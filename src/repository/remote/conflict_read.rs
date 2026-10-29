@@ -169,7 +169,8 @@ pub struct ConflictPathDto {
     pub token: String,
     pub kind: ConflictPathKind,
     pub structure: ConflictPathStructure,
-    /// Whether the library read the sides as text (fact 32, R-10).
+    /// Whether the sides are given: only for an item's canonical text
+    /// (structure `regular`), as the library reads it (fact 32, R-10).
     pub content_available: bool,
     pub base: Option<String>,
     pub local: Option<String>,
@@ -550,12 +551,20 @@ fn live(
     let mut paths = Vec::with_capacity(inspection.paths.len());
     for (token_text, token) in path_tokens(inspection) {
         let candidate = validate::classify_conflict_entry(&git, &index_conflict(&token));
-        let sides = match service.read_synchronization_conflict(&token) {
-            Ok(sides) => text_sides([sides.base, sides.local, sides.incoming]),
-            // Not text the library reads: binary, not UTF-8, or not a
-            // regular file at a plain path.
-            Err(SynchronizationError::ExternalResolutionRequired { .. }) => None,
-            Err(error) => return Err(read_error(error)),
+        // Sides only for an item's canonical text (R-10), which the item
+        // limits bound; and only when the library returns them (fact 32).
+        // Any other path, text or not, is given none.
+        let item_text = candidate.kind != ConflictEntryKind::Noncanonical
+            && candidate.structure == ConflictStructure::RegularUtf8SamePath;
+        let sides = if item_text {
+            match service.read_synchronization_conflict(&token) {
+                Ok(sides) => text_sides([sides.base, sides.local, sides.incoming]),
+                // Not text the library reads.
+                Err(SynchronizationError::ExternalResolutionRequired { .. }) => None,
+                Err(error) => return Err(read_error(error)),
+            }
+        } else {
+            None
         };
         let content_available = sides.is_some();
         let [base, local, incoming] = sides.unwrap_or_default();
@@ -694,10 +703,14 @@ const FOREIGN_METADATA: [&str; 7] = [
 ];
 
 /// Whether the target holds an outside repair a restart would take up
-/// (fact 35): HEAD is a commit with exactly the parents `[local,
-/// incoming]`; the target is clean but for this operation's own recorded
-/// merge metadata; and `validates_external_integration` accepts it. Read
-/// under the repository's lease. Nothing is written, retired or recorded.
+/// (fact 35), judged as `reconcile_pending_candidate` judges it. A Git lock
+/// left in the target (`index.lock`, or a lock of HEAD, of the branch or
+/// of packed refs) is the restart's `recovery_required`, whatever else
+/// the target holds, and so it is the read's. Otherwise: HEAD is a commit
+/// with exactly the parents `[local, incoming]`; the target is clean but
+/// for this operation's own recorded merge metadata; and
+/// `validates_external_integration` accepts it. Read under the
+/// repository's lease. Nothing is written, retired or recorded.
 fn repair_accepted(root: &Path, recorded: &Recorded) -> Result<bool, ReadError> {
     let ConfigurationInspection::Valid(config) = read_configuration(root)? else {
         return Ok(false);
@@ -707,6 +720,7 @@ fn repair_accepted(root: &Path, recorded: &Recorded) -> Result<bool, ReadError> 
         return Ok(false);
     };
     let _lease = repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)?;
+    sync::refuse_local_reconciliation_locks(&repository).map_err(read_error)?;
     Ok(repaired(&repository, recorded).unwrap_or(false))
 }
 

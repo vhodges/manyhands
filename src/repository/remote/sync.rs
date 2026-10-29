@@ -2707,7 +2707,9 @@ fn owned_merge_metadata_remnant(
     Ok(Some(recorded.digests))
 }
 
-fn refuse_local_reconciliation_locks(
+/// Also called by the conflict read, which judges an outside repair as a
+/// restart would.
+pub(super) fn refuse_local_reconciliation_locks(
     repository: &git2::Repository,
 ) -> Result<(), SynchronizationError> {
     // A generic integration has no owned index sentinel/ref-lock manifest.

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 conflicted path",
-  "description": "One path of a live synchronization conflict: how to show it, the token that names it to a resolution, what it holds, and its three sides where the library reads them as text.",
+  "description": "One path of a live synchronization conflict: how to show it, the token that names it to a resolution, what it holds, and its three sides when it is an item's canonical text.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -43,7 +43,7 @@
       ]
     },
     "content_available": {
-      "description": "Whether the sides were read as text. When false, base, local and incoming are null.",
+      "description": "Whether the sides are given: only for an item's canonical text (structure regular) that the library reads. Any other path, text or not, is given none. When false, base, local and incoming are null.",
       "type": "boolean"
     },
     "base": {

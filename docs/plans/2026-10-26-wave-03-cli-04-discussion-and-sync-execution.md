@@ -594,7 +594,7 @@ new ticket comment (ruling P4).
 | 1 | `feat: merge divergent history in item and repo sync`; fix round 1 `fix: answer busy for a sync beside a pending merge, and name a cancelled merge` | Verify list passed: 37, 44, 72, 129 and 113 SSH cases; fix round 1: 26 `c4_merging`, 5 E-3, 123 `--lib mutation`, 44 | fix round 1 applied; re-review pending | See "Task 1: Merging Synchronization" |
 | 2a | `feat: let comment submission take a synchronizer` | Verify list passed: 5 `c4_comment_domain`, 41 and 25 SSH cases, 1344 `--lib repository`, clippy, fmt | pending | The author moves to Task 2b (ruling Q2). See "Task 2a: The Library's Comment Submission" |
 | 2b | `feat: bind comment submission with authorship and safe points`; pre-review fix round 1 `fix: keep a comment whose branch was deleted cancellable, and release an unwritten refused binding`; review fix round 2 `fix: finish a comment refused for its input, and keep release failures` | Verify list passed: 148, 41 SSH cases; 383, 129, 44, 72; 123 `--lib mutation`; clippy, fmt; fix rounds: see their entries | review fix round 2 applied; re-review pending | Findings 1 and 2 fixed by controller ruling in fix round 1; review findings in fix round 2. See "Task 2b: The Comment Submission Binding" |
-| 3 | `feat: read synchronization conflicts with string tokens` | Verify list passed: 21 `c4_conflict_read` SSH cases, 72, 44, clippy; `--lib remote`, `--lib local_sync`, `--lib integration`; fmt | pending | Fact 86 holds. See "Task 3: Conflict Inspection Read" |
+| 3 | `feat: read synchronization conflicts with string tokens`; pre-review fix round 1 `fix: refuse a repair beside a Git lock, and give sides only for item text` | Verify list passed: 21 `c4_conflict_read` SSH cases, 72, 44, clippy; `--lib remote`, `--lib local_sync`, `--lib integration`; fmt; fix round 1: 22 `c4_conflict_read`, 72, 44, 477 `--lib remote`, clippy, fmt | pre-review fix round 1 applied; review pending | Fact 86 holds. See "Task 3: Conflict Inspection Read" |
 
 ### Task 1: Merging Synchronization
 
@@ -1528,4 +1528,62 @@ The read's `next_action` is checked against the synchronization's own
 | `test --all-features --lib remote` | 477 passed |
 | `test --all-features --lib local_sync` | 164 passed |
 | `test --all-features --lib integration` | 26 passed |
+| `fmt --check` | passed |
+
+#### Task 3, pre-review fix round 1
+
+The controller ruled on the report's concerns. Concerns 3 and 8 changed
+code; 1, 2, 4, 5, 6 and 7 are accepted with no change, and 1 and 2 get
+table rows in Task 14. The commit is `fix: refuse a repair beside a Git
+lock, and give sides only for item text`, on `ffa627b`.
+
+1. **Concern 3: the lock check is mirrored.**
+   - `sync.rs`: `refuse_local_reconciliation_locks` is `pub(super)`, with
+     no other change.
+   - `conflict_read.rs`: the repair judgement calls it under the
+     repository's lease, before it looks at the repair, as
+     `reconcile_pending_candidate` does. The judgement runs when the
+     inspection fails at `ConflictPending`.
+   - A Git lock in the target is then the read's `recovery_required`, the
+     restart's own answer, whatever the target holds. The locks are
+     `index.lock`, and the locks of HEAD, its log, the branch, the branch's
+     log and packed refs. The read never says `repaired` beside one.
+2. **Concern 8: sides only for an item's canonical text (R-10).**
+   - The library's side read is asked only for a path the classifier
+     reads as an item's (`kind` is not `noncanonical`) with structure
+     `regular`. `content_available` is true only when it returns sides.
+   - Any other path gets no sides and `content_available: false`,
+     whatever its structure: a non-item UTF-8 file (`binary`), an
+     executable, or an `incompatible_closures` ticket.
+   - The `conflict_path` schema's descriptions say so.
+   - No golden changed: the pending golden's one path is a `regular`
+     ticket, and the other two have no paths.
+
+**Cases.**
+
+- `c4_conflict_read_repair_beside_a_lock` (new; 22 cases now). A valid
+  outside repair, cleaned up, with a stale `.git/index.lock`, then a stale
+  `refs/heads/main.lock`. For each lock, the read is `recovery_required`,
+  and the library's restart is `Err(RecoveryRequired)`. With the lock
+  removed, the read is `repaired` / `resume`, and a restart publishes the
+  repair. Every platform can name both files, so the case runs everywhere.
+  - A probe with the check line removed failed this case at the read's
+    `unwrap_err`: the read said `repaired`.
+- `noncanonical_or_structural` gains `plain.sh`, the script as a 100644
+  file. It is `noncanonical` / `binary` with no sides, while the library's
+  side read, called directly with its resolved token, returns them.
+- `incompatible_closures` asserts no sides.
+- `hostile_path` asserts that the read carries no sides. It still proves
+  the token resolves, by the library's side read on the resolved token.
+
+**Commands** (each `devenv shell -- cargo … --locked`):
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --test mutation_remote -- c4_conflict_read_repair_beside_a_lock`, with the lock check removed (probe) | 1 SSH case failed, at the read's `unwrap_err` |
+| `test --all-features --test mutation_remote -- c4_conflict_read` | 22 SSH cases passed (263 s), goldens compared |
+| `test --all-features --test read_contract` | 72 passed |
+| `test --all-features --test mutation_contract` | 44 passed |
+| `test --all-features --lib remote` | 477 passed |
+| `clippy --all-targets --all-features -- -D warnings` | passed |
 | `fmt --check` | passed |

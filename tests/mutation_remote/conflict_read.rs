@@ -54,6 +54,10 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         c4_conflict_read_repair_refused,
     ),
     (
+        "c4_conflict_read_repair_beside_a_lock",
+        c4_conflict_read_repair_beside_a_lock,
+    ),
+    (
         "c4_conflict_read_merge_aborted",
         c4_conflict_read_merge_aborted,
     ),
@@ -573,6 +577,12 @@ fn mixed_files<'a>(
             bytes: script,
             mode: EXECUTABLE,
         },
+        // The same script as a regular file: text, and no item.
+        File {
+            path: b"plain.sh",
+            bytes: script,
+            mode: REGULAR,
+        },
     ]
 }
 
@@ -600,8 +610,8 @@ fn c4_conflict_read_noncanonical_or_structural() -> Result<(), FixtureError> {
     );
     assert!(dto.observation.is_some());
     assert!(!dto.historical);
-    // Every path with its kind, in raw byte order; sides only where the
-    // library reads them as text.
+    // Every path with its kind, in raw byte order; sides only for the
+    // item's canonical text (R-10).
     let shape: Vec<_> = dto
         .paths
         .iter()
@@ -630,6 +640,12 @@ fn c4_conflict_read_noncanonical_or_structural() -> Result<(), FixtureError> {
                 false
             ),
             (
+                "plain.sh",
+                ConflictPathKind::Noncanonical,
+                ConflictPathStructure::Binary,
+                false
+            ),
+            (
                 "tool.sh",
                 ConflictPathKind::Noncanonical,
                 ConflictPathStructure::Executable,
@@ -641,6 +657,18 @@ fn c4_conflict_read_noncanonical_or_structural() -> Result<(), FixtureError> {
     for path in &dto.paths[1..] {
         assert!(path.base.is_none() && path.local.is_none() && path.incoming.is_none());
     }
+    // The library would read the regular non-item file as text; the read
+    // still gives it no sides.
+    let tokens = repository::path_tokens(&inspect(&w, operation));
+    let (_, plain) = tokens
+        .iter()
+        .find(|(text, _)| *text == dto.paths[2].token)
+        .unwrap();
+    let sides = w.service.read_synchronization_conflict(plain).unwrap();
+    assert_eq!(
+        sides.local.map(|side| side.bytes().to_vec()),
+        Some(b"echo local\n".to_vec())
+    );
     Ok(())
 }
 
@@ -674,8 +702,12 @@ fn c4_conflict_read_incompatible_closures() -> Result<(), FixtureError> {
         dto.paths[0].structure,
         ConflictPathStructure::IncompatibleClosures
     );
-    assert_eq!(dto.paths[0].local.as_deref(), Some(local.as_str()));
-    assert_eq!(dto.paths[0].incoming.as_deref(), Some(incoming.as_str()));
+    // Not `regular`, so given no sides (R-10).
+    assert!(!dto.paths[0].content_available);
+    assert_eq!(
+        (&dto.paths[0].local, &dto.paths[0].incoming),
+        (&None, &None)
+    );
     // The library refuses to resolve the set, before any write (fact 33).
     let resolved = source("Resolved");
     assert!(matches!(
@@ -959,6 +991,53 @@ fn c4_conflict_read_repair_refused() -> Result<(), FixtureError> {
     Ok(())
 }
 
+/// A valid outside repair beside a stale Git lock: the restart refuses it
+/// (`refuse_local_reconciliation_locks`), and so does the read.
+fn c4_conflict_read_repair_beside_a_lock() -> Result<(), FixtureError> {
+    let w = world()?;
+    let (operation, local, incoming) = plain_conflict(&w);
+    let repo = w.repo().unwrap();
+    let repaired = commit_files(
+        &repo,
+        local,
+        &[local, incoming],
+        &[file(PLAIN, b"repaired conflict\n")],
+    );
+    install_repair(&repo, repaired, true);
+    // A stale lock of the index, then of the branch. Every platform names
+    // both files.
+    for lock in [
+        repo.path().join("index.lock"),
+        repo.commondir().join("refs/heads/main.lock"),
+    ] {
+        std::fs::write(&lock, b"").unwrap();
+        assert_eq!(
+            show(&w, operation).unwrap_err().code(),
+            ResultCode::RecoveryRequired
+        );
+        assert!(matches!(
+            w.sync(restart(&w, operation)),
+            Err(SynchronizationError::RecoveryRequired)
+        ));
+        std::fs::remove_file(&lock).unwrap();
+    }
+    // With the lock gone, the repair is read as one, and a restart takes
+    // it up.
+    assert_eq!(
+        show(&w, operation).unwrap(),
+        settled(
+            operation,
+            local,
+            incoming,
+            ConflictState::Repaired,
+            ConflictReadNextAction::Resume
+        )
+    );
+    let published = w.sync(restart(&w, operation)).unwrap();
+    outcome(published, true, SynchronizationTarget::Primary, repaired);
+    Ok(())
+}
+
 fn c4_conflict_read_merge_aborted() -> Result<(), FixtureError> {
     let w = world()?;
     let (operation, local, incoming) = plain_conflict(&w);
@@ -1196,13 +1275,14 @@ fn c4_conflict_read_hostile_path() -> Result<(), FixtureError> {
     assert_eq!(path.display_path, "hostile-\\x1b[31mred\\x0aline.txt");
     assert!(!raw_control(&path.display_path));
     assert_eq!(path.kind, ConflictPathKind::Noncanonical);
-    // The library reads it as text, and so gives its sides.
-    assert!(path.content_available);
-    assert_eq!(path.local.as_deref(), Some("local\n"));
+    // It is text, but no item's: the read gives no sides (R-10).
+    assert!(!path.content_available);
+    assert!(path.base.is_none() && path.local.is_none() && path.incoming.is_none());
     // Neither rendering of the read holds a raw control byte.
     assert!(!raw_control(&format!("{dto:?}")));
     assert!(!raw_control(&serde_json::to_string(&dto).unwrap()));
-    // Its token resolves to the library's own.
+    // Its token resolves to the library's own, whose side read the
+    // library answers directly.
     let inspection = inspect(&w, operation);
     let tokens = repository::path_tokens(&inspection);
     let (_, token) = tokens.iter().find(|(text, _)| *text == path.token).unwrap();
