@@ -6,6 +6,8 @@ pub(crate) mod create;
 pub(crate) mod documents;
 pub(crate) mod draft_comparison;
 pub(crate) mod drafts;
+#[cfg(all(test, feature = "desktop-test-support"))]
+mod editing_privacy_tests;
 pub(crate) mod editor;
 pub(crate) mod find;
 #[cfg(all(test, feature = "desktop-test-support"))]

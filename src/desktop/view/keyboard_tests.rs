@@ -594,5 +594,7 @@ fn ringed(window: &gpui_kit::Window, region: Region) {
 mod actions;
 mod confirm;
 mod drafts;
+mod editing;
+mod frame;
 mod passphrase;
 mod settings;
