@@ -34,7 +34,8 @@
 //!   `steps`'s.
 //! - **Keyboard.** Focus starts in the Folder; Enter in a field moves, when
 //!   Move is offered; Escape and Cancel close the dialog, but not while a
-//!   move runs, and focus goes back where it was.
+//!   move runs, when Cancel is disabled as Move is (Part E review, M5);
+//!   focus goes back where it was.
 //!
 //! The paths are the user's text, so nothing here derives `Debug`; the
 //! request carries them to the library and nothing else does.
@@ -423,7 +424,7 @@ impl Render for MoveDialog {
                 )
         });
         let entity = cx.entity().downgrade();
-        let cancel = button("move-cancel", CANCEL, false, true, None, {
+        let cancel = button("move-cancel", CANCEL, false, !self.running, None, {
             let entity = entity.clone();
             move |_, window, cx| {
                 let _ = entity.update(cx, |dialog, cx| dialog.cancel(window, cx));

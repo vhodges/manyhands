@@ -1517,3 +1517,35 @@ async fn a_created_item_ended_before_its_read_is_viewed_as_the_private_copy(
         })
         .await;
 }
+
+/// Part E review, M5: while a create runs, from Create to its new ID and
+/// draft, Cancel is disabled, as Create is, so Tab, which reaches it
+/// before, passes it by. The dialog stays until the create goes on, then
+/// closes.
+#[gpui_kit::test]
+async fn cancel_is_disabled_while_a_create_runs(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(cx, |_, _| {});
+    new_document(&shell, "Plans", "plans.md", cx).await;
+    let cancel = ("create-cancel", 0usize);
+    assert!(shell.tab_reaches(cancel, 12, cx), "Tab reaches Cancel");
+    retype(&shell, "file", "plans.md", cx);
+    assert!(holds_focus(&shell, "file", cx), "focus back in the File name");
+    shell.until_drawn(cx, "the path check", offered).await;
+
+    let new_id = shell.backend.hold_read(ReadKind::NewId);
+    shell.click("create-ok", cx);
+    assert!(!offered(&shell, cx), "one create at a time");
+    assert!(
+        !shell.tab_reaches(cancel, 12, cx),
+        "Cancel is disabled while the create runs"
+    );
+    assert!(dialog_open(&shell, cx), "the dialog waits");
+
+    new_id.send(()).unwrap();
+    shell
+        .until_drawn(cx, "the dialog closing", |shell, cx| {
+            !dialog_open(shell, cx)
+        })
+        .await;
+    assert_eq!(prepares(&shell, cx).len(), 1, "the create went on");
+}

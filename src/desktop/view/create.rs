@@ -15,7 +15,8 @@
 //!   itself (`finish`; it waits under a dialog opened above it), and the
 //!   new tab follows that prepare to the edit editor. With no draft
 //!   store nothing is provisioned, and the dialog stays open, saying why
-//!   (R-46). One create runs at a time, and Escape waits for it.
+//!   (R-46). One create runs at a time, and Escape waits for it; Cancel
+//!   is disabled meanwhile (Part E review, M5).
 //! - **Keyboard.** Focus starts in the Title; Tab moves through the fields,
 //!   Cancel and Create; Enter in a field creates, when Create is offered;
 //!   Escape closes the dialog, and focus goes back where it was.

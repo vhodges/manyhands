@@ -239,7 +239,7 @@ impl Render for CreateDialog {
             .clone()
             .map(|words| text("create-failure", words).text_sm().text_color(danger));
         let entity = cx.entity().downgrade();
-        let cancel = button("create-cancel", CANCEL, false, true, None, {
+        let cancel = button("create-cancel", CANCEL, false, !self.creating, None, {
             let entity = entity.clone();
             move |_, window, cx| {
                 let _ = entity.update(cx, |dialog, cx| dialog.cancel(window, cx));

@@ -20,7 +20,8 @@
 //!   included.
 //! - **Keyboard.** Focus starts in the Folder name; Enter creates, when
 //!   Create is offered; Escape and Cancel close the dialog, but not while a
-//!   create runs, and focus goes back where it was.
+//!   create runs, when Cancel is disabled as Create is (Part E review, M5);
+//!   focus goes back where it was.
 //!
 //! The name is the user's text, so nothing here derives `Debug`; the
 //! request carries it to the library and nothing else does.
@@ -339,7 +340,7 @@ impl Render for NewFolderDialog {
                 }))
         });
         let entity = cx.entity().downgrade();
-        let cancel = button("new-folder-cancel", CANCEL, false, true, None, {
+        let cancel = button("new-folder-cancel", CANCEL, false, !self.running, None, {
             let entity = entity.clone();
             move |_, window, cx| {
                 let _ = entity.update(cx, |dialog, cx| dialog.cancel(window, cx));

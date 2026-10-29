@@ -1193,3 +1193,48 @@ async fn a_stale_move_is_not_offered_again_until_reopened(cx: &mut TestAppContex
         .await;
     assert!(!shell.present("move-failure", cx), "read afresh");
 }
+
+/// Part E review, M5: while a move runs, Cancel is disabled, as Move is,
+/// so Tab, which reaches it before, passes it by. The dialog stays until
+/// the move lands, then closes.
+#[gpui_kit::test]
+async fn cancel_is_disabled_while_a_move_runs(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_file(root, PLAN, document_source(DOCUMENT, "Plan").as_bytes());
+    });
+    open(&shell, &root, DOCUMENT, cx);
+    open_move(&shell, cx);
+    retype(&shell, "file", "moved.md", cx);
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
+    let cancel = ("move-cancel", 0usize);
+    assert!(shell.tab_reaches(cancel, 12, cx), "Tab reaches Cancel");
+    retype(&shell, "file", "moved.md", cx);
+    assert!(holds_focus(&shell, "file", cx), "focus back in the File name");
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
+
+    let held = shell.backend.hold_job(JobKind::DocumentMove);
+    shell.click("move-ok", cx);
+    shell
+        .until_drawn(cx, "the move being sent", |shell, cx| {
+            !moves(shell, cx).is_empty()
+        })
+        .await;
+    held.wait_reached();
+    assert!(
+        !shell.tab_reaches(cancel, 12, cx),
+        "Cancel is disabled while the move runs"
+    );
+    assert!(dialog_open(&shell, cx), "the dialog waits");
+
+    held.release();
+    shell
+        .until_drawn(cx, "the dialog closing", |shell, cx| {
+            !dialog_open(shell, cx)
+        })
+        .await;
+    assert_eq!(shown(&shell, &root, DOCUMENT).path, "docs/moved.md");
+}

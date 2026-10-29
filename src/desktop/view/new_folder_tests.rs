@@ -25,7 +25,7 @@ use manyhands::{
 use super::{NewFolderDialog, OpenedFolder};
 use crate::desktop::{
     services::{
-        ReadKind,
+        JobKind, ReadKind,
         requests::{DesktopRequestId, Intent, RequestState},
     },
     test_support::fixtures::Fixture,
@@ -403,4 +403,38 @@ async fn a_folder_made_with_its_index_owed_closes_the_dialog(cx: &mut TestAppCon
         "the tree reads its folders again"
     );
     assert_eq!(refreshes(&shell, cx), 0, "no refresh of the desktop's own");
+}
+
+/// Part E review, M5: while a create runs, Cancel is disabled, as Create
+/// is, so Tab, which reaches it before, passes it by. The dialog stays
+/// until the create lands, then closes.
+#[gpui_kit::test]
+async fn cancel_is_disabled_while_a_create_runs(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx);
+    open_dialog(&shell, cx);
+    retype(&shell, "plans", cx);
+    assert!(offered(cx));
+    let cancel = ("new-folder-cancel", 0usize);
+    assert!(shell.tab_reaches(cancel, 12, cx), "Tab reaches Cancel");
+    retype(&shell, "plans", cx);
+    assert!(offered(cx));
+
+    let held = shell.backend.hold_job(JobKind::FolderCreate);
+    shell.click("new-folder-ok", cx);
+    held.wait_reached();
+    assert!(
+        !shell.tab_reaches(cancel, 12, cx),
+        "Cancel is disabled while the create runs"
+    );
+    assert!(dialog_open(&shell, cx), "the dialog waits");
+
+    held.release();
+    let (_, answer) = answered(&shell, cx).await;
+    assert_eq!(answer, ResultCode::Ok);
+    shell
+        .until_drawn(cx, "the dialog closing", |shell, cx| {
+            !dialog_open(shell, cx)
+        })
+        .await;
+    assert!(root.join("docs/plans").is_dir());
 }

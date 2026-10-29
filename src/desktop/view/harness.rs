@@ -194,6 +194,25 @@ impl Shell {
         })
     }
 
+    /// Whether Tab, pressed at most `presses` times from where focus is,
+    /// puts focus on the element `id`. A disabled Kit button tracks no
+    /// focus, so Tab passes it by.
+    pub(crate) fn tab_reaches(
+        &self,
+        id: impl Into<ElementId>,
+        presses: usize,
+        cx: &mut TestAppContext,
+    ) -> bool {
+        let id = id.into();
+        (0..presses).any(|_| {
+            self.keys("tab", cx);
+            let id = id.clone();
+            self.frame(cx, move |window, _| {
+                window.try_find(id).and_then(|element| element.focused()) == Some(true)
+            })
+        })
+    }
+
     /// Whether the element `id` is drawn.
     pub(crate) fn present(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
         let id = id.into();
