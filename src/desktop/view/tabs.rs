@@ -156,8 +156,8 @@ pub(super) fn tab_info(pane: &ItemPane, cx: &App) -> TabInfo {
         ItemDtoKind::Ticket => item.and_then(|item| item.slug.clone()),
         _ => None,
     };
-    // The header's pill reads the same (Task 27 fix 1, B3).
-    let unsaved = pane.unsaved_edit(cx) || pane.unsaved(cx);
+    // The header's pill reads the same (Task 27 fix 1, B3, D1).
+    let unsaved = pane.unsaved(cx);
     let repository = Path::new(repo)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())

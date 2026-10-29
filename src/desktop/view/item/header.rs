@@ -31,6 +31,7 @@ use super::{ItemPane, chips::chips, pill, text, tokens::item_colors};
 use crate::desktop::{
     assets::icon_path,
     model::{
+        edit::Phase,
         item::{APPROVE_AND_MERGE, CLOSE_TICKET, LATER, LATER_NOTE, SHARE},
         navigation::OpenTarget,
         tabs::TabKey,
@@ -368,12 +369,18 @@ impl ItemPane {
             )
     }
 
-    /// Whether the tab holds what is not saved besides an edit session's
-    /// text: a draft of its item kept or stored, or edited repair text. The
-    /// strip's unsaved mark and the header's pill both read it, so the two
-    /// agree (Task 27 fix 1, B3).
+    /// Whether the tab holds what is not saved: the strip's unsaved mark,
+    /// which the header's pill agrees with (Task 27 fix 1, B3). While the
+    /// tab is Editing, it is the session's text differing from its base,
+    /// as the pill's "Editing · unsaved changes" says, however a draft of
+    /// it stands: a draft at its base holds nothing unsaved (ruling D1;
+    /// N3's close dialog says so too). Otherwise it is that, a draft of the
+    /// item kept or stored, or edited repair text.
     pub(in crate::desktop::view) fn unsaved(&self, cx: &App) -> bool {
-        self.draft_kept(cx) || self.repair_edited(cx)
+        if self.edit.phase() == Phase::Editing {
+            return self.edit_dirty(cx) || self.repair_edited(cx);
+        }
+        self.unsaved_edit(cx) || self.draft_kept(cx) || self.repair_edited(cx)
     }
 
     /// Whether a draft of this item is kept or stored: attached to this

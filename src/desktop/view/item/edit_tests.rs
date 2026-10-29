@@ -1397,6 +1397,38 @@ async fn the_editor_opening_under_a_prompt_leaves_focus_in_it(cx: &mut TestAppCo
     assert!(!shell.present("passphrase-dialog", cx));
 }
 
+/// Task 27 fix 1, C2 (the "Shared undo" row): typed in rich text, switched
+/// to Markdown, typed again, then undone back past the switch, the tab is
+/// clean: its pill says what it shows is saved on this computer, and its
+/// name in the strip is not marked unsaved.
+#[gpui_kit::test]
+async fn undo_back_past_a_mode_switch_leaves_the_tab_clean(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Shared undo", "");
+    });
+    open(&shell, ticket(&root, TICKET), cx);
+    let host = edit(&shell, cx).await;
+    let body = host.read_with(cx, |host, cx| host.text(cx));
+    type_at_end(&shell, &host, "rich", cx);
+    assert_eq!(pill(&shell, cx).as_deref(), Some(EDITING_UNSAVED));
+    shell.keys("secondary-shift-m", cx);
+    assert!(!host.read_with(cx, |host, _| host.is_rich()), "Markdown");
+    type_at_end(&shell, &host, "md", cx);
+    assert!(host.read_with(cx, |host, cx| host.text(cx)) == format!("{body}richmd"));
+
+    shell.keys("secondary-z", cx);
+    shell.keys("secondary-z", cx);
+    assert!(host.read_with(cx, |host, cx| host.text(cx)) == body);
+    shell.run(cx);
+    assert!(
+        !pane(&shell, cx).read_with(cx, |pane, cx| pane.edit_dirty(cx)),
+        "clean"
+    );
+    assert_eq!(pill(&shell, cx).as_deref(), Some(EDITING_SAVED));
+    assert_eq!(shell.rows("tab", cx), ["Shared undo"], "not marked unsaved");
+}
+
 /// Save, the session after a save, and the save states (Task 15).
 #[path = "edit_save_tests.rs"]
 mod save;
