@@ -645,7 +645,8 @@ async fn a_preview_the_file_changed_under_offers_no_prepare_again(cx: &mut TestA
 /// A corrected ID another document holds is an ambiguous identity: the
 /// preview is refused with the library's message and code, no Confirm is
 /// offered, and nothing is written. Escape closes the dialog, focus goes
-/// back to the text area (Part E review, M2), and the text is kept.
+/// back to Preview, which no repair running leaves enabled (Task 27 fix 1,
+/// B5), and the text is kept.
 #[gpui_kit::test]
 async fn an_ambiguous_identity_blocks_repair_with_its_reason(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |fixture, root| {
@@ -695,7 +696,10 @@ async fn an_ambiguous_identity_blocks_repair_with_its_reason(cx: &mut TestAppCon
 
     shell.keys("escape", cx);
     assert!(!shell.present("confirm-dialog", cx));
-    assert!(text_focused(&shell, cx), "focus is back in the text");
+    assert!(
+        focused(&shell, "repair-preview-button", cx),
+        "focus is back"
+    );
     assert_eq!(repair_text(&shell, cx), typed, "the text is kept");
 }
 

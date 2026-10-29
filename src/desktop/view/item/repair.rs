@@ -46,7 +46,7 @@ mod adopt;
 mod prompt;
 mod view;
 
-use std::path::PathBuf;
+use std::{path::PathBuf, rc::Rc};
 
 use gpui_kit::{
     App, AppContext, Context, Entity, EventEmitter, Focusable, Subscription, Window,
@@ -279,9 +279,11 @@ impl ItemPane {
 
     /// Preview: the repair of the text as it is now, prepared in the
     /// confirmation dialog, whose Confirm sends it; after an answer whose
-    /// effect is unknown, that same request prepared again. The dialog
-    /// gives focus back to the text area, which takes it while read-only,
-    /// as Preview does not while a repair runs (Part E review, M2).
+    /// effect is unknown, that same request prepared again. As the dialog
+    /// closes it gives focus back to Preview, which opened it, while
+    /// Preview is enabled then (contract 13); while a repair runs, Preview
+    /// waits and holds no focus, and the text area, read only, takes it
+    /// (Task 27 fix 1, B5, narrowing Part E review, M2).
     fn preview_repair(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {
             return;
@@ -292,7 +294,22 @@ impl ItemPane {
         if repair.running {
             return;
         }
-        let origin = repair.text.read(cx).focus_handle(cx);
+        let text = repair.text.read(cx).focus_handle(cx);
+        let preview = window.focused(cx).unwrap_or_else(|| text.clone());
+        let pane = cx.entity().downgrade();
+        let origin: confirm::Origin = Rc::new(move |cx: &App| {
+            let running = pane.upgrade().is_some_and(|pane| {
+                pane.read(cx)
+                    .repair
+                    .as_ref()
+                    .is_some_and(|repair| repair.running)
+            });
+            if running {
+                text.clone()
+            } else {
+                preview.clone()
+            }
+        });
         let dialog = match repair.sent.as_ref().filter(|_| repair.unknown) {
             Some(sent) => {
                 confirm::prepare_again_followed(sent.request, origin, &self.services, window, cx)

@@ -27,6 +27,8 @@
 //! (`confirm_followed`, `prepare_again_followed`) what Confirm sent, and
 //! what a prepare that gave no preview answered (`Followed`).
 
+use std::rc::Rc;
+
 use gpui_kit::{
     AnyElement, App, AppContext, ClickEvent, Context, ElementId, Entity, EventEmitter, FocusHandle,
     InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled,
@@ -143,6 +145,16 @@ pub(crate) fn offers_prepare_again(code: ResultCode, recovery: &[RecoveryAction]
     }
 }
 
+/// Where focus goes as the dialog closes, chosen at that moment from what
+/// holds then: an opener whose control may wait meanwhile names another
+/// (Task 27 fix 1, B5).
+pub(crate) type Origin = Rc<dyn Fn(&App) -> FocusHandle>;
+
+/// `origin`, whatever holds as the dialog closes.
+fn fixed(origin: FocusHandle) -> Origin {
+    Rc::new(move |_| origin.clone())
+}
+
 /// Opens the confirmation dialog for `intent`: prepares it, shows the
 /// preview and, on Confirm, submits it once as a user job. Closing it
 /// focuses `origin`.
@@ -153,15 +165,15 @@ pub(crate) fn confirm(
     window: &mut Window,
     cx: &mut App,
 ) {
-    open(intent, None, origin, services, window, cx);
+    open(intent, None, fixed(origin), services, window, cx);
 }
 
 /// Opens the confirmation dialog for `intent`, as `confirm` does, and
 /// gives it, for its opener to follow (`Followed`); `None` when nothing
-/// opened.
+/// opened. Closing it focuses what `origin` chooses then.
 pub(crate) fn confirm_followed(
     intent: Intent,
-    origin: FocusHandle,
+    origin: Origin,
     services: &Services,
     window: &mut Window,
     cx: &mut App,
@@ -178,15 +190,15 @@ pub(crate) fn prepare_again(
     window: &mut Window,
     cx: &mut App,
 ) {
-    prepare_again_followed(id, origin, services, window, cx);
+    prepare_again_followed(id, fixed(origin), services, window, cx);
 }
 
 /// Opens the dialog for the request `id` again, as `prepare_again` does,
 /// and gives it, for its opener to follow (`Followed`); `None` when
-/// nothing opened.
+/// nothing opened. Closing it focuses what `origin` chooses then.
 pub(crate) fn prepare_again_followed(
     id: DesktopRequestId,
-    origin: FocusHandle,
+    origin: Origin,
     services: &Services,
     window: &mut Window,
     cx: &mut App,
@@ -202,7 +214,7 @@ pub(crate) fn prepare_again_followed(
 fn open(
     intent: Intent,
     request: Option<DesktopRequestId>,
-    origin: FocusHandle,
+    origin: Origin,
     services: &Services,
     window: &mut Window,
     cx: &mut App,
@@ -240,7 +252,7 @@ fn open(
             })
             // Escape: close with nothing submitted.
             .on_cancel(|_, _, _| true)
-            .on_close(move |_, window, cx| window.focus(&origin, cx))
+            .on_close(move |_, window, cx| window.focus(&origin(cx), cx))
     });
     #[cfg(test)]
     cx.set_global(OpenedConfirm(opened.downgrade()));
@@ -292,7 +304,7 @@ enum Phase {
 pub(crate) struct ConfirmDialog {
     intent: Intent,
     services: Services,
-    origin: FocusHandle,
+    origin: Origin,
     /// The desktop request this dialog submitted, or prepares again.
     request: Option<DesktopRequestId>,
     /// The attempt of `request` this dialog submitted: an answer to an
@@ -309,7 +321,7 @@ impl ConfirmDialog {
     fn new(
         intent: Intent,
         request: Option<DesktopRequestId>,
-        origin: FocusHandle,
+        origin: Origin,
         services: Services,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -528,7 +540,8 @@ impl ConfirmDialog {
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.close_dialog(cx);
-        window.focus(&self.origin, cx);
+        let origin = (self.origin)(cx);
+        window.focus(&origin, cx);
     }
 }
 
@@ -832,7 +845,7 @@ impl Render for ConfirmDialog {
             let origin = self.origin.clone();
             move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                 window.close_dialog(cx);
-                window.focus(&origin, cx);
+                window.focus(&origin(cx), cx);
             }
         };
         let confirm = {
