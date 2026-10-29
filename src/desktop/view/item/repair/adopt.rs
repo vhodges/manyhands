@@ -20,6 +20,7 @@ use gpui_kit::{Context, Task, Window};
 use manyhands::{
     canonical::{self, CanonicalItem, Document, ItemId},
     repository::{NewIdDto, ReadError},
+    results::ResultCode,
 };
 
 use super::{Offer, unmanaged};
@@ -30,14 +31,16 @@ use crate::desktop::{
 };
 
 /// Adopt…'s ID: the one made, with the observation of the read it was made
-/// for; the read making one, while it runs; and whether one has landed for
-/// the next frame to open the view on.
+/// for; the read making one, while it runs; whether one has landed for the
+/// next frame to open the view on; and the code of a read that failed,
+/// shown beside Adopt… until it is pressed again (fix 2, N1).
 #[derive(Default)]
 pub(in crate::desktop::view::item) struct Adoption {
     made: Option<(String, ItemId)>,
     making: Option<Task<()>>,
     ids: Generations,
     landed: bool,
+    pub(super) failure: Option<ResultCode>,
 }
 
 /// The title an adopted file takes: its first ATX heading's text, outside
@@ -79,6 +82,11 @@ pub(super) fn adopt_title(path: &str, source: &str) -> String {
             return text.to_owned();
         }
     }
+    file_stem(path)
+}
+
+/// The file stem of `path`, the title a file with no heading takes.
+fn file_stem(path: &str) -> String {
     Path::new(path)
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
@@ -102,6 +110,8 @@ impl ItemPane {
         let Some(observation) = item.observation.clone() else {
             return;
         };
+        self.adoption.failure = None;
+        cx.notify();
         match &self.adoption.made {
             Some((seen, id)) if *seen == observation => {
                 let id = id.clone();
@@ -127,7 +137,8 @@ impl ItemPane {
 
     /// An ID landed for the read `observation`: it is kept for that read,
     /// and the next frame opens the view on it. A read that failed opens
-    /// nothing; Adopt… asks again.
+    /// nothing, and says why beside Adopt…, in the library's message and
+    /// code, as a create's does (`view::create`); Adopt… asks again.
     fn id_made(
         &mut self,
         stamp: Stamp,
@@ -139,15 +150,44 @@ impl ItemPane {
             return;
         }
         self.adoption.making = None;
-        let ReadResult::Ok(made) = result else {
-            return;
+        let id = match result {
+            ReadResult::Ok(made) => made
+                .id
+                .parse::<ItemId>()
+                .map_err(|_| ResultCode::InternalError),
+            ReadResult::Busy => Err(ResultCode::Busy),
+            ReadResult::Failed(failure) => Err(failure.code),
         };
-        let Ok(id) = made.id.parse::<ItemId>() else {
-            return;
+        let id = match id {
+            Ok(id) => id,
+            Err(code) => {
+                self.adoption.failure = Some(code);
+                cx.notify();
+                return;
+            }
         };
         self.adoption.made = Some((observation, id));
         self.adoption.landed = true;
         cx.notify();
+    }
+
+    /// Answers the Adopt… read now running with `result`, as if it had
+    /// landed: the library's `new_item_id` cannot fail, so a test gives a
+    /// failed answer here. The read running is dropped when it lands.
+    #[cfg(test)]
+    pub(crate) fn answer_adoption_for_testing(
+        &mut self,
+        result: ReadResult<NewIdDto>,
+        cx: &mut Context<Self>,
+    ) {
+        let observation = self
+            .model
+            .item()
+            .rows()
+            .and_then(|item| item.observation.clone())
+            .expect("the tab has read its file");
+        let stamp = self.adoption.ids.next(ViewScope::Create);
+        self.id_made(stamp, observation, result, cx);
     }
 
     /// The frame after an ID landed opens the view on it, while the tab
@@ -174,7 +214,10 @@ impl ItemPane {
     }
 
     /// The view opens on the canonical document front matter with `id` and
-    /// the file's title, then the file exactly as read: its unedited text.
+    /// the file's title, then the file exactly as read: its unedited text. A
+    /// heading the library cannot write as a title gives way to the file
+    /// stem (fix 2, N2); the file alone is the last resort, which keeps this
+    /// total.
     fn open_adopted(&mut self, id: &ItemId, window: &mut Window, cx: &mut Context<Self>) {
         let Some(item) = self.model.item().rows() else {
             return;
@@ -182,14 +225,17 @@ impl ItemPane {
         let Some(source) = item.source.clone() else {
             return;
         };
-        let document = Document {
-            id: id.clone(),
-            title: adopt_title(&item.path, &source),
-            body: source.clone(),
-            unknown: serde_yaml::Mapping::new(),
+        let adopted = |title: String| {
+            canonical::serialize_item(&CanonicalItem::Document(Document {
+                id: id.clone(),
+                title,
+                body: source.clone(),
+                unknown: serde_yaml::Mapping::new(),
+            }))
         };
-        let opened =
-            canonical::serialize_item(&CanonicalItem::Document(document)).unwrap_or(source);
+        let opened = adopted(adopt_title(&item.path, &source))
+            .or_else(|_| adopted(file_stem(&item.path)))
+            .unwrap_or_else(|_| source.clone());
         self.open_view(opened, window, cx);
     }
 }

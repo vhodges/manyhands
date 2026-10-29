@@ -33,7 +33,7 @@ use super::ItemPane;
 use crate::desktop::{
     model::{editor_text::load, navigation::OpenTarget, tabs::TabKey},
     services::{
-        JobKind,
+        JobKind, ReadFailure, ReadKind, ReadResult,
         requests::{DesktopRequestId, Intent, RequestState},
     },
     test_support::{
@@ -1109,4 +1109,67 @@ async fn a_stale_preview_is_refused_and_prepare_again_is_offered(cx: &mut TestAp
     follows(&shell, &root, ItemDtoKind::Document, ADOPTED, "Adopted", cx).await;
     assert_eq!(repairs(&shell, cx), [sent], "one request");
     assert_eq!(own_commits(&root, &document_branch(ADOPTED)), Some(1));
+}
+
+/// Adopt…'s ID read failing says why beside Adopt…, the library's message
+/// and code, and opens no view; a later answer of the read it replaced is
+/// dropped. A later Adopt… clears it and opens the view (fix 2, N1). The
+/// library's `new_item_id` cannot fail, so the failed answer is given to
+/// the pane.
+#[gpui_kit::test]
+async fn a_failed_id_read_says_why_beside_adopt(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_file(root, NOTES, b"# Notes\n");
+    });
+    open(&shell, inspect(&root, NOTES), cx);
+    let held = shell.backend.hold_read(ReadKind::NewId);
+    shell.click("item-repair-button", cx);
+    let failure = ReadFailure {
+        code: ResultCode::RepositoryInaccessible,
+        recovery: Vec::new(),
+    };
+    pane(&shell, cx).update(cx, |pane, cx| {
+        pane.answer_adoption_for_testing(ReadResult::Failed(failure), cx)
+    });
+    shell.run(cx);
+    assert_eq!(
+        shell.label("repair-failure", cx).as_deref(),
+        Some(ResultCode::RepositoryInaccessible.message())
+    );
+    assert_eq!(
+        shell.label("repair-failure-code", cx).as_deref(),
+        Some(ResultCode::RepositoryInaccessible.as_str())
+    );
+    assert!(inside(&shell, "repair-failure", "item-banners", cx));
+    drop(held);
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(!shell.present("repair-source", cx), "no view opens");
+
+    pane(&shell, cx).update(cx, |pane, cx| {
+        pane.answer_adoption_for_testing(ReadResult::Busy, cx)
+    });
+    shell.run(cx);
+    assert_eq!(
+        shell.label("repair-failure-code", cx).as_deref(),
+        Some(ResultCode::Busy.as_str())
+    );
+
+    let (_, _) = adopt(&shell, cx).await;
+    assert!(!shell.present("repair-failure", cx), "Adopt… cleared it");
+}
+
+/// A first heading that cannot be a title, holding a NUL, gives way to the
+/// file stem; the file is still adopted with its front matter, byte for
+/// byte after it (fix 2, N2).
+#[gpui_kit::test]
+async fn a_heading_that_cannot_be_a_title_gives_way_to_the_file_stem(cx: &mut TestAppContext) {
+    let written = "# Bad\u{0}title\n\nBody.\n";
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_file(root, NOTES, written.as_bytes());
+    });
+    open(&shell, inspect(&root, NOTES), cx);
+    assert_eq!(super::adopt_title(NOTES, written), "Bad\u{0}title");
+    let (prefilled, id) = adopt(&shell, cx).await;
+    assert_eq!(prefilled, adoption(&id, "notes", written));
 }

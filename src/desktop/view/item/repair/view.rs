@@ -4,8 +4,8 @@
 //! of its text, with what the last answer said, Preview and Cancel.
 
 use gpui_kit::{
-    AnyElement, ClickEvent, Context, Focusable, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, TestSupportExt,
+    AnyElement, App, ClickEvent, Context, Focusable, InteractiveElement, IntoElement,
+    ParentElement, StatefulInteractiveElement, Styled, TestSupportExt,
     component::{
         ActiveTheme, Disableable, Sizable,
         button::{Button, ButtonVariants},
@@ -15,7 +15,7 @@ use gpui_kit::{
     },
     div, px,
 };
-use manyhands::repository::ItemDto;
+use manyhands::{repository::ItemDto, results::ResultCode};
 
 use super::{Offer, PREVIEW, REPAIR_NOT_UTF8, UNMANAGED};
 use crate::desktop::{
@@ -64,12 +64,18 @@ impl ItemPane {
         })
     }
 
-    /// An unmanaged document's banner: the handoff's words, and Adopt….
+    /// An unmanaged document's banner: the handoff's words, and Adopt…,
+    /// with why its last ID read failed, when it did: the library's message
+    /// and code (fix 2, N1).
     pub(in crate::desktop::view::item) fn unmanaged_banner(
         &self,
         item: &ItemDto,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let failure = self
+            .adoption
+            .failure
+            .map(|code| failure(code.message().to_owned(), code, cx));
         h_flex()
             .flex_wrap()
             .gap_3()
@@ -80,7 +86,12 @@ impl ItemPane {
                     .min_w_0()
                     .child(text("item-unmanaged", UNMANAGED)),
             )
-            .children(self.repair_entry(item, true, cx))
+            .child(
+                v_flex()
+                    .gap_1()
+                    .children(self.repair_entry(item, true, cx))
+                    .children(failure),
+            )
             .into_any_element()
     }
 
@@ -94,27 +105,12 @@ impl ItemPane {
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let repair = self.repair.as_ref()?;
-        let theme = cx.theme();
-        let (danger, muted, mono) = (
-            theme.danger,
-            theme.muted_foreground,
-            theme.mono_font_family.clone(),
-        );
+        let mono = cx.theme().mono_font_family.clone();
         let (running, locked) = (repair.running, repair.locked());
-        let failure = repair.failure.as_ref().map(|(message, code)| {
-            v_flex()
-                .gap_1()
-                .child(
-                    text("repair-failure", message.clone())
-                        .text_sm()
-                        .text_color(danger),
-                )
-                .child(
-                    text("repair-failure-code", code.as_str())
-                        .text_xs()
-                        .text_color(muted),
-                )
-        });
+        let failure = repair
+            .failure
+            .as_ref()
+            .map(|(message, code)| failure(message.clone(), *code, cx));
         let button =
             |id: &'static str, label: &'static str| div().id(id).test_support().aria_label(label);
         let preview = Button::new("repair-preview-button")
@@ -169,4 +165,22 @@ impl ItemPane {
                 .into_any_element(),
         )
     }
+}
+
+/// Why the last answer made nothing: the library's message, then its code,
+/// muted.
+fn failure(message: String, code: ResultCode, cx: &App) -> impl IntoElement + use<> {
+    let theme = cx.theme();
+    v_flex()
+        .gap_1()
+        .child(
+            text("repair-failure", message)
+                .text_sm()
+                .text_color(theme.danger),
+        )
+        .child(
+            text("repair-failure-code", code.as_str())
+                .text_xs()
+                .text_color(theme.muted_foreground),
+        )
 }
