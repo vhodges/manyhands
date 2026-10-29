@@ -799,6 +799,8 @@ fn branch_bytes(root: &Path, id: &str) -> Vec<(String, Vec<u8>)> {
 /// editing and left with Done, writes nothing. Normalization is no change:
 /// the editor is clean, `secondary-s` sends nothing, and the canonical
 /// bytes of every branch are the file's as committed, with no new commit.
+/// The context the Edit made is released on leave: held until all that is
+/// read, then let run (Task 27 fix 1, C1).
 #[gpui_kit::test]
 async fn a_normalized_item_opened_and_done_writes_nothing(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -822,17 +824,35 @@ async fn a_normalized_item_opened_and_done_writes_nothing(cx: &mut TestAppContex
     assert!(!dirty(&host, cx));
     assert_eq!(pill(&shell, cx).as_deref(), Some(EDITING_SAVED));
 
+    let held = shell.backend.hold_job(JobKind::ContextRelease);
     let editor = host_editor(&host, cx);
     focus_at(&shell, &editor, 0, cx);
     shell.keys("secondary-s", cx);
     shell.click("item-done", cx);
     shell.run(cx);
+    held.wait_reached();
     assert!(saves(&shell, cx).is_empty(), "nothing is saved");
     assert!(stored_bodies(&shell).is_empty(), "nothing is drafted");
     assert_eq!(RepositorySnapshot::take(&root), snapshot, "no new commit");
     assert!(
         branch_bytes(&root, TICKET) == branches,
         "every branch's bytes"
+    );
+
+    held.release();
+    let release = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::ContextRelease { .. })
+    });
+    assert_eq!(release.len(), 1, "one release");
+    ended(&shell, release[0], cx).await;
+    assert_eq!(code(&shell, release[0], cx), Some(ResultCode::Ok));
+    let branch = format!("refs/heads/manyhands/ticket/{TICKET}");
+    assert!(
+        !RepositorySnapshot::take(&root)
+            .refs
+            .iter()
+            .any(|(name, _)| *name == branch),
+        "the context is released"
     );
 }
 
