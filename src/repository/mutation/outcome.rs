@@ -26,7 +26,7 @@ use super::{
         leases_are_free, recovery,
         transport::SshTransportErrorKind,
     },
-    bind::resume,
+    bind::{comment, resume},
     command::Command,
     identity::RequestId,
     records,
@@ -1001,12 +1001,8 @@ fn recovery(
 }
 
 /// Whether `code`, from a synchronization, is one the same request
-/// never gets past; see the closing rule of `recovery`. A comment's
-/// submission whose publication stops so is finished on it (R-34).
-pub(crate) fn never_finished_by_the_same_request(
-    code: ResultCode,
-    command: Option<Command>,
-) -> bool {
+/// never gets past; see the closing rule of `recovery`.
+fn never_finished_by_the_same_request(code: ResultCode, command: Option<Command>) -> bool {
     command.is_some_and(Command::stops_at_safe_points)
         && (code == ResultCode::MergeRequired || code == ResultCode::RemoteBranchDeleted)
 }
@@ -1212,6 +1208,10 @@ impl RepositoryService {
     /// The reservation is read only for an envelope that offers the
     /// action. One that cannot be read drops it: the envelope then offers
     /// what it did before the action existed.
+    ///
+    /// A comment's request holds its comment's operation, and the
+    /// reservation is held by the synchronization that publishes the
+    /// comment: that synchronization is the request's own as well (R-5).
     fn offering_cancel<T>(&self, mut envelope: Envelope<T>) -> Envelope<T> {
         let offers = envelope
             .recovery
@@ -1226,10 +1226,26 @@ impl RepositoryService {
             .as_deref()
             .zip(envelope.operation_id.as_deref())
             .is_some_and(|(root, operation_id)| {
-                self.active_remote_operation(Path::new(root))
-                    .ok()
-                    .flatten()
-                    .is_some_and(|active| active.operation_id().to_string() == operation_id)
+                let Some(active) = self.active_remote_operation(Path::new(root)).ok().flatten()
+                else {
+                    return false;
+                };
+                let active = active.operation_id();
+                active.to_string() == operation_id
+                    || OperationId::parse(operation_id).is_ok_and(|operation_id| {
+                        self.read_session(RepositoryOperation::Read, |connection| {
+                            Ok(comment::comment_synchronization(
+                                connection,
+                                Path::new(root),
+                                operation_id,
+                            ))
+                        })
+                        .ok()
+                        .flatten()
+                        .is_some_and(|(comment, synchronization)| {
+                            comment == operation_id && synchronization == active
+                        })
+                    })
             });
         if !own {
             envelope

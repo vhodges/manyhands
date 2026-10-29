@@ -118,8 +118,16 @@ pub struct CommentSubmissionError {
     pub kind: RepositoryErrorKind,
     pub operation_id: Option<OperationId>,
     error: Box<RepositoryError>,
+    /// The refusal came after the comment's binding was inserted, and
+    /// released it with its row's rejection, having written nothing.
+    released: bool,
 }
 impl CommentSubmissionError {
+    /// Whether the refusal released the binding it inserted, having
+    /// written nothing: the same operation then binds afresh (R-34).
+    pub(crate) fn released(&self) -> bool {
+        self.released
+    }
     pub fn external_change(&self) -> Option<&ExternalChangeDiagnostic> {
         self.error.external_change()
     }
@@ -130,6 +138,7 @@ impl From<RepositoryError> for CommentSubmissionError {
             kind: error.kind,
             operation_id: None,
             error: Box::new(error),
+            released: false,
         }
     }
 }
@@ -305,6 +314,8 @@ impl RepositoryService {
         synchronize: &mut Synchronizer<'_>,
     ) -> Result<CommentSubmissionOutcome, CommentSubmissionError> {
         let id = request.comment.target.operation_id;
+        // Set by a refusal that released the binding it inserted.
+        let mut released = false;
         let result = (|| {
             let (_, root) = canonical_repository_root(
                 &request.comment.target.root,
@@ -343,6 +354,7 @@ impl RepositoryService {
                     config,
                     author,
                     release_unwritten,
+                    &mut released,
                 )?
             } else {
                 self.checkpoint_comment_locally(request.comment.clone(), config)?
@@ -440,6 +452,7 @@ impl RepositoryService {
         result.map_err(|error: RepositoryError| {
             let mut error = CommentSubmissionError::from(error);
             error.operation_id = Some(id);
+            error.released = released;
             error
         })
     }

@@ -593,7 +593,7 @@ new ticket comment (ruling P4).
 | --- | --- | --- | --- | --- |
 | 1 | `feat: merge divergent history in item and repo sync`; fix round 1 `fix: answer busy for a sync beside a pending merge, and name a cancelled merge` | Verify list passed: 37, 44, 72, 129 and 113 SSH cases; fix round 1: 26 `c4_merging`, 5 E-3, 123 `--lib mutation`, 44 | fix round 1 applied; re-review pending | See "Task 1: Merging Synchronization" |
 | 2a | `feat: let comment submission take a synchronizer` | Verify list passed: 5 `c4_comment_domain`, 41 and 25 SSH cases, 1344 `--lib repository`, clippy, fmt | pending | The author moves to Task 2b (ruling Q2). See "Task 2a: The Library's Comment Submission" |
-| 2b | `feat: bind comment submission with authorship and safe points` | Verify list passed: 148, 41 SSH cases; 383, 129, 44, 72; 123 `--lib mutation`; clippy, fmt | pending | `remote_branch_deleted` leaves a held reservation (finding 1). See "Task 2b: The Comment Submission Binding" |
+| 2b | `feat: bind comment submission with authorship and safe points`; pre-review fix round 1 `fix: keep a comment whose branch was deleted cancellable, and release an unwritten refused binding` | Verify list passed: 148, 41 SSH cases; 383, 129, 44, 72; 123 `--lib mutation`; clippy, fmt; fix round 1: see its entry | pending | Findings 1 and 2 fixed by controller ruling in fix round 1. See "Task 2b: The Comment Submission Binding" |
 
 ### Task 1: Merging Synchronization
 
@@ -1216,3 +1216,89 @@ watchdog; with two rows it ran in about 48 s.
    working tree only, as the merging cases do; the comment's index hand-off
    then stops, and the answer is not `ok`. The cases commit the change on
    primary instead.
+
+#### Task 2b, fix round 1
+
+Before the task review, the controller ruled on findings 1 and 2 ("Task 2b
+concern 1" and "concern 2" in the controller ledger). Findings 3 and 4 are
+unchanged: the conformance margin is carried to Task 5, E-6's rename is
+accepted, and the host action is a deferred minor. The commit is `fix: keep a
+comment whose branch was deleted cancellable, and release an unwritten
+refused binding`, on `846b35f`. `origin/main` is still `a372edb`.
+
+1. **A child stopped as `remote_branch_deleted` is owed, not final.**
+   - The same holds for any code `never_finished_by_the_same_request`
+     names. `standing_of` loses its early `Final` for them, so the child's
+     own standing applies: a held reservation leaves the record accepted.
+     The binding no longer needs that function, which is private again.
+   - The result offers exactly `[request.cancel]`, naming the `comment add`
+     request, by `recovery`'s rule for a held synchronization.
+   - `offering_cancel` (`outcome.rs`) keeps the action when the reservation
+     is held by the comment's synchronization. It resolves that through
+     `comment_synchronization` on the envelope's operation (R-5). Before
+     this, it kept the action only when the reservation was the envelope's
+     own operation, the comment's local one, and so always dropped it.
+   - **The path out.** `request cancel` sets the request's flag. The same
+     request then re-enters with `restart`, and its synchronization's
+     `Watch` reads the flag at the first safe point, before the domain
+     refuses the deleted branch again. The answer is `cancelled`, with the
+     checkpoint committed and the publication pending; the child's row is
+     cancelled, the reservation released, and the record finished. The
+     flag alone does this, so `cancel_request` (`progress.rs`) is
+     unchanged.
+2. **A refusal after the binding that wrote nothing releases it.**
+   - `checkpoint_comment_locally_with` gains `released: &mut bool`.
+     `checkpoint_comment_locally` passes a throwaway one.
+   - With the binding's semantics, an error after the binding row was
+     inserted is released when: the call left nothing behind
+     (`CallEffects::leave_nothing_behind`, a new row with no effect
+     begun); and the comment's file is absent from the item's worktree.
+     The release reuses `release_unwritten_comment_binding`, whose guard
+     also requires no write step, no checkpoint and no child row. It runs
+     under the lease, in one transaction with the row's rejection.
+   - The refusal is returned unchanged, and `released` is set.
+   - `CommentSubmissionError` gains a private `released` flag, with a
+     `pub(crate)` reader. The submission sets it. Nothing builds that
+     error by literal.
+   - The binding's `refused` keeps the record (`Standing::Owed`) for a
+     released refusal, as R-34 has it for an identity stop. The same
+     request then binds afresh, and is refused the same way. A refusal
+     before the binding (parent, closed ticket, pending conflict,
+     unfinished local sync) is unchanged, with its record deleted. A
+     refusal that wrote the file, or began any effect, keeps its binding.
+   - With the record kept, `occupied_path`'s recovery is `[request.retry]`,
+     by `recovery`'s rule for an accepted record of a stopping command.
+
+**Tests.**
+
+- `c4_comment_remote_context_deleted` now asserts:
+  - `remote_branch_deleted`, partial, with the checkpoint committed and the
+    publication pending;
+  - the record accepted, the reservation held, and recovery exactly
+    `[request.cancel]` naming `REQUEST_1`, with no operation;
+  - nothing recreated, and a new `item sync` `busy`;
+  - then `request cancel` (`requested`), and the same request:
+    `cancelled`, the same effects, no recovery, the reservation released,
+    and the record finished. A replay gives the same answer;
+  - then a new `item sync`, which is not `busy`: it reaches the remote, and
+    answers `remote_branch_deleted` under its own request.
+- `c4_comment_comment_id_occupied` sends the same request twice. Each time
+  it asserts `occupied_path` (input), the same operation, the record
+  accepted, no binding row, the row `rejected`, and no file.
+- No golden changed.
+
+**Commands** (each `devenv shell -- cargo … --locked`):
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --test mutation_remote -- c4_comment` | 34 SSH cases passed (7 min 2 s) |
+| `test --all-features --test comment_publication` | 41 SSH cases passed |
+| `test --all-features --test mutation_replay` | 383 passed |
+| `test --all-features --test mutation_contract` | 44 passed |
+| `test --all-features --lib mutation` | 123 passed |
+| `clippy --all-targets --all-features -- -D warnings` | passed |
+| `fmt --check` | passed |
+
+`progress.rs` is untouched, so the `request cancel` cases were not run
+again; nor was the whole `mutation_remote` target, which the review
+scopes.

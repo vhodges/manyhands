@@ -903,14 +903,46 @@ fn c4_comment_remote_context_deleted() -> Result<(), FixtureError> {
         data(&stopped)?.pending_reason,
         Some(CommentPendingReason::Synchronization)
     );
-    // The same request cannot get past it: the record is finished.
-    assert_eq!(state(&w, REQUEST_1), Some(RequestState::Finished));
-    assert!(
-        !actions(&stopped).contains(&RecoveryActionKind::RequestRetry),
-        "{:?}",
-        actions(&stopped)
+    // The comment's synchronization holds the reservation, as `item
+    // sync`'s does on this code, and the record stays accepted: the same
+    // request cannot get past it, and what is offered is its cancellation
+    // (controller ruling, Task 2b concern 1).
+    assert_eq!(state(&w, REQUEST_1), Some(RequestState::Accepted));
+    assert!(reserved(&w));
+    assert_eq!(actions(&stopped), [RecoveryActionKind::RequestCancel]);
+    assert_eq!(stopped.recovery[0].operation_id, None);
+    assert_eq!(stopped.recovery[0].arguments.len(), 1);
+    assert_eq!(
+        stopped.recovery[0].arguments["request_id"].as_str(),
+        Some(REQUEST_1)
     );
-    // Nothing is recreated.
+    // Nothing is recreated, and a new synchronization is refused while
+    // the reservation is held.
+    assert!(w.bare()?.find_reference(CONTEXT).is_err());
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(execute(&w, REQUEST_2, item_sync(&w)).code, ResultCode::Busy);
+
+    // `request cancel`, then the same request, ends it.
+    let asked = w
+        .service
+        .cancel_request(request(REQUEST_1))
+        .data
+        .ok_or(FixtureError)?;
+    assert!(asked.requested);
+    let ended = added(&w, REQUEST_1, add(&w));
+    assert_eq!(ended.code, ResultCode::Cancelled);
+    assert_eq!(ended.outcome, Outcome::Cancelled);
+    assert_eq!(ended.operation_id, stopped.operation_id);
+    assert_eq!(ended.effects, saved(checkpoint, PublicationEffect::Pending));
+    assert!(ended.recovery.is_empty());
+    assert!(!reserved(&w));
+    assert_eq!(state(&w, REQUEST_1), Some(RequestState::Finished));
+    assert_eq!(added(&w, REQUEST_1, add(&w)), ended);
+    // The repository is free: a new synchronization reaches the remote,
+    // where the branch is still deleted.
+    let synchronized = execute(&w, REQUEST_3, item_sync(&w));
+    assert_ne!(synchronized.code, ResultCode::Busy);
+    assert_eq!(synchronized.code, ResultCode::RemoteBranchDeleted);
     assert!(w.bare()?.find_reference(CONTEXT).is_err());
     assert_eq!(accepted(&w.server), pushes);
     Ok(())
@@ -981,21 +1013,34 @@ fn c4_comment_self_parent() -> Result<(), FixtureError> {
     Ok(())
 }
 
+/// The domain refuses an occupied comment ID after it bound the comment.
+/// Having written nothing, the refusal releases the binding with its
+/// row's rejection, and the record stays, as for an identity stop: the
+/// same request, sent again, binds afresh and is refused the same way
+/// (controller ruling, Task 2b concern 2).
 fn c4_comment_comment_id_occupied() -> Result<(), FixtureError> {
     let (w, context) = world()?;
     // The ticket's own ID, which its file holds.
-    let refused = added(
-        &w,
-        REQUEST_1,
-        comment_on(&w, ITEM, ITEM, None, COMMENT_BODY, None),
-    );
-    assert_eq!(refused.code, ResultCode::OccupiedPath);
-    assert_eq!(refused.outcome, Outcome::Error);
-    assert_eq!(refused.failure_class(), Some(FailureClass::Input));
-    assert_eq!(refused.effects, Effects::not_requested());
-    assert!(refused.data.is_none());
-    assert!(record(&w, REQUEST_1).is_none());
-    assert!(!context.worktree.join(comment_path(ITEM, ITEM)).exists());
+    let occupied = || comment_on(&w, ITEM, ITEM, None, COMMENT_BODY, None);
+    let mut operation = None;
+    for _ in 0..2 {
+        let refused = added(&w, REQUEST_1, occupied());
+        assert_eq!(refused.code, ResultCode::OccupiedPath);
+        assert_eq!(refused.outcome, Outcome::Error);
+        assert_eq!(refused.failure_class(), Some(FailureClass::Input));
+        assert_eq!(refused.effects, Effects::not_requested());
+        assert!(refused.data.is_none());
+        // The same request each time, under the same operation.
+        let this = operation_of(&refused)?;
+        assert_eq!(*operation.get_or_insert(this), this);
+        assert_eq!(state(&w, REQUEST_1), Some(RequestState::Accepted));
+        assert_eq!(binding_rows(&w)?, 0);
+        assert_eq!(
+            comment_domain::local_row(&w, this)?,
+            ("completed".to_owned(), Some("rejected".to_owned()))
+        );
+        assert!(!context.worktree.join(comment_path(ITEM, ITEM)).exists());
+    }
     Ok(())
 }
 

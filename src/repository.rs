@@ -2761,7 +2761,7 @@ impl RepositoryService {
         request: SubmitCommentRequest,
         effective_config: Option<&Config>,
     ) -> Result<LocalCommentCheckpointOutcome, RepositoryError> {
-        self.checkpoint_comment_locally_with(request, effective_config, None, false)
+        self.checkpoint_comment_locally_with(request, effective_config, None, false, &mut false)
     }
 
     /// `checkpoint_comment_locally`, which calls this with no author and
@@ -2781,22 +2781,35 @@ impl RepositoryService {
     /// - on `IdentityRequired`, when this operation recorded no write
     ///   step and the comment file is absent, one registry transaction
     ///   deletes the binding and marks the row `rejected`. The same
-    ///   operation then begins again as new and binds afresh (R-34).
+    ///   operation then begins again as new and binds afresh (R-34);
+    /// - so too on a refusal after the binding row was inserted that left
+    ///   nothing behind, as one for an occupied comment ID does. The
+    ///   refusal is returned, and `released` is set (controller ruling,
+    ///   Task 2b concern 2).
     ///
     /// Without it, the order and the standing are the public path's:
     /// the binding row is inserted first, and is kept with the completed
-    /// row on `IdentityRequired`.
+    /// row on `IdentityRequired` and on a refusal.
     pub(crate) fn checkpoint_comment_locally_with(
         &self,
         request: SubmitCommentRequest,
         effective_config: Option<&Config>,
         author: Option<comment_publication::CommentAuthor>,
         release_unwritten: bool,
+        released: &mut bool,
     ) -> Result<LocalCommentCheckpointOutcome, RepositoryError> {
         let operation = RepositoryOperation::SubmitComment;
         let operation_id = request.target.operation_id;
         self.require_index_available(operation, Some(&request.target.root))?;
         let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
+        // The comment's file in the item's editing worktree: a refusal
+        // that releases its binding has not written it.
+        let comment_file = item_context(&root, request.target.kind, request.target.item_id.clone())
+            .worktree
+            .join(format!(
+                ".manyhands/comments/{}/{}.md",
+                request.target.item_id, request.comment_id
+            ));
         let comment_id = request.comment_id.to_string();
         let paths = [Path::new(".manyhands/comments"), Path::new(&comment_id)];
         self.reject_pending_synchronization_target(
@@ -3254,6 +3267,28 @@ impl RepositoryService {
                         binding: retained_binding
                             .ok_or_else(comment_publication::recovery_error)?,
                     });
+                }
+                // With the binding's semantics, a refusal after the binding
+                // row was inserted that left nothing behind releases it,
+                // under the lease, as an identity stop does: no write step,
+                // and no comment file. The refusal stands either way; a
+                // release that cannot be made leaves the binding, and the
+                // row is settled as before.
+                let unwritten = matches!(
+                    comment_file.symlink_metadata(),
+                    Err(missing) if missing.kind() == std::io::ErrorKind::NotFound
+                );
+                if release_unwritten
+                    && retained_binding.is_some()
+                    && effects.leave_nothing_behind(record)
+                    && unwritten
+                    && self
+                        .release_unwritten_comment_binding(&root, record, operation_id)
+                        .unwrap_or(false)
+                {
+                    *released = true;
+                    drop(lease);
+                    return Err(error);
                 }
                 self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error))
             }

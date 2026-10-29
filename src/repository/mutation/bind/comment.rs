@@ -19,10 +19,13 @@
 //!   is finished.
 //! - A publication left pending is owed: the record stays accepted, and
 //!   the same request publishes the comment without writing it again.
-//!   The exceptions are a child that is final, such as one cancelled,
-//!   and a code the same request never gets past, such as
-//!   `remote_branch_deleted`. Those are finished.
-//! - `identity_required` keeps the record accepted. A binding that wrote
+//!   The exception is a child that is final, such as one cancelled,
+//!   which is finished. A code the same request never gets past, such as
+//!   `remote_branch_deleted`, is owed as well: the child holds the
+//!   reservation, as `item sync`'s does, and `request cancel` followed by
+//!   the same request ends it, `cancelled`.
+//! - `identity_required` keeps the record accepted, and so does a refusal
+//!   the domain makes after it bound the comment. A binding that wrote
 //!   nothing is released with its row's rejection, so the same request
 //!   binds afresh; one that wrote the file is kept, and the same request
 //!   checkpoints the file once.
@@ -254,16 +257,16 @@ struct Child {
     succeeded: bool,
 }
 
-/// What becomes of the record of a request whose publication stopped as
-/// `code`, given what the synchronization's binding says of its own row
-/// (R-34). A code the same request never gets past is final, and so is a
-/// row that was cancelled or retained. A row that completed beside an
-/// error leaves the record for the same request to answer from it. Any
-/// other stop is owed: the same request takes the publication up.
-fn standing_of(code: ResultCode, standing: Standing) -> Standing {
-    if outcome::never_finished_by_the_same_request(code, Some(Command::CommentAdd)) {
-        return Standing::Final;
-    }
+/// What becomes of the record of a request whose publication stopped,
+/// given what the synchronization's binding says of its own row (R-34). A
+/// row that was cancelled or retained is final. A row that completed
+/// beside an error leaves the record for the same request to answer from
+/// it. Any other stop is owed, whatever stopped it: the synchronization
+/// holds the repository's reservation, and the same request is what takes
+/// it up, or, for a code the same request never gets past, such as
+/// `remote_branch_deleted`, what ends it after `request cancel`, as for
+/// `item sync` (controller ruling, Task 2b concern 1).
+fn standing_of(standing: Standing) -> Standing {
     match standing {
         Standing::Final => Standing::Final,
         Standing::Owed => Standing::Owed,
@@ -380,10 +383,15 @@ impl CommentAddBinding {
     }
 
     /// The submission refused the request, or failed. Only the error's
-    /// kind is read: its text can hold a path or a backend's message. A
-    /// request whose comment is checkpointed keeps its record, for the
-    /// same request to prove the checkpoint again; any other is the local
-    /// row's to settle.
+    /// kind is read: its text can hold a path or a backend's message.
+    ///
+    /// - A refusal that released the binding it inserted, having written
+    ///   nothing, keeps the record, as an identity stop does: the same
+    ///   request binds afresh, and is answered as it is then (R-34;
+    ///   controller ruling, Task 2b concern 2).
+    /// - A request whose comment is checkpointed keeps its record, for the
+    ///   same request to prove the checkpoint again.
+    /// - Any other is the local row's to settle.
     fn refused(
         &self,
         service: &RepositoryService,
@@ -391,7 +399,7 @@ impl CommentAddBinding {
         error: &CommentSubmissionError,
     ) -> Ran {
         let effects = comment_effects(service, accepted);
-        let standing = if effects.checkpoint == CheckpointEffect::Committed {
+        let standing = if error.released() || effects.checkpoint == CheckpointEffect::Committed {
             Standing::Owed
         } else {
             Standing::Stopped {
@@ -499,7 +507,7 @@ fn saved(
                 (
                     answer.code,
                     Some(CommentPendingReason::Synchronization),
-                    standing_of(answer.code, standing),
+                    standing_of(standing),
                 )
             }
             // It published, and what it published does not hold the
