@@ -12,14 +12,14 @@ use gpui_kit::{
     Window, WindowHandle, component::Root, px, size, test::TestWindowExt,
 };
 use manyhands::{
-    drafts::{BaseContext, ContextKind, DraftBase, DraftFields, DraftId, DraftTarget, ItemKind},
+    drafts::{DraftBase, DraftFields, DraftId, DraftTarget, ItemKind},
     repository::ItemDtoKind,
 };
 
 use super::{editor::host::EditorHost, workspace::Workspace};
 use crate::desktop::{
     keys,
-    model::{navigation::OpenTarget, operations::Operations, tabs::TabKey},
+    model::{drafts::create, navigation::OpenTarget, operations::Operations, tabs::TabKey},
     open_test_window_over,
     services::requests::{DesktopRequest, DesktopRequestId},
     test_support::{delaying::DelayingBackend, fixtures::Fixture},
@@ -326,47 +326,30 @@ impl Shell {
 }
 
 /// A new ticket's draft fields: `title`, the default type and status, and
-/// an empty body.
+/// an empty body, as New ticket… makes them.
 pub(crate) fn new_ticket_fields(title: &str) -> DraftFields {
-    DraftFields::Ticket {
-        title: title.to_owned(),
-        ticket_type: "task".to_owned(),
-        status: "open".to_owned(),
-        project: None,
-        team: None,
-        deps: Vec::new(),
-        parent: None,
-        body: String::new(),
-    }
+    create::ticket_fields(title, create::DEFAULT_TYPE)
 }
 
 /// The new item's draft of the ticket `id` of `root` with `fields`: its
 /// target, and its base, with neither observation nor source (R-20), at the
-/// ticket's path on the primary branch.
+/// ticket's path in the primary context, as New ticket… makes them. The
+/// fixture's primary branch is `main`.
 pub(crate) fn new_ticket_draft(
     root: &Path,
     id: &str,
     fields: &DraftFields,
 ) -> (DraftTarget, DraftBase) {
-    let target = DraftTarget {
-        repository: key(root),
-        item_kind: ItemKind::Ticket,
-        item_id: id.parse().unwrap(),
-        comment: None,
-    };
-    let base = DraftBase {
-        observation: None,
-        path: format!(".manyhands/tickets/{id}/ticket.md"),
-        context: BaseContext {
-            kind: ContextKind::Primary,
-            branch: Some("main".to_owned()),
-            worktree: key(root),
-            head_oid: None,
-        },
-        source: None,
-        fields: fields.clone(),
-    };
-    (target, base)
+    let id = id.parse().unwrap();
+    let path = create::ticket_path(&id);
+    create::new_item_draft(
+        &key(root),
+        Some("main".to_owned()),
+        ItemKind::Ticket,
+        id,
+        path,
+        fields,
+    )
 }
 
 impl Shell {

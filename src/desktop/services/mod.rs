@@ -83,7 +83,6 @@ pub(crate) enum ReadKind {
     /// the desktop asks the library about.
     ObservePath,
     /// `new_id`, for a new item's ID.
-    #[allow(dead_code)] // Called from Task 23; no test builds it.
     NewId,
     /// The check of a relationship a draft sets, before it is saved.
     RelationshipCheck,

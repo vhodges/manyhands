@@ -23,8 +23,8 @@
 //!   (`context_prepared`). When the file there is this draft's item, the
 //!   draft becomes an ordinary unverified draft (R-42), which its tab
 //!   reviews: an earlier create's answer was lost. Otherwise, as for
-//!   `initials_required`, the draft is kept as it is, and its tab shows the
-//!   library's refusal.
+//!   `initials_required`, the draft is kept as it is, and its tab says why
+//!   (R-21, R-22).
 //! - **A lost answer.** A create the library offers to take again under the
 //!   same request keeps its record (`save`), so the same request sent again
 //!   completes the draft once it has created the item, once.
@@ -53,13 +53,11 @@ use crate::desktop::{
 
 /// R-46: why a new item cannot be created while the draft store is not
 /// open (pre-flight ruling, Task 22).
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 23.
 pub(crate) const RECOVERY_NEEDED: &str = "Crash recovery is off, so a new item cannot be created.";
 
 /// A new item's draft, stored and claimed, and the `context prepare` sent
 /// after it (R-20): what the new tab shows and follows. It holds no text.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 23.
 pub(crate) struct NewItem {
     pub(crate) draft: DraftId,
     pub(crate) prepare: DesktopRequestId,
@@ -70,7 +68,6 @@ impl DraftRegistry {
     /// its session, as `begin` does. `base` has neither observation nor
     /// source (R-20), and holds the path and the fields. A store that did
     /// not open answers at once with why, having written nothing (R-46).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 23.
     pub(crate) fn begin_new(
         &mut self,
         target: DraftTarget,
@@ -90,7 +87,6 @@ impl DraftRegistry {
     /// with the Create intent sent, on the user lane. Answers both, or why
     /// the draft could not be written: then nothing is sent, and nothing
     /// is provisioned (R-46).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 23.
     pub(crate) fn new_item(
         &mut self,
         target: DraftTarget,

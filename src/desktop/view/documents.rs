@@ -2,7 +2,8 @@
 //! with its arrow bindings. Folders show by name, empty ones say so;
 //! documents show by title with their path as secondary text; a
 //! nonconforming document shows its path and problem code. Enter or a
-//! click opens a document. Folder creation is visibly unavailable.
+//! click opens a document. New document… opens its dialog
+//! (`view::create`); folder creation is visibly unavailable.
 
 use std::{collections::HashMap, rc::Rc};
 
@@ -20,7 +21,7 @@ use gpui_kit::{
     div, px,
 };
 
-use super::workspace::Workspace;
+use super::{create::NEW_DOCUMENT, workspace::Workspace};
 use crate::desktop::model::{documents::TreeNode, navigation::OpenTarget, stamp::RepoKey};
 
 pub(crate) const NONCONFORMING: &str = "Nonconforming";
@@ -116,6 +117,7 @@ impl DocumentsPane {
         let theme = cx.theme();
         let muted = theme.muted_foreground;
         let nodes = self.nodes.clone();
+        let opener = workspace.clone();
         let rows = tree(&self.tree, move |ix, entry, selected, _, _| {
             let indent = px(12. * entry.depth() as f32);
             let item = ListItem::new(("doc-item", ix))
@@ -201,6 +203,15 @@ impl DocumentsPane {
                     .children(secondary),
             )
         });
+        // New document…, before New folder (`03-panels.md`): its dialog
+        // (`view::create`).
+        let new_document = div().id("new-document").test_support().child(
+            Button::new("new-document-button")
+                .label(NEW_DOCUMENT)
+                .on_click(move |_: &ClickEvent, window, cx| {
+                    let _ = opener.update(cx, |workspace, cx| workspace.new_item(window, cx));
+                }),
+        );
         v_flex()
             .gap_1()
             .size_full()
@@ -208,6 +219,7 @@ impl DocumentsPane {
             .child(
                 h_flex()
                     .gap_2()
+                    .child(new_document)
                     .child(
                         div().id("new-folder").test_support().child(
                             Button::new("new-folder-button")

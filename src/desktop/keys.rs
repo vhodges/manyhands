@@ -67,7 +67,6 @@ gpui_kit::actions!(
         /// the address.
         InsertLink,
         /// New document or New ticket, the shown list's.
-        #[cfg_attr(not(test), allow(dead_code))] // Called from Task 23.
         NewItem,
         /// Focus the edit toolbar's next control.
         ToolbarNext,
@@ -96,6 +95,11 @@ gpui_kit::actions!(
         ClosePicker,
     ]
 );
+
+/// The key context of the navigation region, the documents and tickets
+/// lists with their find bar and choices: `secondary-n` opens the shown
+/// list's New document… or New ticket… there, and nowhere else.
+pub(crate) const NAVIGATION_CONTEXT: &str = "Navigation";
 
 /// The key context of the document tree's wrapper, where `enter` opens
 /// the selected row.
@@ -177,6 +181,9 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("secondary-shift-d", OpenDrafts, None),
         KeyBinding::new("secondary-q", Quit, None),
         KeyBinding::new("enter", OpenSelected, Some(DOCUMENTS_CONTEXT)),
+        // New document… or New ticket…, the shown list's, in the navigation
+        // region only.
+        KeyBinding::new("secondary-n", NewItem, Some(NAVIGATION_CONTEXT)),
         KeyBinding::new("pageup", ScrollPageUp, Some(CONTENT_CONTEXT)),
         KeyBinding::new("pagedown", ScrollPageDown, Some(CONTENT_CONTEXT)),
         KeyBinding::new("home", ScrollToTop, Some(CONTENT_CONTEXT)),

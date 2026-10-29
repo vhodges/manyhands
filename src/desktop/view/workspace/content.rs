@@ -12,7 +12,7 @@ use crate::desktop::{
         navigation::OpenTarget,
         stamp::{RepoKey, SettingsPage, TabId},
     },
-    services::requests::DesktopRequestId,
+    services::{drafts::NewItem, requests::DesktopRequestId},
     view::{
         close_draft::{self, Ask, CloseWithDraft},
         drafts::DraftsEvent,
@@ -102,10 +102,24 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A tab's create was refused for want of initials, and its banner
+    /// asked for Settings on `root` (R-21): the next frame, which supplies
+    /// its window, opens them.
+    pub(in crate::desktop::view) fn settings_for_initials(
+        &mut self,
+        root: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        self.content.settings_for = Some(root);
+        cx.notify();
+    }
+
     /// Opens the Drafts page a tab's Review in Drafts asked for, and
-    /// focuses a tab whose draft was discarded. While a
-    /// dialog is open the request waits, as D1's actions do not act behind
-    /// one; the frame after the dialog closes opens it.
+    /// focuses a tab whose draft was discarded, and opens Settings on the
+    /// repository a tab's create asked for: the identity form, where its
+    /// initials are set. While a dialog is open the request waits, as D1's
+    /// actions do not act behind one; the frame after the dialog closes
+    /// opens it.
     pub(super) fn apply_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {
             return;
@@ -116,6 +130,27 @@ impl Workspace {
         if let Some(id) = self.content.review.take() {
             self.open_drafts(Some(id), window, cx);
         }
+        if let Some(root) = self.content.settings_for.take() {
+            self.identity_in_settings(root, window, cx);
+        }
+    }
+
+    /// A create dialog's new item (R-20): its draft is written and its
+    /// Create prepare sent. The dialog closes, the item's tab opens, and the
+    /// tab follows that prepare to the edit editor.
+    pub(in crate::desktop::view) fn open_created(
+        &mut self,
+        target: OpenTarget,
+        created: NewItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.close_dialog(cx);
+        self.open_item(target, cx);
+        if let Some(pane) = self.content.tabs.shown() {
+            pane.update(cx, |pane, cx| pane.edit_created(created, cx));
+        }
+        self.focus_region(Region::Content, window, cx);
     }
 
     /// What the Drafts page asks: Show shows and focuses the tab its draft

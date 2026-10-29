@@ -20,17 +20,23 @@
 //!   a refresh finds the item changed under the draft, with Compare…,
 //!   which opens the review, but for while it is open (R-68); a refusal,
 //!   with the library's message and code, and Retry when its recovery
-//!   offers the request again.
+//!   offers the request again. A new item's create refused for another file
+//!   at its path says so and that the draft is kept, once D2 has read the
+//!   path (R-22); one refused for want of initials says so, and its Open
+//!   Settings opens Settings on the repository (R-21).
+
+use std::path::PathBuf;
 
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, IntoElement, ParentElement, Styled,
+    AnyElement, App, ClickEvent, Context, EventEmitter, IntoElement, ParentElement, Styled,
     component::{ActiveTheme, Disableable, Icon, Sizable, button::Button, h_flex, v_flex},
 };
-use manyhands::results::RecoveryActionKind;
+use manyhands::results::{RecoveryActionKind, ResultCode};
 
 use super::Phase;
 use crate::desktop::{
     assets::icon_path,
+    model::create::{INITIALS_NEEDED, OPEN_SETTINGS, path_held_draft_kept},
     model::edit::save_state::{
         REVIEW_BEFORE_SAVING, SAVE, SAVE_TOOLTIP, SaveState, before_save, save_banner, save_offer,
         save_state,
@@ -44,7 +50,49 @@ use crate::desktop::{
     },
 };
 
+/// A create's `initials_required` banner asked for Settings on its
+/// repository, where its initials are set (R-21).
+pub(crate) struct InitialsInSettings(pub PathBuf);
+
+impl EventEmitter<InitialsInSettings> for ItemPane {}
+
+/// What the tab says of a create the library refused for its place or its
+/// short code.
+enum Refused {
+    /// The registry is reading the path for whether this draft's own item
+    /// is there: the review, or the words, follow.
+    Checking,
+    Said(String),
+}
+
 impl ItemPane {
+    /// The words of a never-created session's create the library refused
+    /// (R-21, R-22): another file at its path keeps the draft, once the
+    /// registry has read the path and found no item of this draft's there
+    /// (`create`); a repository with no initials says so, and its banner
+    /// points to Settings. `None` for any other refusal.
+    fn create_refused(&self, code: ResultCode, cx: &App) -> Option<Refused> {
+        let session = self
+            .edit
+            .session
+            .as_ref()
+            .filter(|session| session.never_created())?;
+        match code {
+            ResultCode::OccupiedPath => {
+                let checking = self
+                    .live_draft(cx)
+                    .and_then(|id| self.services.drafts().read(cx).session(id))
+                    .is_some_and(|session| session.saving().is_some());
+                Some(match checking {
+                    true => Refused::Checking,
+                    false => Refused::Said(path_held_draft_kept(&session.base.path)),
+                })
+            }
+            ResultCode::InitialsRequired => Some(Refused::Said(INITIALS_NEEDED.to_owned())),
+            _ => None,
+        }
+    }
+
     /// Whether Save can save now: editing, dirty, every required field
     /// filled, and no save in flight or waiting for its Retry, D2's
     /// finishing of the last one included.
@@ -200,6 +248,11 @@ impl ItemPane {
                 ));
             }
             SaveState::Refused(code) => {
+                let refused = match self.create_refused(code, cx) {
+                    Some(Refused::Checking) => return banners,
+                    Some(Refused::Said(words)) => Some(words),
+                    None => save_banner(state).map(str::to_owned),
+                };
                 let muted = cx.theme().muted_foreground;
                 let offered = !reviewing
                     && answer
@@ -214,14 +267,24 @@ impl ItemPane {
                             this.save_requested(window, cx);
                         }))
                 });
+                // R-21: initials are the repository's settings.
+                let settings = (code == ResultCode::InitialsRequired).then(|| {
+                    Button::new("item-save-settings")
+                        .label(OPEN_SETTINGS)
+                        .small()
+                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
+                            cx.emit(InitialsInSettings(PathBuf::from(this.repo())));
+                        }))
+                });
                 banners.push((
                     Banner::Refused,
                     v_flex()
                         .gap_1()
-                        .children(save_banner(state).map(|words| text("item-save-refused", words)))
+                        .children(refused.map(|words| text("item-save-refused", words)))
                         .child(text("item-save-message", answer.message.clone()).text_color(muted))
                         .child(text("item-save-code", code.as_str()).text_color(muted))
                         .children(again)
+                        .children(settings)
                         .into_any_element(),
                 ));
             }

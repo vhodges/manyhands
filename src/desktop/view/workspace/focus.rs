@@ -52,7 +52,7 @@ impl Region {
     fn key_context(self) -> &'static str {
         match self {
             Self::Repositories => "Repositories",
-            Self::Navigation => "Navigation",
+            Self::Navigation => crate::desktop::keys::NAVIGATION_CONTEXT,
             Self::Content => crate::desktop::keys::CONTENT_CONTEXT,
             Self::Operations => "Operations",
         }

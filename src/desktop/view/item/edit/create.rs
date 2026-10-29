@@ -26,6 +26,17 @@
 //!   was lost), the session goes on over the registry's unverified base,
 //!   and the review opens (`follow_unmarked`).
 //!
+//! - **A create dialog's new item** (R-20; `view::create`). Its draft is
+//!   written, and its Create prepare sent, before its tab opens: the tab
+//!   takes the draft and follows that prepare as Continue editing does, to
+//!   the same opening (`edit_created`).
+//! - **The header** (design, Create: the new tab opens editing, with its
+//!   header built from the draft's fields). With no item to read, the tab
+//!   shows the draft's fields as its item, in the header, the strip and the
+//!   sheet, while the never-created session lives and while its Create
+//!   prepare runs (`new_item_shown`); D1's not-found line and D2's restored
+//!   section are not shown meanwhile.
+//!
 //! Done, Discard and the Drafts page's discard of such a session are
 //! `done` and `leave`'s: there is no saved copy to view, so the tab
 //! closes; release on leave releases only a context this process made
@@ -34,7 +45,7 @@
 use gpui_kit::{App, Context, Window};
 use manyhands::{
     drafts::{TargetState, classify, is_new_item_base},
-    repository::ContextPrepareIntent,
+    repository::{ContextPrepareIntent, ItemDto},
     results::ResultCode,
 };
 
@@ -44,9 +55,80 @@ use super::{
     restored::{Continued, Continuing, Then},
     saved::body_of,
 };
-use crate::desktop::{model::edit::edit_offered, view::item::ItemPane};
+use crate::desktop::{
+    model::{drafts::create::shown_new_item, edit::edit_offered, navigation::OpenTarget},
+    services::drafts::NewItem,
+    view::item::ItemPane,
+};
 
 impl ItemPane {
+    /// A create dialog's new item (R-20): its draft, written before its
+    /// Create prepare was sent, is attached to this, its tab, and the tab
+    /// follows that prepare as Continue editing does: once its read lands,
+    /// the edit editor opens on the draft (`open_not_created`).
+    pub(in crate::desktop::view) fn edit_created(
+        &mut self,
+        created: NewItem,
+        cx: &mut Context<Self>,
+    ) {
+        let tab = self.tab_key();
+        self.services
+            .drafts()
+            .update(cx, |registry, cx| registry.attach(tab, created.draft, cx));
+        self.edit.continuing = Some(Continuing {
+            draft: created.draft,
+            then: Then::Edit,
+            create: true,
+        });
+        self.edit.phase = Phase::Preparing(created.prepare);
+        self.edit.prepare_taken = 0;
+        self.edit.stopped = None;
+        // The prepare may have been answered before the tab was there.
+        self.prepare_progressed(cx);
+        cx.notify();
+    }
+
+    /// The new item this tab shows while it is not created yet: with no
+    /// item read, the never-created session's fields, or, while a Create
+    /// prepare runs for the draft continued here, that draft's. `None`
+    /// otherwise, a stored or restored draft not continued included.
+    pub(in crate::desktop::view) fn new_item_shown(&self, cx: &App) -> Option<ItemDto> {
+        if self.model.item().rows().is_some() {
+            return None;
+        }
+        let OpenTarget::Item { kind, id, .. } = self.model.target() else {
+            return None;
+        };
+        if let Some(session) = &self.edit.session {
+            return session
+                .never_created()
+                .then(|| shown_new_item(*kind, id, &session.base, &session.meta));
+        }
+        if !self.opening_new_item() {
+            return None;
+        }
+        let continuing = self.edit.continuing.as_ref()?;
+        let registry = self.services.drafts().read(cx);
+        let session = registry.session(registry.current_id(continuing.draft)?)?;
+        Some(shown_new_item(
+            *kind,
+            id,
+            session.base()?,
+            session.current(),
+        ))
+    }
+
+    /// Whether the Create prepare of a draft continued here runs: the tab
+    /// is opening its editor on a new item's draft.
+    pub(in crate::desktop::view::item) fn opening_new_item(&self) -> bool {
+        matches!(self.edit.phase, Phase::Preparing(_) | Phase::Loading)
+            && self
+                .edit
+                .continuing
+                .as_ref()
+                .is_some_and(|continuing| continuing.create)
+    }
+
     /// Whether the draft Continue editing would continue is a new item's
     /// whose item the tab's read finds missing (`NotCreated`): it is
     /// continued with the Create intent, and with no item read (R-42).

@@ -4,9 +4,9 @@ use super::{Region, Workspace};
 use crate::desktop::{
     keys::{
         CloseTab, Find as FindKey, FocusContent, FocusNavigation, FocusOperations,
-        FocusRepositories, JumpToDiscussion, NextRegion, NextTab, OpenDrafts, OpenSelected,
-        OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh, ScrollPageDown,
-        ScrollPageUp, ScrollToBottom, ScrollToTop,
+        FocusRepositories, JumpToDiscussion, NewItem, NextRegion, NextTab, OpenDrafts,
+        OpenSelected, OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh,
+        ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop,
     },
     model::stamp::SettingsPage,
     view::{
@@ -141,6 +141,11 @@ impl Render for Workspace {
                 this.request_quit(window, cx);
             }))
             .on_action(cx.listener(|this, _: &QuitNow, _, cx| this.quit_now(cx)))
+            // New document… or New ticket…, bound in the navigation region
+            // only.
+            .on_action(unless_dialog(cx, |this, _: &NewItem, window, cx| {
+                this.new_item(window, cx)
+            }))
             .on_action(unless_dialog(cx, |this, _: &OpenSelected, _, cx| {
                 this.open_selected_document(cx)
             }))

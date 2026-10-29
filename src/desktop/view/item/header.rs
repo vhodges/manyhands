@@ -196,16 +196,21 @@ impl ItemPane {
     }
 
     /// The header block, and how many later actions it and its banners
-    /// drew: the discussion's Comment comes after them.
+    /// drew: the discussion's Comment comes after them. A new item not
+    /// created yet shows its draft's fields as its title, pill, chips and
+    /// breadcrumb (`new_item_shown`); its actions and banners are the tab's
+    /// own, as with no item read.
     pub(super) fn header(
         &self,
-        item: Option<&ItemDto>,
+        read: Option<&ItemDto>,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> (AnyElement, usize) {
         let colors = item_colors(cx);
-        let later = header_later(self.shown_kind(item));
+        let later = header_later(self.shown_kind(read));
         let state = self.edit_pill(cx);
+        let shown = read.cloned().or_else(|| self.new_item_shown(cx));
+        let item = shown.as_ref();
         let pill = item.map(|item| {
             let state = state.unwrap_or_else(|| pill::viewing_state(item, self.draft_kept(cx)));
             pill::pill(state, item, cx)
@@ -218,7 +223,7 @@ impl ItemPane {
             .gap(px(8.))
             .children(pill)
             .children(self.comments_button(window, cx))
-            .children(self.edit_action(item, window, cx))
+            .children(self.edit_action(read, window, cx))
             .children(
                 later
                     .iter()
@@ -278,7 +283,7 @@ impl ItemPane {
             .gap(px(16.))
             .child(actions)
             .child(identity);
-        let (banners, banner_later) = self.banners(item, later.len(), cx);
+        let (banners, banner_later) = self.banners(read, later.len(), cx);
         let slot = (!banners.is_empty())
             .then(|| v_flex().id("item-banners").gap(px(6.)).children(banners));
         let (vertical, horizontal) = PADDING;

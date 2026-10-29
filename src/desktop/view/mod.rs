@@ -2,6 +2,7 @@
 
 pub(crate) mod close_draft;
 pub(crate) mod confirm;
+pub(crate) mod create;
 pub(crate) mod documents;
 pub(crate) mod draft_comparison;
 pub(crate) mod drafts;

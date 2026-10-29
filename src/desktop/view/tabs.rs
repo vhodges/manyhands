@@ -12,7 +12,7 @@
 use super::{
     item::text,
     item::{
-        CloseThisTab, DraftDiscarded, ItemPane, OpenDetails, ReviewInDrafts,
+        CloseThisTab, DraftDiscarded, InitialsInSettings, ItemPane, OpenDetails, ReviewInDrafts,
         tokens::{ItemColors, item_colors},
     },
     relationships::OpenRelated,
@@ -144,7 +144,11 @@ pub(super) fn active_line(content_focused: bool, colors: &ItemColors) -> (&'stat
 
 /// The facts of `pane`'s tab.
 pub(super) fn tab_info(pane: &ItemPane, cx: &App) -> TabInfo {
-    let title = pane.tab_title();
+    // A new item not created yet is titled by its draft.
+    let title = pane
+        .new_item_shown(cx)
+        .and_then(|item| item.title)
+        .unwrap_or_else(|| pane.tab_title());
     let (repo, kind) = match pane.model.target() {
         OpenTarget::Item { repo, kind, .. } => (repo.as_str(), *kind),
         OpenTarget::Inspect { repo, .. } => (repo.as_str(), ItemDtoKind::Document),
@@ -207,9 +211,10 @@ pub(crate) struct TabContent {
     focus: HashMap<TabId, FocusHandle>,
     close_focus: HashMap<TabId, FocusHandle>,
     /// Each pane's related item opened, its Review in Drafts, its restored
-    /// draft discarded, its chips' requests for the details sheet, and its
+    /// draft discarded, its chips' requests for the details sheet, its
+    /// create's ask for Settings on its repository, and its
     /// own close once its unsaved work was settled.
-    related: HashMap<TabId, [Subscription; 5]>,
+    related: HashMap<TabId, [Subscription; 6]>,
     scroll: ContentScroll,
     /// The strip's own scroll handle, and the tabs the last frame saw shown
     /// and focused, so a change is scrolled into view once.
@@ -282,11 +287,14 @@ impl TabContent {
             let details = cx.subscribe(&pane, |this, pane, event: &OpenDetails, cx| {
                 this.ask_details(&pane, event.0, cx)
             });
+            let settings = cx.subscribe(&pane, |this, _, event: &InitialsInSettings, cx| {
+                this.settings_for_initials(event.0.clone(), cx)
+            });
             let close = cx.subscribe(&pane, move |this, _, _: &CloseThisTab, cx| {
                 this.close_settled(id, cx)
             });
             self.related
-                .insert(id, [related, review, discarded, details, close]);
+                .insert(id, [related, review, discarded, details, settings, close]);
             self.panes.insert(id, pane);
             self.focus.insert(id, cx.focus_handle().tab_stop(true));
             self.close_focus.insert(id, cx.focus_handle());

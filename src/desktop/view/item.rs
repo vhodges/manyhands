@@ -77,7 +77,7 @@ pub(super) use details::text;
 pub(crate) use draft::NOT_SAVED;
 pub(crate) use draft::{NOT_DISCARDED, ReviewInDrafts, refused_label};
 pub(crate) use draft_actions::DraftDiscarded;
-pub(crate) use edit::{CloseThisTab, Leaving};
+pub(crate) use edit::{CloseThisTab, InitialsInSettings, Leaving};
 pub(crate) use sheet::open_details;
 
 pub(crate) const NONCONFORMING_FILE: &str = "Nonconforming file";
@@ -327,8 +327,9 @@ impl Render for ItemPane {
         // its problems in "Needs fixing".
         let inspect = matches!(self.model.target(), OpenTarget::Inspect { .. });
         let identity = inspect.then(|| self.identity(item.as_ref(), cx));
-        // While a session lives, kept or not, its text is the edit editor's.
-        let section = if self.has_session() {
+        // While a session lives, kept or not, its text is the edit editor's;
+        // and a new item's draft is opening in it.
+        let section = if self.has_session() || self.opening_new_item() {
             None
         } else {
             self.draft_section(window, cx)

@@ -164,7 +164,13 @@ impl ItemPane {
     /// session's fields.
     fn sheet(&mut self, sheet: Sheet, window: &mut Window, cx: &mut Context<Self>) -> Sheet {
         self.sync_controls(window, cx);
-        let item = self.model.item().rows().cloned();
+        // A new item not created yet: its draft's fields (`edit::create`).
+        let item = self
+            .model
+            .item()
+            .rows()
+            .cloned()
+            .or_else(|| self.new_item_shown(cx));
         let kind = self
             .shown_kind(item.as_ref())
             .unwrap_or(ItemDtoKind::Ticket);

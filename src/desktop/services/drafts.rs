@@ -45,6 +45,7 @@ mod retire;
 mod save;
 mod stored;
 
+pub(crate) use create::{NewItem, RECOVERY_NEEDED};
 pub(crate) use restore::RestoreRefused;
 
 use super::{

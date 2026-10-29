@@ -71,6 +71,7 @@ pub(crate) use self::leave::{CloseThisTab, Leaving};
 #[cfg(test)]
 pub(super) use self::recovery_off::{CONTINUE, message as recovery_off_message};
 use self::restored::{Continuing, Then};
+pub(crate) use self::save_view::InitialsInSettings;
 
 use futures::{channel::oneshot, future::Shared};
 use gpui_kit::{
