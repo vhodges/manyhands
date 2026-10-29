@@ -3270,10 +3270,11 @@ impl RepositoryService {
                 }
                 // With the binding's semantics, a refusal after the binding
                 // row was inserted that left nothing behind releases it,
-                // under the lease, as an identity stop does: no write step,
-                // and no comment file. The refusal stands either way; a
-                // release that cannot be made leaves the binding, and the
-                // row is settled as before.
+                // under the lease, as an identity stop does: no effect
+                // begun, no write step, and no comment file. A release
+                // its guard refuses leaves the binding, and the row is
+                // settled as before; a registry that cannot be written is
+                // reported, as for an identity stop.
                 let unwritten = matches!(
                     comment_file.symlink_metadata(),
                     Err(missing) if missing.kind() == std::io::ErrorKind::NotFound
@@ -3282,9 +3283,7 @@ impl RepositoryService {
                     && retained_binding.is_some()
                     && effects.leave_nothing_behind(record)
                     && unwritten
-                    && self
-                        .release_unwritten_comment_binding(&root, record, operation_id)
-                        .unwrap_or(false)
+                    && self.release_unwritten_comment_binding(&root, record, operation_id)?
                 {
                     *released = true;
                     drop(lease);

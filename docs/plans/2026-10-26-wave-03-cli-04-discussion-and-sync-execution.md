@@ -593,7 +593,7 @@ new ticket comment (ruling P4).
 | --- | --- | --- | --- | --- |
 | 1 | `feat: merge divergent history in item and repo sync`; fix round 1 `fix: answer busy for a sync beside a pending merge, and name a cancelled merge` | Verify list passed: 37, 44, 72, 129 and 113 SSH cases; fix round 1: 26 `c4_merging`, 5 E-3, 123 `--lib mutation`, 44 | fix round 1 applied; re-review pending | See "Task 1: Merging Synchronization" |
 | 2a | `feat: let comment submission take a synchronizer` | Verify list passed: 5 `c4_comment_domain`, 41 and 25 SSH cases, 1344 `--lib repository`, clippy, fmt | pending | The author moves to Task 2b (ruling Q2). See "Task 2a: The Library's Comment Submission" |
-| 2b | `feat: bind comment submission with authorship and safe points`; pre-review fix round 1 `fix: keep a comment whose branch was deleted cancellable, and release an unwritten refused binding` | Verify list passed: 148, 41 SSH cases; 383, 129, 44, 72; 123 `--lib mutation`; clippy, fmt; fix round 1: see its entry | pending | Findings 1 and 2 fixed by controller ruling in fix round 1. See "Task 2b: The Comment Submission Binding" |
+| 2b | `feat: bind comment submission with authorship and safe points`; pre-review fix round 1 `fix: keep a comment whose branch was deleted cancellable, and release an unwritten refused binding`; review fix round 2 `fix: finish a comment refused for its input, and keep release failures` | Verify list passed: 148, 41 SSH cases; 383, 129, 44, 72; 123 `--lib mutation`; clippy, fmt; fix rounds: see their entries | review fix round 2 applied; re-review pending | Findings 1 and 2 fixed by controller ruling in fix round 1; review findings in fix round 2. See "Task 2b: The Comment Submission Binding" |
 
 ### Task 1: Merging Synchronization
 
@@ -1302,3 +1302,60 @@ refused binding`, on `846b35f`. `origin/main` is still `a372edb`.
 `progress.rs` is untouched, so the `request cancel` cases were not run
 again; nor was the whole `mutation_remote` target, which the review
 scopes.
+
+#### Task 2b, review fix round 2
+
+The task review found one Important issue and some Minors, and the
+controller ruled on each. The commit is `fix: finish a comment refused for
+its input, and keep release failures`, on `699a270`.
+
+1. **Important: a released refusal of failure class `input` is final.**
+   - `refused` makes a refusal that released its binding
+     `Standing::Final` when its code's class is `input`: `occupied_path`,
+     `item_not_found` after the binding, or any other such code. The
+     record is finished with that result, and offers nothing.
+   - A re-send of the same request replays the stored `occupied_path`.
+   - A released refusal of any other class stays `Owed`.
+   - The release is unchanged: the binding is deleted and the row rejected
+     in one transaction.
+   - This supersedes fix round 1's last note, that `occupied_path`'s
+     recovery is `[request.retry]`: it is now none, as the table row says.
+2. **Minor 2.** A registry failure in `release_unwritten_comment_binding`
+   is now propagated with `?`, as on the identity path. Only the guard's
+   refusal means "not released"; before this, `.unwrap_or(false)` made a
+   failure mean that too.
+3. **Minor 3.** `release_unwritten_comment_binding`'s doc names its two
+   callers, and what its error means.
+4. **Minor 4.** In `standing_of`, a child row that completed beside an
+   error is now `Owed`, not `Unconfirmed`, which is documented as "Git
+   could not be read". Both leave the record accepted.
+5. **Minor 5.** `c4_comment_malformed_author` asserts no recovery.
+   `c4_comment_self_parent` asserts no recovery and the `input` class.
+6. **Minor 1.** Fix round 1's report said the release also covered a
+   test-only injected failure before the write (`BeforeItemWrite`). That
+   was wrong, because `effects.begin()` runs before that check
+   (`src/repository.rs:3123-3124`), so `leave_nothing_behind` is false and
+   nothing is released. The fix report corrects it. This ledger's fix
+   round 1 entry does not carry the claim: it gives the condition as "no
+   effect begun".
+
+**Tests.** `c4_comment_comment_id_occupied` sends the same request twice.
+The second answer is the first one, replayed with no connection. It
+asserts, on both:
+
+- `occupied_path` (input), no effect and no data;
+- no recovery, and the same operation;
+- the record `Finished`, no binding row, the row `rejected`, and no file.
+
+No golden changed.
+
+**Commands** (each `devenv shell -- cargo … --locked`):
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --test mutation_remote -- c4_comment` | 34 SSH cases passed (7 min 12 s) |
+| `test --all-features --test comment_publication` | 41 SSH cases passed |
+| `test --all-features --test mutation_replay` | 383 passed |
+| `test --all-features --lib mutation` | 123 passed |
+| `clippy --all-targets --all-features -- -D warnings` | passed |
+| `fmt --check` | passed |

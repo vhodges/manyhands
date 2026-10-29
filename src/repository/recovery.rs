@@ -388,17 +388,23 @@ impl super::RepositoryService {
         Ok(())
     }
 
-    /// Releases the binding of a comment submission that stopped for an
-    /// identity having written nothing (R-34): in one transaction, the
-    /// binding is deleted and the row `record` is marked `rejected`. The
-    /// row is kept, so the operation ID stays bound to its target, and a
-    /// repeat of it begins again as new and binds afresh.
+    /// Releases the binding of a comment submission that wrote nothing
+    /// (R-34): in one transaction, the binding is deleted and the row
+    /// `record` is marked `rejected`. The row is kept, so the operation ID
+    /// stays bound to its target, and a repeat of it begins again as new
+    /// and binds afresh.
+    ///
+    /// It has two callers, both `checkpoint_comment_locally_with` with
+    /// the binding's semantics: a submission that stopped for an identity,
+    /// and one refused after its binding row was inserted, having begun no
+    /// effect (controller ruling, Task 2b concern 2).
     ///
     /// The caller has found the comment file absent. Here the row must
     /// hold no step past the context's own, the binding no checkpoint, and
     /// the child synchronization no row. Otherwise nothing changes and
     /// `false` is returned: the binding and the row are the caller's to
-    /// keep, as for a submission that wrote.
+    /// keep, as for a submission that wrote. An error is a registry that
+    /// could not be read or written.
     pub(super) fn release_unwritten_comment_binding(
         &self,
         root: &Path,

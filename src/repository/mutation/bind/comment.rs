@@ -25,10 +25,11 @@
 //!   reservation, as `item sync`'s does, and `request cancel` followed by
 //!   the same request ends it, `cancelled`.
 //! - `identity_required` keeps the record accepted, and so does a refusal
-//!   the domain makes after it bound the comment. A binding that wrote
-//!   nothing is released with its row's rejection, so the same request
-//!   binds afresh; one that wrote the file is kept, and the same request
-//!   checkpoints the file once.
+//!   the domain makes after it bound the comment, unless it refuses the
+//!   caller's input, as an occupied comment ID is: that is finished, and
+//!   offers nothing. A binding that wrote nothing is released with its
+//!   row's rejection, so the same request binds afresh; one that wrote
+//!   the file is kept, and the same request checkpoints the file once.
 //!
 //! A comment's operation records no checkpoint step of the boundary's
 //! kind, so a completed row says nothing of the request
@@ -43,8 +44,8 @@ use rusqlite::OptionalExtension;
 use crate::{
     canonical::{self, ItemId},
     results::{
-        CheckpointEffect, DiscoveryEffect, Effects, PublicationEffect, ResultCode, Scope,
-        WriteEffect,
+        CheckpointEffect, DiscoveryEffect, Effects, FailureClass, PublicationEffect, ResultCode,
+        Scope, WriteEffect,
     },
 };
 
@@ -259,13 +260,13 @@ struct Child {
 
 /// What becomes of the record of a request whose publication stopped,
 /// given what the synchronization's binding says of its own row (R-34). A
-/// row that was cancelled or retained is final. A row that completed
-/// beside an error leaves the record for the same request to answer from
-/// it. Any other stop is owed, whatever stopped it: the synchronization
-/// holds the repository's reservation, and the same request is what takes
-/// it up, or, for a code the same request never gets past, such as
-/// `remote_branch_deleted`, what ends it after `request cancel`, as for
-/// `item sync` (controller ruling, Task 2b concern 1).
+/// row that was cancelled or retained is final. Any other stop is owed,
+/// whatever stopped it: the synchronization holds the repository's
+/// reservation, and the same request is what takes it up, or, for a code
+/// the same request never gets past, such as `remote_branch_deleted`,
+/// what ends it after `request cancel`, as for `item sync` (controller
+/// ruling, Task 2b concern 1). So is a row that completed beside an
+/// error: the same request then answers from the row.
 fn standing_of(standing: Standing) -> Standing {
     match standing {
         Standing::Final => Standing::Final,
@@ -281,14 +282,16 @@ fn standing_of(standing: Standing) -> Standing {
         } => Standing::Final,
         Standing::Stopped {
             journal:
-                Some(JournalRow::Final {
-                    kind: FinalKind::Completed,
-                    owes_work: _,
-                    checkpointed: _,
-                }),
-        } => Standing::Unconfirmed,
-        Standing::Stopped {
-            journal: Some(JournalRow::Absent | JournalRow::Pending(_)) | None,
+                Some(
+                    JournalRow::Absent
+                    | JournalRow::Pending(_)
+                    | JournalRow::Final {
+                        kind: FinalKind::Completed,
+                        owes_work: _,
+                        checkpointed: _,
+                    },
+                )
+                | None,
         }
         | Standing::NotRun { journal: _ } => Standing::Owed,
     }
@@ -386,9 +389,12 @@ impl CommentAddBinding {
     /// kind is read: its text can hold a path or a backend's message.
     ///
     /// - A refusal that released the binding it inserted, having written
-    ///   nothing, keeps the record, as an identity stop does: the same
+    ///   nothing, is final when it is the caller's input that is refused,
+    ///   as an occupied comment ID is: the same request is refused the
+    ///   same way, so its result is stored, and nothing is offered. Any
+    ///   other keeps the record, as an identity stop does: the same
     ///   request binds afresh, and is answered as it is then (R-34;
-    ///   controller ruling, Task 2b concern 2).
+    ///   controller rulings, Task 2b concern 2 and review fix round 1).
     /// - A request whose comment is checkpointed keeps its record, for the
     ///   same request to prove the checkpoint again.
     /// - Any other is the local row's to settle.
@@ -398,8 +404,15 @@ impl CommentAddBinding {
         accepted: &Accepted,
         error: &CommentSubmissionError,
     ) -> Ran {
+        let code = outcome::repository_error_code(error.kind);
         let effects = comment_effects(service, accepted);
-        let standing = if error.released() || effects.checkpoint == CheckpointEffect::Committed {
+        let standing = if error.released() {
+            if code.failure_class() == Some(FailureClass::Input) {
+                Standing::Final
+            } else {
+                Standing::Owed
+            }
+        } else if effects.checkpoint == CheckpointEffect::Committed {
             Standing::Owed
         } else {
             Standing::Stopped {
@@ -409,7 +422,7 @@ impl CommentAddBinding {
         Ran {
             answer: Answer {
                 effects,
-                ..Answer::stopped(outcome::repository_error_code(error.kind))
+                ..Answer::stopped(code)
             },
             standing,
         }

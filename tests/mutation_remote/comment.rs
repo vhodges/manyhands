@@ -976,6 +976,7 @@ fn c4_comment_malformed_author() -> Result<(), FixtureError> {
         assert_eq!(refused.outcome, Outcome::Error);
         assert_eq!(refused.failure_class(), Some(FailureClass::Input));
         assert_eq!(refused.operation_id, None);
+        assert!(refused.recovery.is_empty());
         assert_nothing(&w, &context, REQUEST_1, &refused)?;
     }
     assert!(long.len() > 256);
@@ -1009,38 +1010,44 @@ fn c4_comment_self_parent() -> Result<(), FixtureError> {
     );
     assert_eq!(refused.code, ResultCode::ItemNotFound);
     assert_eq!(refused.outcome, Outcome::Error);
+    assert_eq!(refused.failure_class(), Some(FailureClass::Input));
+    assert!(refused.recovery.is_empty());
     assert_nothing(&w, &context, REQUEST_1, &refused)?;
     Ok(())
 }
 
 /// The domain refuses an occupied comment ID after it bound the comment.
 /// Having written nothing, the refusal releases the binding with its
-/// row's rejection, and the record stays, as for an identity stop: the
-/// same request, sent again, binds afresh and is refused the same way
-/// (controller ruling, Task 2b concern 2).
+/// row's rejection (controller ruling, Task 2b concern 2). It refuses the
+/// caller's input, so the record is finished with that result and offers
+/// nothing: the same request, sent again, is answered from it (review fix
+/// round 1).
 fn c4_comment_comment_id_occupied() -> Result<(), FixtureError> {
     let (w, context) = world()?;
     // The ticket's own ID, which its file holds.
     let occupied = || comment_on(&w, ITEM, ITEM, None, COMMENT_BODY, None);
-    let mut operation = None;
-    for _ in 0..2 {
-        let refused = added(&w, REQUEST_1, occupied());
+    let first = added(&w, REQUEST_1, occupied());
+    let operation = operation_of(&first)?;
+    let opened = connections(&w);
+    let again = added(&w, REQUEST_1, occupied());
+    assert_eq!(again, first);
+    assert_eq!(connections(&w), opened);
+    for refused in [&first, &again] {
         assert_eq!(refused.code, ResultCode::OccupiedPath);
         assert_eq!(refused.outcome, Outcome::Error);
         assert_eq!(refused.failure_class(), Some(FailureClass::Input));
         assert_eq!(refused.effects, Effects::not_requested());
         assert!(refused.data.is_none());
-        // The same request each time, under the same operation.
-        let this = operation_of(&refused)?;
-        assert_eq!(*operation.get_or_insert(this), this);
-        assert_eq!(state(&w, REQUEST_1), Some(RequestState::Accepted));
-        assert_eq!(binding_rows(&w)?, 0);
-        assert_eq!(
-            comment_domain::local_row(&w, this)?,
-            ("completed".to_owned(), Some("rejected".to_owned()))
-        );
-        assert!(!context.worktree.join(comment_path(ITEM, ITEM)).exists());
+        assert!(refused.recovery.is_empty());
+        assert_eq!(operation_of(refused)?, operation);
     }
+    assert_eq!(state(&w, REQUEST_1), Some(RequestState::Finished));
+    assert_eq!(binding_rows(&w)?, 0);
+    assert_eq!(
+        comment_domain::local_row(&w, operation)?,
+        ("completed".to_owned(), Some("rejected".to_owned()))
+    );
+    assert!(!context.worktree.join(comment_path(ITEM, ITEM)).exists());
     Ok(())
 }
 
