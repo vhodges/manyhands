@@ -182,7 +182,7 @@ impl ItemPane {
         // draft's (`edit::create`).
         let missing =
             matches!(state, ListState::Failed(failure) if failure.code == ResultCode::ItemNotFound);
-        let new_item = missing && self.new_item_shown(cx).is_some();
+        let new_item = missing && self.shows_new_item(cx);
         if let Some(banner) = status_banner(state).filter(|_| !new_item) {
             let status = self.status("item", state, cx).into_any_element();
             banners.push((banner, status));

@@ -44,7 +44,7 @@
 
 use gpui_kit::{App, Context, Window};
 use manyhands::{
-    drafts::{TargetState, classify, is_new_item_base},
+    drafts::{DraftBase, DraftFields, TargetState, classify, is_new_item_base},
     repository::{ContextPrepareIntent, ItemDto},
     results::ResultCode,
 };
@@ -88,21 +88,47 @@ impl ItemPane {
         cx.notify();
     }
 
-    /// The new item this tab shows while it is not created yet: with no
-    /// item read, the never-created session's fields, or, while a Create
-    /// prepare runs for the draft continued here, that draft's. `None`
-    /// otherwise, a stored or restored draft not continued included.
+    /// The new item this tab shows while it is not created yet, or not yet
+    /// read since: with no item read, the session's fields while one lives
+    /// that began on a new item's draft (its create may have committed
+    /// already, the tab's own read of the item still to land: Task 23 fix
+    /// 1), or, while a Create prepare runs for the draft continued here,
+    /// that draft's. `None` otherwise, a stored or restored draft not
+    /// continued included. The read that finds the item replaces it.
     pub(in crate::desktop::view) fn new_item_shown(&self, cx: &App) -> Option<ItemDto> {
-        if self.model.item().rows().is_some() {
-            return None;
-        }
         let OpenTarget::Item { kind, id, .. } = self.model.target() else {
             return None;
         };
+        self.with_new_item(cx, |base, fields| shown_new_item(*kind, id, base, fields))
+    }
+
+    /// The title `new_item_shown` gives, alone, when it gives one.
+    pub(in crate::desktop::view) fn new_item_title(&self, cx: &App) -> Option<String> {
+        self.with_new_item(cx, |_, fields| match fields {
+            DraftFields::Document { title, .. } | DraftFields::Ticket { title, .. } => {
+                (!title.is_empty()).then(|| title.clone())
+            }
+            DraftFields::Comment { .. } => None,
+        })
+        .flatten()
+    }
+
+    /// Whether the tab shows a new item's stand-in (`new_item_shown`).
+    pub(in crate::desktop::view::item) fn shows_new_item(&self, cx: &App) -> bool {
+        self.with_new_item(cx, |_, _| ()).is_some()
+    }
+
+    /// `f` of the base and fields `new_item_shown` shows.
+    fn with_new_item<R>(
+        &self,
+        cx: &App,
+        f: impl FnOnce(&DraftBase, &DraftFields) -> R,
+    ) -> Option<R> {
+        if self.model.item().rows().is_some() {
+            return None;
+        }
         if let Some(session) = &self.edit.session {
-            return session
-                .never_created()
-                .then(|| shown_new_item(*kind, id, &session.base, &session.meta));
+            return session.began_new.then(|| f(&session.base, &session.meta));
         }
         if !self.opening_new_item() {
             return None;
@@ -110,12 +136,7 @@ impl ItemPane {
         let continuing = self.edit.continuing.as_ref()?;
         let registry = self.services.drafts().read(cx);
         let session = registry.session(registry.current_id(continuing.draft)?)?;
-        Some(shown_new_item(
-            *kind,
-            id,
-            session.base()?,
-            session.current(),
-        ))
+        Some(f(session.base()?, session.current()))
     }
 
     /// Whether the Create prepare of a draft continued here runs: the tab

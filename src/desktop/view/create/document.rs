@@ -3,7 +3,8 @@
 //! (`model::create::document_path`), then with `observe_path` in the
 //! primary context, which must find nothing there. Every change checks
 //! again under a new stamp, and the last check's task is dropped, so an
-//! answer for an older name never offers Create.
+//! answer for an older name never offers Create. A check that gave no
+//! answer is made again at the next change of any field.
 //!
 //! The path is the user's text, so nothing here derives `Debug`.
 
@@ -54,6 +55,18 @@ impl CreateDialog {
             PathCheck::Failed(code) => Some(code.message().to_owned()),
             PathCheck::Checking | PathCheck::Free(_) => None,
         }
+    }
+
+    /// Whether the last path check gave no answer: it is made again at the
+    /// next change of any field (Task 23 fix 1).
+    pub(super) fn path_failed(&self) -> bool {
+        matches!(
+            self.inputs,
+            Inputs::Document(Place {
+                check: PathCheck::Failed(_),
+                ..
+            })
+        )
     }
 
     /// Where the new item goes: a ticket's place follows from its ID

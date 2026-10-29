@@ -202,8 +202,7 @@ impl ItemPane {
         rows.extend(self.relationship_rows(item, window, cx));
         rows.push(self.other_fields(item, &[], cx));
         rows.push(self.facts(item, ItemDtoKind::Ticket, window, cx));
-        rows.extend(self.problems_section(item, cx));
-        rows.push(self.inspect_link(item, cx));
+        rows.extend(self.file_rows(item, cx));
         rows
     }
 

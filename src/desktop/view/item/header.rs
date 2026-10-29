@@ -209,8 +209,9 @@ impl ItemPane {
         let colors = item_colors(cx);
         let later = header_later(self.shown_kind(read));
         let state = self.edit_pill(cx);
-        let shown = read.cloned().or_else(|| self.new_item_shown(cx));
-        let item = shown.as_ref();
+        // The read is borrowed; only a new item's stand-in is built.
+        let built = read.is_none().then(|| self.new_item_shown(cx)).flatten();
+        let item = read.or(built.as_ref());
         let pill = item.map(|item| {
             let state = state.unwrap_or_else(|| pill::viewing_state(item, self.draft_kept(cx)));
             pill::pill(state, item, cx)

@@ -399,8 +399,9 @@ async fn new_document_prepares_and_opens_a_draft_already_in_the_store(cx: &mut T
 /// answer for an older name never offers Create.
 #[gpui_kit::test]
 async fn the_path_must_be_under_docs_end_md_and_be_free(cx: &mut TestAppContext) {
-    let (shell, _root) = shell(cx, |fixture, root| {
+    let (shell, root) = shell(cx, |fixture, root| {
         fixture.commit_file(root, "docs/held.md", b"Another file\n");
+        fixture.commit_file(root, "docs/dir.md/inner.md", b"In a folder\n");
     });
     shell.click("new-document-button", cx);
     // Obligation 2: Create waits for the Title, in Task 20's words.
@@ -423,6 +424,10 @@ async fn the_path_must_be_under_docs_end_md_and_be_free(cx: &mut TestAppContext)
 
     retype(&shell, "file", "notes.txt", cx);
     assert_eq!(shell.label("create-file-note", cx).as_deref(), Some(not_md));
+    // A File name with nothing before `.md` is an empty one (fix 1, Minor 8).
+    retype(&shell, "file", ".md", cx);
+    assert_eq!(shell.label("create-file-note", cx).as_deref(), Some(not_md));
+    assert!(!offered(&shell, cx));
     retype(&shell, "file", "notes.md", cx);
     for folder in [
         "elsewhere",
@@ -460,8 +465,9 @@ async fn the_path_must_be_under_docs_end_md_and_be_free(cx: &mut TestAppContext)
     let held = "Another file is already at docs/held.md.";
     assert_eq!(shell.label("create-file-note", cx).as_deref(), Some(held));
     assert_eq!(create_note(&shell, cx).as_deref(), Some(held));
-    // The older check was dropped with its gate; were its answer to land,
-    // its stamp is not the latest.
+    // The older check's task was dropped with its gate when the newer one
+    // began, which is what stops its answer; its stamp, a second guard, is
+    // one no test reaches.
     let _ = late.send(());
     shell.run(cx);
     shell.frame(cx, |_, _| ());
@@ -482,6 +488,24 @@ async fn the_path_must_be_under_docs_end_md_and_be_free(cx: &mut TestAppContext)
     .await;
     assert!(!shell.present("create-file-note", cx));
     assert!(create_note(&shell, cx).is_none(), "Create is offered");
+
+    // A check that failed (a folder at the path is `invalid_path`) is made
+    // again at the next change of any field (fix 1, Minor 4).
+    retype(&shell, "folder", "docs", cx);
+    retype(&shell, "file", "dir.md", cx);
+    let failed = ResultCode::InvalidPath.message();
+    until(&shell, cx, "the failed check", |shell, cx| {
+        shell.label("create-file-note", cx).as_deref() == Some(failed)
+    })
+    .await;
+    assert!(!offered(&shell, cx));
+    std::fs::remove_dir_all(root.join("docs/dir.md")).unwrap();
+    retype(&shell, "title", "Title again", cx);
+    until(&shell, cx, "the check made again", |shell, cx| {
+        offered(shell, cx)
+    })
+    .await;
+    assert!(!shell.present("create-file-note", cx));
 }
 
 /// Obligation 7: Save creates the document once; a second Save is an
@@ -498,6 +522,11 @@ async fn save_creates_the_document_once_and_the_tab_becomes_an_edit_session(
     let id = opened_id(&shell, cx);
     type_at_end(&shell, &host, "First", cx);
 
+    // The tab's reads after the create are held where they reach the
+    // library.
+    let reads: Vec<_> = (0..3)
+        .map(|_| shell.backend.hold_read(ReadKind::Item))
+        .collect();
     shell.click("item-save", cx);
     let sent = creates(&shell, cx);
     assert_eq!(sent.len(), 1, "Save sent one create");
@@ -511,6 +540,15 @@ async fn save_creates_the_document_once_and_the_tab_becomes_an_edit_session(
         shell.fixture.draft_store().list().unwrap().is_empty()
     })
     .await;
+    // Until the tab's own read finds the item, the header is still the
+    // draft's, and the item is not said to be missing (fix 1, Minor 2).
+    shell.frame(cx, |_, _| ());
+    assert_eq!(shell.label("item-title", cx).as_deref(), Some("Plans"));
+    assert!(!shell.present(ChipField::Updated.id(), cx), "not read yet");
+    assert!(!shell.present("item-failure", cx), "not said to be missing");
+    for held in reads {
+        let _ = held.send(());
+    }
     // The item as read: a draft's header has no Updated chip.
     until(&shell, cx, "the item read", |shell, cx| {
         shell.label("item-title", cx).as_deref() == Some("Plans")
@@ -704,6 +742,25 @@ async fn the_new_tab_opens_editing_with_its_header_from_the_draft(cx: &mut TestA
     assert!(!shell.present("draft-section", cx), "no restored section");
     assert!(!shell.present("draft-continue", cx));
 
+    // While the prepare runs, the sheet says the item is not created yet
+    // and offers no Inspect of a file that is not there (fix 1, I1).
+    shell.click(ChipField::All.id(), cx);
+    shell.frame(cx, |_, _| ());
+    assert!(shell.present("sheet-title", cx), "the sheet opens");
+    assert_eq!(
+        shell.label("sheet-description", cx).as_deref(),
+        Some("Not created yet. These can be changed once its private copy is ready.")
+    );
+    assert_eq!(
+        shell.label("sheet-note", cx).as_deref(),
+        Some("Read only until then")
+    );
+    assert!(!shell.present("sheet-inspect", cx), "no file to inspect");
+    shell.keys("escape", cx);
+    assert!(!shell.frame(cx, |window, cx| {
+        gpui_kit::component::WindowExt::has_active_sheet(window, cx)
+    }));
+
     prepare.release();
     until_editing(&shell, cx).await;
     assert_eq!(header(&shell, cx), expected, "the header, while editing");
@@ -717,13 +774,20 @@ async fn the_new_tab_opens_editing_with_its_header_from_the_draft(cx: &mut TestA
     assert!(!shell.present("draft-continue", cx));
     assert!(show(&shell, &root, &id).is_none(), "not created yet");
 
-    // The sheet shows the draft's fields too.
+    // The sheet shows the draft's fields too, as any edit session's sheet
+    // does, and offers no Inspect of a file that is not there (fix 1, I1).
     shell.click(ChipField::All.id(), cx);
     shell.frame(cx, |_, _| ());
     assert!(
         shell.present("sheet-title", cx),
         "the sheet opens on the draft"
     );
+    assert_eq!(
+        shell.label("sheet-description", cx).as_deref(),
+        Some("Changes here become part of your draft and are saved with the ticket.")
+    );
+    assert!(!shell.present("sheet-inspect", cx), "no file to inspect");
+    assert!(!shell.present("sheet-problems", cx));
 }
 
 /// R-22 at Save: another file reached the path after the dialog checked it;
@@ -994,4 +1058,51 @@ async fn a_create_prepare_answered_before_its_tab_opens_still_opens_the_editor(
     let host = until_editing(&shell, cx).await;
     assert_eq!(host.read_with(cx, |host, cx| host.text(cx)), "");
     assert_eq!(shell.label("item-title", cx).as_deref(), Some("Early"));
+}
+
+/// Fix 1, Minor 7: Create closes its own dialog, not whatever dialog is on
+/// top. A dialog opened above it while the create runs, as a credential
+/// prompt may, stays open, with its focus; the create dialog, its item
+/// made, waits under it, and Escape closes each in turn.
+#[gpui_kit::test]
+async fn a_dialog_above_the_create_dialog_stays_open_when_it_creates(cx: &mut TestAppContext) {
+    use gpui_kit::{InteractiveElement, ParentElement, TestSupportExt, component::WindowExt, div};
+
+    let (shell, _root) = shell(cx, |_, _| {});
+    let prepare = shell.backend.hold_job(JobKind::ContextPrepare);
+    shell.click("pane-tickets", cx);
+    shell.click("new-ticket-button", cx);
+    shell.visual(cx).simulate_input("Under another");
+    shell.run(cx);
+    let new_id = shell.backend.hold_read(ReadKind::NewId);
+    shell.click("create-ok", cx);
+    shell.visual(cx).update(|window, cx| {
+        window.open_dialog(cx, |dialog, _, _| {
+            dialog
+                .title("Above")
+                .child(div().id("above-dialog").test_support().child("Above"))
+        })
+    });
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(shell.present("above-dialog", cx));
+    new_id.send(()).unwrap();
+    until(&shell, cx, "the new tab", |shell, cx| {
+        opened(shell, cx).is_some()
+    })
+    .await;
+
+    assert!(shell.present("above-dialog", cx), "the dialog above stays");
+    assert!(dialog_open(&shell, cx), "the create dialog waits under it");
+    assert!(!offered(&shell, cx), "its item is made");
+    shell.keys("escape", cx);
+    assert!(
+        !shell.present("above-dialog", cx),
+        "Escape closes the top one"
+    );
+    assert!(dialog_open(&shell, cx));
+    shell.keys("escape", cx);
+    assert!(!dialog_open(&shell, cx), "then the create dialog");
+    prepare.release();
+    until_editing(&shell, cx).await;
 }

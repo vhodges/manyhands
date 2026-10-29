@@ -92,10 +92,10 @@ pub(crate) fn new_item_draft(
     (target, base)
 }
 
-/// What the tab of the new item `id`, of `kind`, shows of it until it is
-/// created (design, Create: the new tab opens editing, with its header
+/// What the tab of the new item `id`, of `kind`, shows of it until its
+/// tab reads it (design, Create: the new tab opens editing, with its header
 /// built from the draft's fields): the draft's named fields over its base's
-/// path and context, open, with no body, short code, relationship,
+/// path and context kind, open, with no body, short code, relationship,
 /// readiness, other key or problem. A field left empty is not shown.
 pub(crate) fn shown_new_item(
     kind: ItemDtoKind,
@@ -146,7 +146,11 @@ pub(crate) fn shown_new_item(
         source: None,
         observation: None,
         context: ItemContextDto {
-            kind: ItemContextKind::Primary,
+            kind: match context.kind {
+                ContextKind::Primary => ItemContextKind::Primary,
+                ContextKind::Unverified => ItemContextKind::Unverified,
+                ContextKind::Active => ItemContextKind::Active,
+            },
             branch: context.branch.clone(),
             worktree: context.worktree.clone(),
             head_oid: context.head_oid.clone(),

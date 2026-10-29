@@ -136,8 +136,10 @@ impl Workspace {
     }
 
     /// A create dialog's new item (R-20): its draft is written and its
-    /// Create prepare sent. The dialog closes, the item's tab opens, and the
-    /// tab follows that prepare to the edit editor.
+    /// Create prepare sent, and the dialog has closed itself (Task 23 fix
+    /// 1). The item's tab opens, and follows that prepare to the edit
+    /// editor. Focus goes to it unless a dialog is still open: one opened
+    /// above the create dialog keeps it.
     pub(in crate::desktop::view) fn open_created(
         &mut self,
         target: OpenTarget,
@@ -145,12 +147,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        window.close_dialog(cx);
         self.open_item(target, cx);
         if let Some(pane) = self.content.tabs.shown() {
             pane.update(cx, |pane, cx| pane.edit_created(created, cx));
         }
-        self.focus_region(Region::Content, window, cx);
+        if !window.has_active_dialog(cx) {
+            self.focus_region(Region::Content, window, cx);
+        }
     }
 
     /// What the Drafts page asks: Show shows and focuses the tab its draft

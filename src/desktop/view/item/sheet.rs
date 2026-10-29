@@ -17,6 +17,10 @@
 //! while the tab is Editing or Saving (`fields`), as are a ticket's Waiting
 //! on and Parent (`super::relations_edit`); `secondary-s` inside it saves
 //! the tab (R-74). Nothing else in it writes.
+//!
+//! A new item not created yet shows its draft's fields (`edit::create`),
+//! with no problems and no Inspect link, and says it is not created yet
+//! while its private copy is made ready (Task 23).
 
 mod document;
 mod facts;
@@ -57,6 +61,11 @@ pub(crate) const EDITING_TICKET: &str =
 pub(crate) const EDITING_DOCUMENT: &str =
     "Changes here become part of your draft and are saved with the document.";
 pub(crate) const READ_ONLY: &str = "Read only while viewing";
+/// The description and note while a new item's editor opens: its Create
+/// prepare runs, and nothing is there to view (Task 23 fix 1, I1).
+pub(crate) const NOT_CREATED_YET: &str =
+    "Not created yet. These can be changed once its private copy is ready.";
+pub(crate) const READ_ONLY_UNTIL_READY: &str = "Read only until then";
 /// The footer's note while editing.
 pub(crate) const SAVED_WITH_TICKET: &str = "Saved with the ticket (Ctrl S)";
 pub(crate) const SAVED_WITH_DOCUMENT: &str = "Saved with the document (Ctrl S)";
@@ -192,6 +201,7 @@ impl ItemPane {
         let (description, note) = match (editing, kind) {
             (true, ItemDtoKind::Ticket) => (EDITING_TICKET, SAVED_WITH_TICKET),
             (true, ItemDtoKind::Document) => (EDITING_DOCUMENT, SAVED_WITH_DOCUMENT),
+            (false, _) if self.opening_new_item() => (NOT_CREATED_YET, READ_ONLY_UNTIL_READY),
             (false, _) if private => (VIEWING_PRIVATE, READ_ONLY),
             (false, _) => (VIEWING, READ_ONLY),
         };
@@ -393,6 +403,19 @@ impl ItemPane {
                 .child(fields),
         )
         .into_any_element()
+    }
+
+    /// What the sheet shows of the item's file: its own problems, then the
+    /// Inspect link. None for a new item not created yet, whose sheet shows
+    /// the draft's fields (`edit::create`): there is no file to inspect,
+    /// and at its path there may be another's (Task 23 fix 1, I1).
+    fn file_rows(&self, item: &ItemDto, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        if self.model.item().rows().is_none() {
+            return Vec::new();
+        }
+        let mut rows: Vec<AnyElement> = self.problems_section(item, cx).into_iter().collect();
+        rows.push(self.inspect_link(item, cx));
+        rows
     }
 
     /// The item's own problems, as D1 listed them, when it has any.

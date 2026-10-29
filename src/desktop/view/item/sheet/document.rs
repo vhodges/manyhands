@@ -49,8 +49,7 @@ impl ItemPane {
         rows.push(self.row(FOLDER, folder, None, window, cx));
         rows.push(self.other_fields(item, &NAMED, cx));
         rows.push(self.facts(item, ItemDtoKind::Document, window, cx));
-        rows.extend(self.problems_section(item, cx));
-        rows.push(self.inspect_link(item, cx));
+        rows.extend(self.file_rows(item, cx));
         rows
     }
 }

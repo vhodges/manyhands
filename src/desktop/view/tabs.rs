@@ -145,10 +145,7 @@ pub(super) fn active_line(content_focused: bool, colors: &ItemColors) -> (&'stat
 /// The facts of `pane`'s tab.
 pub(super) fn tab_info(pane: &ItemPane, cx: &App) -> TabInfo {
     // A new item not created yet is titled by its draft.
-    let title = pane
-        .new_item_shown(cx)
-        .and_then(|item| item.title)
-        .unwrap_or_else(|| pane.tab_title());
+    let title = pane.new_item_title(cx).unwrap_or_else(|| pane.tab_title());
     let (repo, kind) = match pane.model.target() {
         OpenTarget::Item { repo, kind, .. } => (repo.as_str(), *kind),
         OpenTarget::Inspect { repo, .. } => (repo.as_str(), ItemDtoKind::Document),

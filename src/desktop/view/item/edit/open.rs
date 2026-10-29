@@ -5,7 +5,7 @@
 //! whose item is not created yet (`create`).
 
 use gpui_kit::{AppContext, Context, Window};
-use manyhands::drafts::{DraftBase, DraftFields};
+use manyhands::drafts::{DraftBase, DraftFields, is_new_item_base};
 
 use super::{DraftLink, EditSession, Phase};
 use crate::desktop::{
@@ -147,6 +147,7 @@ impl ItemPane {
         ];
         let editor = host.read(cx).editor().clone();
         let Opening { base, meta, draft } = opening;
+        let began_new = is_new_item_base(&base);
         let mut session = EditSession {
             host,
             toolbar,
@@ -156,6 +157,7 @@ impl ItemPane {
             saved: false,
             dirty_seen: false,
             kept: false,
+            began_new,
             _subscriptions: subscriptions,
         };
         session.dirty_seen = session.dirty(cx);

@@ -153,6 +153,9 @@ pub(super) struct EditSession {
     /// The session is kept after Done: the tab views the saved copy, and
     /// the edit editor waits, with its text, caret and undo (R-58).
     kept: bool,
+    /// The session began on a new item's draft (R-20): its tab shows the
+    /// draft's fields until its read finds the item (`create`).
+    began_new: bool,
     _subscriptions: [Subscription; 2],
 }
 

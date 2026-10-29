@@ -11,27 +11,27 @@
 //! - **Create**, in R-20's order: a new ID (`new_item_id`), then the
 //!   registry's one entry point, which writes the new item's draft and only
 //!   then sends `context prepare` with the Create intent
-//!   (`DraftRegistry::new_item`). Then the dialog says `Created`: it closes,
-//!   and the new tab follows that prepare to the edit editor. With no draft
+//!   (`DraftRegistry::new_item`). Then the dialog says `Created`: it closes
+//!   itself (`finish`; it waits under a dialog opened above it), and the
+//!   new tab follows that prepare to the edit editor. With no draft
 //!   store nothing is provisioned, and the dialog stays open, saying why
 //!   (R-46). One create runs at a time, and Escape waits for it.
 //! - **Keyboard.** Focus starts in the Title; Tab moves through the fields,
 //!   Cancel and Create; Enter in a field creates, when Create is offered;
 //!   Escape closes the dialog, and focus goes back where it was.
 //!
-//! `Workspace::new_item` is the way in; the controls are `form`'s. The
+//! `Workspace::new_item` is the way in; the drawing is `form`'s. The
 //! fields hold the user's text, so nothing here derives `Debug`.
 
 mod document;
 mod form;
 
 use gpui_kit::{
-    App, AppContext, Context, Entity, EventEmitter, InteractiveElement, IntoElement, ParentElement,
-    Render, Styled, Subscription, Task, TestSupportExt, Window,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, ParentElement, Subscription, Task,
+    Window,
     component::{
-        ActiveTheme, WindowExt, h_flex,
+        WindowExt,
         input::{InputEvent, InputState},
-        v_flex,
     },
 };
 use manyhands::{
@@ -41,18 +41,15 @@ use manyhands::{
     results::ResultCode,
 };
 
-use self::{
-    document::{PathCheck, Place},
-    form::{button, field},
-};
-use super::{item::text, workspace::Workspace};
+use self::document::{PathCheck, Place};
+use super::workspace::Workspace;
 use crate::desktop::{
     model::{
         create::DEFAULT_FOLDER,
         drafts::create::{
             DEFAULT_TYPE, document_fields, new_item_draft, ticket_fields, ticket_path,
         },
-        edit::fields::{Field, missing, required_message},
+        edit::fields::missing,
         navigation::{OpenTarget, Pane},
         stamp::{Generations, RepoKey, Stamp, ViewScope},
     },
@@ -105,6 +102,12 @@ pub(crate) struct CreateDialog {
     /// Create runs, from its new ID until the dialog closes or says why
     /// nothing was made.
     creating: bool,
+    /// Its item is made: Create offers nothing more, and Escape and Cancel
+    /// close the dialog, which waits under one opened above it.
+    created: bool,
+    /// Around the dialog's own controls: it closes itself only while focus
+    /// is here, so never a dialog opened above it (Task 23 fix 1).
+    focus: FocusHandle,
     ids: Generations,
     id_read: Option<Task<()>>,
     /// Why the last Create made nothing.
@@ -193,7 +196,8 @@ impl Workspace {
         cx.subscribe_in(
             &dialog,
             window,
-            |workspace, _, created: &Created, window, cx| {
+            |workspace, dialog, created: &Created, window, cx| {
+                dialog.update(cx, |dialog, cx| dialog.finish(window, cx));
                 workspace.open_created(created.target.clone(), created.item, window, cx)
             },
         )
@@ -256,6 +260,8 @@ impl CreateDialog {
             checks: Generations::default(),
             observe: None,
             creating: false,
+            created: false,
+            focus: cx.focus_handle(),
             ids: Generations::default(),
             id_read: None,
             failure: None,
@@ -292,12 +298,16 @@ impl CreateDialog {
     /// Whether Create can create now: every required field filled, a
     /// document's path checked free, and no create running.
     fn offered(&self, cx: &App) -> bool {
-        !self.creating && missing(&self.fields(cx)).is_none() && self.place().is_some()
+        !self.creating
+            && !self.created
+            && missing(&self.fields(cx)).is_none()
+            && self.place().is_some()
     }
 
-    /// A field changed: a path field's change checks the path again.
+    /// A field changed: a path field's change checks the path again, and so
+    /// does any field's while the last check failed (Task 23 fix 1).
     fn changed(&mut self, path: bool, cx: &mut Context<Self>) {
-        if path {
+        if path || self.path_failed() {
             self.check_path(cx);
         }
         cx.notify();
@@ -417,71 +427,25 @@ impl CreateDialog {
         cx.notify();
     }
 
+    /// Its item is made (`Created`): the dialog closes itself, while it is
+    /// the dialog focus is in. Under a dialog opened above it meanwhile, as
+    /// a credential prompt may be, it stays, with nothing more to create,
+    /// until Escape or Cancel closes it. The Kit closes only the topmost
+    /// dialog.
+    fn finish(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.creating = false;
+        self.created = true;
+        if self.focus.contains_focused(window, cx) {
+            window.close_dialog(cx);
+        }
+        cx.notify();
+    }
+
     /// Cancel: closed with nothing made, but not while Create runs.
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.creating {
             window.close_dialog(cx);
         }
-    }
-}
-
-impl Render for CreateDialog {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let fields = self.fields(cx);
-        let note = |field| required_message(&fields, field).map(str::to_owned);
-        let body = v_flex()
-            .id("create-dialog")
-            .test_support()
-            .gap_3()
-            .child(field(
-                "create-title",
-                TITLE,
-                &self.title,
-                note(Field::Title),
-                cx,
-            ));
-        let body = match &self.inputs {
-            Inputs::Ticket { ticket_type } => body.child(field(
-                "create-type",
-                TYPE,
-                ticket_type,
-                note(Field::Type),
-                cx,
-            )),
-            Inputs::Document(place) => body
-                .child(field("create-folder", FOLDER, &place.folder, None, cx))
-                .child(field(
-                    "create-file",
-                    FILE_NAME,
-                    &place.file_name,
-                    self.path_note(),
-                    cx,
-                )),
-        };
-        let danger = cx.theme().danger;
-        let failure = self
-            .failure
-            .clone()
-            .map(|words| text("create-failure", words).text_sm().text_color(danger));
-        let entity = cx.entity().downgrade();
-        let cancel = button("create-cancel", CANCEL, false, true, None, {
-            let entity = entity.clone();
-            move |_, window, cx| {
-                let _ = entity.update(cx, |dialog, cx| dialog.cancel(window, cx));
-            }
-        });
-        let create = button(
-            "create-ok",
-            CREATE,
-            true,
-            self.offered(cx),
-            self.reason(cx),
-            move |_, window, cx| {
-                let _ = entity.update(cx, |dialog, cx| dialog.create(window, cx));
-            },
-        );
-        body.children(failure)
-            .child(h_flex().gap_2().justify_end().child(cancel).child(create))
     }
 }
 

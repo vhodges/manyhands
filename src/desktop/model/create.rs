@@ -40,10 +40,12 @@ pub(crate) fn path_held_draft_kept(path: &str) -> String {
 
 /// The path `folder` and `file_name` give a new document, as the library
 /// writes it, or why it cannot be one: a file name that does not end in
-/// `.md`, then a path that is not a plain one under `docs`. A folder may end
-/// with `/`.
+/// `.md`, or has nothing before it, which is an empty one (Task 23 fix 1),
+/// then a path that is not a plain one under `docs`. A folder may end with
+/// `/`.
 pub(crate) fn document_path(folder: &str, file_name: &str) -> Result<String, &'static str> {
-    if !file_name.ends_with(MARKDOWN) {
+    let name = file_name.rsplit('/').next().unwrap_or(file_name);
+    if name.strip_suffix(MARKDOWN).is_none_or(str::is_empty) {
         return Err(PATH_NOT_MARKDOWN);
     }
     let folder = folder.strip_suffix('/').unwrap_or(folder);
