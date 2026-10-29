@@ -1682,3 +1682,26 @@ Notes for later tasks: Task 22 leaves `targets()` in
   scan reads the accessibility labels and values of `test_support`
   elements only. Text drawn as a plain child, Kit tooltips, and the Kit's
   own text are not seen. This is the same shape as D2's ruled sweep.
+- Part E checkpoint (controller):
+  - The gate at `b3e6ecf` passed:
+    - the desktop binary: 1048 passed, 0 failed, in 808 s (13 tests ran over 60 s under the run's own load, the parked M9);
+    - clippy both ways, fmt, CLI isolation and `check --all-features` were clean;
+    - Part E changed no library code.
+  - The review found 1 Important and 7 Minor issues.
+- Ruling (controller, Part E review I1): while a tab's repair text differs from its unedited baseline, the header pill says "Editing · unsaved changes". It says so while the repair runs, too. — Contract 16: unsaved state is shown in words, on the tab and in the pill. — If wrong: the pill's words during a running repair.
+- Ruling (controller, Part E review M1, and fix round 1 concern 1): Move… waits for the draft store's listing, as Release does. While the listing is loading, or has failed while the store is open, Move… is disabled, with R-23's words. A store that did not open is never listed, so while crash recovery is off Move… does not wait for a listing and is offered on its other conditions. — R-23: there is no stored draft only once the store has said so; a store that did not open holds no draft this process can see, as Edit with recovery off already assumes. — If wrong: Move is unavailable for a moment at launch, or a move beside another process's draft that this process cannot see.
+- Ruling (controller, Part E review M2): the repair's confirmation returns focus to the repair text area, not to Preview, which is disabled while the repair runs. Task 25's ambiguous-identity test and Task 26's keyboard repair walk, D3's own tests, now expect focus there after Escape. — Contract 13. — If wrong: one Tab.
+- Ruling (controller, Part E review M4; it corrects the controller's Task 26 fix-1 M5 brief): D3 changes main's test modules only additively, outside the named edits:
+  - `mod` lines;
+  - new helpers;
+  - `pub(super)` on an existing helper.
+
+  No existing helper's or test's body changes outside a named edit, even when the behaviour is preserved. `tab_to` and `open_a_document` return to main's text, and `press_until` and `open_tree_row` stay as Task 26's own helpers. — The design's E table confines each edit to what is named. — If wrong: a small loop that is duplicated in Task 26's helpers.
+- Ruling (controller, Part E review M5): Cancel is disabled while a Move, New folder or Create write runs, as Repair's view does. Escape is unchanged. — A control must not offer what it does not do. — If wrong: a Cancel that cannot be pressed for a moment.
+- Ruling (controller, Part E review M6, after fix round 1): the privacy sweep drives a repair refused at Preview. A source that is no conforming document is refused at prepare (`invalid_input`, `mutation/bind/repair.rs:14-23`), with no Confirm and no `repair-failure`, so the sweep reads that dialog's code and message. It does not drive an `external_change` after Confirm: Task 25 already shows those words are the library's fixed message. — The refusal a parser could echo the source in is the one at prepare. — If wrong: a refusal route the sweep does not read.
+- Ruling (controller, Part E review M7): New folder's module doc says why it sends no observation.
+- Known Limit, to add to the design at Task 27 (Part E review M3): after a repair, the file on primary still needs fixing until the item's work is merged, and repairing it again is refused.
+- Part E checkpoint, after the fix rounds (controller): the scoped
+  re-review of `b3e6ecf..b356838` found I1, M1, M2, M4, M5, M6 and M7
+  addressed, with nothing new broken. The controller checked M4 itself:
+  `tab_to` and `open_a_document` match `a372edb`.
