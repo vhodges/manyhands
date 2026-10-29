@@ -1235,3 +1235,134 @@ async fn escape_while_the_repair_runs_gives_focus_back_to_the_text(cx: &mut Test
         "the repaired document, viewed"
     );
 }
+
+// Task 27 fix 1.
+
+/// A3's words: what closing the tab says once the repair was sent.
+const SENT_BODY: &str =
+    "Your repair was sent and may already be made. Closing the tab does not undo it.";
+
+fn tab_count(shell: &Shell, cx: &mut TestAppContext) -> usize {
+    shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.tab_keys())
+        .len()
+}
+
+/// The prompt's title, message and buttons, as closing the tab draws them.
+fn discard_prompt(shell: &Shell, cx: &mut TestAppContext) -> [Option<String>; 4] {
+    [
+        "repair-discard-dialog",
+        "repair-discard-message",
+        "repair-discard-discard",
+        "repair-discard-cancel",
+    ]
+    .map(|id| shell.label(id, cx))
+}
+
+fn prompt_saying(body: &str) -> [Option<String>; 4] {
+    [DISCARD_TITLE, body, "Discard", "Cancel"].map(|label| Some(label.to_owned()))
+}
+
+/// A3: closing the tab while its repair runs asks under the same title,
+/// with Discard and Cancel, but says the repair was sent and may already be
+/// made, which closing does not undo. Discard closes the tab. The repair
+/// goes on, and its answer, landing for a closed tab, opens nothing: the
+/// file is repaired once.
+#[gpui_kit::test]
+async fn closing_while_the_repair_runs_says_it_was_sent(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_nonconforming_document(root, MARKER);
+    });
+    completed_marker(&shell, &root, cx);
+    preview(&shell, cx).await;
+    let held = shell.backend.hold_job(JobKind::DocumentRepair);
+    shell.click("confirm-ok", cx);
+    held.wait_reached();
+    shell.keys("escape", cx);
+    assert!(!shell.present("confirm-dialog", cx));
+
+    shell.keys("secondary-w", cx);
+    assert_eq!(discard_prompt(&shell, cx), prompt_saying(SENT_BODY));
+    shell.click("repair-discard-discard-button", cx);
+    assert_eq!(tab_count(&shell, cx), 0, "Discard closes the tab");
+
+    let sent = repairs(&shell, cx)[0];
+    held.release();
+    shell.until_ended(sent, cx).await;
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert_eq!(answer(&shell, sent, cx), (1, Some(ResultCode::Ok)));
+    assert_eq!(tab_count(&shell, cx), 0, "nothing opens");
+    assert_eq!(repairs(&shell, cx), [sent], "one request");
+    assert_eq!(
+        own_commits(&root, &document_branch(ADOPTED)),
+        Some(1),
+        "repaired once"
+    );
+}
+
+/// A3: after an answer whose effect is unknown (`BeforeRequestSettlement`),
+/// closing the tab says the repair was sent and may already be made. Cancel
+/// keeps the tab and the text.
+#[gpui_kit::test]
+async fn closing_after_a_lost_repair_answer_says_it_was_sent(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_nonconforming_document(root, MARKER);
+    });
+    let typed = completed_marker(&shell, &root, cx);
+    preview(&shell, cx).await;
+    failing_at(&shell, FailurePoint::BeforeRequestSettlement);
+    let sent = confirm(&shell, cx).await;
+    working(&shell);
+    assert_eq!(
+        answer(&shell, sent, cx),
+        (1, Some(ResultCode::InternalError)),
+        "lost"
+    );
+
+    shell.keys("secondary-w", cx);
+    assert_eq!(discard_prompt(&shell, cx), prompt_saying(SENT_BODY));
+    shell.keys("escape", cx);
+    assert!(!shell.present("repair-discard-dialog", cx));
+    assert_eq!(tab_count(&shell, cx), 1, "Cancel keeps the tab");
+    assert_eq!(repair_text(&shell, cx), typed, "and the text");
+}
+
+/// A3: every other state keeps the first words. Edited and never sent,
+/// closing the tab and the view's Cancel both say the changes are not
+/// saved anywhere; so does closing after a refusal, the repair sent but
+/// not made.
+#[gpui_kit::test]
+async fn closing_unsent_or_refused_repair_text_says_it_is_not_saved(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_nonconforming_document(root, MARKER);
+    });
+    completed_marker(&shell, &root, cx);
+    shell.keys("secondary-w", cx);
+    assert_eq!(discard_prompt(&shell, cx), prompt_saying(DISCARD_BODY));
+    shell.keys("escape", cx);
+    shell.click("repair-cancel-button", cx);
+    assert_eq!(
+        shell.label("repair-discard-message", cx).as_deref(),
+        Some(DISCARD_BODY)
+    );
+    shell.keys("escape", cx);
+
+    preview(&shell, cx).await;
+    shell.fixture.commit_file(
+        &root,
+        MARKER,
+        b"---\nmanyhands_managed: true\n---\nChanged by another.\n",
+    );
+    let sent = confirm(&shell, cx).await;
+    assert_eq!(
+        answer(&shell, sent, cx),
+        (1, Some(ResultCode::ExternalChange)),
+        "refused"
+    );
+    shell.keys("secondary-w", cx);
+    assert_eq!(discard_prompt(&shell, cx), prompt_saying(DISCARD_BODY));
+    shell.keys("escape", cx);
+    assert_eq!(tab_count(&shell, cx), 1);
+}

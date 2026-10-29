@@ -35,7 +35,8 @@
 //!   M1). While a request runs, the text and Preview wait.
 //! - **Leaving.** Cancel, closing the tab, quitting, or removing the
 //!   repository with text that differs from what the view opened with
-//!   asks first, or counts it; unedited text goes unasked.
+//!   asks first, or counts it; unedited text goes unasked. Once a repair
+//!   was sent, the question says it may already be made (`prompt`).
 //!
 //! The text is the file's, so nothing here derives `Debug`, and it reaches
 //! no operation entry, notification, dialog message or error: only the
@@ -60,7 +61,7 @@ use manyhands::{
     results::{CheckpointEffect, ProblemCode, ResultCode},
 };
 
-use super::{CloseThisTab, ItemPane};
+use super::ItemPane;
 use crate::desktop::{
     model::{edit::Phase, item::CONTEXT_PROBLEMS, navigation::OpenTarget},
     services::requests::{DesktopRequestId, Intent, RequestState},
@@ -69,7 +70,6 @@ use crate::desktop::{
 pub(super) use adopt::Adoption;
 #[cfg(test)]
 use adopt::adopt_title;
-use prompt::Choice;
 
 /// A file with no text to repair (pre-flight ruling, Task 25).
 pub(crate) const REPAIR_NOT_UTF8: &str =
@@ -462,31 +462,6 @@ impl ItemPane {
         } else {
             self.close_repair(window, cx);
         }
-    }
-
-    /// Asks before edited repair text is lost, which no draft keeps:
-    /// Discard drops it, and closes the tab when `closing`; Cancel, the
-    /// default, keeps both.
-    pub(in crate::desktop::view) fn ask_discard_repair(
-        &mut self,
-        closing: bool,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let pane = cx.entity().downgrade();
-        prompt::ask(window, cx, move |choice, window, cx| {
-            if choice != Choice::Discard {
-                return;
-            }
-            let _ = pane.update(cx, |pane, cx| {
-                if closing {
-                    pane.repair = None;
-                    cx.emit(CloseThisTab);
-                } else {
-                    pane.close_repair(window, cx);
-                }
-            });
-        });
     }
 
     /// The view closes, and the file's own text takes the focus.
