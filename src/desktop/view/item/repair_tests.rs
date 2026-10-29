@@ -1173,3 +1173,34 @@ async fn a_heading_that_cannot_be_a_title_gives_way_to_the_file_stem(cx: &mut Te
     let (prefilled, id) = adopt(&shell, cx).await;
     assert_eq!(prefilled, adoption(&id, "notes", written));
 }
+
+/// Edited repair text is unsaved in the header's pill too, in its words,
+/// as the strip marks it (Part E review, I1): unedited, the pill is the
+/// viewing state; typed in, "Editing · unsaved changes"; Cancel, then
+/// Discard, gives the viewing state back.
+#[gpui_kit::test]
+async fn edited_repair_text_is_unsaved_in_the_pill(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_nonconforming_document(root, MARKER);
+    });
+    open(&shell, inspect(&root, MARKER), cx);
+    let viewing = Some("Viewing the shared copy");
+    assert_eq!(shell.label("item-pill", cx).as_deref(), viewing);
+    open_repair(&shell, cx);
+    assert_eq!(
+        shell.label("item-pill", cx).as_deref(),
+        viewing,
+        "unedited"
+    );
+
+    type_at_line(&shell, 0, "x", cx);
+    assert_eq!(
+        shell.label("item-pill", cx).as_deref(),
+        Some("Editing \u{b7} unsaved changes")
+    );
+
+    shell.click("repair-cancel-button", cx);
+    shell.click("repair-discard-discard-button", cx);
+    assert!(!shell.present("repair-source", cx), "the view closes");
+    assert_eq!(shell.label("item-pill", cx).as_deref(), viewing);
+}

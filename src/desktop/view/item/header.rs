@@ -201,7 +201,12 @@ impl ItemPane {
     ) -> (AnyElement, usize) {
         let colors = item_colors(cx);
         let later = header_later(self.shown_kind(read));
-        let state = self.edit_pill(cx);
+        // Edited repair text is unsaved, while its repair runs too, as the
+        // strip marks it (Part E review, I1).
+        let state = self.edit_pill(cx).or_else(|| {
+            self.repair_edited(cx)
+                .then_some(pill::PillState::EditingUnsaved)
+        });
         // The read is borrowed; only a new item's stand-in is built.
         let built = read.is_none().then(|| self.new_item_shown(cx)).flatten();
         let item = read.or(built.as_ref());
