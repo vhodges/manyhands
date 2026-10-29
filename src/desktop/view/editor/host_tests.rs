@@ -338,7 +338,9 @@ fn with(text: &str, offset: usize, inserted: &str) -> String {
 }
 
 /// The mode key switches modes; neither the key nor the call touches the
-/// text, and undo and redo reach across a switch.
+/// text, and undo and redo reach across a switch: text typed in rich text,
+/// then in Markdown, is undone back past the switch to the loaded text,
+/// clean (Task 27 fix 1, C2).
 #[gpui_kit::test]
 fn a_mode_switch_keeps_the_text_and_the_undo_history(cx: &mut TestAppContext) {
     const BODY: &str = "# A heading\n\nA paragraph with **bold** and `code`.\n\n- an item\n";
@@ -354,6 +356,15 @@ fn a_mode_switch_keeps_the_text_and_the_undo_history(cx: &mut TestAppContext) {
     assert!(!editing.rich(cx), "the key switched to Markdown");
     assert!(editing.text(cx) == typed, "the switch kept the text");
     assert!(editing.editor_focused(cx), "the editor kept focus");
+    let item = at(&typed, "an item");
+    editing.place(item, cx);
+    editing.input("one more, ", cx);
+    assert!(
+        editing.text(cx) == with(&typed, item, "one more, "),
+        "Markdown takes typing"
+    );
+    editing.keys("ctrl-z", cx);
+    assert!(editing.text(cx) == typed, "undo in Markdown");
     editing.keys("ctrl-z", cx);
     assert!(editing.text(cx) == BODY, "undo reached across the switch");
     assert!(!editing.dirty(cx));
