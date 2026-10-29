@@ -822,8 +822,9 @@ impl IdentityMutationDto {
 
 /// What a synchronization that stopped for its host reports: the host
 /// it reached and the key that host presented, which is what a host
-/// approval is given. A synchronization reports no other data: what it
-/// published is in its effects.
+/// approval is given. One that stopped on a conflict reports
+/// `SynchronizationConflictMutationDto` instead; every other result of one
+/// reports no data, and what it published is in its effects.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SynchronizationMutationDto {
     /// The host, in lower case.

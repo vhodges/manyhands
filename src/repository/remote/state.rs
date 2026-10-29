@@ -4780,13 +4780,11 @@ fn resolution_attempt_id(
     ).optional().map_err(|_| recovery_required())?.ok_or_else(recovery_required)
 }
 
-/// The request a resolution attempt of `conflict resolve` belongs to, and
-/// the digest of the input it presented (R-35). An ID and a digest: no
-/// source is kept.
+/// The request a resolution attempt of `conflict resolve` belongs to
+/// (R-35): an ID, and no source.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in super::super) struct ResolutionOwner {
     pub request_id: String,
-    pub input_digest: [u8; 32],
 }
 
 /// Where a step that met a conflict stands, as `conflict resolve` reads it.
@@ -4844,13 +4842,10 @@ pub(in super::super) struct ResolutionAttemptView {
 }
 
 /// What `conflict resolve` reads of a synchronization's resolution in one
-/// read (R-14, R-35): the operation's phase, what it synchronizes, each
-/// step that met a conflict, newest first, and every resolution attempt,
-/// oldest first.
+/// read (R-14, R-35): each step that met a conflict, newest first, and
+/// every resolution attempt, oldest first.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in super::super) struct ResolutionView {
-    pub phase: RemoteOperationPhase,
-    pub target: SynchronizationTarget,
     pub steps: Vec<ResolutionConflictStep>,
     pub attempts: Vec<ResolutionAttemptView>,
 }
@@ -4953,7 +4948,9 @@ pub(in super::super) fn resolution_view(
     let Some(record) = read_operation(connection, repository_id, operation_id)? else {
         return Ok(None);
     };
-    let target = synchronization_target(&record.target).ok_or_else(recovery_required)?;
+    if synchronization_target(&record.target).is_none() {
+        return Err(recovery_required());
+    }
     let steps = connection
         .prepare(
             "SELECT window_number,ordinal FROM remote_integration_steps
@@ -4989,7 +4986,6 @@ pub(in super::super) fn resolution_view(
         Option<String>,
         bool,
         Option<String>,
-        Option<Vec<u8>>,
     );
     let attempts = connection
         .prepare(
@@ -4999,7 +4995,7 @@ pub(in super::super) fn resolution_view(
                       AND EXISTS(SELECT 1 FROM remote_resolution_index_artifacts artifact
                                   WHERE artifact.attempt_id=attempt.id AND artifact.phase='released'
                                     AND artifact.ref_phase='observed'),
-                    owner.request_ulid, owner.input_digest
+                    owner.request_ulid
                FROM remote_resolution_attempts attempt
                JOIN remote_integration_steps step ON step.id=attempt.integration_step_id
                LEFT JOIN remote_resolution_owners owner ON owner.attempt_ulid=attempt.attempt_ulid
@@ -5017,7 +5013,6 @@ pub(in super::super) fn resolution_view(
                         row.get(4)?,
                         row.get(5)?,
                         row.get(6)?,
-                        row.get(7)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()
@@ -5025,7 +5020,7 @@ pub(in super::super) fn resolution_view(
         .map_err(|_| recovery_required())?
         .into_iter()
         .map(
-            |(attempt, window, ordinal, phase, candidate, released, request, digest)| {
+            |(attempt, window, ordinal, phase, candidate, released, request)| {
                 Ok(ResolutionAttemptView {
                     attempt: crate::repository::OperationId::parse(&attempt)
                         .map_err(|_| recovery_required())?,
@@ -5034,24 +5029,12 @@ pub(in super::super) fn resolution_view(
                     phase: resolution_attempt_phase(&phase)?,
                     candidate: oid(candidate)?,
                     released,
-                    owner: match (request, digest) {
-                        (Some(request_id), Some(digest)) => Some(ResolutionOwner {
-                            request_id,
-                            input_digest: digest.try_into().map_err(|_| recovery_required())?,
-                        }),
-                        (None, None) => None,
-                        _ => return Err(recovery_required()),
-                    },
+                    owner: request.map(|request_id| ResolutionOwner { request_id }),
                 })
             },
         )
         .collect::<Result<Vec<_>, RepositoryError>>()?;
-    Ok(Some(ResolutionView {
-        phase: record.phase,
-        target,
-        steps,
-        attempts,
-    }))
+    Ok(Some(ResolutionView { steps, attempts }))
 }
 
 /// The attempts `request` is recorded as the owner of, each with the
@@ -5244,10 +5227,10 @@ pub(super) fn resolution_path_records(
 }
 
 /// Closes the attempt `attempt`, which has written paths and no candidate,
-/// for a new request that supersedes it (decision 18): its rows and the
-/// record of its owner go, in one transaction. The caller has released its
-/// native index sentinel and proved its written paths unchanged under the
-/// repository's lease, while holding the reservation.
+/// for a new request that supersedes it (decision 18): see
+/// `delete_resolution_attempt`. The caller has released its native index
+/// sentinel and proved its written paths unchanged under the repository's
+/// lease, while holding the reservation.
 pub(super) fn close_superseded_resolution_attempt(
     tx: &Transaction<'_>,
     record: &StoredRemoteOperation,
@@ -5264,6 +5247,58 @@ pub(super) fn close_superseded_resolution_attempt(
     if phase != "paths_applying" || step_phase != "resolution_prepared" {
         return Err(recovery_required());
     }
+    delete_resolution_attempt(tx, id, attempt)
+}
+
+/// Closes the attempt `attempt` when its rows show that it wrote nothing:
+/// recorded, or with its paths begun and none observed, and no native index
+/// or ref-log artifact retained or bound. `Ok(false)`, with nothing changed,
+/// otherwise. The caller has proved, under the repository's lease and while
+/// holding the reservation, that every path still holds its recorded
+/// pre-write image.
+pub(super) fn close_unwritten_resolution_attempt(
+    tx: &Transaction<'_>,
+    record: &StoredRemoteOperation,
+    attempt: crate::repository::OperationId,
+) -> Result<bool, RepositoryError> {
+    let (id, phase) = resolution_attempt_id(tx, record, attempt)?;
+    if !matches!(phase.as_str(), "prepared" | "paths_applying") {
+        return Ok(false);
+    }
+    let held: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM remote_resolution_index_artifacts WHERE attempt_id=?1)
+                 OR EXISTS(SELECT 1 FROM remote_resolution_ref_log_artifacts WHERE attempt_id=?1)
+                 OR EXISTS(SELECT 1 FROM remote_resolution_paths WHERE attempt_id=?1 AND applied)",
+            [id],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    if held {
+        return Ok(false);
+    }
+    delete_resolution_attempt(tx, id, attempt)?;
+    Ok(true)
+}
+
+/// Deletes the attempt whose row is `id` and whose ULID is `attempt`: its
+/// rows and the record of its owner, in the caller's transaction. Its step,
+/// when the attempt had begun its paths, is put back to `conflict_pending`,
+/// so the conflict reads as one no attempt has begun to resolve, and
+/// outside repair is accepted again (Cycle decision 18). The step holds
+/// nothing else of the attempt: beginning its paths set only its phase.
+fn delete_resolution_attempt(
+    tx: &Transaction<'_>,
+    id: i64,
+    attempt: crate::repository::OperationId,
+) -> Result<(), RepositoryError> {
+    tx.execute(
+        "UPDATE remote_integration_steps SET phase='conflict_pending'
+          WHERE id=(SELECT integration_step_id FROM remote_resolution_attempts WHERE id=?1)
+            AND phase='resolution_prepared'",
+        [id],
+    )
+    .map_err(|_| recovery_required())?;
     for statement in [
         "DELETE FROM remote_resolution_ref_log_artifacts WHERE attempt_id=?1",
         "DELETE FROM remote_resolution_index_artifacts WHERE attempt_id=?1",

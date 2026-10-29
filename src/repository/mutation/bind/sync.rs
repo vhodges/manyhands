@@ -67,14 +67,13 @@ use crate::{
 use super::{
     super::{
         super::{
-            AuthoringKind, ConfigurationInspection, ConflictEligibility, OperationFamily,
-            OperationId, ReadError, RemoteOperationSafePoint, RepositoryOperation,
-            RepositoryService, SafePointRequest, SynchronizationError, SynchronizationObserver,
-            SynchronizationOutcome, SynchronizationResult, SynchronizationSettings,
-            SynchronizationTarget, SynchronizeRemoteRequest, authoring_kind_segment,
-            read_configuration_for,
+            AuthoringKind, ConfigurationInspection, OperationFamily, OperationId, ReadError,
+            RemoteOperationSafePoint, RepositoryOperation, RepositoryService, SafePointRequest,
+            SynchronizationError, SynchronizationObserver, SynchronizationOutcome,
+            SynchronizationResult, SynchronizationSettings, SynchronizationTarget,
+            SynchronizeRemoteRequest, authoring_kind_segment, read_configuration_for,
             recovery::{FinalKind, JournalRow},
-            remote::sync::RepublishConsent,
+            remote::{conflict_read, sync::RepublishConsent},
             transport::SshTransportErrorKind,
         },
         command::Command,
@@ -1182,13 +1181,7 @@ pub(crate) fn conflict_next(
     // Manyhands either: it is repaired outside.
     let canonical = service
         .inspect_synchronization_recovery(root, operation_id)
-        .is_ok_and(|inspection| {
-            !inspection.paths.is_empty()
-                && inspection
-                    .paths
-                    .iter()
-                    .all(|path| path.eligibility == ConflictEligibility::EligibleCanonical)
-        });
+        .is_ok_and(|inspection| conflict_read::resolvable(&inspection));
     ConflictNextDto {
         operation_id: operation_id.to_string(),
         next_action: if canonical {

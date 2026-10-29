@@ -2477,14 +2477,71 @@ fn tree_blobs(
     Ok(())
 }
 
+/// A path of a resolution attempt that no longer holds what the attempt left
+/// there: its bytes as the live conflict has them, or `None` for a recorded
+/// path that is no path of the live conflict.
+type ChangedPath = Option<Vec<u8>>;
+
+/// The first path of a resolution attempt that no longer holds exactly what
+/// the attempt left there, as its rows show; `None` when every one does. A
+/// path whose write was observed holds its result. One whose write was not
+/// observed may have been written all the same, so it holds either its
+/// result or its recorded pre-write image. Each recorded path is found among
+/// the live conflict's paths by its digest; one that is not found, or holds
+/// anything else, is changed, and so is one that cannot be told.
+fn first_changed_path(
+    repository: &git2::Repository,
+    inspection: &SynchronizationConflictInspection,
+    paths: &[state::ResolutionPathRecord],
+) -> Result<Option<ChangedPath>, SynchronizationError> {
+    let workdir = repository
+        .workdir()
+        .ok_or(SynchronizationError::RecoveryRequired)?;
+    for recorded in paths {
+        let Some(path) = inspection
+            .paths
+            .iter()
+            .find(|path| blake3::hash(&path.token.path).as_bytes() == &recorded.path_digest)
+        else {
+            return Ok(Some(None));
+        };
+        let changed = Some(Some(path.token.path.clone()));
+        let Ok(relative) = std::str::from_utf8(&path.token.path) else {
+            return Ok(changed);
+        };
+        let relative = Path::new(relative);
+        match owned_result_digest(workdir, relative) {
+            Ok(digest) if digest == recorded.result_digest => continue,
+            Ok(_) | Err(SynchronizationError::ExternalChange) => {}
+            Err(error) => return Err(error),
+        }
+        if recorded.applied {
+            return Ok(changed);
+        }
+        match conflict_worktree_digest(workdir, relative) {
+            Ok(digest) if digest == recorded.prewrite_digest => {}
+            Ok(_) | Err(SynchronizationError::ExternalChange) => return Ok(changed),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(None)
+}
+
 /// Whether every path of a resolution attempt still holds exactly what the
-/// attempt left there, as its rows show. A path whose write was observed
-/// holds its result. One whose write was not observed may have been written
-/// all the same, so it holds either its result or its recorded pre-write
-/// image. Each recorded path is found among the live conflict's paths by
-/// its digest; one that is not found, or holds anything else, is changed,
-/// and so is one that cannot be told.
+/// attempt left there; see `first_changed_path`.
 fn written_paths_unchanged(
+    repository: &git2::Repository,
+    inspection: &SynchronizationConflictInspection,
+    paths: &[state::ResolutionPathRecord],
+) -> Result<bool, SynchronizationError> {
+    Ok(first_changed_path(repository, inspection, paths)?.is_none())
+}
+
+/// Whether a resolution attempt wrote none of its paths, as far as the
+/// worktree can show: no write was observed, and every path holds its
+/// recorded pre-write image, found among the live conflict's paths by its
+/// digest. A path that is not found, or that cannot be told, is no proof.
+fn paths_hold_their_prewrite_images(
     repository: &git2::Repository,
     inspection: &SynchronizationConflictInspection,
     paths: &[state::ResolutionPathRecord],
@@ -2493,6 +2550,9 @@ fn written_paths_unchanged(
         .workdir()
         .ok_or(SynchronizationError::RecoveryRequired)?;
     for recorded in paths {
+        if recorded.applied {
+            return Ok(false);
+        }
         let Some(path) = inspection
             .paths
             .iter()
@@ -2503,16 +2563,7 @@ fn written_paths_unchanged(
         let Ok(relative) = std::str::from_utf8(&path.token.path) else {
             return Ok(false);
         };
-        let relative = Path::new(relative);
-        match owned_result_digest(workdir, relative) {
-            Ok(digest) if digest == recorded.result_digest => continue,
-            Ok(_) | Err(SynchronizationError::ExternalChange) => {}
-            Err(error) => return Err(error),
-        }
-        if recorded.applied {
-            return Ok(false);
-        }
-        match conflict_worktree_digest(workdir, relative) {
+        match conflict_worktree_digest(workdir, Path::new(relative)) {
             Ok(digest) if digest == recorded.prewrite_digest => {}
             Ok(_) | Err(SynchronizationError::ExternalChange) => return Ok(false),
             Err(error) => return Err(error),
@@ -5626,6 +5677,22 @@ impl RepositoryService {
         synchronization_id: OperationId,
         attempt_id: OperationId,
     ) -> Result<bool, SynchronizationError> {
+        Ok(self
+            .changed_resolution_path(root, synchronization_id, attempt_id)?
+            .is_none())
+    }
+
+    /// The first path the attempt `attempt_id` left that no longer holds
+    /// what it left there, as `resolution_paths_unchanged` judges it:
+    /// `None` when every one does, and `Some(None)` for a recorded path that
+    /// is no path of the live conflict. Read only, under the repository's
+    /// lease; nothing is reserved.
+    pub(crate) fn changed_resolution_path(
+        &self,
+        root: &Path,
+        synchronization_id: OperationId,
+        attempt_id: OperationId,
+    ) -> Result<Option<ChangedPath>, SynchronizationError> {
         let (_, root) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
         let paths = state::with_transaction(self, &root, |tx, id| {
             let record = state::read_operation(tx, id, synchronization_id)?
@@ -5635,7 +5702,73 @@ impl RepositoryService {
         let inspection = self.inspect_synchronization_recovery(&root, synchronization_id)?;
         let repository = Self::inspect_conflict_target(&root, &inspection.target)?;
         let _lease = repository_lease(&repository, &root, RepositoryOperation::RepositorySnapshot)?;
-        written_paths_unchanged(&repository, &inspection, &paths)
+        first_changed_path(&repository, &inspection, &paths)
+    }
+
+    /// The synchronization's live conflict, and its reservation taken again
+    /// in the conflict's window: what a supersede and a close of an attempt
+    /// act under.
+    fn reserved_conflict(
+        &self,
+        root: &Path,
+        synchronization_id: OperationId,
+    ) -> Result<(SynchronizationConflictInspection, RemoteReservation), SynchronizationError> {
+        let inspection = self.inspect_synchronization_recovery(root, synchronization_id)?;
+        let ConfigurationInspection::Valid(config) = read_configuration(root)? else {
+            return Err(SynchronizationError::RecoveryRequired);
+        };
+        let Some(remote) = config.publication_remote.as_deref() else {
+            return Err(SynchronizationError::RecoveryRequired);
+        };
+        let plan = RemoteRefPlan::from_configuration(remote, &config.primary_branch)
+            .map_err(|_| SynchronizationError::RecoveryRequired)?;
+        let owner = match self.reacquire_synchronization_conflict_in_window(
+            root,
+            synchronization_id,
+            &inspection.target.operation_target(&plan),
+            inspection.observation.window_number,
+            inspection.observation.ordinal,
+            inspection.observation.fingerprint,
+        )? {
+            RemoteReservationOutcome::Reserved(owner) => owner,
+            RemoteReservationOutcome::Busy => return Err(SynchronizationError::Busy),
+            _ => return Err(SynchronizationError::RecoveryRequired),
+        };
+        Ok((inspection, owner))
+    }
+
+    /// Closes the attempt `attempt_id` when it wrote nothing, so that a
+    /// refusal of it leaves the conflict as no attempt had begun it (Task 6
+    /// review, I1): no path's write was observed, every path holds its
+    /// recorded pre-write image, and no native index or ref-log artifact is
+    /// retained or bound. `Ok(false)`, with nothing changed, when that cannot
+    /// be proved.
+    ///
+    /// Under the conflict's reservation and the repository's lease, the
+    /// paths are proved, and the attempt's rows and the record of its owner
+    /// are deleted in one transaction that checks the rows again and puts
+    /// the step back to `conflict_pending`, as a supersede closes one.
+    pub(crate) fn close_unwritten_resolution_attempt(
+        &self,
+        root: &Path,
+        synchronization_id: OperationId,
+        attempt_id: OperationId,
+    ) -> Result<bool, SynchronizationError> {
+        let (_, root) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+        let (inspection, owner) = self.reserved_conflict(&root, synchronization_id)?;
+        let repository = Self::inspect_conflict_target(&root, &inspection.target)?;
+        let _lease = repository_lease(&repository, &root, RepositoryOperation::RepositorySnapshot)?;
+        let paths = state::with_transaction(self, &root, |tx, id| {
+            let record = reservation::owned(self, tx, id, &owner)?;
+            state::resolution_path_records(tx, &record, attempt_id)
+        })?;
+        if !paths_hold_their_prewrite_images(&repository, &inspection, &paths)? {
+            return Ok(false);
+        }
+        Ok(state::with_transaction(self, &root, |tx, id| {
+            let record = reservation::owned(self, tx, id, &owner)?;
+            state::close_unwritten_resolution_attempt(tx, &record, attempt_id)
+        })?)
     }
 
     /// Decision 18's supersede: closes the attempt `attempt_id`, which has
@@ -5656,27 +5789,7 @@ impl RepositoryService {
         attempt_id: OperationId,
     ) -> Result<bool, SynchronizationError> {
         let (_, root) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
-        let inspection = self.inspect_synchronization_recovery(&root, synchronization_id)?;
-        let ConfigurationInspection::Valid(config) = read_configuration(&root)? else {
-            return Err(SynchronizationError::RecoveryRequired);
-        };
-        let Some(remote) = config.publication_remote.as_deref() else {
-            return Err(SynchronizationError::RecoveryRequired);
-        };
-        let plan = RemoteRefPlan::from_configuration(remote, &config.primary_branch)
-            .map_err(|_| SynchronizationError::RecoveryRequired)?;
-        let owner = match self.reacquire_synchronization_conflict_in_window(
-            &root,
-            synchronization_id,
-            &inspection.target.operation_target(&plan),
-            inspection.observation.window_number,
-            inspection.observation.ordinal,
-            inspection.observation.fingerprint,
-        )? {
-            RemoteReservationOutcome::Reserved(owner) => owner,
-            RemoteReservationOutcome::Busy => return Err(SynchronizationError::Busy),
-            _ => return Err(SynchronizationError::RecoveryRequired),
-        };
+        let (inspection, owner) = self.reserved_conflict(&root, synchronization_id)?;
         let repository = Self::inspect_conflict_target(&root, &inspection.target)?;
         let _lease = repository_lease(&repository, &root, RepositoryOperation::RepositorySnapshot)?;
         let (paths, artifact) = state::with_transaction(self, &root, |tx, id| {

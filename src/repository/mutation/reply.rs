@@ -129,6 +129,7 @@ impl Reply<'_> {
             offers_nothing,
             // Of a preview that is refused, and of no request.
             host_replacement: _,
+            message,
         } = answer;
         let scope = self.scope(accepted.map(|accepted| &accepted.position));
         // A request with no operation names none.
@@ -161,6 +162,9 @@ impl Reply<'_> {
         )
         .with_request_id(self.identity.request_id.to_string())
         .with_recovery(recovery);
+        if let Some(message) = message {
+            envelope.message = message;
+        }
         if let Some(operation) = operation {
             envelope = envelope.with_operation_id(operation.operation_id.to_string());
         }

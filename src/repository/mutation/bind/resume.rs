@@ -3,7 +3,7 @@
 //! confirmation: what it does was consented to when the operation began.
 //!
 //! Sending the request that began an operation again, under its own
-//! request ID, is the general way to finish it. A resume is for the two
+//! request ID, is the general way to finish it. A resume is for the three
 //! kinds of work that need none of that request's input:
 //!
 //! - the index hand-off of a local operation whose own work is recorded

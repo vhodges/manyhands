@@ -287,6 +287,12 @@ pub(crate) struct Answer {
     /// has a pin: the one data a `prepare` gives that is no preview. No
     /// answer of `execute` holds it.
     pub(crate) host_replacement: Option<Box<HostReplacementDto>>,
+    /// The result's message in place of the code's, for an answer that
+    /// says what in particular stopped the request and how to get past it,
+    /// as a `conflict resolve` refused for a path edited by hand does (Task
+    /// 6 review, I1). It is no part of a stored result: an answer that
+    /// carries one leaves no record to give it again.
+    pub(crate) message: Option<String>,
 }
 
 impl Answer {
@@ -300,6 +306,7 @@ impl Answer {
             local_change: false,
             offers_nothing: false,
             host_replacement: None,
+            message: None,
         }
     }
 

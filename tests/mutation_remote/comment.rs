@@ -93,6 +93,10 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         "c4_comment_remote_added_later",
         c4_comment_remote_added_later,
     ),
+    (
+        "c4_comment_remote_added_later_resumed",
+        c4_comment_remote_added_later_resumed,
+    ),
     ("c4_comment_lost_output", c4_comment_lost_output),
     (
         "c4_comment_merges_a_divergent_context",
@@ -1200,6 +1204,32 @@ fn c4_comment_remote_added_later() -> Result<(), FixtureError> {
     let synchronized = execute(&w, REQUEST_2, item_sync(&w));
     assert_eq!(synchronized.code, ResultCode::Ok);
     assert!(served(&w, COMMENT)?);
+    // The finished request still says what it did.
+    assert_eq!(execute(&w, REQUEST_1, add(&w)), saved_only);
+    Ok(())
+}
+
+/// The same, with the remote added later and the comment published by
+/// `operation resume` of the comment's operation, as the resume table's
+/// first row says: no child synchronization ran, and the resume's retry
+/// runs one (Task 6 review, M3; a pin).
+fn c4_comment_remote_added_later_resumed() -> Result<(), FixtureError> {
+    let (w, _) = world()?;
+    remove_the_remote(&w)?;
+    let saved_only = added(&w, REQUEST_1, add(&w));
+    assert_eq!(saved_only.code, ResultCode::Ok);
+    assert_eq!(
+        data(&saved_only)?.pending_reason,
+        Some(CommentPendingReason::NoPublicationRemote)
+    );
+    let comment = saved_only.operation_id.clone().ok_or(FixtureError)?;
+    restore_the_remote(&w)?;
+    let pushes = accepted(&w.server);
+    let resumed = execute(&w, REQUEST_2, resume(&w, &comment));
+    assert_eq!(resumed.code, ResultCode::Ok, "{resumed:?}");
+    assert_eq!(resumed.effects.publication, PublicationEffect::Published);
+    assert!(served(&w, COMMENT)?);
+    assert_eq!(accepted(&w.server), pushes + 1);
     // The finished request still says what it did.
     assert_eq!(execute(&w, REQUEST_1, add(&w)), saved_only);
     Ok(())

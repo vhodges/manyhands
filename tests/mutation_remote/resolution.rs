@@ -4,7 +4,10 @@
 //! row of the conformance table; and the review's first fix round:
 //! `request cancel` of the request that holds the synchronization (step 6),
 //! an attempt ID that collides (R-14), a refused supersede, an edited path
-//! whose write was not observed, and a synchronization with no conflict.
+//! whose write was not observed, and a synchronization with no conflict;
+//! and the Part A review's fix round: a refusal that wrote nothing closes
+//! its attempt, the original request after a hand edit, a supersede whose
+//! new request is refused, and a continuation that meets a deleted branch.
 //!
 //! A raw peer clone makes the remote diverge, as a second user would, and
 //! a synchronization stops on the conflict. The resolution is presented as
@@ -159,6 +162,22 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         "c4_resolution_synchronization_without_conflict",
         c4_resolution_synchronization_without_conflict,
     ),
+    (
+        "c4_resolution_refused_at_a_git_lock",
+        c4_resolution_refused_at_a_git_lock,
+    ),
+    (
+        "c4_resolution_original_request_after_an_edit",
+        c4_resolution_original_request_after_an_edit,
+    ),
+    (
+        "c4_resolution_superseded_then_refused",
+        c4_resolution_superseded_then_refused,
+    ),
+    (
+        "c4_resolution_continuation_meets_a_deleted_branch",
+        c4_resolution_continuation_meets_a_deleted_branch,
+    ),
 ];
 
 const MAIN: &str = "refs/heads/main";
@@ -180,6 +199,8 @@ const LATER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR4";
 const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
 /// The second ticket of the conflict with two paths.
 const SECOND_TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAY";
+/// A third resolution request.
+const THIRD: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR5";
 /// A source the stores and the envelopes must never hold.
 const PRIVATE: &str = "conflict-resolve-private-source-sentinel";
 /// A well-formed token that no conflict issued.
@@ -840,11 +861,11 @@ fn c4_resolution_new_request_supersedes_written_paths() -> Result<(), FixtureErr
     Ok(())
 }
 
-fn c4_resolution_new_request_after_a_written_path_is_edited() -> Result<(), FixtureError> {
-    let c = Conflict::primary()?;
-    c.interrupted_at(FailurePoint::ResolutionAfterPathWrite, RESOLVE, "Resolved");
-    std::fs::write(c.worktree.join(c.path()), c.source("Edited by hand")).unwrap();
-    let before = state_of(&c);
+/// Row 8: a new request, `OTHER`, after `RESOLVE`'s written path was edited
+/// by hand. It is `original_request_required`, naming `RESOLVE`, with
+/// nothing written and the edit intact.
+fn superseding_after_an_edit(c: &Conflict) -> Envelope<MutationDataDto> {
+    let before = state_of(c);
     let refused = c.on(&fresh(&c.w), OTHER, c.titled("Superseding"));
     assert_eq!(refused.outcome, Outcome::Blocked);
     assert!(refused.data.is_none());
@@ -855,7 +876,7 @@ fn c4_resolution_new_request_after_a_written_path_is_edited() -> Result<(), Fixt
         Some(&serde_json::json!(RESOLVE))
     );
     assert_nothing_written(
-        &c,
+        c,
         OTHER,
         &refused,
         ResultCode::OriginalRequestRequired,
@@ -863,6 +884,14 @@ fn c4_resolution_new_request_after_a_written_path_is_edited() -> Result<(), Fixt
     );
     assert_eq!(c.written(), c.source("Edited by hand"));
     assert_eq!(c.show().request_id.as_deref(), Some(RESOLVE));
+    refused
+}
+
+fn c4_resolution_new_request_after_a_written_path_is_edited() -> Result<(), FixtureError> {
+    let c = Conflict::primary()?;
+    c.interrupted_at(FailurePoint::ResolutionAfterPathWrite, RESOLVE, "Resolved");
+    std::fs::write(c.worktree.join(c.path()), c.source("Edited by hand")).unwrap();
+    let refused = superseding_after_an_edit(&c);
     assert_resolution_golden(
         &c.w,
         "conflict_resolve_original_request_required",
@@ -1996,6 +2025,185 @@ fn c4_resolution_synchronization_without_conflict() -> Result<(), FixtureError> 
     assert!(record(&w, RESOLVE).is_none());
     assert_eq!(attempts(&w), (0, 0));
     assert_eq!(connections(&w), opened);
+    Ok(())
+}
+
+/// How many resolution paths the registry holds.
+fn path_rows(w: &World) -> i64 {
+    w.db()
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM remote_resolution_paths", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+}
+
+/// Gives the repository `identity`, or takes its own away.
+fn set_identity(w: &World, identity: Option<(&str, &str)>) -> Result<(), FixtureError> {
+    let mut config = fixed(fixed(w.repo()?.config())?.open_level(git2::ConfigLevel::Local))?;
+    match identity {
+        Some((name, email)) => {
+            fixed(config.set_str("user.name", name))?;
+            fixed(config.set_str("user.email", email))?;
+        }
+        None => {
+            fixed(config.remove("user.name"))?;
+            fixed(config.remove("user.email"))?;
+        }
+    }
+    Ok(())
+}
+
+/// I1, the fix: a refusal after the attempt began its paths and before it
+/// wrote any, here for a Git `index.lock` the attempt does not own. The
+/// rows prove nothing was written, so the attempt is closed as a supersede
+/// closes one, and the conflict reads as one no request has begun to
+/// resolve.
+fn c4_resolution_refused_at_a_git_lock() -> Result<(), FixtureError> {
+    let c = Conflict::primary()?;
+    let pushes = accepted(&c.w.server);
+    let lock = c.w.root.join(".git/index.lock");
+    fixed(std::fs::write(&lock, b"held by another process\n"))?;
+    let (tip, written) = (c.tip(), c.written());
+    let refused = c.execute(RESOLVE, c.titled("Resolved"));
+    // As today.
+    assert_eq!(refused.code, ResultCode::ExternalChange, "{refused:?}");
+    assert_eq!(refused.effects, Effects::not_requested());
+    assert!(record(&c.w, RESOLVE).is_none());
+    // No attempt, path or owner row, and the step as before any attempt.
+    assert_eq!(attempts(&c.w), (0, 0));
+    assert_eq!(path_rows(&c.w), 0);
+    assert_eq!(c.step(), "conflict_pending");
+    assert_eq!((c.tip(), c.written()), (tip, written));
+    fixed(std::fs::remove_file(&lock))?;
+    let shown = c.show();
+    assert_eq!(shown.state, ConflictState::ConflictPending);
+    assert_eq!(shown.next_action, ConflictReadNextAction::Resolve);
+    assert_eq!(shown.request_id, None);
+    assert!(!shown.historical);
+    // The file is edited by hand, and a new request resolves the conflict.
+    fixed(std::fs::write(
+        c.worktree.join(c.path()),
+        c.source("Edited by hand"),
+    ))?;
+    let resolved = c.on(&fresh(&c.w), OTHER, c.titled("Resolved"));
+    c.assert_published(&resolved, pushes);
+    Ok(())
+}
+
+/// I1, the escape: the first request's written path is edited by hand. No
+/// request writes over the edit; once the path holds what the request wrote
+/// there again, the same request goes on.
+fn c4_resolution_original_request_after_an_edit() -> Result<(), FixtureError> {
+    let c = Conflict::primary()?;
+    let pushes = accepted(&c.w.server);
+    c.interrupted_at(FailurePoint::ResolutionAfterPathWrite, RESOLVE, "Resolved");
+    let path = c.worktree.join(c.path());
+    fixed(std::fs::write(&path, c.source("Edited by hand")))?;
+    // A new request (row 8).
+    superseding_after_an_edit(&c);
+    // The same request, with the same input.
+    let before = state_of(&c);
+    let refused = c.on(&fresh(&c.w), RESOLVE, c.titled("Resolved"));
+    assert_nothing_written(&c, RESOLVE, &refused, ResultCode::ExternalChange, before);
+    assert_eq!(c.written(), c.source("Edited by hand"));
+    // It says which path, and how to go on.
+    assert_eq!(
+        refused.message,
+        format!(
+            "What the request was based on has changed. The path '{}' no longer \
+             holds what this request wrote there: restore it to this request's \
+             resolution, or to its content before the write, and send the request \
+             again.",
+            c.path()
+        )
+    );
+    // The request's resolution is written back: the same request goes on.
+    fixed(std::fs::write(&path, c.source("Resolved")))?;
+    let retried = c.on(&fresh(&c.w), RESOLVE, c.titled("Resolved"));
+    c.assert_published(&retried, pushes);
+    Ok(())
+}
+
+/// M1: a supersede whose new request is then refused before its own attempt
+/// is recorded, here for want of an identity. The superseded attempt is
+/// closed with its step put back, so the conflict reads as one with no
+/// attempt: `resolve`, no request named, and a resume meets the conflict
+/// as it would before any attempt.
+fn c4_resolution_superseded_then_refused() -> Result<(), FixtureError> {
+    let c = Conflict::primary()?;
+    let pushes = accepted(&c.w.server);
+    c.interrupted_at(FailurePoint::ResolutionAfterPathWrite, RESOLVE, "Resolved");
+    set_identity(&c.w, None)?;
+    let refused = c.on(&fresh(&c.w), OTHER, c.titled("Superseding"));
+    assert_eq!(refused.code, ResultCode::IdentityRequired, "{refused:?}");
+    assert_eq!(refused.effects, Effects::not_requested());
+    assert!(record(&c.w, OTHER).is_none());
+    assert_eq!(attempts(&c.w), (0, 0));
+    assert_eq!(c.step(), "conflict_pending");
+    let shown = c.show();
+    assert_eq!(shown.state, ConflictState::ConflictPending);
+    assert_eq!(shown.next_action, ConflictReadNextAction::Resolve);
+    assert_eq!(shown.request_id, None);
+    assert!(!shown.historical);
+    set_identity(&c.w, Some(("Fixture", "fixture@example.invalid")))?;
+    let resumed = execute(&c.w, RESUME, resume(&c.w, &c.operation.to_string()));
+    assert_eq!(resumed.code, ResultCode::RecoveryRequired, "{resumed:?}");
+    assert_eq!(
+        resumed.data,
+        Some(MutationDataDto::SynchronizationConflict(
+            SynchronizationConflictMutationDto {
+                r#type: SynchronizationConflictType::SynchronizationConflict,
+                conflict: ConflictNextDto {
+                    operation_id: c.operation.to_string(),
+                    next_action: ConflictNextAction::Resolve,
+                },
+            }
+        ))
+    );
+    // A third request resolves it, from the conflict as it is read now.
+    let shown = c.show();
+    let third = resolve(
+        &c.w,
+        c.operation,
+        shown.observation.as_deref().ok_or(FixtureError)?,
+        [(shown.paths[0].token.clone(), c.source("Third"))],
+    );
+    let resolved = c.on(&fresh(&c.w), THIRD, third);
+    c.assert_published(&resolved, pushes);
+    assert_eq!(c.written(), c.source("Third"));
+    Ok(())
+}
+
+/// M9: the continuation meets the item's branch deleted on the remote. The
+/// synchronization's own request holds the reservation, and `request
+/// cancel` of it, then that request once more, lets the reservation go:
+/// `request cancel` never reaches a `conflict resolve` request (R-32), so
+/// the action names the synchronization's request.
+fn c4_resolution_continuation_meets_a_deleted_branch() -> Result<(), FixtureError> {
+    let c = Conflict::item(|_| Ok(()))?;
+    fixed(fixed(c.w.bare()?.find_reference(CONTEXT))?.delete())?;
+    let stopped = c.execute(RESOLVE, c.titled("Resolved"));
+    assert_eq!(stopped.code, ResultCode::RemoteBranchDeleted, "{stopped:?}");
+    let commit = c.resolutions()[0];
+    assert_eq!(stopped.effects.commit_oid, Some(commit.to_string()));
+    assert_eq!(actions(&stopped), [RecoveryActionKind::RequestCancel]);
+    assert_eq!(
+        stopped.recovery[0].arguments.get("request_id"),
+        Some(&serde_json::json!(SYNC))
+    );
+    assert!(reserved(&c.w));
+    let asked =
+        c.w.service
+            .cancel_request(request(SYNC))
+            .data
+            .ok_or(FixtureError)?;
+    assert!(asked.requested);
+    let ended = execute(&c.w, SYNC, item_sync(&c.w));
+    assert_eq!(ended.code, ResultCode::Cancelled, "{ended:?}");
+    assert!(!reserved(&c.w));
+    let previewed = republish::prepared(&c.w);
+    assert_ne!(previewed.code, ResultCode::Busy, "{previewed:?}");
     Ok(())
 }
 

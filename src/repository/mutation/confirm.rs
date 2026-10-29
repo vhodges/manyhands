@@ -99,6 +99,8 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         local_change,
         offers_nothing,
         host_replacement,
+        // Of a refusal `execute` gives; a `prepare` gives the code's.
+        message: _,
     } = answer;
     // The host a refusal is about is named by its data, and the action
     // that replaces its pin takes the host.

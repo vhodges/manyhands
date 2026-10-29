@@ -595,7 +595,7 @@ new ticket comment (ruling P4).
 | 2a | `feat: let comment submission take a synchronizer` | Verify list passed: 5 `c4_comment_domain`, 41 and 25 SSH cases, 1344 `--lib repository`, clippy, fmt | pending | The author moves to Task 2b (ruling Q2). See "Task 2a: The Library's Comment Submission" |
 | 2b | `feat: bind comment submission with authorship and safe points`; pre-review fix round 1 `fix: keep a comment whose branch was deleted cancellable, and release an unwritten refused binding`; review fix round 2 `fix: finish a comment refused for its input, and keep release failures` | Verify list passed: 148, 41 SSH cases; 383, 129, 44, 72; 123 `--lib mutation`; clippy, fmt; fix rounds: see their entries | review fix round 2 applied; re-review pending | Findings 1 and 2 fixed by controller ruling in fix round 1; review findings in fix round 2. See "Task 2b: The Comment Submission Binding" |
 | 3 | `feat: read synchronization conflicts with string tokens`; pre-review fix round 1 `fix: refuse a repair beside a Git lock, and give sides only for item text`; review fix round 2 `fix: give item sides, tell errors from refused repairs, and share the restart's repair rule` | Verify list passed: 21 `c4_conflict_read` SSH cases, 72, 44, clippy; `--lib remote`, `--lib local_sync`, `--lib integration`; fmt; fix round 1: 22 `c4_conflict_read`, 72, 44, 477 `--lib remote`, clippy, fmt; fix round 2: 23 `c4_conflict_read`, 25 `remote_merge_recovery`, 72, 44, 477, 164, 26, clippy, fmt | review fix round 2 applied; re-review pending | Fact 86 holds. See "Task 3: Conflict Inspection Read" |
-| 4a | `feat: bind conflict resolution that the same request can finish`; review fix round 1 `fix: let the original request cancel a resolution's publication, and close the review's gaps` | Verify list: 200 of 201 `mutation_remote` SSH cases, the one watchdog failure (`c4_resolution_conformance`) fixed and re-run (1, 47 s); 30 `c4_resolution`; 383, 129, 44, 72, 95, 25 SSH; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy; fix round 1: see its entry | review fix round 1 applied; re-review pending | Every row of the interrupted-resolution table met; resume's one route for a prepared commit added (decision 18). See "Task 4a: Conflict Resolution Binding" |
+| 4a | `feat: bind conflict resolution that the same request can finish`; review fix round 1 `fix: let the original request cancel a resolution's publication, and close the review's gaps`; Part A review fix round 1 `fix: close a resolution attempt that wrote nothing, and close Part A review's gaps` | Verify list: 200 of 201 `mutation_remote` SSH cases, the one watchdog failure (`c4_resolution_conformance`) fixed and re-run (1, 47 s); 30 `c4_resolution`; 383, 129, 44, 72, 95, 25 SSH; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy; fix rounds: see their entries | Part A review fix round 1 applied; re-review pending | Every row of the interrupted-resolution table met; resume's one route for a prepared commit added (decision 18). See "Task 4a: Conflict Resolution Binding" |
 | 4b | `feat: resume comment publication and resolved synchronizations`; review fix round 1 `fix: share resolution fixtures, keep an owed child's standing, and pin a fenced comment's resume` | Verify list: 221 `mutation_remote` SSH cases (13 `c4_resume`), no watchdog hit; 383 `mutation_replay`; 44 `mutation_contract`; 123 `--lib mutation`; clippy, fmt; desktop check and clippy; fix round 1: 15 `c4_resume`, 34 `c4_comment`, 37 `c4_resolution`, 383, 183, 123, 477, clippy, fmt, desktop | review fix round 1 applied; re-review pending | Every row of the resume table met but row 6 (Task 5's, P3). Row 8 stopped at a design checkpoint and was ruled option B; Task 14 amends its wording. E-11 applied. See "Task 4b: Resume Routes" |
 | 5 | `feat: republish a remotely deleted item branch with consent`; review fix round 1 `refactor: share item sync's fetch and push steps with republish, and close the review's gaps` | Verify list: 249 `mutation_remote` SSH cases (23 `c4_republish`, 16 `c4_resume`), no watchdog hit; 23 `c4_republish`, 16 `c4_resume`, 3 `c4_conformance`, 1 `c4_resolution_conformance`; 183, 129, 44, 72; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy (`--bin`), `check --features desktop`, and `clippy --all-targets --features desktop` at main's 58; fix round 1: see its entry | review fix round 1 applied; re-review pending | Every row of the republish table met, and the resume table's row 6 (P3). The conformance case is split per row (owner-authorized, beside E-9). See "Task 5: Republish" |
 
@@ -2020,6 +2020,117 @@ six of them failed against the library at `e485caa`
   - `clippy --all-targets --all-features -- -D warnings` and `fmt --check`
     passed. The first clippy run found one `single_match`, which was
     fixed.
+  - `check` and `clippy --features desktop --bin manyhands` passed.
+
+#### Task 4a, Part A review fix round 1
+
+Part A's checkpoint review (Task 6) found gaps in the conflict code. The
+controller ruled on each (`task-6-fix-1.md`). The commit is `fix: close a
+resolution attempt that wrote nothing, and close Part A review's gaps`, on
+`2a7dccd`; `origin/main` is still `a372edb`.
+
+The new cases were written first. Against `2a7dccd`, four failed and the
+M3 pin passed (`logs/task-6-fix1-red.log`).
+
+No stop was met. No pre-existing test, no file outside the library scope,
+and nothing of `resolve_synchronization`'s write order changed.
+
+- **I1.1: a refusal that wrote nothing closes its attempt.**
+  - After any refusal, `reported` asks the library's new
+    `close_unwritten_resolution_attempt` to close the attempt.
+  - The library closes it under the conflict's reservation and the
+    repository's lease, and only when all of these hold:
+    - the attempt is `prepared` or `paths_applying`;
+    - no write was observed;
+    - every path holds its recorded pre-write image;
+    - no index or ref-log artifact row exists.
+  - It closes the attempt as a supersede does: the rows and the owner row
+    are deleted, and the step goes back to `conflict_pending`. The two closes
+    share `state::delete_resolution_attempt`.
+  - What this covers: the present `index.lock` at
+    `ResolutionIndexLock::acquire`, and every refusal before the index
+    artifact is recorded.
+  - What stays open, as before: the lock-held refusals, the lock-held
+    `StaleObservation` among them, and every refusal after a path write.
+    No failure point stages the lock-held `StaleObservation`, so it has no
+    case.
+  - A refusal that wrote nothing now claims no write.
+- **I1.2: the escape, pinned.**
+  - After a hand edit of a written path, two answers write nothing and leave
+    the edit:
+    - a new request is `original_request_required`;
+    - the same request, with the same input, is `external_change`.
+  - With the request's resolution written back, the same request publishes.
+- **I1.3: the refusal says why.**
+  - That `external_change` names the changed path, as `conflict show`
+    displays it, and says how to restore it. The supersede's own check finds
+    the path (`first_changed_path`).
+  - The message is carried by a crate-private `Answer::message`. It is
+    stored nowhere, and that answer leaves no record.
+  - This departs from the global constraint that the JSON `message` is the
+    code's message, and is flagged in the report.
+- **M1.** A supersede resets the step to `conflict_pending`. If its new
+  request is then refused before its own attempt is recorded:
+  - the conflict reads `conflict_pending` and `resolve`, with
+    `request_id: null`;
+  - a resume meets the conflict and names `resolve`.
+
+  `takes_up` stays true, as for every conflict.
+- **M2.** `own_attempt` decides in this order:
+  1. an unfinished attempt the request owns;
+  2. else the live step's derived attempt;
+  3. else the newest step's.
+
+  There is no case: no fixture stages a second-stage conflict after a
+  resolved first stage.
+- **M3, a pin.** `c4_comment_remote_added_later_resumed`: once the remote
+  is added, `operation resume` by the comment's operation publishes the
+  comment.
+- **M4.** These texts are corrected:
+  - `resume.rs`'s "three kinds";
+  - `SynchronizationMutationDto`'s doc;
+  - `synchronization_mutation.schema.json`'s description, which is
+    hand-written.
+- **M5.** These fields are gone: `ResolutionView.phase`,
+  `ResolutionView.target` and `ResolutionOwner.input_digest`.
+  `owner.input_digest` is no longer selected.
+- **M6.** `conflict_read.rs` holds the one `field`, the prefixes
+  `OBSERVATION_PREFIX` and `TOKEN_PREFIX`, and `resolvable`. The read,
+  `conflict_next` and the binding all use them.
+- **M9.**
+  - A continuation that stops on `remote_branch_deleted` (or
+    `merge_required`) offers `[request.cancel]`. It names the request that
+    holds the synchronization, and `offering_cancel` keeps the action while
+    that request holds the reservation.
+  - Why not the resolve request: `request cancel` never reaches it (R-32:
+    it has no safe points). So its record goes, as on any other stop, and
+    the route runs through the holder's request.
+  - In the case, the holder's request is cancelled and then sent once more.
+    It answers `cancelled`, the reservation is released, and `item
+    republish`'s preview is not `busy`.
+- **Cases** (5 new): `c4_resolution_refused_at_a_git_lock`,
+  `…_original_request_after_an_edit`, `…_superseded_then_refused`,
+  `…_continuation_meets_a_deleted_branch` and
+  `c4_comment_remote_added_later_resumed`. The row-8 case's assertions now
+  live in a shared helper.
+- **Verify.** Each command ran as `devenv shell -- cargo … --locked`, with
+  logs in `logs/task-6-fix1-*`. Every case passed at its first run, with no
+  watchdog loss, at loads of up to 34.
+  - `mutation_remote`, as SSH cases:
+    - `c4_resolution`: 41 passed;
+    - `c4_conflict_read`: 23 passed;
+    - `c4_resume`: 17 passed;
+    - `c4_comment`: 35 passed;
+    - `merging`: 26 passed.
+  - `remote_merge_recovery`: 25 SSH cases passed.
+  - `read_contract`: 72 passed. `mutation_contract`: 44 passed.
+  - The `--lib` filters:
+    - `remote`: 477 passed;
+    - `local_sync`: 164 passed;
+    - `integration`: 26 passed;
+    - `mutation`: 123 passed.
+  - `clippy --all-targets --all-features -- -D warnings` and `fmt --check`
+    passed.
   - `check` and `clippy --features desktop --bin manyhands` passed.
 
 ### Task 4b: Resume Routes

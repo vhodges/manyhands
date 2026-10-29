@@ -56,13 +56,13 @@ use super::{
     super::{
         super::{
             CommentPublicationPendingReason, CommentPublicationState, CommentSubmissionOutcome,
-            ConflictEligibility, OperationFamily, OperationId, ReadError, RedactedConflictBytes,
-            RepositoryOperation, RepositoryService, ResolveSynchronizationOutcome,
-            ResolveSynchronizationRequest, ResolvedRepository, RetryCommentPublicationRequest,
-            SynchronizationError, SynchronizationTarget, local_sync,
+            OperationFamily, OperationId, ReadError, RedactedConflictBytes, RepositoryOperation,
+            RepositoryService, ResolveSynchronizationOutcome, ResolveSynchronizationRequest,
+            ResolvedRepository, RetryCommentPublicationRequest, SynchronizationError,
+            SynchronizationTarget, local_sync,
             recovery::{FinalKind, JournalRow},
             remote::{
-                conflict_read,
+                conflict_read::{self, field},
                 state::{self, ResolutionAttemptPhase, ResolutionAttemptView, ResolutionView},
             },
         },
@@ -136,11 +136,6 @@ impl From<ConflictResolveInput> for ConflictResolveBinding {
     }
 }
 
-/// The prefix of an observation's string form, as `conflict show` gives it.
-const OBSERVATION: &str = "conflict-v1:";
-/// The prefix of a path token's string form.
-const TOKEN: &str = "conflict-path-v1:";
-
 /// Whether `text` is `prefix` and a BLAKE3 digest in lower-case hex: the
 /// form R-9 gives an observation and a token.
 fn well_formed(text: &str, prefix: &str) -> bool {
@@ -150,12 +145,6 @@ fn well_formed(text: &str, prefix: &str) -> bool {
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     })
-}
-
-/// One field of a digest: its length, then its bytes.
-fn field(hash: &mut blake3::Hasher, bytes: &[u8]) {
-    hash.update(&(bytes.len() as u64).to_be_bytes());
-    hash.update(bytes);
 }
 
 /// The resolution attempt of the request `request` for the conflict at
@@ -245,6 +234,32 @@ fn original_request(attempt: &ResolutionAttemptView) -> Answer {
             .map(|owner| outcome::original_request(owner.request_id.clone()))
             .collect(),
         ..Answer::stopped(ResultCode::OriginalRequestRequired)
+    }
+}
+
+/// The request's own attempt, refused `external_change` because a path it
+/// wrote was changed by hand since (Task 6 review, I1): the answer's message
+/// names the path, displayed as `conflict show` displays it, and says how
+/// to go on. The library writes over no such path for any request; once it
+/// holds the request's resolution again, or its content before the write,
+/// the same request goes on. Only the message changes (decision 8). Any
+/// other answer, and one whose changed path cannot be read, is kept.
+fn naming_the_edit(resolving: &Resolving<'_>, attempt: OperationId, answer: Answer) -> Answer {
+    if answer.code != ResultCode::ExternalChange {
+        return answer;
+    }
+    let Some(path) = resolving.changed_path(attempt) else {
+        return answer;
+    };
+    Answer {
+        message: Some(format!(
+            "{} The path '{}' no longer holds what this request wrote there: restore it \
+             to this request's resolution, or to its content before the write, and send \
+             the request again.",
+            ResultCode::ExternalChange.message(),
+            conflict_read::display_path(&path),
+        )),
+        ..answer
     }
 }
 
@@ -384,6 +399,42 @@ impl Resolving<'_> {
         .map_err(refused)
     }
 
+    /// Closes `attempt` after the library refused it, when its rows and
+    /// the worktree prove it wrote nothing (Task 6 review, I1): recorded,
+    /// or with its paths begun and none written, as a present `index.lock`
+    /// leaves it. The conflict then reads as one no attempt has begun, so
+    /// outside repair is accepted again (Cycle decision 18), and the record
+    /// of its owner goes with it: the same request, sent again, resolves
+    /// afresh. An attempt that cannot be proved so, or whose close fails,
+    /// is left as the refusal left it; the refusal is the answer either way.
+    fn close_if_unwritten(&self, attempt: OperationId) {
+        let begun = self.mark(attempt).is_some_and(|(phase, _)| {
+            matches!(
+                phase,
+                ResolutionAttemptPhase::Prepared | ResolutionAttemptPhase::PathsApplying
+            )
+        });
+        if begun {
+            let _closed = self.service().close_unwritten_resolution_attempt(
+                self.root(),
+                self.synchronization,
+                attempt,
+            );
+        }
+    }
+
+    /// The first path `attempt` wrote that no longer holds what it wrote
+    /// there nor what it held before, for a refusal of the attempt's own
+    /// request: the answer names it. `None` when every path does, or when
+    /// that cannot be read.
+    fn changed_path(&self, attempt: OperationId) -> Option<Vec<u8>> {
+        self.service()
+            .changed_resolution_path(self.root(), self.synchronization, attempt)
+            .ok()
+            .flatten()
+            .flatten()
+    }
+
     /// The request that holds the synchronization, whose `request cancel`
     /// is to reach the continuation (design, step 6): the synchronization's
     /// own request; or, for the synchronization of the comment `comment`,
@@ -421,10 +472,11 @@ impl ConflictResolveBinding {
     /// show` gives them, at least one resolution, and no token twice.
     fn well_formed(&self) -> bool {
         let mut tokens = std::collections::BTreeSet::new();
-        well_formed(&self.observation, OBSERVATION)
+        well_formed(&self.observation, conflict_read::OBSERVATION_PREFIX)
             && !self.resolutions.is_empty()
             && self.resolutions.iter().all(|resolution| {
-                well_formed(&resolution.token, TOKEN) && tokens.insert(&resolution.token)
+                well_formed(&resolution.token, conflict_read::TOKEN_PREFIX)
+                    && tokens.insert(&resolution.token)
             })
     }
 
@@ -503,8 +555,15 @@ impl ConflictResolveBinding {
 
     /// The attempt this request is recorded as the owner of for the
     /// synchronization's conflicts, with the digest of the input it
-    /// presented (step 2): the one whose ID is derived from this request
-    /// and a step of the synchronization that met a conflict.
+    /// presented (step 2): one whose ID is derived from this request and a
+    /// step of the synchronization that met a conflict.
+    ///
+    /// An unfinished attempt the request owns decides. Otherwise, while a
+    /// conflict is live, only the attempt derived for its own step is this
+    /// request's: one the request finished for an earlier stage is passed
+    /// over, so a request ID sent again for a later conflict meets no other
+    /// conflict's attempt (R-14). With no live conflict, the newest step's
+    /// attempt is the one an earlier call checkpointed.
     fn own_attempt(
         &self,
         resolving: &Resolving<'_>,
@@ -517,18 +576,24 @@ impl ConflictResolveBinding {
                 Ok(state::resolution_owned_by(db, &request.to_string())?)
             })
             .map_err(|error| Answer::of_read(&error))?;
-        Ok(view.steps.iter().find_map(|step| {
-            let derived = attempt_for(
-                request,
-                resolving.synchronization,
-                step.window_number,
-                step.ordinal,
-            );
-            owned
-                .iter()
-                .find(|(attempt, _)| *attempt == derived)
-                .copied()
-        }))
+        let owned_as =
+            |attempt: OperationId| owned.iter().find(|(owned, _)| *owned == attempt).copied();
+        let derived = |window: u32, ordinal: u8| {
+            attempt_for(request, resolving.synchronization, window, ordinal)
+        };
+        if let Some(found) = view
+            .unfinished()
+            .and_then(|unfinished| owned_as(unfinished.attempt))
+        {
+            return Ok(Some(found));
+        }
+        if let Some(live) = view.live_step() {
+            return Ok(owned_as(derived(live.window_number, live.ordinal)));
+        }
+        Ok(view
+            .steps
+            .iter()
+            .find_map(|step| owned_as(derived(step.window_number, step.ordinal))))
     }
 
     /// The one call of the request: steps 2 to 7 of the design's
@@ -613,7 +678,19 @@ impl ConflictResolveBinding {
                         Ok(Some(request)) => {
                             let outcome =
                                 resolving.service().resolve_synchronization(request.alone());
+                            // The library writes over no path that holds
+                            // neither what the attempt wrote nor what it
+                            // held before: the answer names such a path.
+                            let edited =
+                                matches!(outcome, Err(SynchronizationError::ExternalChange));
                             self.reported(&resolving, attempt, before, outcome)
+                                .map_err(|answer| {
+                                    if edited {
+                                        naming_the_edit(&resolving, attempt, answer)
+                                    } else {
+                                        answer
+                                    }
+                                })
                         }
                         Ok(None) => Err(Answer::stopped(ResultCode::RecoveryRequired)),
                         Err(error) => Err(failed(&error)),
@@ -678,12 +755,7 @@ impl ConflictResolveBinding {
             return Err(Answer::stopped(ResultCode::ExternalChange));
         }
         // 4.3: an external-only set, incompatible closures among it (R-40).
-        if inspection.paths.is_empty()
-            || inspection
-                .paths
-                .iter()
-                .any(|path| path.eligibility != ConflictEligibility::EligibleCanonical)
-        {
+        if !conflict_read::resolvable(&inspection) {
             return Err(external_repair(synchronization));
         }
         // 4.4: count before membership, as the gate orders them (fact 53).
@@ -763,6 +835,13 @@ impl ConflictResolveBinding {
         outcome: Result<ResolveSynchronizationOutcome, SynchronizationError>,
     ) -> Result<Ran, Answer> {
         let synchronization = resolving.synchronization;
+        // A refusal that wrote nothing leaves no attempt behind it (I1).
+        if !matches!(
+            outcome,
+            Ok(ResolveSynchronizationOutcome::LocalCheckpointComplete { .. })
+        ) {
+            resolving.close_if_unwritten(attempt);
+        }
         let refusal = |code| {
             resolving.disown(attempt)?;
             Err(Answer::stopped(code))
@@ -877,7 +956,7 @@ impl ConflictResolveBinding {
                     answer,
                     standing: gone(),
                 };
-                return published(synchronization, commit, ran);
+                return published(synchronization, commit, ran, None);
             }
         };
         let ran = match comment {
@@ -891,7 +970,7 @@ impl ConflictResolveBinding {
                 holder,
             ),
         };
-        published(synchronization, commit, ran)
+        published(synchronization, commit, ran, holder)
     }
 
     /// The continuation of a comment's synchronization: the comment's
@@ -1035,7 +1114,21 @@ pub(crate) fn finish_prepared_resolution(
 /// its continuation `ran`: the continuation's code, the resolution's
 /// effects with what was published or merged, and the next step of a new
 /// conflict the publication met.
-fn published(synchronization: OperationId, commit: git2::Oid, ran: Ran) -> Ran {
+///
+/// A continuation that stopped on a cause the synchronization's request
+/// never gets past (a branch deleted at the remote) leaves the operation
+/// holding the reservation, as that request's own call would. Its exit is
+/// `request cancel` of `holder`, the request that holds the operation, and
+/// one more call of that request, which the answer offers (Task 6 review,
+/// M9; Task 2b's ruling for a comment's child). `request cancel` never
+/// reaches a `conflict resolve` request, which stops at no safe point
+/// (R-32), so its own record goes, as on any other stop.
+fn published(
+    synchronization: OperationId,
+    commit: git2::Oid,
+    ran: Ran,
+    holder: Option<RequestId>,
+) -> Ran {
     let Ran {
         answer,
         standing: _,
@@ -1071,6 +1164,10 @@ fn published(synchronization: OperationId, commit: git2::Oid, ran: Ran) -> Ran {
                 synchronization.to_string(),
                 [],
             )],
+        ),
+        code if outcome::never_gets_past(code) => (
+            gone(),
+            holder.into_iter().map(outcome::request_cancel).collect(),
         ),
         _ => (gone(), Vec::new()),
     };

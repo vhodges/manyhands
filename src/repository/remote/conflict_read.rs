@@ -196,11 +196,31 @@ impl RepositoryService {
     }
 }
 
+/// The prefix of an observation's string form (R-9).
+pub(crate) const OBSERVATION_PREFIX: &str = "conflict-v1:";
+/// The prefix of a path token's string form (R-9).
+pub(crate) const TOKEN_PREFIX: &str = "conflict-path-v1:";
+
+/// Whether a conflict can be resolved in Manyhands (R-8, R-40): it has
+/// paths, and every one is canonical content of the kind the domain's
+/// resolution accepts. Otherwise it is repaired outside. The one rule the
+/// read, a synchronization's next step and `conflict resolve` apply.
+pub(crate) fn resolvable(inspection: &SynchronizationConflictInspection) -> bool {
+    !inspection.paths.is_empty()
+        && inspection
+            .paths
+            .iter()
+            .all(|path| path.eligibility == ConflictEligibility::EligibleCanonical)
+}
+
 /// The observation's string form (R-9): `conflict-v1:` and a BLAKE3 digest
 /// of every field of the observation, each domain-separated and
 /// length-delimited.
 pub(crate) fn observation_text(observation: &ConflictObservation) -> String {
-    format!("conflict-v1:{}", observation_digest(observation).to_hex())
+    format!(
+        "{OBSERVATION_PREFIX}{}",
+        observation_digest(observation).to_hex()
+    )
 }
 
 /// Each path of the inspection, in its order, with its string token
@@ -243,8 +263,9 @@ pub(crate) fn display_path(path: &[u8]) -> String {
     display
 }
 
-/// One field of a token's digest: its length, then its bytes.
-fn field(hash: &mut blake3::Hasher, bytes: &[u8]) {
+/// One field of a digest: its length, then its bytes. The conflict read's
+/// digests and `conflict resolve`'s are all made of such fields.
+pub(crate) fn field(hash: &mut blake3::Hasher, bytes: &[u8]) {
     hash.update(&(bytes.len() as u64).to_be_bytes());
     hash.update(bytes);
 }
@@ -279,7 +300,7 @@ fn path_token_text(observation: &[u8; 32], position: usize, token: &ConflictPath
             &mode.map_or_else(Vec::new, |mode| mode.to_be_bytes().to_vec()),
         );
     }
-    format!("conflict-path-v1:{}", hash.finalize().to_hex())
+    format!("{TOKEN_PREFIX}{}", hash.finalize().to_hex())
 }
 
 /// What the registry says of the ID a read was asked for.
@@ -598,12 +619,9 @@ fn live(
         ));
     }
     paths.sort_by(|left, right| left.0.cmp(&right.0));
-    // `conflict_next`'s rule, so the read and a mutation agree.
-    let eligible = !inspection.paths.is_empty()
-        && inspection
-            .paths
-            .iter()
-            .all(|path| path.eligibility == ConflictEligibility::EligibleCanonical);
+    // The rule `conflict_next` and `conflict resolve` apply too, so the
+    // read and a mutation agree.
+    let eligible = resolvable(inspection);
     let (state, next_action) = if prepared {
         (
             ConflictState::ResolutionPrepared,
