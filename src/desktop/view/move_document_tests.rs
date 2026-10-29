@@ -1211,7 +1211,10 @@ async fn cancel_is_disabled_while_a_move_runs(cx: &mut TestAppContext) {
     let cancel = ("move-cancel", 0usize);
     assert!(shell.tab_reaches(cancel, 12, cx), "Tab reaches Cancel");
     retype(&shell, "file", "moved.md", cx);
-    assert!(holds_focus(&shell, "file", cx), "focus back in the File name");
+    assert!(
+        holds_focus(&shell, "file", cx),
+        "focus back in the File name"
+    );
     shell
         .until_drawn(cx, "the destination check", |_, cx| offered(cx))
         .await;

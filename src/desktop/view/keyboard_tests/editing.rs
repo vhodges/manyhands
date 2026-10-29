@@ -922,14 +922,13 @@ async fn preview_by_enter(walk: &Walk, cx: &mut TestAppContext) {
 /// Tab leaves it for Preview and Shift-Tab comes back; Preview by Enter
 /// opens the one confirmation, Escape gives focus back to the text area,
 /// Tab reaches Preview again, and Enter in the confirmation confirms: the
-/// tab follows the repaired document. The
-/// unmanaged file: Adopt…, by Tab and Enter, opens the view prefilled;
-/// typed in, closing the tab asks "Discard your repair?", whose Enter is
-/// Cancel and whose Escape is too, focus back in the text; Cancel by Tab
-/// and Enter asks the same, and its Discard, by Tab and Enter, closes the
-/// view, focus in the file it shows again, its opener gone with it. A
-/// conforming document's Inspect tab, from its sheet's link by Tab and
-/// Enter, offers no Repair….
+/// tab follows the repaired document. The unmanaged file: Adopt…, by Tab
+/// and Enter, opens the view prefilled; typed in, closing the tab asks
+/// "Discard your repair?", whose Enter is Cancel and whose Escape is too,
+/// focus back in the text; Cancel by Tab and Enter asks the same, and its
+/// Discard, by Tab and Enter, closes the view, focus in the file it shows
+/// again, its opener gone with it. A conforming document's Inspect tab,
+/// from its sheet's link by Tab and Enter, offers no Repair….
 #[gpui_kit::test]
 async fn repair_and_adopt_by_keyboard_alone(cx: &mut TestAppContext) {
     cx.executor().allow_parking();

@@ -1184,11 +1184,7 @@ async fn edited_repair_text_is_unsaved_in_the_pill(cx: &mut TestAppContext) {
     let viewing = Some("Viewing the shared copy");
     assert_eq!(shell.label("item-pill", cx).as_deref(), viewing);
     open_repair(&shell, cx);
-    assert_eq!(
-        shell.label("item-pill", cx).as_deref(),
-        viewing,
-        "unedited"
-    );
+    assert_eq!(shell.label("item-pill", cx).as_deref(), viewing, "unedited");
 
     type_at_line(&shell, 0, "x", cx);
     assert_eq!(

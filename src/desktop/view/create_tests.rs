@@ -1529,7 +1529,10 @@ async fn cancel_is_disabled_while_a_create_runs(cx: &mut TestAppContext) {
     let cancel = ("create-cancel", 0usize);
     assert!(shell.tab_reaches(cancel, 12, cx), "Tab reaches Cancel");
     retype(&shell, "file", "plans.md", cx);
-    assert!(holds_focus(&shell, "file", cx), "focus back in the File name");
+    assert!(
+        holds_focus(&shell, "file", cx),
+        "focus back in the File name"
+    );
     shell.until_drawn(cx, "the path check", offered).await;
 
     let new_id = shell.backend.hold_read(ReadKind::NewId);
