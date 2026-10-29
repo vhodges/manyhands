@@ -21,7 +21,7 @@ use crate::desktop::{
     assets::icon_path,
     model::{
         edit::{CONTINUE_EDITING, DONE, DONE_IN_REVIEW, Phase, RECOVERY_OFF, edit_offered},
-        item::{EDIT, LATER_NOTE},
+        item::EDIT,
     },
     view::item::{ItemPane, banners::Banner, text},
 };
@@ -29,9 +29,9 @@ use crate::desktop::{
 impl ItemPane {
     /// The header's actions for editing: Edit, or Continue editing while a
     /// draft is kept or stored (R-35), where it is offered, disabled while
-    /// it cannot start, with "Available in a later release" for a new
-    /// item's draft, which waits for Task 22's Create; Save and Done while
-    /// editing.
+    /// it cannot start; Save and Done while editing. A new item's draft
+    /// whose item is not created yet is continued with no item read
+    /// (R-42).
     pub(in crate::desktop::view::item) fn edit_action(
         &self,
         item: Option<&ItemDto>,
@@ -41,7 +41,11 @@ impl ItemPane {
         if self.editing() {
             return vec![self.save_action(cx), self.done_action(window, cx)];
         }
-        if !item.is_some_and(|item| edit_offered(self.model.target(), item)) {
+        let offered = match item {
+            Some(item) => edit_offered(self.model.target(), item),
+            None => self.continued_not_created(cx),
+        };
+        if !offered {
             return Vec::new();
         }
         let label = if self.draft_kept(cx) {
@@ -57,31 +61,7 @@ impl ItemPane {
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.edit_requested(window, cx);
             }));
-        // A new item's draft waits for Task 22's route: Continue editing is
-        // disabled and says so, as the header's other disabled actions do
-        // (design, Header block). Its label is not a later action's. While
-        // preparing, the pill and the banners say why.
-        let later = self.edit.phase() == Phase::Viewing && self.continues_new_item(cx);
-        if !later {
-            return vec![button.into_any_element()];
-        }
-        vec![
-            div()
-                .id("item-edit-action")
-                .test_support()
-                .role(Role::Group)
-                .aria_label(label)
-                .aria_description(LATER_NOTE)
-                .flex_none()
-                .child(
-                    div()
-                        .id("item-edit-note")
-                        .test_support()
-                        .aria_label(LATER_NOTE)
-                        .child(button.tooltip(LATER_NOTE)),
-                )
-                .into_any_element(),
-        ]
+        vec![button.into_any_element()]
     }
 
     /// The header's Done while editing: the focus Escape in the editor

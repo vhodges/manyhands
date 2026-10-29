@@ -174,6 +174,7 @@ impl ItemPane {
             pane.follow_done(cx);
             pane.follow_close_save(cx);
             pane.follow_continuing(cx);
+            pane.follow_unmarked(cx);
             cx.notify()
         });
         let saved = cx.subscribe(services.drafts(), |pane, _, event: &DraftSaved, cx| {
@@ -332,26 +333,34 @@ impl Render for ItemPane {
         } else {
             self.draft_section(window, cx)
         };
-        let body = item.as_ref().map(|item| {
-            let details = inspect.then(|| {
-                v_flex()
-                    .gap_3()
-                    .child(self.provenance(item, cx))
-                    .child(self.fields(item, cx))
-                    .children((!banners::nonconforming(item)).then(|| self.problems(item, cx)))
-                    .child(self.metadata(item, &[], cx))
-            });
-            // An item tab reads its body in the read view (decision 17); a
-            // file read by its path keeps D1's source view (R-64).
-            let text = if inspect {
-                self.source(item, cx)
-            } else if let Some(editing) = self.edit_view(cx) {
-                editing
-            } else {
-                self.read_body(item, cx)
-            };
-            v_flex().gap_3().children(details).child(text)
-        });
+        let body = match item.as_ref() {
+            Some(item) => {
+                let details = inspect.then(|| {
+                    v_flex()
+                        .gap_3()
+                        .child(self.provenance(item, cx))
+                        .child(self.fields(item, cx))
+                        .children((!banners::nonconforming(item)).then(|| self.problems(item, cx)))
+                        .child(self.metadata(item, &[], cx))
+                });
+                // An item tab reads its body in the read view (decision
+                // 17); a file read by its path keeps D1's source view
+                // (R-64).
+                let text = if inspect {
+                    self.source(item, cx)
+                } else if let Some(editing) = self.edit_view(cx) {
+                    editing
+                } else {
+                    self.read_body(item, cx)
+                };
+                Some(v_flex().gap_3().children(details).child(text))
+            }
+            // A new item not created yet has no item to read: its edit
+            // editor is the page (R-42).
+            None => self
+                .edit_view(cx)
+                .map(|editing| v_flex().gap_3().child(editing)),
+        };
         // D2's restored draft at the top of the page (R-38); its banner is
         // in the header's slot.
         let content = v_flex()

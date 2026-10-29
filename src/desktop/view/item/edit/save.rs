@@ -5,7 +5,8 @@
 //! - **Save** is enabled only while dirty and not saving, and never during
 //!   the review. `secondary-s` on a clean editor saves nothing and says so
 //!   in the toolbar's status item. On an unverified base Save reads
-//!   "Review before saving" and opens the review instead (R-36).
+//!   "Review before saving" and opens the review instead (R-36). A
+//!   never-created item's Save is its create (`create`, R-20b), D2's too.
 //! - **The save** is D2's (`DraftRegistry::save`): it writes the newest
 //!   revision first, then sends it, one save at a time; a write that fails
 //!   leaves it sent from memory (controller ruling 2). A draft still
@@ -183,7 +184,7 @@ impl ItemPane {
             toolbar.update(cx, |toolbar, cx| toolbar.note(missing, cx));
             return false;
         }
-        if !self.base_verified() {
+        if !self.saves_directly() {
             self.open_review(cx);
             return false;
         }
@@ -195,12 +196,14 @@ impl ItemPane {
         true
     }
 
-    /// Whether the session's next draft begins on a verified base.
-    pub(in crate::desktop::view::item) fn base_verified(&self) -> bool {
+    /// Whether Save saves without the review first (R-36): the session's
+    /// base is verified, or its item is not created yet, which Save creates
+    /// (R-20).
+    pub(in crate::desktop::view::item) fn saves_directly(&self) -> bool {
         self.edit
             .session
             .as_ref()
-            .is_some_and(|session| session.base.observation.is_some())
+            .is_some_and(|session| session.base.observation.is_some() || session.never_created())
     }
 
     /// Sends the save waiting in `run`: through D2's session, or, with none,
@@ -217,6 +220,8 @@ impl ItemPane {
         if session.draft == DraftLink::Beginning || self.store_settling(cx) {
             return;
         }
+        // A never-created item's Save is its create (R-20b).
+        let create = session.never_created();
         if let Some(blocked) = self.save_blocked(cx) {
             let toolbar = session.toolbar.clone();
             toolbar.update(cx, |toolbar, cx| toolbar.note(blocked, cx));
@@ -233,7 +238,10 @@ impl ItemPane {
         let sent = self
             .services
             .drafts()
-            .update(cx, |registry, cx| registry.save(id, cx));
+            .update(cx, |registry, cx| match create {
+                true => registry.create(id, cx),
+                false => registry.save(id, cx),
+            });
         cx.spawn(async move |pane, cx| {
             let request = sent.await;
             let _ = pane.update(cx, |pane, cx| pane.registry_sent(request, cx));
@@ -347,6 +355,9 @@ impl ItemPane {
                         if code == ResultCode::ExternalChange {
                             self.open_review(cx);
                         }
+                        // A create whose path holds its own item reviews it
+                        // once D2 has read the path (`create`).
+                        self.follow_unmarked(cx);
                     }
                 }
             }

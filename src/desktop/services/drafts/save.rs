@@ -1,4 +1,5 @@
-//! A session's save, and what its answer does to the draft.
+//! A session's save, and what its answer does to the draft. A new item's
+//! create goes the same way, over a new item's base (`create`).
 //!
 //! A save retires only the revision it saved, never newer text (review
 //! focus 1). `save` first writes the newest revision N, then sends N's
@@ -30,20 +31,21 @@
 use futures::FutureExt;
 use gpui_kit::{Context, Task};
 use manyhands::{
-    drafts::{DraftErrorKind, DraftFields, DraftId, DraftTarget},
+    drafts::{DraftErrorKind, DraftFields, DraftId, DraftTarget, is_new_item_base},
     repository::MutationDataDto,
-    results::Envelope,
+    results::{Envelope, ResultCode},
 };
 
 use super::{DraftDiscardLanded, DraftRegistry, Live, SessionDiscarded, off_thread, retire::take};
 use crate::desktop::{
     model::drafts::{
         RecoveryState, Saving,
+        create::create_intent,
         save::{SaveVerdict, save_intent, save_verdict},
     },
     services::{
         ReadKind,
-        requests::{DesktopRequestId, Lane},
+        requests::{DesktopRequestId, Intent, Lane},
     },
 };
 
@@ -55,6 +57,18 @@ pub(super) struct SaveRecord {
     pub(super) fields: DraftFields,
     /// The operation a pending answer named: abandoning it ends the save.
     pub(super) operation: Option<String>,
+    /// A new item's create (`create`), not a save: its completion and its
+    /// refusals are a create's.
+    pub(super) create: bool,
+}
+
+/// What a session's newest revision is sent as.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Verb {
+    /// A save over a verified base.
+    Save,
+    /// A new item's create (`create`), over a new item's base.
+    Create,
 }
 
 impl DraftRegistry {
@@ -63,11 +77,25 @@ impl DraftRegistry {
     /// fails, the revision is sent from memory all the same (controller
     /// ruling 2, Task 15 fix round 1). Answers the request, or `None`,
     /// having sent nothing, while a save of this session is in flight or
-    /// its revision retires, when it has no base (a new item is D3's), and
-    /// when its base is unverified.
+    /// its revision retires, when it has no base, and when its base is
+    /// unverified, a new item's included: that is created (`create`).
     pub(crate) fn save(
         &mut self,
         id: DraftId,
+        cx: &mut Context<Self>,
+    ) -> Task<Option<DesktopRequestId>> {
+        self.flush_and_send(id, Verb::Save, cx)
+    }
+
+    /// Writes the session `id`'s newest revision, then sends it as `verb`,
+    /// one save or create at a time. `None`, having sent nothing, when a
+    /// save of the session is in flight or its revision retires, and when
+    /// its base does not take `verb`: a verified base is saved, a new
+    /// item's created.
+    pub(super) fn flush_and_send(
+        &mut self,
+        id: DraftId,
+        verb: Verb,
         cx: &mut Context<Self>,
     ) -> Task<Option<DesktopRequestId>> {
         let Some(live) = self
@@ -77,10 +105,11 @@ impl DraftRegistry {
             return Task::ready(None);
         };
         let session = &mut live.session;
-        let verified = session
-            .base()
-            .is_some_and(|base| base.observation.is_some());
-        if session.saving().is_some() || session.retiring() || !verified {
+        let takes = session.base().is_some_and(|base| match verb {
+            Verb::Save => base.observation.is_some(),
+            Verb::Create => is_new_item_base(base),
+        });
+        if session.saving().is_some() || session.retiring() || !takes {
             return Task::ready(None);
         }
         session.set_saving(Some(Saving::Flushing));
@@ -95,7 +124,7 @@ impl DraftRegistry {
                         .ok()?;
                     let flushed = flush.await;
                     let sent = registry
-                        .update(cx, |registry, cx| registry.send_save(id, flushed, cx))
+                        .update(cx, |registry, cx| registry.send_save(id, flushed, verb, cx))
                         .ok()?;
                     match sent {
                         Send::Sent(request) => return Some(request),
@@ -113,12 +142,13 @@ impl DraftRegistry {
         cx.spawn(async move |_, _| work.await)
     }
 
-    /// Sends the save once the newest revision is stored; another flush
-    /// when an edit came after it.
+    /// Sends the save, or the create, once the newest revision is stored;
+    /// another flush when an edit came after it.
     fn send_save(
         &mut self,
         id: DraftId,
         flushed: Result<(), DraftErrorKind>,
+        verb: Verb,
         cx: &mut Context<Self>,
     ) -> Send {
         // The flush may have stored the text again under a new ID.
@@ -143,9 +173,10 @@ impl DraftRegistry {
             return Send::Again;
         }
         let fields = session.current().clone();
-        let intent = session
-            .base()
-            .and_then(|base| save_intent(session.target(), &fields, base));
+        let intent = session.base().and_then(|base| match verb {
+            Verb::Save => save_intent(session.target(), &fields, base),
+            Verb::Create => create_intent(session.target(), &fields, base),
+        });
         let Some(intent) = intent else {
             session.set_saving(None);
             return Send::Refused;
@@ -153,6 +184,10 @@ impl DraftRegistry {
         let revision = session.revision();
         let request = self.worker.submit(intent, Lane::User, None, None);
         session.set_saving(Some(Saving::Submitted(request, revision)));
+        // An earlier create of the session, kept for the same request to be
+        // sent again (`finished`), is over: this one is its save now.
+        self.saves
+            .retain(|_, record| !(record.create && record.draft == id));
         self.saves.insert(
             request,
             SaveRecord {
@@ -160,6 +195,7 @@ impl DraftRegistry {
                 revision,
                 fields,
                 operation: None,
+                create: verb == Verb::Create,
             },
         );
         cx.notify();
@@ -194,8 +230,25 @@ impl DraftRegistry {
             // F2 holds a pending operation; a Retry of the same request
             // applies its answer again.
             SaveVerdict::Pending => record.operation = envelope.operation_id.clone(),
-            SaveVerdict::Keep => {
+            // A create stopped by what is at its path: the path is read in
+            // the item's own context first (`create`), and the session saves
+            // again once that read lands.
+            SaveVerdict::Keep if record.create && envelope.code == ResultCode::OccupiedPath => {
                 self.saves.remove(&request);
+                self.check_occupied(draft, cx);
+            }
+            SaveVerdict::Keep => {
+                // A create whose effect is not known (an answer lost after
+                // it ran, a busy or cancelled one: not a refusal, which
+                // touched nothing) keeps its record, so the same request
+                // sent again (the worker's `retry`) completes the draft once
+                // it has created the item, as its first answer would have.
+                // The session's next save or create drops it.
+                let again = record.create
+                    && !Intent::refused_answer(envelope.outcome, envelope.code, &envelope.recovery);
+                if !again {
+                    self.saves.remove(&request);
+                }
                 live.session.set_saving(None);
                 cx.notify();
             }

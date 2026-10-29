@@ -192,6 +192,25 @@ pub enum TargetState {
     ReadFailed(ResultCode),
     /// Comment drafts only: the reply's parent is not in the thread.
     ParentNotFound,
+    /// A new item's draft (`is_new_item_base`) whose item is missing: the
+    /// item is not created yet. It may be restored.
+    NotCreated,
+}
+
+/// Whether `base` is a new item's (R-20): it has neither an observation
+/// nor a source, as only a draft written before its item's create has.
+/// Nothing else writes such a base: a draft of an item read has the read's
+/// observation, a base left unverified keeps a source (`""` when it has
+/// none of its own), and a non-UTF-8 item, which has no source, is never
+/// drafted.
+pub fn is_new_item_base(base: &DraftBase) -> bool {
+    base.observation.is_none() && base.source.is_none()
+}
+
+/// Whether `draft` is a new item's: an item draft whose base is a new
+/// item's.
+fn new_item(draft: &Draft) -> bool {
+    draft.target.comment.is_none() && draft.base.as_ref().is_some_and(is_new_item_base)
 }
 
 /// The state a failed read gives.
@@ -220,9 +239,10 @@ fn context_changed(base: &BaseContext, read: &ItemContextDto) -> bool {
 }
 
 /// Classifies an item draft against a read of its item. In order: a read
-/// error by code; a lifecycle-closed ticket, whatever else holds; a
-/// nonconforming read; fields equal to the draft's; an unverified base;
-/// an equal observation; otherwise changed.
+/// error by code, a missing item being `NotCreated` for a new item's
+/// draft; a lifecycle-closed ticket, whatever else holds; a nonconforming
+/// read; fields equal to the draft's; an unverified base, a new item's
+/// among them; an equal observation; otherwise changed.
 ///
 /// A draft with no base at all is unverified, compared with the item's
 /// own fields as the base, so only the draft's changes show.
@@ -232,6 +252,7 @@ fn context_changed(base: &BaseContext, read: &ItemContextDto) -> bool {
 pub fn classify(draft: &Draft, item: Result<&ItemDto, ResultCode>) -> TargetState {
     let item = match item {
         Ok(item) => item,
+        Err(ResultCode::ItemNotFound) if new_item(draft) => return TargetState::NotCreated,
         Err(code) => return read_error(code),
     };
     if lifecycle_closed(item) {
@@ -351,7 +372,9 @@ pub fn restore_policy(draft: &Draft, state: &TargetState, held: Held) -> Restore
         return Restore::Refused(RefusalReason::CommentDraft);
     }
     match state {
-        TargetState::Current | TargetState::AlreadySaved => Restore::Allowed,
+        TargetState::Current | TargetState::AlreadySaved | TargetState::NotCreated => {
+            Restore::Allowed
+        }
         TargetState::Changed { .. } | TargetState::Unverified { .. } => Restore::AllowedFlagged,
         TargetState::TicketClosed => Restore::Refused(RefusalReason::TicketClosed),
         TargetState::ItemNotFound => Restore::Refused(RefusalReason::ItemNotFound),

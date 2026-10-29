@@ -542,18 +542,14 @@ async fn done_after_typing_and_undoing_discards_the_stored_draft(cx: &mut TestAp
 
 /// Row: Done on a never-created item asks Save, Keep draft, Discard or
 /// Cancel; there is no saved copy to view. Cancel goes on editing; Keep
-/// draft closes the tab and leaves the draft for the Drafts page. (A new
-/// item's base has neither observation nor source, R-20; Task 22 makes
-/// such sessions, so the test marks one.)
+/// draft closes the tab and leaves the draft for the Drafts page. (A real
+/// never-created item: its draft begun with `begin_new`, in its tab,
+/// continued with the Create intent; ruling P-3, Task 22.)
 #[gpui_kit::test]
 async fn done_on_a_never_created_item_asks(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
-    let (shell, root) = shell(cx, |fixture, root| {
-        fixture.commit_ticket(root, TICKET, "Not yet", "");
-    });
-    open(&shell, ticket(&root, TICKET), cx);
-    let host = edit(&shell, cx).await;
-    pane(&shell, cx).update(cx, |pane, _| pane.edit_session_mut().unwrap().as_new_item());
+    let (shell, root) = shell(cx, |_, _| {});
+    let (_, host) = shell.edit_new_ticket(&root, TICKET, "Not yet", cx).await;
     type_at_end(&shell, &host, "x", cx);
     let typed = edit_text(&host, cx);
     let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
@@ -903,17 +899,15 @@ async fn a_drafts_page_discard_ends_a_live_session_and_says_so(cx: &mut TestAppC
 }
 
 /// R-71: a discard from the Drafts page ends a never-created item's
-/// session, which has no saved copy to view: its tab closes. (The session
-/// is marked as a new item's, as in `done_on_a_never_created_item_asks`.)
+/// session, which has no saved copy to view: its tab closes. (A real
+/// never-created item, as in `done_on_a_never_created_item_asks`.)
 #[gpui_kit::test]
 async fn a_drafts_page_discard_closes_a_never_created_items_tab(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
-    let (shell, root) = shell(cx, |fixture, root| {
-        fixture.commit_ticket(root, TICKET, "Never created", "");
-    });
-    open(&shell, ticket(&root, TICKET), cx);
-    let host = edit(&shell, cx).await;
-    pane(&shell, cx).update(cx, |pane, _| pane.edit_session_mut().unwrap().as_new_item());
+    let (shell, root) = shell(cx, |_, _| {});
+    let (_, host) = shell
+        .edit_new_ticket(&root, TICKET, "Never created", cx)
+        .await;
     type_at_end(&shell, &host, "x", cx);
     let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
 
@@ -1398,16 +1392,15 @@ async fn the_close_dialogs_message_follows_its_offers(cx: &mut TestAppContext) {
 }
 
 /// Minor 8 (review): the never-created prompt's Discard discards the draft
-/// and closes the tab, since there is no saved copy to view.
+/// and closes the tab, since there is no saved copy to view. (A real
+/// never-created item, as in `done_on_a_never_created_item_asks`.)
 #[gpui_kit::test]
 async fn discard_on_a_never_created_item_closes_the_tab(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
-    let (shell, root) = shell(cx, |fixture, root| {
-        fixture.commit_ticket(root, TICKET, "Discarded new", "");
-    });
-    open(&shell, ticket(&root, TICKET), cx);
-    let host = edit(&shell, cx).await;
-    pane(&shell, cx).update(cx, |pane, _| pane.edit_session_mut().unwrap().as_new_item());
+    let (shell, root) = shell(cx, |_, _| {});
+    let (_, host) = shell
+        .edit_new_ticket(&root, TICKET, "Discarded new", cx)
+        .await;
     type_at_end(&shell, &host, "x", cx);
     let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
 

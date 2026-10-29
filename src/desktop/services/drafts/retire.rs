@@ -1,5 +1,8 @@
-//! A committed save's completion: the item read again for the new base,
-//! `DraftSaved` emitted with it (R-69), then the saved revision retired,
+//! A committed save's completion, a create's among them: the item read
+//! again for the new base, by D2's unverified rule, or for a create by
+//! R-20b's (`model::drafts::create::base_after_create`), which clears the
+//! new item's marker; `DraftSaved` emitted with it (R-69), then the saved
+//! revision retired,
 //! only if it is still the session's newest, or the session rebased onto
 //! that base. A session whose text is still what the save sent, though it
 //! was never stored as that revision (its write failed), ends too: its
@@ -29,7 +32,7 @@ use manyhands::{
 
 use super::{DraftRegistry, DraftSaved, off_thread, save::SaveRecord};
 use crate::desktop::{
-    model::drafts::save::base_after_save,
+    model::drafts::{create::base_after_create, save::base_after_save},
     services::{ReadKind, ReadResult, Reader},
 };
 
@@ -68,7 +71,12 @@ impl DraftRegistry {
             let Ok(Some(base)) = registry.update(cx, |registry, _| {
                 let live = registry.sessions.get(&registry.current_id(record.draft)?)?;
                 let previous = live.session.base()?;
-                Some(base_after_save(&record.fields, read_item(&read), previous))
+                let read = read_item(&read);
+                // A create's clears the new item's marker either way (R-20b).
+                Some(match record.create {
+                    true => base_after_create(&record.fields, read, previous),
+                    false => base_after_save(&record.fields, read, previous),
+                })
             }) else {
                 return;
             };

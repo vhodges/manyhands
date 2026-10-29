@@ -15,10 +15,14 @@
 //! and writes the revision off the foreground behind the `DraftWrite`
 //! gate. The result lands back on the session, which schedules whatever
 //! came meanwhile.
+//!
+//! A new item's draft is written before its context is prepared, and its
+//! Save is its create (`create`; R-20, R-20b, R-46).
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fmt,
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -34,6 +38,7 @@ use manyhands::{
     results::ResultCode,
 };
 
+mod create;
 mod flush;
 mod restore;
 mod retire;
@@ -42,7 +47,10 @@ mod stored;
 
 pub(crate) use restore::RestoreRefused;
 
-use super::{Backend, ReadFailure, ReadKind, requests::DesktopRequestId, worker::WorkerHandle};
+use super::{
+    Backend, ReadFailure, ReadKind, created_contexts::ContextKey, requests::DesktopRequestId,
+    worker::WorkerHandle,
+};
 use crate::desktop::model::{
     drafts::{DraftSession, RecoveryState},
     list_state::ListState,
@@ -151,6 +159,10 @@ pub(crate) struct DraftRegistry {
     /// Sessions whose tab is gone and whose release waits for their text
     /// to be stored, by the ID they were released under.
     releasing: BTreeSet<DraftId>,
+    /// The worktree of each item's context that a `context prepare` with
+    /// the Create intent made ready, as its answer gave it: where a
+    /// create's `occupied_path` is read (`create`).
+    contexts: HashMap<ContextKey, PathBuf>,
 }
 
 /// A session and the tasks that write it.
@@ -184,6 +196,7 @@ impl DraftRegistry {
             moved: BTreeMap::new(),
             attached: HashMap::new(),
             releasing: BTreeSet::new(),
+            contexts: HashMap::new(),
         }
     }
 

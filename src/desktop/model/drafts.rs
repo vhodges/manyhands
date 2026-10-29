@@ -29,6 +29,7 @@ use time::OffsetDateTime;
 use super::{editor_text::normalized, names::TicketName};
 use crate::desktop::services::requests::DesktopRequestId;
 
+pub(crate) mod create;
 pub(crate) mod rows;
 pub(crate) mod save;
 

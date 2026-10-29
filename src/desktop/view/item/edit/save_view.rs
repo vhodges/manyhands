@@ -81,7 +81,7 @@ impl ItemPane {
     /// The header's Save while editing, before Done. While a required field
     /// is empty, its tooltip says so.
     pub(in crate::desktop::view::item) fn save_action(&self, cx: &mut Context<Self>) -> AnyElement {
-        let label = match before_save(self.base_verified()) {
+        let label = match before_save(self.saves_directly()) {
             SaveState::ReviewBeforeSaving => REVIEW_BEFORE_SAVING,
             _ => SAVE,
         };
@@ -136,7 +136,7 @@ impl ItemPane {
         // no review opens while a save is kept for its Retry (I2).
         let reviewing = self.edit.phase() == Phase::Review;
         let kept = self.edit.save.run.is_some();
-        if !reviewing && !self.base_verified() {
+        if !reviewing && !self.saves_directly() {
             let state = before_save(false);
             let action = match kept {
                 true => None,

@@ -16,10 +16,13 @@
 //! - **Save** from a restored draft (D2's section, or the close dialog)
 //!   runs those steps, then saves. It waits, saying why, while the draft
 //!   leaves a required field empty.
-//! - **A new item's draft** (`NotCreated`, R-20) is continued through
-//!   `context prepare` with the Create intent, which is Task 22's
-//!   (`continue_new_item`). Until then its Continue editing and Save are
-//!   unavailable, with "Available in a later release".
+//! - **The route** is the draft's classification against the tab's read
+//!   (R-42): a new item's draft whose item is missing (`NotCreated`) is
+//!   continued through `context prepare` with the Create intent, and its
+//!   editor opens with no item read (`create`); any other draft takes the
+//!   Edit intent. A new item's draft whose item exists after all goes on
+//!   as an ordinary unverified draft (`model::drafts::create::unmarked`),
+//!   and the review opens.
 //!
 //! A context is so always provisioned through `context prepare`. Nothing
 //! here holds draft text but the session it opens.
@@ -31,7 +34,7 @@ use gpui_kit::{
     div,
 };
 use manyhands::{
-    drafts::{DraftBase, DraftId, TargetState},
+    drafts::{DraftBase, DraftId, TargetState, is_new_item_base},
     repository::ItemDto,
 };
 
@@ -42,9 +45,9 @@ use super::{
 };
 use crate::desktop::{
     model::{
+        drafts::create::unmarked,
         edit::save_state::SAVE,
-        edit::{CONTINUE_EDITING, adopted_base, base_for_edit, edit_offered, new_item_base},
-        item::LATER_NOTE,
+        edit::{CONTINUE_EDITING, adopted_base, base_for_edit, edit_offered},
         tabs::TabKey,
     },
     view::item::ItemPane,
@@ -60,13 +63,16 @@ pub(super) enum Then {
 /// The draft Continue editing continues, from its prepare until the
 /// editor opens on it.
 pub(super) struct Continuing {
-    draft: DraftId,
-    then: Then,
+    pub(super) draft: DraftId,
+    pub(super) then: Then,
+    /// A new item's draft whose item is not created yet: prepared with the
+    /// Create intent (R-42).
+    pub(super) create: bool,
 }
 
 /// The draft Continue editing would continue.
 #[derive(Clone, Copy)]
-enum Continued {
+pub(super) enum Continued {
     /// Restored in this tab, with no edit session.
     Restored(DraftId),
     /// Stored for this tab's item, not claimed by this process.
@@ -76,7 +82,7 @@ enum Continued {
 impl ItemPane {
     /// The draft of this tab's item that Continue editing continues: one
     /// restored here with no edit session, else one stored for the item.
-    fn continued(&self, cx: &App) -> Option<Continued> {
+    pub(super) fn continued(&self, cx: &App) -> Option<Continued> {
         if self.has_session() {
             return None;
         }
@@ -91,63 +97,46 @@ impl ItemPane {
         registry.stored_for(repo, *kind, id).map(Continued::Stored)
     }
 
-    /// Whether the draft Continue editing would continue is a new item's
-    /// (R-20): its base has neither observation nor source. Task 22
-    /// continues it through Create (`continue_new_item`).
-    pub(in crate::desktop::view::item) fn continues_new_item(&self, cx: &App) -> bool {
-        let registry = self.services.drafts().read(cx);
-        let base = match self.continued(cx) {
-            Some(Continued::Restored(id)) => {
-                registry.session(id).and_then(|session| session.base())
-            }
-            Some(Continued::Stored(id)) => registry
-                .listed(id)
-                .and_then(|(draft, _)| draft.base.as_ref()),
-            None => None,
-        };
-        base.is_some_and(new_item_base)
-    }
-
     /// Continue editing the draft stored or restored here, going on to
-    /// `then` once the editor opens. False when there is none, so Edit
-    /// prepares as it does for an item with no draft.
+    /// `then` once the editor opens: by its classification against the
+    /// tab's read, with the Create intent for a new item's draft whose item
+    /// is not created yet, and otherwise the Edit intent (R-42). False when
+    /// there is none, so Edit prepares as it does for an item with no draft.
     pub(super) fn continue_requested(&mut self, then: Then, cx: &mut Context<Self>) -> bool {
         let Some(continued) = self.continued(cx) else {
             return false;
         };
-        if self.continues_new_item(cx) {
-            self.continue_new_item(cx);
-            return true;
-        }
+        let create = self.continued_not_created(cx);
         match continued {
-            Continued::Restored(id) => self.continue_restored(id, then, cx),
+            Continued::Restored(id) => self.continue_restored(id, then, create, cx),
             Continued::Stored(id) => self.claim(
                 id,
-                move |pane, id, cx| pane.continue_restored(id, then, cx),
+                move |pane, id, cx| pane.continue_restored(id, then, create, cx),
                 cx,
             ),
         }
         true
     }
 
-    /// Task 22's hook: a new item's draft is continued through `context
-    /// prepare` with the Create intent, as in Part D (R-42). Until then it
-    /// starts nothing; its Continue editing and Save are unavailable.
-    fn continue_new_item(&mut self, cx: &mut Context<Self>) {
-        cx.notify();
-    }
-
     /// The restored draft `draft` is continued: the context is prepared,
-    /// and the editor opens on the draft once the item is read again.
-    fn continue_restored(&mut self, draft: DraftId, then: Then, cx: &mut Context<Self>) {
+    /// with the Create intent when `create`, and the editor opens on the
+    /// draft once the item is read again.
+    fn continue_restored(
+        &mut self,
+        draft: DraftId,
+        then: Then,
+        create: bool,
+        cx: &mut Context<Self>,
+    ) {
         if self.edit.phase != Phase::Viewing {
             return;
         }
-        self.edit.continuing = Some(Continuing { draft, then });
-        self.prepare(cx);
-        if !matches!(self.edit.phase, Phase::Preparing(_)) {
-            self.edit.continuing = None;
-        }
+        self.edit.continuing = Some(Continuing {
+            draft,
+            then,
+            create,
+        });
+        self.prepare_continued(cx);
     }
 
     /// A close dialog's Save still in Continue editing's steps was
@@ -205,16 +194,21 @@ impl ItemPane {
             return;
         };
         let meta = session.current().clone();
-        let drafted = session.base().cloned();
+        // R-42: a new item's draft whose item exists after all goes on as an
+        // ordinary unverified draft, and the review opens on it.
+        let (drafted, unmarking) = match session.base().cloned() {
+            Some(base) if is_new_item_base(&base) => (Some(unmarked(base)), true),
+            base => (base, false),
+        };
         let adopted = drafted.as_ref().and_then(|base| adopted_base(base, item));
         // A draft with no base is unverified against the item as read.
         let base = adopted.clone().or(drafted).unwrap_or(DraftBase {
             observation: None,
             ..read
         });
-        if let Some(adopted) = &adopted {
-            let adopted = adopted.clone();
-            drafts.update(cx, |registry, cx| registry.adopt_base(id, adopted, cx));
+        if adopted.is_some() || unmarking {
+            let moved = base.clone();
+            drafts.update(cx, |registry, cx| registry.adopt_base(id, moved, cx));
         }
         let text = body_of(&meta).to_owned();
         let opening = Opening {
@@ -234,33 +228,36 @@ impl ItemPane {
     }
 
     /// Whether the draft restored here holds what the item does not: its
-    /// Save has something to save.
+    /// Save has something to save. A new item's draft whose item is not
+    /// created yet always does (R-73).
     pub(in crate::desktop::view::item) fn restored_unsaved(&self, cx: &App) -> bool {
         let registry = self.services.drafts().read(cx);
         let Some(id) = registry.attached(&self.tab_key()) else {
             return false;
         };
-        let Some(item) = self.model.item().rows() else {
+        let Some(read) = self.model.item_read() else {
             return false;
         };
-        edit_offered(self.model.target(), item)
+        let offered = match read {
+            Ok(item) => edit_offered(self.model.target(), item),
+            Err(_) => self.continued_not_created(cx),
+        };
+        offered
             && !matches!(
-                registry.classify(id, Ok(item)),
+                registry.classify(id, read),
                 Some(TargetState::AlreadySaved) | None
             )
     }
 
     /// Continue editing, as the button `id` of the draft banner or D2's
-    /// section: offered while Edit can start, and unavailable, with its
-    /// note, for a new item's draft.
+    /// section: offered while Edit can start.
     pub(in crate::desktop::view::item) fn continue_button(
         &self,
         id: &'static str,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let enabled = self.edit_available(cx);
-        let later = self.continues_new_item(cx).then_some(LATER_NOTE);
-        action(id, CONTINUE_EDITING, enabled, later)
+        action(id, CONTINUE_EDITING, enabled, None)
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.edit_requested(window, cx);
             }))
@@ -268,18 +265,15 @@ impl ItemPane {
     }
 
     /// D2's section's Save: offered while Edit can start and the draft
-    /// holds what the item does not; unavailable, with its note, for a new
-    /// item's draft, and for one that leaves a required field empty, whose
-    /// note says which.
+    /// holds what the item does not; unavailable, with its note, for one
+    /// that leaves a required field empty, whose note says which. A new
+    /// item's draft is created (R-42).
     pub(in crate::desktop::view::item) fn restored_save_button(
         &self,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let enabled = self.edit_available(cx) && self.restored_unsaved(cx);
-        let note = match self.continues_new_item(cx) {
-            true => Some(LATER_NOTE),
-            false => self.save_blocked(cx),
-        };
+        let note = self.save_blocked(cx);
         action("draft-save", SAVE, enabled, note)
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.save_restored(cx)))
             .into_any_element()
@@ -287,8 +281,8 @@ impl ItemPane {
 }
 
 /// A draft action, the button `id`-button in the wrapper `id`: enabled or
-/// not, and, with a `note`, unavailable and saying why: "Available in a
-/// later release", or a required field's message.
+/// not, and, with a `note`, unavailable and saying why: a required field's
+/// message.
 fn action(
     id: &'static str,
     label: &'static str,

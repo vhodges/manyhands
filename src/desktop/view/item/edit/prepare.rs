@@ -1,8 +1,9 @@
 //! Edit's prepare (design, Part C, Phases, steps 2 and 3): `context
-//! prepare` with the Edit intent submitted on the user lane, its answer
-//! taken, and Resume of a hand-off still owed, which sends the same
-//! request again (R-13, R-77), never once a release of the item was sent
-//! and not refused (R-78; owner, 2026-10-28).
+//! prepare` with the Edit intent submitted on the user lane, or the Create
+//! intent for a new item's draft (R-42, `create`), its answer taken, and
+//! Resume of a hand-off still owed, which sends the same request again
+//! (R-13, R-77), never once a release of the item was sent and not refused
+//! (R-78; owner, 2026-10-28).
 
 use std::path::PathBuf;
 
@@ -31,6 +32,13 @@ pub(crate) const PRESS_EDIT: &str = "Press Edit to try again.";
 impl ItemPane {
     /// Submits `context prepare` with the Edit intent for this tab's item.
     pub(super) fn prepare(&mut self, cx: &mut Context<Self>) {
+        self.prepare_with(ContextPrepareIntent::Edit, cx);
+    }
+
+    /// Submits `context prepare` with `intent` for this tab's item: Edit,
+    /// or Create for a new item's draft whose item is not created yet
+    /// (R-42, `create`).
+    pub(super) fn prepare_with(&mut self, intent: ContextPrepareIntent, cx: &mut Context<Self>) {
         let OpenTarget::Item { repo, kind, id } = self.model.target().clone() else {
             return;
         };
@@ -46,7 +54,7 @@ impl ItemPane {
                 root: PathBuf::from(repo),
                 kind,
                 id,
-                intent: ContextPrepareIntent::Edit,
+                intent,
             },
             Lane::User,
             None,
@@ -130,6 +138,11 @@ impl ItemPane {
                 self.edit.stopped = Some(Stopped::Pending(request));
             }
             Some(RequestState::Finished(_, code, _, recovery, message)) => {
+                // R-42: a Create met by an item that exists takes the Edit
+                // route, and the review (`create`).
+                if self.create_rerouted(code, cx) {
+                    return;
+                }
                 let retry = recovery
                     .iter()
                     .any(|action| action.action == RecoveryActionKind::RequestRetry)

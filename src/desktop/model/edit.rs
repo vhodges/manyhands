@@ -2,7 +2,8 @@
 //! and Done and leaving): where the tab stands, whether Edit is offered,
 //! the base a session's draft begins on, the base a restored draft goes on
 //! over (R-42), what the toolbar's status item says of D2's recovery
-//! copy, what Done comes to, and whether an item was never created.
+//! copy, and what Done comes to. Whether an item was never created is the
+//! library's `is_new_item_base` (R-20).
 //!
 //! Nothing here holds the item's text but `fields_with_body`'s answer, a
 //! draft's fields, which derive no `Debug`. What a save comes to is
@@ -200,13 +201,6 @@ pub(crate) fn done_outcome(
         (false, true, true) if written => DoneOutcome::Keep,
         (false, true, _) => DoneOutcome::AskNotKept,
     }
-}
-
-/// Whether `base` is a new item's (R-20): it has neither an observation
-/// nor a source, as only a draft written before its item's create has.
-/// Task 22's `is_new_item_base` states the same rule for the library.
-pub(crate) fn new_item_base(base: &DraftBase) -> bool {
-    base.observation.is_none() && base.source.is_none()
 }
 
 /// The indicator in words.

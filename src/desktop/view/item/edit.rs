@@ -7,7 +7,9 @@
 //!   start it, where it is offered (`model::edit::edit_offered`). While a
 //!   draft of the item is kept or stored it reads Continue editing (R-35):
 //!   a kept session shows its editor again, and a stored or restored draft
-//!   takes the restored-draft route (`restored`, R-42).
+//!   takes the restored-draft route (`restored`, R-42). A new item's draft
+//!   whose item is not created yet is continued with the Create intent and
+//!   no item read, and its Save is its create (`create`).
 //! - **Preparing.** `context prepare` with the Edit intent runs on the user
 //!   lane (`prepare`). The pill says the private copy is being made ready,
 //!   Edit is disabled, and the page stays readable. A tab closed meanwhile
@@ -48,6 +50,7 @@
 
 mod actions;
 mod close_save;
+mod create;
 mod done;
 mod feed;
 mod kept;
@@ -75,7 +78,7 @@ use gpui_kit::{
     Styled, Subscription, TestSupportExt, Window, component::WindowExt, div,
 };
 use manyhands::{
-    drafts::{DraftBase, DraftErrorKind, DraftFields, DraftId},
+    drafts::{DraftBase, DraftErrorKind, DraftFields, DraftId, is_new_item_base},
     results::ResultCode,
 };
 use zorite_editor::EditorState;
@@ -83,7 +86,7 @@ use zorite_editor::EditorState;
 use super::ItemPane;
 use crate::desktop::{
     model::{
-        edit::{Phase, edit_offered, fields_with_body, new_item_base},
+        edit::{Phase, edit_offered, fields_with_body},
         stamp::ViewScope,
         tabs::TabKey,
     },
@@ -169,24 +172,16 @@ impl EditSession {
         &self.base
     }
 
-    /// Makes the session's base a new item's (R-20): no observation and no
-    /// source, as Task 22's new-item drafts are.
-    #[cfg(test)]
-    pub(super) fn as_new_item(&mut self) {
-        self.base.observation = None;
-        self.base.source = None;
-    }
-
     /// The session's fields now: the editor's text over the fields besides
     /// it.
     fn current(&self, cx: &App) -> DraftFields {
         fields_with_body(&self.meta, self.host.read(cx).text(cx))
     }
 
-    /// Whether the item was never created: it is dirty until its create
-    /// succeeds (R-73).
+    /// Whether the item was never created: its base is a new item's (R-20),
+    /// and it is dirty until its create succeeds (R-73).
     fn never_created(&self) -> bool {
-        new_item_base(&self.base)
+        is_new_item_base(&self.base)
     }
 
     /// Dirty (design, Done and leaving): the text or any other field differs
@@ -296,12 +291,6 @@ impl ItemPane {
         self.edit.session.as_ref()
     }
 
-    /// The edit session, for a test to mark it.
-    #[cfg(test)]
-    pub(super) fn edit_session_mut(&mut self) -> Option<&mut EditSession> {
-        self.edit.session.as_mut()
-    }
-
     /// The edit editor's host, while a session lives, kept or not.
     #[cfg(test)]
     pub(crate) fn edit_host(&self) -> Option<Entity<EditorHost>> {
@@ -406,19 +395,20 @@ impl ItemPane {
     }
 
     /// Whether Edit can start now: viewing an item it is offered for; a
-    /// kept session is continued, and so is a draft stored or restored here,
-    /// but not a new item's, which waits for Task 22's Create. A prepare
-    /// waiting for Resume is in Loading. Not while a Discard waits for its
-    /// draft (re-review N2), nor while a draft is being claimed.
+    /// kept session is continued, and so is a draft stored or restored here.
+    /// A new item's draft whose item is not created yet is continued with
+    /// no item to read (R-42, `create`). A prepare waiting for Resume is in
+    /// Loading. Not while a Discard waits for its draft (re-review N2), nor
+    /// while a draft is being claimed.
     pub(super) fn edit_available(&self, cx: &App) -> bool {
-        let Some(item) = self.model.item().rows() else {
-            return false;
-        };
-        self.edit.phase == Phase::Viewing
+        let viewing = self.edit.phase == Phase::Viewing
             && self.edit.discard_begun.is_none()
-            && !self.draft.restoring()
-            && edit_offered(self.model.target(), item)
-            && !self.continues_new_item(cx)
+            && !self.draft.restoring();
+        viewing
+            && match self.model.item().rows() {
+                Some(item) => edit_offered(self.model.target(), item),
+                None => self.continued_not_created(cx),
+            }
     }
 
     /// The edit session while its editor is shown, not kept.

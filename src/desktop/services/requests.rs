@@ -162,7 +162,6 @@ pub(crate) enum Intent {
         id: ItemId,
     },
     /// A new document at `path`. It holds the body.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 22.
     DocumentCreate {
         root: PathBuf,
         id: ItemId,
@@ -171,7 +170,6 @@ pub(crate) enum Intent {
         body: String,
     },
     /// A new ticket. It holds the body.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 22.
     TicketCreate {
         root: PathBuf,
         id: ItemId,

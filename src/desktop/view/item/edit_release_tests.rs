@@ -232,18 +232,18 @@ async fn a_drafts_page_discard_of_a_kept_draft_releases_a_context_this_run_made(
 
 /// Row: the Drafts page discards a never-created item's draft that a tab
 /// holds. The tab closes, and a context in `CreatedContexts` is released.
-/// (The session is marked as a new item's, as in Task 16's tests.)
+/// (A real never-created item: its draft begun with `begin_new`, in its
+/// tab, continued with the Create intent, which made the context; ruling
+/// P-3, Task 22.)
 #[gpui_kit::test]
 async fn a_drafts_page_discard_of_a_held_never_created_draft_closes_the_tab_and_releases(
     cx: &mut TestAppContext,
 ) {
     cx.executor().allow_parking();
-    let (shell, root) = shell(cx, |fixture, root| {
-        fixture.commit_ticket(root, TICKET, "Never created", "");
-    });
-    open(&shell, ticket(&root, TICKET), cx);
-    let host = edit(&shell, cx).await;
-    pane(&shell, cx).update(cx, |pane, _| pane.edit_session_mut().unwrap().as_new_item());
+    let (shell, root) = shell(cx, |_, _| {});
+    let (_, host) = shell
+        .edit_new_ticket(&root, TICKET, "Never created", cx)
+        .await;
     type_at_end(&shell, &host, "x", cx);
     let id = attached(&shell, &root, TICKET, cx).expect("the draft began");
     assert!(created(&shell, &root, TICKET, cx));

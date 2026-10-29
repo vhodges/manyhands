@@ -1,7 +1,8 @@
 //! The edit editor opened (design, Part C, Phases, step 3; Restored drafts
 //! and the close dialog): as a frame is drawn, the read that landed while
 //! Loading opens it, on the item's body for an Edit, or on a continued
-//! draft's text (`restored`).
+//! draft's text (`restored`), with no item read for a new item's draft
+//! whose item is not created yet (`create`).
 
 use gpui_kit::{AppContext, Context, Window};
 use manyhands::drafts::{DraftBase, DraftFields};
@@ -53,6 +54,14 @@ impl ItemPane {
         self.edit.loaded = false;
         self.edit.phase = Phase::Viewing;
         let continuing = self.edit.continuing.take();
+        // A new item's draft prepared with Create opens by what this read
+        // says of its item (R-42): with none to read, on the draft alone.
+        let continuing = match continuing {
+            Some(continuing) if continuing.create => {
+                return self.open_not_created(continuing, window, cx);
+            }
+            continuing => continuing,
+        };
         if self.model.not_refreshed().is_some() {
             return;
         }

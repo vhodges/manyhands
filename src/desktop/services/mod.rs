@@ -17,14 +17,14 @@ pub(crate) mod release;
 pub(crate) mod requests;
 pub(crate) mod worker;
 
-use std::{sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use futures::StreamExt;
 use gpui_kit::{App, AppContext, Entity};
 use manyhands::{
     drafts::{DraftError, DraftStore},
-    repository::{MutationDataDto, RepositoryService, keys::KeyStore},
-    results::{Envelope, Outcome},
+    repository::{ContextPrepareIntent, MutationDataDto, RepositoryService, keys::KeyStore},
+    results::{Envelope, Outcome, ResultCode},
 };
 
 use crate::desktop::model::operations::Operations;
@@ -83,7 +83,7 @@ pub(crate) enum ReadKind {
     /// the desktop asks the library about.
     ObservePath,
     /// `new_id`, for a new item's ID.
-    #[allow(dead_code)] // Called from Task 22; no test builds it.
+    #[allow(dead_code)] // Called from Task 23; no test builds it.
     NewId,
     /// The check of a relationship a draft sets, before it is saved.
     RelationshipCheck,
@@ -119,9 +119,7 @@ pub(crate) enum JobKind {
     TicketSave,
     ContextPrepare,
     ContextRelease,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 22.
     DocumentCreate,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 22.
     TicketCreate,
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 24.
     DocumentMove,
@@ -231,8 +229,10 @@ impl Services {
     /// listed once, at launch.
     ///
     /// Each finished request is then passed to the draft registry, after
-    /// the request model has it: a save's answer applies to its draft, and
-    /// an abandoned operation ends the pending save it held. The registry
+    /// the request model has it: a save's or a new item's create's answer
+    /// applies to its draft, an abandoned operation ends the pending save
+    /// it held, and a `context prepare` with the Create intent gives the
+    /// worktree its create's `occupied_path` is read in. The registry
     /// outlives tabs, so a save that finishes after its tab closed still
     /// retires its revision.
     ///
@@ -317,6 +317,9 @@ impl Services {
                             ForDrafts::Abandoned(operation) => {
                                 registry.operation_abandoned(&operation, cx)
                             }
+                            ForDrafts::Prepared(key, worktree) => {
+                                registry.context_prepared(key, worktree)
+                            }
                         }
                     }
                 });
@@ -396,11 +399,15 @@ impl Services {
 
 /// What a finished request means to the draft registry.
 enum ForDrafts {
-    /// A save finished: its answer applies to its draft.
+    /// A save or a new item's create finished: its answer applies to its
+    /// draft.
     Save(requests::DesktopRequestId, Box<Envelope<MutationDataDto>>),
     /// An `operation abandon` ended this operation: a pending save that
     /// held it is over (ruling R22).
     Abandoned(String),
+    /// A `context prepare` with the Create intent made the item's context
+    /// ready, at this worktree: where its create's `occupied_path` is read.
+    Prepared(ContextKey, PathBuf),
 }
 
 fn for_drafts(
@@ -408,8 +415,12 @@ fn for_drafts(
     id: requests::DesktopRequestId,
     envelope: &Envelope<MutationDataDto>,
 ) -> Option<ForDrafts> {
-    match &operations.request(id)?.intent {
-        requests::Intent::DocumentSave { .. } | requests::Intent::TicketSave { .. } => {
+    let intent = &operations.request(id)?.intent;
+    match intent {
+        requests::Intent::DocumentSave { .. }
+        | requests::Intent::TicketSave { .. }
+        | requests::Intent::DocumentCreate { .. }
+        | requests::Intent::TicketCreate { .. } => {
             Some(ForDrafts::Save(id, Box::new(envelope.clone())))
         }
         requests::Intent::OperationAbandon { operation_id, .. }
@@ -417,6 +428,16 @@ fn for_drafts(
         {
             Some(ForDrafts::Abandoned(operation_id.to_string()))
         }
+        requests::Intent::ContextPrepare {
+            intent: ContextPrepareIntent::Create,
+            ..
+        } if envelope.code == ResultCode::Ok => match &envelope.data {
+            Some(MutationDataDto::Context(context)) => Some(ForDrafts::Prepared(
+                ContextKey::of(intent)?,
+                PathBuf::from(&context.worktree),
+            )),
+            _ => None,
+        },
         _ => None,
     }
 }

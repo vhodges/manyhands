@@ -7,9 +7,9 @@
 //! while preparing is in it as well (R-37). Leaving and discarding consult
 //! it (`release`); a context it does not hold is never released by them. A
 //! prepare that answered `discovery_pending` enters it only once a retry
-//! answers `ok` (R-77). A save that commits into a context takes it out: it
-//! holds work now. A release leaves it in: the release service keeps what
-//! it has released.
+//! answers `ok` (R-77). A save, or a new item's create, that commits into a
+//! context takes it out: it holds work now. A release leaves it in: the
+//! release service keeps what it has released.
 
 use std::{collections::HashSet, path::PathBuf};
 
@@ -39,13 +39,17 @@ impl ContextKey {
         }
     }
 
-    /// The item a context command or a save names.
+    /// The item a context command, a save or a new item's create names.
     pub(crate) fn of(intent: &Intent) -> Option<Self> {
         let (root, kind, id) = match intent {
             Intent::ContextPrepare { root, kind, id, .. }
             | Intent::ContextRelease { root, kind, id } => (root, dto_kind(*kind), id),
-            Intent::DocumentSave { root, id, .. } => (root, ItemDtoKind::Document, id),
-            Intent::TicketSave { root, id, .. } => (root, ItemDtoKind::Ticket, id),
+            Intent::DocumentSave { root, id, .. } | Intent::DocumentCreate { root, id, .. } => {
+                (root, ItemDtoKind::Document, id)
+            }
+            Intent::TicketSave { root, id, .. } | Intent::TicketCreate { root, id, .. } => {
+                (root, ItemDtoKind::Ticket, id)
+            }
             _ => return None,
         };
         Some(Self::new(root.to_str()?, kind, &id.to_string()))
@@ -62,11 +66,14 @@ impl ContextKey {
         matches!(intent, Intent::ContextRelease { .. }) && Self::of(intent).as_ref() == Some(self)
     }
 
-    /// Whether `intent` saves this item.
+    /// Whether `intent` saves this item, or creates it.
     pub(crate) fn saved_by(&self, intent: &Intent) -> bool {
         matches!(
             intent,
-            Intent::DocumentSave { .. } | Intent::TicketSave { .. }
+            Intent::DocumentSave { .. }
+                | Intent::TicketSave { .. }
+                | Intent::DocumentCreate { .. }
+                | Intent::TicketCreate { .. }
         ) && Self::of(intent).as_ref() == Some(self)
     }
 
@@ -106,11 +113,12 @@ impl CreatedContexts {
     }
 
     /// A finished request: a `context prepare` that answered `ok` with
-    /// `created: true` adds its item's context, and a save whose checkpoint
-    /// committed takes its item's out (R-75), whether or not its tab is
-    /// still open. Any other answer, and any other request, changes
-    /// nothing. True when the answer made the context: a tab that closed
-    /// while it prepared releases it then (R-37).
+    /// `created: true` adds its item's context, and a save or a new item's
+    /// create whose checkpoint committed takes its item's out (R-75),
+    /// whether or not its tab is still open. Any other answer, and any
+    /// other request, changes nothing. True when the answer made the
+    /// context: a tab that closed while it prepared releases it then
+    /// (R-37).
     pub(crate) fn finished(
         &mut self,
         intent: &Intent,
@@ -120,7 +128,10 @@ impl CreatedContexts {
             return false;
         };
         match intent {
-            Intent::DocumentSave { .. } | Intent::TicketSave { .. } => {
+            Intent::DocumentSave { .. }
+            | Intent::TicketSave { .. }
+            | Intent::DocumentCreate { .. }
+            | Intent::TicketCreate { .. } => {
                 if envelope.effects.checkpoint == CheckpointEffect::Committed {
                     self.remove(&key);
                 }

@@ -8,7 +8,7 @@
 //!   nothing is saving; it is placed after Keep draft, which stays the
 //!   default and the first Tab stop. While a save, or Continue editing's
 //!   steps before one, run, Keep draft, Save and Discard wait. A new item's
-//!   restored draft shows Save unavailable (Task 22).
+//!   restored draft is offered Save too: it is created (R-42, `create`).
 //! - **Save** saves the session; a restored draft is continued first
 //!   (`restored`). The dialog stays open meanwhile. Once the save has
 //!   committed and the draft retired, the session ends clean and the tab
@@ -116,16 +116,15 @@ impl ItemPane {
     pub(in crate::desktop::view) fn close_offers(&self, cx: &App) -> Offers {
         let busy = self.close_busy(cx);
         if self.edit.session.is_none() {
-            // D2's dialog of a draft restored here.
-            let save = (!self.continues_new_item(cx)).then(|| {
-                !busy
-                    && self.edit_available(cx)
-                    && self.restored_unsaved(cx)
-                    && self.save_blocked(cx).is_none()
-            });
+            // D2's dialog of a draft restored here; a new item's is created
+            // (R-42).
+            let save = !busy
+                && self.edit_available(cx)
+                && self.restored_unsaved(cx)
+                && self.save_blocked(cx).is_none();
             return Offers {
                 keep: Some(!busy),
-                save,
+                save: Some(save),
                 discard: !busy,
             };
         }
@@ -164,10 +163,8 @@ impl ItemPane {
     /// What the close dialog says of its Save, while it has not closed the
     /// tab. While the review is open, how to reach it; once Save is
     /// pressed, what it came to (`closing_note`); else, only when nothing
-    /// else blocks it, the empty required field that does, but not for a
-    /// new item's draft, whose Save is unavailable for a later release, as
-    /// D2's section says (Task 20 fix 1). `None` when there is nothing to
-    /// say.
+    /// else blocks it, the empty required field that does (Task 20 fix 1).
+    /// `None` when there is nothing to say.
     pub(in crate::desktop::view) fn close_note(&self, cx: &App) -> Option<SaveNote> {
         // A prepare waiting for Resume is why D2's Save waits (M2): Resume
         // is the tab's banner's, which Cancel returns to.
@@ -193,9 +190,6 @@ impl ItemPane {
             && let Some(note) = self.closing_note(cx)
         {
             return Some(note);
-        }
-        if self.edit.session.is_none() && self.continues_new_item(cx) {
-            return None;
         }
         self.save_blocked(cx).map(SaveNote::says)
     }

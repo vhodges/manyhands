@@ -2,7 +2,8 @@
 //! of one restored here.
 //!
 //! The banner shows when the last listing holds a draft of this item that
-//! this process has not claimed. It sits in the header's banner slot
+//! this process has not claimed; with no item read, only a new item's
+//! draft not created yet (R-42). It sits in the header's banner slot
 //! (`Banner::StoredDraft`; design, Banners). Nothing is restored on its
 //! own; Restore asks the registry to claim the draft and attach it to this
 //! tab, then opens the tab through its item locator (ruling R25). It is
@@ -257,6 +258,34 @@ impl ItemPane {
         cx.notify();
     }
 
+    /// The draft of this item the last listing holds and this process has
+    /// not claimed, where the item stands against it and whether it may be
+    /// restored: against `item` as read, normalized as a base is (R-11,
+    /// R-72). With no item read, only a new item's draft not created yet is
+    /// offered (R-42).
+    fn stored_draft(
+        &self,
+        item: Option<&ItemDto>,
+        cx: &App,
+    ) -> Option<(DraftId, TargetState, Restore)> {
+        let TabKey::Item { repo, kind, id } = self.tab_key() else {
+            return None;
+        };
+        let registry = self.services.drafts().read(cx);
+        let stored = registry.stored_for(&repo, kind, &id)?;
+        let (draft, held) = registry.listed(stored)?;
+        let state = match (item, self.model.item_read()) {
+            (Some(item), _) => classify(draft, Ok(&normalized(item))),
+            (None, Some(Err(code))) => match classify(draft, Err(code)) {
+                TargetState::NotCreated => TargetState::NotCreated,
+                _ => return None,
+            },
+            (None, _) => return None,
+        };
+        let policy = restore_policy(draft, &state, held);
+        Some((stored, state, policy))
+    }
+
     /// The banner, when the last listing holds a draft of this item this
     /// process has not claimed, and what the last Restore answered.
     pub(super) fn draft_banner(
@@ -278,18 +307,7 @@ impl ItemPane {
             .text_sm()
             .into_any_element()
         });
-        let offered = item.and_then(|item| {
-            let TabKey::Item { repo, kind, id } = self.tab_key() else {
-                return None;
-            };
-            let registry = self.services.drafts().read(cx);
-            let stored = registry.stored_for(&repo, kind, &id)?;
-            let (draft, held) = registry.listed(stored)?;
-            // Normalized as the base is (R-11, R-72).
-            let state = classify(draft, Ok(&normalized(item)));
-            let policy = restore_policy(draft, &state, held);
-            Some((stored, state, policy))
-        });
+        let offered = self.stored_draft(item, cx);
         let banner = offered.map(|(stored, state, policy)| {
             // Held elsewhere may pass: Restore stays offered.
             let restorable = matches!(

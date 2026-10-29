@@ -11,12 +11,15 @@ use gpui_kit::{
     App, ElementId, Entity, KeyDownEvent, KeyUpEvent, Keystroke, TestAppContext, VisualTestContext,
     Window, WindowHandle, component::Root, px, size, test::TestWindowExt,
 };
-use manyhands::drafts::{DraftFields, DraftId, DraftTarget, ItemKind};
+use manyhands::{
+    drafts::{BaseContext, ContextKind, DraftBase, DraftFields, DraftId, DraftTarget, ItemKind},
+    repository::ItemDtoKind,
+};
 
-use super::workspace::Workspace;
+use super::{editor::host::EditorHost, workspace::Workspace};
 use crate::desktop::{
     keys,
-    model::operations::Operations,
+    model::{navigation::OpenTarget, operations::Operations, tabs::TabKey},
     open_test_window_over,
     services::requests::{DesktopRequest, DesktopRequestId},
     test_support::{delaying::DelayingBackend, fixtures::Fixture},
@@ -319,6 +322,127 @@ impl Shell {
         });
         self.run(cx);
         id
+    }
+}
+
+/// A new ticket's draft fields: `title`, the default type and status, and
+/// an empty body.
+pub(crate) fn new_ticket_fields(title: &str) -> DraftFields {
+    DraftFields::Ticket {
+        title: title.to_owned(),
+        ticket_type: "task".to_owned(),
+        status: "open".to_owned(),
+        project: None,
+        team: None,
+        deps: Vec::new(),
+        parent: None,
+        body: String::new(),
+    }
+}
+
+/// The new item's draft of the ticket `id` of `root` with `fields`: its
+/// target, and its base, with neither observation nor source (R-20), at the
+/// ticket's path on the primary branch.
+pub(crate) fn new_ticket_draft(
+    root: &Path,
+    id: &str,
+    fields: &DraftFields,
+) -> (DraftTarget, DraftBase) {
+    let target = DraftTarget {
+        repository: key(root),
+        item_kind: ItemKind::Ticket,
+        item_id: id.parse().unwrap(),
+        comment: None,
+    };
+    let base = DraftBase {
+        observation: None,
+        path: format!(".manyhands/tickets/{id}/ticket.md"),
+        context: BaseContext {
+            kind: ContextKind::Primary,
+            branch: Some("main".to_owned()),
+            worktree: key(root),
+            head_oid: None,
+        },
+        source: None,
+        fields: fields.clone(),
+    };
+    (target, base)
+}
+
+impl Shell {
+    /// Begins a new item's draft of the ticket `id` of `root`, which no
+    /// repository holds yet, with `begin_new`: titled `title`, with an empty
+    /// body. Its session is attached to the item's tab, which shows it
+    /// restored once it opens.
+    pub(crate) async fn begin_new_ticket(
+        &self,
+        root: &Path,
+        id: &str,
+        title: &str,
+        cx: &mut TestAppContext,
+    ) -> DraftId {
+        let drafts = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+        let fields = new_ticket_fields(title);
+        let (target, base) = new_ticket_draft(root, id, &fields);
+        let begun = drafts.update(cx, |registry, cx| {
+            registry.begin_new(target, base, fields, cx)
+        });
+        self.run(cx);
+        let draft = match begun.await {
+            Ok(draft) => draft,
+            Err(kind) => panic!("the new item's draft must begin: {kind:?}"),
+        };
+        let tab = TabKey::Item {
+            repo: key(root),
+            kind: ItemDtoKind::Ticket,
+            id: id.to_owned(),
+        };
+        drafts.update(cx, |registry, cx| registry.attach(tab, draft, cx));
+        self.run(cx);
+        draft
+    }
+
+    /// A real not-created tab: a new item's draft of the ticket `id` of
+    /// `root`, begun with `begin_new`, in the item's tab, continued with
+    /// Continue editing, which prepares with the Create intent; once the
+    /// edit editor opens, its draft and its host. The test allows parking.
+    pub(crate) async fn edit_new_ticket(
+        &self,
+        root: &Path,
+        id: &str,
+        title: &str,
+        cx: &mut TestAppContext,
+    ) -> (DraftId, Entity<EditorHost>) {
+        let draft = self.begin_new_ticket(root, id, title, cx).await;
+        let target = OpenTarget::Item {
+            repo: key(root),
+            kind: ItemDtoKind::Ticket,
+            id: id.parse().unwrap(),
+        };
+        self.workspace
+            .update(cx, |workspace, cx| workspace.open_item(target, cx));
+        self.run(cx);
+        self.click("draft-continue-button", cx);
+        let deadline = Instant::now() + WAIT;
+        loop {
+            self.frame(cx, |_, _| ());
+            self.run(cx);
+            let pane = self
+                .workspace
+                .read_with(cx, |workspace, _| workspace.item_pane())
+                .expect("an item tab is shown");
+            if let Some(host) = pane.read_with(cx, |pane, _| pane.edit_host()) {
+                self.frame(cx, |_, _| ());
+                return (draft, host);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the new item's edit editor did not open"
+            );
+            cx.executor().timer(POLL).await;
+        }
     }
 }
 
