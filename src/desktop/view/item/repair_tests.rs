@@ -645,7 +645,7 @@ async fn a_preview_the_file_changed_under_offers_no_prepare_again(cx: &mut TestA
 /// A corrected ID another document holds is an ambiguous identity: the
 /// preview is refused with the library's message and code, no Confirm is
 /// offered, and nothing is written. Escape closes the dialog, focus goes
-/// back to Preview, and the text is kept.
+/// back to the text area (Part E review, M2), and the text is kept.
 #[gpui_kit::test]
 async fn an_ambiguous_identity_blocks_repair_with_its_reason(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |fixture, root| {
@@ -695,10 +695,7 @@ async fn an_ambiguous_identity_blocks_repair_with_its_reason(cx: &mut TestAppCon
 
     shell.keys("escape", cx);
     assert!(!shell.present("confirm-dialog", cx));
-    assert!(
-        focused(&shell, "repair-preview-button", cx),
-        "focus is back"
-    );
+    assert!(text_focused(&shell, cx), "focus is back in the text");
     assert_eq!(repair_text(&shell, cx), typed, "the text is kept");
 }
 
@@ -1203,4 +1200,42 @@ async fn edited_repair_text_is_unsaved_in_the_pill(cx: &mut TestAppContext) {
     shell.click("repair-discard-discard-button", cx);
     assert!(!shell.present("repair-source", cx), "the view closes");
     assert_eq!(shell.label("item-pill", cx).as_deref(), viewing);
+}
+
+/// Escape from the confirmation while the repair it sent runs gives focus
+/// back to the text area, read-only but focusable, not to Preview, which
+/// waits and holds no focus (Part E review, M2). Meanwhile the pill says
+/// the text is unsaved (I1). Once the repair lands, the tab follows.
+#[gpui_kit::test]
+async fn escape_while_the_repair_runs_gives_focus_back_to_the_text(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_nonconforming_document(root, MARKER);
+    });
+    completed_marker(&shell, &root, cx);
+    shell.keys("tab", cx);
+    assert!(focused(&shell, "repair-preview-button", cx));
+    shell.press("enter", cx);
+    previewed(&shell, cx).await;
+    assert!(shell.present("confirm-ok", cx), "a preview");
+
+    let held = shell.backend.hold_job(JobKind::DocumentRepair);
+    shell.keys("enter", cx);
+    held.wait_reached();
+    shell.keys("escape", cx);
+    assert!(!shell.present("confirm-dialog", cx), "Escape closes it");
+    assert!(text_focused(&shell, cx), "focus is in the text area");
+    assert!(shell.present("repair-source", cx));
+    assert_eq!(
+        shell.label("item-pill", cx).as_deref(),
+        Some("Editing \u{b7} unsaved changes"),
+        "while the repair runs"
+    );
+
+    held.release();
+    follows(&shell, &root, ItemDtoKind::Document, ADOPTED, "Adopted", cx).await;
+    assert_eq!(
+        shell.label("item-pill", cx).as_deref(),
+        Some("Viewing your private copy"),
+        "the repaired document, viewed"
+    );
 }

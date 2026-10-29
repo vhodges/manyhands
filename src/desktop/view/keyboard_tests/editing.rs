@@ -920,8 +920,9 @@ async fn preview_by_enter(walk: &Walk, cx: &mut TestAppContext) {
 /// from the tree: Repair… in "Needs fixing", by Tab and Enter, opens the
 /// view with focus in its text area, where its front matter is typed;
 /// Tab leaves it for Preview and Shift-Tab comes back; Preview by Enter
-/// opens the one confirmation, Escape gives focus back to Preview, and
-/// Enter in it confirms: the tab follows the repaired document. The
+/// opens the one confirmation, Escape gives focus back to the text area,
+/// Tab reaches Preview again, and Enter in the confirmation confirms: the
+/// tab follows the repaired document. The
 /// unmanaged file: Adopt…, by Tab and Enter, opens the view prefilled;
 /// typed in, closing the tab asks "Discard your repair?", whose Enter is
 /// Cancel and whose Escape is too, focus back in the text; Cancel by Tab
@@ -952,14 +953,16 @@ async fn repair_and_adopt_by_keyboard_alone(cx: &mut TestAppContext) {
     in_repair_text(&walk, cx);
     walk.step("tab", "repair-preview-button", Region::Content, cx);
 
-    // The confirmation: Escape back to Preview, then Enter confirms.
+    // The confirmation: Escape back to the text (Part E review, M2), Tab
+    // to Preview again, then Enter confirms.
     preview_by_enter(&walk, cx).await;
     walk.keys("escape", cx);
     assert!(
         !walk.shell.present("confirm-dialog", cx),
         "Escape closed it"
     );
-    walk.on("repair-preview-button", Region::Content, cx);
+    in_repair_text(&walk, cx);
+    walk.step("tab", "repair-preview-button", Region::Content, cx);
     preview_by_enter(&walk, cx).await;
     walk.keys("enter", cx);
     assert_eq!(
