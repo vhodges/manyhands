@@ -240,15 +240,18 @@ impl Workspace {
         if !window.has_active_sheet(cx) {
             self.content.sheet = None;
         }
-        if window.has_active_dialog(cx) {
-            return;
-        }
-        let Some((pane, field)) = self.content.details.take() else {
-            return;
-        };
-        if let Some(pane) = pane.upgrade().filter(|pane| shown.as_ref() == Some(pane)) {
+        if !window.has_active_dialog(cx)
+            && let Some((pane, field)) = self.content.details.take()
+            && let Some(pane) = pane.upgrade().filter(|pane| shown.as_ref() == Some(pane))
+        {
             open_details(&pane, field, window, cx);
             self.content.sheet = Some(pane.downgrade());
+        }
+        // R-57: the sheet suggests the values on the tickets loaded, which
+        // its tab reads as the sheet is drawn, later in this frame.
+        if let Some(pane) = self.content.sheet.as_ref().and_then(|pane| pane.upgrade()) {
+            let tickets = &self.tickets;
+            pane.update(cx, |pane, _| pane.take_loaded_tickets(tickets));
         }
     }
 

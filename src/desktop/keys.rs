@@ -116,6 +116,10 @@ pub(crate) const DRAFT_INSPECT_CONTEXT: &str = "DraftInspect";
 /// editor from anywhere in the tab while editing.
 pub(crate) const ITEM_TAB_CONTEXT: &str = "ItemTab";
 
+/// The key context of an item tab's details sheet, which renders in Root's
+/// layer outside the tab: `secondary-s` saves the tab from it (R-74).
+pub(crate) const ITEM_SHEET_CONTEXT: &str = "ItemSheet";
+
 /// The key context of an item tab's page, set only while it is viewing:
 /// `e` edits there, the read editor included, whose guard stops the
 /// letter's text and not its binding (fact 76). A dialog, the details
@@ -190,6 +194,8 @@ pub(crate) fn bind(cx: &mut App) {
         // Save, from anywhere in the tab while editing; the tab lets it go
         // on otherwise.
         KeyBinding::new("secondary-s", Save, Some(ITEM_TAB_CONTEXT)),
+        // And from the tab's details sheet, outside it (R-74).
+        KeyBinding::new("secondary-s", Save, Some(ITEM_SHEET_CONTEXT)),
         // The edit toolbar: its controls, its Style menu and its link
         // popover. The mode key is the host's, forwarded from a control.
         KeyBinding::new("left", ToolbarPrevious, Some(TOOLBAR_CONTEXT)),

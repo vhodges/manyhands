@@ -162,9 +162,11 @@ impl ItemPane {
 
     /// Saves the shown session: one save at a time, a pending checkpoint's
     /// waiting for its Retry included, and none during the review. A clean
-    /// session says "No changes to save"; an unverified base opens the
-    /// review instead (R-36). True when a save started. The header's Save,
-    /// a restored draft's Save and the close dialog's come here.
+    /// session says "No changes to save", and one with an empty required
+    /// field says which; an unverified base opens the review instead
+    /// (R-36). True when a save started. The header's Save, `secondary-s`
+    /// in the tab and in the details sheet, a restored draft's Save and
+    /// the close dialog's come here.
     pub(super) fn start_save(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(session) = self.shown_session() else {
             return false;
@@ -172,9 +174,13 @@ impl ItemPane {
         if self.edit.phase == Phase::Review || self.edit.save.run.is_some() {
             return false;
         }
+        let toolbar = session.toolbar.clone();
         if !session.dirty(cx) {
-            let toolbar = session.toolbar.clone();
             toolbar.update(cx, |toolbar, cx| toolbar.note(NO_CHANGES_TO_SAVE, cx));
+            return false;
+        }
+        if let Some(missing) = self.missing_field(cx) {
+            toolbar.update(cx, |toolbar, cx| toolbar.note(missing, cx));
             return false;
         }
         if !self.base_verified() {

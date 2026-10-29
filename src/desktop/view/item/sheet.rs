@@ -1,7 +1,7 @@
-//! The details sheet while viewing (design, Details sheet (viewing);
-//! `item_view/03-front-matter-sheet.md`): the Kit's `Sheet` on the right,
-//! 440 px wide (fact 61, R-48), opened from a header chip or All details
-//! with that chip's field focused (fact 80).
+//! The details sheet (design, Details sheet (viewing), and Named controls
+//! in the details sheet; `item_view/03-front-matter-sheet.md`): the Kit's
+//! `Sheet` on the right, 440 px wide (fact 61, R-48), opened from a header
+//! chip or All details with that chip's field focused (fact 80).
 //!
 //! It holds what D1 drew on the item's page: the named fields, each read
 //! only in its own box at 75% (R-74); a ticket's relationships (`ticket`)
@@ -10,11 +10,19 @@
 //! opens the item's file in an Inspect tab (R-64). Escape, Done and the
 //! close button close it, and Root gives focus back to the chip that
 //! opened it. The workspace closes it when its tab goes away, and refuses
-//! its own keys while it is open (R-60). Nothing in it writes.
+//! its own keys while it is open (R-60).
+//!
+//! While the tab is editing, its body is a `draft-section` (R-38), it says
+//! its changes are part of the draft, and the named fields are controls
+//! while the tab is Editing or Saving (`fields`); `secondary-s` inside it
+//! saves the tab (R-74). Nothing else in it writes.
 
 mod document;
 mod facts;
+mod fields;
 mod ticket;
+
+pub(super) use self::fields::SheetFields;
 
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, Entity, FocusHandle, FontWeight, InteractiveElement,
@@ -33,7 +41,8 @@ use manyhands::repository::{ItemContextKind, ItemDto, ItemDtoKind};
 
 use super::{ChipField, ItemPane, text};
 use crate::desktop::{
-    model::{navigation::OpenTarget, relationships::NONE},
+    keys::ITEM_SHEET_CONTEXT,
+    model::{edit::fields::Field, navigation::OpenTarget, relationships::NONE},
     view::relationships::OpenRelated,
 };
 
@@ -41,7 +50,15 @@ pub(crate) const TICKET_DETAILS: &str = "Ticket details";
 pub(crate) const DOCUMENT_DETAILS: &str = "Document details";
 pub(crate) const VIEWING: &str = "Viewing the shared copy. Choose Edit to change these.";
 pub(crate) const VIEWING_PRIVATE: &str = "Viewing your private copy. Choose Edit to change these.";
+/// The description while editing (the handoff's `fmDesc`).
+pub(crate) const EDITING_TICKET: &str =
+    "Changes here become part of your draft and are saved with the ticket.";
+pub(crate) const EDITING_DOCUMENT: &str =
+    "Changes here become part of your draft and are saved with the document.";
 pub(crate) const READ_ONLY: &str = "Read only while viewing";
+/// The footer's note while editing.
+pub(crate) const SAVED_WITH_TICKET: &str = "Saved with the ticket (Ctrl S)";
+pub(crate) const SAVED_WITH_DOCUMENT: &str = "Saved with the document (Ctrl S)";
 pub(crate) const DONE: &str = "Done";
 pub(crate) const INSPECT: &str = "Inspect the raw front matter (YAML)…";
 pub(crate) const OTHER_FIELDS: &str = "Other fields";
@@ -113,20 +130,16 @@ pub(super) fn sheet_focus(cx: &mut App) -> Vec<FocusHandle> {
 /// Opens `pane`'s details sheet with `field` focused. The chip takes focus
 /// first, since Root gives focus back, on every close, to what held it as
 /// the sheet opened; `open_sheet` then focuses a handle of Root's own, so
-/// the field is focused after it (fact 80).
+/// the field is focused after it (fact 80): its control while the tab is
+/// editing, else its row.
 pub(crate) fn open_details(
     pane: &Entity<ItemPane>,
     field: ChipField,
     window: &mut Window,
     cx: &mut App,
 ) {
-    let (chip, target) = {
-        let pane = pane.read(cx);
-        (
-            pane.chip_focus[field.index()].clone(),
-            pane.sheet_focus[field.index()].clone(),
-        )
-    };
+    let chip = pane.read(cx).chip_focus[field.index()].clone();
+    let target = pane.update(cx, |pane, cx| pane.sheet_target(field, window, cx));
     window.focus(&chip, cx);
     let pane = pane.downgrade();
     window.open_sheet(cx, move |sheet, window, cx| match pane.upgrade() {
@@ -143,8 +156,10 @@ fn value(id: &'static str, value: Option<&String>) -> Option<AnyElement> {
 
 impl ItemPane {
     /// The sheet as this frame draws it, from the item as last read, so a
-    /// read again updates it in place.
+    /// read again updates it in place, and, while editing, from the
+    /// session's fields.
     fn sheet(&mut self, sheet: Sheet, window: &mut Window, cx: &mut Context<Self>) -> Sheet {
+        self.sync_controls(window, cx);
         let item = self.model.item().rows().cloned();
         let kind = self
             .shown_kind(item.as_ref())
@@ -161,7 +176,15 @@ impl ItemPane {
         let private = item
             .as_ref()
             .is_some_and(|item| item.context.kind == ItemContextKind::Active);
-        let description = if private { VIEWING_PRIVATE } else { VIEWING };
+        // Editing: the session is shown, its controls read only during the
+        // review; a kept session views the saved copy.
+        let editing = self.editing();
+        let (description, note) = match (editing, kind) {
+            (true, ItemDtoKind::Ticket) => (EDITING_TICKET, SAVED_WITH_TICKET),
+            (true, ItemDtoKind::Document) => (EDITING_DOCUMENT, SAVED_WITH_DOCUMENT),
+            (false, _) if private => (VIEWING_PRIVATE, READ_ONLY),
+            (false, _) => (VIEWING, READ_ONLY),
+        };
         let muted = cx.theme().muted_foreground;
         let (vertical, horizontal) = PADDING;
         let body = v_flex()
@@ -174,12 +197,23 @@ impl ItemPane {
                     .text_color(muted),
             )
             .children(rows);
+        // R-38: the session's text the controls hold is drawn only in a
+        // draft section.
+        let body = if editing {
+            body.id("draft-section").test_support().into_any_element()
+        } else {
+            body.into_any_element()
+        };
         let handle = self.sheet_scroll.handle().clone();
+        // R-74: the sheet renders outside the tab, so it takes `secondary-s`
+        // itself.
         let footer = h_flex()
+            .key_context(ITEM_SHEET_CONTEXT)
+            .on_action(cx.listener(Self::sheet_save))
             .w_full()
             .justify_between()
             .items_center()
-            .child(text("sheet-note", READ_ONLY).text_xs().text_color(muted))
+            .child(text("sheet-note", note).text_xs().text_color(muted))
             .child(
                 Button::new("sheet-done")
                     .label(DONE)
@@ -200,6 +234,8 @@ impl ItemPane {
             .child(
                 div()
                     .id("sheet-body")
+                    .key_context(ITEM_SHEET_CONTEXT)
+                    .on_action(cx.listener(Self::sheet_save))
                     .absolute()
                     .inset_0()
                     .child(
@@ -283,12 +319,17 @@ impl ItemPane {
         element.into_any_element()
     }
 
-    /// The Title row, which All details opens the sheet on.
-    fn title_row(&self, item: &ItemDto, window: &Window, cx: &App) -> AnyElement {
+    /// The Title row, which All details opens the sheet on: its control
+    /// while the tab is editing.
+    fn title_row(&self, item: &ItemDto, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(control) = self.control_row(TITLE, Field::Title, window, cx) {
+            return control;
+        }
         let focus = &self.sheet_focus[ChipField::All.index()];
+        let title = self.named_value(Field::Title, item.title.as_ref());
         self.row(
             TITLE,
-            value("sheet-title-value", item.title.as_ref()),
+            value("sheet-title-value", title.as_ref()),
             Some(focus),
             window,
             cx,

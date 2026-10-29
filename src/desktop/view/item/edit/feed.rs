@@ -215,7 +215,6 @@ impl ItemPane {
     /// controls: they mark the session dirty exactly as typing does, and
     /// feed the draft (design, Named controls in the details sheet). The
     /// body is the editor's, whatever `fields` holds.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 20.
     pub(in crate::desktop::view::item) fn change_fields(
         &mut self,
         fields: DraftFields,

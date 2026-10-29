@@ -117,8 +117,12 @@ impl ItemPane {
         let busy = self.close_busy(cx);
         if self.edit.session.is_none() {
             // D2's dialog of a draft restored here.
-            let save = (!self.continues_new_item(cx))
-                .then(|| !busy && self.edit_available(cx) && self.restored_unsaved(cx));
+            let save = (!self.continues_new_item(cx)).then(|| {
+                !busy
+                    && self.edit_available(cx)
+                    && self.restored_unsaved(cx)
+                    && self.missing_field(cx).is_none()
+            });
             return Offers {
                 keep: Some(!busy),
                 save,
@@ -137,7 +141,10 @@ impl ItemPane {
     /// 18 fix 1, I2: the design's rule covers a kept draft).
     fn close_save_offered(&self, cx: &App) -> bool {
         if self.session_kept() {
-            return self.edit.save.run.is_none() && !self.store_settling(cx) && self.edit_dirty(cx);
+            return self.edit.save.run.is_none()
+                && !self.store_settling(cx)
+                && self.edit_dirty(cx)
+                && self.missing_field(cx).is_none();
         }
         self.save_offered(cx)
     }
@@ -177,6 +184,10 @@ impl ItemPane {
                 CHECK_CURRENT_VERSION
             };
             return Some(SaveNote::says(format!("{words} {CANCEL_TO_REVIEW}")));
+        }
+        // Save waits for an empty required field: the dialog says which.
+        if let Some(missing) = self.missing_field(cx) {
+            return Some(SaveNote::says(missing));
         }
         if !self.edit.closing {
             return None;

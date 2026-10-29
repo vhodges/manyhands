@@ -1,8 +1,9 @@
 //! A ticket's details (design, Details sheet, Ticket): Title, Type and
-//! Status, required; Project and Team; then its relationships: Parent,
-//! Waiting on with the readiness note, Dependents and Children, each D1's
-//! rows, and the relationship problems (R-54); then Other fields, the
-//! Facts, the Problems and the Inspect link.
+//! Status, required; Project and Team, each a control while editing
+//! (`fields`); then its relationships: Parent, Waiting on with the
+//! readiness note, Dependents and Children, each D1's rows, and the
+//! relationship problems (R-54); then Other fields, the Facts, the
+//! Problems and the Inspect link.
 
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement,
@@ -14,7 +15,10 @@ use manyhands::repository::{ItemDto, ItemDtoKind, ReadinessState};
 
 use super::{super::chips::waiting_on, GAP, Row, value};
 use crate::desktop::{
-    model::relationships::{RELATIONSHIPS, Relationships},
+    model::{
+        edit::fields::Field,
+        relationships::{RELATIONSHIPS, Relationships},
+    },
     view::item::{ChipField, ItemPane, text},
 };
 
@@ -73,14 +77,39 @@ impl ItemPane {
     ) -> Vec<AnyElement> {
         let focus = |pane: &Self, field: ChipField| pane.sheet_focus[field.index()].clone();
         let mut rows = vec![self.title_row(item, window, cx)];
-        for (row, id, field, shown) in [
-            (TYPE, "item-type", ChipField::Type, &item.ticket_type),
-            (STATUS, "item-status", ChipField::Status, &item.status),
-            (PROJECT, "item-project", ChipField::Project, &item.project),
-            (TEAM, "item-team", ChipField::Team, &item.team),
+        for (row, id, chip, field, read) in [
+            (
+                TYPE,
+                "item-type",
+                ChipField::Type,
+                Field::Type,
+                &item.ticket_type,
+            ),
+            (
+                STATUS,
+                "item-status",
+                ChipField::Status,
+                Field::Status,
+                &item.status,
+            ),
+            (
+                PROJECT,
+                "item-project",
+                ChipField::Project,
+                Field::Project,
+                &item.project,
+            ),
+            (TEAM, "item-team", ChipField::Team, Field::Team, &item.team),
         ] {
-            let field = focus(self, field);
-            rows.push(self.row(row, value(id, shown.as_ref()), Some(&field), window, cx));
+            // While editing, a control; else read only, the session's value
+            // during the review (R-74).
+            if let Some(control) = self.control_row(row, field, window, cx) {
+                rows.push(control);
+                continue;
+            }
+            let shown = self.named_value(field, read.as_ref());
+            let focus = focus(self, chip);
+            rows.push(self.row(row, value(id, shown.as_ref()), Some(&focus), window, cx));
         }
         rows.extend(self.relationship_rows(item, window, cx));
         rows.push(self.other_fields(item, &[], cx));

@@ -17,6 +17,7 @@ use time::OffsetDateTime;
 use super::{editor_text::normalized, navigation::OpenTarget};
 use crate::desktop::services::requests::DesktopRequestId;
 
+pub(crate) mod fields;
 pub(crate) mod save_state;
 
 /// The header's Edit while a draft of the item is kept or stored (R-35).

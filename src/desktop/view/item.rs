@@ -116,6 +116,8 @@ pub(crate) struct ItemPane {
     /// The details sheet's own scroll, where its focused controls are
     /// revealed.
     pub(super) sheet_scroll: ContentScroll,
+    /// The sheet's named controls while editing, and what it suggests.
+    fields: sheet::SheetFields,
     refreshing: Option<DesktopRequestId>,
     /// An Inspect tab's last source plus the same textarea entity,
     /// preserving selection/focus.
@@ -191,6 +193,7 @@ impl ItemPane {
             chip_focus: chips::chip_focus(cx),
             sheet_focus: sheet::sheet_focus(cx),
             link_focus: cx.focus_handle(),
+            fields: sheet::SheetFields::default(),
             sheet_scroll: scroll.region(),
             refreshing: None,
             source: None,

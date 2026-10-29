@@ -14,7 +14,8 @@
 //!   the token (`model::edit::adopted_base`), and D2's draft moves onto it;
 //!   otherwise the review opens (`review`).
 //! - **Save** from a restored draft (D2's section, or the close dialog)
-//!   runs those steps, then saves.
+//!   runs those steps, then saves. It waits, saying why, while the draft
+//!   leaves a required field empty.
 //! - **A new item's draft** (`NotCreated`, R-20) is continued through
 //!   `context prepare` with the Create intent, which is Task 22's
 //!   (`continue_new_item`). Until then its Continue editing and Save are
@@ -258,7 +259,8 @@ impl ItemPane {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let enabled = self.edit_available(cx);
-        action(id, CONTINUE_EDITING, enabled, self.continues_new_item(cx))
+        let later = self.continues_new_item(cx).then_some(LATER_NOTE);
+        action(id, CONTINUE_EDITING, enabled, later)
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.edit_requested(window, cx);
             }))
@@ -267,26 +269,37 @@ impl ItemPane {
 
     /// D2's section's Save: offered while Edit can start and the draft
     /// holds what the item does not; unavailable, with its note, for a new
-    /// item's draft.
+    /// item's draft, and for one that leaves a required field empty, whose
+    /// note says which.
     pub(in crate::desktop::view::item) fn restored_save_button(
         &self,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let enabled = self.edit_available(cx) && self.restored_unsaved(cx);
-        action("draft-save", SAVE, enabled, self.continues_new_item(cx))
+        let note = match self.continues_new_item(cx) {
+            true => Some(LATER_NOTE),
+            false => self.missing_field(cx),
+        };
+        action("draft-save", SAVE, enabled, note)
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.save_restored(cx)))
             .into_any_element()
     }
 }
 
 /// A draft action, the button `id`-button in the wrapper `id`: enabled or
-/// not, and, `later`, unavailable with "Available in a later release".
-fn action(id: &'static str, label: &'static str, enabled: bool, later: bool) -> Action {
+/// not, and, with a `note`, unavailable and saying why: "Available in a
+/// later release", or a required field's message.
+fn action(
+    id: &'static str,
+    label: &'static str,
+    enabled: bool,
+    note: Option<&'static str>,
+) -> Action {
     Action {
         id,
         label,
-        enabled: enabled && !later,
-        later,
+        enabled: enabled && note.is_none(),
+        note,
     }
 }
 
@@ -295,7 +308,7 @@ struct Action {
     id: &'static str,
     label: &'static str,
     enabled: bool,
-    later: bool,
+    note: Option<&'static str>,
 }
 
 impl Action {
@@ -313,15 +326,15 @@ impl Action {
             .role(Role::Group)
             .aria_label(self.label)
             .flex_none();
-        if !self.later {
+        let Some(note) = self.note else {
             return wrapper.child(button);
-        }
-        wrapper.aria_description(LATER_NOTE).child(
+        };
+        wrapper.aria_description(note).child(
             div()
                 .id(gpui_kit::ElementId::from(format!("{}-note", self.id)))
                 .test_support()
-                .aria_label(LATER_NOTE)
-                .child(button.tooltip(LATER_NOTE)),
+                .aria_label(note)
+                .child(button.tooltip(note)),
         )
     }
 }

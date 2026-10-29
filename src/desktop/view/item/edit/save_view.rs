@@ -6,6 +6,8 @@
 //!   is enabled only while dirty, not saving and not in the review; D2
 //!   retiring the last save's revision, or storing newer text again, is
 //!   still saving. On an unverified base it reads "Review before saving".
+//!   An empty required field disables it, and every other save, its
+//!   tooltip saying why (`missing_field`).
 //! - **The pill** while editing: "Saving…" while D2 finishes the last
 //!   save; otherwise unsaved while dirty, and saved on this
 //!   computer when clean, not shared yet once a save has found a selected
@@ -28,11 +30,11 @@ use manyhands::results::RecoveryActionKind;
 use super::Phase;
 use crate::desktop::{
     assets::icon_path,
-    model::edit::COMPARE,
     model::edit::save_state::{
         REVIEW_BEFORE_SAVING, SAVE, SAVE_TOOLTIP, SaveState, before_save, save_banner, save_offer,
         save_state,
     },
+    model::edit::{COMPARE, fields::missing},
     view::item::{
         ItemPane,
         banners::Banner,
@@ -42,16 +44,32 @@ use crate::desktop::{
 };
 
 impl ItemPane {
-    /// Whether Save can save now: editing, dirty, and no save in flight or
-    /// waiting for its Retry, D2's finishing of the last one included.
+    /// Whether Save can save now: editing, dirty, every required field
+    /// filled, and no save in flight or waiting for its Retry, D2's
+    /// finishing of the last one included.
     pub(in crate::desktop::view::item) fn save_offered(&self, cx: &App) -> bool {
         self.edit.phase() == Phase::Editing
             && self.edit.save.run.is_none()
             && !self.store_settling(cx)
             && self.edit_dirty(cx)
+            && self.missing_field(cx).is_none()
     }
 
-    /// The header's Save while editing, before Done.
+    /// Why nothing can be saved now, in a required field's words (design,
+    /// Named controls in the details sheet): the session's fields, kept or
+    /// not, or, with no session, those of the draft restored here, leave a
+    /// Title, Type or Status empty. Every save waits until it is filled.
+    pub(in crate::desktop::view::item) fn missing_field(&self, cx: &App) -> Option<&'static str> {
+        if let Some(session) = &self.edit.session {
+            return missing(&session.meta);
+        }
+        let registry = self.services.drafts().read(cx);
+        let id = registry.attached(&self.tab_key())?;
+        missing(registry.session(id)?.current())
+    }
+
+    /// The header's Save while editing, before Done. While a required field
+    /// is empty, its tooltip says so.
     pub(in crate::desktop::view::item) fn save_action(&self, cx: &mut Context<Self>) -> AnyElement {
         let label = match before_save(self.base_verified()) {
             SaveState::ReviewBeforeSaving => REVIEW_BEFORE_SAVING,
@@ -61,7 +79,7 @@ impl ItemPane {
             .label(label)
             .small()
             .icon(Icon::default().path(icon_path("save")))
-            .tooltip(SAVE_TOOLTIP)
+            .tooltip(self.missing_field(cx).unwrap_or(SAVE_TOOLTIP))
             .disabled(!self.save_offered(cx))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.save_requested(window, cx);

@@ -259,14 +259,19 @@ impl ItemPane {
         );
     }
 
-    /// What Done's prompt offers now: Save while the session is dirty and
-    /// nothing is saving; Keep draft, for a never-created item, once its
-    /// draft is stored.
+    /// What Done's prompt offers now: Save while the session is dirty, its
+    /// required fields filled, and nothing is saving; Keep draft, for a
+    /// never-created item, once its draft is stored.
     fn done_offers(&self, never_created: bool, cx: &App) -> Offers {
         let saving = self.save_in_flight(cx);
         Offers {
             keep: never_created.then(|| self.keep_offer(cx)).flatten(),
-            save: Some(self.edit.phase() == Phase::Editing && self.edit_dirty(cx) && !saving),
+            save: Some(
+                self.edit.phase() == Phase::Editing
+                    && self.edit_dirty(cx)
+                    && !saving
+                    && self.missing_field(cx).is_none(),
+            ),
             discard: !saving,
         }
     }

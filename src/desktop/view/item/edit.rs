@@ -348,6 +348,13 @@ impl ItemPane {
         self.edit.session.is_some()
     }
 
+    /// The shown session's fields besides the body, which the details
+    /// sheet's controls change: not a kept session's, whose tab views the
+    /// saved copy.
+    pub(super) fn session_meta(&self) -> Option<&DraftFields> {
+        Some(&self.shown_session()?.meta)
+    }
+
     /// Whether the session is dirty: its text or another field differs from
     /// the baseline, or its item is not created yet.
     pub(super) fn edit_dirty(&self, cx: &App) -> bool {
