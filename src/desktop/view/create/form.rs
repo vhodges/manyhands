@@ -7,9 +7,9 @@
 use std::rc::Rc;
 
 use gpui_kit::{
-    App, ClickEvent, Context, ElementId, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, Role, StatefulInteractiveElement, Styled, TestSupportExt,
-    Window,
+    AnyElement, App, ClickEvent, Context, ElementId, Entity, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ParentElement, Render, Role, StatefulInteractiveElement,
+    Styled, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable,
         button::{Button, ButtonVariants},
@@ -75,6 +75,47 @@ pub(in crate::desktop::view) fn button(
     note: Option<String>,
     press: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> impl IntoElement {
+    wrapped(id, label, primary, enabled, note, None, press)
+}
+
+/// A dialog's primary button `id`, as `button` draws it, whose wrapper
+/// also tracks `focus`: no tab stop of its own, but where a keyed
+/// press of the button parks focus while the button disables
+/// (`keep_focus_in`), ringed while it holds it, and where Enter presses the
+/// button again.
+pub(in crate::desktop::view) fn held_button(
+    id: &'static str,
+    label: &'static str,
+    enabled: bool,
+    note: Option<String>,
+    (focus, window, cx): (&FocusHandle, &Window, &App),
+    press: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
+    let ring = focus.is_focused(window).then(|| {
+        div()
+            .id(ElementId::from(format!("{id}-focus-ring")))
+            .test_support()
+            .absolute()
+            .inset_0()
+            .rounded_sm()
+            .border_2()
+            .border_color(cx.theme().ring)
+            .into_any_element()
+    });
+    wrapped(id, label, true, enabled, note, Some((focus, ring)), press)
+}
+
+/// `button`, its wrapper tracking `held`'s focus and drawing its ring when
+/// given.
+fn wrapped(
+    id: &'static str,
+    label: &'static str,
+    primary: bool,
+    enabled: bool,
+    note: Option<String>,
+    held: Option<(&FocusHandle, Option<AnyElement>)>,
+    press: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+) -> impl IntoElement {
     let press = Rc::new(press);
     let on_enter = press.clone();
     let button = Button::new((id, 0usize))
@@ -92,6 +133,10 @@ pub(in crate::desktop::view) fn button(
                 on_enter(&ClickEvent::default(), window, cx)
             }
         });
+    let wrapper = match held {
+        Some((focus, ring)) => wrapper.track_focus(focus).relative().children(ring),
+        None => wrapper,
+    };
     match note.filter(|_| !enabled) {
         Some(note) => wrapper.aria_description(note.clone()).child(
             div()
@@ -107,11 +152,12 @@ pub(in crate::desktop::view) fn button(
 /// A dialog's primary button was pressed: it disables while the dialog
 /// works, and a disabled button holds no focus. When focus is on it, in
 /// the dialog's own `focus` but in none of its `fields` (a click leaves
-/// focus in the field it was in), focus moves to `focus`, around the
-/// dialog's controls. So it stays in the dialog, which closes itself once
+/// focus in the field it was in), focus moves to the button's wrapper,
+/// `primary` (`held_button`). So it stays in the dialog, which closes itself once
 /// done only while focus is in it.
 pub(in crate::desktop::view) fn keep_focus_in(
     focus: &FocusHandle,
+    primary: &FocusHandle,
     fields: &[&Entity<InputState>],
     window: &mut Window,
     cx: &mut App,
@@ -119,17 +165,44 @@ pub(in crate::desktop::view) fn keep_focus_in(
     let in_field = fields
         .iter()
         .any(|field| field.read(cx).focus_handle(cx).contains_focused(window, cx));
-    if focus.contains_focused(window, cx) && !focus.is_focused(window) && !in_field {
-        window.focus(focus, cx);
+    if focus.contains_focused(window, cx) && !in_field {
+        window.focus(primary, cx);
+    }
+}
+
+/// After a keyed press that was refused, with the dialog still open
+/// (fix round 1, M4): while focus waits on the primary button's wrapper,
+/// `primary`, and the refusal's note is under the field `noted`, focus
+/// goes to that field. Otherwise it stays on the button, which Enter
+/// presses again once it is offered.
+pub(in crate::desktop::view) fn focus_the_note(
+    primary: &FocusHandle,
+    noted: Option<&Entity<InputState>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if let Some(field) = noted
+        && primary.is_focused(window)
+    {
+        let field = field.clone();
+        window.defer(cx, move |window, cx| {
+            field.update(cx, |input, cx| input.focus(window, cx))
+        });
     }
 }
 
 /// The dialog: its fields, each with its note, what the last Create said,
 /// and Cancel and Create.
 impl Render for CreateDialog {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let fields = self.fields(cx);
         let note = |field| required_message(&fields, field).map(str::to_owned);
+        let noted = match &self.inputs {
+            _ if note(Field::Title).is_some() => Some(&self.title),
+            Inputs::Ticket { ticket_type } => note(Field::Type).is_some().then_some(ticket_type),
+            Inputs::Document(place) => self.path_note().is_some().then_some(&place.file_name),
+        };
+        focus_the_note(&self.primary, noted, window, cx);
         let body = v_flex()
             .id("create-dialog")
             .test_support()
@@ -172,12 +245,12 @@ impl Render for CreateDialog {
                 let _ = entity.update(cx, |dialog, cx| dialog.cancel(window, cx));
             }
         });
-        let create = button(
+        let create = held_button(
             "create-ok",
             CREATE,
-            true,
             self.offered(cx),
             self.reason(cx),
+            (&self.primary, window, cx),
             move |_, window, cx| {
                 let _ = entity.update(cx, |dialog, cx| {
                     let fields = match &dialog.inputs {
@@ -186,7 +259,7 @@ impl Render for CreateDialog {
                             vec![&dialog.title, &place.folder, &place.file_name]
                         }
                     };
-                    keep_focus_in(&dialog.focus, &fields, window, cx);
+                    keep_focus_in(&dialog.focus, &dialog.primary, &fields, window, cx);
                     dialog.create(window, cx)
                 });
             },

@@ -39,7 +39,7 @@ use gpui_kit::{
 use manyhands::results::ResultCode;
 
 use super::{
-    create::{CANCEL, CREATE, button, field, keep_focus_in},
+    create::{CANCEL, CREATE, button, field, focus_the_note, held_button, keep_focus_in},
     item::text,
     workspace::Workspace,
 };
@@ -95,6 +95,8 @@ pub(crate) struct NewFolderDialog {
     /// Around the dialog's own controls: it closes itself only while focus
     /// is here.
     focus: FocusHandle,
+    /// Create's wrapper, where a keyed press of it parks focus (`held_button`).
+    primary: FocusHandle,
     _events: Subscription,
     _operations: Subscription,
 }
@@ -200,6 +202,7 @@ impl NewFolderDialog {
             made: false,
             answer: None,
             focus: cx.focus_handle(),
+            primary: cx.focus_handle(),
             _events: events,
             _operations: operations,
         }
@@ -311,9 +314,15 @@ impl NewFolderDialog {
 /// The dialog: what a new folder is, the Folder name with its note, the
 /// full path, what the last Create was answered, and Cancel and Create.
 impl Render for NewFolderDialog {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (danger, muted) = (cx.theme().danger, cx.theme().muted_foreground);
         let note = name_refused(&self.name.read(cx).value()).map(str::to_owned);
+        focus_the_note(
+            &self.primary,
+            note.is_some().then_some(&self.name),
+            window,
+            cx,
+        );
         let answer = self.answer.as_ref().map(|answer| {
             let (words, code) = match answer {
                 Answer::Exists => (FOLDER_EXISTS.to_owned(), None),
@@ -336,15 +345,15 @@ impl Render for NewFolderDialog {
                 let _ = entity.update(cx, |dialog, cx| dialog.cancel(window, cx));
             }
         });
-        let create = button(
+        let create = held_button(
             "new-folder-ok",
             CREATE,
-            true,
             self.offered(cx),
             self.reason(cx).map(str::to_owned),
+            (&self.primary, window, cx),
             move |_, window, cx| {
                 let _ = entity.update(cx, |dialog, cx| {
-                    keep_focus_in(&dialog.focus, &[&dialog.name], window, cx);
+                    keep_focus_in(&dialog.focus, &dialog.primary, &[&dialog.name], window, cx);
                     dialog.create(cx)
                 });
             },

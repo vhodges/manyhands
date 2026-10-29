@@ -46,7 +46,7 @@ use self::document::Place;
 /// 24).
 pub(in crate::desktop::view) use self::{
     document::PathCheck,
-    form::{button, field, keep_focus_in},
+    form::{button, field, focus_the_note, held_button, keep_focus_in},
 };
 use super::workspace::Workspace;
 use crate::desktop::{
@@ -114,6 +114,8 @@ pub(crate) struct CreateDialog {
     /// Around the dialog's own controls: it closes itself only while focus
     /// is here, so never a dialog opened above it (Task 23 fix 1).
     focus: FocusHandle,
+    /// Create's wrapper, where a keyed press parks focus (`form::held_button`).
+    primary: FocusHandle,
     ids: Generations,
     id_read: Option<Task<()>>,
     /// Why the last Create made nothing.
@@ -268,6 +270,7 @@ impl CreateDialog {
             creating: false,
             created: false,
             focus: cx.focus_handle(),
+            primary: cx.focus_handle(),
             ids: Generations::default(),
             id_read: None,
             failure: None,

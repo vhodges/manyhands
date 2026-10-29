@@ -57,7 +57,10 @@ use manyhands::{
 };
 
 use super::{
-    create::{CANCEL, FILE_NAME, FOLDER, PathCheck, button, field, keep_focus_in},
+    create::{
+        CANCEL, FILE_NAME, FOLDER, PathCheck, button, field, focus_the_note, held_button,
+        keep_focus_in,
+    },
     item::{ItemPane, text},
 };
 use crate::desktop::{
@@ -185,6 +188,8 @@ pub(crate) struct MoveDialog {
     /// Around the dialog's own controls: it closes itself only while focus
     /// is here, so never a dialog opened above it.
     focus: FocusHandle,
+    /// Move's wrapper, where a keyed press of it parks focus (`held_button`).
+    primary: FocusHandle,
     _events: Vec<Subscription>,
     _operations: Subscription,
 }
@@ -275,6 +280,7 @@ impl MoveDialog {
             moved: false,
             failure: None,
             focus: cx.focus_handle(),
+            primary: cx.focus_handle(),
             _events: events,
             _operations: operations,
         };
@@ -403,7 +409,9 @@ impl MoveDialog {
 /// The dialog: the Folder and the File name, with the destination's note,
 /// what the last Move said, and Cancel and Move.
 impl Render for MoveDialog {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let noted = self.check.note().is_some().then_some(&self.file_name);
+        focus_the_note(&self.primary, noted, window, cx);
         let (danger, muted) = (cx.theme().danger, cx.theme().muted_foreground);
         let failure = self.failure.as_ref().map(|failure| {
             let (words, code) = failure.words();
@@ -421,16 +429,16 @@ impl Render for MoveDialog {
                 let _ = entity.update(cx, |dialog, cx| dialog.cancel(window, cx));
             }
         });
-        let move_button = button(
+        let move_button = held_button(
             "move-ok",
             MOVE_ACTION,
-            true,
             self.offered(),
             self.reason(),
+            (&self.primary, window, cx),
             move |_, window, cx| {
                 let _ = entity.update(cx, |dialog, cx| {
                     let fields = [&dialog.folder, &dialog.file_name];
-                    keep_focus_in(&dialog.focus, &fields, window, cx);
+                    keep_focus_in(&dialog.focus, &dialog.primary, &fields, window, cx);
                     dialog.move_document(cx)
                 });
             },
