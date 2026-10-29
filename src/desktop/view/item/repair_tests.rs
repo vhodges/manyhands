@@ -1242,9 +1242,10 @@ async fn escape_while_the_repair_runs_gives_focus_back_to_the_text(cx: &mut Test
 
 // Task 27 fix 1.
 
-/// A3's words: what closing the tab says once the repair was sent.
+/// A3's words (ruling D2): what the question says once the repair was
+/// sent, on closing the tab and on the view's Cancel alike.
 const SENT_BODY: &str =
-    "Your repair was sent and may already be made. Closing the tab does not undo it.";
+    "Your repair was sent and may already be made. Discarding does not undo it.";
 
 fn tab_count(shell: &Shell, cx: &mut TestAppContext) -> usize {
     shell
@@ -1307,8 +1308,9 @@ async fn closing_while_the_repair_runs_says_it_was_sent(cx: &mut TestAppContext)
 }
 
 /// A3: after an answer whose effect is unknown (`BeforeRequestSettlement`),
-/// closing the tab says the repair was sent and may already be made. Cancel
-/// keeps the tab and the text.
+/// closing the tab says the repair was sent and may already be made, and
+/// so does the view's own Cancel (ruling D2). Cancel keeps the tab and the
+/// text.
 #[gpui_kit::test]
 async fn closing_after_a_lost_repair_answer_says_it_was_sent(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |fixture, root| {
@@ -1331,6 +1333,11 @@ async fn closing_after_a_lost_repair_answer_says_it_was_sent(cx: &mut TestAppCon
     assert!(!shell.present("repair-discard-dialog", cx));
     assert_eq!(tab_count(&shell, cx), 1, "Cancel keeps the tab");
     assert_eq!(repair_text(&shell, cx), typed, "and the text");
+
+    shell.click("repair-cancel-button", cx);
+    assert_eq!(discard_prompt(&shell, cx), prompt_saying(SENT_BODY));
+    shell.keys("escape", cx);
+    assert!(shell.present("repair-source", cx), "the view stays");
 }
 
 /// A3: every other state keeps the first words. Edited and never sent,

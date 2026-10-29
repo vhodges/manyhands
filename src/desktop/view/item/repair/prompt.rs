@@ -2,8 +2,9 @@
 //! ruling, Task 25): "Discard your repair?", with Cancel, the default
 //! (Enter and Escape) and first Tab stop, and Discard. It says the changes
 //! are saved nowhere, or, once the repair was sent and may already be made
-//! (it runs, or its answer's effect is unknown), that closing the tab does
-//! not undo it (Task 27 fix 1, A3). It names no file and holds no text.
+//! (it runs, or its answer's effect is unknown), that discarding does not
+//! undo it (Task 27 fix 1, A3 and D2), on closing the tab and on the view's
+//! Cancel alike. It names no file and holds no text.
 //! Focus goes back where it was when it closes.
 
 use std::rc::Rc;
@@ -32,7 +33,7 @@ pub(crate) const DISCARD_BODY: &str = "Your changes to this file are not saved a
 /// The question's words once the repair was sent: while it runs, or after
 /// an answer whose effect is unknown.
 pub(crate) const SENT_BODY: &str =
-    "Your repair was sent and may already be made. Closing the tab does not undo it.";
+    "Your repair was sent and may already be made. Discarding does not undo it.";
 
 /// What the question chose.
 #[derive(Clone, Copy, PartialEq, Eq)]
