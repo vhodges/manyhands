@@ -10,6 +10,8 @@ pub use production::*;
 mod comment;
 #[path = "mutation_remote/comment_domain.rs"]
 mod comment_domain;
+#[path = "mutation_remote/conflict_read.rs"]
+mod conflict_read;
 #[path = "support/conformance.rs"]
 mod conformance;
 #[allow(dead_code)]
@@ -52,6 +54,7 @@ fn main() {
         .chain(merging::CASES)
         .chain(comment_domain::CASES)
         .chain(comment::CASES)
+        .chain(conflict_read::CASES)
         .copied()
         .collect();
     let controls: Vec<_> = OUTPUT_CONTROLS

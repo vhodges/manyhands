@@ -1086,6 +1086,55 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
                 .to_vec(),
         ),
     ]);
+    use manyhands::repository::{
+        ConflictPathKind, ConflictPathStructure, ConflictReadEligibility, ConflictReadNextAction,
+        ConflictStage, ConflictState, ConflictTarget,
+    };
+    let conflict = "conflict.schema.json";
+    let conflict_path = "conflict_path.schema.json";
+    enumerations.extend([
+        (
+            conflict,
+            "target",
+            ConflictTarget::ALL.map(ConflictTarget::as_str).to_vec(),
+        ),
+        (
+            conflict,
+            "stage",
+            ConflictStage::ALL.map(ConflictStage::as_str).to_vec(),
+        ),
+        (
+            conflict,
+            "state",
+            ConflictState::ALL.map(ConflictState::as_str).to_vec(),
+        ),
+        (
+            conflict,
+            "next_action",
+            ConflictReadNextAction::ALL
+                .map(ConflictReadNextAction::as_str)
+                .to_vec(),
+        ),
+        (
+            conflict,
+            "eligibility",
+            ConflictReadEligibility::ALL
+                .map(ConflictReadEligibility::as_str)
+                .to_vec(),
+        ),
+        (
+            conflict_path,
+            "kind",
+            ConflictPathKind::ALL.map(ConflictPathKind::as_str).to_vec(),
+        ),
+        (
+            conflict_path,
+            "structure",
+            ConflictPathStructure::ALL
+                .map(ConflictPathStructure::as_str)
+                .to_vec(),
+        ),
+    ]);
     enumerations
 }
 

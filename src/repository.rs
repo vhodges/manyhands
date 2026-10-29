@@ -93,8 +93,10 @@ use recovery::{
     touch_indexing, transition_indexing,
 };
 pub use remote::{
-    AutomaticBackoff, AutomaticPollEligibility, ConfirmedCommitIdentity, ConflictEligibility,
-    ConflictObservation, ConflictPathToken, EphemeralSynchronizationConflictSides,
+    AutomaticBackoff, AutomaticPollEligibility, ConfirmedCommitIdentity, ConflictDto,
+    ConflictEligibility, ConflictObservation, ConflictPathDto, ConflictPathKind,
+    ConflictPathStructure, ConflictPathToken, ConflictReadEligibility, ConflictReadNextAction,
+    ConflictStage, ConflictState, ConflictTarget, EphemeralSynchronizationConflictSides,
     ExpectedConfiguration, ObservePublicationRemoteRequest, PollCompletion, PollDisposition,
     PollIneligibility, PollPublicationRemoteRequest, PollTargetReport, PollingInterval,
     PublishPendingReason, RedactedConflictBytes, RemoteContextSnapshot, RemoteContextState,
@@ -113,6 +115,13 @@ pub use remote::{
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
+/// The conflict read's string tokens and display rule, for the
+/// source-included test targets that pin them.
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) use remote::conflict_read::{
+    display_path as conflict_display_path, observation_text, path_tokens,
+};
 #[cfg(test)]
 #[allow(unused_imports)] // Used by the source-included isolated SSH test runner.
 pub(crate) use remote::observation_tests;

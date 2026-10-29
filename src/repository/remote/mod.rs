@@ -1,8 +1,13 @@
+pub(super) mod conflict_read;
 mod merge;
 pub(super) mod observation;
 mod poll;
 mod refs;
 pub(super) mod sync;
+pub use conflict_read::{
+    ConflictDto, ConflictPathDto, ConflictPathKind, ConflictPathStructure, ConflictReadEligibility,
+    ConflictReadNextAction, ConflictStage, ConflictState, ConflictTarget,
+};
 pub use merge::{
     ConfirmedCommitIdentity, ConflictEligibility, ConflictObservation, ConflictPathToken,
     ExpectedConfiguration, RedactedConflictBytes, ResolveSynchronizationOutcome,

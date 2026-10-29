@@ -57,6 +57,9 @@ mod replay;
 mod reply;
 mod settle;
 
+/// The synchronization a comment's operation publishes it by, for the
+/// conflict read (R-5).
+pub(super) use bind::comment::comment_synchronization;
 use bind::{
     Binding, Confirmed,
     abandon::OperationAbandonBinding,

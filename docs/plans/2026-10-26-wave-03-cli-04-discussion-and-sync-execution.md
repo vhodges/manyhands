@@ -594,6 +594,7 @@ new ticket comment (ruling P4).
 | 1 | `feat: merge divergent history in item and repo sync`; fix round 1 `fix: answer busy for a sync beside a pending merge, and name a cancelled merge` | Verify list passed: 37, 44, 72, 129 and 113 SSH cases; fix round 1: 26 `c4_merging`, 5 E-3, 123 `--lib mutation`, 44 | fix round 1 applied; re-review pending | See "Task 1: Merging Synchronization" |
 | 2a | `feat: let comment submission take a synchronizer` | Verify list passed: 5 `c4_comment_domain`, 41 and 25 SSH cases, 1344 `--lib repository`, clippy, fmt | pending | The author moves to Task 2b (ruling Q2). See "Task 2a: The Library's Comment Submission" |
 | 2b | `feat: bind comment submission with authorship and safe points`; pre-review fix round 1 `fix: keep a comment whose branch was deleted cancellable, and release an unwritten refused binding`; review fix round 2 `fix: finish a comment refused for its input, and keep release failures` | Verify list passed: 148, 41 SSH cases; 383, 129, 44, 72; 123 `--lib mutation`; clippy, fmt; fix rounds: see their entries | review fix round 2 applied; re-review pending | Findings 1 and 2 fixed by controller ruling in fix round 1; review findings in fix round 2. See "Task 2b: The Comment Submission Binding" |
+| 3 | `feat: read synchronization conflicts with string tokens` | Verify list passed: 21 `c4_conflict_read` SSH cases, 72, 44, clippy; `--lib remote`, `--lib local_sync`, `--lib integration`; fmt | pending | Fact 86 holds. See "Task 3: Conflict Inspection Read" |
 
 ### Task 1: Merging Synchronization
 
@@ -1358,4 +1359,173 @@ No golden changed.
 | `test --all-features --test mutation_replay` | 383 passed |
 | `test --all-features --lib mutation` | 123 passed |
 | `clippy --all-targets --all-features -- -D warnings` | passed |
+| `fmt --check` | passed |
+
+### Task 3: Conflict Inspection Read
+
+The commit is `feat: read synchronization conflicts with string tokens`, on
+`54cafc4`. `origin/main` is still `a372edb`, and
+`git merge-tree --write-tree HEAD origin/main` exits 0. No subagent was
+dispatched.
+
+**What changed.**
+
+- `remote/conflict_read.rs` (new):
+  - `RepositoryService::show_conflict(repo, operation_id) ->
+    Result<ConflictDto, ReadError>`.
+  - `ConflictDto` and `ConflictPathDto`, as the design's tables, with
+    `request_id` (null until Task 4a). They derive `Debug` and
+    `Serialize`, the one exception the Global Constraints allow.
+  - `contract_enum!`s `ConflictState`, `ConflictReadNextAction`,
+    `ConflictPathKind` and `ConflictPathStructure`. Three more close the
+    design's other value sets: `ConflictTarget` (`primary`, `document`,
+    `ticket`), `ConflictStage` (`context`, `primary`) and
+    `ConflictReadEligibility` (`eligible_canonical`,
+    `external_resolution_required`), so that E-8 ties every schema enum
+    to Rust.
+  - `pub(crate) fn path_tokens` and `pub(crate) fn observation_text`, as
+    the brief names them (ruling P2), and `pub(crate) fn display_path`
+    (R-11's rule, copied from the gate's).
+- **R-9's encoding.** Each digest starts with a domain string
+  (`manyhands-conflict-observation-v1`, `manyhands-conflict-path-v1`).
+  Each field follows as a big-endian `u64` length and its bytes, as the
+  gate's `observe::field` writes it.
+  - The observation hashes the operation ID, window number, stage
+    ordinal, fingerprint, head, configuration digest and root.
+  - A path token hashes the observation's digest, the path's position in
+    the inspection's `paths`, the path bytes, and each side's OID and mode.
+    An absent side is two empty fields.
+- **The read, in order.**
+  1. A read-only session looks the ID up among the gate's records
+     (`local_sync::record::owned_identity`; `invalid_input`, R-37).
+  2. It resolves a comment's operation to its synchronization through
+     `comment_synchronization` (R-5).
+  3. It reads the remote record, the newest window's pending step and the
+     newest step with a conflict digest, whether a resolution attempt is
+     recorded for that step, and the merge metadata its merge recorded.
+     - An ID no remote record has, but another operation of the repository
+       does (`show_operation`), is `invalid_input`; otherwise
+       `operation_not_found`.
+     - A remote operation that is no synchronization is `invalid_input`.
+  4. Then by the step:
+     - **`conflict_pending`.** The library's inspection gives the
+       observation and tokens. `next_action` is `resolve` exactly when the
+       set is non-empty and every path is `EligibleCanonical`, which is
+       `conflict_next`'s rule. Eligibility is that one value for the set.
+     - **`resolution_prepared` with written paths.** The same, with
+       `retry_resolution` and `historical: true` (fact 86).
+     - **The commit prepared.** `resolution_prepared` with `resume`.
+     - **No pending step.** `complete` if the record completed;
+       `cancelled` with `synchronize` if it was cancelled; else, with the
+       conflict's step applied, `resolved` (an attempt is recorded) or
+       `repaired` (a restart observed an outside repair), each with
+       `resume`.
+  5. **When the inspection fails at `conflict_pending`.** A held lease
+     or a registry failure is answered as itself (`busy`). Any other
+     failure means Git no longer holds the recorded conflict. The read
+     then judges an outside repair, under the repository's lease, by
+     fact 35 as `reconcile_pending_candidate` applies it:
+     - HEAD has exactly the parents `[local, incoming]`;
+     - the target is clean, except that the operation's own merge
+       metadata may remain if every member matches the recorded digests;
+     - `validates_external_integration` accepts the commit.
+
+     Accepted, the answer is `repaired`, `resume`. Otherwise it is
+     `repair_refused`, `external_repair`. The clean check compares the
+     index with HEAD's tree through a diff. `require_clean_target_with`
+     writes the index's tree to compare it, and this read writes nothing.
+- **Per path.** Kind and structure come from
+  `integration::validate::classify_conflict_entry`, called on each index
+  conflict the inspection issued a token for. The `IndexConflict` is
+  rebuilt from the token: its path, and each stage's OID and mode.
+  libgit2 groups a conflict's stages by path, and classification reads
+  only those fields and the blobs, so no second index read is needed.
+  Sides are read with the library's `read_synchronization_conflict`, one
+  call per path (fact 32). `content_available` is true exactly when it
+  returns sides. `ExternalResolutionRequired` from it means none. Paths
+  are sorted by raw bytes; tokens keep the inspection's positions.
+- **Errors** are placed as `ResolvedRepository::failure` places them: the
+  scope names the repository, and `index_unavailable` offers
+  `index.rebuild` with its root. `at_root` is private to `read/`, so this
+  is a local copy.
+- **Exports.** `remote/mod.rs` declares `pub(super) mod conflict_read`
+  and re-exports the DTOs and enums. `src/repository.rs` adds them to
+  `pub use remote::{…}`. Under `cfg(test)`, it re-exports the three
+  crate-private functions for the source-included test targets;
+  `display_path` becomes `conflict_display_path`.
+  `mutation/mod.rs` re-exports `comment_synchronization` as
+  `pub(super)`. `read/mod.rs` and `read/dto.rs` needed no change: the
+  types reach `manyhands::repository` beside the other remote types.
+- **Schemas.** `conflict.schema.json` and `conflict_path.schema.json`,
+  closed. `conflict` is a data root (E-7: `DATA_ROOTS` 52 → 53).
+  `conflict_path` is reached through `$ref`.
+- **Named edits.** E-7 (the data root) and E-8 (`contract_enumerations`
+  gains the seven enumerations of the two schemas).
+- **Goldens.** `conflict_show_conflict_pending`, `conflict_show_repaired`
+  and `conflict_show_complete` (read goldens, registered in
+  `golden::CASES`), written with `MANYHANDS_UPDATE_GOLDEN=1`, read, and
+  then compared in the Verify run.
+
+**Cases** (`tests/mutation_remote/conflict_read.rs`, 21, all `c4_conflict_read_`):
+
+| Row or focus | Case |
+| --- | --- |
+| Conflict pending, canonical regular | `canonical`, with the golden, the token resolving to the library's, and a second read equal |
+| Any path noncanonical or structural | `noncanonical_or_structural`: a ticket (sides), a binary file and an executable (no sides) |
+| Incompatible closures (R-40, Step 4) | `incompatible_closures`, and the library refuses to resolve the set |
+| Markers removed | `markers_removed`: the same read as before |
+| Stopped after writing paths | `resolution_prepared` (`ResolutionAfterPathWrite`): the same observation, tokens and sides |
+| Commit prepared, ref not moved | `commit_prepared` (`ResolutionAfterCandidatePrepared`) |
+| Resolved, not published | `resolved` |
+| Resolved, then a local save | `resolved_then_saved`: an item's branch, saved through `save_ticket` |
+| Repaired outside | `repaired`, with the golden: the metadata left, then cleaned; then a restart publishes it, and the read is `complete` |
+| Staged, or wrong parents | `repair_refused`: staged, one parent, reversed parents. A restart refuses each, and each undone reads as pending again |
+| Merge aborted outside | `merge_aborted` |
+| Publication cancelled | `cancelled` (an observer cancels the restart) |
+| Published | `complete`, with the golden |
+| Lease held | `busy` |
+| Unknown ID | `unknown_operation` |
+| No synchronization | `not_a_synchronization` (a `ticket create`'s operation) |
+| A local sync (decision 19) | `local_sync` |
+| R-5 | `comment_operation`: by the comment's ID and by the synchronization's |
+| R-12 | `writes_nothing`: the registry's bytes, with the WAL checkpointed before and after, unchanged across a live read, an unknown ID and a held lease |
+| Review Focus 2 | `hostile_path`: an escape sequence and a newline, escaped once; no raw control byte in `Debug`, JSON or a diagnostic; its token resolves |
+| R-11 | `display_path`: the rule pinned byte for byte, and on Linux the same in a read |
+
+The read's `next_action` is checked against the synchronization's own
+`conflict.next_action` in five cases. They agree.
+
+**Decisions to review.**
+
+1. **No conflict recorded.** A synchronization that recorded no conflict,
+   in any phase, is `invalid_input`: the DTO needs the conflict's stage
+   and parents. Its terminal rows (`cancelled`, `complete`) are read for
+   a synchronization that met one.
+2. **A failed inspection at `ResolutionPrepared`.** It answers the
+   inspection's own code (`external_change` or `recovery_required`), as
+   the library's restart refuses that state. No table row covers it.
+3. **A lock not mirrored.** The repair judgement does not mirror
+   `refuse_local_reconciliation_locks`. A Git lock left in the target
+   makes the read say `repaired` where a restart answers
+   `recovery_required` until the lock is gone.
+4. **Platforms.** The hostile-path case returns early on Windows, which
+   cannot name such a file. The display-path read runs on Linux only
+   (macOS refuses the non-UTF-8 byte). Its pure-function pin runs
+   everywhere.
+5. **Leases.** Blobs are read for classification outside the lease. The
+   lease is taken by every library inspection and side read, and by the
+   repair judgement.
+
+**Commands** (each `devenv shell -- cargo … --locked`):
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --test mutation_remote -- c4_conflict_read` (RED, before the implementation) | did not compile: only the missing read, types and functions |
+| `test --all-features --test mutation_remote -- c4_conflict_read` | 21 SSH cases passed (5 min 53 s) |
+| `test --all-features --test read_contract` | 72 passed |
+| `test --all-features --test mutation_contract` | 44 passed |
+| `clippy --all-targets --all-features -- -D warnings` | passed |
+| `test --all-features --lib remote` | 477 passed |
+| `test --all-features --lib local_sync` | 164 passed |
+| `test --all-features --lib integration` | 26 passed |
 | `fmt --check` | passed |
