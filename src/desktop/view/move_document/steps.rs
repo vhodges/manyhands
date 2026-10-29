@@ -13,9 +13,9 @@ use manyhands::{
     results::{CheckpointEffect, ResultCode},
 };
 
-use super::{Failure, MOVE_STALE, MOVE_WHILE_VIEWING, MoveDialog, Moved, Sent, Then, context_of};
+use super::{Failure, MOVE_WHILE_VIEWING, MoveDialog, Moved, Sent, Then, context_of};
 use crate::desktop::{
-    model::{create::path_held, stamp::ViewScope},
+    model::stamp::ViewScope,
     services::{
         ReadKind, ReadResult,
         requests::{Intent, Lane, RequestState},
@@ -26,7 +26,7 @@ use crate::desktop::{
 impl MoveDialog {
     /// Move: R-23 asked of the tab again, then the document read again.
     pub(crate) fn move_document(&mut self, cx: &mut Context<Self>) {
-        if !self.offered(cx) {
+        if !self.offered() {
             return;
         }
         let PathCheck::Free(destination) = &self.check else {
@@ -37,7 +37,7 @@ impl MoveDialog {
             Some(pane) => pane.read(cx).move_blocked(cx),
             None => Some(MOVE_WHILE_VIEWING),
         };
-        self.failure = blocked.map(|words| Failure::Words(words.to_owned()));
+        self.failure = blocked.map(Failure::Blocked);
         if self.failure.is_none() {
             self.running = true;
             self.read_again(destination, Then::Send, cx);
@@ -67,9 +67,11 @@ impl MoveDialog {
         ));
     }
 
-    /// The document as read again: at the destination it is moved; where
-    /// the dialog read it, Move goes on to observe the destination; anywhere
-    /// else, or once the library found it changed, it is stale.
+    /// The document as read again: at the destination it is moved; anywhere
+    /// but where the dialog read it, it is stale. Where it was read, Move
+    /// goes on to observe the destination and send; after `external_change`
+    /// the destination is observed to tell a file put there from a changed
+    /// source (fix 1, M2).
     fn read_landed(
         &mut self,
         destination: String,
@@ -89,19 +91,23 @@ impl MoveDialog {
                 let reload = matches!(then, Then::Send);
                 self.done(reload, cx)
             }
-            Then::Send if item.path == self.source.path => {
+            _ if item.path != self.source.path => self.refused(Failure::Stale, cx),
+            Then::Send => {
                 self.source.context = context_of(&item);
-                self.observe_destination(destination, item.observation, cx);
+                self.observe_destination(destination, then, item.observation, cx);
             }
-            Then::Send | Then::Judge => self.refused(Failure::Words(MOVE_STALE.to_owned()), cx),
+            Then::Judge => self.observe_destination(destination, then, None, cx),
         }
     }
 
-    /// Observes the destination again: a file there refuses the move;
-    /// nothing there sends it, with the source's observation and this one.
+    /// Observes the destination again: a file there refuses the move.
+    /// Nothing there sends it, with the source's observation and this one;
+    /// or, once the library answered `external_change`, says the source
+    /// changed.
     fn observe_destination(
         &mut self,
         destination: String,
+        then: Then,
         observation: Option<String>,
         cx: &mut Context<Self>,
     ) {
@@ -118,9 +124,12 @@ impl MoveDialog {
                     ReadResult::Ok(observed) if observed.exists => {
                         dialog.collision(destination, cx)
                     }
-                    ReadResult::Ok(observed) => {
-                        dialog.send(destination, observation, observed.observation, cx)
-                    }
+                    ReadResult::Ok(observed) => match then {
+                        Then::Send => {
+                            dialog.send(destination, observation, observed.observation, cx)
+                        }
+                        Then::Judge => dialog.refused(Failure::Stale, cx),
+                    },
                     ReadResult::Busy => dialog.refused(Failure::of(ResultCode::Busy), cx),
                     ReadResult::Failed(failure) => dialog.refused(Failure::of(failure.code), cx),
                 }
@@ -196,7 +205,7 @@ impl MoveDialog {
     /// An attempt's answer, `committed` when its checkpoint committed:
     /// the move is in the document's branch, whatever else is still owed
     /// (a hand-off the operation area offers).
-    fn answered(
+    pub(super) fn answered(
         &mut self,
         code: ResultCode,
         committed: bool,
@@ -223,7 +232,7 @@ impl MoveDialog {
             self.running = false;
             cx.notify();
         } else {
-            self.refused(Failure::Words(path_held(&destination)), cx);
+            self.refused(Failure::Held(destination), cx);
         }
     }
 

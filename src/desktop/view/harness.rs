@@ -258,6 +258,29 @@ impl Shell {
         wait_until(cx, &operations, move |operations, _| done(operations)).await;
     }
 
+    /// Draws frames, with the worker and the reads running, until `done`
+    /// holds of the window, then draws one more. Panics after `WAIT` of
+    /// real time, saying that `what` did not happen. The test allows
+    /// parking.
+    pub(crate) async fn until_drawn(
+        &self,
+        cx: &mut TestAppContext,
+        what: &str,
+        done: impl Fn(&Shell, &mut TestAppContext) -> bool,
+    ) {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            self.frame(cx, |_, _| ());
+            self.run(cx);
+            if done(self, cx) {
+                self.frame(cx, |_, _| ());
+                return;
+            }
+            assert!(Instant::now() < deadline, "{what} did not happen");
+            cx.executor().timer(POLL).await;
+        }
+    }
+
     /// Waits until the request `id` has ended: finished, removed or not
     /// sent.
     pub(crate) async fn until_ended(&self, id: DesktopRequestId, cx: &mut TestAppContext) {

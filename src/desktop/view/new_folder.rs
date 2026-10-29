@@ -10,12 +10,14 @@
 //!   `.` or `..`, or starts with `.`; anything else the library refuses is
 //!   shown with its message and code.
 //! - **Create**, on the user's action only (contract 11), sends `folder
-//!   create`. Its `ok` closes the dialog (`Made`), and the tree reads its
-//!   folders again, as any finished request of its repository makes it:
-//!   folder creation refreshes the index itself, so no refresh is sent
-//!   here (R-24). `already_applied`, a retry's answer, reads "Folder
-//!   exists", and the dialog stays; so does every other answer. Each
-//!   attempt of its request is followed, a retry's included.
+//!   create`. Its `ok` closes the dialog (`Made`), as does
+//!   `discovery_pending`, a folder made whose index refresh is owed (fix
+//!   1, M1); the tree reads its folders again, as any finished request of
+//!   its repository makes it: folder creation refreshes the index itself,
+//!   so no refresh is sent here (R-24). `already_applied`, a retry's
+//!   answer, reads "Folder exists", and the dialog stays; so does every
+//!   other answer. Each attempt of its request is followed, a retry's
+//!   included.
 //! - **Keyboard.** Focus starts in the Folder name; Enter creates, when
 //!   Create is offered; Escape and Cancel close the dialog, but not while a
 //!   create runs, and focus goes back where it was.
@@ -266,7 +268,9 @@ impl NewFolderDialog {
                 cx.notify();
                 return;
             }
-            RequestState::Finished(_, ResultCode::Ok, ..) => {
+            // A folder made, or found, whose index refresh is owed is made: the
+            // index alone owes work (fix 1, M1).
+            RequestState::Finished(_, ResultCode::Ok | ResultCode::DiscoveryPending, ..) => {
                 self.running = false;
                 self.made = true;
                 cx.emit(Made);

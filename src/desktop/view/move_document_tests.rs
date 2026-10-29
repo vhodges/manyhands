@@ -13,10 +13,7 @@
 //! through the window, into the field holding focus. The ruled words are
 //! literals: the tests fix them.
 
-use std::{
-    path::{Path, PathBuf},
-    time::{Duration, Instant},
-};
+use std::path::{Path, PathBuf};
 
 use git2::Repository;
 use gpui_kit::{
@@ -24,8 +21,8 @@ use gpui_kit::{
 };
 use manyhands::{
     repository::{
-        CancellationToken, DocumentMoveInput, FailurePoint, ItemDto, ItemDtoKind, Mutation,
-        MutationCall, NoProgress, RepositoryService, RequestId, keys::SessionCredentials,
+        CancellationToken, DocumentMoveInput, FailurePoint, ItemContextKind, ItemDto, ItemDtoKind,
+        Mutation, MutationCall, NoProgress, RepositoryService, RequestId, keys::SessionCredentials,
     },
     results::ResultCode,
 };
@@ -44,7 +41,7 @@ use crate::desktop::{
     },
     view::{
         editor::host::EditorHost,
-        harness::{Shell, WAIT, key},
+        harness::{Shell, key},
         item::{ChipField, ItemPane},
     },
 };
@@ -92,26 +89,6 @@ fn open(shell: &Shell, root: &Path, id: &str, cx: &mut TestAppContext) {
         .workspace
         .update(cx, |workspace, cx| workspace.open_item(target, cx));
     shell.run(cx);
-}
-
-/// Draws frames, with the worker and the reads running, until `done`.
-async fn until(
-    shell: &Shell,
-    cx: &mut TestAppContext,
-    what: &str,
-    done: impl Fn(&Shell, &mut TestAppContext) -> bool,
-) {
-    let deadline = Instant::now() + WAIT;
-    loop {
-        shell.frame(cx, |_, _| ());
-        shell.run(cx);
-        if done(shell, cx) {
-            shell.frame(cx, |_, _| ());
-            return;
-        }
-        assert!(Instant::now() < deadline, "{what} did not happen");
-        cx.executor().timer(Duration::from_millis(10)).await;
-    }
 }
 
 fn pane(shell: &Shell, cx: &mut TestAppContext) -> Entity<ItemPane> {
@@ -221,7 +198,7 @@ fn retype(shell: &Shell, name: &str, typed: &str, cx: &mut TestAppContext) {
 }
 
 fn offered(cx: &mut TestAppContext) -> bool {
-    dialog(cx).read_with(cx, |dialog, cx| dialog.offered(cx))
+    dialog(cx).read_with(cx, |dialog, _| dialog.offered())
 }
 
 /// Opens Move… from the sheet, and finds the destination checked.
@@ -319,11 +296,12 @@ fn working(shell: &Shell) {
 /// Clicks Edit and waits for the edit editor.
 async fn edit(shell: &Shell, cx: &mut TestAppContext) -> Entity<EditorHost> {
     shell.click("item-edit", cx);
-    until(shell, cx, "the edit editor opening", |shell, cx| {
-        pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_some())
-            && phase(shell, cx) == Phase::Editing
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the edit editor opening", |shell, cx| {
+            pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_some())
+                && phase(shell, cx) == Phase::Editing
+        })
+        .await;
     pane(shell, cx)
         .read_with(cx, |pane, _| pane.edit_host())
         .unwrap()
@@ -388,13 +366,16 @@ async fn move_from_the_sheet_commits_both_paths_and_the_tab_follows(cx: &mut Tes
     assert!(moves(&shell, cx).is_empty(), "Enter moves nothing yet");
 
     retype(&shell, "folder", "docs/archive", cx);
-    until(&shell, cx, "the destination check", |_, cx| offered(cx)).await;
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
     assert!(!shell.present("move-ok-note", cx), "Move says nothing");
     shell.keys("enter", cx);
-    until(&shell, cx, "the dialog closing", |shell, cx| {
-        !dialog_open(shell, cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the dialog closing", |shell, cx| {
+            !dialog_open(shell, cx)
+        })
+        .await;
 
     let sent = moves(&shell, cx);
     assert_eq!(sent.len(), 1, "one move");
@@ -424,10 +405,11 @@ async fn move_from_the_sheet_commits_both_paths_and_the_tab_follows(cx: &mut Tes
     assert!(!holds(&root, &branch, 0, PLAN), "the old path is emptied");
     assert!(holds(&root, &branch, 1, PLAN), "in the same commit");
 
-    until(&shell, cx, "the tab following", |shell, cx| {
-        shell.label("item-folder", cx).as_deref() == Some("docs/archive")
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the tab following", |shell, cx| {
+            shell.label("item-folder", cx).as_deref() == Some("docs/archive")
+        })
+        .await;
     let opened = shell
         .workspace
         .read_with(cx, |workspace, cx| workspace.opened(cx));
@@ -445,10 +427,11 @@ async fn move_from_the_sheet_commits_both_paths_and_the_tab_follows(cx: &mut Tes
         Some("plan.md")
     );
     shell.keys("escape", cx);
-    until(&shell, cx, "the tree reading again", |shell, cx| {
-        tree_paths(shell, cx) == ["docs/archive/plan.md"]
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the tree reading again", |shell, cx| {
+            tree_paths(shell, cx) == ["docs/archive/plan.md"]
+        })
+        .await;
 }
 
 /// A file another actor commits at the destination after it was checked
@@ -462,7 +445,9 @@ async fn a_collision_is_refused_and_explained_and_the_dialog_stays(cx: &mut Test
     open(&shell, &root, DOCUMENT, cx);
     open_move(&shell, cx);
     retype(&shell, "file", "taken.md", cx);
-    until(&shell, cx, "the destination check", |_, cx| offered(cx)).await;
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
 
     shell.fixture.commit_file(
         &root,
@@ -471,10 +456,11 @@ async fn a_collision_is_refused_and_explained_and_the_dialog_stays(cx: &mut Test
     );
     let before = RepositorySnapshot::take(&root);
     shell.click("move-ok", cx);
-    until(&shell, cx, "the refusal", |shell, cx| {
-        shell.label("move-file-note", cx).is_some()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the refusal", |shell, cx| {
+            shell.label("move-file-note", cx).is_some()
+        })
+        .await;
     let words = "Another file is already at docs/taken.md.";
     assert_eq!(shell.label("move-file-note", cx).as_deref(), Some(words));
     assert_eq!(shell.label("move-ok-note", cx).as_deref(), Some(words));
@@ -486,7 +472,9 @@ async fn a_collision_is_refused_and_explained_and_the_dialog_stays(cx: &mut Test
 
     // Another name is free again, and Escape closes the dialog.
     retype(&shell, "file", "free.md", cx);
-    until(&shell, cx, "the destination check", |_, cx| offered(cx)).await;
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
     shell.keys("escape", cx);
     assert!(!dialog_open(&shell, cx), "Escape closes it");
     assert!(moves(&shell, cx).is_empty(), "nothing was sent");
@@ -504,24 +492,28 @@ async fn a_stale_source_is_refused(cx: &mut TestAppContext) {
     open(&shell, &root, DOCUMENT, cx);
     open_move(&shell, cx);
     retype(&shell, "folder", "docs/archive", cx);
-    until(&shell, cx, "the destination check", |_, cx| offered(cx)).await;
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
 
     let held = shell.backend.hold_job(JobKind::DocumentMove);
     shell.click("move-ok", cx);
-    until(&shell, cx, "the move being sent", |shell, cx| {
-        !moves(shell, cx).is_empty()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the move being sent", |shell, cx| {
+            !moves(shell, cx).is_empty()
+        })
+        .await;
     held.wait_reached();
     shell
         .fixture
         .commit_file(&root, PLAN, document_source(DOCUMENT, "Changed").as_bytes());
     held.release();
     let sent = moves(&shell, cx)[0];
-    until(&shell, cx, "the stale words", |shell, cx| {
-        shell.label("move-failure", cx).as_deref() == Some(STALE)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the stale words", |shell, cx| {
+            shell.label("move-failure", cx).as_deref() == Some(STALE)
+        })
+        .await;
     assert_eq!(
         answer(&shell, sent, cx),
         (1, Some(ResultCode::ExternalChange))
@@ -576,19 +568,21 @@ async fn move_is_offered_only_while_viewing_with_no_draft(cx: &mut TestAppContex
     assert_eq!(phase(&shell, cx), Phase::Saving);
     assert_not_offered(&shell, WHILE_VIEWING, cx);
     held.release();
-    until(&shell, cx, "the save ending", |shell, cx| {
-        phase(shell, cx) == Phase::Editing
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the save ending", |shell, cx| {
+            phase(shell, cx) == Phase::Editing
+        })
+        .await;
 
     // A session kept after Done: its text differs and its draft is
     // written.
     type_at_end(&shell, &host, " Again.", cx);
     shell.click("item-done", cx);
-    until(&shell, cx, "Done keeping the session", |shell, cx| {
-        phase(shell, cx) == Phase::Viewing
-    })
-    .await;
+    shell
+        .until_drawn(cx, "Done keeping the session", |shell, cx| {
+            phase(shell, cx) == Phase::Viewing
+        })
+        .await;
     assert!(
         pane(&shell, cx).read_with(cx, |pane, _| pane.has_session()),
         "the session is kept"
@@ -620,10 +614,11 @@ async fn move_is_disabled_while_a_release_is_queued_or_running(cx: &mut TestAppC
             matches!(request.intent, Intent::ContextRelease { .. })
         })
     };
-    until(&shell, cx, "the release being sent", |shell, cx| {
-        !releases(shell, cx).is_empty()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the release being sent", |shell, cx| {
+            !releases(shell, cx).is_empty()
+        })
+        .await;
     held.wait_reached();
     assert_eq!(phase(&shell, cx), Phase::Viewing);
     assert!(!pane(&shell, cx).read_with(cx, |pane, _| pane.has_session()));
@@ -631,10 +626,11 @@ async fn move_is_disabled_while_a_release_is_queued_or_running(cx: &mut TestAppC
 
     held.release();
     let release = releases(&shell, cx)[0];
-    until(&shell, cx, "the release ending", |shell, cx| {
-        answer(shell, release, cx).1.is_some()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the release ending", |shell, cx| {
+            answer(shell, release, cx).1.is_some()
+        })
+        .await;
     assert_eq!(answer(&shell, release, cx).1, Some(ResultCode::Ok));
     assert_offered(&shell, cx);
     shell.click("sheet-move-button", cx);
@@ -649,15 +645,18 @@ async fn move_is_disabled_while_a_release_is_queued_or_running(cx: &mut TestAppC
 async fn lost_move(shell: &Shell, root: &Path, cx: &mut TestAppContext) -> DesktopRequestId {
     open_move(shell, cx);
     retype(shell, "folder", "docs/archive", cx);
-    until(shell, cx, "the destination check", |_, cx| offered(cx)).await;
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
     failing_at(shell, FailurePoint::BeforeRequestSettlement);
     shell.click("move-ok", cx);
-    until(shell, cx, "the lost answer", |shell, cx| {
-        moves(shell, cx)
-            .first()
-            .is_some_and(|sent| answer(shell, *sent, cx).1.is_some())
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the lost answer", |shell, cx| {
+            moves(shell, cx)
+                .first()
+                .is_some_and(|sent| answer(shell, *sent, cx).1.is_some())
+        })
+        .await;
     working(shell);
     let sent = moves(shell, cx)[0];
     assert_eq!(
@@ -685,28 +684,28 @@ async fn retried(shell: &Shell, sent: DesktopRequestId, cx: &mut TestAppContext)
         .workspace
         .read_with(cx, |workspace, _| workspace.services().worker().clone());
     assert!(worker.retry(sent, None), "sent again");
-    until(shell, cx, "the retried answer", |shell, cx| {
-        matches!(answer(shell, sent, cx), (2, Some(_)))
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the retried answer", |shell, cx| {
+            matches!(answer(shell, sent, cx), (2, Some(_)))
+        })
+        .await;
     answer(shell, sent, cx).1.unwrap()
 }
 
 /// The dialog closed as for a success, the same request the only move,
 /// and the tab shows the moved document.
 async fn shows_the_moved_document(shell: &Shell, sent: DesktopRequestId, cx: &mut TestAppContext) {
-    until(shell, cx, "the dialog closing", |shell, cx| {
-        !dialog_open(shell, cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the dialog closing", |shell, cx| {
+            !dialog_open(shell, cx)
+        })
+        .await;
     assert_eq!(moves(shell, cx), [sent], "the same request");
-    until(
-        shell,
-        cx,
-        "the tab showing the moved document",
-        |shell, cx| shell.label("item-folder", cx).as_deref() == Some("docs/archive"),
-    )
-    .await;
+    shell
+        .until_drawn(cx, "the tab showing the moved document", |shell, cx| {
+            shell.label("item-folder", cx).as_deref() == Some("docs/archive")
+        })
+        .await;
     assert!(!shell.present("move-failure", cx));
 }
 
@@ -757,6 +756,31 @@ fn by_another(shell: &Shell, mutation: Mutation) {
     assert_eq!(done.code, ResultCode::Ok, "{}", done.message);
 }
 
+/// Another actor moves `root`'s document to `destination` through the
+/// library, as `observe_path` and `show_item` read it now; gives the
+/// worktree of its context.
+fn move_by_another(shell: &Shell, root: &Path, destination: &str) -> PathBuf {
+    let before = shown(shell, root, DOCUMENT);
+    let worktree = PathBuf::from(&before.context.worktree);
+    let context = (before.context.kind == ItemContextKind::Active).then_some(worktree.as_path());
+    let service = shell.fixture.service();
+    let repo = service.resolve_repository(root).unwrap();
+    let free = service
+        .observe_path(&repo, context, Path::new(destination))
+        .unwrap();
+    by_another(
+        shell,
+        Mutation::DocumentMove(DocumentMoveInput {
+            root: root.to_owned(),
+            id: item_id(DOCUMENT),
+            observation: before.observation.clone(),
+            destination_path: PathBuf::from(destination),
+            destination_observation: free.observation,
+        }),
+    );
+    worktree
+}
+
 /// The pre-flight ruling on `external_change` (Task 24): while the move is
 /// with the worker, another actor moves the document to the same
 /// destination and leaves a change to it uncommitted, so the library
@@ -772,35 +796,22 @@ async fn a_move_answered_external_change_at_its_destination_is_done(cx: &mut Tes
     open(&shell, &root, DOCUMENT, cx);
     open_move(&shell, cx);
     retype(&shell, "folder", "docs/archive", cx);
-    until(&shell, cx, "the destination check", |_, cx| offered(cx)).await;
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
     let held = shell.backend.hold_job(JobKind::DocumentMove);
     shell.click("move-ok", cx);
-    until(&shell, cx, "the move being sent", |shell, cx| {
-        !moves(shell, cx).is_empty()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the move being sent", |shell, cx| {
+            !moves(shell, cx).is_empty()
+        })
+        .await;
     held.wait_reached();
     let sent = moves(&shell, cx)[0];
 
     // Another actor moves it there, and changes it without committing.
     let destination = "docs/archive/plan.md";
-    let before = shown(&shell, &root, DOCUMENT);
-    let worktree = PathBuf::from(&before.context.worktree);
-    let service = shell.fixture.service();
-    let repo = service.resolve_repository(&root).unwrap();
-    let free = service
-        .observe_path(&repo, Some(&worktree), Path::new(destination))
-        .unwrap();
-    by_another(
-        &shell,
-        Mutation::DocumentMove(DocumentMoveInput {
-            root: root.clone(),
-            id: item_id(DOCUMENT),
-            observation: before.observation.clone(),
-            destination_path: PathBuf::from(destination),
-            destination_observation: free.observation,
-        }),
-    );
+    let worktree = move_by_another(&shell, &root, destination);
     std::fs::write(
         worktree.join(destination),
         document_source(DOCUMENT, "Plan, edited").as_bytes(),
@@ -808,10 +819,11 @@ async fn a_move_answered_external_change_at_its_destination_is_done(cx: &mut Tes
     .unwrap();
 
     held.release();
-    until(&shell, cx, "the move's answer", |shell, cx| {
-        answer(shell, sent, cx).1.is_some()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the move's answer", |shell, cx| {
+            answer(shell, sent, cx).1.is_some()
+        })
+        .await;
     assert_eq!(
         answer(&shell, sent, cx),
         (1, Some(ResultCode::ExternalChange))
@@ -839,15 +851,18 @@ async fn a_committed_move_still_owing_its_index_closes_the_dialog(cx: &mut TestA
     let before = commits(&root, &branch);
     open_move(&shell, cx);
     retype(&shell, "folder", "docs/archive", cx);
-    until(&shell, cx, "the destination check", |_, cx| offered(cx)).await;
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
     failing_at(&shell, FailurePoint::BeforeIndexTransactionCommit);
     shell.click("move-ok", cx);
-    until(&shell, cx, "the move's answer", |shell, cx| {
-        moves(shell, cx)
-            .first()
-            .is_some_and(|sent| answer(shell, *sent, cx).1.is_some())
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the move's answer", |shell, cx| {
+            moves(shell, cx)
+                .first()
+                .is_some_and(|sent| answer(shell, *sent, cx).1.is_some())
+        })
+        .await;
     working(&shell);
     let sent = moves(&shell, cx)[0];
     assert_eq!(
@@ -855,10 +870,11 @@ async fn a_committed_move_still_owing_its_index_closes_the_dialog(cx: &mut TestA
         (1, Some(ResultCode::DiscoveryPending))
     );
     assert_eq!(commits(&root, &branch), before + 1, "committed");
-    until(&shell, cx, "the dialog closing", |shell, cx| {
-        !dialog_open(shell, cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the dialog closing", |shell, cx| {
+            !dialog_open(shell, cx)
+        })
+        .await;
     assert!(!shell.present("move-failure", cx));
 }
 
@@ -878,8 +894,251 @@ async fn move_pressed_again_after_a_lost_answer_finds_the_document_moved(cx: &mu
     shell.click("move-ok", cx);
     shows_the_moved_document(&shell, sent, cx).await;
     shell.keys("escape", cx);
-    until(&shell, cx, "the tree reading again", |shell, cx| {
-        tree_paths(shell, cx) == ["docs/archive/plan.md"]
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the tree reading again", |shell, cx| {
+            tree_paths(shell, cx) == ["docs/archive/plan.md"]
+        })
+        .await;
+}
+
+// ---- fix round 1 ----
+
+/// Fix 1, M2: the dialog's observe at Move finds the destination free;
+/// another actor commits a file there before the library takes the move.
+/// The library answers `external_change`, its token of the destination no
+/// longer holding; the document is where it was read, and the destination
+/// observed again holds a file, so the dialog says so under the File name,
+/// not that the document changed, and stays.
+#[gpui_kit::test]
+async fn a_destination_taken_while_the_move_waits_is_explained_and_the_dialog_stays(
+    cx: &mut TestAppContext,
+) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_file(root, PLAN, document_source(DOCUMENT, "Plan").as_bytes());
+    });
+    open(&shell, &root, DOCUMENT, cx);
+    open_move(&shell, cx);
+    retype(&shell, "file", "taken.md", cx);
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
+    let held = shell.backend.hold_job(JobKind::DocumentMove);
+    shell.click("move-ok", cx);
+    shell
+        .until_drawn(cx, "the move being sent", |shell, cx| {
+            !moves(shell, cx).is_empty()
+        })
+        .await;
+    held.wait_reached();
+    shell.fixture.commit_file(
+        &root,
+        "docs/taken.md",
+        document_source(DRAFTED, "Taken").as_bytes(),
+    );
+    held.release();
+    let sent = moves(&shell, cx)[0];
+    shell
+        .until_drawn(cx, "the move's answer", |shell, cx| {
+            answer(shell, sent, cx).1.is_some()
+        })
+        .await;
+    assert_eq!(
+        answer(&shell, sent, cx),
+        (1, Some(ResultCode::ExternalChange))
+    );
+    let words = "Another file is already at docs/taken.md.";
+    shell
+        .until_drawn(cx, "the collision's words", |shell, cx| {
+            shell.label("move-file-note", cx).as_deref() == Some(words)
+        })
+        .await;
+    assert!(dialog_open(&shell, cx), "the dialog stays");
+    assert!(!offered(cx));
+    assert!(!shell.present("move-failure", cx), "not the stale words");
+    assert_eq!(shown(&shell, &root, DOCUMENT).path, PLAN, "nothing moved");
+}
+
+/// Fix 1, M2: the library's own `occupied_path`, which this dialog cannot
+/// draw from the library (its observe at Move refuses a file there first,
+/// and one put there later makes the library answer `external_change`),
+/// given to the dialog as an answer: the destination is held, said under
+/// the File name and on Move, with no code, and the dialog stays.
+#[gpui_kit::test]
+async fn an_occupied_path_answer_holds_the_destination(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_file(root, PLAN, document_source(DOCUMENT, "Plan").as_bytes());
+    });
+    open(&shell, &root, DOCUMENT, cx);
+    open_move(&shell, cx);
+    retype(&shell, "file", "taken.md", cx);
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
+    dialog(cx).update(cx, |dialog, cx| {
+        let code = ResultCode::OccupiedPath;
+        let message = code.message().to_owned();
+        dialog.answered(code, false, message, "docs/taken.md".to_owned(), cx)
+    });
+    let words = "Another file is already at docs/taken.md.";
+    assert_eq!(shell.label("move-file-note", cx).as_deref(), Some(words));
+    assert_eq!(shell.label("move-ok-note", cx).as_deref(), Some(words));
+    assert!(!shell.present("move-failure-code", cx));
+    assert!(dialog_open(&shell, cx), "the dialog stays");
+    assert!(!offered(cx));
+}
+
+/// Fix 1, M2: another actor moves the document to the destination before
+/// Move is pressed. Read again, it is there: the dialog closes with no
+/// move of this session's, and the tab and the tree, which no answer told,
+/// read the repository again and follow it.
+#[gpui_kit::test]
+async fn a_document_another_moved_there_is_found_moved_and_the_tab_follows(
+    cx: &mut TestAppContext,
+) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.create_document(root, DOCUMENT, PLAN, "Plan");
+        fixture.create_folder(root, "docs/archive");
+    });
+    open(&shell, &root, DOCUMENT, cx);
+    open_move(&shell, cx);
+    assert_eq!(shell.label("item-folder", cx).as_deref(), Some("docs"));
+    retype(&shell, "folder", "docs/archive", cx);
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
+    move_by_another(&shell, &root, "docs/archive/plan.md");
+    shell.click("move-ok", cx);
+    shell
+        .until_drawn(cx, "the dialog closing", |shell, cx| {
+            !dialog_open(shell, cx)
+        })
+        .await;
+    assert!(moves(&shell, cx).is_empty(), "this session moved nothing");
+    shell
+        .until_drawn(cx, "the tab following", |shell, cx| {
+            shell.label("item-folder", cx).as_deref() == Some("docs/archive")
+        })
+        .await;
+    shell.keys("escape", cx);
+    shell
+        .until_drawn(cx, "the tree following", |shell, cx| {
+            tree_paths(shell, cx) == ["docs/archive/plan.md"]
+        })
+        .await;
+}
+
+/// Fix 1, M4: a change of the fields clears the last refusal of the
+/// destination they gave, and a held destination is held again when the
+/// fields give it again.
+#[gpui_kit::test]
+async fn a_field_change_clears_the_last_refusal_and_a_held_path_stays_held(
+    cx: &mut TestAppContext,
+) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_file(root, PLAN, document_source(DOCUMENT, "Plan").as_bytes());
+    });
+    open(&shell, &root, DOCUMENT, cx);
+    open_move(&shell, cx);
+    retype(&shell, "file", "taken.md", cx);
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
+    shell.fixture.commit_file(
+        &root,
+        "docs/taken.md",
+        document_source(DRAFTED, "Taken").as_bytes(),
+    );
+    shell.click("move-ok", cx);
+    let words = "Another file is already at docs/taken.md.";
+    shell
+        .until_drawn(cx, "the collision", |shell, cx| {
+            shell.label("move-file-note", cx).as_deref() == Some(words)
+        })
+        .await;
+    retype(&shell, "file", "free.md", cx);
+    shell
+        .until_drawn(cx, "another name checked", |_, cx| offered(cx))
+        .await;
+    assert!(!shell.present("move-file-note", cx));
+    retype(&shell, "file", "taken.md", cx);
+    shell
+        .until_drawn(cx, "the held name held again", |shell, cx| {
+            shell.label("move-file-note", cx).as_deref() == Some(words)
+        })
+        .await;
+    assert!(!offered(cx));
+
+    // A library refusal: the answer lost, its code shown, then cleared.
+    retype(&shell, "file", "free.md", cx);
+    shell
+        .until_drawn(cx, "another name checked", |_, cx| offered(cx))
+        .await;
+    failing_at(&shell, FailurePoint::BeforeRequestSettlement);
+    shell.click("move-ok", cx);
+    shell
+        .until_drawn(cx, "the lost answer's code", |shell, cx| {
+            shell.label("move-failure-code", cx).as_deref() == Some("internal_error")
+        })
+        .await;
+    working(&shell);
+    retype(&shell, "file", "other.md", cx);
+    assert!(!shell.present("move-failure", cx), "cleared by the change");
+    assert!(!shell.present("move-failure-code", cx));
+}
+
+/// Fix 1, M4: after the stale words Move is not offered again in that
+/// dialog, whatever the fields give, and says why; Move… opened again
+/// reads afresh and offers it.
+#[gpui_kit::test]
+async fn a_stale_move_is_not_offered_again_until_reopened(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_file(root, PLAN, document_source(DOCUMENT, "Plan").as_bytes());
+    });
+    open(&shell, &root, DOCUMENT, cx);
+    open_move(&shell, cx);
+    retype(&shell, "folder", "docs/archive", cx);
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
+    let held = shell.backend.hold_job(JobKind::DocumentMove);
+    shell.click("move-ok", cx);
+    shell
+        .until_drawn(cx, "the move being sent", |shell, cx| {
+            !moves(shell, cx).is_empty()
+        })
+        .await;
+    held.wait_reached();
+    shell
+        .fixture
+        .commit_file(&root, PLAN, document_source(DOCUMENT, "Changed").as_bytes());
+    held.release();
+    shell
+        .until_drawn(cx, "the stale words", |shell, cx| {
+            shell.label("move-failure", cx).as_deref() == Some(STALE)
+        })
+        .await;
+    assert!(!offered(cx), "not offered after the stale words");
+    assert_eq!(shell.label("move-ok-note", cx).as_deref(), Some(STALE));
+    retype(&shell, "folder", "docs/elsewhere", cx);
+    shell.frame(cx, |_, _| ());
+    shell.run(cx);
+    assert!(!offered(cx), "nor for another destination");
+    assert_eq!(
+        shell.label("move-failure", cx).as_deref(),
+        Some(STALE),
+        "the words stay"
+    );
+    shell.keys("enter", cx);
+    shell.click("move-ok", cx);
+    assert_eq!(moves(&shell, cx).len(), 1, "nothing more is sent");
+
+    shell.keys("escape", cx);
+    assert!(!dialog_open(&shell, cx), "Escape closes it");
+    shell.click("sheet-move-button", cx);
+    assert!(dialog_open(&shell, cx), "Move… opens again");
+    retype(&shell, "folder", "docs/archive", cx);
+    shell
+        .until_drawn(cx, "the destination check", |_, cx| offered(cx))
+        .await;
+    assert!(!shell.present("move-failure", cx), "read afresh");
 }

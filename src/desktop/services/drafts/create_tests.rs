@@ -16,7 +16,6 @@
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, Instant},
 };
 
 use git2::Repository;
@@ -57,7 +56,7 @@ use crate::desktop::{
     view::{
         drafts::row_id,
         editor::host::EditorHost,
-        harness::{Shell, WAIT, key, new_ticket_draft, new_ticket_fields, wait_until},
+        harness::{Shell, key, new_ticket_draft, new_ticket_fields, wait_until},
     },
 };
 
@@ -862,32 +861,13 @@ fn created(shell: &Shell, root: &Path, cx: &mut TestAppContext) -> bool {
     })
 }
 
-/// Draws frames, with the worker and the reads running, until `done`.
-async fn until(
-    shell: &Shell,
-    cx: &mut TestAppContext,
-    what: &str,
-    done: impl Fn(&Shell, &mut TestAppContext) -> bool,
-) {
-    let deadline = Instant::now() + WAIT;
-    loop {
-        shell.frame(cx, |_, _| ());
-        shell.run(cx);
-        if done(shell, cx) {
-            shell.frame(cx, |_, _| ());
-            return;
-        }
-        assert!(Instant::now() < deadline, "{what} did not happen");
-        cx.executor().timer(Duration::from_millis(10)).await;
-    }
-}
-
 /// The shown tab's edit host, once its editor has opened.
 async fn until_editing(shell: &Shell, cx: &mut TestAppContext) -> Entity<EditorHost> {
-    until(shell, cx, "the edit editor opening", |shell, cx| {
-        pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_some())
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the edit editor opening", |shell, cx| {
+            pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_some())
+        })
+        .await;
     pane(shell, cx)
         .read_with(cx, |pane, _| pane.edit_host())
         .unwrap()
@@ -940,16 +920,18 @@ async fn a_not_created_draft_restores_into_a_tab_with_no_item_read(cx: &mut Test
     assert!(shell.present("draft-restore", cx));
 
     shell.keys("secondary-shift-d", cx);
-    until(&shell, cx, "the Drafts page's check", |shell, cx| {
-        shell.label(row_id(id, "state"), cx).as_deref() == Some(NOT_CREATED)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the Drafts page's check", |shell, cx| {
+            shell.label(row_id(id, "state"), cx).as_deref() == Some(NOT_CREATED)
+        })
+        .await;
     assert!(shell.present(row_id(id, "restore"), cx), "restorable");
     shell.click(row_id(id, "restore"), cx);
-    until(&shell, cx, "the restore", |shell, cx| {
-        shell.present("draft-section", cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the restore", |shell, cx| {
+            shell.present("draft-section", cx)
+        })
+        .await;
 
     assert_eq!(
         held(&shell.fixture.draft_store(), id),
@@ -977,10 +959,11 @@ async fn a_not_created_draft_restores_into_a_tab_with_no_item_read(cx: &mut Test
 async fn restore_in_tab(shell: &Shell, root: &Path, cx: &mut TestAppContext) {
     open(shell, root, cx);
     shell.click("draft-restore-button", cx);
-    until(shell, cx, "the restore", |shell, cx| {
-        shell.present("draft-section", cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the restore", |shell, cx| {
+            shell.present("draft-section", cx)
+        })
+        .await;
 }
 
 /// The ticket `TICKET` of `root`, as read now, if it exists.
@@ -1002,16 +985,18 @@ async fn save_of_a_restored_not_created_draft_creates_it(cx: &mut TestAppContext
     restore_in_tab(&shell, &root, cx).await;
 
     shell.click("draft-save-button", cx);
-    until(&shell, cx, "the create", |shell, cx| {
-        creates(shell, cx)
-            .first()
-            .is_some_and(|request| request_code(shell, *request, cx).is_some())
-    })
-    .await;
-    until(&shell, cx, "the draft retiring", |shell, _| {
-        held(&shell.fixture.draft_store(), id).is_none()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the create", |shell, cx| {
+            creates(shell, cx)
+                .first()
+                .is_some_and(|request| request_code(shell, *request, cx).is_some())
+        })
+        .await;
+    shell
+        .until_drawn(cx, "the draft retiring", |shell, _| {
+            held(&shell.fixture.draft_store(), id).is_none()
+        })
+        .await;
 
     let sent = creates(&shell, cx);
     assert_eq!(sent.len(), 1, "one create");
@@ -1054,10 +1039,9 @@ async fn the_close_dialogs_save_of_a_not_created_draft_creates_it_and_closes(
     assert_eq!(shell.label("close-draft-save", cx).as_deref(), Some("Save"));
     assert!(!shell.present("close-draft-save-note", cx), "offered");
     shell.click("close-draft-save-button", cx);
-    until(&shell, cx, "the tab closing", |shell, cx| {
-        tab_count(shell, cx) == 0
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the tab closing", |shell, cx| tab_count(shell, cx) == 0)
+        .await;
 
     assert!(!shell.present("close-draft-dialog", cx), "closed with it");
     let sent = creates(&shell, cx);
@@ -1107,10 +1091,11 @@ async fn a_marked_draft_whose_item_exists_routes_to_edit_and_review(cx: &mut Tes
     open(&shell, &root, cx);
     assert!(shell.present("item-title", cx), "the item is read");
     shell.click("draft-banner-continue-button", cx);
-    until(&shell, cx, "the review", |shell, cx| {
-        phase(shell, cx) == Phase::Review
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the review", |shell, cx| {
+            phase(shell, cx) == Phase::Review
+        })
+        .await;
 
     let sent = prepares(&shell, cx);
     assert_eq!(sent.len(), 1, "one prepare");
@@ -1139,10 +1124,11 @@ async fn continue_editing_a_not_created_draft_whose_item_appeared_routes_to_revi
         .fixture
         .create_ticket(&root, TICKET, "Created elsewhere", "open");
     shell.click("draft-banner-continue-button", cx);
-    until(&shell, cx, "the review", |shell, cx| {
-        phase(shell, cx) == Phase::Review
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the review", |shell, cx| {
+            phase(shell, cx) == Phase::Review
+        })
+        .await;
 
     let sent = prepares(&shell, cx);
     assert_eq!(sent.len(), 2, "Create, then Edit");
@@ -1167,10 +1153,11 @@ async fn an_untitled_new_ticket_is_not_created(cx: &mut TestAppContext) {
     });
     open(&shell, &root, cx);
     shell.click("draft-restore-button", cx);
-    until(&shell, cx, "the restore", |shell, cx| {
-        shell.present("draft-section", cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the restore", |shell, cx| {
+            shell.present("draft-section", cx)
+        })
+        .await;
     assert_eq!(
         shell.label("draft-save-note", cx).as_deref(),
         Some("A ticket needs a title before it can be saved.")
@@ -1198,10 +1185,11 @@ async fn a_titled_new_item_with_an_empty_body_can_be_saved(cx: &mut TestAppConte
     let sent = creates(&shell, cx);
     assert_eq!(sent.len(), 1, "Save sent one create");
     shell.until_ended(sent[0], cx).await;
-    until(&shell, cx, "the draft retiring", |shell, _| {
-        shell.fixture.draft_store().list().unwrap().is_empty()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the draft retiring", |shell, _| {
+            shell.fixture.draft_store().list().unwrap().is_empty()
+        })
+        .await;
 
     assert_eq!(request_code(&shell, sent[0], cx), Some(ResultCode::Ok));
     let shown = show(shell.fixture.service(), &root, TICKET);
@@ -1235,10 +1223,11 @@ async fn an_occupied_path_for_this_drafts_own_item_becomes_a_review(cx: &mut Tes
         request_code(&shell, sent[0], cx),
         Some(ResultCode::OccupiedPath)
     );
-    until(&shell, cx, "the review", |shell, cx| {
-        phase(shell, cx) == Phase::Review
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the review", |shell, cx| {
+            phase(shell, cx) == Phase::Review
+        })
+        .await;
 
     let base = session_base(&shell, id, cx);
     assert!(!is_new_item_base(&base), "an ordinary unverified draft");
@@ -1287,10 +1276,11 @@ async fn an_occupied_path_that_cannot_be_read_names_no_other_file(cx: &mut TestA
         .backend
         .replace_service(RepositoryService::open_at(elsewhere.path()).unwrap());
     read.send(()).unwrap();
-    until(&shell, cx, "the refusal", |shell, cx| {
-        shell.present("item-save-code", cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the refusal", |shell, cx| {
+            shell.present("item-save-code", cx)
+        })
+        .await;
     shell
         .backend
         .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
@@ -1365,20 +1355,22 @@ async fn done_after_a_create_found_already_applied_releases_nothing(cx: &mut Tes
         request_code(&shell, sent[0], cx),
         Some(ResultCode::AlreadyApplied)
     );
-    until(&shell, cx, "the draft retiring", |shell, _| {
-        held(&shell.fixture.draft_store(), id).is_none()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the draft retiring", |shell, _| {
+            held(&shell.fixture.draft_store(), id).is_none()
+        })
+        .await;
     assert!(
         !created(&shell, &root, cx),
         "the context holds the item's commit"
     );
 
     shell.click("item-done", cx);
-    until(&shell, cx, "Done ending the session", |shell, cx| {
-        pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_none())
-    })
-    .await;
+    shell
+        .until_drawn(cx, "Done ending the session", |shell, cx| {
+            pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_none())
+        })
+        .await;
     shell.run(cx);
     assert!(releases(&shell, cx).is_empty(), "nothing is released");
     assert_eq!(context_of(&root), (true, true), "the context is kept");
@@ -1400,12 +1392,13 @@ async fn discarding_a_new_item_draft_releases_the_context_this_session_made(
     shell.run(cx);
     assert!(shell.present("done-draft-dialog", cx), "Done asks");
     shell.click("done-draft-discard-button", cx);
-    until(&shell, cx, "a release", |shell, cx| {
-        releases(shell, cx)
-            .first()
-            .is_some_and(|request| request_code(shell, *request, cx).is_some())
-    })
-    .await;
+    shell
+        .until_drawn(cx, "a release", |shell, cx| {
+            releases(shell, cx)
+                .first()
+                .is_some_and(|request| request_code(shell, *request, cx).is_some())
+        })
+        .await;
 
     assert_eq!(tab_count(&shell, cx), 0, "the tab closes");
     assert!(
@@ -1438,10 +1431,9 @@ async fn discarding_a_restored_new_item_draft_keeps_its_context(cx: &mut TestApp
     shell.click("item-done", cx);
     shell.run(cx);
     shell.click("done-draft-discard-button", cx);
-    until(&shell, cx, "the tab closing", |shell, cx| {
-        tab_count(shell, cx) == 0
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the tab closing", |shell, cx| tab_count(shell, cx) == 0)
+        .await;
     shell.run(cx);
 
     assert!(

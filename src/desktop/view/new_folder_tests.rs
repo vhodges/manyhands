@@ -13,10 +13,7 @@
 //! through the window, into the field holding focus. The ruled words are
 //! literals: the tests fix them.
 
-use std::{
-    path::{Path, PathBuf},
-    time::{Duration, Instant},
-};
+use std::path::{Path, PathBuf};
 
 use git2::Repository;
 use gpui_kit::{Entity, Focusable, TestAppContext, component::input::InputState};
@@ -27,12 +24,12 @@ use manyhands::{
 
 use super::{NewFolderDialog, OpenedFolder};
 use crate::desktop::{
-    services::requests::{DesktopRequestId, Intent, RequestState},
-    test_support::fixtures::Fixture,
-    view::{
-        documents::EMPTY_FOLDER,
-        harness::{Shell, WAIT},
+    services::{
+        ReadKind,
+        requests::{DesktopRequestId, Intent, RequestState},
     },
+    test_support::fixtures::Fixture,
+    view::{documents::EMPTY_FOLDER, harness::Shell},
 };
 
 const DOCUMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FN0";
@@ -52,26 +49,6 @@ fn shell(cx: &mut TestAppContext) -> (Shell, PathBuf) {
     let shell = Shell::open(fixture, cx);
     shell.select(&root, cx);
     (shell, root)
-}
-
-/// Draws frames, with the worker and the reads running, until `done`.
-async fn until(
-    shell: &Shell,
-    cx: &mut TestAppContext,
-    what: &str,
-    done: impl Fn(&Shell, &mut TestAppContext) -> bool,
-) {
-    let deadline = Instant::now() + WAIT;
-    loop {
-        shell.frame(cx, |_, _| ());
-        shell.run(cx);
-        if done(shell, cx) {
-            shell.frame(cx, |_, _| ());
-            return;
-        }
-        assert!(Instant::now() < deadline, "{what} did not happen");
-        cx.executor().timer(Duration::from_millis(10)).await;
-    }
 }
 
 fn dialog(cx: &mut TestAppContext) -> Entity<NewFolderDialog> {
@@ -140,12 +117,13 @@ fn code(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> Option<
 
 /// Waits until the newest folder create has an answer, and gives it.
 async fn answered(shell: &Shell, cx: &mut TestAppContext) -> (DesktopRequestId, ResultCode) {
-    until(shell, cx, "the folder create's answer", |shell, cx| {
-        creates(shell, cx)
-            .first()
-            .is_some_and(|id| code(shell, *id, cx).is_some())
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the folder create's answer", |shell, cx| {
+            creates(shell, cx)
+                .first()
+                .is_some_and(|id| code(shell, *id, cx).is_some())
+        })
+        .await;
     let id = creates(shell, cx)[0];
     (id, code(shell, id, cx).unwrap())
 }
@@ -219,20 +197,22 @@ async fn new_folder_creates_and_explains_local_folders_and_lists_it(cx: &mut Tes
     let (sent, answer) = answered(&shell, cx).await;
     assert_eq!(answer, ResultCode::Ok);
     assert_eq!(requested_path(&shell, sent, cx), "docs/plans");
-    until(&shell, cx, "the dialog closing", |shell, cx| {
-        !dialog_open(shell, cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the dialog closing", |shell, cx| {
+            !dialog_open(shell, cx)
+        })
+        .await;
     assert!(
         root.join("docs/plans").is_dir(),
         "made in the primary worktree"
     );
     assert_eq!(head(&root), commit, "no commit");
     assert!(folders(&shell, &root).contains(&"docs/plans".to_owned()));
-    until(&shell, cx, "the tree listing it", |shell, cx| {
-        shell.rows("doc-node", cx).contains(&"plans".to_owned())
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the tree listing it", |shell, cx| {
+            shell.rows("doc-node", cx).contains(&"plans".to_owned())
+        })
+        .await;
     let nodes = shell.rows("doc-node", cx);
     let at = nodes.iter().position(|node| node == "plans").unwrap();
     assert_eq!(
@@ -259,10 +239,11 @@ async fn new_folder_creates_and_explains_local_folders_and_lists_it(cx: &mut Tes
         Some("docs/plans/drafts")
     );
     shell.keys("enter", cx);
-    until(&shell, cx, "the second folder", |shell, cx| {
-        creates(shell, cx).len() == 2 && !dialog_open(shell, cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the second folder", |shell, cx| {
+            creates(shell, cx).len() == 2 && !dialog_open(shell, cx)
+        })
+        .await;
     let (sent, answer) = answered(&shell, cx).await;
     assert_eq!(answer, ResultCode::Ok);
     assert_eq!(requested_path(&shell, sent, cx), "docs/plans/drafts");
@@ -303,17 +284,19 @@ async fn a_folder_retry_reads_folder_exists(cx: &mut TestAppContext) {
         .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
     assert!(offered(cx), "Create is offered again");
     shell.keys("enter", cx);
-    until(&shell, cx, "the retry's answer", |shell, cx| {
-        creates(shell, cx).len() == 2 && code(shell, creates(shell, cx)[0], cx).is_some()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the retry's answer", |shell, cx| {
+            creates(shell, cx).len() == 2 && code(shell, creates(shell, cx)[0], cx).is_some()
+        })
+        .await;
     let retried = creates(&shell, cx)[0];
     assert_ne!(retried, lost);
     assert_eq!(code(&shell, retried, cx), Some(ResultCode::AlreadyApplied));
-    until(&shell, cx, "Folder exists", |shell, cx| {
-        shell.label("new-folder-answer", cx).as_deref() == Some(EXISTS)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "Folder exists", |shell, cx| {
+            shell.label("new-folder-answer", cx).as_deref() == Some(EXISTS)
+        })
+        .await;
     assert!(dialog_open(&shell, cx), "the dialog says so");
     assert!(!shell.present("new-folder-answer-code", cx));
     assert!(!offered(cx), "nothing more to create under that name");
@@ -322,10 +305,11 @@ async fn a_folder_retry_reads_folder_exists(cx: &mut TestAppContext) {
         .filter(|folder| folder == "docs/plans")
         .collect();
     assert_eq!(made.len(), 1, "one folder");
-    until(&shell, cx, "the tree listing it", |shell, cx| {
-        shell.rows("doc-node", cx).contains(&"plans".to_owned())
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the tree listing it", |shell, cx| {
+            shell.rows("doc-node", cx).contains(&"plans".to_owned())
+        })
+        .await;
     shell.keys("escape", cx);
     assert!(!dialog_open(&shell, cx));
 }
@@ -362,10 +346,11 @@ async fn an_invalid_folder_name_is_refused(cx: &mut TestAppContext) {
     shell.keys("enter", cx);
     let (sent, answer) = answered(&shell, cx).await;
     assert_eq!(answer, ResultCode::InvalidPath);
-    until(&shell, cx, "the refusal", |shell, cx| {
-        shell.label("new-folder-answer-code", cx).as_deref() == Some("invalid_path")
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the refusal", |shell, cx| {
+            shell.label("new-folder-answer-code", cx).as_deref() == Some("invalid_path")
+        })
+        .await;
     let message = shell.operations(cx).read_with(cx, |operations, _| {
         match &operations.request(sent).expect("listed").state {
             RequestState::Finished(.., message) => message.clone(),
@@ -379,4 +364,43 @@ async fn an_invalid_folder_name_is_refused(cx: &mut TestAppContext) {
     );
     assert!(dialog_open(&shell, cx), "the dialog stays");
     assert!(!root.join("docs/con").exists(), "nothing is made");
+}
+
+/// Fix 1, M1: a folder made whose index refresh failed is answered
+/// `discovery_pending` (the library's `BeforeIndexTransactionCommit`, a
+/// route to `there()`'s pending discovery): it is made, so the dialog
+/// closes as for `ok`, and the tree reads its folders again.
+#[gpui_kit::test]
+async fn a_folder_made_with_its_index_owed_closes_the_dialog(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx);
+    let commit = head(&root);
+    open_dialog(&shell, cx);
+    shell.visual(cx).simulate_input("plans");
+    shell.run(cx);
+    let read = shell.backend.reads_seen(ReadKind::Folders);
+    shell.backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            shell.fixture.data_dir(),
+            FailurePoint::BeforeIndexTransactionCommit,
+        )
+        .unwrap(),
+    );
+    shell.keys("enter", cx);
+    let (_, answer) = answered(&shell, cx).await;
+    shell
+        .backend
+        .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
+    assert_eq!(answer, ResultCode::DiscoveryPending);
+    shell
+        .until_drawn(cx, "the dialog closing", |shell, cx| {
+            !dialog_open(shell, cx)
+        })
+        .await;
+    assert!(root.join("docs/plans").is_dir(), "made");
+    assert_eq!(head(&root), commit, "no commit");
+    assert!(
+        shell.backend.reads_seen(ReadKind::Folders) > read,
+        "the tree reads its folders again"
+    );
+    assert_eq!(refreshes(&shell, cx), 0, "no refresh of the desktop's own");
 }

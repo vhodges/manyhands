@@ -16,10 +16,7 @@
 //! sets the caret, focuses the editor and draws a frame first. The words
 //! are literals: the tests fix them.
 
-use std::{
-    path::{Path, PathBuf},
-    time::{Duration, Instant},
-};
+use std::path::{Path, PathBuf};
 
 use git2::Repository;
 use gpui_kit::{Entity, Focusable, TestAppContext, component::input::InputState};
@@ -47,7 +44,7 @@ use crate::desktop::{
     view::{
         drafts::row_id,
         editor::host::EditorHost,
-        harness::{Shell, WAIT, key},
+        harness::{Shell, key},
         item::ChipField,
         settings::Shown,
     },
@@ -72,26 +69,6 @@ fn shell(cx: &mut TestAppContext, build: impl FnOnce(&Fixture, &Path)) -> (Shell
     (shell, root)
 }
 
-/// Draws frames, with the worker and the reads running, until `done`.
-async fn until(
-    shell: &Shell,
-    cx: &mut TestAppContext,
-    what: &str,
-    done: impl Fn(&Shell, &mut TestAppContext) -> bool,
-) {
-    let deadline = Instant::now() + WAIT;
-    loop {
-        shell.frame(cx, |_, _| ());
-        shell.run(cx);
-        if done(shell, cx) {
-            shell.frame(cx, |_, _| ());
-            return;
-        }
-        assert!(Instant::now() < deadline, "{what} did not happen");
-        cx.executor().timer(Duration::from_millis(10)).await;
-    }
-}
-
 fn pane(shell: &Shell, cx: &mut TestAppContext) -> Entity<crate::desktop::view::item::ItemPane> {
     shell
         .workspace
@@ -108,11 +85,12 @@ fn phase(shell: &Shell, cx: &mut TestAppContext) -> Option<Phase> {
 
 /// The shown tab's edit host, once its editor has opened.
 async fn until_editing(shell: &Shell, cx: &mut TestAppContext) -> Entity<EditorHost> {
-    until(shell, cx, "the edit editor opening", |shell, cx| {
-        phase(shell, cx) == Some(Phase::Editing)
-            && pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_some())
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the edit editor opening", |shell, cx| {
+            phase(shell, cx) == Some(Phase::Editing)
+                && pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_some())
+        })
+        .await;
     pane(shell, cx)
         .read_with(cx, |pane, _| pane.edit_host())
         .unwrap()
@@ -234,7 +212,7 @@ async fn new_document(shell: &Shell, title: &str, file: &str, cx: &mut TestAppCo
     shell.visual(cx).simulate_input(title);
     shell.run(cx);
     retype(shell, "file", file, cx);
-    until(shell, cx, "the path check", offered).await;
+    shell.until_drawn(cx, "the path check", offered).await;
 }
 
 // ---- the requests and the store ----
@@ -300,10 +278,11 @@ fn intent(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> Inten
 
 /// Waits until the request `id` has an answer, and gives its code.
 async fn answered(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) -> ResultCode {
-    until(shell, cx, "the answer", |shell, cx| {
-        request_code(shell, id, cx).is_some()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the answer", |shell, cx| {
+            request_code(shell, id, cx).is_some()
+        })
+        .await;
     request_code(shell, id, cx).unwrap()
 }
 
@@ -376,10 +355,11 @@ async fn new_document_prepares_and_opens_a_draft_already_in_the_store(cx: &mut T
     shell.keys("escape", cx);
     assert!(dialog_open(&shell, cx), "Escape waits for the create");
     new_id.send(()).unwrap();
-    until(&shell, cx, "the prepare", |shell, cx| {
-        !prepares(shell, cx).is_empty()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the prepare", |shell, cx| {
+            !prepares(shell, cx).is_empty()
+        })
+        .await;
     prepare.wait_reached();
 
     let id = opened_id(&shell, cx);
@@ -484,10 +464,11 @@ async fn the_path_must_be_under_docs_end_md_and_be_free(cx: &mut TestAppContext)
     assert!(!offered(&shell, cx), "not offered while it is checked");
     assert!(!shell.present("create-file-note", cx), "nothing said yet");
     retype(&shell, "file", "held.md", cx);
-    until(&shell, cx, "the newer check", |shell, cx| {
-        shell.label("create-file-note", cx).is_some()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the newer check", |shell, cx| {
+            shell.label("create-file-note", cx).is_some()
+        })
+        .await;
     let held = "Another file is already at docs/held.md.";
     assert_eq!(shell.label("create-file-note", cx).as_deref(), Some(held));
     assert_eq!(create_note(&shell, cx).as_deref(), Some(held));
@@ -508,10 +489,9 @@ async fn the_path_must_be_under_docs_end_md_and_be_free(cx: &mut TestAppContext)
 
     retype(&shell, "folder", "docs/plans/", cx);
     retype(&shell, "file", "free.md", cx);
-    until(&shell, cx, "the free path's check", |shell, cx| {
-        offered(shell, cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the free path's check", offered)
+        .await;
     assert!(!shell.present("create-file-note", cx));
     assert!(create_note(&shell, cx).is_none(), "Create is offered");
 
@@ -520,17 +500,15 @@ async fn the_path_must_be_under_docs_end_md_and_be_free(cx: &mut TestAppContext)
     retype(&shell, "folder", "docs", cx);
     retype(&shell, "file", "dir.md", cx);
     let failed = ResultCode::InvalidPath.message();
-    until(&shell, cx, "the failed check", |shell, cx| {
-        shell.label("create-file-note", cx).as_deref() == Some(failed)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the failed check", |shell, cx| {
+            shell.label("create-file-note", cx).as_deref() == Some(failed)
+        })
+        .await;
     assert!(!offered(&shell, cx));
     std::fs::remove_dir_all(root.join("docs/dir.md")).unwrap();
     retype(&shell, "title", "Title again", cx);
-    until(&shell, cx, "the check made again", |shell, cx| {
-        offered(shell, cx)
-    })
-    .await;
+    shell.until_drawn(cx, "the check made again", offered).await;
     assert!(!shell.present("create-file-note", cx));
 }
 
@@ -562,10 +540,11 @@ async fn save_creates_the_document_once_and_the_tab_becomes_an_edit_session(
             if path == Path::new("docs/plans.md") && title == "Plans" && body == "First"
     ));
     assert_eq!(answered(&shell, sent[0], cx).await, ResultCode::Ok);
-    until(&shell, cx, "the draft retiring", |shell, _| {
-        shell.fixture.draft_store().list().unwrap().is_empty()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the draft retiring", |shell, _| {
+            shell.fixture.draft_store().list().unwrap().is_empty()
+        })
+        .await;
     // Until the tab's own read finds the item, the header is still the
     // draft's, and the item is not said to be missing (fix 1, Minor 2).
     shell.frame(cx, |_, _| ());
@@ -576,11 +555,12 @@ async fn save_creates_the_document_once_and_the_tab_becomes_an_edit_session(
         let _ = held.send(());
     }
     // The item as read: a draft's header has no Updated chip.
-    until(&shell, cx, "the item read", |shell, cx| {
-        shell.label("item-title", cx).as_deref() == Some("Plans")
-            && shell.present(ChipField::Updated.id(), cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the item read", |shell, cx| {
+            shell.label("item-title", cx).as_deref() == Some("Plans")
+                && shell.present(ChipField::Updated.id(), cx)
+        })
+        .await;
     let shown = show(&shell, &root, &id).expect("the document is created");
     assert_eq!(shown.path, "docs/plans.md");
     assert_eq!(shown.body.as_deref(), Some("First"));
@@ -608,13 +588,14 @@ async fn save_creates_the_document_once_and_the_tab_becomes_an_edit_session(
     assert_eq!(creates(&shell, cx).len(), 1, "created once");
     let same = pane(&shell, cx).read_with(cx, |pane, _| pane.edit_host());
     assert!(same.as_ref() == Some(&host), "the same session's editor");
-    until(&shell, cx, "the saved read", |shell, _| {
-        show(shell, &root, &id)
-            .and_then(|item| item.body)
-            .as_deref()
-            == Some("First and more")
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the saved read", |shell, _| {
+            show(shell, &root, &id)
+                .and_then(|item| item.body)
+                .as_deref()
+                == Some("First and more")
+        })
+        .await;
     assert_eq!(phase(&shell, cx), Some(Phase::Editing));
 }
 
@@ -676,10 +657,11 @@ async fn new_ticket_creates_with_its_fields_and_dependency(cx: &mut TestAppConte
         assert!(shell.present("rel-picker", cx), "{opener} opens the picker");
         shell.visual(cx).simulate_input(filter);
         shell.run(cx);
-        until(&shell, cx, "the offer", |shell, cx| {
-            shell.present(("rel-pick", 0usize), cx)
-        })
-        .await;
+        shell
+            .until_drawn(cx, "the offer", |shell, cx| {
+                shell.present(("rel-pick", 0usize), cx)
+            })
+            .await;
         shell.click(("rel-pick", 0usize), cx);
         shell.frame(cx, |_, _| ());
     }
@@ -756,10 +738,11 @@ async fn the_new_tab_opens_editing_with_its_header_from_the_draft(cx: &mut TestA
     shell.run(cx);
     retype(&shell, "type", "feature", cx);
     shell.click("create-ok", cx);
-    until(&shell, cx, "the prepare", |shell, cx| {
-        !prepares(shell, cx).is_empty()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the prepare", |shell, cx| {
+            !prepares(shell, cx).is_empty()
+        })
+        .await;
     prepare.wait_reached();
     let id = opened_id(&shell, cx);
 
@@ -874,10 +857,11 @@ async fn an_occupied_path_at_save_keeps_the_draft(cx: &mut TestAppContext) {
     );
     check.send(()).unwrap();
     let kept = "Another file is already at docs/taken.md. The draft is kept.";
-    until(&shell, cx, "the words", |shell, cx| {
-        shell.label("item-save-refused", cx).as_deref() == Some(kept)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the words", |shell, cx| {
+            shell.label("item-save-refused", cx).as_deref() == Some(kept)
+        })
+        .await;
     assert_eq!(phase(&shell, cx), Some(Phase::Editing), "no review");
     let drafts = stored(&shell.fixture.draft_store());
     assert_eq!(drafts.len(), 1, "the draft is kept");
@@ -915,11 +899,12 @@ async fn initials_required_points_to_settings(cx: &mut TestAppContext) {
         answered(&shell, sent[0], cx).await,
         ResultCode::InitialsRequired
     );
-    until(&shell, cx, "the words", |shell, cx| {
-        shell.label("item-save-refused", cx).as_deref()
-            == Some("This repository needs initials before it can create tickets.")
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the words", |shell, cx| {
+            shell.label("item-save-refused", cx).as_deref()
+                == Some("This repository needs initials before it can create tickets.")
+        })
+        .await;
     assert!(matches!(
         intent(&shell, sent[0], cx),
         Intent::TicketCreate { ref status, .. } if status == "open"
@@ -943,10 +928,11 @@ async fn initials_required_points_to_settings(cx: &mut TestAppContext) {
 
     set_initials(&root, "ae");
     shell.click("settings-close-button", cx);
-    until(&shell, cx, "the tab again", |shell, cx| {
-        shell.present("item-save", cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the tab again", |shell, cx| {
+            shell.present("item-save", cx)
+        })
+        .await;
     shell.click("item-save", cx);
     let sent = creates(&shell, cx);
     assert_eq!(sent.len(), 2, "Save sends the create again");
@@ -1043,10 +1029,11 @@ async fn create_without_a_draft_store_says_why_and_stays_open(cx: &mut TestAppCo
     shell.visual(cx).simulate_input("No store");
     shell.run(cx);
     shell.click("create-ok", cx);
-    until(&shell, cx, "the words", |shell, cx| {
-        shell.label("create-failure", cx).is_some()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the words", |shell, cx| {
+            shell.label("create-failure", cx).is_some()
+        })
+        .await;
     assert_eq!(
         shell.label("create-failure", cx).as_deref(),
         Some("Crash recovery is off, so a new item cannot be created.")
@@ -1141,10 +1128,9 @@ async fn a_dialog_above_the_create_dialog_stays_open_when_it_creates(cx: &mut Te
     shell.frame(cx, |_, _| ());
     assert!(shell.present("above-dialog", cx));
     new_id.send(()).unwrap();
-    until(&shell, cx, "the new tab", |shell, cx| {
-        opened(shell, cx).is_some()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the new tab", |shell, cx| opened(shell, cx).is_some())
+        .await;
 
     assert!(shell.present("above-dialog", cx), "the dialog above stays");
     assert!(dialog_open(&shell, cx), "the create dialog waits under it");
@@ -1201,10 +1187,11 @@ async fn a_new_item_read_then_missing_shows_not_found(cx: &mut TestAppContext) {
     shell.click("item-save", cx);
     let sent = creates(&shell, cx);
     assert_eq!(answered(&shell, sent[0], cx).await, ResultCode::Ok);
-    until(&shell, cx, "the item read", |shell, cx| {
-        shell.present(ChipField::Updated.id(), cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the item read", |shell, cx| {
+            shell.present(ChipField::Updated.id(), cx)
+        })
+        .await;
     assert_eq!(
         phase(&shell, cx),
         Some(Phase::Editing),
@@ -1219,10 +1206,11 @@ async fn a_new_item_read_then_missing_shows_not_found(cx: &mut TestAppContext) {
     pane(&shell, cx).update(cx, |pane, cx| {
         pane.reload(cx);
     });
-    until(&shell, cx, "the read", |shell, cx| {
-        !shell.present(ChipField::Updated.id(), cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the read", |shell, cx| {
+            !shell.present(ChipField::Updated.id(), cx)
+        })
+        .await;
     assert_eq!(
         shell.label("item-failure", cx).as_deref(),
         Some(ResultCode::ItemNotFound.message()),
@@ -1255,20 +1243,20 @@ async fn done_then_save_creates_once_and_keeps_the_header_until_read(cx: &mut Te
         .map(|_| shell.backend.hold_read(ReadKind::Item))
         .collect();
     shell.click("done-draft-save-button", cx);
-    until(&shell, cx, "the create", |shell, cx| {
-        !creates(shell, cx).is_empty()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the create", |shell, cx| !creates(shell, cx).is_empty())
+        .await;
     let sent = creates(&shell, cx);
     assert!(matches!(
         intent(&shell, sent[0], cx),
         Intent::DocumentCreate { ref body, .. } if body == "First"
     ));
     assert_eq!(answered(&shell, sent[0], cx).await, ResultCode::Ok);
-    until(&shell, cx, "Done going on", |shell, cx| {
-        pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_none())
-    })
-    .await;
+    shell
+        .until_drawn(cx, "Done going on", |shell, cx| {
+            pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_none())
+        })
+        .await;
     assert_eq!(phase(&shell, cx), Some(Phase::Viewing), "the session ended");
     assert!(!shell.present("done-draft-dialog", cx));
     assert!(
@@ -1285,11 +1273,12 @@ async fn done_then_save_creates_once_and_keeps_the_header_until_read(cx: &mut Te
     for held in reads {
         let _ = held.send(());
     }
-    until(&shell, cx, "the item read", |shell, cx| {
-        shell.label("item-title", cx).as_deref() == Some("Plans")
-            && shell.present(ChipField::Updated.id(), cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the item read", |shell, cx| {
+            shell.label("item-title", cx).as_deref() == Some("Plans")
+                && shell.present(ChipField::Updated.id(), cx)
+        })
+        .await;
     assert_eq!(creates(&shell, cx).len(), 1, "created once");
     let shown = show(&shell, &root, &id).expect("the document is created");
     assert_eq!(shown.body.as_deref(), Some("First"));
@@ -1309,10 +1298,11 @@ async fn a_drafts_page_discard_while_the_create_prepares_closes_the_tab_and_rele
     shell.visual(cx).simulate_input("Discarded early");
     shell.run(cx);
     shell.click("create-ok", cx);
-    until(&shell, cx, "the prepare", |shell, cx| {
-        !prepares(shell, cx).is_empty()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the prepare", |shell, cx| {
+            !prepares(shell, cx).is_empty()
+        })
+        .await;
     prepare.wait_reached();
     let id = opened_id(&shell, cx);
     let drafts = stored(&shell.fixture.draft_store());
@@ -1324,10 +1314,9 @@ async fn a_drafts_page_discard_while_the_create_prepares_closes_the_tab_and_rele
     shell.click(row_id(draft, "discard"), cx);
     assert!(shell.present("discard-draft-dialog", cx), "it asks first");
     shell.click("discard-draft-confirm", cx);
-    until(&shell, cx, "the tab closing", |shell, cx| {
-        tab_count(shell, cx) == 0
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the tab closing", |shell, cx| tab_count(shell, cx) == 0)
+        .await;
     assert!(
         shell.fixture.draft_store().list().unwrap().is_empty(),
         "discarded"
@@ -1337,12 +1326,13 @@ async fn a_drafts_page_discard_while_the_create_prepares_closes_the_tab_and_rele
     let sent = prepares(&shell, cx);
     assert_eq!(sent.len(), 1, "one prepare");
     assert_eq!(answered(&shell, sent[0].1, cx).await, ResultCode::Ok);
-    until(&shell, cx, "the release", |shell, cx| {
-        releases(shell, cx)
-            .first()
-            .is_some_and(|request| request_code(shell, *request, cx).is_some())
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the release", |shell, cx| {
+            releases(shell, cx)
+                .first()
+                .is_some_and(|request| request_code(shell, *request, cx).is_some())
+        })
+        .await;
     let released = releases(&shell, cx);
     assert_eq!(released.len(), 1, "one release");
     assert_eq!(request_code(&shell, released[0], cx), Some(ResultCode::Ok));
@@ -1403,10 +1393,11 @@ async fn a_created_item_not_yet_read_stands_in_as_created_once_kept_or_discarded
     shell.click("item-save", cx);
     let sent = creates(&shell, cx);
     assert_eq!(answered(&shell, sent[0], cx).await, ResultCode::Ok);
-    until(&shell, cx, "the draft retiring", |shell, _| {
-        shell.fixture.draft_store().list().unwrap().is_empty()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the draft retiring", |shell, _| {
+            shell.fixture.draft_store().list().unwrap().is_empty()
+        })
+        .await;
 
     shell.click(ChipField::All.id(), cx);
     shell.frame(cx, |_, _| ());
@@ -1417,16 +1408,18 @@ async fn a_created_item_not_yet_read_stands_in_as_created_once_kept_or_discarded
         Some("Changed"),
         "a shown session's fields"
     );
-    until(&shell, cx, "the new draft", |shell, _| {
-        !shell.fixture.draft_store().list().unwrap().is_empty()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the new draft", |shell, _| {
+            !shell.fixture.draft_store().list().unwrap().is_empty()
+        })
+        .await;
 
     shell.click("item-done", cx);
-    until(&shell, cx, "the session kept", |shell, cx| {
-        shell.present("item-kept", cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the session kept", |shell, cx| {
+            shell.present("item-kept", cx)
+        })
+        .await;
     assert!(!shell.present(ChipField::Updated.id(), cx), "not read yet");
     assert_eq!(
         shell.label("item-title", cx).as_deref(),
@@ -1438,10 +1431,11 @@ async fn a_created_item_not_yet_read_stands_in_as_created_once_kept_or_discarded
     shell.click("item-kept-discard", cx);
     assert!(shell.present("discard-draft-dialog", cx), "it asks first");
     shell.click("discard-draft-confirm", cx);
-    until(&shell, cx, "the session ending", |shell, cx| {
-        pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_none())
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the session ending", |shell, cx| {
+            pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_none())
+        })
+        .await;
     assert!(!shell.present(ChipField::Updated.id(), cx), "not read yet");
     assert_eq!(
         shell.label("item-title", cx).as_deref(),
@@ -1453,10 +1447,11 @@ async fn a_created_item_not_yet_read_stands_in_as_created_once_kept_or_discarded
     for held in reads {
         let _ = held.send(());
     }
-    until(&shell, cx, "the item read", |shell, cx| {
-        shell.present(ChipField::Updated.id(), cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the item read", |shell, cx| {
+            shell.present(ChipField::Updated.id(), cx)
+        })
+        .await;
     assert_eq!(shell.label("item-title", cx).as_deref(), Some("Plans"));
 }
 
@@ -1486,16 +1481,18 @@ async fn a_created_item_ended_before_its_read_is_viewed_as_the_private_copy(
     // lands: the base is the fields sent, over the new item's context.
     retitled_by_another(&shell, &root, &id, "Someone else's title");
     checked.send(()).unwrap();
-    until(&shell, cx, "the draft retiring", |shell, _| {
-        shell.fixture.draft_store().list().unwrap().is_empty()
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the draft retiring", |shell, _| {
+            shell.fixture.draft_store().list().unwrap().is_empty()
+        })
+        .await;
 
     shell.click("item-done", cx);
-    until(&shell, cx, "Done ending the session", |shell, cx| {
-        pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_none())
-    })
-    .await;
+    shell
+        .until_drawn(cx, "Done ending the session", |shell, cx| {
+            pane(shell, cx).read_with(cx, |pane, _| pane.edit_host().is_none())
+        })
+        .await;
     assert!(!shell.present(ChipField::Updated.id(), cx), "not read yet");
     assert_eq!(shell.label("item-title", cx).as_deref(), Some("Plans"));
     assert_eq!(
@@ -1514,8 +1511,9 @@ async fn a_created_item_ended_before_its_read_is_viewed_as_the_private_copy(
     for held in reads {
         let _ = held.send(());
     }
-    until(&shell, cx, "the item read", |shell, cx| {
-        shell.present(ChipField::Updated.id(), cx)
-    })
-    .await;
+    shell
+        .until_drawn(cx, "the item read", |shell, cx| {
+            shell.present(ChipField::Updated.id(), cx)
+        })
+        .await;
 }

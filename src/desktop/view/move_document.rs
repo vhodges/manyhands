@@ -22,12 +22,15 @@
 //!   destination, found here or by the library (`occupied_path`), is said
 //!   under the File name. `external_change` reads the document again by its
 //!   ID: found at the destination, the move is done (the pre-flight
-//!   ruling for known defect `01M4PB80T7`); otherwise its source changed,
-//!   and the dialog says so. Anything else is the
-//!   library's message and code. Every refusal leaves the dialog open. Each
-//!   attempt of its request is followed, a retry's included. An answer
-//!   whose checkpoint committed has moved the document, whatever hand-off
-//!   it still owes, which the operation area offers. The steps are
+//!   ruling for known defect `01M4PB80T7`); found where it was read with a
+//!   file now at the destination, which makes the library answer so, it is
+//!   that collision (fix 1, M2); otherwise its source changed, the dialog
+//!   says so, and Move is not offered again in it. Anything else is the
+//!   library's message and code. Every refusal leaves the dialog open, and
+//!   a change of the fields clears the last refusal of the destination they
+//!   gave. Each attempt of its request is followed, a retry's included.
+//!   An answer whose checkpoint committed has moved the document, whatever
+//!   hand-off it still owes, which the operation area offers. The steps are
 //!   `steps`'s.
 //! - **Keyboard.** Focus starts in the Folder; Enter in a field moves, when
 //!   Move is offered; Escape and Cancel close the dialog, but not while a
@@ -59,7 +62,7 @@ use super::{
 };
 use crate::desktop::{
     model::{
-        create::document_path,
+        create::{document_path, path_held},
         stamp::{Generations, RepoKey, Stamp, ViewScope},
     },
     services::{ReadKind, ReadResult, Services, requests::DesktopRequestId},
@@ -122,12 +125,15 @@ struct Sent {
 
 /// Why the last Move moved nothing.
 enum Failure {
-    Words(String),
+    /// R-23 no longer holds, in its words.
+    Blocked(&'static str),
+    /// A file is at a destination the fields no longer give.
+    Held(String),
+    /// The document changed since the dialog read it: Move is not offered
+    /// again in this dialog, as its words say (fix 1, M4).
+    Stale,
     /// The library's message and code.
-    Library {
-        message: String,
-        code: ResultCode,
-    },
+    Library { message: String, code: ResultCode },
 }
 
 impl Failure {
@@ -137,6 +143,22 @@ impl Failure {
             message: code.message().to_owned(),
             code,
         }
+    }
+
+    /// What it says, and the library's code with its message.
+    fn words(&self) -> (String, Option<&'static str>) {
+        match self {
+            Self::Blocked(words) => ((*words).to_owned(), None),
+            Self::Held(path) => (path_held(path), None),
+            Self::Stale => (MOVE_STALE.to_owned(), None),
+            Self::Library { message, code } => (message.clone(), Some(code.as_str())),
+        }
+    }
+
+    /// Whether a change of the fields clears it: it refused the destination
+    /// they gave (fix 1, M4).
+    fn of_destination(&self) -> bool {
+        matches!(self, Self::Held(_) | Self::Library { .. })
     }
 }
 
@@ -270,10 +292,23 @@ impl MoveDialog {
         self.file_name.clone()
     }
 
-    /// Whether Move can move now: the destination checked free, and no move
-    /// running or done.
-    pub(crate) fn offered(&self, _cx: &App) -> bool {
-        !self.running && !self.moved && matches!(self.check, PathCheck::Free(_))
+    /// Whether Move can move now: the destination checked free, no move
+    /// running or done, and the document not found changed since it was
+    /// read.
+    pub(crate) fn offered(&self) -> bool {
+        !self.running
+            && !self.moved
+            && !matches!(self.failure, Some(Failure::Stale))
+            && matches!(self.check, PathCheck::Free(_))
+    }
+
+    /// Why Move is not offered, while it says: a stale document, else the
+    /// destination's check.
+    fn reason(&self) -> Option<String> {
+        match self.failure {
+            Some(Failure::Stale) => Some(MOVE_STALE.to_owned()),
+            _ => self.check.note(),
+        }
     }
 
     /// The destination the fields give, or why it is not one.
@@ -287,7 +322,12 @@ impl MoveDialog {
         Ok(path)
     }
 
+    /// A field changed: the last refusal of the destination it gave goes,
+    /// and the destination is checked again.
     fn changed(&mut self, cx: &mut Context<Self>) {
+        if self.failure.as_ref().is_some_and(Failure::of_destination) {
+            self.failure = None;
+        }
         self.check_path(cx);
         cx.notify();
     }
@@ -366,10 +406,7 @@ impl Render for MoveDialog {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (danger, muted) = (cx.theme().danger, cx.theme().muted_foreground);
         let failure = self.failure.as_ref().map(|failure| {
-            let (words, code) = match failure {
-                Failure::Words(words) => (words.clone(), None),
-                Failure::Library { message, code } => (message.clone(), Some(code.as_str())),
-            };
+            let (words, code) = failure.words();
             v_flex()
                 .gap_1()
                 .child(text("move-failure", words).text_sm().text_color(danger))
@@ -388,8 +425,8 @@ impl Render for MoveDialog {
             "move-ok",
             MOVE_ACTION,
             true,
-            self.offered(cx),
-            self.check.note(),
+            self.offered(),
+            self.reason(),
             move |_, _, cx| {
                 let _ = entity.update(cx, |dialog, cx| dialog.move_document(cx));
             },
