@@ -23,6 +23,16 @@ pub fn item_id(args: &ArgMatches, repo: &ResolvedRepository) -> Result<ItemId, R
         .map_err(|_| ReadError::invalid_id().with_scope(repo.scope()))
 }
 
+/// The operation `--operation-id` names. A malformed ID is `invalid_id` in
+/// the repository's scope.
+pub fn operation_id(
+    args: &ArgMatches,
+    repo: &ResolvedRepository,
+) -> Result<OperationId, ReadError> {
+    OperationId::parse(value(args, "operation-id")?)
+        .map_err(|_| ReadError::invalid_id().with_scope(repo.scope()))
+}
+
 fn value<'a>(args: &'a ArgMatches, name: &str) -> Result<&'a str, ReadError> {
     args.get_one::<String>(name)
         .map(String::as_str)
@@ -267,8 +277,7 @@ fn operation_show(
     args: &ArgMatches,
 ) -> Result<Envelope<OperationDto>, ReadError> {
     let repo = resolve(service, args)?;
-    let id = OperationId::parse(value(args, "operation-id")?)
-        .map_err(|_| ReadError::invalid_id().with_scope(repo.scope()))?;
+    let id = operation_id(args, &repo)?;
     Ok(Envelope::read_success(
         "operation show",
         repo.scope(),

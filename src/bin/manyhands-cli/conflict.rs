@@ -17,8 +17,8 @@
 use clap::ArgMatches;
 use manyhands::{
     repository::{
-        ConflictDto, ConflictResolutionInput, ConflictResolveInput, Mutation, OperationId,
-        ReadError, RepositoryService,
+        ConflictDto, ConflictResolutionInput, ConflictResolveInput, Mutation, ReadError,
+        RepositoryService,
     },
     results::Envelope,
 };
@@ -53,11 +53,7 @@ fn conflict(
     args: &ArgMatches,
 ) -> Result<Envelope<ConflictDto>, ReadError> {
     let repo = dispatch::resolve(service, args)?;
-    let operation_id = OperationId::parse(
-        args.get_one::<String>("operation-id")
-            .expect("required operation selector"),
-    )
-    .map_err(|_| ReadError::invalid_id().with_scope(repo.scope()))?;
+    let operation_id = dispatch::operation_id(args, &repo)?;
     Ok(Envelope::read_success(
         name,
         repo.scope(),

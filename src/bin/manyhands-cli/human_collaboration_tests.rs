@@ -530,7 +530,7 @@ const OBSERVATION: &str =
     "conflict-v1:0000000000000000000000000000000000000000000000000000000000000000";
 const TOKEN: &str =
     "conflict-path-v1:1111111111111111111111111111111111111111111111111111111111111111";
-const HAND_EDIT_NOTE_LINE: &str = "note: a resolved file edited by hand must be restored to the request's resolution, or to its conflicted content, before the request is sent again.\n";
+const HAND_EDIT_NOTE_LINE: &str = "note: a resolved file edited by hand must be restored to the request's resolution before the request is sent again.\n";
 
 fn seen(f: impl FnOnce(&mut Seen)) -> Seen {
     let mut seen = Seen::default();
@@ -603,7 +603,7 @@ fn a_resolve_that_needs_its_original_request_says_the_written_paths_were_edited(
          code: original_request_required\n\
          request: 01ARZ3NDEKTSV4RRFFQ69G5FR2\n\
          next: send request 01ARZ3NDEKTSV4RRFFQ69G5FR1 again with its original command and input\n\
-         note: the paths the original request wrote were edited. Restoring them to the request's resolution or to their conflicted content lets that request continue, or a new conflict resolve supersede it.\n";
+         note: the attempt's written paths were edited by hand. Restore each file the request wrote to the request's resolution; a file it has not written yet may keep its conflicted content. Then send that request again, or a new conflict resolve may supersede it.\n";
     let plain = output(&envelope, false, &Seen::default());
     assert_eq!(plain.status, 3);
     assert!(plain.stdout.is_empty());
@@ -612,7 +612,7 @@ fn a_resolve_that_needs_its_original_request_says_the_written_paths_were_edited(
     // whatever was read.
     let read = output(&envelope, false, &seen(|seen| seen.supersedable = true));
     assert_eq!(stderr(&read), expected);
-    assert!(!expected.contains("may supersede"));
+    assert!(!expected.contains(SUPERSEDE_NOTE));
     // The `request.retry` action is rendered once, as a request.
     assert!(!expected.contains("request.retry"));
 }

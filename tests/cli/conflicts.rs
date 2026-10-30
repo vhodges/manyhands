@@ -481,11 +481,12 @@ fn input_the_cli_refuses_is_invalid_input_with_the_request_named_and_no_record()
             .unwrap(),
         ),
     ];
-    // A source that is itself JSON is a string like any other.
+    // A repeated key is refused whatever else the input holds. The
+    // resolutions are valid here, so the case isolates the repeated key.
     cases.push((
         "duplicate key",
         format!(
-            r#"{{"observation":"{OBSERVATION}","observation":"{OBSERVATION}","resolutions":[]}}"#
+            r#"{{"observation":"{OBSERVATION}","observation":"{OBSERVATION}","resolutions":[{{"token":"{TOKEN}","source":"{SOURCE}"}}]}}"#
         )
         .into_bytes(),
     ));

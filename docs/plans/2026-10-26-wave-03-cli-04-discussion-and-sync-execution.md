@@ -3215,3 +3215,36 @@ so there is no separate RED for the bin cases.
   `invalid_id`, `not_confirmable` and (show) `usage_error`.
 - **Task 14:** design line 2045's Known Limit (an unfinished resolution whose
   written paths were edited) is now told by the human output's two notes.
+
+**Fix round 1** (review of `fefc6ae4..71d65975`: approved; four minors folded
+in). FIX_BASE `71d65975`.
+
+- **The notes match the library's rule** (`integration/resolution.rs`,
+  `remote/sync.rs`): a path the request has written must hold its result; only
+  a path it has not written yet may hold its conflicted content.
+  - `EDITED_NOTE`: `the attempt's written paths were edited by hand. Restore
+    each file the request wrote to the request's resolution; a file it has not
+    written yet may keep its conflicted content. Then send that request again,
+    or a new conflict resolve may supersede it.`
+  - `HAND_EDIT_NOTE`: `a resolved file edited by hand must be restored to the
+    request's resolution before the request is sent again.`
+  - The two unit tests that pin the texts were updated. The "never Task 7's
+    note" assertion now compares with `SUPERSEDE_NOTE` itself, because the new
+    `EDITED_NOTE` also contains "may supersede".
+- **`tests/cli/conflicts.rs`:** the duplicate-key case's comment is corrected
+  and its `resolutions` list is valid, so it isolates the repeated key.
+- **Module doc** of `human_collaboration.rs`: for a resolve, the three
+  `remote_branch_deleted` lines name the request that holds the
+  synchronization.
+- **Duplication:**
+  - `dispatch::operation_id(args, &repo)` sits beside `item_id`, keeps
+    `value()?`'s error path, and serves `operation_show` and `conflict show`.
+    `operation_show`'s tests needed no edit.
+  - `reservation_note` builds the holder's note from `RESERVATION_NOTE` with
+    `replacen`; the text it produces is the same.
+  - `wants_conflict` matches `human_collaboration::RESOLVE` (now `pub const`)
+    instead of the literal.
+- **Left as briefed:** the label style, and the schema's `minItems`.
+- **Verify** (`logs/task-9-fix1-*`): `--bin manyhands-cli` 243 passed;
+  `--test cli` 330 passed; clippy (all targets, all features), `fmt --check` and
+  `check --bin manyhands-cli` pass. No new ticket comment.

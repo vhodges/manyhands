@@ -5,9 +5,11 @@
 //!   looks at it;
 //! - a comment's note on what publishing it publishes;
 //! - a local-context sync's state, reason and next action (R-37);
-//! - for `remote_branch_deleted`, three `next:` lines: cancel the refused
-//!   request, send it again, which ends it cancelled and releases its
-//!   reservation, then prepare the republish (Task 2b's ruling);
+//! - for `remote_branch_deleted`, three `next:` lines: cancel the request that
+//!   holds the reservation, send it again, which ends it cancelled and
+//!   releases the reservation, then prepare the republish (Task 2b's ruling).
+//!   For a `conflict resolve` that request is the one holding the
+//!   synchronization, not the resolve;
 //! - for `original_request_required` of `operation resume`, a `next:` line
 //!   naming the request, and the supersede note when that request's remote
 //!   resolution has written paths only;
@@ -15,8 +17,8 @@
 //!   `next:` line and a note that the attempt's written paths were edited,
 //!   because that is the only way a resolve meets it;
 //! - for `external_change` of `conflict resolve` on a conflict whose attempt
-//!   has written paths, the note that a hand-edited file must be restored
-//!   before the request is sent again;
+//!   has written paths, the note that a hand-edited file must be restored to
+//!   the request's resolution before the request is sent again;
 //! - for `conflict show`, the conflict's state, next step and paths. A side
 //!   is content, so only JSON carries it.
 //!
@@ -57,14 +59,18 @@ const SUPERSEDE_NOTE: &str =
 /// A `conflict resolve` refused with `original_request_required`: the
 /// library answers so only when the attempt's written paths changed, and
 /// without a change a new request supersedes the attempt.
-const EDITED_NOTE: &str = "the paths the original request wrote were edited. Restoring them to the request's resolution or to their conflicted content lets that request continue, or a new conflict resolve supersede it.";
+///
+/// The library's rule (`integration/resolution.rs`, `remote/sync.rs`): a path
+/// the request has written must hold its result; only a path it has not
+/// written yet may hold its conflicted content.
+const EDITED_NOTE: &str = "the attempt's written paths were edited by hand. Restore each file the request wrote to the request's resolution; a file it has not written yet may keep its conflicted content. Then send that request again, or a new conflict resolve may supersede it.";
 /// A `conflict resolve` refused with `external_change` on an attempt with
 /// written paths. The JSON message stays the code's own (Global
 /// Constraints), so this is where the way out is told.
-const HAND_EDIT_NOTE: &str = "a resolved file edited by hand must be restored to the request's resolution, or to its conflicted content, before the request is sent again.";
+const HAND_EDIT_NOTE: &str = "a resolved file edited by hand must be restored to the request's resolution before the request is sent again.";
 const CLOSURES_NOTE: &str =
     "two clones closed this ticket differently; repair it outside Manyhands.";
-const RESOLVE: &str = "conflict resolve";
+pub const RESOLVE: &str = "conflict resolve";
 
 /// A root in a `next:` command: single-quoted for a POSIX shell, with
 /// controls escaped as C3's `path observe` escapes a path, and each single
@@ -153,9 +159,10 @@ fn reservation_note(envelope: &Envelope<MutationDataDto>, request: &str) -> Stri
     if envelope.request_id.as_deref() == Some(request) {
         return RESERVATION_NOTE.into();
     }
-    format!(
-        "request {} keeps its reservation until it is cancelled; sending it again then ends it and releases the reservation.",
-        field(request)
+    RESERVATION_NOTE.replacen(
+        "the refused request",
+        &format!("request {}", field(request)),
+        1,
     )
 }
 

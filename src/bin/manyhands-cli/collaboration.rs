@@ -237,7 +237,10 @@ fn wants_conflict(envelope: &Envelope<MutationDataDto>) -> bool {
         ("operation resume", ResultCode::OriginalRequestRequired) => {
             original_request(envelope).is_some()
         }
-        ("conflict resolve", ResultCode::ExternalChange | ResultCode::RemoteBranchDeleted) => true,
+        (
+            human_collaboration::RESOLVE,
+            ResultCode::ExternalChange | ResultCode::RemoteBranchDeleted,
+        ) => true,
         _ => false,
     }
 }
