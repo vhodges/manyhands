@@ -1896,3 +1896,26 @@ Notes for later tasks: Task 22 leaves `targets()` in
   "Move the repository details out of the item tab", was created with
   the owner's go-ahead and its branch pushed. UI rework is done
   separately from the feature Cycles.
+- Owner (2026-10-29, Task 27 Step 2): on Linux the toolbar's Bold
+  changed the text to `**word**` (Source showed it; Bold and Italic lit
+  up) but the word drew regular, and headings were barely heavier. The
+  owner asked for the fix in D3. Cause: GPUI's Linux system UI font is
+  the family "IBM Plex Sans", which the machine lacks, so text falls back
+  to Noto Sans, a variable font (one upright face for every weight); GPUI
+  draws it at its normal weight and picks only among faces (`gpui-pre-wgpu`
+  0.3.6 `cosmic_text_system.rs:412`, and its test
+  `font_properties_describe_the_selected_face`). Fix: `src/desktop/fonts.rs`
+  registers IBM Plex Sans 1.1.0's static faces on Linux before
+  `gpui_kit::init`, where the Kit names the family the system UI font
+  resolves to, as the Zorite app does (`src/theme.rs`,
+  `register_bundled_fonts`). The faces and the SIL Open Font License are
+  in `assets/fonts/`, from IBM's `@ibm/plex-sans@1.1.0` release; its
+  Regular, Italic, Bold and Bold Italic are byte-identical to Zorite's.
+- Ruling (controller, font fix): six faces, adding Medium and SemiBold
+  to Zorite's four, since the desktop draws medium and semibold text
+  (about 1.2 MB, Linux builds only). — Each weight then has its own
+  face. — If wrong: 400 KB to drop.
+- Ruling (controller, font fix): no automated test. — Tests run on
+  GPUI's no-op text system, which has no faces to tell apart; the
+  owner's on-screen check of Bold covers it. — If wrong: a regression in
+  font registration is found on screen.
