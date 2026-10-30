@@ -566,6 +566,14 @@ pub fn dispatch(
         "ticket slug-assign" => {
             return crate::authoring::ticket_slug_assign(service, session, command, args);
         }
+        "item sync" => return crate::collaboration::item_sync(service, session, command, args),
+        "repo sync" => return crate::collaboration::repo_sync(service, session, command, args),
+        "operation resume" => {
+            return crate::collaboration::operation_resume(service, session, command, args);
+        }
+        "operation abandon" => {
+            return crate::collaboration::operation_abandon(service, session, command, args);
+        }
         "repo enable" => return crate::admin::repo_enable(service, session, command, args),
         "repo remove" => return crate::admin::repo_remove(service, session, command, args),
         "repo identity-set" => {

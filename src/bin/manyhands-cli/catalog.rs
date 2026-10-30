@@ -83,6 +83,12 @@ const REPO: OptionSpec = option(
 );
 const ID: OptionSpec = option("--id", Some("ULID"), true, "Canonical item ULID.");
 const KEY_ID: OptionSpec = option("--key-id", Some("ULID"), true, "Canonical key ULID.");
+pub const OPERATION_ID: OptionSpec = option(
+    "--operation-id",
+    Some("ULID"),
+    true,
+    "Canonical operation ULID.",
+);
 pub const INPUT: OptionSpec = option(
     "--input",
     Some("file|-"),
@@ -393,15 +399,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         "show",
         "Show a repository operation.",
         Required,
-        &[
-            REPO,
-            option(
-                "--operation-id",
-                Some("ULID"),
-                true,
-                "Canonical operation ULID.",
-            ),
-        ],
+        &[REPO, OPERATION_ID],
     ),
     available("id", "new", "Generate a new item ID.", Refused, &[]),
     CommandSpec {
@@ -874,12 +872,56 @@ pub const COMMANDS: &[CommandSpec] = &[
         kind: Kind::Read,
     },
     planned("comment", "add", "Add a comment.", "C4"),
-    planned("item", "sync", "Synchronize an item.", "C4"),
-    planned("repo", "sync", "Synchronize a repository.", "C4"),
+    CommandSpec {
+        resource: "item",
+        verb: "sync",
+        summary: "Synchronize an item.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[REPO, ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "repo",
+        verb: "sync",
+        summary: "Synchronize a repository.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
     planned("conflict", "show", "Show a conflict.", "C4"),
     planned("conflict", "resolve", "Resolve a conflict.", "C4"),
-    planned("operation", "resume", "Resume an operation.", "C4"),
-    planned("operation", "abandon", "Abandon an operation.", "C4"),
+    CommandSpec {
+        resource: "operation",
+        verb: "resume",
+        summary: "Resume an operation.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[REPO, OPERATION_ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "operation",
+        verb: "abandon",
+        summary: "Abandon an operation.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[REPO, OPERATION_ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
     planned("document", "promote", "Promote a document.", "C5"),
     planned("ticket", "close", "Close a ticket.", "C5"),
     planned("poll", "once", "Poll a repository once.", "C5"),

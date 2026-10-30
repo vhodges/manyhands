@@ -47,6 +47,20 @@ pub trait Boundary {
     ) -> Envelope<MutationDataDto>;
     fn request_exists(&self, id: RequestId) -> Result<bool, Envelope<RequestDto>>;
 }
+/// Whether a Ctrl-C stops the mutation at its next safe point (R-21): the
+/// six verbs that stop at safe points or take a synchronization up. Their
+/// `execute` runs inside the Ctrl-C window.
+pub fn stops_on_ctrl_c(mutation: &Mutation) -> bool {
+    matches!(
+        mutation,
+        Mutation::ItemSync(_)
+            | Mutation::RepoSync(_)
+            | Mutation::ItemRepublish(_)
+            | Mutation::CommentAdd(_)
+            | Mutation::ConflictResolve(_)
+            | Mutation::OperationResume(_)
+    )
+}
 impl Boundary for RepositoryService {
     fn prepare(&self, mutation: &Mutation) -> Envelope<PrepareDataDto> {
         RepositoryService::prepare(self, mutation)
@@ -57,7 +71,13 @@ impl Boundary for RepositoryService {
         credentials: &mut SessionCredentials<TerminalProvider<'_>>,
         progress: &mut dyn ProgressSink,
     ) -> Envelope<MutationDataDto> {
-        RepositoryService::execute(self, call, credentials, progress, &CancellationToken::new())
+        if stops_on_ctrl_c(&call.mutation) {
+            crate::interrupt::during(|token| {
+                RepositoryService::execute(self, call, credentials, progress, token)
+            })
+        } else {
+            RepositoryService::execute(self, call, credentials, progress, &CancellationToken::new())
+        }
     }
     fn request_exists(&self, id: RequestId) -> Result<bool, Envelope<RequestDto>> {
         let envelope = self.show_request(id);
@@ -121,11 +141,42 @@ pub fn run(
     boundary: &dyn Boundary,
     session: &mut Session,
     spec: &'static CommandSpec,
-    mut flags: MutationFlags,
+    flags: MutationFlags,
     plan: Plan,
     build: &mut dyn FnMut(&Extras) -> Mutation,
     sleep: &mut dyn FnMut(Duration),
 ) -> Output {
+    match drive(boundary, session, spec, flags, plan, build, sleep) {
+        Driven::Answered(output) => output,
+        Driven::Executed { envelope, supplied } => {
+            render::mutation_output(session.json, &envelope, supplied)
+        }
+    }
+}
+
+/// What a run came to: an answer the CLI gave without executing, or the
+/// envelope of the last `execute`, for the verb to render.
+pub enum Driven {
+    Answered(Output),
+    Executed {
+        envelope: Box<Envelope<MutationDataDto>>,
+        /// Whether a passphrase was supplied during the run.
+        supplied: bool,
+    },
+}
+
+/// `run`, with the last envelope given back unrendered.
+pub fn drive(
+    boundary: &dyn Boundary,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    mut flags: MutationFlags,
+    plan: Plan,
+    build: &mut dyn FnMut(&Extras) -> Mutation,
+    sleep: &mut dyn FnMut(Duration),
+) -> Driven {
+    // A run starts with no Ctrl-C latched (R-36).
+    crate::interrupt::reset();
     let command = format!("{} {}", spec.resource, spec.verb);
     let confirmed = matches!(
         spec.kind,
@@ -136,12 +187,23 @@ pub fn run(
     );
     let mut extras = Extras::default();
     if flags.prepare {
-        return render::prepare_output(session.json, &boundary.prepare(&build(&extras)));
+        return Driven::Answered(render::prepare_output(
+            session.json,
+            &boundary.prepare(&build(&extras)),
+        ));
     }
     flags.allocate(session);
     let request_id = match flags.request_id {
         Some(id) => id,
-        None => return refusal(session, &command, None, ResultCode::UsageError, None),
+        None => {
+            return Driven::Answered(refusal(
+                session,
+                &command,
+                None,
+                ResultCode::UsageError,
+                None,
+            ));
+        }
     };
     let exists = if confirmed
         && session.interactive
@@ -152,7 +214,11 @@ pub fn run(
         match boundary.request_exists(request_id) {
             Ok(exists) => exists,
             Err(envelope) => {
-                return render::envelope_output(session.json, &envelope, human_admin::request);
+                return Driven::Answered(render::envelope_output(
+                    session.json,
+                    &envelope,
+                    human_admin::request,
+                ));
             }
         }
     } else {
@@ -171,29 +237,29 @@ pub fn run(
                 match asked {
                     Asked::Answer(identity) => extras.identity = Some(identity),
                     Asked::Cancelled => {
-                        return refusal(
+                        return Driven::Answered(refusal(
                             session,
                             &command,
                             Some(request_id),
                             ResultCode::Cancelled,
                             None,
-                        );
+                        ));
                     }
                     Asked::Exhausted => {
-                        return refusal(
+                        return Driven::Answered(refusal(
                             session,
                             &command,
                             Some(request_id),
                             ResultCode::InvalidInput,
                             None,
-                        );
+                        ));
                     }
                 }
                 note(&identity_note(request_id));
                 envelope = boundary.prepare(&build(&extras));
             }
             let Some(preview) = envelope.data.as_ref().and_then(PrepareDataDto::preview) else {
-                return render::prepare_output(session.json, &envelope);
+                return Driven::Answered(render::prepare_output(session.json, &envelope));
             };
             let consent = session
                 .terminal
@@ -201,25 +267,25 @@ pub fn run(
                 .map(|t| prompt::consent(t, &human_admin::preview(preview)))
                 .unwrap_or(Consent::No);
             if matches!(consent, Consent::No) {
-                return refusal(
+                return Driven::Answered(refusal(
                     session,
                     &command,
                     Some(request_id),
                     ResultCode::Cancelled,
                     None,
-                );
+                ));
             }
             // A library preview always contains a canonical confirmation ID.
             match ConfirmationId::parse(&preview.confirmation_id) {
                 Ok(id) => Some(id),
                 Err(_) => {
-                    return refusal(
+                    return Driven::Answered(refusal(
                         session,
                         &command,
                         Some(request_id),
                         ResultCode::InternalError,
                         None,
-                    );
+                    ));
                 }
             }
         }
@@ -252,9 +318,17 @@ pub fn run(
             &mut credentials,
             progress,
         );
-        if !plan.retry || attempts == RETRY_DELAYS_MS.len() || !should_retry(&envelope, request_id)
+        // No retry follows a Ctrl-C latched in this run (R-36), wherever
+        // in the call it landed.
+        if !plan.retry
+            || attempts == RETRY_DELAYS_MS.len()
+            || !should_retry(&envelope, request_id)
+            || crate::interrupt::latched()
         {
-            return render::mutation_output(session.json, &envelope, supplied.get());
+            return Driven::Executed {
+                envelope: Box::new(envelope),
+                supplied: supplied.get(),
+            };
         }
         if !session.json {
             note("progress: retrying");

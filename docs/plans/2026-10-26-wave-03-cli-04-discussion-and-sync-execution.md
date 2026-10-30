@@ -598,6 +598,7 @@ new ticket comment (ruling P4).
 | 4a | `feat: bind conflict resolution that the same request can finish`; review fix round 1 `fix: let the original request cancel a resolution's publication, and close the review's gaps`; Part A review fix round 1 `fix: close a resolution attempt that wrote nothing, and close Part A review's gaps` | Verify list: 200 of 201 `mutation_remote` SSH cases, the one watchdog failure (`c4_resolution_conformance`) fixed and re-run (1, 47 s); 30 `c4_resolution`; 383, 129, 44, 72, 95, 25 SSH; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy; fix rounds: see their entries | Part A review fix round 1 applied; re-review pending | Every row of the interrupted-resolution table met; resume's one route for a prepared commit added (decision 18). See "Task 4a: Conflict Resolution Binding" |
 | 4b | `feat: resume comment publication and resolved synchronizations`; review fix round 1 `fix: share resolution fixtures, keep an owed child's standing, and pin a fenced comment's resume` | Verify list: 221 `mutation_remote` SSH cases (13 `c4_resume`), no watchdog hit; 383 `mutation_replay`; 44 `mutation_contract`; 123 `--lib mutation`; clippy, fmt; desktop check and clippy; fix round 1: 15 `c4_resume`, 34 `c4_comment`, 37 `c4_resolution`, 383, 183, 123, 477, clippy, fmt, desktop | review fix round 1 applied; re-review pending | Every row of the resume table met but row 6 (Task 5's, P3). Row 8 stopped at a design checkpoint and was ruled option B; Task 14 amends its wording. E-11 applied. See "Task 4b: Resume Routes" |
 | 5 | `feat: republish a remotely deleted item branch with consent`; review fix round 1 `refactor: share item sync's fetch and push steps with republish, and close the review's gaps` | Verify list: 249 `mutation_remote` SSH cases (23 `c4_republish`, 16 `c4_resume`), no watchdog hit; 23 `c4_republish`, 16 `c4_resume`, 3 `c4_conformance`, 1 `c4_resolution_conformance`; 183, 129, 44, 72; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy (`--bin`), `check --features desktop`, and `clippy --all-targets --features desktop` at main's 58; fix round 1: see its entry | review fix round 1 applied; re-review pending | Every row of the republish table met, and the resume table's row 6 (P3). The conformance case is split per row (owner-authorized, beside E-9). See "Task 5: Republish" |
+| 7 | `feat: add sync, resume and abandon verbs with a Ctrl-C window` | Verify list: `--bin manyhands-cli` 212, `cli` 302, `cli_remote -- c4_interruption` 1 SSH case; clippy, `check --bin manyhands-cli`, fmt; desktop `check --bin manyhands` (guard) | pending | The spike answered `cancelled`, exit 130, with its effects intact (decision 14). No library change; no `--lib` run (ruling 5). See "Task 7: The Ctrl-C Window And The Sync, Resume And Abandon Verbs" |
 
 ### Task 1: Merging Synchronization
 
@@ -2664,3 +2665,205 @@ origin/main` exits 0.
   `01M62KA2F519YGJ71XADTDX9N7`'s statement that `remote_branch_deleted`
   finishes a `comment add` record: under Task 2b's concern-1 ruling, the
   record stays `Owed`.
+
+### Task 7: The Ctrl-C Window And The Sync, Resume And Abandon Verbs
+
+The commit is `feat: add sync, resume and abandon verbs with a Ctrl-C window`,
+on BASE `970cd40c`. `origin/main` is still `a372edb`, and `git merge-tree
+--write-tree HEAD origin/main` exits 0. No subagent was dispatched. Only
+`src/bin/manyhands-cli` and tests changed: no library file, so no `--lib`
+target ran (controller ruling 5).
+
+**The window (R-21, R-36), `interrupt.rs`.**
+
+- `pub(crate) fn during<T>(work: impl FnOnce(&CancellationToken) -> T) -> T`.
+  The token sits in an `AtomicPtr` slot. The handler only does atomic loads
+  and stores: the run's first press cancels the token and latches; a later
+  one ends the process.
+- Unix (`interrupt/unix.rs`): `sigaction(SIGINT)` with `SA_RESTART`. A second
+  press restores `SIG_DFL` and `raise`s, so the process dies by `SIGINT` when
+  the handler returns.
+- Windows (`interrupt/windows.rs`): `SetConsoleCtrlHandler`. The first
+  `CTRL_C_EVENT` returns `TRUE`, a later one `FALSE`; other events go to the
+  default handler. It is not compiled here: there is no Windows target in the
+  Devenv toolchain. It stays the owed native check (Owed native checks, item 1).
+- Teardown, on return or unwind (a drop guard): it restores the disposition,
+  clears the slot, waits for any handler still running on another thread, and
+  then drops the token.
+- One latch per run: the press count is process-wide. `reset()` and
+  `latched()` are what `mutate` uses, and a window opened while latched starts
+  cancelled.
+
+**The wiring, `mutate.rs`.**
+
+- The `Boundary` impl runs `RepositoryService::execute` inside `during` for
+  `ItemSync`, `RepoSync`, `ItemRepublish`, `CommentAdd`, `ConflictResolve` and
+  `OperationResume` (`stops_on_ctrl_c`). Every other mutation gets a fresh
+  token, as before.
+- `Boundary`, `Plan` and `FakeBoundary` are unchanged, and so is
+  `mutate_tests`.
+- `run`'s body moved, unchanged, into `drive`, which returns
+  `Driven::Answered(Output)` or `Driven::Executed { envelope, supplied }`.
+  `run` renders the latter as before. The collaboration verbs call `drive`, so
+  that human output can read beside the envelope (see the supersede note
+  below).
+- `drive` resets the latch on entry, and the retry loop stops once a press is
+  latched. C2's retry still never follows `cancelled` (R-23).
+
+**The verbs, `collaboration.rs`.**
+
+- `item sync`, `repo sync` and `operation resume` are unconfirmed, and run with
+  `Plan { identity_prompt: false, retry: true }`.
+- `operation abandon` is confirmed, and uses C2's flow: `--prepare`,
+  `--confirm`, or consent at a terminal.
+- `item sync` reads the kind with one `show_item` before it builds the request
+  (R-2). The read's refusal is the verb's, with its request ID and no effect,
+  as C3's fill read gives it.
+- The catalog flips all four to `Available("C4")`, and adds `pub const
+  OPERATION_ID`, which `operation show` now uses unchanged. Each verb's
+  options are `--repo`, its selector, `--request-id`, `--prepare` and
+  `--confirm`, as C3's verbs that take no input have them. `--input` is a
+  usage error.
+- E-1: `help_root.json` and `help_root_text.txt` were regenerated. The diff
+  changes only the four verbs' availability, repository rule and options.
+
+**Human output, `human_collaboration.rs`.** Every result keeps C2's lines.
+C4's lines are added by the data and the code:
+
+- **A conflict** (`SynchronizationConflictMutationDto`, and a `conflict` in a
+  comment's or a resolution's data):
+  - `conflict: operation <id> stopped on a conflict; next action: <resolve|external_repair>`;
+  - `next: manyhands-cli conflict show --repo '<root>' --operation-id <id>`.
+
+  C2's lines for the recovery actions follow. A resume of a conflict-stopped
+  synchronization (controller ruling 3) prints the same lines.
+- **`remote_branch_deleted`** (controller ruling 1): the `request.cancel` the
+  library offers is printed as three lines, in place of C2's one line:
+  1. `manyhands-cli request cancel --request-id <id>`;
+  2. the same request again: `manyhands-cli item sync --repo '<root>' --id
+     <item> --request-id <id>`. When the request is not the envelope's own,
+     whose command cannot be named, the line is `send request <id> again with
+     its original command and input`;
+  3. `manyhands-cli item republish --repo '<root>' --id <item> --prepare`.
+
+  A note says why: the refused request keeps its reservation until it is
+  cancelled, and sending it again then ends it and releases the reservation.
+  `branch_deleted(root, item, request, again)` is public in the module for
+  Task 8's `comment add` and Task 9's `conflict resolve`.
+- **`original_request_required`** (controller ruling 2): a `request.retry`
+  naming another request is printed as `next: send request <id> again with
+  its original command and input`. For a local sync, the line names
+  `required_request_id` once.
+  - The supersede note is `note: a new conflict resolve may supersede its
+    resolution while the paths it wrote are unchanged.`
+  - It is printed only when the conflict read (`show_conflict`) of the resumed
+    operation reports `historical: true`, with `request_id` equal to the named
+    request (R-39, R-35).
+  - The read happens in human mode only, after `execute`. A read that fails
+    adds nothing. JSON passes through unchanged.
+- **The gate's `LocalContextSyncMutationDto`** (R-37): `state:`, `reason:` and
+  `next action:` lines, in place of C2's field list. No local verb is named.
+  The tests render the gate's goldens `local_sync_*.json`.
+- Roots in `next:` lines are single-quoted, with controls escaped by C3's
+  `field`, and a single quote written as `'\''`.
+- Progress is C2's `HumanProgress`, on stderr, unchanged.
+
+**The spike (decision 14): `c4_interruption_held_transfer`.**
+
+- **Setup.**
+  - `World` and `CliEnv`; the host is approved through the library, as
+    `unlock.rs`'s `approve` does.
+  - The world's key is passphrase-protected, so a `--non-interactive` call
+    would answer `unlock_required` before it connects. The case therefore
+    registers and selects an unprotected copy of the same key, decrypted with
+    the fixture passphrase. Its lines are added to the output probes.
+  - The item is saved locally and never published. A peer pushes a commit
+    with a 1.6 MB random payload to the remote's `main`.
+- **The run.**
+  - `hold_transfer_after(131072)` holds `item sync`'s fetch.
+  - `item sync --non-interactive --request-id` runs through `PtyCli`, in human
+    mode.
+  - Once the hold is reached and the first `progress:` line is on stderr, it
+    sends `0x03`, waits 500 ms, and releases the hold.
+- **The answer.** It was the same on all four runs (logs `task-7-spike-*`,
+  `task-7-cli-remote.log`):
+  - `cancelled`, **exit 130**, at the next safe point. The `SA_RESTART`
+    handler let the blocked transfer finish, and the safe point after the
+    fetch stopped the request.
+  - Human stderr: `progress: accepted`, `connecting`, `fetching`, `observing`,
+    `stopping`, then `error: The request was cancelled.`, `code: cancelled`,
+    `request: …`, `operation: …` and `effects: publication=pending`.
+  - `request show`: finished, outcome `cancelled`. Effects:
+    `publication: pending`, every other effect `not_requested`, and
+    `commit_oid` null.
+  - The observation is `130 68 3 0 0 1 1 1 0`: the exit, the code index, the
+    publication index (`pending`), the integration index (`not_requested`),
+    the remote context present (no), the local context unchanged (yes), the
+    local primary unchanged (yes), the remote primary at the peer's commit
+    (yes), and pushes since (0).
+- **Effects intact.** Nothing was pushed, merged or moved locally, and the
+  effects claim no more. The case pins this answer.
+- **For Task 14.** The Known Limit's `transport_unavailable` alternative was
+  not observed with this transport. The limit can keep it as possible, or say
+  the spike answered `cancelled`. The owner's wording stands.
+
+**Tests.**
+
+- **Unit, Unix** (`interrupt_tests.rs`). Every case re-runs the test binary as
+  a child, filtered to itself. A child that must die proves first that it
+  survived its first press.
+  - The disposition is restored after `during`, from both `SIG_DFL` and
+    `SIG_IGN`, with `SA_RESTART` set inside.
+  - A press cancels the token, and the process goes on.
+  - The latch is set by a press, and stays set in a second window.
+  - A second press dies by `SIGINT`.
+  - A press outside a window, after one inside it, dies.
+  - An unwind restores the disposition.
+  - R-36 through `mutate::run`: a latched press stops C2's retry after one
+    `execute`, and the next run is retried three times. It fails if the
+    loop's latch check is removed.
+- **Unit** (`human_collaboration_tests.rs`, 13 cases).
+- **Unit** (`collaboration_tests.rs`, 4 cases): the six windowed variants,
+  the kind mapping, the supersede predicate, and which request an
+  `original_request_required` names.
+- **Binary** (`tests/cli/collaboration.rs`, 12 cases, no SSH).
+  - The goldens: `repo_sync_publication_remote_required`,
+    `item_sync_item_not_found`, `operation_resume_operation_not_found` and
+    `operation_abandon_preview`. Also `operation_resume_ok` and
+    `operation_abandon_ok`, for R-28's `_ok`.
+  - The text goldens: `item_sync_text`, `repo_sync_text`,
+    `operation_resume_text` and `operation_abandon_text`.
+  - Abandon's prepare, confirm and interactive consent.
+  - R-30: C3's stuck save (committed, hand-off owed, then hand-edited, so
+    its own retry is `external_change`) is closed by abandon. The edited bytes,
+    the branch tip and the worktree are unchanged, the request is released,
+    and `index refresh` then succeeds.
+  - A remote operation's abandon: `invalid_input` to `--prepare`, and
+    `confirmation_required` without a confirmation, with nothing changed.
+  - Abandon's stale write: the save's own request finishes the operation after
+    the preview, and the confirmation is then `external_change`.
+  - `request_mismatch` and the stored-result replay, for resume and for
+    abandon.
+  - A human resume prints `progress: accepted/observing/indexing` on stderr,
+    and JSON stderr is empty.
+  - Review Focus 4: a Ctrl-C at abandon's consent prompt is exit 130. The
+    operation stays pending, the save's record stays accepted, and the
+    allocated request has no record.
+  - `--input` on each verb is a usage error with a null request ID.
+
+**For later tasks.**
+
+- **Task 8:** add a `"comment add"` arm to `human_collaboration::again` (with
+  its `--input`), or pass `None` to `branch_deleted` for the generic line. The
+  publication note goes into `Lines` notes.
+- **Task 9:** `conflict resolve`'s `remote_branch_deleted` names the holder's
+  request, which is not the envelope's own, so its second line is the generic
+  one. The republish line needs `scope.item_id`, so check that the resolve
+  envelope carries it.
+- **Task 10:** the republish carries from Task 5 (busy names the refused `item
+  sync` request; the no-op preview says to run `item sync` first) are not done
+  here.
+- **Task 12b:** the supersede note's read has no end-to-end case without a
+  remote conflict.
+- **Task 13:** the spike case is `tests/cli_remote/interruption.rs`'s first;
+  Task 13 adds its cases beside it.

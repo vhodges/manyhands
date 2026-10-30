@@ -24,6 +24,9 @@ mod authoring_reads;
 #[path = "cli/boundaries.rs"]
 mod boundaries;
 
+#[path = "cli/collaboration.rs"]
+mod collaboration;
+
 #[path = "cli/content.rs"]
 mod content;
 

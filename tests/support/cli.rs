@@ -330,6 +330,12 @@ pub const CLI_CASES: &[&str] = &[
     "usage_unknown_command",
     "usage_unknown_option",
     "version",
+    "repo_sync_publication_remote_required",
+    "item_sync_item_not_found",
+    "operation_resume_operation_not_found",
+    "operation_resume_ok",
+    "operation_abandon_preview",
+    "operation_abandon_ok",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
     "document_repair_text",
@@ -353,6 +359,10 @@ pub const CLI_TEXT_CASES: &[&str] = &[
     "version_text",
     "ticket_list_text",
     "item_not_found_text",
+    "item_sync_text",
+    "repo_sync_text",
+    "operation_resume_text",
+    "operation_abandon_text",
 ];
 pub const CLI_REPOSITORY_VALUES: &[&str] = &["required", "refused"];
 

@@ -2,6 +2,8 @@
 pub use manyhands::{repository, runtime};
 #[path = "cli_remote/hosts.rs"]
 mod hosts;
+#[path = "cli_remote/interruption.rs"]
+mod interruption;
 #[path = "cli_remote/journeys.rs"]
 mod journeys;
 // As in the other SSH targets, preserve the shared fixture's domain error type.
@@ -90,6 +92,7 @@ fn main() {
         .iter()
         .chain(unlock::CASES)
         .chain(journeys::CASES)
+        .chain(interruption::CASES)
         .copied()
         .collect();
     ssh_harness::run(&cases);
