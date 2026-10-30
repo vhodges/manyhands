@@ -3595,7 +3595,9 @@ extra private `TempDir`, which keeps the clones alive.
   `ITEM`, and `OTHER_ITEM` for a request sent again with another target.
 - **Each clone.** A `git2` clone of the server, then, through `checked`:
   1. `key import` of the server's one allowed key into the clone's own key
-     store, and `key select`;
+     store, and `key select`. Both clones import the same key file, because
+     the SSH fixture allows a single key. "Its own selected key" holds as
+     each clone's own key-store entry;
   2. `repo identity-set`, prepare then confirm;
   3. `repo enable {"primary_branch":"main"}`, prepare then confirm;
   4. `remote select origin`, which answers `already_applied`;
@@ -3721,8 +3723,13 @@ comments, the bodies are a probe no output may hold.
     `cancelled`, 130, with the checkpoint `committed`, publication `pending`
     and no recovery. The record is `finished`; nothing is recreated and
     nothing is pushed.
-  - `item republish --prepare` answers `ok`, not `busy`. Its preview has
-    `branch_republished` and `local_oid` the checkpoint.
+  - `item republish --prepare` answers `ok`, with `branch_republished` and
+    `local_oid` the checkpoint. The preview takes no reservation, so it
+    proves nothing about one (fix round 1).
+  - The preview, confirmed under a new request ID, answers `ok`, 0, not
+    `busy`. The server's context is then the checkpoint, from exactly one
+    accepted push that creates the branch. Only this proves the reservation
+    free.
 - `c4_collaboration_resume_meets_a_deleted_branch` (carry 2)
   - The same setup, then `operation resume` of the comment's operation in
     human mode: exit 3.
@@ -3792,3 +3799,38 @@ takes no `--locked`); logs are in `logs/task-12a-*`.
 - **Owner and main.** `01M669FJR27FRHCNPWAMD6VH4V` (remote selection's
   stale index). When it lands, `CliPair` can select the publication remote
   itself on one clone.
+
+#### Task 12a, fix round 1
+
+The commit is `test: prove the freed reservation by a republish, and close
+the review's minors`, on FIX_BASE `ee22988e`.
+
+- **I-1.** The deleted-branch cases now confirm the republish. A preview
+  takes no reservation, so on its own it proved nothing. `free_the_reservation`
+  confirms the preview under a new request ID, and asserts `ok`, 0, the
+  server's context at the checkpoint, and exactly one accepted push, which
+  creates the branch. Both carry cases use it, and both pass.
+- **M-1.** The `item sync` mismatch makes no `OTHER_ITEM` context. The
+  resume's JSON replay and its mismatch leave A's context unchanged. The
+  `repo sync` replay leaves B's primary unchanged.
+- **M-2.** Carry 1 matches the whole human effects line through
+  `commit=<checkpoint>`, read from A's context tip before the output
+  assertions.
+- **M-5.** The setup line notes the shared key file (see `CliPair` above).
+- **The owner's exploration** (uncommitted; `logs/task-12a-explore-history-unknown-cli.log`).
+  A key re-selected after the publication remote is configured leaves that
+  registry unable to publish a never-published context. Every `item sync`
+  stops after its fetch:
+  - It answers `recovery_required`, 3, with `[request.retry, repo.inspect]`,
+    and holds the reservation, so other syncs are `busy`.
+  - Only `request cancel` plus the same request releases the reservation,
+    and the next sync repeats the stop.
+  - Nothing else works: `operation resume` (`recovery_required`), `operation
+    abandon` (`invalid_input`), `item republish --prepare` (`already_applied`)
+    and `comment add` (`recovery_required`).
+  - The report has the details, for the owner.
+- **Verify** (`logs/task-12a-fix1-*`):
+  - `test --all-features --test cli_remote -- c4_collaboration`: 8 SSH cases
+    passed;
+  - `clippy --all-targets --all-features -- -D warnings`: passes;
+  - `fmt --check`: passes.

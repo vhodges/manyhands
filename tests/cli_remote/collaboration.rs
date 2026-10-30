@@ -623,6 +623,11 @@ fn c4_collaboration_item_sync() -> Result<(), FixtureError> {
     // The same request ID for another item is another request.
     let mismatch = item_sync(b, OTHER_ITEM, R3, "request_mismatch", 2);
     assert!(mismatch["data"].is_null());
+    // The refused request made no context of the other item.
+    assert_eq!(
+        b.tip(&format!("refs/heads/manyhands/ticket/{OTHER_ITEM}"))?,
+        None
+    );
     assert_eq!(connections(&p), opened);
     assert_eq!(remote_world::accepted(&p.server), pushes + 1);
     assert_eq!(b.tip(CONTEXT)?, Some(merge));
@@ -746,6 +751,7 @@ fn c4_collaboration_repo_sync() -> Result<(), FixtureError> {
     // The finished request again: its stored result, and nothing runs.
     let opened = connections(&p);
     assert_eq!(repo_sync(b, R2, "ok", 0), merged);
+    assert_eq!(b.tip(PRIMARY)?, Some(merge));
     // The same request ID for the item's branch is another request.
     let mismatch = item_sync(b, ITEM, R2, "request_mismatch", 2);
     assert!(mismatch["data"].is_null());
@@ -827,6 +833,7 @@ fn c4_collaboration_resume_publishes_a_stopped_comment() -> Result<(), FixtureEr
     let opened = connections(&p);
     let resumed = resume(a, &comment, R3, "ok", 0);
     assert_eq!(connections(&p), opened);
+    assert_eq!(a.tip(CONTEXT)?, Some(checkpoint));
     assert!(resumed["operation_id"].is_null());
     assert!(resumed["recovery"].as_array().unwrap().is_empty());
     for (key, expected) in [
@@ -851,6 +858,8 @@ fn c4_collaboration_resume_publishes_a_stopped_comment() -> Result<(), FixtureEr
     // The same request ID for another operation is another request.
     let other = repository::OperationId::new().to_string();
     resume(a, &other, R3, "request_mismatch", 2);
+    assert_eq!(a.tip(CONTEXT)?, Some(checkpoint));
+    assert_eq!(connections(&p), opened);
     // The comment's own request finds it published, and pushes nothing.
     let again = add(a, R2, C2, None, PRIVATE_BODY, "ok", 0);
     assert_eq!(again["data"]["publication"], "published");
@@ -869,8 +878,10 @@ fn deleted(p: &CliPair) -> Result<(), FixtureError> {
 
 /// The way out the human output names, followed: `request cancel` of the
 /// comment's request, the same request again, which ends it cancelled with
-/// its checkpoint kept, and an `item republish` preview that is not
-/// refused as `busy`.
+/// its checkpoint kept, then `item republish`, prepared and confirmed. The
+/// preview takes no reservation, so only the confirmed republish, which
+/// reserves and pushes, proves the reservation free: it publishes the
+/// checkpoint with one push, and is not refused as `busy`.
 fn free_the_reservation(p: &CliPair, checkpoint: git2::Oid) -> Result<(), FixtureError> {
     let a = &p.a;
     let pushes = remote_world::accepted(&p.server);
@@ -915,6 +926,39 @@ fn free_the_reservation(p: &CliPair, checkpoint: git2::Oid) -> Result<(), Fixtur
         serde_json::json!([{"effect": "branch_republished"}])
     );
     assert_eq!(oid(&preview["data"]["details"]["local_oid"]), checkpoint);
+    let republished = checked(
+        &a.env,
+        &[
+            "item",
+            "republish",
+            "--repo",
+            a.root(),
+            "--id",
+            ITEM,
+            "--request-id",
+            R6,
+            "--confirm",
+            preview["data"]["confirmation_id"].as_str().unwrap(),
+        ],
+        &[],
+        "ok",
+        0,
+        None,
+    );
+    assert_eq!(republished["outcome"], "success");
+    assert_eq!(republished["request_id"], R6);
+    assert_eq!(p.served(CONTEXT)?, Some(checkpoint));
+    assert_eq!(remote_world::accepted(&p.server), pushes + 1);
+    assert_eq!(
+        p.server.receive_updates().last(),
+        Some(&ssh_remote::ReceiveUpdate {
+            reference: CONTEXT.into(),
+            old_oid: git2::Oid::zero(),
+            new_oid: checkpoint,
+            accepted: true,
+        })
+    );
+    assert_eq!(a.tip(CONTEXT)?, Some(checkpoint));
     Ok(())
 }
 
@@ -934,6 +978,8 @@ fn c4_collaboration_comment_meets_a_deleted_branch() -> Result<(), FixtureError>
     );
     assert_eq!(out.status, 4);
     assert!(out.stdout.is_empty());
+    // The run made the checkpoint: its OID is A's context tip.
+    let checkpoint = a.tip(CONTEXT)?.ok_or(FixtureError)?;
     let stderr = text(&out.stderr);
     assert!(
         stderr.starts_with(&format!(
@@ -945,7 +991,9 @@ fn c4_collaboration_comment_meets_a_deleted_branch() -> Result<(), FixtureError>
         "{stderr}"
     );
     assert!(
-        stderr.contains("effects: write=written checkpoint=committed discovery=current publication=pending commit="),
+        stderr.contains(&format!(
+            "effects: write=written checkpoint=committed discovery=current publication=pending commit={checkpoint}\n"
+        )),
         "{stderr}"
     );
     assert_eq!(
@@ -967,7 +1015,7 @@ fn c4_collaboration_comment_meets_a_deleted_branch() -> Result<(), FixtureError>
     assert_eq!(request_show(a, R2)["state"], "accepted");
     assert_eq!(p.served(CONTEXT)?, None);
     assert_eq!(remote_world::accepted(&p.server), pushes);
-    let checkpoint = a.tip(CONTEXT)?.ok_or(FixtureError)?;
+    assert_eq!(a.tip(CONTEXT)?, Some(checkpoint));
     free_the_reservation(&p, checkpoint)
 }
 
