@@ -55,20 +55,20 @@ const C2: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC2";
 const C3: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC3";
 const C4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC4";
 /// A comment body no output may hold: a case that uses it never lists it.
-const PRIVATE_BODY: &str = "cli-pair-private-comment-body-sentinel";
+pub(super) const PRIVATE_BODY: &str = "cli-pair-private-comment-body-sentinel";
 const AUTHOR_A: &str = "Clone A <clone-a@example.invalid>";
 const AUTHOR_B: &str = "Clone B <clone-b@example.invalid>";
 const COMMENT_SCHEMA: &str = "comment_mutation.schema.json";
-const PUBLICATION_NOTE: &str = "note: publishing the comment also publishes this item's other checkpointed work; unsaved drafts are not included.\n";
+pub(super) const PUBLICATION_NOTE: &str = "note: publishing the comment also publishes this item's other checkpointed work; unsaved drafts are not included.\n";
 pub(super) const RESERVATION_NOTE: &str = "note: the refused request keeps its reservation until it is cancelled; sending it again then ends it and releases the reservation.\n";
 const RESUME_DELETED_NOTE: &str = "note: the request that started this publication, its comment add or item sync, still holds the reservation: run request cancel with that request's ID, then send that request once more, then run item republish.\n";
 
 /// Makes `PRIVATE_BODY` a probe of every later run's output.
-fn private_body() {
+pub(super) fn private_body() {
     OUTPUT_PROBES.with(|probes| probes.borrow_mut().push(PRIVATE_BODY.to_owned()));
 }
 
-fn comment_input(comment: &str, parent: Option<&str>, body: &str) -> Vec<u8> {
+pub(super) fn comment_input(comment: &str, parent: Option<&str>, body: &str) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "comment_id": comment,
         "parent_id": parent,
@@ -77,7 +77,11 @@ fn comment_input(comment: &str, parent: Option<&str>, body: &str) -> Vec<u8> {
     .unwrap()
 }
 
-fn comment_args<'a>(clone: &'a CliClone, item: &'a str, request: &'a str) -> Vec<&'a str> {
+pub(super) fn comment_args<'a>(
+    clone: &'a CliClone,
+    item: &'a str,
+    request: &'a str,
+) -> Vec<&'a str> {
     vec![
         "comment",
         "add",
@@ -120,7 +124,7 @@ fn add_on(
 }
 
 /// `add_on` of `ITEM`.
-fn add(
+pub(super) fn add(
     clone: &CliClone,
     request: &str,
     comment: &str,
@@ -244,12 +248,16 @@ pub(super) fn quoted(clone: &CliClone) -> String {
     format!("'{}'", clone.root.canonicalize().unwrap().to_str().unwrap())
 }
 
-fn comment_path(comment: &str) -> String {
+pub(super) fn comment_path(comment: &str) -> String {
     format!(".manyhands/comments/{ITEM}/{comment}.md")
 }
 
 /// Whether the commit `oid` of `repo` holds `path`.
-fn holds(repo: &git2::Repository, oid: git2::Oid, path: &str) -> Result<bool, FixtureError> {
+pub(super) fn holds(
+    repo: &git2::Repository,
+    oid: git2::Oid,
+    path: &str,
+) -> Result<bool, FixtureError> {
     Ok(fixed(fixed(repo.find_commit(oid))?.tree())?
         .get_path(std::path::Path::new(path))
         .is_ok())
@@ -257,7 +265,7 @@ fn holds(repo: &git2::Repository, oid: git2::Oid, path: &str) -> Result<bool, Fi
 
 /// The commits in the history of `tip` that add `path`: those that hold it
 /// while none of their parents does.
-fn checkpoints(
+pub(super) fn checkpoints(
     repo: &git2::Repository,
     tip: git2::Oid,
     path: &str,
@@ -316,7 +324,7 @@ fn c4_golden(name: &str, value: &Value, clone: &CliClone) {
 
 /// What a request that wrote and checkpointed its comment reports, with
 /// the publication `publication`.
-fn assert_saved(value: &Value, publication: &str) {
+pub(super) fn assert_saved(value: &Value, publication: &str) {
     for (key, expected) in [
         ("write", "written"),
         ("checkpoint", "committed"),

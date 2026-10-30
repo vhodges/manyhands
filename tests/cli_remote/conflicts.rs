@@ -190,7 +190,7 @@ fn worktree_bytes(clone: &CliClone, path: &str) -> Result<Vec<u8>, FixtureError>
 /// them `Alpha` and publishes with `repo sync`; B retitles them `Beta`, and
 /// its commit is left for B's own `repo sync` to meet the conflict. Returns
 /// B's local commit and A's published one.
-fn tickets_diverge(p: &CliPair) -> Result<(git2::Oid, git2::Oid), FixtureError> {
+pub(super) fn tickets_diverge(p: &CliPair) -> Result<(git2::Oid, git2::Oid), FixtureError> {
     let incoming = retitle_both(&p.a, "Alpha")?;
     let published = repo_sync(&p.a, R1, "ok", 0);
     assert_eq!(published["effects"]["publication"], "published");
@@ -215,7 +215,7 @@ fn retitle_both(clone: &CliClone, title: &str) -> Result<git2::Oid, FixtureError
 /// B's `repo sync` under `SYNC`, in JSON, which stops on the conflict:
 /// `recovery_required` with the next step in its data (Cycle, item 4).
 /// Returns the synchronization.
-fn stopped_on_primary(p: &CliPair, next: &str) -> String {
+pub(super) fn stopped_on_primary(p: &CliPair, next: &str) -> String {
     let stopped = repo_sync(&p.b, SYNC, "recovery_required", 3);
     stopped_with(&stopped, next)
 }
@@ -251,7 +251,7 @@ fn show_args<'a>(clone: &'a CliClone, operation: &'a str) -> Vec<&'a str> {
 }
 
 /// `conflict show` in JSON, its data checked against the published schema.
-fn show(clone: &CliClone, operation: &str) -> Value {
+pub(super) fn show(clone: &CliClone, operation: &str) -> Value {
     let value = checked(
         &clone.env,
         &show_args(clone, operation),
@@ -282,7 +282,11 @@ fn assert_settled(shown: &Value, state: &str, next: &str) {
     assert!(shown["data"]["eligibility"].is_null());
 }
 
-fn resolve_args<'a>(clone: &'a CliClone, operation: &'a str, request: &'a str) -> Vec<&'a str> {
+pub(super) fn resolve_args<'a>(
+    clone: &'a CliClone,
+    operation: &'a str,
+    request: &'a str,
+) -> Vec<&'a str> {
     vec![
         "conflict",
         "resolve",
@@ -297,7 +301,7 @@ fn resolve_args<'a>(clone: &'a CliClone, operation: &'a str, request: &'a str) -
     ]
 }
 
-fn resolve_input(observation: &str, resolutions: &[(String, String)]) -> Vec<u8> {
+pub(super) fn resolve_input(observation: &str, resolutions: &[(String, String)]) -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({
         "observation": observation,
         "resolutions": resolutions
@@ -350,7 +354,7 @@ fn resolved_source(ticket: &str, title: &str) -> String {
 
 /// A resolution of every path `shown` gives, with the token it gave: each
 /// ticket's source titled `title`.
-fn resolutions(shown: &Value, title: &str) -> Vec<(String, String)> {
+pub(super) fn resolutions(shown: &Value, title: &str) -> Vec<(String, String)> {
     shown["data"]["paths"]
         .as_array()
         .unwrap()
@@ -364,17 +368,17 @@ fn resolutions(shown: &Value, title: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-fn observation(shown: &Value) -> &str {
+pub(super) fn observation(shown: &Value) -> &str {
     shown["data"]["observation"].as_str().unwrap()
 }
 
 /// Makes `PRIVATE_SOURCE` a probe of every later run's output.
-fn private_source() {
+pub(super) fn private_source() {
     OUTPUT_PROBES.with(|probes| probes.borrow_mut().push(PRIVATE_SOURCE.to_owned()));
 }
 
 /// A request that was refused before it was accepted keeps no record.
-fn no_record(clone: &CliClone, request: &str) {
+pub(super) fn no_record(clone: &CliClone, request: &str) {
     checked(
         &clone.env,
         &["request", "show", "--request-id", request],
@@ -386,7 +390,7 @@ fn no_record(clone: &CliClone, request: &str) {
 }
 
 /// Asserts that every effect but those `named` is `not_requested`.
-fn assert_effects(value: &Value, named: &[(&str, &str)]) {
+pub(super) fn assert_effects(value: &Value, named: &[(&str, &str)]) {
     for key in [
         "write",
         "checkpoint",
@@ -1162,7 +1166,7 @@ fn c4_conflicts_resolve_meets_a_deleted_branch() -> Result<(), FixtureError> {
 /// A's editing context, made by a ticket save and published by `item
 /// sync`, then deleted on the server by the peer. Returns A's tip, the
 /// commit that was published.
-fn published_then_deleted(p: &CliPair) -> Result<git2::Oid, FixtureError> {
+pub(super) fn published_then_deleted(p: &CliPair) -> Result<git2::Oid, FixtureError> {
     let a = &p.a;
     save(a, R1, "Saved in clone A.\n");
     let published = item_sync(a, ITEM, R2, "ok", 0);
@@ -1188,7 +1192,7 @@ fn sync_args(clone: &CliClone) -> Vec<&str> {
 
 /// A's `item sync` under `SYNC`, in JSON, refused for the deleted branch:
 /// it does not recreate it, and holds the reservation.
-fn sync_refused(p: &CliPair) -> Result<(), FixtureError> {
+pub(super) fn sync_refused(p: &CliPair) -> Result<(), FixtureError> {
     let refused = item_sync(&p.a, ITEM, SYNC, "remote_branch_deleted", 3);
     assert_eq!(refused["outcome"], "blocked");
     assert_effects(&refused, &[("publication", "pending")]);
@@ -1204,7 +1208,7 @@ fn sync_refused(p: &CliPair) -> Result<(), FixtureError> {
 
 /// The refused `item sync` under `SYNC` cancelled and sent once more, which
 /// ends it and lets the reservation go.
-fn release(clone: &CliClone) {
+pub(super) fn release(clone: &CliClone) {
     let asked = checked(
         &clone.env,
         &["request", "cancel", "--request-id", SYNC],
@@ -1224,7 +1228,7 @@ fn republish_args<'a>(clone: &'a CliClone, item: &'a str) -> Vec<&'a str> {
 }
 
 /// `item republish --prepare` of the item, in JSON: a preview.
-fn prepare(clone: &CliClone) -> Value {
+pub(super) fn prepare(clone: &CliClone) -> Value {
     let mut args = republish_args(clone, ITEM);
     args.push("--prepare");
     let value = checked(&clone.env, &args, &[], "ok", 0, Some(PREVIEW_SCHEMA));
@@ -1247,7 +1251,7 @@ fn prepare(clone: &CliClone) -> Value {
     value
 }
 
-fn confirm_args<'a>(
+pub(super) fn confirm_args<'a>(
     clone: &'a CliClone,
     item: &'a str,
     request: &'a str,
@@ -1258,13 +1262,19 @@ fn confirm_args<'a>(
     args
 }
 
-fn confirmation(preview: &Value) -> &str {
+pub(super) fn confirmation(preview: &Value) -> &str {
     preview["data"]["confirmation_id"].as_str().unwrap()
 }
 
 /// `item republish --confirm` of the item, in JSON, with `preview`'s
 /// confirmation.
-fn confirm(clone: &CliClone, request: &str, preview: &Value, code: &str, status: i32) -> Value {
+pub(super) fn confirm(
+    clone: &CliClone,
+    request: &str,
+    preview: &Value,
+    code: &str,
+    status: i32,
+) -> Value {
     let value = clone.json(
         &confirm_args(clone, ITEM, request, confirmation(preview)),
         &[],
@@ -1278,7 +1288,7 @@ fn confirm(clone: &CliClone, request: &str, preview: &Value, code: &str, status:
 
 /// Asserts that a republish published exactly `tip`, creating the branch on
 /// the server with one push, and integrated nothing.
-fn assert_republished(
+pub(super) fn assert_republished(
     p: &CliPair,
     value: &Value,
     tip: git2::Oid,

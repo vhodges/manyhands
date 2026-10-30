@@ -30,6 +30,9 @@ mod c4_support;
 #[path = "cli/collaboration.rs"]
 mod collaboration;
 
+#[path = "cli/collaboration_exits.rs"]
+mod collaboration_exits;
+
 #[path = "cli/conflicts.rs"]
 mod conflicts;
 
