@@ -462,3 +462,55 @@ fn list_readers_refuse_wrong_shapes_without_disclosing_values() {
         }
     }
 }
+
+#[test]
+fn object_lists_keep_their_order_and_the_objects_are_readable() {
+    let input = object(r#"{"items":[{"name":"b"},{"name":"a"},{"name":"b"}]}"#);
+    let names: Vec<_> = ok(input.object_list("items"))
+        .iter()
+        .map(|item| ok(item.string("name")))
+        .collect();
+    assert_eq!(names, ["b", "a", "b"]);
+    // An object of the list is closed like any other.
+    let items = ok(input.object_list("items"));
+    assert!(items[0].only(&["name"]).is_ok());
+    assert!(matches!(
+        items[0].only(&["other"]),
+        Err(InputError::UnknownField(field)) if field == "name"
+    ));
+}
+
+#[test]
+fn an_object_list_that_is_missing_empty_or_not_a_list_of_objects_is_refused() {
+    assert!(matches!(
+        error(object("{}").object_list("items")),
+        InputError::Missing("items")
+    ));
+    for value in [
+        "[]",
+        "null",
+        "true",
+        "1234567",
+        r#""VALUE-SENTINEL-41""#,
+        r#"{"VALUE-SENTINEL-41":{}}"#,
+        r#"["VALUE-SENTINEL-41"]"#,
+        "[1234567]",
+        "[null]",
+        "[[]]",
+        r#"[{"a":"b"},"VALUE-SENTINEL-41"]"#,
+        r#"[{"a":"b"},{"a":"b"},[{"a":"b"}]]"#,
+    ] {
+        let error = error(object(&format!("{{\"items\":{value}}}")).object_list("items"));
+        assert!(
+            matches!(error, InputError::WrongType { field: "items", .. }),
+            "{value}"
+        );
+        // The detail names the field and the shape, never a value.
+        let detail = error.detail();
+        assert_eq!(
+            detail,
+            "Input field items must be a non-empty array of objects."
+        );
+        assert!(!detail.contains(SENTINEL));
+    }
+}

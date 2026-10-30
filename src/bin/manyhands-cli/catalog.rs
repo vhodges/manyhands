@@ -917,8 +917,37 @@ pub const COMMANDS: &[CommandSpec] = &[
             input: InputRule::Refused,
         },
     },
-    planned("conflict", "show", "Show a conflict.", "C4"),
-    planned("conflict", "resolve", "Resolve a conflict.", "C4"),
+    CommandSpec {
+        resource: "conflict",
+        verb: "show",
+        summary: "Show a conflict.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[REPO, OPERATION_ID],
+        kind: Kind::Read,
+    },
+    CommandSpec {
+        resource: "conflict",
+        verb: "resolve",
+        summary: "Resolve a conflict.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            OPERATION_ID,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
     CommandSpec {
         resource: "operation",
         verb: "resume",

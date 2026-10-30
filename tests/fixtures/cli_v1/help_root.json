@@ -1776,19 +1776,69 @@
         "summary": "Synchronize a repository."
       },
       {
-        "available": false,
+        "available": true,
         "command": "conflict show",
         "delivered_by": "C4",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--operation-id",
+            "required": true,
+            "summary": "Canonical operation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
         "summary": "Show a conflict."
       },
       {
-        "available": false,
+        "available": true,
         "command": "conflict resolve",
         "delivered_by": "C4",
-        "options": [],
-        "repository": null,
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--operation-id",
+            "required": true,
+            "summary": "Canonical operation ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
         "summary": "Resolve a conflict."
       },
       {

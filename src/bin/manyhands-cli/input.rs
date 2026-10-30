@@ -202,6 +202,30 @@ impl InputObject {
         }
     }
 
+    /// A required, non-empty array of objects. A missing field is
+    /// `Missing`; a value that is no array, an element that is no object
+    /// and an empty array are each `WrongType`, which names the field and
+    /// never a value.
+    pub fn object_list(&self, field: &'static str) -> Result<Vec<InputObject>, InputError> {
+        let wrong_type = || InputError::WrongType {
+            field,
+            expected: "a non-empty array of objects",
+        };
+        match self.fields.get(field) {
+            None => Err(InputError::Missing(field)),
+            Some(Json::Array(values)) if !values.is_empty() => values
+                .iter()
+                .map(|value| match value {
+                    Json::Object(fields) => Ok(InputObject {
+                        fields: fields.clone(),
+                    }),
+                    _ => Err(wrong_type()),
+                })
+                .collect(),
+            _ => Err(wrong_type()),
+        }
+    }
+
     pub fn one_of(
         &self,
         field: &'static str,

@@ -78,7 +78,7 @@ pub fn resolve(
     service.resolve_repository(&repository_path(args)?)
 }
 
-fn read_output<T: serde::Serialize>(
+pub(crate) fn read_output<T: serde::Serialize>(
     name: &str,
     json: bool,
     result: Result<Envelope<T>, ReadError>,
@@ -569,6 +569,8 @@ pub fn dispatch(
         "comment add" => return crate::discussion::comment_add(service, session, command, args),
         "item sync" => return crate::collaboration::item_sync(service, session, command, args),
         "repo sync" => return crate::collaboration::repo_sync(service, session, command, args),
+        "conflict show" => return crate::conflict::show(service, session, command, args),
+        "conflict resolve" => return crate::conflict::resolve(service, session, command, args),
         "operation resume" => {
             return crate::collaboration::operation_resume(service, session, command, args);
         }

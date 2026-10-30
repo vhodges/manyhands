@@ -3053,3 +3053,165 @@ Then:
   codes: `ok`, `ticket_closed`, `invalid_input`, `invalid_id`, `item_not_found`,
   `occupied_path`, `request_mismatch` and `not_confirmable`. The rest need a
   remote or an identity staging.
+
+### Task 9: `conflict show` And `conflict resolve`
+
+The commit is `feat: add conflict show and conflict resolve`, on BASE
+`fefc6ae4`. `origin/main` is still `a372edb`, and `git merge-tree
+--write-tree HEAD origin/main` exits 0. No subagent was dispatched. Only
+`src/bin/manyhands-cli`, the input schema and fixture, and tests changed: no
+library file, so no `--lib` target ran (controller ruling 5).
+
+**The verbs, `conflict.rs`.**
+
+- `conflict::show` reads `show_conflict` for `--repo` and `--operation-id`. A
+  malformed ID is `invalid_id` in the repository's scope. It is a read: no
+  request ID, and `--prepare`, `--confirm`, `--request-id` and `--input` are
+  usage errors by the grammar. The catalog entry is `Kind::Read`,
+  `Available("C4")`, options `--repo` and `--operation-id`. `read_output`
+  in `dispatch.rs` is now `pub(crate)`, so the verb shares it.
+- `conflict::resolve` reads, in C3's order: the flags, the input object, the
+  two fields, the root, then `--operation-id`. `fields` takes `observation`
+  and `resolutions` (`only`); each resolution takes exactly `token` and
+  `source` (`only`). A token is any string: the library judges its form
+  (R-9) and whether it names a path of the live conflict (R-33). Its
+  `invalid_input` for a malformed token, a duplicate token or a malformed
+  observation is the library's, found before anything is recorded.
+- `input::InputObject::object_list(key)` is the new reader. A missing key is
+  `Missing`. A non-array, an element that is no object and an empty array
+  are each `WrongType` ("a non-empty array of objects"), naming the field
+  and never a value.
+- `collaboration::operation_id` is extracted from `operation()` so
+  `conflict resolve` can read its input between the flags and the
+  selectors. `operation resume` and `abandon` call it unchanged.
+- It runs through `collaboration::run` (the bounded retry, and the Ctrl-C
+  window already wired for `Mutation::ConflictResolve`). `--prepare` is
+  `not_confirmable`. Its catalog entry is unconfirmed, input required.
+- The input schema and example: `schemas/input/v1/conflict_resolve.schema.json`
+  (closed; `observation` and `resolutions` required; each resolution closed
+  with `token` and `source` required) and
+  `tests/fixtures/cli_input_v1/conflict_resolve.json`. The checker has no
+  `minItems`, so the schema cannot say "non-empty"; the CLI reader and the
+  library do, and a `description` says so.
+- E-1: `help_root.json` and `help_root_text.txt` regenerated. The diff changes
+  only the two verbs' availability, repository rule and options, and their
+  "Available now." lines.
+
+**`collaboration::seen` (Task 7's pattern, generalised).** `run`'s
+`resumed` parameter is now `named`: the operation a verb names, for the one
+extra read human mode may add. The read happens only when
+`wants_conflict(envelope)`:
+
+| Command and code | Why | Adds |
+| --- | --- | --- |
+| `operation resume`, `original_request_required` naming a request | Task 7: may the request's written resolution be superseded | `supersedable` |
+| `conflict resolve`, `external_change` | ruling 1: does the attempt have written paths | `written` = `historical` |
+| `conflict resolve`, `remote_branch_deleted` | ruling 3: the envelope's scope names no item | `item` = the conflict's `item_id` |
+
+A `conflict resolve` that answers `original_request_required` reads nothing
+(ruling 2). The pure `observed(envelope, historical, attempt, item)` builds
+the result from the read, as `supersedable` does, and is unit-tested. When the
+read fails, the result is the one JSON mode gives, with no extra line.
+
+**Human output (`human_collaboration.rs`).**
+
+- Ruling 1: `external_change` of a resolve whose conflict reads `historical`
+  adds `note: a resolved file edited by hand must be restored to the request's
+  resolution, or to its conflicted content, before the request is sent again.`
+  JSON is unchanged: its `message` stays the code's own (Global Constraints).
+- Ruling 2: `original_request_required` of a resolve prints the `next:` line
+  naming the request and `note: the paths the original request wrote were
+  edited. Restoring them to the request's resolution or to their conflicted
+  content lets that request continue, or a new conflict resolve supersede
+  it.` Task 7's supersede note stays an `operation resume`'s only.
+- Ruling 3: `remote_branch_deleted` of a resolve prints Task 7's three
+  `next:` lines. The cancel line and the "send request … again" line name the
+  holder's request, taken from the `request.cancel` action; the resolve's own
+  request appears once, as the request refused. The republish line needs the
+  item, which a resolve's scope does not carry, so it comes from the conflict
+  read. Without the read the line is left out (two lines).
+- **Decision, beyond the rulings:** the reservation note says "the refused
+  request keeps its reservation", which is false when the refused request is a
+  resolve and another request holds it. When the action's request is not the
+  envelope's own, the note names it: `note: request <id> keeps its reservation
+  until it is cancelled; sending it again then ends it and releases the
+  reservation.` The own-request wording is unchanged for `item sync` and
+  `comment add`.
+- Ruling 4: `conflict_show` prints the lines `operation`, `comment
+  operation` (when set), `target`, `item` (when set), `stage`, `state`,
+  `next action`, `request` (when set), `observation` (`-` when none),
+  `historical: yes` (when true), and one `path:` line per path:
+  `kind=… structure=… token=… display=…`. The display path is last, so a name
+  cannot imitate a field. It is printed through `field`, once, which leaves the
+  library's `\xNN` text as it is. No side is printed in text; JSON carries
+  them. An `incompatible_closures` path adds the design's note, once.
+
+**Tests.** RED, before the implementation: `--test cli -- conflicts` (13
+cases) had 9 failed with `internal_error` (no dispatch arm) and 4 passed (the
+schema case, and the grammar's usage errors). `object_list`, the `Seen`
+fields and the renderers were written with their unit tests in the same step,
+so there is no separate RED for the bin cases.
+
+- **Unit** (`input_tests.rs`, 2): order and closed objects; the missing key,
+  the empty array, a non-array and a non-object element, each refused by field
+  with no value in the detail.
+- **Unit** (`conflict_tests.rs`, 3): the two fields and the order of the
+  resolutions, sources byte for byte; a token is any string; each missing,
+  mistyped, empty, or unknown field's detail, never a value.
+- **Unit** (`collaboration_tests.rs`, 4): which results read the conflict;
+  `written` for a resolve; `item` for a deleted branch; `supersedable` for a
+  resume.
+- **Unit** (`human_collaboration_tests.rs`, 14): rulings 1 to 4; Review Focus
+  2 (a display path with an escape sequence and a newline, no raw control
+  byte, no doubled escape; a raw control from a library bug is escaped; a path
+  cannot forge a field); the `incompatible_closures` note; the sides in JSON
+  only; a resolve sent to outside repair prints the `conflict:` lines.
+- **Binary** (`tests/cli/conflicts.rs`, 13, no SSH): the input schema and
+  the example; `conflict_show_operation_not_found` (exit 2, golden, text,
+  snapshot unchanged); a malformed operation ID for both verbs; `conflict show`
+  refusing `--prepare`, `--request-id`, `--confirm` and `--input` as usage
+  errors; `conflict resolve` not confirmable, requiring its input and its
+  operation, refusing an undeclared option; an unknown operation after the
+  syntax passes; a malformed token or observation and a duplicate token
+  (`invalid_input`, exit 2, golden, snapshot unchanged); every input the CLI
+  refuses (request named, no record made); `conflict show` and `conflict
+  resolve` of a pending local operation that is no synchronization
+  (`invalid_input`); and of a local-context sync's operation, made with the
+  gate's `LocalContextSync` mutation (`invalid_input`, never
+  `operation_not_found`, no record of the resolve, the sync's request as it
+  was, the repository untouched).
+- **Goldens (R-28):** `conflict_show_operation_not_found`,
+  `conflict_show_invalid_input` and `conflict_resolve_invalid_input` in
+  `tests/support/cli.rs`'s `CLI_CASES`. The text golden of `conflict show`
+  needs a live conflict, so it is Task 12b's.
+
+**Verify.** Each ran as `devenv shell -- cargo … --locked`; logs are in
+`logs/task-9-*`.
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --bin manyhands-cli` | 243 passed (220 before) |
+| `test --all-features --test cli` | 330 passed (317 before) |
+| `test --all-features --test cli -- input_schemas` | 7 passed |
+| `clippy --all-targets --all-features -- -D warnings` | passes |
+| `fmt --check` | passes |
+| `check --bin manyhands-cli` | passes |
+| `check --features desktop --bin manyhands` | passes |
+
+**For later tasks.**
+
+- **Task 12b:** the live rows run end to end here: `conflict show` of a real
+  conflict (JSON and its text golden, with a path holding an escape sequence);
+  `conflict resolve` with the captured observation and tokens; a stale
+  observation; the hand-edit escape (`external_change` plus the note, with the
+  read marking `historical`); the supersede and `original_request_required`
+  with its note; and `remote_branch_deleted` from a resolve, which must show
+  the holder's request in the two request lines and the item from the read in
+  the third. Check there that `show_conflict` of the operation still returns
+  `item_id` after the continuation stopped (the unit tests build the read by
+  hand).
+- **Task 13:** `conflict show` and `conflict resolve` through the binary reach
+  these codes without a remote: `operation_not_found`, `invalid_input`,
+  `invalid_id`, `not_confirmable` and (show) `usage_error`.
+- **Task 14:** design line 2045's Known Limit (an unfinished resolution whose
+  written paths were edited) is now told by the human output's two notes.

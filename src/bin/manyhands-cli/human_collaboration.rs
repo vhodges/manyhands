@@ -8,16 +8,24 @@
 //! - for `remote_branch_deleted`, three `next:` lines: cancel the refused
 //!   request, send it again, which ends it cancelled and releases its
 //!   reservation, then prepare the republish (Task 2b's ruling);
-//! - for `original_request_required`, a `next:` line naming the request,
-//!   and the supersede note when that request's remote resolution has
-//!   written paths only.
+//! - for `original_request_required` of `operation resume`, a `next:` line
+//!   naming the request, and the supersede note when that request's remote
+//!   resolution has written paths only;
+//! - for `original_request_required` of `conflict resolve`, the same
+//!   `next:` line and a note that the attempt's written paths were edited,
+//!   because that is the only way a resolve meets it;
+//! - for `external_change` of `conflict resolve` on a conflict whose attempt
+//!   has written paths, the note that a hand-edited file must be restored
+//!   before the request is sent again;
+//! - for `conflict show`, the conflict's state, next step and paths. A side
+//!   is content, so only JSON carries it.
 //!
 //! A `next:` line C4 prints renders a recovery action the library offered,
 //! in full, in place of C2's line for it. C4 adds no action (decision 8).
 
 use crate::{
     human_admin,
-    render::{self, Output, field},
+    render::{self, Human, Output, field},
 };
 use manyhands::{
     repository::*,
@@ -32,6 +40,13 @@ pub struct Seen {
     /// new `conflict resolve` may supersede it while those paths are
     /// unchanged (decision 18).
     pub supersedable: bool,
+    /// A `conflict resolve` was refused as `external_change` on a conflict
+    /// whose attempt has written paths (`historical`, R-39): one of them may
+    /// have been edited by hand.
+    pub written: bool,
+    /// The item a `conflict resolve` that met a deleted remote branch was
+    /// synchronizing, which its envelope does not name.
+    pub item: Option<String>,
 }
 
 const RESERVATION_NOTE: &str = "the refused request keeps its reservation until it is cancelled; sending it again then ends it and releases the reservation.";
@@ -39,6 +54,17 @@ const RESERVATION_NOTE: &str = "the refused request keeps its reservation until 
 const PUBLICATION_NOTE: &str = "publishing the comment also publishes this item's other checkpointed work; unsaved drafts are not included.";
 const SUPERSEDE_NOTE: &str =
     "a new conflict resolve may supersede its resolution while the paths it wrote are unchanged.";
+/// A `conflict resolve` refused with `original_request_required`: the
+/// library answers so only when the attempt's written paths changed, and
+/// without a change a new request supersedes the attempt.
+const EDITED_NOTE: &str = "the paths the original request wrote were edited. Restoring them to the request's resolution or to their conflicted content lets that request continue, or a new conflict resolve supersede it.";
+/// A `conflict resolve` refused with `external_change` on an attempt with
+/// written paths. The JSON message stays the code's own (Global
+/// Constraints), so this is where the way out is told.
+const HAND_EDIT_NOTE: &str = "a resolved file edited by hand must be restored to the request's resolution, or to its conflicted content, before the request is sent again.";
+const CLOSURES_NOTE: &str =
+    "two clones closed this ticket differently; repair it outside Manyhands.";
+const RESOLVE: &str = "conflict resolve";
 
 /// A root in a `next:` command: single-quoted for a POSIX shell, with
 /// controls escaped as C3's `path observe` escapes a path, and each single
@@ -120,6 +146,19 @@ fn again(envelope: &Envelope<MutationDataDto>, request: &str) -> Option<String> 
     }
 }
 
+/// The note on the reservation `request` holds. A refused request that holds
+/// its own reservation says so. A `conflict resolve` holds none: the request
+/// that does is the synchronization's or the comment's, so the note names it.
+fn reservation_note(envelope: &Envelope<MutationDataDto>, request: &str) -> String {
+    if envelope.request_id.as_deref() == Some(request) {
+        return RESERVATION_NOTE.into();
+    }
+    format!(
+        "request {} keeps its reservation until it is cancelled; sending it again then ends it and releases the reservation.",
+        field(request)
+    )
+}
+
 /// The request a recovery action names, when it names one.
 fn named(arguments: &serde_json::Map<String, serde_json::Value>) -> Option<&str> {
     arguments.get("request_id")?.as_str()
@@ -198,13 +237,15 @@ impl Lines {
                     .find_map(|(index, action)| Some((index, named(&action.arguments)?)));
                 if let Some((index, request)) = cancel {
                     lines.rendered.push(index);
+                    // A `conflict resolve` names no item: the conflict read does.
+                    let item = envelope.scope.item_id.as_deref().or(seen.item.as_deref());
                     lines.next.extend(branch_deleted(
                         root,
-                        envelope.scope.item_id.as_deref(),
+                        item,
                         request,
                         again(envelope, request),
                     ));
-                    lines.notes.push(RESERVATION_NOTE.into());
+                    lines.notes.push(reservation_note(envelope, request));
                 }
             }
             ResultCode::OriginalRequestRequired => {
@@ -224,9 +265,14 @@ impl Lines {
                 lines
                     .next
                     .extend(requests.iter().map(|request| resend(request)));
-                if seen.supersedable {
+                if envelope.command == RESOLVE {
+                    lines.notes.push(EDITED_NOTE.into());
+                } else if seen.supersedable {
                     lines.notes.push(SUPERSEDE_NOTE.into());
                 }
+            }
+            ResultCode::ExternalChange if seen.written => {
+                lines.notes.push(HAND_EDIT_NOTE.into());
             }
             _ => {}
         }
@@ -258,6 +304,70 @@ impl Lines {
             .map(|note| format!("note: {note}\n"))
             .collect()
     }
+}
+
+fn put(out: &mut String, label: &str, value: &str) {
+    out.push_str(label);
+    out.push_str(": ");
+    out.push_str(&field(value));
+    out.push('\n');
+}
+
+/// The human output of `conflict show`: the state, the next step and each
+/// path with its kind, structure and token (design, Human Output).
+///
+/// `display_path` is printed as the library escaped it (R-11), so it is
+/// printed once through `field`, which leaves that text as it is and only
+/// escapes a raw control, which the library never emits. A path comes last
+/// on its line, so a name that looks like another field cannot forge one.
+/// A side is content, and only `--json` prints it, so a terminal is never
+/// repainted by what a conflict holds.
+pub fn conflict_show(data: &ConflictDto) -> Human {
+    let mut stdout = String::new();
+    put(&mut stdout, "operation", &data.operation_id);
+    if let Some(comment) = &data.comment_operation_id {
+        put(&mut stdout, "comment operation", comment);
+    }
+    put(&mut stdout, "target", data.target.as_str());
+    if let Some(item) = &data.item_id {
+        put(&mut stdout, "item", item);
+    }
+    put(&mut stdout, "stage", data.stage.as_str());
+    put(&mut stdout, "state", data.state.as_str());
+    put(&mut stdout, "next action", data.next_action.as_str());
+    if let Some(request) = &data.request_id {
+        put(&mut stdout, "request", request);
+    }
+    put(
+        &mut stdout,
+        "observation",
+        data.observation.as_deref().unwrap_or("-"),
+    );
+    if data.historical {
+        put(&mut stdout, "historical", "yes");
+    }
+    for path in &data.paths {
+        put(
+            &mut stdout,
+            "path",
+            &format!(
+                "kind={} structure={} token={} display={}",
+                path.kind.as_str(),
+                path.structure.as_str(),
+                path.token,
+                path.display_path
+            ),
+        );
+    }
+    let mut notes = Vec::new();
+    if data
+        .paths
+        .iter()
+        .any(|path| path.structure == ConflictPathStructure::IncompatibleClosures)
+    {
+        notes.push(CLOSURES_NOTE.to_owned());
+    }
+    Human { stdout, notes }
 }
 
 /// The human output of a collaboration verb's result: C2's, with C4's lines.

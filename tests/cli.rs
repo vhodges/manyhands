@@ -27,6 +27,9 @@ mod boundaries;
 #[path = "cli/collaboration.rs"]
 mod collaboration;
 
+#[path = "cli/conflicts.rs"]
+mod conflicts;
+
 #[path = "cli/discussion.rs"]
 mod discussion;
 

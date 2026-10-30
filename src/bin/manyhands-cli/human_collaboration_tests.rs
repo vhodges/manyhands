@@ -364,7 +364,14 @@ fn an_original_request_is_named_and_a_written_resolution_may_be_superseded() {
          request: 01ARZ3NDEKTSV4RRFFQ69G5FX2\n\
          next: send request 01ARZ3NDEKTSV4RRFFQ69G5FX1 again with its original command and input\n"
     );
-    let resolution = output(&envelope, false, &Seen { supersedable: true });
+    let resolution = output(
+        &envelope,
+        false,
+        &Seen {
+            supersedable: true,
+            ..Seen::default()
+        },
+    );
     assert_eq!(
         stderr(&resolution),
         format!(
@@ -512,4 +519,461 @@ fn a_comment_s_deleted_remote_branch_names_cancel_the_request_sent_again_and_rep
     );
     // The body of the comment is in none of it: the data holds none.
     no_raw_control(text);
+}
+
+// `conflict resolve`, and `conflict show`.
+
+const R3: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX3";
+const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+const OPERATION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAZ";
+const OBSERVATION: &str =
+    "conflict-v1:0000000000000000000000000000000000000000000000000000000000000000";
+const TOKEN: &str =
+    "conflict-path-v1:1111111111111111111111111111111111111111111111111111111111111111";
+const HAND_EDIT_NOTE_LINE: &str = "note: a resolved file edited by hand must be restored to the request's resolution, or to its conflicted content, before the request is sent again.\n";
+
+fn seen(f: impl FnOnce(&mut Seen)) -> Seen {
+    let mut seen = Seen::default();
+    f(&mut seen);
+    seen
+}
+
+fn same_as_c2(envelope: &Envelope<MutationDataDto>, seen: &Seen) {
+    let ours = output(envelope, false, seen);
+    let c2 = crate::render::mutation_output(false, envelope, false);
+    assert_eq!(
+        (ours.stdout, ours.stderr, ours.status),
+        (c2.stdout, c2.stderr, c2.status)
+    );
+}
+
+/// Controller ruling 1: the escape of a hand-edited resolution is told by
+/// the human output only. The JSON message stays the code's own.
+#[test]
+fn a_resolution_refused_after_a_hand_edit_says_to_restore_the_file() {
+    let envelope = golden("conflict_resolve_external_change");
+    // No written paths: C2's refusal, exactly.
+    same_as_c2(&envelope, &Seen::default());
+
+    let c2 = crate::render::mutation_output(false, &envelope, false);
+    let written = output(&envelope, false, &seen(|seen| seen.written = true));
+    assert_eq!(written.status, 3);
+    assert_eq!(written.stdout, c2.stdout);
+    assert_eq!(
+        stderr(&written),
+        format!("{}{HAND_EDIT_NOTE_LINE}", stderr(&c2))
+    );
+    no_raw_control(stderr(&written));
+
+    // JSON mode is not touched: one envelope, the code's own message.
+    let json = crate::render::mutation_output(true, &envelope, false);
+    assert!(json.stderr.is_empty());
+    let json: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(json["message"], ResultCode::ExternalChange.message());
+    assert!(!json.to_string().contains("restored"));
+}
+
+#[test]
+fn the_hand_edit_note_follows_an_external_change_only() {
+    // Any other code is C2's, even when the conflict read says written.
+    let written = seen(|seen| seen.written = true);
+    for name in [
+        "conflict_resolve_invalid_input",
+        "conflict_resolve_original_request_required",
+    ] {
+        let envelope = golden(name);
+        let text = stderr(&output(&envelope, false, &written)).to_owned();
+        assert!(!text.contains(HAND_EDIT_NOTE_LINE), "{name}: {text}");
+    }
+    same_as_c2(&golden("conflict_resolve_invalid_input"), &written);
+    // And the same external change of another command, which reads no
+    // conflict, never carries it.
+    let mut envelope = golden("conflict_resolve_external_change");
+    envelope.command = "item sync".into();
+    assert!(!stderr(&output(&envelope, false, &Seen::default())).contains("edited by hand"));
+}
+
+/// Controller ruling 2: `conflict resolve` answers
+/// `original_request_required` only when an unfinished attempt's written
+/// paths changed, so Task 7's supersede note would mislead.
+#[test]
+fn a_resolve_that_needs_its_original_request_says_the_written_paths_were_edited() {
+    let envelope = golden("conflict_resolve_original_request_required");
+    let expected = "error: The original request must be submitted again to finish the operation.\n\
+         code: original_request_required\n\
+         request: 01ARZ3NDEKTSV4RRFFQ69G5FR2\n\
+         next: send request 01ARZ3NDEKTSV4RRFFQ69G5FR1 again with its original command and input\n\
+         note: the paths the original request wrote were edited. Restoring them to the request's resolution or to their conflicted content lets that request continue, or a new conflict resolve supersede it.\n";
+    let plain = output(&envelope, false, &Seen::default());
+    assert_eq!(plain.status, 3);
+    assert!(plain.stdout.is_empty());
+    assert_eq!(stderr(&plain), expected);
+    // Task 7's note is an `operation resume`'s. A resolve never carries it,
+    // whatever was read.
+    let read = output(&envelope, false, &seen(|seen| seen.supersedable = true));
+    assert_eq!(stderr(&read), expected);
+    assert!(!expected.contains("may supersede"));
+    // The `request.retry` action is rendered once, as a request.
+    assert!(!expected.contains("request.retry"));
+}
+
+#[test]
+fn a_resumes_original_request_keeps_task_7_s_supersede_note() {
+    let envelope = golden("operation_resume_original_request_required");
+    let text = stderr(&output(&envelope, false, &Seen::default())).to_owned();
+    assert!(!text.contains("note:"), "{text}");
+    let text = stderr(&output(
+        &envelope,
+        false,
+        &seen(|seen| seen.supersedable = true),
+    ))
+    .to_owned();
+    assert!(
+        text.ends_with(&format!("note: {SUPERSEDE_NOTE}\n")),
+        "{text}"
+    );
+    assert!(!text.contains("were edited"), "{text}");
+}
+
+/// A `conflict resolve` that met the item's branch deleted on the remote:
+/// the envelope is the resolve's own, and its `request.cancel` names the
+/// request that holds the synchronization (Part A checkpoint ruling M9).
+fn deleted_branch_of_a_resolve() -> Envelope<MutationDataDto> {
+    let mut envelope = Envelope::<MutationDataDto>::failure(
+        "conflict resolve",
+        Scope {
+            repository: Some("/work/repo".into()),
+            ..Scope::default()
+        },
+        ResultCode::RemoteBranchDeleted,
+        vec![RecoveryAction::new(
+            RecoveryActionKind::RequestCancel,
+            [("request_id", R1.into())],
+        )],
+    );
+    envelope.request_id = Some(R3.into());
+    envelope.effects.write = WriteEffect::Written;
+    envelope.effects.checkpoint = CheckpointEffect::Committed;
+    envelope.effects.commit_oid = Some("0123456789abcdef0123456789abcdef01234567".into());
+    envelope
+}
+
+fn next_lines(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter(|line| line.starts_with("next: "))
+        .collect()
+}
+
+/// Controller ruling 3: the three lines name the holder's request, taken
+/// from the action, and never the resolve's own.
+#[test]
+fn a_resolve_that_met_a_deleted_branch_names_the_holder_s_request_in_three_lines() {
+    let envelope = deleted_branch_of_a_resolve();
+    let output = output(
+        &envelope,
+        false,
+        &seen(|seen| seen.item = Some(ITEM.into())),
+    );
+    assert_eq!(
+        output.status,
+        crate::render::exit_status(envelope.failure_class())
+    );
+    assert!(output.stdout.is_empty());
+    let text = stderr(&output);
+    assert!(
+        text.starts_with(&format!(
+            "error: The published branch was deleted on the remote.\n\
+             code: remote_branch_deleted\n\
+             request: {R3}\n"
+        )),
+        "{text}"
+    );
+    assert_eq!(
+        next_lines(text),
+        [
+            format!("next: manyhands-cli request cancel --request-id {R1}"),
+            format!("next: send request {R1} again with its original command and input"),
+            format!("next: manyhands-cli item republish --repo '/work/repo' --id {ITEM} --prepare"),
+        ]
+    );
+    // The resolve's own request is named once, as the request refused, and
+    // in none of the lines that tell what to do.
+    assert_eq!(text.matches(R3).count(), 1, "{text}");
+    // C2's line for the cancellation is replaced, not repeated.
+    assert!(!text.contains("request.cancel"), "{text}");
+    // The note names the request that holds the reservation, not "the
+    // refused request", which holds none.
+    assert!(
+        text.ends_with(&format!(
+            "note: request {R1} keeps its reservation until it is cancelled; sending it again then ends it and releases the reservation.\n"
+        )),
+        "{text}"
+    );
+    assert!(!text.contains(RESERVATION_NOTE), "{text}");
+    no_raw_control(text);
+}
+
+#[test]
+fn a_deleted_branch_whose_item_is_unknown_still_names_cancel_and_the_holder_s_request() {
+    // The conflict read failed: two lines, as for a result with no item.
+    let envelope = deleted_branch_of_a_resolve();
+    let output = output(&envelope, false, &Seen::default());
+    assert_eq!(
+        next_lines(stderr(&output)),
+        [
+            format!("next: manyhands-cli request cancel --request-id {R1}"),
+            format!("next: send request {R1} again with its original command and input"),
+        ]
+    );
+}
+
+#[test]
+fn a_deleted_branch_of_the_refused_request_s_own_reservation_keeps_its_note() {
+    // As `item sync` and `comment add` meet it: the refused request is the
+    // holder.
+    let mut envelope = deleted_branch_of_a_resolve();
+    envelope.request_id = Some(R1.into());
+    let text = stderr(&output(&envelope, false, &Seen::default())).to_owned();
+    assert!(
+        text.ends_with(&format!("note: {RESERVATION_NOTE}\n")),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_resolve_the_library_sends_to_outside_repair_prints_the_conflict_lines() {
+    // `recovery_required` with `next_action: external_repair` (design,
+    // Conflict Resolution, step 4): the data carries the next step.
+    let mut envelope = golden("conflict_resolve_invalid_input");
+    envelope.scope.repository = Some("/work/repo".into());
+    envelope.code = ResultCode::RecoveryRequired;
+    envelope.message = ResultCode::RecoveryRequired.message().into();
+    envelope.data = Some(MutationDataDto::ConflictResolution(
+        ConflictResolutionMutationDto {
+            r#type: ConflictResolutionMutationType::ConflictResolution,
+            operation_id: OPERATION.into(),
+            commit_oid: None,
+            publication: PublicationEffect::NotRequested,
+            conflict: Some(ConflictNextDto {
+                operation_id: OPERATION.into(),
+                next_action: ConflictNextAction::ExternalRepair,
+            }),
+        },
+    ));
+    let text = stderr(&output(&envelope, false, &Seen::default())).to_owned();
+    assert!(
+        text.contains(&format!(
+            "conflict: operation {OPERATION} stopped on a conflict; next action: external_repair\n\
+             next: manyhands-cli conflict show --repo '/work/repo' --operation-id {OPERATION}\n"
+        )),
+        "{text}"
+    );
+}
+
+fn path(display: &str) -> ConflictPathDto {
+    ConflictPathDto {
+        display_path: display.into(),
+        token: TOKEN.into(),
+        kind: ConflictPathKind::Ticket,
+        structure: ConflictPathStructure::Regular,
+        content_available: true,
+        base: Some("BASE-SIDE-SENTINEL".into()),
+        local: Some("LOCAL-SIDE-SENTINEL\u{1b}[2J".into()),
+        incoming: Some("INCOMING-SIDE-SENTINEL".into()),
+    }
+}
+
+fn conflict(paths: Vec<ConflictPathDto>) -> ConflictDto {
+    ConflictDto {
+        operation_id: OPERATION.into(),
+        comment_operation_id: None,
+        target: ConflictTarget::Ticket,
+        item_id: Some(ITEM.into()),
+        stage: ConflictStage::Context,
+        state: ConflictState::ConflictPending,
+        next_action: ConflictReadNextAction::Resolve,
+        request_id: None,
+        eligibility: Some(ConflictReadEligibility::EligibleCanonical),
+        local_parent: "a".repeat(40),
+        incoming_parent: "b".repeat(40),
+        observation: Some(OBSERVATION.into()),
+        historical: false,
+        paths,
+    }
+}
+
+fn shown(conflict: &ConflictDto) -> Output {
+    let envelope = Envelope::read_success(
+        "conflict show",
+        Scope {
+            repository: Some("/work/repo".into()),
+            ..Scope::default()
+        },
+        conflict.clone(),
+    );
+    crate::render::envelope_output(false, &envelope, conflict_show)
+}
+
+const SHOWN: &str = "operation: 01ARZ3NDEKTSV4RRFFQ69G5FAZ\n\
+     target: ticket\n\
+     item: 01ARZ3NDEKTSV4RRFFQ69G5FAW\n\
+     stage: context\n\
+     state: conflict_pending\n\
+     next action: resolve\n\
+     observation: conflict-v1:0000000000000000000000000000000000000000000000000000000000000000\n";
+
+#[test]
+fn conflict_show_prints_the_state_the_next_step_and_each_path() {
+    let output = shown(&conflict(vec![
+        path(".manyhands/tickets/a.md"),
+        ConflictPathDto {
+            kind: ConflictPathKind::Noncanonical,
+            structure: ConflictPathStructure::Binary,
+            ..path("assets/logo.png")
+        },
+    ]));
+    assert_eq!(output.status, 0);
+    assert!(output.stderr.is_empty(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        format!(
+            "{SHOWN}\
+             path: kind=ticket structure=regular token={TOKEN} display=.manyhands/tickets/a.md\n\
+             path: kind=noncanonical structure=binary token={TOKEN} display=assets/logo.png\n"
+        )
+    );
+}
+
+#[test]
+fn conflict_show_names_an_attempt_a_comment_and_a_conflict_with_no_live_paths() {
+    let mut data = conflict(Vec::new());
+    data.comment_operation_id = Some("01ARZ3NDEKTSV4RRFFQ69G5FB0".into());
+    data.target = ConflictTarget::Primary;
+    data.item_id = None;
+    data.stage = ConflictStage::Primary;
+    data.state = ConflictState::ResolutionPrepared;
+    data.next_action = ConflictReadNextAction::RetryResolution;
+    data.request_id = Some(R1.into());
+    data.historical = true;
+    let output = shown(&data);
+    assert_eq!(
+        stdout(&output),
+        format!(
+            "operation: {OPERATION}\n\
+             comment operation: 01ARZ3NDEKTSV4RRFFQ69G5FB0\n\
+             target: primary\n\
+             stage: primary\n\
+             state: resolution_prepared\n\
+             next action: retry_resolution\n\
+             request: {R1}\n\
+             observation: {OBSERVATION}\n\
+             historical: yes\n"
+        )
+    );
+    // A conflict no longer live has no observation and no path.
+    data.observation = None;
+    data.state = ConflictState::Complete;
+    data.next_action = ConflictReadNextAction::None;
+    data.request_id = None;
+    data.historical = false;
+    let text = stdout(&shown(&data)).to_owned();
+    assert!(text.contains("observation: -\n"), "{text}");
+    assert!(!text.contains("path:"), "{text}");
+}
+
+/// Controller ruling 4, and the design's Human Output: a side is printed
+/// only with `--json`, so a terminal is never repainted by content.
+#[test]
+fn conflict_show_prints_no_side_in_text_and_the_sides_in_json() {
+    let data = conflict(vec![path(".manyhands/tickets/a.md")]);
+    let output = shown(&data);
+    let text = format!("{}{}", stdout(&output), stderr(&output));
+    for side in ["BASE-SIDE", "LOCAL-SIDE", "INCOMING-SIDE"] {
+        assert!(!text.contains(side), "{text}");
+    }
+    no_raw_control(&text);
+
+    let envelope = Envelope::read_success("conflict show", Scope::default(), data);
+    let json = crate::render::envelope_output(true, &envelope, conflict_show);
+    let json: Value = serde_json::from_slice(&json.stdout).unwrap();
+    let path = &json["data"]["paths"][0];
+    assert_eq!(path["base"], "BASE-SIDE-SENTINEL");
+    assert_eq!(path["local"], "LOCAL-SIDE-SENTINEL\u{1b}[2J");
+    assert_eq!(path["incoming"], "INCOMING-SIDE-SENTINEL");
+}
+
+/// Review Focus 2: the library has escaped the display path (R-11), so a
+/// path holding an escape sequence and a newline arrives as text. It is
+/// printed once, not escaped again.
+#[test]
+fn a_display_path_the_library_escaped_is_printed_as_it_is() {
+    // The bytes `d/a<ESC>[31m<LF>b`, as `display_path` renders them.
+    let display = r"d/a\x1b[31m\x0ab";
+    let output = shown(&conflict(vec![path(display)]));
+    let text = stdout(&output);
+    no_raw_control(text);
+    assert!(
+        text.ends_with(&format!(
+            "path: kind=ticket structure=regular token={TOKEN} display=d/a\\x1b[31m\\x0ab\n"
+        )),
+        "{text}"
+    );
+    // Not doubled: the backslash of `\x1b` is one character.
+    assert!(!text.contains(r"\\x1b"), "{text}");
+    assert!(!text.contains(r"\\x0a"), "{text}");
+    assert_eq!(text.lines().count(), SHOWN.lines().count() + 1);
+
+    // A library that let a raw control through is not repainted either.
+    let raw = shown(&conflict(vec![path("d/a\u{1b}[31m\nnext: forged\nb")]));
+    let text = stdout(&raw);
+    no_raw_control(text);
+    assert_eq!(text.lines().count(), SHOWN.lines().count() + 1, "{text}");
+    assert!(!text.contains("\nnext: forged"), "{text}");
+    assert!(text.contains(r"d/a\u{1b}[31m\nnext: forged\nb"), "{text}");
+}
+
+#[test]
+fn a_path_that_looks_like_a_field_cannot_forge_one() {
+    // The path is last on its line, after the fields it could imitate.
+    let display = "x display=y token=conflict-path-v1:forged structure=regular";
+    let text = stdout(&shown(&conflict(vec![path(display)]))).to_owned();
+    let line = text.lines().last().unwrap();
+    assert!(
+        line.starts_with(&format!(
+            "path: kind=ticket structure=regular token={TOKEN} display=x display=y"
+        )),
+        "{line}"
+    );
+}
+
+/// The design's note, once, whatever the number of such paths.
+#[test]
+fn an_incompatible_closures_path_says_to_repair_it_outside_manyhands() {
+    const CLOSURES: &str =
+        "note: two clones closed this ticket differently; repair it outside Manyhands.\n";
+    let closed = |display: &str| ConflictPathDto {
+        structure: ConflictPathStructure::IncompatibleClosures,
+        ..path(display)
+    };
+    let mut data = conflict(vec![closed(".manyhands/tickets/a.md")]);
+    data.next_action = ConflictReadNextAction::ExternalRepair;
+    data.eligibility = Some(ConflictReadEligibility::ExternalResolutionRequired);
+    let output = shown(&data);
+    assert_eq!(stderr(&output), CLOSURES);
+    assert!(
+        stdout(&output).ends_with(&format!(
+            "path: kind=ticket structure=incompatible_closures token={TOKEN} display=.manyhands/tickets/a.md\n"
+        ))
+    );
+    data.paths.push(closed(".manyhands/tickets/b.md"));
+    assert_eq!(stderr(&shown(&data)), CLOSURES);
+    // Another structure is no such note.
+    let plain = shown(&conflict(vec![
+        path("a"),
+        ConflictPathDto {
+            structure: ConflictPathStructure::Delete,
+            ..path("b")
+        },
+    ]));
+    assert!(plain.stderr.is_empty());
 }

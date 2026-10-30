@@ -11,6 +11,7 @@ use manyhands::{
     repository::{
         AuthoringKind, ItemDtoKind, ItemSyncInput, Mutation, MutationDataDto,
         OperationAbandonInput, OperationId, OperationResumeInput, RepoSyncInput, RepositoryService,
+        RequestId,
     },
     results::{Envelope, ResultCode},
 };
@@ -125,7 +126,20 @@ fn operation(
 ) -> Result<(MutationFlags, PathBuf, OperationId), Output> {
     let flags = admin::flags(session, spec, args)?;
     let root = admin::mutation_root(session, spec, args, flags.request_id)?;
-    let operation_id = OperationId::parse(
+    let operation_id = operation_id(session, spec, args, flags.request_id)?;
+    Ok((flags, root, operation_id))
+}
+
+/// The operation `--operation-id` names. A malformed ID is `invalid_id`,
+/// with the request named. Shared by `conflict resolve`, whose input is read
+/// between the flags and the selectors.
+pub(crate) fn operation_id(
+    session: &Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+    request_id: Option<RequestId>,
+) -> Result<OperationId, Output> {
+    OperationId::parse(
         args.get_one::<String>("operation-id")
             .expect("required operation selector"),
     )
@@ -133,23 +147,24 @@ fn operation(
         mutate::refusal(
             session,
             &admin::name(spec),
-            flags.request_id,
+            request_id,
             ResultCode::InvalidId,
             None,
         )
-    })?;
-    Ok((flags, root, operation_id))
+    })
 }
 
 /// Runs the mutation through C2's driver, with its bounded retry (R-23),
-/// and renders the result. `resumed` is the operation a resume names.
-/// Shared by `comment add`, which takes input.
+/// and renders the result. `named` is the operation the verb names, for the
+/// conflict read human output sometimes adds (`seen`): an `operation resume`
+/// or a `conflict resolve`. Shared by `comment add` and `conflict resolve`,
+/// which take input.
 pub(crate) fn run(
     service: &RepositoryService,
     session: &mut Session,
     spec: &'static CommandSpec,
     flags: MutationFlags,
-    resumed: Option<OperationId>,
+    named: Option<OperationId>,
     build: &mut dyn FnMut(&Extras) -> Mutation,
 ) -> Output {
     let plan = Plan {
@@ -170,35 +185,77 @@ pub(crate) fn run(
             render::mutation_output(true, &envelope, supplied)
         }
         Driven::Executed { envelope, supplied } => {
-            let seen = seen(service, &envelope, resumed);
+            let seen = seen(service, &envelope, named);
             human_collaboration::output(&envelope, supplied, &seen)
         }
     }
 }
 
-/// What human output needs that the envelope does not say: whether the
-/// request an `operation resume` was refused for owns a remote resolution
-/// whose paths are written and not committed (design, Resume). The
-/// conflict read says so; when it cannot be read, nothing is added.
+/// What human output needs that the envelope does not say, from the
+/// conflict read. When the result is one that needs it (`wants_conflict`)
+/// and the read fails, nothing is added: the result is then the one the
+/// JSON mode gives.
 fn seen(
     service: &RepositoryService,
     envelope: &Envelope<MutationDataDto>,
-    resumed: Option<OperationId>,
+    named: Option<OperationId>,
 ) -> Seen {
-    let (Some(operation), Some(request), Some(root)) = (
-        resumed,
-        original_request(envelope),
-        envelope.scope.repository.as_deref(),
-    ) else {
+    let (Some(operation), Some(root)) = (named, envelope.scope.repository.as_deref()) else {
         return Seen::default();
     };
-    let conflict = service
+    if !wants_conflict(envelope) {
+        return Seen::default();
+    }
+    service
         .resolve_repository(Path::new(root))
-        .and_then(|repo| service.show_conflict(&repo, operation));
+        .and_then(|repo| service.show_conflict(&repo, operation))
+        .map_or_else(
+            |_| Seen::default(),
+            |conflict| {
+                observed(
+                    envelope,
+                    conflict.historical,
+                    conflict.request_id.as_deref(),
+                    conflict.item_id,
+                )
+            },
+        )
+}
+
+/// Whether human output of this result looks at the conflict:
+/// - an `operation resume` refused for another request, whose resolution
+///   may be superseded (design, Resume);
+/// - a `conflict resolve` refused as `external_change`, where the attempt's
+///   written paths may have been edited by hand;
+/// - a `conflict resolve` whose continuation met a deleted remote branch,
+///   whose item its envelope does not name.
+///
+/// A `conflict resolve` that answers `original_request_required` needs no
+/// read: it answers that only when the attempt's written paths changed.
+fn wants_conflict(envelope: &Envelope<MutationDataDto>) -> bool {
+    match (envelope.command.as_str(), envelope.code) {
+        ("operation resume", ResultCode::OriginalRequestRequired) => {
+            original_request(envelope).is_some()
+        }
+        ("conflict resolve", ResultCode::ExternalChange | ResultCode::RemoteBranchDeleted) => true,
+        _ => false,
+    }
+}
+
+/// What the conflict read of a result that `wants_conflict` adds: the
+/// conflict's `historical` flag (R-39), the request whose attempt is
+/// unfinished, and its item.
+fn observed(
+    envelope: &Envelope<MutationDataDto>,
+    historical: bool,
+    attempt: Option<&str>,
+    item: Option<String>,
+) -> Seen {
     Seen {
-        supersedable: conflict.is_ok_and(|conflict| {
-            supersedable(conflict.historical, conflict.request_id.as_deref(), request)
-        }),
+        supersedable: original_request(envelope)
+            .is_some_and(|request| supersedable(historical, attempt, request)),
+        written: envelope.code == ResultCode::ExternalChange && historical,
+        item: item.filter(|_| envelope.code == ResultCode::RemoteBranchDeleted),
     }
 }
 
