@@ -6,13 +6,17 @@ This list is for checking the D3 Cycle (rich-text and source authoring) by hand 
 
 - Start the app from the worktree
   (`/home/vhodges/work/src/manyhands/.manyhands/worktrees/01M4CC0VN0MFTGKQ4HGTTC5H63`)
-  with:
-  `devenv shell -- cargo run --locked --features desktop --bin manyhands`
-  It needs an active desktop display.
-- While Claude's final gate is running, that command may wait for
-  cargo's build lock. If it does, run the same build directly instead:
-  `devenv shell -- target/owner-check/manyhands`
-  It was built with the command above from the code at `74ae378`.
+  with a release build, as D1's native checklist does:
+  `devenv shell -- cargo run --release --locked --features desktop --bin manyhands`
+  It needs an active desktop display. A development build (`cargo run`
+  without `--release`) is not optimized, and its editors lag, most on an
+  item with many comments. The editor spike found the same
+  (`docs/research/wave-03-editor-feasibility.md`, 2026-10-07 appendix).
+- If that command waits for cargo's build lock, run the built binary
+  directly instead: `devenv shell -- target/release/manyhands`.
+  It was built with the same flags from the code at `74ae378`.
+- Run it while no long test suite or build is running on the machine; a
+  busy machine makes any build lag.
 - Use a throwaway branch of this project's repository (the Manyhands repository).
 - Nothing here needs a network connection. The `https` link in step 2.3 only has to open the browser; the page does not have to load.
 - Have these ready before the steps that need them:

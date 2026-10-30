@@ -1881,3 +1881,18 @@ Notes for later tasks: Task 22 leaves `targets()` in
   relevant tests; the full suite and native CI run after merge. — If
   wrong: a regression in main's library code, found by the post-merge
   run.
+- Ruling (controller, Task 27 Step 2): the on-screen checklist runs on
+  a release build, as D1's native checklist did. On the owner's first
+  run, a development build lagged badly, most on an item with 66
+  comments, and typed text did not appear while the draft went dirty.
+  The editor spike recorded the same lag on a development build
+  (`docs/research/wave-03-editor-feasibility.md`, 2026-10-07 appendix).
+  Its other fix, host work only on an actual change of text, is in D3
+  already (`EditorHost::compare`, `ReadOnly::hold`). — The spike's
+  release run "felt fine". — If wrong: the lag stays on release, and it
+  is a D3 fault to trace.
+- Owner (2026-10-29, Task 27 Step 2): D1's repository details stay at
+  the end of the item's scroll in D3. Follow-up ticket `01M654G5VG`,
+  "Move the repository details out of the item tab", was created with
+  the owner's go-ahead and its branch pushed. UI rework is done
+  separately from the feature Cycles.
