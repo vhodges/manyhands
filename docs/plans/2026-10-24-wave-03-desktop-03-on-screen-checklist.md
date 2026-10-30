@@ -14,7 +14,8 @@ This list is for checking the D3 Cycle (rich-text and source authoring) by hand 
   (`docs/research/wave-03-editor-feasibility.md`, 2026-10-07 appendix).
 - If that command waits for cargo's build lock, run the built binary
   directly instead: `devenv shell -- target/release/manyhands`.
-  It was built with the same flags from the code at `74ae378`.
+  It was built with the same flags from the code at `570118e`, which
+  bundles IBM Plex Sans on Linux so that bold text draws bold.
 - Run it while no long test suite or build is running on the machine; a
   busy machine makes any build lag.
 - Use a throwaway branch of this project's repository (the Manyhands repository).

@@ -1919,3 +1919,11 @@ Notes for later tasks: Task 22 leaves `targets()` in
   GPUI's no-op text system, which has no faces to tell apart; the
   owner's on-screen check of Bold covers it. — If wrong: a regression in
   font registration is found on screen.
+- Font fix review (controller dispatch, `86f6cf4..fbc8242`): spec ✅,
+  quality approved, no Critical or Important findings. Minor 1, the
+  ignored result's comment named a failure Linux cannot have: reworded
+  (`570118e`). Minor 2, a medium or semibold italic falls to Italic 400:
+  accepted, nothing draws one. Minor 3, `assets/fonts/LICENSE.txt` has
+  no final newline: kept byte for byte as IBM ships it. The OFL notice
+  must also travel with release artifacts; that is packaging work, not
+  D3's. The checklist's release binary was rebuilt from `570118e`.
