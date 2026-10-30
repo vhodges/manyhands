@@ -228,16 +228,16 @@ pub(crate) fn open(
     });
     let folder = dialog.read(cx).folder.clone();
     folder.update(cx, |input, cx| input.focus(window, cx));
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     cx.set_global(OpenedMove(dialog.downgrade()));
     Some(dialog)
 }
 
 /// The dialog last opened, for a test to type into and read.
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) struct OpenedMove(pub(crate) gpui_kit::WeakEntity<MoveDialog>);
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 impl gpui_kit::Global for OpenedMove {}
 
 impl MoveDialog {
@@ -289,12 +289,12 @@ impl MoveDialog {
         dialog
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn folder_input(&self) -> Entity<InputState> {
         self.folder.clone()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn file_input(&self) -> Entity<InputState> {
         self.file_name.clone()
     }

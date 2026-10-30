@@ -240,18 +240,18 @@ impl RemotesPage {
         page
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn input(&self, id: &str) -> Entity<InputState> {
         self.inputs[id].clone()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn control_focus(&self, id: &str) -> FocusHandle {
         self.focus[id].clone()
     }
 
     /// The names of the remotes shown.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn remote_names(&self) -> Vec<String> {
         match &self.remotes {
             Read::Ready(listed) => listed
@@ -264,7 +264,7 @@ impl RemotesPage {
     }
 
     /// The remote shown selected for publication.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn selected(&self) -> Option<&str> {
         match &self.remotes {
             Read::Ready(listed) => listed

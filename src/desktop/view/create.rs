@@ -163,16 +163,16 @@ fn open(
     });
     let title = dialog.read(cx).title.clone();
     title.update(cx, |input, cx| input.focus(window, cx));
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     cx.set_global(OpenedDialog(dialog.downgrade()));
     Some(dialog)
 }
 
 /// The dialog last opened, for a test to type into and read.
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) struct OpenedDialog(pub(crate) gpui_kit::WeakEntity<CreateDialog>);
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 impl gpui_kit::Global for OpenedDialog {}
 
 impl Workspace {

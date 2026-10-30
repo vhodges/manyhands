@@ -59,7 +59,7 @@ impl ContentArea {
 }
 
 impl Workspace {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn settings(
         &self,
     ) -> &gpui_kit::Entity<crate::desktop::view::settings::SettingsHost> {
@@ -682,50 +682,50 @@ impl Workspace {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn drafts_page(
         &self,
     ) -> &gpui_kit::Entity<crate::desktop::view::drafts::DraftsPage> {
         &self.content.drafts
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn drafts_shown(&self, cx: &App) -> bool {
         matches!(self.content.page(cx), ContentPage::Drafts)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn item_pane(
         &self,
     ) -> Option<gpui_kit::Entity<crate::desktop::view::item::ItemPane>> {
         self.content.tabs.shown()
     }
     /// The shown tab, for a test that closes it by its own action.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn shown_tab(&self) -> Option<TabId> {
         self.content.tabs.active()
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn opened(&self, cx: &App) -> Option<OpenTarget> {
         self.content
             .tabs
             .shown()
             .map(|item| item.read(cx).target().clone())
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn tab_keys(&self) -> Vec<crate::desktop::model::tabs::TabKey> {
         self.content.tabs.keys()
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn settings_shown(&self, cx: &App) -> crate::desktop::view::settings::Shown {
         self.content.settings.read(cx).shown()
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn content_offset(&self) -> gpui_kit::Pixels {
         self.content_scroll().handle().offset().y
     }
     /// The shown item's scroll region's offset.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn item_offset(&self, cx: &App) -> gpui_kit::Pixels {
         self.content
             .tabs

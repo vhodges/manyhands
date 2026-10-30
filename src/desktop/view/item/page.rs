@@ -93,13 +93,13 @@ impl Page {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(super) fn focus_handle(&self) -> &FocusHandle {
         &self.focus
     }
 
     /// The read view, once a read gave a body.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(super) fn read(&self) -> Option<&Entity<ReadOnly>> {
         self.read.as_ref()
     }

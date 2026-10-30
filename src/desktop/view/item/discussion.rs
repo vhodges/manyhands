@@ -153,7 +153,7 @@ impl Discussion {
     }
 
     /// The read view of the comment `id`'s body.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(super) fn body(&self, id: &str) -> Option<&Entity<ReadOnly>> {
         self.bodies.get(id).map(|body| &body.read)
     }

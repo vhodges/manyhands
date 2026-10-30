@@ -174,7 +174,7 @@ impl ItemPane {
     /// Answers the Adopt… read now running with `result`, as if it had
     /// landed: the library's `new_item_id` cannot fail, so a test gives a
     /// failed answer here. The read running is dropped when it lands.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn answer_adoption_for_testing(
         &mut self,
         result: ReadResult<NewIdDto>,

@@ -397,13 +397,13 @@ impl DraftRegistry {
             .any(|live| live.session.saving().is_some() && target(live.session.target()))
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn is_idle(&self) -> bool {
         self.sessions.is_empty() && self.saves.is_empty()
     }
 
     /// The sessions' draft IDs: for a test.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn session_ids(&self) -> Vec<DraftId> {
         self.sessions.keys().copied().collect()
     }
@@ -411,7 +411,7 @@ impl DraftRegistry {
     /// Ends the session `id` at once, as a release lets it go, its draft
     /// kept and no tab told: for a test of a tab whose D2 session ends
     /// under a save or a write it waits on (Task 27 fix 1, B1 and B2).
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn end_session_for_testing(&mut self, id: DraftId, cx: &mut Context<Self>) {
         if let Some(current) = self.current_id(id) {
             self.sessions.remove(&current);

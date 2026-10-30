@@ -116,7 +116,7 @@ impl SettingsHost {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn shown(&self) -> Shown {
         self.shown
     }

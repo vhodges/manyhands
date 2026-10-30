@@ -132,7 +132,7 @@ impl ImageSource {
 }
 
 /// What a test reads of one `src`'s entry.
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) enum Seen {
     Pending,
@@ -318,7 +318,7 @@ impl TabImages {
 
     /// Holds a stand-in for a decoded `width` by `height` image at `src`,
     /// so a test can spend most of the tab's budget without decoding it.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn hold_stand_in(&self, src: &str, width: f32, height: f32) {
         let image = image::Frame::new(image::RgbaImage::new(1, 1));
         let image = Arc::new(RenderImage::new(vec![image]));
@@ -329,7 +329,7 @@ impl TabImages {
     }
 
     /// The decoded image `src` names, once loaded.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn image(&self, src: &str) -> Option<Arc<RenderImage>> {
         match self.0.borrow().entries.get(src)? {
             ImageEntry::Loaded(image, ..) => Some(image.clone()),
@@ -337,7 +337,7 @@ impl TabImages {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn seen(&self, src: &str) -> Option<Seen> {
         self.0.borrow().entries.get(src).map(|entry| match entry {
             ImageEntry::Pending => Seen::Pending,

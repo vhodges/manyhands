@@ -68,7 +68,7 @@ mod save_view;
 mod saved;
 
 pub(crate) use self::leave::{CloseThisTab, Leaving};
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 pub(super) use self::recovery_off::{CONTINUE, message as recovery_off_message};
 use self::restored::{Continuing, Then};
 pub(crate) use self::save_view::InitialsInSettings;
@@ -171,7 +171,7 @@ impl EditSession {
     }
 
     /// The base the session's next draft begins on.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(super) fn base(&self) -> &DraftBase {
         &self.base
     }
@@ -299,31 +299,31 @@ impl TabEdit {
 
 impl ItemPane {
     /// The edit session, while one lives, kept or not.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(super) fn edit_session(&self) -> Option<&EditSession> {
         self.edit.session.as_ref()
     }
 
     /// The edit editor's host, while a session lives, kept or not.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn edit_host(&self) -> Option<Entity<EditorHost>> {
         Some(self.edit.session.as_ref()?.host.clone())
     }
 
     /// Where the tab stands.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn edit_phase(&self) -> Phase {
         self.edit.phase
     }
 
     /// The review's body editor, once the body has a result.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn review_host(&self) -> Option<Entity<EditorHost>> {
         self.edit.review.as_ref()?.host.clone()
     }
 
     /// The edit editor's toolbar, while a session lives.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn edit_toolbar(&self) -> Option<Entity<Toolbar>> {
         Some(self.edit.session.as_ref()?.toolbar.clone())
     }
