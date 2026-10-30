@@ -753,6 +753,20 @@ lists each:
   `01M4W5SCBV6WFJP11Y7PJF5VS8` (operation reads name no item for comment
   rows) and `01M4PB7YZMBFAFFM94AZY08HWS` (an interrupted step-less save)
   touch C4's verbs; C4 adds no workaround.
+- Amended 2026-10-30 by C4 (the final review's rulings). A comment's
+  publication stopped for an untrusted host offers `request.retry` only,
+  not `host.approve` or `host.replace`. Its way out is
+  `host observe --repo <root>`, which names the host and the key it
+  presents, then `host approve` or `host replace`, then the same
+  `comment add` request again.
+- Amended 2026-10-30 by C4 (the final review's rulings). Two requests
+  resolving one conflict at once can leave an attempt with no owner: a
+  later re-entry of the first after a stop is treated as a new request,
+  and `conflict show` names no request for it. No data is lost.
+- Amended 2026-10-30 by C4 (the final review's rulings). A file system
+  refusal after `conflict resolve` has written a path answers
+  `internal_error`, exit 4, with no `next:` line; `conflict show` names
+  `retry_resolution`, the way on.
 
 **Owed after merge.** The Windows Ctrl-C console handler is first compiled
 and checked natively, as a manual check. Native CI runs on main with its

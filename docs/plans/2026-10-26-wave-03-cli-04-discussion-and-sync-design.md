@@ -993,7 +993,7 @@ For both `item sync` and `repo sync`, written as a test first (Task 1).
 | Remote behind, local ahead | `ok` | success, 0 | publication published |
 | Local behind | `already_applied` | success, 0 | the local branch fast-forwards; nothing pushed (fact 63) |
 | Clean divergence | `ok` | success, 0 | One merge commit with parents `[local, incoming]` and the fact 25 subject, published. No rebase; the remote keeps its earlier tip as an ancestor |
-| Canonical conflict | `recovery_required` | blocked, 3 | integration pending; `conflict: {operation_id, next_action: resolve}`; the reservation is released |
+| Canonical conflict | `recovery_required` | blocked, 3 | integration pending; `conflict: {operation_id, next_action: resolve}`; the reservation is released. Amended 2026-10-30 by C4 (final review, library minor 7): every new reservation is still `busy` while the conflict is pending (fact 27, `has_pending_conflict`) |
 | `item sync`: the remote context merged (stage 0), then primary conflicts (stage 1) | `recovery_required` | partial, 4: the stage-0 merge commit is durable | integration pending; the stage-0 commit kept; `next_action` from the stage-1 conflict |
 | Conflict in a noncanonical path | `recovery_required` | blocked, 3 | integration pending; `next_action: external_repair` |
 | The same request again, conflict still pending | `recovery_required` | blocked, 3 | the same conflict data; no transport (fact 26) |
@@ -1086,6 +1086,19 @@ derives `Clone`.
     `synchronize_context` operation that needs no schema change (fact 75),
     and it is the end a refused `item sync` reaches after `request cancel`
     and one more call.
+  - Amended 2026-10-30 by C4 (final review, library issue 1 ruling): a
+    `push_rejected` is the remote's answer to the one ref update the push
+    intent names, so nothing of the operation is on the remote. In the
+    transaction that ends the operation `cancelled`, its outcome records the
+    refusal as `protocol_rejected`, the category a poll records a refused
+    push under; no column changes (fact 75). The push intent is kept, and
+    push-absence evidence no longer counts it as an intent nothing answered.
+    So a new prepare offers the republish again, also where no
+    synchronization of this registry proved a publication of the branch
+    and the refusal was the remote's own, such as a hook's
+    (`c4_republish_refused_push_prepared_again`). Operation reads still
+    show the operation `cancelled`, with the failure `protocol_rejected`. An
+    `external_change` ends its operation as before.
 - **Data.** None: `data` is null, and the effects report the publication.
 - **Desktop.** One `PreviewDetailsDto::Republish` arm in
   `src/desktop/view/confirm.rs` shows "Branch", "Last published" and "Local
@@ -2308,6 +2321,39 @@ Each ruling is listed with its cost if wrong.
 - A string token is valid only while its conflict is unchanged (R-9).
 - The Windows Ctrl-C handler is first compiled and checked natively, after
   merge.
+- A comment's publication stopped for an untrusted host offers no
+  `host.approve` or `host.replace`. Amended 2026-10-30 by C4 (final
+  review, library issue 2: a Known Limit, with a follow-up offered to the
+  owner; Tasks 2b, 4a and 4b deferred it). `comment add` answers
+  `host_approval_required` or `host_replacement_required`, partial, 4, with
+  `request.retry` only: the comment's data carries no host for the action.
+  A resume of the comment's publication and a resolution's comment
+  continuation leave the host out the same way. The comment's
+  synchronization keeps the reservation, so a new `item sync` or
+  `repo sync` answers `busy` and names no host, and `repo inspect` shows
+  only the remote's locations. The way out, walked through the boundary
+  for both codes during the final review: `host observe --repo <root>`
+  names the host, its port, the key it presents and its pin, and takes no
+  reservation. `host approve` with those values, or `host replace` naming
+  the pinned fingerprint as the old one, is not blocked by the held
+  reservation. Then the same `comment add` request, sent again as
+  `request.retry` offers, publishes the comment and releases the
+  reservation.
+- Two requests resolving one conflict at once can leave an attempt with no
+  owner. Amended 2026-10-30 by C4 (final review, the library review's
+  verdict on Task 6's M8). Request B's supersede can commit between request
+  A's read of its earlier attempt and A's reservation. A's attempt is then
+  recorded again without its owner row. B is refused `recovery_required` by
+  the check that the attempt is alone, and A completes. Only a later
+  re-entry of A after a stop pays for it: A is treated as a new request, so
+  it supersedes or is `recovery_required`, and `conflict show` names no
+  `request_id` for the attempt. No data is lost.
+- A file system refusal after `conflict resolve` has written a path answers
+  `internal_error`, partial, 4, with no recovery action and no `next:`
+  line. Amended 2026-10-30 by C4 (final review, the CLI review's verdict on
+  Task 12b's concern 2: a Known Limit, with a follow-up offered to the
+  owner). The effects say the write happened, and `conflict show` names
+  `retry_resolution`, which is the way on.
 
 ## Alternatives Rejected
 

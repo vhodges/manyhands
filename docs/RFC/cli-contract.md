@@ -159,7 +159,7 @@ a usage error. No C4 verb accepts `--context`.
 | `index status` | Inspect cache freshness; no mutation input. |
 | `index refresh`, `index rebuild` | Required `--repo`; no `--input` or `--id`. Explicit local scan/rebuild, with `--request-id` for JSON/noninteractive execution. Never fetch or rewrite canonical state. Rebuild supports explicit root after cache loss. |
 | `poll status`, `poll configure`, `poll pause`, `poll resume`, `poll once` | Durable policy and observed results; configure input `interval_seconds` in 60–3600. Once is explicit remote polling, not synchronization. No process discovery or worker control. |
-| `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. List returns every stored operation that resume could act on or that still has work outstanding; show finds any stored operation, finished or not. Resume never infers permission for a different target/action. Resume takes no input. It publishes a comment's pending publication, by the comment's operation ID or its synchronization's, without writing it again; publishes a resolution or an accepted outside repair; and passes a local-context sync to the gate's routing. `request cancel` does not reach it; Ctrl-C does. |
+| `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. List returns every stored operation that resume could act on or that still has work outstanding; show finds any stored operation, finished or not. Resume never infers permission for a different target/action. Resume takes no input. It publishes a comment's pending publication, by the comment's operation ID or its synchronization's, without writing it again. Amended 2026-10-30 by C4 (Task 4b's ruling): a fenced comment publication, such as one held for a key whose selection then changed, answers `external_change` by either ID, as a fenced synchronization does, and the `comment add` request's own next call settles it. Resume publishes a resolution or an accepted outside repair, and passes a local-context sync to the gate's routing. `request cancel` does not reach it; Ctrl-C does. |
 | `operation abandon` | F2's confirmed abandonment of a pending local operation; closes its journal record without changing files. No input. A remote operation's ID is `invalid_input`, and a pending remote conflict cannot be abandoned (`01M4H33R34Z7C7EEKTY1ZCT950`). A local-context sync goes to the gate's guarded abandonment. |
 | `request show`, `request cancel` | Required `--request-id`, refuse `--repo`; inspect the request's state/result or request safe-point cancellation. Accepted local C2 requests report `requested: false`; this does not interrupt their process. |
 | `conflict show`, `conflict resolve` | Select a remote synchronization's operation ID, or a comment's operation; a local-context sync's is `invalid_input`. Show is a read: no request ID, `--prepare` refused. It reports the state, next step, observation and each path's token, kind, structure and, for an item's path the library reads as UTF-8 text, base/local/incoming sides, as `content_available` says. Resolve takes input `observation` and `resolutions`, one `{token, source}` per conflicted path, then publishes under the same request. See [Conflict and cancellation behavior](#conflict-and-cancellation-behavior). |
@@ -691,8 +691,9 @@ Example: a comment checkpoint succeeded but configured publication failed.
 Amended 2026-10-30 by C4 (decision 9; R-6, and the Cycle's Review Record):
 the example now uses the code `comment add` returns when the server refuses
 the push, `push_rejected`, in place of `publication_pending`, which no build
-defines, with the data, scope and recovery the build gives. `created_by` is the comment's author. The record
-stays accepted, and the same request publishes without writing again.
+defines, with the data, scope and recovery the build gives. `created_by` is
+the comment's author. The record stays accepted, and the same request
+publishes without writing again.
 
 ```json
 {
@@ -918,7 +919,8 @@ UTF-8 text, as `content_available` says. The library withholds them for a
 stage mode other than `100644`, a binary blob or non-UTF-8 text, and a
 noncanonical path gets none. A side is printed only with `--json`. The
 states are `conflict_pending`, `resolution_prepared`, `resolved`,
-`repaired`, `repair_refused`, `cancelled` and `complete`, and the next steps `resolve`, `retry_resolution`, `external_repair`, `resume`,
+`repaired`, `repair_refused`, `cancelled` and `complete`, and the next
+steps `resolve`, `retry_resolution`, `external_repair`, `resume`,
 `synchronize` and `none`. The kinds are `document`, `ticket`, `comment`
 and `noncanonical`, and the structures `regular`, `binary`, `executable`,
 `symlink`, `rename`, `delete`, `identity_changed` and
@@ -1138,6 +1140,26 @@ Known limits on main, which C4 states and does not work around:
   for it, so the next `repo sync` answers `worktree_not_clean`
   (`01M669FJR27FRHCNPWAMD6VH4V`). C4's two-clone fixture seeds the publication
   remote in the server's primary instead.
+
+Amended 2026-10-30 by C4 (the final review's rulings). Three of C4's own
+limits, which the final review recorded:
+- a comment's publication stopped for an untrusted host answers
+  `host_approval_required` or `host_replacement_required`, exit 4, with
+  `request.retry` only: the comment's data names no host, and a new
+  `item sync` meanwhile answers `busy`. `host observe --repo <root>` names
+  the host and the key it presents without the reservation; `host approve`,
+  or `host replace` naming the pinned fingerprint, is not blocked by it;
+  then the same `comment add` request publishes. Follow-up offered: offer
+  the host action from the comment's synchronization;
+- two requests resolving one conflict at once can leave an attempt with no
+  owner. A later re-entry of the first request after a stop is treated as
+  a new request, and `conflict show` names no `request_id` for the
+  attempt. No data is lost;
+- a file system refusal after `conflict resolve` has written a path
+  answers `internal_error`, exit 4, with no recovery action and no `next:`
+  line. The effects say the write happened, and `conflict show` names
+  `retry_resolution`, the way on. Follow-up offered: print the
+  `conflict show` line for that result.
 
 The [C4 design's Known Limits](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-design.md#known-limits)
 list the rest.

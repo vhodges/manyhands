@@ -4736,3 +4736,147 @@ or new ticket comment.
 The union block is byte-identical to `079006b8`. Step 3's grep over the
 touched files hits only amendment text naming what it replaces, and, in the
 Cycle, its own decisions and review record.
+
+### Final review fixes
+
+The final whole-branch review ran as two reviews of `f487cc74..71dd7c3e`,
+the library's ("ready with fixes") and the CLI's ("ready"). This is the one
+fix dispatch they get (`final-fix-1.md`), on FIX_BASE `71dd7c3e`. Three
+commits: the library fix, the CLI and test minors, and the documents. No
+merge, rebase or ticket comment. `origin/main` moved during the round to
+`48ffc058` (`ci: remove release binary artifact upload`, the Build
+workflow only); `git merge-tree --write-tree HEAD origin/main` is clean,
+and it is not merged here.
+
+**L1: a refused republish push is prepared again (fixed).** A
+`push_rejected` republish ended `cancelled` with its checkpoint at
+`push_prepared` and its `push_oid` kept. `push_absence` counted that as an
+intent nothing answered.
+- **When it bites.** Only where no synchronization of this registry proved
+  a publication of the branch, for example a branch another clone published
+  that this one only fetched. There a later prepare was the no-op, and
+  `item sync` was refused `recovery_required`: a dead loop. Where this
+  registry's own `item sync` published the branch, that proof makes the
+  absence `Deleted` whatever the intent says, so the preview was already
+  offered again. A throwaway case, the brief's four steps on
+  `deleted(ByFetch)`, passed before the fix.
+- **Readers checked.** Every reader of `push_oid` and of the checkpoint:
+  `push_absence` (`sync.rs`), the only one that reads other operations'
+  push intent, through `republish_evidence` and
+  `synchronization_push_absence_boundary`. The others read the operation's
+  own row: `checkpoint_synchronization`, `reconcile_synchronization`,
+  `publication_intent` and `settle_synchronization_publication`, the local
+  hand-off checks and `restart_synchronization_guarded`, `acknowledge` and
+  the safe-point checks (`reservation.rs`); `read_operation`'s validation,
+  `lookup_push`, `prepare_integration_window`,
+  `publication_previously_intended`, `open_publication_attempt`, the
+  attempt chain and the push-proof snapshot overlay (`state.rs`); and the
+  sync and republish executors' own `prior` and `evidence` (`sync.rs`).
+  None of them needed a change.
+- **Why reader-side.** Clearing the intent is forbidden by invariants:
+  `read_operation` refuses `push_prepared` without a `push_oid`,
+  `checkpoint_synchronization` refuses to change a recorded `push_oid` or to
+  go back to `fetch_prepared`, and the code calls the legacy intent
+  immutable history. So the brief's reader-side variant was taken. The
+  rejection is recorded on the row without a schema change (fact 75): in
+  the transaction that acknowledges the cancellation, the new
+  `acknowledge_refused_push` sets the outcome to `protocol_rejected`, the
+  category a poll records a refused push under. It does so only for a row
+  at `push_prepared`, with `before_push` its last step and with no
+  publication attempt, authority or reconciliation.
+- **The two sides.** `push_absence` ignores a `cancelled` row with that
+  outcome at `push_prepared`. `ExternalChange` still uses
+  `check_synchronization_requests`, so its outcome stays `cancelled`.
+- **Visible change.** `operation show` of such an operation reports phase
+  `cancelled` with `failure_code` `protocol_rejected`, where it said
+  `cancelled`. No test or golden reads it.
+- **The case.** `c4_republish_refused_push_prepared_again`: the branch is
+  published outside the registry, and `repo sync` records it and then its
+  deletion. A prepare and confirm follow, with the server refusing updates
+  of its checked-out branch, and the answer is `push_rejected`. A new
+  prepare then offers the preview, and a confirm republishes once. Red
+  before the fix, at the new prepare's `ok` assertion: a probe line showed
+  `already_applied` with no data, the no-op. Green after.
+
+**L2: a comment's host stop (Known Limit, as ruled).** A throwaway case
+(`logs/final-fix1-L2-throwaway.log`) walked both codes through the
+boundary:
+- **The stop.** `comment add` answers `host_approval_required` (never
+  approved) or `host_replacement_required` (key rotated): partial, data
+  `comment`, `[request.retry]`, record accepted, reservation held.
+- **New requests.** A new `item sync` and a new `repo sync` answer `busy`.
+- **Learning the host.** `observe_host` (`host observe --repo`, no
+  `--authority`) is `ok`. It names the host and port and the presented
+  key, which matches the server's, and reports the pin: none, or the old
+  one. `repo inspect` has only the remotes' locations.
+- **Approving it.** `host approve` or `host replace` prepares and confirms
+  `ok` while the reservation is held.
+- **The way on.** The same `comment add` request then answers `ok`,
+  published, served, record finished, reservation released, and a later
+  `item sync` is `already_applied`.
+
+So there is a way out. The code is unchanged, and the limit names it.
+
+**L3.** `delete_resolution_attempt` resets the step only when the deleted
+attempt was `paths_applying`. A new unit test,
+`closing_an_unbegun_attempt_keeps_the_step_another_attempt_began`, was red
+(`conflict_pending`) before the predicate and green after.
+
+**L4.** `ChangedPath`, `first_changed_path` and `changed_resolution_path`
+are gone. `written_paths_unchanged` returns the bool, and
+`resolution_paths_unchanged` calls it. Behavior is unchanged: every early
+"changed" return is `false`, and the end is `true`.
+
+**C1–C7.**
+- **C1.** `discussion.rs`'s module doc names `conflict resolve` as the other
+  verb that takes input.
+- **C2.** The test constant is `PUBLICATION_NOTE_LINE`. Rustfmt rewrapped
+  two `format!` calls.
+- **C3.** The malformed-author loop asserts that the envelope does not hold
+  the author.
+- **C4.** The renames are `cli_refusal_golden` and
+  `a_comment_add_refusal_in_human_mode_names_its_code_and_prints_no_note`.
+- **C5.** The comment credits the library's consent gate (`consent`,
+  `mutation/confirm.rs`).
+- **C6.** `finish_any` also returns stdout. Nothing else in `pty.rs`
+  changed. The second-press case scans stdout and asserts it empty.
+- **C7.** Both consent runs of `c4_conflicts_republish_ctrl_c_at_consent`
+  scan their transcripts.
+
+**Documents.**
+- **Carries 1–5.** The Cycle's held-reservation limit and `conflict show`
+  sides. The RFC's `operation resume` row gains the fenced comment, and RFC
+  lines 694 and 921 are rewrapped. The file system refusal is a Known
+  Limit.
+- **The final review's limits.** L2, with its way out, and M8 go in the
+  design's Known Limits, the CLI RFC's C4 limits and the Wave's C4 known
+  limits.
+- **The design.** The canonical-conflict row gains the `busy` clause (minor
+  7), and the Records amendment says what L1 records.
+- **Not edited.** The audit is untouched, so the audit-reading exit tests
+  were not rerun beyond `collaboration_exits`, which the `collaboration`
+  filter runs.
+
+**Verify** (each `devenv shell -- cargo … --locked`, `fmt --check` without
+`--locked`; logs `logs/final-fix1-*`):
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --test mutation_remote -- c4_republish` | **26 passed** (the new case among them) |
+| `test --all-features --test mutation_remote -- c4_resolution` | **41 passed** |
+| `test --all-features --test mutation_remote -- c4_resume` | first run **15 passed, 2 failed** under load (load average near 13), with no panic location, as the 100 s watchdog fails a case: `c4_resume_prepared_commit` and `c4_resume_cancelled`; each passed alone, and the rerun **17 passed** |
+| `test --all-features --lib remote` | **478 passed** |
+| `test --all-features --lib mutation` | **125 passed** |
+| `test --all-features --lib local_sync` | **164 passed** |
+| `test --all-features --lib integration` | **26 passed** |
+| `test --all-features --test mutation_replay` | **383 passed** |
+| `test --all-features --bin manyhands-cli` | **252 passed** |
+| `test --all-features --test cli discussion` | **15 passed** |
+| `test --all-features --test cli collaboration` | **23 passed** (`collaboration_exits` among them) |
+| `test --all-features --test cli_remote -- c4_interruption` | **17 passed** |
+| `test --all-features --test cli_remote -- c4_conflicts_republish_ctrl_c_at_consent` | **1 passed** |
+| `clippy --all-targets --all-features -- -D warnings` | passes |
+| `clippy --all-targets --features desktop -- -D warnings` | passes |
+| `fmt --check` | passes |
+
+The full suite is the controller's, on this result.

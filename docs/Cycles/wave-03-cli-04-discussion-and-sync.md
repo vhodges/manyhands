@@ -116,7 +116,11 @@ Authority, in order:
   - `01M4H33R34Z7C7EEKTY1ZCT950`: a pending remote conflict cannot be
     abandoned (decision 6);
   - `01M4R19PC0T6ZPKM39X9DF26HX`: a blocked synchronization holds its
-    reservation until its request is cancelled;
+    reservation until its request is cancelled and then sent once more.
+    Amended 2026-10-30 by C4 (Task 2b's ruling: asking is not stopping),
+    replacing "until its request is cancelled": `request cancel` alone does
+    not release it, and one more call of the same request ends it
+    `cancelled` and releases it;
   - `01M5MK57JKCSQFXBNZ8DBE548K`: an unusable Git identity is refused late,
     after a merge has begun;
   - `01M5E6DYJ6GN7DMW4424TH3V78`: a wrong passphrase is reported as
@@ -284,7 +288,9 @@ Authority, in order:
 6. **Conflicts.**
    - `conflict show` reports the operation, the conflict's state, its
      observation, each path's token, kind, structure and sides, and the next
-     step.
+     step. Amended 2026-10-30 by C4 (Task 3's sides rulings): a path's sides
+     are given when the library reads the path as UTF-8 text, as its
+     `content_available` says, and a noncanonical path gets none.
    - `conflict resolve` validates every resolution before any write. It
      writes only owned canonical Markdown, checkpoints the merge, and
      continues the operation's publication.
