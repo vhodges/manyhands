@@ -3367,3 +3367,61 @@ no `--locked`); logs are in `logs/task-10-*`.
   verbs), and `usage_error`.
 - **Task 14:** the RFC's `item republish` row can cite the no-op preview's
   human text.
+
+#### Task 10, fix round 1
+
+The review of `f1f9f06e..76344619` approved the task; its minors are folded in.
+FIX_BASE `76344619`. No library file changed; no `--lib` target ran. No new
+ticket comment.
+
+- **The no-op `next:` line runs as printed.** In non-interactive human mode,
+  `item sync` without `--request-id` is a `usage_error`. C4's other `next:`
+  lines for a mutation all resend an *existing* request, so each already
+  carries its ID; there was no C4 convention for a new request. I followed
+  C2's own: its preview line says "add --request-id unless you run it at a
+  terminal". The `next:` line is unchanged, and the note now reads `... run
+  item sync first (add --request-id unless you run it at a terminal), which
+  looks at the remote, then run the republish again.` The unit test pins the
+  new text.
+- **Wording.** "then run the republish again" reads right on the `--prepare`
+  path and on the interactive path (where the republish is the command the
+  user already ran).
+- **One helper for note lines.** `render::note_lines(&[String]) -> String`
+  replaces the four copies: `prepare_output`, `envelope_output`, and
+  `Lines::notes` and `Lines::lead` in `human_collaboration.rs`.
+- **Shared test helpers.** `stdout`, `stderr` and `no_raw_control` are now in
+  `render::test_support`, a `#[cfg(test)]` module of `render.rs`;
+  `human_admin_tests.rs` (my four Task 10 cases only, no pre-existing case
+  edited) and `human_collaboration_tests.rs` import them. A separate
+  `test_support.rs` module did not work: `tests/cli_remote.rs` mounts
+  `human_admin.rs`, and with it `human_admin_tests.rs` (`cfg(test)` is on in
+  that target), so a helper module has to be reachable from `render.rs`,
+  which it mounts, not from the bin's root. `check --test cli_remote` caught
+  it.
+- **Module doc.** `human_collaboration.rs` now says the no-op preview's code
+  is `human_admin::republish_noop`, called from `render::prepare_output`, and
+  why it is not in that module.
+- **Tests that can fail.**
+  - `a_busy_republish_in_json_is_the_envelope_with_no_note` is deleted: it
+    called `render::mutation_output(true, ..)`, which never reaches the new
+    code. A comment beside the busy test names the real guard: the note is
+    built only in `human_collaboration::output`, and `collaboration::run`'s
+    `Driven::Executed { .. } if session.json` arm returns before it. That arm
+    needs a service, so no unit test can drive it.
+  - `item_republish_refuses_input_and_needs_its_item` asserts `command ==
+    "item republish"` for both refusals (it holds for both).
+
+**Verify** (`logs/task-10-fix1-*`):
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --bin manyhands-cli` | 249 passed (250 before; the JSON test is deleted) |
+| `test --all-features --test cli` | 338 passed |
+| `clippy --all-targets --all-features -- -D warnings` | passes |
+| `fmt --check` | passes |
+| `check --bin manyhands-cli` | passes |
+| `check --all-features --test cli_remote` | passes |
+
+The full `--test cli` run started before the last edit, which only moved a
+`#[cfg(test)]` module inside `render.rs`; the binary under test has the same
+production code.

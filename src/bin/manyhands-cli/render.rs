@@ -57,11 +57,7 @@ pub fn prepare_output(json: bool, envelope: &Envelope<PrepareDataDto>) -> Output
     };
     Output {
         stdout: stdout.into_bytes(),
-        stderr: notes
-            .iter()
-            .map(|note| format!("note: {note}\n"))
-            .collect::<String>()
-            .into_bytes(),
+        stderr: note_lines(&notes).into_bytes(),
         status: exit_status(envelope.failure_class()),
     }
 }
@@ -124,12 +120,7 @@ pub fn envelope_output<T: Serialize>(
     });
     Output {
         stdout: rendered.stdout.into_bytes(),
-        stderr: rendered
-            .notes
-            .iter()
-            .map(|note| format!("note: {note}\n"))
-            .collect::<String>()
-            .into_bytes(),
+        stderr: note_lines(&rendered.notes).into_bytes(),
         status: exit_status(envelope.failure_class()),
     }
 }
@@ -164,6 +155,11 @@ fn json_output<T: Serialize>(envelope: &Envelope<T>) -> Output {
             json_output(&failure)
         }
     }
+}
+
+/// `notes` as `note:` lines, each ended.
+pub fn note_lines(notes: &[String]) -> String {
+    notes.iter().map(|note| format!("note: {note}\n")).collect()
 }
 
 /// A root in a `next:` command: single-quoted for a POSIX shell, with
@@ -233,6 +229,30 @@ pub fn write_and_exit(output: Output) -> ! {
         Err(_) => 1,
     };
     std::process::exit(status)
+}
+
+/// Helpers the CLI's unit tests share for reading an `Output`. They live
+/// here because `tests/cli_remote.rs` mounts `render.rs` and `human_admin.rs`
+/// (and so `human_admin_tests.rs`) but no other module.
+#[cfg(test)]
+pub mod test_support {
+    use super::Output;
+
+    pub fn stdout(output: &Output) -> &str {
+        std::str::from_utf8(&output.stdout).unwrap()
+    }
+
+    pub fn stderr(output: &Output) -> &str {
+        std::str::from_utf8(&output.stderr).unwrap()
+    }
+
+    /// No byte of `text` is a control other than a line's end.
+    pub fn no_raw_control(text: &str) {
+        assert!(
+            !text.chars().any(|c| c.is_control() && c != '\n'),
+            "{text:?}"
+        );
+    }
 }
 
 #[cfg(test)]

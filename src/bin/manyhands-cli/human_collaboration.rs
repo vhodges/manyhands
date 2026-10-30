@@ -15,7 +15,10 @@
 //!   refused, and no public read names that request, so the note says to
 //!   cancel it with its ID (controller ruling, Task 10);
 //! - for the no-op preview of `item republish`, the `item sync` to run first,
-//!   because the library offers no recovery action that names a sync;
+//!   because the library offers no recovery action that names a sync. That
+//!   is not this module's code: it is `human_admin::republish_noop`, called
+//!   from `render::prepare_output`, because a preview is not a mutation
+//!   result and `tests/cli_remote.rs` mounts `render.rs` but not this module;
 //! - for `original_request_required` of `operation resume`, a `next:` line
 //!   naming the request, and the supersede note when that request's remote
 //!   resolution has written paths only;
@@ -33,7 +36,7 @@
 
 use crate::{
     human_admin::{self, REPUBLISH},
-    render::{self, Human, Output, field, quoted},
+    render::{self, Human, Output, field, note_lines, quoted},
 };
 use manyhands::{
     repository::*,
@@ -319,18 +322,12 @@ impl Lines {
     }
 
     fn notes(&self) -> String {
-        self.notes
-            .iter()
-            .map(|note| format!("note: {note}\n"))
-            .collect()
+        note_lines(&self.notes)
     }
 
     /// The notes that precede a refusal's recovery lines.
     fn lead(&self) -> String {
-        self.lead
-            .iter()
-            .map(|note| format!("note: {note}\n"))
-            .collect()
+        note_lines(&self.lead)
     }
 }
 

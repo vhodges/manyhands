@@ -143,6 +143,7 @@ fn item_republish_refuses_input_and_needs_its_item() {
         2,
         "usage_error",
     );
+    assert_eq!(value["command"], "item republish");
     assert!(value["request_id"].is_null());
     let value = f.checked(
         "item",
@@ -152,6 +153,7 @@ fn item_republish_refuses_input_and_needs_its_item() {
         2,
         "usage_error",
     );
+    assert_eq!(value["command"], "item republish");
     assert!(value["request_id"].is_null());
 }
 

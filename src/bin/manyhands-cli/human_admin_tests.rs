@@ -1,4 +1,5 @@
 use super::*;
+use crate::render::test_support::{no_raw_control, stderr, stdout};
 use manyhands::results::{Effects, Outcome, ResultCode, Scope, WriteEffect};
 use std::collections::HashSet;
 
@@ -316,22 +317,6 @@ fn a_noop_says_already_applied() {
     );
 }
 
-fn stdout(output: &crate::render::Output) -> &str {
-    std::str::from_utf8(&output.stdout).unwrap()
-}
-
-fn stderr(output: &crate::render::Output) -> &str {
-    std::str::from_utf8(&output.stderr).unwrap()
-}
-
-/// No byte of `text` is a control other than a line's end.
-fn no_raw_control(text: &str) {
-    assert!(
-        !text.chars().any(|c| c.is_control() && c != '\n'),
-        "{text:?}"
-    );
-}
-
 fn republish_noop(scope: Scope) -> Envelope<PrepareDataDto> {
     Envelope::mutation(
         "item republish",
@@ -359,7 +344,7 @@ fn the_no_op_republish_preview_says_to_run_item_sync_first() {
     );
     assert_eq!(
         stderr(&output),
-        "note: no deletion of this item's published branch is recorded, so there is nothing to republish; run item sync first, which looks at the remote, then prepare the republish again.\n"
+        "note: no deletion of this item's published branch is recorded, so there is nothing to republish; run item sync first (add --request-id unless you run it at a terminal), which looks at the remote, then run the republish again.\n"
     );
 }
 

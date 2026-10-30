@@ -1,4 +1,5 @@
 use super::*;
+use crate::render::test_support::{no_raw_control, stderr, stdout};
 use manyhands::results::{
     CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, IntegrationEffect, Outcome,
     PublicationEffect, RecoveryAction, Scope, WriteEffect,
@@ -138,22 +139,6 @@ fn next_step(value: &Value) -> ConflictNextDto {
             other => panic!("unknown next action {other}"),
         },
     }
-}
-
-fn stdout(output: &Output) -> &str {
-    std::str::from_utf8(&output.stdout).unwrap()
-}
-
-fn stderr(output: &Output) -> &str {
-    std::str::from_utf8(&output.stderr).unwrap()
-}
-
-/// No byte of `text` is a control other than a line's end.
-fn no_raw_control(text: &str) {
-    assert!(
-        !text.chars().any(|c| c.is_control() && c != '\n'),
-        "{text:?}"
-    );
 }
 
 const R1: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX1";
@@ -1003,6 +988,11 @@ const BUSY_REPUBLISH_NOTE: &str = "note: if an earlier item sync of this item wa
 /// Controller ruling 1 of Task 10: no public read gives the request that
 /// holds the reservation, so a busy republish says what to do about it, and
 /// says it before the retry line.
+// JSON has no such note by construction, not by a test here: the note is built
+// only in `output`, and `collaboration::run` returns `render::mutation_output`
+// for the envelope before `output` is reached when `session.json` is set (the
+// `Driven::Executed { .. } if session.json` arm). That arm needs a service, so
+// it cannot be driven from a unit test.
 #[test]
 fn a_busy_republish_says_a_refused_sync_may_hold_the_reservation_before_the_retry_line() {
     let output = output(&busy("item republish"), false, &Seen::default());
@@ -1037,12 +1027,4 @@ fn a_busy_result_of_any_other_verb_or_a_republish_refusal_is_c2_s_output() {
     other.code = ResultCode::ExternalChange;
     other.outcome = other.code.outcome();
     same_as_c2(&other, &Seen::default());
-}
-
-#[test]
-fn a_busy_republish_in_json_is_the_envelope_with_no_note() {
-    let envelope = busy("item republish");
-    let json = crate::render::mutation_output(true, &envelope, false);
-    assert!(json.stderr.is_empty());
-    assert!(!stdout(&json).contains("earlier item sync"));
 }

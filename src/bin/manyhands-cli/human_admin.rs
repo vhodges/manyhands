@@ -7,7 +7,7 @@ use manyhands::{
 pub const REPUBLISH: &str = "item republish";
 /// The no-op preview of `item republish`: the branch is there, was never
 /// published, or its deletion is not yet observed (design, Republish).
-const UNPUBLISHED_NOTE: &str = "no deletion of this item's published branch is recorded, so there is nothing to republish; run item sync first, which looks at the remote, then prepare the republish again.";
+const UNPUBLISHED_NOTE: &str = "no deletion of this item's published branch is recorded, so there is nothing to republish; run item sync first (add --request-id unless you run it at a terminal), which looks at the remote, then run the republish again.";
 
 /// What the no-op preview of an `item republish` adds to C2's line: the
 /// `item sync` to run first, as a `next:` line when the repository and the
