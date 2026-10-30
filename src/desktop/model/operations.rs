@@ -262,13 +262,13 @@ impl Operations {
     }
 
     /// Whether any host observation has been answered.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn observed_any(&self) -> bool {
         self.observed.is_some()
     }
 
     /// Whether the last host observation answered is a success.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn last_observation_succeeded(&self) -> bool {
         self.observed
             .as_ref()

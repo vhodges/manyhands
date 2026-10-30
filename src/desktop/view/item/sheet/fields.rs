@@ -362,7 +362,7 @@ impl ItemPane {
     }
 
     /// The control of `field`, once made.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn sheet_input(&self, field: Field) -> Option<Entity<InputState>> {
         Some(self.fields.control(field)?.input.clone())
     }

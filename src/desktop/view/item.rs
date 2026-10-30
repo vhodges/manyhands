@@ -75,11 +75,11 @@ use crate::desktop::{
         requests::DesktopRequestId,
     },
 };
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use banners::{LINK_NOT_FOUND, LINK_NOT_OPENED, NEAREST_MATCH};
 pub(crate) use chips::{ChipField, OpenDetails};
 pub(super) use details::text;
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use draft::NOT_SAVED;
 pub(crate) use draft::{NOT_DISCARDED, ReviewInDrafts, refused_label};
 pub(crate) use draft_actions::DraftDiscarded;
@@ -238,25 +238,25 @@ impl ItemPane {
         pane
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn target(&self) -> &OpenTarget {
         self.model.target()
     }
 
     /// The read view of an item tab, once a read gave a body.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn read_view(&self) -> Option<Entity<super::editor::read_only::ReadOnly>> {
         self.page.read().cloned()
     }
 
     /// The read view's editor.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn read_editor(&self, cx: &App) -> Option<Entity<zorite_editor::EditorState>> {
         Some(self.page.read()?.read(cx).editor().clone())
     }
 
     /// The read view of the comment `id`'s body.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn comment_view(
         &self,
         id: &str,
@@ -265,13 +265,13 @@ impl ItemPane {
     }
 
     /// The tab's images.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn images(&self) -> &TabImages {
         &self.images
     }
 
     /// The vertical offset of the item's scroll region.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn region_offset(&self) -> gpui_kit::Pixels {
         self.scroll.handle().offset().y
     }

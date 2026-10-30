@@ -202,7 +202,7 @@ pub(crate) struct Services {
     drafts: Entity<DraftRegistry>,
     /// The work contexts this process made and saved nothing into (R-75):
     /// `releases` reads them; tests read them here.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     created: Entity<CreatedContexts>,
     /// Release on leave (R-37), shared by every view.
     releases: Entity<Releases>,
@@ -326,7 +326,7 @@ impl Services {
             worker,
             operations,
             drafts: drafts.clone(),
-            #[cfg(test)]
+            #[cfg(all(test, feature = "desktop-test-support"))]
             created,
             releases,
             edit_tabs: cx.new(|_| EditTabs::default()),
@@ -340,7 +340,7 @@ impl Services {
 
     /// The same services, with no refresh at launch: for a test that
     /// does not wait for the worker.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn without_launch_refresh(mut self) -> Self {
         self.launch_refresh = false;
         self
@@ -370,7 +370,7 @@ impl Services {
     }
 
     /// The work contexts this process made and saved nothing into.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn created_contexts(&self) -> &Entity<CreatedContexts> {
         &self.created
     }
@@ -386,7 +386,7 @@ impl Services {
         &self.edit_tabs
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn backend(&self) -> &Arc<dyn Backend> {
         &self.backend
     }

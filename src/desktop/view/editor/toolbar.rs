@@ -338,17 +338,17 @@ impl Toolbar {
     }
 
     /// What D2 holds of the text, as the tab last said.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn status(&self) -> DraftState {
         self.status
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     fn drawn(&self, control: Control) -> Option<f32> {
         self.drawn.get(&control).copied()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     fn refreshes(&self) -> usize {
         self.refreshes
     }

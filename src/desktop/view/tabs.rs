@@ -239,7 +239,7 @@ impl TabContent {
             .map(|(id, _)| *id)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(super) fn keys(&self) -> Vec<TabKey> {
         self.tabs
             .tabs()

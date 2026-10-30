@@ -382,7 +382,7 @@ impl ItemPane {
     }
 
     /// The picker's filter box, while it is open.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn picker_filter(&self) -> Option<Entity<InputState>> {
         Some(self.relations.picker.as_ref()?.input.clone())
     }

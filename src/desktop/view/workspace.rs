@@ -40,10 +40,10 @@ use crate::desktop::{
     },
     services::Services,
 };
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use focus::REGIONS;
 pub(crate) use focus::Region;
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 use gpui_kit::App;
 use manyhands::drafts::DraftId;
 
@@ -292,22 +292,22 @@ impl Workspace {
         &self.quit_focus
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn passphrase(&self) -> Option<Entity<PassphraseDialog>> {
         self.passphrase.as_ref().and_then(WeakEntity::upgrade)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn repositories_list_focus(&self, cx: &App) -> FocusHandle {
         gpui_kit::Focusable::focus_handle(self.repositories_pane.list().read(cx), cx)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn tickets_list_focus(&self, cx: &App) -> FocusHandle {
         gpui_kit::Focusable::focus_handle(self.tickets_pane.list().read(cx), cx)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn remove_focus(&self) -> FocusHandle {
         self.remove_focus.clone()
     }

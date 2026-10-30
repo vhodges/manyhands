@@ -49,7 +49,7 @@ impl ItemPane {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn source_state(&self) -> Option<&gpui_kit::Entity<TextareaState>> {
         self.source.as_ref().map(|(_, state)| state)
     }

@@ -68,7 +68,7 @@ use crate::desktop::{
     view::confirm::{self, Followed},
 };
 pub(super) use adopt::Adoption;
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 use adopt::adopt_title;
 
 /// A file with no text to repair (pre-flight ruling, Task 25).
@@ -172,7 +172,7 @@ fn sent_source(intent: &Intent) -> Option<&str> {
 
 impl ItemPane {
     /// The repair view's text area, while it is open.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn repair_state(&self) -> Option<Entity<TextareaState>> {
         Some(self.repair.as_ref()?.text.clone())
     }

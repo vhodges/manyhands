@@ -253,7 +253,7 @@ impl Workspace {
         self.control_focus.retain(|key, _| drawn.contains(key));
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn abandon_focus(&self, root: &str, operation_id: &str) -> Option<FocusHandle> {
         self.abandon_focus
             .get(&(root.to_owned(), operation_id.to_owned()))
