@@ -520,6 +520,92 @@ fn a_click_deep_in_a_long_body_does_not_jump_to_its_top(cx: &mut TestAppContext)
     assert!(caret_in_view(&shell, &editor, cx));
 }
 
+/// The middle of the first `[[Reading]]` link drawn wholly inside the
+/// item's scroll region, from a fresh paint.
+fn link_in_view(
+    shell: &Shell,
+    editor: &Entity<EditorState>,
+    cx: &mut TestAppContext,
+) -> Point<Pixels> {
+    let links: Vec<usize> = text(editor, cx)
+        .match_indices("[[Reading]]")
+        .map(|(at, _)| at + "[[Re".len())
+        .collect();
+    let editor = editor.clone();
+    shell
+        .frame(cx, move |window, cx| {
+            let region = window.find("item-scroll").bounds();
+            links.iter().find_map(|at| {
+                let link = editor.read(cx).bounds_for_offset(*at)?;
+                (link.top() >= region.top() && link.bottom() <= region.bottom())
+                    .then(|| link.center())
+            })
+        })
+        .expect("a link is in view")
+}
+
+/// A link clicked deep in a long body opens its tab and leaves the
+/// region where it was. The press focuses the read editor without moving
+/// its caret, which stays at the top, and that focus reveals nothing: the
+/// press is where the reader is looking (owner, 2026-10-30).
+#[gpui_kit::test]
+fn a_link_clicked_deep_in_a_long_body_leaves_the_region_where_it_is(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        let body: String = (0..200)
+            .map(|line| format!("Line {line} links to [[Reading]].\n"))
+            .collect();
+        let source = ticket_with_body(LONG, "Long", &body);
+        fixture.commit_file(root, &ticket_path(LONG), source.as_bytes());
+        let reading = document_source(DOCUMENT, "Reading", "The linked document.\n");
+        fixture.commit_file(root, DOCUMENT_PATH, reading.as_bytes());
+    });
+    open(&shell, ticket(&root, LONG), cx);
+    let editor = read_editor(&shell, cx);
+    shell.keys("secondary-3 pagedown pagedown", cx);
+    let scrolled = offset(&shell, cx);
+    assert!(scrolled < px(0.), "the region scrolled: {scrolled:?}");
+
+    let link = link_in_view(&shell, &editor, cx);
+    press(&shell, link, Modifiers::none(), cx);
+    shell.run(cx);
+    let opened = shell
+        .workspace
+        .read_with(cx, |workspace, cx| workspace.opened(cx));
+    assert_eq!(opened, Some(document(&root, DOCUMENT)), "the link opened");
+    assert_eq!(cursor(&editor, cx), 0, "the press left the caret alone");
+
+    open(&shell, ticket(&root, LONG), cx);
+    assert_eq!(offset(&shell, cx), scrolled, "the region did not move");
+}
+
+/// A press is over once the region is laid out again: Shift-Tab back onto
+/// the read editor after one reveals its caret.
+#[gpui_kit::test]
+fn a_press_does_not_outlast_its_frame(cx: &mut TestAppContext) {
+    let (shell, root) = shell(cx, |fixture, root| {
+        let source = ticket_with_body(LONG, "Long", &long_body());
+        fixture.commit_file(root, &ticket_path(LONG), source.as_bytes());
+    });
+    open(&shell, ticket(&root, LONG), cx);
+    let editor = read_editor(&shell, cx);
+    let region = bounds(&shell, "item-scroll", cx);
+    press(&shell, region.center(), Modifiers::none(), cx);
+    assert!(focused(&shell, &editor, cx), "the press focused the editor");
+
+    shell.keys("tab", cx);
+    assert!(holds_focus(&shell, "back-to-top", cx));
+    editor.update(cx, |editor, cx| editor.set_cursor(0, cx));
+    shell.run(cx);
+    assert!(
+        !caret_in_view(&shell, &editor, cx),
+        "Back to top is far below the caret"
+    );
+
+    shell.keys("shift-tab", cx);
+    assert!(focused(&shell, &editor, cx), "the read editor has focus");
+    assert!(caret_in_view(&shell, &editor, cx), "the caret was revealed");
+}
+
 /// R-67: Tab onto a read editor whose caret is below the fold brings the
 /// caret into view as the editor takes focus. Moving the caret of an
 /// unfocused editor moves nothing.

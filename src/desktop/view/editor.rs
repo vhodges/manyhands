@@ -76,8 +76,11 @@ pub(crate) fn reveal_caret(editor: &Entity<EditorState>, scroll: &ContentScroll,
 
 /// R-67 for one editor in a scroll region: its caret is brought into view
 /// after each caret move or change of text while it has focus, and when
-/// it takes focus. Other notifications, such as the pointer passing over
-/// it, move nothing, and nothing moves while it is unfocused.
+/// it takes focus from anything but a press in the region. A press is
+/// where the reader is looking: it put the caret there, or left it where
+/// it was on purpose, as a link's does (owner, 2026-10-30). Other
+/// notifications, such as the pointer passing over it, move nothing, and
+/// nothing moves while it is unfocused.
 ///
 /// The owner makes one beside its editor and calls `note_focus` as each
 /// of its frames is drawn: GPUI sends focus events only to an active
@@ -120,14 +123,15 @@ impl CaretInView {
     }
 
     /// As the owner's frame is drawn: when the editor has taken focus
-    /// since the last frame, its caret is revealed once this frame is
-    /// drawn, and the owner is notified for the frame that shows it.
+    /// since the last frame, and no press in the region gave it, its caret
+    /// is revealed once this frame is drawn, and the owner is notified for
+    /// the frame that shows it.
     pub(crate) fn note_focus<T: 'static>(&mut self, window: &Window, cx: &mut Context<T>) {
         let focused = self
             .editor
             .upgrade()
             .is_some_and(|editor| editor.read(cx).focus_handle(cx).is_focused(window));
-        if focused && !self.focused {
+        if focused && !self.focused && !self.scroll.pressed() {
             let (editor, scroll) = (self.editor.clone(), self.scroll.clone());
             cx.defer_in(window, move |_, _, cx| {
                 if let Some(editor) = editor.upgrade() {

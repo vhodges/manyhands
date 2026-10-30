@@ -21,7 +21,10 @@
 //! draws the region at that offset. Focus that has not moved is never
 //! revealed again, so scrolling away from a focused control is left alone.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use gpui_kit::{
     Bounds, FocusHandle, IntoElement, Pixels, ScrollHandle, Styled, WeakFocusHandle, Window,
@@ -39,6 +42,9 @@ const PAGE: f32 = 0.9;
 pub(crate) struct ContentScroll {
     handle: ScrollHandle,
     reveal: Rc<RefCell<Reveal>>,
+    /// A press landed in the region since it was last laid out
+    /// (`note_press`).
+    pressed: Rc<Cell<bool>>,
 }
 
 #[derive(Default)]
@@ -57,6 +63,7 @@ impl ContentScroll {
         Self {
             handle: ScrollHandle::new(),
             reveal: self.reveal.clone(),
+            pressed: Rc::default(),
         }
     }
 
@@ -86,6 +93,31 @@ impl ContentScroll {
         )
         .absolute()
         .size_0()
+    }
+
+    /// A press in the region, from its capture phase. Focus the press
+    /// gives an editor reveals no caret (`editor::CaretInView`): the press
+    /// is where the reader is looking. The press lasts until the region is
+    /// next laid out (`press_ends`), in the frame this asks for, so it
+    /// never outlives a press that changes nothing.
+    pub(crate) fn note_press(&self, window: &mut Window) {
+        self.pressed.set(true);
+        window.refresh();
+    }
+
+    /// Whether a press landed in the region since it was last laid out.
+    /// Views drawn inside the region read it as they render.
+    pub(crate) fn pressed(&self) -> bool {
+        self.pressed.get()
+    }
+
+    /// An empty canvas to draw with the region: once the views inside it
+    /// have rendered and it is laid out, the last press is over.
+    pub(crate) fn press_ends(&self) -> impl IntoElement + use<> {
+        let pressed = self.pressed.clone();
+        canvas(move |_, _, _| pressed.set(false), |_, _, _, _| {})
+            .absolute()
+            .size_0()
     }
 
     /// The window's focus as this frame begins: when it moved, the control

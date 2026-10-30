@@ -12,7 +12,8 @@
 //! (decision 17): a `ReadOnly` made at the first read with a body, kept
 //! across reloads, and reloaded in place when the body changes (R-19). It
 //! keeps its own caret in view (R-67): after each caret move while it has
-//! focus, and when it takes focus. Its links go to the pane (decision 10;
+//! focus, and when it takes focus, unless a press took it there, as a
+//! link's press does. Its links go to the pane (decision 10;
 //! `banners`). It draws the local images its body names from the tab's
 //! images, which each read locates in the item's trees and folder
 //! (decision 9). A press on the page that no control takes focuses the read
@@ -356,7 +357,8 @@ pub(super) const DISCUSSION_CHILD: usize = 1;
 
 /// The item's scroll region, holding `page`, then `discussion`, then
 /// `end`, the selected repository's details, with the Kit's scrollbar
-/// over it, and then `over`, laid over the region after it.
+/// over it, and then `over`, laid over the region after it. A press on
+/// what it scrolls is noted for the editors' caret reveals (`scroll`).
 pub(super) fn region<P: IntoElement, D: IntoElement>(
     scroll: &ContentScroll,
     page: P,
@@ -379,6 +381,7 @@ pub(super) fn region<P: IntoElement, D: IntoElement>(
             .pb_3()
             .child(end)
     });
+    let pressed = scroll.clone();
     div()
         .id("item-region")
         .relative()
@@ -393,6 +396,7 @@ pub(super) fn region<P: IntoElement, D: IntoElement>(
                 .size_full()
                 .overflow_y_scroll()
                 .track_scroll(scroll.handle())
+                .capture_any_mouse_down(move |_, window, _| pressed.note_press(window))
                 .child(page)
                 .children(discussion)
                 .children(end),
@@ -416,4 +420,5 @@ pub(super) fn region<P: IntoElement, D: IntoElement>(
                 ),
         )
         .children(over)
+        .child(scroll.press_ends())
 }
