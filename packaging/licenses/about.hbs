@@ -1,0 +1,16 @@
+{{#each licenses}}
+<section>
+  <h3>{{name}} ({{id}})</h3>
+  <ul>
+  {{#each used_by}}
+    <li>{{crate.name}} {{crate.version}}
+    {{#if crate.source}} —
+      <a href="https://crates.io/crates/{{crate.name}}/{{crate.version}}">package</a>;
+      <a href="https://crates.io/api/v1/crates/{{crate.name}}/{{crate.version}}/download">original source</a>
+    {{/if}}
+    </li>
+  {{/each}}
+  </ul>
+  <pre>{{text}}</pre>
+</section>
+{{/each}}
