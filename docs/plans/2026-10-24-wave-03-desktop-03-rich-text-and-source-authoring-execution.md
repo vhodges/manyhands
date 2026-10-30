@@ -1940,3 +1940,38 @@ Notes for later tasks: Task 22 leaves `targets()` in
   comment files carry a `parent_id`, each naming the one before, so they
   draw in their root's card under the 1 px `page_border_soft` rule, as
   the design's Threads rule says. The owner: "fine for now".
+- Owner (2026-10-30, Task 27 Step 2): an item tab lay 8 px inside the
+  content region's border, D1's `p_2` on every region; the owner asked
+  for it flush. Fix: the content region has no padding while an item
+  tab is shown (`workspace/render.rs`). Each region's focus ring now
+  draws over its content, so a flush tab cannot cover it
+  (`workspace/focus.rs`), and the repository details at the end of the
+  item's scroll keep an 8 px side inset of their own
+  (`item-region-end`). No test: layout (owner, 2026-10-27).
+- Ruling (controller, flush item tab): only an item tab is flush;
+  Settings, the Drafts page and the empty pane keep the padding, since
+  none pads its own text. — The owner named the item's scroll area. —
+  If wrong: the tab strip moves 8 px as the first tab opens, and a line
+  extends the change.
+- Owner (2026-10-30, Task 27 Step 2): a link clicked in the read view
+  opened its tab, but the linking tab's region was back at its top.
+  Cause: the press focuses the read editor without moving its caret
+  (zorite-editor 0.10.0 opens the link and returns before placing it,
+  `lib.rs:3077-3104`), and R-67's reveal on taking focus then brought
+  the caret, still at the start, into view. Fix: the item's scroll
+  column notes a press in its capture phase
+  (`ContentScroll::note_press`), which lasts until the region is next
+  laid out (`press_ends`), and `CaretInView::note_focus` reveals nothing
+  for focus a press gave. It covers the read view, comments, the edit
+  editor and a press beside the text. Tests:
+  `a_link_clicked_deep_in_a_long_body_leaves_the_region_where_it_is`
+  (red before the fix: the offset went from -1664 px to -36 px) and
+  `a_press_does_not_outlast_its_frame` (fails with `press_ends`
+  removed).
+- Ruling (controller, link press): R-67's "when it takes focus" now
+  reads "from anything but a press in the region". — A press is where
+  the reader is looking: it put the caret there, or left it on purpose,
+  as on a link, a checkbox or a grip. — If wrong: a control in the
+  region that focused an editor at once, its caret out of view, would
+  show no caret. None does today: the page's press is the only one, and
+  the edit editor takes focus a frame after it opens.
