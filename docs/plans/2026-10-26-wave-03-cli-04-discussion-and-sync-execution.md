@@ -598,7 +598,7 @@ new ticket comment (ruling P4).
 | 4a | `feat: bind conflict resolution that the same request can finish`; review fix round 1 `fix: let the original request cancel a resolution's publication, and close the review's gaps`; Part A review fix round 1 `fix: close a resolution attempt that wrote nothing, and close Part A review's gaps` | Verify list: 200 of 201 `mutation_remote` SSH cases, the one watchdog failure (`c4_resolution_conformance`) fixed and re-run (1, 47 s); 30 `c4_resolution`; 383, 129, 44, 72, 95, 25 SSH; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy; fix rounds: see their entries | Part A review fix round 1 applied; re-review pending | Every row of the interrupted-resolution table met; resume's one route for a prepared commit added (decision 18). See "Task 4a: Conflict Resolution Binding" |
 | 4b | `feat: resume comment publication and resolved synchronizations`; review fix round 1 `fix: share resolution fixtures, keep an owed child's standing, and pin a fenced comment's resume` | Verify list: 221 `mutation_remote` SSH cases (13 `c4_resume`), no watchdog hit; 383 `mutation_replay`; 44 `mutation_contract`; 123 `--lib mutation`; clippy, fmt; desktop check and clippy; fix round 1: 15 `c4_resume`, 34 `c4_comment`, 37 `c4_resolution`, 383, 183, 123, 477, clippy, fmt, desktop | review fix round 1 applied; re-review pending | Every row of the resume table met but row 6 (Task 5's, P3). Row 8 stopped at a design checkpoint and was ruled option B; Task 14 amends its wording. E-11 applied. See "Task 4b: Resume Routes" |
 | 5 | `feat: republish a remotely deleted item branch with consent`; review fix round 1 `refactor: share item sync's fetch and push steps with republish, and close the review's gaps` | Verify list: 249 `mutation_remote` SSH cases (23 `c4_republish`, 16 `c4_resume`), no watchdog hit; 23 `c4_republish`, 16 `c4_resume`, 3 `c4_conformance`, 1 `c4_resolution_conformance`; 183, 129, 44, 72; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy (`--bin`), `check --features desktop`, and `clippy --all-targets --features desktop` at main's 58; fix round 1: see its entry | review fix round 1 applied; re-review pending | Every row of the republish table met, and the resume table's row 6 (P3). The conformance case is split per row (owner-authorized, beside E-9). See "Task 5: Republish" |
-| 7 | `feat: add sync, resume and abandon verbs with a Ctrl-C window` | Verify list: `--bin manyhands-cli` 212, `cli` 302, `cli_remote -- c4_interruption` 1 SSH case; clippy, `check --bin manyhands-cli`, fmt; desktop `check --bin manyhands` (guard) | pending | The spike answered `cancelled`, exit 130, with its effects intact (decision 14). No library change; no `--lib` run (ruling 5). See "Task 7: The Ctrl-C Window And The Sync, Resume And Abandon Verbs" |
+| 7 | `feat: add sync, resume and abandon verbs with a Ctrl-C window`; review fix round 1 `fix: share C3's item read with item sync, and close the review's gaps` | Verify list: `--bin manyhands-cli` 212, `cli` 302, `cli_remote -- c4_interruption` 1 SSH case; clippy, `check --bin manyhands-cli`, fmt; desktop `check --bin manyhands` (guard); fix round 1: the same list, 212, 302, 1 | fix round 1 applied; re-review pending | The spike answered `cancelled`, exit 130, with its effects intact (decision 14). No library change; no `--lib` run (ruling 5). See "Task 7: The Ctrl-C Window And The Sync, Resume And Abandon Verbs" |
 
 ### Task 1: Merging Synchronization
 
@@ -2867,3 +2867,51 @@ C4's lines are added by the data and the code:
   remote conflict.
 - **Task 13:** the spike case is `tests/cli_remote/interruption.rs`'s first;
   Task 13 adds its cases beside it.
+
+#### Task 7, fix round 1
+
+The commit is `fix: share C3's item read with item sync, and close the
+review's gaps`, on FIX_BASE `24404ca3`. `origin/main` is still `a372edb`, and
+`merge-tree` exits 0. The review found the window async-signal-safe and its
+teardown race-free, with one Important finding and five Minors. Each fix is
+the controller's ruling (`task-7-fix-1.md`).
+
+- **I1, C3's fill read and item-ID parse are shared, not copied.**
+  - `fill.rs` gains `read_any_item`. It resolves the repository and shows an
+    item of either kind, and gives the same failure `read_failure` builds.
+  - `read_item` now calls it, then makes its kind check, so C3's behavior is
+    unchanged. `item sync` calls it, and maps the item's kind.
+  - `authoring::document_id` is now `pub(crate) fn item_id`, used by C3's four
+    `--id` verbs and by `item sync`. No pre-existing test names it, so the
+    rename is allowed.
+  - `collaboration.rs` drops its `item_kind`, `item_id` and `invalid_id`
+    copies. `operation`'s `invalid_id` refusal is now inline, its only use.
+  - `fill_tests.rs` and `authoring_tests.rs` are unedited (`git diff
+    24404ca3` on them is empty) and pass.
+- **Minor 1.** `human_collaboration::other_requests` is the one rule for "a
+  `request.retry` naming a request other than the envelope's own". Both the
+  `original_request_required` rendering and `collaboration::original_request`
+  use it.
+- **Minor 2.** `Window::open` fills the slot with `compare_exchange(null,
+  token)`, under a `debug_assert` that it succeeded. A doc line says windows
+  never nest.
+- **Minor 3.** `interrupt/windows.rs`'s `restore` says what a routine already
+  dispatched at teardown does: it can still latch a press and return `TRUE`,
+  harmlessly, because the retry stops or the next window starts cancelled.
+- **Minor 4.** In `tests/cli/collaboration.rs`, the remote-abandon case now
+  says that only `--prepare` reaches the library's refusal, and that C2's
+  confirmation check answers `confirmation_required` before anything reads
+  the operation.
+- **Minor 5.** `interrupt_tests.rs`'s child runner drains both pipes on
+  threads, and polls `try_wait` against a 60 s deadline. A child past the
+  deadline is killed, and its case fails, naming it.
+- **Accepted with no change:** minor 6, the spike's 500 ms wait.
+- **Verify.** Each ran as `devenv shell -- cargo … --locked`, with logs
+  `logs/task-7-fix1-*`:
+  - `--bin manyhands-cli` 212;
+  - `cli` 302;
+  - `cli_remote -- c4_interruption`: 1 SSH case, observation `130 68 3 0 0 1
+    1 1 0`, unchanged;
+  - clippy (all targets and features), `fmt --check`, `check --bin
+    manyhands-cli` and `check --features desktop --bin manyhands` pass.
+- **No ticket comment** was added, as ruling P4 says for a fix round.

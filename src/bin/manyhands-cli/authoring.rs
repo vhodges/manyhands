@@ -253,7 +253,9 @@ pub fn document_create(
     )
 }
 
-fn document_id(
+/// The item `--id` names. A malformed ID is `invalid_id`, with the request
+/// named. Shared by every verb that selects an item with `--id`.
+pub(crate) fn item_id(
     session: &Session,
     spec: &CommandSpec,
     args: &ArgMatches,
@@ -294,7 +296,7 @@ pub fn document_save(
         })()
         .map_err(|e| admin::input_failure(session, spec, flags.request_id, e))?;
         let root = admin::mutation_root(session, spec, args, flags.request_id)?;
-        let id = document_id(session, spec, args, flags.request_id)?;
+        let id = item_id(session, spec, args, flags.request_id)?;
         // Fill once per invocation, before the driver. Replays retain the
         // caller's observation and bounded retries reuse this complete draft.
         let draft = if fill::needs_read_document(&fields) {
@@ -359,7 +361,7 @@ pub fn document_move(
         })()
         .map_err(|e| admin::input_failure(session, spec, flags.request_id, e))?;
         let root = admin::mutation_root(session, spec, args, flags.request_id)?;
-        let id = document_id(session, spec, args, flags.request_id)?;
+        let id = item_id(session, spec, args, flags.request_id)?;
         Ok((flags, root, id, observation, path, destination_observation))
     })() {
         Ok(values) => values,
@@ -504,7 +506,7 @@ pub fn ticket_save(
         })()
         .map_err(|e| admin::input_failure(session, spec, flags.request_id, e))?;
         let root = admin::mutation_root(session, spec, args, flags.request_id)?;
-        let id = document_id(session, spec, args, flags.request_id)?;
+        let id = item_id(session, spec, args, flags.request_id)?;
         // Relationships remain library patches. Only the six draft fields are
         // filled, once before the retry driver; retain the caller's observation.
         let draft = if fill::needs_read_ticket(&fields) {
@@ -570,7 +572,7 @@ pub fn ticket_slug_assign(
         })()
         .map_err(|e| admin::input_failure(session, spec, flags.request_id, e))?;
         let root = admin::mutation_root(session, spec, args, flags.request_id)?;
-        let id = document_id(session, spec, args, flags.request_id)?;
+        let id = item_id(session, spec, args, flags.request_id)?;
         Ok((flags, root, id, observation, initials))
     })() {
         Ok(values) => values,

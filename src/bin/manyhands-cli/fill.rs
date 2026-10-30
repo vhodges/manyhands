@@ -110,12 +110,27 @@ pub fn read_item(
     kind: ItemDtoKind,
     request_id: Option<RequestId>,
 ) -> Result<(ResolvedRepository, ItemDto), Output> {
-    let failure = |error: ReadError| read_failure(session, spec, request_id, error);
-    let repo = service.resolve_repository(root).map_err(failure)?;
-    let item = service.show_item(&repo, id).map_err(failure)?;
+    let (repo, item) = read_any_item(service, session, spec, root, id, request_id)?;
     if item.kind != kind {
         return Err(item_not_found(session, spec, &repo, id, request_id));
     }
+    Ok((repo, item))
+}
+
+/// One `show_item` read of the item `id`, of either kind: the fill read,
+/// and `item sync`'s kind lookup (R-2). A refusal of the read is the
+/// verb's, with its request ID and no effect.
+pub fn read_any_item(
+    service: &RepositoryService,
+    session: &Session,
+    spec: &CommandSpec,
+    root: &Path,
+    id: &ItemId,
+    request_id: Option<RequestId>,
+) -> Result<(ResolvedRepository, ItemDto), Output> {
+    let failure = |error: ReadError| read_failure(session, spec, request_id, error);
+    let repo = service.resolve_repository(root).map_err(failure)?;
+    let item = service.show_item(&repo, id).map_err(failure)?;
     Ok((repo, item))
 }
 

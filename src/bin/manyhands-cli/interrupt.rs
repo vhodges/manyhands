@@ -85,7 +85,8 @@ pub(crate) fn during<T>(work: impl FnOnce(&CancellationToken) -> T) -> T {
 }
 
 /// An open window: its token is in the slot and the handler is installed.
-/// Dropping it, on return or on unwind, tears the window down.
+/// Dropping it, on return or on unwind, tears the window down. Windows
+/// never nest: one wraps one `execute`, and the CLI runs one at a time.
 struct Window {
     token: *mut CancellationToken,
     saved: Option<platform::Saved>,
@@ -94,7 +95,8 @@ struct Window {
 impl Window {
     fn open(token: Box<CancellationToken>) -> Self {
         let token = Box::into_raw(token);
-        SLOT.store(token, SeqCst);
+        let opened = SLOT.compare_exchange(null_mut(), token, SeqCst, SeqCst);
+        debug_assert!(opened.is_ok(), "a window is already open");
         Self {
             token,
             saved: platform::install(),

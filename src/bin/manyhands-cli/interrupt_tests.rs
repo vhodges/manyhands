@@ -6,8 +6,10 @@
 
 use super::*;
 use std::{
+    io::Read,
     os::unix::process::ExitStatusExt,
     process::{Command, Output, Stdio},
+    time::{Duration, Instant},
 };
 
 /// The variable that tells a child which case it runs.
@@ -15,6 +17,9 @@ const CASE: &str = "MANYHANDS_INTERRUPT_CASE";
 /// Written by a child once it is inside its case, so that a child that
 /// died is known to have died there.
 const INSIDE: &str = "interrupt case started";
+/// How long a child may run before it is killed. Generous, for a loaded
+/// machine: a child that hangs fails its case instead of the binary.
+const CHILD_DEADLINE: Duration = Duration::from_secs(60);
 
 /// `None` in the child that runs the case `name`: run its body. In the
 /// parent, the child's output once it has exited.
@@ -26,19 +31,46 @@ fn child(name: &str) -> Option<Output> {
     let module = module_path!()
         .split_once("::")
         .map_or(module_path!(), |(_, path)| path);
-    Some(
-        Command::new(std::env::current_exe().unwrap())
-            .args([
-                &format!("{module}::{name}"),
-                "--exact",
-                "--test-threads=1",
-                "--nocapture",
-            ])
-            .env(CASE, name)
-            .stdin(Stdio::null())
-            .output()
-            .unwrap(),
-    )
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            &format!("{module}::{name}"),
+            "--exact",
+            "--test-threads=1",
+            "--nocapture",
+        ])
+        .env(CASE, name)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Drain both pipes while the child runs, so that it never blocks on them.
+    let drain = |mut pipe: Box<dyn Read + Send>| {
+        std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = pipe.read_to_end(&mut bytes);
+            bytes
+        })
+    };
+    let stdout = drain(Box::new(child.stdout.take().unwrap()));
+    let stderr = drain(Box::new(child.stderr.take().unwrap()));
+    let deadline = Instant::now() + CHILD_DEADLINE;
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the child running {name} exceeded {CHILD_DEADLINE:?} and was killed");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    Some(Output {
+        status,
+        stdout: stdout.join().unwrap(),
+        stderr: stderr.join().unwrap(),
+    })
 }
 
 /// The child ran its case to the end, and the case passed.

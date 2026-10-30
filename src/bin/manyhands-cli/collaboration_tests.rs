@@ -1,5 +1,6 @@
 use super::*;
 use crate::mutate::stops_on_ctrl_c;
+use manyhands::canonical::ItemId;
 use manyhands::repository::{
     CommentAddInput, ConflictResolveInput, IndexRefreshInput, ItemRepublishInput,
 };

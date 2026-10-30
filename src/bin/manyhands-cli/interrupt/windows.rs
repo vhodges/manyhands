@@ -17,7 +17,10 @@ pub(super) fn install() -> Option<Saved> {
     (unsafe { SetConsoleCtrlHandler(Some(routine), 1) } != 0).then_some(Saved)
 }
 
-/// Removes the routine `install` added.
+/// Removes the routine `install` added. A routine the system had already
+/// dispatched can still run after this: it may latch a press and return
+/// `TRUE`, with no token left to cancel. That press is harmless: the retry
+/// loop stops on it, or the run's next window starts cancelled.
 pub(super) fn restore(_: Saved) {
     // SAFETY: removes exactly the routine `install` added.
     unsafe { SetConsoleCtrlHandler(Some(routine), 0) };

@@ -122,6 +122,19 @@ fn named(arguments: &serde_json::Map<String, serde_json::Value>) -> Option<&str>
     arguments.get("request_id")?.as_str()
 }
 
+/// The `request.retry` actions that name a request other than the
+/// envelope's own, with their index in `recovery`: the request an
+/// `original_request_required` sends the caller back to.
+pub fn other_requests(envelope: &Envelope<MutationDataDto>) -> impl Iterator<Item = (usize, &str)> {
+    envelope
+        .recovery
+        .iter()
+        .enumerate()
+        .filter(|(_, action)| action.action == RecoveryActionKind::RequestRetry)
+        .filter_map(|(index, action)| Some((index, named(&action.arguments)?)))
+        .filter(|(_, request)| envelope.request_id.as_deref() != Some(*request))
+}
+
 /// What C4 adds to one result.
 #[derive(Default)]
 struct Lines {
@@ -189,14 +202,9 @@ impl Lines {
             }
             ResultCode::OriginalRequestRequired => {
                 let mut requests = Vec::new();
-                for (index, action) in envelope.recovery.iter().enumerate() {
-                    if action.action == RecoveryActionKind::RequestRetry
-                        && let Some(request) = named(&action.arguments)
-                        && envelope.request_id.as_deref() != Some(request)
-                    {
-                        lines.rendered.push(index);
-                        requests.push(request.to_owned());
-                    }
+                for (index, request) in other_requests(envelope) {
+                    lines.rendered.push(index);
+                    requests.push(request.to_owned());
                 }
                 if let Some(MutationDataDto::LocalContextSync(LocalContextSyncMutationDto {
                     required_request_id: Some(required),
