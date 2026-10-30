@@ -2107,17 +2107,9 @@ fn c4_resolution_original_request_after_an_edit() -> Result<(), FixtureError> {
     let refused = c.on(&fresh(&c.w), RESOLVE, c.titled("Resolved"));
     assert_nothing_written(&c, RESOLVE, &refused, ResultCode::ExternalChange, before);
     assert_eq!(c.written(), c.source("Edited by hand"));
-    // It says which path, and how to go on.
-    assert_eq!(
-        refused.message,
-        format!(
-            "What the request was based on has changed. The path '{}' no longer \
-             holds what this request wrote there: restore it to this request's \
-             resolution, or to its content before the write, and send the request \
-             again.",
-            c.path()
-        )
-    );
+    // The code's own message (Global Constraints): the escape is told by the
+    // human output and the Known Limits, not by the JSON message.
+    assert_eq!(refused.message, ResultCode::ExternalChange.message());
     // The request's resolution is written back: the same request goes on.
     fixed(std::fs::write(&path, c.source("Resolved")))?;
     let retried = c.on(&fresh(&c.w), RESOLVE, c.titled("Resolved"));

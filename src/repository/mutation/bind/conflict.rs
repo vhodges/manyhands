@@ -237,32 +237,6 @@ fn original_request(attempt: &ResolutionAttemptView) -> Answer {
     }
 }
 
-/// The request's own attempt, refused `external_change` because a path it
-/// wrote was changed by hand since (Task 6 review, I1): the answer's message
-/// names the path, displayed as `conflict show` displays it, and says how
-/// to go on. The library writes over no such path for any request; once it
-/// holds the request's resolution again, or its content before the write,
-/// the same request goes on. Only the message changes (decision 8). Any
-/// other answer, and one whose changed path cannot be read, is kept.
-fn naming_the_edit(resolving: &Resolving<'_>, attempt: OperationId, answer: Answer) -> Answer {
-    if answer.code != ResultCode::ExternalChange {
-        return answer;
-    }
-    let Some(path) = resolving.changed_path(attempt) else {
-        return answer;
-    };
-    Answer {
-        message: Some(format!(
-            "{} The path '{}' no longer holds what this request wrote there: restore it \
-             to this request's resolution, or to its content before the write, and send \
-             the request again.",
-            ResultCode::ExternalChange.message(),
-            conflict_read::display_path(&path),
-        )),
-        ..answer
-    }
-}
-
 /// Another request's attempt has its commit prepared: `operation resume`
 /// finishes it from durable state (decision 18), and the repository is
 /// what is looked at otherwise. Nothing is written.
@@ -421,18 +395,6 @@ impl Resolving<'_> {
                 attempt,
             );
         }
-    }
-
-    /// The first path `attempt` wrote that no longer holds what it wrote
-    /// there nor what it held before, for a refusal of the attempt's own
-    /// request: the answer names it. `None` when every path does, or when
-    /// that cannot be read.
-    fn changed_path(&self, attempt: OperationId) -> Option<Vec<u8>> {
-        self.service()
-            .changed_resolution_path(self.root(), self.synchronization, attempt)
-            .ok()
-            .flatten()
-            .flatten()
     }
 
     /// The request that holds the synchronization, whose `request cancel`
@@ -678,19 +640,7 @@ impl ConflictResolveBinding {
                         Ok(Some(request)) => {
                             let outcome =
                                 resolving.service().resolve_synchronization(request.alone());
-                            // The library writes over no path that holds
-                            // neither what the attempt wrote nor what it
-                            // held before: the answer names such a path.
-                            let edited =
-                                matches!(outcome, Err(SynchronizationError::ExternalChange));
                             self.reported(&resolving, attempt, before, outcome)
-                                .map_err(|answer| {
-                                    if edited {
-                                        naming_the_edit(&resolving, attempt, answer)
-                                    } else {
-                                        answer
-                                    }
-                                })
                         }
                         Ok(None) => Err(Answer::stopped(ResultCode::RecoveryRequired)),
                         Err(error) => Err(failed(&error)),

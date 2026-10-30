@@ -2061,14 +2061,15 @@ and nothing of `resolve_synchronization`'s write order changed.
     - a new request is `original_request_required`;
     - the same request, with the same input, is `external_change`.
   - With the request's resolution written back, the same request publishes.
-- **I1.3: the refusal says why.**
-  - That `external_change` names the changed path, as `conflict show`
-    displays it, and says how to restore it. The supersede's own check finds
-    the path (`first_changed_path`).
-  - The message is carried by a crate-private `Answer::message`. It is
-    stored nowhere, and that answer leaves no record.
-  - This departs from the global constraint that the JSON `message` is the
-    code's message, and is flagged in the report.
+- **I1.3: withdrawn by a later ruling.** The global constraint wins: the
+  JSON `message` stays `ResultCode::message()`.
+  - `8546ed7` named the changed path in that `external_change`'s message,
+    and the follow-up commit `fix: keep the result code's message on a
+    resolution's refusal` removes it. That commit takes out
+    `Answer::message` and everything that set or read it.
+  - The escape case now asserts the code's own message.
+  - The escape's explanation moves to the CLI's human output (Part B, Task
+    9) and to Task 14's Known Limit.
 - **M1.** A supersede resets the step to `conflict_pending`. If its new
   request is then refused before its own attempt is recorded:
   - the conflict reads `conflict_pending` and `resolve`, with
