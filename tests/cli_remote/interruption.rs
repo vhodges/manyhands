@@ -13,7 +13,8 @@
 //!   stop at safe points (R-35, fact 11).
 //! - **Lost stdout** (R-25).
 //! - **Exit evidence** (R-27) for the codes only a server gives: the
-//!   transport refusals, and an index hand-off refused after a publication.
+//!   transport refusals, an index hand-off refused after a publication, and
+//!   a poll holding the reservation.
 //!
 //! The server holds the next advertisement until the case lets it go, so
 //! each press or cancellation lands while the run waits on the transfer;
@@ -105,6 +106,10 @@ pub const CASES: &[ssh_harness::Case] = &[
         "c4_interruption_index_hand_off_refused",
         c4_interruption_index_hand_off_refused,
     ),
+    (
+        "c4_interruption_poll_holds_the_reservation",
+        c4_interruption_poll_holds_the_reservation,
+    ),
 ];
 
 const R1: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR1";
@@ -115,8 +120,6 @@ const R5: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR5";
 const R6: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR6";
 const C1: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
 const C2: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC2";
-/// What a cancelled request prints after its progress.
-const CANCELLED: &str = "error: The request was cancelled.\ncode: cancelled\n";
 
 fn sync_args<'a>(clone: &'a CliClone, request: &'a str) -> Vec<&'a str> {
     vec![
@@ -174,25 +177,12 @@ fn assert_merge(clone: &CliClone, merge: git2::Oid, local: git2::Oid, incoming: 
     assert_eq!(commit.parent_ids().collect::<Vec<_>>(), [local, incoming]);
 }
 
-/// `request show` of `request`'s single operation.
-fn the_operation(clone: &CliClone, request: &str) -> String {
-    let shown = request_show(clone, request);
-    let operations = shown["operations"].as_array().unwrap();
-    assert_eq!(operations.len(), 1, "{shown}");
-    operations[0]["operation_id"].as_str().unwrap().to_owned()
-}
-
 /// A JSON-mode run the case lets go on while it does other things: its
 /// input written and stdin closed.
 fn started(env: &CliEnv, args: &[&str], input: &[u8]) -> Started {
-    let mut args = args.to_vec();
-    args.push("--json");
-    let mut child = cli::cli_command(&args.iter().map(OsStr::new).collect::<Vec<_>>(), env)
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    child.stdin.take().unwrap().write_all(input).unwrap();
-    Started(Some(child))
+    let mut run = Started::spawn(env, args);
+    run.child().stdin.take().unwrap().write_all(input).unwrap();
+    run
 }
 
 /// A run in the background, reaped whatever happens: unless it is
@@ -200,6 +190,23 @@ fn started(env: &CliEnv, args: &[&str], input: &[u8]) -> Started {
 struct Started(Option<std::process::Child>);
 
 impl Started {
+    /// `args` in JSON mode, with stdin piped, held from the moment it is
+    /// spawned.
+    fn spawn(env: &CliEnv, args: &[&str]) -> Self {
+        let mut args = args.to_vec();
+        args.push("--json");
+        Self(Some(
+            cli::cli_command(&args.iter().map(OsStr::new).collect::<Vec<_>>(), env)
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .unwrap(),
+        ))
+    }
+
+    fn child(&mut self) -> &mut std::process::Child {
+        self.0.as_mut().unwrap()
+    }
+
     /// Waits for the run, and returns its output.
     fn collected(mut self) -> CliRun {
         cli::collect_cli(self.0.take().unwrap())
@@ -463,6 +470,56 @@ fn c4_interruption_transport_refusals() -> Result<(), FixtureError> {
     Ok(())
 }
 
+/// R-27's exit evidence for `poll_yielding`, staged as Part A stages it
+/// (`tests/mutation_remote.rs`,
+/// `a_poll_holding_the_reservation_is_poll_yielding_and_leaves_no_record`).
+/// A's first `repo sync` makes the repository's remote known to the journal
+/// a poll reserves in. A poll then holds the reservation, taken through the
+/// public service as the desktop's observer takes it. `repo sync` through
+/// the binary yields to it: `poll_yielding`, exit 5, with nothing done, its
+/// own retry offered, no request record, and no connection to the server.
+fn c4_interruption_poll_holds_the_reservation() -> Result<(), FixtureError> {
+    use repository::{
+        OperationId, RemoteOperationPriority, RemoteOperationTarget, RemoteRefPlan,
+        RemoteReservationOutcome, RepositoryService,
+    };
+    let p = CliPair::new()?;
+    let a = &p.a;
+    repo_sync(a, R1, "already_applied", 0);
+    let service = fixed(RepositoryService::open_at(&a.env.data))?;
+    let plan = fixed(RemoteRefPlan::from_configuration("origin", "main"))?;
+    let poll = fixed(service.reserve_remote_operation_with_priority(
+        &a.root,
+        OperationId::new(),
+        &RemoteOperationTarget::for_poll(&plan),
+        RemoteOperationPriority::Poll,
+    ))?;
+    assert!(matches!(poll, RemoteReservationOutcome::Reserved(_)));
+    let (keys, sockets) = (connections(&p), p.server.accepted_sockets());
+
+    let yielded = repo_sync(a, R2, "poll_yielding", 5);
+    assert_eq!(yielded["outcome"], "error");
+    assert_eq!(yielded["request_id"], R2);
+    assert_effects(&yielded, &[]);
+    assert!(yielded["effects"]["commit_oid"].is_null());
+    assert_eq!(
+        yielded["recovery"],
+        serde_json::json!([{"action": "request.retry", "operation_id": null, "arguments": {"request_id": R2}}])
+    );
+    checked(
+        &a.env,
+        &["request", "show", "--request-id", R2],
+        &[],
+        "request_not_found",
+        2,
+        None,
+    );
+    assert_eq!(connections(&p), keys);
+    assert_eq!(p.server.accepted_sockets(), sockets);
+    drop((poll, service));
+    Ok(())
+}
+
 /// The registry's refusal of an index hand-off, as the library's tables
 /// stage it (`tests/mutation_remote/resume.rs`, `c4_resume_comment_hand_off`).
 const FAIL_HAND_OFF: &str = "CREATE TRIGGER fail_handoff BEFORE UPDATE ON operation_records WHEN NEW.state='completed' AND NEW.action='refresh' BEGIN SELECT RAISE(ABORT,'fixed failure'); END";
@@ -529,36 +586,40 @@ fn c4_interruption_index_hand_off_refused() -> Result<(), FixtureError> {
     Ok(())
 }
 
-/// A JSON-mode run whose stdout is closed before it writes anything.
+/// A JSON-mode run whose stdout is closed before it writes anything. As
+/// `collect_cli` does, it waits up to 30 s for the run, then up to one second
+/// for stderr to reach its end.
 fn with_stdout_closed(env: &CliEnv, args: &[&str], input: &[u8]) -> CliRun {
-    let mut args = args.to_vec();
-    args.push("--json");
-    let mut child = cli::cli_command(&args.iter().map(OsStr::new).collect::<Vec<_>>(), env)
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut run = Started::spawn(env, args);
+    let child = run.child();
     drop(child.stdout.take());
     child.stdin.take().unwrap().write_all(input).unwrap();
     let mut stderr = child.stderr.take().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
     let reader = std::thread::spawn(move || {
         let mut bytes = Vec::new();
-        stderr.read_to_end(&mut bytes).map(|_| bytes)
+        let _ = sender.send(stderr.read_to_end(&mut bytes).map(|_| bytes));
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     let status = loop {
         if let Some(status) = child.try_wait().unwrap() {
             break status;
         }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("CLI exceeded 30 seconds");
-        }
+        // Dropping `run` kills the child and waits for it.
+        assert!(
+            std::time::Instant::now() < deadline,
+            "CLI exceeded 30 seconds"
+        );
         std::thread::sleep(std::time::Duration::from_millis(5));
     };
+    let stderr = receiver
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .expect("stderr did not reach EOF within one second of exit")
+        .unwrap();
+    reader.join().unwrap();
     let out = CliRun {
         stdout: Vec::new(),
-        stderr: reader.join().unwrap().unwrap(),
+        stderr,
         status: status.code().expect("CLI terminated without an exit code"),
     };
     scan_output(&out);
@@ -963,6 +1024,17 @@ mod pressed {
     /// How long a press is given to land, as Task 7's spike gives it, while
     /// the transfer is still held.
     const LANDING: std::time::Duration = std::time::Duration::from_millis(500);
+
+    /// What a cancelled request prints after its progress.
+    const CANCELLED: &str = "error: The request was cancelled.\ncode: cancelled\n";
+
+    /// `request show` of `request`'s single operation.
+    fn the_operation(clone: &CliClone, request: &str) -> String {
+        let shown = request_show(clone, request);
+        let operations = shown["operations"].as_array().unwrap();
+        assert_eq!(operations.len(), 1, "{shown}");
+        operations[0]["operation_id"].as_str().unwrap().to_owned()
+    }
 
     /// `args` in human mode at a terminal, with `--non-interactive`, and
     /// `input` on stdin.
@@ -1420,8 +1492,9 @@ mod pressed {
     /// that last check: another clone's publication lands on the branch at
     /// that moment. The press is made then.
     ///
-    /// The same request, sent again without a press, is retried by C2: four
-    /// refused pushes. Once the server takes pushes, it publishes.
+    /// The same request, sent again without a press and with the race
+    /// re-armed, is retried by C2: four refused pushes. Once the server
+    /// takes pushes, it publishes.
     pub fn c4_interruption_press_after_the_last_safe_point() -> Result<(), FixtureError> {
         let p = CliPair::new()?;
         let b = &p.b;
@@ -1496,21 +1569,30 @@ mod pressed {
         assert_eq!(record["state"], "accepted");
         assert!(record["result"].is_null());
 
-        // Without a press, C2's bounded retry re-runs the same request three
-        // more times: four refused pushes, one per execute. The first merges
-        // the other clone's publication.
+        // The control, staged as the pressed run is, with no press: the race
+        // re-armed, so another clone's publication lands again as the push
+        // command arrives, and the server refuses the push. C2's bounded
+        // retry re-runs the same request three more times: four refused
+        // pushes, one per execute. The first merges the publication the
+        // pressed run met; the second merges the one this run met, and the
+        // last two push that merge again.
+        let again = remote_world::commit(&p.bare()?, competing, "again", b"again")?;
+        p.server.race_update(CONTEXT, competing, again)?;
         let updates = p.server.receive_updates().len();
         let retried = item_sync(b, ITEM, R3, "push_rejected", 4);
         assert_eq!(retried["outcome"], "partial");
         assert_eq!(retried["operation_id"], operation.as_str());
-        let remerged = b.tip(CONTEXT)?.ok_or(FixtureError)?;
-        assert_merge(b, remerged, merge, competing);
+        assert_eq!(p.served(CONTEXT)?, Some(again));
         let refused = &p.server.receive_updates()[updates..];
         assert_eq!(refused.len(), 4, "{refused:?}");
+        assert!(refused.iter().all(|update| !update.accepted));
+        let first = refused[0].new_oid;
+        assert_merge(b, first, merge, competing);
+        let remerged = b.tip(CONTEXT)?.ok_or(FixtureError)?;
+        assert_merge(b, remerged, first, again);
         assert!(
-            refused
-                .iter()
-                .all(|update| !update.accepted && update.new_oid == remerged)
+            refused[1..].iter().all(|update| update.new_oid == remerged),
+            "{refused:?}"
         );
 
         // The server takes pushes again: the same request publishes.

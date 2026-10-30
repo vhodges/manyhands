@@ -4305,7 +4305,8 @@ audit's "C4 exit-coverage union" block is read from
 `docs/research/wave-03-api-audit.md`: 48 codes, and with C3's `CLI_ONLY` list,
 50. The rows plus the reasons equal it by set equality, with no code twice
 and none in both. Every row names a `#[test]` of `cli` or a registered `c4_`
-case of `cli_remote`, and its exit is its code's class, or 4 for a partial.
+case of `cli_remote`. A row marked partial exits 4, and every other row by
+its code's own class (fix round 1).
 The rows reach exits 0, 1, 2, 3, 4, 5 and 130 through the binary with a C4
 verb. The union was not changed.
 
@@ -4338,10 +4339,11 @@ verb. The union was not changed.
 | `no_selected_key`, `key_unavailable` | 3 | `repo_sync_refuses_a_remote_or_key_it_cannot_use_before_connecting` |
 | `host_approval_required`, `host_replacement_required`, `unlock_required`, `key_rejected` | 3 | `c4_interruption_transport_refusals` (`repo sync`) |
 | `index_unavailable` | 3 | `repo_sync_on_a_corrupt_registry_is_index_unavailable` |
-| `push_rejected` | 4 | `c4_collaboration_comment_refused_then_saved_once` |
-| `remote_branch_deleted` | 4 | `c4_collaboration_comment_meets_a_deleted_branch` |
-| `discovery_pending` | 4 | `c4_interruption_index_hand_off_refused` (`comment add`) |
+| `push_rejected` | 4, partial | `c4_collaboration_comment_refused_then_saved_once` |
+| `remote_branch_deleted` | 4, partial | `c4_collaboration_comment_meets_a_deleted_branch` |
+| `discovery_pending` | 4, partial | `c4_interruption_index_hand_off_refused` (`comment add`) |
 | `busy` | 5 | `c4_conflicts_republish_busy_then_confirmed` (`item republish`). **Its envelope carries the `operation_id` of the last attempt, yet the request keeps no record** (Task 12b) |
+| `poll_yielding` | 5 | `c4_interruption_poll_holds_the_reservation` (`repo sync`, beside a poll's reservation; fix round 1) |
 | `transport_unavailable` | 5 | `c4_conflicts_republish_transport_stop` |
 | `internal_error` | 1 | `repo_sync_with_an_unopenable_data_directory_is_internal_error` |
 | `cancelled` | 130 | `c4_interruption_request_cancel_of_item_sync` (not a terminal case, so on every platform) |
@@ -4351,9 +4353,6 @@ verb. The union was not changed.
 The codes no fixture reaches through the binary with a C4 verb, with the
 reasons the table gives:
 
-- **`poll_yielding`, 5.** A manual synchronization yields only to a poll the
-  desktop's observer holds; no CLI verb starts a poll. The mapping is
-  pinned by `outcome_tests.rs`.
 - **`remote_unavailable`, 5.** libgit2's `NotFound` is its only source. No
   deterministic fixture produces it: the transport tests accept it or
   `transport_unavailable` for one fixture, as C2's table records.
@@ -4432,3 +4431,80 @@ takes no `--locked`), on the committed sources. The logs are
 The whole `cli_remote` run came before the unlock case lost its publishing
 run. That change only removes a step, and the case and the filter passed
 after it.
+
+#### Task 13, fix round 1
+
+The controller committed the task as `473fa736`, then merged `origin/main`
+twice: D3 as `2f2b1f77`, and main's desktop-only clippy fix as `cec0ce42`.
+This round's commit, on FIX_BASE `cec0ce42`, is `test: reach poll_yielding
+through the binary, and close the review's minors`. `origin/main` is
+`f487cc74`, already merged, and `git merge-tree --write-tree HEAD origin/main`
+exits 0. No `src/` change, no merge or rebase, and no new ticket comment.
+
+**Controller rulings on the task's concerns.** Concerns 1 and 2 are accepted:
+a new request ID is `busy` after a second press, and the latch's
+`push_rejected` is R-36's behaviour. The placement of exit evidence in
+`interruption.rs` is parked for the whole-branch review.
+
+- **Important 1. `poll_yielding` is reached through the binary.**
+  - **Placement.** The new case is `c4_interruption_poll_holds_the_reservation`,
+    beside `transport_refusals`, on `CliPair`. A server-less `cli` case would
+    not reach the code: the key checks come before the reservation. Task 13's
+    transport exploration showed `no_selected_key` answered while another
+    request held the reservation.
+  - **Staging.** It is staged as Part A's
+    `a_poll_holding_the_reservation_is_poll_yielding_and_leaves_no_record` is:
+    1. A's first `repo sync` (`already_applied`) makes the remote known to
+       the journal.
+    2. A `RemoteOperationPriority::Poll` reservation is taken through the
+       public `RepositoryService::reserve_remote_operation_with_priority`.
+  - **The answer.** `repo sync --json` answers `poll_yielding`, exit 5,
+    `error`, with every effect `not_requested` and `[request.retry]` of its
+    own request. `request show` gives `request_not_found`. The server saw no
+    new authentication and no new socket.
+  - The row moved from the reasons to the table, which the mapping above now
+    shows. Two codes keep reasons: `remote_unavailable` and
+    `confirmation_expired`.
+- **Minor 2.** `CANCELLED` and `the_operation` moved into `mod pressed`, their
+  only user, so a non-Unix build has no dead code. Checked by flipping the
+  file's `cfg(unix)` gates to `cfg(windows)` for one `clippy --test
+  cli_remote -D warnings` run, which was clean; the file was then restored
+  byte for byte.
+- **Minor 3.** `Started::spawn` wraps the child as soon as it is spawned:
+  - `started` writes stdin after the wrap;
+  - `with_stdout_closed` holds its child in `Started` too, and its stderr
+    reader now has `collect_cli`'s 1 s EOF bound (an `mpsc` receive with a
+    timeout);
+  - a deadline panic leaves the kill and the wait to `Started`'s `Drop`.
+- **Minor 4.** `finish_any` unwraps the stdout read's `Result`, as `finish`
+  does. That is the only change to `tests/support/pty.rs`.
+- **Minor 5.** The unopenable data directory's `request_id` is pinned null,
+  the one value the binary gives: an error before dispatch.
+- **Minor 6.** Each row has a `partial` marker. The partial rows are
+  `push_rejected`, `remote_branch_deleted` and `discovery_pending`, which
+  exit 4. Every other row's exit equals its code's own class. The test is
+  now `every_c4_row_exits_by_its_code_s_class_unless_partial`, with no
+  blanket `|| exit == 4`.
+- **Minor 7.** The latch's no-press control re-arms the race: another clone's
+  commit lands as the push command arrives, exactly as in the pressed run.
+  It gives four refused pushes:
+  - the first pushes the merge of the pressed run's competing commit;
+  - the second and later push the merge of that merge and the new commit;
+  - the server holds the new commit;
+  - once the server takes pushes, the same request publishes the final
+    merge.
+- **Kept, as ruled:** `confirmation_expired` stays a reason, and the reviewer's
+  Minor 7 is parked.
+
+**Verify on the merged tree.** Each ran as `devenv shell -- cargo …
+--locked` (`fmt --check` takes no `--locked`), on the committed sources. The
+logs are `logs/task-13-fix1-*`.
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --test cli_remote -- c4_interruption` | **17 SSH cases passed** (2 m 35 s) |
+| `test --all-features --test cli -- collaboration_exits` | **11 passed** |
+| `clippy --all-targets --all-features -- -D warnings` | passes |
+| `fmt --check` | passes |
+| `test --all-features --test cli_remote` (whole target) | **66 SSH cases passed** (6 m 50 s) |
+| `test --all-features --test cli` (whole target) | **349 passed** (2 m 17 s) |

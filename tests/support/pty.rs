@@ -370,8 +370,9 @@ impl PtyCli {
                 .pipes
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                 .expect("PTY standard pipe EOF deadline");
+            let bytes = bytes.unwrap();
             if !is_stdout {
-                stderr = bytes.unwrap()
+                stderr = bytes
             }
         }
         for worker in self.workers.drain(..) {

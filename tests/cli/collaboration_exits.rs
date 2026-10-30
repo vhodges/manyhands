@@ -46,6 +46,9 @@ enum How {
 struct Row {
     code: &'static str,
     exit: i32,
+    /// Whether the named test's result is partial: a durable effect came
+    /// first, so it exits 4 whatever its code's own class.
+    partial: bool,
     how: How,
 }
 
@@ -53,6 +56,7 @@ const fn binary(code: &'static str, exit: i32, case: &'static str) -> Row {
     Row {
         code,
         exit,
+        partial: false,
         how: How::Binary(case),
     }
 }
@@ -61,6 +65,17 @@ const fn remote(code: &'static str, exit: i32, case: &'static str) -> Row {
     Row {
         code,
         exit,
+        partial: false,
+        how: How::Remote(case),
+    }
+}
+
+/// A `c4_` SSH case whose result is partial: exit 4.
+const fn partial(code: &'static str, case: &'static str) -> Row {
+    Row {
+        code,
+        exit: 4,
+        partial: true,
         how: How::Remote(case),
     }
 }
@@ -205,24 +220,28 @@ const ROWS: &[Row] = &[
         3,
         "repo_sync_on_a_corrupt_registry_is_index_unavailable",
     ),
-    remote(
+    // A comment checkpointed before its publication is refused, or meets a
+    // deleted branch, or before its index hand-off fails: partial.
+    partial(
         "push_rejected",
-        4,
         "c4_collaboration_comment_refused_then_saved_once",
     ),
-    remote(
+    partial(
         "remote_branch_deleted",
-        4,
         "c4_collaboration_comment_meets_a_deleted_branch",
     ),
-    remote(
+    partial(
         "discovery_pending",
-        4,
         "c4_interruption_index_hand_off_refused",
     ),
     // Task 12b: a `busy` republish carries the `operation_id` of its last
     // attempt in its envelope, yet keeps no request record.
     remote("busy", 5, "c4_conflicts_republish_busy_then_confirmed"),
+    remote(
+        "poll_yielding",
+        5,
+        "c4_interruption_poll_holds_the_reservation",
+    ),
     remote(
         "transport_unavailable",
         5,
@@ -252,17 +271,13 @@ const fn reason(code: &'static str, exit: i32, why: &'static str) -> Row {
     Row {
         code,
         exit,
+        partial: false,
         how: How::Reason(why),
     }
 }
 
 /// The codes no fixture reaches through the binary with a C4 verb.
 const REASONS: &[Row] = &[
-    reason(
-        "poll_yielding",
-        5,
-        "A manual synchronization yields only to a poll the desktop's observer holds; no CLI verb starts a poll. synchronization_error_code maps it (src/repository/mutation/outcome.rs; outcome_tests.rs, every_synchronization_error_has_its_code).",
-    ),
     reason(
         "remote_unavailable",
         5,
@@ -379,16 +394,14 @@ fn class_exit(code: &str) -> i32 {
 }
 
 #[test]
-fn every_c4_row_exits_by_its_code_s_class_or_as_partial() {
-    // A partial result exits 4 whatever its code (`Envelope::failure_class`).
+fn every_c4_row_exits_by_its_code_s_class_unless_partial() {
+    // A partial result exits 4 whatever its code (`Envelope::failure_class`);
+    // any other exits by its code's own class.
     for row in ROWS.iter().chain(REASONS) {
-        assert!(
-            row.exit == class_exit(row.code) || row.exit == 4,
-            "{}: exit {}",
-            row.code,
-            row.exit
-        );
+        let expected = if row.partial { 4 } else { class_exit(row.code) };
+        assert_eq!(row.exit, expected, "{}", row.code);
     }
+    assert!(REASONS.iter().all(|row| !row.partial));
 }
 
 #[test]
@@ -782,7 +795,8 @@ fn repo_sync_on_a_corrupt_registry_is_index_unavailable() {
 }
 
 /// Exit 1: a data directory that is a file. The envelope still goes to
-/// stdout.
+/// stdout. The service is not opened, so this is an error before dispatch,
+/// with a null request ID (Global Constraints, Runtime).
 #[test]
 fn repo_sync_with_an_unopenable_data_directory_is_internal_error() {
     let f = Fixture::new();
@@ -797,6 +811,6 @@ fn repo_sync_with_an_unopenable_data_directory_is_internal_error() {
         "internal_error",
         None,
     );
-    assert!(value["request_id"].is_null() || value["request_id"] == REQUEST);
+    assert!(value["request_id"].is_null(), "{value}");
     assert_eq!(f.snapshot(), before);
 }
