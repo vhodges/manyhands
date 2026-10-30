@@ -4508,3 +4508,155 @@ logs are `logs/task-13-fix1-*`.
 | `fmt --check` | passes |
 | `test --all-features --test cli_remote` (whole target) | **66 SSH cases passed** (6 m 50 s) |
 | `test --all-features --test cli` (whole target) | **349 passed** (2 m 17 s) |
+
+### Task 14: Document Amendments
+
+The commit is `docs: amend RFCs, Wave, F2 design and audit for C4`, on BASE
+`46739c73`. `origin/main` is `f487cc74`, already merged, and did not move
+during the task. No subagent was dispatched. Only documents changed: nothing
+under `src/`, `tests/` or `schemas/`.
+
+Every amendment is dated "Amended 2026-10-30 by C4" and cites its decision or
+ruling. A ruling made in the controller's ledger is cited by what it says and
+by its task, since that ledger is not committed. AGENTS.md and the skills are
+Task 15's, and are not touched.
+
+**The C4 design** (`2026-10-26-wave-03-cli-04-discussion-and-sync-design.md`),
+from the carries:
+
+| Section | Amendment | Source |
+| --- | --- | --- |
+| Execution Status | a note that execution rulings are recorded in place | Task 14 |
+| Fact 9 | F2 answers a cancelled sync that owes nothing `already_applied` | Task 4b's row-8 ruling (this ledger, "Recorded for Task 14") |
+| Comment Submission, Standing | a code never finished by the same request is `Owed`, with `[request.cancel]`; a refusal after the binding releases it, and an input-class refusal finishes the record | carry 8; Task 2b's concern-2 and review I1 rulings |
+| Comment table, `remote_branch_deleted` | the record stays accepted, `[request.cancel]`, three `next:` lines | carry 8 |
+| Comment table, no remote then one added | `operation resume` publishes the comment | carry 4 (Part A review M3) |
+| Republish, Preview | the no-op preview's `item sync` `next:` line and C2's caveat | carry 14 |
+| Republish, Execution step 3 | a pointer to R-18's two further left-out refusals | carry 12 |
+| Republish, Records | `push_rejected` finishes the record; a refused republish ends `cancelled` | carries 9 and 11 |
+| Republish table, row 4 | the record finishes | carry 9 |
+| Republish table, row 13 | human output names the step, not the request ID | carry 13 (and Task 12b's note) |
+| Conflict Inspection | sides for every item path; what `structure` means for a noncanonical path | Task 3's sides rulings; carry 17 |
+| Conflict-states table | two rows: no conflict recorded is `invalid_input`; a failed inspection at `resolution_prepared` answers its own code | carry 6 |
+| Conflict Resolution, step 2 | which attempt a request reconciles; an earlier stage's input is `external_change` | carry 5 (Part A review M2) |
+| Conflict Resolution, step 3 | what closing a superseded attempt deletes; the phase reset | carry 1 |
+| Conflict Resolution, step 6 | the holder's and the comment request's flags; `request cancel` after push intent | carry 2 |
+| Resume table, row 8 | option B's answer | carry 3 |
+| Resume table, new row | `operation resume` meeting `remote_branch_deleted` | carry 15 |
+| Cancellation, Unix | an inherited `SIGINT` ignore is kept | carry 18 |
+| Cancellation, new bullet | after a second press, the same request first | carry 23 |
+| Human Output | three `next:` lines, and the holder's request for a resolve; the resume, busy and no-op notes; the hand-edit notes | carries 7.1, 8, 13, 14 and 15 |
+| R-18 | the fetch-evidence and settle-path refusals left out | carry 12 |
+| R-34 | `Owed` for a never-finished code; the input-class refusal | carry 8; Task 2b's review I1 ruling |
+| Named Edits | the owner-authorized conformance split beside E-9 | carry 16 |
+| Document Amendments | the date used | Task 14 |
+| Known Limits | second press; the spike's observed answer; the latch; the corrected hand-edit limit; lock-held refusals; owner rows after registration removal; push-only `Deleted` evidence; the `busy` check beside a promotion's or closure's merge; main's two defects | carries 7, 10, 19, 20, 23 and 24; this ledger's Task 7 note; Task 1's recorded limit |
+
+**The CLI contract RFC:** C4 verbs available, C5 planned; the C4 taxonomy
+paragraph and the eight rows, `item republish` new; a new section "C4
+collaboration options and input schemas" (the two schemas, examples, token
+lifetime); `item republish` as the republish consent, with the no-op
+preview's text; conflict data in place of a recovery action; the
+`comment add` example with real codes and `created_by`; the gate's paragraph
+amended in place (delivered verbs, C5/D5 for the local contract, the three
+local sentences scoped, the remote rule, C4's six remote departures); the
+conflict paragraph (token input, kind and structure, set-wide resolution,
+`conflict show` after an outside repair); the Ctrl-C window, latch, second
+press, finality, `request cancel` and lost stdout; and a "C4 evidence and
+known limits" subsection, with the resume's deleted-branch note, the
+key-before-enable order, and main's two defects. Sources: the design's
+Document Amendments, carries 17, 18, 19, 20 and 23, and this ledger's Task 10
+and 12a notes.
+
+**The Git workflow RFC:** the bindings merge and republish is its own
+confirmed command (decisions 3, 7 and 11); a conflict's next step in data
+(decision 8); the gate's "Local recovery amendment" scoped to the local
+operation, with the remote rule beside it (decisions 13, 18 and 20); the
+incompatible-closure limit on remote (fact 85, decision 6); and the meaning
+of `structure` (carry 17).
+
+**The canonical content and comment schema RFC:** `created_by` from the
+caller's validated input when given, else the Git identity (decision 9).
+
+**The F2 design:** a dated note under Comment Author, replacing "A caller
+cannot supply it", and a dated paragraph under Departures from the RFCs
+(decision 9).
+
+**Wave 03:** entry-gate item 3's departure (decision 16); the gate
+checkpoint's "C4/D5 must adapt" as C5/D5, keeping "C4/D5 still provide"
+(decision 19); track rule 2's recorded ordering (decision 5); track rule 5's
+exception (decision 1); the C4 section, with decisions 1–21, the delivery,
+the known limits and the owed Windows check; C5 (decision 19); D4 (decision
+5); D5 (decisions 5 and 19); and the capability rows "Comment author", the
+remote half of "Conflict inspection read", and "Discussion/sync/conflict and
+resume".
+
+**The API audit:** a note in the gate's section naming C4's remote
+departures (the section is otherwise unchanged); the C4 refresh's pointer to
+the reconciliation; `conflict show` counted 12, not 13 (carry 21); the
+resume citations named by function (Task 0's deferred minor); a new "C4
+delivery reconciliation (2026-10-30)" subsection; the eight C4 inventory
+rows reconciled in place; and D26/D27 swept (carry 22). The union block is
+byte-identical, 48 codes.
+
+**Not applied.**
+
+- **Carry 24.** R-36 says the press count and cancellation persist and the
+  retry stops; it does not say the answer becomes `cancelled`, so R-36 is
+  unchanged. The latch's answer is recorded in Known Limits and in the CLI
+  RFC instead.
+- **The plan's Task 13 text** (`implementation.md`, "a new request
+  recover[s]" after a second press) is the plan, which implementers do not
+  edit. The design and the CLI RFC now say the same request goes first.
+
+**This ledger's "Task 14" notes that the carries did not list,** all
+applied:
+- fact 9's "a cancelled one is left to inspect" (Task 4b);
+- the spike's observed `cancelled` beside the Ctrl-C limit (Task 7);
+- the RFC's `item republish` text citing the no-op preview's output
+  (Task 10);
+- the RFC citing the resume's deleted-branch note and the key-before-enable
+  order (Task 12a).
+
+**For the controller: amendments neither the carries nor this ledger
+named.** Each tells the truth where the delivered behavior contradicted a
+document; no code changed.
+
+1. **R-34 and Standing: an input-class refusal finishes the record.** Task
+   2b's review I1 ruling. R-34 said the record of a released binding stays.
+2. **Known Limits: the `busy` check beside a promotion's or closure's
+   merge.** Task 1's recorded limit, in its fix-round entry above. The
+   divergent table's `busy` row does not hold for such a merge.
+3. **Conflict Inspection: sides for every item path.** Task 3's sides
+   rulings. R-10's "UTF-8 canonical text" and the table's "sides only where
+   readable" read as if a readable noncanonical file had sides.
+4. **The audit's resume citations,** named by function: Task 0's deferred
+   minor, part of Step 2's reconciliation.
+5. **Known Limits: the latch's answer.** Carry 24 kept R-36 unchanged; the
+   limit states that a press no safe point sees is not reported as
+   `cancelled`.
+
+**D3 interactions.** D3 amended the Wave's D3 and D4 sections and one
+canonical RFC paragraph. C4's D4 amendment follows D3's, and both hold. The
+canonical RFC paragraph D3 changed is not the one C4 amends. D3 touched no
+CLI RFC, Git RFC, F2 design or audit text that C4 amends. No C4 amendment
+needed rewording for D3.
+
+**Step 3's grep** over the three RFCs, the Wave and the audit:
+`publication_pending`, `{path, observation, source}`, "future CLI adapter
+contract" and "C4/D5 must adapt" each hit only amendment text that names
+what it replaces. `conflict.show`, "never merges", "refuse divergence" and
+"`operation show` re-observes" have no hit. Each sentence of fact 85 is
+scoped to the local operation, and the capability row keeps the gate's local
+half.
+
+**Verify.** Each ran as `devenv shell -- cargo … --locked` (`fmt --check`
+takes no `--locked`). The logs are `logs/task-14-*`. Three tests read the
+audit with `include_str!`; no other document edited here is read by a test.
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --test cli -- collaboration_exits` | **11 passed** |
+| `test --all-features --test cli -- authoring_exits` | **15 passed** (C3's union and no-op capability) |
+| `test --all-features --test cli -- exits::` | **30 passed** (C2's union, with the two above) |
+| `fmt --check` | passes |
