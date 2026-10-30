@@ -68,13 +68,13 @@ Each candidate is a Known Limit already written into the documents. Creating a t
 | Item | Answer |
 | --- | --- |
 | 1. Goldens read well | |
-| 1. Label case | |
-| 1. Structure labels | |
-| 1. Nested conflict fields | |
-| 2. Dogfooding go-ahead | |
-| 3. Untrusted-host follow-up | |
-| 3. Filesystem-refusal follow-up | |
-| 3. Exit-evidence move | |
+| 1. Label case | Keep as is; follow-up ticket `01M67BN4H4F4ZXQG79H2NV7PWS` (owner, 2026-10-30) |
+| 1. Structure labels | Follow-up ticket `01M67BN4H4F4ZXQG79H2NV7PWS` (owner, 2026-10-30) |
+| 1. Nested conflict fields | Follow-up ticket `01M67BN4H4F4ZXQG79H2NV7PWS` (owner, 2026-10-30) |
+| 2. Dogfooding go-ahead | Go ahead once the full suite is green (owner, 2026-10-30) |
+| 3. Untrusted-host follow-up | Ticket `01M67BN4C1SY2HQBGNE9NBYMW8` |
+| 3. Filesystem-refusal follow-up | Ticket `01M67BN4DMYV41ME9FHEBCZ2RA` |
+| 3. Exit-evidence move | Ticket `01M67BN4F7M1TYRMTDHB4XNWCM` |
 | 4. Main-defect tickets | |
 | 4. C5, D3, D4 and D5 notes | |
 | 4. `ticket save` | |
