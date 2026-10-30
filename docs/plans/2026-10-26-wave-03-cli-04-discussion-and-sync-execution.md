@@ -2590,3 +2590,77 @@ republish, and close the review's gaps`, on FIX_BASE `296a6c8`
   - `--lib` remote 477, local_sync 164, integration 26 and mutation 123.
   - clippy, fmt, and the desktop `--bin` check and clippy passed.
   - The whole target is the Task 6 gate's, as ruled.
+
+### Task 6: Part A Checkpoint
+
+The controller ran the checkpoint and its review, at `74be902`.
+`origin/main` is still `a372edb`, and `git merge-tree --write-tree HEAD
+origin/main` exits 0.
+
+- **The library scope (Step 2), on `2a7dccd`.**
+  - The protected-file diff exits 0.
+  - The `grep -v -E` filter prints nothing, and it prints all four probe
+    lines, so it can fail.
+  - `src/repository.rs` touches only:
+    - the re-exports, including the `cfg(test)` ones;
+    - `checkpoint_comment_locally`'s delegation;
+    - `checkpoint_comment_locally_with`'s body.
+  - The fix rounds after it changed no file outside the filter.
+- **The gate, on `74be902`.** Each command runs as `devenv shell -- cargo
+  … --locked`. The logs are `logs/task-6-gate-*`.
+  - `check --all-features`, `fmt --check`, `clippy --all-targets
+    --all-features -- -D warnings`, `check --features desktop`, `check --bin
+    manyhands-cli` and `check-cli-no-gpui.sh` pass.
+  - `clippy --all-targets --features desktop` fails with exactly main's 58
+    errors, all in D-track files under `src/desktop/`, and none in a C4 file
+    (Ruling P6).
+  - `--lib`: 1445 passed (28 min).
+  - `--bin manyhands-cli` 188, `cli` 290, `mutation_bridges` 129,
+    `mutation_confirmation` 183, `mutation_contract` 44, `mutation_replay`
+    383, `read_contract` 72.
+  - `cli_remote` 31, `comment_publication` 41, `mutation_remote` 257 (every
+    case, with no watchdog loss), `remote_merge_recovery` 25. These took 78
+    min.
+- **The independent review (Step 3)** was by opus, over `da83fd3..2a7dccd`,
+  adversarial on decision 13's mechanism and on R-18
+  (`task-6-review-report.md`).
+  - **Findings:** 0 Critical, 1 Important (I1), 9 Minor.
+  - **Republish held.** It had no findings, and the `2a7dccd` extraction
+    left item sync's steps unchanged.
+  - **I1.** An attempt with written paths, one of them later edited by hand,
+    cannot be finished by any request.
+    - Ruled: it stays a Known Limit. The library's refusal to overwrite a
+      hand edit is the gate's rule, in a file outside C4's scope.
+    - A refusal that wrote nothing now closes its own attempt, so the wedge
+      cannot be reached without a write.
+    - A case pins the escape: restoring the request's resolution lets the
+      same request publish.
+    - The custom message ruled at first was withdrawn, because the Global
+      Constraint keeps `ResultCode::message()`. The escape goes to Task 9's
+      human output and to Task 14's Known Limit.
+  - **Minors fixed:** M1, M2 (no stageable case), M4, M5, M6 and M9
+    (`[request.cancel]` names the holder's request). M3 is pinned.
+  - **Carried:** M7 to Task 14. M8 is deferred to the final review.
+  - **The fix round** is `8546ed7` and `74be902`; see "Task 4a, Part A
+    review fix round 1" above.
+  - **Its scoped re-review** (opus) was clean. Three Minors are deferred to
+    the final review's fix dispatch, so this gate stays valid:
+    - the step reset is not conditioned on the deleted attempt's phase (the
+      M8 class);
+    - the withdrawn message's scaffolding remains;
+    - two outcome docs.
+- **Task 14 carries added here:**
+  - I1's corrected Known Limit (design line 2045);
+  - a hand edit after a lock-held refusal also wedges until undone;
+  - M3's row (design line 938);
+  - M7's owner rows on registration removal;
+  - design step 2's wording after M2.
+- **Part B carries added here:**
+  - Task 9's escape line for a `historical` conflict's `external_change`;
+  - `conflict resolve`'s `remote_branch_deleted`, which takes 2b's three
+    `next:` lines, naming the holder's request.
+- **Ticket comment** `01M659P4CFQN8ZCFEXGS77Q8H7`, a reply to
+  `01M64AGF41CC4ZXHNQV6QZHQ7P`. It also corrects
+  `01M62KA2F519YGJ71XADTDX9N7`'s statement that `remote_branch_deleted`
+  finishes a `comment add` record: under Task 2b's concern-1 ruling, the
+  record stays `Owed`.
