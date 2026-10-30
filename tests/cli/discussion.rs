@@ -250,13 +250,14 @@ fn input_that_is_not_valid_is_refused_with_nothing_done() {
         input["created_by"] = json!(author);
         let value = f.add(items::TICKET_A, REQUEST_1, &input, 2, "invalid_input");
         assert!(value["data"].is_null());
+        assert!(!value.to_string().contains(author), "{author}");
         assert_eq!(value["effects"]["write"], "not_requested", "{author}");
         assert_eq!(f.snapshot(), before, "{author}");
     }
 
     // The CLI refuses the others before it builds a request, with the
     // request ID named and no record made.
-    let mut malformed_author_golden = None;
+    let mut cli_refusal_golden = None;
     for (case, input) in [
         (
             "comment_id",
@@ -286,11 +287,11 @@ fn input_that_is_not_valid_is_refused_with_nothing_done() {
         assert!(value["data"].is_null(), "{case}");
         f.no_request(REQUEST_2);
         assert_eq!(f.snapshot(), before, "{case}");
-        malformed_author_golden.get_or_insert(value);
+        cli_refusal_golden.get_or_insert(value);
     }
     golden(
         "comment_add_invalid_input",
-        &malformed_author_golden.unwrap(),
+        &cli_refusal_golden.unwrap(),
         &f.repo.root,
     );
 
@@ -544,7 +545,7 @@ fn the_human_text_names_the_publication_and_carries_the_note() {
 }
 
 #[test]
-fn every_comment_add_refusal_in_human_mode_names_its_code_and_prints_no_note() {
+fn a_comment_add_refusal_in_human_mode_names_its_code_and_prints_no_note() {
     let f = Fixture::new();
     let input = json!({"comment_id": COMMENT, "body": "Too late.\n"});
     let human = mutation::run(

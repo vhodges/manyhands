@@ -403,7 +403,7 @@ fn a_result_without_c4_lines_is_c2_s_output() {
     }
 }
 
-const PUBLICATION_NOTE: &str = "note: publishing the comment also publishes this item's other checkpointed work; unsaved drafts are not included.\n";
+const PUBLICATION_NOTE_LINE: &str = "note: publishing the comment also publishes this item's other checkpointed work; unsaved drafts are not included.\n";
 
 #[test]
 fn a_comment_s_result_carries_the_publication_note_and_c2_s_lines() {
@@ -416,7 +416,7 @@ fn a_comment_s_result_carries_the_publication_note_and_c2_s_lines() {
         // The note follows whatever C2 prints on stderr, here the refusal.
         assert_eq!(
             stderr(&output),
-            format!("{}{PUBLICATION_NOTE}", stderr(&c2)),
+            format!("{}{PUBLICATION_NOTE_LINE}", stderr(&c2)),
             "{name}"
         );
     }
@@ -456,7 +456,7 @@ fn a_comment_s_conflict_prints_its_conflict_lines_and_the_note() {
         ),
         "{text}"
     );
-    assert!(text.ends_with(PUBLICATION_NOTE), "{text}");
+    assert!(text.ends_with(PUBLICATION_NOTE_LINE), "{text}");
 }
 
 /// Task 2b's ruling: a comment whose child synchronization meets a deleted
@@ -499,7 +499,9 @@ fn a_comment_s_deleted_remote_branch_names_cancel_the_request_sent_again_and_rep
     // C2's line for the cancellation is replaced, not repeated.
     assert!(!text.contains("request.cancel"), "{text}");
     assert!(
-        text.ends_with(&format!("{PUBLICATION_NOTE}note: {RESERVATION_NOTE}\n")),
+        text.ends_with(&format!(
+            "{PUBLICATION_NOTE_LINE}note: {RESERVATION_NOTE}\n"
+        )),
         "{text}"
     );
     // The body of the comment is in none of it: the data holds none.
@@ -1086,7 +1088,9 @@ fn a_resume_that_met_a_deleted_branch_says_how_to_free_the_reservation() {
     assert_eq!(next_lines(text), [republish.as_str()], "{text}");
     // The publication note of the comment, then the reservation's.
     assert!(
-        text.ends_with(&format!("{PUBLICATION_NOTE}{RESUME_DELETED_NOTE_LINE}")),
+        text.ends_with(&format!(
+            "{PUBLICATION_NOTE_LINE}{RESUME_DELETED_NOTE_LINE}"
+        )),
         "{text}"
     );
     // The refused request's own reservation note is not this one: the

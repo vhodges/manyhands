@@ -623,9 +623,10 @@ fn an_abandon_of_a_remote_operation_is_refused_and_changes_nothing() {
     // another journal holds.
     let refused = checked(&args(&["--prepare"]), &env, &[], 2, "invalid_input", None);
     assert!(refused["data"].is_null());
-    // With no preview there is no confirmation to run it with. C2's
-    // confirmation check answers this before anything reads the operation,
-    // so it shows only that nothing is changed.
+    // With no preview there is no confirmation to run it with. The
+    // library's consent gate (`consent`, `mutation/confirm.rs`)
+    // answers this before anything reads the operation, so it shows only
+    // that nothing is changed.
     checked(
         &args(&["--request-id", REQUEST_2]),
         &env,

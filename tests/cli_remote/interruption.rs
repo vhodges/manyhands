@@ -1418,15 +1418,17 @@ mod pressed {
             pty.send(&[3]);
             pty
         };
-        let (code, signal, stderr) = pty.finish_any();
+        let (code, signal, stdout, stderr) = pty.finish_any();
         // The server lets the dead client's connection go.
         drop(hold);
         scan_output(&CliRun {
-            stdout: Vec::new(),
+            stdout: stdout.clone().into_bytes(),
             stderr: stderr.clone().into_bytes(),
             status: 0,
         });
         assert_eq!((code, signal), (None, Some(libc::SIGINT)));
+        // Nothing more is printed: no result.
+        assert!(stdout.is_empty(), "{stdout}");
         assert_eq!(stderr, progress(&["accepted", "connecting", "fetching"]));
         assert_eq!(b.tip(CONTEXT)?, Some(local));
         assert_eq!(p.served(CONTEXT)?, Some(incoming));

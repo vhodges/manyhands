@@ -355,14 +355,15 @@ impl PtyCli {
         )
     }
     /// As `finish`, for a child that may have died by a signal: its exit
-    /// code, the signal that ended it, and its stderr.
-    pub fn finish_any(mut self) -> (Option<i32>, Option<i32>, String) {
+    /// code, the signal that ended it, its stdout and its stderr.
+    pub fn finish_any(mut self) -> (Option<i32>, Option<i32>, String, String) {
         use std::os::unix::process::ExitStatusExt;
         let status = self.wait();
         self.slave.take();
         if let Some(reader) = self.reader.take() {
             reader.join().unwrap();
         }
+        let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let deadline = Instant::now() + Duration::from_secs(1);
         for _ in 0..2 {
@@ -371,7 +372,9 @@ impl PtyCli {
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
                 .expect("PTY standard pipe EOF deadline");
             let bytes = bytes.unwrap();
-            if !is_stdout {
+            if is_stdout {
+                stdout = bytes
+            } else {
                 stderr = bytes
             }
         }
@@ -382,6 +385,7 @@ impl PtyCli {
         (
             status.code(),
             status.signal(),
+            String::from_utf8(stdout).unwrap(),
             String::from_utf8(stderr).unwrap(),
         )
     }

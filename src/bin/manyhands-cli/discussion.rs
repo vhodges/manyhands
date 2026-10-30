@@ -1,7 +1,8 @@
-//! `comment add`, the one collaboration verb that takes input. It is
-//! C4's driver around `Mutation::CommentAdd`: the same bounded retry, the
-//! same Ctrl-C window (`mutate.rs`) and the same human output
-//! (`human_collaboration`) as the verbs of `collaboration`.
+//! `comment add`, one of the two collaboration verbs that take input
+//! (`conflict resolve`, in `conflict`, is the other). It is C4's driver
+//! around `Mutation::CommentAdd`: the same bounded retry, the same Ctrl-C
+//! window (`mutate.rs`) and the same human output (`human_collaboration`)
+//! as the verbs of `collaboration`.
 //!
 //! The verb adds only what the request needs and the library cannot read
 //! for itself: the item's kind (R-2) and the four input fields. The comment

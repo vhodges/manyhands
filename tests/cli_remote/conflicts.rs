@@ -1665,6 +1665,11 @@ mod unix {
         assert_eq!(after, before);
         let (out, transcript) = pty.finish();
         scan_output(&out);
+        scan_output(&CliRun {
+            stdout: transcript.clone().into_bytes(),
+            stderr: Vec::new(),
+            status: 0,
+        });
         assert_eq!(out.status, 130);
         assert!(out.stdout.is_empty());
         let stderr = text(&out.stderr);
@@ -1694,8 +1699,13 @@ mod unix {
         let mut pty = interactive(a);
         pty.expect("Proceed? [y/N] ");
         pty.send(b"yes\n");
-        let (out, _) = pty.finish();
+        let (out, transcript) = pty.finish();
         scan_output(&out);
+        scan_output(&CliRun {
+            stdout: transcript.into_bytes(),
+            stderr: Vec::new(),
+            status: 0,
+        });
         assert_eq!(out.status, 0, "{}", text(&out.stderr));
         let request = allocated(text(&out.stderr));
         assert!(
