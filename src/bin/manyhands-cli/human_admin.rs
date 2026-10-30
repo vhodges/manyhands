@@ -1,8 +1,39 @@
-use crate::render::{Human, field};
+use crate::render::{Human, field, quoted};
 use manyhands::{
     repository::*,
     results::{Effects, Envelope, Outcome, ResultCode},
 };
+
+pub const REPUBLISH: &str = "item republish";
+/// The no-op preview of `item republish`: the branch is there, was never
+/// published, or its deletion is not yet observed (design, Republish).
+const UNPUBLISHED_NOTE: &str = "no deletion of this item's published branch is recorded, so there is nothing to republish; run item sync first, which looks at the remote, then prepare the republish again.";
+
+/// What the no-op preview of an `item republish` adds to C2's line: the
+/// `item sync` to run first, as a `next:` line when the repository and the
+/// item are known, and the note that says why. The library offers no
+/// recovery action that names a sync, and none may be added (decision 8).
+/// Another command's no-op preview adds nothing.
+pub fn republish_noop(envelope: &Envelope<PrepareDataDto>) -> Option<Human> {
+    if envelope.command != REPUBLISH {
+        return None;
+    }
+    let next = match (
+        envelope.scope.repository.as_deref(),
+        envelope.scope.item_id.as_deref(),
+    ) {
+        (Some(root), Some(item)) => format!(
+            "next: manyhands-cli item sync --repo {} --id {}\n",
+            quoted(root),
+            field(item)
+        ),
+        _ => String::new(),
+    };
+    Some(Human {
+        stdout: next,
+        notes: vec![UNPUBLISHED_NOTE.into()],
+    })
+}
 
 // Only published, content-free DTOs reach this formatter. Inputs never do.
 // Nested field names retain their context, and every dynamic scalar is escaped.

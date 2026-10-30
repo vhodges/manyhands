@@ -342,6 +342,7 @@ pub const CLI_CASES: &[&str] = &[
     "conflict_show_operation_not_found",
     "conflict_show_invalid_input",
     "conflict_resolve_invalid_input",
+    "item_republish_publication_remote_required",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
     "document_repair_text",

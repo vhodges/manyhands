@@ -3248,3 +3248,122 @@ in). FIX_BASE `71d65975`.
 - **Verify** (`logs/task-9-fix1-*`): `--bin manyhands-cli` 243 passed;
   `--test cli` 330 passed; clippy (all targets, all features), `fmt --check` and
   `check --bin manyhands-cli` pass. No new ticket comment.
+
+### Task 10: `item republish`
+
+The commit is `feat: add item republish`, on BASE `f1f9f06e`. `origin/main` is
+still `a372edb`, and `git merge-tree --write-tree HEAD origin/main` exits 0. No
+subagent was dispatched. Only `src/bin/manyhands-cli` and tests changed: no
+library file, so no `--lib` target ran (controller ruling 3).
+
+**The verb, `collaboration.rs`.**
+
+- `item_republish` is C2's confirmed flow, as `operation abandon` is: the same
+  `run` driver (the bounded retry, and the Ctrl-C window that Task 5 and
+  Task 7 already wired for `Mutation::ItemRepublish`), with `--prepare`,
+  `--confirm` and consent at a terminal. The catalog entry is `item
+  republish`, `Available("C4")`, "Republish a deleted item branch.", options
+  `--repo`, `--id`, `--request-id`, `--prepare` and `--confirm`, confirmed,
+  input refused.
+- `item_sync` and `item_republish` share a private `item` function, which
+  reads the flags, the root and the item ID (`authoring::item_id`), reads the
+  item's kind through `fill::read_any_item` (R-2) and builds the mutation.
+  `item_sync` behaves as before.
+- The dispatch arm is `"item republish"`. E-2: `catalog_tests.rs`'s C4 row
+  gains `"item republish"`. E-1: the help goldens were regenerated, and the
+  diff is one added row in each of `help_root.json` and `help_root_text.txt`.
+
+**Human output (controller rulings 1 and 2).**
+
+- **Busy.** No public read gives the request that holds the reservation
+  (`OperationDto` carries none), and a library change is an owner stop. So a
+  human-mode `busy` of `item republish` prints, before C2's `next:
+  request.retry` line, `note: if an earlier item sync of this item was
+  refused, its request still holds the reservation: run request cancel with
+  that request's ID, then send that request once more, before retrying this
+  request.` It is `Lines::lead` in `human_collaboration.rs`, printed with the
+  failure's extra lines, which come before the recovery lines. Another verb's
+  `busy`, a republish's other refusals and JSON are C2's output unchanged.
+  The live journey (a refused `item sync` that holds the reservation) is
+  Task 12b's.
+- **No-op preview.** The no-op preview answers `already_applied` with no
+  confirmation. Its human output, from `human_admin::republish_noop` (called
+  by `render::prepare_output`, so `--prepare` and the interactive path both
+  get it), keeps C2's `Already applied; nothing changed.`, adds `next:
+  manyhands-cli item sync --repo '<root>' --id <id>` on stdout when the scope
+  names both, and `note: no deletion of this item's published branch is
+  recorded, so there is nothing to republish; run item sync first, which looks
+  at the remote, then prepare the republish again.` on stderr. No recovery
+  action was added (decision 8). JSON is unchanged. The helper lives in
+  `human_admin.rs`, and `quoted` moved from `human_collaboration.rs` to
+  `render.rs` beside `field`, because `tests/cli_remote.rs` mounts
+  `render.rs` and `human_admin.rs` but not `human_collaboration.rs`; a
+  dependency of `render.rs` on the latter would not resolve there. `cargo
+  check --test cli_remote` passes.
+- The existing `remote_branch_deleted` lines (Task 2b's three `next:` lines
+  ending in `item republish --prepare`) already name `request cancel`.
+
+**Tests.** RED, before the implementation: the unit cases (`--bin
+manyhands-cli -- republish`) had 4 failed, 4 passed (the 4 passed were the
+existing deleted-branch cases and the C2-unchanged ones). The binary cases
+(`--test cli -- republish`), run with the catalog entry removed, had 6 failed
+with `usage_error` for an unknown command, and 2 passed (the unconfirmed
+verbs, and the refused input, which are usage errors either way).
+
+- **Unit** (`human_collaboration_tests.rs`, 3): the busy note comes before the
+  retry line, exactly; another verb's busy, and a republish refused otherwise,
+  are C2's output; JSON has no note.
+- **Unit** (`human_admin_tests.rs`, 4): the no-op preview names `item sync`
+  and the note, with the root quoted and escaped and no raw control; without a
+  scope it keeps the note; another command's no-op preview and JSON are C2's.
+- **Binary** (`tests/cli/republish.rs`, 8, no SSH):
+  - `item_republish_publication_remote_required`: `--prepare` with no
+    publication remote is `publication_remote_required`, exit 3, a ticket and
+    a document, snapshot unchanged, golden;
+  - an unknown item is `item_not_found` and a malformed ID `invalid_id`,
+    before anything is prepared;
+  - an unknown confirmation is `confirmation_not_found`, exit 3, nothing
+    published;
+  - a malformed confirmation is `invalid_id`;
+  - `--prepare` with `--request-id` or `--confirm` is a usage error, request
+    null;
+  - input is refused and the item is required;
+  - JSON without a request ID is a usage error;
+  - `--prepare` of each of the five unconfirmed mutations (`comment add`,
+    `item sync`, `repo sync`, `conflict resolve`, `operation resume`) is
+    `not_confirmable`, exit 2, request null, snapshot unchanged.
+- **Golden (R-28):** `item_republish_publication_remote_required` in
+  `tests/support/cli.rs`'s `CLI_CASES`. The preview golden, the confirmed
+  push and the interactive consent need a recorded publication, which needs the
+  SSH fixture, so they are Task 12b's.
+
+**Verify.** Each ran as `devenv shell -- cargo … --locked` (`fmt --check` takes
+no `--locked`); logs are in `logs/task-10-*`.
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --bin manyhands-cli` | 250 passed (243 before) |
+| `test --all-features --bin manyhands-cli -- catalog` | 7 passed |
+| `test --all-features --test cli` | 338 passed (330 before) |
+| `test --all-features --test cli -- input_schemas` | 7 passed |
+| `clippy --all-targets --all-features -- -D warnings` | passes |
+| `fmt --check` | passes |
+| `check --bin manyhands-cli` | passes |
+| `check --all-features --test cli_remote` | passes |
+| `check --features desktop --bin manyhands` | passes |
+
+**For later tasks.**
+
+- **Task 12b:** the live rows run end to end here: the preview golden (`item
+  republish --prepare` after a recorded deletion, and after push-absence
+  evidence), `--confirm`, the interactive consent, a Ctrl-C at the prompt,
+  replay, and a transport stop. In particular the `busy` row: a refused `item
+  sync` that holds its reservation, the republish's retry ending `busy`, and
+  the note printed before the retry line. Also the no-op preview's human text
+  from a real repository.
+- **Task 13:** `item republish` through the binary reaches these codes
+  without a remote: `publication_remote_required`, `confirmation_not_found`,
+  `item_not_found`, `invalid_id`, `not_confirmable` (of the five unconfirmed
+  verbs), and `usage_error`.
+- **Task 14:** the RFC's `item republish` row can cite the no-op preview's
+  human text.

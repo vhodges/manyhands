@@ -68,6 +68,8 @@ mod remotes;
 mod repair;
 #[path = "cli/repository.rs"]
 mod repository;
+#[path = "cli/republish.rs"]
+mod republish;
 #[path = "cli/requests.rs"]
 mod requests;
 

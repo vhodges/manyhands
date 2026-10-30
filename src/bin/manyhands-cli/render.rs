@@ -37,18 +37,31 @@ pub fn prepare_output(json: bool, envelope: &Envelope<PrepareDataDto>) -> Output
         let extra = envelope.data.as_ref().map(human_admin::fields);
         return human_failure(envelope, extra.as_deref());
     }
+    let mut notes = Vec::new();
     let stdout = match envelope.data.as_ref() {
         Some(PrepareDataDto::Preview(preview)) => format!(
             "{}Apply with the same command and --confirm {}; add --request-id unless you run it at a terminal.\n",
             human_admin::preview(preview),
             field(&preview.confirmation_id)
         ),
-        _ if envelope.outcome == Outcome::Noop => "Already applied; nothing changed.\n".into(),
+        _ if envelope.outcome == Outcome::Noop => {
+            let mut text = "Already applied; nothing changed.\n".to_owned();
+            // The no-op preview of `item republish` says to run `item sync`.
+            if let Some(more) = human_admin::republish_noop(envelope) {
+                text.push_str(&more.stdout);
+                notes = more.notes;
+            }
+            text
+        }
         _ => format!("{}\n", field(&envelope.message)),
     };
     Output {
         stdout: stdout.into_bytes(),
-        stderr: Vec::new(),
+        stderr: notes
+            .iter()
+            .map(|note| format!("note: {note}\n"))
+            .collect::<String>()
+            .into_bytes(),
         status: exit_status(envelope.failure_class()),
     }
 }
@@ -151,6 +164,13 @@ fn json_output<T: Serialize>(envelope: &Envelope<T>) -> Output {
             json_output(&failure)
         }
     }
+}
+
+/// A root in a `next:` command: single-quoted for a POSIX shell, with
+/// controls escaped as C3's `path observe` escapes a path, and each single
+/// quote closed, escaped and opened again.
+pub fn quoted(root: &str) -> String {
+    format!("'{}'", field(root).replace('\'', r"'\''"))
 }
 
 /// Escape only field-owned controls, preserving ordinary Unicode and paths.

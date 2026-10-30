@@ -315,3 +315,86 @@ fn a_noop_says_already_applied() {
             .starts_with("Already applied; nothing changed.\n")
     );
 }
+
+fn stdout(output: &crate::render::Output) -> &str {
+    std::str::from_utf8(&output.stdout).unwrap()
+}
+
+fn stderr(output: &crate::render::Output) -> &str {
+    std::str::from_utf8(&output.stderr).unwrap()
+}
+
+/// No byte of `text` is a control other than a line's end.
+fn no_raw_control(text: &str) {
+    assert!(
+        !text.chars().any(|c| c.is_control() && c != '\n'),
+        "{text:?}"
+    );
+}
+
+fn republish_noop(scope: Scope) -> Envelope<PrepareDataDto> {
+    Envelope::mutation(
+        "item republish",
+        scope,
+        Outcome::Noop,
+        ResultCode::AlreadyApplied,
+    )
+}
+
+/// Controller ruling 2 of Task 10: the library offers no recovery action
+/// that names a sync, so the human output says to run `item sync` first.
+#[test]
+fn the_no_op_republish_preview_says_to_run_item_sync_first() {
+    let envelope = republish_noop(Scope {
+        repository: Some("/work/repo".into()),
+        item_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAW".into()),
+        ..Scope::default()
+    });
+    let output = crate::render::prepare_output(false, &envelope);
+    assert_eq!(output.status, 0);
+    assert_eq!(
+        stdout(&output),
+        "Already applied; nothing changed.\n\
+         next: manyhands-cli item sync --repo '/work/repo' --id 01ARZ3NDEKTSV4RRFFQ69G5FAW\n"
+    );
+    assert_eq!(
+        stderr(&output),
+        "note: no deletion of this item's published branch is recorded, so there is nothing to republish; run item sync first, which looks at the remote, then prepare the republish again.\n"
+    );
+}
+
+#[test]
+fn the_no_op_republish_preview_without_a_repository_still_says_to_run_item_sync() {
+    let output = crate::render::prepare_output(false, &republish_noop(Scope::default()));
+    assert_eq!(stdout(&output), "Already applied; nothing changed.\n");
+    assert!(
+        stderr(&output).contains("run item sync first"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn the_no_op_republish_preview_escapes_its_root_and_prints_no_raw_control() {
+    let envelope = republish_noop(Scope {
+        repository: Some("/work/it's\n\u{1b}[31m".into()),
+        item_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAW".into()),
+        ..Scope::default()
+    });
+    let output = crate::render::prepare_output(false, &envelope);
+    no_raw_control(stdout(&output));
+    no_raw_control(stderr(&output));
+    assert!(stdout(&output).contains("--repo '/work/it'\\''s\\n\\u{1b}[31m'"));
+}
+
+#[test]
+fn another_command_s_no_op_preview_and_json_are_c2_s() {
+    let mut other = republish_noop(Scope::default());
+    other.command = "repo identity-set".into();
+    let output = crate::render::prepare_output(false, &other);
+    assert_eq!(stdout(&output), "Already applied; nothing changed.\n");
+    assert!(output.stderr.is_empty());
+    let json = crate::render::prepare_output(true, &republish_noop(Scope::default()));
+    assert!(json.stderr.is_empty());
+    assert!(!stdout(&json).contains("item sync"));
+}

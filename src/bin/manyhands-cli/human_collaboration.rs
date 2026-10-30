@@ -10,6 +10,12 @@
 //!   releases the reservation, then prepare the republish (Task 2b's ruling).
 //!   For a `conflict resolve` that request is the one holding the
 //!   synchronization, not the resolve;
+//! - for a `busy` `item republish`, a note before the retry line: the
+//!   reservation may be held by an earlier `item sync` of the item that was
+//!   refused, and no public read names that request, so the note says to
+//!   cancel it with its ID (controller ruling, Task 10);
+//! - for the no-op preview of `item republish`, the `item sync` to run first,
+//!   because the library offers no recovery action that names a sync;
 //! - for `original_request_required` of `operation resume`, a `next:` line
 //!   naming the request, and the supersede note when that request's remote
 //!   resolution has written paths only;
@@ -26,8 +32,8 @@
 //! in full, in place of C2's line for it. C4 adds no action (decision 8).
 
 use crate::{
-    human_admin,
-    render::{self, Human, Output, field},
+    human_admin::{self, REPUBLISH},
+    render::{self, Human, Output, field, quoted},
 };
 use manyhands::{
     repository::*,
@@ -71,13 +77,11 @@ const HAND_EDIT_NOTE: &str = "a resolved file edited by hand must be restored to
 const CLOSURES_NOTE: &str =
     "two clones closed this ticket differently; repair it outside Manyhands.";
 pub const RESOLVE: &str = "conflict resolve";
-
-/// A root in a `next:` command: single-quoted for a POSIX shell, with
-/// controls escaped as C3's `path observe` escapes a path, and each single
-/// quote closed, escaped and opened again.
-pub fn quoted(root: &str) -> String {
-    format!("'{}'", field(root).replace('\'', r"'\''"))
-}
+/// A `busy` `item republish`. Its reservation can be held by an `item sync`
+/// of the same item that was refused as `remote_branch_deleted`, which keeps
+/// it until it is cancelled (design, Republish). No public read gives that
+/// request's ID, so the note says where it comes from.
+const BUSY_REPUBLISH_NOTE: &str = "if an earlier item sync of this item was refused, its request still holds the reservation: run request cancel with that request's ID, then send that request once more, before retrying this request.";
 
 /// How a request whose command cannot be named is sent again.
 pub fn resend(request: &str) -> String {
@@ -192,6 +196,9 @@ struct Lines {
     /// `next:` lines, without the prefix.
     next: Vec<String>,
     notes: Vec<String>,
+    /// Notes of a refusal that come before C2's `next:` lines for its
+    /// recovery actions, because they say what to do before the first.
+    lead: Vec<String>,
     /// The recovery actions a `next:` line above renders.
     rendered: Vec<usize>,
     /// Whether `data` replaces C2's field list.
@@ -281,13 +288,19 @@ impl Lines {
             ResultCode::ExternalChange if seen.written => {
                 lines.notes.push(HAND_EDIT_NOTE.into());
             }
+            ResultCode::Busy if envelope.command == REPUBLISH => {
+                lines.lead.push(BUSY_REPUBLISH_NOTE.into());
+            }
             _ => {}
         }
         lines
     }
 
     fn is_empty(&self) -> bool {
-        self.data.is_empty() && self.next.is_empty() && self.notes.is_empty()
+        self.data.is_empty()
+            && self.next.is_empty()
+            && self.notes.is_empty()
+            && self.lead.is_empty()
     }
 
     /// The data and `next:` lines, each ended.
@@ -307,6 +320,14 @@ impl Lines {
 
     fn notes(&self) -> String {
         self.notes
+            .iter()
+            .map(|note| format!("note: {note}\n"))
+            .collect()
+    }
+
+    /// The notes that precede a refusal's recovery lines.
+    fn lead(&self) -> String {
+        self.lead
             .iter()
             .map(|note| format!("note: {note}\n"))
             .collect()
@@ -399,6 +420,8 @@ pub fn output(envelope: &Envelope<MutationDataDto>, supplied: bool, seen: &Seen)
     }
     let mut extra = human_admin::failure_extra(&shown, supplied);
     extra.push_str(&lines.body());
+    // `extra` is printed before the recovery lines the refusal carries.
+    extra.push_str(&lines.lead());
     let refusal = Envelope::<serde_json::Value> {
         schema_version: envelope.schema_version,
         command: envelope.command.clone(),

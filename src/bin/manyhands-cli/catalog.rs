@@ -918,6 +918,18 @@ pub const COMMANDS: &[CommandSpec] = &[
         },
     },
     CommandSpec {
+        resource: "item",
+        verb: "republish",
+        summary: "Republish a deleted item branch.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[REPO, ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
         resource: "conflict",
         verb: "show",
         summary: "Show a conflict.",

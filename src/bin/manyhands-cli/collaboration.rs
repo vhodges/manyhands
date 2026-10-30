@@ -1,15 +1,16 @@
-//! The collaboration verbs that take no input: `item sync`, `repo sync`,
-//! `operation resume` and `operation abandon`. Each is C2's driver around
-//! one library mutation. The stoppable ones run inside the Ctrl-C window
-//! (`mutate.rs`), and their results are rendered by
-//! `human_collaboration`.
+//! The collaboration verbs that take no input: `item sync`, `item
+//! republish`, `repo sync`, `operation resume` and `operation abandon`.
+//! Each is C2's driver around one library mutation. The stoppable ones run
+//! inside the Ctrl-C window (`mutate.rs`), and their results are rendered
+//! by `human_collaboration`.
 
 use std::path::{Path, PathBuf};
 
 use clap::ArgMatches;
 use manyhands::{
+    canonical::ItemId,
     repository::{
-        AuthoringKind, ItemDtoKind, ItemSyncInput, Mutation, MutationDataDto,
+        AuthoringKind, ItemDtoKind, ItemRepublishInput, ItemSyncInput, Mutation, MutationDataDto,
         OperationAbandonInput, OperationId, OperationResumeInput, RepoSyncInput, RepositoryService,
         RequestId,
     },
@@ -31,6 +32,31 @@ pub fn item_sync(
     spec: &'static CommandSpec,
     args: &ArgMatches,
 ) -> Output {
+    item(service, session, spec, args, |root, kind, id| {
+        Mutation::ItemSync(ItemSyncInput { root, kind, id })
+    })
+}
+
+/// C2's confirmed flow: `--prepare`, `--confirm`, or consent at a terminal.
+pub fn item_republish(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    item(service, session, spec, args, |root, kind, id| {
+        Mutation::ItemRepublish(ItemRepublishInput { root, kind, id })
+    })
+}
+
+/// A verb on one item, whose kind R-2 reads before the request is built.
+fn item(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+    build: fn(PathBuf, AuthoringKind, ItemId) -> Mutation,
+) -> Output {
     let (flags, root, id) = match (|| {
         let flags = admin::flags(session, spec, args)?;
         let root = admin::mutation_root(session, spec, args, flags.request_id)?;
@@ -47,11 +73,7 @@ pub fn item_sync(
         Err(out) => return out,
     };
     run(service, session, spec, flags, None, &mut |_| {
-        Mutation::ItemSync(ItemSyncInput {
-            root: root.clone(),
-            kind,
-            id: id.clone(),
-        })
+        build(root.clone(), kind, id.clone())
     })
 }
 

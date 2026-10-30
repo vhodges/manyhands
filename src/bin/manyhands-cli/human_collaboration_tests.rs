@@ -977,3 +977,72 @@ fn an_incompatible_closures_path_says_to_repair_it_outside_manyhands() {
     ]));
     assert!(plain.stderr.is_empty());
 }
+
+/// What `item republish` answers when the reservation is held: the
+/// retry action names the republish request itself, as the library gives it.
+fn busy(command: &str) -> Envelope<MutationDataDto> {
+    let mut envelope = Envelope::<MutationDataDto>::failure(
+        command,
+        Scope {
+            repository: Some("/work/repo".into()),
+            item_id: Some("01ARZ3NDEKTSV4RRFFQ69G5FAW".into()),
+            ..Scope::default()
+        },
+        ResultCode::Busy,
+        vec![RecoveryAction::new(
+            RecoveryActionKind::RequestRetry,
+            [("request_id", R1.into())],
+        )],
+    );
+    envelope.request_id = Some(R1.into());
+    envelope
+}
+
+const BUSY_REPUBLISH_NOTE: &str = "note: if an earlier item sync of this item was refused, its request still holds the reservation: run request cancel with that request's ID, then send that request once more, before retrying this request.\n";
+
+/// Controller ruling 1 of Task 10: no public read gives the request that
+/// holds the reservation, so a busy republish says what to do about it, and
+/// says it before the retry line.
+#[test]
+fn a_busy_republish_says_a_refused_sync_may_hold_the_reservation_before_the_retry_line() {
+    let output = output(&busy("item republish"), false, &Seen::default());
+    assert_eq!(output.status, 5);
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        stderr(&output),
+        format!(
+            "error: The repository is busy; try again.\n\
+             code: busy\n\
+             request: {R1}\n\
+             {BUSY_REPUBLISH_NOTE}\
+             next: request.retry request_id={R1}\n"
+        )
+    );
+}
+
+#[test]
+fn a_busy_result_of_any_other_verb_or_a_republish_refusal_is_c2_s_output() {
+    for command in [
+        "item sync",
+        "repo sync",
+        "comment add",
+        "conflict resolve",
+        "operation resume",
+        "operation abandon",
+    ] {
+        same_as_c2(&busy(command), &Seen::default());
+    }
+    // A republish that is not busy has no such note.
+    let mut other = busy("item republish");
+    other.code = ResultCode::ExternalChange;
+    other.outcome = other.code.outcome();
+    same_as_c2(&other, &Seen::default());
+}
+
+#[test]
+fn a_busy_republish_in_json_is_the_envelope_with_no_note() {
+    let envelope = busy("item republish");
+    let json = crate::render::mutation_output(true, &envelope, false);
+    assert!(json.stderr.is_empty());
+    assert!(!stdout(&json).contains("earlier item sync"));
+}

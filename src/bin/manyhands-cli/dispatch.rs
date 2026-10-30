@@ -577,6 +577,9 @@ pub fn dispatch(
         }
         "comment add" => return crate::discussion::comment_add(service, session, command, args),
         "item sync" => return crate::collaboration::item_sync(service, session, command, args),
+        "item republish" => {
+            return crate::collaboration::item_republish(service, session, command, args);
+        }
         "repo sync" => return crate::collaboration::repo_sync(service, session, command, args),
         "conflict show" => return crate::conflict::show(service, session, command, args),
         "conflict resolve" => return crate::conflict::resolve(service, session, command, args),
