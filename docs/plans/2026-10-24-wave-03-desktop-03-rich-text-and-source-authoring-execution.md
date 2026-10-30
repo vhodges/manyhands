@@ -1927,3 +1927,16 @@ Notes for later tasks: Task 22 leaves `targets()` in
   no final newline: kept byte for byte as IBM ships it. The OFL notice
   must also travel with release artifacts; that is packaging work, not
   D3's. The checklist's release binary was rebuilt from `570118e`.
+- Owner (2026-10-29, Task 27 Step 2): on a release build, scrolling an
+  item's 66 comments grows more sluggish further down. Follow-up ticket
+  `01M65KRW1R`, "Speed up scrolling through a long discussion", was
+  created with the owner's go-ahead and its branch pushed: profile
+  first, then window the discussion, fix zorite-editor 0.10.0's
+  per-line `line_starts()` rescan in prepaint, and run
+  `sync_discussion` on a list change only. It cites a read-only
+  comparison with the Zorite app; nothing is profiled yet.
+- Owner (2026-10-29, Task 27 Step 2): on C4's ticket, comments after
+  the first had no space between them. They are replies: 16 of its 18
+  comment files carry a `parent_id`, each naming the one before, so they
+  draw in their root's card under the 1 px `page_border_soft` rule, as
+  the design's Threads rule says. The owner: "fine for now".
