@@ -10,6 +10,11 @@
 //!   releases the reservation, then prepare the republish (Task 2b's ruling).
 //!   For a `conflict resolve` that request is the one holding the
 //!   synchronization, not the resolve;
+//! - for `remote_branch_deleted` of an `operation resume`, which offers no
+//!   cancellation because a resume stops at no safe point, a note that the
+//!   publication's own request holds the reservation and how to free it,
+//!   and the `item republish --prepare` line when the item is known
+//!   (controller ruling, Task 12a);
 //! - for a `busy` `item republish`, a note before the retry line: the
 //!   reservation may be held by an earlier `item sync` of the item that was
 //!   refused, and no public read names that request, so the note says to
@@ -85,6 +90,13 @@ const HAND_EDIT_NOTE: &str = "a resolved file edited by hand must be restored to
 const CLOSURES_NOTE: &str =
     "two clones closed this ticket differently; repair it outside Manyhands.";
 pub const RESOLVE: &str = "conflict resolve";
+const RESUME: &str = "operation resume";
+/// An `operation resume` refused as `remote_branch_deleted`. A resume stops
+/// at no safe point, so the library offers no `request.cancel`, and no
+/// public read gives the ID of the request that holds the reservation: the
+/// note says which request that is and what frees it (controller ruling,
+/// Task 12a).
+const RESUME_DELETED_NOTE: &str = "the request that started this publication, its comment add or item sync, still holds the reservation: run request cancel with that request's ID, then send that request once more, then run item republish.";
 /// A `busy` `item republish`. Its reservation can be held by an `item sync`
 /// of the same item that was refused as `remote_branch_deleted`, which keeps
 /// it until it is cancelled (design, Republish). No public read gives that
@@ -117,13 +129,18 @@ pub fn branch_deleted(
         again.unwrap_or_else(|| resend(request)),
     ];
     if let (Some(root), Some(item)) = (root, item) {
-        lines.push(format!(
-            "manyhands-cli item republish --repo {} --id {} --prepare",
-            quoted(root),
-            field(item)
-        ));
+        lines.push(republish(root, item));
     }
     lines
+}
+
+/// The `item republish` preview of `item` in the repository at `root`.
+fn republish(root: &str, item: &str) -> String {
+    format!(
+        "manyhands-cli item republish --repo {} --id {} --prepare",
+        quoted(root),
+        field(item)
+    )
 }
 
 /// The `conflict:` line of a conflict's next step, and the command that
@@ -268,6 +285,17 @@ impl Lines {
                         again(envelope, request),
                     ));
                     lines.notes.push(reservation_note(envelope, request));
+                } else if envelope.command == RESUME {
+                    // The resume's scope names no item when it took up a
+                    // comment's publication; the comment's data does.
+                    let item = envelope.scope.item_id.as_deref().or(match &envelope.data {
+                        Some(MutationDataDto::Comment(comment)) => Some(comment.item_id.as_str()),
+                        _ => None,
+                    });
+                    if let (Some(root), Some(item)) = (root, item) {
+                        lines.next.push(republish(root, item));
+                    }
+                    lines.notes.push(RESUME_DELETED_NOTE.into());
                 }
             }
             ResultCode::OriginalRequestRequired => {

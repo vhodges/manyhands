@@ -1028,3 +1028,126 @@ fn a_busy_result_of_any_other_verb_or_a_republish_refusal_is_c2_s_output() {
     other.outcome = other.code.outcome();
     same_as_c2(&other, &Seen::default());
 }
+
+/// What `operation resume` answers when the publication it took up meets
+/// the item's branch deleted on the remote: blocked, with no recovery
+/// action, because a resume stops at no safe point and the library offers
+/// no cancellation. The reservation stays with the publication's own
+/// request (Task 12a, carry 2). `data` is what the resume took up.
+fn deleted_branch_of_a_resume(
+    root: &str,
+    item: Option<&str>,
+    data: Option<MutationDataDto>,
+) -> Envelope<MutationDataDto> {
+    let mut envelope = Envelope::<MutationDataDto>::failure(
+        "operation resume",
+        Scope {
+            repository: Some(root.into()),
+            item_id: item.map(str::to_owned),
+            ..Scope::default()
+        },
+        ResultCode::RemoteBranchDeleted,
+        Vec::new(),
+    );
+    envelope.request_id = Some(R3.into());
+    envelope.effects.publication = PublicationEffect::Pending;
+    envelope.data = data;
+    envelope
+}
+
+/// A comment's data, as a resume of its publication carries it.
+fn comment_data() -> MutationDataDto {
+    golden("comment_add_push_rejected").data.unwrap()
+}
+
+const RESUME_DELETED_NOTE_LINE: &str = "note: the request that started this publication, its comment add or item sync, still holds the reservation: run request cancel with that request's ID, then send that request once more, then run item republish.\n";
+
+/// Controller ruling 4 of Task 12a: a resume that meets a deleted branch
+/// says how to free the reservation, and prints the republish preview of the
+/// item, from the scope or, for a comment's publication, from its data.
+#[test]
+fn a_resume_that_met_a_deleted_branch_says_how_to_free_the_reservation() {
+    let republish =
+        format!("next: manyhands-cli item republish --repo '/work/repo' --id {ITEM} --prepare");
+    // A comment's publication: the scope names no item, the data does.
+    let envelope = deleted_branch_of_a_resume("/work/repo", None, Some(comment_data()));
+    let refused = output(&envelope, false, &Seen::default());
+    assert_eq!(refused.status, 3);
+    assert!(refused.stdout.is_empty());
+    let text = stderr(&refused);
+    assert!(
+        text.starts_with(&format!(
+            "error: The published branch was deleted on the remote.\n\
+             code: remote_branch_deleted\n\
+             request: {R3}\n"
+        )),
+        "{text}"
+    );
+    assert_eq!(next_lines(text), [republish.as_str()], "{text}");
+    // The publication note of the comment, then the reservation's.
+    assert!(
+        text.ends_with(&format!("{PUBLICATION_NOTE}{RESUME_DELETED_NOTE_LINE}")),
+        "{text}"
+    );
+    // The refused request's own reservation note is not this one: the
+    // resume holds none.
+    assert!(!text.contains(RESERVATION_NOTE), "{text}");
+    no_raw_control(text);
+
+    // An item sync's publication: the scope names the item.
+    let envelope = deleted_branch_of_a_resume("/work/repo", Some(ITEM), None);
+    let text = stderr(&output(&envelope, false, &Seen::default())).to_owned();
+    assert_eq!(next_lines(&text), [republish.as_str()], "{text}");
+    assert!(text.ends_with(RESUME_DELETED_NOTE_LINE), "{text}");
+
+    // No item known: the note alone.
+    let envelope = deleted_branch_of_a_resume("/work/repo", None, None);
+    let text = stderr(&output(&envelope, false, &Seen::default())).to_owned();
+    assert!(next_lines(&text).is_empty(), "{text}");
+    assert!(text.ends_with(RESUME_DELETED_NOTE_LINE), "{text}");
+}
+
+#[test]
+fn a_resume_s_republish_line_quotes_and_escapes_the_root_as_the_other_lines_do() {
+    let envelope = deleted_branch_of_a_resume("/work/it's\u{1b}[2J", Some(ITEM), None);
+    let text = stderr(&output(&envelope, false, &Seen::default())).to_owned();
+    assert_eq!(
+        next_lines(&text),
+        [format!(
+            r"next: manyhands-cli item republish --repo '/work/it'\''s\u{{1b}}[2J' --id {ITEM} --prepare"
+        )],
+        "{text}"
+    );
+    no_raw_control(&text);
+}
+
+#[test]
+fn only_a_resume_s_deleted_branch_without_a_cancellation_carries_the_note() {
+    // A deleted branch that offers the cancellation keeps its three lines
+    // and its own note.
+    let mut offered = deleted_branch_of_a_resume("/work/repo", Some(ITEM), None);
+    offered.recovery = vec![RecoveryAction::new(
+        RecoveryActionKind::RequestCancel,
+        [("request_id", R1.into())],
+    )];
+    let text = stderr(&output(&offered, false, &Seen::default())).to_owned();
+    assert!(!text.contains(RESUME_DELETED_NOTE_LINE), "{text}");
+    assert_eq!(next_lines(&text).len(), 3, "{text}");
+    // Another verb's deleted branch with no cancellation is C2's output.
+    let mut other = deleted_branch_of_a_resume("/work/repo", Some(ITEM), None);
+    other.command = "item sync".into();
+    same_as_c2(&other, &Seen::default());
+    // Another code of a resume is untouched.
+    let mut refused = deleted_branch_of_a_resume("/work/repo", Some(ITEM), None);
+    refused.code = ResultCode::RecoveryRequired;
+    refused.outcome = refused.code.outcome();
+    same_as_c2(&refused, &Seen::default());
+    // JSON is the envelope alone, with the code's own message.
+    let envelope = deleted_branch_of_a_resume("/work/repo", None, Some(comment_data()));
+    let json = crate::render::mutation_output(true, &envelope, false);
+    assert!(json.stderr.is_empty());
+    let json: Value = serde_json::from_slice(&json.stdout).unwrap();
+    assert_eq!(json["message"], ResultCode::RemoteBranchDeleted.message());
+    assert_eq!(json["recovery"], serde_json::json!([]));
+    assert!(!json.to_string().contains("reservation"));
+}
