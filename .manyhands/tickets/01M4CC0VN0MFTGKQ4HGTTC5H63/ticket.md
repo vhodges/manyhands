@@ -4,9 +4,11 @@ cycle: D3
 id: 01M4CC0VN0MFTGKQ4HGTTC5H63
 title: 'Wave 03 D3: Rich-Text And Source Authoring'
 type: cycle
-status: open
+status: closed
 project: manyhands
 team: core
+closed_at: '2026-10-30T14:59:43Z'
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---
