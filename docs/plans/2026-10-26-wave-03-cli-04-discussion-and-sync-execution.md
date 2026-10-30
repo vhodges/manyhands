@@ -2915,3 +2915,141 @@ the controller's ruling (`task-7-fix-1.md`).
   - clippy (all targets and features), `fmt --check`, `check --bin
     manyhands-cli` and `check --features desktop --bin manyhands` pass.
 - **No ticket comment** was added, as ruling P4 says for a fix round.
+
+### Task 8: `comment add`
+
+The commit is `feat: add comment add`, on BASE `a0296b88`. `origin/main` is
+still `a372edb`, and `git merge-tree --write-tree HEAD origin/main` exits 0.
+No subagent was dispatched. Only `src/bin/manyhands-cli`, the input schema and
+fixture, and tests changed: no library file, so no `--lib` target ran
+(controller ruling 2).
+
+**The verb, `discussion.rs`.**
+
+- `comment_add(service, session, spec, args)` follows Task 7's pattern, not
+  the brief's `(args, session, service)` order. It reads, in C3's order for
+  verbs that take input: the flags, the input object, the four fields, the
+  root, `--id` (`invalid_id` with the request named), and then the item's
+  kind.
+- The kind is R-2's one read, `fill::read_any_item`. Its refusal is the
+  verb's, with the request ID, the item in scope, and no record made.
+- `object.only` takes the four keys `comment_id`, `body`, `parent_id` and
+  `created_by`. `comment_id` and `body` are required, and `body` may be
+  empty. `parent_id` is a root comment when absent or null. `created_by` is a
+  string when present, so `null` is `invalid_input`: absent means the Git
+  identity, and the library holds R-7's form rules.
+- `comment_id` and `parent_id` are parsed by one reader, `authoring::ulid`,
+  which is C3's rule: a malformed one is `invalid_input` naming the field and
+  never the value. `document create` and `ticket create` had the same parse
+  inline for `item_id`; they now call `ulid`, so there is one copy. Their
+  behavior is unchanged and their tests are unedited.
+- It runs through Task 7's `collaboration::run`, which is now `pub(crate)`
+  with `authoring_kind`. That is the driver, the bounded retry
+  (`Plan { identity_prompt: false, retry: true }`, as C3's saves) and
+  `human_collaboration`'s output. The Ctrl-C window was already wired for
+  `Mutation::CommentAdd` in `mutate.rs` and is not wired again.
+- The catalog entry is `Available("C4")`, `--repo` required, with `--repo`,
+  `--id`, `--input` (required), `--request-id`, `--prepare` and `--confirm`, as
+  `document save` has them. The verb is unconfirmed, so `--prepare` is
+  `not_confirmable` (tested).
+- E-1: `help_root.json` and `help_root_text.txt` were regenerated. The diff
+  changes only `comment add`'s availability, repository rule and options, and
+  its "Available now." line.
+
+**Human output.**
+
+- The publication note, `note: publishing the comment also publishes this
+  item's other checkpointed work; unsaved drafts are not included.`, is a
+  `Lines` note, so it goes to stderr after C2's lines, as Task 7's notes do.
+  It is printed when the result carries comment data (a checkpointed
+  comment). A refusal before the checkpoint has no data and no note. JSON has
+  none.
+- A comment's conflict prints the same `conflict:` and `conflict show` lines
+  as a synchronization's.
+- `remote_branch_deleted` (controller ruling 1) needed no new rendering. The
+  `request.cancel` action prints Task 7's three `next:` lines, in order:
+  `request cancel` naming the request; the request again; `item republish
+  --prepare`. The second line is the generic `send request <id> again with its
+  original command and input`, not a command: the retried `comment add` needs
+  the caller's input, which the result does not hold and must not print. This
+  is the generic alternative Task 7's carry named, so `again()` has no
+  `comment add` arm. The reservation note follows the publication note.
+  The unit test builds the envelope from `comment_add_push_rejected`. Only a
+  remote stages the case, so Task 12a covers it end to end.
+
+**Tests.** First (RED), run before the implementation:
+
+- `--test cli -- discussion`: 14 of 15 failed with `command_unavailable`; the
+  schema test passed because the schema and fixture were already written.
+- `--bin manyhands-cli -- human_collaboration`: the 3 new cases that expect the
+  note failed. The case with no comment data passed.
+
+Then:
+
+- **Unit** (`discussion_tests.rs`, 4 cases): the four fields and the two
+  required; a null parent; each missing, mistyped or unknown field's detail;
+  a malformed ID in either field is refused naming the field, not the value,
+  and a lower-case ULID is malformed.
+- **Unit** (`human_collaboration_tests.rs`, 4 new cases, 13 to 17): the note
+  after C2's lines on success and on a partial refusal; no note without comment
+  data; a comment's conflict lines; and `remote_branch_deleted` from a
+  constructed envelope.
+- **Binary** (`tests/cli/discussion.rs`, 15 cases, no SSH):
+  - the input schema: required `comment_id` and `body`, optional `parent_id`
+    (nullable) and `created_by`, each mistyped, and closed;
+  - `comment_add_ok`: exit 0, `ok`, publication pending, `pending_reason:
+    no_publication_remote`, no recovery, no body in the envelope, the stored
+    result equal to the printed one;
+  - a comment on a document;
+  - a given author replaces the Git identity, and a body with CRLF, a non-BMP
+    character, a line `---` and no final newline is written byte for byte
+    (Review Focus 1);
+  - `comment_add_ticket_closed`: exit 3, nothing changed, no context left;
+  - `comment_add_invalid_input`: a malformed `created_by` (the library's
+    refusal, exit 2, nothing written); a malformed `comment_id` or
+    `parent_id`, a missing, mistyped or unknown field and a null author (the
+    CLI's, request named, no record made); a malformed `--id` is `invalid_id`;
+  - an unknown item: `item_not_found` with the item in scope and no record;
+  - `--prepare` is `not_confirmable`;
+  - a reply, a reply to a reply and a second root, listed with their parent
+    and depth through `comment list` (0, 1, 2, 0);
+  - an unknown parent, the comment's own ID (Review Focus 5) and another
+    item's comment are `item_not_found`, with the snapshot unchanged;
+  - an occupied comment ID is `occupied_path`;
+  - a replay writes no second file (snapshot, refs and the context's comment
+    files unchanged); the same request with another comment is
+    `request_mismatch`;
+  - human text: `progress:` first, the note last on stderr, once, the
+    publication reason on stdout, and no body anywhere;
+  - the example input `comment_add.json`, validated by the schema and run
+    through the binary, then as a reply to what it wrote.
+- **Goldens (R-28):** `comment_add_ok`, `comment_add_ticket_closed`,
+  `comment_add_invalid_input` and `comment_add_text`, registered in
+  `tests/support/cli.rs`. The library's own `comment_add*` mutation goldens
+  are unchanged.
+
+**Verify.** Each ran as `devenv shell -- cargo … --locked`; logs are in
+`logs/task-8-*`.
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --bin manyhands-cli` | 220 passed (212 before) |
+| `test --all-features --test cli` | 317 passed (302 before), after the E-1 regeneration; before it, only the 2 help cases failed |
+| `test --all-features --test cli -- input_schemas` | 7 passed |
+| `clippy --all-targets --all-features -- -D warnings` | passes |
+| `fmt --check` | passes |
+| `check --bin manyhands-cli` | passes |
+| `check --features desktop --bin manyhands` | passes |
+
+**For later tasks.**
+
+- **Task 9:** `conflict resolve` also reads input. Its ID fields should use
+  `authoring::ulid` and its run `collaboration::run`. Its `remote_branch_deleted`
+  needs no new rendering either.
+- **Task 12a:** the `comment add` rows that need a remote run end to end here:
+  publication, the refused push, the retry, the conflict, `remote_branch_deleted`
+  with Task 7's three lines, and the Ctrl-C rows.
+- **Task 13:** `comment add`'s exit accounting through the binary has these
+  codes: `ok`, `ticket_closed`, `invalid_input`, `invalid_id`, `item_not_found`,
+  `occupied_path`, `request_mismatch` and `not_confirmable`. The rest need a
+  remote or an identity staging.

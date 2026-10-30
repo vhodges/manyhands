@@ -3,6 +3,7 @@
 //!
 //! - a conflict's `conflict:` line, and the `conflict show` command that
 //!   looks at it;
+//! - a comment's note on what publishing it publishes;
 //! - a local-context sync's state, reason and next action (R-37);
 //! - for `remote_branch_deleted`, three `next:` lines: cancel the refused
 //!   request, send it again, which ends it cancelled and releases its
@@ -34,6 +35,8 @@ pub struct Seen {
 }
 
 const RESERVATION_NOTE: &str = "the refused request keeps its reservation until it is cancelled; sending it again then ends it and releases the reservation.";
+/// What a published comment also publishes (design, Human Output).
+const PUBLICATION_NOTE: &str = "publishing the comment also publishes this item's other checkpointed work; unsaved drafts are not included.";
 const SUPERSEDE_NOTE: &str =
     "a new conflict resolve may supersede its resolution while the paths it wrote are unchanged.";
 
@@ -163,11 +166,15 @@ impl Lines {
                 lines.replaces_fields = true;
                 step(&mut lines, &data.conflict);
             }
-            Some(MutationDataDto::Comment(CommentMutationDto {
-                conflict: Some(next),
-                ..
-            }))
-            | Some(MutationDataDto::ConflictResolution(ConflictResolutionMutationDto {
+            Some(MutationDataDto::Comment(comment)) => {
+                // Only a checkpointed comment is published, so only a
+                // result that carries one has something to say about it.
+                lines.notes.push(PUBLICATION_NOTE.into());
+                if let Some(next) = &comment.conflict {
+                    step(&mut lines, next);
+                }
+            }
+            Some(MutationDataDto::ConflictResolution(ConflictResolutionMutationDto {
                 conflict: Some(next),
                 ..
             })) => step(&mut lines, next),

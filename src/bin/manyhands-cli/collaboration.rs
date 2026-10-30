@@ -143,7 +143,8 @@ fn operation(
 
 /// Runs the mutation through C2's driver, with its bounded retry (R-23),
 /// and renders the result. `resumed` is the operation a resume names.
-fn run(
+/// Shared by `comment add`, which takes input.
+pub(crate) fn run(
     service: &RepositoryService,
     session: &mut Session,
     spec: &'static CommandSpec,
@@ -217,7 +218,7 @@ fn supersedable(historical: bool, attempt: Option<&str>, request: &str) -> bool 
     historical && attempt == Some(request)
 }
 
-fn authoring_kind(kind: ItemDtoKind) -> AuthoringKind {
+pub(crate) fn authoring_kind(kind: ItemDtoKind) -> AuthoringKind {
     match kind {
         ItemDtoKind::Document => AuthoringKind::Document,
         ItemDtoKind::Ticket => AuthoringKind::Ticket,

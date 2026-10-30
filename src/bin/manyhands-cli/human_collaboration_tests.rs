@@ -93,6 +93,7 @@ fn data(value: &Value) -> Option<MutationDataDto> {
         Some("local_context_sync") => Some(MutationDataDto::LocalContextSync(
             serde_json::from_value(value.clone()).unwrap(),
         )),
+        Some("comment") => Some(MutationDataDto::Comment(comment(value))),
         Some("synchronization_conflict") => Some(MutationDataDto::SynchronizationConflict(
             SynchronizationConflictMutationDto {
                 r#type: SynchronizationConflictType::SynchronizationConflict,
@@ -100,6 +101,31 @@ fn data(value: &Value) -> Option<MutationDataDto> {
             },
         )),
         other => panic!("no reader for data {other:?}"),
+    }
+}
+
+/// The data of a `comment add` golden. `CommentMutationDto` is built by the
+/// library only, so it has no reader of its own.
+fn comment(value: &Value) -> CommentMutationDto {
+    let text = |key: &str| value[key].as_str().map(str::to_owned);
+    CommentMutationDto {
+        r#type: CommentMutationType::Comment,
+        item_id: text("item_id").unwrap(),
+        comment_id: text("comment_id").unwrap(),
+        parent_id: text("parent_id"),
+        created_by: text("created_by"),
+        synchronization_id: text("synchronization_id").unwrap(),
+        publication: PublicationEffect::ALL
+            .into_iter()
+            .find(|known| Some(known.as_str()) == value["publication"].as_str())
+            .unwrap(),
+        pending_reason: value["pending_reason"].as_str().map(|name| {
+            CommentPendingReason::ALL
+                .into_iter()
+                .find(|known| known.as_str() == name)
+                .unwrap()
+        }),
+        conflict: (!value["conflict"].is_null()).then(|| next_step(&value["conflict"])),
     }
 }
 
@@ -383,4 +409,107 @@ fn a_result_without_c4_lines_is_c2_s_output() {
             "{name}"
         );
     }
+}
+
+const PUBLICATION_NOTE: &str = "note: publishing the comment also publishes this item's other checkpointed work; unsaved drafts are not included.\n";
+
+#[test]
+fn a_comment_s_result_carries_the_publication_note_and_c2_s_lines() {
+    for (name, status) in [("comment_add", 0), ("comment_add_push_rejected", 4)] {
+        let envelope = golden(name);
+        let output = output(&envelope, false, &Seen::default());
+        let c2 = crate::render::mutation_output(false, &envelope, false);
+        assert_eq!(output.status, status, "{name}");
+        assert_eq!(output.stdout, c2.stdout, "{name}");
+        // The note follows whatever C2 prints on stderr, here the refusal.
+        assert_eq!(
+            stderr(&output),
+            format!("{}{PUBLICATION_NOTE}", stderr(&c2)),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_comment_refused_before_it_was_checkpointed_has_no_publication_note() {
+    // No comment data: nothing was checkpointed, so nothing is published.
+    let envelope = golden("comment_add_ticket_closed");
+    assert!(envelope.data.is_none());
+    let output = output(&envelope, false, &Seen::default());
+    let c2 = crate::render::mutation_output(false, &envelope, false);
+    assert_eq!(
+        (output.stdout, output.stderr, output.status),
+        (c2.stdout, c2.stderr, c2.status)
+    );
+}
+
+#[test]
+fn a_comment_s_conflict_prints_its_conflict_lines_and_the_note() {
+    let mut envelope = golden("comment_add_push_rejected");
+    envelope.scope.repository = Some("/work/repo".into());
+    envelope.code = ResultCode::RecoveryRequired;
+    envelope.message = ResultCode::RecoveryRequired.message().into();
+    let Some(MutationDataDto::Comment(data)) = envelope.data.as_mut() else {
+        panic!("comment data")
+    };
+    data.conflict = Some(ConflictNextDto {
+        operation_id: "<operation>".into(),
+        next_action: ConflictNextAction::Resolve,
+    });
+    let text = stderr(&output(&envelope, false, &Seen::default())).to_owned();
+    assert!(
+        text.contains(
+            "conflict: operation <operation> stopped on a conflict; next action: resolve\n\
+             next: manyhands-cli conflict show --repo '/work/repo' --operation-id <operation>\n"
+        ),
+        "{text}"
+    );
+    assert!(text.ends_with(PUBLICATION_NOTE), "{text}");
+}
+
+/// Task 2b's ruling: a comment whose child synchronization meets a deleted
+/// branch keeps its record accepted and offers the request's cancellation.
+/// Only a remote stages it, so Task 12a covers it end to end.
+#[test]
+fn a_comment_s_deleted_remote_branch_names_cancel_the_request_sent_again_and_republish() {
+    let mut envelope = golden("comment_add_push_rejected");
+    envelope.scope.repository = Some("/work/repo".into());
+    envelope.code = ResultCode::RemoteBranchDeleted;
+    envelope.message = ResultCode::RemoteBranchDeleted.message().into();
+    envelope.recovery = vec![RecoveryAction::new(
+        RecoveryActionKind::RequestCancel,
+        [("request_id", R1.into())],
+    )];
+    let output = output(&envelope, false, &Seen::default());
+    assert_eq!(output.status, 4);
+    assert!(output.stdout.is_empty());
+    let text = stderr(&output);
+    assert!(
+        text.starts_with(
+            "error: The published branch was deleted on the remote.\n\
+             code: remote_branch_deleted\n\
+             request: 01ARZ3NDEKTSV4RRFFQ69G5FX1\n"
+        ),
+        "{text}"
+    );
+    // The same three lines as `item sync`'s, in the same order. The input
+    // is the caller's, so the second names the request and not a command.
+    let next: Vec<_> = text.lines().filter(|l| l.starts_with("next: ")).collect();
+    assert_eq!(
+        next,
+        [
+            "next: manyhands-cli request cancel --request-id 01ARZ3NDEKTSV4RRFFQ69G5FX1",
+            "next: send request 01ARZ3NDEKTSV4RRFFQ69G5FX1 again with its original command and input",
+            "next: manyhands-cli item republish --repo '/work/repo' --id 01ARZ3NDEKTSV4RRFFQ69G5FAW --prepare",
+        ],
+        "{text}"
+    );
+    // C2's line for the cancellation is replaced, not repeated.
+    assert!(!text.contains("request.cancel"), "{text}");
+    assert!(
+        text.ends_with(&format!("{PUBLICATION_NOTE}note: {RESERVATION_NOTE}\n")),
+        "{text}"
+    );
+    // The body of the comment is in none of it: the data holds none.
+    no_raw_control(text);
 }

@@ -210,12 +210,7 @@ pub fn document_create(
         let object = admin::input_object(session, spec, args, flags.request_id)?;
         let (id, path, draft) = (|| {
             object.only(&["item_id", "path", "title", "body"])?;
-            let id = object.string("item_id")?.parse::<ItemId>().map_err(|_| {
-                InputError::InvalidValue {
-                    field: "item_id",
-                    allowed: &["a canonical ULID"],
-                }
-            })?;
+            let id = ulid(object.string("item_id")?, "item_id")?;
             Ok((
                 id,
                 PathBuf::from(object.string("path")?),
@@ -251,6 +246,17 @@ pub fn document_create(
         },
         &mut std::thread::sleep,
     )
+}
+
+/// A canonical ULID read from the input field `field`. A malformed one is
+/// `invalid_input`, naming the field and never the value; `invalid_id` is
+/// for flags. Shared by every verb whose input carries an ID.
+pub(crate) fn ulid(text: String, field: &'static str) -> Result<ItemId, InputError> {
+    text.parse::<ItemId>()
+        .map_err(|_| InputError::InvalidValue {
+            field,
+            allowed: &["a canonical ULID"],
+        })
 }
 
 /// The item `--id` names. A malformed ID is `invalid_id`, with the request
@@ -407,12 +413,7 @@ pub fn ticket_create(
                 "item_id", "title", "type", "status", "body", "project", "team", "deps", "parent",
                 "initials",
             ])?;
-            let id = object.string("item_id")?.parse::<ItemId>().map_err(|_| {
-                InputError::InvalidValue {
-                    field: "item_id",
-                    allowed: &["a canonical ULID"],
-                }
-            })?;
+            let id = ulid(object.string("item_id")?, "item_id")?;
             let draft = TicketDraft {
                 title: object.string("title")?,
                 ticket_type: object.string("type")?,

@@ -17,6 +17,8 @@ mod authoring;
 mod catalog;
 #[path = "manyhands-cli/collaboration.rs"]
 mod collaboration;
+#[path = "manyhands-cli/discussion.rs"]
+mod discussion;
 #[path = "manyhands-cli/dispatch.rs"]
 mod dispatch;
 #[path = "manyhands-cli/fill.rs"]

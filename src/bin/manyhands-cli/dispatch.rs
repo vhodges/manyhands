@@ -566,6 +566,7 @@ pub fn dispatch(
         "ticket slug-assign" => {
             return crate::authoring::ticket_slug_assign(service, session, command, args);
         }
+        "comment add" => return crate::discussion::comment_add(service, session, command, args),
         "item sync" => return crate::collaboration::item_sync(service, session, command, args),
         "repo sync" => return crate::collaboration::repo_sync(service, session, command, args),
         "operation resume" => {

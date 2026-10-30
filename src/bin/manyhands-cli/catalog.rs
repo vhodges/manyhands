@@ -871,7 +871,28 @@ pub const COMMANDS: &[CommandSpec] = &[
         ],
         kind: Kind::Read,
     },
-    planned("comment", "add", "Add a comment.", "C4"),
+    CommandSpec {
+        resource: "comment",
+        verb: "add",
+        summary: "Add a comment.",
+        availability: Availability::Available("C4"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            ID,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
     CommandSpec {
         resource: "item",
         verb: "sync",

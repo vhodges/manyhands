@@ -336,6 +336,9 @@ pub const CLI_CASES: &[&str] = &[
     "operation_resume_ok",
     "operation_abandon_preview",
     "operation_abandon_ok",
+    "comment_add_ok",
+    "comment_add_ticket_closed",
+    "comment_add_invalid_input",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
     "document_repair_text",
@@ -363,6 +366,7 @@ pub const CLI_TEXT_CASES: &[&str] = &[
     "repo_sync_text",
     "operation_resume_text",
     "operation_abandon_text",
+    "comment_add_text",
 ];
 pub const CLI_REPOSITORY_VALUES: &[&str] = &["required", "refused"];
 
