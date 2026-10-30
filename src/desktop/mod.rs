@@ -4,6 +4,8 @@
 //! created inside `Root`'s own `cx.new`, so its entity comes after.
 
 mod assets;
+#[cfg(target_os = "linux")]
+mod fonts;
 mod keys;
 mod model;
 mod services;
@@ -46,6 +48,8 @@ pub(crate) fn run() {
     gpui_kit::application()
         .with_assets(assets::DesktopAssets)
         .run(|cx| {
+            #[cfg(target_os = "linux")]
+            fonts::register(cx);
             gpui_kit::init(cx);
             keys::bind(cx);
             view::editor::keys::bind(cx);
