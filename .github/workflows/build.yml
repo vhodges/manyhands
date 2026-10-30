@@ -125,13 +125,3 @@ jobs:
 
       - name: Test the desktop
         run: cargo test --locked --no-fail-fast --target ${{ matrix.target }} --features desktop-test-support --bin manyhands
-
-      - name: Upload release binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: manyhands-${{ matrix.target }}
-          path: |
-            target/${{ matrix.target }}/release/manyhands${{ matrix.executable-suffix }}
-            target/${{ matrix.target }}/release/manyhands-cli${{ matrix.executable-suffix }}
-          if-no-files-found: error
-          retention-days: 14
