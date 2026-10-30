@@ -1086,7 +1086,9 @@ derives `Clone`.
     `synchronize_context` operation that needs no schema change (fact 75),
     and it is the end a refused `item sync` reaches after `request cancel`
     and one more call.
-  - Amended 2026-10-30 by C4 (final review, library issue 1 ruling): a
+  - Amended 2026-10-30 by C4 (the controller's ruling on the final
+    review's library issue 1, which fixed it rather than keep it as a
+    Known Limit): a
     `push_rejected` is the remote's answer to the one ref update the push
     intent names, so nothing of the operation is on the remote. In the
     transaction that ends the operation `cancelled`, its outcome records the
@@ -2334,7 +2336,8 @@ Each ruling is listed with its cost if wrong.
   only the remote's locations. The way out, walked through the boundary
   for both codes during the final review: `host observe --repo <root>`
   names the host, its port, the key it presents and its pin, and takes no
-  reservation. `host approve` with those values, or `host replace` naming
+  reservation. It names the host the remote fetches from; where the push
+  goes to another host, `--authority` names that one. `host approve` with those values, or `host replace` naming
   the pinned fingerprint as the old one, is not blocked by the held
   reservation. Then the same `comment add` request, sent again as
   `request.retry` offers, publishes the comment and releases the

@@ -206,7 +206,10 @@ Authority, in order:
 - **No identity prompt.** A merge or checkpoint without a usable identity
   answers `identity_required` with `repo.identity_set`, as C3's saves do.
 - **No host approval inside a sync.** A host that needs approval answers
-  `host_approval_required` with `host.approve`, as F2 binds it.
+  `host_approval_required` with `host.approve`, as F2 binds it. Amended
+  2026-10-30 by C4 (the final review's rulings): a comment's publication
+  offers `request.retry` only, without `host.approve`. The design's Known
+  Limits give the way out, through `host observe` and `host approve`.
 - **`--context` stays absent.** As C3: every request names its item by ID.
 - **A pending remote conflict blocks the repository.** Until it is resolved
   or repaired outside, other synchronizations answer `busy` and authoring in

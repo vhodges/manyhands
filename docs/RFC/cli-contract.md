@@ -1147,7 +1147,8 @@ limits, which the final review recorded:
   `host_approval_required` or `host_replacement_required`, exit 4, with
   `request.retry` only: the comment's data names no host, and a new
   `item sync` meanwhile answers `busy`. `host observe --repo <root>` names
-  the host and the key it presents without the reservation; `host approve`,
+  the host and the key it presents without the reservation (with
+  `--authority` for a push host that differs); `host approve`,
   or `host replace` naming the pinned fingerprint, is not blocked by it;
   then the same `comment add` request publishes. Follow-up offered: offer
   the host action from the comment's synchronization;
