@@ -29,8 +29,8 @@ const FACES: [&[u8]; 6] = [
 
 /// Adds the faces to GPUI's text system. Call before `gpui_kit::init`.
 pub(crate) fn register(cx: &App) {
-    // The faces are fixed bytes. Were they to fail, text keeps GPUI's
-    // fallback family, as it did before they were bundled.
+    // On Linux this cannot fail: GPUI skips bytes it cannot read. Text
+    // that finds no face keeps the fallback family, as before.
     let _ = cx
         .text_system()
         .add_fonts(FACES.map(Cow::Borrowed).to_vec());
