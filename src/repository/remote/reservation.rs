@@ -1518,6 +1518,62 @@ impl RepositoryService {
         })
     }
 
+    /// `check_synchronization_requests` for a synchronization whose push the
+    /// remote refused, `PushRejected`, and whose executor has just asked to
+    /// cancel it: in the transaction that acknowledges the cancellation,
+    /// the operation's outcome records the refusal as `protocol_rejected`,
+    /// the category a poll records a refused push under.
+    ///
+    /// The refusal is the remote's answer to the one ref update the push
+    /// intent names, so nothing of the operation is on the remote. The
+    /// intent itself is immutable history and is kept: the outcome is what
+    /// tells `push_absence` that the intent was answered. Only an operation
+    /// at its push intent, with the safe point before the push its last
+    /// step and with no publication attempt, authority or reconciliation,
+    /// is so recorded. Any other is cancelled exactly as
+    /// `check_synchronization_requests` cancels it.
+    pub(crate) fn acknowledge_refused_push(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        use state::SynchronizationCheckpoint as C;
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if !is_sync(&record.target) {
+                return Err(state::recovery_required());
+            }
+            if !(record.cancel_requested || record.yield_requested) {
+                return Ok(RemoteSafePointOutcome::Continue);
+            }
+            let refused = record.cancel_requested
+                && record.authority.is_none()
+                && !record.reconciliation_required
+                && record.sync_checkpoint == Some(C::PushPrepared)
+                && record.sync_evidence.push_oid.is_some()
+                && record.completed_step == Some(RemoteOperationSafePoint::BeforePush)
+                && state::latest_publication_attempt(tx, &record)?.is_none();
+            let decision = acknowledge(
+                tx,
+                &record,
+                record
+                    .completed_step
+                    .unwrap_or(RemoteOperationSafePoint::BeforeFetch),
+            )?;
+            if refused && decision == RemoteSafePointOutcome::Cancelled {
+                tx.execute(
+                    "UPDATE remote_operation_records SET outcome=?2 WHERE id=?1 AND phase='cancelled'",
+                    params![
+                        record.id,
+                        state::outcome_name(RemoteOutcomeCategory::ProtocolRejected)
+                    ],
+                )
+                .map_err(|_| state::recovery_required())?;
+            }
+            Ok(decision)
+        })
+    }
+
     /// Child intent is durable before a merge/index effect. The owner epoch is
     /// captured in the immutable row; a later reacquisition receives a new
     /// token and cannot rewrite the earlier intent.

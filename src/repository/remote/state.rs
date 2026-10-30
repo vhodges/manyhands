@@ -5294,7 +5294,8 @@ fn delete_resolution_attempt(
 ) -> Result<(), RepositoryError> {
     tx.execute(
         "UPDATE remote_integration_steps SET phase='conflict_pending'
-          WHERE id=(SELECT integration_step_id FROM remote_resolution_attempts WHERE id=?1)
+          WHERE id=(SELECT integration_step_id FROM remote_resolution_attempts
+                     WHERE id=?1 AND phase='paths_applying')
             AND phase='resolution_prepared'",
         [id],
     )

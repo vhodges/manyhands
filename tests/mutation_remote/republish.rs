@@ -8,7 +8,9 @@
 //! published branch; otherwise only the push evidence of the publication
 //! does. `item sync` is refused, and holds the reservation until its request
 //! is cancelled and sent once more (`01M4R19PC0T6ZPKM39X9DF26HX`), which every
-//! world but the busy row's does.
+//! world but the busy row's does. The world of a push the remote refused
+//! for its own reasons is the exception: the branch is published outside
+//! this registry, and `repo sync` records it and its deletion.
 //!
 //! The row for `operation resume` of a republish stopped after its push is
 //! here; the resume table's own row for an operation an `item republish`
@@ -37,6 +39,10 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
     (
         "c4_republish_recreated_before_the_push",
         c4_republish_recreated_before_the_push,
+    ),
+    (
+        "c4_republish_refused_push_prepared_again",
+        c4_republish_refused_push_prepared_again,
     ),
     (
         "c4_republish_resumed_after_the_push",
@@ -89,6 +95,8 @@ const ANOTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FP5";
 const AFTER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FP6";
 /// `operation resume`.
 const RESUMING: &str = "01ARZ3NDEKTSV4RRFFQ69G5FP7";
+/// The `repo sync` that finds the item's branch gone.
+const NOTICED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FP8";
 
 /// The schema of a republish preview's data.
 const PREVIEW_SCHEMA: &str = "item_republish_preview.schema.json";
@@ -697,6 +705,100 @@ fn c4_republish_recreated_before_the_push() -> Result<(), FixtureError> {
     // The operation is over, the repository free, and the consent spent.
     assert!(!reserved(&w));
     assert_eq!(state_of(&w, REPUBLISH), Some(RequestState::Finished));
+    Ok(())
+}
+
+/// Confirms `w`'s republish under `id`, presenting `confirmation`, while
+/// the remote refuses the push for its own reasons with the branch still
+/// absent: it refuses updates of the branch it has checked out, and then
+/// takes pushes again. The request is finished and its operation over, with
+/// nothing pushed and the push intent it recorded kept.
+fn refused_push(w: &World, id: &str, confirmation: &str) -> Result<(), FixtureError> {
+    let head = fixed(w.bare()?.find_reference("HEAD"))?
+        .symbolic_target()
+        .ok_or(FixtureError)?
+        .to_owned();
+    fixed(w.bare()?.set_head(CONTEXT))?;
+    w.server.reject_primary_updates(true)?;
+    let pushes = accepted(&w.server);
+    let refused = confirmed(w, id, confirmation);
+    w.server.reject_primary_updates(false)?;
+    fixed(w.bare()?.set_head(&head))?;
+    assert_eq!(
+        refused.code,
+        ResultCode::PushRejected,
+        "{}",
+        refused.message
+    );
+    assert_eq!(refused.outcome, Outcome::Blocked);
+    assert_eq!(accepted(&w.server), pushes);
+    assert_eq!(served(w)?, None);
+    assert!(!reserved(w));
+    assert_eq!(state_of(w, id), Some(RequestState::Finished));
+    let operation = refused.operation_id.clone().ok_or(FixtureError)?;
+    assert_eq!(
+        standing(w, &operation)?,
+        ("cancelled".to_owned(), Some("push_prepared".to_owned()))
+    );
+    // The refusal is recorded beside the intent, which is kept as it was.
+    let (outcome, intended): (Option<String>, Option<String>) = fixed(w.db()?.query_row(
+        "SELECT outcome, push_oid FROM remote_operation_records WHERE operation_ulid = ?1",
+        [&operation],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ))?;
+    assert_eq!(outcome.as_deref(), Some("protocol_rejected"));
+    assert_eq!(intended, Some(local(w)?.to_string()));
+    Ok(())
+}
+
+/// Row 4's other cause: the remote refused the push for its own reasons (a
+/// hook, a policy) and the branch is still absent. `push_rejected` ends the
+/// operation, and nothing of it is on the remote, so its push intent no
+/// longer stands in the way: a new prepare offers the republish again, and
+/// once the remote takes pushes its confirmation publishes the branch once.
+///
+/// The branch was published outside this registry, as another clone of the
+/// repository publishes an item's branch, and a `repo sync` recorded it and
+/// then its deletion. No synchronization here proved a publication of it,
+/// so the refused push is the only push evidence there is of the item.
+fn c4_republish_refused_push_prepared_again() -> Result<(), FixtureError> {
+    let mut w = World::new()?;
+    approve(&w)?;
+    w.context()?;
+    let tip = local(&w)?;
+    push_peer(&w.repo()?, &w.server, CONTEXT)?;
+    assert_eq!(served(&w)?, Some(tip));
+    let observed = execute(&w, OBSERVE, repo_sync(&w));
+    assert_eq!(
+        observed.code,
+        ResultCode::AlreadyApplied,
+        "{}",
+        observed.message
+    );
+    assert_eq!(context_state(&w)?.as_deref(), Some(PRESENT));
+    fixed(fixed(w.bare()?.find_reference(CONTEXT))?.delete())?;
+    let noticed = execute(&w, NOTICED, repo_sync(&w));
+    assert_eq!(
+        noticed.code,
+        ResultCode::AlreadyApplied,
+        "{}",
+        noticed.message
+    );
+    assert_eq!(context_state(&w)?.as_deref(), Some("remotely_deleted"));
+
+    let (confirmation, _) = previewed(&w)?;
+    refused_push(&w, REPUBLISH, &confirmation)?;
+
+    // A new prepare offers the republish again: it is not the no-op.
+    let again = prepared(&w);
+    assert_eq!(again.code, ResultCode::Ok, "{}", again.message);
+    let preview = preview_of(&again)?;
+    assert_shows(&preview, tip, Some(tip))?;
+    // The remote takes pushes again: the branch is published once.
+    let updates = w.server.receive_updates().len();
+    let main = primary(&w)?;
+    let republished = confirmed(&w, ANOTHER, &preview.confirmation_id);
+    assert_republished(&w, &republished, tip, updates, main)?;
     Ok(())
 }
 

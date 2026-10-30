@@ -2477,23 +2477,18 @@ fn tree_blobs(
     Ok(())
 }
 
-/// A path of a resolution attempt that no longer holds what the attempt left
-/// there: its bytes as the live conflict has them, or `None` for a recorded
-/// path that is no path of the live conflict.
-type ChangedPath = Option<Vec<u8>>;
-
-/// The first path of a resolution attempt that no longer holds exactly what
-/// the attempt left there, as its rows show; `None` when every one does. A
-/// path whose write was observed holds its result. One whose write was not
-/// observed may have been written all the same, so it holds either its
-/// result or its recorded pre-write image. Each recorded path is found among
-/// the live conflict's paths by its digest; one that is not found, or holds
-/// anything else, is changed, and so is one that cannot be told.
-fn first_changed_path(
+/// Whether every path of a resolution attempt still holds exactly what the
+/// attempt left there, as its rows show. A path whose write was observed
+/// holds its result. One whose write was not observed may have been written
+/// all the same, so it holds either its result or its recorded pre-write
+/// image. Each recorded path is found among the live conflict's paths by its
+/// digest; one that is not found, or holds anything else, is changed, and so
+/// is one that cannot be told.
+fn written_paths_unchanged(
     repository: &git2::Repository,
     inspection: &SynchronizationConflictInspection,
     paths: &[state::ResolutionPathRecord],
-) -> Result<Option<ChangedPath>, SynchronizationError> {
+) -> Result<bool, SynchronizationError> {
     let workdir = repository
         .workdir()
         .ok_or(SynchronizationError::RecoveryRequired)?;
@@ -2503,11 +2498,10 @@ fn first_changed_path(
             .iter()
             .find(|path| blake3::hash(&path.token.path).as_bytes() == &recorded.path_digest)
         else {
-            return Ok(Some(None));
+            return Ok(false);
         };
-        let changed = Some(Some(path.token.path.clone()));
         let Ok(relative) = std::str::from_utf8(&path.token.path) else {
-            return Ok(changed);
+            return Ok(false);
         };
         let relative = Path::new(relative);
         match owned_result_digest(workdir, relative) {
@@ -2516,25 +2510,15 @@ fn first_changed_path(
             Err(error) => return Err(error),
         }
         if recorded.applied {
-            return Ok(changed);
+            return Ok(false);
         }
         match conflict_worktree_digest(workdir, relative) {
             Ok(digest) if digest == recorded.prewrite_digest => {}
-            Ok(_) | Err(SynchronizationError::ExternalChange) => return Ok(changed),
+            Ok(_) | Err(SynchronizationError::ExternalChange) => return Ok(false),
             Err(error) => return Err(error),
         }
     }
-    Ok(None)
-}
-
-/// Whether every path of a resolution attempt still holds exactly what the
-/// attempt left there; see `first_changed_path`.
-fn written_paths_unchanged(
-    repository: &git2::Repository,
-    inspection: &SynchronizationConflictInspection,
-    paths: &[state::ResolutionPathRecord],
-) -> Result<bool, SynchronizationError> {
-    Ok(first_changed_path(repository, inspection, paths)?.is_none())
+    Ok(true)
 }
 
 /// Whether a resolution attempt wrote none of its paths, as far as the
@@ -5668,31 +5652,16 @@ impl RepositoryService {
     }
 
     /// Whether every path the attempt `attempt_id` wrote still holds
-    /// exactly what it wrote, as its durable rows show: the condition under
-    /// which a new request may supersede it (decision 18). Read only, under
-    /// the repository's lease; nothing is reserved.
+    /// exactly what it wrote, as its durable rows show and as
+    /// `written_paths_unchanged` judges it: the condition under which a new
+    /// request may supersede it (decision 18). Read only, under the
+    /// repository's lease; nothing is reserved.
     pub(crate) fn resolution_paths_unchanged(
         &self,
         root: &Path,
         synchronization_id: OperationId,
         attempt_id: OperationId,
     ) -> Result<bool, SynchronizationError> {
-        Ok(self
-            .changed_resolution_path(root, synchronization_id, attempt_id)?
-            .is_none())
-    }
-
-    /// The first path the attempt `attempt_id` left that no longer holds
-    /// what it left there, as `resolution_paths_unchanged` judges it:
-    /// `None` when every one does, and `Some(None)` for a recorded path that
-    /// is no path of the live conflict. Read only, under the repository's
-    /// lease; nothing is reserved.
-    pub(crate) fn changed_resolution_path(
-        &self,
-        root: &Path,
-        synchronization_id: OperationId,
-        attempt_id: OperationId,
-    ) -> Result<Option<ChangedPath>, SynchronizationError> {
         let (_, root) = canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
         let paths = state::with_transaction(self, &root, |tx, id| {
             let record = state::read_operation(tx, id, synchronization_id)?
@@ -5702,7 +5671,7 @@ impl RepositoryService {
         let inspection = self.inspect_synchronization_recovery(&root, synchronization_id)?;
         let repository = Self::inspect_conflict_target(&root, &inspection.target)?;
         let _lease = repository_lease(&repository, &root, RepositoryOperation::RepositorySnapshot)?;
-        first_changed_path(&repository, &inspection, &paths)
+        written_paths_unchanged(&repository, &inspection, &paths)
     }
 
     /// The synchronization's live conflict, and its reservation taken again
@@ -7121,7 +7090,13 @@ fn push_absence(
             || record.sync_checkpoint == Some(Checkpoint::PushVerified)
                 && evidence.push_oid.is_some()
                 && evidence.push_advertised_oid == evidence.push_oid;
-        let intent = evidence.push_oid.is_some()
+        // A push the remote refused, as its operation ended, was answered:
+        // nothing of it is on the remote (`acknowledge_refused_push`).
+        let refused = record.phase == RemoteOperationPhase::Cancelled
+            && record.outcome == Some(RemoteOutcomeCategory::ProtocolRejected)
+            && record.sync_checkpoint == Some(Checkpoint::PushPrepared);
+        let intent = !refused
+            && evidence.push_oid.is_some()
             && matches!(
                 record.sync_checkpoint,
                 Some(Checkpoint::PushPrepared | Checkpoint::PushReturned)
@@ -7329,9 +7304,11 @@ impl RepositoryService {
     ///
     /// A change since the preview, or a push the remote refused, ends the
     /// operation as a cancellation would, with nothing of it on the remote:
-    /// the reservation is let go, and the answer is final. That is not so
-    /// for an operation that began with an earlier call's push unaccounted
-    /// for: such a change is `RecoveryRequired`, and the operation is left.
+    /// the reservation is let go, and the answer is final. A refused push is
+    /// recorded as refused, so that its intent does not make the deletion
+    /// read as ambiguous to the next prepare. That is not so for an
+    /// operation that began with an earlier call's push unaccounted for:
+    /// such a change is `RecoveryRequired`, and the operation is left.
     /// Any other stop leaves the operation as a synchronization's is, for
     /// the same request to take up with `restart`, which asks the remote
     /// what it holds before it pushes again. An operation with its outcome
@@ -7441,12 +7418,19 @@ impl RepositoryService {
             ) if !inherited => {
                 // Nothing of the operation is on the remote. It ends as a
                 // cancellation ends it; should that fail, it stays pending,
-                // and its row says so to whoever reads it.
+                // and its row says so to whoever reads it. A push the remote
+                // refused is recorded as refused as it ends, so that its
+                // intent no longer counts as one nothing answered: a new
+                // prepare offers the republish again.
                 if self
                     .request_synchronization_cancellation(&root, &owner)
                     .is_ok()
                 {
-                    let _ = self.check_synchronization_requests(&root, &owner);
+                    let _ = if matches!(error, SynchronizationError::PushRejected) {
+                        self.acknowledge_refused_push(&root, &owner)
+                    } else {
+                        self.check_synchronization_requests(&root, &owner)
+                    };
                 }
                 Err(error)
             }
