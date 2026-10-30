@@ -179,7 +179,8 @@ impl Workspace {
             .p_2()
             .border_1()
             .border_color(theme.border)
-            .children(ring)
             .child(content)
+            // Over the content: an item tab lies flush with the border.
+            .children(ring)
     }
 }

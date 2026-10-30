@@ -368,10 +368,13 @@ pub(super) fn region<P: IntoElement, D: IntoElement>(
     // One light thumb at rest, under the pointer and while dragged, so it
     // stays light against the page in either theme.
     let thumb = item_colors(cx).page_border_strong;
+    // The content region's padding is gone around an item tab, so the
+    // details keep their own inset from its border.
     let end = end.map(|end| {
         div()
             .id("item-region-end")
             .w_full()
+            .px_2()
             .pt_3()
             .pb_3()
             .child(end)

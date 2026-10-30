@@ -56,9 +56,10 @@ impl Render for Workspace {
         self.repositories_pane
             .set(RepositoryRow::rows(&self.navigation), window, cx);
         let repositories = sidebar::repositories(&self.navigation, &self.repositories_pane, cx);
+        let item_shown = self.shown_item(cx).is_some();
         // An item tab draws the selection at the end of its own scroll
         // region instead.
-        let selection = self.shown_item(cx).is_none().then(|| {
+        let selection = (!item_shown).then(|| {
             sidebar::selection(
                 &self.navigation,
                 &self.remove_focus,
@@ -89,6 +90,15 @@ impl Render for Workspace {
         let content = content
             .children(self.content_body(selection, window, cx))
             .children(sheet);
+        let content = self
+            .region(Region::Content, window, cx, content)
+            .flex_1()
+            .min_w_0()
+            .h_full();
+        // An item tab lies flush with the region's border (owner,
+        // 2026-10-30). Settings, the Drafts page and the empty pane keep
+        // the regions' padding.
+        let content = if item_shown { content.p_0() } else { content };
         let top = h_flex()
             .flex_1()
             .min_h_0()
@@ -103,12 +113,7 @@ impl Render for Workspace {
                     .w(px(320.))
                     .h_full(),
             )
-            .child(
-                self.region(Region::Content, window, cx, content)
-                    .flex_1()
-                    .min_w_0()
-                    .h_full(),
-            );
+            .child(content);
         let session = self.session_section(window, cx);
         let pending = self.pending_section(window, cx);
         self.prune_abandon_focus();
