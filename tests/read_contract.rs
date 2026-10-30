@@ -684,7 +684,7 @@ fn schema_enum(file: &str, property: &str) -> Vec<String> {
 /// abandoned can be. They are named, and not taken from `ALL` by
 /// position: an action added before them that is not local would then
 /// pass for one.
-const LOCAL_ACTIONS: [OperationAction; 14] = [
+const LOCAL_ACTIONS: [OperationAction; 15] = [
     OperationAction::CreateAndEnable,
     OperationAction::Enable,
     OperationAction::RemoveRegistration,
@@ -694,6 +694,7 @@ const LOCAL_ACTIONS: [OperationAction; 14] = [
     OperationAction::Refresh,
     OperationAction::Rebuild,
     OperationAction::PrepareContext,
+    OperationAction::ReleaseContext,
     OperationAction::SaveDocument,
     OperationAction::SaveTicket,
     OperationAction::SubmitComment,
@@ -827,6 +828,11 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "item_context.schema.json",
             "kind",
             ItemContextKind::ALL.map(ItemContextKind::as_str).to_vec(),
+        ),
+        (
+            "context_mutation.schema.json",
+            "kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
         ),
         (
             "dependency.schema.json",

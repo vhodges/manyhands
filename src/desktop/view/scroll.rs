@@ -3,6 +3,13 @@
 //! End to its top and bottom, and a control that takes focus outside the
 //! visible part is scrolled into view.
 //!
+//! Settings, the Drafts page and the empty pane scroll the content
+//! region's own column, as in D1. An item tab scrolls its own region below
+//! its fixed tab strip and header (R-47): each item pane holds a
+//! `ContentScroll` of its own, made by `region`, which shares the focus
+//! the frame saw with the column's, so a control is revealed once, by the
+//! region that draws it.
+//!
 //! GPUI scrolls a `div` by the wheel only, and nothing in GPUI 0.3.6 or the
 //! Kit brings a focused element into view: `ScrollHandle::scroll_to_item`
 //! knows only the scrolled element's direct children. So each control the
@@ -14,7 +21,10 @@
 //! draws the region at that offset. Focus that has not moved is never
 //! revealed again, so scrolling away from a focused control is left alone.
 
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use gpui_kit::{
     Bounds, FocusHandle, IntoElement, Pixels, ScrollHandle, Styled, WeakFocusHandle, Window,
@@ -25,12 +35,16 @@ use gpui_kit::{
 /// page stays in view.
 const PAGE: f32 = 0.9;
 
-/// The content region's scroll state, shared by the workspace that draws
-/// the region and the views drawn inside it. Cloning shares it.
+/// A scrolled region's state, shared by the view that draws the region and
+/// the views drawn inside it. Cloning shares it. The workspace's own is
+/// the content region's column; `region` makes one for a region inside.
 #[derive(Clone, Default)]
 pub(crate) struct ContentScroll {
     handle: ScrollHandle,
     reveal: Rc<RefCell<Reveal>>,
+    /// A press landed in the region since it was last laid out
+    /// (`note_press`).
+    pressed: Rc<Cell<bool>>,
 }
 
 #[derive(Default)]
@@ -42,9 +56,68 @@ struct Reveal {
 }
 
 impl ContentScroll {
+    /// A region of its own inside the content area, such as an item's:
+    /// a handle of its own, and the focus this one sees, so focus that
+    /// moved is revealed once, by the region that draws its control.
+    pub(crate) fn region(&self) -> Self {
+        Self {
+            handle: ScrollHandle::new(),
+            reveal: self.reveal.clone(),
+            pressed: Rc::default(),
+        }
+    }
+
     /// The handle the region's scrolled element tracks.
     pub(crate) fn handle(&self) -> &ScrollHandle {
         &self.handle
+    }
+
+    /// The region's visible height in the last frame.
+    pub(crate) fn height(&self) -> Pixels {
+        self.handle.bounds().size.height
+    }
+
+    /// An empty canvas to draw inside the region, for a child sized from
+    /// the region's height in the last frame, `used`: when the region is
+    /// laid out at another height, as on a window's first frame or a
+    /// resize, it asks for the frame that sizes the child again.
+    pub(crate) fn follow_height(&self, used: Pixels) -> impl IntoElement + use<> {
+        let handle = self.handle.clone();
+        canvas(
+            move |_, window, cx| {
+                if handle.bounds().size.height != used {
+                    redraw(window, cx);
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .size_0()
+    }
+
+    /// A press in the region, from its capture phase. Focus the press
+    /// gives an editor reveals no caret (`editor::CaretInView`): the press
+    /// is where the reader is looking. The press lasts until the region is
+    /// next laid out (`press_ends`), in the frame this asks for, so it
+    /// never outlives a press that changes nothing.
+    pub(crate) fn note_press(&self, window: &mut Window) {
+        self.pressed.set(true);
+        window.refresh();
+    }
+
+    /// Whether a press landed in the region since it was last laid out.
+    /// Views drawn inside the region read it as they render.
+    pub(crate) fn pressed(&self) -> bool {
+        self.pressed.get()
+    }
+
+    /// An empty canvas to draw with the region: once the views inside it
+    /// have rendered and it is laid out, the last press is over.
+    pub(crate) fn press_ends(&self) -> impl IntoElement + use<> {
+        let pressed = self.pressed.clone();
+        canvas(move |_, _, _| pressed.set(false), |_, _, _, _| {})
+            .absolute()
+            .size_0()
     }
 
     /// The window's focus as this frame begins: when it moved, the control
@@ -152,14 +225,19 @@ impl ContentScroll {
             return;
         };
         if self.scroll_to(y) {
-            // A window being drawn takes no refresh: ask for the frame that
-            // draws the new offset once this one is done.
-            let window = window.window_handle();
-            cx.defer(move |cx| {
-                let _ = window.update(cx, |_, window, _| window.refresh());
-            });
+            // The frame that draws the new offset.
+            redraw(window, cx);
         }
     }
+}
+
+/// A window being drawn takes no refresh: asks for another frame once
+/// this one is done.
+fn redraw(window: &Window, cx: &mut gpui_kit::App) {
+    let window = window.window_handle();
+    cx.defer(move |cx| {
+        let _ = window.update(cx, |_, window, _| window.refresh());
+    });
 }
 
 #[cfg(all(test, feature = "desktop-test-support"))]

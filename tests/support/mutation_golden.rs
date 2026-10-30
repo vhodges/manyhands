@@ -19,6 +19,9 @@ use super::{golden, schema};
 /// fixture with no entry, or an entry with no fixture, fails
 /// `tests/mutation_contract.rs`.
 pub const CASES: &[&str] = &[
+    "context_prepare",
+    "context_prepare_discovery_pending",
+    "context_release",
     "local_sync_noop",
     "local_sync_partial",
     "local_sync_refused",

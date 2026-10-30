@@ -25,7 +25,7 @@ impl Workspace {
                 if this.navigation.apply_repositories(stamp, result) {
                     // Only a replacing list drops roots (ruling R-T13a).
                     for root in this.navigation.take_dropped() {
-                        this.close_repository(&root, cx);
+                        this.drop_repository(&root, cx);
                     }
                     if this.navigation.selected().is_none() {
                         this.clear_lists(cx);

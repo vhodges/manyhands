@@ -1,8 +1,12 @@
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use manyhands::{
     repository::{
-        InitialsChange, OperationId, RelationshipWrite, SharedKeyId,
+        AuthoringKind, ContextPrepareIntent, InitialsChange, OperationId, RelationshipWrite,
+        SharedKeyId,
         keys::{KeyStore, SecretPassphrase},
         transport::SshAuthority,
     },
@@ -108,7 +112,7 @@ fn every_intent(root: &Path) -> Vec<Intent> {
             observation: Some("observation".to_owned()),
         },
         Intent::TicketSave {
-            root,
+            root: root.clone(),
             id: ITEM.parse().unwrap(),
             title: "Title".to_owned(),
             ticket_type: "task".to_owned(),
@@ -120,9 +124,62 @@ fn every_intent(root: &Path) -> Vec<Intent> {
             parent: RelationshipWrite::Unchanged,
             observation: "observation".to_owned(),
         },
+        Intent::ContextPrepare {
+            root: root.clone(),
+            kind: AuthoringKind::Document,
+            id: ITEM.parse().unwrap(),
+            intent: ContextPrepareIntent::Edit,
+        },
+        Intent::ContextRelease {
+            root: root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: ITEM.parse().unwrap(),
+        },
+        Intent::DocumentCreate {
+            root: root.clone(),
+            id: ITEM.parse().unwrap(),
+            path: PathBuf::from("docs/new.md"),
+            title: "Title".to_owned(),
+            body: "Body".to_owned(),
+        },
+        Intent::TicketCreate {
+            root: root.clone(),
+            id: ITEM.parse().unwrap(),
+            title: "Title".to_owned(),
+            ticket_type: "task".to_owned(),
+            status: "open".to_owned(),
+            project: None,
+            team: None,
+            body: "Body".to_owned(),
+            deps: Vec::new(),
+            parent: None,
+        },
+        Intent::DocumentMove {
+            root: root.clone(),
+            id: ITEM.parse().unwrap(),
+            observation: Some("observation".to_owned()),
+            destination_path: PathBuf::from("docs/moved.md"),
+            destination_observation: "absent".to_owned(),
+        },
+        Intent::FolderCreate {
+            root: root.clone(),
+            path: "docs/folder".to_owned(),
+        },
+        Intent::DocumentRepair {
+            root: root.clone(),
+            path: PathBuf::from("docs/broken.md"),
+            observation: "observation".to_owned(),
+            source: "source".to_owned(),
+        },
+        Intent::TicketRepair {
+            root,
+            path: PathBuf::from(".manyhands/tickets/x/ticket.md"),
+            observation: "observation".to_owned(),
+            source: "source".to_owned(),
+        },
     ];
     let listed: HashSet<usize> = intents.iter().map(variant).collect();
-    assert_eq!(listed.len(), 21, "one intent of every variant");
+    assert_eq!(listed.len(), 29, "one intent of every variant");
     intents
 }
 
@@ -149,6 +206,14 @@ fn variant(intent: &Intent) -> usize {
         Intent::OperationAbandon { .. } => 18,
         Intent::DocumentSave { .. } => 19,
         Intent::TicketSave { .. } => 20,
+        Intent::ContextPrepare { .. } => 21,
+        Intent::ContextRelease { .. } => 22,
+        Intent::DocumentCreate { .. } => 23,
+        Intent::TicketCreate { .. } => 24,
+        Intent::DocumentMove { .. } => 25,
+        Intent::FolderCreate { .. } => 26,
+        Intent::DocumentRepair { .. } => 27,
+        Intent::TicketRepair { .. } => 28,
     }
 }
 
@@ -201,6 +266,14 @@ fn every_intent_builds_its_own_command() {
         "operation abandon",
         "document save",
         "ticket save",
+        "context prepare",
+        "context release",
+        "document create",
+        "ticket create",
+        "document move",
+        "folder create",
+        "document repair",
+        "ticket repair",
     ];
     let intents = every_intent(fixture.home());
     let mut kinds = HashSet::new();
@@ -253,8 +326,9 @@ fn changes_items_names_the_intents_that_can_change_items() {
     for intent in every_intent(&root) {
         let expected = match variant(&intent) {
             // RepoCreate, RepoEnable, IndexRefresh, IndexRebuild,
-            // OperationResume, OperationAbandon, DocumentSave, TicketSave.
-            0 | 1 | 7 | 8 | 17..=20 => true,
+            // OperationResume, OperationAbandon, DocumentSave, TicketSave,
+            // and the eight Part C commands.
+            0 | 1 | 7 | 8 | 17..=28 => true,
             // RepoRemove closes the tabs instead; the rest change
             // settings, keys or hosts, never an item.
             2..=6 | 9..=16 => false,

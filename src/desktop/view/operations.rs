@@ -20,8 +20,9 @@
 //! operation offers Abandon, which is confirmed.
 //!
 //! Every recovery action an envelope offers is a control: the ones D1
-//! offers run, the rest are text, unavailable. Text is fixed, the
-//! envelope's message or a code's own.
+//! offers run, the rest are text, unavailable. So is the Retry of a context
+//! request once a later one of its item was sent (R-78), which says why.
+//! Text is fixed, the envelope's message or a code's own.
 
 use std::path::Path;
 
@@ -47,7 +48,7 @@ use crate::desktop::{
     model::{
         list_state::ListState,
         operations::{
-            NOT_AVAILABLE_YET, ResumeOffer, abandon_offered, draft_flush_failed,
+            NOT_AVAILABLE_YET, NOT_SENT_AGAIN, ResumeOffer, abandon_offered, draft_flush_failed,
             drafts_unavailable, recovery_label, resume_offer,
         },
         stamp::RepoKey,
@@ -303,12 +304,13 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let label = recovery_label(action.action);
-        let runnable = self
-            .services()
-            .operations()
-            .read(cx)
-            .recovery_step(id, action)
-            .is_some();
+        let operations = self.services().operations().read(cx);
+        let runnable = operations.recovery_step(id, action).is_some();
+        let why = if operations.retry_not_sent_again(id, action) {
+            NOT_SENT_AGAIN
+        } else {
+            NOT_AVAILABLE_YET
+        };
         if runnable {
             let focus = self.control_focus_for(recovery_id(id, n), cx);
             button(
@@ -321,7 +323,7 @@ impl Workspace {
             )
             .into_any_element()
         } else {
-            unavailable(recovery_id(id, n), label, NOT_AVAILABLE_YET, cx).into_any_element()
+            unavailable(recovery_id(id, n), label, why, cx).into_any_element()
         }
     }
 

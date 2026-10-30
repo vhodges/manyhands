@@ -61,17 +61,10 @@ fn provenance_names_the_context_kind_its_branch_and_worktree() {
 }
 
 #[test]
-fn the_unavailable_actions_are_the_designs_six() {
+fn the_unavailable_actions_are_the_designs() {
     assert_eq!(
         LATER,
-        [
-            "Edit",
-            "Comment",
-            "Sync",
-            "Approve and merge",
-            "Close ticket",
-            "Repair"
-        ]
+        ["Comment", "Share", "Approve and merge…", "Close ticket…"]
     );
 }
 

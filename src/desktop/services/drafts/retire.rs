@@ -1,6 +1,13 @@
-//! A committed save's completion: the item read again for the new base,
-//! then the saved revision retired, only if it is still the session's
-//! newest, or the session rebased onto that base.
+//! A committed save's completion, a create's among them: the item read
+//! again for the new base, by D2's unverified rule, or for a create by
+//! R-20b's (`model::drafts::create::base_after_create`), which clears the
+//! new item's marker; `DraftSaved` emitted with it (R-69), then the saved
+//! revision retired,
+//! only if it is still the session's newest, or the session rebased onto
+//! that base. A session whose text is still what the save sent, though it
+//! was never stored as that revision (its write failed), ends too: its
+//! draft is discarded, any older revision with it, since the commit holds
+//! the text (controller ruling, Task 15 fix round 1).
 //!
 //! While the revision retires no write is taken; edits are still taken in
 //! memory. If the store kept the draft, the claim goes back and the
@@ -18,14 +25,17 @@ use std::{path::PathBuf, sync::Mutex};
 use futures::future::{FutureExt, Shared};
 use gpui_kit::{Context, Task};
 use manyhands::{
-    drafts::{DraftBase, DraftClaim, DraftError, DraftErrorKind, DraftId, Retired},
+    drafts::{DraftBase, DraftClaim, DraftError, DraftErrorKind, DraftFields, DraftId, Retired},
     repository::ItemDto,
     results::ResultCode,
 };
 
-use super::{DraftRegistry, off_thread, save::SaveRecord};
+use super::{
+    DraftRegistry, DraftSaved, off_thread,
+    save::{SaveRecord, Verb},
+};
 use crate::desktop::{
-    model::drafts::save::base_after_save,
+    model::drafts::{create::base_after_create, save::base_after_save},
     services::{ReadKind, ReadResult, Reader},
 };
 
@@ -64,13 +74,18 @@ impl DraftRegistry {
             let Ok(Some(base)) = registry.update(cx, |registry, _| {
                 let live = registry.sessions.get(&registry.current_id(record.draft)?)?;
                 let previous = live.session.base()?;
-                Some(base_after_save(&record.fields, read_item(&read), previous))
+                let read = read_item(&read);
+                // A create's clears the new item's marker either way (R-20b).
+                Some(match record.verb {
+                    Verb::Create => base_after_create(&record.fields, read, previous),
+                    Verb::Save => base_after_save(&record.fields, read, previous),
+                })
             }) else {
                 return;
             };
             loop {
                 let step = registry.update(cx, |registry, cx| {
-                    registry.settle(record.draft, record.revision, &base, cx)
+                    registry.settle(record.draft, record.revision, &record.fields, &base, cx)
                 });
                 match step {
                     Ok(Settle::Wait(write)) => write.await,
@@ -82,12 +97,16 @@ impl DraftRegistry {
     }
 
     /// Retires revision `saved` if it is still the session's newest, in
-    /// memory and in the store; otherwise rebases the session onto `base`.
-    /// Waits first for any write in flight.
+    /// memory and in the store; discards the draft when the session's text
+    /// is still `submitted`, the fields the save sent, but was not stored
+    /// as `saved`; otherwise rebases the session onto `base`. Waits first
+    /// for any write in flight. Whichever it does, `DraftSaved` tells the
+    /// tab first, with `submitted` and `base` (R-69).
     fn settle(
         &mut self,
         id: DraftId,
         saved: u64,
+        submitted: &DraftFields,
         base: &DraftBase,
         cx: &mut Context<Self>,
     ) -> Settle {
@@ -102,9 +121,22 @@ impl DraftRegistry {
         {
             return Settle::Wait(write);
         }
+        cx.emit(DraftSaved {
+            draft: id,
+            submitted: submitted.clone(),
+            base: base.clone(),
+        });
         let session = &mut live.session;
         session.set_saving(None);
-        if session.revision() != saved || session.flushed() != saved {
+        let written = session.revision() == saved && session.flushed() == saved;
+        // The commit holds the session's whole text, though the store does
+        // not hold it as its newest revision: its write failed, or an edit
+        // came and was undone. The session ends, and the draft is
+        // discarded, any older revision with it (controller ruling, Task 15
+        // fix round 1). A discard that fails leaves the draft stored, for
+        // the Drafts page.
+        let whole = !written && session.current() == submitted;
+        if !written && !whole {
             // Newer text, or a base change, came after the save: it is not
             // retired, and takes the base the save left.
             session.rebase(base.clone(), cx.background_executor().now());
@@ -112,6 +144,8 @@ impl DraftRegistry {
             cx.notify();
             return Settle::Done;
         }
+        // Text that comes while the claim is out is newer than this.
+        let at = session.revision();
         let slot = session.begin_retire();
         let kept = slot.clone();
         let base = base.clone();
@@ -120,14 +154,21 @@ impl DraftRegistry {
         let work = off_thread(
             &self.backend,
             ReadKind::DraftWrite,
-            move |_| take(&slot)?.retire(saved),
+            move |_| {
+                let claim = take(&slot)?;
+                if whole {
+                    claim.discard().map(|()| Retired::Deleted)
+                } else {
+                    claim.retire(saved)
+                }
+            },
             cx,
         );
         let task = cx
             .spawn(async move |registry, cx| {
                 let result = work.await;
                 let _ = registry.update(cx, |registry, cx| {
-                    registry.retire_landed(id, saved, base, &kept, result, cx)
+                    registry.retire_landed(id, at, base, &kept, result, cx)
                 });
             })
             .shared();
@@ -135,10 +176,12 @@ impl DraftRegistry {
         Settle::Done
     }
 
+    /// The retirement or discard of the claim, decided at the session's
+    /// revision `at`, landed.
     fn retire_landed(
         &mut self,
         id: DraftId,
-        saved: u64,
+        at: u64,
         base: DraftBase,
         slot: &Mutex<Option<DraftClaim>>,
         result: Result<Retired, DraftError>,
@@ -152,7 +195,7 @@ impl DraftRegistry {
             }
             return;
         };
-        let newer = live.session.revision() != saved;
+        let newer = live.session.revision() != at;
         match result {
             Ok(Retired::Kept(claim)) => {
                 live.session.retire_kept(claim);

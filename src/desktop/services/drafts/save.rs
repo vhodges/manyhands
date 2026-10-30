@@ -1,14 +1,20 @@
-//! A session's save, and what its answer does to the draft.
+//! A session's save, and what its answer does to the draft. A new item's
+//! create goes the same way, over a new item's base (`create`).
 //!
 //! A save retires only the revision it saved, never newer text (review
 //! focus 1). `save` first writes the newest revision N, then sends N's
-//! fields (ruling R21), one save at a time (R15). On a committed answer the
-//! item is read again for the new base (R5), any write in flight lands,
-//! and only then is the session compared with N:
+//! fields (ruling R21), one save at a time (R15). When that write fails, N
+//! is sent from memory all the same (controller ruling 2). On a committed
+//! answer the item is read again for the new base (R5), any write in
+//! flight lands, and only then is the session compared with N:
 //!
 //! - its revision in memory is still N, and N is what the store holds:
 //!   the claim is taken out of its slot off the foreground and retired at
 //!   N, and the session ends;
+//! - its text is still what was sent, but that text was never stored as
+//!   the store's newest revision (its write failed, or an edit came and
+//!   was undone): the commit holds the session's whole text, so the draft
+//!   is discarded, any older revision with it, and the session ends;
 //! - anything newer, an edit or a base change, whether its write landed or
 //!   failed: nothing is retired. The session is rebased onto the new base,
 //!   which raises its revision, and is written at once.
@@ -25,20 +31,21 @@
 use futures::FutureExt;
 use gpui_kit::{Context, Task};
 use manyhands::{
-    drafts::{DraftErrorKind, DraftFields, DraftId},
+    drafts::{DraftErrorKind, DraftFields, DraftId, DraftTarget, is_new_item_base},
     repository::MutationDataDto,
-    results::Envelope,
+    results::{Envelope, ResultCode},
 };
 
-use super::{DraftRegistry, Live, off_thread, retire::take};
+use super::{DraftDiscardLanded, DraftRegistry, Live, SessionDiscarded, off_thread, retire::take};
 use crate::desktop::{
     model::drafts::{
         RecoveryState, Saving,
+        create::create_intent,
         save::{SaveVerdict, save_intent, save_verdict},
     },
     services::{
         ReadKind,
-        requests::{DesktopRequestId, Lane},
+        requests::{DesktopRequestId, Intent, Lane},
     },
 };
 
@@ -50,19 +57,45 @@ pub(super) struct SaveRecord {
     pub(super) fields: DraftFields,
     /// The operation a pending answer named: abandoning it ends the save.
     pub(super) operation: Option<String>,
+    /// What it was sent as: a new item's create (`create`) completes and is
+    /// refused as a create.
+    pub(super) verb: Verb,
+}
+
+/// What a session's newest revision is sent as.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Verb {
+    /// A save over a verified base.
+    Save,
+    /// A new item's create (`create`), over a new item's base.
+    Create,
 }
 
 impl DraftRegistry {
     /// Saves the session `id`'s newest revision: writes it to the store if
-    /// it is not there yet, then sends it on the user lane. Answers the
-    /// request, or `None`, having sent nothing, while a save of this
-    /// session is in flight or its revision retires, when it has no base
-    /// (a new item is D3's), when its base is unverified, and when the
-    /// write before it failed.
-    #[cfg_attr(not(test), allow(dead_code))] // Called by D3's editor; tests until then.
+    /// it is not there yet, then sends it on the user lane. When that write
+    /// fails, the revision is sent from memory all the same (controller
+    /// ruling 2, Task 15 fix round 1). Answers the request, or `None`,
+    /// having sent nothing, while a save of this session is in flight or
+    /// its revision retires, when it has no base, and when its base is
+    /// unverified, a new item's included: that is created (`create`).
     pub(crate) fn save(
         &mut self,
         id: DraftId,
+        cx: &mut Context<Self>,
+    ) -> Task<Option<DesktopRequestId>> {
+        self.flush_and_send(id, Verb::Save, cx)
+    }
+
+    /// Writes the session `id`'s newest revision, then sends it as `verb`,
+    /// one save or create at a time. `None`, having sent nothing, when a
+    /// save of the session is in flight or its revision retires, and when
+    /// its base does not take `verb`: a verified base is saved, a new
+    /// item's created.
+    pub(super) fn flush_and_send(
+        &mut self,
+        id: DraftId,
+        verb: Verb,
         cx: &mut Context<Self>,
     ) -> Task<Option<DesktopRequestId>> {
         let Some(live) = self
@@ -72,10 +105,11 @@ impl DraftRegistry {
             return Task::ready(None);
         };
         let session = &mut live.session;
-        let verified = session
-            .base()
-            .is_some_and(|base| base.observation.is_some());
-        if session.saving().is_some() || session.retiring() || !verified {
+        let takes = session.base().is_some_and(|base| match verb {
+            Verb::Save => base.observation.is_some(),
+            Verb::Create => is_new_item_base(base),
+        });
+        if session.saving().is_some() || session.retiring() || !takes {
             return Task::ready(None);
         }
         session.set_saving(Some(Saving::Flushing));
@@ -90,7 +124,7 @@ impl DraftRegistry {
                         .ok()?;
                     let flushed = flush.await;
                     let sent = registry
-                        .update(cx, |registry, cx| registry.send_save(id, flushed, cx))
+                        .update(cx, |registry, cx| registry.send_save(id, flushed, verb, cx))
                         .ok()?;
                     match sent {
                         Send::Sent(request) => return Some(request),
@@ -108,12 +142,13 @@ impl DraftRegistry {
         cx.spawn(async move |_, _| work.await)
     }
 
-    /// Sends the save once the newest revision is stored; another flush
-    /// when an edit came after it.
+    /// Sends the save, or the create, once the newest revision is stored;
+    /// another flush when an edit came after it.
     fn send_save(
         &mut self,
         id: DraftId,
         flushed: Result<(), DraftErrorKind>,
+        verb: Verb,
         cx: &mut Context<Self>,
     ) -> Send {
         // The flush may have stored the text again under a new ID.
@@ -127,18 +162,21 @@ impl DraftRegistry {
         if session.saving() != Some(Saving::Flushing) {
             return Send::Refused;
         }
-        if flushed.is_err() {
-            // The flush failure is shown; nothing is sent.
-            session.set_saving(None);
-            return Send::Refused;
-        }
-        if session.busy() || !matches!(session.recovery_state(), RecoveryState::Saved(_)) {
+        // A flush that failed is shown, and the text is sent from memory at
+        // once (controller ruling 2): Save is what protects it now. It is
+        // never asked to be stored first again, which a failing store would
+        // answer the same way for ever. The revision is not written, so it
+        // never retires as written (`retire.rs`).
+        if flushed.is_ok()
+            && (session.busy() || !matches!(session.recovery_state(), RecoveryState::Saved(_)))
+        {
             return Send::Again;
         }
         let fields = session.current().clone();
-        let intent = session
-            .base()
-            .and_then(|base| save_intent(session.target(), &fields, base));
+        let intent = session.base().and_then(|base| match verb {
+            Verb::Save => save_intent(session.target(), &fields, base),
+            Verb::Create => create_intent(session.target(), &fields, base),
+        });
         let Some(intent) = intent else {
             session.set_saving(None);
             return Send::Refused;
@@ -146,6 +184,10 @@ impl DraftRegistry {
         let revision = session.revision();
         let request = self.worker.submit(intent, Lane::User, None, None);
         session.set_saving(Some(Saving::Submitted(request, revision)));
+        // An earlier create of the session, kept for the same request to be
+        // sent again (`finished`), is over: this one is its save now.
+        self.saves
+            .retain(|_, record| !(record.verb == Verb::Create && record.draft == id));
         self.saves.insert(
             request,
             SaveRecord {
@@ -153,6 +195,7 @@ impl DraftRegistry {
                 revision,
                 fields,
                 operation: None,
+                verb,
             },
         );
         cx.notify();
@@ -187,8 +230,36 @@ impl DraftRegistry {
             // F2 holds a pending operation; a Retry of the same request
             // applies its answer again.
             SaveVerdict::Pending => record.operation = envelope.operation_id.clone(),
-            SaveVerdict::Keep => {
+            // A create stopped by what is at its path: the path is read in
+            // the item's own context first (`create`), and the session saves
+            // again once that read lands.
+            SaveVerdict::Keep
+                if record.verb == Verb::Create && envelope.code == ResultCode::OccupiedPath =>
+            {
                 self.saves.remove(&request);
+                self.check_occupied(draft, cx);
+            }
+            SaveVerdict::Keep => {
+                // A create whose effect is not known (an answer lost after
+                // it ran, a busy or cancelled one: not a refusal, which
+                // touched nothing) keeps its record, so the same request
+                // sent again (the worker's `retry`) completes the draft once
+                // it has created the item, as its first answer would have.
+                // The session's next save or create drops it.
+                //
+                // The session is not saving meanwhile, so that request sent
+                // again (the operation area's Retry, when its answer offers
+                // `request.retry`) and a new Save can both be in flight for
+                // the item: one save at a time is relaxed here, by ruling
+                // (Task 22 fix 1, M7). It is harmless: the new send drops
+                // the old record, so the old request's answer changes
+                // nothing, and the library answers whichever runs second
+                // `already_applied` or `occupied_path`.
+                let again = record.verb == Verb::Create
+                    && !Intent::refused_answer(envelope.outcome, envelope.code, &envelope.recovery);
+                if !again {
+                    self.saves.remove(&request);
+                }
                 live.session.set_saving(None);
                 cx.notify();
             }
@@ -250,12 +321,17 @@ impl DraftRegistry {
     /// finishes. A slot left empty by a draft already gone answers `Ok`.
     /// On failure the store has released the draft, which stays on disk:
     /// the session is over either way. The store is listed again once it
-    /// lands, whatever it answered.
+    /// lands, whatever it answered. The tab the session was attached to
+    /// hears `SessionDiscarded` as the session ends, and again once the
+    /// discard lands, with what it came to (R-71); a discard that deleted
+    /// the draft is `DraftDiscardLanded` too, for release on leave.
     pub(crate) fn discard(
         &mut self,
         id: DraftId,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), DraftErrorKind>> {
+        // The tab the session is attached to learns it ended (R-71).
+        let tab = self.tab_of(id);
         let Some(live) = self
             .current_id(id)
             .and_then(|current| self.sessions.remove(&current))
@@ -265,8 +341,12 @@ impl DraftRegistry {
         let id = live.session.id();
         self.saves.retain(|_, record| record.draft != id);
         self.detach_ended();
+        if let Some(tab) = &tab {
+            cx.emit(SessionDiscarded::Ended(tab.clone()));
+        }
         cx.notify();
         let Live { session, write, .. } = live;
+        let target = session.target().clone();
         let slot = session.claim_slot();
         cx.spawn(async move |registry, cx| {
             if let Some(write) = write {
@@ -297,9 +377,24 @@ impl DraftRegistry {
             // Gone or released, the draft is listed as it now is.
             let _ = registry.update(cx, |registry, cx| {
                 registry.reload_listing(cx);
+                if let Some(tab) = tab {
+                    cx.emit(SessionDiscarded::Landed(tab, discarded.is_ok()));
+                }
+                if discarded.is_ok() {
+                    cx.emit(DraftDiscardLanded(target));
+                }
             });
             discarded
         })
+    }
+
+    /// Whether a save of a draft of `target`'s item is in flight in this
+    /// process: being stored before it is sent, sent, or pending its
+    /// checkpoint (design, Release on leave, condition 3).
+    pub(crate) fn saving_item(&self, target: impl Fn(&DraftTarget) -> bool) -> bool {
+        self.sessions
+            .values()
+            .any(|live| live.session.saving().is_some() && target(live.session.target()))
     }
 
     #[cfg(test)]
@@ -311,6 +406,19 @@ impl DraftRegistry {
     #[cfg(test)]
     pub(crate) fn session_ids(&self) -> Vec<DraftId> {
         self.sessions.keys().copied().collect()
+    }
+
+    /// Ends the session `id` at once, as a release lets it go, its draft
+    /// kept and no tab told: for a test of a tab whose D2 session ends
+    /// under a save or a write it waits on (Task 27 fix 1, B1 and B2).
+    #[cfg(test)]
+    pub(crate) fn end_session_for_testing(&mut self, id: DraftId, cx: &mut Context<Self>) {
+        if let Some(current) = self.current_id(id) {
+            self.sessions.remove(&current);
+            self.saves.retain(|_, record| record.draft != current);
+        }
+        self.detach_ended();
+        cx.notify();
     }
 }
 

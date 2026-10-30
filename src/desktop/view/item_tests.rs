@@ -5,13 +5,17 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::TestAppContext;
+use gpui_kit::{TestAppContext, px};
 use manyhands::{
     repository::{ItemDto, ItemDtoKind, TicketFilter},
     results::{ProblemCode, ResultCode},
 };
+use time::OffsetDateTime;
 
-use super::{NONCONFORMING_FILE, SOURCE_NOT_UTF8};
+use super::{
+    NONCONFORMING_FILE, SOURCE_NOT_UTF8,
+    discussion::{REPLY_INDENT, offset_at, shown_time},
+};
 use crate::desktop::{
     model::{
         item::{
@@ -85,6 +89,11 @@ fn shown(shell: &Shell, root: &Path, id: &str) -> ItemDto {
     service.show_item(&repo, &item_id(id)).unwrap()
 }
 
+/// E-23: opens the shown tab's details sheet with All details, by click.
+fn details(shell: &Shell, cx: &mut TestAppContext) {
+    shell.click("chip-all", cx);
+}
+
 fn present(shell: &Shell, id: impl Into<gpui_kit::ElementId>, cx: &mut TestAppContext) -> bool {
     let id = id.into();
     shell.frame(cx, |window, _| {
@@ -104,6 +113,7 @@ fn the_provenance_says_primary_or_active_with_its_branch_and_worktree(cx: &mut T
     shell.fixture.save_ticket(&root, SAVED, "Saved");
 
     open(&shell, ticket(&root, PRIMARY), cx);
+    details(&shell, cx);
     let primary = shown(&shell, &root, PRIMARY);
     assert_eq!(shell.label("item-title", cx).as_deref(), Some("In primary"));
     assert_eq!(shell.label("item-kind", cx).as_deref(), Some("Ticket"));
@@ -124,6 +134,7 @@ fn the_provenance_says_primary_or_active_with_its_branch_and_worktree(cx: &mut T
     );
 
     open(&shell, ticket(&root, SAVED), cx);
+    details(&shell, cx);
     let saved = shown(&shell, &root, SAVED);
     let worktree = root.join(".manyhands/worktrees").join(SAVED);
     assert_eq!(saved.context.worktree, key(&worktree));
@@ -154,6 +165,7 @@ fn lifecycle_closure_and_project_status_are_separate_fields(cx: &mut TestAppCont
     });
 
     open(&shell, ticket(&root, CLOSED), cx);
+    details(&shell, cx);
     let closed = shown(&shell, &root, CLOSED);
     let closure = closed.closure.clone().unwrap();
     assert_eq!(shell.label("item-lifecycle", cx).as_deref(), Some("Closed"));
@@ -162,6 +174,7 @@ fn lifecycle_closure_and_project_status_are_separate_fields(cx: &mut TestAppCont
     assert_eq!(shell.label("item-status", cx).as_deref(), Some("done"));
 
     open(&shell, ticket(&root, SAYS_CLOSED), cx);
+    details(&shell, cx);
     assert_eq!(shell.label("item-lifecycle", cx).as_deref(), Some("Open"));
     assert_eq!(shell.label("item-status", cx).as_deref(), Some("closed"));
     assert!(!present(&shell, "item-closed-at", cx));
@@ -181,6 +194,7 @@ fn unknown_metadata_is_listed_and_a_null_value_is_not_representable(cx: &mut Tes
         );
     });
     open(&shell, ticket(&root, PRIMARY), cx);
+    details(&shell, cx);
     let item = shown(&shell, &root, PRIMARY);
     let keys: Vec<&str> = item.unknown_metadata.keys().map(String::as_str).collect();
     assert_eq!(keys, ["nested", "tagged", "zeta"]);
@@ -208,6 +222,8 @@ fn the_source_is_shown_verbatim_and_a_non_utf8_file_says_so(cx: &mut TestAppCont
         fixture.commit_ticket(root, PRIMARY, "Plain", "extra: kept\n");
     });
     open(&shell, ticket(&root, PRIMARY), cx);
+    // E-1: the assertions run in the item's Inspect tab (R-64).
+    inspect_from_sheet(&shell, cx);
     let item = shown(&shell, &root, PRIMARY);
     assert!(item.source.as_deref().unwrap().contains("extra: kept\n"));
     assert!(present(&shell, "item-source", cx));
@@ -222,6 +238,24 @@ fn the_source_is_shown_verbatim_and_a_non_utf8_file_says_so(cx: &mut TestAppCont
         Some(SOURCE_NOT_UTF8)
     );
     assert!(!present(&shell, "item-source", cx));
+}
+
+/// E-1, E-2: opens the shown item's Inspect tab from its details sheet,
+/// with All details and then the sheet's Inspect link (R-64). The link
+/// sits below the sheet's fold, so it is reached by Tab and pressed by
+/// Enter.
+fn inspect_from_sheet(shell: &Shell, cx: &mut TestAppContext) {
+    details(shell, cx);
+    let mut presses = 0;
+    while !shell.frame(cx, |window, _| {
+        gpui_kit::test::TestWindowExt::try_find(window, "sheet-inspect")
+            .is_some_and(|link| link.focused() == Some(true))
+    }) {
+        presses += 1;
+        assert!(presses < 40, "Tab never reached the Inspect link");
+        shell.keys("tab", cx);
+    }
+    shell.press("enter", cx);
 }
 
 /// The text the item view shows the source in, after a frame.
@@ -243,6 +277,8 @@ fn the_source_rejects_every_edit(cx: &mut TestAppContext) {
         fixture.commit_ticket(root, PRIMARY, "Kept", "");
     });
     open(&shell, ticket(&root, PRIMARY), cx);
+    // E-2: in the item's Inspect tab (R-64).
+    inspect_from_sheet(&shell, cx);
     let source = shown(&shell, &root, PRIMARY).source.unwrap();
     assert_eq!(source_value(&shell, cx).as_deref(), Some(source.as_str()));
     let before = RepositorySnapshot::take(&root);
@@ -283,10 +319,13 @@ fn the_source_rejects_every_edit(cx: &mut TestAppContext) {
     );
 }
 
-/// Comments are in the library's order, each indented by its depth, with
-/// its author, or "unknown author" when it has none.
+/// Comments are in the library's order. Roots are not indented, every
+/// reply sits at the one reply indent, and only a reply deeper than one
+/// level says whom it answers (R-53). Each shows its author without the
+/// email, or "unknown author" when it has none, its time at the offset
+/// passed, and its body in its read editor.
 #[gpui_kit::test]
-fn comments_are_indented_by_depth_in_list_order(cx: &mut TestAppContext) {
+fn comments_keep_list_order_and_replies_share_one_indent(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, |fixture, root| {
         fixture.commit_ticket(root, PRIMARY, "Discussed", "");
         let by_ada = format!("created_by: {ADA}\n");
@@ -325,14 +364,35 @@ fn comments_are_indented_by_depth_in_list_order(cx: &mut TestAppContext) {
     assert_eq!(depths, [0, 1, 0]);
 
     let bodies: Vec<String> = list.items.iter().map(|c| c.body.clone().unwrap()).collect();
-    assert_eq!(shell.rows("comment-body", cx), bodies);
-    assert_eq!(shell.rows("comment-author", cx), [ADA, UNKNOWN_AUTHOR, ADA]);
+    shell.frame(cx, |_, _| ());
+    let pane = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.item_pane())
+        .unwrap();
+    let read: Vec<String> = list
+        .items
+        .iter()
+        .map(|c| {
+            let view = pane
+                .read_with(cx, |pane, _| pane.comment_view(c.id.as_deref().unwrap()))
+                .unwrap();
+            view.read_with(cx, |view, cx| view.editor().read(cx).text().to_owned())
+        })
+        .collect();
+    assert_eq!(read, bodies);
+    let ada = "Ada Lovelace";
+    assert_eq!(shell.rows("comment-author", cx), [ada, UNKNOWN_AUTHOR, ada]);
     let times: Vec<String> = list
         .items
         .iter()
         .map(|c| c.created_at.clone().unwrap())
         .collect();
-    assert_eq!(shell.rows("comment-time", cx), times);
+    let now = OffsetDateTime::now_utc();
+    let shown: Vec<String> = times
+        .iter()
+        .map(|at| shown_time(at, now, offset_at(at)))
+        .collect();
+    assert_eq!(shell.rows("comment-time", cx), shown);
 
     let x = |index: usize, cx: &mut TestAppContext| {
         shell.frame(cx, |window, _| {
@@ -342,15 +402,23 @@ fn comments_are_indented_by_depth_in_list_order(cx: &mut TestAppContext) {
                 .x
         })
     };
-    let (a, b, c) = (x(0, cx), x(1, cx), x(2, cx));
-    assert!(b > a, "the reply is indented: {a:?} {b:?}");
-    assert_eq!(a, c);
+    let root = x(0, cx);
+    for (ix, comment) in list.items.iter().enumerate() {
+        let indent = if comment.depth == 0 { 0. } else { REPLY_INDENT };
+        assert_eq!(x(ix, cx) - root, px(indent), "{ix}: its indent");
+        assert_eq!(
+            present(&shell, ("comment-reply-to", ix), cx),
+            comment.depth > 1,
+            "{ix}: only a reply deeper than one says whom it answers"
+        );
+    }
 }
 
 /// A nonconforming entry opens by its path: it says so, shows its
-/// problem code with its guidance, and Repair is visibly unavailable.
+/// problem code with its guidance, and Repair is offered from its "Needs
+/// fixing" banner.
 #[gpui_kit::test]
-fn a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_unavailable(
+fn a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_offered(
     cx: &mut TestAppContext,
 ) {
     let (shell, root) = shell(cx, |fixture, root| {
@@ -383,19 +451,24 @@ fn a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_unavailable(
     assert!(present(&shell, "item-source", cx));
     assert!(!present(&shell, "comments-state", cx));
 
-    // Every later action is shown, and says it is not available yet.
-    assert_eq!(shell.rows("later-action", cx), LATER);
+    // The header's later actions are shown, and each says it is not
+    // available yet. An Inspect tab has no discussion, so Comment is not
+    // among them, and the header's primary action is the ticket's, Close
+    // ticket…. Repair is not one of them.
+    let later: Vec<&str> = LATER
+        .into_iter()
+        .filter(|action| !["Comment", "Approve and merge…"].contains(action))
+        .collect();
+    assert_eq!(shell.rows("later-action", cx), later);
     let notes = shell.rows("later-note", cx);
-    assert_eq!(notes.len(), LATER.len());
+    assert_eq!(notes.len(), later.len());
     assert!(notes.iter().all(|note| note == LATER_NOTE));
-    let repair = LATER.iter().position(|action| *action == "Repair").unwrap();
-    assert_eq!(
-        shell.label(("later-action", repair), cx).as_deref(),
-        Some("Repair")
-    );
-    // The control does nothing: the view is as it was.
+    // Repair is offered from the "Needs fixing" banner: pressed, it opens
+    // the repair view, and the problem is still shown.
+    assert_eq!(shell.label("item-repair", cx).as_deref(), Some("Repair…"));
     let before = shell.rows("item-problem", cx);
-    shell.click(("later-button", repair), cx);
+    shell.click("item-repair-button", cx);
+    assert!(present(&shell, "repair-source", cx));
     assert_eq!(shell.rows("item-problem", cx), before);
 }
 
@@ -417,6 +490,7 @@ fn an_item_whose_context_is_rejected_shows_the_librarys_answer_and_no_context_ch
         id: item_id(DOCUMENT),
     };
     open(&shell, target.clone(), cx);
+    details(&shell, cx);
     assert_eq!(
         shell.label("provenance-kind", cx).as_deref(),
         Some(KIND_ACTIVE)
@@ -526,6 +600,7 @@ fn copy_writes_the_id_to_the_clipboard(cx: &mut TestAppContext) {
         fixture.commit_ticket(root, PRIMARY, "Copied", "");
     });
     open(&shell, ticket(&root, PRIMARY), cx);
+    details(&shell, cx);
     shell.click("copy-id", cx);
     assert_eq!(
         cx.read_from_clipboard()
@@ -543,6 +618,7 @@ fn each_copy_leaves_exactly_the_short_code_or_the_ulid(cx: &mut TestAppContext) 
         fixture.commit_ticket(root, PRIMARY, "Copied", "slug: ae-k9x2b\n");
     });
     open(&shell, ticket(&root, PRIMARY), cx);
+    details(&shell, cx);
     let clipboard = |cx: &mut TestAppContext| cx.read_from_clipboard().and_then(|item| item.text());
     assert_eq!(shell.label("item-slug", cx).as_deref(), Some("ae-k9x2b"));
     for (button, wanted) in [
@@ -562,6 +638,7 @@ fn a_ticket_without_a_short_code_offers_none_to_copy(cx: &mut TestAppContext) {
         fixture.commit_ticket(root, PRIMARY, "Uncoded", "");
     });
     open(&shell, ticket(&root, PRIMARY), cx);
+    details(&shell, cx);
     assert!(!present(&shell, "copy-slug", cx));
     assert!(present(&shell, "copy-id", cx));
 }

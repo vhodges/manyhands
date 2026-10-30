@@ -26,9 +26,10 @@ use manyhands::{
 };
 use time::OffsetDateTime;
 
-use super::names::TicketName;
+use super::{editor_text::normalized, names::TicketName};
 use crate::desktop::services::requests::DesktopRequestId;
 
+pub(crate) mod create;
 pub(crate) mod rows;
 pub(crate) mod save;
 
@@ -175,6 +176,11 @@ impl DraftSession {
     /// The newest revision written.
     pub(crate) fn flushed(&self) -> u64 {
         self.flushed
+    }
+
+    /// When the newest revision written was written, as the store said.
+    pub(crate) fn flushed_at(&self) -> OffsetDateTime {
+        self.flushed_at
     }
 
     /// Whether a store call holds the claim: a write in flight, or the
@@ -381,9 +387,13 @@ impl DraftSession {
     }
 
     /// Where the item stands against this session's newest text and base,
-    /// as `item` reads it now. Only an item's draft has a session.
+    /// as `item` reads it now, its body as the editor loads it and its
+    /// `deps` in ID order, as the base holds them (R-11, R-72): a difference
+    /// of normalization alone is never a change. Only an item's draft has a
+    /// session.
     pub(crate) fn classify(&self, item: Result<&ItemDto, ResultCode>) -> TargetState {
-        classify(&self.draft(), item)
+        let item = item.map(normalized);
+        classify(&self.draft(), item.as_ref().map_err(|code| *code))
     }
 
     pub(crate) fn recovery_state(&self) -> RecoveryState {

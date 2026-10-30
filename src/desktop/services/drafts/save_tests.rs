@@ -1200,3 +1200,83 @@ async fn quitting_waits_for_a_retirement_in_flight(cx: &mut TestAppContext) {
     assert_eq!(phase(cx), QuitPhase::Quit);
     assert!(stored(&shell.fixture.draft_store(), id).is_none());
 }
+
+/// R-69: every committed save emits `DraftSaved` with the fields it sent
+/// and the base it leaves, from the registry's own read, before the saved
+/// revision retires: the session is still live when the tab hears of it.
+/// Newer text is rebased onto that same base, after the event.
+#[gpui_kit::test]
+async fn a_committed_save_emits_draft_saved_before_it_retires_or_rebases(cx: &mut TestAppContext) {
+    use std::{cell::RefCell, rc::Rc};
+
+    use crate::desktop::services::drafts::DraftSaved;
+
+    let fixture = Fixture::new();
+    let (backend, services) = start(&fixture, cx);
+    let drafts = services.drafts().clone();
+    let (root, id) = document_draft(&fixture, &services, cx).await;
+    // What the event said, and whether the session was live then.
+    type Heard = (DraftId, DraftFields, DraftBase, bool);
+    let heard: Rc<RefCell<Vec<Heard>>> = Rc::default();
+    let seen = heard.clone();
+    let _saved = cx.update(|cx| {
+        cx.subscribe(&drafts, move |registry, event: &DraftSaved, cx| {
+            let live = registry.read(cx).recovery_state(event.draft).is_some();
+            seen.borrow_mut().push((
+                event.draft,
+                event.submitted.clone(),
+                event.base.clone(),
+                live,
+            ));
+        })
+    });
+
+    // Retired: nothing newer came.
+    let saved = document_fields("Saved title", "Body");
+    edit(&drafts, id, saved.clone(), cx);
+    let request = save(&drafts, id, cx).await.expect("the save is sent");
+    finished(&services, request, 1, cx).await;
+    let shown = show(fixture.service(), &root, DOCUMENT);
+    {
+        let heard = heard.borrow();
+        assert_eq!(heard.len(), 1, "one event for one committed save");
+        let (draft, submitted, base, live) = &heard[0];
+        assert_eq!(*draft, id);
+        assert!(*submitted == saved);
+        assert_eq!(base.observation, shown.observation, "the registry's read");
+        assert!(base.fields == saved);
+        assert!(*live, "before the revision retired");
+    }
+    assert!(!session_live(&drafts, id, cx), "then it retired");
+
+    // Rebased: an edit came while the save ran.
+    let id = begin(&fixture, &services, &root, ItemKind::Document, DOCUMENT, cx).await;
+    let again = document_fields("Again", "Body");
+    edit(&drafts, id, again.clone(), cx);
+    let held = backend.hold_job(JobKind::DocumentSave);
+    let request = save(&drafts, id, cx).await.expect("the save is sent");
+    held.wait_reached();
+    edit(&drafts, id, document_fields("Newer", "Body"), cx);
+    held.release();
+    finished(&services, request, 1, cx).await;
+    let shown = show(fixture.service(), &root, DOCUMENT);
+    let heard = heard.borrow();
+    assert_eq!(heard.len(), 2);
+    let (draft, submitted, base, live) = &heard[1];
+    assert_eq!(
+        drafts.read_with(cx, |registry, _| registry.current_id(*draft)),
+        Some(id)
+    );
+    assert!(*submitted == again);
+    assert_eq!(base.observation, shown.observation);
+    assert!(*live);
+    let rebased = drafts.read_with(cx, |registry, _| {
+        registry
+            .session(id)
+            .and_then(|session| session.base().cloned())
+    });
+    assert!(
+        rebased.is_some_and(|rebased| rebased == *base),
+        "onto the event's base"
+    );
+}

@@ -1,7 +1,9 @@
-//! Retained read-only source text, selection and keyboard behavior.
+//! The text on the page: an Inspect tab's retained read-only source text,
+//! selection and keyboard behavior (D1's, kept by R-64), and an item tab's
+//! read view. A file that is not UTF-8 says so in either.
 
 use gpui_kit::{
-    AnyElement, AppContext, Context, InteractiveElement, IntoElement, ParentElement, Styled,
+    AnyElement, App, AppContext, Context, InteractiveElement, IntoElement, ParentElement, Styled,
     TestSupportExt, Window,
     component::{
         ActiveTheme,
@@ -11,12 +13,17 @@ use gpui_kit::{
 };
 use manyhands::repository::ItemDto;
 
-use super::{ItemPane, SOURCE, SOURCE_NOT_UTF8, text};
+use super::{ItemPane, SOURCE, SOURCE_NOT_UTF8, text, tokens::item_colors};
+use crate::desktop::model::navigation::OpenTarget;
 
 impl ItemPane {
     /// Only a successful read changes the source. Keep its entity/selection
-    /// during an in-flight or failed read, and remove it only for non-UTF8 text.
+    /// during an in-flight or failed read, and remove it only for non-UTF8
+    /// text. An item tab has none: it reads the body in its read view.
     pub(super) fn sync_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(self.model.target(), OpenTarget::Inspect { .. }) {
+            return;
+        }
         let Some(item) = self.model.item().rows() else {
             return;
         };
@@ -47,6 +54,7 @@ impl ItemPane {
         self.source.as_ref().map(|(_, state)| state)
     }
 
+    /// An Inspect tab's whole file, in D1's read-only source view.
     pub(super) fn source(&self, item: &ItemDto, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         match (&item.source, &self.source) {
@@ -76,10 +84,26 @@ impl ItemPane {
                 )
                 .into_any_element(),
             (Some(_), None) => div().into_any_element(),
-            (None, _) => text("item-source-missing", SOURCE_NOT_UTF8.to_owned())
-                .text_sm()
-                .text_color(theme.muted_foreground)
-                .into_any_element(),
+            (None, _) => not_utf8(cx),
         }
     }
+
+    /// An item tab's body, in its read view (decision 17). A file with no
+    /// body to show says why when it is not UTF-8; a nonconforming one
+    /// shows its problems in the header's "Needs fixing" instead.
+    pub(super) fn read_body(&self, item: &ItemDto, cx: &App) -> AnyElement {
+        match (&item.source, self.page.read_view()) {
+            (None, _) => not_utf8(cx),
+            (Some(_), Some(read)) => read,
+            (Some(_), None) => div().into_any_element(),
+        }
+    }
+}
+
+/// D1's words for a file that is not UTF-8, muted on the white page.
+fn not_utf8(cx: &App) -> AnyElement {
+    text("item-source-missing", SOURCE_NOT_UTF8.to_owned())
+        .text_sm()
+        .text_color(item_colors(cx).page_muted)
+        .into_any_element()
 }

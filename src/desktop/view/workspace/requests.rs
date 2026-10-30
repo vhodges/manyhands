@@ -60,7 +60,13 @@ impl Workspace {
             return;
         }
         for root in &changed.removed {
-            self.close_repository(root, cx);
+            // The user's confirmation said which tabs close (Part C fixes 1
+            // and 2); a removal found already done was not confirmed.
+            if changed.confirmed.contains(root) {
+                self.repository_removed(root, cx);
+            } else {
+                self.drop_repository(root, cx);
+            }
             if self.navigation.forget(root) {
                 self.clear_lists(cx);
             }
@@ -308,7 +314,9 @@ impl Workspace {
             Some(RecoveryStep::Retry(id)) if self.protected_generation(id, cx) => {
                 self.retry_generation_in_settings(id, window, cx);
             }
-            Some(RecoveryStep::Retry(id)) => self.services.worker().retry(id, None),
+            Some(RecoveryStep::Retry(id)) => {
+                self.services.worker().retry(id, None);
+            }
             Some(RecoveryStep::Prepare(id)) => {
                 prepare_again(id, origin, &self.services, window, cx);
             }

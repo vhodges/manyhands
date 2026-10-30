@@ -69,6 +69,7 @@ use bind::{
     abandon::OperationAbandonBinding,
     comment::CommentAddBinding,
     conflict::ConflictResolveBinding,
+    context::{ContextPrepareBinding, ContextReleaseBinding},
     document::DocumentBinding,
     folder::FolderCreateBinding,
     host::HostBinding,
@@ -89,6 +90,7 @@ pub use bind::{
     abandon::OperationAbandonInput,
     comment::CommentAddInput,
     conflict::{ConflictResolutionInput, ConflictResolveInput},
+    context::{ContextPrepareInput, ContextPrepareIntent, ContextReleaseInput},
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
     folder::FolderCreateInput,
     host::{HostApproveInput, HostReplaceInput},
@@ -113,14 +115,14 @@ pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
     CancelDto, CommentMutationDto, CommentMutationType, CommentPendingReason, ConflictNextAction,
     ConflictNextDto, ConflictResolutionMutationDto, ConflictResolutionMutationType,
-    DocumentMutationDto, HostMutationDto, HostObservationDto, HostPreviewDto, HostReplacementDto,
-    IdentityMutationDto, IdentityPreviewDto, ItemRepublishPreviewDto, KeyDeletionPreviewDto,
-    KeyDeletionState, KeyGenerationState, KeyMutationDto, LocalIdentityDto, MutationDataDto,
-    OperationAbandonPreviewDto, OperationMutationDto, PrepareDataDto, PreviewDetailsDto,
-    PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
-    RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto, RepairPreviewDto,
-    RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
-    RequestResultDto, RequestState, SynchronizationConflictMutationDto,
+    ContextMutationDto, DocumentMutationDto, HostMutationDto, HostObservationDto, HostPreviewDto,
+    HostReplacementDto, IdentityMutationDto, IdentityPreviewDto, ItemRepublishPreviewDto,
+    KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState, KeyMutationDto, LocalIdentityDto,
+    MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto, PrepareDataDto,
+    PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
+    PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto,
+    RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
+    RequestOperationDto, RequestResultDto, RequestState, SynchronizationConflictMutationDto,
     SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
@@ -450,6 +452,8 @@ pub enum Mutation {
     FolderCreate(FolderCreateInput),
     DocumentRepair(DocumentRepairInput),
     TicketRepair(TicketRepairInput),
+    ContextPrepare(ContextPrepareInput),
+    ContextRelease(ContextReleaseInput),
 }
 
 impl Mutation {
@@ -495,6 +499,8 @@ impl Mutation {
             Self::FolderCreate(_) => Command::FolderCreate,
             Self::DocumentRepair(_) => Command::DocumentRepair,
             Self::TicketRepair(_) => Command::TicketRepair,
+            Self::ContextPrepare(_) => Command::ContextPrepare,
+            Self::ContextRelease(_) => Command::ContextRelease,
         }
     }
 
@@ -541,7 +547,9 @@ impl Mutation {
             | Self::ItemSync(_)
             | Self::RepoSync(_)
             | Self::OperationResume(_)
-            | Self::FolderCreate(_) => None,
+            | Self::FolderCreate(_)
+            | Self::ContextPrepare(_)
+            | Self::ContextRelease(_) => None,
         }
     }
 
@@ -582,6 +590,8 @@ impl Mutation {
             Self::FolderCreate(input) => Box::new(FolderCreateBinding::from(input)),
             Self::DocumentRepair(input) => Box::new(RepairBinding::from(input)),
             Self::TicketRepair(input) => Box::new(RepairBinding::from(input)),
+            Self::ContextPrepare(input) => Box::new(ContextPrepareBinding::from(input)),
+            Self::ContextRelease(input) => Box::new(ContextReleaseBinding::from(input)),
         }
     }
 }

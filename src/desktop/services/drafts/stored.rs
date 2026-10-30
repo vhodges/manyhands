@@ -10,7 +10,7 @@
 use gpui_kit::{Context, Task};
 use manyhands::drafts::{DraftErrorKind, DraftId};
 
-use super::{DraftRegistry, off_thread};
+use super::{DraftDiscardLanded, DraftRegistry, off_thread};
 use crate::desktop::services::ReadKind;
 
 impl DraftRegistry {
@@ -35,13 +35,15 @@ impl DraftRegistry {
     /// of: claimed and discarded when `readable`, else deleted under its
     /// lock. Another process holding it refuses with `OpenElsewhere`. A
     /// failed discard of a claimed draft releases it, still stored. The
-    /// store is listed again once it lands.
+    /// store is listed again once it lands; a readable draft deleted is
+    /// `DraftDiscardLanded`, by the target it was listed with.
     pub(crate) fn discard_stored(
         &mut self,
         id: DraftId,
         readable: bool,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), DraftErrorKind>> {
+        let target = self.listed(id).map(|(draft, _)| draft.target.clone());
         let discard = off_thread(
             &self.backend,
             ReadKind::DraftWrite,
@@ -56,6 +58,9 @@ impl DraftRegistry {
             // Gone or released, the draft is listed as it now is.
             let _ = registry.update(cx, |registry, cx| {
                 registry.reload_listing(cx);
+                if let (Ok(()), Some(target)) = (&discarded, target) {
+                    cx.emit(DraftDiscardLanded(target));
+                }
             });
             discarded
         })

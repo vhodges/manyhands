@@ -26,7 +26,7 @@ mod store_tests;
 
 pub use compare::{
     Change, Comparison, Field, RefusalReason, Restore, TargetState, classify, classify_comment,
-    compare, restore_policy,
+    compare, is_new_item_base, restore_policy,
 };
 pub use export::markdown;
 pub use protect::{DraftError, DraftErrorKind};

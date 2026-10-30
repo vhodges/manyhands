@@ -221,11 +221,23 @@ pub(crate) fn open_discard(
     cx: &mut App,
     confirm: impl Fn(&mut Window, &mut App) + 'static,
 ) {
+    let message = discard_message(name.as_deref());
+    open_discard_saying(message, origin, services, window, cx, confirm);
+}
+
+/// The Discard dialog, saying `message`, as `open_discard` opens it.
+pub(crate) fn open_discard_saying(
+    message: String,
+    origin: FocusHandle,
+    services: &Services,
+    window: &mut Window,
+    cx: &mut App,
+    confirm: impl Fn(&mut Window, &mut App) + 'static,
+) {
     if !may_open(services, window, cx) {
         return;
     }
     let confirm: Confirm = Rc::new(confirm);
-    let message = discard_message(name.as_deref());
     window.open_dialog(cx, move |base, _, _| {
         let close = origin.clone();
         base.title(DISCARD_TITLE)

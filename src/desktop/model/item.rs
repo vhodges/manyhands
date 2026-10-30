@@ -29,15 +29,23 @@ pub(crate) const NO_BRANCH: &str = "no branch";
 pub(crate) const NOT_REPRESENTABLE: &str = "Not representable";
 pub(crate) const UNKNOWN_AUTHOR: &str = "unknown author";
 
-/// The actions the item view shows, none of them available in D1.
-pub(crate) const LATER: [&str; 6] = [
-    "Edit",
-    "Comment",
-    "Sync",
-    "Approve and merge",
-    "Close ticket",
-    "Repair",
-];
+/// The design's action labels, each by name.
+pub(crate) const EDIT: &str = "Edit";
+pub(crate) const COMMENT: &str = "Comment";
+pub(crate) const SHARE: &str = "Share";
+pub(crate) const APPROVE_AND_MERGE: &str = "Approve and merge…";
+pub(crate) const CLOSE_TICKET: &str = "Close ticket…";
+/// The "Needs fixing" banner's action, and an Inspect tab's: it opens the
+/// repair view (Part E).
+pub(crate) const REPAIR: &str = "Repair…";
+/// An unmanaged document's banner's action: a repair with adoption.
+pub(crate) const ADOPT: &str = "Adopt…";
+
+/// The actions the item view shows that are not available yet, with the
+/// design's labels: the header's Share and primary action, and the
+/// discussion's Comment. Edit (E-6) and Repair (E-6, Task 25) are
+/// available.
+pub(crate) const LATER: [&str; 4] = [COMMENT, SHARE, APPROVE_AND_MERGE, CLOSE_TICKET];
 pub(crate) const LATER_NOTE: &str = "Available in a later release";
 
 /// The problems that make the header a recovery view: the item's branch

@@ -73,10 +73,7 @@ fn tab_keys(shell: &Shell, cx: &mut TestAppContext) -> Vec<TabKey> {
 fn the_settings_key_shows_the_settings_and_back_keeps_the_tabs(cx: &mut TestAppContext) {
     let (shell, root) = with_tabs(cx);
     let tabs = tab_keys(&shell, cx);
-    assert_eq!(
-        shell.label(("tab-shown", 1usize), cx).as_deref(),
-        Some(SHOWN)
-    );
+    assert!(shell.present(("tab-active-line", 1usize), cx));
 
     shell.keys("secondary-,", cx);
     assert_eq!(
@@ -114,10 +111,7 @@ fn the_settings_key_shows_the_settings_and_back_keeps_the_tabs(cx: &mut TestAppC
     assert_eq!(shown(&shell, cx), Shown::Tabs);
     assert!(!shell.present("settings", cx));
     assert_eq!(tab_keys(&shell, cx), tabs);
-    assert_eq!(
-        shell.label(("tab-shown", 1usize), cx).as_deref(),
-        Some(SHOWN)
-    );
+    assert!(shell.present(("tab-active-line", 1usize), cx));
     let opened = shell
         .workspace
         .read_with(cx, |workspace, cx| workspace.opened(cx));

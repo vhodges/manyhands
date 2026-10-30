@@ -8,17 +8,23 @@ use std::{
 };
 
 use gpui_kit::{
-    App, ElementId, Entity, KeyDownEvent, KeyUpEvent, Keystroke, TestAppContext, VisualTestContext,
-    Window, WindowHandle, component::Root, px, size, test::TestWindowExt,
+    App, ElementId, Entity, Focusable, KeyDownEvent, KeyUpEvent, Keystroke, TestAppContext,
+    VisualTestContext, Window, WindowHandle, component::Root, px, size, test::TestWindowExt,
 };
-use manyhands::drafts::{DraftFields, DraftId, DraftTarget, ItemKind};
+use manyhands::{
+    drafts::{DraftBase, DraftFields, DraftId, DraftTarget, ItemKind},
+    repository::{ItemDtoKind, SharedKeyId, keys::UnlockReason},
+};
 
-use super::workspace::Workspace;
+use super::{editor::host::EditorHost, workspace::Workspace};
 use crate::desktop::{
     keys,
-    model::operations::Operations,
+    model::{drafts::create, navigation::OpenTarget, operations::Operations, tabs::TabKey},
     open_test_window_over,
-    services::requests::{DesktopRequest, DesktopRequestId},
+    services::{
+        prompts::{PromptReply, PromptRequest},
+        requests::{DesktopRequest, DesktopRequestId, Intent},
+    },
     test_support::{delaying::DelayingBackend, fixtures::Fixture},
 };
 
@@ -89,6 +95,7 @@ impl Shell {
     ) -> Self {
         cx.update(gpui_kit::init);
         cx.update(keys::bind);
+        cx.update(super::editor::keys::bind);
         // Dialogs open without their entrance animation, so a frame finds
         // them where they rest.
         cx.update(|cx| cx.set_reduce_motion(true));
@@ -190,6 +197,25 @@ impl Shell {
         })
     }
 
+    /// Whether Tab, pressed at most `presses` times from where focus is,
+    /// puts focus on the element `id`. A disabled Kit button tracks no
+    /// focus, so Tab passes it by.
+    pub(crate) fn tab_reaches(
+        &self,
+        id: impl Into<ElementId>,
+        presses: usize,
+        cx: &mut TestAppContext,
+    ) -> bool {
+        let id = id.into();
+        (0..presses).any(|_| {
+            self.keys("tab", cx);
+            let id = id.clone();
+            self.frame(cx, move |window, _| {
+                window.try_find(id).and_then(|element| element.focused()) == Some(true)
+            })
+        })
+    }
+
     /// Whether the element `id` is drawn.
     pub(crate) fn present(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
         let id = id.into();
@@ -252,6 +278,29 @@ impl Shell {
     ) {
         let operations = self.operations(cx);
         wait_until(cx, &operations, move |operations, _| done(operations)).await;
+    }
+
+    /// Draws frames, with the worker and the reads running, until `done`
+    /// holds of the window, then draws one more. Panics after `WAIT` of
+    /// real time, saying that `what` did not happen. The test allows
+    /// parking.
+    pub(crate) async fn until_drawn(
+        &self,
+        cx: &mut TestAppContext,
+        what: &str,
+        done: impl Fn(&Shell, &mut TestAppContext) -> bool,
+    ) {
+        let deadline = Instant::now() + WAIT;
+        loop {
+            self.frame(cx, |_, _| ());
+            self.run(cx);
+            if done(self, cx) {
+                self.frame(cx, |_, _| ());
+                return;
+            }
+            assert!(Instant::now() < deadline, "{what} did not happen");
+            cx.executor().timer(POLL).await;
+        }
     }
 
     /// Waits until the request `id` has ended: finished, removed or not
@@ -319,6 +368,197 @@ impl Shell {
         self.run(cx);
         id
     }
+}
+
+/// A new ticket's draft fields: `title`, the default type and status, and
+/// an empty body, as New ticket… makes them.
+pub(crate) fn new_ticket_fields(title: &str) -> DraftFields {
+    create::ticket_fields(title, create::DEFAULT_TYPE)
+}
+
+/// The new item's draft of the ticket `id` of `root` with `fields`: its
+/// target, and its base, with neither observation nor source (R-20), at the
+/// ticket's path in the primary context, as New ticket… makes them. The
+/// fixture's primary branch is `main`.
+pub(crate) fn new_ticket_draft(
+    root: &Path,
+    id: &str,
+    fields: &DraftFields,
+) -> (DraftTarget, DraftBase) {
+    let id = id.parse().unwrap();
+    let path = create::ticket_path(&id);
+    create::new_item_draft(
+        &key(root),
+        Some("main".to_owned()),
+        ItemKind::Ticket,
+        id,
+        path,
+        fields,
+    )
+}
+
+impl Shell {
+    /// Begins a new item's draft of the ticket `id` of `root`, which no
+    /// repository holds yet, with `begin_new`: titled `title`, with an empty
+    /// body. Its session is attached to the item's tab, which shows it
+    /// restored once it opens.
+    pub(crate) async fn begin_new_ticket(
+        &self,
+        root: &Path,
+        id: &str,
+        title: &str,
+        cx: &mut TestAppContext,
+    ) -> DraftId {
+        let drafts = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+        let fields = new_ticket_fields(title);
+        let (target, base) = new_ticket_draft(root, id, &fields);
+        let begun = drafts.update(cx, |registry, cx| {
+            registry.begin_new(target, base, fields, cx)
+        });
+        self.run(cx);
+        let draft = match begun.await {
+            Ok(draft) => draft,
+            Err(kind) => panic!("the new item's draft must begin: {kind:?}"),
+        };
+        let tab = TabKey::Item {
+            repo: key(root),
+            kind: ItemDtoKind::Ticket,
+            id: id.to_owned(),
+        };
+        drafts.update(cx, |registry, cx| registry.attach(tab, draft, cx));
+        self.run(cx);
+        draft
+    }
+
+    /// A real not-created tab: a new item's draft of the ticket `id` of
+    /// `root`, begun with `begin_new`, in the item's tab, continued with
+    /// Continue editing, which prepares with the Create intent; once the
+    /// edit editor opens, its draft and its host. The test allows parking.
+    pub(crate) async fn edit_new_ticket(
+        &self,
+        root: &Path,
+        id: &str,
+        title: &str,
+        cx: &mut TestAppContext,
+    ) -> (DraftId, Entity<EditorHost>) {
+        let draft = self.begin_new_ticket(root, id, title, cx).await;
+        let target = OpenTarget::Item {
+            repo: key(root),
+            kind: ItemDtoKind::Ticket,
+            id: id.parse().unwrap(),
+        };
+        self.workspace
+            .update(cx, |workspace, cx| workspace.open_item(target, cx));
+        self.run(cx);
+        self.click("draft-continue-button", cx);
+        let deadline = Instant::now() + WAIT;
+        loop {
+            self.frame(cx, |_, _| ());
+            self.run(cx);
+            let pane = self
+                .workspace
+                .read_with(cx, |workspace, _| workspace.item_pane())
+                .expect("an item tab is shown");
+            if let Some(host) = pane.read_with(cx, |pane, _| pane.edit_host()) {
+                self.frame(cx, |_, _| ());
+                return (draft, host);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the new item's edit editor did not open"
+            );
+            cx.executor().timer(POLL).await;
+        }
+    }
+}
+
+impl Shell {
+    /// The shown item tab's edit host, if its editor is open.
+    fn edit_host(&self, cx: &mut TestAppContext) -> Option<Entity<EditorHost>> {
+        let pane = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.item_pane())?;
+        pane.read_with(cx, |pane, _| pane.edit_host())
+    }
+
+    /// The shown item tab's edit host, once its editor has opened: frames
+    /// are drawn while the worker and the reads run. The test allows
+    /// parking.
+    pub(crate) async fn until_editing(&self, cx: &mut TestAppContext) -> Entity<EditorHost> {
+        self.until_drawn(cx, "the edit editor opened", |shell, cx| {
+            shell.edit_host(cx).is_some()
+        })
+        .await;
+        self.edit_host(cx).expect("the edit editor is open")
+    }
+
+    /// Types `typed` at the end of `host`'s text, through the window: the
+    /// caret set there, the editor focused and a frame drawn first.
+    pub(crate) fn type_at_end(
+        &self,
+        host: &Entity<EditorHost>,
+        typed: &str,
+        cx: &mut TestAppContext,
+    ) {
+        let editor = host.read_with(cx, |host, _| host.editor().clone());
+        let end = editor.read_with(cx, |editor, _| editor.text().len());
+        editor.update(cx, |editor, cx| editor.set_cursor(end, cx));
+        let handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
+        self.frame(cx, |window, cx| window.focus(&handle, cx));
+        self.frame(cx, |_, _| ());
+        self.visual(cx).simulate_input(typed);
+        self.run(cx);
+    }
+}
+
+impl Shell {
+    /// A credential prompt, placed in the worker's channel as a job's
+    /// provider places it, with nothing waiting on it: the workspace shows
+    /// it above whatever is open once the channel drains. No transport is
+    /// initialized. Gives its answer, which a dropped dialog leaves
+    /// `Canceled`.
+    pub(crate) fn prompt(
+        &self,
+        cx: &mut TestAppContext,
+    ) -> futures::channel::oneshot::Receiver<PromptReply> {
+        let (reply, answer) = futures::channel::oneshot::channel();
+        self.workspace.read_with(cx, |workspace, _| {
+            workspace.services().worker().send_prompt(PromptRequest {
+                key_id: SharedKeyId::new(),
+                label: "primary".to_owned(),
+                reason: UnlockReason::ProtectedKey,
+                reply,
+            })
+        });
+        self.run(cx);
+        self.frame(cx, |_, _| ());
+        answer
+    }
+
+    /// Whether the open prompt's passphrase input holds focus.
+    pub(crate) fn prompt_focused(&self, cx: &mut TestAppContext) -> bool {
+        let Some(dialog) = self
+            .workspace
+            .read_with(cx, |workspace, _| workspace.passphrase())
+        else {
+            return false;
+        };
+        let Some(input) = dialog.read_with(cx, |dialog, _| dialog.input()) else {
+            return false;
+        };
+        let handle = input.read_with(cx, |input, cx| input.focus_handle(cx));
+        self.frame(cx, move |window, _| handle.is_focused(window))
+    }
+}
+
+/// Whether `intent` saves an item.
+pub(crate) fn is_save(intent: &Intent) -> bool {
+    matches!(
+        intent,
+        Intent::TicketSave { .. } | Intent::DocumentSave { .. }
+    )
 }
 
 /// A root as the repository list gives it.

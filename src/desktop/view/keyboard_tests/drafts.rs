@@ -70,7 +70,7 @@ fn attached(walk: &Walk, cx: &mut TestAppContext) -> Option<DraftId> {
 impl Walk {
     /// The element `id`, in a dialog, holds focus and is on screen; no
     /// region holds it: the dialog traps it.
-    fn in_dialog(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) {
+    pub(super) fn in_dialog(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) {
         let id = id.into();
         self.shell.frame(cx, |window, _| {
             for region in REGIONS {
@@ -87,7 +87,7 @@ impl Walk {
     }
 
     /// A dialog `dialog` is open and holds focus: no region does.
-    fn dialog_open(&self, dialog: &'static str, cx: &mut TestAppContext) {
+    pub(super) fn dialog_open(&self, dialog: &'static str, cx: &mut TestAppContext) {
         assert!(self.shell.present(dialog, cx), "{dialog} is open");
         self.shell.frame(cx, |window, _| {
             for region in REGIONS {

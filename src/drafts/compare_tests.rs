@@ -682,3 +682,93 @@ fn a_comment_draft_is_always_refused() {
         );
     }
 }
+
+// ---- new-item drafts (R-20) ----
+
+/// A new item's draft: its base has neither observation nor source, as
+/// only a draft written before its item's create has (R-20). Its text is
+/// the "Mine" ticket.
+fn new_item_draft() -> Draft {
+    let mut base = base(None, ticket("Mine", "Body\n"));
+    base.source = None;
+    draft(Some(base), ticket("Mine", "Body\n"))
+}
+
+#[test]
+fn a_new_item_draft_of_a_missing_item_is_not_created_and_restorable() {
+    let draft = new_item_draft();
+    assert!(is_new_item_base(draft.base.as_ref().unwrap()));
+    let state = classify(&draft, Err(ResultCode::ItemNotFound));
+    assert!(matches!(state, TargetState::NotCreated));
+    assert_eq!(restore_policy(&draft, &state, Held::No), Restore::Allowed);
+    // Who holds it decides first, as for every draft.
+    assert_eq!(
+        restore_policy(&draft, &state, Held::Elsewhere),
+        Restore::Refused(RefusalReason::OpenElsewhere)
+    );
+    // Any other read error is the read's.
+    assert!(matches!(
+        classify(&draft, Err(ResultCode::Busy)),
+        TargetState::ReadFailed(ResultCode::Busy)
+    ));
+}
+
+#[test]
+fn a_new_item_draft_whose_item_exists_with_other_fields_is_unverified() {
+    let draft = new_item_draft();
+    let read = item("Theirs", "obs-1", "main");
+    match classify(&draft, Ok(&read)) {
+        TargetState::Unverified { theirs, comparison } => {
+            assert!(theirs == ticket("Theirs", "Body\n"));
+            // Compared with the fields the base holds.
+            assert_eq!(comparison.fields[0], (Field::Title, Change::Theirs));
+        }
+        _ => panic!("an existing item with other fields is Unverified"),
+    }
+}
+
+#[test]
+fn a_new_item_draft_whose_item_exists_with_equal_fields_is_already_saved() {
+    let draft = new_item_draft();
+    let read = item("Mine", "obs-1", "main");
+    assert!(matches!(
+        classify(&draft, Ok(&read)),
+        TargetState::AlreadySaved
+    ));
+}
+
+#[test]
+fn an_unverified_base_with_a_source_is_still_item_not_found_when_missing() {
+    // D2's unverified rule: no observation, and the source `""`.
+    let mut draft = new_item_draft();
+    draft.base.as_mut().unwrap().source = Some(String::new());
+    assert!(!is_new_item_base(draft.base.as_ref().unwrap()));
+    let state = classify(&draft, Err(ResultCode::ItemNotFound));
+    assert!(matches!(state, TargetState::ItemNotFound));
+    assert_eq!(
+        restore_policy(&draft, &state, Held::No),
+        Restore::Refused(RefusalReason::ItemNotFound)
+    );
+    // Nor is a draft with no base at all, nor one with an observation.
+    for draft in [
+        draft_with_no_base(),
+        draft_with_an_observation_and_no_source(),
+    ] {
+        assert!(matches!(
+            classify(&draft, Err(ResultCode::ItemNotFound)),
+            TargetState::ItemNotFound
+        ));
+    }
+}
+
+fn draft_with_no_base() -> Draft {
+    draft(None, ticket("Mine", "Body\n"))
+}
+
+/// A non-UTF-8 item's base has no source, but it has an observation.
+fn draft_with_an_observation_and_no_source() -> Draft {
+    let mut draft = ticket_draft();
+    draft.base.as_mut().unwrap().source = None;
+    assert!(!is_new_item_base(draft.base.as_ref().unwrap()));
+    draft
+}

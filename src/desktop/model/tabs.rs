@@ -104,6 +104,26 @@ impl Tabs {
         (id, true)
     }
 
+    /// The open tab `id` shows `key` from now on, in its place in the strip:
+    /// the tab follows its item (a repair made). False when it is not open,
+    /// or another tab shows `key`.
+    pub(crate) fn replace(&mut self, id: TabId, key: TabKey) -> bool {
+        if self
+            .open
+            .iter()
+            .any(|(open, shown)| *open != id && *shown == key)
+        {
+            return false;
+        }
+        match self.open.iter_mut().find(|(open, _)| *open == id) {
+            Some((_, shown)) => {
+                *shown = key;
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Shows the open tab `id`. False when it is not open.
     pub(crate) fn activate(&mut self, id: TabId) -> bool {
         if self.position(id).is_none() {

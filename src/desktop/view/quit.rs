@@ -1,8 +1,14 @@
 //! Quitting the main window.
 //!
 //! The Quit action and the window's close request go through one
-//! handler. First, if a draft session's newest text is not yet stored,
-//! it refuses, flushes every session and shows "Saving drafts for
+//! handler. First, a draft an item tab is still beginning is waited for,
+//! under "Saving drafts for recovery" and Quit now; then, when item tabs
+//! hold unsaved edit text that no draft holds (crash recovery off, or a
+//! draft that could not begin), a dialog says how many, naming no item and
+//! no text, with Quit anyway and Cancel, the default, which stays and shows
+//! the first such tab (Part C fix 1, I1; the Cycle's contract 6). Quit
+//! anyway goes on as below. Next, if a draft session's newest text is not
+//! yet stored, it refuses, flushes every session and shows "Saving drafts for
 //! recovery" with Quit now, which quits at once (the last stored revision
 //! survives). If every flush succeeds, quitting goes on as below; if any
 //! fails, a dialog says how many drafts could not be saved, with Quit
@@ -153,28 +159,96 @@ impl DraftsNotSaved {
         cx: &mut App,
         choose: impl Fn(NotSavedChoice, &mut Window, &mut App) + 'static,
     ) {
-        let choose: Choose = Rc::new(choose);
-        let message = self.message();
-        window.open_dialog(cx, move |base, _, _| {
-            let (ok, cancel) = (choose.clone(), choose.clone());
-            base.title(NOT_SAVED_TITLE)
-                .close_button(false)
-                .overlay_closable(false)
-                .child(not_saved_body(&message, &choose))
-                // Enter: Cancel, the default; the Kit closes the dialog.
-                .on_ok(move |_, window, cx| {
-                    ok(NotSavedChoice::Cancel, window, cx);
-                    true
-                })
-                .on_cancel(move |_, window, cx| {
-                    cancel(NotSavedChoice::Cancel, window, cx);
-                    true
-                })
-        });
+        open_asking(DRAFTS_NOT_SAVED, self.message(), window, cx, choose);
     }
 }
 
-fn not_saved_body(message: &str, choose: &Choose) -> impl IntoElement + use<> {
+/// The dialog quitting opens when item tabs hold unsaved edit text that no
+/// draft holds (Part C fix 1, I1): crash recovery off, or a draft that
+/// could not begin. It says how many, naming no item and no text, with
+/// Quit anyway and Cancel, the default (Enter and Escape), which stays and
+/// shows the first such tab. D2's own question, when it applies, comes
+/// after Quit anyway.
+pub(crate) struct EditsNotKept {
+    pub count: usize,
+}
+
+impl EditsNotKept {
+    pub(crate) fn message(&self) -> String {
+        unkept_tabs(self.count)
+    }
+
+    /// Opens the dialog; `choose` gets the choice once it has closed.
+    pub(crate) fn open(
+        self,
+        window: &mut Window,
+        cx: &mut App,
+        choose: impl Fn(NotSavedChoice, &mut Window, &mut App) + 'static,
+    ) {
+        open_asking(EDITS_NOT_KEPT, self.message(), window, cx, choose);
+    }
+}
+
+/// How many tabs hold unsaved changes that no draft keeps, in words that
+/// name no item and no text.
+pub(crate) fn unkept_tabs(count: usize) -> String {
+    match count {
+        1 => "1 tab has unsaved changes that are not kept as a draft".to_owned(),
+        n => format!("{n} tabs have unsaved changes that are not kept as drafts"),
+    }
+}
+
+/// A quit question's element IDs.
+struct AskIds {
+    dialog: &'static str,
+    message: &'static str,
+    cancel: &'static str,
+    quit: &'static str,
+}
+
+const DRAFTS_NOT_SAVED: AskIds = AskIds {
+    dialog: "drafts-not-saved-dialog",
+    message: "drafts-not-saved-message",
+    cancel: "drafts-not-saved-cancel",
+    quit: "drafts-not-saved-quit",
+};
+
+const EDITS_NOT_KEPT: AskIds = AskIds {
+    dialog: "edits-not-kept-dialog",
+    message: "edits-not-kept-message",
+    cancel: "edits-not-kept-cancel",
+    quit: "edits-not-kept-quit",
+};
+
+/// Opens a quit question: `message`, with Cancel, the default, and Quit
+/// anyway; `choose` gets the choice once it has closed.
+fn open_asking(
+    ids: AskIds,
+    message: String,
+    window: &mut Window,
+    cx: &mut App,
+    choose: impl Fn(NotSavedChoice, &mut Window, &mut App) + 'static,
+) {
+    let choose: Choose = Rc::new(choose);
+    window.open_dialog(cx, move |base, _, _| {
+        let (ok, cancel) = (choose.clone(), choose.clone());
+        base.title(NOT_SAVED_TITLE)
+            .close_button(false)
+            .overlay_closable(false)
+            .child(not_saved_body(&ids, &message, &choose))
+            // Enter: Cancel, the default; the Kit closes the dialog.
+            .on_ok(move |_, window, cx| {
+                ok(NotSavedChoice::Cancel, window, cx);
+                true
+            })
+            .on_cancel(move |_, window, cx| {
+                cancel(NotSavedChoice::Cancel, window, cx);
+                true
+            })
+    });
+}
+
+fn not_saved_body(ids: &AskIds, message: &str, choose: &Choose) -> impl IntoElement + use<> {
     let button = |id: &'static str, label: &'static str, choice: NotSavedChoice| {
         let choose = choose.clone();
         let button = Button::new(format!("{id}-button")).label(label);
@@ -198,12 +272,12 @@ fn not_saved_body(message: &str, choose: &Choose) -> impl IntoElement + use<> {
             .child(button.on_click(move |_: &ClickEvent, window, cx| press(window, cx)))
     };
     v_flex()
-        .id("drafts-not-saved-dialog")
+        .id(ids.dialog)
         .test_support()
         .gap_2()
         .child(
             div()
-                .id("drafts-not-saved-message")
+                .id(ids.message)
                 .test_support()
                 .aria_label(message.to_owned())
                 .text_sm()
@@ -214,15 +288,7 @@ fn not_saved_body(message: &str, choose: &Choose) -> impl IntoElement + use<> {
                 .gap_2()
                 // The safe choice is the first Tab stop: one stray Tab and
                 // Enter does not quit.
-                .child(button(
-                    "drafts-not-saved-cancel",
-                    CANCEL,
-                    NotSavedChoice::Cancel,
-                ))
-                .child(button(
-                    "drafts-not-saved-quit",
-                    QUIT_ANYWAY,
-                    NotSavedChoice::QuitAnyway,
-                )),
+                .child(button(ids.cancel, CANCEL, NotSavedChoice::Cancel))
+                .child(button(ids.quit, QUIT_ANYWAY, NotSavedChoice::QuitAnyway)),
         )
 }

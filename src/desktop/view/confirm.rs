@@ -17,11 +17,22 @@
 //! preview under the same desktop request and request ID. Any other
 //! answer closes the dialog: the operation area holds it. Text is the
 //! envelope's message, the code and fixed strings.
+//!
+//! A repair's preview shows its Root, Path and ID, and, when the file
+//! holds no valid ID and the source's is assigned, "A new ID will be
+//! assigned". A repair carries the token of the read its text came from,
+//! so a fresh preview of one refused `external_change` would be refused
+//! the same way: that answer offers no Prepare again, and closes the
+//! dialog (Task 25 fix 1, M5). The dialog tells an opener that follows it
+//! (`confirm_followed`, `prepare_again_followed`) what Confirm sent, and
+//! what a prepare that gave no preview answered (`Followed`).
+
+use std::rc::Rc;
 
 use gpui_kit::{
-    AnyElement, App, AppContext, ClickEvent, Context, ElementId, FocusHandle, InteractiveElement,
-    IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled, Subscription, Task,
-    TestSupportExt, Window,
+    AnyElement, App, AppContext, ClickEvent, Context, ElementId, Entity, EventEmitter, FocusHandle,
+    InteractiveElement, IntoElement, ParentElement, Render, StatefulInteractiveElement, Styled,
+    Subscription, Task, TestSupportExt, Window,
     component::{
         ActiveTheme, Disableable, WindowExt,
         button::{Button, ButtonVariants},
@@ -44,6 +55,7 @@ use crate::desktop::{
         KEY_STORE_UNAVAILABLE, Services,
         requests::{DesktopRequestId, Intent, Lane, NotBuilt, RequestState},
     },
+    view::quit::unkept_tabs,
 };
 
 pub(crate) const CONFIRM: &str = "Confirm";
@@ -62,6 +74,49 @@ pub(crate) const PINNED_KEY: &str = "Pinned key";
 pub(crate) const FILES_REMAIN: &str = "Local files remain: only the registration is removed. Nothing in the folder or in Git is changed.";
 /// A removal keeps the drafts of the repository's items (design, Tabs).
 pub(crate) const DRAFTS_REMAIN: &str = "Drafts of this repository's items stay in Drafts.";
+/// A repair's preview that adopts the file: its ID is the source's
+/// (design, Part E: Repair).
+pub(crate) const NEW_ID: &str = "A new ID will be assigned";
+
+/// What the dialog tells an opener that follows it (`confirm_followed`,
+/// `prepare_again_followed`).
+pub(crate) enum Followed {
+    /// Confirm sent the request, or queued it again after Prepare again,
+    /// with the details of the preview confirmed: its answers are the
+    /// opener's to follow.
+    Confirmed {
+        request: DesktopRequestId,
+        details: Box<PreviewDetailsDto>,
+    },
+    /// The prepare gave no preview, and was answered this code.
+    Answered(ResultCode),
+}
+
+impl EventEmitter<Followed> for ConfirmDialog {}
+
+/// Whether `intent`, answered `code` at execute, is one whose fresh
+/// preview would be refused the same way: a repair carries the token of
+/// the read its text came from, so after `external_change` no new preview
+/// of it can stand (Task 25 fix 1, M5).
+fn refused_again(intent: &Intent, code: ResultCode) -> bool {
+    code == ResultCode::ExternalChange
+        && matches!(
+            intent,
+            Intent::DocumentRepair { .. } | Intent::TicketRepair { .. }
+        )
+}
+
+/// A removal closes the repository's tabs, `count` of which hold unsaved
+/// text that no draft holds (Part C fix 1, I1): `None` when none do. The
+/// words name no item and no text.
+pub(crate) fn removing_closes(count: usize) -> Option<String> {
+    let them = match count {
+        0 => return None,
+        1 => "it",
+        _ => "them",
+    };
+    Some(format!("{}. Removing closes {them}.", unkept_tabs(count)))
+}
 
 /// The answers that mean the preview no longer stands: the dialog offers
 /// Prepare again.
@@ -90,6 +145,16 @@ pub(crate) fn offers_prepare_again(code: ResultCode, recovery: &[RecoveryAction]
     }
 }
 
+/// Where focus goes as the dialog closes, chosen at that moment from what
+/// holds then: an opener whose control may wait meanwhile names another
+/// (Task 27 fix 1, B5).
+pub(crate) type Origin = Rc<dyn Fn(&App) -> FocusHandle>;
+
+/// `origin`, whatever holds as the dialog closes.
+fn fixed(origin: FocusHandle) -> Origin {
+    Rc::new(move |_| origin.clone())
+}
+
 /// Opens the confirmation dialog for `intent`: prepares it, shows the
 /// preview and, on Confirm, submits it once as a user job. Closing it
 /// focuses `origin`.
@@ -100,7 +165,20 @@ pub(crate) fn confirm(
     window: &mut Window,
     cx: &mut App,
 ) {
-    open(intent, None, origin, services, window, cx);
+    open(intent, None, fixed(origin), services, window, cx);
+}
+
+/// Opens the confirmation dialog for `intent`, as `confirm` does, and
+/// gives it, for its opener to follow (`Followed`); `None` when nothing
+/// opened. Closing it focuses what `origin` chooses then.
+pub(crate) fn confirm_followed(
+    intent: Intent,
+    origin: Origin,
+    services: &Services,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Entity<ConfirmDialog>> {
+    open(intent, None, origin, services, window, cx)
 }
 
 /// Opens the dialog for the request `id` again, whose answer asked for a
@@ -112,30 +190,40 @@ pub(crate) fn prepare_again(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let Some(intent) = services
+    prepare_again_followed(id, fixed(origin), services, window, cx);
+}
+
+/// Opens the dialog for the request `id` again, as `prepare_again` does,
+/// and gives it, for its opener to follow (`Followed`); `None` when
+/// nothing opened. Closing it focuses what `origin` chooses then.
+pub(crate) fn prepare_again_followed(
+    id: DesktopRequestId,
+    origin: Origin,
+    services: &Services,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Entity<ConfirmDialog>> {
+    let intent = services
         .operations()
         .read(cx)
         .request(id)
-        .map(|request| request.intent.clone())
-    else {
-        return;
-    };
-    open(intent, Some(id), origin, services, window, cx);
+        .map(|request| request.intent.clone())?;
+    open(intent, Some(id), origin, services, window, cx)
 }
 
 fn open(
     intent: Intent,
     request: Option<DesktopRequestId>,
-    origin: FocusHandle,
+    origin: Origin,
     services: &Services,
     window: &mut Window,
     cx: &mut App,
-) {
+) -> Option<Entity<ConfirmDialog>> {
     // Quitting waits for drafts or a job with Quit now in view: nothing
     // opens in front of it, and once the worker quits no request could be
     // sent.
     if services.worker().quitting() || services.operations().read(cx).saving_drafts() {
-        return;
+        return None;
     }
     let title = intent.label();
     let dialog = cx.new(|cx| {
@@ -148,6 +236,7 @@ fn open(
             cx,
         )
     });
+    let opened = dialog.clone();
     window.open_dialog(cx, move |base, _, _| {
         let confirming = dialog.clone();
         let origin = origin.clone();
@@ -163,8 +252,30 @@ fn open(
             })
             // Escape: close with nothing submitted.
             .on_cancel(|_, _, _| true)
-            .on_close(move |_, window, cx| window.focus(&origin, cx))
+            .on_close(move |_, window, cx| window.focus(&origin(cx), cx))
     });
+    #[cfg(test)]
+    cx.set_global(OpenedConfirm(opened.downgrade()));
+    Some(opened)
+}
+
+/// The confirmation last opened, for a test to read what it holds.
+#[cfg(test)]
+pub(crate) struct OpenedConfirm(pub(crate) gpui_kit::WeakEntity<ConfirmDialog>);
+
+#[cfg(test)]
+impl gpui_kit::Global for OpenedConfirm {}
+
+#[cfg(test)]
+impl ConfirmDialog {
+    /// What a prepare that gave no preview answered, as the dialog holds
+    /// it: its code and message.
+    pub(crate) fn answered(&self) -> Option<(ResultCode, &str)> {
+        match &self.phase {
+            Phase::Answered { code, message, .. } => Some((*code, message)),
+            _ => None,
+        }
+    }
 }
 
 /// Where the dialog stands.
@@ -193,7 +304,7 @@ enum Phase {
 pub(crate) struct ConfirmDialog {
     intent: Intent,
     services: Services,
-    origin: FocusHandle,
+    origin: Origin,
     /// The desktop request this dialog submitted, or prepares again.
     request: Option<DesktopRequestId>,
     /// The attempt of `request` this dialog submitted: an answer to an
@@ -210,7 +321,7 @@ impl ConfirmDialog {
     fn new(
         intent: Intent,
         request: Option<DesktopRequestId>,
-        origin: FocusHandle,
+        origin: Origin,
         services: Services,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -301,6 +412,7 @@ impl ConfirmDialog {
                     message,
                     replacement,
                 };
+                cx.emit(Followed::Answered(code));
                 // What the row offered may be gone: the views that show
                 // the repository read it again. A busy answer says nothing
                 // changed: Retry prepares again.
@@ -355,6 +467,18 @@ impl ConfirmDialog {
                 }
             },
         }
+        if let (Some(request), Some((preview, _))) = (self.request, &self.preview) {
+            let details = Box::new(preview.details.clone());
+            cx.emit(Followed::Confirmed { request, details });
+        }
+        // Part C fix 2, N1: once it lands, a removal closes only the tabs
+        // whose unkept text the line counted as it was confirmed.
+        if let Some(root) = self.removal_root() {
+            let root = root.to_owned();
+            self.services
+                .edit_tabs()
+                .update(cx, |tabs, cx| tabs.confirmed(&root, cx));
+        }
         self.phase = Phase::Submitted;
         cx.notify();
     }
@@ -381,7 +505,8 @@ impl ConfirmDialog {
     }
 
     /// The request this dialog submitted was answered: a stale preview
-    /// shows Prepare again; anything else closes the dialog.
+    /// shows Prepare again, unless a new one would be refused the same way
+    /// (`refused_again`); anything else closes the dialog.
     fn operations_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !matches!(self.phase, Phase::Submitted) {
             return;
@@ -401,7 +526,7 @@ impl ConfirmDialog {
         match &request.state {
             RequestState::Queued | RequestState::Running { .. } => {}
             RequestState::Finished(_, code, _, recovery, message)
-                if offers_prepare_again(*code, recovery) =>
+                if offers_prepare_again(*code, recovery) && !refused_again(&self.intent, *code) =>
             {
                 self.phase = Phase::Stale {
                     code: *code,
@@ -415,7 +540,8 @@ impl ConfirmDialog {
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.close_dialog(cx);
-        window.focus(&self.origin, cx);
+        let origin = (self.origin)(cx);
+        window.focus(&origin, cx);
     }
 }
 
@@ -454,7 +580,7 @@ pub(crate) fn local_time(at: &str) -> String {
 
 /// This system's offset from UTC at `timestamp`.
 #[cfg(unix)]
-fn local_offset(timestamp: i64) -> Option<UtcOffset> {
+pub(in crate::desktop::view) fn local_offset(timestamp: i64) -> Option<UtcOffset> {
     #[allow(clippy::useless_conversion)] // `time_t` is narrower on some targets.
     let time: libc::time_t = timestamp.try_into().ok()?;
     let mut local = std::mem::MaybeUninit::<libc::tm>::zeroed();
@@ -472,7 +598,7 @@ fn local_offset(timestamp: i64) -> Option<UtcOffset> {
 
 /// Shown in UTC, and said so, where no local offset is read.
 #[cfg(not(unix))]
-fn local_offset(_timestamp: i64) -> Option<UtcOffset> {
+pub(in crate::desktop::view) fn local_offset(_timestamp: i64) -> Option<UtcOffset> {
     None
 }
 
@@ -629,7 +755,27 @@ impl ConfirmDialog {
         .into_any_element()
     }
 
-    fn preview_body(&self, cx: &App) -> Option<impl IntoElement + use<>> {
+    /// A repository removal's tabs whose edit session holds unsaved text
+    /// that no draft holds, read as the dialog is drawn (Part C fix 1, I1):
+    /// the confirmation says they close.
+    fn unkept_tabs(&self, cx: &mut Context<Self>) -> usize {
+        let Some(root) = self.removal_root() else {
+            return 0;
+        };
+        self.services
+            .edit_tabs()
+            .update(cx, |tabs, cx| tabs.unkept(root, cx).len())
+    }
+
+    /// The repository a removal's confirmation removes.
+    fn removal_root(&self) -> Option<&str> {
+        let Intent::RepoRemove { root } = &self.intent else {
+            return None;
+        };
+        root.to_str()
+    }
+
+    fn preview_body(&self, unkept: usize, cx: &App) -> Option<impl IntoElement + use<>> {
         let (preview, _) = self.preview.as_ref()?;
         let muted = cx.theme().muted_foreground;
         let note = match &preview.details {
@@ -640,8 +786,16 @@ impl ConfirmDialog {
             }
             _ => None,
         };
-        let drafts = matches!(preview.details, PreviewDetailsDto::RepositoryRemoval(_))
-            .then(|| text("confirm-drafts-note", DRAFTS_REMAIN).text_sm());
+        // A repair that assigns the source's ID says so (design, Part E).
+        let adoption =
+            matches!(&preview.details, PreviewDetailsDto::Repair(repair) if repair.adoption)
+                .then(|| text("confirm-adoption", NEW_ID).text_sm());
+        let removal = matches!(preview.details, PreviewDetailsDto::RepositoryRemoval(_));
+        let drafts = removal.then(|| text("confirm-drafts-note", DRAFTS_REMAIN).text_sm());
+        let unkept = removal
+            .then(|| removing_closes(unkept))
+            .flatten()
+            .map(|words| text("confirm-unkept-note", words).text_sm());
         Some(
             v_flex()
                 .gap_1()
@@ -662,8 +816,10 @@ impl ConfirmDialog {
                         .enumerate()
                         .map(|(ix, (name, value))| named(("confirm-detail", ix), name, &value)),
                 )
+                .children(adoption)
                 .children(note)
                 .children(drafts)
+                .children(unkept)
                 .child(
                     text(
                         "confirm-expires",
@@ -694,7 +850,7 @@ impl Render for ConfirmDialog {
             let origin = self.origin.clone();
             move |_: &ClickEvent, window: &mut Window, cx: &mut App| {
                 window.close_dialog(cx);
-                window.focus(&origin, cx);
+                window.focus(&origin(cx), cx);
             }
         };
         let confirm = {
@@ -733,7 +889,8 @@ impl Render for ConfirmDialog {
             }
             Phase::Ready | Phase::Submitted => {
                 let submitted = matches!(self.phase, Phase::Submitted);
-                body = body.children(self.preview_body(cx));
+                let unkept = self.unkept_tabs(cx);
+                body = body.children(self.preview_body(unkept, cx));
                 if submitted {
                     body = body.child(text("confirm-state", SUBMITTED).text_sm());
                 }
