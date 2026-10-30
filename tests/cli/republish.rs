@@ -8,16 +8,16 @@
 
 use serde_json::{Value, json};
 
-use super::{index::Fixture, mutation};
-use crate::support::{self, items, mutation::REQUEST_1};
+use super::{
+    c4_support::{OBSERVATION, TOKEN},
+    index::Fixture,
+    mutation,
+};
+use crate::support::{self, cli, items, mutation::REQUEST_1};
 
 /// A confirmation ID no preview made.
 const UNKNOWN_CONFIRMATION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
 const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FM0";
-const OBSERVATION: &str =
-    "conflict-v1:0000000000000000000000000000000000000000000000000000000000000000";
-const TOKEN: &str =
-    "conflict-path-v1:1111111111111111111111111111111111111111111111111111111111111111";
 
 impl Fixture {
     fn republish(&self, extra: &[&str], status: i32, code: &str) -> Value {
@@ -43,6 +43,20 @@ fn item_republish_publication_remote_required() {
         "item_republish_publication_remote_required",
         &value,
         &f.repo.root,
+    );
+    // In text, C2's refusal on stderr, and nothing on stdout (R-28).
+    let human = mutation::run(
+        &f.args("item", "republish", &["--id", items::TICKET_A, "--prepare"]),
+        &f.env,
+        &[],
+    );
+    assert_eq!(human.status, 3);
+    assert!(human.stdout.is_empty());
+    let root = f.repo.root.canonicalize().unwrap();
+    cli::assert_cli_text_golden(
+        "item_republish_text",
+        std::str::from_utf8(&human.stderr).unwrap(),
+        &[(root.to_str().unwrap(), "<repository>")],
     );
     // The document of the fixture is as good an item: the kind is read, not
     // given.

@@ -118,7 +118,8 @@ pub fn read_item(
 }
 
 /// One `show_item` read of the item `id`, of either kind: the fill read,
-/// and `item sync`'s kind lookup (R-2). A refusal of the read is the
+/// and the kind lookup of the `--id` verbs that need one (R-2): `item
+/// sync`, `item republish` and `comment add`. A refusal of the read is the
 /// verb's, with its request ID and no effect.
 pub fn read_any_item(
     service: &RepositoryService,

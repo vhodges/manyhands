@@ -121,20 +121,32 @@ fn press() {
 }
 
 #[test]
-fn the_window_restores_the_disposition_it_found() {
-    let Some(output) = child("the_window_restores_the_disposition_it_found") else {
-        for found in [libc::SIG_DFL, libc::SIG_IGN] {
-            set(found);
-            let before = disposition();
-            assert_eq!(before.0, found);
-            during(|token| {
-                let (handler, flags) = disposition();
-                assert!(handler != libc::SIG_DFL && handler != libc::SIG_IGN);
-                assert_ne!(flags & libc::SA_RESTART, 0, "SA_RESTART");
-                assert!(!token.is_cancelled());
-            });
+fn the_window_restores_a_default_and_keeps_an_inherited_ignore() {
+    let Some(output) = child("the_window_restores_a_default_and_keeps_an_inherited_ignore") else {
+        // From the default: the handler, with SA_RESTART, then the default.
+        set(libc::SIG_DFL);
+        let before = disposition();
+        assert_eq!(before.0, libc::SIG_DFL);
+        during(|token| {
+            let (handler, flags) = disposition();
+            assert!(handler != libc::SIG_DFL && handler != libc::SIG_IGN);
+            assert_ne!(flags & libc::SA_RESTART, 0, "SA_RESTART");
+            assert!(!token.is_cancelled());
+        });
+        assert_eq!(disposition(), before);
+        // From an inherited ignore: nothing is installed, so a press neither
+        // cancels the token nor ends the process, and the ignore stays.
+        reset();
+        set(libc::SIG_IGN);
+        let before = disposition();
+        assert_eq!(before.0, libc::SIG_IGN);
+        during(|token| {
             assert_eq!(disposition(), before);
-        }
+            press();
+            assert!(!token.is_cancelled());
+        });
+        assert!(!latched());
+        assert_eq!(disposition(), before);
         return;
     };
     passed(&output);

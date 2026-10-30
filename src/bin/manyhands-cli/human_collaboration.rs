@@ -31,8 +31,13 @@
 //! - for `conflict show`, the conflict's state, next step and paths. A side
 //!   is content, so only JSON carries it.
 //!
-//! A `next:` line C4 prints renders a recovery action the library offered,
-//! in full, in place of C2's line for it. C4 adds no action (decision 8).
+//! Where a `next:` line C4 prints renders a recovery action the library
+//! offered, it is that action in full, in place of C2's line for it. Some
+//! are built from the result's data or code instead, because no recovery
+//! action names their command: `conflict show` from a conflict's next step,
+//! `item republish --prepare` from `remote_branch_deleted`, and the `item
+//! sync` of the republish no-op preview (`human_admin.rs`). None of these
+//! adds a result code or a recovery-action kind (decision 8).
 
 use crate::{
     human_admin::{self, REPUBLISH},

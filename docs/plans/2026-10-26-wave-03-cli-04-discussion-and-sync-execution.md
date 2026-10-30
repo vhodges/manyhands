@@ -598,7 +598,7 @@ new ticket comment (ruling P4).
 | 4a | `feat: bind conflict resolution that the same request can finish`; review fix round 1 `fix: let the original request cancel a resolution's publication, and close the review's gaps`; Part A review fix round 1 `fix: close a resolution attempt that wrote nothing, and close Part A review's gaps` | Verify list: 200 of 201 `mutation_remote` SSH cases, the one watchdog failure (`c4_resolution_conformance`) fixed and re-run (1, 47 s); 30 `c4_resolution`; 383, 129, 44, 72, 95, 25 SSH; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy; fix rounds: see their entries | Part A review fix round 1 applied; re-review pending | Every row of the interrupted-resolution table met; resume's one route for a prepared commit added (decision 18). See "Task 4a: Conflict Resolution Binding" |
 | 4b | `feat: resume comment publication and resolved synchronizations`; review fix round 1 `fix: share resolution fixtures, keep an owed child's standing, and pin a fenced comment's resume` | Verify list: 221 `mutation_remote` SSH cases (13 `c4_resume`), no watchdog hit; 383 `mutation_replay`; 44 `mutation_contract`; 123 `--lib mutation`; clippy, fmt; desktop check and clippy; fix round 1: 15 `c4_resume`, 34 `c4_comment`, 37 `c4_resolution`, 383, 183, 123, 477, clippy, fmt, desktop | review fix round 1 applied; re-review pending | Every row of the resume table met but row 6 (Task 5's, P3). Row 8 stopped at a design checkpoint and was ruled option B; Task 14 amends its wording. E-11 applied. See "Task 4b: Resume Routes" |
 | 5 | `feat: republish a remotely deleted item branch with consent`; review fix round 1 `refactor: share item sync's fetch and push steps with republish, and close the review's gaps` | Verify list: 249 `mutation_remote` SSH cases (23 `c4_republish`, 16 `c4_resume`), no watchdog hit; 23 `c4_republish`, 16 `c4_resume`, 3 `c4_conformance`, 1 `c4_resolution_conformance`; 183, 129, 44, 72; `--lib` 123, 477, 164, 26; clippy, fmt; desktop check and clippy (`--bin`), `check --features desktop`, and `clippy --all-targets --features desktop` at main's 58; fix round 1: see its entry | review fix round 1 applied; re-review pending | Every row of the republish table met, and the resume table's row 6 (P3). The conformance case is split per row (owner-authorized, beside E-9). See "Task 5: Republish" |
-| 7 | `feat: add sync, resume and abandon verbs with a Ctrl-C window`; review fix round 1 `fix: share C3's item read with item sync, and close the review's gaps` | Verify list: `--bin manyhands-cli` 212, `cli` 302, `cli_remote -- c4_interruption` 1 SSH case; clippy, `check --bin manyhands-cli`, fmt; desktop `check --bin manyhands` (guard); fix round 1: the same list, 212, 302, 1 | fix round 1 applied; re-review pending | The spike answered `cancelled`, exit 130, with its effects intact (decision 14). No library change; no `--lib` run (ruling 5). See "Task 7: The Ctrl-C Window And The Sync, Resume And Abandon Verbs" |
+| 7 | `feat: add sync, resume and abandon verbs with a Ctrl-C window`; review fix round 1 `fix: share C3's item read with item sync, and close the review's gaps`; Part B review fix round 1 `fix: keep an inherited SIGINT ignore, add the missing text goldens, and share the binary tests' helpers` | Verify list: `--bin manyhands-cli` 212, `cli` 302, `cli_remote -- c4_interruption` 1 SSH case; clippy, `check --bin manyhands-cli`, fmt; desktop `check --bin manyhands` (guard); fix round 1: the same list, 212, 302, 1 | fix round 1 applied; re-review pending | The spike answered `cancelled`, exit 130, with its effects intact (decision 14). No library change; no `--lib` run (ruling 5). See "Task 7: The Ctrl-C Window And The Sync, Resume And Abandon Verbs" |
 
 ### Task 1: Merging Synchronization
 
@@ -2915,6 +2915,75 @@ the controller's ruling (`task-7-fix-1.md`).
   - clippy (all targets and features), `fmt --check`, `check --bin
     manyhands-cli` and `check --features desktop --bin manyhands` pass.
 - **No ticket comment** was added, as ruling P4 says for a fix round.
+
+#### Task 7, Part B review fix round 1
+
+The commit is `fix: keep an inherited SIGINT ignore, add the missing text
+goldens, and share the binary tests' helpers`, on FIX_BASE `5e641f1f`.
+`origin/main` is still `a372edb`. Part B's review (`task-11-review-report.md`,
+section 4) approved the Part with five Minors. The controller ruled M1 to M4
+fixed now (`task-11-fix-1.md`).
+
+- **M1. An inherited `SIGINT` ignore is kept on Unix.**
+  - `interrupt/unix.rs`'s `install` first reads the current action. When it
+    is `SIG_IGN`, or cannot be read, it installs nothing and returns `None`,
+    so the window leaves the ignore in place, as a Windows console handler is
+    not called while Ctrl-C is ignored.
+  - Teardown restores what it found, which is nothing to restore here.
+  - The test is now `the_window_restores_a_default_and_keeps_an_inherited_ignore`.
+    From the default, the handler is installed with `SA_RESTART` and the
+    default comes back. From `SIG_IGN`, the disposition inside the window is
+    still the ignore; a `raise(SIGINT)` neither cancels the token nor ends the
+    process; nothing is latched; and the ignore stays.
+  - With the `SIG_IGN` check removed, the case fails at the in-window
+    disposition assertion.
+  - The module doc of `interrupt.rs` says so.
+- **M2. R-28's two missing text goldens.**
+  - `item_republish_text` (`tests/cli/republish.rs`) is `item republish
+    --prepare` with no publication remote: `publication_remote_required`.
+  - `conflict_resolve_text` (`tests/cli/conflicts.rs`) is `conflict resolve`
+    of an unknown operation, with well-formed input: `operation_not_found`.
+  - Both are registered in `CLI_TEXT_CASES`, written with
+    `MANYHANDS_UPDATE_GOLDEN=1` (`CI` unset), and read: C2's refusal lines,
+    with nothing on stdout.
+- **M3. Three comments now match the code.**
+  - `human_collaboration.rs`'s module doc says which `next:` lines are built
+    from data or code rather than an offered action: `conflict show`, `item
+    republish --prepare`, and the no-op preview's `item sync`.
+  - `fill.rs` says `read_any_item` also serves `item republish` and `comment
+    add`.
+  - `interrupt.rs` says the latch is reset in `mutate::drive`.
+- **M4. One C4-local test support module.**
+  - `tests/cli/c4_support.rs` is mounted additively from `tests/cli.rs`. It
+    holds:
+    - `golden`, with one placeholder set that covers every field either old
+      helper redacted, `/data/synchronization_id` and `/effects/commit_oid`
+      included;
+    - `environment`, the `CliEnv` with `.gitconfig autocrlf`;
+    - `OBSERVATION` and `TOKEN`;
+    - `example(name)` and `input_directory()`.
+  - `collaboration.rs`, `discussion.rs`, `conflicts.rs` and `republish.rs` use
+    it, and their copies are gone.
+  - `conflicts.rs` and `republish.rs` keep the pre-existing
+    `mutation::golden` for their JSON goldens: switching them would change
+    `conflict_show_*`'s placeholders.
+  - `human_collaboration_tests.rs`'s constants stay in the bin crate, and the
+    pre-existing `tests/cli/mutation.rs` is not edited.
+  - A full `--test cli` run with `MANYHANDS_UPDATE_GOLDEN=1` left every
+    existing golden byte-identical: `git status` showed only the two new text
+    goldens. In that first run, `fixture_directory_is_exactly_the_registered_cases`
+    raced the two new files' first write; it passes in the strict run.
+- **Not in this round:** M5 (label case) goes to the owner's Task 15 check,
+  and the review's observation goes to Task 12a.
+- **Verify.** Each ran as `devenv shell -- cargo … --locked`, with logs
+  `logs/task-11-fix1-*`:
+  - `--bin manyhands-cli` 249;
+  - `cli` 338;
+  - `cli_remote -- c4_interruption`: 1 SSH case, observation `130 68 3 0 0 1
+    1 1 0`, unchanged;
+  - clippy (all targets and features), `fmt --check`, `check --bin
+    manyhands-cli` and `check --features desktop --bin manyhands` pass.
+- **No ticket comment** was added.
 
 ### Task 8: `comment add`
 

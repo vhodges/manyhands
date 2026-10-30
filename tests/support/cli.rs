@@ -371,6 +371,8 @@ pub const CLI_TEXT_CASES: &[&str] = &[
     "operation_resume_text",
     "operation_abandon_text",
     "comment_add_text",
+    "item_republish_text",
+    "conflict_resolve_text",
 ];
 pub const CLI_REPOSITORY_VALUES: &[&str] = &["required", "refused"];
 

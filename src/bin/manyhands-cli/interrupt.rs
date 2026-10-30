@@ -2,11 +2,14 @@
 //! a process-wide handler turns the first Ctrl-C into a cancellation of the
 //! call's token, which the library honours at its next safe point, and lets
 //! a second one end the process. Outside a window Ctrl-C keeps the
-//! disposition the process had, which ends it at once.
+//! disposition the process had, which by default ends it at once. A process
+//! that inherited an ignore of Ctrl-C keeps it inside a window too: no
+//! handler is installed, and a press does nothing.
 //!
 //! One latch per run: the press count is shared by every window of one CLI
 //! run, so a press stays latched across C2's bounded retry, and the retry
-//! loop stops once a press is latched. `mutate::run` resets it on entry.
+//! loop stops once a press is latched. `mutate::drive`, which every run goes
+//! through, resets it on entry.
 //!
 //! The handler only does atomic loads and stores, which are
 //! async-signal-safe. The token it cancels lives in a slot that teardown

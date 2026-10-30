@@ -6,21 +6,15 @@
 //! These cases pin what the verbs add: their grammar, their input, the
 //! operation lookups that need no remote, and their exit statuses.
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
-
 use serde_json::{Value, json};
 
 use super::{
+    c4_support::{self, OBSERVATION, TOKEN, environment, input_directory},
     index::Fixture,
     mutation::{self, golden},
 };
 use crate::support::{
-    self, FailOnce,
-    cli::CliEnv,
-    items,
+    self, FailOnce, items,
     mutation::{REQUEST_1, REQUEST_2, REQUEST_3, World},
     schema,
 };
@@ -30,23 +24,10 @@ use manyhands::{
     results::ResultCode,
 };
 
-/// Well-formed in the library's sense (R-9): the prefix and 64 lower-case
-/// hex digits. Neither names a live conflict.
-const OBSERVATION: &str =
-    "conflict-v1:0000000000000000000000000000000000000000000000000000000000000000";
-const TOKEN: &str =
-    "conflict-path-v1:1111111111111111111111111111111111111111111111111111111111111111";
 const SOURCE: &str = "SOURCE-SENTINEL-77";
 
 fn example() -> Value {
-    serde_json::from_slice(include_bytes!(
-        "../fixtures/cli_input_v1/conflict_resolve.json"
-    ))
-    .unwrap()
-}
-
-fn input_directory() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/input/v1")
+    c4_support::example("conflict_resolve")
 }
 
 fn input(observation: &str, resolutions: Value) -> Vec<u8> {
@@ -115,18 +96,6 @@ impl Fixture {
             None,
         );
     }
-}
-
-/// A world over the CLI's data directory, with a git configuration that
-/// leaves line endings alone.
-fn environment(world: &World) -> CliEnv {
-    let env = CliEnv::new(world.data.path().to_owned());
-    fs::write(
-        env.home.path().join(".gitconfig"),
-        "[core]\n\tautocrlf = false\n",
-    )
-    .unwrap();
-    env
 }
 
 fn args<'a>(verb: &'a str, root: &'a str, operation: &'a str, extra: &[&'a str]) -> Vec<&'a str> {
@@ -349,6 +318,36 @@ fn conflict_resolve_unknown_operation_is_operation_not_found_after_the_syntax_pa
         "operation_not_found",
     );
     assert_eq!(value["request_id"], REQUEST_1);
+    // In text, C2's refusal on stderr, and nothing on stdout (R-28).
+    let operation = operation();
+    let human = mutation::run(
+        &f.args(
+            "conflict",
+            "resolve",
+            &[
+                "--operation-id",
+                &operation,
+                "--request-id",
+                REQUEST_2,
+                "--input",
+                "-",
+            ],
+        ),
+        &f.env,
+        &well_formed(),
+    );
+    assert_eq!(human.status, 2);
+    assert!(human.stdout.is_empty());
+    let root = f.repo.root.canonicalize().unwrap();
+    crate::support::cli::assert_cli_text_golden(
+        "conflict_resolve_text",
+        std::str::from_utf8(&human.stderr).unwrap(),
+        &[
+            (root.to_str().unwrap(), "<repository>"),
+            (REQUEST_2, "<request-id>"),
+            (&operation, "<operation-id>"),
+        ],
+    );
     assert_eq!(support::repository_and_worktree_snapshot(&f.repo), before);
 }
 
@@ -516,7 +515,7 @@ fn conflict_show_of_a_local_operation_that_is_no_synchronization_is_invalid_inpu
     assert_eq!(owed.code, ResultCode::DiscoveryPending);
     let operation = owed.operation_id.clone().unwrap();
     world.reopen();
-    let env = environment(&world);
+    let env = environment(world.data.path());
     let root = world.root.to_str().unwrap();
     let before = support::repository_and_worktree_snapshot(&world.fixture);
 
@@ -557,7 +556,7 @@ fn conflict_show_and_resolve_of_a_local_context_syncs_operation_are_invalid_inpu
     let world = World::new();
     let operation = local_sync(&world);
     let sync_state = world.record(REQUEST_2).unwrap().state;
-    let env = environment(&world);
+    let env = environment(world.data.path());
     let root = world.root.to_str().unwrap();
     let before = support::repository_and_worktree_snapshot(&world.fixture);
 

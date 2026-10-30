@@ -5,14 +5,12 @@
 //! the library answers. These cases pin what the verb adds: its input, its
 //! item lookup, its exit statuses, its output and the one write.
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::fs;
 
 use serde_json::{Value, json};
 
 use super::{
+    c4_support::{self, golden, input_directory},
     index::{Fixture, assert_stored_result},
     mutation,
 };
@@ -36,11 +34,7 @@ const NOTE: &str = "note: publishing the comment also publishes this item's othe
 const BYTE_BODY: &str = "line one\r\nline two\r\n---\nthree 🦀\nno final newline";
 
 fn example() -> Value {
-    serde_json::from_slice(include_bytes!("../fixtures/cli_input_v1/comment_add.json")).unwrap()
-}
-
-fn input_directory() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/input/v1")
+    c4_support::example("comment_add")
 }
 
 fn bytes(input: &Value) -> Vec<u8> {
@@ -106,38 +100,6 @@ impl Fixture {
             None,
         );
     }
-}
-
-fn golden(name: &str, value: &Value, f: &Fixture) {
-    let mut pairs = vec![(
-        f.repo
-            .root
-            .canonicalize()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned(),
-        "<repository>",
-    )];
-    for (pointer, label) in [
-        ("/request_id", "<request-id>"),
-        ("/operation_id", "<operation-id>"),
-        ("/data/synchronization_id", "<synchronization-id>"),
-        ("/effects/commit_oid", "<commit-oid>"),
-    ] {
-        if let Some(text) = value.pointer(pointer).and_then(Value::as_str)
-            && !pairs.iter().any(|(known, _)| known == text)
-        {
-            pairs.push((text.to_owned(), label));
-        }
-    }
-    cli::assert_cli_golden(
-        name,
-        value,
-        &pairs
-            .iter()
-            .map(|(value, label)| (value.as_str(), *label))
-            .collect::<Vec<_>>(),
-    );
 }
 
 #[test]
@@ -212,7 +174,7 @@ fn a_comment_without_a_publication_remote_is_checkpointed_with_publication_pendi
     assert!(value["recovery"].as_array().unwrap().is_empty());
     // The data holds no body.
     assert!(!value.to_string().contains("A first comment."));
-    golden("comment_add_ok", &value, &f);
+    golden("comment_add_ok", &value, &f.repo.root);
 
     let comments = f.comments(items::TICKET_A);
     assert_eq!(comments.len(), 1);
@@ -272,7 +234,7 @@ fn a_comment_on_a_closed_ticket_is_ticket_closed_and_changes_nothing() {
             .join(items::TICKET_B)
             .exists()
     );
-    golden("comment_add_ticket_closed", &value, &f);
+    golden("comment_add_ticket_closed", &value, &f.repo.root);
 }
 
 #[test]
@@ -329,7 +291,7 @@ fn input_that_is_not_valid_is_refused_with_nothing_done() {
     golden(
         "comment_add_invalid_input",
         &malformed_author_golden.unwrap(),
-        &f,
+        &f.repo.root,
     );
 
     // A malformed `--id` is a usage of the flag, with the request named.

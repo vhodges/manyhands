@@ -7,12 +7,21 @@ use std::ptr::null_mut;
 /// The disposition `SIGINT` had before the window installed its own.
 pub(super) struct Saved(libc::sigaction);
 
-/// Installs the window's handler. `None` when it could not be installed,
-/// which leaves the disposition as it was.
+/// Installs the window's handler. `None` when it was not installed, which
+/// leaves the disposition as it was: when it could not be, and when the
+/// process inherited an ignore of `SIGINT`, which the window keeps, as a
+/// Windows console handler is not called while Ctrl-C is ignored.
 pub(super) fn install() -> Option<Saved> {
     // SAFETY: zeroed sigaction storage is valid; the mask is initialized
-    // by sigemptyset, and both pointers are to live, initialized storage.
+    // by sigemptyset, and every pointer is to live, initialized storage or
+    // null, which only reads or only sets.
     unsafe {
+        let mut found: libc::sigaction = std::mem::zeroed();
+        if libc::sigaction(libc::SIGINT, std::ptr::null(), &mut found) != 0
+            || found.sa_sigaction == libc::SIG_IGN
+        {
+            return None;
+        }
         let mut action: libc::sigaction = std::mem::zeroed();
         action.sa_sigaction = handler as extern "C" fn(libc::c_int) as libc::sighandler_t;
         action.sa_flags = libc::SA_RESTART;

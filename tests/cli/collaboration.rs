@@ -13,7 +13,10 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::mutation::{checked, run};
+use super::{
+    c4_support::{environment, golden},
+    mutation::{checked, run},
+};
 use crate::support::{
     self, FailOnce,
     cli::{self, CliEnv, CliRun},
@@ -46,12 +49,7 @@ impl Owing {
         assert_eq!(world.pending_journal_rows(), 1);
         let operation = owed.operation_id.clone().unwrap();
         world.reopen();
-        let env = CliEnv::new(world.data.path().to_owned());
-        fs::write(
-            env.home.path().join(".gitconfig"),
-            "[core]\n\tautocrlf = false\n",
-        )
-        .unwrap();
+        let env = environment(world.data.path());
         Self {
             world,
             env,
@@ -140,37 +138,6 @@ impl Owing {
             schema,
         )
     }
-}
-
-/// A CLI golden, with the repository, the requests, the operation and the
-/// confirmation replaced.
-fn golden(name: &str, value: &Value, root: &Path) {
-    let mut replacements = vec![(
-        fs::canonicalize(root).unwrap().to_str().unwrap().to_owned(),
-        "<repository>",
-    )];
-    for (pointer, label) in [
-        ("/request_id", "<request-id>"),
-        ("/operation_id", "<operation-id>"),
-        ("/data/operation_id", "<operation-id>"),
-        ("/data/details/operation_id", "<operation-id>"),
-        ("/data/confirmation_id", "<confirmation-id>"),
-        ("/data/expires_at", "<expires-at>"),
-    ] {
-        if let Some(text) = value.pointer(pointer).and_then(Value::as_str)
-            && !replacements.iter().any(|(value, _)| value == text)
-        {
-            replacements.push((text.into(), label));
-        }
-    }
-    cli::assert_cli_golden(
-        name,
-        value,
-        &replacements
-            .iter()
-            .map(|(value, label)| (value.as_str(), *label))
-            .collect::<Vec<_>>(),
-    );
 }
 
 fn text(name: &str, bytes: &[u8], root: &Path, ids: &[(&str, &str)]) {

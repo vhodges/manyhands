@@ -24,6 +24,9 @@ mod authoring_reads;
 #[path = "cli/boundaries.rs"]
 mod boundaries;
 
+#[path = "cli/c4_support.rs"]
+mod c4_support;
+
 #[path = "cli/collaboration.rs"]
 mod collaboration;
 
