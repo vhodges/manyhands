@@ -1975,3 +1975,11 @@ Notes for later tasks: Task 22 leaves `targets()` in
   region that focused an editor at once, its caret out of view, would
   show no caret. None does today: the page's press is the only one, and
   the edit editor takes focus a frame after it opens.
+- Owner (2026-10-30, Task 27 Step 4): "I approve the current state,
+  lets proceed", at `4a29b61`, after a run of the on-screen checklist in
+  part (19 of 135 items ticked) and general use; anything found later
+  becomes a ticket. The Cycle's acceptance table is filled, the
+  review-ready comment written (`01M66KXWZKF99G8FW25PVF6WJ4`), and
+  `git merge-tree --write-tree HEAD origin/main` is clean at
+  `a372edb`. A pull request, the merge, closing the ticket, native CI
+  and worktree cleanup each still need the owner's go-ahead.
