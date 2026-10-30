@@ -4536,7 +4536,7 @@ from the carries:
 | Republish, Records | `push_rejected` finishes the record; a refused republish ends `cancelled` | carries 9 and 11 |
 | Republish table, row 4 | the record finishes | carry 9 |
 | Republish table, row 13 | human output names the step, not the request ID | carry 13 (and Task 12b's note) |
-| Conflict Inspection | sides for every item path; what `structure` means for a noncanonical path | Task 3's sides rulings; carry 17 |
+| Conflict Inspection | the read asks for sides on every item path, and gives them when the library reads them as text (`content_available`); none for a noncanonical path; what `structure` means for a noncanonical path | Task 3's sides rulings; carry 17 |
 | Conflict-states table | two rows: no conflict recorded is `invalid_input`; a failed inspection at `resolution_prepared` answers its own code | carry 6 |
 | Conflict Resolution, step 2 | which attempt a request reconciles; an earlier stage's input is `external_change` | carry 5 (Part A review M2) |
 | Conflict Resolution, step 3 | what closing a superseded attempt deletes; the phase reset | carry 1 |
@@ -4609,8 +4609,9 @@ byte-identical, 48 codes.
   recover[s]" after a second press) is the plan, which implementers do not
   edit. The design and the CLI RFC now say the same request goes first.
 
-**This ledger's "Task 14" notes that the carries did not list,** all
-applied:
+**This ledger's "Task 14" notes.** All 14 lines are applied: 599 (carry
+3), 1544, 2073, 2231, 2442, 2641, 2644, 2653, 2806, 3285, 3437, 3553, 3797
+and 4068. Four of them say what the carries did not list:
 - fact 9's "a cancelled one is left to inspect" (Task 4b);
 - the spike's observed `cancelled` beside the Ctrl-C limit (Task 7);
 - the RFC's `item republish` text citing the no-op preview's output
@@ -4618,18 +4619,21 @@ applied:
 - the RFC citing the resume's deleted-branch note and the key-before-enable
   order (Task 12a).
 
-**For the controller: amendments neither the carries nor this ledger
-named.** Each tells the truth where the delivered behavior contradicted a
-document; no code changed.
+**For the controller: five amendments neither the carries nor this ledger
+named.** Each tells the truth where a document fell short of the delivered
+behavior; no code changed.
 
 1. **R-34 and Standing: an input-class refusal finishes the record.** Task
    2b's review I1 ruling. R-34 said the record of a released binding stays.
 2. **Known Limits: the `busy` check beside a promotion's or closure's
    merge.** Task 1's recorded limit, in its fix-round entry above. The
    divergent table's `busy` row does not hold for such a merge.
-3. **Conflict Inspection: sides for every item path.** Task 3's sides
-   rulings. R-10's "UTF-8 canonical text" and the table's "sides only where
-   readable" read as if a readable noncanonical file had sides.
+3. **Conflict Inspection: which paths get sides.** Task 3's sides rulings,
+   made explicit (corrected in fix round 1): the read asks the library for
+   sides on every item path, `incompatible_closures` included, and gives
+   them only when the library reads them as text, as `content_available`
+   says. A noncanonical path gets none. R-10 already excluded noncanonical
+   paths; this says how the read applies it.
 4. **The audit's resume citations,** named by function: Task 0's deferred
    minor, part of Step 2's reconciliation.
 5. **Known Limits: the latch's answer.** Carry 24 kept R-36 unchanged; the
@@ -4660,3 +4664,75 @@ audit with `include_str!`; no other document edited here is read by a test.
 | `test --all-features --test cli -- authoring_exits` | **15 passed** (C3's union and no-op capability) |
 | `test --all-features --test cli -- exits::` | **30 passed** (C2's union, with the two above) |
 | `fmt --check` | passes |
+
+#### Task 14, fix round 1
+
+The review of `46739c73..079006b8` needed fixes (`task-14-fix-1.md`). The
+commit is `docs: correct the held-reservation limits and conflict sides, and
+amend the Cycle`, on FIX_BASE `079006b8`. Documents only. No merge, rebase
+or new ticket comment.
+
+- **Important 1: held reservations.** The design's two Known Limits now say
+  "cancelled and then sent once more", replacing "until … cancelled". They
+  cite Task 2b's ruling: asking is not stopping. The divergent table's
+  "Remote context deleted" row points to Human Output's three `next:`
+  lines, with `item republish` last.
+- **Important 2: conflict sides.** The read asks for sides on every item
+  path. The library refuses them with `ExternalResolutionRequired` for a
+  stage mode other than `100644`, a binary blob or non-UTF-8 text, and
+  those paths get no sides and `content_available: false`. The qualifier
+  "when the library reads them as UTF-8 text, as `content_available` says"
+  is added at:
+  - the CLI RFC's taxonomy row and conflict paragraph;
+  - the audit's gate note, its `conflict show` inventory row and D26.
+
+  This entry's Conflict Inspection row and its item 3 are corrected. **The
+  pushed ticket comment `01M671EVGQJX85S8Q1813X9FBM` says "sides are given
+  for every item path"; that sentence is corrected by this round**, and the
+  comment is left as pushed.
+- **Ruled items 3–5.**
+  - The Cycle's Required Contract item 9 and its "Ctrl-C" acceptance row
+    gain a dated amendment: a press no safe point sees leaves the in-flight
+    answer (`push_rejected`, 4, no retry), and after a second press the same
+    request goes first. Each names what it replaces.
+  - The design's resume table gains the fenced-comment row
+    (`external_change`, Task 4b's ruling), and so does the audit's
+    reconciliation bullet.
+  - The audit's D24 is swept, as D26 and D27 were.
+- **Minors.**
+  - **Citations.** The CLI RFC's six bare amendments now cite their source:
+    - availability: R-1, decision 7;
+    - taxonomy: R-2, R-32;
+    - input: decision 9, R-7, R-9;
+    - the example: decision 9, R-6;
+    - `operation abandon`: R-1, R-30;
+    - evidence: R-24, R-25, R-27.
+  - **Counts.** This entry now counts 14 ledger lines applied, 599 among
+    them, and five uncarried amendments; the report agrees.
+  - **Row 13** says "if an earlier `item sync` … was refused", as the
+    delivered note does.
+  - **Sides on screen.** The RFC says "A side is printed only with
+    `--json`".
+  - **`created_by`.** In the RFC's input table, and in the canonical RFC
+    for consistency, the whole rule as `CommentAuthor::parse` enforces it:
+    - at most 256 bytes;
+    - ends with `>`, split at the first ` <`;
+    - name and email each non-empty, with no `<` or `>`, no control
+      character, and no leading or trailing white space;
+    - an `@` in the email;
+    - a Git signature that gives both back unchanged.
+- **Also.** The design's Document Amendments note records the Cycle's
+  amendment.
+
+**Verify** (each `devenv shell -- cargo … --locked`, logs
+`logs/task-14-fix1-*`):
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --test cli -- collaboration_exits` | **11 passed** |
+| `test --all-features --test cli -- authoring_exits` | **15 passed** |
+| `test --all-features --test cli -- exits::` | **30 passed** |
+
+The union block is byte-identical to `079006b8`. Step 3's grep over the
+touched files hits only amendment text naming what it replaces, and, in the
+Cycle, its own decisions and review record.

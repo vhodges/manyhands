@@ -329,6 +329,20 @@ Authority, in order:
      rollback.
    - A lost stdout exits 1. The work's effects stay, and the request's
      result can be read and replayed under its request ID.
+
+   Amended 2026-10-30 by C4 (Task 13's rulings; design R-36 and Known
+   Limits):
+   - **A press no safe point sees.** This item first said a Ctrl-C "stops
+     it at the next safe point", or answers `transport_unavailable`. A press
+     after the last safe point is seen by none. The in-flight answer stands,
+     and the latched press stops C2's bounded retry. The latch case answers
+     `push_rejected`, exit 4, with one refused push and no retry, and the
+     press is not reported as `cancelled`.
+   - **After a second press,** the same request is sent again first. This
+     item first said only "A second Ctrl-C ends the process at once". The
+     interrupted request stays accepted and keeps its reservation, so a new
+     request ID answers `busy` until the same request is sent again, which
+     completes the work (`01M4R19PC0T6ZPKM39X9DF26HX`).
 10. **Never printed.** No body, source, secret, private key, passphrase,
     backend or server text, SQL or `Debug` rendering appears in either mode,
     except a requested comment body or conflict side in `conflict show`'s
@@ -345,7 +359,7 @@ Authority, in order:
 | Stale resolutions | `conflict resolve` with an observation taken before a change is `external_change`, and nothing is written. An incomplete set and an unknown token are refused before any write. A second, different resolution after a completed one is refused. |
 | Outside repair of a noncanonical conflict | A conflict in a code file is reported with outside-repair guidance, and `conflict resolve` writes nothing. After the user commits a two-parent merge in the worktree, `conflict show` reports the repair and `operation resume` publishes it. Removing markers alone, staging without a commit, or wrong parents is not accepted. |
 | No secret or raw-server output | Every C4 journey's stdout and stderr pass the output scan: no private key, passphrase, sentinel, server text or remote URL credential. Bodies and sources never reach a diagnostic or the request stores. |
-| Ctrl-C | Through the pseudo-terminal, over SSH: a Ctrl-C while `item sync` is held exits 130, or exit 5 under decision 14. Its effects name what completed, `request show` agrees, and a new request completes the work. A Ctrl-C during `comment add`'s publication leaves the comment checkpointed, and a new `item sync` publishes it. A second Ctrl-C ends the process. A Ctrl-C at an unlock prompt is still `unlock_required`. |
+| Ctrl-C | Through the pseudo-terminal, over SSH: a Ctrl-C while `item sync` is held exits 130, or exit 5 under decision 14. Its effects name what completed, `request show` agrees, and a new request completes the work. A Ctrl-C during `comment add`'s publication leaves the comment checkpointed, and a new `item sync` publishes it. A second Ctrl-C ends the process. A Ctrl-C at an unlock prompt is still `unlock_required`. Amended 2026-10-30 by C4 (Task 13's rulings), qualifying "exits 130, or exit 5 under decision 14" and "a new request completes the work". A press no safe point sees leaves the in-flight answer: the latch case gives `push_rejected`, exit 4, with no retry. After a second Ctrl-C the same request is sent again first, and a new request ID is `busy` until then. |
 | Lost stdout | With stdout closed, `item sync` and `comment add` exit 1. `request show` returns the stored result, and a replay under the same request ID makes no second push, file or checkpoint. |
 | Dogfooding switch | With the owner's go-ahead in the final task, the branch-built CLI adds a verification comment to the C4 ticket with `comment add` and the agent's `created_by`. `comment list` shows it by value. AGENTS.md and the skills direct comments to the CLI, with decision 15's exception. The review-ready comment is then added through the CLI too. |
 

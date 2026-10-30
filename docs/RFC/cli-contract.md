@@ -97,9 +97,9 @@ and `ticket check` move to C3. F2's `request show`, `request cancel` and
 Amended 2026-10-20 by C2: all eighteen C2 verbs are available with the rules
 below. Amended 2026-10-24 by C3: all thirteen C3 verbs are available;
 C4–C5 remain cataloged as planned until their delivering Cycles.
-Amended 2026-10-30 by C4: all eight C4 verbs are available, the new
-`item republish` among them; C5 remains cataloged as planned until it
-delivers.
+Amended 2026-10-30 by C4 (R-1; decision 7): all eight C4 verbs are
+available, the new `item republish` among them; C5 remains cataloged as
+planned until it delivers.
 
 Amended 2026-10-24 by C3: the C3 taxonomy rows below specify selectors and
 input fields. Every C3 verb requires `--repo`; only the four ID-selected
@@ -107,7 +107,8 @@ mutations declare `--id`. No C3 mutation accepts `--context`. Input fields
 are JSON strings unless a different type is stated; bodies and repair sources
 have no argv, environment or secondary-file input channel.
 
-Amended 2026-10-30 by C4: the C4 rows below (`comment add`, `item sync`,
+Amended 2026-10-30 by C4 (R-2 and R-32; the C4 design's Grammar And
+Per-Verb Rules): the C4 rows below (`comment add`, `item sync`,
 `repo sync`, `item republish`, `conflict show`, `conflict resolve`,
 `operation resume` and `operation abandon`) specify selectors and input.
 Every C4 verb requires `--repo`. `comment add`, `item sync` and
@@ -161,7 +162,7 @@ a usage error. No C4 verb accepts `--context`.
 | `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. List returns every stored operation that resume could act on or that still has work outstanding; show finds any stored operation, finished or not. Resume never infers permission for a different target/action. Resume takes no input. It publishes a comment's pending publication, by the comment's operation ID or its synchronization's, without writing it again; publishes a resolution or an accepted outside repair; and passes a local-context sync to the gate's routing. `request cancel` does not reach it; Ctrl-C does. |
 | `operation abandon` | F2's confirmed abandonment of a pending local operation; closes its journal record without changing files. No input. A remote operation's ID is `invalid_input`, and a pending remote conflict cannot be abandoned (`01M4H33R34Z7C7EEKTY1ZCT950`). A local-context sync goes to the gate's guarded abandonment. |
 | `request show`, `request cancel` | Required `--request-id`, refuse `--repo`; inspect the request's state/result or request safe-point cancellation. Accepted local C2 requests report `requested: false`; this does not interrupt their process. |
-| `conflict show`, `conflict resolve` | Select a remote synchronization's operation ID, or a comment's operation; a local-context sync's is `invalid_input`. Show is a read: no request ID, `--prepare` refused. It reports the state, next step, observation and each path's token, kind, structure and, for an item's path, base/local/incoming sides. Resolve takes input `observation` and `resolutions`, one `{token, source}` per conflicted path, then publishes under the same request. See [Conflict and cancellation behavior](#conflict-and-cancellation-behavior). |
+| `conflict show`, `conflict resolve` | Select a remote synchronization's operation ID, or a comment's operation; a local-context sync's is `invalid_input`. Show is a read: no request ID, `--prepare` refused. It reports the state, next step, observation and each path's token, kind, structure and, for an item's path the library reads as UTF-8 text, base/local/incoming sides, as `content_available` says. Resolve takes input `observation` and `resolutions`, one `{token, source}` per conflicted path, then publishes under the same request. See [Conflict and cancellation behavior](#conflict-and-cancellation-behavior). |
 | `id new` | Generate and return a canonical ULID for caller-owned requests/items/comments; no repository mutation. |
 
 ### Authoring reads
@@ -388,14 +389,15 @@ authoring reads take flags only.
 
 ## C4 collaboration options and input schemas
 
-Amended 2026-10-30 by C4: the two closed input schemas and example inputs
-below extend the C2 and C3 input contracts. A malformed ULID inside input
-is `invalid_input`; a malformed flag ID is `invalid_id`. No diagnostic
-holds a body, a source or a token.
+Amended 2026-10-30 by C4 (decision 9, R-7 and R-9; the C4 design's Input):
+the two closed input schemas and example inputs below extend the C2 and C3
+input contracts. A malformed ULID inside input is `invalid_input`; a
+malformed flag ID is `invalid_id`. No diagnostic holds a body, a source or a
+token.
 
 | Verb | Required input | Optional input and semantics | Schema / example |
 | --- | --- | --- | --- |
-| `comment add` | `comment_id` (canonical ULID), `body` (may be empty) | `parent_id`: string or null; missing or null means a root comment. `created_by`: `Name <email>`, at most 256 bytes. The name and email are each non-empty, with no control character and no leading or trailing white space, the email holds an `@`, and the name holds no `<` or `>`. It is written verbatim, once; missing means the effective Git identity, which the checkpoint needs either way. | [schema](../../schemas/input/v1/comment_add.schema.json) / [example](../../tests/fixtures/cli_input_v1/comment_add.json) |
+| `comment add` | `comment_id` (canonical ULID), `body` (may be empty) | `parent_id`: string or null; missing or null means a root comment. `created_by`: `Name <email>`, at most 256 bytes: the text ends with `>`, and is split at its first ` <` into the name and the email. Each is non-empty, holds no `<` or `>` and no control character, and has no leading or trailing white space; the email holds an `@`. A Git signature made from them must give both back unchanged. It is written verbatim, once; missing means the effective Git identity, which the checkpoint needs either way. | [schema](../../schemas/input/v1/comment_add.schema.json) / [example](../../tests/fixtures/cli_input_v1/comment_add.json) |
 | `conflict resolve` | `observation`; `resolutions`, a non-empty array of objects, each with exactly the strings `token` and `source`, one for every conflicted path | None. | [schema](../../schemas/input/v1/conflict_resolve.schema.json) / [example](../../tests/fixtures/cli_input_v1/conflict_resolve.json) |
 
 Only `item republish` and `operation abandon` are confirmed. The other five
@@ -686,10 +688,10 @@ envelope and specify required/nullable fields for every command. This RFC does
 not authorize directly serializing Rust enums as the public API.
 
 Example: a comment checkpoint succeeded but configured publication failed.
-Amended 2026-10-30 by C4: the example now uses the code `comment add`
-returns when the server refuses the push, `push_rejected`, in place of
-`publication_pending`, which no build defines, with the data, scope and
-recovery the build gives. `created_by` is the comment's author. The record
+Amended 2026-10-30 by C4 (decision 9; R-6, and the Cycle's Review Record):
+the example now uses the code `comment add` returns when the server refuses
+the push, `push_rejected`, in place of `publication_pending`, which no build
+defines, with the data, scope and recovery the build gives. `created_by` is the comment's author. The record
 stays accepted, and the same request publishes without writing again.
 
 ```json
@@ -911,10 +913,12 @@ remote synchronization, named by its own operation ID or a comment's. It
 returns the operation, the target and stage, the state, the next step, the
 observation, the request of an unfinished attempt, and each path's escaped
 display path, token, kind and structure. A path whose kind is an item also
-carries its base, local and incoming sides; human output prints sides only
-with `--json`. The states are `conflict_pending`, `resolution_prepared`,
-`resolved`, `repaired`, `repair_refused`, `cancelled` and `complete`, and
-the next steps `resolve`, `retry_resolution`, `external_repair`, `resume`,
+carries its base, local and incoming sides when the library reads them as
+UTF-8 text, as `content_available` says. The library withholds them for a
+stage mode other than `100644`, a binary blob or non-UTF-8 text, and a
+noncanonical path gets none. A side is printed only with `--json`. The
+states are `conflict_pending`, `resolution_prepared`, `resolved`,
+`repaired`, `repair_refused`, `cancelled` and `complete`, and the next steps `resolve`, `retry_resolution`, `external_repair`, `resume`,
 `synchronize` and `none`. The kinds are `document`, `ticket`, `comment`
 and `noncanonical`, and the structures `regular`, `binary`, `executable`,
 `symlink`, `rename`, `delete`, `identity_changed` and
@@ -1003,8 +1007,8 @@ enable or remote select can stop between writing `.manyhands/config.toml` and
 committing it, leaving a dirty-worktree refusal on retry. Remove the uncommitted
 configuration for create/enable, or restore its committed content for remote
 select, then retry the same request. C4 owns later operation abandonment.
-Amended 2026-10-30 by C4: `operation abandon` is available, as its taxonomy
-row says.
+Amended 2026-10-30 by C4 (R-1 and R-30): `operation abandon` is available,
+as its taxonomy row says.
 
 ## Alternatives, risks and required evidence
 
@@ -1089,8 +1093,9 @@ Task 9 obligations.
 
 ### C4 evidence and known limits
 
-Amended 2026-10-30 by C4: the eight collaboration verbs have real-binary
-human/JSON evidence in [discussion](../../tests/cli/discussion.rs),
+Amended 2026-10-30 by C4 (R-24, R-25 and R-27; the limits, Task 12a's
+rulings): the eight collaboration verbs have real-binary human/JSON
+evidence in [discussion](../../tests/cli/discussion.rs),
 [collaboration](../../tests/cli/collaboration.rs),
 [conflicts](../../tests/cli/conflicts.rs) and
 [republish](../../tests/cli/republish.rs). Two-clone SSH journeys, with

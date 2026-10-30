@@ -1008,7 +1008,7 @@ For both `item sync` and `repo sync`, written as a test first (Task 1).
 | Divergence with no usable identity | `identity_required` | blocked, 3 | `[request.retry, repo.identity_set]` (fact 7) |
 | Then `repo identity-set` | `ok` | success, 0 | the identity is set; not refused by the stopped merge (fact 28) |
 | Then the same sync request | `ok` | success, 0 | the merge is committed and published once |
-| Remote context deleted | `remote_branch_deleted` | blocked, 3 | nothing recreated; human output names `item republish` |
+| Remote context deleted | `remote_branch_deleted` | blocked, 3 | nothing recreated; human output names `item republish`. Amended 2026-10-30 by C4 (Task 2b's ruling): it prints three `next:` lines, `request cancel`, the same request again, then `item republish --prepare` last (Human Output) |
 | No publication remote | `publication_remote_required` | blocked, 3 | nothing |
 | Ctrl-C at a safe point | `cancelled` | cancelled, 130 | Effects name what completed. The operation is final (fact 56): a new request completes it |
 | Ctrl-C after the push returned, before it is verified | `cancelled` | cancelled, 130 | publication as the stored push says (fact 74); a new request verifies it |
@@ -1109,7 +1109,7 @@ Written as a test first (Task 5).
 | `--confirm` where the context is an ancestor of primary | `ok`, exit 0: exactly `local_oid` pushed, not primary's tip |
 | `--confirm` after the local branch moved | `external_change`, exit 3; nothing pushed; `[request.prepare]` |
 | `--confirm` after the branch reappeared on the remote | `external_change`, exit 3; nothing pushed; `[request.prepare]` |
-| `--confirm` while the refused `item sync` request still holds its reservation (`01M4R19PC0T6ZPKM39X9DF26HX`) | `busy`, exit 5, after C2's bounded retry. Amended 2026-10-30 by C4 (Task 10's pre-dispatch ruling), replacing "human output names `request cancel` for that request first": no public read gives the holding request's ID, so human output names the step. A note before the retry line says that an earlier refused `item sync` of this item still holds the reservation, and to run `request cancel` with that request's ID, then send that request once more, before retrying |
+| `--confirm` while the refused `item sync` request still holds its reservation (`01M4R19PC0T6ZPKM39X9DF26HX`) | `busy`, exit 5, after C2's bounded retry. Amended 2026-10-30 by C4 (Task 10's pre-dispatch ruling), replacing "human output names `request cancel` for that request first": no public read gives the holding request's ID, so human output names the step. A note before the retry line says: if an earlier `item sync` of this item was refused, its request still holds the reservation; run `request cancel` with that request's ID, then send that request once more, before retrying |
 | `--confirm` while a local-context sync in the repository is unfinished (fact 80, R-38) | `recovery_required`, exit 3; nothing pushed; `[repo.inspect]` |
 | `--confirm` meeting a transport, unlock or host stop | the code `item sync` gives it, such as `transport_unavailable` (5), `unlock_required` (3) or `host_approval_required` (3); nothing pushed; the same request continues |
 | Replay of a confirmed request | Its stored result; no second push |
@@ -1371,6 +1371,7 @@ nothing in it, and gives the CLI human output for its data (R-37).
 | Operation | Resume does | Data |
 | --- | --- | --- |
 | A comment's synchronization, or the comment's own operation, with its checkpoint present and publication pending, not cancelled | The synchronizer-driven retry with `restart: true`: publishes the comment, never writes it | `CommentMutationDto` |
+| A comment's publication that is fenced, such as one held for a key whose selection then changed, by either ID. Amended 2026-10-30 by C4 (Task 4b's fix-round ruling) | `external_change`, exit 3, blocked, as F2 answers a fenced synchronization (`a_resume_does_not_take_up_a_fenced_synchronization`). No effects, no recovery action, and no record; nothing is connected or pushed (`c4_resume_fenced_comment`). The `comment add` request's own next call settles it | none |
 | A comment request that stopped at `identity_required` | Nothing to take up: its binding was released (R-34). Resume answers its completed local row as F2 does, `already_applied`; the same `comment add` request ID writes the comment | none |
 | A synchronization with a resolution checkpointed or an accepted outside repair | A restart with the merging settings: publishes it | null |
 | A synchronization whose resolution attempt has its commit prepared, or its ref moved, unpublished | Finishes the attempt from durable state alone, with no input (decision 18), then publishes it | null |
@@ -1766,6 +1767,9 @@ Amended 2026-10-30 by C4. Task 14 made them on 2026-10-30, so each is
 dated "Amended 2026-10-30 by C4" in place of the date planned below. Each
 also carries the execution rulings its subject gathered, as the execution
 ledger's Task 14 entry lists. AGENTS.md and the skills remain Task 15's.
+By the controller's ruling in Task 14's fix round, the Cycle document's
+Required Contract item 9 and its "Ctrl-C" acceptance row are amended too,
+for the latch and the second press.
 
 **CLI contract RFC**, "Amended 2026-10-26 by C4":
 
@@ -2278,8 +2282,12 @@ Each ruling is listed with its cost if wrong.
   server's primary with the publication remote already selected, and makes
   no index workaround.
 - A refused `item sync` holds its reservation until that request is
-  cancelled, so `item republish` first needs `request cancel`
-  (`01M4R19PC0T6ZPKM39X9DF26HX`).
+  cancelled and then sent once more, so `item republish` first needs
+  `request cancel` and one more call of that request
+  (`01M4R19PC0T6ZPKM39X9DF26HX`). Amended 2026-10-30 by C4 (Task 2b's
+  ruling: asking is not stopping), replacing "until that request is
+  cancelled": `request cancel` alone does not release the reservation. One
+  more call of the same request ends it `cancelled` and releases it.
 - `request cancel` does not reach a resume. Ctrl-C does.
 - A wrong passphrase reports `transport_unavailable`
   (`01M5E6DYJ6GN7DMW4424TH3V78`).
@@ -2287,7 +2295,11 @@ Each ruling is listed with its cost if wrong.
   divergent-synchronization table's identity rows cover the missing case
   only.
 - A blocked synchronization holds its reservation until its request is
-  cancelled (`01M4R19PC0T6ZPKM39X9DF26HX`).
+  cancelled and then sent once more (`01M4R19PC0T6ZPKM39X9DF26HX`).
+  Amended 2026-10-30 by C4 (Task 2b's ruling: asking is not stopping),
+  replacing "until its request is cancelled": `request cancel`, then one
+  more call of the same request, ends it `cancelled` and releases the
+  reservation.
 - Operation reads name no item for comment rows
   (`01M4W5SCBV6WFJP11Y7PJF5VS8`).
 - An interrupted save whose row recorded no step is closed as `rejected`
