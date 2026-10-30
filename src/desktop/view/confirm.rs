@@ -254,19 +254,19 @@ fn open(
             .on_cancel(|_, _, _| true)
             .on_close(move |_, window, cx| window.focus(&origin(cx), cx))
     });
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     cx.set_global(OpenedConfirm(opened.downgrade()));
     Some(opened)
 }
 
 /// The confirmation last opened, for a test to read what it holds.
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) struct OpenedConfirm(pub(crate) gpui_kit::WeakEntity<ConfirmDialog>);
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 impl gpui_kit::Global for OpenedConfirm {}
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 impl ConfirmDialog {
     /// What a prepare that gave no preview answered, as the dialog holds
     /// it: its code and message.

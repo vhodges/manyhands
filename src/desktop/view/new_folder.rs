@@ -135,16 +135,16 @@ fn open(
     });
     let name = dialog.read(cx).name.clone();
     name.update(cx, |input, cx| input.focus(window, cx));
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     cx.set_global(OpenedFolder(dialog.downgrade()));
     Some(dialog)
 }
 
 /// The dialog last opened, for a test to type into and read.
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) struct OpenedFolder(pub(crate) gpui_kit::WeakEntity<NewFolderDialog>);
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 impl gpui_kit::Global for OpenedFolder {}
 
 impl Workspace {
@@ -211,7 +211,7 @@ impl NewFolderDialog {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn name_input(&self) -> Entity<InputState> {
         self.name.clone()
     }

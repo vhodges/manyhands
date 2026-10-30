@@ -372,7 +372,7 @@ impl Toolbar {
     }
 
     /// The link popover's address field, while it is open.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(super) fn link_input(&self) -> Option<Entity<InputState>> {
         match self.popover.as_ref().map(|popover| &popover.kind) {
             Some(Kind::Link { input, .. }) => Some(input.clone()),

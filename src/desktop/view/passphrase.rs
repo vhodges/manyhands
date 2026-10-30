@@ -135,7 +135,7 @@ impl PassphraseDialog {
     }
 
     /// The input, while the dialog holds it.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn input(&self) -> Option<Entity<InputState>> {
         self.input.clone()
     }

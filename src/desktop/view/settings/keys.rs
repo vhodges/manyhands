@@ -212,22 +212,22 @@ impl KeysPage {
         page
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn input(&self, id: &str) -> Entity<InputState> {
         self.inputs[id].clone()
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn control_focus(&self, id: &str) -> FocusHandle {
         self.focus[id].clone()
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn key_labels(&self) -> Vec<String> {
         match &self.keys {
             Read::Ready(keys) => keys.iter().map(|key| key.label.clone()).collect(),
             _ => Vec::new(),
         }
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn selected_label(&self) -> Option<&str> {
         match &self.keys {
             Read::Ready(keys) => keys
@@ -237,13 +237,13 @@ impl KeysPage {
             _ => None,
         }
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn retrying(&self) -> Option<DesktopRequestId> {
         self.retrying.as_ref().map(|retrying| retrying.id)
     }
 
     /// Every held piece of text, including inputs, for the secret-retention test.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn held_text(&self, cx: &gpui_kit::App) -> Vec<String> {
         let mut held: Vec<String> = Vec::new();
         if let Read::Ready(keys) = &self.keys {

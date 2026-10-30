@@ -408,7 +408,7 @@ impl WorkerHandle {
 
     /// A provider that asks this worker's UI, as the worker's own does:
     /// for a test that raises a prompt from a plain thread.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn provider(&self) -> DesktopProvider {
         DesktopProvider::new(self.shared().events.clone())
     }
@@ -416,7 +416,7 @@ impl WorkerHandle {
     /// Sends `prompt` to the UI over the worker's event channel, as the
     /// provider does, without waiting for its reply: for a test that must
     /// place a prompt in one drain batch with other events.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn send_prompt(&self, prompt: PromptRequest) {
         self.shared().send(WorkerEvent::Prompt(prompt));
     }

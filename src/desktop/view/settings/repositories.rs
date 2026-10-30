@@ -320,12 +320,12 @@ impl RepositoriesPage {
         page
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn input(&self, id: &str) -> Entity<InputState> {
         self.inputs[id].clone()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn control_focus(&self, id: &str) -> FocusHandle {
         self.focus[id].clone()
     }

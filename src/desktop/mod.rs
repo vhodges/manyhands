@@ -168,7 +168,7 @@ pub(crate) struct StartupFailureView {
 }
 
 impl StartupFailureView {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn quit_requested(&self) -> bool {
         self.quit_requested
     }
@@ -179,7 +179,7 @@ impl StartupFailureView {
         cx.quit();
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn message(&self) -> &'static str {
         self.failure.message()
     }

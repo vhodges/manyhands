@@ -178,7 +178,7 @@ impl EditorHost {
     /// Whether the text differs from the host's own baseline. The tab reads
     /// dirty against its session's base, the saved copy, instead (Task 16
     /// fix round 1); the host's flag drives `DirtyChanged`, and tests.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn is_dirty(&self) -> bool {
         self.dirty
     }
@@ -274,7 +274,7 @@ impl EditorHost {
     }
 
     /// The text style the editor was last painted in.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(super) fn painted_style(&self) -> Option<gpui_kit::TextStyle> {
         self.painted.borrow().clone()
     }

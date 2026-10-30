@@ -98,7 +98,7 @@ fn label(row: &TicketRow) -> String {
 }
 
 /// The label of the row `item` makes.
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) fn row_label(item: &manyhands::repository::ItemDto) -> String {
     label(&TicketRow::from_item(item))
 }
@@ -270,7 +270,7 @@ impl TicketsPane {
     }
 
     /// The rows shown, for tests.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn rows(&self, cx: &App) -> Vec<TicketRow> {
         self.list.read(cx).delegate().rows.clone()
     }
