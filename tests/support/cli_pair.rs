@@ -145,25 +145,8 @@ impl CliClone {
         letter: &str,
     ) -> Result<Self, FixtureError> {
         let root = directory.join(format!("clone-{letter}"));
-        let mut callbacks = git2::RemoteCallbacks::new();
-        callbacks.credentials(|_, user, _| {
-            git2::Cred::ssh_key(
-                user.unwrap_or("fixture"),
-                None,
-                server.client_key_path(),
-                None,
-            )
-        });
-        let host = fixed(server.host_public_key().to_bytes())?;
-        callbacks.certificate_check(move |certificate, _| {
-            if certificate.as_hostkey().and_then(|key| key.hostkey()) == Some(host.as_slice()) {
-                Ok(git2::CertificateCheckStatus::CertificateOk)
-            } else {
-                Err(git2::Error::from_str("fixture host mismatch"))
-            }
-        });
         let mut fetch = git2::FetchOptions::new();
-        fetch.remote_callbacks(callbacks);
+        fetch.remote_callbacks(callbacks(server)?);
         let mut builder = git2::build::RepoBuilder::new();
         builder.fetch_options(fetch);
         fixed(builder.clone(&server.url(), &root))?;
@@ -250,6 +233,29 @@ impl CliClone {
     pub fn context(&self) -> PathBuf {
         self.root.join(".manyhands/worktrees").join(ITEM)
     }
+}
+
+/// Git's callbacks for the server as a clone's own Git reaches it: the key
+/// the server allows, which is not protected, and the server's host key.
+pub fn callbacks(server: &SshRemoteFixture) -> Result<git2::RemoteCallbacks<'_>, FixtureError> {
+    let mut callbacks = git2::RemoteCallbacks::new();
+    callbacks.credentials(|_, user, _| {
+        git2::Cred::ssh_key(
+            user.unwrap_or("fixture"),
+            None,
+            server.client_key_path(),
+            None,
+        )
+    });
+    let host = fixed(server.host_public_key().to_bytes())?;
+    callbacks.certificate_check(move |certificate, _| {
+        if certificate.as_hostkey().and_then(|key| key.hostkey()) == Some(host.as_slice()) {
+            Ok(git2::CertificateCheckStatus::CertificateOk)
+        } else {
+            Err(git2::Error::from_str("fixture host mismatch"))
+        }
+    });
+    Ok(callbacks)
 }
 
 fn new_request() -> String {

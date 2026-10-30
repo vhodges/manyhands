@@ -4072,3 +4072,41 @@ the sources frozen.
   - The code-file structures above may deserve a sentence.
 - **The owner's on-screen check.** `conflict_show_text` is the golden for
   M5, the lower-case labels: a canonical conflict with two paths.
+
+#### Task 12b, fix round 1
+
+The commit is `test: restore permissions on every path, share the save
+helper, and close the review's minors`, on FIX_BASE `aeed23ef`. No `src/`
+change.
+
+- **I-1.** The hand-edit case reads the directory's mode before its chmod.
+  - Right after the chmod, it makes a `ModeRestored` guard, whose `Drop`
+    puts the mode back.
+  - It drops the guard explicitly after the resolve's run, then asserts the
+    mode is the original.
+  - A panic or a CLI deadline now unwinds through the guard. A SIGKILL from
+    the watchdog runs no `Drop`, so nothing in the process can cover it.
+- **I-2.** `collaboration.rs` now has `pub(super) fn save(clone, request,
+  body)`, and `save_the_ticket` is a one-line wrapper around it (the
+  controller's authorization). `conflicts.rs` uses `save`, and its copy is
+  gone.
+- **M-3.** `EDITED_NOTE` and `HAND_EDIT_NOTE` moved into `mod unix`, beside
+  their one use.
+- **M-4.** `cli_pair.rs` has one `pub fn callbacks(server)`, the
+  credentials and the host-key check. `CliClone::cloned` and
+  `peer_deletes` both use it.
+- **M-5.** Row 13's human stderr is pinned by exact equality, with the busy
+  result's `operation:` line read from the output.
+- **M-6.** The republish `request_mismatch` asserts that every effect is
+  `not_requested`.
+- **Native CI margin, accepted.** The PTY "yes" run waits up to 10 s, and
+  `outside_repair` is the heaviest case (over 30 CLI runs after the pair's
+  setup). Both go to
+  native CI's margin notes.
+- **Verify** (`logs/task-12b-fix1-*`):
+  - `test --all-features --test cli_remote -- c4_conflicts`: 10 SSH cases
+    passed (2 m 17 s);
+  - `test --all-features --test cli_remote -- c4_collaboration`: 8 SSH cases
+    passed (2 m 3 s), after the save helper moved;
+  - `clippy --all-targets --all-features -- -D warnings`: passes;
+  - `fmt --check`: passes.

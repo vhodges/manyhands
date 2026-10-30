@@ -558,22 +558,28 @@ fn c4_collaboration_replies_from_both_clones() -> Result<(), FixtureError> {
 /// B's first write: a save of the ticket's body, which makes B's editing
 /// context and publishes nothing.
 fn save_the_ticket(b: &CliClone, request: &str) -> Value {
-    let shown = b.json(
-        &["ticket", "show", "--repo", b.root(), "--id", ITEM],
+    save(b, request, "Saved in clone B.\n")
+}
+
+/// A save of `ITEM`'s body as `body` in the clone. Its first write makes
+/// the clone's editing context; a save publishes nothing.
+pub(super) fn save(clone: &CliClone, request: &str, body: &str) -> Value {
+    let shown = clone.json(
+        &["ticket", "show", "--repo", clone.root(), "--id", ITEM],
         &[],
         "ok",
         0,
     );
     let input = serde_json::json!({
         "observation": shown["data"]["observation"],
-        "body": "Saved in clone B.\n",
+        "body": body,
     });
-    let saved = b.json(
+    let saved = clone.json(
         &[
             "ticket",
             "save",
             "--repo",
-            b.root(),
+            clone.root(),
             "--id",
             ITEM,
             "--request-id",

@@ -23,7 +23,7 @@ use super::*;
 use cli_pair::{CONTEXT, CliClone, CliPair, ITEM, OTHER_ITEM, PRIMARY};
 use collaboration::{
     RESERVATION_NOTE, connections, human, item_sync, next_lines, oid, progress, quoted, repo_sync,
-    request_show, resume, resume_args, text,
+    request_show, resume, resume_args, save, text,
 };
 use ssh_remote::{FixtureBoundary, FixtureError, ReceiveUpdate, fixed};
 
@@ -93,11 +93,6 @@ const DELETED: &str = "error: The published branch was deleted on the remote.\n\
                        code: remote_branch_deleted\n";
 /// Task 10's note on a `busy` republish (`human_collaboration.rs`).
 const BUSY_NOTE: &str = "note: if an earlier item sync of this item was refused, its request still holds the reservation: run request cancel with that request's ID, then send that request once more, before retrying this request.\n";
-/// Task 9's note on `original_request_required` of `conflict resolve`.
-const EDITED_NOTE: &str = "note: the attempt's written paths were edited by hand. Restore each file the request wrote to the request's resolution; a file it has not written yet may keep its conflicted content. Then send that request again, or a new conflict resolve may supersede it.\n";
-/// Task 9's note on `external_change` of `conflict resolve` with written
-/// paths.
-const HAND_EDIT_NOTE: &str = "note: a resolved file edited by hand must be restored to the request's resolution before the request is sent again.\n";
 
 /// A ticket's canonical source, titled `title`, with the body line `body`.
 fn source(id: &str, title: &str, body: &str) -> String {
@@ -996,41 +991,6 @@ fn c4_conflicts_outside_repair() -> Result<(), FixtureError> {
     Ok(())
 }
 
-/// A ticket save in the clone, of `body`: its first write makes its
-/// editing context, and publishes nothing.
-fn save(clone: &CliClone, request: &str, body: &str) -> Value {
-    let shown = clone.json(
-        &["ticket", "show", "--repo", clone.root(), "--id", ITEM],
-        &[],
-        "ok",
-        0,
-    );
-    let input = serde_json::json!({
-        "observation": shown["data"]["observation"],
-        "body": body,
-    });
-    let saved = clone.json(
-        &[
-            "ticket",
-            "save",
-            "--repo",
-            clone.root(),
-            "--id",
-            ITEM,
-            "--request-id",
-            request,
-            "--input",
-            "-",
-        ],
-        &serde_json::to_vec(&input).unwrap(),
-        "ok",
-        0,
-    );
-    assert_eq!(saved["effects"]["checkpoint"], "committed");
-    assert_eq!(saved["effects"]["publication"], "not_requested");
-    saved
-}
-
 /// The peer, clone B, deletes the item's branch on the server with its own
 /// Git, as another person would.
 fn peer_deletes(p: &CliPair) -> Result<(), FixtureError> {
@@ -1038,25 +998,8 @@ fn peer_deletes(p: &CliPair) -> Result<(), FixtureError> {
     let before = p.server.receive_updates().len();
     let repo = p.b.repo()?;
     let mut remote = fixed(repo.remote_anonymous(&p.server.url()))?;
-    let mut callbacks = git2::RemoteCallbacks::new();
-    callbacks.credentials(|_, user, _| {
-        git2::Cred::ssh_key(
-            user.unwrap_or("fixture"),
-            None,
-            p.server.client_key_path(),
-            None,
-        )
-    });
-    let host = fixed(p.server.host_public_key().to_bytes())?;
-    callbacks.certificate_check(move |certificate, _| {
-        if certificate.as_hostkey().and_then(|key| key.hostkey()) == Some(host.as_slice()) {
-            Ok(git2::CertificateCheckStatus::CertificateOk)
-        } else {
-            Err(git2::Error::from_str("fixture host mismatch"))
-        }
-    });
     let mut options = git2::PushOptions::new();
-    options.remote_callbacks(callbacks);
+    options.remote_callbacks(cli_pair::callbacks(&p.server)?);
     fixed(remote.push(&[&format!(":{CONTEXT}")], Some(&mut options)))?;
     p.server.fixture_push_transport_returned()?;
     p.server.wait_for_receive_update(
@@ -1420,19 +1363,26 @@ fn c4_conflicts_republish_busy_then_confirmed() -> Result<(), FixtureError> {
     assert_eq!(out.status, 5);
     assert!(out.stdout.is_empty());
     let stderr = text(&out.stderr);
-    // C2's bounded retry: three re-runs, each after a `retrying` line.
+    // The busy result names the operation of its last attempt.
+    let operation = stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("operation: "))
+        .unwrap();
+    // C2's bounded retry: three re-runs, each after a `retrying` line; then
+    // C2's refusal, Task 10's note, and the retry line.
     let attempt = progress(&["accepted", "connecting"]);
-    assert!(
-        stderr.starts_with(&format!(
+    assert_eq!(
+        stderr,
+        format!(
             "{attempt}progress: retrying\n{attempt}progress: retrying\n{attempt}progress: retrying\n{attempt}\
-             error: The repository is busy; try again.\ncode: busy\nrequest: {R3}\n"
-        )),
-        "{stderr}"
+             error: The repository is busy; try again.\n\
+             code: busy\n\
+             request: {R3}\n\
+             operation: {operation}\n\
+             {BUSY_NOTE}\
+             next: request.retry request_id={R3}\n"
+        )
     );
-    // Task 10's note, then the retry line.
-    let retry = format!("next: request.retry request_id={R3}\n");
-    assert!(stderr.ends_with(&format!("{BUSY_NOTE}{retry}")), "{stderr}");
-    assert_eq!(next_lines(stderr), [retry.trim_end()]);
     no_record(a, R3);
     assert_eq!(p.served(CONTEXT)?, None);
     assert_eq!(remote_world::accepted(&p.server), pushes);
@@ -1483,6 +1433,7 @@ fn c4_conflicts_republish_busy_then_confirmed() -> Result<(), FixtureError> {
         2,
     );
     assert!(mismatch["data"].is_null());
+    assert_effects(&mismatch, &[]);
     assert_eq!(
         a.tip(&format!("refs/heads/manyhands/ticket/{OTHER_ITEM}"))?,
         None
@@ -1643,6 +1594,25 @@ mod unix {
     use super::*;
     use support::pty::PtyCli;
 
+    /// Task 9's note on `original_request_required` of `conflict resolve`.
+    const EDITED_NOTE: &str = "note: the attempt's written paths were edited by hand. Restore each file the request wrote to the request's resolution; a file it has not written yet may keep its conflicted content. Then send that request again, or a new conflict resolve may supersede it.\n";
+    /// Task 9's note on `external_change` of `conflict resolve` with written
+    /// paths.
+    const HAND_EDIT_NOTE: &str = "note: a resolved file edited by hand must be restored to the request's resolution before the request is sent again.\n";
+
+    /// Puts a directory's mode back when dropped, however the case ends
+    /// short of the process being killed, so the tree stays deletable.
+    struct ModeRestored {
+        directory: std::path::PathBuf,
+        mode: std::fs::Permissions,
+    }
+
+    impl Drop for ModeRestored {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.directory, self.mode.clone());
+        }
+    }
+
     fn interactive(clone: &CliClone) -> PtyCli {
         PtyCli::spawn(
             &republish_args(clone, ITEM)
@@ -1754,17 +1724,24 @@ mod unix {
         let pushes = remote_world::accepted(&p.server);
         private_source();
 
+        let mode = fixed(std::fs::metadata(&directory))?.permissions();
+        let original = mode.mode();
         fixed(std::fs::set_permissions(
             &directory,
             std::fs::Permissions::from_mode(0o555),
         ))?;
+        let restored = ModeRestored {
+            directory: directory.clone(),
+            mode,
+        };
         // The staging needs a user the permission binds.
         assert!(std::fs::write(directory.join("probe"), b"").is_err());
         let out = human(b, &resolve_args(b, &operation, R2), &input);
-        fixed(std::fs::set_permissions(
-            &directory,
-            std::fs::Permissions::from_mode(0o755),
-        ))?;
+        drop(restored);
+        assert_eq!(
+            fixed(std::fs::metadata(&directory))?.permissions().mode(),
+            original
+        );
         assert_eq!(out.status, 4);
         assert!(out.stdout.is_empty());
         assert_eq!(
