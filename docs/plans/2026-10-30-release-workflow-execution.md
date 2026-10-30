@@ -1,0 +1,311 @@
+# Release Workflow Execution Record
+
+Date: 2026-10-30
+
+## First Checkpoint — Tasks 1–3
+
+Branch: `release-workflow`, worktree `.worktrees/release-workflow`.
+Fetched origin and merged `origin/main` before implementation; it was
+already up to date at `48ffc058`. Work is uncommitted and has not been
+pushed. No workflow has been dispatched and no release/tag/certificate
+or external repository has been created.
+
+### Implemented
+
+1. **Release identity:** existing lightweight/annotated tag resolution,
+   strict v-prefixed SemVer parsing, tagged `Cargo.toml`/`Cargo.lock`
+   validation, JSON handoff, and GitHub scalar outputs. Missing tags,
+   branch-only references, inconsistent versions, and malformed input
+   fail without creating a new manifest.
+2. **Licensing/documents:** pinned cargo-about 0.9.3, separate normal CLI
+   and desktop graphs, HTML-escaped complete licence notices, nested
+   upstream/native/asset notices, IBM Plex Sans provenance and OFL, and
+   original source archives for selected MPL-covered dependencies plus
+   libgit2. Source archives are checked against Cargo.lock SHA-256 hashes.
+3. **Shared packaging:** target-specific staging, macOS app resource
+   disclosures, strict README rendering, tar/ZIP creation, safe extraction,
+   package identity/disclosure/source verification, and extracted CLI
+   smoke tests with an isolated home and loader-path cleanup. Pending
+   Windows/macOS signing cannot be archived as a completed payload.
+
+The initial Devenv lacked Python. Added `python3` to its packages and
+ignored bytecode caches. No Rust source, Cargo dependencies, or Devenv
+inputs/lockfile changed.
+
+### Verification Evidence
+
+```text
+devenv shell -- python3 -B -m unittest discover -s scripts/release/tests -v
+Ran 39 tests ... OK
+```
+
+Tests include temporary Git repositories; tag and version errors; nested
+notices; missing/corrupt source archives; absent binaries/licences;
+private signing material; tar execution bits; Linux and Windows archive
+round trips; macOS AppleDouble handling; path/link rejection; malformed
+inventory input; CLI smoke failure; and the actual stage/archive/verify
+command entry points using synthetic executable fixtures.
+
+Generated real dependency notice bundles successfully for:
+
+| Target | Output |
+| --- | --- |
+| `x86_64-unknown-linux-gnu` | `/tmp/opencode/manyhands-notices-linux` |
+| `aarch64-unknown-linux-gnu` | `/tmp/opencode/manyhands-notices-linux-arm` |
+| `aarch64-apple-darwin` | `/tmp/opencode/manyhands-notices-macos` |
+| `x86_64-pc-windows-msvc` | `/tmp/opencode/manyhands-notices-windows` |
+
+Manually inspected generated IBM copyright/OFL, full MIT/MPL texts,
+libgit2's COPYING/linking exception, and Lucide/Feather icon terms. The
+Linux bundle contains original `option-ext-0.2.0.crate` and
+`libgit2-sys-0.18.8+1.9.7.crate` source archives. Normal dependency
+notice generation required no crate-specific licence-expression override.
+
+Checked upstream Rust 1.98.1 distribution metadata: all four native
+target packages are marked available. Pinned that version and cargo-about
+in `packaging/tool-versions.env`.
+
+Tracked and new-file whitespace checks passed. Rust build/test gates are
+not applicable to this batch's Python, Nix package-list, and documentation
+changes. No native compilation, signature verification, or GUI launch is
+claimed from these results.
+
+### Observations And Refinements
+
+- cargo-about 0.9.3 requires `--features cli` at installation; a plain
+  `cargo install` succeeds without installing an executable. The documented
+  installation command includes the feature.
+- Crate metadata alone omits nested native/asset notices. Preserve original
+  nested files and source archives in addition to generated Rust notices.
+- Concurrent Devenv invocations in one worktree raced on generated
+  `load-exports` state and timed out. Repeating the notice generation
+  sequentially completed successfully. Avoid concurrent Devenv shell
+  invocations sharing that state.
+- Windows ZIP fixtures verify structure only; dummy certificate/signing
+  metadata in tests is not a cryptographic signature test.
+- New output directories are required. Helpers do not overwrite arbitrary
+  existing staging/extraction/archive outputs.
+
+## First Checkpoint Handoff (Completed Below)
+
+After owner feedback, implement Tasks 4–6: the Linux runtime audit, macOS
+bundle metadata/icon/linkage and ad-hoc signing, and persistent Windows
+self-signing/provisioning instructions. Native steps must complete the
+manifest's signing state, keep the app's resource manifest in sync, and
+verify extracted signatures. Follow with Tasks 7–8 for draft lifecycle and
+the manual workflow. Windows secrets remain an owner-provisioned input;
+native dispatch still needs fresh authorization after merge.
+
+## Second Checkpoint — Tasks 4–6
+
+The owner approved the first checkpoint in conversation. Implemented the
+next three tasks on the same branch/worktree. No commit, push, workflow
+dispatch, tag/release creation, or real signing identity provisioning has
+occurred. Fetched/merged main again before this batch and before this
+checkpoint; main remained at `48ffc058`. `git merge-tree --write-tree HEAD
+origin/main` also succeeded (implementation is still uncommitted).
+
+### Implemented
+
+- **Linux:** ELF architecture/loader/RPATH/glibc/linkage auditing, explicit
+  Ubuntu 24.04 runtime-package and dynamic-library lists, metadata/README
+  updates, and a Docker-based isolated runtime check. The container checks
+  both binaries' linkage, loads the declared dynamic libraries, and runs
+  the extracted CLI without a development environment. Missing input files
+  are rejected before Docker can create bind-mount paths.
+- **macOS:** generated 1024-square icon (resvg 0.48.1), app plist with stable
+  `io.github.vhodges.manyhands` identity, minimum-OS derivation across
+  packaged Mach-O files, reviewed OpenSSL 3 relocation into app/CLI runtime
+  layouts, original native notices, inside-out ad-hoc signing, and native
+  extracted verification. The public README/manifest and app resource
+  copies are refreshed before sealing. Failed sealing leaves signing
+  marked pending.
+- **Windows:** import/header auditing with MSVC tools and an exact reviewed
+  OS/API-set list, static-CRT build policy, persistent PFX/secret support,
+  SHA-256 Authenticode/RFC 3161 timestamping, exact signer/timestamp checks,
+  temporary current-user trust, owned private-key/file/certificate cleanup,
+  public certificate/fingerprint documentation, and public-only extracted
+  verification. Packaged CLI tests now strip developer-tool PATH entries.
+
+The Windows workflow must set `RUSTFLAGS=-C target-feature=+crt-static`
+for both builds. The initial policy forbids non-system module graphs;
+unknown modules need explicit review rather than automatic runner copying.
+The macOS initial external-library policy covers Homebrew OpenSSL 3 only.
+
+### Local Verification
+
+Built both actual release binaries from the worktree through Devenv,
+reusing the primary checkout's ignored target cache:
+
+```sh
+CARGO_TARGET_DIR=/home/vhodges/work/src/manyhands/target devenv shell -- cargo build --locked --release --no-default-features --bin manyhands-cli
+CARGO_TARGET_DIR=/home/vhodges/work/src/manyhands/target devenv shell -- cargo build --locked --release --no-default-features --features desktop --bin manyhands
+devenv shell -- sh scripts/check-cli-no-gpui.sh
+```
+
+All three commands passed. Inspected both binaries' dynamic sections and
+checked the real desktop binary through the ELF policy: it was correctly
+rejected as an Ubuntu release because its loader/RPATHs are Nix-specific.
+These local builds are development outputs, not distribution assets.
+
+Final local checks:
+
+| Check | Result |
+| --- | --- |
+| Python packaging/policy suite through Devenv | **60 tests passed** |
+| PowerShell import-policy tests (PowerShell 7.6.6 via Nix) | Passed |
+| PowerShell parser: signing script, module, and policy tests | Passed |
+| ShellCheck 0.11.0: both native shell entry points | Passed |
+| `bash -n` on the Ubuntu container setup script | Passed |
+| Generated PNG visual inspection | Correct 1024-square brand artwork |
+
+Python tests cover metadata/versions, dependency relocation orchestration,
+unknown external libraries, ELF baseline failures, missing Docker inputs,
+certificate-fingerprint metadata, static-CRT policy, Windows environment
+cleanup, and archive handling. macOS command-boundary fixtures do not run
+real Mach-O rewriting or codesign. PowerShell policy tests run without
+accessing a Windows certificate store. Real signature/timestamp validation
+is not claimed from Linux-hosted checks.
+
+### Code Review
+
+Requested a read-only review of the native helpers. Two P2 findings were
+reproduced with failing regressions and fixed:
+
+1. Accept the exact `__MACOSX/._<root>` AppleDouble root sidecar produced by
+   metadata-preserving ZIP tools, while retaining path restrictions.
+2. Require an exact reviewed Windows OS/API-set name as well as ordinary
+   module presence in System32. A vendor DLL in System32 no longer passes.
+   Dumpbin parsing also captures non-`.dll` import names such as
+   `WINSPOOL.DRV` instead of silently dropping them.
+
+The targeted re-review confirmed both findings resolved and reported no
+remaining concrete issues in that recheck. Non-system dependency graphs
+are prohibited, so OS-managed transitive dependencies remain Windows'
+responsibility.
+
+### Native Acceptance Still Pending
+
+- Ubuntu native archives and isolated runtime checks on x86_64 and ARM64.
+- Real macOS `sips`/`iconutil`/Mach-O relocation/codesign and extracted
+  signature checks, plus Finder launch/Gatekeeper behavior.
+- Real Windows static-CRT builds, SignTool/timestamp/WinTrust checks,
+  certificate-store cleanup, and extracted execution on a native runner.
+- GUI launches on Windows, macOS, and Linux Wayland.
+
+Those run after merge with fresh owner authorization. Windows signing
+secrets still need owner provisioning using `packaging/windows/SIGNING.md`.
+No Rust source or Cargo dependency/lockfile changed in this batch; the
+full Rust source-change gates are not required for the new packaging code.
+
+## Second Checkpoint Handoff (Completed Below)
+
+After owner feedback, implement draft creation/recovery/checksums and the
+manual `Release` workflow. Wire all three native helpers into each matrix
+job before artifact handoff, retain the CLI dependency-boundary check,
+set Windows static-CRT flags, and preserve the independent Build workflow.
+Task 9's real native acceptance and Stage 2's installation channels remain
+separate follow-on checkpoints.
+
+## Stage 1 Final Checkpoint — Tasks 7–8 And Local Handoff
+
+The owner approved the second checkpoint. The manual Release workflow and
+draft assembly are now implemented on `release-workflow`; all work remains
+uncommitted in `.worktrees/release-workflow`. Native acceptance is still
+post-merge and requires fresh owner authorization. No workflow was
+dispatched, real release/tag created, signing secrets provisioned, or
+GitHub data mutated during implementation.
+
+### Workflow
+
+`.github/workflows/release.yml` has only `workflow_dispatch`, with a
+required existing tag. Preparation requires main invocation, an already
+merged source revision, matching tagged Cargo manifests, and remote
+tag/release preflight. It emits a compact source manifest. Every later job
+checks out and verifies that exact SHA without resolving the tag anew.
+
+The four native matrix rows build featureless CLI and production desktop
+separately. They generate notices, run the platform runtime/signing
+helpers, archive, extract, smoke-test the CLI, perform extracted native
+verification, and hand off only successful outputs. Windows secrets are
+scoped to signing, not extracted verification; Windows builds set static
+CRT flags. Linux runs the isolated Ubuntu check. Development-only desktop
+features are excluded. Only the final assembly job has `contents: write`.
+
+### Draft Assembly And Recovery
+
+Added archive size/SHA-256 inventories and complete candidate validation,
+including comparison with each extracted archive manifest. `gh` supplies
+all GitHub operations. A read-only 404 probe confirmed its `--include`
+HTTP response format; tests distinguish explicit absence from API/auth or
+network failures. Annotated tags are peeled to commits and rechecked.
+
+Assembly produces six owned assets: four archives, immutable source-level
+`release.json`, and `SHA256SUMS`. The source asset identifies the revision
+and target/archive/signing descriptors; detailed per-build information
+remains inside each archive. Upload the source anchor first, retain it on
+reruns, clear stale checksums before replacing archives, and upload new
+checksums last. Verify final uploaded states/sizes and available GitHub
+digests. Never publish automatically or modify a published release.
+
+Owner-written notes and unrelated attachments are preserved. Existing
+drafts must match both source identity and prerelease classification.
+When notes no longer contain their original source marker, the immutable
+source asset proves identity without risking deletion during clobber.
+Same-source rebuilds can replace timestamped binaries/archives while the
+identity anchor stays unchanged.
+
+### Final Local Verification
+
+| Check | Result |
+| --- | --- |
+| Full release-helper suite through Devenv | **87 tests passed** |
+| actionlint 1.7.12 with ShellCheck available | Passed |
+| PowerShell parser on every inline pwsh workflow body | **19 steps passed** |
+| Prior native-helper ShellCheck/PowerShell policy checks | Passed in second checkpoint |
+| Fetch/merge origin/main | Already up to date at `48ffc058` |
+| `git merge-tree --write-tree HEAD origin/main` | Succeeded; source remains uncommitted |
+
+The added tests exercise real small four-target archive fixtures and an
+in-memory GitHub boundary. They cover API error classification, exact draft
+creation flags, tag peeling, missing/duplicate/corrupt candidates, mismatched
+inventories, source/prerelease mismatches, interrupted clobber semantics,
+same-source rebuilds, preserved notes/attachments, and publication observed
+mid-run. They do not create real GitHub releases or validate native code
+signatures on Linux. No Rust source/dependency changes were made in this
+batch; broad Rust source-change gates were not rerun.
+
+### Final Code Review
+
+Requested review of workflow/assembly integration. Reproduced and fixed:
+
+1. Existing draft prerelease flags were not checked. Both incorrect flag
+   directions now fail preflight before mutation.
+2. Clobbering the only source manifest after owner notes were rewritten
+   could make interrupted runs unrecoverable. Source identity is now a
+   deterministic immutable asset, established first and never replaced.
+   The fake boundary now deletes an old asset before simulating upload
+   failure, matching real `gh --clobber` behavior.
+3. Null/list nested handoff metadata produced tracebacks. Explicit object
+   validation now reports ordinary release-validation errors.
+
+The targeted re-review confirmed all three findings resolved with no
+remaining concrete related defect; its 23 assembly tests passed. The
+subsequent full parent-run suite passed all 87 tests.
+
+### Handoff
+
+Local implementation and review for Stage 1 are complete. Preserve the
+worktree and obtain explicit commit/push/merge instructions. After merge,
+the owner provisions Windows signing secrets, creates a matching merged
+tag, and authorizes the first native Release run. Inspect real downloads,
+signature checks, runtime checks, and desktop launches under Task 9; any
+post-merge native failures are follow-on work under repository policy.
+Homebrew, Inno Setup, and Nix flake delivery remain Stage 2.
+
+## Integration Authorization
+
+The owner selected committing Stage 1 and merging it into local `main`.
+Verify the merged result before removing the completed worktree. Pushing
+and native workflow dispatch require their own authorization; native
+acceptance and Stage 2 remain follow-on work.
