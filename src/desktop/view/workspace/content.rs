@@ -12,16 +12,23 @@ use crate::desktop::{
         navigation::OpenTarget,
         stamp::{RepoKey, SettingsPage, TabId},
     },
-    services::requests::DesktopRequestId,
+    services::{drafts::NewItem, requests::DesktopRequestId},
     view::{
-        close_draft::{self, CloseWithDraft},
+        close_draft::{self, Ask, CloseWithDraft},
         drafts::DraftsEvent,
+        item::{ChipField, ItemPane, Leaving, RegionEnd, open_details},
         scroll::ContentScroll,
+        sidebar,
+        tabs::Keeping,
     },
 };
-use gpui_kit::{AnyElement, App, Context, IntoElement, Window, component::WindowExt};
+use gpui_kit::{
+    AnyElement, App, Context, Entity, InteractiveElement, IntoElement, ParentElement, Styled,
+    Window,
+    component::{WindowExt, v_flex},
+};
 use manyhands::{drafts::DraftId, repository::transport::SshAuthority};
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{collections::BTreeSet, path::PathBuf, rc::Rc};
 
 enum ContentPage {
     Tabs,
@@ -95,10 +102,26 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A tab's create was refused for want of initials, and its banner
+    /// asked for Settings on `root` (R-21): the next frame, which supplies
+    /// its window, opens them.
+    pub(in crate::desktop::view) fn settings_for_initials(
+        &mut self,
+        root: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        self.content.settings_for = Some(root);
+        cx.notify();
+    }
+
     /// Opens the Drafts page a tab's Review in Drafts asked for, and
-    /// focuses a tab whose draft was discarded. While a
-    /// dialog is open the request waits, as D1's actions do not act behind
-    /// one; the frame after the dialog closes opens it.
+    /// focuses a tab whose draft was discarded, or the content region once
+    /// a tab closed or followed its item (not behind the details sheet,
+    /// N2), and opens Settings on the
+    /// repository a tab's create asked for: the identity form, where its
+    /// initials are set. While a dialog is open the request waits, as D1's
+    /// actions do not act behind one; the frame after the dialog closes
+    /// opens it.
     pub(super) fn apply_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {
             return;
@@ -106,8 +129,36 @@ impl Workspace {
         if std::mem::take(&mut self.content.refocus) {
             self.focus_region(Region::Content, window, cx);
         }
+        // Dropped behind the details sheet, never kept for its close (N2).
+        if std::mem::take(&mut self.content.landed_refocus) && !window.has_active_sheet(cx) {
+            self.focus_region(Region::Content, window, cx);
+        }
         if let Some(id) = self.content.review.take() {
             self.open_drafts(Some(id), window, cx);
+        }
+        if let Some(root) = self.content.settings_for.take() {
+            self.identity_in_settings(root, window, cx);
+        }
+    }
+
+    /// A create dialog's new item (R-20): its draft is written and its
+    /// Create prepare sent, and the dialog has closed itself (Task 23 fix
+    /// 1). The item's tab opens, and follows that prepare to the edit
+    /// editor. Focus goes to it unless a dialog is still open: one opened
+    /// above the create dialog keeps it.
+    pub(in crate::desktop::view) fn open_created(
+        &mut self,
+        target: OpenTarget,
+        created: NewItem,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_item(target, cx);
+        if let Some(pane) = self.content.tabs.shown() {
+            pane.update(cx, |pane, cx| pane.edit_created(created, cx));
+        }
+        if !window.has_active_dialog(cx) {
+            self.focus_region(Region::Content, window, cx);
         }
     }
 
@@ -202,9 +253,86 @@ impl Workspace {
             .update(cx, |settings, cx| settings.retry_generation(id, window, cx));
     }
 
+    /// A chip asked for its tab's details sheet: the next frame, which
+    /// supplies its window, opens it.
+    pub(in crate::desktop::view) fn ask_details(
+        &mut self,
+        pane: &Entity<ItemPane>,
+        field: ChipField,
+        cx: &mut Context<Self>,
+    ) {
+        self.content.details = Some((pane.downgrade(), field));
+        cx.notify();
+    }
+
+    /// Opens the details sheet a chip asked for, while its tab is shown
+    /// and no dialog is open; and closes the sheet once its tab is not the
+    /// one shown: closed, left, or another item opened from the sheet
+    /// (fact 80). Root then gives focus back to the chip, or, when the
+    /// chip went with its tab, the content region takes it.
+    pub(super) fn sync_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let shown = self.shown_item(cx);
+        if window.has_active_sheet(cx) {
+            let owned = match (&self.content.sheet, &shown) {
+                (Some(owner), Some(pane)) => *owner == pane.downgrade(),
+                _ => false,
+            };
+            if !owned {
+                window.close_sheet(cx);
+            }
+        }
+        if !window.has_active_sheet(cx) {
+            self.content.sheet = None;
+        }
+        if !window.has_active_dialog(cx)
+            && let Some((pane, field)) = self.content.details.take()
+            && let Some(pane) = pane.upgrade().filter(|pane| shown.as_ref() == Some(pane))
+        {
+            open_details(&pane, field, window, cx);
+            self.content.sheet = Some(pane.downgrade());
+        }
+        // R-57: the sheet suggests the values on the tickets loaded, which
+        // its tab reads as the sheet is drawn, later in this frame.
+        if let Some(pane) = self.content.sheet.as_ref().and_then(|pane| pane.upgrade()) {
+            let tickets = &self.tickets;
+            pane.update(cx, |pane, _| pane.take_loaded_tickets(tickets));
+        }
+    }
+
     pub(crate) fn open_item(&mut self, target: OpenTarget, cx: &mut Context<Self>) {
+        // Whatever opens an item closes the details sheet at the next
+        // frame: only the sheet's own rows and link can open one while it
+        // is open.
+        self.content.sheet = None;
         self.content.show_tabs(cx);
         self.content.tabs.open(target, &self.services, cx);
+        if let Some(pane) = self.content.tabs.shown() {
+            let details = Self::repository_details(cx);
+            pane.update(cx, |pane, _| pane.end_region_with(details));
+        }
+        cx.notify();
+    }
+
+    /// A repair made in the tab `id` (`ItemPane`'s `FollowItem`): the tab
+    /// follows the item to `target`, in its place in the strip, and reads it
+    /// there; a tab already open on it is shown instead, and this one
+    /// closes. A shown tab's content takes the focus at the next frame, the
+    /// view that held it gone, unless the details sheet is open then (N2).
+    pub(in crate::desktop::view) fn follow_tab(
+        &mut self,
+        id: TabId,
+        target: OpenTarget,
+        cx: &mut Context<Self>,
+    ) {
+        let shown = self.content.tabs.active() == Some(id);
+        let now = self.content.tabs.follow(id, target, &self.services, cx);
+        if let Some(pane) = self.content.tabs.pane(now).cloned() {
+            let details = Self::repository_details(cx);
+            pane.update(cx, |pane, _| pane.end_region_with(details));
+        }
+        if shown {
+            self.content.landed_refocus = true;
+        }
         cx.notify();
     }
 
@@ -216,10 +344,17 @@ impl Workspace {
         }
     }
 
-    /// Closes the tab `id`. A tab with a restored draft attached asks
-    /// first: Keep draft, Discard or Cancel. True when the tab closed now.
-    /// While quitting waits for drafts or a job, with Quit now in view,
-    /// nothing closes and nothing opens in front of it.
+    /// Closes the tab `id`, asking first when it holds unsaved work (design,
+    /// Done and leaving: Closing the tab; R-41): a restored draft asks
+    /// D2's Keep draft, Save, Discard or Cancel; an edit session with
+    /// unsaved work, a kept or stored draft, or one being stored, asks in
+    /// its tab (`ItemPane::ask_to_close`), which closes once its choice is
+    /// settled; edited repair text asks whether to discard it
+    /// (`ItemPane::ask_discard_repair`). A clean tab closes at once, and
+    /// release on leave applies.
+    /// True when the tab closed now. While quitting waits for drafts or a
+    /// job, with Quit now in view, nothing closes and nothing opens in
+    /// front of it.
     pub(in crate::desktop::view) fn close_tab(
         &mut self,
         id: TabId,
@@ -230,36 +365,78 @@ impl Workspace {
         {
             return false;
         }
-        let attached = self.content.tabs.pane(id).and_then(|pane| {
-            let pane = pane.read(cx);
-            let draft = self.services.drafts().read(cx).attached(&pane.tab_key())?;
-            Some((draft, pane.tab_title()))
-        });
-        let Some((draft, title)) = attached else {
-            let closed = self.content.tabs.close(id);
-            if closed {
-                cx.notify();
+        let pane = self.content.tabs.pane(id).cloned();
+        let leaving = pane
+            .as_ref()
+            .map_or(Leaving::Clean, |pane| pane.read(cx).leaving(cx));
+        let (draft, pane) = match (leaving, pane) {
+            (Leaving::Clean, pane) => {
+                if let Some(pane) = &pane {
+                    pane.update(cx, |pane, cx| pane.release_on_leave(cx));
+                }
+                let closed = self.content.tabs.close(id);
+                if closed {
+                    cx.notify();
+                }
+                return closed;
             }
-            return closed;
+            _ if window.has_active_dialog(cx) => return false,
+            (Leaving::Session, Some(pane)) => {
+                pane.update(cx, |pane, cx| pane.ask_to_close(window, cx));
+                return false;
+            }
+            (Leaving::Repair, Some(pane)) => {
+                pane.update(cx, |pane, cx| pane.ask_discard_repair(true, window, cx));
+                return false;
+            }
+            (Leaving::Restored(draft), Some(pane)) => (draft, pane),
+            (_, None) => return false,
         };
-        if window.has_active_dialog(cx) {
-            return false;
-        }
+        let title = pane.read(cx).tab_title();
+        // What it offers and says is the tab's: its Save goes through
+        // Continue editing's steps.
+        let (offers, note) = pane.update(cx, |pane, cx| pane.close_readers(cx));
         let workspace = cx.entity().downgrade();
-        close_draft::open(title, window, cx, move |choice, window, cx| {
-            let _ = workspace.update(cx, |workspace, cx| {
-                workspace.close_with_draft(id, draft, choice, window, cx)
-            });
-        });
+        let opened = close_draft::open(
+            Ask::restored(&title, offers, note),
+            window,
+            cx,
+            move |choice, window, cx| {
+                let _ = workspace.update(cx, |workspace, cx| {
+                    workspace.close_with_draft(id, draft, choice, window, cx)
+                });
+            },
+        );
+        pane.update(cx, |pane, _| pane.close_dialog_opened(opened));
         false
     }
 
-    /// What the close dialog chose for the tab `id` and its draft. Keep
-    /// closes the tab once the draft is written and let go of; a failed
-    /// write leaves the tab open with the failure. Discard closes it once
-    /// the draft is deleted; a failed discard leaves it open and says so,
-    /// the draft let go of and listed again. A tab closed here gives the
-    /// focus to the content region, as `secondary-w` does.
+    /// The tab `id` settled what its unsaved work comes to, in its own
+    /// dialog or after a discard elsewhere (R-71): it closes. When it was
+    /// the tab shown, the next frame focuses the content region, as
+    /// `secondary-w` does, unless the details sheet is open then (Task 27
+    /// fix 2, N2); a tab closed in the background, behind another tab or
+    /// the Drafts page or Settings, held no focus, so focus stays where the
+    /// user is (fix 3).
+    pub(in crate::desktop::view) fn close_settled(&mut self, id: TabId, cx: &mut Context<Self>) {
+        let shown = matches!(self.content.page(cx), ContentPage::Tabs)
+            && self.content.tabs.active() == Some(id);
+        if self.content.tabs.close(id) {
+            if shown {
+                self.content.landed_refocus = true;
+            }
+            cx.notify();
+        }
+    }
+
+    /// What the close dialog chose for the tab `id` and its draft. Save,
+    /// Retry and Cancel are the tab's (`ItemPane::close_chosen`), and so is
+    /// every choice once its Save opened an edit session. Keep closes the
+    /// tab once the draft is written and let go of; a failed write leaves
+    /// the tab open with the failure. Discard closes it once the draft is
+    /// deleted; a failed discard leaves it open and says so, the draft let
+    /// go of and listed again. A tab closed here gives the focus to the
+    /// content region, as `secondary-w` does.
     fn close_with_draft(
         &mut self,
         id: TabId,
@@ -268,9 +445,27 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let pane = self.content.tabs.pane(id).cloned();
+        let the_tabs = matches!(
+            choice,
+            CloseWithDraft::Save | CloseWithDraft::Retry | CloseWithDraft::Cancel
+        ) || pane
+            .as_ref()
+            .is_some_and(|pane| pane.read(cx).has_session());
+        if the_tabs {
+            if let Some(pane) = pane {
+                pane.update(cx, |pane, cx| pane.close_chosen(choice, cx));
+            }
+            return;
+        }
+        // D2's Keep draft or Discard: nothing the tab was continuing is
+        // saved after this (Task 18 fix 1, M1).
+        if let Some(pane) = &pane {
+            pane.update(cx, |pane, _| pane.continue_without_saving());
+        }
         let drafts = self.services.drafts().clone();
         let closing = match choice {
-            CloseWithDraft::Cancel => return,
+            CloseWithDraft::Cancel | CloseWithDraft::Save | CloseWithDraft::Retry => return,
             CloseWithDraft::KeepDraft => {
                 drafts.update(cx, |registry, cx| registry.release(draft, cx))
             }
@@ -299,13 +494,50 @@ impl Workspace {
         .detach();
     }
 
-    /// Closes every tab of `root`. Their restored drafts are written and
-    /// let go of first, kept in Drafts, never discarded.
+    /// Closes every tab of `root`, as the user's confirmed removal does,
+    /// but a tab whose edit session holds unsaved text that no draft holds,
+    /// and that the confirmation did not count when it was confirmed: that
+    /// one stays open, and its own close asks (Part C fix 2, N1). The tabs
+    /// it counted were the user's choice. Their restored drafts are written
+    /// and let go of first, kept in Drafts, never discarded.
     pub(crate) fn close_repository(&mut self, root: &str, cx: &mut Context<Self>) {
+        let counted = self
+            .services
+            .edit_tabs()
+            .update(cx, |tabs, _| tabs.counted(root));
+        self.close_tabs_of(root, Keeping::Uncounted(&counted), cx);
+    }
+
+    /// The user's confirmed removal of `root` landed: its tabs close as
+    /// `close_repository` closes them, and no context of it is released by
+    /// a tab kept open that leaves later: the library would refuse it (Part
+    /// C fix 2, N2).
+    pub(super) fn repository_removed(&mut self, root: &str, cx: &mut Context<Self>) {
+        self.close_repository(root, cx);
+        self.forget_contexts_of(root, cx);
+    }
+
+    /// `root` left the list with no removal the user confirmed: its tabs
+    /// close as `close_repository`'s do, except every tab whose edit session
+    /// holds unsaved text that no draft holds, which stays open; its own
+    /// close asks (Part C fix 1, I1). No context of it is released by such a
+    /// tab later (N2).
+    pub(super) fn drop_repository(&mut self, root: &str, cx: &mut Context<Self>) {
+        self.close_tabs_of(root, Keeping::Unkept, cx);
+        self.forget_contexts_of(root, cx);
+    }
+
+    fn forget_contexts_of(&mut self, root: &str, cx: &mut Context<Self>) {
+        self.services
+            .releases()
+            .update(cx, |releases, _| releases.forget_root(root));
+    }
+
+    fn close_tabs_of(&mut self, root: &str, keeping: Keeping<'_>, cx: &mut Context<Self>) {
         self.services
             .drafts()
             .update(cx, |registry, cx| registry.release_repository(root, cx));
-        self.content.tabs.close_repository(root);
+        self.content.tabs.close_repository(root, keeping, cx);
         cx.notify();
     }
 
@@ -354,17 +586,60 @@ impl Workspace {
         window.focus(&focus, cx);
     }
 
+    /// The content region's column: Settings, the Drafts page and the
+    /// empty pane scroll it, as in D1.
     pub(super) fn content_scroll(&self) -> &ContentScroll {
         self.content.tabs.scroll()
+    }
+
+    /// The item tab the content region shows, if it shows one.
+    pub(super) fn shown_item(&self, cx: &App) -> Option<Entity<ItemPane>> {
+        match self.content.page(cx) {
+            ContentPage::Tabs => self.content.tabs.shown(),
+            ContentPage::Settings | ContentPage::Drafts => None,
+        }
+    }
+
+    /// What the page keys move: while an item tab is shown, its own scroll
+    /// region below the strip and the header (R-47); else the column.
+    pub(super) fn scroll_target(&self, cx: &App) -> ContentScroll {
+        match self.shown_item(cx) {
+            Some(pane) => pane.read(cx).region().clone(),
+            None => self.content_scroll().clone(),
+        }
+    }
+
+    /// The details of the selected repository, as the end of an item's
+    /// scroll region: drawn there, and revealed by that region (owner,
+    /// 2026-10-27). D1 drew them at the end of the content column.
+    fn repository_details(cx: &mut Context<Self>) -> RegionEnd {
+        let workspace = cx.entity().downgrade();
+        Rc::new(
+            move |scroll: &ContentScroll, _: &mut Window, cx: &mut App| {
+                workspace
+                    .update(cx, |workspace, cx| {
+                        sidebar::selection(
+                            &workspace.navigation,
+                            &workspace.remove_focus,
+                            &workspace.retry_focus,
+                            scroll,
+                            cx,
+                        )
+                        .into_any_element()
+                    })
+                    .ok()
+            },
+        )
     }
 
     /// Keep selection construction and secret clearing in their existing frame
     /// order; leaving Settings does not replace its cached pages or scroll.
     /// Leaving Keys for the tabs or the Drafts page empties a typed
-    /// passphrase alike.
+    /// passphrase alike. `selection` is drawn by the empty pane; an item
+    /// tab draws its own at the end of its scroll region.
     pub(super) fn content_body(
         &self,
-        selection: AnyElement,
+        selection: Option<AnyElement>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
@@ -380,9 +655,29 @@ impl Workspace {
                 self.content
                     .settings
                     .update(cx, |settings, cx| settings.forget_passphrase(window, cx));
-                let mut body = self.content.tabs.render(window, cx);
-                body.push(selection);
-                body
+                let tabs = self.content.tabs.render(
+                    window,
+                    self.focused_region(window, cx) == Some(Region::Content),
+                    cx,
+                );
+                if self.content.tabs.shown().is_none() {
+                    // The empty pane keeps D1's single scrolling column.
+                    let mut body = tabs;
+                    body.extend(selection);
+                    return body;
+                }
+                // An item tab fills the column: the strip, then the pane,
+                // whose header stays above its own scroll region. It has no
+                // zero minimum: never shorter than the strip and the
+                // header, it lets the column scroll in a short window.
+                vec![
+                    v_flex()
+                        .id("item-tab")
+                        .flex_1()
+                        .w_full()
+                        .children(tabs)
+                        .into_any_element(),
+                ]
             }
         }
     }
@@ -405,6 +700,11 @@ impl Workspace {
     ) -> Option<gpui_kit::Entity<crate::desktop::view::item::ItemPane>> {
         self.content.tabs.shown()
     }
+    /// The shown tab, for a test that closes it by its own action.
+    #[cfg(test)]
+    pub(crate) fn shown_tab(&self) -> Option<TabId> {
+        self.content.tabs.active()
+    }
     #[cfg(test)]
     pub(crate) fn opened(&self, cx: &App) -> Option<OpenTarget> {
         self.content
@@ -423,5 +723,14 @@ impl Workspace {
     #[cfg(test)]
     pub(crate) fn content_offset(&self) -> gpui_kit::Pixels {
         self.content_scroll().handle().offset().y
+    }
+    /// The shown item's scroll region's offset.
+    #[cfg(test)]
+    pub(crate) fn item_offset(&self, cx: &App) -> gpui_kit::Pixels {
+        self.content
+            .tabs
+            .shown()
+            .map(|pane| pane.read(cx).region_offset())
+            .unwrap_or_default()
     }
 }

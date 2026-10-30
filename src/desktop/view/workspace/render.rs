@@ -4,9 +4,9 @@ use super::{Region, Workspace};
 use crate::desktop::{
     keys::{
         CloseTab, Find as FindKey, FocusContent, FocusNavigation, FocusOperations,
-        FocusRepositories, NextRegion, NextTab, OpenDrafts, OpenSelected, OpenSettings,
-        PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh, ScrollPageDown, ScrollPageUp,
-        ScrollToBottom, ScrollToTop,
+        FocusRepositories, JumpToDiscussion, NewItem, NextRegion, NextTab, OpenDrafts,
+        OpenSelected, OpenSettings, PreviousRegion, PreviousTab, Quit, QuitNow, Rebuild, Refresh,
+        ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop,
     },
     model::stamp::SettingsPage,
     view::{
@@ -18,24 +18,27 @@ use gpui_kit::{
     App, Context, InteractiveElement, IntoElement, ParentElement, Render,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{ActiveTheme, Root, WindowExt, h_flex, v_flex},
-    px,
+    deferred, div, px,
 };
 
 impl Workspace {
+    /// A page key: the shown item's scroll region moves, else the content
+    /// region's column (R-47).
     fn scroll_content(&mut self, scroll: impl Fn(&ContentScroll) -> bool, cx: &mut Context<Self>) {
-        if scroll(self.content_scroll()) {
+        if scroll(&self.scroll_target(cx)) {
             cx.notify();
         }
     }
 }
 
-/// Except Quit, workspace actions must not escape a dialog's focus trap.
+/// Except Quit, workspace actions must not escape a dialog's focus trap,
+/// nor act behind the details sheet (R-60).
 pub(in crate::desktop::view) fn unless_dialog<A: 'static>(
     cx: &mut Context<Workspace>,
     f: impl Fn(&mut Workspace, &A, &mut Window, &mut Context<Workspace>) + 'static,
 ) -> impl Fn(&A, &mut Window, &mut App) + 'static {
     cx.listener(move |this, action: &A, window, cx| {
-        if !window.has_active_dialog(cx) {
+        if !window.has_active_dialog(cx) && !window.has_active_sheet(cx) {
             f(this, action, window, cx)
         }
     })
@@ -45,6 +48,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_tickets(window, cx);
         self.apply_review(window, cx);
+        self.sync_sheet(window, cx);
         if let Some(region) = self.focused_region(window, cx) {
             self.last_region = Some(region);
         }
@@ -52,13 +56,19 @@ impl Render for Workspace {
         self.repositories_pane
             .set(RepositoryRow::rows(&self.navigation), window, cx);
         let repositories = sidebar::repositories(&self.navigation, &self.repositories_pane, cx);
-        let selection = sidebar::selection(
-            &self.navigation,
-            &self.remove_focus,
-            &self.retry_focus,
-            self.content_scroll(),
-            cx,
-        );
+        let item_shown = self.shown_item(cx).is_some();
+        // An item tab draws the selection at the end of its own scroll
+        // region instead.
+        let selection = (!item_shown).then(|| {
+            sidebar::selection(
+                &self.navigation,
+                &self.remove_focus,
+                &self.retry_focus,
+                self.content_scroll(),
+                cx,
+            )
+            .into_any_element()
+        });
         let navigation = self.navigation_pane(window, cx);
         self.content_scroll()
             .note_focus(window.focused(cx).as_ref());
@@ -69,7 +79,26 @@ impl Render for Workspace {
             .size_full()
             .overflow_y_scroll()
             .track_scroll(self.content_scroll().handle());
-        let content = content.children(self.content_body(selection.into_any_element(), window, cx));
+        // Root's sheet layer is drawn inside the content region, whose item
+        // tab opens the sheet: its focus then counts as the region's, and
+        // its keys pass the region's context before the workspace's, where
+        // R-60 refuses them. The sheet places itself over the whole window
+        // (fact 61); deferred, it is painted above the rest of the window
+        // and below dialogs, popups and tooltips, which are deferred higher.
+        let sheet = Root::render_sheet_layer(window, cx)
+            .map(|layer| div().absolute().child(deferred(layer)));
+        let content = content
+            .children(self.content_body(selection, window, cx))
+            .children(sheet);
+        let content = self
+            .region(Region::Content, window, cx, content)
+            .flex_1()
+            .min_w_0()
+            .h_full();
+        // An item tab lies flush with the region's border (owner,
+        // 2026-10-30). Settings, the Drafts page and the empty pane keep
+        // the regions' padding.
+        let content = if item_shown { content.p_0() } else { content };
         let top = h_flex()
             .flex_1()
             .min_h_0()
@@ -84,11 +113,7 @@ impl Render for Workspace {
                     .w(px(320.))
                     .h_full(),
             )
-            .child(
-                self.region(Region::Content, window, cx, content)
-                    .flex_1()
-                    .h_full(),
-            );
+            .child(content);
         let session = self.session_section(window, cx);
         let pending = self.pending_section(window, cx);
         self.prune_abandon_focus();
@@ -113,7 +138,7 @@ impl Render for Workspace {
             )
             .w_full()
             .h(px(260.));
-        // Root's first child draws its layers.
+        // Root's first child draws its dialog and notification layers.
         v_flex()
             .id("workspace")
             .key_context("Workspace")
@@ -121,6 +146,11 @@ impl Render for Workspace {
                 this.request_quit(window, cx);
             }))
             .on_action(cx.listener(|this, _: &QuitNow, _, cx| this.quit_now(cx)))
+            // New document… or New ticket…, bound in the navigation region
+            // only.
+            .on_action(unless_dialog(cx, |this, _: &NewItem, window, cx| {
+                this.new_item(window, cx)
+            }))
             .on_action(unless_dialog(cx, |this, _: &OpenSelected, _, cx| {
                 this.open_selected_document(cx)
             }))
@@ -187,12 +217,19 @@ impl Render for Workspace {
             .on_action(unless_dialog(cx, |this, _: &ScrollToBottom, _, cx| {
                 this.scroll_content(ContentScroll::to_bottom, cx)
             }))
+            .on_action(unless_dialog(
+                cx,
+                |this, _: &JumpToDiscussion, window, cx| {
+                    if let Some(pane) = this.shown_item(cx) {
+                        pane.update(cx, |pane, cx| pane.jump_to_discussion(window, cx));
+                    }
+                },
+            ))
             .relative()
             .size_full()
             .bg(cx.theme().background)
             .child(top)
             .child(operations)
-            .children(Root::render_sheet_layer(window, cx))
             .children(Root::render_dialog_layer(window, cx))
             .children(Root::render_notification_layer(window, cx))
     }

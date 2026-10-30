@@ -46,9 +46,9 @@ source modes. Viewing, switching modes and no-change saves preserve original
 source. Rich-text editing retains unsupported constructs and untouched source;
 it does not silently reserialize or simplify an entire document. Actual metadata
 edits preserve unknown values even when YAML formatting changes. As amended on
-2026-10-07, a desktop save after an actual edit may also write the selected
-editor's recorded, meaning-preserving load normalization of the body; the
-desktop/editor RFC bounds that exception. It does not apply to the CLI or the
+2026-10-07 and by Wave 03 D3 on 2026-10-26, a desktop save after an actual
+edit may also write the selected editor's recorded load normalization of the
+body (desktop RFC); the desktop/editor RFC bounds that exception. It does not apply to the CLI or the
 headless library.
 
 Browsing and repair MUST NOT silently change identity. Adoption of marker-only

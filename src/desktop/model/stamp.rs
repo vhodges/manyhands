@@ -42,6 +42,10 @@ pub(crate) enum ViewScope {
     /// A confirmation dialog's preview. Each dialog keeps its own
     /// generations, so one scope serves them all.
     Confirmation,
+    /// A create dialog's path check and new ID, and Move…'s checks and
+    /// reads (Task 24). Each dialog keeps its own generations, so one
+    /// scope serves them all.
+    Create,
     /// The draft registry's listing of the store. One scope: a new listing
     /// drops the last.
     Drafts,

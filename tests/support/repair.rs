@@ -342,7 +342,8 @@ pub fn repair_data(envelope: &Envelope<MutationDataDto>) -> &RepairMutationDto {
             | MutationDataDto::Operation(_)
             | MutationDataDto::Synchronization(_)
             | MutationDataDto::Identity(_)
-            | MutationDataDto::Host(_),
+            | MutationDataDto::Host(_)
+            | MutationDataDto::Context(_),
         )
         | None => panic!("the envelope carries no repair data"),
     }

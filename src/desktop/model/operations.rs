@@ -14,15 +14,15 @@
 //! shown as text, unavailable.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
 };
 
 use manyhands::{
     drafts::{DraftError, DraftErrorKind},
     repository::{
-        HostObservationDto, OperationAction, OperationDto, OperationFamily, OperationId,
-        OperationListDto, OperationNextAction, ProgressStage, transport::SshAuthority,
+        HostObservationDto, MutationDataDto, OperationAction, OperationDto, OperationFamily,
+        OperationId, OperationListDto, OperationNextAction, ProgressStage, transport::SshAuthority,
     },
     results::{Envelope, Outcome, RecoveryAction, RecoveryActionKind, ResultCode},
 };
@@ -35,7 +35,7 @@ use super::{
 use crate::desktop::services::{
     DraftStoreUnavailable, ReadResult,
     prompts::PromptRequest,
-    requests::{DesktopRequest, DesktopRequestId, Intent, RequestState},
+    requests::{DesktopRequest, DesktopRequestId, Intent, Refusals, RequestState},
     worker::WorkerEvent,
 };
 
@@ -44,6 +44,9 @@ pub(crate) const SYNCHRONIZATION_UNAVAILABLE: &str = "Synchronization is not ava
 /// Why a recovery action that names nothing this session can act on is
 /// unavailable.
 pub(crate) const NOT_AVAILABLE_YET: &str = "Not available yet";
+/// Why the Retry of a context request is unavailable once a later request
+/// of its item was sent (R-78).
+pub(crate) const NOT_SENT_AGAIN: &str = "Not sent again after a later Edit or release";
 /// The persistent entry of a draft store that did not open.
 pub(crate) const DRAFTS_UNAVAILABLE: &str = "Recovery copies are unavailable";
 
@@ -76,6 +79,15 @@ impl Rows for OperationListDto {
 #[derive(Default)]
 pub(crate) struct Operations {
     requests: Vec<DesktopRequest>,
+    /// When each request's last attempt was queued, in the order of every
+    /// attempt (R-78), and how many have been.
+    sent: HashMap<DesktopRequestId, u64>,
+    sends: u64,
+    /// What each request's attempts were answered (R-78's exemption).
+    answers: HashMap<DesktopRequestId, Refusals>,
+    /// The IDs a ticket request's last answer rejected it for, for its
+    /// relationships (`TicketMutationDto::rejected`): IDs, never text.
+    rejected: HashMap<DesktopRequestId, Vec<String>>,
     /// Each listed repository's pending operations, by root.
     pending: BTreeMap<RepoKey, ListState<OperationListDto>>,
     generations: Generations,
@@ -108,6 +120,12 @@ pub(crate) struct Changed {
     /// found already gone (ruling R-T13a): their tabs close and their
     /// selection goes (design, Repositories).
     pub removed: BTreeSet<RepoKey>,
+    /// Those of `removed` whose `repo remove` request the user confirmed
+    /// and the worker ran. A preview that found the registration gone was
+    /// never confirmed: a tab whose edit session holds unsaved text that no
+    /// draft holds stays open, as when a repository leaves the list (Part C
+    /// fix 1, I1).
+    pub confirmed: BTreeSet<RepoKey>,
 }
 
 impl Changed {
@@ -133,6 +151,13 @@ impl Operations {
         self.requests.iter().find(|request| request.id == id)
     }
 
+    /// The IDs the last answer to the ticket request `id` rejected it for,
+    /// in ID order: a relationship cycle's tickets, or the IDs that are not
+    /// tickets. Empty for any other answer.
+    pub(crate) fn rejected(&self, id: DesktopRequestId) -> &[String] {
+        self.rejected.get(&id).map_or(&[], Vec::as_slice)
+    }
+
     fn request_mut(&mut self, id: DesktopRequestId) -> Option<&mut DesktopRequest> {
         self.requests.iter_mut().find(|request| request.id == id)
     }
@@ -141,11 +166,16 @@ impl Operations {
     /// never saw queued (a host observation) changes nothing here.
     pub(crate) fn apply(&mut self, event: WorkerEvent) {
         match event {
-            WorkerEvent::Queued(request) => match self.request_mut(request.id) {
-                // A retry: the same request, in its place.
-                Some(existing) => *existing = request,
-                None => self.requests.insert(0, request),
-            },
+            WorkerEvent::Queued(request) => {
+                self.sends += 1;
+                self.sent.insert(request.id, self.sends);
+                self.answers.entry(request.id).or_default().queued();
+                match self.request_mut(request.id) {
+                    // A retry: the same request, in its place.
+                    Some(existing) => *existing = request,
+                    None => self.requests.insert(0, request),
+                }
+            }
             WorkerEvent::Started(id) => self.set(
                 id,
                 RequestState::Running {
@@ -163,6 +193,23 @@ impl Operations {
             }
             WorkerEvent::Finished(id, envelope) => {
                 let envelope = *envelope;
+                match &envelope.data {
+                    Some(MutationDataDto::Ticket(ticket)) if !ticket.rejected.is_empty() => {
+                        self.rejected.insert(id, ticket.rejected.clone());
+                    }
+                    _ => {
+                        self.rejected.remove(&id);
+                    }
+                }
+                // What it was answered, for R-78's exemption (`Refusals`).
+                self.answers
+                    .entry(id)
+                    .or_default()
+                    .finished(Intent::refused_answer(
+                        envelope.outcome,
+                        envelope.code,
+                        &envelope.recovery,
+                    ));
                 // A removal that succeeded took its registration out, and one
                 // answered `already_applied` found it gone (ruling R-T13a); a
                 // refused one left it.
@@ -186,6 +233,7 @@ impl Operations {
                 if let Some((root, items, removed)) = root {
                     if removed {
                         self.changed.removed.insert(root.clone());
+                        self.changed.confirmed.insert(root.clone());
                         self.removals += 1;
                     }
                     self.changed.insert(root, items);
@@ -401,9 +449,88 @@ pub(crate) fn parse_authority(text: &str) -> Option<SshAuthority> {
 }
 
 impl Operations {
+    /// The request this session holds by the request ID `action` names;
+    /// `id` itself when it names none.
+    fn named(&self, id: DesktopRequestId, action: &RecoveryAction) -> Option<DesktopRequestId> {
+        match action.arguments.get("request_id") {
+            None => Some(id),
+            Some(named) => {
+                let named = named.as_str()?;
+                self.requests
+                    .iter()
+                    .find(|request| request.request_id.to_string() == named)
+                    .map(|request| request.id)
+            }
+        }
+    }
+
+    /// R-78: whether the request `id` is never sent again, a later context
+    /// request of its item having been sent (`Intent::kept_from_again_by`):
+    /// a release once the item was prepared again, a prepare once its
+    /// context was released, unless the library refused that release,
+    /// touching nothing (owner, 2026-10-28). "Later" is the order the
+    /// worker queued attempts in, as their `Queued` events came. The worker
+    /// refuses it too.
+    pub(crate) fn not_sent_again(&self, id: DesktopRequestId) -> bool {
+        let (Some(request), Some(at)) = (self.request(id), self.sent.get(&id)) else {
+            return false;
+        };
+        self.requests.iter().any(|later| {
+            let refused = self
+                .answers
+                .get(&later.id)
+                .is_some_and(Refusals::all_refused);
+            self.sent.get(&later.id).is_some_and(|sent| sent > at)
+                && request.intent.kept_from_again_by(&later.intent, refused)
+        })
+    }
+
+    /// Whether the request `id`'s last answer named a pending operation of
+    /// its own, offered for Abandon, and the operation area lists it for
+    /// the request's repository (Task 17 fix 2).
+    pub(crate) fn pending_row_listed(&self, id: DesktopRequestId) -> bool {
+        let Some(request) = self.request(id) else {
+            return false;
+        };
+        let RequestState::Finished(_, _, _, recovery, _) = &request.state else {
+            return false;
+        };
+        let Some(operation) = recovery
+            .iter()
+            .find(|action| action.action == RecoveryActionKind::OperationAbandon)
+            .and_then(|action| action.operation_id.as_deref())
+        else {
+            return false;
+        };
+        request
+            .intent
+            .root()
+            .and_then(Path::to_str)
+            .and_then(|root| self.pending.get(root))
+            .and_then(ListState::rows)
+            .is_some_and(|list| {
+                list.items
+                    .iter()
+                    .any(|row| row.operation_id.as_deref() == Some(operation))
+            })
+    }
+
+    /// Whether `action`, offered on the request `id`, is a Retry that R-78
+    /// forbids: the operation area says so.
+    pub(crate) fn retry_not_sent_again(
+        &self,
+        id: DesktopRequestId,
+        action: &RecoveryAction,
+    ) -> bool {
+        recovery_control(action.action) == RecoveryControl::Retry
+            && self
+                .named(id, action)
+                .is_some_and(|named| self.not_sent_again(named))
+    }
+
     /// What the recovery action `action`, offered on the request `id`,
-    /// runs; `None` when D1 does not offer it, or it names nothing this
-    /// session can act on.
+    /// runs; `None` when D1 does not offer it, it names nothing this
+    /// session can act on, or it is a Retry that R-78 forbids.
     pub(crate) fn recovery_step(
         &self,
         id: DesktopRequestId,
@@ -424,16 +551,7 @@ impl Operations {
         };
         // A request this session holds, by the request ID the action
         // names; this one when it names none.
-        let named = || match action.arguments.get("request_id") {
-            None => Some(id),
-            Some(named) => {
-                let named = named.as_str()?;
-                self.requests
-                    .iter()
-                    .find(|request| request.request_id.to_string() == named)
-                    .map(|request| request.id)
-            }
-        };
+        let named = || self.named(id, action);
         Some(match recovery_control(action.action) {
             RecoveryControl::IndexRefresh => {
                 RecoveryStep::Submit(Intent::IndexRefresh { root: root()? })
@@ -441,7 +559,13 @@ impl Operations {
             RecoveryControl::IndexRebuild => {
                 RecoveryStep::Submit(Intent::IndexRebuild { root: root()? })
             }
-            RecoveryControl::Retry => RecoveryStep::Retry(named()?),
+            RecoveryControl::Retry => {
+                let named = named()?;
+                if self.not_sent_again(named) {
+                    return None;
+                }
+                RecoveryStep::Retry(named)
+            }
             RecoveryControl::Prepare => {
                 if !request.intent.confirmed() {
                     return None;

@@ -740,7 +740,32 @@ stale or vanished targets remain recoverable and never silently overwritten.
 
 ### D3: Rich-Text And Source Authoring
 
-**Planned document:** `docs/Cycles/wave-03-desktop-03-rich-text-and-source-authoring.md`
+**Cycle document:** [D3: Rich-Text And Source Authoring](../Cycles/wave-03-desktop-03-rich-text-and-source-authoring.md)
+
+**Amended 2026-10-24 and 2026-10-26 by D3.** The Cycle, design and plan were
+approved on 2026-10-26 at `c3904c7`. The product-owner decisions, numbered
+in the Cycle document, change this section as follows:
+
+- **Shape** (decisions 5 and 13): one Cycle in six Parts, 0 and A–E, each
+  with a checkpoint review. This departs from the risk row's "split before
+  its plan is approved"; the owner may split at a checkpoint.
+- **Part 0 inside D3** (decisions 2 and 11): the library gains two F2
+  commands, `context prepare` and `context release`, reviewed on their own
+  before any desktop Part. This departs from track rule 5. `src/drafts/`
+  also gains one target state for a never-created item (ruling R-20).
+- **The item-view design** (decision 12): the tab strip, a fixed header, a
+  white page, the inline display of comments, front matter in a details
+  sheet and an editor toolbar, from `docs/design/item_view/`.
+- **The read view** is the editor, read-only, so text can be copied
+  (decision 17).
+- **Unsupported constructs** are shown literally and edited in place, not as
+  labeled source fallback (decision 8; desktop RFC amendment).
+- **Safe local resource rendering** means local raster images inside the
+  repository and link resolution between documents (decisions 9 and 10).
+- **Untouched-byte evidence** keeps front matter by value: the library
+  re-emits it on every save.
+- **Context release** applies only to contexts the desktop process created
+  (decision 18).
 
 **Purpose:** Deliver the selected editor experience with trustworthy local saves.
 
@@ -773,6 +798,14 @@ recovery never loses newer text.
 ### D4: Desktop Discussion And Deliberate Synchronization
 
 **Planned document:** `docs/Cycles/wave-03-desktop-04-discussion-and-sync.md`
+
+**Amended 2026-10-26 by D3 (decision 12).** D3 builds the read-only,
+ordered display of comment threads inline below the item, with read-only
+comment editors, and disabled Share, Close ticket… and Approve and merge…
+actions in the item header. D4 keeps the composers, posting,
+synchronization and its exit evidence, thread ordering after posting and
+rebuild included. D4 may reuse D3's `context prepare` and `context release`
+for a comment's context, and the item-view handoff's composer design.
 
 **Purpose:** Make discussion and explicit publication understandable and usable.
 

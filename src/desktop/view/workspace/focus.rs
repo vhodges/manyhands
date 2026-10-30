@@ -52,7 +52,7 @@ impl Region {
     fn key_context(self) -> &'static str {
         match self {
             Self::Repositories => "Repositories",
-            Self::Navigation => "Navigation",
+            Self::Navigation => crate::desktop::keys::NAVIGATION_CONTEXT,
             Self::Content => crate::desktop::keys::CONTENT_CONTEXT,
             Self::Operations => "Operations",
         }
@@ -109,13 +109,22 @@ impl Workspace {
     }
 
     /// A control disappeared: restore to the nearest remaining region or the
-    /// last one, but let an open dialog retain its own focus.
+    /// last one, but let an open dialog retain its own focus. Inside the
+    /// details sheet, focus goes to the nearest focusable that holds the
+    /// control, which the sheet's own host does, so it stays in the sheet's
+    /// trap.
     pub(super) fn focus_lost(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if window.has_active_dialog(cx) {
             return;
         }
-        let region = window
-            .focus_lost_restore_target(cx)
+        let target = window.focus_lost_restore_target(cx);
+        if window.has_active_sheet(cx) {
+            if let Some(target) = target {
+                window.focus(&target, cx);
+            }
+            return;
+        }
+        let region = target
             .and_then(|target| {
                 REGIONS
                     .into_iter()
@@ -170,7 +179,8 @@ impl Workspace {
             .p_2()
             .border_1()
             .border_color(theme.border)
-            .children(ring)
             .child(content)
+            // Over the content: an item tab lies flush with the border.
+            .children(ring)
     }
 }

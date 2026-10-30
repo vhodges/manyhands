@@ -15,10 +15,14 @@
 //! and writes the revision off the foreground behind the `DraftWrite`
 //! gate. The result lands back on the session, which schedules whatever
 //! came meanwhile.
+//!
+//! A new item's draft is written before its context is prepared, and its
+//! Save is its create (`create`; R-20, R-20b, R-46).
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fmt,
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -34,15 +38,20 @@ use manyhands::{
     results::ResultCode,
 };
 
+mod create;
 mod flush;
 mod restore;
 mod retire;
 mod save;
 mod stored;
 
+pub(crate) use create::{NewItem, RECOVERY_NEEDED};
 pub(crate) use restore::RestoreRefused;
 
-use super::{Backend, ReadFailure, ReadKind, requests::DesktopRequestId, worker::WorkerHandle};
+use super::{
+    Backend, ReadFailure, ReadKind, created_contexts::ContextKey, requests::DesktopRequestId,
+    worker::WorkerHandle,
+};
 use crate::desktop::model::{
     drafts::{DraftSession, RecoveryState},
     list_state::ListState,
@@ -67,6 +76,43 @@ impl fmt::Display for DraftStoreUnavailable {
         DraftError { kind: self.0 }.fmt(formatter)
     }
 }
+
+/// A save of the session `draft` committed (R-69): the fields it sent, and
+/// the base it leaves, from the registry's own read after it
+/// (`model::drafts::save::base_after_save`), unverified when another actor
+/// changed the item between the commit and that read. The registry emits
+/// it on every committed save, before it retires the saved revision or
+/// rebases newer text onto `base`. It holds draft text and derives no
+/// `Debug`.
+pub(crate) struct DraftSaved {
+    /// The session's ID as the save committed: `current_id` of the ID a
+    /// tab holds.
+    pub draft: DraftId,
+    pub submitted: DraftFields,
+    pub base: DraftBase,
+}
+
+impl gpui_kit::EventEmitter<DraftSaved> for DraftRegistry {}
+
+/// A discard of the session attached to an item tab (R-71): from the Drafts
+/// page, or from the tab itself, which has let go of its session first. It
+/// holds no text.
+pub(crate) enum SessionDiscarded {
+    /// The session attached to the tab ended; its draft is being discarded.
+    Ended(TabKey),
+    /// The discard landed: the draft is gone (`true`), or the store refused
+    /// and let go of it, still stored and listed again.
+    Landed(TabKey, bool),
+}
+
+impl gpui_kit::EventEmitter<SessionDiscarded> for DraftRegistry {}
+
+/// A draft was discarded, the store having deleted it: from a tab, its
+/// banners or the Drafts page, with or without a tab (design, Release on
+/// leave, condition 2). Its target names the item; it holds no text.
+pub(crate) struct DraftDiscardLanded(pub DraftTarget);
+
+impl gpui_kit::EventEmitter<DraftDiscardLanded> for DraftRegistry {}
 
 /// The store's item kind of a desktop item.
 fn item_kind(kind: ItemDtoKind) -> ItemKind {
@@ -114,6 +160,13 @@ pub(crate) struct DraftRegistry {
     /// Sessions whose tab is gone and whose release waits for their text
     /// to be stored, by the ID they were released under.
     releasing: BTreeSet<DraftId>,
+    /// The worktree of each item's context that a `context prepare` with
+    /// the Create intent made ready, as its answer gave it: where a
+    /// create's `occupied_path` is read (`create`).
+    contexts: HashMap<ContextKey, PathBuf>,
+    /// Sessions whose last create met `occupied_path` and whose path could
+    /// not then be read: what is there is not known (`create`).
+    path_unread: BTreeSet<DraftId>,
 }
 
 /// A session and the tasks that write it.
@@ -124,6 +177,9 @@ struct Live {
     /// The last store call started on the claim (a write, a retirement or
     /// a store again), for a flush, a save or a discard to wait on.
     write: Option<Shared<Task<()>>>,
+    /// The review is open over it (R-44): nothing is written on its
+    /// schedule until it closes.
+    suspended: bool,
 }
 
 impl DraftRegistry {
@@ -144,6 +200,8 @@ impl DraftRegistry {
             moved: BTreeMap::new(),
             attached: HashMap::new(),
             releasing: BTreeSet::new(),
+            contexts: HashMap::new(),
+            path_unread: BTreeSet::new(),
         }
     }
 
@@ -286,7 +344,6 @@ impl DraftRegistry {
     /// session is inserted releases the claim: revision 1 stays on disk as
     /// an unclaimed draft. No text is lost; the next listing offers it for
     /// recovery.
-    #[cfg_attr(not(test), allow(dead_code))] // Called by D3's editor; tests until then.
     pub(crate) fn begin(
         &mut self,
         target: DraftTarget,
@@ -311,6 +368,7 @@ impl DraftRegistry {
                         session,
                         timer: None,
                         write: None,
+                        suspended: false,
                     };
                     registry.sessions.insert(id, live);
                     cx.notify();
@@ -323,7 +381,6 @@ impl DraftRegistry {
     }
 
     /// The editor's newest text of `id`, scheduled to be written.
-    #[cfg_attr(not(test), allow(dead_code))] // Called by D3's editor; tests until then.
     pub(crate) fn edit(&mut self, id: DraftId, current: DraftFields, cx: &mut Context<Self>) {
         let now = cx.background_executor().now();
         let Some(id) = self.current_id(id) else {

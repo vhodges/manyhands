@@ -151,6 +151,9 @@ pub(crate) struct TicketRow {
     pub title: Option<String>,
     pub ticket_type: Option<String>,
     pub status: Option<String>,
+    /// Its project and team, which the details sheet suggests (R-57).
+    pub project: Option<String>,
+    pub team: Option<String>,
     /// `None` for a nonconforming entry, which has no closure.
     pub lifecycle: Option<Lifecycle>,
     pub changed_at: Option<String>,
@@ -177,6 +180,8 @@ impl TicketRow {
             title: item.title.clone(),
             ticket_type: item.ticket_type.clone(),
             status: item.status.clone(),
+            project: item.project.clone(),
+            team: item.team.clone(),
             lifecycle: item.closure.as_ref().map(|closure| match closure.state {
                 ClosureState::Open => Lifecycle::Open,
                 ClosureState::Closed => Lifecycle::Closed,

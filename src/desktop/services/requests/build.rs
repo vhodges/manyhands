@@ -1,11 +1,13 @@
 //! How an intent becomes a library command, one attempt at a time.
 
 use manyhands::repository::{
-    CommitIdentity, DocumentDraft, DocumentSaveInput, HostApproveInput, HostReplaceInput,
-    IndexRebuildInput, IndexRefreshInput, KeyClearInput, KeyDeleteInput, KeyGenerateInput,
-    KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation, OperationAbandonInput,
-    OperationResumeInput, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput,
-    RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput, TicketDraft, TicketSaveInput,
+    CommitIdentity, ContextPrepareInput, ContextReleaseInput, DocumentCreateInput, DocumentDraft,
+    DocumentMoveInput, DocumentRepairInput, DocumentSaveInput, FolderCreateInput, HostApproveInput,
+    HostReplaceInput, IndexRebuildInput, IndexRefreshInput, KeyClearInput, KeyDeleteInput,
+    KeyGenerateInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation,
+    OperationAbandonInput, OperationResumeInput, RemoteAddInput, RemoteRemoveInput,
+    RemoteSelectInput, RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput,
+    TicketCreateInput, TicketDraft, TicketRepairInput, TicketSaveInput,
     keys::{KeyProtection, KeyStore, SecretPassphrase},
 };
 
@@ -206,6 +208,104 @@ impl Intent {
                 deps: deps.clone(),
                 parent: parent.clone(),
                 observation: observation.clone(),
+            }),
+            Self::ContextPrepare {
+                root,
+                kind,
+                id,
+                intent,
+            } => Mutation::ContextPrepare(ContextPrepareInput {
+                root: root.clone(),
+                kind: *kind,
+                id: id.clone(),
+                intent: *intent,
+            }),
+            Self::ContextRelease { root, kind, id } => {
+                Mutation::ContextRelease(ContextReleaseInput {
+                    root: root.clone(),
+                    kind: *kind,
+                    id: id.clone(),
+                })
+            }
+            Self::DocumentCreate {
+                root,
+                id,
+                path,
+                title,
+                body,
+            } => Mutation::DocumentCreate(DocumentCreateInput {
+                root: root.clone(),
+                id: id.clone(),
+                path: path.clone(),
+                draft: DocumentDraft {
+                    title: title.clone(),
+                    body: body.clone(),
+                },
+            }),
+            Self::TicketCreate {
+                root,
+                id,
+                title,
+                ticket_type,
+                status,
+                project,
+                team,
+                body,
+                deps,
+                parent,
+            } => Mutation::TicketCreate(TicketCreateInput {
+                root: root.clone(),
+                id: id.clone(),
+                draft: TicketDraft {
+                    title: title.clone(),
+                    ticket_type: ticket_type.clone(),
+                    status: status.clone(),
+                    project: project.clone(),
+                    team: team.clone(),
+                    body: body.clone(),
+                },
+                deps: deps.clone(),
+                parent: parent.clone(),
+                initials: None,
+            }),
+            Self::DocumentMove {
+                root,
+                id,
+                observation,
+                destination_path,
+                destination_observation,
+            } => Mutation::DocumentMove(DocumentMoveInput {
+                root: root.clone(),
+                id: id.clone(),
+                observation: observation.clone(),
+                destination_path: destination_path.clone(),
+                destination_observation: destination_observation.clone(),
+            }),
+            Self::FolderCreate { root, path } => Mutation::FolderCreate(FolderCreateInput {
+                root: root.clone(),
+                path: path.clone(),
+            }),
+            Self::DocumentRepair {
+                root,
+                path,
+                observation,
+                source,
+            } => Mutation::DocumentRepair(DocumentRepairInput {
+                root: root.clone(),
+                path: path.clone(),
+                observation: observation.clone(),
+                source: source.clone(),
+            }),
+            Self::TicketRepair {
+                root,
+                path,
+                observation,
+                source,
+            } => Mutation::TicketRepair(TicketRepairInput {
+                root: root.clone(),
+                path: path.clone(),
+                observation: observation.clone(),
+                source: source.clone(),
             }),
         })
     }

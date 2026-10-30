@@ -10,7 +10,10 @@ mod render;
 mod repositories;
 mod requests;
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use gpui_kit::{
     AppContext, Context, Entity, FocusHandle, Subscription, Task, WeakEntity, Window,
@@ -24,6 +27,7 @@ pub(crate) use super::quit::QuitPhase;
 use super::{
     documents::DocumentsPane,
     drafts::{DraftsEvent, DraftsPage},
+    item::{ChipField, ItemPane},
     passphrase::PassphraseDialog,
     settings::{SettingsEvent, SettingsHost},
     sidebar::RepositoriesPane,
@@ -51,9 +55,23 @@ struct ContentArea {
     drafts: Entity<DraftsPage>,
     /// A tab's Review in Drafts, for the next frame to open.
     review: Option<DraftId>,
+    /// A tab's create asked for Settings on this repository, where its
+    /// initials are set: the next frame opens them.
+    settings_for: Option<PathBuf>,
     /// A tab's restored draft was discarded: the next frame focuses the
     /// tab's content.
     refocus: bool,
+    /// A tab closed, or followed its repaired item, once an answer landed:
+    /// the next frame focuses the content region, as `refocus` does, but
+    /// not while the details sheet is open, whose close gives focus back to
+    /// its chip (Task 27 fix 2, N2).
+    landed_refocus: bool,
+    /// A chip's request for its tab's details sheet, for the next frame to
+    /// open.
+    details: Option<(WeakEntity<ItemPane>, ChipField)>,
+    /// The tab whose details sheet is open: the sheet closes once another
+    /// is shown.
+    sheet: Option<WeakEntity<ItemPane>>,
 }
 
 pub(crate) struct Workspace {
@@ -214,7 +232,11 @@ impl Workspace {
                 settings,
                 drafts: drafts_page,
                 review: None,
+                settings_for: None,
                 refocus: false,
+                landed_refocus: false,
+                details: None,
+                sheet: None,
             },
             _settings_events: settings_events,
             _drafts_events: drafts_events,

@@ -34,6 +34,8 @@ pub use closure::{
     TicketClosurePreview, TicketClosureResult,
 };
 mod comment_publication;
+mod context_release;
+pub use context_release::{ContextReleaseOutcome, ReleaseContextRequest};
 mod coordination;
 pub use comment_publication::*;
 #[cfg(test)]
@@ -1022,6 +1024,17 @@ pub enum FailurePoint {
     /// past the wait would have it fail, and the row is left as the
     /// refresh left it.
     BeforeFolderRefreshClose,
+    /// `release_context`, once the checks before anything is touched
+    /// have passed, and before the branch is deleted. When the context
+    /// had a worktree, the worktree is removed and its step recorded, so
+    /// the call ends with the worktree gone, the branch there and the row
+    /// pending. When the context was a branch alone, nothing was removed
+    /// and no step was recorded, so the new row is discarded.
+    BeforeContextBranchRelease,
+    /// `release_context`, after the context's branch is deleted and its
+    /// step recorded, and before the index is told: the call ends there
+    /// with the context gone and no refresh begun.
+    AfterContextBranchRelease,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1043,6 +1056,7 @@ pub enum RepositoryOperation {
     RemoveRemote,
     SetPublicationRemote,
     PrepareContext,
+    ReleaseContext,
     SaveDocument,
     SaveTicket,
     SubmitComment,
@@ -3501,6 +3515,9 @@ impl RepositoryService {
             | LocalStep::CommentRegistrationPending
             | LocalStep::BranchObserved
             | LocalStep::WorktreeObserved
+            // A release's steps follow a removal, and no write of an item.
+            | LocalStep::ContextWorktreeReleased
+            | LocalStep::ContextBranchReleased
             | LocalStep::AuthoritativeObserved
             | LocalStep::RemoteChanged
             | LocalStep::PublicationConfigurationWritten
@@ -9275,6 +9292,19 @@ fn validate_context_tree(
     context: &ItemContext,
     operation: RepositoryOperation,
 ) -> Result<(), RepositoryError> {
+    validate_context_tree_items(repository, context, true, operation)
+}
+
+/// `validate_context_tree`, with the item required in the tree only when
+/// `require_target` says so: a context made for an item that does not
+/// exist yet holds none, and is still checked for an item of another
+/// kind, or two, under the ID.
+fn validate_context_tree_items(
+    repository: &Repository,
+    context: &ItemContext,
+    require_target: bool,
+    operation: RepositoryOperation,
+) -> Result<(), RepositoryError> {
     let inspect = || -> Result<CanonicalContext, ()> {
         let tree = repository
             .head()
@@ -9311,7 +9341,7 @@ fn validate_context_tree(
             "the canonical target commit cannot be inspected",
         )
     })?;
-    validate_context_items(context, canonical, true, operation)
+    validate_context_items(context, canonical, require_target, operation)
 }
 fn validate_context_items(
     context: &ItemContext,

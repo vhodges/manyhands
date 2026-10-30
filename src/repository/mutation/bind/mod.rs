@@ -32,6 +32,7 @@ use super::{
 };
 
 pub(crate) mod abandon;
+pub(crate) mod context;
 pub(crate) mod document;
 pub(crate) mod folder;
 pub(crate) mod host;
@@ -991,6 +992,19 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // the request's path may have been there before it, so none is
         // claimed for it.
         Some(Command::FolderCreate) => Recorded::nothing(),
+        // A work context is shown by no effect. The row says whether part
+        // of it was made with the operation not yet ended.
+        Some(Command::ContextPrepare) => Recorded {
+            effects: Effects::not_requested(),
+            local_change: context::changed_and_unfinished(journal.as_ref()),
+        },
+        // A context that was removed is shown by no effect either. The
+        // row says whether part of it was removed with the release not
+        // yet ended.
+        Some(Command::ContextRelease) => Recorded {
+            effects: Effects::not_requested(),
+            local_change: context::released_and_unfinished(journal.as_ref()),
+        },
         Some(Command::DocumentRepair | Command::TicketRepair) => {
             Recorded::of(repair::recorded_effects(record, &accepted))
         }

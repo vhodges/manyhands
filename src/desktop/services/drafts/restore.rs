@@ -13,7 +13,9 @@
 //!
 //! A tab is attached by its key. The session may go on under another
 //! draft ID (its text stored again after a save); `attached` follows it
-//! with `current_id`, so the tab keeps its session.
+//! with `current_id`, so the tab keeps its session. Continue editing
+//! moves a restored session onto the token of its item's context
+//! (`adopt_base`, R-42).
 //!
 //! Release, a close that keeps the draft, writes the newest text first,
 //! then ends the session and lets go of the claim: the draft stays on disk,
@@ -23,7 +25,9 @@
 use gpui_kit::{Context, Task};
 use manyhands::{
     canonical::ItemId,
-    drafts::{Draft, DraftClaim, DraftError, DraftErrorKind, DraftId, DraftTarget, Entry, Held},
+    drafts::{
+        Draft, DraftBase, DraftClaim, DraftError, DraftErrorKind, DraftId, DraftTarget, Entry, Held,
+    },
     repository::ItemDtoKind,
     results::ResultCode,
 };
@@ -57,6 +61,28 @@ impl DraftRegistry {
     /// The session attached to the tab `tab`, by the ID it goes on under.
     pub(crate) fn attached(&self, tab: &TabKey) -> Option<DraftId> {
         self.current_id(*self.attached.get(tab)?)
+    }
+
+    /// Attaches the live session `id`, which the item tab `tab` began in its
+    /// edit editor, to that tab, as a restore attaches one: the tab holds
+    /// it, the strip marks it unsaved, closing asks first and the Drafts
+    /// page lists it as held here: the store is listed again, as a restore
+    /// lists it. A session already ended is not attached.
+    pub(crate) fn attach(&mut self, tab: TabKey, id: DraftId, cx: &mut Context<Self>) {
+        let Some(id) = self.current_id(id) else {
+            return;
+        };
+        self.attached.insert(tab, id);
+        self.reload_listing(cx);
+        cx.notify();
+    }
+
+    /// The tab `tab` lets go of its session's draft while its edit session
+    /// goes on: the stale-edit review's choices left nothing to keep (Task
+    /// 19 fix 1, M3). A discard of the draft that follows tells the tab
+    /// nothing, so its session is not ended.
+    pub(crate) fn detach(&mut self, tab: &TabKey) {
+        self.attached.remove(tab);
     }
 
     /// The tab the session of `id` is attached to, by the ID it goes on
@@ -94,6 +120,22 @@ impl DraftRegistry {
         item: Result<&manyhands::repository::ItemDto, ResultCode>,
     ) -> Option<manyhands::drafts::TargetState> {
         Some(self.session(id)?.classify(item))
+    }
+
+    /// R-42: the restored session `id` goes on over `base`, its own with the
+    /// token and context of the item's read in the context Continue editing
+    /// made ready. A base change raises the revision and is written at
+    /// once. A session already ended has no base to move.
+    pub(crate) fn adopt_base(&mut self, id: DraftId, base: DraftBase, cx: &mut Context<Self>) {
+        let Some(id) = self.current_id(id) else {
+            return;
+        };
+        let Some(live) = self.sessions.get_mut(&id) else {
+            return;
+        };
+        live.session.rebase(base, cx.background_executor().now());
+        self.schedule(id, cx);
+        cx.notify();
     }
 
     /// Restores the stored draft `id` into the item tab `tab`: claims it,
@@ -164,6 +206,7 @@ impl DraftRegistry {
                 session,
                 timer: None,
                 write: None,
+                suspended: false,
             },
         );
         self.attached.insert(tab, id);

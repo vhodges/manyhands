@@ -182,6 +182,23 @@ impl Walk {
         }
     }
 
+    /// Presses `key` until `reached` holds, at most `TAB_LIMIT` times, or
+    /// fails saying `key` never reached `id`.
+    fn press_until(
+        &self,
+        key: &str,
+        id: &ElementId,
+        reached: impl Fn(&Self, &mut TestAppContext) -> bool,
+        cx: &mut TestAppContext,
+    ) {
+        let mut presses = 0;
+        while !reached(self, cx) {
+            presses += 1;
+            assert!(presses <= TAB_LIMIT, "{key} never reached {id:?}");
+            self.keys(key, cx);
+        }
+    }
+
     fn opened(&self, cx: &mut TestAppContext) -> Option<OpenTarget> {
         self.shell
             .workspace
@@ -308,6 +325,23 @@ impl Walk {
         self.region(Region::Navigation, cx);
     }
 
+    /// In the focused document tree, the arrows move down to the row
+    /// `label` and Enter opens it.
+    fn open_tree_row(&self, label: &str, cx: &mut TestAppContext) {
+        let nodes = self.shell.rows("doc-node", cx);
+        let at = nodes
+            .iter()
+            .position(|node| node == label)
+            .expect("the document is listed");
+        let mut presses = 0;
+        while !self.shell.selected(("doc-node", at), cx) {
+            presses += 1;
+            assert!(presses <= nodes.len() + 1, "the arrows never reached it");
+            self.keys("down", cx);
+        }
+        self.enter(cx);
+    }
+
     /// The closure and readiness filters, each by shift-Tab and Enter
     /// from the ticket list. Each says what it shows in text; the rows
     /// change with it. Back to Open and any readiness at the end.
@@ -378,6 +412,9 @@ impl Walk {
     fn follow_a_relationship(&self, cx: &mut TestAppContext) {
         self.keys("secondary-3", cx);
         self.on(("tab", 1usize), Region::Content, cx);
+        // E-26: the details sheet, opened by All details, holds the row.
+        self.tab_to("tab", "chip-all", cx);
+        self.enter(cx);
         self.tab_to("tab", ("rel-dependency", 0usize), cx);
         self.on(("rel-dependency", 0usize), Region::Content, cx);
         self.enter(cx);
@@ -425,10 +462,16 @@ impl Walk {
 
         self.find(CLOSED, cx);
         assert_eq!(self.opened(cx), Some(self.ticket(CLOSED)));
+        // E-30: the lifecycle is in the details sheet, opened by All
+        // details and closed before going on.
+        self.keys("secondary-3", cx);
+        self.tab_to("tab", "chip-all", cx);
+        self.enter(cx);
         assert_eq!(
             self.shell.label("item-lifecycle", cx).as_deref(),
             Some(LIFECYCLE_CLOSED)
         );
+        self.keys("escape", cx);
         assert_eq!(self.tab_count(cx), 5);
     }
 
@@ -585,5 +628,7 @@ fn ringed(window: &gpui_kit::Window, region: Region) {
 mod actions;
 mod confirm;
 mod drafts;
+mod editing;
+mod frame;
 mod passphrase;
 mod settings;

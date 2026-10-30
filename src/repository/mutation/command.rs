@@ -67,6 +67,8 @@ commands! {
     TicketRepair => "ticket repair",
     LocalContextSync => "context sync-local",
     LocalContextResolve => "context resolve-local",
+    ContextPrepare => "context prepare",
+    ContextRelease => "context release",
 }
 
 impl Command {
@@ -115,6 +117,12 @@ impl Command {
             // context, its write, its checkpoint and its hand-off.
             | Self::DocumentRepair
             | Self::TicketRepair
+            // One operation of the local journal: the context's branch and
+            // worktree, and the hand-off to the index.
+            | Self::ContextPrepare
+            // One operation of the local journal: the removal of the
+            // context's worktree and branch, and the hand-off.
+            | Self::ContextRelease
             // One operation, in the remote journal. Its index hand-off
             // is a row of the local journal under the same ID, which
             // the remote row answers for: it owes work until the
@@ -182,7 +190,9 @@ impl Command {
             | Self::HostReplace
             | Self::FolderCreate
             | Self::DocumentRepair
-            | Self::TicketRepair => false,
+            | Self::TicketRepair
+            | Self::ContextPrepare
+            | Self::ContextRelease => false,
         }
     }
 
@@ -222,7 +232,9 @@ impl Command {
             | Self::HostReplace
             | Self::FolderCreate
             | Self::DocumentRepair
-            | Self::TicketRepair => false,
+            | Self::TicketRepair
+            | Self::ContextPrepare
+            | Self::ContextRelease => false,
         }
     }
 
@@ -261,7 +273,9 @@ impl Command {
             | Self::HostReplace
             | Self::FolderCreate
             | Self::DocumentRepair
-            | Self::TicketRepair => false,
+            | Self::TicketRepair
+            | Self::ContextPrepare
+            | Self::ContextRelease => false,
         }
     }
 
@@ -302,7 +316,9 @@ impl Command {
             | Self::HostReplace
             | Self::FolderCreate
             | Self::DocumentRepair
-            | Self::TicketRepair => false,
+            | Self::TicketRepair
+            | Self::ContextPrepare
+            | Self::ContextRelease => false,
             // A resume has no operation. One that takes up another
             // request's synchronization honors its own call's token at
             // that operation's safe points and reports their stages, but
@@ -351,7 +367,9 @@ impl Command {
             | Self::HostReplace
             | Self::FolderCreate
             | Self::DocumentRepair
-            | Self::TicketRepair => false,
+            | Self::TicketRepair
+            | Self::ContextPrepare
+            | Self::ContextRelease => false,
         }
     }
 
@@ -391,7 +409,12 @@ impl Command {
             // What a folder creation does first is make the directory.
             | Self::FolderCreate
             | Self::DocumentRepair
-            | Self::TicketRepair => ProgressStage::Writing,
+            | Self::TicketRepair
+            // What a context preparation does first is cut the branch.
+            | Self::ContextPrepare
+            // What a context release does is remove the worktree and
+            // the branch.
+            | Self::ContextRelease => ProgressStage::Writing,
         }
     }
 
@@ -435,7 +458,11 @@ impl Command {
             // A repair's hand-off is its own operation's to owe, as a
             // save's is.
             | Self::DocumentRepair
-            | Self::TicketRepair => false,
+            | Self::TicketRepair
+            | Self::ContextPrepare
+            // A release's hand-off is its operation's to owe, as a
+            // save's is, and `operation resume` takes it up (R-32).
+            | Self::ContextRelease => false,
         }
     }
 
@@ -481,6 +508,13 @@ impl Command {
             // A directory that holds nothing is made and nothing else:
             // there is nothing to show first.
             | Self::FolderCreate
+            // A work context is a branch and a worktree cut from
+            // primary's head, with no content of the caller's in them:
+            // there is nothing to show first.
+            | Self::ContextPrepare
+            // A release removes only a context that holds nothing of
+            // anyone's, and refuses any other: nothing is lost to show.
+            | Self::ContextRelease
             // A resume does only what an operation already owes and
             // was consented to when it began.
             | Self::OperationResume => false,
@@ -676,6 +710,44 @@ mod tests {
         assert!(!Command::FolderCreate.needs_confirmation());
         assert!(!Command::FolderCreate.stops_at_safe_points());
         assert_eq!(Command::FolderCreate.stage(), ProgressStage::Writing);
+    }
+
+    #[test]
+    fn a_context_preparation_is_a_plain_local_operation_whose_hand_off_is_owed() {
+        let command = Command::ContextPrepare;
+        assert_eq!(command.name(), "context prepare");
+        assert_eq!(Command::parse("context prepare"), Some(command));
+        assert!(command.has_operation());
+        assert!(!command.was_accepted_without_operation());
+        assert!(!command.needs_confirmation());
+        assert!(!command.restores_index());
+        assert!(!command.creates_its_repository());
+        assert!(!command.stops_at_safe_points());
+        assert!(!command.finishes_as_a_synchronization());
+        // Its hand-off is its operation's to owe. The row stays at
+        // `worktree_observed`, so a resume answers
+        // `original_request_required` and the request's own retry
+        // finishes it (R-77); no refresh does it in its place.
+        assert!(!command.hands_off_to_any_refresh());
+        assert_eq!(command.stage(), ProgressStage::Writing);
+    }
+
+    #[test]
+    fn a_context_release_is_a_plain_local_operation_whose_hand_off_resume_takes_up() {
+        let command = Command::ContextRelease;
+        assert_eq!(command.name(), "context release");
+        assert_eq!(Command::parse("context release"), Some(command));
+        assert!(command.has_operation());
+        assert!(!command.was_accepted_without_operation());
+        assert!(!command.needs_confirmation());
+        assert!(!command.restores_index());
+        assert!(!command.creates_its_repository());
+        assert!(!command.stops_at_safe_points());
+        assert!(!command.finishes_as_a_synchronization());
+        // Its hand-off is its operation's to owe: the row's step, once
+        // the branch is deleted, is one `operation resume` takes up.
+        assert!(!command.hands_off_to_any_refresh());
+        assert_eq!(command.stage(), ProgressStage::Writing);
     }
 
     #[test]

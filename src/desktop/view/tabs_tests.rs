@@ -4,18 +4,19 @@
 
 use std::{fs, path::PathBuf, time::Duration};
 
-use gpui_kit::{Entity, TestAppContext, component::input::TextareaState, test::TestWindowExt};
+use gpui_kit::{Entity, Focusable, TestAppContext, test::TestWindowExt};
 use manyhands::{
     drafts::{DraftFields, DraftId, Held},
-    repository::{ItemDtoKind, LeaseHolderForTesting, LeaseKind, RepositoryService},
+    repository::{FailurePoint, ItemDtoKind, LeaseHolderForTesting, LeaseKind, RepositoryService},
     results::ResultCode,
 };
+use zorite_editor::EditorState;
 
-use super::SHOWN;
+use super::{TabInfo, active_line, tab_info, tooltip_text};
 use crate::desktop::{
     model::{navigation::OpenTarget, tabs::TabKey},
     services::{
-        ReadKind,
+        JobKind, ReadKind,
         drafts::DraftRegistry,
         requests::{DesktopRequestId, Intent, Lane},
     },
@@ -26,8 +27,9 @@ use crate::desktop::{
     view::{
         close_draft::{DISCARD, KEEP_DRAFT, SAVE},
         confirm::CANCEL,
-        harness::{Shell, key},
-        item::{EDITOR_LATER, NOT_REFRESHED, NOT_SAVED},
+        editor::host::EditorHost,
+        harness::{Shell, WAIT, key},
+        item::{NOT_REFRESHED, NOT_SAVED, tokens::colors},
         workspace::{REGIONS, Region},
     },
 };
@@ -92,9 +94,9 @@ fn shown(shell: &Shell, cx: &mut TestAppContext) -> Option<usize> {
         .filter(|ix| shell.selected(("tab", *ix), cx))
         .collect();
     let marked: Vec<usize> = (0..count)
-        .filter(|ix| shell.label(("tab-shown", *ix), cx).as_deref() == Some(SHOWN))
+        .filter(|ix| shell.present(("tab-active-line", *ix), cx))
         .collect();
-    assert_eq!(selected, marked, "the shown tab says so in text too");
+    assert_eq!(selected, marked, "the shown tab carries the active line");
     assert!(selected.len() <= 1);
     selected.first().copied()
 }
@@ -139,10 +141,11 @@ fn submit_refresh(
     })
 }
 
-fn source_state(shell: &Shell, cx: &mut TestAppContext) -> Option<Entity<TextareaState>> {
+/// The shown tab's read editor (E-3 to E-5), after a frame.
+fn read_editor(shell: &Shell, cx: &mut TestAppContext) -> Option<Entity<EditorState>> {
     shell.frame(cx, |_, _| ());
     shell.workspace.read_with(cx, |workspace, cx| {
-        workspace.item_pane()?.read(cx).source_state().cloned()
+        workspace.item_pane()?.read(cx).read_editor(cx)
     })
 }
 
@@ -193,7 +196,8 @@ fn opening_a_tab_does_not_change_the_selection(cx: &mut TestAppContext) {
 
 /// Refresh of `a` reads every open tab of `a` again, once, in place: the
 /// strip keeps its order and the shown tab, `b`'s tab is not read, and the
-/// shown tab's source keeps its text field and its focus.
+/// shown tab's read editor keeps its entity, its focus and its cursor
+/// (R-19).
 #[gpui_kit::test]
 async fn a_refresh_reloads_every_open_tab_of_the_repository_in_place(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -204,10 +208,7 @@ async fn a_refresh_reloads_every_open_tab_of_the_repository_in_place(cx: &mut Te
     shell.click(("tab", 0usize), cx);
     assert_eq!(strip(&shell, cx), ["One", "Other", "Two"]);
 
-    let source = source_state(&shell, cx).expect("the source is shown");
-    let mut visual = shell.visual(cx);
-    visual.update(|window, cx| source.update(cx, |state, cx| state.focus(window, cx)));
-    visual.run_until_parked();
+    let source = focus_read(&shell, cx);
 
     shell.fixture.commit_ticket(&a, ONE, "One again", "");
     shell.fixture.commit_ticket(&a, TWO, "Two again", "");
@@ -223,11 +224,14 @@ async fn a_refresh_reloads_every_open_tab_of_the_repository_in_place(cx: &mut Te
     assert_eq!(shown(&shell, cx), Some(0));
     assert_eq!(title(&shell, cx).as_deref(), Some("One again"));
     assert_eq!(item_reads(&shell) - reads, 2, "one read per tab of a");
-    let after = source_state(&shell, cx).expect("the source is shown");
-    assert_eq!(after, source, "the same text field");
-    assert!(shell.visual(cx).update(|window, cx| {
-        gpui_kit::Focusable::focus_handle(after.read(cx), cx).is_focused(window)
-    }));
+    let after = read_editor(&shell, cx).expect("the read view is shown");
+    assert_eq!(after, source, "the same read editor");
+    assert!(read_focused(&shell, &after, cx));
+    assert_eq!(
+        after.read_with(cx, |editor, _| editor.cursor()),
+        CURSOR,
+        "the cursor is kept"
+    );
 }
 
 /// Review Focus 1 (jobs): a job for `a` finishes while `b` is selected.
@@ -574,17 +578,15 @@ fn past_the_retries(shell: &Shell, cx: &mut TestAppContext) {
 }
 
 /// A reload that stays busy keeps what the tab shows: the item, the
-/// source's text field with its focus, and the tab's title, and says it
-/// could not refresh, with Busy's message and Retry. Retry loads again in
-/// place: while its load is held, the item is still shown, not Loading.
+/// read editor with its focus and its cursor (R-19), and the tab's title,
+/// and says it could not refresh, with Busy's message and Retry. Retry
+/// loads again in place: while its load is held, the item is still shown,
+/// not Loading.
 #[gpui_kit::test]
 fn a_busy_reload_keeps_the_view_and_retry_loads_in_place(cx: &mut TestAppContext) {
     let Two { shell, a, .. } = two(cx);
     open(&shell, ticket(&a, ONE), cx);
-    let source = source_state(&shell, cx).expect("the source is shown");
-    let mut visual = shell.visual(cx);
-    visual.update(|window, cx| source.update(cx, |state, cx| state.focus(window, cx)));
-    visual.run_until_parked();
+    let source = focus_read(&shell, cx);
 
     let lease = hold_cache_write(&shell, &a);
     let pane = shell
@@ -611,11 +613,14 @@ fn a_busy_reload_keeps_the_view_and_retry_loads_in_place(cx: &mut TestAppContext
         Some(ResultCode::Busy.as_str())
     );
     assert!(shell.present("item-not-refreshed-retry", cx));
-    let kept = source_state(&shell, cx).expect("the source is still shown");
-    assert_eq!(kept, source, "the same text field");
-    assert!(shell.visual(cx).update(|window, cx| {
-        gpui_kit::Focusable::focus_handle(kept.read(cx), cx).is_focused(window)
-    }));
+    let kept = read_editor(&shell, cx).expect("the read view is still shown");
+    assert_eq!(kept, source, "the same read editor");
+    assert!(read_focused(&shell, &kept, cx));
+    assert_eq!(
+        kept.read_with(cx, |editor, _| editor.cursor()),
+        CURSOR,
+        "the cursor is kept"
+    );
 
     drop(lease);
     let held = shell.backend.hold_read(ReadKind::Item);
@@ -630,31 +635,36 @@ fn a_busy_reload_keeps_the_view_and_retry_loads_in_place(cx: &mut TestAppContext
     shell.run(cx);
     assert!(!shell.present("item-not-refreshed", cx));
     assert_eq!(title(&shell, cx).as_deref(), Some("One"));
-    assert_eq!(source_state(&shell, cx), Some(source));
+    assert_eq!(read_editor(&shell, cx), Some(source));
 }
 
-/// Focuses the shown tab's source text field, as a click into it does.
-fn focus_source(shell: &Shell, cx: &mut TestAppContext) -> Entity<TextareaState> {
-    let source = source_state(shell, cx).expect("the source is shown");
-    let mut visual = shell.visual(cx);
-    visual.update(|window, cx| source.update(cx, |state, cx| state.focus(window, cx)));
-    visual.run_until_parked();
-    assert!(source_focused(shell, &source, cx));
-    source
+/// Where E-3 and E-4 put the read editor's caret before a reload.
+const CURSOR: usize = 5;
+
+/// Focuses the shown tab's read editor with its caret at `CURSOR`, as a
+/// click into it does, and draws a frame.
+fn focus_read(shell: &Shell, cx: &mut TestAppContext) -> Entity<EditorState> {
+    let editor = read_editor(shell, cx).expect("the read view is shown");
+    editor.update(cx, |editor, cx| editor.set_cursor(CURSOR, cx));
+    let handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
+    shell.frame(cx, |window, cx| window.focus(&handle, cx));
+    shell.frame(cx, |_, _| ());
+    assert!(read_focused(shell, &editor, cx));
+    editor
 }
 
-fn source_focused(shell: &Shell, source: &Entity<TextareaState>, cx: &mut TestAppContext) -> bool {
+fn read_focused(shell: &Shell, editor: &Entity<EditorState>, cx: &mut TestAppContext) -> bool {
     shell.frame(cx, |window, cx| {
-        gpui_kit::Focusable::focus_handle(source.read(cx), cx).is_focused(window)
+        editor.read(cx).focus_handle(cx).is_focused(window)
     })
 }
 
-/// The tab keys work with focus in the shown item's read-only source:
+/// The tab keys work with focus in the shown item's read view:
 /// `ctrl-tab` and `ctrl-shift-tab` move to the next and previous tab and
 /// `secondary-w` closes the shown one, each with focus following. Tab
-/// and shift-Tab leave the source, which takes no indent.
+/// and shift-Tab leave the read editor, which takes no indent.
 #[gpui_kit::test]
-fn the_tab_keys_work_from_inside_the_source(cx: &mut TestAppContext) {
+fn the_tab_keys_work_from_inside_the_read_view(cx: &mut TestAppContext) {
     let Two { shell, a, .. } = two(cx);
     open(&shell, ticket(&a, ONE), cx);
     open(&shell, ticket(&a, TWO), cx);
@@ -662,41 +672,41 @@ fn the_tab_keys_work_from_inside_the_source(cx: &mut TestAppContext) {
     shell.click(("tab", 1usize), cx);
     assert_eq!(title(&shell, cx).as_deref(), Some("Two"));
 
-    focus_source(&shell, cx);
+    focus_read(&shell, cx);
     shell.keys("ctrl-tab", cx);
     assert_eq!(shown(&shell, cx), Some(2));
     assert!(tab_focused(&shell, 2, cx));
 
-    focus_source(&shell, cx);
+    focus_read(&shell, cx);
     shell.keys("ctrl-shift-tab", cx);
     assert_eq!(shown(&shell, cx), Some(1));
     assert!(tab_focused(&shell, 1, cx));
 
-    focus_source(&shell, cx);
+    focus_read(&shell, cx);
     shell.keys("secondary-w", cx);
     assert_eq!(strip(&shell, cx), ["One", "Three"]);
     assert_eq!(shown(&shell, cx), Some(1));
     assert!(tab_focused(&shell, 1, cx));
 
-    let source = focus_source(&shell, cx);
-    let text = source.read_with(cx, |state, _| state.value().to_string());
+    let source = focus_read(&shell, cx);
+    let text = source.read_with(cx, |editor, _| editor.text().to_owned());
     shell.keys("tab", cx);
     assert!(
-        !source_focused(&shell, &source, cx),
-        "Tab leaves the source"
+        !read_focused(&shell, &source, cx),
+        "Tab leaves the read editor"
     );
     assert!(
         shell.frame(cx, |window, cx| window.focused(cx).is_some()),
         "for the next control"
     );
-    focus_source(&shell, cx);
+    focus_read(&shell, cx);
     shell.keys("shift-tab", cx);
     assert!(
-        !source_focused(&shell, &source, cx),
-        "shift-Tab leaves the source"
+        !read_focused(&shell, &source, cx),
+        "shift-Tab leaves the read editor"
     );
     assert_eq!(
-        source.read_with(cx, |state, _| state.value().to_string()),
+        source.read_with(cx, |editor, _| editor.text().to_owned()),
         text,
         "no indent was made"
     );
@@ -779,8 +789,9 @@ fn close_dialog_shown(shell: &Shell, cx: &mut TestAppContext) -> bool {
 
 /// The tab's Close and `secondary-w` both ask first for a tab with a
 /// draft attached, and close a tab without one at once. The dialog offers
-/// Keep draft, Discard and Cancel, and Save unavailable; Cancel, Escape
-/// and Save keep the tab and its draft.
+/// Keep draft, Save, Discard and Cancel; Save is enabled, the stored draft
+/// differing from the item (E-9). Cancel and Escape keep the tab and its
+/// draft.
 #[gpui_kit::test]
 fn closing_a_tab_with_a_draft_asks_first_and_one_without_closes_at_once(cx: &mut TestAppContext) {
     let Restored { shell, a, draft } = restored(cx);
@@ -799,25 +810,32 @@ fn closing_a_tab_with_a_draft_asks_first_and_one_without_closes_at_once(cx: &mut
         Some(CANCEL)
     );
     assert_eq!(shell.label("close-draft-save", cx).as_deref(), Some(SAVE));
-    assert_eq!(
-        shell.label("close-draft-save-note", cx).as_deref(),
-        Some(EDITOR_LATER)
+    assert!(
+        !shell.present("close-draft-save-note", cx),
+        "Save is available"
     );
-    assert_eq!(strip(&shell, cx), ["One", "Two"], "nothing closed yet");
+    let offered = shell.workspace.read_with(cx, |workspace, cx| {
+        workspace
+            .item_pane()
+            .map(|pane| pane.read(cx).close_offers(cx).save)
+    });
+    assert_eq!(offered, Some(Some(true)), "Save is enabled");
+    assert_eq!(
+        strip(&shell, cx),
+        ["One, unsaved", "Two"],
+        "nothing closed yet"
+    );
 
-    assert!(shell.inert_button("close-draft-save-button", cx));
-    shell.click("close-draft-save-button", cx);
-    assert!(close_dialog_shown(&shell, cx), "Save does nothing");
     shell.click("close-draft-cancel-button", cx);
     assert!(!close_dialog_shown(&shell, cx));
-    assert_eq!(strip(&shell, cx), ["One", "Two"]);
+    assert_eq!(strip(&shell, cx), ["One, unsaved", "Two"]);
 
     shell.keys("secondary-3", cx);
     shell.keys("secondary-w", cx);
     assert!(close_dialog_shown(&shell, cx));
     shell.keys("escape", cx);
     assert!(!close_dialog_shown(&shell, cx));
-    assert_eq!(strip(&shell, cx), ["One", "Two"]);
+    assert_eq!(strip(&shell, cx), ["One, unsaved", "Two"]);
     assert!(tab_focused(&shell, 0, cx), "focus goes back to the tab");
     let tab = TabKey::for_target(&ticket(&a, ONE));
     assert_eq!(
@@ -828,11 +846,11 @@ fn closing_a_tab_with_a_draft_asks_first_and_one_without_closes_at_once(cx: &mut
     // Two has no draft: it closes at once, by click and by key.
     shell.click(("tab-close", 1usize), cx);
     assert!(!close_dialog_shown(&shell, cx));
-    assert_eq!(strip(&shell, cx), ["One"]);
+    assert_eq!(strip(&shell, cx), ["One, unsaved"]);
     open(&shell, ticket(&a, TWO), cx);
     shell.keys("secondary-3 secondary-w", cx);
     assert!(!close_dialog_shown(&shell, cx));
-    assert_eq!(strip(&shell, cx), ["One"]);
+    assert_eq!(strip(&shell, cx), ["One, unsaved"]);
 }
 
 /// Keep draft, the default, flushes and releases the claim: the tab
@@ -882,7 +900,7 @@ fn discard_deletes_only_that_draft(cx: &mut TestAppContext) {
     shell.click("close-draft-discard-button", cx);
     shell.run(cx);
     assert!(!close_dialog_shown(&shell, cx));
-    assert_eq!(strip(&shell, cx), ["Two"]);
+    assert_eq!(strip(&shell, cx), ["Two, unsaved"]);
     assert!(
         tab_focused(&shell, 0, cx),
         "focus goes to the tab shown now"
@@ -919,7 +937,11 @@ fn keep_with_an_unwritable_store_leaves_the_tab_open_with_the_failure(cx: &mut T
     shell.run(cx);
     fs::set_permissions(&folder, fs::Permissions::from_mode(mode)).unwrap();
     assert!(!close_dialog_shown(&shell, cx));
-    assert_eq!(strip(&shell, cx), ["One", "Two"], "the tab stays open");
+    assert_eq!(
+        strip(&shell, cx),
+        ["One, unsaved", "Two"],
+        "the tab stays open"
+    );
     let recovery = shell.label("draft-recovery", cx).unwrap();
     assert!(recovery.starts_with(NOT_SAVED), "{recovery}");
     assert!(shell.present("draft-recovery-retry", cx));
@@ -936,4 +958,708 @@ fn keep_with_an_unwritable_store_leaves_the_tab_open_with_the_failure(cx: &mut T
         held(&shell.fixture.draft_store(), draft),
         Some(Held::Here)
     ));
+}
+
+// The close dialog's Save (Task 18; design, Restored drafts and the close
+// dialog; R-16, R-76). Each test that waits on the worker allows parking.
+
+/// Draws frames, with the worker running, until `done` holds: the edit
+/// editor opens as a frame is drawn.
+async fn until_drawn(
+    shell: &Shell,
+    cx: &mut TestAppContext,
+    what: &str,
+    done: impl Fn(&Shell, &mut TestAppContext) -> bool,
+) {
+    let deadline = std::time::Instant::now() + WAIT;
+    loop {
+        shell.frame(cx, |_, _| ());
+        shell.run(cx);
+        if done(shell, cx) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what} did not happen"
+        );
+        cx.executor().timer(Duration::from_millis(10)).await;
+    }
+}
+
+/// The shown tab's edit host, once Edit has opened its editor.
+async fn edit_shown(shell: &Shell, cx: &mut TestAppContext) -> Entity<EditorHost> {
+    shell.click("item-edit", cx);
+    until_drawn(shell, cx, "the edit editor", |shell, cx| {
+        shell.workspace.read_with(cx, |workspace, cx| {
+            workspace
+                .item_pane()
+                .is_some_and(|pane| pane.read(cx).edit_host().is_some())
+        })
+    })
+    .await;
+    shell.workspace.read_with(cx, |workspace, cx| {
+        workspace
+            .item_pane()
+            .and_then(|pane| pane.read(cx).edit_host())
+            .expect("editing")
+    })
+}
+
+/// Types `typed` at the end of the edit editor's text, after setting the
+/// caret, focusing the editor and drawing a frame.
+fn type_at_end(shell: &Shell, host: &Entity<EditorHost>, typed: &str, cx: &mut TestAppContext) {
+    let editor = host.read_with(cx, |host, _| host.editor().clone());
+    let end = editor.read_with(cx, |editor, _| editor.text().len());
+    editor.update(cx, |editor, cx| editor.set_cursor(end, cx));
+    let handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
+    shell.frame(cx, |window, cx| window.focus(&handle, cx));
+    shell.frame(cx, |_, _| ());
+    shell.visual(cx).simulate_input(typed);
+    shell.run(cx);
+}
+
+/// The ticket `id`'s body, as the library reads it now.
+fn body(shell: &Shell, root: &std::path::Path, id: &str) -> Option<String> {
+    let service = shell.fixture.service();
+    let repo = service.resolve_repository(root).unwrap();
+    service.show_item(&repo, &item_id(id)).unwrap().body
+}
+
+/// This session's requests of the kind `pick` picks, newest first.
+fn picked(
+    shell: &Shell,
+    cx: &mut TestAppContext,
+    pick: fn(&Intent) -> bool,
+) -> Vec<DesktopRequestId> {
+    shell.requests(cx, move |request| pick(&request.intent))
+}
+
+fn is_save(intent: &Intent) -> bool {
+    matches!(intent, Intent::TicketSave { .. })
+}
+
+/// How many of this session's requests of the kind `pick` picks have
+/// ended: finished, removed or not sent (Part C fix 2, A).
+fn ended_requests(shell: &Shell, cx: &mut TestAppContext, pick: fn(&Intent) -> bool) -> usize {
+    use crate::desktop::services::requests::RequestState;
+    shell.operations(cx).read_with(cx, |operations, _| {
+        operations
+            .requests()
+            .iter()
+            .filter(|request| pick(&request.intent))
+            .filter(|request| {
+                !matches!(
+                    request.state,
+                    RequestState::Queued | RequestState::Running { .. }
+                )
+            })
+            .count()
+    })
+}
+
+fn is_prepare(intent: &Intent) -> bool {
+    matches!(intent, Intent::ContextPrepare { .. })
+}
+
+/// Whether the element `id` holds focus.
+fn holds_focus(shell: &Shell, id: &'static str, cx: &mut TestAppContext) -> bool {
+    shell.frame(cx, |window, _| {
+        window.try_find(id).and_then(|element| element.focused()) == Some(true)
+    })
+}
+
+/// The close dialog's Save saves, then closes the tab once the draft
+/// retires; the dialog stays open while it saves. From D2's dialog of a
+/// restored draft it first makes the context ready (design, Restored
+/// drafts); from an edit session's, it saves the editor's text.
+#[gpui_kit::test]
+async fn save_in_the_close_dialog_saves_then_closes(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let Restored { shell, a, draft } = restored(cx);
+    shell.click(("tab-close", 0usize), cx);
+    assert!(close_dialog_shown(&shell, cx));
+    let prepare = shell.backend.hold_job(JobKind::ContextPrepare);
+    shell.click("close-draft-save-button", cx);
+    prepare.wait_reached();
+    assert!(
+        close_dialog_shown(&shell, cx),
+        "it stays open while it saves"
+    );
+    assert_eq!(strip(&shell, cx), ["One, unsaved", "Two"]);
+    prepare.release();
+    // Each step its own wait (Part C fix 2, A): the prepare, the save,
+    // then the close.
+    until_drawn(&shell, cx, "One's prepare ending", |shell, cx| {
+        ended_requests(shell, cx, is_prepare) == 1
+    })
+    .await;
+    until_drawn(&shell, cx, "One's save ending", |shell, cx| {
+        ended_requests(shell, cx, is_save) == 1
+    })
+    .await;
+    until_drawn(&shell, cx, "One's tab closing", |shell, cx| {
+        strip(shell, cx) == ["Two"]
+    })
+    .await;
+    assert!(!close_dialog_shown(&shell, cx), "the dialog closed with it");
+    assert!(body(&shell, &a, ONE).as_deref() == Some("Draft body"));
+    assert!(
+        held(&shell.fixture.draft_store(), draft).is_none(),
+        "the draft retired"
+    );
+    let (prepared, saved) = (picked(&shell, cx, is_prepare), picked(&shell, cx, is_save));
+    assert_eq!((prepared.len(), saved.len()), (1, 1));
+    assert!(prepared[0] < saved[0], "the context was made ready first");
+
+    // An edit session's dialog.
+    let host = edit_shown(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let typed = host.read_with(cx, |host, cx| host.text(cx));
+    shell.click(("tab-close", 0usize), cx);
+    assert!(close_dialog_shown(&shell, cx));
+    shell.click("close-draft-save-button", cx);
+    until_drawn(&shell, cx, "Two's save ending", |shell, cx| {
+        ended_requests(shell, cx, is_save) == 2
+    })
+    .await;
+    until_drawn(&shell, cx, "Two's tab closing", |shell, cx| {
+        strip(shell, cx).is_empty()
+    })
+    .await;
+    assert!(!close_dialog_shown(&shell, cx));
+    assert!(body(&shell, &a, TWO).as_deref() == Some(typed.as_str()));
+    assert_eq!(picked(&shell, cx, is_save).len(), 2, "one save more");
+}
+
+/// A save the library refuses, from the close dialog: the dialog stays
+/// open with the refusal, in the library's code, and the tab stays, with
+/// its text.
+#[gpui_kit::test]
+async fn a_refused_save_from_the_close_dialog_keeps_the_tab(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let Restored { shell, .. } = restored(cx);
+    shell.click(("tab", 1usize), cx);
+    let host = edit_shown(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let typed = host.read_with(cx, |host, cx| host.text(cx));
+    shell.backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            shell.fixture.data_dir(),
+            FailurePoint::BeforeRequestDomainCall,
+        )
+        .unwrap(),
+    );
+
+    shell.click(("tab-close", 1usize), cx);
+    assert!(close_dialog_shown(&shell, cx));
+    shell.click("close-draft-save-button", cx);
+    let request = picked(&shell, cx, is_save)[0];
+    shell.until_ended(request, cx).await;
+    shell.run(cx);
+    assert!(close_dialog_shown(&shell, cx), "the dialog stays open");
+    assert_eq!(
+        shell.label("close-draft-save-state", cx).as_deref(),
+        Some("Could not save on this computer. Your edits are kept.")
+    );
+    assert_eq!(
+        shell.label("close-draft-save-code", cx).as_deref(),
+        Some("internal_error")
+    );
+    assert_eq!(strip(&shell, cx), ["One, unsaved", "Two, unsaved"]);
+    shell.click("close-draft-cancel-button", cx);
+    assert!(!close_dialog_shown(&shell, cx));
+    assert_eq!(
+        strip(&shell, cx),
+        ["One, unsaved", "Two, unsaved"],
+        "the tab stays"
+    );
+    assert!(
+        host.read_with(cx, |host, cx| host.text(cx)) == typed,
+        "with its text"
+    );
+}
+
+/// The design's session-outcome row for Task 18 (R-76): the close dialog's
+/// Save answering a pending checkpoint. The dialog stays open with Retry,
+/// and the tab stays. Retry sends the same request again; once it commits
+/// and the draft retires, the tab closes.
+#[gpui_kit::test]
+async fn a_pending_checkpoint_from_the_close_dialog_keeps_it_open_with_retry(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let Restored { shell, a, .. } = restored(cx);
+    shell.click(("tab", 1usize), cx);
+    let host = edit_shown(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let typed = host.read_with(cx, |host, cx| host.text(cx));
+    shell.backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            shell.fixture.data_dir(),
+            FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
+        )
+        .unwrap(),
+    );
+
+    shell.click(("tab-close", 1usize), cx);
+    shell.click("close-draft-save-button", cx);
+    let request = picked(&shell, cx, is_save)[0];
+    shell.until_ended(request, cx).await;
+    shell.run(cx);
+    assert!(close_dialog_shown(&shell, cx), "the dialog stays open");
+    assert_eq!(
+        shell.label("close-draft-save-state", cx).as_deref(),
+        Some("Could not save a checkpoint on this computer. Your text is kept.")
+    );
+    assert_eq!(
+        shell.label("close-draft-retry", cx).as_deref(),
+        Some("Retry")
+    );
+    assert_eq!(
+        strip(&shell, cx),
+        ["One, unsaved", "Two, unsaved"],
+        "the tab stays"
+    );
+    assert!(host.read_with(cx, |host, cx| host.text(cx)) == typed);
+
+    shell
+        .backend
+        .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
+    shell.click("close-draft-retry-button", cx);
+    until_drawn(&shell, cx, "Two's tab closing", |shell, cx| {
+        strip(shell, cx) == ["One, unsaved"]
+    })
+    .await;
+    assert_eq!(picked(&shell, cx, is_save), [request], "the same request");
+    assert!(!close_dialog_shown(&shell, cx));
+    assert!(body(&shell, &a, TWO).as_deref() == Some(typed.as_str()));
+}
+
+/// R-16: Save comes after Keep draft, which stays the default and the
+/// first Tab stop, in D2's dialog of a restored draft and in an edit
+/// session's.
+#[gpui_kit::test]
+async fn keep_draft_is_still_the_first_tab_stop_of_the_close_dialog(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let Restored { shell, .. } = restored(cx);
+    shell.click(("tab-close", 0usize), cx);
+    assert!(close_dialog_shown(&shell, cx));
+    shell.keys("tab", cx);
+    assert!(
+        holds_focus(&shell, "close-draft-keep-button", cx),
+        "Keep draft first"
+    );
+    shell.keys("tab", cx);
+    assert!(
+        holds_focus(&shell, "close-draft-save-button", cx),
+        "then Save"
+    );
+    shell.keys("escape", cx);
+    assert!(!close_dialog_shown(&shell, cx));
+
+    shell.click(("tab", 1usize), cx);
+    let host = edit_shown(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    shell.click(("tab-close", 1usize), cx);
+    assert!(close_dialog_shown(&shell, cx));
+    assert!(shell.present("close-draft-keep", cx), "a draft is stored");
+    shell.keys("tab", cx);
+    assert!(
+        holds_focus(&shell, "close-draft-keep-button", cx),
+        "Keep draft first"
+    );
+    shell.keys("tab", cx);
+    assert!(
+        holds_focus(&shell, "close-draft-save-button", cx),
+        "then Save"
+    );
+    shell.keys("escape", cx);
+    assert!(!close_dialog_shown(&shell, cx));
+}
+
+/// The shown tab's close dialog's Save, as the dialog draws it.
+fn close_save_offered(shell: &Shell, cx: &mut TestAppContext) -> Option<Option<bool>> {
+    shell.workspace.read_with(cx, |workspace, cx| {
+        workspace
+            .item_pane()
+            .map(|pane| pane.read(cx).close_offers(cx).save)
+    })
+}
+
+/// I2 (Task 18 fix 1): the close dialog's Save for a session kept after
+/// Done. It is dirty and nothing saves, so Save is enabled; it saves the
+/// kept text, and the tab closes once the draft retires.
+#[gpui_kit::test]
+async fn save_in_the_close_dialog_saves_a_kept_session_then_closes(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let Restored { shell, a, .. } = restored(cx);
+    shell.click(("tab", 1usize), cx);
+    let host = edit_shown(&shell, cx).await;
+    type_at_end(&shell, &host, "x", cx);
+    let typed = host.read_with(cx, |host, cx| host.text(cx));
+    shell.click("item-done", cx);
+    until_drawn(&shell, cx, "the session kept", |shell, cx| {
+        shell.label("item-pill", cx).as_deref() == Some("Viewing \u{b7} unsaved changes kept")
+    })
+    .await;
+
+    shell.click(("tab-close", 1usize), cx);
+    assert!(close_dialog_shown(&shell, cx));
+    assert_eq!(
+        close_save_offered(&shell, cx),
+        Some(Some(true)),
+        "Save is enabled"
+    );
+    assert!(!shell.present("close-draft-save-note", cx));
+    shell.click("close-draft-save-button", cx);
+    // Each step its own wait (Part C fix 2, A): the save, then the close.
+    until_drawn(&shell, cx, "Two's save ending", |shell, cx| {
+        ended_requests(shell, cx, is_save) == 1
+    })
+    .await;
+    until_drawn(&shell, cx, "Two's tab closing", |shell, cx| {
+        strip(shell, cx) == ["One, unsaved"]
+    })
+    .await;
+    assert!(!close_dialog_shown(&shell, cx), "the dialog closed with it");
+    assert!(body(&shell, &a, TWO).as_deref() == Some(typed.as_str()));
+    assert_eq!(picked(&shell, cx, is_save).len(), 1, "one save");
+}
+
+/// M1 (Task 18 fix 1): Cancel in D2's dialog while its Save is still in
+/// Continue editing's steps. The editor opens once the prepare lands, on
+/// the draft, and nothing is saved: a write the user cancelled never
+/// happens.
+#[gpui_kit::test]
+async fn cancelling_the_close_dialogs_save_in_its_steps_saves_nothing(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let Restored { shell, a, draft } = restored(cx);
+    shell.click(("tab-close", 0usize), cx);
+    let prepare = shell.backend.hold_job(JobKind::ContextPrepare);
+    shell.click("close-draft-save-button", cx);
+    prepare.wait_reached();
+    shell.click("close-draft-cancel-button", cx);
+    assert!(!close_dialog_shown(&shell, cx), "Cancel closes the dialog");
+    prepare.release();
+    until_drawn(&shell, cx, "the edit editor", |shell, cx| {
+        shell.workspace.read_with(cx, |workspace, cx| {
+            workspace
+                .item_pane()
+                .is_some_and(|pane| pane.read(cx).edit_host().is_some())
+        })
+    })
+    .await;
+    for _ in 0..3 {
+        shell.frame(cx, |_, _| ());
+        shell.run(cx);
+    }
+    let host = shell.workspace.read_with(cx, |workspace, cx| {
+        workspace
+            .item_pane()
+            .and_then(|pane| pane.read(cx).edit_host())
+            .expect("editing")
+    });
+    assert!(host.read_with(cx, |host, cx| host.text(cx)) == "Draft body");
+    assert!(picked(&shell, cx, is_save).is_empty(), "nothing is saved");
+    assert!(body(&shell, &a, ONE).as_deref() == Some("Body of One.\n"));
+    assert_eq!(strip(&shell, cx), ["One, unsaved", "Two"], "the tab stays");
+    let tab = TabKey::for_target(&ticket(&a, ONE));
+    assert_eq!(
+        drafts(&shell, cx).read_with(cx, |registry, _| registry.attached(&tab)),
+        Some(draft),
+        "with its draft"
+    );
+}
+
+const DOC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ5";
+const CODE: &str = "mh-vh-k9x2b";
+
+/// The shown tab's facts, as the strip draws them.
+fn info(shell: &Shell, cx: &mut TestAppContext) -> TabInfo {
+    shell.workspace.read_with(cx, |workspace, cx| {
+        tab_info(workspace.item_pane().unwrap().read(cx), cx)
+    })
+}
+
+/// A ticket tab shows its type icon, its short code in mono and its
+/// title, each in its own element.
+#[gpui_kit::test]
+fn each_tab_shows_its_type_short_code_and_title(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    fixture.commit_ticket(&a, ONE, "One", &format!("slug: {CODE}\n"));
+    fixture.commit_ticket(&a, TWO, "Two", "");
+    fixture.refresh(&a);
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&a, ONE), cx);
+    open(&shell, ticket(&a, TWO), cx);
+
+    assert_eq!(
+        shell.label(("tab-icon", 0usize), cx).as_deref(),
+        Some("Ticket")
+    );
+    assert_eq!(shell.label(("tab-code", 0usize), cx).as_deref(), Some(CODE));
+    assert_eq!(
+        shell.label(("tab-title", 0usize), cx).as_deref(),
+        Some("One")
+    );
+    assert_eq!(
+        shell.label(("tab-icon", 1usize), cx).as_deref(),
+        Some("Ticket")
+    );
+    assert!(
+        !shell.present(("tab-code", 1usize), cx),
+        "a ticket without a short code shows none"
+    );
+    assert_eq!(
+        shell.label(("tab-title", 1usize), cx).as_deref(),
+        Some("Two")
+    );
+    assert_eq!(strip(&shell, cx), ["One", "Two"]);
+}
+
+/// A document tab has the document icon and no short code.
+#[gpui_kit::test]
+fn a_document_tab_has_no_short_code(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    fixture.create_document(&a, DOC, "docs/note.md", "A note");
+    fixture.refresh(&a);
+    let shell = Shell::open(fixture, cx);
+    let target = OpenTarget::Item {
+        repo: key(&a),
+        kind: ItemDtoKind::Document,
+        id: item_id(DOC),
+    };
+    open(&shell, target, cx);
+    assert_eq!(
+        shell.label(("tab-icon", 0usize), cx).as_deref(),
+        Some("Document")
+    );
+    assert_eq!(
+        shell.label(("tab-title", 0usize), cx).as_deref(),
+        Some("A note")
+    );
+    assert!(!shell.present(("tab-code", 0usize), cx));
+}
+
+/// A tab with a restored or stored draft shows the amber dot and says
+/// "unsaved" in its accessible name, not by colour alone.
+#[gpui_kit::test]
+fn a_tab_with_a_stored_draft_shows_its_dot_and_is_named_unsaved(cx: &mut TestAppContext) {
+    let Restored { shell, .. } = restored(cx);
+    assert_eq!(strip(&shell, cx), ["One, unsaved", "Two"]);
+    assert_eq!(
+        shell.label(("tab-unsaved", 0usize), cx).as_deref(),
+        Some("Unsaved changes")
+    );
+    assert!(!shell.present(("tab-unsaved", 1usize), cx));
+    // The title element keeps the bare title.
+    assert_eq!(
+        shell.label(("tab-title", 0usize), cx).as_deref(),
+        Some("One")
+    );
+}
+
+/// The tooltip is "Title · repository"; an item with a work context also
+/// names its branch and worktree.
+#[gpui_kit::test]
+fn the_tooltip_names_the_repository_and_the_context_when_there_is_one(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    fixture.commit_ticket(&a, ONE, "One", "");
+    fixture.commit_ticket(&a, TWO, "Two", "");
+    fixture.refresh(&a);
+    fixture.save_ticket(&a, TWO, "Two saved");
+    fixture.refresh(&a);
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&a, ONE), cx);
+    assert_eq!(info(&shell, cx).tooltip, "One · a");
+
+    open(&shell, ticket(&a, TWO), cx);
+    let tooltip = info(&shell, cx).tooltip;
+    assert!(tooltip.starts_with("Two saved · a · branch "), "{tooltip}");
+    assert!(tooltip.contains(" · worktree "), "{tooltip}");
+    assert_eq!(
+        tooltip_text("T", "r", Some((Some("b"), "/w"))),
+        "T · r · branch b · worktree /w"
+    );
+    assert_eq!(
+        tooltip_text("T", "r", Some((None, "/w"))),
+        "T · r · worktree /w"
+    );
+    assert_eq!(tooltip_text("T", "r", None), "T · r");
+}
+
+/// The strip does not wrap: tabs with long titles stay on one row of the
+/// strip's height, and the strip scrolls.
+#[gpui_kit::test]
+fn the_strip_does_not_wrap(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    let long = "A very long title that would need more than one line in a narrow strip";
+    for id in [ONE, TWO, THREE] {
+        fixture.commit_ticket(&a, id, long, "");
+    }
+    fixture.refresh(&a);
+    let shell = Shell::open(fixture, cx);
+    for id in [ONE, TWO, THREE] {
+        open(&shell, ticket(&a, id), cx);
+    }
+    let rows: Vec<_> = (0..3usize)
+        .map(|ix| {
+            shell.frame(cx, |window, _| {
+                let bounds = window.find(("tab", ix)).bounds();
+                (bounds.origin.y, bounds.size.height)
+            })
+        })
+        .collect();
+    assert!(rows.iter().all(|row| row.0 == rows[0].0), "{rows:?}");
+    assert!(
+        rows.iter().all(|row| row.1 <= gpui_kit::px(34.)),
+        "{rows:?}"
+    );
+    let strip = shell.frame(cx, |window, _| window.find("tab-strip").bounds());
+    assert_eq!(strip.size.height, gpui_kit::px(34.));
+    // Widths: a tab with a long title is cut at 260 px, not collapsed and
+    // not wrapped: the title keeps one line.
+    for ix in 0..3usize {
+        let (tab, close, title, icon) = shell.frame(cx, |window, _| {
+            (
+                window.find(("tab", ix)).bounds(),
+                window.find(("tab-close", ix)).bounds(),
+                window.find(("tab-title", ix)).bounds(),
+                window.find(("tab-icon", ix)).bounds(),
+            )
+        });
+        let whole = tab.size.width + close.size.width + gpui_kit::px(6.);
+        assert!(whole <= gpui_kit::px(260.), "tab {ix} is {whole:?} wide");
+        assert!(
+            tab.size.width > icon.size.width + close.size.width,
+            "tab {ix} collapsed to {:?}",
+            tab.size.width
+        );
+        assert!(title.size.width > gpui_kit::px(40.), "title {ix} collapsed");
+        assert!(
+            title.size.height < gpui_kit::px(24.),
+            "title {ix} wrapped to {:?}",
+            title.size.height
+        );
+    }
+}
+
+/// Exactly the shown tab carries the active line, whichever tab that is.
+#[gpui_kit::test]
+fn only_the_shown_tab_carries_the_active_line(cx: &mut TestAppContext) {
+    let t = two(cx);
+    open(&t.shell, ticket(&t.a, ONE), cx);
+    open(&t.shell, ticket(&t.a, TWO), cx);
+    let lines = |cx: &mut TestAppContext| -> Vec<bool> {
+        (0..2usize)
+            .map(|ix| t.shell.present(("tab-active-line", ix), cx))
+            .collect()
+    };
+    assert_eq!(lines(cx), [false, true]);
+    t.shell.click(("tab", 0usize), cx);
+    assert_eq!(lines(cx), [true, false]);
+    assert_eq!(shown(&t.shell, cx), Some(0));
+}
+
+/// The line is amber while the content region has focus and `faint`
+/// otherwise; it is drawn either way. The rendered line says which it
+/// is drawn in, from the real focus.
+#[gpui_kit::test]
+fn the_focused_strip_marks_the_active_tab(cx: &mut TestAppContext) {
+    let t = two(cx);
+    open(&t.shell, ticket(&t.a, ONE), cx);
+    let line = |cx: &mut TestAppContext| t.shell.label(("tab-active-line-state", 0usize), cx);
+    t.shell.keys("secondary-3", cx);
+    assert_eq!(ring(&t.shell, cx), [Region::Content]);
+    assert_eq!(line(cx).as_deref(), Some("amber"));
+    t.shell.keys("secondary-1", cx);
+    assert_ne!(ring(&t.shell, cx), [Region::Content]);
+    assert_eq!(
+        line(cx).as_deref(),
+        Some("faint"),
+        "the line stays when focus leaves, in faint"
+    );
+    let colors = colors(true);
+    assert_eq!(active_line(true, &colors), ("amber", colors.accent));
+    assert_eq!(active_line(false, &colors), ("faint", colors.faint));
+}
+
+/// The close control is the design's 20 x 20, with the Kit's `close` icon.
+#[gpui_kit::test]
+fn the_close_button_is_twenty_by_twenty(cx: &mut TestAppContext) {
+    let t = two(cx);
+    open(&t.shell, ticket(&t.a, ONE), cx);
+    let (wrapper, button) = t.shell.frame(cx, |window, _| {
+        (
+            window.find(("tab-close", 0usize)).bounds().size,
+            window.find(("tab-close-button", 0usize)).bounds().size,
+        )
+    });
+    let twenty = gpui_kit::size(gpui_kit::px(20.), gpui_kit::px(20.));
+    assert_eq!(button, twenty);
+    assert_eq!(wrapper, twenty);
+    assert_eq!(
+        t.shell.label(("tab-close", 0usize), cx).as_deref(),
+        Some("Close One")
+    );
+}
+
+/// Whether the tab at `ix` lies inside the strip's visible part, after a
+/// frame.
+fn tab_in_view(shell: &Shell, ix: usize, cx: &mut TestAppContext) -> bool {
+    let (strip, tab) = shell.frame(cx, |window, _| {
+        (
+            window.find("tab-strip").bounds(),
+            window.find(("tab", ix)).bounds(),
+        )
+    });
+    strip.intersects(&tab) && tab.left() >= strip.left() && tab.right() <= strip.right()
+}
+
+/// In a strip wider than its room, the tab keys and a newly opened tab
+/// bring the tab they show into view (Contract 13).
+#[gpui_kit::test]
+fn the_strip_scrolls_the_shown_tab_into_view(cx: &mut TestAppContext) {
+    const IDS: [&str; 6] = [
+        ONE,
+        TWO,
+        THREE,
+        "01ARZ3NDEKTSV4RRFFQ69G5FJ5",
+        "01ARZ3NDEKTSV4RRFFQ69G5FJ6",
+        "01ARZ3NDEKTSV4RRFFQ69G5FJ7",
+    ];
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    for (ix, id) in IDS.iter().enumerate() {
+        let title = format!("A tab with a title of length {ix}");
+        fixture.commit_ticket(&a, id, &title, "");
+    }
+    fixture.refresh(&a);
+    let shell = Shell::open(fixture, cx);
+    for id in &IDS[..5] {
+        open(&shell, ticket(&a, id), cx);
+    }
+    assert_eq!(shown(&shell, cx), Some(4));
+    assert!(tab_in_view(&shell, 4, cx), "the newest tab is in view");
+
+    shell.keys(
+        "ctrl-shift-tab ctrl-shift-tab ctrl-shift-tab ctrl-shift-tab",
+        cx,
+    );
+    assert_eq!(shown(&shell, cx), Some(0));
+    assert!(tab_in_view(&shell, 0, cx), "the first tab is in view");
+
+    shell.keys("ctrl-shift-tab", cx);
+    assert_eq!(shown(&shell, cx), Some(4));
+    assert!(tab_in_view(&shell, 4, cx), "the last tab is in view");
+
+    open(&shell, ticket(&a, IDS[5]), cx);
+    assert_eq!(shown(&shell, cx), Some(5));
+    assert!(tab_in_view(&shell, 5, cx), "a sixth tab is in view");
+    shell.keys("ctrl-tab", cx);
+    assert!(tab_in_view(&shell, 0, cx), "the first tab is in view again");
 }

@@ -6,24 +6,32 @@
 //! fails or fabricates a call. Failures in tests come from the library's
 //! own failure points and hooks.
 
+pub(crate) mod created_contexts;
 pub(crate) mod drafts;
+pub(crate) mod edit_tabs;
+pub(crate) mod images;
+pub(crate) mod links;
 pub(crate) mod prompts;
 mod reads;
+pub(crate) mod release;
 pub(crate) mod requests;
 pub(crate) mod worker;
 
-use std::{sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use futures::StreamExt;
 use gpui_kit::{App, AppContext, Entity};
 use manyhands::{
     drafts::{DraftError, DraftStore},
-    repository::{MutationDataDto, RepositoryService, keys::KeyStore},
-    results::{Envelope, Outcome},
+    repository::{ContextPrepareIntent, MutationDataDto, RepositoryService, keys::KeyStore},
+    results::{Envelope, Outcome, ResultCode},
 };
 
 use crate::desktop::model::operations::Operations;
+use created_contexts::{ContextKey, CreatedContexts};
 use drafts::DraftRegistry;
+use edit_tabs::EditTabs;
+use release::Releases;
 use worker::{WorkerEvent, WorkerHandle};
 
 pub(crate) use drafts::DraftStoreUnavailable;
@@ -71,6 +79,16 @@ pub(crate) enum ReadKind {
     /// The registry's re-read of an item after a save, apart from `Item`,
     /// which the repository's tabs reload under at the same time.
     DraftItem,
+    /// `observe_path`: the path a clicked link names, and any other path
+    /// the desktop asks the library about.
+    ObservePath,
+    /// `new_id`, for a new item's ID.
+    NewId,
+    /// The check of a relationship a draft sets, before it is saved.
+    RelationshipCheck,
+    /// A local image an editor shows, read from the tab's trees and
+    /// decoded (`images`): no library call, but held like one.
+    Image,
 }
 
 /// What a worker job does, so the seam can hold one kind and not another.
@@ -98,6 +116,14 @@ pub(crate) enum JobKind {
     OperationAbandon,
     DocumentSave,
     TicketSave,
+    ContextPrepare,
+    ContextRelease,
+    DocumentCreate,
+    TicketCreate,
+    DocumentMove,
+    FolderCreate,
+    DocumentRepair,
+    TicketRepair,
     ObserveHost,
 }
 
@@ -174,6 +200,15 @@ pub(crate) struct Services {
     operations: Entity<Operations>,
     /// The drafts this session knows of, shared by every view.
     drafts: Entity<DraftRegistry>,
+    /// The work contexts this process made and saved nothing into (R-75):
+    /// `releases` reads them; tests read them here.
+    #[cfg(test)]
+    created: Entity<CreatedContexts>,
+    /// Release on leave (R-37), shared by every view.
+    releases: Entity<Releases>,
+    /// What each item tab says of its edit session (Part C fixes 1 and 2):
+    /// a repository's removal and the Drafts page read it.
+    edit_tabs: Entity<EditTabs>,
     /// Whether the workspace refreshes every listed repository once its
     /// list first loads. Tests that do not wait for the worker turn it
     /// off.
@@ -189,16 +224,29 @@ impl Services {
     /// listed once, at launch.
     ///
     /// Each finished request is then passed to the draft registry, after
-    /// the request model has it: a save's answer applies to its draft, and
-    /// an abandoned operation ends the pending save it held. The registry
+    /// the request model has it: a save's or a new item's create's answer
+    /// applies to its draft, an abandoned operation ends the pending save
+    /// it held, and a `context prepare` with the Create intent gives the
+    /// worktree its create's `occupied_path` is read in. The registry
     /// outlives tabs, so a save that finishes after its tab closed still
     /// retires its revision.
+    ///
+    /// A finished `context prepare` is first passed to `CreatedContexts`,
+    /// in the same update, so a context is counted before any view hears
+    /// of its answer, and whether or not its tab is still open (R-37).
+    /// Once the request model has it, release on leave hears of it too, as
+    /// of a prepare removed from the queue or not sent: a tab that closed
+    /// while it prepared releases the context it made.
     pub(crate) fn start(backend: Arc<dyn Backend>, cx: &mut App) -> Self {
         let (worker, mut events) = WorkerHandle::spawn(backend.clone());
         let operations = cx.new(|_| Operations::default());
         let model = operations.downgrade();
         let drafts = cx.new(|_| DraftRegistry::new(backend.clone(), worker.clone()));
         let registry = drafts.downgrade();
+        let created = cx.new(|_| CreatedContexts::default());
+        let made = created.downgrade();
+        let releases = cx.new(|cx| Releases::new(worker.clone(), created.clone(), &drafts, cx));
+        let releasing = releases.downgrade();
         cx.spawn(async move |cx| {
             while let Some(event) = events.next().await {
                 let mut batch = vec![event];
@@ -207,20 +255,52 @@ impl Services {
                 }
                 let applied = model.update(cx, |operations, cx| {
                     let mut finished = Vec::new();
+                    let mut prepared = Vec::new();
                     for event in batch {
-                        if let WorkerEvent::Finished(id, envelope) = &event
-                            && let Some(forward) = for_drafts(operations, *id, envelope)
-                        {
-                            finished.push(forward);
+                        let ended = match &event {
+                            WorkerEvent::Finished(id, _)
+                            | WorkerEvent::Removed(id)
+                            | WorkerEvent::NotSent(id, _) => operations.request(*id),
+                            _ => None,
+                        };
+                        // A prepare's end, for release on leave: what it
+                        // made, if anything. One removed from the queue, or
+                        // not sent, made nothing.
+                        let prepare = ended.and_then(|request| {
+                            matches!(request.intent, requests::Intent::ContextPrepare { .. })
+                                .then(|| (request.id, ContextKey::of(&request.intent)))
+                        });
+                        let mut made_here = false;
+                        if let WorkerEvent::Finished(id, envelope) = &event {
+                            if let Some(request) = operations.request(*id) {
+                                made_here = made
+                                    .update(cx, |created, _| {
+                                        created.finished(&request.intent, envelope)
+                                    })
+                                    .unwrap_or(false);
+                            }
+                            if let Some(forward) = for_drafts(operations, *id, envelope) {
+                                finished.push(forward);
+                            }
+                        }
+                        if let Some((id, item)) = prepare {
+                            prepared.push((id, item, made_here));
                         }
                         operations.apply(event);
                     }
                     cx.notify();
-                    finished
+                    (finished, prepared)
                 });
-                let Ok(finished) = applied else {
+                let Ok((finished, prepared)) = applied else {
                     break;
                 };
+                if !prepared.is_empty() {
+                    let _ = releasing.update(cx, |releases, cx| {
+                        for (id, item, made) in prepared {
+                            releases.prepared(id, item, made, cx);
+                        }
+                    });
+                }
                 if finished.is_empty() {
                     continue;
                 }
@@ -231,6 +311,9 @@ impl Services {
                             ForDrafts::Save(id, envelope) => registry.finished(id, &envelope, cx),
                             ForDrafts::Abandoned(operation) => {
                                 registry.operation_abandoned(&operation, cx)
+                            }
+                            ForDrafts::Prepared(key, worktree) => {
+                                registry.context_prepared(key, worktree)
                             }
                         }
                     }
@@ -243,6 +326,10 @@ impl Services {
             worker,
             operations,
             drafts: drafts.clone(),
+            #[cfg(test)]
+            created,
+            releases,
+            edit_tabs: cx.new(|_| EditTabs::default()),
             launch_refresh: true,
         };
         drafts.update(cx, |registry, cx| {
@@ -282,6 +369,23 @@ impl Services {
         &self.drafts
     }
 
+    /// The work contexts this process made and saved nothing into.
+    #[cfg(test)]
+    pub(crate) fn created_contexts(&self) -> &Entity<CreatedContexts> {
+        &self.created
+    }
+
+    /// Release on leave: what each item's tab and its drafts' discards
+    /// hand over (R-37).
+    pub(crate) fn releases(&self) -> &Entity<Releases> {
+        &self.releases
+    }
+
+    /// What each item tab says of its edit session.
+    pub(crate) fn edit_tabs(&self) -> &Entity<EditTabs> {
+        &self.edit_tabs
+    }
+
     #[cfg(test)]
     pub(crate) fn backend(&self) -> &Arc<dyn Backend> {
         &self.backend
@@ -290,11 +394,15 @@ impl Services {
 
 /// What a finished request means to the draft registry.
 enum ForDrafts {
-    /// A save finished: its answer applies to its draft.
+    /// A save or a new item's create finished: its answer applies to its
+    /// draft.
     Save(requests::DesktopRequestId, Box<Envelope<MutationDataDto>>),
     /// An `operation abandon` ended this operation: a pending save that
     /// held it is over (ruling R22).
     Abandoned(String),
+    /// A `context prepare` with the Create intent made the item's context
+    /// ready, at this worktree: where its create's `occupied_path` is read.
+    Prepared(ContextKey, PathBuf),
 }
 
 fn for_drafts(
@@ -302,8 +410,12 @@ fn for_drafts(
     id: requests::DesktopRequestId,
     envelope: &Envelope<MutationDataDto>,
 ) -> Option<ForDrafts> {
-    match &operations.request(id)?.intent {
-        requests::Intent::DocumentSave { .. } | requests::Intent::TicketSave { .. } => {
+    let intent = &operations.request(id)?.intent;
+    match intent {
+        requests::Intent::DocumentSave { .. }
+        | requests::Intent::TicketSave { .. }
+        | requests::Intent::DocumentCreate { .. }
+        | requests::Intent::TicketCreate { .. } => {
             Some(ForDrafts::Save(id, Box::new(envelope.clone())))
         }
         requests::Intent::OperationAbandon { operation_id, .. }
@@ -311,6 +423,16 @@ fn for_drafts(
         {
             Some(ForDrafts::Abandoned(operation_id.to_string()))
         }
+        requests::Intent::ContextPrepare {
+            intent: ContextPrepareIntent::Create,
+            ..
+        } if envelope.code == ResultCode::Ok => match &envelope.data {
+            Some(MutationDataDto::Context(context)) => Some(ForDrafts::Prepared(
+                ContextKey::of(intent)?,
+                PathBuf::from(&context.worktree),
+            )),
+            _ => None,
+        },
         _ => None,
     }
 }

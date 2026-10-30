@@ -170,3 +170,26 @@ fn ids_are_not_reused() {
     let (two, _) = tabs.open(item("/a", "1"));
     assert_ne!(one, two);
 }
+
+/// A tab follows its item (Task 25: a repair made): it shows the new key
+/// in its own place, still active, under the same ID. It never takes a key
+/// another tab shows, and a tab that is not open shows nothing.
+#[test]
+fn a_tab_replaces_its_key_in_place_unless_another_shows_it() {
+    let mut tabs = Tabs::default();
+    let (repaired, _) = tabs.open(inspect("/a", "docs/a.md"));
+    let (other, _) = tabs.open(item("/a", OTHER));
+    tabs.activate(repaired);
+    assert!(tabs.replace(repaired, item("/a", ID)));
+    assert_eq!(keys(&tabs), [item("/a", ID), item("/a", OTHER)]);
+    assert_eq!(tabs.active(), Some(repaired));
+
+    assert!(
+        !tabs.replace(repaired, item("/a", OTHER)),
+        "another shows it"
+    );
+    assert_eq!(keys(&tabs), [item("/a", ID), item("/a", OTHER)]);
+    tabs.close(other);
+    assert!(!tabs.replace(other, item("/a", OTHER)), "not open");
+    assert_eq!(keys(&tabs), [item("/a", ID)]);
+}

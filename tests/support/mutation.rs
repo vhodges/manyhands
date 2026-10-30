@@ -605,6 +605,7 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
+        MutationDataDto::Context(_) => panic!("a context's data"),
     }
 }
 
@@ -621,6 +622,7 @@ pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationD
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
+        MutationDataDto::Context(_) => panic!("a context's data"),
     }
 }
 
@@ -741,6 +743,7 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
+        MutationDataDto::Context(_) => panic!("a context's data"),
     }
 }
 
@@ -757,6 +760,7 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
+        MutationDataDto::Context(_) => panic!("a context's data"),
     }
 }
 
@@ -773,6 +777,7 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
+        MutationDataDto::Context(_) => panic!("a context's data"),
     }
 }
 
@@ -789,6 +794,7 @@ pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationD
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
+        MutationDataDto::Context(_) => panic!("a context's data"),
     }
 }
 

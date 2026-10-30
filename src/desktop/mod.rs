@@ -3,6 +3,9 @@
 //! Every window's first entity is GPUI Kit's `Root`; the window's view is
 //! created inside `Root`'s own `cx.new`, so its entity comes after.
 
+mod assets;
+#[cfg(target_os = "linux")]
+mod fonts;
 mod keys;
 mod model;
 mod services;
@@ -43,10 +46,13 @@ pub(crate) const STARTUP_FAILURE_OTHER: &str = "Manyhands could not start.";
 /// this is called.
 pub(crate) fn run() {
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(assets::DesktopAssets)
         .run(|cx| {
+            #[cfg(target_os = "linux")]
+            fonts::register(cx);
             gpui_kit::init(cx);
             keys::bind(cx);
+            view::editor::keys::bind(cx);
             let opener: Opener = Rc::new(RepositoryService::open_default);
             cx.spawn(async move |cx| {
                 cx.update(|cx| start(opener, cx));
