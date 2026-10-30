@@ -3494,3 +3494,67 @@ ticket comment.
 The full `--test cli` run started before the last edit, which only moved a
 `#[cfg(test)]` module inside `render.rs`; the binary under test has the same
 production code.
+
+### Task 11: Part B Checkpoint
+
+The controller ran this checkpoint and its review at `8f3f9f4c`.
+`origin/main` is still `a372edb`, and `git merge-tree --write-tree HEAD
+origin/main` exits 0.
+
+- **The gate.** Each command runs as `devenv shell -- cargo … --locked`;
+  the logs are `logs/task-11-gate-*` and `task-11-regate-*`.
+  - On `5e641f1f`:
+    - `check --all-features`, `fmt --check`, `clippy --all-targets
+      --all-features -- -D warnings`, `check --features desktop`, `check
+      --bin manyhands-cli` and `check-cli-no-gpui.sh` pass.
+    - Desktop-alone clippy fails with main's 58 errors exactly (Ruling P6).
+    - The tests: `--bin manyhands-cli` 249, `cli` 338, `mutation_bridges`
+      129, `mutation_confirmation` 183, `mutation_contract` 44,
+      `mutation_replay` 383, `read_contract` 72, and `cli_remote` 32 SSH
+      cases.
+  - After the fix round, on `8f3f9f4c`: the same build and lint steps (with
+    clippy's 58 again), then `--bin manyhands-cli` 249, `cli` 338 and
+    `cli_remote` 32.
+  - **Cited from Task 6** (`74be902`): `--lib` 1445, `mutation_remote` 257,
+    `comment_publication` 41 and `remote_merge_recovery` 25. Since
+    `74be902`, Part B changed no file under `src/` outside
+    `src/bin/manyhands-cli/`, no test file outside the CLI set, and only
+    `schemas/input/`. None of those targets compiles or reads any of these,
+    and none mounts `tests/support/mod.rs`. The five contract targets after
+    the fix round are cited from the `5e641f1f` run on the same grounds.
+    This follows the owner's rule that front-end work runs library tests
+    only for library code it changes.
+- **Step 2.** C5's verbs still answer `command_unavailable`, and help and
+  version start no transport. The tests that pin this
+  (`tests/cli/boundaries.rs`, `exits.rs`, `help.rs`, `dispatch_tests.rs`)
+  are unchanged since `origin/main`, and they pass in the gate's `cli` and
+  `--bin` runs.
+- **The independent review** (opus, `970cd40c..5e641f1f`,
+  `task-11-review-report.md`).
+  - **Approved:** 0 Critical, 0 Important, 5 Minor. The Ctrl-C window, JSON
+    purity, escaping, C1 to C3's shared code, the catalog and help, and the
+    pre-existing tests all held.
+  - **Fixed in `8f3f9f4c`:**
+    - M1: an inherited `SIGINT` ignore is kept on Unix, as Windows keeps it;
+    - M2: R-28's `item_republish_text` and `conflict_resolve_text` goldens;
+    - M3: three comments;
+    - M4: one `tests/cli/c4_support.rs`, with every golden byte-identical
+      and `tests/cli/mutation.rs` untouched.
+  - **M5 goes to the owner's on-screen check at Task 15:** the lower-case
+    labels of `conflict show` and R-37's local-sync lines, where C1 and C2
+    use Title Case.
+  - **To Task 12a:** watch what `operation resume` of a comment's
+    publication prints when the branch was deleted.
+- **Per-task reviews in Part B.** Task 7 had one Important finding (C3's
+  read copied), fixed. Tasks 8, 9 and 10 were approved. Tasks 9 and 10
+  folded in minors that corrected user-facing guidance:
+  - the resolution notes now follow the library's rule for written paths;
+  - the no-op preview's `next:` line now runs as printed.
+- **Task 14 carries added in Part B:**
+  - `remote_branch_deleted`'s three `next:` lines, naming the holder's
+    request for a resolve;
+  - the busy note names the step, not the request ID (row 13);
+  - the escape and edited-path notes;
+  - the no-op's `item sync` line.
+- **Ticket comment** `01M65KWK66M3RFEC1ADJ3SRNHS`, a reply to
+  `01M65H0BS6T4K3309X4NKVH3SR`.
