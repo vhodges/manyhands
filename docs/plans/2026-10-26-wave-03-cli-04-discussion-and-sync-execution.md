@@ -3834,3 +3834,241 @@ the review's minors`, on FIX_BASE `ee22988e`.
     passed;
   - `clippy --all-targets --all-features -- -D warnings`: passes;
   - `fmt --check`: passes.
+
+### Task 12b: Two Clones: Conflicts And Republish
+
+The commit is `test: prove C4 conflict and republish journeys across two
+clones`, on BASE `35200326`. `origin/main` is still `a372edb`, and
+`git merge-tree --write-tree HEAD origin/main` exits 0. No subagent was
+dispatched. No `src/` file changed, so no `--lib` target ran.
+
+**Files.**
+
+- `tests/cli_remote/conflicts.rs` (new): 10 `c4_conflicts_` SSH cases, each
+  a fresh `CliPair`. Two are `#[cfg(unix)]`: the PTY case and the hand-edit
+  case, which stages its stop with a directory's permissions.
+- `tests/cli_remote.rs`: the mount and one `CASES` chain, additive.
+- `tests/cli_remote/collaboration.rs`: twelve helpers and `RESERVATION_NOTE`
+  made `pub(super)`, so that the new module shares them. Visibility only.
+- `tests/support/cli.rs`: `conflict_show_ok`, `conflict_resolve_ok`,
+  `item_republish_preview` and `item_republish_ok` in `CLI_CASES`, and
+  `conflict_show_text` in `CLI_TEXT_CASES`, with their five fixtures.
+
+**How the clones diverge.** Every Manyhands step goes through the binary.
+Git builds only what a person would do outside it:
+
+- a commit of their own on primary, which retitles both tickets or edits a
+  code file;
+- clone B, as a peer with its own Git, pushing the deletion of the item's
+  branch, as `tests/ticket_closure.rs`'s `peer_delete` does;
+- the outside repairs in B's worktree.
+
+An item's context is made by a `ticket save`. A resolution's source holds a
+line that is a probe of every later output.
+
+**The cases.**
+
+- `c4_conflicts_canonical_shown_and_resolved`. A retitles both tickets on
+  primary and publishes; B retitles them otherwise.
+  - B's `repo sync` answers `recovery_required`, 3: integration and
+    publication `pending`, and `synchronization_conflict` data with
+    `next_action: resolve`. Its recovery is `[request.retry, repo.inspect]`.
+  - `conflict show --json`: `conflict_pending`, `resolve`,
+    `eligible_canonical`, both parents, and two `ticket` paths in byte
+    order, each `regular` with its three sides. This is the
+    `conflict_show_ok` golden.
+  - The text is the `conflict_show_text` golden, with no side printed.
+  - `conflict resolve` with the shown tokens answers `ok`, 0: written,
+    committed, published, integration `complete`. One merge has parents
+    `[local, incoming]` and the subject `Resolve synchronization primary`,
+    published by one push. This is the `conflict_resolve_ok` golden. The
+    read is then `complete`.
+  - A replay is identical, with no connection.
+  - Another `--operation-id` under the same request ID is
+    `request_mismatch`, 2.
+  - A second, different resolution is `recovery_required`, 3,
+    `[repo.inspect]`, and keeps no record.
+  - A's `repo sync` fast-forwards to the resolution.
+- `c4_conflicts_stale_resolution`.
+  - The stop in human mode: the progress lines, then C2's lines, the
+    `conflict:` line, and `next: manyhands-cli conflict show …`, followed
+    by C2's `request.retry` and `repo.inspect` lines. The case then runs the
+    `conflict show` line as printed.
+  - The stale resolutions, each refused before any write. No record is
+    kept, no file or tip changes, no attempt begins, and nothing connects:
+    - An observation taken before `.manyhands/config.toml` changed (the
+      observation digests it) is `external_change`, 3, with no recovery.
+    - An incomplete set is `invalid_input`, 2.
+    - A well-formed token of no path of the conflict is `external_change`,
+      3 (R-33).
+  - The resolution in human mode prints C2's lines and the data. On
+    stderr: `progress: accepted`, `writing`, `fetching`, `observing`,
+    `pushing`, `verifying`, `indexing`.
+- `c4_conflicts_outside_repair`. Both clones hold `src/conflict.rs`, and each
+  edits it.
+  - Human mode prints `next action: external_repair` and the
+    `conflict show` line.
+  - The read is `conflict_pending`, `external_repair`,
+    `external_resolution_required`. The path is `noncanonical`, structure
+    `binary` (see below), with no sides.
+  - `conflict resolve` is `recovery_required`, 3, `[repo.inspect]`. Its
+    data names `external_repair`, and nothing is written.
+  - Five repairs that are not accepted:
+    - the markers removed alone read `conflict_pending`, and `operation
+      resume` answers `recovery_required` with the conflict's data;
+    - the path staged without a commit reads `repair_refused`;
+    - three clean commits with wrong parents (one parent, reversed, a
+      foreign second parent) each read `repair_refused`.
+
+    Each `operation resume` is `recovery_required`, 3, `[repo.inspect]`.
+    Nothing connects or pushes, and each undo reads `conflict_pending`
+    again.
+  - The person's two-parent merge reads `repaired`, `resume`. `operation
+    resume` in human mode publishes it with one push. On stderr:
+    `progress: accepted`, `observing`, `fetching`, `observing`, `pushing`,
+    `verifying`, `indexing`. The read is then `complete`, and A
+    fast-forwards.
+- `c4_conflicts_resolve_meets_a_deleted_branch` (controller carry 2). An item
+  conflict: A saves and publishes, and B saves, so B's `item sync` stops.
+  The peer then deletes the branch, and B resolves in human mode.
+  - Exit 4, `remote_branch_deleted`, with `effects: write=written
+    checkpoint=committed discovery=pending publication=pending
+    integration=complete commit=<resolution>`.
+  - Three `next:` lines: `request cancel --request-id <SYNC>`, `send request
+    <SYNC> again …` and `item republish --repo '<root B>' --id <ITEM>
+    --prepare`. The first two name B's `item sync`, not the resolve.
+  - Then the note: `request <SYNC> keeps its reservation …`.
+  - The read the human output uses is `resolved`, `resume`, with `item_id`
+    present, so the third line prints.
+  - JSON is `partial`, 4, `[request.cancel(SYNC)]`.
+  - Followed: the cancel; the same `item sync`, which ends `cancelled`, 130;
+    the preview (`local_oid` the resolution, `last_published_oid` A's
+    publication); and the confirm, which creates the branch at the
+    resolution with one push. A then fast-forwards.
+- `c4_conflicts_hand_edit_after_written_paths` (controller carry 3; ruling
+  I1). The binary can stage it without a test hook. The second path's
+  directory is made read-only, so the resolve writes the first path, then
+  stops.
+  - It answers `internal_error`, exit 4, `effects: write=written`.
+  - The read is `resolution_prepared`, `retry_resolution`, naming the
+    request, with `historical: true`.
+  - The written path is then edited by hand.
+    - A new request is `original_request_required`, 3, with `next: send
+      request R2 again …` and Task 9's edited note. It keeps no record.
+    - The first request is `external_change`, 3, with the restore note.
+    - Once the path is restored to the request's resolution, the first
+      request answers `ok`, and publishes one merge.
+- `c4_conflicts_republish_busy_then_confirmed` (controller carry 1, table
+  row 13).
+  - `item sync` in human mode is `remote_branch_deleted`, 3, with three
+    `next:` lines: cancel, the full `item sync … --request-id <SYNC>`, and
+    the republish preview. Then the reservation note. The branch is not
+    recreated.
+  - The preview connects to nothing.
+  - The confirm in human mode is `busy`, 5. Each of the four attempts
+    prints `progress: accepted` and `connecting`, and three
+    `progress: retrying` lines come between them.
+  - Task 10's note is the line before `next: request.retry
+    request_id=<R3>`, and no record is kept.
+  - After the cancel and the cancelled `item sync`, the same request
+    publishes, in human mode. On stderr: `accepted`, `connecting`,
+    `fetching`, `observing`, `pushing`, `verifying`, `indexing`.
+  - The JSON replay is identical, with no connection.
+  - `--id OTHER_ITEM` under the same request ID is `request_mismatch`, 2,
+    and makes no context.
+- `c4_conflicts_republish_confirmed`.
+  - `item sync` is `remote_branch_deleted`, `blocked`, 3,
+    `[request.cancel]`, and the record stays `accepted`. Then the release.
+  - The preview has `branch_republished`, the branch, `origin`, and both
+    commits equal to A's tip. This is the `item_republish_preview` golden.
+  - The confirm creates the branch at exactly that commit with one push, and
+    integrates nothing. This is the `item_republish_ok` golden.
+  - A later `item sync` is `already_applied`, publication `current` (row
+    17).
+- `c4_conflicts_republish_local_moved`. A preview, then a person's `ticket
+  save` moves the local branch.
+  - The confirm is `external_change`, 3, `[request.prepare]`, with no
+    record, no connection and no push.
+  - A new preview shows the new commit, and its confirm pushes it.
+- `c4_conflicts_republish_transport_stop`. The server drops the connection
+  at its advertisement.
+  - The confirm is `transport_unavailable`, 5, `error`, publication
+    `pending`, `[request.retry(R3)]`, and the record stays `accepted`.
+  - The same request in human mode completes it under the same operation.
+    On stderr: `connecting`, `fetching`, `observing`, `pushing`,
+    `verifying`, `indexing`, with no `accepted`, because the request was
+    accepted already.
+- `c4_conflicts_republish_ctrl_c_at_consent` (Review Focus 4, `#[cfg(unix)]`).
+  - At the PTY, `item republish` shows the preview and asks. A Ctrl-C
+    exits 130 with `code: cancelled`, no progress, and the terminal modes
+    unchanged.
+  - The allocated request has no record, nothing connected and nothing was
+    pushed.
+  - A second run answered `yes` republishes, so nothing was reserved.
+
+**Observed for the controller.**
+
+- **A code file's structure.** A text code file that both clones edited
+  reads `structure: binary`, and an add/add of a new code file (seen while
+  exploring) reads `delete`. The gate's classification (fact 30) gives both.
+  The library's own read table pins `binary` for its `plain.sh`, so neither
+  is a stop. `conflict show`'s text then prints `structure=binary` for a
+  text file, and `structure=delete` for two adds.
+- **Carry 3's first stop is `internal_error`.** A write the file system
+  refuses, after a first path was written, answers `internal_error` with no
+  recovery action. Only `conflict show` names the way on
+  (`retry_resolution`, with the request).
+- **A `busy` republish carries an `operation_id`** in its envelope, yet keeps
+  no record. The library's row asserts the same: no record.
+
+**RED and GREEN.**
+
+- **RED** (`logs/task-12b-red.log`): 6 cases passed and 4 failed.
+  - The 2 golden cases failed at the missing fixture
+    (`tests/support/cli.rs:428`).
+  - The outside-repair case had `structure` pinned `regular`. It is
+    `binary`, as the library's table has it.
+  - The PTY case failed on the terminal's `\r\n` line ends.
+- The goldens were written with `MANYHANDS_UPDATE_GOLDEN=1`, with `CI` unset
+  (`logs/task-12b-golden-update.log`), and each was read.
+- **GREEN** (`logs/task-12b-green.log`): 10 SSH cases passed, in 1 m 47 s.
+  No case came near the watchdog.
+
+**Verify.** Each ran as `devenv shell -- cargo … --locked` (`fmt --check`
+takes no `--locked`); logs are in `logs/task-12b-*`.
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --test cli_remote -- c4_conflicts` | 10 SSH cases passed (1 m 47 s; `logs/task-12b-verify.log`) |
+| `test --all-features --test cli_remote` (whole target, once) | 50 SSH cases passed (4 m 25 s; `logs/task-12b-cli-remote.log`) |
+| `test --all-features --test cli -- fixture_directory_is_exactly_the_registered_cases` | 1 passed |
+| `clippy --all-targets --all-features -- -D warnings` | passes |
+| `fmt --check` | passes |
+
+An earlier whole-target run is void, and its log is kept as
+`logs/task-12b-cli-remote-invalidated.log`. While it ran, I rebuilt the
+test binary with a comment-only edit and a `--list`. The harness spawns each
+case from `current_exe()`, so from then on every case failed, at once and
+with no panic line: 38 passed and 12 failed. The run above followed, with
+the sources frozen.
+
+**For later tasks.**
+
+- **Task 13.** Codes reached here through the binary over SSH:
+  - `conflict show`: `ok`;
+  - `conflict resolve`: `ok`, `external_change`, `invalid_input`,
+    `recovery_required`, `request_mismatch`, `remote_branch_deleted`,
+    `original_request_required` and `internal_error`;
+  - `item republish`: `ok`, `busy`, `external_change`,
+    `transport_unavailable`, `cancelled` (at the prompt) and
+    `request_mismatch`;
+  - `repo sync` and `item sync`: `recovery_required`;
+  - `item sync`: `remote_branch_deleted` and `cancelled`;
+  - `operation resume`: `ok` and `recovery_required`.
+- **Task 14.**
+  - Republish row 13 still says human output names `request cancel` for the
+    holding request. Through the binary it prints Task 10's note, which
+    names the step, so Task 10's carried amendment stands.
+  - The code-file structures above may deserve a sentence.
+- **The owner's on-screen check.** `conflict_show_text` is the golden for
+  M5, the lower-case labels: a canonical conflict with two paths.

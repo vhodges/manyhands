@@ -60,7 +60,7 @@ const AUTHOR_A: &str = "Clone A <clone-a@example.invalid>";
 const AUTHOR_B: &str = "Clone B <clone-b@example.invalid>";
 const COMMENT_SCHEMA: &str = "comment_mutation.schema.json";
 const PUBLICATION_NOTE: &str = "note: publishing the comment also publishes this item's other checkpointed work; unsaved drafts are not included.\n";
-const RESERVATION_NOTE: &str = "note: the refused request keeps its reservation until it is cancelled; sending it again then ends it and releases the reservation.\n";
+pub(super) const RESERVATION_NOTE: &str = "note: the refused request keeps its reservation until it is cancelled; sending it again then ends it and releases the reservation.\n";
 const RESUME_DELETED_NOTE: &str = "note: the request that started this publication, its comment add or item sync, still holds the reservation: run request cancel with that request's ID, then send that request once more, then run item republish.\n";
 
 /// Makes `PRIVATE_BODY` a probe of every later run's output.
@@ -132,7 +132,13 @@ fn add(
     add_on(clone, ITEM, request, comment, parent, body, code, status)
 }
 
-fn item_sync(clone: &CliClone, item: &str, request: &str, code: &str, status: i32) -> Value {
+pub(super) fn item_sync(
+    clone: &CliClone,
+    item: &str,
+    request: &str,
+    code: &str,
+    status: i32,
+) -> Value {
     clone.json(
         &[
             "item",
@@ -150,7 +156,7 @@ fn item_sync(clone: &CliClone, item: &str, request: &str, code: &str, status: i3
     )
 }
 
-fn repo_sync(clone: &CliClone, request: &str, code: &str, status: i32) -> Value {
+pub(super) fn repo_sync(clone: &CliClone, request: &str, code: &str, status: i32) -> Value {
     clone.json(
         &[
             "repo",
@@ -166,7 +172,11 @@ fn repo_sync(clone: &CliClone, request: &str, code: &str, status: i32) -> Value 
     )
 }
 
-fn resume_args<'a>(clone: &'a CliClone, operation: &'a str, request: &'a str) -> Vec<&'a str> {
+pub(super) fn resume_args<'a>(
+    clone: &'a CliClone,
+    operation: &'a str,
+    request: &'a str,
+) -> Vec<&'a str> {
     vec![
         "operation",
         "resume",
@@ -179,11 +189,17 @@ fn resume_args<'a>(clone: &'a CliClone, operation: &'a str, request: &'a str) ->
     ]
 }
 
-fn resume(clone: &CliClone, operation: &str, request: &str, code: &str, status: i32) -> Value {
+pub(super) fn resume(
+    clone: &CliClone,
+    operation: &str,
+    request: &str,
+    code: &str,
+    status: i32,
+) -> Value {
     clone.json(&resume_args(clone, operation, request), &[], code, status)
 }
 
-fn request_show(clone: &CliClone, request: &str) -> Value {
+pub(super) fn request_show(clone: &CliClone, request: &str) -> Value {
     checked(
         &clone.env,
         &["request", "show", "--request-id", request],
@@ -196,22 +212,22 @@ fn request_show(clone: &CliClone, request: &str) -> Value {
 }
 
 /// One human-mode run, with nothing on stdin.
-fn human(clone: &CliClone, args: &[&str], input: &[u8]) -> CliRun {
+pub(super) fn human(clone: &CliClone, args: &[&str], input: &[u8]) -> CliRun {
     run(&clone.env, args, input)
 }
 
-fn text(bytes: &[u8]) -> &str {
+pub(super) fn text(bytes: &[u8]) -> &str {
     std::str::from_utf8(bytes).unwrap()
 }
 
-fn next_lines(text: &str) -> Vec<&str> {
+pub(super) fn next_lines(text: &str) -> Vec<&str> {
     text.lines()
         .filter(|line| line.starts_with("next: "))
         .collect()
 }
 
 /// `progress:` lines, one per stage, as human mode writes them on stderr.
-fn progress(stages: &[&str]) -> String {
+pub(super) fn progress(stages: &[&str]) -> String {
     stages
         .iter()
         .map(|stage| format!("progress: {stage}\n"))
@@ -219,12 +235,12 @@ fn progress(stages: &[&str]) -> String {
 }
 
 /// How many times the server has authenticated a client.
-fn connections(pair: &CliPair) -> usize {
+pub(super) fn connections(pair: &CliPair) -> usize {
     pair.server.accepted_keys().len()
 }
 
 /// A root as `next:` lines quote it.
-fn quoted(clone: &CliClone) -> String {
+pub(super) fn quoted(clone: &CliClone) -> String {
     format!("'{}'", clone.root.canonicalize().unwrap().to_str().unwrap())
 }
 
@@ -259,7 +275,7 @@ fn checkpoints(
     Ok(found)
 }
 
-fn oid(value: &Value) -> git2::Oid {
+pub(super) fn oid(value: &Value) -> git2::Oid {
     git2::Oid::from_str(value.as_str().unwrap()).unwrap()
 }
 

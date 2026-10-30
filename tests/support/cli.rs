@@ -346,6 +346,10 @@ pub const CLI_CASES: &[&str] = &[
     "item_sync_ok",
     "repo_sync_ok",
     "operation_resume_comment_ok",
+    "conflict_show_ok",
+    "conflict_resolve_ok",
+    "item_republish_preview",
+    "item_republish_ok",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
     "document_repair_text",
@@ -376,6 +380,7 @@ pub const CLI_TEXT_CASES: &[&str] = &[
     "comment_add_text",
     "item_republish_text",
     "conflict_resolve_text",
+    "conflict_show_text",
 ];
 pub const CLI_REPOSITORY_VALUES: &[&str] = &["required", "refused"];
 

@@ -4,6 +4,8 @@ pub use manyhands::{repository, runtime};
 mod cli_pair;
 #[path = "cli_remote/collaboration.rs"]
 mod collaboration;
+#[path = "cli_remote/conflicts.rs"]
+mod conflicts;
 #[path = "cli_remote/hosts.rs"]
 mod hosts;
 #[path = "cli_remote/interruption.rs"]
@@ -98,6 +100,7 @@ fn main() {
         .chain(journeys::CASES)
         .chain(interruption::CASES)
         .chain(collaboration::CASES)
+        .chain(conflicts::CASES)
         .copied()
         .collect();
     ssh_harness::run(&cases);
