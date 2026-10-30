@@ -34,11 +34,11 @@ This list is for checking the D3 Cycle (rich-text and source authoring) by hand 
 
 ## 1. Smoke test
 
-- [ ] **Do:** Start the app with the command above. **Expect:** A window opens with no error in the terminal.
-- [ ] **Do:** Open the throwaway repository. **Expect:** Its tickets and documents list.
-- [ ] **Do:** Open a document. **Expect:** It opens in its own tab.
-- [ ] **Do:** Open a ticket. **Expect:** It opens in its own tab.
-- [ ] **Do:** Quit the app. **Expect:** The window closes, with no error in the terminal.
+- [x] **Do:** Start the app with the command above. **Expect:** A window opens with no error in the terminal.
+- [x] **Do:** Open the throwaway repository. **Expect:** Its tickets and documents list.
+- [x] **Do:** Open a document. **Expect:** It opens in its own tab.
+- [x] **Do:** Open a ticket. **Expect:** It opens in its own tab.
+- [x] **Do:** Quit the app. **Expect:** The window closes, with no error in the terminal.
 
 ## 2. Native checklist
 
@@ -46,31 +46,31 @@ This list is for checking the D3 Cycle (rich-text and source authoring) by hand 
 
 Open a ticket and a document, in the dark and the light theme.
 
-- [ ] **Do:** Scroll the page. **Expect:** The header stays while the page scrolls, and the page is white in both themes.
-- [ ] **Do:** Click each chip. **Expect:** Each chip opens the details sheet at its field.
-- [ ] **Do:** Press Escape in the sheet. **Expect:** Focus returns to the chip.
-- [ ] **Do:** Show the discussion. **Expect:** The floating comments button hides once the discussion shows.
-- [ ] **Do:** Look at Share and the primary action. **Expect:** Both are disabled, with their tooltip.
-- [ ] **Do:** Scroll to the end of the item. **Expect:** The selected repository's details sit at the end of the item's scroll, after the discussion, and the page still fills the region.
+- [x] **Do:** Scroll the page. **Expect:** The header stays while the page scrolls, and the page is white in both themes.
+- [x] **Do:** Click each chip. **Expect:** Each chip opens the details sheet at its field.
+- [x] **Do:** Press Escape in the sheet. **Expect:** Focus returns to the chip.
+- [x] **Do:** Show the discussion. **Expect:** The floating comments button hides once the discussion shows.
+- [x] **Do:** Look at Share and the primary action. **Expect:** Both are disabled, with their tooltip.
+- [x] **Do:** Scroll to the end of the item. **Expect:** The selected repository's details sit at the end of the item's scroll, after the discussion, and the page still fills the region.
 
 ### 2.2 Read view
 
 Commit a fixture document under `docs/` with a words-mixed `$$` pair, an image beside it, and three images that are refused: `![r](https://example.com/r.png)`, `![s](s.svg)` with an SVG file beside it, and `![t](../../t.png)` (it leaves the repository). Then open it.
 
 - [ ] **Do:** Open the document. **Expect:** It renders with its image. The three refused images each show as their source text, and nothing is fetched (no network activity). (Task 27 review)
-- [ ] **Do:** Select a paragraph and copy it, then paste elsewhere. **Expect:** The paste is its Markdown.
-- [ ] **Do:** Type, paste, middle-click paste, click a checkbox, drag a table column, and right-click. **Expect:** None of these changes anything.
-- [ ] **Do:** Hover over blocks and tables. **Expect:** The editor's block grip and table handles show. Using them changes nothing.
+- [x] **Do:** Select a paragraph and copy it, then paste elsewhere. **Expect:** The paste is its Markdown.
+- [x] **Do:** Type, paste, middle-click paste, click a checkbox, drag a table column, and right-click. **Expect:** None of these changes anything.
+- [x] **Do:** Hover over blocks and tables. **Expect:** The editor's block grip and table handles show. Using them changes nothing.
 - [ ] **Do:** Look at each image, then drag its corner resize grip. **Expect:** Each image shows a corner resize grip. Dragging it changes nothing.
 - [ ] **Do:** Arrow through the `$$` block. **Expect:** The caret passes it.
-- [ ] **Do:** Click the sheet's Inspect link. **Expect:** It shows the file.
-- [ ] **Do:** Run `git status`. **Expect:** It is unchanged.
+- [x] **Do:** Click the sheet's Inspect link. **Expect:** It shows the file.
+- [x] **Do:** Run `git status`. **Expect:** It is unchanged.
 
 ### 2.3 Links
 
 Click each of these and check the result.
 
-- [ ] **Do:** Click a relative link. **Expect:** It opens its tab.
+- [x] **Do:** Click a relative link. **Expect:** It opens its tab.
 - [ ] **Do:** Click a `file:` link. **Expect:** Nothing happens.
 - [ ] **Do:** Click a `javascript:` link. **Expect:** Nothing happens.
 - [ ] **Do:** Click a missing link. **Expect:** It says not found.
@@ -80,8 +80,8 @@ Click each of these and check the result.
 
 Edit (`e`) the fixture document of step 2.2.
 
-- [ ] **Do:** Press `e`. **Expect:** The caret is where you last clicked in the read view.
-- [ ] **Do:** Press Done at once, then run `git status` and `git branch`. **Expect:** Nothing is written, `git status` is unchanged, and `git branch` shows the context gone.
+- [x] **Do:** Press `e`. **Expect:** The caret is where you last clicked in the read view.
+- [x] **Do:** Press Done at once, then run `git status` and `git branch`. **Expect:** Nothing is written, `git status` is unchanged, and `git branch` shows the context gone.
 - [ ] **Do:** Edit again. Type in rich mode, switch mode (`secondary-shift-m`), type, then undo past the switch. **Expect:** The tab is clean: the pill reads "Editing · saved on this computer", and the tab in the strip shows no unsaved dot. (Task 27 review)
 - [ ] **Do:** Type again, then press Done. **Expect:** The saved copy shows, with the kept-draft banner.
 - [ ] **Do:** Press Continue editing. **Expect:** The text and undo are back.
