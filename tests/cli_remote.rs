@@ -1,5 +1,9 @@
 //! Real CLI host commands, one isolated SSH fixture process per case.
 pub use manyhands::{repository, runtime};
+#[path = "support/cli_pair.rs"]
+mod cli_pair;
+#[path = "cli_remote/collaboration.rs"]
+mod collaboration;
 #[path = "cli_remote/hosts.rs"]
 mod hosts;
 #[path = "cli_remote/interruption.rs"]
@@ -93,6 +97,7 @@ fn main() {
         .chain(unlock::CASES)
         .chain(journeys::CASES)
         .chain(interruption::CASES)
+        .chain(collaboration::CASES)
         .copied()
         .collect();
     ssh_harness::run(&cases);

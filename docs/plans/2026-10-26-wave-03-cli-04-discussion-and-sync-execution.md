@@ -3558,3 +3558,237 @@ origin/main` exits 0.
   - the no-op's `item sync` line.
 - **Ticket comment** `01M65KWK66M3RFEC1ADJ3SRNHS`, a reply to
   `01M65H0BS6T4K3309X4NKVH3SR`.
+
+### Task 12a: Two Clones: Comments And Synchronization
+
+The commits are `cbbca6ef` (`fix: say how to free a deleted branch's
+reservation after a resume`) and `test: prove C4 comment and sync journeys
+across two clones`, on BASE `df31f127`. `origin/main` is still `a372edb`, and
+`git merge-tree --write-tree HEAD origin/main` exits 0. No subagent was
+dispatched. Only `src/bin/manyhands-cli/human_collaboration*.rs` and tests
+changed, with no library file, so no `--lib` target ran.
+
+**The stop, and the ruling.**
+
+- **The defect.** The first dispatch stopped BLOCKED. `remote select`
+  (`set_publication_remote_recorded`, through `configuration_tree`) commits
+  `.manyhands/config.toml` from a fresh in-memory index and never writes the
+  worktree's index. After it, the file is `INDEX_MODIFIED | WT_MODIFIED`, and
+  the next `repo sync` answers `worktree_not_clean` (3). The evidence is
+  `logs/task-12a-evidence-remote-select.log`.
+- **The owner's ruling.**
+  - The defect is ticketed on main as `01M669FJR27FRHCNPWAMD6VH4V`, "Remote
+    selection must leave the Git index current for the configuration it
+    commits".
+  - C4 takes option 3: the server's primary is seeded already configured, so
+    neither clone's `remote select` commits. Each clone still runs `remote
+    select` through the binary, and it answers `already_applied`.
+  - There is no index workaround in the fixture.
+
+**`CliPair` (`tests/support/cli_pair.rs`).** It is mounted only from
+`tests/cli_remote.rs`. The interface's `CliPair { server, a, b }` has one
+extra private `TempDir`, which keeps the clones alive.
+
+- **The seed (R-33).** One commit on the server's primary, made before either
+  clone. It holds `.manyhands/config.toml` (`format_version`,
+  `primary_branch = "main"`, `publication_remote = "origin"`) and two tickets:
+  `ITEM`, and `OTHER_ITEM` for a request sent again with another target.
+- **Each clone.** A `git2` clone of the server, then, through `checked`:
+  1. `key import` of the server's one allowed key into the clone's own key
+     store, and `key select`;
+  2. `repo identity-set`, prepare then confirm;
+  3. `repo enable {"primary_branch":"main"}`, prepare then confirm;
+  4. `remote select origin`, which answers `already_applied`;
+  5. `host approve`, prepare then confirm.
+- **The order matters.**
+  - `key select` fences every repository whose publication remote is
+    configured already (`invalidate_key_selection`, then `history_unknown`).
+    A fenced repository answers a context it never published as
+    `HistoryUnknown`, and the stopped attempt keeps the reservation, so every
+    later sync is `busy`.
+  - `repo enable` of an already-enabled primary requires an identity but
+    writes none, so `repo identity-set` comes first.
+- **No context yet.** Neither clone has an editing context when the pair is
+  made: each case makes its own with a first write.
+
+**The fix (controller ruling 4).** An `operation resume` that answers
+`remote_branch_deleted` offers no `request.cancel`, because a resume stops at
+no safe point. Human output now prints a note: the request that started the
+publication, its `comment add` or `item sync`, still holds the reservation;
+cancel it by its ID, send it once more, then run `item republish`.
+
+- **The `next:` line.** It prints `manyhands-cli item republish --repo
+  '<root>' --id <item> --prepare`, quoted and escaped as the other lines are.
+- **The item it names.** The item comes from the scope, or, when the resume
+  took up a comment's publication, from the comment's data. The resume's
+  scope names no item there (observed). This is my reading of "when the
+  scope names the item".
+- **What stays C2's.** JSON is unchanged. Any other verb, or a resume
+  refusal that offers the cancellation, keeps the existing output.
+- **Tests (`human_collaboration_tests.rs`, 3).**
+  - RED, before the change: 2 failed and 1 passed. The guard test passes on
+    the old code, as it should.
+  - GREEN: 36 passed in `human_collaboration`, 252 in the bin.
+
+**The cases (`tests/cli_remote/collaboration.rs`, 8 SSH cases, each a fresh
+pair).** Every run goes through `scan_output`. Where a case lists no
+comments, the bodies are a probe no output may hold.
+
+- `c4_collaboration_comment_publishes`
+  - A's first `comment add` makes its context and publishes it: `ok`, 0, with
+    write `written`, checkpoint `committed` and publication `published`.
+  - `created_by` is A's identity, and the server holds the comment.
+  - A replay is identical, with no connection and no push.
+  - `--id OTHER_ITEM` under the same request ID is `request_mismatch`, 2, and
+    makes no context.
+  - Human mode prints C2's lines on stdout. On stderr: `progress: accepted`,
+    `writing`, `fetching`, `observing`, `pushing`, `verifying` and
+    `indexing`, then the publication note.
+- `c4_collaboration_comment_refused_then_saved_once`
+  - The server refuses updates of its checked-out branch. `comment add`
+    answers `push_rejected`, 4: checkpoint committed, publication pending,
+    `pending_reason: synchronization`, and `[request.retry(R2)]` first.
+  - The record stays `accepted`.
+  - The server recorded exactly four refused pushes of the checkpoint (the
+    first and C2's three re-runs).
+  - With the server accepting, the same request answers `ok`, with the same
+    operation and synchronization and the same checkpoint.
+  - The file's bytes are unchanged, there are two comment files, and one
+    commit adds the comment. One accepted push; the record is `finished`.
+- `c4_collaboration_replies_from_both_clones`
+  1. A adds root C1.
+  2. B's first write, root C2, makes B's context. Its publication merges A's
+     (integration `complete`).
+  3. B replies to C1 (C3).
+  4. A's `item sync` fast-forwards (`already_applied`, no push).
+  5. A replies to C3 (C4).
+  6. B's `item sync` fast-forwards.
+  7. Both clones list `[C1 0, C3 1, C4 2, C2 0]` with each comment's author,
+     at the same tip.
+- `c4_collaboration_item_sync`
+  - B's first write is a `ticket save` of the body: a checkpoint, not
+    published.
+  - Clean divergence: `ok`, 0, integration `complete`, publication
+    `published`. One merge commit, with parents `[local, incoming]` and the
+    subject `Merge remote context <item>`. The server keeps its earlier tip
+    as an ancestor. One push, and the `item_sync_ok` golden.
+  - A replay is identical, with no connection.
+  - `--id OTHER_ITEM` is `request_mismatch`, 2.
+  - A's fast-forward, in human mode: `Already applied; nothing changed.` and
+    `effects: discovery=current publication=current`. On stderr:
+    `progress: accepted`, `connecting`, `fetching`, `observing`,
+    `updating_local`, `observing`, `indexing`. No push.
+  - Already current: `already_applied`, `noop`, no push.
+- `c4_collaboration_repo_sync`
+  - Each clone commits a file on primary with `git2`, as history.
+  - A, local ahead, in human mode: `The request completed.` and its effects
+    line. On stderr: `progress: accepted`, `connecting`, `fetching`,
+    `observing`, `pushing`, `verifying`, `indexing`.
+  - B's clean divergence: `ok`, integration `complete`, a merge with parents
+    `[local, incoming]` and the subject `Merge remote primary`, published. The
+    `repo_sync_ok` golden.
+  - A replay is identical, with no connection.
+  - `item sync --id ITEM` under the same request ID is `request_mismatch`, 2
+    (ruling 3), and makes no context.
+  - A's fast-forward, then already current: `already_applied` both times, no
+    push.
+- `c4_collaboration_resume_publishes_a_stopped_comment`
+  - With `disconnect_at(Advertisement)`, `comment add` answers
+    `transport_unavailable`, 4, publication `pending`, `request.retry` first.
+  - `operation resume` of the comment's operation, in human mode: exit 0. It
+    prints `The request completed.` with
+    `effects: discovery=current publication=published commit=<checkpoint>`.
+    On stderr: `progress: accepted`, `observing`, `fetching`, `observing`,
+    `pushing`, `verifying`, `indexing`, then the note.
+  - It published the comment once and wrote nothing.
+  - The JSON replay of the same request has no connection. It carries
+    `operation_id: null`, a `CommentMutationDto` with publication
+    `published`, and the comment's synchronization. It is the
+    `operation_resume_comment_ok` golden (ruling 2).
+  - Another operation ID under the same request ID is `request_mismatch`, 2.
+  - The comment's own request then answers `ok`, published, with no push.
+- `c4_collaboration_comment_meets_a_deleted_branch` (carry 1)
+  - After the server's context is deleted, a human-mode `comment add` exits
+    4 with `code: remote_branch_deleted` and its effects.
+  - It prints the three `next:` lines in order:
+    - `request cancel --request-id R2`;
+    - `send request R2 again with its original command and input`;
+    - `item republish --repo '<root>' --id <item> --prepare`.
+
+    Then the publication and reservation notes.
+  - The record stays `accepted`.
+  - `request cancel` gives `requested: true`. The same request then answers
+    `cancelled`, 130, with the checkpoint `committed`, publication `pending`
+    and no recovery. The record is `finished`; nothing is recreated and
+    nothing is pushed.
+  - `item republish --prepare` answers `ok`, not `busy`. Its preview has
+    `branch_republished` and `local_oid` the checkpoint.
+- `c4_collaboration_resume_meets_a_deleted_branch` (carry 2)
+  - The same setup, then `operation resume` of the comment's operation in
+    human mode: exit 3.
+  - On stderr: `progress: accepted`, `observing`, `fetching`, `observing`.
+    Then `error: …`, `code: remote_branch_deleted`, `request: R3` and
+    `effects: publication=pending`.
+  - One `next:` line, `item republish --prepare`, then the publication note
+    and the new note.
+  - No record is kept: `request show R3` is `request_not_found`.
+  - JSON: `remote_branch_deleted`, `blocked`, 3, `recovery: []`, effects
+    publication `pending` and write `not_requested`, and a
+    `CommentMutationDto` with publication `pending`.
+  - Following the note frees the reservation, as in carry 1.
+
+**Observed for the controller (carry 2).** Before the fix, the resume's human
+output printed no `next:` line and no way forward: `operation resume` offers
+no `request.cancel`, and the publication's own request holds the reservation.
+The ruling's note and `next:` line now name it. The resume itself keeps no
+record (`request_not_found`).
+
+**RED and GREEN.**
+
+- **RED** (`logs/task-12a-red.log`): 5 cases passed. The 3 golden cases
+  (`item_sync`, `repo_sync`, `resume_publishes_a_stopped_comment`) failed at
+  the missing golden (`tests/support/cli.rs:423`).
+- The goldens were written with `MANYHANDS_UPDATE_GOLDEN=1`, with `CI`
+  unset, and each was read.
+- `item_sync_ok`, `repo_sync_ok` and `operation_resume_comment_ok` are
+  registered in `CLI_CASES`.
+
+**Verify.** Each ran as `devenv shell -- cargo … --locked` (`fmt --check`
+takes no `--locked`); logs are in `logs/task-12a-*`.
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --test cli_remote -- c4_collaboration` | 8 SSH cases passed (1 m 48 s) |
+| `test --all-features --bin manyhands-cli` (the fix) | 252 passed (249 before) |
+| `test --all-features --bin manyhands-cli -- human_collaboration` | 36 passed |
+| `test --all-features --test cli -- fixture_directory_is_exactly_the_registered_cases` | 1 passed |
+| `clippy --all-targets --all-features -- -D warnings` | passes |
+| `fmt --check` | passes |
+| `check --bin manyhands-cli` | passes |
+
+**For later tasks.**
+
+- **Task 12b.** Use `CliPair` as it stands.
+  - Each clone has `ITEM` and `OTHER_ITEM` on primary, and no context until
+    its first write.
+  - A `ticket save` makes a context without publishing it, which is how B
+    diverged in the item sync case.
+  - Delete the server's context with `p.bare()?.find_reference(CONTEXT)` and
+    `delete()`.
+  - For refused pushes, use `set_head(CONTEXT)` with
+    `reject_primary_updates(true)`.
+  - Keep the key-before-enable order if a case selects another key.
+  - A comment's resume names its item in the data, not the scope.
+- **Task 13.**
+  - Codes reached through the binary over SSH here: `comment add` gives `ok`,
+    `push_rejected`, `transport_unavailable`, `remote_branch_deleted`,
+    `cancelled` and `request_mismatch`.
+  - `item sync` and `repo sync` give `ok`, `already_applied` and
+    `request_mismatch`.
+  - `operation resume` gives `ok`, `remote_branch_deleted` and
+    `request_mismatch`.
+- **Task 14.** The RFC can cite the resume's deleted-branch note (ruling 4)
+  and the key-before-enable order.
+- **Owner and main.** `01M669FJR27FRHCNPWAMD6VH4V` (remote selection's
+  stale index). When it lands, `CliPair` can select the publication remote
+  itself on one clone.
