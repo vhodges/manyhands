@@ -5832,7 +5832,10 @@ fn comment_beside_a_plain_document_is_still_refused_for_its_item_or_parent() {
                 (new_comment.clone(), Some(support::reply_id()))
             }
             // The orphan's missing parent is the new comment, which would
-            // close a cycle through itself.
+            // close a cycle through itself. The earlier parent checks
+            // refuse it, because the orphan is already nonconforming
+            // before the new comment exists, so no cycle forms at the
+            // narrowed context check.
             "cycle" => {
                 orphan();
                 (support::root_comment_id(), Some(support::reply_id()))

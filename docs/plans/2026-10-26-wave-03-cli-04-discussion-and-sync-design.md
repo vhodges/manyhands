@@ -901,8 +901,10 @@ every field, the body by digest.
   - The submission's other content reads already used only the conforming
     items, never the problem list: the context's preparation, the parent
     check before the binding, and the item and parent checks after it.
-    The receipt replay and the publication read only the comment. The
-    one site changed is the comment path's own. `ticket save`,
+    The receipt replay reads only the comment, and the publication's
+    merging synchronization checks the context tree's conforming items
+    (`validate_context_tree`), never its problems. The one site changed is
+    the comment path's own. `ticket save`,
     `document save` and the other authoring verbs do not share it.
 - **Publication (R-3).** The binding passes the submission a crate-private
   synchronizer. That is a closure over

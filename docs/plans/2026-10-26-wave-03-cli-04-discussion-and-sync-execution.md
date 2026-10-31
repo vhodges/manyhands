@@ -5140,3 +5140,32 @@ decision)".
 **Main.** `origin/main` moved during the fix, to `676ff193` (release CI and
 packaging, and the version fixtures). It is not merged here.
 `git merge-tree --write-tree HEAD origin/main` is clean.
+
+**Step 3, first attempt.** The owner ran the comment at the terminal.
+Request `01M67R83D9A9SP5XHG1NBMH93T` answered `item_not_found`. It is
+final and wrote nothing (operation `01M67R98CQ356B0R2QEGSV0N3Q`); the
+worktree was untouched.
+
+- **The cause.** In a throwaway clone with its own registry, `comment add`
+  refused every item in this repository, including a brand-new ticket.
+  The comment path's whole-context check refused on any canonical problem,
+  and main's 21 Markdown files under `docs/` without front matter are
+  `missing_front_matter` problems.
+- **The owner's decision (2026-10-30):** fix it in C4. See "Dogfooding fix"
+  above (`763f8d8a`). Its review approved it, with two document corrections
+  and a test comment made by the controller.
+- **The sandbox recheck.** In the same throwaway clone, with the fixed CLI,
+  the comment, with its parent and noreply author, is written and
+  checkpointed. Publication then stops at `no_selected_key`, as expected,
+  because the sandbox registry has no key.
+- **Merges.** Main moved twice more and was merged: `055353f8` (the signed
+  release workflow) as `30db0ff8`, and `676ff193` (release fixes, v0.1.1)
+  as `b6b496c8`. After the second, `fmt`, both clippy runs,
+  `--bin manyhands-cli` (252) and `--test cli` (350) passed.
+
+**Step 3, retry, recorded before it is sent.**
+
+- Request `01M67X2FHGAANH3Y0N9KK55PVV`, comment
+  `01M67X2FGGWT4YQDAJEA1PGTG9`, parent `01M671EVGQJX85S8Q1813X9FBM`.
+- `created_by` is `Claude Opus 5.5 <noreply@anthropic.com>`.
+- The owner sends it at the terminal. The first request stays spent.
