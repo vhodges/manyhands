@@ -1,1 +1,1 @@
-manyhands-cli 0.1.3
+manyhands-cli 0.1.4
