@@ -145,10 +145,12 @@ jobs:
 
       - name: Test Windows release helpers
         if: matrix.os == 'windows'
+        timeout-minutes: 10
         run: |
           ./scripts/release/tests/test_windows_tools.ps1
           ./scripts/release/tests/test_windows_process.ps1
           ./scripts/release/tests/test_windows_signing.ps1
+          ./scripts/release/tests/test_windows_trust.ps1
 
       - name: Build release CLI without desktop features
         run: python -B scripts/release/workflow.py build-cli

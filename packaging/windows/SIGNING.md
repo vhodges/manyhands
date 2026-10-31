@@ -92,7 +92,7 @@ requirement and does not collect replacement DLLs from developer-tool PATHs.
 ## Signing and extracted verification
 
 With the two secrets available as environment variables in the signing
-step, on a disposable Windows runner:
+step, on an elevated, disposable **GitHub-hosted Windows runner**:
 
 ```powershell
 pwsh -NoProfile -File scripts/release/windows-sign.ps1 -Mode Sign -Staging $staging
@@ -102,9 +102,37 @@ The helper validates the certificate's private key, code-signing EKU,
 validity dates, and self-signed identity, imports it into the runner's
 current-user My store, signs and timestamps both executables, and verifies
 the exact expected identity with SignTool and Authenticode APIs. It adds
-temporary public trust only for runner verification. Owned private files,
-the imported private key, and newly added trust are removed in `finally`;
-existing unrelated certificates are preserved. Cleanup failure fails the job.
+temporary public trust in **`Cert:\LocalMachine\Root`** only for runner
+verification. The private identity remains in `Cert:\CurrentUser\My`.
+Current-user root imports can require Windows security UI; the v0.1.5 trial
+stalled at that import even though both signing/timestamp calls succeeded.
+The machine-root path avoids that user-root confirmation requirement; its
+actual behavior must still be confirmed by native acceptance.
+
+Both Sign and Verify modes fail their preflight before private-key handling
+unless the process is Windows, `GITHUB_ACTIONS=true`,
+`RUNNER_ENVIRONMENT=github-hosted`, and running with an elevated administrator
+token. There is no fallback to current-user roots, other providers, or skipped
+verification. These environment checks prevent accidental use on persistent
+machines; they are not a boundary against malicious code already running as
+administrator. This helper is release automation, not a consumer trust setup.
+
+The helper validates the public `.cer` against the expected identity before
+import. It preserves an existing matching root certificate and records an
+owned exact thumbprint path before mutation so partial imports are cleaned.
+Owned private files, the imported private key, and newly added trust are
+removed in `finally`; unrelated/pre-existing certificates are preserved.
+Trust removal verifies disappearance. Its failure still fails the job but
+does not prevent subsequent private-key/file cleanup. No trust certificate
+is installed on users' machines, and runner trust is not public publisher trust.
+
+The Windows helper-test step runs a separate native import/preservation/removal
+fixture before signing secrets are available. That fixture uses a unique,
+one-hour test certificate, keeps its private key only in memory, and cleans
+its public machine-root entry in caller `finally`. It is not a new publisher
+identity. Portable policy/ownership tests use stubbed store APIs; Linux runs
+explicitly skip the real Windows fixture. The fixture child has the existing
+180-second native deadline and the helper step has a ten-minute backstop.
 
 ### Progress and deadlines
 
@@ -126,8 +154,8 @@ its output pipes open, the output-drain deadline still fails promptly; the old
 parent handle cannot guarantee termination of that detached child. Such jobs
 must continue to use disposable runners, not persistent signing machines.
 
-Both the signing and extracted Windows-verification workflow steps also have
-a **ten-minute limit**. This is a backstop for in-process certificate cmdlets
+The Windows helper-test, signing, and extracted-verification workflow steps
+also have a **ten-minute limit**. This is a backstop for in-process certificate cmdlets
 and cumulative work, not permission to wait ten minutes for each native tool.
 A workflow hard cancellation can interrupt `finally`; only the ordinary
 native-tool timeout is designed to return through normal cleanup. Hosted
