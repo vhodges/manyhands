@@ -46,13 +46,16 @@ use super::{
             PromotionSynchronizationCategory, RepositoryError, RepositoryOperation,
             RepositoryService, SynchronizationError, TicketClosureError, TicketClosureOutcome,
             TicketClosurePreflight, TicketClosurePreview, TicketClosureResult, closure, promotion,
-            promotion::{ParentView, lifecycle::ParentStep},
+            promotion::{
+                ParentView,
+                lifecycle::{LifecyclePreview, ParentStep},
+            },
             read_configuration_for,
             recovery::JournalRow,
             transport::SshTransportError,
         },
         command::Command,
-        confirm::{Row, Seen},
+        confirm::{self, Row, Seen},
         context::context_names,
         dto::{
             LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupPendingReason,
@@ -95,7 +98,8 @@ pub(crate) struct Ready {
     remote: Option<String>,
     context_oid: git2::Oid,
     primary_oid: git2::Oid,
-    tracking_context: Option<git2::Oid>,
+    /// A context child runs before integration, by the verb's rule.
+    context_child: bool,
     changes: Vec<PromotionPathChange>,
     integration: PlannedIntegration,
     publication: PlannedPublication,
@@ -140,9 +144,6 @@ pub(crate) trait LifecycleVerb {
     const COMMAND: Command;
     const KIND: AuthoringKind;
     const DTO_KIND: ItemDtoKind;
-
-    /// Whether a context child runs before integration, by the verb's rule.
-    fn runs_context_child(ready: &Ready) -> bool;
 
     fn observe(
         service: &RepositoryService,
@@ -227,7 +228,9 @@ fn ready_of_promotion(preview: &DocumentPromotionPreview) -> Ready {
         remote: preview.publication_remote().map(str::to_owned),
         context_oid: preview.context_oid(),
         primary_oid: preview.primary_oid(),
-        tracking_context: preview.tracking_context(),
+        // The runner's own rule, with the remote it asks for beside it.
+        context_child: preview.publication_remote().is_some()
+            && LifecyclePreview::runs_context_child(preview),
         changes: preview.changes().to_vec(),
         integration: preview.integration(),
         publication: preview.publication(),
@@ -244,7 +247,10 @@ fn ready_of_closure(preview: &TicketClosurePreview) -> Ready {
         remote: preview.publication_remote().map(str::to_owned),
         context_oid: preview.context_oid(),
         primary_oid: preview.primary_oid(),
-        tracking_context: preview.tracking_context(),
+        // As `ClosureObservation::needs_context_child`: a contained context
+        // is never synchronized, and the checkpoint is never pushed.
+        context_child: preview.publication_remote().is_some()
+            && preview.integration() != PlannedIntegration::AlreadyContained,
         changes: preview.changes().to_vec(),
         integration: preview.integration(),
         publication: preview.publication(),
@@ -277,13 +283,6 @@ impl LifecycleVerb for Promote {
     const COMMAND: Command = Command::DocumentPromote;
     const KIND: AuthoringKind = AuthoringKind::Document;
     const DTO_KIND: ItemDtoKind = ItemDtoKind::Document;
-
-    /// Cycle 09's rule, as `LifecyclePreview::runs_context_child` has it.
-    fn runs_context_child(ready: &Ready) -> bool {
-        ready.remote.is_some()
-            && !(ready.integration == PlannedIntegration::AlreadyContained
-                && ready.tracking_context.is_none())
-    }
 
     fn observe(
         service: &RepositoryService,
@@ -368,12 +367,6 @@ impl LifecycleVerb for Close {
     const COMMAND: Command = Command::TicketClose;
     const KIND: AuthoringKind = AuthoringKind::Ticket;
     const DTO_KIND: ItemDtoKind = ItemDtoKind::Ticket;
-
-    /// A contained context is never synchronized, and the checkpoint is never
-    /// pushed (`ClosureObservation::needs_context_child`).
-    fn runs_context_child(ready: &Ready) -> bool {
-        ready.remote.is_some() && ready.integration != PlannedIntegration::AlreadyContained
-    }
 
     fn observe(
         service: &RepositoryService,
@@ -1006,10 +999,22 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
     }
 
     /// Observes, and gives the digest the boundary compares with the
-    /// confirmation's: no check is made here of what the preview covers.
+    /// confirmation's. What the preview covers is not checked here, with one
+    /// exception (R-22): an identity removed since the preview, alone, is
+    /// answered as what it is, since a new preview would only say the same.
     /// The request is placed on primary, whose reachability a replay checks.
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
         let (root, observed) = self.observe(call.service)?;
+        if let Observed::Blocked(blockers) = &observed
+            && matches!(blockers.as_slice(), [LifecycleBlocker::IdentityRequired])
+        {
+            return Err(Answer::stopped(ResultCode::IdentityRequired).with_data(
+                MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
+                    blockers: blockers.clone(),
+                    ..self.data()
+                })),
+            ));
+        }
         let configuration =
             match read_configuration_for(&root, RepositoryOperation::RepositorySnapshot)
                 .map_err(refused)?
@@ -1042,13 +1047,11 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
 
     fn reenter(
         &mut self,
-        _call: &CallContext<'_>,
-        _accepted: &Accepted,
-        _journal: JournalRow,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        journal: JournalRow,
     ) -> Result<Entered, Ran> {
-        // A confirmed command is entered again by `confirm::reenter` and by
-        // nothing else (fact 36): this is not reached.
-        Err(Self::not_entered())
+        confirm::reenter(self, call, accepted, journal)
     }
 
     fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
@@ -1069,8 +1072,13 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
             Observed::Blocked(blockers) => {
                 // An ID no item of this kind holds, as `item republish`
                 // answers it. An item with no context reads as a missing
-                // context to the domain, and the index tells the two apart.
+                // context to the domain, and the index tells the two apart,
+                // unless it is marked behind: then it cannot say.
                 let unknown = blockers.contains(&LifecycleBlocker::ContextMissing)
+                    && call
+                        .service
+                        .repository_snapshot(&root)
+                        .is_ok_and(|snapshot| !snapshot.refresh_required)
                     && resolve_root(call.service, &root).is_ok_and(|repository| {
                         call.service
                             .show_item(&repository, &self.id)
@@ -1097,7 +1105,7 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
         let key = ScopeKey::for_repository(&self.root)
             .ok_or_else(|| Answer::stopped(ResultCode::InvalidPath))?;
         let mut effects = Vec::new();
-        if V::runs_context_child(&ready) {
+        if ready.context_child {
             effects.push(PreviewEffect::ContextSynchronized);
         }
         let closure = ready.closure.as_ref().map(|closure| match closure {

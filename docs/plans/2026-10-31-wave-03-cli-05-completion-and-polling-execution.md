@@ -276,8 +276,8 @@ Goldens were regenerated with `MANYHANDS_UPDATE_GOLDEN=1` and read.
 **Decisions.**
 
 - The first run's standing is implemented, since a first run needs one and `lifecycle_parent` has no other caller: no parent deletes the request; a consent refusal, superseded or complete parent finishes it; an unfinished parent leaves it accepted. Task 2b tests the table.
-- `Binding::prepare` checks nothing, so a state blocked since its preview is `external_change` with no record. `Blocked` at run is reached only after acceptance, and a case stages it with the request hook.
-- The domain reports an unknown ID as `ContextMissing`, not `NotA*`. The binding asks the index: `ContextMissing` with `show_item` answering `item_not_found` is `item_not_found`. So an item on primary with no context, under a stale index, answers `item_not_found` until `index refresh`, as `ticket show` does (Task 0). The context-missing row refreshes first.
+- `Binding::prepare` checks nothing, so a state blocked since its preview is `external_change` with no record (the review's R-22 below makes one exception). `Blocked` at run is reached only after acceptance, and a case stages it with the request hook.
+- The domain reports an unknown ID as `ContextMissing`, not `NotA*`. The binding asks the index: `ContextMissing` with `show_item` answering `item_not_found` is `item_not_found`, and, after the review below, only when the index is not marked behind.
 - A result's scope names primary as its branch and no worktree, since the context doesn't outlive a complete run.
 - `ParentView` holds only what this task reads: step, refused, checkpoint, integration. Later tasks add fields with their callers, because clippy denies unread ones.
 - A checkpoint counts as an effect only once the context's branch holds it, since `begin_closing` records it before the ref moves.
@@ -295,3 +295,13 @@ Goldens were regenerated with `MANYHANDS_UPDATE_GOLDEN=1` and read.
 - Task 2c: `cancel_request` sets a flag nothing reads yet for these commands, and `Interrupted` is always `recovery_required`.
 - Task 3: resume. Task 4: made-ready. Task 6: the promotion identity row.
 - Task 7: the human rendering of `LifecycleBlocked`, which is the code's message for now; no verb reaches it yet.
+
+#### Task 2a review fixes (controller's rulings)
+
+- **R-22.** A closure observed as exactly `[IdentityRequired]` at execute answers `identity_required` from `Binding::prepare`, with no record and no domain call, and its blockers in `data`. Other states blocked since their preview stay `external_change`. This amends the design's Identity row, and R-21's terminal row now covers only the race after this check. The Cycle's decisions are unchanged. Case: `c5_lifecycle_identity_removed_after_prepare_close`.
+- **Stale index.** An ID is unknown only when `repository_snapshot(root).refresh_required` is false; otherwise the `recovery_required` answer naming `context_missing` stands. Cases: `prepare_stale_index` and, for the design's new known limit, `prepare_index_not_marked`, both verbs.
+- **Seen first.** The identity row and both stale-index rows failed by assertion before the fix. The slug row and `local_only`'s Git assertions passed at once: they pin existing behaviour.
+- **Minors.** `Binding::reenter` delegates to `confirm::reenter`. `Ready.context_child` is computed once in each `ready_of_*`, and the verb method and `tracking_context` are gone. `from_stored` has one `optional_known`. Two comments corrected. `lifecycle_world` saves a distinct title, which `prepared()` and `called()` scan for. `DATA_ROOTS` is in order.
+- **Carried to Task 2b.** `parent_effects` under-reports past integration (publication and cleanup steps), and the `stopped()` rows.
+- **The shortfall** recorded above needs no rerun against a stub (controller).
+- **Verified after the fixes.** `c5_lifecycle` 38 cases (210 s), `mutation_contract` 44 (11 s), `read_contract` 72 (7 s), `mutation_confirmation` 183 (58 s), `--lib mutation` 126 (13 s), `fmt --check`, clippy (11 s). `src/desktop` was not touched, so the desktop commands were not rerun. No golden changed.

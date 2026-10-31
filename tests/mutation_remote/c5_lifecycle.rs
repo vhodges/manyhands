@@ -24,6 +24,8 @@ const BOTH: &[ssh_harness::Case] = both![
     "prepare_primary_dirty" => prepare_primary_dirty,
     "prepare_mixed_blockers" => prepare_mixed_blockers,
     "prepare_context_missing" => prepare_context_missing,
+    "prepare_stale_index" => prepare_stale_index,
+    "prepare_index_not_marked" => prepare_index_not_marked,
     "prepare_unknown_id" => prepare_unknown_id,
     "prepare_wrong_kind" => prepare_wrong_kind,
     "prepare_not_enabled" => prepare_not_enabled,
@@ -46,13 +48,18 @@ const ONE: &[ssh_harness::Case] = &[
         "c5_lifecycle_prepare_already_closed_close",
         prepare_already_closed,
     ),
+    (
+        "c5_lifecycle_identity_removed_after_prepare_close",
+        identity_removed_after_prepare,
+    ),
+    ("c5_lifecycle_prepare_slug_close", prepare_slug),
 ];
 
 pub(crate) const CASES: &[ssh_harness::Case] = &[
     BOTH[0], BOTH[1], BOTH[2], BOTH[3], BOTH[4], BOTH[5], BOTH[6], BOTH[7], BOTH[8], BOTH[9],
     BOTH[10], BOTH[11], BOTH[12], BOTH[13], BOTH[14], BOTH[15], BOTH[16], BOTH[17], BOTH[18],
     BOTH[19], BOTH[20], BOTH[21], BOTH[22], BOTH[23], BOTH[24], BOTH[25], BOTH[26], BOTH[27],
-    BOTH[28], BOTH[29], ONE[0], ONE[1],
+    BOTH[28], BOTH[29], BOTH[30], BOTH[31], BOTH[32], BOTH[33], ONE[0], ONE[1], ONE[2], ONE[3],
 ];
 
 const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ1";
@@ -72,7 +79,11 @@ fn prepared(
 ) -> Envelope<PrepareDataDto> {
     let envelope = service.prepare(&verb.mutation(root, id));
     let rendered = serde_json::to_vec(&envelope).expect("an envelope serializes");
-    ssh_privacy::clean(&rendered, &[BODY.as_bytes().to_vec()]).expect("no source in a preview");
+    ssh_privacy::clean(
+        &rendered,
+        &[BODY.as_bytes().to_vec(), TITLE.as_bytes().to_vec()],
+    )
+    .expect("neither source nor title in a preview");
     let value = serde_json::to_value(&envelope).expect("an envelope serializes");
     schema::check_published("envelope.schema.json", &value).expect("the envelope schema");
     match &envelope.data {
@@ -114,6 +125,7 @@ fn called(
         &rendered,
         &[
             BODY.as_bytes().to_vec(),
+            TITLE.as_bytes().to_vec(),
             b"fixture@example.invalid".to_vec(),
         ],
     )
@@ -365,6 +377,71 @@ fn prepare_context_missing(verb: Verb) -> Result<(), FixtureError> {
     Ok(())
 }
 
+/// The world of the two rows below: an item on primary whose context was
+/// retired outside Manyhands, which the index has not looked at since.
+fn retired_unrefreshed(verb: Verb) -> Result<Local, FixtureError> {
+    let local = Local::holding(verb)?;
+    let repo = local.repo()?;
+    fast_forward_primary(&repo, verb)?;
+    retire_context(&repo, &local.root, verb)?;
+    Ok(local)
+}
+
+/// An index marked behind cannot say an ID is unknown: the blockers stand.
+fn prepare_stale_index(verb: Verb) -> Result<(), FixtureError> {
+    let local = retired_unrefreshed(verb)?;
+    fixed(
+        local
+            .db()?
+            .execute("UPDATE repositories SET refresh_required = 1", []),
+    )?;
+    let envelope = prepared(&local.service, verb, &local.root, verb.id());
+    assert_eq!(envelope.code, ResultCode::RecoveryRequired);
+    assert_eq!(blockers_of(&envelope), [LifecycleBlocker::ContextMissing]);
+    Ok(())
+}
+
+/// The design's known limit: an index not marked behind is believed, until
+/// `index refresh`.
+fn prepare_index_not_marked(verb: Verb) -> Result<(), FixtureError> {
+    let local = retired_unrefreshed(verb)?;
+    let envelope = prepared(&local.service, verb, &local.root, verb.id());
+    assert_eq!(envelope.code, ResultCode::ItemNotFound);
+    assert!(envelope.data.is_none());
+    Ok(())
+}
+
+/// A ticket's short code, as the index holds it, is shown.
+fn prepare_slug() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let local = Local::holding(verb)?;
+    let path = format!(".manyhands/tickets/{ITEM}/ticket.md");
+    let worktree = verb.worktree(&local.root);
+    let source = fixed(std::fs::read_to_string(worktree.join(&path)))?;
+    let slugged = source.replacen("---\n", "---\nslug: mh-vh-k9x2b\n", 1);
+    commit_in(&worktree, verb.branch(), &path, slugged.as_bytes())?;
+    let refreshed = called(
+        &local.service,
+        SECOND,
+        None,
+        Mutation::IndexRefresh(IndexRefreshInput {
+            root: local.root.clone(),
+        }),
+    );
+    assert_eq!(refreshed.code, ResultCode::Ok);
+    let envelope = prepared(&local.service, verb, &local.root, ITEM);
+    let preview = envelope
+        .data
+        .as_ref()
+        .and_then(PrepareDataDto::preview)
+        .ok_or(FixtureError)?;
+    let PreviewDetailsDto::Lifecycle(details) = &preview.details else {
+        return Err(FixtureError);
+    };
+    assert_eq!(details.slug.as_deref(), Some("mh-vh-k9x2b"));
+    Ok(())
+}
+
 /// An ID no item holds, as `item republish` answers it.
 fn prepare_unknown_id(verb: Verb) -> Result<(), FixtureError> {
     let local = Local::empty()?;
@@ -479,6 +556,46 @@ fn stale_at_confirm(verb: Verb) -> Result<(), FixtureError> {
     Ok(())
 }
 
+/// R-22: an identity removed since the preview is the one thing that stands
+/// in the way, and the answer says so, with no record and no domain call.
+fn identity_removed_after_prepare() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let local = Local::holding(verb)?;
+    let repo = local.repo()?;
+    let main = fixed(repo.refname_to_id(MAIN))?;
+    let tip = fixed(repo.refname_to_id(verb.branch()))?;
+    let confirmation = confirmation_of(&prepared(&local.service, verb, &local.root, ITEM));
+    forget_identity(&repo)?;
+    let envelope = called(
+        &local.service,
+        FIRST,
+        Some(&confirmation),
+        verb.mutation(&local.root, ITEM),
+    );
+    assert_eq!(envelope.code, ResultCode::IdentityRequired);
+    assert_eq!(actions(&envelope), [RecoveryActionKind::RepoIdentitySet]);
+    assert_eq!(
+        lifecycle_of(&envelope).ok_or(FixtureError)?.blockers,
+        [LifecycleBlocker::IdentityRequired]
+    );
+    assert!(
+        local
+            .service
+            .request_record(request(FIRST))
+            .unwrap()
+            .is_none()
+    );
+    let parents: i64 = fixed(local.db()?.query_row(
+        "SELECT COUNT(*) FROM ticket_closures",
+        [],
+        |row| row.get(0),
+    ))?;
+    assert_eq!(parents, 0);
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, main);
+    assert_eq!(fixed(repo.refname_to_id(verb.branch()))?, tip);
+    Ok(())
+}
+
 // A first run.
 
 /// Everything done: merged, published, the remote branch deleted and the
@@ -578,6 +695,13 @@ fn local_only(verb: Verb) -> Result<(), FixtureError> {
         Some(LifecyclePublicationPendingReason::NoPublicationRemote)
     );
     assert_eq!(data.publication_oid, None);
+    let repo = local.repo()?;
+    assert_eq!(
+        data.integration_oid,
+        Some(fixed(repo.refname_to_id(MAIN))?.to_string())
+    );
+    assert!(repo.refname_to_id(verb.branch()).is_err());
+    assert!(!verb.worktree(&local.root).exists());
     let held = local
         .service
         .request_record(request(FIRST))

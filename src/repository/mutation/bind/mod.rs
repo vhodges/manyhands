@@ -288,12 +288,11 @@ pub(crate) struct Answer {
     /// stopped the request.
     pub(crate) offers_nothing: bool,
     /// What a preview of `host approve` is refused with for a host that
-    /// has a pin: the one data a `prepare` gives that is no preview. No
-    /// answer of `execute` holds it.
+    /// has a pin: data a `prepare` gives that is no preview, as
+    /// `lifecycle_blocked` is. No answer of `execute` holds it.
     pub(crate) host_replacement: Option<Box<HostReplacementDto>>,
     /// What a preview of `document promote` or `ticket close` is refused
-    /// for: the other data a `prepare` gives that is no preview. An answer
-    /// of `execute` holds the same blockers in its `data`.
+    /// for. An answer of `execute` holds the same blockers in its `data`.
     pub(crate) lifecycle_blocked: Option<LifecycleBlockedDto>,
 }
 

@@ -91,7 +91,7 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         code,
         effects,
         // What a request would report is not what `prepare` gives: a
-        // preview, or what the one refusal below is about.
+        // preview, or what one of the two refusals below is about.
         data: _,
         // What the binding or a read suggested is kept, as `execute`
         // keeps it; `outcome::offered` decides.

@@ -592,7 +592,8 @@ Decision 6 and `01M5MK57`. Both verbs pass `confirmed_identity: None`.
 | Either prepare | Already contained, or existing closure | No identity needed |
 | Closure confirm | The identity changed since prepare | The digest binds `closed_by`, so `external_change`, record ended; a new prepare |
 | Promotion | Identity lost after the record began | `identity_required`, `Owed`; after `repo identity-set` the same request continues. Only a change during the run reaches this |
-| Closure confirm | Identity removed or unusable | Refused through `refuse_record`, which writes a terminal row: `identity_required`; a new prepare. A terminal refused row is no recovery obligation, so `01M5MK57`'s "journal unchanged" is read as no unfinished row for closure (R-21, recorded on that ticket) |
+| Closure confirm | Identity removed or unusable, seen by the boundary's observation as `[IdentityRequired]` alone | `Binding::prepare` answers `identity_required`, with no record and no domain call; a new prepare (R-22). Other states blocked since their preview stay `external_change` |
+| Closure confirm | Identity removed in the race after that check | Refused through `refuse_record`, which writes a terminal row. A terminal refused row is no recovery obligation, so `01M5MK57`'s "journal unchanged" is read as no unfinished row for closure (R-21, recorded on that ticket) |
 | Either | A context child's `IdentityRequired` | `identity_required`, `Owed`; the same request continues |
 | After a closure checkpoint | | `closed_by` comes from the commit: none needed |
 
@@ -793,6 +794,7 @@ review. This list is not yet proven complete.
 | R-19 | `Row::Unfinished` is added to `confirm.rs`, since the existing rows cannot express a parent with no journal row. | A variant for two commands. |
 | R-20 | Decision 12's outcome comes from acknowledging the flag on a `cancelled` answer, not from a driver check. | A killed process's resend answers `cancelled` once more. |
 | R-21 | Closure's refused identity leaves a terminal row, read as no recovery obligation under `01M5MK57`. | The ticket's literal "journal unchanged" is narrowed for closure. |
+| R-22 | A closure observed as exactly `[IdentityRequired]` at execute answers `identity_required` from `Binding::prepare`, with no record and no domain call, not `external_change`. Amends the Identity table; R-21's terminal row now covers only the race after this check. (Controller's ruling on Task 2a's review, 2026-10-31.) | One state the boundary's digest comparison doesn't answer. |
 | R-16 | A completed poll with preserved or marked targets is `ok`, exit 0, with dispositions in data. The RFC says once is explicit polling, not synchronization. | A script checking only the exit misses a blocked target; human output names them. |
 
 ## Known Limits
@@ -807,6 +809,7 @@ review. This list is not yet proven complete.
 - Policy verbs are last commit wins: resending a request that never committed writes again (decision 15).
 - A poll plan failure other than a missing remote writes the domain's stored state.
 - A promotion blocked by a pending local sync issues a confirmation before refusing.
+- After an external `git pull`, with the index not marked behind, an item on primary with no context answers `item_not_found` until `index refresh`. An index marked behind keeps the `recovery_required` answer naming `context_missing`.
 
 ## Alternatives Rejected
 

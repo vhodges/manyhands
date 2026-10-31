@@ -20,6 +20,8 @@ pub const DOCUMENT_PATH: &str = "docs/lifecycle.md";
 pub const DOCUMENT_BRANCH: &str = "refs/heads/manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FDC";
 pub const TICKET_BRANCH: &str = "refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW";
 pub const MAIN: &str = "refs/heads/main";
+/// What a preview and a result may never hold, as a world's `BODY` is.
+pub const TITLE: &str = "lifecycle-title-private-sentinel";
 
 /// Which of the two verbs a row is of.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,7 +100,7 @@ impl Verb {
                 source_path: None,
                 destination_path: DOCUMENT_PATH.into(),
                 draft: DocumentDraft {
-                    title: "Fixture".into(),
+                    title: TITLE.into(),
                     body: BODY.into(),
                 },
                 expected_source: None,
@@ -107,7 +109,7 @@ impl Verb {
             Self::Close => service.save_ticket(SaveTicketRequest {
                 target,
                 draft: TicketDraft {
-                    title: "Fixture".into(),
+                    title: TITLE.into(),
                     body: BODY.into(),
                     ticket_type: "task".into(),
                     status: "open".into(),

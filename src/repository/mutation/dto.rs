@@ -834,71 +834,62 @@ impl LifecycleMutationDto {
             }
         };
         // A closed vocabulary: what is not of it is not of this shape.
-        fn known<T: Copy>(all: &[T], name: impl Fn(T) -> &'static str, text: &str) -> Option<T> {
+        fn known<T: Copy>(all: &[T], name: fn(T) -> &'static str, text: &str) -> Option<T> {
             all.iter().copied().find(|known| name(*known) == text)
         }
-        let tag = text("type")??;
-        let kind = text("kind")??;
-        let optional = |key: &str| text(key);
+        // A nullable field of a closed vocabulary. The outer `None` is data
+        // that is not of this shape.
+        fn optional_known<T: Copy>(
+            value: Option<String>,
+            all: &[T],
+            name: fn(T) -> &'static str,
+        ) -> Option<Option<T>> {
+            match value {
+                Some(value) => Some(Some(known(all, name, &value)?)),
+                None => Some(None),
+            }
+        }
         Some(Self {
             r#type: known(
                 &LifecycleMutationType::ALL,
                 LifecycleMutationType::as_str,
-                &tag,
+                &text("type")??,
             )?,
-            kind: known(&ItemDtoKind::ALL, ItemDtoKind::as_str, &kind)?,
+            kind: known(&ItemDtoKind::ALL, ItemDtoKind::as_str, &text("kind")??)?,
             item_id: text("item_id")??,
-            recording: match optional("recording")? {
-                Some(value) => Some(known(
-                    &LifecycleRecording::ALL,
-                    LifecycleRecording::as_str,
-                    &value,
-                )?),
-                None => None,
-            },
-            checkpoint_oid: optional("checkpoint_oid")?,
-            integration: match optional("integration")? {
-                Some(value) => Some(known(
-                    &LifecycleIntegrationKind::ALL,
-                    LifecycleIntegrationKind::as_str,
-                    &value,
-                )?),
-                None => None,
-            },
-            integration_oid: optional("integration_oid")?,
-            publication: match optional("publication")? {
-                Some(value) => Some(known(
-                    &LifecyclePublicationState::ALL,
-                    LifecyclePublicationState::as_str,
-                    &value,
-                )?),
-                None => None,
-            },
-            publication_oid: optional("publication_oid")?,
-            publication_pending: match optional("publication_pending")? {
-                Some(value) => Some(known(
-                    &LifecyclePublicationPendingReason::ALL,
-                    LifecyclePublicationPendingReason::as_str,
-                    &value,
-                )?),
-                None => None,
-            },
-            cleanup: match optional("cleanup")? {
-                Some(value) => Some(known(
-                    &LifecycleCleanupState::ALL,
-                    LifecycleCleanupState::as_str,
-                    &value,
-                )?),
-                None => None,
-            },
-            cleanup_pending: match optional("cleanup_pending")? {
-                Some(value) => Some(known(
-                    &LifecycleCleanupPendingReason::ALL,
-                    LifecycleCleanupPendingReason::as_str,
-                    &value,
-                )?),
-                None => None,
-            },
+            recording: optional_known(
+                text("recording")?,
+                &LifecycleRecording::ALL,
+                LifecycleRecording::as_str,
+            )?,
+            checkpoint_oid: text("checkpoint_oid")?,
+            integration: optional_known(
+                text("integration")?,
+                &LifecycleIntegrationKind::ALL,
+                LifecycleIntegrationKind::as_str,
+            )?,
+            integration_oid: text("integration_oid")?,
+            publication: optional_known(
+                text("publication")?,
+                &LifecyclePublicationState::ALL,
+                LifecyclePublicationState::as_str,
+            )?,
+            publication_oid: text("publication_oid")?,
+            publication_pending: optional_known(
+                text("publication_pending")?,
+                &LifecyclePublicationPendingReason::ALL,
+                LifecyclePublicationPendingReason::as_str,
+            )?,
+            cleanup: optional_known(
+                text("cleanup")?,
+                &LifecycleCleanupState::ALL,
+                LifecycleCleanupState::as_str,
+            )?,
+            cleanup_pending: optional_known(
+                text("cleanup_pending")?,
+                &LifecycleCleanupPendingReason::ALL,
+                LifecycleCleanupPendingReason::as_str,
+            )?,
             blockers: stored
                 .get("blockers")?
                 .as_array()?
