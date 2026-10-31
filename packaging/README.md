@@ -226,3 +226,9 @@ then stamps the verified public identity/runtime metadata. `-Mode Verify`
 repeats native verification on extracted outputs without access to the
 private signing secrets. The CLI test removes developer-tool PATH entries
 so Visual Studio/Git/toolchain DLLs cannot satisfy missing app dependencies.
+
+Both modes require an elevated GitHub-hosted Windows runner. Only the public
+certificate is temporarily trusted in `LocalMachine\Root`; its private signing
+identity remains in `CurrentUser\My`. Existing trust is preserved and only
+owned additions are removed. The native helper fixture runs before release
+secrets, and all Windows certificate-operation steps have ten-minute limits.

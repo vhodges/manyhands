@@ -202,6 +202,15 @@ explanation in the package. Do not install trust certificates on users'
 machines automatically. Clean up imported private material on success or
 failure. Self-signing does not remove SmartScreen warnings.
 
+After the v0.1.5 trial isolated a stall at the current-user root import, the
+owner approved temporary `LocalMachine\Root` public verification trust on
+elevated, disposable GitHub-hosted Windows runners only. Reject other
+contexts before private-key handling, retain the private identity in
+`CurrentUser\My`, preserve existing trust, and remove only the exact root
+certificate added by this invocation. Both signature verifiers and timestamp
+requirements remain mandatory. See the
+[trust correction design](2026-10-31-windows-verification-trust-design.md).
+
 ## Licences And Runtime Dependencies
 
 The repository's MIT licence is the application licence. The bundled IBM

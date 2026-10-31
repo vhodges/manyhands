@@ -35,6 +35,9 @@ function Confirm-Signatures([string[]]$Files, $Certificate, [string]$SignTool) {
 }
 
 Write-ReleaseProgress "Starting Windows signing/verification (mode $Mode)"
+Write-ReleaseProgress 'Starting hosted Windows administrator verification-trust preflight'
+$null = Get-HostedVerificationTrustStore
+Write-ReleaseProgress 'Completed hosted Windows administrator verification-trust preflight'
 $root = (Resolve-Path -LiteralPath $Staging).Path
 $python = (Get-Command python -ErrorAction Stop).Source
 $helper = Join-Path $PSScriptRoot 'windows.py'
@@ -112,15 +115,8 @@ try {
         }
     }
 
-    $rootPath = "Cert:\CurrentUser\Root\$($certificate.Thumbprint)"
-    if (-not (Test-Path -LiteralPath $rootPath)) {
-        $trustCertificate = $rootPath
-        Write-ReleaseProgress 'Starting temporary verification trust import'
-        Import-Certificate -FilePath (Join-Path $root 'signing/manyhands.cer') -CertStoreLocation 'Cert:\CurrentUser\Root' | Out-Null
-        Write-ReleaseProgress 'Completed temporary verification trust import'
-    } else {
-        Write-ReleaseProgress 'Verification trust already present; existing certificate will be preserved'
-    }
+    Add-VerificationTrust -CertificatePath (Join-Path $root 'signing/manyhands.cer') `
+        -Thumbprint $certificate.Thumbprint -OwnedPath ([ref]$trustCertificate)
     Confirm-Signatures $files $certificate $signTool
 
     if ($Mode -eq 'Sign') {
@@ -162,9 +158,11 @@ try {
     if ($null -ne $password) { $password.Dispose() }
     Write-ReleaseProgress 'Completed signing certificate handle disposal'
     $cleanupErrors = @()
-    if ($null -ne $trustCertificate -and (Test-Path -LiteralPath $trustCertificate)) {
-        Write-ReleaseProgress 'Removing owned temporary verification trust'
-        Remove-Item -LiteralPath $trustCertificate -Force -ErrorAction SilentlyContinue -ErrorVariable +cleanupErrors
+    try {
+        Remove-VerificationTrust -OwnedPath $trustCertificate
+    } catch {
+        $cleanupErrors += $_
+        Write-ReleaseProgress 'Failed verification-trust cleanup; continuing owned private-state cleanup'
     }
     if ($null -ne $myCertificate -and (Test-Path -LiteralPath $myCertificate)) {
         Write-ReleaseProgress 'Removing owned signing identity and private key'
