@@ -271,6 +271,13 @@ Also required:
     (Recommended)". No observation token. This answers the former question 2. My question
     overstated it. See owner question 6: the third review showed last commit wins.
 
+16. **Task 0's unlisted test pins (2026-10-31).** "Add E-16, others no-edit (Recommended)".
+    `startup_tests.rs:171` and `parse_tests.rs:563` move to the test-only planned spec. The other
+    hits are on record as no-edit; one that fails when its verb is bound stops for the owner.
+17. **A `FailurePoint` variant for `remote select` (2026-10-31).** "Allow a FailurePoint variant
+    (Recommended)": one variant in `src/repository.rs`, so the stop between commit and index
+    update has a real test.
+
 **Owner questions, approved at these recommendations on 2026-10-31.**
 
 1. `effective_identity`'s per-key cascade: keep it for C5, with a follow-up ticket (R-6).

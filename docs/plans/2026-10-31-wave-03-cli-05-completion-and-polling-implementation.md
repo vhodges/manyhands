@@ -31,7 +31,7 @@ id: "01M69C6SHD04G8PT6D1Y36CDN7"
   - `src/repository/promotion/` and `src/repository/closure/`, for the parent-record accessor, the cancellation probe and the identity path only;
   - `src/repository/read/{mod,dto,graph}.rs`, for exports, the corrected comment and the made-ready read;
   - `src/results.rs`, for the `RequestCancel` doc only;
-  - `src/repository.rs`, for `set_publication_remote_recorded` and any recovery of it Task 0 locates (decision 10) only;
+  - `src/repository.rs`, for `set_publication_remote_recorded`, its already-selected branch and one `FailurePoint` variant (decisions 10 and 17) only;
   - `schemas/v1/`.
 
   No new `ResultCode` or `RecoveryActionKind`. No field on a public struct that tests build by literal: the probe is a crate-private entry point, and the public signatures stay. No column of an audited table changes, and no blocker enum's order. A gap beyond this stops the task for the owner.
@@ -42,7 +42,7 @@ id: "01M69C6SHD04G8PT6D1Y36CDN7"
 - **Content and secrets.** No type holding source or a token derives `Debug`, `Display` or `Serialize`, except the content read's DTO. `closed_by` appears only in the preview, canonical content, the index and Git, as Cycle 10 lists. Previews aren't persisted, and request records hold no `closed_by` or title. No input value, source, token or backend text reaches a diagnostic.
 - **Test placement.** Library tables are modules of `tests/mutation_remote.rs`, on the new `tests/support/lifecycle_world.rs`. Cases in `harness = false` targets are `ssh_harness` cases named `c5_<module>_<case>`, registered in `CASES`, split per row under the 100-second watchdog. `#[test]` functions do not run there. `tests/cli_remote.rs` reaches public items only.
 - **Test isolation.** Every CLI child goes through `tests/support/cli.rs`, `tests/support/pty.rs` or the SSH harness. Tests never touch developer keys, global Git configuration, the real terminal or real application data.
-- **Pre-existing tests.** Only named edits E-1 to E-15. Any other semantic edit stops for owner review.
+- **Pre-existing tests.** Only named edits E-1 to E-16. Any other semantic edit stops for owner review.
 - **Outcome tables.** Each table's test is written first and seen to fail. It is committed together with the code that passes it. A row that answers otherwise stops for a ruling.
 - **Test runs.**
   - Each task runs only the targets and filters it names. Check that more than zero tests ran. Cargo takes one positional filter per command.
@@ -332,7 +332,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 
 **Decisions to tasks:** 1 all of Part A; 2 Task 6; 3 Task 10a; 4 Task 14a; 5 Tasks 5a, 8; 6 Tasks 2a, 6; 7 authorizes the documents, no task; 8 Tasks 2b, 2c, 13a; 9 Tasks 11, 15; 10 Tasks 0, 6; 11 Task 5a; 12 Task 2c; 13 Task 4; 14 Task 15; 15 Task 5a.
 
-**Named edits:** E-1 to E-7 and E-14 in 7–10b; E-8 in 13b; E-9, E-12, E-13 in 2a, 5a, 5b; E-10 in 3; E-11 in 2a, 4, 5a, 5b; E-15 in 2b.
+**Named edits:** E-1 to E-7, E-14 and E-16 in 7–10b; E-8 in 13b; E-9, E-12, E-13 in 2a, 5a, 5b; E-10 in 3; E-11 in 2a, 4, 5a, 5b; E-15 in 2b.
 
 **Stops built in:** Task 0: identity, a changed fact, an unlisted pin, a reproduction surprise. Outcome-table rows in 2a–5b. Task 11: a refusal on real content. Task 14a: a behaviour gap. Task 15: a suite failure, closure.
 

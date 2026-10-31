@@ -613,7 +613,7 @@ synchronization proceeds. The fix is in `set_publication_remote_recorded` (`src/
 ticket's acceptance governs, in full: a library test as well as the binary path; other index entries
 unchanged; a retry and a replay of `remote select` leave the index current; and recovery after a stop
 between the commit and the index update, which Task 0 locates and may widen the scope's named function.
-Its "merged on its own" bullet is overridden by decision 10, recorded on that ticket. C4's fixture seed
+Re-entry to that function's already-selected branch (`src/repository.rs:4500`) updates the index too, and one `FailurePoint` variant stages the stop (decision 17). Its "merged on its own" bullet is overridden by decision 10, recorded on that ticket. C4's fixture seed
 stays.
 
 ## Recovery Tables (decision 4)
@@ -743,6 +743,7 @@ and request records hold neither (Task 0 confirms). The index's `closed_by` colu
 | E-13 | `tests/support/conformance.rs` `HOMES`, `tests/mutation_contract.rs:1510` `DATA_ROOTS`, `tests/support/confirmation.rs:60` `preview_schema` | Length and entries grow; each command gets its home, conformance row and golden in the task that binds it |
 | E-14 | `src/bin/manyhands-cli/collaboration_tests.rs:82` | New `stops_on_ctrl_c` rows |
 | E-15 | `src/repository/mutation/confirm_tests.rs` | `Row::Unfinished` cases |
+| E-16 | `src/bin/manyhands-cli/startup_tests.rs:171`, `parse_tests.rs:563` | Move to the test-only planned spec (decision 16), done with E-3 and E-4 in Task 9 |
 
 `tests/read_relationships.rs:1183,1190,1254` hold `"C5"` as Wave-graph data, and are not pins. Task 0
 greps for other pins (`NotResumable`, `"C5"`, `arrives with`, `Planned`). An unlisted hit stops for owner

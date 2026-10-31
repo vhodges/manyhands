@@ -242,8 +242,7 @@ near `:190`, and the audit's other document amendments, stay with Task 14b.
 
 ## Rulings and blockers
 
-**Open:** the unlisted hits in Test Pins. Task 0 stops there for a ruling. Everything
-else in Task 0 is done.
+**Settled (owner, 2026-10-31, decisions 16 and 17):** E-16 for `startup_tests.rs:171` and `parse_tests.rs:563`; the other unlisted hits are no-edit, and one that fails when its verb is bound stops for the owner. One `FailurePoint` variant is allowed in Task 6. Task 0 is complete.
 
 ## Task log
 
