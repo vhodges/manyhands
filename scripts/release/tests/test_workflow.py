@@ -47,6 +47,29 @@ class WorkflowTests(unittest.TestCase):
                 self.assertEqual(command[command.index("-Mode") + 1], mode)
                 self.assertEqual(command[-1], self.env[variable])
 
+    def test_windows_signing_and_verification_have_ten_minute_step_backstops(self):
+        workflow = Path(__file__).resolve().parents[3] / ".github/workflows/release.yml"
+        steps = workflow.read_text(encoding="utf-8").split("      - name: ")
+        for name in ("Audit and self-sign Windows executables",
+                     "Verify extracted Windows signatures without signing secrets"):
+            with self.subTest(step=name):
+                matches = [step for step in steps if step.startswith(name + "\n")]
+                self.assertEqual(len(matches), 1)
+                self.assertRegex(matches[0], r"(?m)^        timeout-minutes: 10$")
+                self.assertIn("if: matrix.os == 'windows'", matches[0])
+
+    def test_all_windows_helper_suites_run_before_signing_secrets_are_available(self):
+        workflow = Path(__file__).resolve().parents[3] / ".github/workflows/release.yml"
+        text = workflow.read_text(encoding="utf-8")
+        steps = text.split("      - name: ")
+        matches = [step for step in steps if step.startswith("Test Windows ")]
+        self.assertEqual(len(matches), 1)
+        for name in ("test_windows_tools.ps1", "test_windows_process.ps1", "test_windows_signing.ps1"):
+            self.assertIn(f"./scripts/release/tests/{name}", matches[0])
+        self.assertIn("if: matrix.os == 'windows'", matches[0])
+        self.assertNotIn("WINDOWS_SIGNING_", matches[0])
+        self.assertLess(text.index(matches[0]), text.index("Audit and self-sign Windows executables"))
+
     def test_handoff_does_not_resolve_the_tag_again(self):
         command = command_for_stage("prepare", self.env, self.repo)
         self.assertIn("--manifest-env", command)

@@ -530,3 +530,78 @@ Native Windows signing, extracted signature/runtime verification, and draft
 assembly still need an independently authorized post-merge trial with a new
 matching source version/tag containing this correction. No workflow was
 dispatched, no certificate regenerated, and no existing tag moved.
+
+## v0.1.4 Native Trial — Bounded Signing Diagnostics
+
+The owner subsequently authorized pushing the timestamp correction and a
+new Release trial, then explicitly approved preparing `v0.1.4`. The fix is
+`5600d7d7`, merged as `87d87dea`; version metadata and both CLI version
+fixtures were committed as `25a8174d`. The targeted CLI version test and
+tag/merged-source validation passed, then main and the new annotated tag
+were pushed. Existing tags were not moved. GitHub CLI credential retrieval
+blocked dispatch, so the owner started the trial through GitHub's web UI.
+
+[Release run 41233300191](https://github.com/vhodges/manyhands/actions/runs/41233300191)
+validated the tag and completed macOS and both Linux packages. Windows job
+`124631826355` remained in **Audit and self-sign Windows executables** from
+19:24:20 to 20:26:52 UTC on October 31, 2026: **62 minutes 32 seconds**.
+The owner cancelled the run. Its supplied signing log showed only invocation,
+masked secrets, and cancellation; cleanup named only an orphan `pwsh`.
+This does not identify which signing/certificate/audit operation stalled.
+Windows packaging/verification and draft assembly did not complete.
+
+The owner approved a diagnostic follow-up in
+`.worktrees/release-windows-signing-diagnostics`, based on `25a8174d` after
+fetching/merging `origin/main`. See the
+[design](2026-10-31-windows-signing-diagnostics-design.md) and
+[implementation plan](2026-10-31-windows-signing-diagnostics.md).
+
+### Diagnostic Changes And Local Evidence
+
+- UTC information-stream progress marks PFX loading/import, public export,
+  the runtime audit, each executable's signing/timestamping, SignTool and
+  Windows Authenticode verification separately, metadata, smoke testing,
+  and cleanup. No private data, environment dumps, or argument lists are
+  logged; parsed return values remain separate from progress.
+- Native tools use .NET argument lists without a shell, concurrent output
+  drains, and a 180-second deadline covering execution and output collection.
+  A timeout terminates a live process tree, allows a bounded five-second reap,
+  and throws through normal signing cleanup. A detached child whose parent
+  has already exited cannot be guaranteed terminated through that old handle;
+  its open output pipes still cannot defeat the deadline.
+- Both Windows signing and extracted-verification steps have a ten-minute
+  backstop for in-process certificate cmdlets and cumulative work. Hard
+  workflow cancellation can skip `finally`; disposable-runner teardown is
+  the isolation backstop. Signature, timestamp, identity, and cleanup failures
+  still fail the release without an unsigned/untimestamped fallback.
+- Baseline: 14 focused Python tests and PowerShell DLL/endpoint tests passed.
+  New process/progress regressions failed before implementation; the two
+  workflow-limit assertions and five verification-progress cases also failed
+  before their changes. The inherited-pipe timeout diagnostic was separately
+  reproduced as missing before its implementation.
+- Final local checks: **16 focused Python tests**, **11 real child-process
+  cases**, **5 verification-progress cases with platform APIs stubbed**, and
+  existing PowerShell DLL/endpoint tests passed through Devenv. PowerShell
+  7.6.9 parsed five source/test files and 21 Windows inline workflow bodies.
+  actionlint 1.7.12 with ShellCheck 0.11.0 passed both workflows. Only the
+  PowerShell subprocess's inherited loader override was cleared for Nix
+  compatibility; project runtime-library settings remain unchanged.
+- Scoped read-only review found one test-registration gap: the two new
+  PowerShell suites were not yet in the existing Windows helper-test step.
+  A new workflow regression failed on that omission before the correction.
+  All three suites now run before signing secrets are introduced. Fixture
+  deadlines use three seconds (rather than the initial one-second local
+  probe) for Windows child-startup headroom; production remains 180 seconds.
+  Targeted re-review confirmed the finding resolved with no additional
+  actionable issues. Native Windows execution of those tests is still pending.
+
+These results verify diagnostic and timeout behavior on Linux, not native
+Windows signing or real certificate-store cleanup. The original stall's
+cause remains unproven. No Rust source/dependencies changed, so broad Rust
+gates were not run. At review the changes were uncommitted; Cargo version
+stays `0.1.4`, and no tags, secrets, workflow matrix, or assets changed.
+
+The owner subsequently selected committing the diagnostic patch and merging
+it into local `main`, with focused verification repeated on the merged tree.
+Push, version/tag preparation, and another native trial are not included in
+that authorization. No new workflow was dispatched.

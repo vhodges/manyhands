@@ -106,6 +106,35 @@ temporary public trust only for runner verification. Owned private files,
 the imported private key, and newly added trust are removed in `finally`;
 existing unrelated certificates are preserved. Cleanup failure fails the job.
 
+### Progress and deadlines
+
+UTC progress messages identify the start and completion of PFX loading and
+store import, public certificate export, runtime auditing, signing/timestamping
+each executable, both verification APIs, metadata finalization, the CLI smoke
+test, and cleanup. They use PowerShell's information stream, so assignments
+and `Out-Null` do not hide them or mix them into parsed native-tool results.
+Messages do not print private material, passwords, environment contents, or
+complete argument lists. The last operation with a start but no completion
+message identifies the boundary to investigate; it is not proof of a cause.
+
+Each native tool has a **180-second deadline**, including stdout/stderr
+collection. Both pipes drain concurrently. Expiry fails the operation, kills
+the live process tree, allows up to five seconds for process exit, and throws
+through the existing signing cleanup. Nonzero exit codes still fail with
+captured tool output. If a tool has already exited but a detached child keeps
+its output pipes open, the output-drain deadline still fails promptly; the old
+parent handle cannot guarantee termination of that detached child. Such jobs
+must continue to use disposable runners, not persistent signing machines.
+
+Both the signing and extracted Windows-verification workflow steps also have
+a **ten-minute limit**. This is a backstop for in-process certificate cmdlets
+and cumulative work, not permission to wait ten minutes for each native tool.
+A workflow hard cancellation can interrupt `finally`; only the ordinary
+native-tool timeout is designed to return through normal cleanup. Hosted
+runner teardown remains the isolation backstop for hard cancellation. No
+timeout permits unsigned or untimestamped output, bypasses identity checks,
+or publishes an incomplete release.
+
 After archive creation and extraction to a fresh directory, repeat:
 
 ```powershell
