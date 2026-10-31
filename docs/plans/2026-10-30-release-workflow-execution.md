@@ -383,3 +383,50 @@ verification follows that direction; the broad suite is not reported as passed.
 The targeted CLI version test then passed, as did all 97 release-helper
 tests, actionlint for both workflows, and whitespace checks. Integration
 and the newly authorized native trial proceed on those scoped checks.
+
+## v0.1.1 Native Trial — Dependency Audit Follow-Up
+
+Merged/pushed the shell and notice fixes, tagged `v0.1.1` at
+`676ff1936fc8cc60eb758f873e8883e4b5a51e8d`, and dispatched
+[41158651149](https://github.com/vhodges/manyhands/actions/runs/41158651149)
+with owner authorization. Both Linux targets completed packaging and
+isolated runtime verification successfully. macOS and Windows passed
+compilation, notices, and staging, then failed their native dependency
+audits; assembly was skipped.
+
+The follow-up branch `release-native-deps` contains these scoped fixes:
+
+- **macOS:** the runner had Homebrew `openssl@3` installed, but the locked
+  `openssl-sys 0.9.117` discovery code prefers an installed `openssl@4`
+  unless `OPENSSL_DIR` is supplied. The resulting binary imported
+  `libssl.4.dylib`, outside the packager's reviewed OpenSSL 3 policy. Both
+  workflows now persist `OPENSSL_DIR=$(brew --prefix openssl@3)` before
+  cache restoration/building. The crate tracks that environment variable
+  for rebuilds; the packager continues to accept only the reviewed family.
+- **Windows:** the audit rejected
+  `api-ms-win-shcore-scaling-l1-1-1.dll`. Microsoft's official
+  [GetDpiForMonitor documentation](https://learn.microsoft.com/en-us/windows/win32/api/shellscalingapi/nf-shellscalingapi-getdpiformonitor)
+  lists that exact standard OS forwarding alias. Add only that name to the
+  reviewed list and cover it with a regression. Batch rejected imports
+  per executable into one diagnostic without weakening any rejection rule.
+
+Verification was restricted to the affected packaging code: the Windows
+policy regression failed before the allowlist fix; the aggregate diagnostic
+regression also failed before its implementation. Both now pass, alongside
+the seven macOS packaging-policy tests, actionlint for both workflows, and
+whitespace checks. A scoped read-only review found no actionable issues
+and independently checked exact/case-insensitive recognition, rejection
+of neighboring unknown contracts and CRT imports, and diagnostic behavior.
+No full Rust gates were run for these workflow/policy-only changes.
+
+The fixes are uncommitted pending integration instructions. Cargo versions
+and existing tags are unchanged, and no further native run has been
+dispatched. The next Release trial needs a matching new source version/tag
+containing these fixes; native signing and Windows/macOS runtime acceptance
+are still pending.
+
+The owner subsequently approved committing/merging these dependency fixes,
+bumping package metadata and CLI version goldens to `0.1.2`, pushing main
+and a new `v0.1.2` tag, and starting one new Release trial. Validation stays
+scoped to the affected policy/packaging code and the CLI version test;
+existing tags are not moved.

@@ -114,7 +114,11 @@ jobs:
       - name: Install macOS OpenSSL
         if: matrix.os == 'macos'
         shell: bash
-        run: brew install openssl@3
+        run: |
+          brew install openssl@3
+          openssl_prefix="$(brew --prefix openssl@3)"
+          # openssl-sys otherwise prefers a preinstalled openssl@4.
+          printf 'OPENSSL_DIR=%s\n' "$openssl_prefix" >> "$GITHUB_ENV"
 
       - name: Verify native Windows Perl for vendored OpenSSL
         if: matrix.os == 'windows'

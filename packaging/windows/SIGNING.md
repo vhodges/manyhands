@@ -63,6 +63,10 @@ normal/delay imports, and rejects dynamic CRT or non-system DLL imports.
 modules must also exist in the native OS System directory; finding an
 arbitrary vendor DLL there does not make it an approved OS dependency.
 Unreviewed DLLs are not silently collected from the runner's PATH.
+Audit failures list every rejected import for the executable being checked,
+so additional missing contracts can be reviewed together. The DPI contract
+`api-ms-win-shcore-scaling-l1-1-1.dll` is an explicitly reviewed Windows
+Shcore forwarding alias, documented by Microsoft for `GetDpiForMonitor`.
 
 ## Signing and extracted verification
 
