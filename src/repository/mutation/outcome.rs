@@ -582,6 +582,22 @@ pub(crate) fn inspect_the_root_it_lies_in(root: &Path) -> Vec<RecoveryAction> {
         .collect()
 }
 
+/// The codes of a failure that passes by itself: a poll giving way, a lease
+/// another call holds, a remote or a network that could not be reached.
+macro_rules! passes_by_itself {
+    () => {
+        ResultCode::Busy
+            | ResultCode::PollYielding
+            | ResultCode::RemoteUnavailable
+            | ResultCode::TransportUnavailable
+    };
+}
+
+/// Whether `code` is of a failure that passes by itself.
+pub(crate) fn passes_by_itself(code: ResultCode) -> bool {
+    matches!(code, passes_by_itself!())
+}
+
 /// The action that asks for a new preview, on what its own request left.
 pub(crate) fn prepare_again() -> RecoveryAction {
     RecoveryAction::new(RecoveryActionKind::RequestPrepare, [])
@@ -743,7 +759,7 @@ fn recovery(
             .into_iter()
             .collect()
     };
-    let prepare_again = || vec![RecoveryAction::new(RecoveryActionKind::RequestPrepare, [])];
+    let prepare_anew = || vec![prepare_again()];
     let mut actions = match code {
         // A hand-off that is no operation's to owe: nothing is pending
         // under the request's operation ID, and any refresh brings the
@@ -783,7 +799,7 @@ fn recovery(
         // one.
         ResultCode::ConfirmationRequired
         | ResultCode::ConfirmationExpired
-        | ResultCode::ConfirmationNotFound => prepare_again(),
+        | ResultCode::ConfirmationNotFound => prepare_anew(),
         // A result that names no repository has none to inspect: it is
         // of a request of the application, as a key generation is. When
         // its record was left accepted, as that of a generation that was
@@ -837,7 +853,7 @@ fn recovery(
             retry,
             root,
         ) {
-            (true, false, _) => prepare_again(),
+            (true, false, _) => prepare_anew(),
             (true, true, Some(_)) => vec![at_root(RecoveryActionKind::RepoInspect)],
             (true, true, None) | (false, _, _) => Vec::new(),
         },
@@ -845,10 +861,7 @@ fn recovery(
         // either way the same request is the one to send. So it is for
         // a failure that passes by itself: a poll that is giving way, a
         // remote or a network that could not be reached.
-        ResultCode::Busy
-        | ResultCode::PollYielding
-        | ResultCode::RemoteUnavailable
-        | ResultCode::TransportUnavailable => retry_request(),
+        passes_by_itself!() => retry_request(),
         // The commit exists and the registry write failed: the same
         // request completes the registration.
         ResultCode::RegistrationPending => retry_request(),

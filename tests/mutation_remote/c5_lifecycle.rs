@@ -76,6 +76,16 @@ const BOTH: &[ssh_harness::Case] = both![
     "cache_loss_request" => cache_loss_request,
     "cache_loss_integrated" => cache_loss_integrated,
     "cache_loss_remote_gone" => cache_loss_remote_gone,
+    "busy_lease_on_reentry" => busy_lease_on_reentry,
+    "integrating_before_ref" => integrating_before_ref,
+    "integrating_after_ref" => integrating_after_ref,
+    "parent_unreadable_on_reentry" => parent_unreadable_on_reentry,
+    "parent_unreadable_after_stop" => parent_unreadable_after_stop,
+    "parent_unreadable_on_mismatch" => parent_unreadable_on_mismatch,
+    "external_refusal_with_record_accepted" => external_refusal_with_record_accepted,
+    "busy_with_a_standing_parent" => busy_with_a_standing_parent,
+    "poll_yielding_past_integration" => poll_yielding_past_integration,
+    "interrupted_by_a_changed_remote" => interrupted_by_a_changed_remote,
 ];
 
 const ONE: &[ssh_harness::Case] = &[
@@ -108,6 +118,10 @@ const ONE: &[ssh_harness::Case] = &[
     (
         "c5_lifecycle_cache_loss_checkpoint_close",
         cache_loss_checkpoint,
+    ),
+    (
+        "c5_lifecycle_busy_after_a_checkpoint_close",
+        busy_after_a_checkpoint,
     ),
 ];
 
@@ -1854,9 +1868,18 @@ fn child_remote_branch_deleted(verb: Verb) -> Result<(), FixtureError> {
         "{:?}",
         stopped.data
     );
-    assert_eq!(actions(&stopped), [RecoveryActionKind::RequestRetry]);
+    let offered = [
+        RecoveryActionKind::RequestRetry,
+        RecoveryActionKind::RepoInspect,
+    ];
+    assert_eq!(actions(&stopped), offered);
     assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     assert_eq!(parents(&w.db()?, verb)?, 1);
+    // The same request is refused the same way: the way out is Task 2c's walk.
+    let again = resent(&w.service, FIRST, verb, &w.root);
+    assert_eq!(again.code, ResultCode::RemoteBranchDeleted);
+    assert_eq!(actions(&again), offered);
+    assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     Ok(())
 }
 
@@ -1958,6 +1981,15 @@ fn deletion_host(verb: Verb) -> Result<(), FixtureError> {
         lifecycle_of(&stopped).ok_or(FixtureError)?.cleanup_pending,
         Some(LifecycleCleanupPendingReason::RemoteDeletionHost)
     );
+    fixed(w.service.approve_host_pin_for_testing(
+        &SshAuthority {
+            host: "127.0.0.1".into(),
+            port: w.server.address().port(),
+        },
+        &w.server.host_identity(),
+    ))?;
+    let done = resent(&w.service, FIRST, verb, &w.root);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
     Ok(())
 }
 
@@ -2215,7 +2247,11 @@ fn child_conflict() -> Result<(), FixtureError> {
         ]
     );
     let data = lifecycle_of(&stopped).ok_or(FixtureError)?;
-    assert!(!data.blockers.is_empty());
+    assert!(
+        data.blockers.contains(&LifecycleBlocker::ConflictPending),
+        "{:?}",
+        data.blockers
+    );
     assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     Ok(())
 }
@@ -2254,6 +2290,304 @@ fn comment_publication_pending() -> Result<(), FixtureError> {
         [LifecycleBlocker::CommentPublicationPending]
     );
     assert_eq!(prepare_actions(&preview), [RecoveryActionKind::RepoInspect]);
+    Ok(())
+}
+
+// The review's rows (R-23 onward).
+
+/// A request stopped before its context's synchronization, on a local world.
+fn local_stopped_at(
+    verb: Verb,
+    point: FailurePoint,
+) -> Result<(Local, Envelope<MutationDataDto>), FixtureError> {
+    let mut local = Local::holding(verb)?;
+    let confirmation = confirmation_of(&prepared(&local.service, verb, &local.root, verb.id()));
+    let failing = failing_service(&local_data(&local), point)?;
+    let stopped = called(
+        &failing,
+        FIRST,
+        Some(&confirmation),
+        verb.mutation(&local.root, verb.id()),
+    );
+    local.service = clean_service(&local_data(&local))?;
+    Ok((local, stopped))
+}
+
+/// R-27: a resend that finds the lease held by another call of the request, no
+/// parent yet: the record is left under that call, and the same request goes on.
+fn busy_lease_on_reentry(verb: Verb) -> Result<(), FixtureError> {
+    let (local, _, _) = accepted_with_no_parent(verb)?;
+    let held = fixed(RepositoryService::hold_lease_for_testing(
+        &local.root,
+        &local_data(&local),
+        LeaseKind::Repository,
+    ))?;
+    let busy = resent(&local.service, FIRST, verb, &local.root);
+    drop(held);
+    assert_eq!(busy.code, ResultCode::Busy, "{:?}", busy.data);
+    assert_eq!(actions(&busy), [RecoveryActionKind::RequestRetry]);
+    assert_eq!(local_state(&local, FIRST), Some(RequestState::Accepted));
+    assert_eq!(parents(&local.db()?, verb)?, 0);
+    let done = resent(&local.service, FIRST, verb, &local.root);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    Ok(())
+}
+
+/// R-25: stopped with its merge commit named and the ref not moved: no effect
+/// yet, and one merge after the resend.
+fn integrating_before_ref(verb: Verb) -> Result<(), FixtureError> {
+    let (local, stopped) = local_stopped_at(verb, FailurePoint::BeforeIntegrationRef)?;
+    assert_eq!(stopped.effects.integration, IntegrationEffect::NotRequested);
+    let mismatch = called(
+        &local.service,
+        FIRST,
+        None,
+        other_verb_mutation(verb, &local.root),
+    );
+    assert_eq!(
+        mismatch.effects.integration,
+        IntegrationEffect::NotRequested
+    );
+    assert_eq!(mismatch.effects.commit_oid, None);
+    let done = resent(&local.service, FIRST, verb, &local.root);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(merges_on_primary(&local.repo()?)?, 1);
+    Ok(())
+}
+
+/// R-25: a kill between the ref and the record: the step says `integrating`,
+/// primary holds the merge, and the effect is reported. One merge.
+fn integrating_after_ref(verb: Verb) -> Result<(), FixtureError> {
+    let (local, _) = local_stopped_at(verb, FailurePoint::AfterIntegrationRef)?;
+    let main = fixed(local.repo()?.refname_to_id(MAIN))?;
+    assert_eq!(merges_on_primary(&local.repo()?)?, 1);
+    let mismatch = called(
+        &local.service,
+        FIRST,
+        None,
+        other_verb_mutation(verb, &local.root),
+    );
+    assert_eq!(mismatch.outcome, Outcome::Partial);
+    assert_eq!(mismatch.effects.integration, IntegrationEffect::Complete);
+    assert_eq!(mismatch.effects.commit_oid, Some(main.to_string()));
+    let done = resent(&local.service, FIRST, verb, &local.root);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(fixed(local.repo()?.refname_to_id(MAIN))?, main);
+    assert_eq!(merges_on_primary(&local.repo()?)?, 1);
+    Ok(())
+}
+
+/// The registry's bytes, with its log written through.
+fn registry_image(data: &Path) -> Vec<u8> {
+    let db = rusqlite::Connection::open(data.join(REGISTRY_FILE)).expect("the registry");
+    let _: i64 = db
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| row.get(0))
+        .expect("a checkpoint");
+    drop(db);
+    std::fs::read(data.join(REGISTRY_FILE)).expect("the registry's bytes")
+}
+
+/// Makes the verb's parent table unreadable, as a damaged registry would. A
+/// rename rewrites what the schema check compares, so only the image restores.
+fn hide_parents(data: &Path, verb: Verb) {
+    rusqlite::Connection::open(data.join(REGISTRY_FILE))
+        .expect("the registry")
+        .execute(
+            &format!("ALTER TABLE {0} RENAME TO {0}_hidden", table(verb)),
+            [],
+        )
+        .expect("a hidden table");
+}
+
+fn restore_registry(data: &Path, image: &[u8]) {
+    registry_image(data);
+    std::fs::write(data.join(REGISTRY_FILE), image).expect("the registry restored");
+}
+
+/// `row`'s `Err` arm: nothing can be said, so the record is left.
+fn parent_unreadable_on_reentry(verb: Verb) -> Result<(), FixtureError> {
+    let (local, _) = local_stopped_at(verb, FailurePoint::AfterConfirmed)?;
+    let data = local_data(&local);
+    let image = registry_image(&data);
+    hide_parents(&data, verb);
+    let answer = resent(&local.service, FIRST, verb, &local.root);
+    assert_ne!(answer.code, ResultCode::Ok);
+    assert_eq!(answer.effects, Effects::not_requested());
+    assert_eq!(local_state(&local, FIRST), Some(RequestState::Accepted));
+    restore_registry(&data, &image);
+    let done = resent(&local.service, FIRST, verb, &local.root);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    Ok(())
+}
+
+/// `stopped()`'s `Err` arm: the parent becomes unreadable once `row` has read
+/// it, and the call that fails on that cannot read what it left.
+fn parent_unreadable_after_stop(verb: Verb) -> Result<(), FixtureError> {
+    let (local, _) = local_stopped_at(verb, FailurePoint::AfterConfirmed)?;
+    let data = local_data(&local);
+    let image = registry_image(&data);
+    let hidden = data.clone();
+    local
+        .service
+        .set_request_hook_for_testing(move || hide_parents(&hidden, verb));
+    let answer = resent(&local.service, FIRST, verb, &local.root);
+    assert_ne!(answer.code, ResultCode::Ok);
+    assert_eq!(answer.effects, Effects::not_requested());
+    assert_eq!(local_state(&local, FIRST), Some(RequestState::Accepted));
+    restore_registry(&data, &image);
+    let done = resent(&local.service, FIRST, verb, &local.root);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    Ok(())
+}
+
+/// `recorded_effects`' `Err` arm: nothing is claimed.
+fn parent_unreadable_on_mismatch(verb: Verb) -> Result<(), FixtureError> {
+    let (local, _) = local_stopped_at(verb, FailurePoint::AfterIntegrationRef)?;
+    let data = local_data(&local);
+    hide_parents(&data, verb);
+    let mismatch = called(
+        &local.service,
+        FIRST,
+        None,
+        other_verb_mutation(verb, &local.root),
+    );
+    assert_eq!(mismatch.code, ResultCode::RequestMismatch);
+    assert_eq!(mismatch.effects, Effects::not_requested());
+    Ok(())
+}
+
+/// A consent refusal whose result was lost: the stored refusal.
+fn external_refusal_with_record_accepted(verb: Verb) -> Result<(), FixtureError> {
+    let mut local = Local::holding(verb)?;
+    let confirmation = confirmation_of(&prepared(&local.service, verb, &local.root, verb.id()));
+    let failing = failing_service(&local_data(&local), FailurePoint::BeforeRequestSettlement)?;
+    let root = local.root.clone();
+    failing.set_request_hook_for_testing(move || {
+        edit_context(verb, &root).expect("an edited context");
+    });
+    called(
+        &failing,
+        FIRST,
+        Some(&confirmation),
+        verb.mutation(&local.root, verb.id()),
+    );
+    local.service = clean_service(&local_data(&local))?;
+    assert_eq!(local_state(&local, FIRST), Some(RequestState::Accepted));
+    let refused = resent(&local.service, FIRST, verb, &local.root);
+    assert_eq!(refused.code, ResultCode::ExternalChange);
+    assert_eq!(actions(&refused), [RecoveryActionKind::RequestPrepare]);
+    assert_eq!(local_state(&local, FIRST), Some(RequestState::Finished));
+    Ok(())
+}
+
+/// `busy` with a standing parent, before anything durable.
+fn busy_with_a_standing_parent(verb: Verb) -> Result<(), FixtureError> {
+    let (local, _) = local_stopped_at(verb, FailurePoint::AfterContextSync)?;
+    let held = fixed(RepositoryService::hold_lease_for_testing(
+        &local.root,
+        &local_data(&local),
+        LeaseKind::Repository,
+    ))?;
+    let busy = resent(&local.service, FIRST, verb, &local.root);
+    drop(held);
+    assert_eq!(busy.code, ResultCode::Busy, "{:?}", busy.data);
+    assert_ne!(busy.outcome, Outcome::Partial);
+    assert_eq!(actions(&busy), [RecoveryActionKind::RequestRetry]);
+    assert_eq!(local_state(&local, FIRST), Some(RequestState::Accepted));
+    let done = resent(&local.service, FIRST, verb, &local.root);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    Ok(())
+}
+
+/// `busy` after a written checkpoint: exit 4's outcome.
+fn busy_after_a_checkpoint() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let (local, _) = local_stopped_at(verb, FailurePoint::AfterClosureCheckpoint)?;
+    let held = fixed(RepositoryService::hold_lease_for_testing(
+        &local.root,
+        &local_data(&local),
+        LeaseKind::Repository,
+    ))?;
+    let busy = resent(&local.service, FIRST, verb, &local.root);
+    drop(held);
+    assert_eq!(busy.code, ResultCode::Busy, "{:?}", busy.data);
+    assert_eq!(busy.outcome, Outcome::Partial);
+    assert_eq!(busy.effects.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(actions(&busy), [RecoveryActionKind::RequestRetry]);
+    Ok(())
+}
+
+/// `poll_yielding` with a standing parent past integration: exit 4's outcome.
+fn poll_yielding_past_integration(verb: Verb) -> Result<(), FixtureError> {
+    let mut w = remote(verb)?;
+    stopped_at(&mut w, verb, FailurePoint::AfterIntegrationRef)?;
+    fixed(w.service.set_remote_polling(
+        &w.root,
+        true,
+        false,
+        PollingInterval::from_seconds(120).unwrap(),
+    ))?;
+    let second = clean_service(&w.data())?;
+    let gate = w.server.hold_advertisement()?;
+    let root = w.root.clone();
+    let yielded = std::thread::scope(|scope| -> Result<_, FixtureError> {
+        let worker = scope.spawn(|| {
+            w.service.poll_publication_remote(
+                PollPublicationRemoteRequest {
+                    root,
+                    operation_id: OperationId::new(),
+                    invocation: RemotePollInvocation::Automatic,
+                    approval: None,
+                    restart: false,
+                },
+                &mut SessionCredentials::new(Provider),
+            )
+        });
+        gate.wait_until_held()?;
+        let yielded = resent(&second, FIRST, verb, &w.root);
+        gate.release()?;
+        let _ = fixed(worker.join())?;
+        Ok(yielded)
+    })?;
+    assert_eq!(yielded.code, ResultCode::PollYielding, "{:?}", yielded.data);
+    assert_eq!(yielded.outcome, Outcome::Partial);
+    assert_eq!(actions(&yielded), [RecoveryActionKind::RequestRetry]);
+    assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
+    let done = resent(&w.service, FIRST, verb, &w.root);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    Ok(())
+}
+
+/// `Interrupted` with no cancellation: the remote the record began with is no
+/// longer the one configured. With it put back, the same request goes on.
+fn interrupted_by_a_changed_remote(verb: Verb) -> Result<(), FixtureError> {
+    let mut w = remote(verb)?;
+    stopped_at(&mut w, verb, FailurePoint::AfterConfirmed)?;
+    let path = w.root.join(".manyhands/config.toml");
+    let source = fixed(std::fs::read_to_string(&path))?;
+    fixed(std::fs::write(
+        &path,
+        source.replace("publication_remote = \"origin\"\n", ""),
+    ))?;
+    let stopped = resent(&w.service, FIRST, verb, &w.root);
+    fixed(std::fs::write(&path, &source))?;
+    assert_eq!(
+        stopped.code,
+        ResultCode::RecoveryRequired,
+        "{:?}",
+        stopped.data
+    );
+    assert_ne!(stopped.outcome, Outcome::Partial);
+    assert_eq!(
+        actions(&stopped),
+        [
+            RecoveryActionKind::RequestRetry,
+            RecoveryActionKind::RepoInspect
+        ]
+    );
+    assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
+    let done = resent(&w.service, FIRST, verb, &w.root);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
     Ok(())
 }
 

@@ -12,9 +12,10 @@
 //! approval and no confirmed identity (decision 6). What is left of the
 //! request is read from the parent record, not the journal, because a parent
 //! usually has no journal row (fact 29): no parent, the request is deleted and
-//! a new prepare follows; a parent a consent refusal ended or a complete or
-//! superseded one, the result is stored; an unfinished one, the request stays
-//! accepted, and never `Stopped{Absent}`.
+//! a new prepare follows, unless a call entered again met a failure that
+//! passes by itself; a parent a consent refusal ended or a superseded one
+//! answers from what it holds, and that is stored; a complete one, or one
+//! unfinished, leaves the request accepted, and never `Stopped{Absent}`.
 //!
 //! **Entered again,** `Confirmed::row` reads the same record (R-19). An
 //! unfinished or complete parent is called again with the record's own
@@ -796,11 +797,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         // a host category carries no authority to approve.
         let recovery: Vec<RecoveryAction> = match code {
             ResultCode::DiscoveryPending => vec![outcome::same_request(accepted.request_id)],
-            ResultCode::HostApprovalRequired => {
-                let mut actions = vec![outcome::same_request(accepted.request_id)];
-                actions.extend(outcome::inspect_the_root_it_lies_in(&accepted.root()));
-                actions
-            }
+            ResultCode::HostApprovalRequired => retry_then_inspect(accepted),
             _ => Vec::new(),
         };
         Ran {
@@ -819,23 +816,89 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         }
     }
 
+    /// The data of an answer that names what stands in the way.
+    fn blocked_data(&self, blockers: Vec<LifecycleBlocker>) -> MutationDataDto {
+        MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
+            blockers,
+            ..self.data()
+        }))
+    }
+
     /// The answer to an operation that stopped. What it left is the parent's
-    /// to say: it is read after the call.
-    fn stopped(&self, service: &RepositoryService, accepted: &Accepted, stop: Stop) -> Ran {
+    /// to say: it is read after the call, and another call of the request may
+    /// have moved it since this one's stop (R-23).
+    fn stopped(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        stop: Stop,
+        entered_again: bool,
+    ) -> Ran {
         let root = accepted.root();
-        let parent = V::parent(service, &root, accepted.operation_id);
+        let primary = accepted.position.base_ref.as_deref();
+        let parent = match V::parent(service, &root, accepted.operation_id) {
+            // Nothing can be said of what it left: the record is left.
+            Err(_) => {
+                return Ran {
+                    answer: Answer::stopped(stop_answer(&stop).0),
+                    standing: Standing::Stopped { journal: None },
+                };
+            }
+            Ok(parent) => parent,
+        };
         let (code, blockers, offers_nothing) = stop_answer(&stop);
-        let stands = matches!(&parent, Ok(Some(view)) if !ended(view));
+        let Some(view) = parent else {
+            // A call entered again may be meeting the call it came after,
+            // which has yet to begin its record: the record is that call's
+            // too, and is not deleted under it (R-27).
+            let (recovery, standing) = if entered_again && outcome::passes_by_itself(code) {
+                (Vec::new(), Standing::Owed)
+            } else {
+                (
+                    no_parent_recovery(code),
+                    Standing::Stopped {
+                        journal: Some(JournalRow::Absent),
+                    },
+                )
+            };
+            return Ran {
+                answer: Answer {
+                    recovery,
+                    data: blockers.map(|blockers| self.blocked_data(blockers)),
+                    offers_nothing,
+                    ..Answer::stopped(code)
+                },
+                standing,
+            };
+        };
+        if let Some(answer) = self.ended_answer(service, &root, primary, &view) {
+            return Ran {
+                answer,
+                standing: Standing::Final,
+            };
+        }
+        let effects = parent_effects::<V>(service, &root, primary, &view);
+        // This call's stop is not the request's last word: the next call gets
+        // the outcome the parent stored.
+        if view.step == ParentStep::Complete {
+            return Ran {
+                answer: Answer {
+                    effects,
+                    recovery: vec![outcome::same_request(accepted.request_id)],
+                    ..Answer::stopped(code)
+                },
+                standing: Standing::Owed,
+            };
+        }
         // A refused merge, a child's conflict: the state is the repository's
         // to name, and a preview reads it with nothing changed.
-        let names_its_state = stands
-            && match &stop {
-                Stop::RecoveryRequired => true,
-                Stop::ContextSynchronization(error) => {
-                    outcome::synchronization_error_code(error) == ResultCode::RecoveryRequired
-                }
-                _ => false,
-            };
+        let names_its_state = match &stop {
+            Stop::RecoveryRequired => true,
+            Stop::ContextSynchronization(error) => {
+                outcome::synchronization_error_code(error) == ResultCode::RecoveryRequired
+            }
+            _ => false,
+        };
         let blockers = match (blockers, names_its_state) {
             (Some(blockers), _) => Some(blockers),
             (None, true) => match V::observe(service, &root, &self.id) {
@@ -844,41 +907,10 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             },
             (None, false) => None,
         };
-        let (effects, recovery, standing) = match &parent {
-            // Nothing can be said of what it left: the record is left.
-            Err(_) => (
-                Effects::not_requested(),
-                Vec::new(),
-                Standing::Stopped { journal: None },
-            ),
-            Ok(None) => (
-                Effects::not_requested(),
-                no_parent_recovery(code),
-                Standing::Stopped {
-                    journal: Some(JournalRow::Absent),
-                },
-            ),
-            Ok(Some(view)) => (
-                parent_effects::<V>(service, &root, view),
-                if stands {
-                    standing_recovery(code, accepted)
-                } else {
-                    Vec::new()
-                },
-                if stands {
-                    Standing::Owed
-                } else {
-                    Standing::Final
-                },
-            ),
-        };
         let data = blockers.map(|blockers| {
-            let checkpoint = parent
-                .as_ref()
-                .ok()
-                .and_then(Option::as_ref)
-                .filter(|_| effects.checkpoint == CheckpointEffect::Committed)
-                .and_then(|view| view.checkpoint);
+            let checkpoint = view
+                .checkpoint
+                .filter(|_| effects.checkpoint == CheckpointEffect::Committed);
             MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
                 blockers,
                 recording: checkpoint.map(|_| LifecycleRecording::Record),
@@ -890,16 +922,16 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             answer: Answer {
                 effects,
                 data,
-                recovery,
+                recovery: standing_recovery(code, accepted),
                 offers_nothing,
                 ..Answer::stopped(code)
             },
-            standing,
+            standing: Standing::Owed,
         }
     }
 
     /// The one domain call, under the request's operation ID.
-    fn call(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
+    fn call(&self, call: &CallContext<'_>, accepted: &Accepted, entered_again: bool) -> Ran {
         let called = self.expected.and_then(|expected| {
             V::call(
                 call.session,
@@ -912,7 +944,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         });
         match called {
             Some(Ok(reached)) => self.reached(accepted, &reached),
-            Some(Err(stop)) => self.stopped(call.service, accepted, stop),
+            Some(Err(stop)) => self.stopped(call.service, accepted, stop, entered_again),
             // No consent was observed, or the session has no credentials:
             // nothing was called, and the record is left as it is.
             None => Ran {
@@ -934,12 +966,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         if names_no_item(service, root, &self.id, &blockers) {
             return Answer::stopped(ResultCode::ItemNotFound);
         }
-        Answer::stopped(blocked_code(&blockers)).with_data(MutationDataDto::Lifecycle(Box::new(
-            LifecycleMutationDto {
-                blockers,
-                ..self.data()
-            },
-        )))
+        Answer::stopped(blocked_code(&blockers)).with_data(self.blocked_data(blockers))
     }
 
     /// A parent that has ended answers its request from what it holds.
@@ -947,17 +974,19 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         &self,
         service: &RepositoryService,
         root: &Path,
+        primary: Option<&str>,
         parent: &ParentView<LifecycleBlocker>,
     ) -> Option<Answer> {
-        let effects = parent_effects::<V>(service, root, parent);
+        let effects = parent_effects::<V>(service, root, primary, parent);
         let answer = match &parent.refusal {
-            Some(Refusal::Blocked(blockers)) => Answer::stopped(blocked_code(blockers)).with_data(
-                MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
-                    blockers: blockers.clone(),
-                    ..self.data()
-                })),
-            ),
+            Some(Refusal::Blocked(blockers)) => Answer::stopped(blocked_code(blockers))
+                .with_data(self.blocked_data(blockers.clone())),
             Some(Refusal::ExternalChange | Refusal::ReconfirmationRequired) => {
+                Answer::stopped(ResultCode::ExternalChange)
+            }
+            // The record's own check makes this unreachable: a parent that
+            // says it was abandoned is not run, whatever it holds.
+            None if parent.step == ParentStep::Abandoned => {
                 Answer::stopped(ResultCode::ExternalChange)
             }
             None if parent.step == ParentStep::Superseded => Answer {
@@ -1028,12 +1057,8 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
         if let Observed::Blocked(blockers) = &observed
             && matches!(blockers.as_slice(), [LifecycleBlocker::IdentityRequired])
         {
-            return Err(Answer::stopped(ResultCode::IdentityRequired).with_data(
-                MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
-                    blockers: blockers.clone(),
-                    ..self.data()
-                })),
-            ));
+            return Err(Answer::stopped(ResultCode::IdentityRequired)
+                .with_data(self.blocked_data(blockers.clone())));
         }
         let configuration =
             match read_configuration_for(&root, RepositoryOperation::RepositorySnapshot)
@@ -1062,7 +1087,7 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
     }
 
     fn run(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
-        self.call(call, accepted)
+        self.call(call, accepted, false)
     }
 
     fn reenter(
@@ -1079,7 +1104,7 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
     }
 
     fn rerun(&self, call: &CallContext<'_>, accepted: &Accepted, _entered: &Entered) -> Ran {
-        self.call(call, accepted)
+        self.call(call, accepted, true)
     }
 }
 
@@ -1188,9 +1213,9 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
         })
     }
 
-    /// The parent record says where the request stands; see the table in
-    /// the module's comment. A parent that goes on is called with the
-    /// expectation it was begun with, not one read now.
+    /// The parent record says where the request stands, as the module's
+    /// comment says. A parent that goes on is called with the expectation it
+    /// was begun with, not one read now.
     fn row(&mut self, call: &CallContext<'_>, accepted: &Accepted, _journal: &JournalRow) -> Row {
         let root = accepted.root();
         let parent = match V::parent(call.service, &root, accepted.operation_id) {
@@ -1203,7 +1228,8 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
                 });
             }
         };
-        if let Some(answer) = self.ended_answer(call.service, &root, &parent) {
+        let primary = accepted.position.base_ref.as_deref();
+        if let Some(answer) = self.ended_answer(call.service, &root, primary, &parent) {
             return Row::answers(Ran {
                 answer,
                 standing: Standing::Final,
@@ -1250,64 +1276,68 @@ pub(super) fn recorded_effects<V: LifecycleVerb>(
 ) -> Effects {
     let root = accepted.root();
     match V::parent(service, &root, accepted.operation_id) {
-        Ok(Some(parent)) => parent_effects::<V>(service, &root, &parent),
+        Ok(Some(parent)) => parent_effects::<V>(
+            service,
+            &root,
+            accepted.position.base_ref.as_deref(),
+            &parent,
+        ),
         Ok(None) | Err(_) => Effects::not_requested(),
     }
 }
 
-/// Whether a parent has ended, so that its request's answer is final: refused,
-/// superseded or complete.
-fn ended(parent: &ParentView<LifecycleBlocker>) -> bool {
-    parent.refusal.is_some()
-        || matches!(
-            parent.step,
-            ParentStep::Abandoned | ParentStep::Superseded | ParentStep::Complete
-        )
-}
-
 /// The effects a parent shows, read from its step: a commit named by the
-/// record is not yet an effect (fact 41). A superseded parent had reached
-/// cleanup, and only that is ever superseded.
+/// record is not yet an effect (fact 41), until primary holds it, which a kill
+/// between the ref and the record leaves at `integrating`. A superseded parent
+/// had reached cleanup, and only that is ever superseded.
 fn parent_effects<V: LifecycleVerb>(
     service: &RepositoryService,
     root: &Path,
+    primary: Option<&str>,
     parent: &ParentView<LifecycleBlocker>,
 ) -> Effects {
-    let integrated = matches!(
-        parent.step,
+    let integrated = match parent.step {
         ParentStep::Integrated
-            | ParentStep::Published
-            | ParentStep::PublicationPending
-            | ParentStep::RemoteDeleted
-            | ParentStep::WorktreeRemoving
-            | ParentStep::WorktreeRemoved
-            | ParentStep::BranchDeleted
-            | ParentStep::Complete
-            | ParentStep::Superseded
-    );
+        | ParentStep::Published
+        | ParentStep::PublicationPending
+        | ParentStep::RemoteDeleted
+        | ParentStep::WorktreeRemoving
+        | ParentStep::WorktreeRemoved
+        | ParentStep::BranchDeleted
+        | ParentStep::Complete
+        | ParentStep::Superseded => true,
+        ParentStep::Integrating => parent
+            .integration
+            .is_some_and(|commit| evidence::still_reachable(root, primary, commit)),
+        ParentStep::Confirmed | ParentStep::ContextSynchronized | ParentStep::Abandoned => false,
+    };
     // A checkpoint is written once the context's branch holds it, or primary
-    // once that branch is gone.
+    // once that branch is gone: never whatever is checked out.
     let branch = context_names(root, &V::KIND, &parent.item_id.to_string()).branch_ref;
-    let checkpointed = parent
+    let branch_stands = git2::Repository::open(root)
+        .is_ok_and(|repository| repository.refname_to_id(&branch).is_ok());
+    let holder = if branch_stands {
+        Some(branch.as_str())
+    } else {
+        primary
+    };
+    let checkpoint = if parent
         .checkpoint
-        .is_some_and(|commit| evidence::still_reachable(root, Some(&branch), commit));
+        .is_some_and(|commit| evidence::still_reachable(root, holder, commit))
+    {
+        CheckpointEffect::Committed
+    } else {
+        CheckpointEffect::NotRequested
+    };
     if !integrated {
         return Effects {
-            checkpoint: if checkpointed {
-                CheckpointEffect::Committed
-            } else {
-                CheckpointEffect::NotRequested
-            },
+            checkpoint,
             ..Effects::not_requested()
         };
     }
     Effects {
         write: WriteEffect::NotRequested,
-        checkpoint: if checkpointed {
-            CheckpointEffect::Committed
-        } else {
-            CheckpointEffect::NotRequested
-        },
+        checkpoint,
         discovery: if service
             .repository_snapshot(root)
             .is_ok_and(|snapshot| !snapshot.refresh_required)
@@ -1356,30 +1386,35 @@ fn stop_answer(stop: &Stop) -> (ResultCode, Option<Vec<LifecycleBlocker>>, bool)
 }
 
 /// With no parent the request is deleted, so a code whose own action is to
-/// send it again offers a new preview: the design's first row of the standing
-/// table, "whatever its code". Any other code's action stands.
+/// send it again offers a new preview. Any other code's action stands, and
+/// `internal_error` has none (R-28).
 fn no_parent_recovery(code: ResultCode) -> Vec<RecoveryAction> {
-    match code {
-        ResultCode::Busy
-        | ResultCode::PollYielding
-        | ResultCode::RemoteUnavailable
-        | ResultCode::TransportUnavailable => vec![outcome::prepare_again()],
-        _ => Vec::new(),
+    if outcome::passes_by_itself(code) {
+        vec![outcome::prepare_again()]
+    } else {
+        Vec::new()
     }
 }
 
-/// What a code would offer wrongly while a parent stands: a host stop carries
-/// no authority to approve, and a child's branch deleted at the remote is the
-/// child's reservation and not the request's to cancel, so the request is what
-/// is offered. Every other code's own actions follow the same request.
+fn retry_then_inspect(accepted: &Accepted) -> Vec<RecoveryAction> {
+    let mut actions = vec![outcome::same_request(accepted.request_id)];
+    actions.extend(outcome::inspect_the_root_it_lies_in(&accepted.root()));
+    actions
+}
+
+/// What a code would offer wrongly while a parent stands. A host stop carries
+/// no authority to approve. A child's `remote_branch_deleted` or
+/// `merge_required` holds the child's reservation, not the request's, so its
+/// `request.cancel` would be dropped: the request is offered, and the repository
+/// is what shows what happened to the branch. The same request does not get
+/// past either alone; the way out is Task 2c's to walk (R-24). Every other
+/// code's own actions follow the same request.
 fn standing_recovery(code: ResultCode, accepted: &Accepted) -> Vec<RecoveryAction> {
     match code {
         ResultCode::HostApprovalRequired | ResultCode::HostReplacementRequired => {
-            let mut actions = vec![outcome::same_request(accepted.request_id)];
-            actions.extend(outcome::inspect_the_root_it_lies_in(&accepted.root()));
-            actions
+            retry_then_inspect(accepted)
         }
-        _ if outcome::never_gets_past(code) => vec![outcome::same_request(accepted.request_id)],
+        _ if outcome::never_gets_past(code) => retry_then_inspect(accepted),
         _ => Vec::new(),
     }
 }
@@ -1572,5 +1607,171 @@ mod tests {
             );
         }
         assert!(no_parent_recovery(ResultCode::RecoveryRequired).is_empty());
+        assert!(no_parent_recovery(ResultCode::InternalError).is_empty());
+    }
+
+    /// A verb whose parent is what the test says it is.
+    struct Fixed;
+
+    thread_local! {
+        static PARENT: std::cell::RefCell<Option<ParentView<LifecycleBlocker>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    impl LifecycleVerb for Fixed {
+        const COMMAND: Command = Command::TicketClose;
+        const KIND: AuthoringKind = AuthoringKind::Ticket;
+        const DTO_KIND: ItemDtoKind = ItemDtoKind::Ticket;
+
+        fn observe(
+            _service: &RepositoryService,
+            _root: &Path,
+            _id: &ItemId,
+        ) -> Result<Observed, RepositoryError> {
+            Ok(Observed::Blocked(Vec::new()))
+        }
+
+        fn call(
+            _session: &dyn Session,
+            _service: &RepositoryService,
+            _root: PathBuf,
+            _operation_id: OperationId,
+            _item_id: ItemId,
+            _expected: [u8; 32],
+        ) -> Option<Result<Reached, Stop>> {
+            None
+        }
+
+        fn parent(
+            _service: &RepositoryService,
+            _root: &Path,
+            _operation: OperationId,
+        ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError> {
+            Ok(PARENT.with(|parent| parent.borrow_mut().take()))
+        }
+    }
+
+    const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+
+    /// What `stopped` answers `stop` with, the parent being at `step`.
+    fn stopped_with(
+        step: ParentStep,
+        refusal: Option<Refusal<LifecycleBlocker>>,
+        stop: Stop,
+    ) -> Ran {
+        let id: ItemId = ITEM.parse().unwrap();
+        PARENT.with(|parent| {
+            *parent.borrow_mut() = Some(ParentView {
+                step,
+                refusal,
+                expectation: [0; 32],
+                item_id: id.clone(),
+                checkpoint: None,
+                integration: None,
+                publication: None,
+            });
+        });
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let binding = LifecycleBinding::<Fixed> {
+            root: PathBuf::from("/nowhere"),
+            id,
+            expected: None,
+            verb: PhantomData,
+        };
+        binding.stopped(&service, &accepted(), stop, true)
+    }
+
+    fn accepted() -> Accepted {
+        Accepted {
+            request_id: crate::repository::mutation::identity::RequestId::new(),
+            attempt: 1,
+            scope: crate::repository::mutation::identity::ScopeKey::application(),
+            family: Some(OperationFamily::Remote),
+            operation_id: OperationId::new(),
+            position: Position {
+                base_ref: None,
+                base_oid: None,
+            },
+            expected: None,
+        }
+    }
+
+    /// R-23: a stop is not stored because the parent has since completed.
+    #[test]
+    fn a_stop_of_a_complete_parent_leaves_the_record_for_its_stored_outcome() {
+        let ran = stopped_with(ParentStep::Complete, None, Stop::Busy);
+        assert_eq!(ran.answer.code, ResultCode::Busy);
+        assert!(matches!(ran.standing, Standing::Owed));
+        assert_eq!(ran.answer.recovery.len(), 1);
+        assert_eq!(
+            ran.answer.recovery[0].action,
+            crate::results::RecoveryActionKind::RequestRetry
+        );
+    }
+
+    /// R-23: a stop of a superseded parent answers as the parent does.
+    #[test]
+    fn a_stop_of_a_superseded_parent_is_its_request_mismatch() {
+        let ran = stopped_with(ParentStep::Superseded, None, Stop::Busy);
+        assert_eq!(ran.answer.code, ResultCode::RequestMismatch);
+        assert!(ran.answer.offers_nothing);
+        assert!(matches!(ran.standing, Standing::Final));
+    }
+
+    /// R-23: a stop of a refused parent answers with the stored refusal.
+    #[test]
+    fn a_stop_of_a_refused_parent_is_its_refusal() {
+        let ran = stopped_with(
+            ParentStep::Abandoned,
+            Some(Refusal::Blocked(vec![LifecycleBlocker::PrimaryDirty])),
+            Stop::Busy,
+        );
+        assert_eq!(ran.answer.code, ResultCode::RecoveryRequired);
+        assert!(matches!(ran.standing, Standing::Final));
+    }
+
+    /// R-28: `ended_answer` answers whatever `abandoned` holds: it is not run.
+    #[test]
+    fn an_abandoned_parent_with_no_refusal_is_answered() {
+        let ran = stopped_with(ParentStep::Abandoned, None, Stop::Busy);
+        assert_eq!(ran.answer.code, ResultCode::ExternalChange);
+        assert!(matches!(ran.standing, Standing::Final));
+    }
+
+    /// R-24: `merge_required` is told only to a caller set to refuse
+    /// divergence, and the bindings merge, so this is the row that can be had.
+    #[test]
+    fn a_childs_way_past_needs_the_request_and_a_look_at_the_repository() {
+        for code in [ResultCode::MergeRequired, ResultCode::RemoteBranchDeleted] {
+            let offered = standing_recovery(code, &accepted());
+            assert_eq!(
+                offered[0].action,
+                crate::results::RecoveryActionKind::RequestRetry,
+                "{code:?}"
+            );
+        }
+    }
+
+    /// R-27: on a re-entry a transient code with no parent leaves the record.
+    #[test]
+    fn a_transient_stop_entered_again_with_no_parent_leaves_the_record() {
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let binding = LifecycleBinding::<Fixed> {
+            root: PathBuf::from("/nowhere"),
+            id: ITEM.parse().unwrap(),
+            expected: None,
+            verb: PhantomData,
+        };
+        let again = binding.stopped(&service, &accepted(), Stop::Busy, true);
+        assert!(matches!(again.standing, Standing::Owed));
+        let first = binding.stopped(&service, &accepted(), Stop::Busy, false);
+        assert!(matches!(
+            first.standing,
+            Standing::Stopped {
+                journal: Some(JournalRow::Absent)
+            }
+        ));
     }
 }

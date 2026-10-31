@@ -353,3 +353,27 @@ No schema enum and no desktop file changed, so `--test read_contract` and the de
 **Deviation from the task's file list.** Seven names in `tests/support/mutation_golden.rs`, as Global Constraints allow.
 
 **Left.** Task 2c: cancellation, including `Interrupted` as `cancelled`. Task 3: resume. Task 4: made-ready. Task 6: identity rows. Task 7: the human lines.
+
+#### Task 2b review fixes (controller's rulings)
+
+The design's Rulings table holds R-23 to R-28, and its standing and answers sections are amended to match.
+
+- **R-23, a stale final answer.** `stopped()` no longer stores a stop's code because the parent reads as ended afterwards. Refused or superseded answers from `ended_answer`, `Final`. Complete is `Owed`, offering `request.retry`, and the next call gets the stored outcome.
+- **R-24, a child's `remote_branch_deleted` and `merge_required`.** They offer `request.retry`, then `repo.inspect`. **Task 2c owes the walk of the way out (cancel, republish, retry) to a finish, and if it cannot finish, that stops for the owner there.** The row now resends once, and the same request is refused the same way. `merge_required` is a unit row only, because `synchronization_error_code` says the bindings merge and none is answered with it.
+- **R-25, a kill between the ref and the record.** `parent_effects` at `Integrating` asks whether primary holds `integration_oid`. Rows at `BeforeIntegrationRef` and `AfterIntegrationRef`, each counting one merge.
+- **R-26, the checkpoint's holder.** It is the context's branch, or primary once the branch is gone, and no longer depends on `HEAD`.
+- **R-27, finding 5: the race is real.** `coordination::repository_lease` fails with `RepositoryBusy`, the preflight's `?` keeps it a repository error, and `repository_error_code` makes it `busy`. Against the code as it stood, `busy_lease_on_reentry` answered `busy` and offered `request.prepare`, with the record deleted under the other call. A re-entered call with no parent and a code that passes by itself now leaves the record and offers `request.retry`. A first call still deletes its own.
+- **R-28.** With no parent, `internal_error` offers nothing. `ended_answer` is the one test of an ended parent, and `ended` is gone: `Abandoned` with no refusal answers `external_change` and is not run.
+- **Quality.** `outcome.rs` has one `prepare_again` and one list of codes that pass by themselves (`passes_by_itself!`), which `no_parent_recovery` uses. `blocked_data` and `retry_then_inspect` are extracted, `parent_effects` computes `checkpoint` once, and `row`'s comment is corrected. `child_conflict` asserts `conflict_pending`.
+
+**Added rows.** `busy_lease_on_reentry`, `integrating_before_ref`, `integrating_after_ref`, the three `parent_unreadable_*`, `external_refusal_with_record_accepted`, `busy_with_a_standing_parent`, `busy_after_a_checkpoint` (exit 4's outcome), `poll_yielding_past_integration` (exit 4's outcome), `interrupted_by_a_changed_remote`, and `deletion_host` continuing after approval.
+
+**Deviations.**
+
+- **The concurrent-retry row is not end to end, against the ruling's wording.** No public seam gives a stop after another call completes the parent. The request hook runs before the domain, whose first read returns a stored `Complete`. Failure points take no hook. The observation hook, tried in a row, fires in the call's own refresh, after it has finished, and that call answered `ok`, so the row was removed. Inside a child, the other call would be refused by the reservation. R-23 is pinned by unit rows through a verb with a fixed parent, in `bind/lifecycle.rs`, for complete, superseded and refused parents. `complete_with_record_accepted` pins the resend's stored success. A real two-process row would need a new seam, which is outside this fix.
+- **The superseded variant is a unit row** for the same reason, and because a superseded parent's own stops return as outcomes.
+- **The refused merge's human `next:` lines move to Task 7**, from the design's answers row. This task gives its code, actions, data and golden.
+
+**Seen first.** Against the code before the fixes, `busy_lease_on_reentry`, `integrating_after_ref` and `child_remote_branch_deleted` failed on the behaviour. Rows that passed at once pin existing behaviour: `integrating_before_ref`, `parent_unreadable_on_mismatch`, `external_refusal_with_record_accepted`, both `busy` rows, `poll_yielding_past_integration`, `interrupted_by_a_changed_remote`, `child_conflict` and `deletion_host`. The other two `parent_unreadable_*` rows failed then on a fixture fault (a table rename can't be undone past the schema check, so the registry's image is restored) and were not rerun against the old code. **The unit rows were written with the fix**, since the signature changed, so they were not seen to fail.
+
+**Verified on the final code, all exit 0.** `c5_lifecycle` 126 cases (1037 s), `mutation_replay` 383 (277 s), `mutation_confirmation` 183, `mutation_contract` 44, `--lib mutation` 141, `cargo fmt --check`, clippy `-D warnings`. No golden changed.
