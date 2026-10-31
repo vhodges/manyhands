@@ -430,3 +430,39 @@ bumping package metadata and CLI version goldens to `0.1.2`, pushing main
 and a new `v0.1.2` tag, and starting one new Release trial. Validation stays
 scoped to the affected policy/packaging code and the CLI version test;
 existing tags are not moved.
+
+## v0.1.2 Native Trial — Windows Desktop OS Components
+
+The authorized `v0.1.2` trial
+[41161342157](https://github.com/vhodges/manyhands/actions/runs/41161342157)
+completed macOS and both Linux packages, including their native/extracted
+verification. Windows reached its dependency audit and reported three
+missing reviewed names for `manyhands.exe`: `gdiplus.dll`, `icuuc.dll`, and
+`uiautomationcore.dll`. Draft assembly was skipped.
+
+The `release-windows-dlls` follow-up adds only those exact OS DLL names.
+Microsoft documents them respectively as GDI+, the OS ICU common C runtime,
+and UI Automation; source links are recorded beside the policy entries.
+ICU common C APIs were introduced as `icuuc.dll` in Windows 10 version
+1703, and that prerequisite is recorded in package runtime metadata without
+claiming it as the application's overall minimum supported OS.
+
+The regression reproduced all three rejected imports before the policy
+change. It now verifies combined acceptance while the DLLs exist in the
+fixture System directory, and individual rejection after each file is
+removed. The ordinary-system-file presence check, exact/case-insensitive
+name matching, unknown/vendor rejection, and dynamic-CRT rejection remain.
+PowerShell policy tests, the four Windows metadata tests, and whitespace
+checks passed. Scoped read-only review found no actionable issues and
+independently reran those checks. No broad Rust gates were run.
+
+The fix is uncommitted pending integration instructions. Cargo version
+remains `0.1.2`; existing tags and signing secrets are unchanged, and no new
+native run was dispatched. A subsequent trial needs an approved matching
+new source version/tag containing the correction.
+
+The owner subsequently approved committing/merging this Windows correction,
+preparing package metadata and CLI version goldens for `0.1.3`, pushing
+main and a new `v0.1.3` tag, and starting one new Release trial. Existing
+tags and the persistent signing identity are retained. Checks remain scoped
+to the Windows policy/metadata and CLI version behavior.

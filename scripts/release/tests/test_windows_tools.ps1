@@ -30,6 +30,15 @@ try {
     Assert-SystemDependency -Name 'KERNEL32.dll' -SystemDirectory $temporary
     Assert-SystemDependency -Name 'api-ms-win-core-synch-l1-2-0.dll' -SystemDirectory $temporary
     Assert-SystemDependency -Name 'api-ms-win-shcore-scaling-l1-1-1.dll' -SystemDirectory $temporary
+    $desktopLibraries = @('gdiplus.dll', 'icuuc.dll', 'uiautomationcore.dll')
+    foreach ($library in $desktopLibraries) {
+        [IO.File]::WriteAllText((Join-Path $temporary $library), 'Documented Windows system component fixture')
+    }
+    Assert-SystemDependencies -Names $desktopLibraries -SystemDirectory $temporary -BinaryName 'manyhands.exe'
+    foreach ($library in $desktopLibraries) {
+        Remove-Item -LiteralPath (Join-Path $temporary $library)
+        Assert-Throws { Assert-SystemDependency -Name $library -SystemDirectory $temporary }
+    }
     Assert-Throws { Assert-SystemDependency -Name 'unknown.dll' -SystemDirectory $temporary }
     [IO.File]::WriteAllText((Join-Path $temporary 'vendor.dll'), 'Runner-installed third-party fixture')
     Assert-Throws { Assert-SystemDependency -Name 'vendor.dll' -SystemDirectory $temporary }
