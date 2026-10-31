@@ -4880,3 +4880,100 @@ are gone. `written_paths_unchanged` returns the bool, and
 | `fmt --check` | passes |
 
 The full suite is the controller's, on this result.
+
+### Task 15: Full Verification, Review, Dogfooding, Switch And Handoff
+
+**Merges of main.** `origin/main` moved three times during Tasks 13 to 15.
+Each move was merged, never rebased:
+
+- `bda0a2d1`, D3, as `2f2b1f77`. Six conflicts, each a pair of additions:
+  C4's `comment add`, `conflict resolve` and `item republish` beside D3's
+  `context prepare` and `context release`. The counted lists widened to
+  `DATA_ROOTS` 56 and `HOMES` 37. The checkpoint gate ran in full on the
+  merge.
+- `f487cc74`, D3's desktop-only clippy fix, as `cec0ce42`. Desktop-alone
+  clippy passes from here on, so P6's comparison with main's errors ends.
+- `48ffc058`, a Build workflow change, as `a58aef28`.
+
+**Step 2: the final whole-branch review.** Two independent reviewers read
+`f487cc74..71dd7c3e`, the net change against main, one per side:
+
+- the library side: with fixes, 2 Important;
+- the CLI side: ready to merge, Minor only.
+
+The controller ruled on every finding and every deferred item. There was one
+fix round, `71dd7c3e..62ae05ee` (see "Final review fixes"), and its
+re-review found everything addressed. Its three document notes were closed
+in `c19d655b`, which also adds the owner checklist,
+`docs/plans/2026-10-26-wave-03-cli-04-owner-checklist.md`.
+
+**Step 1: the gate and the full suite, once, on the final tree.** The run
+was moved after the final fix, so that it covers the fixed code. An earlier
+start, on `71dd7c3e`, was stopped while it was still in `--lib`, because the
+fix's builds would have waited on its build lock.
+
+It ran on `a58aef28`, and everything after that commit is documentation
+only. The run took 3 h 34 m (14:04 to 17:38), past the plan's two-hour
+budget, on a machine loaded by other sessions. `--no-fail-fast` gave exit 0.
+
+- **Gate.** `check`, `fmt --check`, all-features clippy, desktop-alone
+  `check` and clippy, the CLI `check` and `check-cli-no-gpui.sh` all pass.
+- **Full suite.** Every target passed:
+
+| Target | Result |
+| --- | --- |
+| `--lib` | 1477 |
+| `src/main.rs` (desktop) | 1082 |
+| `--bin manyhands-cli` | 252 |
+| `canonical_foundation` | 65 |
+| `cli` | 349 |
+| `cli_remote` | 66 SSH cases |
+| `comment_publication` | 41 SSH cases |
+| `discovery_rebuild` | 79 |
+| `document_promotion` | 74 SSH cases |
+| `drafts` | 48 |
+| `editor_feasibility` | 9 |
+| `journal_rejection` | 26 |
+| `key_material` | 39 |
+| `key_storage` | 2 |
+| `local_authoring` | 140 |
+| `mutation_bridges` | 166 |
+| `mutation_confirmation` | 183 |
+| `mutation_contract` | 44 |
+| `mutation_relationships` | 27 |
+| `mutation_remote` | 258 SSH cases |
+| `mutation_replay` | 383 |
+| `read_boundary` | 20 |
+| `read_characterization` | 0, 1 ignored (as on main) |
+| `read_comments` | 23 |
+| `read_contract` | 72 |
+| `read_credentials` | 25 |
+| `read_items` | 82 |
+| `read_relationships` | 17 |
+| `read_repository` | 33 |
+| `read_status` | 24 |
+| `recovery_foundation_gate` | 52 |
+| `remote_merge_recovery` | 25 SSH cases |
+| `remote_observation` | 15 SSH cases |
+| `remote_polling` | 84 SSH cases |
+| `remote_reservation` | 13 |
+| `remote_synchronization` | 63 SSH cases |
+| `repository_enablement` | 95 |
+| `session_credentials` | 11 |
+| `shared_key_registry` | 39 |
+| `ssh_fixture` | 35 SSH cases |
+| `ssh_transport` | 123 SSH cases |
+| `ticket_closure` | 73 SSH cases |
+| doc-tests | 15 |
+
+**The owner's answers** (2026-10-30):
+
+- Dogfooding: go ahead once the full suite is green.
+- Label case: keep it as it is, with a follow-up.
+- Follow-up tickets: all four. Each is on its own pushed branch, created with
+  main's CLI:
+  - `01M67BN4C1SY2HQBGNE9NBYMW8`, the comment host offer;
+  - `01M67BN4DMYV41ME9FHEBCZ2RA`, the resolve refusal's `next:` line;
+  - `01M67BN4F7M1TYRMTDHB4XNWCM`, the exit-evidence move;
+  - `01M67BN4H4F4ZXQG79H2NV7PWS`, consistent human output, with the label
+    case.
