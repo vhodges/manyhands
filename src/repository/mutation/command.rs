@@ -72,6 +72,8 @@ commands! {
     ItemRepublish => "item republish",
     ContextPrepare => "context prepare",
     ContextRelease => "context release",
+    DocumentPromote => "document promote",
+    TicketClose => "ticket close",
 }
 
 impl Command {
@@ -139,6 +141,10 @@ impl Command {
             | Self::ItemSync
             | Self::RepoSync
             | Self::ItemRepublish => true,
+            // One parent operation, recorded in its lifecycle's own table
+            // and, once it deletes the remote context, in the remote
+            // journal under the same ID (fact 29).
+            Self::DocumentPromote | Self::TicketClose => true,
             // Never made twice, and so recorded against nothing: a key's
             // ID is not registered again.
             Self::KeyRemove => false,
@@ -181,7 +187,9 @@ impl Command {
             | Self::LocalContextResolve
             | Self::CommentAdd
             | Self::ConflictResolve
-            | Self::ItemRepublish => false,
+            | Self::ItemRepublish
+            | Self::DocumentPromote
+            | Self::TicketClose => false,
             Self::KeyImport | Self::KeySelect | Self::KeyClear => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -225,7 +233,9 @@ impl Command {
             | Self::LocalContextResolve
             | Self::CommentAdd
             | Self::ConflictResolve
-            | Self::ItemRepublish => false,
+            | Self::ItemRepublish
+            | Self::DocumentPromote
+            | Self::TicketClose => false,
             Self::IndexRebuild => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -270,7 +280,9 @@ impl Command {
             | Self::LocalContextResolve
             | Self::CommentAdd
             | Self::ConflictResolve
-            | Self::ItemRepublish => false,
+            | Self::ItemRepublish
+            | Self::DocumentPromote
+            | Self::TicketClose => false,
             Self::RepoCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -325,6 +337,10 @@ impl Command {
             // A republish pushes as a synchronization does, from the safe
             // points of its own operation (R-32).
             Self::ItemRepublish => true,
+            // A promotion and a closure stop at the safe points of their
+            // one runner, and of the children it runs (Task 2c connects a
+            // cancellation to them).
+            Self::DocumentPromote | Self::TicketClose => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -387,7 +403,11 @@ impl Command {
             | Self::RepoSync
             | Self::OperationResume
             | Self::CommentAdd
-            | Self::ItemRepublish => true,
+            | Self::ItemRepublish
+            // This only decides how a replay reads a finished row, and keeps
+            // `finishes == stops || resume` (design, Command Predicates).
+            | Self::DocumentPromote
+            | Self::TicketClose => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -430,7 +450,11 @@ impl Command {
         match self {
             Self::LocalContextSync | Self::LocalContextResolve => ProgressStage::Observing,
             Self::IndexRefresh | Self::IndexRebuild => ProgressStage::Indexing,
-            Self::ItemSync | Self::RepoSync | Self::ItemRepublish => ProgressStage::Connecting,
+            Self::ItemSync
+            | Self::RepoSync
+            | Self::ItemRepublish
+            | Self::DocumentPromote
+            | Self::TicketClose => ProgressStage::Connecting,
             // An approval connects to the host to see the key it
             // presents, and does nothing else there.
             Self::HostApprove | Self::HostReplace => ProgressStage::Connecting,
@@ -489,7 +513,9 @@ impl Command {
             | Self::LocalContextResolve
             | Self::CommentAdd
             | Self::ConflictResolve
-            | Self::ItemRepublish => false,
+            | Self::ItemRepublish
+            | Self::DocumentPromote
+            | Self::TicketClose => false,
             Self::FolderCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -560,7 +586,11 @@ impl Command {
             // A republish recreates a branch the remote deleted: its
             // caller is shown the branch, the remote and the commit, and
             // consents to that commit (decisions 4 and 7).
-            | Self::ItemRepublish => true,
+            | Self::ItemRepublish
+            // Each merges into primary, publishes and retires a context:
+            // its caller is shown all of it, and consents to that state.
+            | Self::DocumentPromote
+            | Self::TicketClose => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -641,6 +671,8 @@ mod tests {
         assert_eq!(Command::CommentAdd.name(), "comment add");
         assert_eq!(Command::ConflictResolve.name(), "conflict resolve");
         assert_eq!(Command::ItemRepublish.name(), "item republish");
+        assert_eq!(Command::DocumentPromote.name(), "document promote");
+        assert_eq!(Command::TicketClose.name(), "ticket close");
     }
 
     #[test]
@@ -655,16 +687,19 @@ mod tests {
             // points; what it does first is write the comment.
             let comment = command == Command::CommentAdd;
             // A republish pushes as a synchronization does, at its safe
-            // points, and is the one stopping command that needs
-            // confirmation (R-32).
-            let republish = command == Command::ItemRepublish;
+            // points, and needs confirmation (R-32), as a promotion and a
+            // closure do, which stop at the safe points of their runner.
+            let confirmed = matches!(
+                command,
+                Command::ItemRepublish | Command::DocumentPromote | Command::TicketClose
+            );
             let stopping = local
                 || comment
-                || republish
+                || confirmed
                 || matches!(command, Command::ItemSync | Command::RepoSync);
             assert_eq!(command.stops_at_safe_points(), stopping, "{command:?}");
             if stopping {
-                assert_eq!(command.needs_confirmation(), republish, "{command:?}");
+                assert_eq!(command.needs_confirmation(), confirmed, "{command:?}");
                 assert_eq!(
                     command.has_operation(),
                     command != Command::LocalContextResolve,
@@ -750,6 +785,8 @@ mod tests {
                         | Command::DocumentRepair
                         | Command::TicketRepair
                         | Command::ItemRepublish
+                        | Command::DocumentPromote
+                        | Command::TicketClose
                 ),
                 "{command:?}"
             );
@@ -860,6 +897,24 @@ mod tests {
         // the branch is deleted, is one `operation resume` takes up.
         assert!(!command.hands_off_to_any_refresh());
         assert_eq!(command.stage(), ProgressStage::Writing);
+    }
+
+    /// The design's Command Predicates row of both lifecycle verbs. They
+    /// finish as a synchronization only in how a replay reads a finished
+    /// row, which keeps the pinned equality.
+    #[test]
+    fn a_promotion_and_a_closure_are_confirmed_operations_with_safe_points() {
+        for command in [Command::DocumentPromote, Command::TicketClose] {
+            assert!(command.needs_confirmation(), "{command:?}");
+            assert!(command.has_operation(), "{command:?}");
+            assert!(command.stops_at_safe_points(), "{command:?}");
+            assert!(command.finishes_as_a_synchronization(), "{command:?}");
+            assert!(!command.hands_off_to_any_refresh(), "{command:?}");
+            assert!(!command.was_accepted_without_operation(), "{command:?}");
+            assert!(!command.restores_index(), "{command:?}");
+            assert!(!command.creates_its_repository(), "{command:?}");
+            assert_eq!(command.stage(), ProgressStage::Connecting, "{command:?}");
+        }
     }
 
     #[test]

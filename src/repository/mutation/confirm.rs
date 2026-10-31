@@ -99,6 +99,7 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         local_change,
         offers_nothing,
         host_replacement,
+        lifecycle_blocked,
     } = answer;
     // The host a refusal is about is named by its data, and the action
     // that replaces its pin takes the host.
@@ -120,9 +121,10 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
     let envelope =
         Envelope::classified_mutation(command.name(), scope, false, code, effects, local_change)
             .with_recovery(recovery);
-    match host_replacement {
-        Some(data) => envelope.with_data(PrepareDataDto::HostReplacement(*data)),
-        None => envelope,
+    match (host_replacement, lifecycle_blocked) {
+        (Some(data), _) => envelope.with_data(PrepareDataDto::HostReplacement(*data)),
+        (None, Some(data)) => envelope.with_data(PrepareDataDto::LifecycleBlocked(data)),
+        (None, None) => envelope,
     }
 }
 

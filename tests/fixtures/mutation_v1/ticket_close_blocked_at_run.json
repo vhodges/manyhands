@@ -1,0 +1,51 @@
+{
+  "code": "recovery_required",
+  "command": "ticket close",
+  "data": {
+    "blockers": [
+      "primary_dirty"
+    ],
+    "checkpoint_oid": null,
+    "cleanup": null,
+    "cleanup_pending": null,
+    "integration": null,
+    "integration_oid": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "kind": "ticket",
+    "publication": null,
+    "publication_oid": null,
+    "publication_pending": null,
+    "recording": null,
+    "type": "lifecycle"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "Recovery is required before this can continue.",
+  "operation_id": "<operation>",
+  "outcome": "blocked",
+  "recovery": [
+    {
+      "action": "repo.inspect",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FJ1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

@@ -250,3 +250,48 @@ near `:190`, and the audit's other document amendments, stay with Task 14b.
 
 Documents only: this ledger, the audit, and one ticket comment. No `src` or `tests`
 edit. The temporary directories were removed afterwards.
+
+### Task 2a: Lifecycle Binding: Accessor, Prepare And First Run
+
+**Base.** `05b8d4f0` (the owner's rulings). `origin/main` had moved to `25a8174d` (v0.1.4 metadata), and was merged first as `961ae44a`, without conflicts.
+
+**Tests first.** 32 `c5_lifecycle_` cases ran against a stub binding answering `internal_error`, and all 32 failed. The rows with a server failed by assertion. The rest also failed, until the world saved its probes and the IDs were corrected, then by assertion or pass as the binding grew. The harness reports only a panic's line number.
+
+**Commands, all exit 0, on the final code unless noted.**
+
+| Command | Result | Time |
+| --- | --- | --- |
+| `--test mutation_remote -- c5_lifecycle` | 32 cases | 211 s |
+| `--test mutation_contract` | 44 | 11 s |
+| `--test read_contract` | 72 (one failure before its registration, below) | 8 s |
+| `--test mutation_replay` | 383 | 273 s |
+| `--test mutation_confirmation` | 183 | 59 s |
+| `--test mutation_bridges` | 166 | 61 s |
+| `--lib mutation` | 126 | 34 s |
+| `--bin manyhands-cli -- human_admin` | 12 | 5 s |
+| `cargo fmt --check`; both clippy commands; `cargo check --locked --features desktop` | ok | 10–25 s |
+
+Goldens were regenerated with `MANYHANDS_UPDATE_GOLDEN=1` and read.
+
+**Decisions.**
+
+- The first run's standing is implemented, since a first run needs one and `lifecycle_parent` has no other caller: no parent deletes the request; a consent refusal, superseded or complete parent finishes it; an unfinished parent leaves it accepted. Task 2b tests the table.
+- `Binding::prepare` checks nothing, so a state blocked since its preview is `external_change` with no record. `Blocked` at run is reached only after acceptance, and a case stages it with the request hook.
+- The domain reports an unknown ID as `ContextMissing`, not `NotA*`. The binding asks the index: `ContextMissing` with `show_item` answering `item_not_found` is `item_not_found`. So an item on primary with no context, under a stale index, answers `item_not_found` until `index refresh`, as `ticket show` does (Task 0). The context-missing row refreshes first.
+- A result's scope names primary as its branch and no worktree, since the context doesn't outlive a complete run.
+- `ParentView` holds only what this task reads: step, refused, checkpoint, integration. Later tasks add fields with their callers, because clippy denies unread ones.
+- A checkpoint counts as an effect only once the context's branch holds it, since `begin_closing` records it before the ref moves.
+- Seven `PreviewEffect` values are added: `context_synchronized`, `closure_recorded`, `primary_integrated`, `primary_published`, `remote_branch_deleted`, `worktree_removed`, `branch_deleted`.
+
+**Deviations from the task's file list, none changing behaviour.**
+
+- Compile-required arms in `tests/mutation_remote/host.rs`, `tests/support/mutation.rs` (six) and `tests/support/repair.rs`, and the blocked arm in `tests/support/confirmation.rs`.
+- `tests/read_contract.rs`: 15 enumeration rows, and `schema_enum` learns the path step `items`. The plan's Step 3 does not list this target, and `published_enumerations_list_exactly_the_registered_values` failed until they were added.
+- No `outcome_tests.rs` edit (E-12) was needed: its `Command::ALL` loops hold for both commands.
+
+**Left for later, each with a comment where it stands.**
+
+- Task 2b: `row` and `observe_again` answer `recovery_required` with the record left accepted and no domain call, whatever the parent holds, so a resend does not yet continue. `recorded_effects` claims nothing for these commands.
+- Task 2c: `cancel_request` sets a flag nothing reads yet for these commands, and `Interrupted` is always `recovery_required`.
+- Task 3: resume. Task 4: made-ready. Task 6: the promotion identity row.
+- Task 7: the human rendering of `LifecycleBlocked`, which is the code's message for now; no verb reaches it yet.

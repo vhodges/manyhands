@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 lifecycle blockers",
+  "description": "The data of a prepare envelope of document promote or ticket close that is refused for what stands in its way: every blocker, in the domain's order. identity_required alone answers identity_required, already_closed alone answers ticket_closed, and anything else answers recovery_required.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "blockers"
+  ],
+  "properties": {
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "not_a_document",
+          "not_a_ticket",
+          "context_missing",
+          "context_nonconforming",
+          "context_dirty",
+          "context_conflicted",
+          "conflict_pending",
+          "local_operation_pending",
+          "comment_publication_pending",
+          "primary_missing",
+          "primary_not_checked_out",
+          "primary_dirty",
+          "primary_conflicted",
+          "primary_ahead_of_remote",
+          "context_behind_remote",
+          "integration_conflict",
+          "remote_context_deleted",
+          "history_unknown",
+          "already_closed",
+          "primary_reopened",
+          "document_invalid_after_integration",
+          "ticket_invalid_after_closure",
+          "identity_required"
+        ]
+      }
+    }
+  }
+}

@@ -28,9 +28,10 @@ use crate::results::{Effects, Envelope, ResultCode, Scope, contract_enum};
 
 use super::{
     super::{
-        OperationFamily, ReadError, RepositoryService, SynchronizationError,
+        CloseTicketRequest, DocumentPromotionError, DocumentPromotionResult, OperationFamily,
+        PromoteDocumentRequest, ReadError, RepositoryService, SynchronizationError,
         SynchronizationObserver, SynchronizationResult, SynchronizationSettings,
-        SynchronizeRemoteRequest,
+        SynchronizeRemoteRequest, TicketClosureError, TicketClosureResult,
         keys::{SessionCredentialProvider, SessionCredentials},
         recovery::{FinalKind, JournalRow, PendingOperation},
         remote::sync::RepublishConsent,
@@ -212,6 +213,24 @@ pub(crate) trait Session {
         observer: &mut dyn SynchronizationObserver,
     ) -> Option<Result<SynchronizationResult, SynchronizationError>>;
 
+    /// Promotes a document with the session's credentials; see
+    /// `RepositoryService::promote_document`. `None` when the session has
+    /// no credentials, or they are in use: nothing was called.
+    fn promote_document(
+        &self,
+        service: &RepositoryService,
+        request: PromoteDocumentRequest,
+    ) -> Option<Result<DocumentPromotionResult, DocumentPromotionError>>;
+
+    /// Closes a ticket with the session's credentials; see
+    /// `RepositoryService::close_ticket`. `None` when the session has no
+    /// credentials, or they are in use: nothing was called.
+    fn close_ticket(
+        &self,
+        service: &RepositoryService,
+        request: CloseTicketRequest,
+    ) -> Option<Result<TicketClosureResult, TicketClosureError>>;
+
     /// Connects to the host of the publication remote with the session's
     /// credentials and sees the key it presents; see
     /// `RepositoryService::verify_ssh_transport`. `None` when the
@@ -304,6 +323,24 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         Some(service.republish_context(request, consent, &mut credentials, observer))
     }
 
+    fn promote_document(
+        &self,
+        service: &RepositoryService,
+        request: PromoteDocumentRequest,
+    ) -> Option<Result<DocumentPromotionResult, DocumentPromotionError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        Some(service.promote_document(request, &mut credentials))
+    }
+
+    fn close_ticket(
+        &self,
+        service: &RepositoryService,
+        request: CloseTicketRequest,
+    ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        Some(service.close_ticket(request, &mut credentials))
+    }
+
     fn verify_transport(
         &self,
         service: &RepositoryService,
@@ -343,6 +380,22 @@ impl Session for NoSession {
         _consent: &RepublishConsent,
         _observer: &mut dyn SynchronizationObserver,
     ) -> Option<Result<SynchronizationResult, SynchronizationError>> {
+        None
+    }
+
+    fn promote_document(
+        &self,
+        _service: &RepositoryService,
+        _request: PromoteDocumentRequest,
+    ) -> Option<Result<DocumentPromotionResult, DocumentPromotionError>> {
+        None
+    }
+
+    fn close_ticket(
+        &self,
+        _service: &RepositoryService,
+        _request: CloseTicketRequest,
+    ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
         None
     }
 

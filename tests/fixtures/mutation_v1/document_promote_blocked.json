@@ -1,0 +1,39 @@
+{
+  "code": "recovery_required",
+  "command": "document promote",
+  "data": {
+    "blockers": [
+      "primary_dirty"
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "Recovery is required before this can continue.",
+  "operation_id": null,
+  "outcome": "blocked",
+  "recovery": [
+    {
+      "action": "repo.inspect",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FDC",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

@@ -75,6 +75,7 @@ use bind::{
     host::HostBinding,
     index::IndexBinding,
     key::{KeyDeleteBinding, KeyGenerateBinding, KeyRegistryBinding},
+    lifecycle::LifecycleBinding,
     local_sync::LocalSyncBinding,
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
     repair::RepairBinding,
@@ -99,6 +100,7 @@ pub use bind::{
         KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
         KeySelectInput,
     },
+    lifecycle::{DocumentPromoteInput, TicketCloseInput},
     local_sync::{LocalConflictResolutionInput, LocalContextResolveInput, LocalContextSyncInput},
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
     repair::{DocumentRepairInput, TicketRepairInput},
@@ -117,13 +119,19 @@ pub use dto::{
     ConflictNextDto, ConflictResolutionMutationDto, ConflictResolutionMutationType,
     ContextMutationDto, DocumentMutationDto, HostMutationDto, HostObservationDto, HostPreviewDto,
     HostReplacementDto, IdentityMutationDto, IdentityPreviewDto, ItemRepublishPreviewDto,
-    KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState, KeyMutationDto, LocalIdentityDto,
-    MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto, PrepareDataDto,
-    PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
-    PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto,
-    RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
-    RequestOperationDto, RequestResultDto, RequestState, SynchronizationConflictMutationDto,
-    SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
+    KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState, KeyMutationDto,
+    LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupPendingReason, LifecycleCleanupState,
+    LifecycleIntegrationKind, LifecycleMutationDto, LifecycleMutationType, LifecyclePathChangeDto,
+    LifecyclePathChangeKind, LifecyclePlannedCleanupDto, LifecyclePlannedClosureDto,
+    LifecyclePlannedIntegration, LifecyclePlannedPublication, LifecyclePreviewDto,
+    LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
+    LocalIdentityDto, MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto,
+    PrepareDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto,
+    PreviewIdentityDto, PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto,
+    RepairMutationDto, RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto,
+    RequestDto, RequestOperationDto, RequestResultDto, RequestState,
+    SynchronizationConflictMutationDto, SynchronizationConflictType, SynchronizationMutationDto,
+    TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -454,6 +462,8 @@ pub enum Mutation {
     TicketRepair(TicketRepairInput),
     ContextPrepare(ContextPrepareInput),
     ContextRelease(ContextReleaseInput),
+    DocumentPromote(DocumentPromoteInput),
+    TicketClose(TicketCloseInput),
 }
 
 impl Mutation {
@@ -501,6 +511,8 @@ impl Mutation {
             Self::TicketRepair(_) => Command::TicketRepair,
             Self::ContextPrepare(_) => Command::ContextPrepare,
             Self::ContextRelease(_) => Command::ContextRelease,
+            Self::DocumentPromote(_) => Command::DocumentPromote,
+            Self::TicketClose(_) => Command::TicketClose,
         }
     }
 
@@ -529,6 +541,8 @@ impl Mutation {
             Self::HostReplace(input) => Some(Box::new(HostBinding::from(input.clone()))),
             Self::DocumentRepair(input) => Some(Box::new(RepairBinding::from(input.clone()))),
             Self::TicketRepair(input) => Some(Box::new(RepairBinding::from(input.clone()))),
+            Self::DocumentPromote(input) => Some(Box::new(LifecycleBinding::from(input.clone()))),
+            Self::TicketClose(input) => Some(Box::new(LifecycleBinding::from(input.clone()))),
             Self::DocumentCreate(_)
             | Self::DocumentSave(_)
             | Self::DocumentMove(_)
@@ -592,6 +606,8 @@ impl Mutation {
             Self::TicketRepair(input) => Box::new(RepairBinding::from(input)),
             Self::ContextPrepare(input) => Box::new(ContextPrepareBinding::from(input)),
             Self::ContextRelease(input) => Box::new(ContextReleaseBinding::from(input)),
+            Self::DocumentPromote(input) => Box::new(LifecycleBinding::from(input)),
+            Self::TicketClose(input) => Box::new(LifecycleBinding::from(input)),
         }
     }
 }

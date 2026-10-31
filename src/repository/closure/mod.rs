@@ -341,6 +341,27 @@ impl From<RepositoryError> for TicketClosureError {
     }
 }
 
+/// The parent record of the closure `operation`, when there is one.
+pub(super) fn lifecycle_parent(
+    service: &RepositoryService,
+    root: &Path,
+    operation: OperationId,
+) -> Result<Option<crate::repository::promotion::ParentView>, RepositoryError> {
+    use crate::repository::promotion::lifecycle::LifecycleRecord;
+    crate::repository::remote::state::with_transaction(service, root, |tx, repository_id| {
+        Ok(
+            record::read_record(tx, repository_id, operation)?.map(|parent| {
+                crate::repository::promotion::ParentView {
+                    step: parent.step(),
+                    refused: parent.refusal().is_some(),
+                    checkpoint: parent.closure_oid,
+                    integration: parent.integration_oid(),
+                }
+            }),
+        )
+    })
+}
+
 impl RepositoryService {
     /// Observe local Git, the stored publication history and pending local
     /// work without a repository lease, network access, or a Git/registry

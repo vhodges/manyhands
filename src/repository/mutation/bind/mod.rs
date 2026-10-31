@@ -22,7 +22,9 @@ use super::{
     command::Command,
     confirm::{Row, Seen},
     context::context_names,
-    dto::{HostReplacementDto, MutationDataDto, PreviewDetailsDto, PreviewEffect},
+    dto::{
+        HostReplacementDto, LifecycleBlockedDto, MutationDataDto, PreviewDetailsDto, PreviewEffect,
+    },
     evidence::{PathEvidence, Position},
     identity::{IntentDigestBuilder, RequestId, ScopeKey},
     observe::ObservationDigest,
@@ -40,6 +42,7 @@ pub(crate) mod folder;
 pub(crate) mod host;
 pub(crate) mod index;
 pub(crate) mod key;
+pub(crate) mod lifecycle;
 pub(crate) mod local_sync;
 pub(crate) mod remote;
 pub(crate) mod repair;
@@ -288,6 +291,10 @@ pub(crate) struct Answer {
     /// has a pin: the one data a `prepare` gives that is no preview. No
     /// answer of `execute` holds it.
     pub(crate) host_replacement: Option<Box<HostReplacementDto>>,
+    /// What a preview of `document promote` or `ticket close` is refused
+    /// for: the other data a `prepare` gives that is no preview. An answer
+    /// of `execute` holds the same blockers in its `data`.
+    pub(crate) lifecycle_blocked: Option<LifecycleBlockedDto>,
 }
 
 impl Answer {
@@ -301,6 +308,7 @@ impl Answer {
             local_change: false,
             offers_nothing: false,
             host_replacement: None,
+            lifecycle_blocked: None,
         }
     }
 
@@ -1047,6 +1055,10 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::DocumentRepair | Command::TicketRepair) => {
             Recorded::of(repair::recorded_effects(record, &accepted))
         }
+        // Task 2b reads these from the parent record, before the row is
+        // asked, since a parent usually has no row (fact 40). Until then a
+        // row that a parent's cleanup reserved claims nothing.
+        Some(Command::DocumentPromote | Command::TicketClose) => Recorded::nothing(),
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }

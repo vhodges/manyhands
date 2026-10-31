@@ -1,0 +1,41 @@
+{
+  "code": "ok",
+  "command": "document promote",
+  "data": {
+    "blockers": [],
+    "checkpoint_oid": null,
+    "cleanup": "complete",
+    "cleanup_pending": null,
+    "integration": "merged",
+    "integration_oid": "<integration>",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FDC",
+    "kind": "document",
+    "publication": "published",
+    "publication_oid": "<integration>",
+    "publication_pending": null,
+    "recording": null,
+    "type": "lifecycle"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "complete",
+    "commit_oid": "<integration>",
+    "discovery": "current",
+    "integration": "complete",
+    "publication": "published",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": "<operation>",
+  "outcome": "success",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FJ1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FDC",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

@@ -357,6 +357,39 @@ pub enum DocumentPromotionPreflight {
     Blocked { blockers: Vec<PromotionBlocker> },
 }
 
+/// What the mutation boundary reads of a parent record: a lifecycle parent
+/// usually has no journal row (fact 29), so this is where it stands. It holds
+/// IDs, OIDs and fixed categories.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct ParentView {
+    pub(super) step: lifecycle::ParentStep,
+    /// A consent refusal ended the record.
+    pub(super) refused: bool,
+    /// The closure checkpoint the record holds. Its ref may not have moved
+    /// while the step is `closing`.
+    pub(super) checkpoint: Option<Oid>,
+    pub(super) integration: Option<Oid>,
+}
+
+/// The parent record of the promotion `operation`, when there is one.
+pub(super) fn lifecycle_parent(
+    service: &RepositoryService,
+    root: &Path,
+    operation: OperationId,
+) -> Result<Option<ParentView>, RepositoryError> {
+    use lifecycle::LifecycleRecord;
+    crate::repository::remote::state::with_transaction(service, root, |tx, repository_id| {
+        Ok(
+            record::read_record(tx, repository_id, operation)?.map(|parent| ParentView {
+                step: parent.step(),
+                refused: parent.refusal().is_some(),
+                checkpoint: None,
+                integration: parent.integration_oid(),
+            }),
+        )
+    })
+}
+
 impl RepositoryService {
     pub fn promote_document<P: SessionCredentialProvider>(
         &self,

@@ -1,0 +1,49 @@
+{
+  "code": "push_rejected",
+  "command": "ticket close",
+  "data": {
+    "blockers": [],
+    "checkpoint_oid": "<checkpoint>",
+    "cleanup": "pending",
+    "cleanup_pending": "awaiting_publication",
+    "integration": "merged",
+    "integration_oid": "<integration>",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "kind": "ticket",
+    "publication": "pending",
+    "publication_oid": null,
+    "publication_pending": "rejected",
+    "recording": "record",
+    "type": "lifecycle"
+  },
+  "effects": {
+    "checkpoint": "committed",
+    "cleanup": "pending",
+    "commit_oid": "<integration>",
+    "discovery": "pending",
+    "integration": "complete",
+    "publication": "pending",
+    "write": "not_requested"
+  },
+  "message": "The remote rejected the push.",
+  "operation_id": "<operation>",
+  "outcome": "partial",
+  "recovery": [
+    {
+      "action": "request.retry",
+      "arguments": {
+        "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FJ1"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FJ1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

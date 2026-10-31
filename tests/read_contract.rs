@@ -662,12 +662,17 @@ fn every_golden_fixture_is_canonical_text() {
 
 /// The strings of the `enum` of `property`, which is a property name or a
 /// dotted path through nested objects. A nullable enumeration also lists
-/// `null`, which its `type` already allows and which is not a string.
+/// `null`, which its `type` already allows and which is not a string. The
+/// name `items` steps into an array's items.
 fn schema_enum(file: &str, property: &str) -> Vec<String> {
     let schema = read_json(&schema::schema_directory().join(file));
     let mut node = &schema;
     for name in property.split('.') {
-        node = &node["properties"][name];
+        node = if name == "items" {
+            &node["items"]
+        } else {
+            &node["properties"][name]
+        };
     }
     node["enum"]
         .as_array()
@@ -705,7 +710,110 @@ const LOCAL_ACTIONS: [OperationAction; 15] = [
 fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
     let envelope = golden::ENVELOPE_SCHEMA;
     let effects = "effects.schema.json";
+    use manyhands::repository::{
+        LifecycleBlocker, LifecycleCleanupPendingReason, LifecycleCleanupState,
+        LifecycleIntegrationKind, LifecycleMutationType, LifecyclePathChangeKind,
+        LifecyclePlannedIntegration, LifecyclePlannedPublication,
+        LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
+    };
     let mut enumerations = vec![
+        (
+            "lifecycle_blocked.schema.json",
+            "blockers.items",
+            LifecycleBlocker::ALL.map(LifecycleBlocker::as_str).to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.changes.items.change",
+            LifecyclePathChangeKind::ALL
+                .map(LifecyclePathChangeKind::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.integration",
+            LifecyclePlannedIntegration::ALL
+                .map(LifecyclePlannedIntegration::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.publication",
+            LifecyclePlannedPublication::ALL
+                .map(LifecyclePlannedPublication::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.closure.recording",
+            LifecycleRecording::ALL
+                .map(LifecycleRecording::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "type",
+            LifecycleMutationType::ALL
+                .map(LifecycleMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "recording",
+            LifecycleRecording::ALL
+                .map(LifecycleRecording::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "integration",
+            LifecycleIntegrationKind::ALL
+                .map(LifecycleIntegrationKind::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "publication",
+            LifecyclePublicationState::ALL
+                .map(LifecyclePublicationState::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "publication_pending",
+            LifecyclePublicationPendingReason::ALL
+                .map(LifecyclePublicationPendingReason::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "cleanup",
+            LifecycleCleanupState::ALL
+                .map(LifecycleCleanupState::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "cleanup_pending",
+            LifecycleCleanupPendingReason::ALL
+                .map(LifecycleCleanupPendingReason::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "blockers.items",
+            LifecycleBlocker::ALL.map(LifecycleBlocker::as_str).to_vec(),
+        ),
         (
             "local_context_sync_observation.schema.json",
             "kind",

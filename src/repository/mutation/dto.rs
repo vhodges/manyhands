@@ -137,6 +137,14 @@ contract_enum!(
     /// preview's details name. Nothing is integrated: no local branch
     /// moves, and the next synchronization of the item integrates
     /// primary.
+    ///
+    /// `context_synchronized` to `branch_deleted` are a promotion's and a
+    /// closure's, in order, each listed when the preview plans it:
+    /// `context_synchronized` is the editing branch synchronized with the
+    /// remote first; `closure_recorded` the closure fields written and
+    /// committed there; `primary_integrated` the branch merged into primary;
+    /// `primary_published` primary pushed; `remote_branch_deleted`,
+    /// `worktree_removed` and `branch_deleted` the context retired.
     PreviewEffect {
         DirectoryCreated => "directory_created",
         RepositoryInitialized => "repository_initialized",
@@ -165,6 +173,13 @@ contract_enum!(
         SourceWritten => "source_written",
         CheckpointCommitted => "checkpoint_committed",
         BranchRepublished => "branch_republished",
+        ContextSynchronized => "context_synchronized",
+        ClosureRecorded => "closure_recorded",
+        PrimaryIntegrated => "primary_integrated",
+        PrimaryPublished => "primary_published",
+        RemoteBranchDeleted => "remote_branch_deleted",
+        WorktreeRemoved => "worktree_removed",
+        BranchDeleted => "branch_deleted",
     }
 );
 
@@ -225,6 +240,130 @@ pub enum PreviewDetailsDto {
     Host(HostPreviewDto),
     Repair(RepairPreviewDto),
     Republish(ItemRepublishPreviewDto),
+    Lifecycle(Box<LifecyclePreviewDto>),
+}
+
+contract_enum!(
+    /// How a preview plans to reach primary.
+    LifecyclePlannedIntegration {
+        MergeCommit => "merge_commit",
+        AlreadyContained => "already_contained",
+    }
+);
+
+contract_enum!(
+    /// What a preview plans for primary's publication: a push, or none for
+    /// a repository with no publication remote.
+    LifecyclePlannedPublication {
+        Publish => "publish",
+        PendingNoRemote => "pending_no_remote",
+    }
+);
+
+contract_enum!(
+    /// How a path differs between primary and the item's context.
+    LifecyclePathChangeKind {
+        Added => "added",
+        Modified => "modified",
+        Deleted => "deleted",
+    }
+);
+
+contract_enum!(
+    /// How a closure reaches the ticket: this operation writes both closure
+    /// fields, or the context already holds them.
+    LifecycleRecording {
+        Record => "record",
+        Existing => "existing",
+    }
+);
+
+/// One path of a preview's whole-branch change set. It names the path and
+/// holds nothing the file holds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LifecyclePathChangeDto {
+    /// Relative to the repository, with forward slashes.
+    pub path: String,
+    pub change: LifecyclePathChangeKind,
+}
+
+/// What a preview plans to retire of the item's context.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct LifecyclePlannedCleanupDto {
+    pub remote_branch: bool,
+    pub worktree: bool,
+    pub local_branch: bool,
+}
+
+/// What a closure records. `closed_by` is personal data, and appears only in
+/// a preview, canonical content, the index and Git (Cycle 10): a request's
+/// record never holds it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LifecyclePlannedClosureDto {
+    pub recording: LifecycleRecording,
+    pub closed_by: String,
+}
+
+/// What a preview of `document promote` or `ticket close` shows. It holds
+/// names, commits and paths, and no title, body or content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LifecyclePreviewDto {
+    /// The repository's root, as the request's records name it.
+    pub root: String,
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    /// The ticket's short code, when the index holds one.
+    pub slug: Option<String>,
+    /// The item's editing branch, as its short name.
+    pub branch: String,
+    pub primary_branch: String,
+    /// The publication remote, by its name. Null for a repository with none.
+    pub remote: Option<String>,
+    pub context_oid: String,
+    pub primary_oid: String,
+    pub changes: Vec<LifecyclePathChangeDto>,
+    pub integration: LifecyclePlannedIntegration,
+    pub publication: LifecyclePlannedPublication,
+    pub cleanup: LifecyclePlannedCleanupDto,
+    /// Null for a promotion, which records no closure.
+    pub closure: Option<LifecyclePlannedClosureDto>,
+}
+
+contract_enum!(
+    /// What stands in the way of a promotion or a closure: the domain's
+    /// blockers of both, by one vocabulary.
+    LifecycleBlocker {
+        NotADocument => "not_a_document",
+        NotATicket => "not_a_ticket",
+        ContextMissing => "context_missing",
+        ContextNonconforming => "context_nonconforming",
+        ContextDirty => "context_dirty",
+        ContextConflicted => "context_conflicted",
+        ConflictPending => "conflict_pending",
+        LocalOperationPending => "local_operation_pending",
+        CommentPublicationPending => "comment_publication_pending",
+        PrimaryMissing => "primary_missing",
+        PrimaryNotCheckedOut => "primary_not_checked_out",
+        PrimaryDirty => "primary_dirty",
+        PrimaryConflicted => "primary_conflicted",
+        PrimaryAheadOfRemote => "primary_ahead_of_remote",
+        ContextBehindRemote => "context_behind_remote",
+        IntegrationConflict => "integration_conflict",
+        RemoteContextDeleted => "remote_context_deleted",
+        HistoryUnknown => "history_unknown",
+        AlreadyClosed => "already_closed",
+        PrimaryReopened => "primary_reopened",
+        DocumentInvalidAfterIntegration => "document_invalid_after_integration",
+        TicketInvalidAfterClosure => "ticket_invalid_after_closure",
+        IdentityRequired => "identity_required",
+    }
+);
+
+/// What a `prepare` of `document promote` or `ticket close` reports when it
+/// is refused for its blockers: every one of them, in the domain's order.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LifecycleBlockedDto {
+    pub blockers: Vec<LifecycleBlocker>,
 }
 
 /// What a preview of `item republish` shows: the item's editing branch,
@@ -533,8 +672,8 @@ pub(crate) fn authority_text(host: &str, port: u16) -> String {
     }
 }
 
-/// The `data` of a `prepare` envelope: the preview, or, for the one
-/// refusal that reports any, what the refusal is about. A `prepare`
+/// The `data` of a `prepare` envelope: the preview, or, for the two
+/// refusals that report any, what the refusal is about. A `prepare`
 /// that gives neither carries no data: every other rejection, and a
 /// no-op for a command whose end state already holds.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -543,6 +682,8 @@ pub enum PrepareDataDto {
     Preview(Box<PreviewDto>),
     /// Of `host approve`, refused as `host_replacement_required`.
     HostReplacement(HostReplacementDto),
+    /// Of `document promote` and `ticket close`, refused for their blockers.
+    LifecycleBlocked(LifecycleBlockedDto),
 }
 
 impl PrepareDataDto {
@@ -550,7 +691,7 @@ impl PrepareDataDto {
     pub fn preview(&self) -> Option<&PreviewDto> {
         match self {
             Self::Preview(preview) => Some(preview),
-            Self::HostReplacement(_) => None,
+            Self::HostReplacement(_) | Self::LifecycleBlocked(_) => None,
         }
     }
 
@@ -558,7 +699,7 @@ impl PrepareDataDto {
     pub fn into_preview(self) -> Option<PreviewDto> {
         match self {
             Self::Preview(preview) => Some(*preview),
-            Self::HostReplacement(_) => None,
+            Self::HostReplacement(_) | Self::LifecycleBlocked(_) => None,
         }
     }
 }
@@ -582,6 +723,196 @@ pub enum MutationDataDto {
     Host(HostMutationDto),
     Repair(RepairMutationDto),
     Context(ContextMutationDto),
+    Lifecycle(Box<LifecycleMutationDto>),
+}
+
+contract_enum!(
+    /// The tag of `LifecycleMutationDto`: one value, so that the data of a
+    /// promotion or a closure is told apart by it alone.
+    LifecycleMutationType {
+        Lifecycle => "lifecycle",
+    }
+);
+
+contract_enum!(
+    /// How an operation reached primary: its merge commit, or a context
+    /// primary already contained.
+    LifecycleIntegrationKind {
+        Merged => "merged",
+        AlreadyContained => "already_contained",
+    }
+);
+
+contract_enum!(
+    /// How far primary's publication got.
+    LifecyclePublicationState {
+        Published => "published",
+        AlreadyCurrent => "already_current",
+        Pending => "pending",
+    }
+);
+
+contract_enum!(
+    /// Why primary's publication is pending: the repository has no
+    /// publication remote; its synchronization stopped for this category;
+    /// or it was cancelled.
+    LifecyclePublicationPendingReason {
+        NoPublicationRemote => "no_publication_remote",
+        Conflict => "conflict",
+        Rejected => "rejected",
+        Transport => "transport",
+        Identity => "identity",
+        Busy => "busy",
+        Yielding => "yielding",
+        RecoveryRequired => "recovery_required",
+        Cancelled => "cancelled",
+    }
+);
+
+contract_enum!(
+    /// How far retiring the context got.
+    LifecycleCleanupState {
+        Complete => "complete",
+        Pending => "pending",
+    }
+);
+
+contract_enum!(
+    /// Why retiring the context is pending. It holds a fixed category and
+    /// no text a server sent.
+    LifecycleCleanupPendingReason {
+        AwaitingPublication => "awaiting_publication",
+        ContextChanged => "context_changed",
+        IgnoredFiles => "ignored_files",
+        RemoteContextChanged => "remote_context_changed",
+        RemoteDeletionTransport => "remote_deletion_transport",
+        RemoteDeletionRejected => "remote_deletion_rejected",
+        RemoteDeletionConfiguration => "remote_deletion_configuration",
+        RemoteDeletionKey => "remote_deletion_key",
+        RemoteDeletionUnlock => "remote_deletion_unlock",
+        RemoteDeletionHost => "remote_deletion_host",
+        RecoveryRequired => "recovery_required",
+        Cancelled => "cancelled",
+    }
+);
+
+/// What `document promote` and `ticket close` report. An operation that
+/// reached primary reports how far it got; one refused for its blockers
+/// names them, and the rest is null. It holds IDs, commits and fixed
+/// categories: no `closed_by`, title or body.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LifecycleMutationDto {
+    pub r#type: LifecycleMutationType,
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    /// How the closure reached the ticket. Null for a promotion, and for a
+    /// closure that did not reach primary.
+    pub recording: Option<LifecycleRecording>,
+    /// The commit that recorded the closure, when this operation wrote it.
+    pub checkpoint_oid: Option<String>,
+    pub integration: Option<LifecycleIntegrationKind>,
+    pub integration_oid: Option<String>,
+    pub publication: Option<LifecyclePublicationState>,
+    /// The commit primary was published at, or found current at.
+    pub publication_oid: Option<String>,
+    /// Set exactly when the publication is pending.
+    pub publication_pending: Option<LifecyclePublicationPendingReason>,
+    pub cleanup: Option<LifecycleCleanupState>,
+    /// Set exactly when the cleanup is pending.
+    pub cleanup_pending: Option<LifecycleCleanupPendingReason>,
+    /// What refused the operation, in the domain's order. Empty otherwise.
+    pub blockers: Vec<LifecycleBlocker>,
+}
+
+impl LifecycleMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        let text = |key: &str| -> Option<Option<String>> {
+            match stored.get(key)? {
+                serde_json::Value::Null => Some(None),
+                value => Some(Some(value.as_str()?.to_owned())),
+            }
+        };
+        // A closed vocabulary: what is not of it is not of this shape.
+        fn known<T: Copy>(all: &[T], name: impl Fn(T) -> &'static str, text: &str) -> Option<T> {
+            all.iter().copied().find(|known| name(*known) == text)
+        }
+        let tag = text("type")??;
+        let kind = text("kind")??;
+        let optional = |key: &str| text(key);
+        Some(Self {
+            r#type: known(
+                &LifecycleMutationType::ALL,
+                LifecycleMutationType::as_str,
+                &tag,
+            )?,
+            kind: known(&ItemDtoKind::ALL, ItemDtoKind::as_str, &kind)?,
+            item_id: text("item_id")??,
+            recording: match optional("recording")? {
+                Some(value) => Some(known(
+                    &LifecycleRecording::ALL,
+                    LifecycleRecording::as_str,
+                    &value,
+                )?),
+                None => None,
+            },
+            checkpoint_oid: optional("checkpoint_oid")?,
+            integration: match optional("integration")? {
+                Some(value) => Some(known(
+                    &LifecycleIntegrationKind::ALL,
+                    LifecycleIntegrationKind::as_str,
+                    &value,
+                )?),
+                None => None,
+            },
+            integration_oid: optional("integration_oid")?,
+            publication: match optional("publication")? {
+                Some(value) => Some(known(
+                    &LifecyclePublicationState::ALL,
+                    LifecyclePublicationState::as_str,
+                    &value,
+                )?),
+                None => None,
+            },
+            publication_oid: optional("publication_oid")?,
+            publication_pending: match optional("publication_pending")? {
+                Some(value) => Some(known(
+                    &LifecyclePublicationPendingReason::ALL,
+                    LifecyclePublicationPendingReason::as_str,
+                    &value,
+                )?),
+                None => None,
+            },
+            cleanup: match optional("cleanup")? {
+                Some(value) => Some(known(
+                    &LifecycleCleanupState::ALL,
+                    LifecycleCleanupState::as_str,
+                    &value,
+                )?),
+                None => None,
+            },
+            cleanup_pending: match optional("cleanup_pending")? {
+                Some(value) => Some(known(
+                    &LifecycleCleanupPendingReason::ALL,
+                    LifecycleCleanupPendingReason::as_str,
+                    &value,
+                )?),
+                None => None,
+            },
+            blockers: stored
+                .get("blockers")?
+                .as_array()?
+                .iter()
+                .map(|value| {
+                    known(
+                        &LifecycleBlocker::ALL,
+                        LifecycleBlocker::as_str,
+                        value.as_str()?,
+                    )
+                })
+                .collect::<Option<_>>()?,
+        })
+    }
 }
 
 contract_enum!(
@@ -1265,7 +1596,9 @@ impl MutationDataDto {
             // none.
             | Self::Host(_)
             | Self::Repair(_)
-            | Self::Context(_) => None,
+            | Self::Context(_)
+            // A lifecycle's category carries no authority (design, Answers).
+            | Self::Lifecycle(_) => None,
         }
     }
 
@@ -1333,6 +1666,10 @@ impl MutationDataDto {
                     .map(Self::SynchronizationConflict)
             }
             Command::ContextPrepare => ContextMutationDto::from_stored(stored).map(Self::Context),
+            Command::DocumentPromote | Command::TicketClose => {
+                LifecycleMutationDto::from_stored(stored)
+                    .map(|data| Self::Lifecycle(Box::new(data)))
+            }
             // A resume reports data only of a synchronization it took
             // up: the host that synchronization stopped for, or the
             // conflict above. A republish reports only the host it

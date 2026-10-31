@@ -6,6 +6,8 @@
 #[path = "../src/lib.rs"]
 mod production;
 pub use production::*;
+#[path = "mutation_remote/c5_lifecycle.rs"]
+mod c5_lifecycle;
 #[path = "mutation_remote/comment.rs"]
 mod comment;
 #[path = "mutation_remote/comment_domain.rs"]
@@ -19,6 +21,8 @@ mod conformance;
 mod golden;
 #[path = "mutation_remote/host.rs"]
 mod host;
+#[path = "support/lifecycle_world.rs"]
+mod lifecycle_world;
 #[path = "mutation_remote/merging.rs"]
 mod merging;
 #[allow(dead_code)]
@@ -64,6 +68,7 @@ fn main() {
         .chain(resolution::CASES)
         .chain(resume::CASES)
         .chain(republish::CASES)
+        .chain(c5_lifecycle::CASES)
         .copied()
         .collect();
     let controls: Vec<_> = OUTPUT_CONTROLS
@@ -4668,7 +4673,7 @@ fn conforming(
 /// need a finished request each make a conflict to resolve, and that of
 /// `item republish` is `republish::c4_republish_conformance`, whose rules
 /// each make a deleted branch to republish.
-const CONFORMANCE: [conformance::Row; 5] = [
+const CONFORMANCE: [conformance::Row; 7] = [
     conformance::Row::new("item sync", false, "item_not_found", |rule| {
         conforming(
             |w, ask| match ask {
@@ -4740,6 +4745,18 @@ const CONFORMANCE: [conformance::Row; 5] = [
         true,
         "confirmation_not_found",
         republish::conforming,
+    ),
+    conformance::Row::new(
+        "document promote",
+        true,
+        "confirmation_not_found",
+        c5_lifecycle::conforming_promote,
+    ),
+    conformance::Row::new(
+        "ticket close",
+        true,
+        "confirmation_not_found",
+        c5_lifecycle::conforming_close,
     ),
 ];
 

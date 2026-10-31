@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 lifecycle mutation",
+  "description": "The data of a result of document promote or ticket close. One that reached primary reports how far it got; one refused for its blockers names them, and the rest is null. It holds IDs, commits and fixed categories: no closed_by, title or body.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "type",
+    "kind",
+    "item_id",
+    "recording",
+    "checkpoint_oid",
+    "integration",
+    "integration_oid",
+    "publication",
+    "publication_oid",
+    "publication_pending",
+    "cleanup",
+    "cleanup_pending",
+    "blockers"
+  ],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "lifecycle"
+      ]
+    },
+    "kind": {
+      "type": "string",
+      "enum": [
+        "document",
+        "ticket"
+      ]
+    },
+    "item_id": {
+      "type": "string"
+    },
+    "recording": {
+      "description": "How the closure reached the ticket. Null for a promotion, and for a closure that did not reach primary.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "record",
+        "existing",
+        null
+      ]
+    },
+    "checkpoint_oid": {
+      "description": "The commit that recorded the closure, when this operation wrote it.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "integration": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "merged",
+        "already_contained",
+        null
+      ]
+    },
+    "integration_oid": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "publication": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "published",
+        "already_current",
+        "pending",
+        null
+      ]
+    },
+    "publication_oid": {
+      "description": "The commit primary was published at, or found current at.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "publication_pending": {
+      "description": "Set exactly when the publication is pending.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "no_publication_remote",
+        "conflict",
+        "rejected",
+        "transport",
+        "identity",
+        "busy",
+        "yielding",
+        "recovery_required",
+        "cancelled",
+        null
+      ]
+    },
+    "cleanup": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "complete",
+        "pending",
+        null
+      ]
+    },
+    "cleanup_pending": {
+      "description": "Set exactly when the cleanup is pending.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "awaiting_publication",
+        "context_changed",
+        "ignored_files",
+        "remote_context_changed",
+        "remote_deletion_transport",
+        "remote_deletion_rejected",
+        "remote_deletion_configuration",
+        "remote_deletion_key",
+        "remote_deletion_unlock",
+        "remote_deletion_host",
+        "recovery_required",
+        "cancelled",
+        null
+      ]
+    },
+    "blockers": {
+      "description": "What refused the operation, in the domain's order. Empty otherwise.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "not_a_document",
+          "not_a_ticket",
+          "context_missing",
+          "context_nonconforming",
+          "context_dirty",
+          "context_conflicted",
+          "conflict_pending",
+          "local_operation_pending",
+          "comment_publication_pending",
+          "primary_missing",
+          "primary_not_checked_out",
+          "primary_dirty",
+          "primary_conflicted",
+          "primary_ahead_of_remote",
+          "context_behind_remote",
+          "integration_conflict",
+          "remote_context_deleted",
+          "history_unknown",
+          "already_closed",
+          "primary_reopened",
+          "document_invalid_after_integration",
+          "ticket_invalid_after_closure",
+          "identity_required"
+        ]
+      }
+    }
+  }
+}
