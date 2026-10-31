@@ -359,6 +359,7 @@ pub(super) fn lifecycle_parent(
                     checkpoint: parent.closure_oid,
                     integration: parent.integration_oid(),
                     publication: parent.publication(),
+                    cancel_requested: parent.cancel_requested(),
                 }
             }),
         )
@@ -385,7 +386,16 @@ impl RepositoryService {
         request: CloseTicketRequest,
         session: &mut SessionCredentials<P>,
     ) -> Result<TicketClosureResult, TicketClosureError> {
-        lifecycle::close(self, request, session)
+        lifecycle::close(self, request, session, None)
+    }
+    /// `close_ticket`, stopping at each safe point when `probe` says so.
+    pub(super) fn close_ticket_observed<P: SessionCredentialProvider>(
+        &self,
+        request: CloseTicketRequest,
+        session: &mut SessionCredentials<P>,
+        probe: crate::repository::promotion::lifecycle::CancellationProbe,
+    ) -> Result<TicketClosureResult, TicketClosureError> {
+        lifecycle::close(self, request, session, Some(probe))
     }
     /// Ask an unfinished closure to stop at its next safe point. `false` when
     /// no unfinished closure has this ID.

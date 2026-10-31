@@ -933,7 +933,10 @@ impl RepositoryService {
     /// Whether the record's cancellation flag is set. Nothing is
     /// changed: a cancellation that is held, and not yet passed on,
     /// stays where a later call finds it.
-    pub(super) fn cancellation_requested(&self, request_id: RequestId) -> Result<bool, ReadError> {
+    pub(in super::super) fn cancellation_requested(
+        &self,
+        request_id: RequestId,
+    ) -> Result<bool, ReadError> {
         if self
             .should_inject(
                 FailurePoint::BeforeRequestCancellationRead,

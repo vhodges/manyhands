@@ -23,9 +23,13 @@
 //! state. A parent that ended answers from what it holds. With no parent, what
 //! is there is compared with what was previewed.
 //!
-//! **Left for later tasks.** Task 2c connects cancellation, Task 3 `operation
-//! resume`, Task 4 the made-ready report, and Task 6 the promotion identity
-//! row.
+//! **Cancellation.** The domain's safe points read the call's token and the
+//! request's flag. A run that stops for either answers `cancelled` and its
+//! request stays accepted, with its flag taken, so that the same request
+//! continues (decision 8, R-20).
+//!
+//! **Left for later tasks.** Task 3 `operation resume`, Task 4 the made-ready
+//! report, and Task 6 the promotion identity row.
 
 use std::{marker::PhantomData, path::Path, path::PathBuf};
 
@@ -75,7 +79,7 @@ use super::{
             PreviewEffect,
         },
         evidence::{self, Position},
-        identity::{IntentDigestBuilder, ScopeKey},
+        identity::{IntentDigestBuilder, RequestId, ScopeKey},
         observe::{Observation, ObservationDigest},
         outcome,
         progress::Session,
@@ -142,6 +146,8 @@ pub(crate) enum Stop {
     Busy,
     PollYielding,
     Interrupted,
+    /// `Interrupted`, by a cancellation.
+    Cancelled,
     OperationMismatch,
     RecoveryRequired,
 }
@@ -167,6 +173,7 @@ pub(crate) trait LifecycleVerb {
         operation_id: OperationId,
         item_id: ItemId,
         expected: [u8; 32],
+        request_id: RequestId,
     ) -> Option<Result<Reached, Stop>>;
 
     fn parent(
@@ -319,6 +326,7 @@ impl LifecycleVerb for Promote {
         operation_id: OperationId,
         item_id: ItemId,
         expected: [u8; 32],
+        request_id: RequestId,
     ) -> Option<Result<Reached, Stop>> {
         let result = session.promote_document(
             service,
@@ -330,6 +338,7 @@ impl LifecycleVerb for Promote {
                 approval: None,
                 confirmed_identity: None,
             },
+            request_id,
         )?;
         Some(match result {
             Ok(DocumentPromotionResult::Complete(outcome)) => {
@@ -406,6 +415,7 @@ impl LifecycleVerb for Close {
         operation_id: OperationId,
         item_id: ItemId,
         expected: [u8; 32],
+        request_id: RequestId,
     ) -> Option<Result<Reached, Stop>> {
         let result = session.close_ticket(
             service,
@@ -417,6 +427,7 @@ impl LifecycleVerb for Close {
                 approval: None,
                 confirmed_identity: None,
             },
+            request_id,
         )?;
         Some(match result {
             Ok(TicketClosureResult::Complete(outcome)) => Ok(closure_reached(&outcome, false)),
@@ -940,18 +951,50 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
                 accepted.operation_id,
                 self.id.clone(),
                 expected,
+                accepted.request_id,
             )
         });
-        match called {
+        let ran = match called {
             Some(Ok(reached)) => self.reached(accepted, &reached),
-            Some(Err(stop)) => self.stopped(call.service, accepted, stop, entered_again),
+            Some(Err(stop)) => {
+                let stop = self.interrupted_as_asked(call, accepted, stop);
+                self.stopped(call.service, accepted, stop, entered_again)
+            }
             // No consent was observed, or the session has no credentials:
             // nothing was called, and the record is left as it is.
             None => Ran {
                 answer: Answer::stopped(ResultCode::InternalError),
                 standing: Standing::Stopped { journal: None },
             },
+        };
+        // The cancellation is answered, so the next call starts clean. A
+        // call that dies before this, or a take that fails, leaves the flag,
+        // and the next call answers `cancelled` once more (R-20).
+        if ran.answer.code == ResultCode::Cancelled {
+            let _ = call.service.take_cancellation(accepted.request_id);
         }
+        ran
+    }
+
+    /// `Interrupted` is `cancelled` once the call, the request or the parent
+    /// was asked to stop. Anything else that interrupts it is no cancellation.
+    fn interrupted_as_asked(
+        &self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        stop: Stop,
+    ) -> Stop {
+        if !matches!(stop, Stop::Interrupted) {
+            return stop;
+        }
+        let asked = call.session.cancelled()
+            || call
+                .service
+                .cancellation_requested(accepted.request_id)
+                .unwrap_or(false)
+            || V::parent(call.service, &accepted.root(), accepted.operation_id)
+                .is_ok_and(|parent| parent.is_some_and(|parent| parent.cancel_requested));
+        if asked { Stop::Cancelled } else { stop }
     }
 
     /// The answer to what stands in the way of a request entered again with
@@ -1379,7 +1422,7 @@ fn stop_answer(stop: &Stop) -> (ResultCode, Option<Vec<LifecycleBlocker>>, bool)
         }
         Stop::Busy => (ResultCode::Busy, None, false),
         Stop::PollYielding => (ResultCode::PollYielding, None, false),
-        // Task 2c answers `cancelled` for one that was asked to stop.
+        Stop::Cancelled => (ResultCode::Cancelled, None, false),
         Stop::Interrupted | Stop::RecoveryRequired => (ResultCode::RecoveryRequired, None, false),
         Stop::OperationMismatch => (ResultCode::RequestMismatch, None, true),
     }
@@ -1407,7 +1450,10 @@ fn retry_then_inspect(accepted: &Accepted) -> Vec<RecoveryAction> {
 /// `merge_required` holds the child's reservation, not the request's, so its
 /// `request.cancel` would be dropped: the request is offered, and the repository
 /// is what shows what happened to the branch. The same request does not get
-/// past either alone; the way out is Task 2c's to walk (R-24). Every other
+/// past either alone. A deleted branch's way out, walked by
+/// `c5_cancel_walk_remote_branch_deleted`, is `request cancel`, `operation
+/// resume` of the child `repo inspect` names, `item republish`, then the same
+/// request (R-24). Every other
 /// code's own actions follow the same request.
 fn standing_recovery(code: ResultCode, accepted: &Accepted) -> Vec<RecoveryAction> {
     match code {
@@ -1638,6 +1684,7 @@ mod tests {
             _operation_id: OperationId,
             _item_id: ItemId,
             _expected: [u8; 32],
+            _request_id: RequestId,
         ) -> Option<Result<Reached, Stop>> {
             None
         }
@@ -1669,6 +1716,7 @@ mod tests {
                 checkpoint: None,
                 integration: None,
                 publication: None,
+                cancel_requested: false,
             });
         });
         let data = tempfile::tempdir().unwrap();

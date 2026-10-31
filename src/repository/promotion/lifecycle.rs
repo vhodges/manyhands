@@ -18,7 +18,10 @@ use crate::{
     repository::{
         AuthoringKind, CommitIdentity, ConfirmedCommitIdentity, ExpectedConfiguration,
         IndexPending, OperationId, RemoteOperationAction, RepositoryError, RepositoryService,
-        SynchronizationError, cleanup::RetirementEvidence, remote::reservation::RemoteReservation,
+        SynchronizationError,
+        cleanup::RetirementEvidence,
+        mutation::{CancellationToken, RequestId},
+        remote::{reservation::RemoteReservation, state},
         transport::HostApproval,
     },
 };
@@ -71,8 +74,38 @@ impl LifecycleKind {
     }
 }
 
+/// What stops a run besides its parent's own flag, for a run the mutation
+/// boundary makes: the call's token, and the flag `request cancel` sets on the
+/// request's record. A same-ID call clears the parent's flag, and neither of
+/// these, so a run reads them at every safe point its parent's flag is read at.
+#[derive(Clone)]
+pub(in super::super) struct CancellationProbe {
+    token: CancellationToken,
+    request: RequestId,
+}
+impl CancellationProbe {
+    pub(in super::super) fn new(token: CancellationToken, request: RequestId) -> Self {
+        Self { token, request }
+    }
+    /// Whether the run has been asked to stop. The flag is read and left set:
+    /// the boundary takes it once the request has answered `cancelled`. A flag
+    /// that cannot be read is an error, and is not taken for "no".
+    pub(in super::super) fn asked(
+        &self,
+        service: &RepositoryService,
+    ) -> Result<bool, RepositoryError> {
+        if self.token.is_cancelled() {
+            return Ok(true);
+        }
+        service
+            .cancellation_requested(self.request)
+            .map_err(|_| state::recovery_required())
+    }
+}
+
 /// The runner's kind-neutral request. Each lifecycle's public request
-/// converts into it field for field.
+/// converts into it field for field. `probe` is the boundary's, through an
+/// `_observed` entry point: the public signatures have none.
 #[derive(Clone)]
 pub(in super::super) struct LifecycleRequest<E> {
     pub(in super::super) root: PathBuf,
@@ -81,6 +114,7 @@ pub(in super::super) struct LifecycleRequest<E> {
     pub(in super::super) expected: E,
     pub(in super::super) approval: Option<HostApproval>,
     pub(in super::super) confirmed_identity: Option<ConfirmedCommitIdentity>,
+    pub(in super::super) probe: Option<CancellationProbe>,
 }
 
 /// The parent steps the runner branches on, shared by every lifecycle. A

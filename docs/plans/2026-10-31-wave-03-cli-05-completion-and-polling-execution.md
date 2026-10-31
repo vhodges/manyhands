@@ -377,3 +377,67 @@ The design's Rulings table holds R-23 to R-28, and its standing and answers sect
 **Seen first.** Against the code before the fixes, `busy_lease_on_reentry`, `integrating_after_ref` and `child_remote_branch_deleted` failed on the behaviour. Rows that passed at once pin existing behaviour: `integrating_before_ref`, `parent_unreadable_on_mismatch`, `external_refusal_with_record_accepted`, both `busy` rows, `poll_yielding_past_integration`, `interrupted_by_a_changed_remote`, `child_conflict` and `deletion_host`. The other two `parent_unreadable_*` rows failed then on a fixture fault (a table rename can't be undone past the schema check, so the registry's image is restored) and were not rerun against the old code. **The unit rows were written with the fix**, since the signature changed, so they were not seen to fail.
 
 **Verified on the final code, all exit 0.** `c5_lifecycle` 126 cases (1037 s), `mutation_replay` 383 (277 s), `mutation_confirmation` 183, `mutation_contract` 44, `--lib mutation` 141, `cargo fmt --check`, clippy `-D warnings`. No golden changed.
+
+### Task 2c: Cancellation Reach
+
+**Base.** `ab6a9750`. `origin/main` had moved to `b411e208` (v0.1.5, Windows signing), and was merged first as `f3dc3f81`, without conflicts.
+
+**Tests first.** 51 `c5_cancel_` cases ran against the unchanged library, and all 51 failed. 47 failed on the behaviour: 45 on the `cancelled` answer, 2 (`killed_after_acknowledging`) on the flag, and 2 (`walk_remote_branch_deleted`) at the end of the walk. **`complete_with_record_accepted` failed on a fixture fault** (it stopped at a point that finishes the record), so it wasn't seen to fail on the behaviour. It uses `BeforeRequestSettlement` now. The child-flag and walk rows were tightened to their final assertions after that first run, once the answers were read, and were not rerun against the old library.
+
+**Commands, all exit 0, on the final code.**
+
+| Command | Result | Time |
+| --- | --- | --- |
+| `--test mutation_remote -- c5_cancel_` | 51 cases | 831 s |
+| `--test mutation_remote -- c5_lifecycle` | 126 cases | 1032 s |
+| `--test document_promotion` | 74 | 750 s |
+| `--test ticket_closure` | 73 | 669 s |
+| `--lib remote` | 478 | 209 s |
+| `--lib local_sync` | 164 | 291 s |
+| `--lib integration` | 26 | 16 s |
+| `--lib mutation` | 141 | 2 s |
+| `cargo fmt --check`; `cargo clippy --all-targets --all-features --locked -- -D warnings` | ok | |
+
+`src/repository/remote/` was not touched. No schema, golden or desktop file changed, so `read_contract` and the desktop commands weren't run.
+
+**R-24, the walk: a way out finishes, and it isn't the one the ruling named.** Cancel, republish, retry does not finish. Found by testing, for both verbs:
+
+| Step | Answer |
+| --- | --- |
+| The request | `remote_branch_deleted`; `request.retry`, `repo.inspect`; the child holds the reservation |
+| `request cancel` | `requested` |
+| The same request | `cancelled`: the parent stops at its first safe point, before any child, so **the child still holds the reservation** |
+| `item republish` | `busy`, `request.retry` |
+| The same request, instead (the dead end, first exploration) | The row is retired and a new attempt answers `remote_branch_deleted` again, holding the reservation again |
+| `operation resume` of the child, whose ID `repo inspect` names as `active_operation_id` | `cancelled`: the row's flag is acknowledged and the reservation is free |
+| `item republish` | `ok` |
+| The same request | `ok`, one merge |
+
+The row is `c5_cancel_walk_remote_branch_deleted`. It reads the active operation through the library call, not through `repo inspect` itself.
+
+**`request.cancel` is not offered: open, for a ruling.** It is the first step of what works, and the task allows offering it. But offering it needs `offering_cancel` in `outcome.rs` to see a parent's child as the request's own, and it changes `c5_lifecycle_child_remote_branch_deleted`'s pinned actions, in a file outside this task's list with no named edit. And the action alone doesn't describe the way out, since the `operation resume` step is what frees the reservation. So the answer still offers `request.retry`, `repo.inspect`.
+
+**A pending child's flag.**
+
+- A child stopped by a transport fault keeps its reservation in a nonterminal phase. `request cancel` sets its row's `cancel_requested` with nothing running, and the `cancelled` answer leaves it, since no child ran.
+- **`restart` does not clear the flag.** It acknowledges it (`restart_synchronization_guarded`, `reservation.rs:2510`): the row ends `cancelled` with the flag still 1, and the next call runs a new attempt under a new ID. Pinned by `c5_cancel_child_flag_unowned`.
+- A retained conflict's row has already ended `interrupted`, so `request cancel` sets no flag on it. The cancellation is answered once, and the next call answers `recovery_required` as before. Pinned by `c5_cancel_child_flag_retained_close`.
+
+**Decisions, for review.**
+
+- **The probe is data:** `CancellationProbe { token, request }`, on `LifecycleRequest`, reached through `promote_document_observed` and `close_ticket_observed`. `Session`'s two methods take the request's ID. Public signatures stay. A flag that can't be read is an error at a safe point, and a `Stop` in a child, not "no".
+- **A refused deletion is `Pending{Cancelled}` when a cancellation was asked.** `request cancel` sets the parent's own reservation row, whose boundary refuses the deletion as a repository error, which answered `recovery_required`. `finish_steps` now reads `cancelled::<L>` on a deletion error, as `child` already does. This is the one runner behaviour beyond the probe, and only a run asked to stop reaches it.
+- **`cancel_request` reports `acknowledged: false` for these commands while the record is accepted.** The acknowledgement is the `cancelled` answer, and the journal loop isn't run, since `request_cancellation` already sets the rows.
+- **`Stop::Cancelled` is new:** `Interrupted` becomes it when the token, the request's flag or the parent's flag says so, so `interrupted_by_a_changed_remote` still answers `recovery_required`.
+- `promote_with_io` is now `#[cfg(test)]`: production reaches the runner through `run_lifecycle`.
+- **A new ID past integration has nothing to confirm.** Before integration it answers `busy`, offering `request.prepare`, with its record deleted. At `AfterPublication` its prepare is already refused, `recovery_required`, naming `primary_ahead_of_remote` and `remote_context_deleted` until a poll has run. Both pinned, and in both the same request then finishes.
+
+**Risks, for review.**
+
+- `remote_context_deleted` in that prepare is reported while the branch still stands at the remote (the row asserts it is there only for `cleanup_pending_by_request`, a separate path). It's what the preview's stored evidence says; this task doesn't change it.
+- A non-cancelled stop between a `request cancel` and its answer leaves the flag, so the next resend answers `cancelled`, as R-20 intends.
+- The comment on `c5_lifecycle_child_remote_branch_deleted` still says "the way out is Task 2c's walk".
+
+**Deviation.** `tests/mutation_remote/c5_cancel.rs` duplicates a few helpers, since `c5_lifecycle.rs`'s are private and outside this task's files.
+
+**Left.** The ruling above. Task 5b: the probe on `remote/poll.rs`. Task 7: `stops_on_ctrl_c`, and the human lines.

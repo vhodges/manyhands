@@ -373,6 +373,9 @@ pub(super) struct ParentView<B> {
     pub(super) checkpoint: Option<Oid>,
     pub(super) integration: Option<Oid>,
     pub(super) publication: Option<record::PublicationCategory>,
+    /// The parent's own flag, which `cancel_document_promotion` or
+    /// `cancel_ticket_closure` sets as well as `request cancel`.
+    pub(super) cancel_requested: bool,
 }
 
 impl<B> ParentView<B> {
@@ -393,6 +396,7 @@ impl<B> ParentView<B> {
             checkpoint: self.checkpoint,
             integration: self.integration,
             publication: self.publication,
+            cancel_requested: self.cancel_requested,
         }
     }
 }
@@ -414,6 +418,7 @@ pub(super) fn lifecycle_parent(
                 checkpoint: None,
                 integration: parent.integration_oid(),
                 publication: parent.publication(),
+                cancel_requested: parent.cancel_requested(),
             }),
         )
     })
@@ -425,7 +430,16 @@ impl RepositoryService {
         request: PromoteDocumentRequest,
         session: &mut SessionCredentials<P>,
     ) -> Result<DocumentPromotionResult, DocumentPromotionError> {
-        run::promote(self, request, session)
+        run::promote(self, request, session, None)
+    }
+    /// `promote_document`, stopping at each safe point when `probe` says so.
+    pub(super) fn promote_document_observed<P: SessionCredentialProvider>(
+        &self,
+        request: PromoteDocumentRequest,
+        session: &mut SessionCredentials<P>,
+        probe: lifecycle::CancellationProbe,
+    ) -> Result<DocumentPromotionResult, DocumentPromotionError> {
+        run::promote(self, request, session, Some(probe))
     }
     pub fn cancel_document_promotion(
         &self,

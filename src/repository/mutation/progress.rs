@@ -7,10 +7,10 @@
 //!
 //! Cancellation is cooperative. It is honored before a request is
 //! accepted, by every command, and after that only where the request's
-//! operation has a safe point, which is a synchronization: at each one
-//! the binding looks at the token and at the flag `cancel_request` sets
-//! on the request's record, and asks the synchronization to stop there.
-//! A local operation has no safe point once it is accepted.
+//! operation has a safe point, which is a synchronization, a promotion or a
+//! closure: at each one the token and the flag `cancel_request` sets on the
+//! request's record are looked at, and the operation stops there. A local
+//! operation has no safe point once it is accepted.
 
 use std::{
     cell::RefCell,
@@ -29,10 +29,11 @@ use crate::results::{Effects, Envelope, ResultCode, Scope, contract_enum};
 use super::{
     super::{
         CloseTicketRequest, DocumentPromotionError, DocumentPromotionResult, OperationFamily,
-        PromoteDocumentRequest, ReadError, RepositoryService, SynchronizationError,
-        SynchronizationObserver, SynchronizationResult, SynchronizationSettings,
-        SynchronizeRemoteRequest, TicketClosureError, TicketClosureResult,
+        PromoteDocumentRequest, ReadError, RepositoryError, RepositoryService,
+        SynchronizationError, SynchronizationObserver, SynchronizationResult,
+        SynchronizationSettings, SynchronizeRemoteRequest, TicketClosureError, TicketClosureResult,
         keys::{SessionCredentialProvider, SessionCredentials},
+        promotion::lifecycle::CancellationProbe,
         recovery::{FinalKind, JournalRow, PendingOperation},
         remote::sync::RepublishConsent,
         transport::{SshTransportError, SshTransportVerified, VerifySshTransportRequest},
@@ -213,22 +214,26 @@ pub(crate) trait Session {
         observer: &mut dyn SynchronizationObserver,
     ) -> Option<Result<SynchronizationResult, SynchronizationError>>;
 
-    /// Promotes a document with the session's credentials; see
+    /// Promotes a document with the session's credentials, stopped by the
+    /// call's token and by the flag of the request `asked_of`; see
     /// `RepositoryService::promote_document`. `None` when the session has
     /// no credentials, or they are in use: nothing was called.
     fn promote_document(
         &self,
         service: &RepositoryService,
         request: PromoteDocumentRequest,
+        asked_of: RequestId,
     ) -> Option<Result<DocumentPromotionResult, DocumentPromotionError>>;
 
-    /// Closes a ticket with the session's credentials; see
+    /// Closes a ticket with the session's credentials, stopped by the call's
+    /// token and by the flag of the request `asked_of`; see
     /// `RepositoryService::close_ticket`. `None` when the session has no
     /// credentials, or they are in use: nothing was called.
     fn close_ticket(
         &self,
         service: &RepositoryService,
         request: CloseTicketRequest,
+        asked_of: RequestId,
     ) -> Option<Result<TicketClosureResult, TicketClosureError>>;
 
     /// Connects to the host of the publication remote with the session's
@@ -327,18 +332,22 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         &self,
         service: &RepositoryService,
         request: PromoteDocumentRequest,
+        asked_of: RequestId,
     ) -> Option<Result<DocumentPromotionResult, DocumentPromotionError>> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
-        Some(service.promote_document(request, &mut credentials))
+        let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
+        Some(service.promote_document_observed(request, &mut credentials, probe))
     }
 
     fn close_ticket(
         &self,
         service: &RepositoryService,
         request: CloseTicketRequest,
+        asked_of: RequestId,
     ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
-        Some(service.close_ticket(request, &mut credentials))
+        let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
+        Some(service.close_ticket_observed(request, &mut credentials, probe))
     }
 
     fn verify_transport(
@@ -387,6 +396,7 @@ impl Session for NoSession {
         &self,
         _service: &RepositoryService,
         _request: PromoteDocumentRequest,
+        _asked_of: RequestId,
     ) -> Option<Result<DocumentPromotionResult, DocumentPromotionError>> {
         None
     }
@@ -395,6 +405,7 @@ impl Session for NoSession {
         &self,
         _service: &RepositoryService,
         _request: CloseTicketRequest,
+        _asked_of: RequestId,
     ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
         None
     }
@@ -428,7 +439,35 @@ impl RepositoryService {
 /// The command `cancel_request` answers.
 const REQUEST_CANCEL: &str = "request cancel";
 
+/// Whether the request's operation is a promotion or a closure.
+fn asks_a_parent(record: &RequestRecord) -> bool {
+    matches!(
+        Command::parse(&record.command),
+        Some(Command::DocumentPromote | Command::TicketClose)
+    )
+}
+
 impl RepositoryService {
+    /// Asks the parent record of a promotion's or a closure's request to stop,
+    /// when it has one.
+    fn cancel_parent(&self, record: &RequestRecord) -> Result<bool, RepositoryError> {
+        let Some(operation) = record
+            .operations
+            .iter()
+            .find(|operation| operation.family == OperationFamily::Remote)
+        else {
+            return Ok(false);
+        };
+        let root = Path::new(record.scope.as_str());
+        match Command::parse(&record.command) {
+            Some(Command::DocumentPromote) => {
+                self.cancel_document_promotion(root, operation.operation_id)
+            }
+            Some(Command::TicketClose) => self.cancel_ticket_closure(root, operation.operation_id),
+            _ => Ok(false),
+        }
+    }
+
     /// `request cancel`: asks the request `request_id` to stop, from
     /// another thread or process than the one running it.
     ///
@@ -447,6 +486,12 @@ impl RepositoryService {
     /// it. Nothing here finishes or deletes a record, whatever its
     /// operation's row holds; a request that stops is finished by the
     /// call that was running it, or by its next one.
+    ///
+    /// A promotion or a closure is asked through its parent as well, which
+    /// also reaches the rows of its children, and with no parent yet the
+    /// record's flag stops it at its first safe point. Its parent decides
+    /// where it stands, so nothing is finished for it here: `cancelled` leaves
+    /// its record accepted, and the same request continues it.
     ///
     /// A successful envelope reports the call. A request ID no record
     /// holds is `request_not_found`.
@@ -484,6 +529,19 @@ impl RepositoryService {
                     .is_some_and(|result| result.code == ResultCode::Cancelled),
             ),
             (RequestState::Accepted, false) => dto(false, false),
+            (RequestState::Accepted, true) if asks_a_parent(&record) => {
+                match self.request_cancellation(request_id) {
+                    Ok(asked) => {
+                        if asked {
+                            // A failure here loses nothing: the record's
+                            // flag stands, and the next safe point reads it.
+                            let _ = self.cancel_parent(&record);
+                        }
+                        dto(asked, false)
+                    }
+                    Err(error) => return error.to_envelope(REQUEST_CANCEL),
+                }
+            }
             (RequestState::Accepted, true) => {
                 // A request whose operation was fenced can reach no
                 // safe point: nothing takes the operation up again. It
