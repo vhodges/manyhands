@@ -4977,3 +4977,28 @@ budget, on a machine loaded by other sessions. `--no-fail-fast` gave exit 0.
   - `01M67BN4F7M1TYRMTDHB4XNWCM`, the exit-evidence move;
   - `01M67BN4H4F4ZXQG79H2NV7PWS`, consistent human output, with the label
     case.
+
+**Step 3: dogfooding**, with the owner's go-ahead (2026-10-30).
+
+- **Preflight.**
+  - The C4 worktree is clean, every edit is committed, and it is pushed.
+  - Local `main` equals `origin/main` (`055353f8`, merged into C4 as
+    `30db0ff8`; it changes release scripts and workflows only).
+  - C4's context is registered as active in main's index.
+  - The registry is compatible. C4 adds one table,
+    `remote_resolution_owners`, made only if missing. On a copy of the
+    shared registry, main's CLI opened it after the fresh branch-built CLI
+    had, and the reverse also worked. The real registry already holds the
+    table, and main's CLI has opened it since.
+  - The publication remote is `origin` (GitHub), selected for publication.
+  - **One check failed: no key was registered and no host was pinned.**
+    The owner then imported and selected a passphrase-protected key, and
+    approved `github.com` (`ssh-ed25519`,
+    `SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU`, GitHub's
+    published fingerprint), request `01M67R56A3PMDR45F5E76T5H47`.
+- **The verification comment, recorded before it is sent.**
+  - Request `01M67R83D9A9SP5XHG1NBMH93T`, comment
+    `01M67R83CD2P5DM4W2A6BYKQ4Q`, parent `01M671EVGQJX85S8Q1813X9FBM`.
+  - `created_by` is `Claude Opus 5.5 <noreply@anthropic.com>`.
+  - The branch-built CLI sends it at the owner's terminal, because the key
+    has a passphrase.
