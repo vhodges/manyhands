@@ -185,6 +185,15 @@ both executables with Authenticode/SHA-256, and verify the expected
 certificate identity and file integrity. Use RFC 3161 timestamping and fail
 on timestamp errors. Stage 2 also signs the completed installer.
 
+The v0.1.3 native trial rejected the configured HTTPS timestamp URL. Use
+the reviewed `http://timestamp.digicert.com/` RFC 3161 endpoint, matching
+[Microsoft's SignTool example](https://learn.microsoft.com/en-us/windows/win32/seccrypto/signtool#examples).
+Validate and normalize that exact endpoint before invoking SignTool; do not
+permit arbitrary HTTP services or silently fall back to untimestamped output.
+The timestamp token is cryptographically signed despite HTTP transport;
+retain SHA-256 file/timestamp digests and mandatory native verification.
+Keep the existing persistent publisher identity and certificate cleanup.
+
 Self-signed certificates are not trusted by Windows users by default.
 Cryptographic verification and trusted-publisher validation are distinct;
 temporary trust needed for runner verification must not be misreported as

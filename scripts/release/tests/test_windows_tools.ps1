@@ -60,3 +60,27 @@ try {
     Remove-Item -LiteralPath $temporary -Recurse -Force
 }
 Write-Output 'Windows import-policy tests passed.'
+
+$configuration = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '../../../packaging/windows/signing.json') | ConvertFrom-Json
+foreach ($url in @($configuration.timestamp_url, 'http://timestamp.digicert.com/', 'HTTP://TIMESTAMP.DIGICERT.COM')) {
+    $timestamp = Get-SignToolTimestampUrl -Url $url
+    if ($timestamp -cne 'http://timestamp.digicert.com/') { throw "Unexpected normalized timestamp endpoint: $timestamp" }
+}
+foreach ($url in @(
+    'https://timestamp.digicert.com/',
+    'http://example.com/',
+    'http://timestamp.digicert.com.example.com/',
+    'http://user:password@timestamp.digicert.com/',
+    'http://timestamp.digicert.com:81/',
+    'http://timestamp.digicert.com/other',
+    'http://timestamp.digicert.com/?query=1',
+    'http://timestamp.digicert.com/#fragment',
+    'ftp://timestamp.digicert.com/',
+    'timestamp.digicert.com',
+    'not a URL',
+    '',
+    $null
+)) {
+    Assert-Throws { Get-SignToolTimestampUrl -Url $url }
+}
+Write-Output 'Windows timestamp endpoint tests passed.'

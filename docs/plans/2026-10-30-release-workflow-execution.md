@@ -466,3 +466,67 @@ preparing package metadata and CLI version goldens for `0.1.3`, pushing
 main and a new `v0.1.3` tag, and starting one new Release trial. Existing
 tags and the persistent signing identity are retained. Checks remain scoped
 to the Windows policy/metadata and CLI version behavior.
+
+## v0.1.3 Native Trial — Windows Timestamp Transport
+
+The authorized `v0.1.3` trial
+[41163081291](https://github.com/vhodges/manyhands/actions/runs/41163081291)
+completed both Linux packages and macOS packaging/native verification.
+Windows passed its dependency audit and then failed in **Audit and self-sign
+Windows executables** (job `124424744848`), using Windows SDK 10.0.26100.0:
+
+```text
+SignTool Error: Invalid Timestamp URL: https://timestamp.digicert.com/
+```
+
+Draft assembly was skipped. The error concerns the configured timestamp
+transport, not evidence of an unusable signing identity. The helper
+normalized the configured HTTPS URL and explicitly required HTTPS.
+[Microsoft's SignTool examples](https://learn.microsoft.com/en-us/windows/win32/seccrypto/signtool#examples)
+instead document `http://timestamp.digicert.com` with `/tr` and `/td SHA256`.
+
+The owner approved a focused follow-up on `release-windows-timestamp` in
+`.worktrees/release-windows-timestamp`, based on `a52273ff`. Fetched origin
+and merged `origin/main`; main had not moved. The
+[implementation plan](2026-10-31-windows-timestamp-fix.md) records the scope.
+
+### Correction And Regression Evidence
+
+- Changed only the timestamp configuration to the documented HTTP endpoint,
+  with a PowerShell validator that accepts only its normalized exact URL.
+  HTTPS, other hosts, credentials, nondefault ports, non-root paths,
+  queries/fragments, other schemes, relative URLs, and empty/malformed input
+  are rejected. The normalized URL is shared by `/tr` and signing metadata.
+- Preserved the publisher identity, secrets, SHA-256 file/timestamp digests,
+  mandatory native signature/timestamp verification, and certificate cleanup.
+  HTTP carries a cryptographically signed RFC 3161 token; it is not an
+  untimestamped or unsigned fallback. Updated the signing guide/design.
+- Baseline: all four Windows metadata tests and PowerShell import-policy
+  tests passed. The new Python configuration regression then failed on the
+  HTTPS value; the PowerShell acceptance regression failed on the missing
+  endpoint validator before implementation. Both passed after the fix.
+- Final focused Python run through Devenv: **14 Windows metadata/configuration
+  and workflow-adapter tests passed**. PowerShell 7.6.9 through Devenv passed
+  the import-policy and timestamp endpoint tests; it also parsed all three
+  affected PowerShell files successfully. The PowerShell process alone had
+  its inherited `LD_LIBRARY_PATH` cleared to avoid the known Nix ABI collision;
+  the project's runtime library settings were not changed.
+- actionlint 1.7.12 with ShellCheck 0.11.0 passed for Build and Release.
+  `git diff --check` passed. No Rust source, dependencies, versions, workflow
+  matrix, existing tags, signing material, or release assets changed; broad
+  Rust gates were not run for this PowerShell/configuration-only correction.
+- A scoped read-only review found no actionable correctness, security, or
+  coverage issues. Final fetch confirmed main remained at `a52273ff`;
+  `git merge-tree --write-tree HEAD origin/main` succeeded. Edits are still
+  uncommitted, so that merge check compares the committed branch baseline.
+
+At the review checkpoint, changes were uncommitted pending integration
+instructions. The owner then selected committing the correction and merging
+it into local `main`, with focused verification repeated on the merged tree.
+Push, version/tag preparation, and native workflow dispatch are not included
+in that authorization.
+
+Native Windows signing, extracted signature/runtime verification, and draft
+assembly still need an independently authorized post-merge trial with a new
+matching source version/tag containing this correction. No workflow was
+dispatched, no certificate regenerated, and no existing tag moved.
