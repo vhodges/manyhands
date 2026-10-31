@@ -143,9 +143,12 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python -B -m unittest discover -s scripts/release/tests -v
 
-      - name: Test Windows import policy
+      - name: Test Windows release helpers
         if: matrix.os == 'windows'
-        run: ./scripts/release/tests/test_windows_tools.ps1
+        run: |
+          ./scripts/release/tests/test_windows_tools.ps1
+          ./scripts/release/tests/test_windows_process.ps1
+          ./scripts/release/tests/test_windows_signing.ps1
 
       - name: Build release CLI without desktop features
         run: python -B scripts/release/workflow.py build-cli
@@ -175,6 +178,7 @@ jobs:
 
       - name: Audit and self-sign Windows executables
         if: matrix.os == 'windows'
+        timeout-minutes: 10
         env:
           WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
           WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
@@ -192,6 +196,7 @@ jobs:
 
       - name: Verify extracted Windows signatures without signing secrets
         if: matrix.os == 'windows'
+        timeout-minutes: 10
         run: python -B scripts/release/workflow.py windows-verify
 
       - name: Verify Linux archive in an isolated Ubuntu runtime
