@@ -3,13 +3,64 @@ $ErrorActionPreference = 'Stop'
 $script:SystemLibraries = @(Get-Content -LiteralPath (Join-Path $PSScriptRoot '../../packaging/windows/system-libraries.txt') |
     ForEach-Object { $_.Trim() } | Where-Object { $_ -and -not $_.StartsWith('#') })
 
+function Write-ReleaseProgress {
+    param([string]$Message)
+    # The information stream remains visible through assignments/Out-Null,
+    # without becoming part of parsed native-tool output.
+    Write-Host ('[{0}] {1}' -f [DateTime]::UtcNow.ToString('o'), $Message)
+}
+
 function Invoke-ReleaseTool {
-    param([string]$File, [string[]]$Arguments)
-    $output = & $File @Arguments 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "Native release tool failed ($LASTEXITCODE): $File`n$($output -join "`n")"
+    [CmdletBinding()]
+    param([string]$File, [string[]]$Arguments, [ValidateRange(1, 3600)][int]$TimeoutSeconds = 180)
+    $name = [IO.Path]::GetFileName($File)
+    $process = [Diagnostics.Process]::new()
+    $process.StartInfo.FileName = $File
+    $process.StartInfo.UseShellExecute = $false
+    $process.StartInfo.CreateNoWindow = $true
+    $process.StartInfo.WorkingDirectory = $PWD.ProviderPath
+    $process.StartInfo.RedirectStandardOutput = $true
+    $process.StartInfo.RedirectStandardError = $true
+    $process.StartInfo.StandardOutputEncoding = [Text.Encoding]::UTF8
+    $process.StartInfo.StandardErrorEncoding = [Text.Encoding]::UTF8
+    foreach ($argument in $Arguments) { $process.StartInfo.ArgumentList.Add($argument) }
+    Write-ReleaseProgress "Starting native tool: $name (timeout ${TimeoutSeconds}s)"
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        if (-not $process.Start()) { throw "Could not start native release tool: $name" }
+        # Drain both pipes before waiting; sequential reads deadlock on full
+        # stderr/stdout. The same deadline also bounds inherited open pipes.
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $completed = $process.WaitForExit([int][Math]::Max(0, $TimeoutSeconds * 1000 - $clock.ElapsedMilliseconds))
+        if ($completed) {
+            $remaining = [int][Math]::Max(0, $TimeoutSeconds * 1000 - $clock.ElapsedMilliseconds)
+            $completed = [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdout, $stderr), $remaining)
+        }
+        if (-not $completed) {
+            $terminationError = ''
+            try {
+                if (-not $process.HasExited) {
+                    $process.Kill($true)
+                    if (-not $process.WaitForExit(5000)) { $terminationError = '; process did not exit after termination' }
+                } else {
+                    $terminationError = '; tool exited but redirected output did not close'
+                }
+            } catch { $terminationError = '; could not terminate the native process tree' }
+            throw [TimeoutException]::new("Native release tool timed out after $TimeoutSeconds seconds: $name$terminationError")
+        }
+        $output = ((@($stdout.Result, $stderr.Result) | Where-Object { $_ }) -join "`n").TrimEnd([char[]]"`r`n")
+        if ($process.ExitCode -ne 0) {
+            throw "Native release tool failed ($($process.ExitCode)): $name`n$output"
+        }
+        Write-ReleaseProgress ('Completed native tool: {0} ({1:F1}s)' -f $name, $clock.Elapsed.TotalSeconds)
+        return $output
+    } catch {
+        Write-ReleaseProgress ('Failed native tool: {0} ({1:F1}s)' -f $name, $clock.Elapsed.TotalSeconds)
+        throw
+    } finally {
+        $process.Dispose()
     }
-    return ($output -join "`n")
 }
 
 function Find-VisualStudio {
@@ -108,4 +159,4 @@ function Get-WindowsRuntimeReport {
     return [ordered]@{ system = 'windows'; architecture = 'x86_64'; crt = 'static'; binaries = $binaries }
 }
 
-Export-ModuleMember -Function Invoke-ReleaseTool, Find-SignTool, Get-SignToolTimestampUrl, ConvertFrom-DumpbinDependencies, Assert-PeArchitecture, Assert-SystemDependency, Assert-SystemDependencies, Get-WindowsRuntimeReport
+Export-ModuleMember -Function Write-ReleaseProgress, Invoke-ReleaseTool, Find-SignTool, Get-SignToolTimestampUrl, ConvertFrom-DumpbinDependencies, Assert-PeArchitecture, Assert-SystemDependency, Assert-SystemDependencies, Get-WindowsRuntimeReport
