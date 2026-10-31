@@ -382,7 +382,7 @@ The design's Rulings table holds R-23 to R-28, and its standing and answers sect
 
 **Base.** `ab6a9750`. `origin/main` had moved to `b411e208` (v0.1.5, Windows signing), and was merged first as `f3dc3f81`, without conflicts.
 
-**Tests first.** 51 `c5_cancel_` cases ran against the unchanged library, and all 51 failed. 47 failed on the behaviour: 45 on the `cancelled` answer, 2 (`killed_after_acknowledging`) on the flag, and 2 (`walk_remote_branch_deleted`) at the end of the walk. **`complete_with_record_accepted` failed on a fixture fault** (it stopped at a point that finishes the record), so it wasn't seen to fail on the behaviour. It uses `BeforeRequestSettlement` now. The child-flag and walk rows were tightened to their final assertions after that first run, once the answers were read, and were not rerun against the old library.
+**Tests first.** 51 `c5_cancel_` cases ran against the unchanged library, and all 51 failed. 49 failed on the behaviour: 45 on the `cancelled` answer, 2 (`killed_after_acknowledging`) on the flag, and 2 (`walk_remote_branch_deleted`) at the end of the walk. **`complete_with_record_accepted` failed on a fixture fault** (it stopped at a point that finishes the record), so it wasn't seen to fail on the behaviour. It uses `BeforeRequestSettlement` now. The child-flag and walk rows were tightened to their final assertions after that first run, once the answers were read, and were not rerun against the old library.
 
 **Commands, all exit 0, on the final code.**
 
