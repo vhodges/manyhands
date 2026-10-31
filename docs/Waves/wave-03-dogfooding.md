@@ -718,10 +718,16 @@ decisions, numbered in the Cycle document, change this section as follows:
 independent review. Two-clone SSH journeys, interruption, lost output and
 the exit table follow. The branch merged main after D3, never rebasing.
 The [execution ledger](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-execution.md)
-records each task and ruling. C4's final task still owes the full suite,
-the whole-branch review, the dogfooding comment through `comment add`, the
-switch and review-ready. Closure, PR, merge and native CI need their own
-authorization.
+records each task and ruling. Amended 2026-10-30 by C4: C4 is
+review-ready.
+- The full suite passed on the final code, and the whole-branch review is
+  done.
+- The dogfooding comment published through `comment add`, after a fix that
+  dogfooding found.
+- The instruction switch is deferred by the owner (see C4's exit evidence
+  below).
+
+Closure, PR, merge and native CI need their own authorization.
 
 **Known limits.** The [design](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-design.md#known-limits)
 lists each:
@@ -788,6 +794,12 @@ ordered replies, one saved comment after retry, clean/divergent sync, stale
 resolutions, external noncanonical repair and no secret/raw-server output.
 Ctrl-C and lost stdout preserve recoverable effects and meaningful exit status.
 Switch ticket comment dogfooding to the CLI when supported.
+
+Amended 2026-10-30 by C4 (the owner's decision): C4's dogfooding comment
+published through `comment add`, but the instruction switch is deferred.
+With a passphrase-protected key, an agent's non-interactive publication
+stops at `unlock_required` and holds the remote reservation, so agents keep
+canonical comment files for now.
 
 ### C5: CLI Completion And One-Shot Polling
 

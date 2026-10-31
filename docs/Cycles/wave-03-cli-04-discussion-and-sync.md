@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C4: CLI Discussion, Synchronization And Conflict Recovery"
 date: 2026-10-26
-status: "approved"
+status: "review-ready"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -11,6 +11,38 @@ id: "01M5X4YWPK69CG37HVK5DYKGKE"
 # Wave 03 C4: CLI Discussion, Synchronization And Conflict Recovery
 
 ## Status
+
+**Review-ready, 2026-10-30.** Tasks 0–14 are complete, and so is Task 15
+through Step 5, except the Step 4 switch, which the owner deferred. The
+ticket remains **open**. Step 6 closure is a separately authorized lifecycle
+action. This status authorizes no PR, merge, closure, cleanup or native CI.
+
+- **Delivered on the ticket branch:**
+  - `comment add`;
+  - divergent `item sync` and `repo sync`, which merge and stop
+    recoverably on a conflict;
+  - `conflict show` and `conflict resolve`;
+  - `operation resume` of comment publications and resolved
+    synchronizations;
+  - `item republish`;
+  - the CLI's Ctrl-C window;
+  - the Cycle's evidence and document amendments.
+- **Verified.**
+  - The full suite passed once on the final code (`a58aef28`). The
+    [execution ledger](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-execution.md)
+    has the counts.
+  - The final whole-branch review was two independent reviews, followed by
+    one fix round and its re-review.
+- **Dogfooding.**
+  - The verification comment `01M67X2FGGWT4YQDAJEA1PGTG9` published through
+    the branch-built CLI's `comment add` (commit `d4863f12`) and was shown
+    by value.
+  - Dogfooding found that `comment add` refused beside unrelated
+    nonconforming files. That was fixed in C4 (`763f8d8a`), by the owner's
+    decision.
+  - The instruction switch is deferred: see the design's Dogfooding step 4.
+- **The owner's decisions and follow-ups** are in the
+  [owner checklist](../plans/2026-10-26-wave-03-cli-04-owner-checklist.md).
 
 **Approved, 2026-10-28.** The owner approved the Cycle, the design and the
 implementation plan at `8a94e9b`, including named edits E-1 to E-12, and chose
@@ -30,6 +62,16 @@ twice, never rebasing:
 - on 2026-10-26, at `0464c42`, as merge commit `219ec57`;
 - on 2026-10-27, at `a372edb`, as merge commit `e920043`. The gate ticket
   `01M57SKVF6TQ3QM6AXJ35JGGSY` is merged and closed there (decision 2).
+
+Amended 2026-10-30 by C4: during execution it merged main five more times,
+again never rebasing:
+- D3, `bda0a2d1`, as `2f2b1f77`;
+- D3's desktop clippy fix, `f487cc74`, as `cec0ce42`;
+- a Build workflow change, `48ffc058`, as `a58aef28`;
+- the signed release workflow, `055353f8`, as `30db0ff8`;
+- the v0.1.1 release fixes, `676ff193`, as `b6b496c8`.
+
+The execution ledger's Task 15 entry records each one.
 
 The design's facts were re-checked at `e920043` (Review Record). Task 0
 re-checks them again if main has moved.
@@ -370,7 +412,7 @@ Authority, in order:
 | No secret or raw-server output | Every C4 journey's stdout and stderr pass the output scan: no private key, passphrase, sentinel, server text or remote URL credential. Bodies and sources never reach a diagnostic or the request stores. |
 | Ctrl-C | Through the pseudo-terminal, over SSH: a Ctrl-C while `item sync` is held exits 130, or exit 5 under decision 14. Its effects name what completed, `request show` agrees, and a new request completes the work. A Ctrl-C during `comment add`'s publication leaves the comment checkpointed, and a new `item sync` publishes it. A second Ctrl-C ends the process. A Ctrl-C at an unlock prompt is still `unlock_required`. Amended 2026-10-30 by C4 (Task 13's rulings), qualifying "exits 130, or exit 5 under decision 14" and "a new request completes the work". A press no safe point sees leaves the in-flight answer: the latch case gives `push_rejected`, exit 4, with no retry. After a second Ctrl-C the same request is sent again first, and a new request ID is `busy` until then. |
 | Lost stdout | With stdout closed, `item sync` and `comment add` exit 1. `request show` returns the stored result, and a replay under the same request ID makes no second push, file or checkpoint. |
-| Dogfooding switch | With the owner's go-ahead in the final task, the branch-built CLI adds a verification comment to the C4 ticket with `comment add` and the agent's `created_by`. `comment list` shows it by value. AGENTS.md and the skills direct comments to the CLI, with decision 15's exception. The review-ready comment is then added through the CLI too. |
+| Dogfooding switch | With the owner's go-ahead in the final task, the branch-built CLI adds a verification comment to the C4 ticket with `comment add` and the agent's `created_by`. `comment list` shows it by value. AGENTS.md and the skills direct comments to the CLI, with decision 15's exception. The review-ready comment is then added through the CLI too. Amended 2026-10-30 by C4 (the owner's decision): the verification comment published through the CLI and was shown by value. The instruction switch is deferred, because with a passphrase-protected key an agent's non-interactive publication stops at `unlock_required` and holds the remote reservation. See the design's Dogfooding step 4. |
 
 Also required:
 

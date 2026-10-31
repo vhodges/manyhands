@@ -5169,3 +5169,31 @@ worktree was untouched.
   `01M67X2FGGWT4YQDAJEA1PGTG9`, parent `01M671EVGQJX85S8Q1813X9FBM`.
 - `created_by` is `Claude Opus 5.5 <noreply@anthropic.com>`.
 - The owner sends it at the terminal. The first request stays spent.
+
+**Step 3, retry: published.** The owner sent request
+`01M67X2FHGAANH3Y0N9KK55PVV` at the terminal, typing the key's passphrase
+when it connected. The progress ran accepted, writing, fetching, observing,
+pushing, verifying and indexing.
+
+- **The answer.** `ok`; `write=written`, `checkpoint=committed`,
+  `discovery=current`, `publication=published`; commit `d4863f12`;
+  synchronization `01M67XCZ3T990R1KANKDXHHRXF`; operation
+  `01M67XCYTF1XDT04CXXQDYDM64`.
+- **Checked by value.** `comment list` shows `01M67X2FGGWT4YQDAJEA1PGTG9`
+  with parent `01M671EVGQJX85S8Q1813X9FBM` and author
+  `Claude Opus 5.5 <noreply@anthropic.com>`, with no problems.
+  `origin/manyhands/ticket/01M4CC0VMWEQQ9G4W0DAG7ADPY` is `d4863f12`, pushed
+  by Manyhands' own SSH transport. `request show` gives `finished` and `ok`,
+  with publication `published`.
+
+**Step 4: the switch is deferred** (the owner, 2026-10-30). The selected key
+has a passphrase, and agents run `--non-interactive`. An agent's
+`comment add` would write and checkpoint the comment, then stop at
+publication with `unlock_required`, holding the remote reservation until a
+terminal resend. So C4 makes no instruction change, and AGENTS.md and the
+skills of fact 48 are unchanged. The design's Dogfooding step 4, the
+Cycle's acceptance row and the Wave's C4 exit evidence record the deferral.
+
+**Step 5: review-ready.** The Cycle and the design are marked
+`review-ready`. The Cycle's Status gives the outcome and lists main's
+merges.

@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C4 CLI Discussion, Synchronization And Conflict Recovery Design"
 date: 2026-10-26
-status: "approved"
+status: "review-ready"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -11,6 +11,13 @@ id: "01M5X4YWQMNJJT3VXP0BY9JGG9"
 # Wave 03 C4 CLI Discussion, Synchronization And Conflict Recovery Design
 
 ## Execution Status
+
+**Review-ready, 2026-10-30.** The Cycle's
+[Status](../Cycles/wave-03-cli-04-discussion-and-sync.md#status) gives the
+outcome. Implementation and verification are complete, and so is the final
+review. Dogfooding published through `comment add`. The instruction switch
+(Dogfooding step 4) is deferred by the owner. The ticket stays open until
+review approval.
 
 **Approved, 2026-10-28,** at `8a94e9b`, with named edits E-1 to E-12. The
 owner chose subagent-driven execution and authorized implementation. Drafted
@@ -1700,6 +1707,19 @@ In the final task, and only with the owner's go-ahead at that step:
    `scripts/ticket-loop` keep canonical comment files, with the noreply
    `created_by`, until that skill is revised. The switch has its own
    independent review.
+
+   Amended 2026-10-30 by C4 (the owner's decision, after dogfooding):
+   **the switch is deferred, and C4 makes no instruction change.**
+   - Steps 1 to 3 succeeded, and the verification comment published
+     through Manyhands' own SSH transport. The owner sent it at a terminal,
+     because the selected key has a passphrase.
+   - Agents run `--non-interactive`. With such a key, an agent's
+     `comment add` writes and checkpoints the comment, then publication
+     stops at `unlock_required`. That stop holds the remote reservation
+     until the same request is sent again at a terminal, or cancelled and
+     sent once more.
+   - AGENTS.md and the skills of fact 48 keep canonical comment files
+     until non-interactive publication works, or another way is chosen.
 5. **Review-ready.** After the documents are marked review-ready and
    `merge-tree` is clean, the review-ready comment is also added through the
    CLI, the same way.
