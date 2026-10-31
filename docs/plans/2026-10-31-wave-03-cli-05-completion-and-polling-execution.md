@@ -255,7 +255,7 @@ edit. The temporary directories were removed afterwards.
 
 **Base.** `05b8d4f0` (the owner's rulings). `origin/main` had moved to `25a8174d` (v0.1.4 metadata), and was merged first as `961ae44a`, without conflicts.
 
-**Tests first.** 32 `c5_lifecycle_` cases ran against a stub binding answering `internal_error`, and all 32 failed. The rows with a server failed by assertion. The rest also failed, until the world saved its probes and the IDs were corrected, then by assertion or pass as the binding grew. The harness reports only a panic's line number.
+**Tests first.** 32 `c5_lifecycle_` cases ran against a stub binding answering `internal_error`, and all 32 failed. The harness reports only a panic's line number. Against the stub, the prepare-ready, published and rejected rows and conformance failed by assertion. The rows on the local world failed earlier, by a fixture fault (no probes saved), which was fixed only once the real binding was in, so **those rows were not seen to fail by assertion against the stub**. Twelve of them did fail by assertion against the real binding on the way (an unsupported schema keyword, then the unknown-ID rule).
 
 **Commands, all exit 0, on the final code unless noted.**
 
