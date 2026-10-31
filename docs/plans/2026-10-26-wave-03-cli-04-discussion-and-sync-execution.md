@@ -5197,3 +5197,15 @@ Cycle's acceptance row and the Wave's C4 exit evidence record the deferral.
 **Step 5: review-ready.** The Cycle and the design are marked
 `review-ready`. The Cycle's Status gives the outcome and lists main's
 merges.
+
+**Merge, 2026-10-30.** `origin/main` `9bc06d8c` (native dependency fixes,
+v0.1.2) is merged as `4edbd141`. It is a version bump to test the release
+cycle. By the owner's instruction, no tests ran on it.
+
+**Step 5, the review-ready comment, recorded before it is sent.**
+
+- Request `01M67XSA5R5JZY6WV4FB1N6XVK`, comment
+  `01M67XSA523QPFGK4WXQDP88G8`, parent `01M67X2FGGWT4YQDAJEA1PGTG9`.
+- `created_by` is `Claude Opus 5.5 <noreply@anthropic.com>`.
+- The owner sends it at the terminal.
+- `merge-tree` against `origin/main` is clean.
