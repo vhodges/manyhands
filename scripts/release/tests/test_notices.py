@@ -1,14 +1,18 @@
 """Disclosures must include nested notices and checksum-verified source."""
 
 import hashlib
+import json
+import contextlib
+import io
 from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from notices import gather_disclosures, render_notices
+from notices import gather_disclosures, generate_notices, render_notices
 
 
 class NoticeTests(unittest.TestCase):
@@ -72,6 +76,40 @@ class NoticeTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;not executable&lt;/script&gt;", rendered)
         self.assertIn("SIL OFL\ncomplete terms &amp; copyright", rendered)
         self.assertNotIn("<script>", rendered)
+
+    def test_generator_reads_utf8_files_instead_of_capturing_about_stdout(self):
+        packaging = self.repo / "packaging/licenses"
+        packaging.mkdir(parents=True)
+        (self.repo / "packaging/tool-versions.env").write_text("CARGO_ABOUT_VERSION=0.9.3\n", encoding="utf-8")
+        (packaging / "README.md").write_text("Source and licence guide", encoding="utf-8")
+        fonts = self.repo / "assets/fonts"
+        fonts.mkdir(parents=True)
+        (fonts / "README.md").write_text("IBM Plex Sans — provenance", encoding="utf-8")
+        (fonts / "LICENSE.txt").write_text("Copyright © IBM; OFL terms", encoding="utf-8")
+        generated = []
+
+        def cargo(args, repo):
+            if args == ["cargo", "about", "--version"]:
+                return "cargo-about 0.9.3\n"
+            if args[:2] == ["cargo", "metadata"]:
+                return '{"packages":[]}'
+            if "--output-file" not in args:
+                raise ValueError("cargo-about rejects stdout when PowerShell is an ancestor")
+            destination = Path(args[args.index("--output-file") + 1])
+            self.assertNotEqual(str(destination), "-")
+            generated.append(args)
+            text = json.dumps({"licenses": [{"id": "MPL-2.0", "used_by": [{"crate": self.package}]}]}) if "--format" in args else "<section>Licence © café — complete terms</section>"
+            destination.write_bytes(text.encode("utf-8"))
+            return "stdout is not the licence document"
+
+        for target in ("x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"):
+            with self.subTest(target=target), patch("notices.run", side_effect=cargo), contextlib.redirect_stderr(io.StringIO()):
+                output = self.output / target
+                generate_notices(self.repo, target, output)
+                html = (output / "THIRD-PARTY-NOTICES.html").read_text(encoding="utf-8")
+                self.assertIn("Licence © café — complete terms", html)
+                self.assertNotIn("stdout is not", html)
+        self.assertEqual(len(generated), 8)  # JSON and HTML for both front ends on both targets.
 
 
 if __name__ == "__main__":

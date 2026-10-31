@@ -5,6 +5,12 @@ four native archive targets and assembles an unpublished GitHub Release.
 The Build workflow supplies the separate native build/test checks.
 Homebrew, a Windows installer, and Nix consumer packages are Stage 2 work.
 
+Release jobs use Bash on Linux/macOS and PowerShell on Windows. Shared
+argument construction lives in `scripts/release/workflow.py`, which passes
+argument lists directly to Cargo and the existing packaging helpers. Cargo
+builds on Windows run natively, preserving the Windows Perl/MSVC environment.
+Both native workflows use the pinned ARM64 `macos-15` runner label.
+
 ## Tag-first releases
 
 1. Update the package version in `Cargo.toml` and `Cargo.lock` and merge the
@@ -21,6 +27,12 @@ are marked as such in GitHub. Tags and both Cargo manifests must agree.
 The selected commit must already be merged into the dispatch's main
 revision. Configure the Windows signing secrets described in
 [Windows signing](windows/SIGNING.md) before the first native release run.
+
+A retry can exercise helper fixes only if its source tag contains those
+fixes. The failed initial `v0.1.0` tag still identifies the original source;
+do not move it. For the next trial, merge the fixes and use a new version/tag
+with matching `Cargo.toml` and `Cargo.lock` versions. No version bump or new
+tag is made automatically by the workflow.
 
 After merge, with owner approval for the native run:
 

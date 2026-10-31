@@ -44,6 +44,12 @@ prefers MIT for dual-licensed crates and accepts the reviewed licence
 families in the locked dependency inventory. No crate-specific licence
 overrides or synthetic clarifications are currently needed on Linux.
 
+Both JSON discovery and HTML rendering use cargo-about's `--output-file`
+option and explicit UTF-8 reads. Version 0.9.3 rejects stdout output when
+PowerShell occurs anywhere in its process ancestry, including Python
+capturing stdout. File output keeps the generator compatible with Windows
+PowerShell and preserves Unicode notices independently of shell encoding.
+
 Normal-graph metadata is not a runtime-linkage audit. The native packaging
 steps must additionally account for any external dylib/DLL copied from a
 runner, and the corresponding notices/source obligations. System runtime

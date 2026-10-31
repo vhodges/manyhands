@@ -79,7 +79,7 @@ fresh product-owner approval, including the first Release trial.
 | `ubuntu-24.04` | `x86_64-unknown-linux-gnu` | `.tar.gz` |
 | `ubuntu-24.04-arm` | `aarch64-unknown-linux-gnu` | `.tar.gz` |
 | `windows-2022` | `x86_64-pc-windows-msvc` | `.zip` |
-| `macos-14` | `aarch64-apple-darwin` | `.zip` |
+| `macos-15` | `aarch64-apple-darwin` | `.zip` |
 
 Use the native prerequisite setup in the current Build workflow as the
 starting point. Release does not need its SSH test-fixture provisioning.
@@ -96,6 +96,11 @@ release Rust toolchain during implementation and use the same version for
 Nix builds, provided it is supported by the existing locked dependencies.
 The workflow records the compiler version; byte-for-byte reproducibility
 across signing timestamps and native SDK updates is not an initial promise.
+
+Use Bash for Unix runners and PowerShell for Windows, with shared command
+arguments constructed in Python. Licence generation writes JSON and HTML
+through cargo-about's explicit output-file option so PowerShell ancestry
+does not trigger its stdout/encoding guard.
 
 Windows release builds additionally set
 `RUSTFLAGS=-C target-feature=+crt-static` for both front ends. Import audits
