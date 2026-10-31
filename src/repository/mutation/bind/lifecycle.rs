@@ -8,18 +8,23 @@
 //! the same way and checks nothing, so a request whose state has moved since
 //! its preview is `external_change` with no record.
 //!
-//! **A first run** calls the domain under the request's operation ID, with no
-//! host approval and no confirmed identity (decision 6). What is left of the
+//! **A run** calls the domain under the request's operation ID, with no host
+//! approval and no confirmed identity (decision 6). What is left of the
 //! request is read from the parent record, not the journal, because a parent
-//! usually has no journal row (fact 29): no parent, the request is deleted; a
-//! parent a consent refusal ended, the refusal is stored; an unfinished one,
-//! the request stays accepted, and never `Stopped{Absent}`.
+//! usually has no journal row (fact 29): no parent, the request is deleted and
+//! a new prepare follows; a parent a consent refusal ended or a complete or
+//! superseded one, the result is stored; an unfinished one, the request stays
+//! accepted, and never `Stopped{Absent}`.
 //!
-//! **Left for later tasks.** Task 2b continues an unfinished parent under its
-//! request, with `Row::Unfinished` in place of the safe answer `row` gives
-//! here, and reads `recorded_effects` from the parent. Task 2c connects
-//! cancellation, Task 3 `operation resume`, Task 4 the made-ready report, and
-//! Task 6 the promotion identity row.
+//! **Entered again,** `Confirmed::row` reads the same record (R-19). An
+//! unfinished or complete parent is called again with the record's own
+//! expectation and nothing compared, since the request's own work moved the
+//! state. A parent that ended answers from what it holds. With no parent, what
+//! is there is compared with what was previewed.
+//!
+//! **Left for later tasks.** Task 2c connects cancellation, Task 3 `operation
+//! resume`, Task 4 the made-ready report, and Task 6 the promotion identity
+//! row.
 
 use std::{marker::PhantomData, path::Path, path::PathBuf};
 
@@ -49,6 +54,8 @@ use super::{
             promotion::{
                 ParentView,
                 lifecycle::{LifecyclePreview, ParentStep},
+                lifecycle_record::Refusal,
+                record::PublicationCategory,
             },
             read_configuration_for,
             recovery::JournalRow,
@@ -165,7 +172,7 @@ pub(crate) trait LifecycleVerb {
         service: &RepositoryService,
         root: &Path,
         operation: OperationId,
-    ) -> Result<Option<ParentView>, RepositoryError>;
+    ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError>;
 }
 
 pub(crate) struct Promote;
@@ -358,8 +365,9 @@ impl LifecycleVerb for Promote {
         service: &RepositoryService,
         root: &Path,
         operation: OperationId,
-    ) -> Result<Option<ParentView>, RepositoryError> {
-        promotion::lifecycle_parent(service, root, operation)
+    ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError> {
+        Ok(promotion::lifecycle_parent(service, root, operation)?
+            .map(|parent| parent.of_blockers(promotion_blocker)))
     }
 }
 
@@ -442,8 +450,9 @@ impl LifecycleVerb for Close {
         service: &RepositoryService,
         root: &Path,
         operation: OperationId,
-    ) -> Result<Option<ParentView>, RepositoryError> {
-        closure::lifecycle_parent(service, root, operation)
+    ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError> {
+        Ok(closure::lifecycle_parent(service, root, operation)?
+            .map(|parent| parent.of_blockers(closure_blocker)))
     }
 }
 
@@ -810,105 +819,78 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         }
     }
 
-    /// The effects a parent shows of a request that stopped, read from its
-    /// step: a commit named by the record is not yet an effect (fact 41).
-    fn parent_effects(root: &Path, id: &ItemId, parent: &ParentView) -> Effects {
-        let integrated = matches!(
-            parent.step,
-            ParentStep::Integrated
-                | ParentStep::Published
-                | ParentStep::PublicationPending
-                | ParentStep::RemoteDeleted
-                | ParentStep::WorktreeRemoving
-                | ParentStep::WorktreeRemoved
-                | ParentStep::BranchDeleted
-                | ParentStep::Complete
-        );
-        // A checkpoint is written once the context's branch holds it.
-        let branch = context_names(root, &V::KIND, &id.to_string()).branch_ref;
-        let checkpointed = parent
-            .checkpoint
-            .is_some_and(|commit| evidence::still_reachable(root, Some(&branch), commit));
-        Effects {
-            checkpoint: if checkpointed {
-                CheckpointEffect::Committed
-            } else {
-                CheckpointEffect::NotRequested
-            },
-            integration: if integrated {
-                IntegrationEffect::Complete
-            } else {
-                IntegrationEffect::NotRequested
-            },
-            commit_oid: if integrated {
-                parent.integration.map(|oid| oid.to_string())
-            } else {
-                None
-            },
-            ..Effects::not_requested()
-        }
-    }
-
     /// The answer to an operation that stopped. What it left is the parent's
     /// to say: it is read after the call.
     fn stopped(&self, service: &RepositoryService, accepted: &Accepted, stop: Stop) -> Ran {
         let root = accepted.root();
         let parent = V::parent(service, &root, accepted.operation_id);
-        let (code, blockers, offers_nothing) = match &stop {
-            Stop::Repository(error) => (outcome::repository_error_code(error.kind), None, false),
-            Stop::Transport(error) => (outcome::ssh_transport_error_code(&error.kind), None, false),
-            Stop::Blocked(blockers) => (blocked_code(blockers), Some(blockers.clone()), false),
-            Stop::ExternalChange | Stop::ReconfirmationRequired | Stop::PrimaryAdvanced => {
-                (ResultCode::ExternalChange, None, false)
-            }
-            Stop::IdentityRequired => (ResultCode::IdentityRequired, None, false),
-            Stop::ContextSynchronization(error) => {
-                (outcome::synchronization_error_code(error), None, false)
-            }
-            Stop::Busy => (ResultCode::Busy, None, false),
-            Stop::PollYielding => (ResultCode::PollYielding, None, false),
-            // Task 2c answers `cancelled` for one that was asked to stop.
-            Stop::Interrupted | Stop::RecoveryRequired => {
-                (ResultCode::RecoveryRequired, None, false)
-            }
-            Stop::OperationMismatch => (ResultCode::RequestMismatch, None, true),
+        let (code, blockers, offers_nothing) = stop_answer(&stop);
+        let stands = matches!(&parent, Ok(Some(view)) if !ended(view));
+        // A refused merge, a child's conflict: the state is the repository's
+        // to name, and a preview reads it with nothing changed.
+        let names_its_state = stands
+            && match &stop {
+                Stop::RecoveryRequired => true,
+                Stop::ContextSynchronization(error) => {
+                    outcome::synchronization_error_code(error) == ResultCode::RecoveryRequired
+                }
+                _ => false,
+            };
+        let blockers = match (blockers, names_its_state) {
+            (Some(blockers), _) => Some(blockers),
+            (None, true) => match V::observe(service, &root, &self.id) {
+                Ok(Observed::Blocked(blockers)) => Some(blockers),
+                Ok(Observed::Ready(_)) | Err(_) => None,
+            },
+            (None, false) => None,
         };
-        let data = blockers.map(|blockers| {
-            MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
-                blockers,
-                ..self.data()
-            }))
-        });
-        let (effects, standing) = match &parent {
+        let (effects, recovery, standing) = match &parent {
             // Nothing can be said of what it left: the record is left.
             Err(_) => (
                 Effects::not_requested(),
+                Vec::new(),
                 Standing::Stopped { journal: None },
             ),
             Ok(None) => (
                 Effects::not_requested(),
+                no_parent_recovery(code),
                 Standing::Stopped {
                     journal: Some(JournalRow::Absent),
                 },
             ),
             Ok(Some(view)) => (
-                Self::parent_effects(&root, &self.id, view),
-                if view.refused
-                    || matches!(
-                        view.step,
-                        ParentStep::Abandoned | ParentStep::Superseded | ParentStep::Complete
-                    )
-                {
-                    Standing::Final
+                parent_effects::<V>(service, &root, view),
+                if stands {
+                    standing_recovery(code, accepted)
                 } else {
+                    Vec::new()
+                },
+                if stands {
                     Standing::Owed
+                } else {
+                    Standing::Final
                 },
             ),
         };
+        let data = blockers.map(|blockers| {
+            let checkpoint = parent
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .filter(|_| effects.checkpoint == CheckpointEffect::Committed)
+                .and_then(|view| view.checkpoint);
+            MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
+                blockers,
+                recording: checkpoint.map(|_| LifecycleRecording::Record),
+                checkpoint_oid: checkpoint.map(|oid| oid.to_string()),
+                ..self.data()
+            }))
+        });
         Ran {
             answer: Answer {
                 effects,
                 data,
+                recovery,
                 offers_nothing,
                 ..Answer::stopped(code)
             },
@@ -940,13 +922,51 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         }
     }
 
-    /// Task 2b's until then: a request entered again is not run, and stays
-    /// as it is for the same request to take up once it can.
-    fn not_entered() -> Ran {
-        Ran {
-            answer: Answer::stopped(ResultCode::RecoveryRequired),
-            standing: Standing::Unconfirmed,
+    /// The answer to what stands in the way of a request entered again with
+    /// no parent, as a prepare gives it. Its data holds what a prepare's
+    /// refusal would, since `execute` has no other place for it.
+    fn blocked_again(
+        &self,
+        service: &RepositoryService,
+        root: &Path,
+        blockers: Vec<LifecycleBlocker>,
+    ) -> Answer {
+        if names_no_item(service, root, &self.id, &blockers) {
+            return Answer::stopped(ResultCode::ItemNotFound);
         }
+        Answer::stopped(blocked_code(&blockers)).with_data(MutationDataDto::Lifecycle(Box::new(
+            LifecycleMutationDto {
+                blockers,
+                ..self.data()
+            },
+        )))
+    }
+
+    /// A parent that has ended answers its request from what it holds.
+    fn ended_answer(
+        &self,
+        service: &RepositoryService,
+        root: &Path,
+        parent: &ParentView<LifecycleBlocker>,
+    ) -> Option<Answer> {
+        let effects = parent_effects::<V>(service, root, parent);
+        let answer = match &parent.refusal {
+            Some(Refusal::Blocked(blockers)) => Answer::stopped(blocked_code(blockers)).with_data(
+                MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
+                    blockers: blockers.clone(),
+                    ..self.data()
+                })),
+            ),
+            Some(Refusal::ExternalChange | Refusal::ReconfirmationRequired) => {
+                Answer::stopped(ResultCode::ExternalChange)
+            }
+            None if parent.step == ParentStep::Superseded => Answer {
+                offers_nothing: true,
+                ..Answer::stopped(ResultCode::RequestMismatch)
+            },
+            None => return None,
+        };
+        Some(Answer { effects, ..answer })
     }
 }
 
@@ -1070,28 +1090,7 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
         let ready = match observed {
             Observed::Ready(ready) => ready,
             Observed::Blocked(blockers) => {
-                // An ID no item of this kind holds, as `item republish`
-                // answers it. An item with no context reads as a missing
-                // context to the domain, and the index tells the two apart,
-                // unless it is marked behind: then it cannot say.
-                let unknown = blockers.contains(&LifecycleBlocker::ContextMissing)
-                    && call
-                        .service
-                        .repository_snapshot(&root)
-                        .is_ok_and(|snapshot| !snapshot.refresh_required)
-                    && resolve_root(call.service, &root).is_ok_and(|repository| {
-                        call.service
-                            .show_item(&repository, &self.id)
-                            .is_err_and(|error| error.code() == ResultCode::ItemNotFound)
-                    });
-                if unknown
-                    || blockers.iter().any(|blocker| {
-                        matches!(
-                            blocker,
-                            LifecycleBlocker::NotADocument | LifecycleBlocker::NotATicket
-                        )
-                    })
-                {
+                if names_no_item(call.service, &root, &self.id, &blockers) {
                     return Err(Answer::stopped(ResultCode::ItemNotFound));
                 }
                 return Err(Answer {
@@ -1189,22 +1188,389 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
         })
     }
 
-    /// Task 2b reads the parent here, and gives `Row::Unfinished`. Until
-    /// then a request entered again is answered without a domain call, and
-    /// left accepted, whatever its parent holds: nothing is run on a consent
-    /// this task has not compared, and nothing it did is forgotten.
-    fn row(&mut self, _call: &CallContext<'_>, _accepted: &Accepted, _journal: &JournalRow) -> Row {
-        Row::answers(Self::not_entered())
+    /// The parent record says where the request stands; see the table in
+    /// the module's comment. A parent that goes on is called with the
+    /// expectation it was begun with, not one read now.
+    fn row(&mut self, call: &CallContext<'_>, accepted: &Accepted, _journal: &JournalRow) -> Row {
+        let root = accepted.root();
+        let parent = match V::parent(call.service, &root, accepted.operation_id) {
+            Ok(Some(parent)) => parent,
+            Ok(None) => return Row::Unrecorded,
+            Err(error) => {
+                return Row::answers(Ran {
+                    answer: refused(error),
+                    standing: Standing::Stopped { journal: None },
+                });
+            }
+        };
+        if let Some(answer) = self.ended_answer(call.service, &root, &parent) {
+            return Row::answers(Ran {
+                answer,
+                standing: Standing::Final,
+            });
+        }
+        self.expected = Some(parent.expectation);
+        Row::Unfinished
     }
 
-    /// Asked only of a row that reads `Row::Unrecorded`, which Task 2b is the
-    /// first to answer.
+    /// No parent: the request stopped before its record began. What is there
+    /// is the consent's to judge, in `confirm::reenter`. A state now blocked
+    /// answers as a prepare does, and the record is deleted.
     fn observe_again(
         &mut self,
-        _call: &CallContext<'_>,
+        call: &CallContext<'_>,
         _accepted: &Accepted,
         _journal: &JournalRow,
     ) -> Result<Seen, Ran> {
-        Err(Self::not_entered())
+        let (root, observed) = self.observe(call.service).map_err(|answer| Ran {
+            answer,
+            standing: Standing::Stopped { journal: None },
+        })?;
+        let found = digest_of(V::COMMAND, &observed);
+        match observed {
+            Observed::Ready(ready) => {
+                self.expected = Some(ready.expected);
+                Ok(Seen::State { found, own: None })
+            }
+            Observed::Blocked(blockers) => Err(Ran {
+                answer: self.blocked_again(call.service, &root, blockers),
+                standing: Standing::Stopped {
+                    journal: Some(JournalRow::Absent),
+                },
+            }),
+        }
+    }
+}
+
+/// What a request that has not settled shows of its effects, for a call that
+/// finds its record accepted and does not run it.
+pub(super) fn recorded_effects<V: LifecycleVerb>(
+    service: &RepositoryService,
+    accepted: &Accepted,
+) -> Effects {
+    let root = accepted.root();
+    match V::parent(service, &root, accepted.operation_id) {
+        Ok(Some(parent)) => parent_effects::<V>(service, &root, &parent),
+        Ok(None) | Err(_) => Effects::not_requested(),
+    }
+}
+
+/// Whether a parent has ended, so that its request's answer is final: refused,
+/// superseded or complete.
+fn ended(parent: &ParentView<LifecycleBlocker>) -> bool {
+    parent.refusal.is_some()
+        || matches!(
+            parent.step,
+            ParentStep::Abandoned | ParentStep::Superseded | ParentStep::Complete
+        )
+}
+
+/// The effects a parent shows, read from its step: a commit named by the
+/// record is not yet an effect (fact 41). A superseded parent had reached
+/// cleanup, and only that is ever superseded.
+fn parent_effects<V: LifecycleVerb>(
+    service: &RepositoryService,
+    root: &Path,
+    parent: &ParentView<LifecycleBlocker>,
+) -> Effects {
+    let integrated = matches!(
+        parent.step,
+        ParentStep::Integrated
+            | ParentStep::Published
+            | ParentStep::PublicationPending
+            | ParentStep::RemoteDeleted
+            | ParentStep::WorktreeRemoving
+            | ParentStep::WorktreeRemoved
+            | ParentStep::BranchDeleted
+            | ParentStep::Complete
+            | ParentStep::Superseded
+    );
+    // A checkpoint is written once the context's branch holds it, or primary
+    // once that branch is gone.
+    let branch = context_names(root, &V::KIND, &parent.item_id.to_string()).branch_ref;
+    let checkpointed = parent
+        .checkpoint
+        .is_some_and(|commit| evidence::still_reachable(root, Some(&branch), commit));
+    if !integrated {
+        return Effects {
+            checkpoint: if checkpointed {
+                CheckpointEffect::Committed
+            } else {
+                CheckpointEffect::NotRequested
+            },
+            ..Effects::not_requested()
+        };
+    }
+    Effects {
+        write: WriteEffect::NotRequested,
+        checkpoint: if checkpointed {
+            CheckpointEffect::Committed
+        } else {
+            CheckpointEffect::NotRequested
+        },
+        discovery: if service
+            .repository_snapshot(root)
+            .is_ok_and(|snapshot| !snapshot.refresh_required)
+        {
+            DiscoveryEffect::Current
+        } else {
+            DiscoveryEffect::Pending
+        },
+        publication: match parent.publication {
+            Some(PublicationCategory::Published) => PublicationEffect::Published,
+            Some(PublicationCategory::AlreadyCurrent) => PublicationEffect::Current,
+            _ => PublicationEffect::Pending,
+        },
+        integration: IntegrationEffect::Complete,
+        cleanup: if parent.step == ParentStep::Complete {
+            CleanupEffect::Complete
+        } else {
+            CleanupEffect::Pending
+        },
+        commit_oid: parent.integration.map(|oid| oid.to_string()),
+    }
+}
+
+/// The code a stop answers with, the blockers it names, and whether the code's
+/// actions are not to be offered. A repository error of any kind stays one: it
+/// may follow a written checkpoint, so it never reads as a consent refusal
+/// (fact 11).
+fn stop_answer(stop: &Stop) -> (ResultCode, Option<Vec<LifecycleBlocker>>, bool) {
+    match stop {
+        Stop::Repository(error) => (outcome::repository_error_code(error.kind), None, false),
+        Stop::Transport(error) => (outcome::ssh_transport_error_code(&error.kind), None, false),
+        Stop::Blocked(blockers) => (blocked_code(blockers), Some(blockers.clone()), false),
+        Stop::ExternalChange | Stop::ReconfirmationRequired | Stop::PrimaryAdvanced => {
+            (ResultCode::ExternalChange, None, false)
+        }
+        Stop::IdentityRequired => (ResultCode::IdentityRequired, None, false),
+        Stop::ContextSynchronization(error) => {
+            (outcome::synchronization_error_code(error), None, false)
+        }
+        Stop::Busy => (ResultCode::Busy, None, false),
+        Stop::PollYielding => (ResultCode::PollYielding, None, false),
+        // Task 2c answers `cancelled` for one that was asked to stop.
+        Stop::Interrupted | Stop::RecoveryRequired => (ResultCode::RecoveryRequired, None, false),
+        Stop::OperationMismatch => (ResultCode::RequestMismatch, None, true),
+    }
+}
+
+/// With no parent the request is deleted, so a code whose own action is to
+/// send it again offers a new preview: the design's first row of the standing
+/// table, "whatever its code". Any other code's action stands.
+fn no_parent_recovery(code: ResultCode) -> Vec<RecoveryAction> {
+    match code {
+        ResultCode::Busy
+        | ResultCode::PollYielding
+        | ResultCode::RemoteUnavailable
+        | ResultCode::TransportUnavailable => vec![outcome::prepare_again()],
+        _ => Vec::new(),
+    }
+}
+
+/// What a code would offer wrongly while a parent stands: a host stop carries
+/// no authority to approve, and a child's branch deleted at the remote is the
+/// child's reservation and not the request's to cancel, so the request is what
+/// is offered. Every other code's own actions follow the same request.
+fn standing_recovery(code: ResultCode, accepted: &Accepted) -> Vec<RecoveryAction> {
+    match code {
+        ResultCode::HostApprovalRequired | ResultCode::HostReplacementRequired => {
+            let mut actions = vec![outcome::same_request(accepted.request_id)];
+            actions.extend(outcome::inspect_the_root_it_lies_in(&accepted.root()));
+            actions
+        }
+        _ if outcome::never_gets_past(code) => vec![outcome::same_request(accepted.request_id)],
+        _ => Vec::new(),
+    }
+}
+
+/// An ID no item of this kind holds, as `item republish` answers it. An item
+/// with no context reads as a missing context to the domain, and the index
+/// tells the two apart, unless it is marked behind: then it cannot say.
+fn names_no_item(
+    service: &RepositoryService,
+    root: &Path,
+    id: &ItemId,
+    blockers: &[LifecycleBlocker],
+) -> bool {
+    let unknown = blockers.contains(&LifecycleBlocker::ContextMissing)
+        && service
+            .repository_snapshot(root)
+            .is_ok_and(|snapshot| !snapshot.refresh_required)
+        && resolve_root(service, root).is_ok_and(|repository| {
+            service
+                .show_item(&repository, id)
+                .is_err_and(|error| error.code() == ResultCode::ItemNotFound)
+        });
+    unknown
+        || blockers.iter().any(|blocker| {
+            matches!(
+                blocker,
+                LifecycleBlocker::NotADocument | LifecycleBlocker::NotATicket
+            )
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::repository::{RepositoryErrorKind, RepositoryOperation};
+
+    fn reached(publication: PromotionPublication, cleanup: PromotionCleanup) -> Reached {
+        Reached {
+            recording: None,
+            integration: PromotionIntegration::Merged {
+                oid: git2::Oid::zero(),
+            },
+            publication,
+            cleanup,
+            index_pending: false,
+        }
+    }
+
+    fn pending_publication(reason: PromotionPublicationPending) -> PromotionPublication {
+        PromotionPublication::Pending { reason }
+    }
+
+    fn pending_cleanup(reason: PromotionCleanupPending) -> PromotionCleanup {
+        PromotionCleanup::Pending { reason }
+    }
+
+    const AWAITING: PromotionCleanup = PromotionCleanup::Pending {
+        reason: PromotionCleanupPending::AwaitingPublication,
+    };
+
+    #[test]
+    fn a_publication_that_stopped_answers_with_its_category() {
+        use PromotionSynchronizationCategory as Category;
+        for (category, code) in [
+            (Category::Conflict, ResultCode::RecoveryRequired),
+            (Category::Rejected, ResultCode::PushRejected),
+            (Category::Transport, ResultCode::TransportUnavailable),
+            (Category::Identity, ResultCode::IdentityRequired),
+            (Category::Busy, ResultCode::Busy),
+            (Category::Yielding, ResultCode::PollYielding),
+            (Category::RecoveryRequired, ResultCode::RecoveryRequired),
+        ] {
+            let stopped = reached(
+                pending_publication(PromotionPublicationPending::Synchronization(category)),
+                AWAITING,
+            );
+            assert_eq!(reached_code(&stopped), code, "{category:?}");
+        }
+    }
+
+    #[test]
+    fn a_deletion_that_stopped_answers_with_its_category() {
+        use PromotionRemoteDeletionCategory as Category;
+        for (category, code) in [
+            (Category::Transport, ResultCode::TransportUnavailable),
+            (Category::Rejected, ResultCode::PushRejected),
+            (Category::Configuration, ResultCode::RecoveryRequired),
+            (Category::Key, ResultCode::NoSelectedKey),
+            (Category::Unlock, ResultCode::UnlockRequired),
+            (Category::Host, ResultCode::HostApprovalRequired),
+        ] {
+            let stopped = reached(
+                PromotionPublication::Published {
+                    oid: git2::Oid::zero(),
+                },
+                pending_cleanup(PromotionCleanupPending::RemoteDeletionFailed(category)),
+            );
+            assert_eq!(reached_code(&stopped), code, "{category:?}");
+        }
+    }
+
+    #[test]
+    fn cleanup_stops_that_name_no_category_are_recovery() {
+        for reason in [
+            PromotionCleanupPending::ContextChanged,
+            PromotionCleanupPending::IgnoredFiles,
+            PromotionCleanupPending::RemoteContextChanged,
+            PromotionCleanupPending::RecoveryRequired,
+        ] {
+            let stopped = reached(
+                PromotionPublication::Published {
+                    oid: git2::Oid::zero(),
+                },
+                pending_cleanup(reason),
+            );
+            assert_eq!(reached_code(&stopped), ResultCode::RecoveryRequired);
+        }
+    }
+
+    #[test]
+    fn cancelled_publication_or_cleanup_is_cancelled() {
+        assert_eq!(
+            reached_code(&reached(
+                pending_publication(PromotionPublicationPending::Cancelled),
+                AWAITING
+            )),
+            ResultCode::Cancelled
+        );
+        assert_eq!(
+            reached_code(&reached(
+                PromotionPublication::Published {
+                    oid: git2::Oid::zero()
+                },
+                pending_cleanup(PromotionCleanupPending::Cancelled)
+            )),
+            ResultCode::Cancelled
+        );
+    }
+
+    /// Task 0 found no failure point that yields this after a checkpoint. A
+    /// repository error of kind `ExternalChange` is `external_change` by its
+    /// own mapping, and is not a consent refusal: a standing parent decides
+    /// what is left, and the domain's half is `closure/run_tests.rs`.
+    #[test]
+    fn a_repository_external_change_stays_a_repository_error() {
+        let stop = Stop::Repository(RepositoryError::new(
+            RepositoryOperation::RepositorySnapshot,
+            None,
+            RepositoryErrorKind::ExternalChange,
+            "moved",
+        ));
+        let (code, blockers, offers_nothing) = stop_answer(&stop);
+        assert_eq!(code, ResultCode::ExternalChange);
+        assert_eq!(blockers, None);
+        assert!(!offers_nothing);
+    }
+
+    #[test]
+    fn a_stop_answers_with_the_tables_code() {
+        for (stop, code) in [
+            (Stop::Busy, ResultCode::Busy),
+            (Stop::PollYielding, ResultCode::PollYielding),
+            (Stop::Interrupted, ResultCode::RecoveryRequired),
+            (Stop::RecoveryRequired, ResultCode::RecoveryRequired),
+            (Stop::IdentityRequired, ResultCode::IdentityRequired),
+            (Stop::PrimaryAdvanced, ResultCode::ExternalChange),
+            (Stop::ExternalChange, ResultCode::ExternalChange),
+            (Stop::ReconfirmationRequired, ResultCode::ExternalChange),
+        ] {
+            assert_eq!(stop_answer(&stop).0, code);
+        }
+        let (code, _, offers_nothing) = stop_answer(&Stop::OperationMismatch);
+        assert_eq!(code, ResultCode::RequestMismatch);
+        assert!(offers_nothing);
+    }
+
+    #[test]
+    fn with_no_parent_a_code_that_would_resend_prepares_again() {
+        for code in [
+            ResultCode::Busy,
+            ResultCode::PollYielding,
+            ResultCode::TransportUnavailable,
+            ResultCode::RemoteUnavailable,
+        ] {
+            let offered = no_parent_recovery(code);
+            assert_eq!(offered.len(), 1);
+            assert_eq!(
+                offered[0].action,
+                crate::results::RecoveryActionKind::RequestPrepare
+            );
+        }
+        assert!(no_parent_recovery(ResultCode::RecoveryRequired).is_empty());
     }
 }

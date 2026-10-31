@@ -582,6 +582,11 @@ pub(crate) fn inspect_the_root_it_lies_in(root: &Path) -> Vec<RecoveryAction> {
         .collect()
 }
 
+/// The action that asks for a new preview, on what its own request left.
+pub(crate) fn prepare_again() -> RecoveryAction {
+    RecoveryAction::new(RecoveryActionKind::RequestPrepare, [])
+}
+
 /// What a result names, for the actions it offers.
 pub(crate) struct Named<'a> {
     pub(crate) code: ResultCode,

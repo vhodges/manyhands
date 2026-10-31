@@ -346,16 +346,19 @@ pub(super) fn lifecycle_parent(
     service: &RepositoryService,
     root: &Path,
     operation: OperationId,
-) -> Result<Option<crate::repository::promotion::ParentView>, RepositoryError> {
+) -> Result<Option<crate::repository::promotion::ParentView<ClosureBlocker>>, RepositoryError> {
     use crate::repository::promotion::lifecycle::LifecycleRecord;
     crate::repository::remote::state::with_transaction(service, root, |tx, repository_id| {
         Ok(
             record::read_record(tx, repository_id, operation)?.map(|parent| {
                 crate::repository::promotion::ParentView {
                     step: parent.step(),
-                    refused: parent.refusal().is_some(),
+                    refusal: parent.refusal().cloned(),
+                    expectation: parent.expectation().to_bytes(),
+                    item_id: parent.item_id().clone(),
                     checkpoint: parent.closure_oid,
                     integration: parent.integration_oid(),
+                    publication: parent.publication(),
                 }
             }),
         )

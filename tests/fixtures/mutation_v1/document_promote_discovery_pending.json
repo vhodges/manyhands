@@ -1,0 +1,49 @@
+{
+  "code": "discovery_pending",
+  "command": "document promote",
+  "data": {
+    "blockers": [],
+    "checkpoint_oid": null,
+    "cleanup": "complete",
+    "cleanup_pending": null,
+    "integration": "merged",
+    "integration_oid": "<integration>",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FDC",
+    "kind": "document",
+    "publication": "pending",
+    "publication_oid": null,
+    "publication_pending": "no_publication_remote",
+    "recording": null,
+    "type": "lifecycle"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "complete",
+    "commit_oid": "<integration>",
+    "discovery": "pending",
+    "integration": "complete",
+    "publication": "pending",
+    "write": "not_requested"
+  },
+  "message": "The change is recorded; the index has not been updated yet.",
+  "operation_id": "<operation>",
+  "outcome": "partial",
+  "recovery": [
+    {
+      "action": "request.retry",
+      "arguments": {
+        "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FJ1"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FJ1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FDC",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

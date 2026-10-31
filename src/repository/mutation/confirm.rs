@@ -144,6 +144,11 @@ pub(crate) enum Row {
     /// is: the domain is called. A row there is, then: this answer for
     /// a request with no row is `internal_error`, and nothing is run.
     Recorded,
+    /// The operation's own parent record says it began, and a parent usually
+    /// has no journal row (fact 29, R-19). Nothing is compared, for the same
+    /// reason as `Recorded`, and the domain is called: it continues the
+    /// parent, or gives the outcome it stored.
+    Unfinished,
     /// Nothing of the request's is known to be done: the state is
     /// observed again and compared with what was previewed.
     Unrecorded,
@@ -183,7 +188,8 @@ pub(crate) enum Seen {
 ///    that no operation of the command has, ends the call here. A row
 ///    that has recorded the request's work is taken up by the domain
 ///    call with nothing compared. That is never said of a request with
-///    no row: a binding that says it is answered `internal_error`.
+///    no row: a binding that says it is answered `internal_error`. A
+///    parent record says the same with no row, as `Row::Unfinished`.
 /// 2. Otherwise the binding observes; see `Seen`. When the command's
 ///    end state holds and no row stands, the request is a no-op and is
 ///    finished; with a pending row the domain is called to end it.
@@ -220,6 +226,7 @@ pub(crate) fn reenter<B: Confirmed + ?Sized>(
             }
             return Ok(Entered::Unfinished);
         }
+        Row::Unfinished => return Ok(Entered::Unfinished),
         Row::Unrecorded => {}
     }
     match binding.observe_again(call, accepted, &journal)? {

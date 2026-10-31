@@ -956,6 +956,20 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
     let Some(accepted) = Accepted::of_record(record, record.attempt) else {
         return Recorded::nothing();
     };
+    // A parent usually has no row, and what it did is its own to say (fact 40).
+    match Command::parse(&record.command) {
+        Some(Command::DocumentPromote) => {
+            return Recorded::of(lifecycle::recorded_effects::<lifecycle::Promote>(
+                service, &accepted,
+            ));
+        }
+        Some(Command::TicketClose) => {
+            return Recorded::of(lifecycle::recorded_effects::<lifecycle::Close>(
+                service, &accepted,
+            ));
+        }
+        _ => {}
+    }
     let journal = accepted.journal_row(service);
     let ran = match journal {
         Some(JournalRow::Absent) => false,
@@ -1054,9 +1068,7 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::DocumentRepair | Command::TicketRepair) => {
             Recorded::of(repair::recorded_effects(record, &accepted))
         }
-        // Task 2b reads these from the parent record, before the row is
-        // asked, since a parent usually has no row (fact 40). Until then a
-        // row that a parent's cleanup reserved claims nothing.
+        // Answered above, from the parent record: this is not reached.
         Some(Command::DocumentPromote | Command::TicketClose) => Recorded::nothing(),
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),

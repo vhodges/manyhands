@@ -359,16 +359,42 @@ pub enum DocumentPromotionPreflight {
 
 /// What the mutation boundary reads of a parent record: a lifecycle parent
 /// usually has no journal row (fact 29), so this is where it stands. It holds
-/// IDs, OIDs and fixed categories.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct ParentView {
+/// IDs, OIDs, the consent's digest and fixed categories.
+pub(super) struct ParentView<B> {
     pub(super) step: lifecycle::ParentStep,
-    /// A consent refusal ended the record.
-    pub(super) refused: bool,
+    /// What ended the record, when a consent refusal did.
+    pub(super) refusal: Option<lifecycle_record::Refusal<B>>,
+    /// The digest the record was begun with, which the same operation ID
+    /// is called with again.
+    pub(super) expectation: [u8; 32],
+    pub(super) item_id: ItemId,
     /// The closure checkpoint the record holds. Its ref may not have moved
     /// while the step is `closing`.
     pub(super) checkpoint: Option<Oid>,
     pub(super) integration: Option<Oid>,
+    pub(super) publication: Option<record::PublicationCategory>,
+}
+
+impl<B> ParentView<B> {
+    /// The same view, with a refusal's blockers as `blocker` gives them.
+    pub(super) fn of_blockers<C>(self, blocker: impl Fn(B) -> C) -> ParentView<C> {
+        use lifecycle_record::Refusal;
+        ParentView {
+            step: self.step,
+            refusal: self.refusal.map(|refusal| match refusal {
+                Refusal::Blocked(blockers) => {
+                    Refusal::Blocked(blockers.into_iter().map(blocker).collect())
+                }
+                Refusal::ExternalChange => Refusal::ExternalChange,
+                Refusal::ReconfirmationRequired => Refusal::ReconfirmationRequired,
+            }),
+            expectation: self.expectation,
+            item_id: self.item_id,
+            checkpoint: self.checkpoint,
+            integration: self.integration,
+            publication: self.publication,
+        }
+    }
 }
 
 /// The parent record of the promotion `operation`, when there is one.
@@ -376,15 +402,18 @@ pub(super) fn lifecycle_parent(
     service: &RepositoryService,
     root: &Path,
     operation: OperationId,
-) -> Result<Option<ParentView>, RepositoryError> {
+) -> Result<Option<ParentView<PromotionBlocker>>, RepositoryError> {
     use lifecycle::LifecycleRecord;
     crate::repository::remote::state::with_transaction(service, root, |tx, repository_id| {
         Ok(
             record::read_record(tx, repository_id, operation)?.map(|parent| ParentView {
                 step: parent.step(),
-                refused: parent.refusal().is_some(),
+                refusal: parent.refusal().cloned(),
+                expectation: parent.expectation().to_bytes(),
+                item_id: parent.item_id().clone(),
                 checkpoint: None,
                 integration: parent.integration_oid(),
+                publication: parent.publication(),
             }),
         )
     })

@@ -305,3 +305,51 @@ Goldens were regenerated with `MANYHANDS_UPDATE_GOLDEN=1` and read.
 - **Carried to Task 2b.** `parent_effects` under-reports past integration (publication and cleanup steps), and the `stopped()` rows.
 - **The shortfall** recorded above needs no rerun against a stub (controller).
 - **Verified after the fixes.** `c5_lifecycle` 38 cases (210 s), `mutation_contract` 44 (11 s), `read_contract` 72 (7 s), `mutation_confirmation` 183 (58 s), `--lib mutation` 126 (13 s), `fmt --check`, clippy (11 s). `src/desktop` was not touched, so the desktop commands were not rerun. No golden changed.
+
+### Task 2b: Re-Entry, Standing And The Answers Table
+
+**Base.** `4462d3c6`. `origin/main` was still `25a8174d`, so nothing was merged.
+
+**Tests first.** 67 rows were added and run against Task 2a's binding before any library edit: of 105 cases, 55 failed and 50 passed. The harness reports a panic's line number.
+
+- **Failed by assertion on the behaviour:** every re-entry row, since the placeholder answered `recovery_required`.
+- **Failed for another reason, so not seen to fail on the behaviour:** `deletion_rejected` and `local_sync_pending` (a fixture fault, below), and `index_pending` (only its golden was missing: Task 2a's first run already answered it).
+- **Passed against the old binding, pinning what exists:** those rows answered on a first run or before the boundary, such as `expired_confirmation`, `consent_refused_at_run`, the cache-loss rows and `comment_publication_pending`.
+
+**Fixture faults found against the real binding, none a changed answer.**
+
+- `deletion_rejected`: the fixture refuses only the receiver's current branch, so the row sets the bare `HEAD`, as the domain's journeys do.
+- `superseded`: a closure's further commit is never merged, so the row uses an untracked file, then a poll, as the domain's journeys do. **A superseding prepare needs that poll**: a push does not advance tracking, and the preview says `primary_ahead_of_remote` until then.
+- `local_sync_pending`: C4's helper leaves primary ahead of the remote, so the row uses a local world.
+- `primary_advanced`: the merge count now walks primary's first-parent line, since a child's merge is on the side.
+
+**Commands, all exit 0, on the final code.**
+
+| Command | Result | Time |
+| --- | --- | --- |
+| `--test mutation_remote -- c5_lifecycle` | 105 cases | 949 s |
+| `--test mutation_replay` | 383 | 279 s |
+| `--test mutation_confirmation` | 183 | 55 s |
+| `--test mutation_contract` | 44 | 8 s |
+| `--lib mutation` | 135 | 1 s |
+| `cargo fmt --check`; `cargo clippy --all-targets --all-features --locked -- -D warnings` | ok | 10 s |
+
+No schema enum and no desktop file changed, so `--test read_contract` and the desktop commands were not run. Seven goldens are new and were read. No existing golden changed.
+
+**Decisions, for review.**
+
+- **A stop with no parent offers `request.prepare` for `busy`, `poll_yielding`, `remote_unavailable` and `transport_unavailable`.** The answers table's Next column says `request.retry`, but the design says that column is for `Owed`, and that a stop with no parent is followed by a new prepare "whatever its code". Other codes keep their own actions.
+- **`discovery: pending` on a rejected push stays.** Decided by test: `push_rejected_continues` asserts that it equals the index's `refresh_required`, and the finished request reports `current`.
+- **A superseded request's stored `request_mismatch` is `partial`, naming its integration,** with cleanup `pending` and no actions. Its integration stands, as the table's "4 after a replay's effects" allows. `Superseded` counts as past integration, since only a cleanup stop is ever superseded.
+- **"Data naming the state" is what a fresh preview says.** A `RecoveryRequired` stop or a child's `recovery_required` with a standing parent reads the preview, and its blockers go in `data`, with the checkpoint when one is written. The refused checkpoint merge names `integration_conflict`. The human `next:` lines are Task 7's.
+- **Host stops with a standing parent offer `request.retry`, `repo.inspect`,** for a child's stop and for `host_replacement_required` too, since lifecycle data names no authority.
+- **A child's `remote_branch_deleted` offers `request.retry` alone,** as the table says. The reservation is the child's, so `request.cancel` would be dropped anyway.
+- **A stop's `discovery` past integration reads the index,** not the step, so a lost result of a complete parent reports what is so.
+- `ParentView` is generic over its blockers, holds the refusal, expectation, item ID and publication, and loses its derives. `cleanup` and `cancel_requested` wait for a caller.
+- `PrimaryAdvanced`, a repository `ExternalChange` and the remaining categories: the first is a row, the second a unit test of the mapping, as Task 0 found, and every publication and deletion category has a unit row beside the transport, unlock, host and rejected rows.
+
+**Risk, for review.** With `remote_branch_deleted` the same request can't get past the deleted branch, and the table offers it nothing else. The answer is not `partial`, so `should_retry` won't repeat it, but its way out is unproven. Task 12a or 13b's walk should reach it.
+
+**Deviation from the task's file list.** Seven names in `tests/support/mutation_golden.rs`, as Global Constraints allow.
+
+**Left.** Task 2c: cancellation, including `Interrupted` as `cancelled`. Task 3: resume. Task 4: made-ready. Task 6: identity rows. Task 7: the human lines.

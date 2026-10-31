@@ -16,6 +16,8 @@ use super::{
 struct AlwaysRecorded {
     root: PathBuf,
     observed: Cell<bool>,
+    /// Says `Row::Unfinished`, as a parent record does, not `Row::Recorded`.
+    parent: bool,
 }
 
 impl Binding for AlwaysRecorded {
@@ -78,7 +80,11 @@ impl Confirmed for AlwaysRecorded {
     }
 
     fn row(&mut self, _call: &CallContext<'_>, _accepted: &Accepted, _journal: &JournalRow) -> Row {
-        Row::Recorded
+        if self.parent {
+            Row::Unfinished
+        } else {
+            Row::Recorded
+        }
     }
 
     fn observe_again(
@@ -96,6 +102,10 @@ impl Confirmed for AlwaysRecorded {
 }
 
 fn entered_again(journal: JournalRow) -> (Result<Entered, Ran>, bool) {
+    entered_with(journal, false)
+}
+
+fn entered_with(journal: JournalRow, parent: bool) -> (Result<Entered, Ran>, bool) {
     let data = tempfile::tempdir().expect("a data directory");
     let service = RepositoryService::open_at(data.path()).expect("a service");
     let call = CallContext {
@@ -118,6 +128,7 @@ fn entered_again(journal: JournalRow) -> (Result<Entered, Ran>, bool) {
     let mut binding = AlwaysRecorded {
         root: PathBuf::from("/nowhere"),
         observed: Cell::new(false),
+        parent,
     };
     let entered = reenter(&mut binding, &call, &accepted, journal);
     (entered, binding.observed.get())
@@ -143,6 +154,26 @@ fn a_row_that_recorded_the_requests_work_is_taken_up_with_nothing_compared() {
         state: "created".to_owned(),
         step: None,
     }));
+    assert!(matches!(entered, Ok(Entered::Unfinished)));
+    assert!(!observed);
+}
+
+#[test]
+fn a_parent_record_with_no_row_is_taken_up_with_nothing_compared() {
+    let (entered, observed) = entered_with(JournalRow::Absent, true);
+    assert!(matches!(entered, Ok(Entered::Unfinished)));
+    assert!(!observed);
+}
+
+#[test]
+fn a_parent_record_with_a_row_is_taken_up_with_nothing_compared() {
+    let (entered, observed) = entered_with(
+        JournalRow::Pending(PendingOperation::Local {
+            state: "created".to_owned(),
+            step: None,
+        }),
+        true,
+    );
     assert!(matches!(entered, Ok(Entered::Unfinished)));
     assert!(!observed);
 }

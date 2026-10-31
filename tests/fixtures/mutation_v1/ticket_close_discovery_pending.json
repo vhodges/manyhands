@@ -1,0 +1,49 @@
+{
+  "code": "discovery_pending",
+  "command": "ticket close",
+  "data": {
+    "blockers": [],
+    "checkpoint_oid": "<checkpoint>",
+    "cleanup": "complete",
+    "cleanup_pending": null,
+    "integration": "merged",
+    "integration_oid": "<integration>",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "kind": "ticket",
+    "publication": "pending",
+    "publication_oid": null,
+    "publication_pending": "no_publication_remote",
+    "recording": "record",
+    "type": "lifecycle"
+  },
+  "effects": {
+    "checkpoint": "committed",
+    "cleanup": "complete",
+    "commit_oid": "<integration>",
+    "discovery": "pending",
+    "integration": "complete",
+    "publication": "pending",
+    "write": "not_requested"
+  },
+  "message": "The change is recorded; the index has not been updated yet.",
+  "operation_id": "<operation>",
+  "outcome": "partial",
+  "recovery": [
+    {
+      "action": "request.retry",
+      "arguments": {
+        "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FJ1"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FJ1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}
