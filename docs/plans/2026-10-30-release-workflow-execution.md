@@ -605,3 +605,76 @@ The owner subsequently selected committing the diagnostic patch and merging
 it into local `main`, with focused verification repeated on the merged tree.
 Push, version/tag preparation, and another native trial are not included in
 that authorization. No new workflow was dispatched.
+
+## v0.1.5 Native Trial — Hosted Machine-Root Verification Trust
+
+The owner authorized committing/merging the diagnostic patch (`55a6a0b1`,
+merge `47b5d93f`), then preparing and pushing version metadata and the new
+annotated `v0.1.5` tag at `b411e208`. The targeted CLI version test and merged
+tag/source validation passed before the atomic main/tag push. No existing
+tag moved and no workflow was dispatched by the agent.
+
+The owner supplied the log from
+[Release run 41243103652](https://github.com/vhodges/manyhands/actions/runs/41243103652),
+which used `b411e208`. On October 31, 2026, PFX loading/validation, import into
+`CurrentUser\My`, public export, and the Windows runtime audit completed.
+SignTool's signing/RFC 3161 calls then returned success for `manyhands.exe`
+in 0.6 seconds and `manyhands-cli.exe` in 0.2 seconds. The next line at
+21:28:13 UTC was **Starting temporary verification trust import**. No completion
+followed before the ten-minute signing-step timeout. Native signature
+verification had not started.
+
+This isolates the stalled call to `Import-Certificate` into
+`Cert:\CurrentUser\Root`; it is not a timestamp-service or signing-key failure
+in this trial. An inaccessible Windows current-user-root confirmation is the
+leading explanation, not a dialog directly observed in the log. Microsoft
+documents the machine-root import target and GitHub documents administrator
+tokens/UAC-disabled Windows hosted VMs; see the
+[approved correction design](2026-10-31-windows-verification-trust-design.md).
+
+The owner approved the CI-only correction in `.worktrees/release-windows-trust`,
+based on `b411e208` after fetching/merging origin/main:
+
+- Require actual Windows plus `GITHUB_ACTIONS=true`,
+  `RUNNER_ENVIRONMENT=github-hosted`, and an elevated administrator token.
+  Preflight runs before private-key handling, and import rechecks the context.
+  No current-user-root fallback or silent verification bypass is available.
+- Use only the public `.cer` in `LocalMachine\Root`; preserve the persistent
+  private identity in `CurrentUser\My`. Validate public identity before mutation,
+  preserve existing trust, record exact ownership before import, and check
+  imported identity/store presence. Removal accepts only an exact owned root
+  thumbprint path, verifies disappearance, and fails the job if it cannot clean.
+  A trust-cleanup failure still permits subsequent private-key/file cleanup.
+- Both Sign/Verify modes share this lifecycle. Progress, SHA-256, RFC 3161,
+  both native verifiers, and the 180-second/ten-minute deadlines remain.
+  A registered native fixture tests an independent one-hour public test root
+  before release secrets, with private fixture keys only in memory. Its fresh
+  child process has the native deadline; its helper-test step now also has a
+  ten-minute backstop. It does not replace the publisher identity.
+- Red/green evidence: the portable trust tests failed before the new helpers;
+  script-wiring and cleanup-continuation cases failed before script integration;
+  workflow registration/helper-limit assertions failed before the YAML changes.
+- Local checks: **16 focused Python tests**, **14 portable trust cases**,
+  existing DLL/endpoint tests, **11 process cases**, and **5 verification-progress
+  cases** passed through Devenv. Store/Windows verification APIs are stubbed
+  where required on Linux. A separate actual context-discovery probe rejected
+  Linux even with hosted-runner environment values; no real store was changed.
+  PowerShell 7.6.9 parsed six source/test files and 21 inline Windows workflow
+  bodies. actionlint 1.7.12 with ShellCheck 0.11.0 passed both workflows.
+- Scoped read-only review found no actionable production, security, cleanup,
+  fixture-isolation, or documentation issues. Tracked and new-file whitespace
+  checks passed. Final fetch/merge left main unchanged at `b411e208`.
+
+The real Windows root-import/preserve/remove fixture is registered but was
+explicitly skipped on Linux; native trust import, full signing verification,
+and actual store cleanup are still pending the next separately authorized
+Windows run. No Rust source/dependencies changed and broad Rust gates were
+not run. At the review checkpoint, changes were uncommitted and Cargo version
+remained `0.1.5`, with tags/secrets unchanged and no new run dispatched.
+
+The owner subsequently approved committing/merging this correction into main,
+pushing origin, and preparing/pushing a new matching release tag. Prepare
+`v0.1.6` with Cargo metadata and both CLI version fixtures updated, validate
+the targeted version test and merged tag/source identity, and push main/tag
+together. This authorization does not include native workflow dispatch or
+moving existing tags; publisher identity and secrets remain unchanged.

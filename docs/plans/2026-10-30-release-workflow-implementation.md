@@ -351,8 +351,11 @@ commands. A missing secret or signing/timestamp failure terminates the job.
 **Step 4: Verify signatures accurately.** Verify signature integrity,
 expected signer thumbprint, and timestamp. If `signtool verify /pa` needs
 the self-signed certificate trusted, install public trust only temporarily
-in the disposable runner's current-user certificate store and remove it
-after verification. State that this is a controlled runner check, not
+in `LocalMachine\Root` on an elevated, disposable GitHub-hosted Windows
+runner and remove only the owned addition after verification. This is the
+owner-approved v0.1.5 follow-up; keep the private identity in `CurrentUser\My`
+and fail before private-key handling outside the permitted context.
+State that this is a controlled runner check, not
 public trust. Include `signing/manyhands.cer` and `signing/README.md` in
 the distribution; never auto-import trust on the user's machine.
 

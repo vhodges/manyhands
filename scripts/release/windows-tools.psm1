@@ -105,6 +105,69 @@ function Get-SignToolTimestampUrl {
     return $endpoint.AbsoluteUri
 }
 
+function Get-VerificationTrustStore {
+    param([bool]$Windows, [string]$Actions, [string]$RunnerEnvironment, [bool]$Administrator)
+    if (-not $Windows -or $Actions -cne 'true' -or $RunnerEnvironment -cne 'github-hosted' -or -not $Administrator) {
+        throw 'Temporary verification trust requires an elevated GitHub-hosted Windows runner'
+    }
+    return 'Cert:\LocalMachine\Root'
+}
+
+function Get-HostedVerificationTrustStore {
+    $administrator = $false
+    if ($IsWindows) {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        try {
+            $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+            $administrator = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        } finally { $identity.Dispose() }
+    }
+    return Get-VerificationTrustStore -Windows $IsWindows -Actions $env:GITHUB_ACTIONS `
+        -RunnerEnvironment $env:RUNNER_ENVIRONMENT -Administrator $administrator
+}
+
+function Add-VerificationTrust {
+    param([string]$CertificatePath, [string]$Thumbprint, [ref]$OwnedPath)
+    $store = Get-HostedVerificationTrustStore
+    if ($Thumbprint -notmatch '\A[0-9A-Fa-f]{40}\z') { throw 'Invalid verification trust thumbprint' }
+    if ($null -eq $OwnedPath -or $null -ne $OwnedPath.Value) { throw 'Expected an empty verification trust ownership slot' }
+    if ([IO.Path]::GetExtension($CertificatePath) -ine '.cer') { throw 'Verification trust requires a public .cer file' }
+    $public = [Security.Cryptography.X509Certificates.X509Certificate2]::new($CertificatePath)
+    try {
+        if ($public.HasPrivateKey -or $public.Thumbprint -ne $Thumbprint) {
+            throw 'Verification trust public certificate does not match the expected identity'
+        }
+    } finally { $public.Dispose() }
+    $path = "$store\$($Thumbprint.ToUpperInvariant())"
+    if (Test-Path -LiteralPath $path) {
+        Write-ReleaseProgress 'Verification trust already present; existing certificate will be preserved'
+        return
+    }
+    # Record ownership before import so a partial import is cleaned up too.
+    $OwnedPath.Value = $path
+    Write-ReleaseProgress 'Starting temporary verification trust import into LocalMachine/Root'
+    $imported = @(Import-Certificate -FilePath $CertificatePath -CertStoreLocation $store -Confirm:$false -ErrorAction Stop)
+    if ($imported.Count -ne 1 -or $imported[0].Thumbprint -ne $Thumbprint) {
+        throw 'Imported verification trust identity changed'
+    }
+    if (-not (Test-Path -LiteralPath $path)) { throw 'Verification trust was not found after import' }
+    Write-ReleaseProgress 'Completed temporary verification trust import into LocalMachine/Root'
+}
+
+function Remove-VerificationTrust {
+    param([string]$OwnedPath)
+    if ([string]::IsNullOrEmpty($OwnedPath)) { return }
+    if ($OwnedPath -notmatch '\ACert:\\LocalMachine\\Root\\[0-9A-Fa-f]{40}\z') {
+        throw 'Refusing to remove anything except an exact owned machine-root certificate'
+    }
+    if (Test-Path -LiteralPath $OwnedPath) {
+        Write-ReleaseProgress 'Removing owned temporary machine-root verification trust'
+        Remove-Item -LiteralPath $OwnedPath -Force -ErrorAction Stop
+        if (Test-Path -LiteralPath $OwnedPath) { throw 'Owned verification trust is still present after removal' }
+        Write-ReleaseProgress 'Removed owned temporary machine-root verification trust'
+    }
+}
+
 function ConvertFrom-DumpbinDependencies {
     param([string]$Output)
     return @([regex]::Matches($Output, '(?im)^\s*([A-Z0-9_-][A-Z0-9_.-]*\.[A-Z0-9]+)\s*$') |
@@ -159,4 +222,4 @@ function Get-WindowsRuntimeReport {
     return [ordered]@{ system = 'windows'; architecture = 'x86_64'; crt = 'static'; binaries = $binaries }
 }
 
-Export-ModuleMember -Function Write-ReleaseProgress, Invoke-ReleaseTool, Find-SignTool, Get-SignToolTimestampUrl, ConvertFrom-DumpbinDependencies, Assert-PeArchitecture, Assert-SystemDependency, Assert-SystemDependencies, Get-WindowsRuntimeReport
+Export-ModuleMember -Function Write-ReleaseProgress, Invoke-ReleaseTool, Find-SignTool, Get-SignToolTimestampUrl, Get-VerificationTrustStore, Get-HostedVerificationTrustStore, Add-VerificationTrust, Remove-VerificationTrust, ConvertFrom-DumpbinDependencies, Assert-PeArchitecture, Assert-SystemDependency, Assert-SystemDependencies, Get-WindowsRuntimeReport
