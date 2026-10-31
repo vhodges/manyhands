@@ -86,10 +86,20 @@ Version-specific original source download links are also provided below.</p>
 
 
 def run(args: list, repo: Path) -> str:
-    result = subprocess.run(args, cwd=repo, capture_output=True, text=True, check=False)
+    result = subprocess.run(args, cwd=repo, capture_output=True, text=True, encoding="utf-8", check=False)
     if result.returncode:
         raise ValueError(f"{' '.join(args[:3])} failed:\n{result.stderr.strip()}")
     return result.stdout
+
+
+def about_output(args: list, repo: Path) -> str:
+    # cargo-about rejects stdout if PowerShell is anywhere in its ancestor
+    # chain, including Python capturing a child pipe. Let the tool write
+    # UTF-8 itself, then read the result independently of the invoking shell.
+    with tempfile.TemporaryDirectory(prefix="manyhands-about-") as temporary:
+        output = Path(temporary) / "notices.txt"
+        run([*args, "--output-file", str(output)], repo)
+        return output.read_text(encoding="utf-8")
 
 
 def generate_notices(repo: Path, target: str, output: Path) -> None:
@@ -111,7 +121,7 @@ def generate_notices(repo: Path, target: str, output: Path) -> None:
             "--target", target, "--config", str(repo / "packaging/licenses/about.toml"),
             *features,
         ]
-        data = json.loads(run([*base, "--format", "json"], repo))
+        data = json.loads(about_output([*base, "--format", "json"], repo))
         for license_info in data["licenses"]:
             for used_by in license_info["used_by"]:
                 package = used_by["crate"]
@@ -119,7 +129,7 @@ def generate_notices(repo: Path, target: str, output: Path) -> None:
                 packages[key] = package
                 if license_info["id"] == "MPL-2.0" or package["name"] == "libgit2-sys":
                     source_ids.add(key)
-        fragments[graph] = run([*base, str(repo / "packaging/licenses/about.hbs")], repo)
+        fragments[graph] = about_output([*base, str(repo / "packaging/licenses/about.hbs")], repo)
     # Vendored OpenSSL is built by openssl-src, not part of the normal Rust
     # graph. Preserve its original notices as well when distributing Windows.
     if target == "x86_64-pc-windows-msvc":

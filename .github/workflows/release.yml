@@ -63,18 +63,22 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             os: linux
+            shell: bash
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             os: linux
+            shell: bash
           - runner: windows-2022
             target: x86_64-pc-windows-msvc
             os: windows
-          - runner: macos-14
+            shell: pwsh
+          - runner: macos-15
             target: aarch64-apple-darwin
             os: macos
+            shell: bash
     defaults:
       run:
-        shell: pwsh
+        shell: ${{ matrix.shell }}
     env:
       TARGET: ${{ matrix.target }}
       RELEASE_INPUT: ${{ needs.prepare.outputs.manifest }}
@@ -90,21 +94,11 @@ jobs:
           python-version: "3.12"
 
       - name: Verify immutable checkout and materialize handoff
-        run: python -B scripts/release/prepare.py --manifest-env RELEASE_INPUT --output release-input.json --target $env:TARGET --github-env $env:GITHUB_ENV
+        run: python -B scripts/release/workflow.py prepare
 
       - name: Read pinned release tools
         id: tools
-        run: |
-          $versions = @{}
-          foreach ($line in Get-Content packaging/tool-versions.env) {
-            $line = $line.Trim()
-            if (-not $line -or $line.StartsWith('#')) { continue }
-            if ($line -notmatch '^(RUST_VERSION|CARGO_ABOUT_VERSION)=([0-9]+\.[0-9]+\.[0-9]+)$') { throw 'Invalid release tool version' }
-            $versions[$Matches[1]] = $Matches[2]
-          }
-          if ($versions.Count -ne 2) { throw 'Missing pinned release tools' }
-          "rust=$($versions.RUST_VERSION)" >> $env:GITHUB_OUTPUT
-          "cargo-about=$($versions.CARGO_ABOUT_VERSION)" >> $env:GITHUB_OUTPUT
+        run: python -B scripts/release/workflow.py tools
 
       - name: Install Linux build dependencies
         if: matrix.os == 'linux'
@@ -150,57 +144,55 @@ jobs:
         run: ./scripts/release/tests/test_windows_tools.ps1
 
       - name: Build release CLI without desktop features
-        run: cargo build --locked --release --no-default-features --bin manyhands-cli --target $env:TARGET
+        run: python -B scripts/release/workflow.py build-cli
 
       - name: Build release desktop
-        run: cargo build --locked --release --no-default-features --features desktop --bin manyhands --target $env:TARGET
+        run: python -B scripts/release/workflow.py build-desktop
 
       - name: Check the CLI dependency boundary
         run: bash scripts/check-cli-no-gpui.sh
 
       - name: Install pinned licence tool
-        env:
-          CARGO_ABOUT_VERSION: ${{ steps.tools.outputs.cargo-about }}
-        run: cargo install cargo-about --version $env:CARGO_ABOUT_VERSION --locked --features cli
+        run: python -B scripts/release/workflow.py install-about
 
       - name: Generate target-specific licences and original notices
-        run: python -B scripts/release/notices.py --target $env:TARGET --output release-notices
+        run: python -B scripts/release/workflow.py notices
 
       - name: Stage binaries and documentation
-        run: python -B scripts/release/package.py stage --input release-input.json --target $env:TARGET --binaries "target/$env:TARGET/release" --notices release-notices --output $env:STAGING
+        run: python -B scripts/release/workflow.py stage
 
       - name: Audit Linux runtime linkage
         if: matrix.os == 'linux'
-        run: bash scripts/release/linux-runtime.sh audit --staging $env:STAGING --target $env:TARGET
+        run: python -B scripts/release/workflow.py linux-audit
 
       - name: Bundle and ad-hoc sign macOS
         if: matrix.os == 'macos'
-        run: bash scripts/release/macos-package.sh package --staging $env:STAGING
+        run: python -B scripts/release/workflow.py macos-package
 
       - name: Audit and self-sign Windows executables
         if: matrix.os == 'windows'
         env:
           WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
           WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
-        run: ./scripts/release/windows-sign.ps1 -Mode Sign -Staging $env:STAGING
+        run: python -B scripts/release/workflow.py windows-sign
 
       - name: Create platform archive
-        run: python -B scripts/release/package.py archive --input release-input.json --target $env:TARGET --staging $env:STAGING --output release-dist
+        run: python -B scripts/release/workflow.py archive
 
       - name: Verify extracted contents and CLI; record archive inventory
-        run: python -B scripts/release/verify.py --input release-input.json --target $env:TARGET --archive $env:ARCHIVE --extract-to release-extracted --inventory $env:INVENTORY --smoke-cli
+        run: python -B scripts/release/workflow.py verify
 
       - name: Verify extracted macOS signatures and linkage
         if: matrix.os == 'macos'
-        run: bash scripts/release/macos-package.sh verify --staging $env:EXTRACTED
+        run: python -B scripts/release/workflow.py macos-verify
 
       - name: Verify extracted Windows signatures without signing secrets
         if: matrix.os == 'windows'
-        run: ./scripts/release/windows-sign.ps1 -Mode Verify -Staging $env:EXTRACTED
+        run: python -B scripts/release/workflow.py windows-verify
 
       - name: Verify Linux archive in an isolated Ubuntu runtime
         if: matrix.os == 'linux'
-        run: bash scripts/release/linux-runtime.sh smoke --input release-input.json --target $env:TARGET --archive $env:ARCHIVE
+        run: python -B scripts/release/workflow.py linux-smoke
 
       - name: Hand off verified archives to draft assembly
         uses: actions/upload-artifact@v4

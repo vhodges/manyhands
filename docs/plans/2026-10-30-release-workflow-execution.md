@@ -309,3 +309,77 @@ The owner selected committing Stage 1 and merging it into local `main`.
 Verify the merged result before removing the completed worktree. Pushing
 and native workflow dispatch require their own authorization; native
 acceptance and Stage 2 remain follow-on work.
+
+## First Native Trial And Follow-Up Fixes
+
+With owner authorization, pushed main and annotated tag `v0.1.0` at
+`055353f8f62ac053638bd64aefbd3b2c14551b81`, provisioned the two persistent
+Windows signing secrets, and dispatched Release run
+[41139543604](https://github.com/vhodges/manyhands/actions/runs/41139543604).
+Signing material is backed up outside the repository; no private values
+are recorded here.
+
+### Observed Result
+
+- Tag/version/remote-state preparation passed.
+- Both CLI and desktop release builds passed on Windows x86_64 and Linux
+  x86_64/ARM64. All three failed later during notice generation.
+- cargo-about 0.9.3 explicitly rejected captured stdout because `pwsh`
+  appeared in its process ancestry, even though Python captured the pipe.
+- macOS never started: GitHub cancelled the job during the scheduled
+  macOS 14 image brownout ahead of retirement on November 2, 2026.
+- Draft assembly was skipped; no draft assets were produced.
+
+### Follow-Up Scope
+
+The owner approved a separate follow-up on branch `release-ci-fixes` in
+`.worktrees/release-ci-fixes`, based on `055353f8`:
+
+1. Write cargo-about JSON and HTML to temporary files with `--output-file`,
+   then read them explicitly as UTF-8. Decode remaining Cargo subprocess
+   output explicitly as UTF-8 as well.
+2. Select Bash for Linux/macOS and PowerShell for Windows. Move the shared
+   argument lists and pinned-tool output into a small Python workflow
+   adapter; preserve checked child execution, production features, native
+   Windows compilation, and all packaging/signature/runtime checks.
+3. Move Build and Release to `macos-15`, confirmed ARM64 in GitHub's
+   [official runner catalog](https://github.com/actions/runner-images#available-images).
+   This avoids the [macOS 14 brownout/retirement](https://github.com/actions/runner-images/issues/13518)
+   without switching to a moving `macos-latest` alias.
+
+### Follow-Up Verification
+
+- Baseline: 87 helper tests passed.
+- Reproduced the real cargo-about failure locally under PowerShell before
+  changing output handling; the new contract regression also failed first.
+- After the fix, generated complete real notice bundles for all four
+  target graphs under PowerShell using pinned cargo-about 0.9.3. This is a
+  cross-target metadata test on Linux, not Windows/macOS native acceptance.
+- The first combined invocation timed out during the macOS desktop graph.
+  A standalone verbose command and a full macOS rerun then completed.
+- The nested local Nix/PowerShell tool environment needed its inherited
+  `LD_LIBRARY_PATH` cleared for the smoke command to avoid a Nix library ABI
+  collision. No project runtime library configuration was changed.
+- Added regressions for UTF-8 file output, shell-neutral paths, production
+  Cargo arguments, Windows PowerShell selection, immutable source handoff,
+  retained smoke/inventory checks, pinned-tool output validation, and child
+  exit-code propagation.
+- Scoped read-only code review reported no actionable findings. Its
+  complete helper suite passed 97 tests; actionlint passed for both workflows.
+
+At the follow-up review checkpoint these fixes were uncommitted and no
+version/tag change or native rerun had been authorized. The owner then
+approved committing/merging the fixes, bumping Cargo metadata to `0.1.1`,
+pushing main and a new `v0.1.1` tag, and starting one new Release trial.
+The existing `v0.1.0` tag remains unchanged. Stage 2 remains separate work.
+
+For the version-only metadata change, check/fmt/clippy passed. An unnecessary
+full-suite run first exceeded the command time limit; an extended run then
+found the CLI version golden still pinned to `0.1.0`. Both JSON and text
+version goldens are updated to `0.1.1`. The owner corrected the verification
+scope: use targeted metadata/CLI version checks on a known-compiling tree
+instead of repeating full gates merely for a version bump. Remaining
+verification follows that direction; the broad suite is not reported as passed.
+The targeted CLI version test then passed, as did all 97 release-helper
+tests, actionlint for both workflows, and whitespace checks. Integration
+and the newly authorized native trial proceed on those scoped checks.
