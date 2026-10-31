@@ -21,7 +21,11 @@ DWRITE.dll
 DWMAPI.dll
 DXGI.dll
 GDI32.dll
+# GDI+ startup/runtime: https://learn.microsoft.com/en-us/windows/win32/api/gdiplusinit/nf-gdiplusinit-gdiplusstartup
+GDIPLUS.dll
 HID.dll
+# OS ICU common C APIs, Windows 10 1703+: https://learn.microsoft.com/en-us/windows/win32/intl/international-components-for-unicode--icu-
+ICUUC.dll
 IMM32.dll
 IPHLPAPI.dll
 KERNEL32.dll
@@ -44,6 +48,8 @@ SETUPAPI.dll
 SHCORE.dll
 SHELL32.dll
 SHLWAPI.dll
+# UI Automation provider: https://learn.microsoft.com/en-us/windows/win32/api/uiautomationcoreapi/nf-uiautomationcoreapi-uiareturnrawelementprovider
+UIAUTOMATIONCORE.dll
 USER32.dll
 USERENV.dll
 USP10.dll

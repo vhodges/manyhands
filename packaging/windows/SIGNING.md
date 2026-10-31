@@ -67,6 +67,12 @@ Audit failures list every rejected import for the executable being checked,
 so additional missing contracts can be reviewed together. The DPI contract
 `api-ms-win-shcore-scaling-l1-1-1.dll` is an explicitly reviewed Windows
 Shcore forwarding alias, documented by Microsoft for `GetDpiForMonitor`.
+The desktop also imports OS-provided GDI+ (`gdiplus.dll`), ICU common C APIs
+(`icuuc.dll`), and UI Automation (`uiautomationcore.dll`). These exact names
+are reviewed with Microsoft documentation linked in the policy file; their
+presence in the native OS System directory is still required. System ICU
+was introduced in Windows 10 version 1703. The package records that runtime
+requirement and does not collect replacement DLLs from developer-tool PATHs.
 
 ## Signing and extracted verification
 
