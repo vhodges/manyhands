@@ -105,7 +105,7 @@ At `717b664d` (main `a52273ff` merged). Task 0 re-checks each one.
 20. Nothing outside tests calls either write or `poll_publication_remote`.
 21. `polling_status` (`read/status.rs:710`) already backs `poll status`. The
     doc on `PollingStatusDto.next_eligible_at` (`read/dto.rs:723`) says no read
-    fills it, while `polling_status` does. Task 5 corrects the comment.
+    fills it, while `polling_status` does. Task 5a corrects the comment.
     `remote_polling_state.next_eligible_at` is a stored column
     (`remote/state.rs:61`), and a null or past value is due (`remote/poll.rs`
     `eligibility`), so "make due" needs no schema change.
@@ -305,7 +305,7 @@ Categories: synchronization `Conflict` is `recovery_required`, `Rejected` is
 is `host_approval_required`. The category carries no authority, so the host row's action
 is `repo.inspect`, followed by `host observe` and `host approve`.
 
-A repository error of kind `ExternalChange` stays a repository error (fact 11). Task 2's
+A repository error of kind `ExternalChange` stays a repository error (fact 11). Task 2b's
 test is written first. C5 adds no `ResultCode`. Automatic bounded retries (fact 33) apply
 to rows whose first action is `request.retry`, so count-based assertions allow for them.
 
@@ -564,7 +564,7 @@ stale branches are removed only on the owner's go-ahead.
 Follow the RFC table. Local-only completion is 0. Partial after any durable effect
 is 4. Blocked before any is 3. `busy` is 5. Ctrl-C is 130, or the domain's answer after
 the last safe point. `tests/cli/collaboration_exits.rs`'s set equality is extended with
-C5's codes in Task 13.
+C5's codes in Task 13b.
 
 ## Testing
 
