@@ -188,6 +188,9 @@ in release metadata; bundle short/build versions use the numeric core.
 
 Reviewed Homebrew OpenSSL 3 libraries are copied and relocated into the
 app's `Contents/Frameworks` and the standalone CLI's sibling `lib/`.
+Both workflows export `OPENSSL_DIR` from `brew --prefix openssl@3` before
+building. Installing OpenSSL 3 alone is insufficient: the locked
+`openssl-sys` also detects preinstalled OpenSSL 4 and otherwise prefers it.
 Original OpenSSL notices are collected and installed in the app resources
 as well as the archive. Unknown external libraries fail for review rather
 than being copied without their distribution terms. Obsolete RPATHs are

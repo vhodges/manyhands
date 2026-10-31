@@ -29,6 +29,7 @@ try {
     [IO.File]::WriteAllText((Join-Path $temporary 'KERNEL32.dll'), 'OS fixture')
     Assert-SystemDependency -Name 'KERNEL32.dll' -SystemDirectory $temporary
     Assert-SystemDependency -Name 'api-ms-win-core-synch-l1-2-0.dll' -SystemDirectory $temporary
+    Assert-SystemDependency -Name 'api-ms-win-shcore-scaling-l1-1-1.dll' -SystemDirectory $temporary
     Assert-Throws { Assert-SystemDependency -Name 'unknown.dll' -SystemDirectory $temporary }
     [IO.File]::WriteAllText((Join-Path $temporary 'vendor.dll'), 'Runner-installed third-party fixture')
     Assert-Throws { Assert-SystemDependency -Name 'vendor.dll' -SystemDirectory $temporary }
@@ -36,6 +37,16 @@ try {
     Assert-Throws { Assert-SystemDependency -Name 'vcruntime140.dll' -SystemDirectory $temporary }
     Assert-Throws { Assert-SystemDependency -Name 'api-ms-win-crt-runtime-l1-1-0.dll' -SystemDirectory $temporary }
     Assert-Throws { Assert-SystemDependency -Name '../KERNEL32.dll' -SystemDirectory $temporary }
+    $auditFailure = $null
+    try {
+        Assert-SystemDependencies -Names @('vendor.dll', 'vcruntime140.dll') -SystemDirectory $temporary -BinaryName 'manyhands.exe'
+    } catch {
+        $auditFailure = $_.Exception.Message
+    }
+    if (-not $auditFailure -or -not $auditFailure.Contains('vendor.dll') -or
+        -not $auditFailure.Contains('vcruntime140.dll') -or -not $auditFailure.Contains('manyhands.exe')) {
+        throw 'Dependency audit must report every rejected import and its executable'
+    }
 } finally {
     Remove-Item -LiteralPath $temporary -Recurse -Force
 }

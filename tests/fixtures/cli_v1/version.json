@@ -3,7 +3,7 @@
   "command": "cli version",
   "data": {
     "name": "manyhands-cli",
-    "version": "0.1.1"
+    "version": "0.1.2"
   },
   "effects": {
     "checkpoint": "not_requested",

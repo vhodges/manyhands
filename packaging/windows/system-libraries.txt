@@ -88,3 +88,6 @@ api-ms-win-core-winrt-l1-1-0.dll
 api-ms-win-core-winrt-error-l1-1-0.dll
 api-ms-win-core-winrt-string-l1-1-0.dll
 api-ms-win-eventing-provider-l1-1-0.dll
+# GetDpiForMonitor: documented Shcore API-set forwarding contract.
+# https://learn.microsoft.com/en-us/windows/win32/api/shellscalingapi/nf-shellscalingapi-getdpiformonitor
+api-ms-win-shcore-scaling-l1-1-1.dll
