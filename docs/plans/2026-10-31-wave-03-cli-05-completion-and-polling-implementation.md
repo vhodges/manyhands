@@ -30,7 +30,7 @@ id: "01M69C6SHD04G8PT6D1Y36CDN7"
   - `src/repository/remote/{state,sync,poll}.rs`;
   - `src/repository/promotion/` and `src/repository/closure/`, for the parent-record accessor, the cancellation probe and the identity path only;
   - `src/repository/read/{mod,dto,graph}.rs`, for exports, the corrected comment and the made-ready read;
-  - `src/repository.rs`, for `set_publication_remote_recorded` (decision 10) only;
+  - `src/repository.rs`, for `set_publication_remote_recorded` and any recovery of it Task 0 locates (decision 10) only;
   - `schemas/v1/`.
 
   No new `ResultCode` or `RecoveryActionKind`. No field on a public struct that tests build by literal: the probe is a crate-private entry point, and the public signatures stay. No column of an audited table changes, and no blocker enum's order. A gap beyond this stops the task for the owner.
@@ -41,7 +41,7 @@ id: "01M69C6SHD04G8PT6D1Y36CDN7"
 - **Content and secrets.** No type holding source or a token derives `Debug`, `Display` or `Serialize`, except the content read's DTO. `closed_by` appears only in the preview, canonical content, the index and Git, as Cycle 10 lists. Previews aren't persisted, and request records hold no `closed_by` or title. No input value, source, token or backend text reaches a diagnostic.
 - **Test placement.** Library tables are modules of `tests/mutation_remote.rs`, on the new `tests/support/lifecycle_world.rs`. Cases in `harness = false` targets are `ssh_harness` cases named `c5_<module>_<case>`, registered in `CASES`, split per row under the 100-second watchdog. `#[test]` functions do not run there. `tests/cli_remote.rs` reaches public items only.
 - **Test isolation.** Every CLI child goes through `tests/support/cli.rs`, `tests/support/pty.rs` or the SSH harness. Tests never touch developer keys, global Git configuration, the real terminal or real application data.
-- **Pre-existing tests.** Only named edits E-1 to E-14. Any other semantic edit stops for owner review.
+- **Pre-existing tests.** Only named edits E-1 to E-15. Any other semantic edit stops for owner review.
 - **Outcome tables.** Each table's test is written first and seen to fail. It is committed together with the code that passes it. A row that answers otherwise stops for a ruling.
 - **Test runs.**
   - Each task runs only the targets and filters it names. Check that more than zero tests ran. Cargo takes one positional filter per command.
@@ -81,104 +81,96 @@ Each has its test in the owning task.
 6. `poll pause` against a stale whole-tuple caller: a control test shows `set_remote_polling` with stale values loses the newer interval, and `update_remote_polling` keeps it. Task 5a.
 7. A malformed remote ref in `poll once`: nullable fields, and no raw name in output. Task 9.
 
-## File Map And Task Order
+## Task Order
 
-Part A (library): Tasks 0–6. Part B (CLI): Tasks 7–11. Part C (evidence): Tasks 12a–15.
+Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in the task that binds it. Part B (CLI): Tasks 7–11. Part C (evidence): Tasks 12a–15.
 
 ## Task 0: Baseline, Re-Grounding, Audit Refresh And Ledger
 
 - [ ] **Step 1:** Ask the owner how commits are identified. Merge `origin/main` if it moved.
 - [ ] **Step 2:** Re-check every Baseline Fact by grep or test. A changed fact stops for a ruling.
-- [ ] **Step 3:** Grep for test pins beyond E-1 to E-14: `NotResumable`, `"C5"`, `arrives with`, `Planned`, `command_unavailable`. `tests/read_relationships.rs`'s `"C5"` is data. An unlisted hit stops for the owner.
+- [ ] **Step 3:** Grep for test pins beyond E-1 to E-15: `NotResumable`, `"C5"`, `arrives with`, `Planned`, `command_unavailable`. `tests/read_relationships.rs`'s `"C5"` is data. An unlisted hit stops for the owner.
 - [ ] **Step 4:** Read and record in the ledger:
   - `lifecycle_record.rs:345-354` and `:977`: that a same-ID retry clears `cancel_requested`;
   - `state::configure`: that it leaves `paused` alone;
-  - that a registered repository always has its polling row;
+  - that a registered repository always has its polling row, and that `request_records` and `remote_polling_state` share the registry connection (decision 15);
+  - where recovery after a stop in `set_publication_remote_recorded` lives;
   - that a confirmation stores no `closed_by`, and what verb creates a missing context;
   - whether a `FailurePoint` yields an `ExternalChange`-kind error after a checkpoint. If none does, Task 2b's row becomes a unit test of the mapping.
 - [ ] **Step 5:** Reproduce `01M669FJR2` through the binary, and confirm the later-publication order doesn't reach `01M66HFV44`. A surprise stops for the owner.
 - [ ] **Step 6:** Refresh the API audit's C5 rows, with code lists.
 - [ ] **Step 7:** Create the ledger. Commit `docs: start the C5 execution ledger and refresh the audit`. Ticket comment. Push.
 
-## Task 1: Commands And Predicates
-
-**Files:** Modify `src/repository/mutation/command.rs`, `dto.rs`, `outcome_tests.rs`, `tests/mutation_contract.rs` (E-9, E-12, E-13).
-
-- [ ] **Step 1:** Add `DocumentPromote`, `TicketClose`, `PollOnce`, `PollConfigure`, `PollPause`, `PollResume`, with an arm in every predicate, per the design's table. Add `None` arms to `MutationDataDto::from_stored`; Tasks 2a and 5a replace them, and a replay round-trip test proves each.
-- [ ] **Step 2:** Extend the names test, add a predicate test per column, and hold the commands in `UNBOUND_COMMANDS`.
-- [ ] **Step 3: Verify.** `devenv shell -- cargo test --all-features --locked --lib mutation::command`, then `--lib mutation::outcome`, then `--test mutation_contract`.
-- [ ] **Step 4:** Commit `feat: add C5 commands to the mutation boundary`. Ticket comment. Push.
-
 ## Task 2a: Lifecycle Binding: Accessor, Prepare And First Run
 
-**Files:** Create `src/repository/mutation/bind/lifecycle.rs`, `tests/support/lifecycle_world.rs`, `tests/mutation_remote/c5_lifecycle.rs`. Modify `tests/mutation_remote.rs`, `bind/mod.rs`, `mutation/mod.rs`, `confirm.rs`, `dto.rs`, `outcome.rs`, `promotion/mod.rs`, `closure/mod.rs`, `schemas/v1/`, `tests/support/mutation_golden.rs`, consumers of `PrepareDataDto`.
+**Files:** Create `src/repository/mutation/bind/lifecycle.rs`, `tests/support/lifecycle_world.rs`, `tests/mutation_remote/c5_lifecycle.rs`. Modify `tests/mutation_remote.rs`, `command.rs`, `bind/mod.rs`, `mutation/mod.rs`, `progress.rs` (`Session` methods, both impls), `confirm.rs`, `dto.rs`, `outcome.rs`, `promotion/mod.rs`, `closure/mod.rs`, `schemas/v1/`, `tests/support/mutation_golden.rs`, `tests/support/conformance.rs`, `tests/mutation_contract.rs`, `src/bin/manyhands-cli/human_admin.rs`, `src/desktop/view/confirm.rs` if its match needs an arm, E-9, E-12, E-13.
 
 - [ ] **Step 1:** Write the prepare and first-run rows as `c5_lifecycle_` cases for both verbs: ready; each blocker rule; dirty primary; unknown ID; wrong kind; `Complete` with each publication result; a local-only run. Build the world, and see each assertion fail against a binding that answers `internal_error`, so the failure isn't only a compile error.
-- [ ] **Step 2:** Implement `lifecycle_parent`, `PreviewDetailsDto::Lifecycle`, `PrepareDataDto::LifecycleBlocked`, the data DTOs, schemas and goldens, and the binding's first run. Audit `PrepareDataDto` consumers in the bin and desktop; a desktop arm runs the two desktop gate commands.
-- [ ] **Step 3: Verify.** `--test mutation_remote -- c5_lifecycle`, then `--test mutation_contract`, then `--lib mutation`.
+- [ ] **Step 2:** Add `DocumentPromote` and `TicketClose`, with an arm in every predicate, `from_stored` and `recorded_effects`, their `HOMES` entries and conformance rows, and the `command.rs` tests. Implement `lifecycle_parent`, `Session` methods, `PreviewDetailsDto::Lifecycle`, `PrepareDataDto::LifecycleBlocked`, the data DTOs, schemas and goldens, and the binding's first run. Audit consumers of both DTOs; a desktop arm runs the two desktop gate commands.
+- [ ] **Step 3: Verify.** `--test mutation_remote -- c5_lifecycle`, `--test mutation_contract`, `--test mutation_replay`, `--test mutation_confirmation`, `--test mutation_bridges`, `--lib mutation`.
 - [ ] **Step 4:** Commit `feat: bind promotion and closure prepare and execution`. Ticket comment. Push.
 
 ## Task 2b: Lifecycle Binding: Re-Entry, Standing And The Answers Table
 
-**Files:** Modify `bind/lifecycle.rs`, `outcome.rs`, `tests/mutation_remote/c5_lifecycle.rs`.
+**Files:** Modify `bind/lifecycle.rs`, `bind/mod.rs` (`recorded_effects`), `confirm.rs`, `confirm_tests.rs` (E-15), `outcome.rs`, `tests/mutation_remote/c5_lifecycle.rs`.
 
-- [ ] **Step 1:** Write the rows of the design's re-entry, standing and answers tables first, as `c5_lifecycle_` cases, split per row. They include: a crash before the record; a stop with a written checkpoint and no remote row, which keeps the record; a stale expectation at confirm; an expired confirmation; a pending local sync and comment publication; refused push; refused deletion; Review Focus 1; each exit split by durable effect.
-- [ ] **Step 2:** Implement the `reenter` override and the standing. A row that answers otherwise stops for a ruling.
+- [ ] **Step 1:** Write the rows of the design's re-entry, standing and answers tables first, as `c5_lifecycle_` cases, split per row. They include: a crash before the record; a stop with a written checkpoint and no remote row, which keeps the record; a preview now `Blocked` on re-entry; a stale expectation at confirm; an expired confirmation, and a kept record past ten minutes; a deleted record's resend past ten minutes; a pending local sync and comment publication; `PrimaryAdvanced` continuing under the same request; refused push; refused deletion; a refused checkpoint merge and its `next:` lines; Review Focus 1, including the old request's stored `request_mismatch`; cache loss at each stage; each exit split by durable effect.
+- [ ] **Step 2:** Implement `Row::Unfinished`, `row`, the standing and the parent-based `recorded_effects`. A row that answers otherwise stops for a ruling.
 - [ ] **Step 3: Verify.** `--test mutation_remote -- c5_lifecycle`, `--test mutation_replay`, `--test mutation_confirmation`, `--lib mutation`.
 - [ ] **Step 4:** Commit `feat: continue unfinished promotions and closures under their request`. Ticket comment. Push.
 
 ## Task 2c: Cancellation Reach
 
-**Files:** Modify `promotion/run.rs`, `promotion/mod.rs`, `closure/mod.rs`, `remote/poll.rs`, `mutation/progress.rs`, `bind/lifecycle.rs`.
+**Files:** Modify `promotion/run.rs`, `promotion/lifecycle.rs`, `promotion/mod.rs`, `closure/lifecycle.rs`, `closure/mod.rs`, `mutation/progress.rs`, `mutation/records.rs`, `results.rs` (the `RequestCancel` doc), `bind/lifecycle.rs`, `tests/mutation_remote/c5_cancel.rs`, `tests/mutation_remote.rs`.
 
-- [ ] **Step 1:** Write first, as `c5_cancel_` cases: `cancel_request` during each lifecycle stage; a token probe at a safe point; cancel, then same request, then a new ID, before and after integration; `Pending{Cancelled}` rows.
+- [ ] **Step 1:** Write first, as `c5_cancel_` cases: `cancel_request` during each lifecycle stage, and with no parent yet; a token probe at a safe point and during a child; cancel by `request cancel`, then same request completing, then a new ID, before and after integration; a `request cancel` between automatic attempts stops attempt 2; a killed process's resend answers `cancelled` once, and the next continues; `Pending{Cancelled}` rows.
 - [ ] **Step 2:** Implement the observed entry points and the `cancel_request` route. Public signatures stay.
 - [ ] **Step 3: Verify.** `--test mutation_remote -- c5_cancel`, `--test document_promotion`, `--test ticket_closure`, and the `remote`, `local_sync` and `integration` lib filters.
 - [ ] **Step 4:** Commit `feat: let cancellation reach promotion and closure safe points`. Ticket comment. Push.
 
 ## Task 3: Resume Routes
 
-**Files:** Modify `bind/resume.rs`, `tests/mutation_remote/resume.rs` (E-10), `tests/mutation_remote/c5_lifecycle.rs`.
+**Files:** Modify `bind/resume.rs`, `dto.rs` (`from_stored`'s tag), `tests/mutation_replay/resume.rs` (E-10), `tests/mutation_remote/c5_lifecycle.rs`.
 
 - [ ] **Step 1:** Write the design's resume table first, with local-only and pre-integration rows, since those have no journal row. Include a Ctrl-C during resume and its made-ready.
 - [ ] **Step 2:** Look in the lifecycle tables first, and correct the comments at `:36-37` and `:212-214`.
-- [ ] **Step 3: Verify.** `--test mutation_remote -- resume`, then `--test mutation_remote -- c5_resume`.
+- [ ] **Step 3: Verify.** `--test mutation_remote -- c5_resume`, `--test mutation_replay`, and `--test mutation_remote -- resume`.
 - [ ] **Step 4:** Commit `feat: resume unfinished promotions and closures by operation ID`. Ticket comment. Push.
 
 ## Task 4: Made-Ready Report
 
-**Files:** Modify `bind/lifecycle.rs`, `read/graph.rs`, `read/mod.rs`, `dto.rs`, `schemas/v1/`.
+**Files:** Create `tests/mutation_remote/c5_made_ready.rs`. Modify `tests/mutation_remote.rs`, `bind/lifecycle.rs`, `read/graph.rs`, `read/mod.rs`, `dto.rs`, `schemas/v1/`.
 
-- [ ] **Step 1:** Write first: one and many dependents; another open dependency; Review Focus 2 and 3; a dependent whose status text is `closed` with no closure; none; cleanup-only and supersede as `not_applicable`; stopped before integration as `not_computed`; an incomplete index and a failed read as `index_pending`, the latter by removing the index under a test hook named in the case; replay identical.
+- [ ] **Step 1:** Write first: one and many dependents; another open dependency; Review Focus 2 and 3; a dependent whose status text is `closed` with no closure; none; cleanup-only and supersede as `not_applicable`; stopped before integration, and a checkpoint only, as `not_computed`; domain `IndexPending` as `Owed`, computing on the retry; a complete closure with an incomplete index or a failed read as `Final` `index_pending` (decision 13), the failed read by a test hook named in the case; replay identical.
 - [ ] **Step 2:** Implement `tickets_made_ready`, `made_ready` and `made_ready_state`.
 - [ ] **Step 3: Verify.** `--test mutation_remote -- c5_made_ready`, `--lib read::graph`, `--test read_relationships`.
 - [ ] **Step 4:** Commit `feat: report the tickets a closure made ready`. Ticket comment. Push.
 
 ## Task 5a: Policy Bindings
 
-**Files:** Create `src/repository/mutation/bind/poll.rs`, `tests/mutation_remote/c5_poll.rs`. Modify `remote/state.rs`, `read/dto.rs`, `bind/mod.rs`, `dto.rs`, `schemas/v1/`.
+**Files:** Create `src/repository/mutation/bind/poll.rs`, `tests/mutation_remote/c5_poll.rs`. Modify `tests/mutation_remote.rs`, `command.rs`, `execute.rs`, `records.rs`, `remote/state.rs`, `read/dto.rs`, `bind/mod.rs`, `dto.rs`, `schemas/v1/`, conformance and golden support (E-13).
 
-- [ ] **Step 1:** Write the policy table first: success; already so; out-of-range; unregistered; `poll resume` clearing the due time while leaving suspension and backoff, read through `polling_status`; pause surviving a remote's removal; Review Focus 6; a retried unfinished request; a replay.
-- [ ] **Step 2:** Implement `update_remote_polling` and the three bindings. Correct `read/dto.rs:723`.
+- [ ] **Step 1:** Write the policy table first: success; already so, including not paused with a future deadline; out-of-range; unregistered; unenabled; unavailable index; `poll resume` clearing a deadline while leaving suspension and the backoff value, read through `polling_status`; pause surviving a remote's removal; Review Focus 6; a crash before the transaction leaves nothing, and one after replays; `poll resume` R1 stopped before commit, `poll pause` R2, R1 resent, with the order's result pinned against decision 15; a replay.
+- [ ] **Step 2:** Add the three commands with every arm and their conformance rows. Implement `update_remote_polling`, the boundary's transaction path and the three bindings. Correct `read/dto.rs:723`.
 - [ ] **Step 3: Verify.** `--test mutation_remote -- c5_poll`, `--test read_status`, and the `remote`, `local_sync` and `integration` lib filters.
 - [ ] **Step 4:** Commit `feat: bind polling policy controls`. Ticket comment. Push.
 
 ## Task 5b: `poll once` Binding
 
-**Files:** Modify `bind/poll.rs`, `remote/poll.rs`, `tests/mutation_remote/c5_poll.rs`, `tests/mutation_contract.rs` (returns E-13's list), `schemas/v1/`.
+**Files:** Modify `command.rs`, `bind/poll.rs`, `bind/resume.rs`, `progress.rs` (`Session`), `remote/poll.rs`, `dto.rs`, `tests/mutation_remote/c5_poll.rs`, `schemas/v1/`, conformance and golden support (E-13).
 
-- [ ] **Step 1:** Write the design's `poll once` table first, split per row, including that no remote writes nothing, and that a pause doesn't refuse.
-- [ ] **Step 2:** Implement it, with the probe.
+- [ ] **Step 1:** Write the design's `poll once` table first, split per row, including that no remote writes nothing, a pause doesn't refuse, each category's code, a post-reservation stop followed by a new request that polls, and `operation resume` naming a held poll's request.
+- [ ] **Step 2:** Add the command with every arm. Implement it, the `Session` method and the probe.
 - [ ] **Step 3: Verify.** `--test mutation_remote -- c5_poll`, `--test remote_polling`, and the three lib filters.
 - [ ] **Step 4:** Commit `feat: bind explicit one-shot polling`. Ticket comment. Push.
 
 ## Task 6: Identity And Remote Selection Fixes, Part A Checkpoint
 
-**Files:** Modify `remote/sync.rs`, `bind/lifecycle.rs`, `src/repository.rs`, `tests/remote_synchronization.rs`, `tests/document_promotion/`, `tests/ticket_closure/`, `tests/repository_enablement/`, `tests/mutation_remote/c5_lifecycle.rs`.
+**Files:** Modify `remote/sync.rs`, `promotion/run.rs`, `bind/lifecycle.rs`, `src/repository.rs`, `tests/remote_synchronization.rs`, `tests/document_promotion/`, `tests/ticket_closure/`, `tests/repository_enablement.rs`, `tests/repository_enablement/`, `tests/mutation_remote/c5_lifecycle.rs`.
 
 - [ ] **Step 1:** Write `01M5MK57`'s regressions for all three paths, as registered cases: bracketed and trimmed configured identities, an unusable confirmed identity, a plain control. Each refusal asserts configuration, refs and journal unchanged, and no recovery obligation. Add one pinning kept recovery records and replays. See them fail, and record the reproduction.
-- [ ] **Step 2:** Apply `commits_unchanged` in `select_committing_identity`. Add the promotion prepare check (R-3) and the design's identity table as `c5_lifecycle_identity_` rows.
-- [ ] **Step 3:** Write `01M669FJR2`'s regression in `tests/repository_enablement`, see it fail, and fix `set_publication_remote_recorded`.
+- [ ] **Step 2:** Apply `commits_unchanged` in `select_committing_identity`. Add the prepare check and the domain's check before `begin_record` (R-3), and the design's identity table as `c5_lifecycle_identity_` rows.
+- [ ] **Step 3:** Write `01M669FJR2`'s regressions in `tests/repository_enablement`: status clean after selection; other index entries unchanged; retry and replay; a stop between commit and index update. See them fail, and fix `set_publication_remote_recorded`.
 - [ ] **Step 4: Verify.**
 
   ```sh
@@ -201,7 +193,7 @@ Part A (library): Tasks 0–6. Part B (CLI): Tasks 7–11. Part C (evidence): Ta
 
 - [ ] **Step 1:** Catalog and grammar for both verbs. Move the planned-state tests. Gate `planned()` and `Availability::Planned` (R-8).
 - [ ] **Step 2:** Implement through `mutate::run`, inside the Ctrl-C window, with unlock handling. The human preview shows every effect and the slug. The result prints `made ready:` lines with slugs.
-- [ ] **Step 3:** The per-verb matrix's Task 7 cells, with goldens: preview, ok, publication pending, blocked, identity required, in JSON and text. Local-only promotion and closure through the binary.
+- [ ] **Step 3:** The per-verb matrix's Task 7 cells, with goldens: preview, ok, publication pending, blocked, identity required, in JSON and text; input failure; no-op; mismatch. Local-only promotion and closure through the binary, and the application-data sentinel scan for `closed_by` and title.
 - [ ] **Step 4: Verify.** `--bin manyhands-cli`, `--test cli -- lifecycle`, `--test cli -- help`, `--test cli -- boundaries`, `--test cli -- exits`.
 - [ ] **Step 5:** Commit `feat: add document promote and ticket close to the CLI`. Ticket comment. Push.
 
@@ -218,7 +210,7 @@ Part A (library): Tasks 0–6. Part B (CLI): Tasks 7–11. Part C (evidence): Ta
 **Files:** Modify `polling.rs`, `catalog.rs`, `mutate.rs`, `tests/cli_remote.rs`. Create `tests/cli_remote/polling.rs`.
 
 - [ ] **Step 1:** Implement with unlock handling and the Ctrl-C window. Human output per target (Review Focus 7).
-- [ ] **Step 2:** `c5_polling_` cases: fast-forward and materialize once; dirty, divergent, malformed and deleted contexts preserved, with no push, checkpoint, merge or cleanup; host and unlock stops, then the same request; no remote; replay; a second-process `busy`.
+- [ ] **Step 2:** `c5_polling_` cases, with human and JSON goldens: fast-forward and materialize once; dirty, divergent, malformed and deleted contexts preserved, with no push, checkpoint, merge or cleanup; a remote context of a closed ticket; host and unlock stops, each a final answer, then a new request after correction; no remote; usage failure; replay; mismatch; a second-process `busy`.
 - [ ] **Step 3: Verify.** `--test cli_remote -- c5_polling`.
 - [ ] **Step 4:** Commit `feat: add poll once to the CLI`. Ticket comment. Push.
 
@@ -226,7 +218,7 @@ Part A (library): Tasks 0–6. Part B (CLI): Tasks 7–11. Part C (evidence): Ta
 
 **Files:** Create `src/bin/manyhands-cli/local_sync.rs`, `local_sync_tests.rs`, `schemas/input/v1/context_sync_local.schema.json`, its example, `tests/cli/local_sync.rs`. Modify `src/bin/manyhands-cli.rs`, `catalog.rs`, `dispatch.rs`, `mutate.rs`, `tests/cli.rs`.
 
-- [ ] **Step 1:** Both reads and `context sync-local`, with goldens: no-op, fast-forward, clean merge and conflict, with primary and remote refs unchanged and no transport start; a stale observation; replay and mismatch; Review Focus 5; human `--token` refused.
+- [ ] **Step 1:** Write the design's required outcomes for the reads and `context sync-local` first. Implement with goldens, with primary and remote refs unchanged and no transport start; replay and mismatch; Review Focus 5; human `--token` refused.
 - [ ] **Step 2: Verify.** `--bin manyhands-cli`, `--test cli -- local_sync`, `--test cli -- input_schemas`.
 - [ ] **Step 3:** Commit `feat: add local context observation, inspection and synchronization to the CLI`. Ticket comment. Push.
 
@@ -234,7 +226,7 @@ Part A (library): Tasks 0–6. Part B (CLI): Tasks 7–11. Part C (evidence): Ta
 
 **Files:** Create `schemas/input/v1/context_resolve_local.schema.json`, its example. Modify `local_sync.rs`, `human_collaboration.rs`, `catalog.rs`, `dispatch.rs`, `tests/cli/local_sync.rs`.
 
-- [ ] **Step 1:** Resolve with goldens: success, stale observation, incomplete set, unknown token, `original_request_required` then the same request, replay, and `operation abandon`'s guarded answer. A source sentinel is absent from application data and diagnostics.
+- [ ] **Step 1:** Write the design's required outcomes for `context resolve-local` first. Implement with goldens, replay, mismatch and `operation abandon`'s guarded answer. A source sentinel is absent from application data and diagnostics.
 - [ ] **Step 2: Verify.** `--bin manyhands-cli`, `--test cli -- local_sync`, `--test cli -- input_schemas`.
 - [ ] **Step 3:** Commit `feat: add context resolve-local to the CLI`. Ticket comment. Push.
 
@@ -249,7 +241,7 @@ Part A (library): Tasks 0–6. Part B (CLI): Tasks 7–11. Part C (evidence): Ta
 
 **Files:** Create `tests/cli_remote/lifecycle.rs`. Modify `tests/cli_remote.rs`.
 
-- [ ] **Step 1:** `c5_lifecycle_` cases: dirty primary; stale consent; refused primary push (`reject_primary_updates`); refused deletion (`reject_context_deletion`); host and unlock stops; same-request completion; counted single merge and checkpoint, allowing for bounded retries; `closed_at` and `closed_by` stable.
+- [ ] **Step 1:** `c5_lifecycle_` cases: dirty primary; stale consent; refused primary push (`reject_primary_updates`); refused deletion (`reject_context_deletion`); host and unlock stops; same-request completion and replay; `operation resume` of each verb through the binary, naming the request and, with no record, continuing; `PrimaryAdvanced`; counted single merge and checkpoint, allowing for bounded retries; `closed_at` and `closed_by` stable.
 - [ ] **Step 2:** The refused checkpoint merge repaired through the context verbs, then `ticket close` again, with no manual Git step.
 - [ ] **Step 3: Verify.** `--test cli_remote -- c5_lifecycle`.
 - [ ] **Step 4:** Commit `test: prove lifecycle exit evidence over SSH`. Ticket comment. Push.
@@ -266,7 +258,7 @@ Part A (library): Tasks 0–6. Part B (CLI): Tasks 7–11. Part C (evidence): Ta
 
 **Files:** Modify `tests/cli_remote/interruption.rs`.
 
-- [ ] **Step 1:** Ctrl-C at a safe point for both lifecycle verbs, `poll once` and both context mutations, and after the last one (Review Focus 4), `#[cfg(unix)]`. `request cancel` from a second invocation. Cancel, then same request, then new ID.
+- [ ] **Step 1:** Ctrl-C at a safe point for both lifecycle verbs, `poll once` and both context mutations, and after the last one (Review Focus 4), `#[cfg(unix)]`. `request cancel` from a second invocation. Cancel, then same request, then new ID. A second press, and a killed `poll once` resent under its ID. The interactive consent prompt for both lifecycle verbs, and a press at it.
 - [ ] **Step 2:** Lost stdout, with a replay making no second effect.
 - [ ] **Step 3:** `c5_interruption_no_resident_worker`: after each of `poll once`, `ticket close` and `document promote`, the process exited, both pipes reach EOF and, on Unix, no process remains in the child's session (`setsid`, `tests/support/cli.rs:71`). A positive control leaves a sleeping child and shows the check fails.
 - [ ] **Step 4: Verify.** `--test cli_remote -- c5_interruption`.
@@ -283,17 +275,17 @@ Part A (library): Tasks 0–6. Part B (CLI): Tasks 7–11. Part C (evidence): Ta
 
 ## Task 14a: Inventory And Recovery Tables
 
-**Files:** Create `tests/cli/inventory.rs`, `tests/cli/recovery_tables.rs`, a `c5_inventory_` case. Modify `tests/cli.rs`, `tests/mutation_remote.rs`, `docs/RFC/cli-contract.md`.
+**Files:** Create `tests/cli/inventory.rs`, `tests/cli/recovery_tables.rs`. Modify `tests/cli.rs`, `docs/RFC/cli-contract.md`.
 
 - [ ] **Step 1:** Write the RFC taxonomy rows, grammar and recovery tables.
 - [ ] **Step 2:** Write the tests. Fill gaps by added goldens. A gap in an earlier Cycle's verb gets a golden with no behaviour change. A behaviour gap stops for the owner.
-- [ ] **Step 3: Verify.** `--test cli -- inventory`, `--test cli -- recovery_tables`, `--test mutation_remote -- c5_inventory`.
+- [ ] **Step 3: Verify.** `--test cli -- inventory`, `--test cli -- recovery_tables`.
 - [ ] **Step 4:** Commit `test: account for every approved command and recovery path`. Ticket comment. Push.
 
 ## Task 14b: Document Amendments
 
 - [ ] **Step 1:** Make the remaining amendments, in the dated form "Amended 2026-MM-DD by C5", citing the decision or ruling.
-- [ ] **Step 2:** Grep for stale terms: `C5 remains cataloged`, `arrives with C5`, `C4/D5 consume`, `NotResumable`, `until C5`.
+- [ ] **Step 2:** Grep for stale terms: `C5 remains cataloged`, `arrives with C5`, `C4/D5 consume`, `NotResumable`, `until C5`, `canonical until C5`.
 - [ ] **Step 3:** Commit `docs: amend the RFCs, Wave and audit for C5`. Ticket comment. Push.
 
 ## Task 15: Full Verification, Review And Handoff
@@ -301,7 +293,7 @@ Part A (library): Tasks 0–6. Part B (CLI): Tasks 7–11. Part C (evidence): Ta
 - [ ] **Step 1:** Merge `origin/main`, run the gate and the full suite once, detached. Record per-target counts. A failure stops for the owner.
 - [ ] **Step 2:** Independent whole-branch spec and quality reviews. Fix or rule every finding. Rerun the gate and the affected targets, and say what ran after the fixes.
 - [ ] **Step 3:** Mark the Cycle and design `review-ready`, run `git merge-tree --write-tree HEAD origin/main`, add the review-ready comment and push. The ticket stays **open**.
-- [ ] **Step 4: Closure,** only after the owner approves the review, in the final push before merge. Close this ticket by the canonical file edit (decision 9). Add `01M5MK57` and `01M669FJR2`'s ticket files with their closure fields and a comment each, on the same go-ahead. Merging needs its own go-ahead.
+- [ ] **Step 4: Closure,** only after the owner approves the review, in the final push before merge. Close this ticket by the canonical file edit (decision 9). Copy `01M5MK57` and `01M669FJR2`'s ticket files byte for byte from their branches, add the closure fields and a comment each, on the same go-ahead. Merging needs its own go-ahead, which also covers deleting those two remote branches, after confirming that they hold only their ticket files (decision 14).
 - [ ] **Step 5:** Record the post-merge follow-up for the owner: a real `ticket close` and the AGENTS.md switch in a separate session, and native CI with its own approval.
 
 ## Plan Self-Review
@@ -322,22 +314,23 @@ Part A (library): Tasks 0–6. Part B (CLI): Tasks 7–11. Part C (evidence): Ta
 | Made-ready | 4, 7, 12b |
 | Local recovery | 10b, 12a |
 | Identity | 6 |
+| Cache loss | 2b |
 | Remote selection | 0, 6 |
-| Outcome tables | 2a, 2b, 3, 4, 5a, 5b |
+| Outcome tables | 2a, 2b, 3, 4, 5a, 5b, 10a, 10b |
 | Ctrl-C | 2c, 13a |
 | Recovery walk | 13b |
 | Per-verb evidence | 7–10b, 12b, 13a |
-| Privacy | 7, 10b |
+| Privacy | 7 (`closed_by`, title), 10b (source) |
 | Exit classes | 13b |
 | Real repository | 11 |
 | Closure | 15 |
 | Unchanged behaviour | 11, 15 |
 
-**Rulings to tasks:** R-1 Task 2a; R-2 Task 7; R-3 Task 6; R-4 Task 4; R-5, R-6 Task 6; R-7 Task 5a; R-8 Task 7; R-9, R-10 Task 14a; R-11 all; R-12 Task 11; R-15 Task 10a; R-16 Task 5b. R-13 and R-14 are withdrawn.
+**Rulings to tasks:** R-1 Task 2a; R-2 Task 7; R-3 Task 6; R-4 Task 4; R-5, R-6 Task 6; R-7 Task 5a; R-8 Task 7; R-9, R-10 Task 14a; R-11 all; R-12 Task 11; R-15 Task 10a; R-16, R-17, R-18 Task 5b; R-19 Task 2b; R-20 Task 2c. R-13 and R-14 are withdrawn.
 
-**Decisions to tasks:** 1 all of Part A; 2 Task 6; 3 Task 10a; 4 Task 14a; 5 Tasks 5a, 8; 6 Tasks 2a, 6; 8 Tasks 2b, 2c, 13a; 9 Tasks 11, 15; 10 Tasks 0, 6; 11 Task 5a.
+**Decisions to tasks:** 1 all of Part A; 2 Task 6; 3 Task 10a; 4 Task 14a; 5 Tasks 5a, 8; 6 Tasks 2a, 6; 7 authorizes the documents, no task; 8 Tasks 2b, 2c, 13a; 9 Tasks 11, 15; 10 Tasks 0, 6; 11 Task 5a; 12 Task 2c; 13 Task 4; 14 Task 15; 15 Task 5a.
 
-**Named edits:** E-1 to E-7 and E-14 in 7–10b; E-8 in 13b; E-9, E-12 in 1; E-10 in 3; E-11 in 2a, 4, 5a, 5b; E-13 in 1, 5b.
+**Named edits:** E-1 to E-7 and E-14 in 7–10b; E-8 in 13b; E-9, E-12, E-13 in 2a, 5a, 5b; E-10 in 3; E-11 in 2a, 4, 5a, 5b; E-15 in 2b.
 
 **Stops built in:** Task 0: identity, a changed fact, an unlisted pin, a reproduction surprise. Outcome-table rows in 2a–5b. Task 11: a refusal on real content. Task 14a: a behaviour gap. Task 15: a suite failure, closure.
 

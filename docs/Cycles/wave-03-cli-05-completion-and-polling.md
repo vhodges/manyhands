@@ -135,7 +135,7 @@ The design's verb sections are the detailed contract. In summary:
    creation; once accepted it stands for that request.
 2. **Retry.** Sending the same request again continues an unfinished
    operation under its operation ID, including after a cancellation
-   (decision 8). After integration consent is not rechecked and only publication
+   (decision 8), unless it stopped with no record, when a new prepare follows. After integration consent is not rechecked and only publication
    and cleanup run. `operation resume` names the request that holds the
    operation, and continues it itself when no request record does. Nothing
    repeats a merge, a closure checkpoint or a push that is already done.
@@ -157,9 +157,11 @@ The design's verb sections are the detailed contract. In summary:
    cleans up, and leaves nothing running. A completed poll is `ok`, with each
    target's disposition in its data. `poll configure` sets `interval_seconds` in
    60–3600. `poll pause` sets the pause flag. `poll resume` clears it and makes an
-   eligible poll due (decision 11), leaving the recovery suspension and backoff
-   alone. Each policy verb updates atomically, so it cannot overwrite a newer value
-   of another field.
+   eligible poll due (decision 11), clearing any stored deadline, and leaving the
+   recovery suspension and stored backoff value alone. Each policy verb writes one field
+   in its request's own transaction, so it can't overwrite another field or apply
+   after a newer request (decision 15). A poll's transport stop is final, and a new
+   request polls again.
 7. **Identity.** Both verbs use the repository's configured identity. An
    unusable one counts as none. With none, the verb answers
    `identity_required` with `repo.identity_set`. What follows depends on the stage,
@@ -193,7 +195,8 @@ Also required:
 - **Identity.** `01M5MK57`'s acceptance list, for synchronization, promotion
   and closure, and the design's per-stage table.
 - **Remote selection.** `01M669FJR2`'s acceptance, through the binary.
-- **Outcome tables.** Every row of the design's required-outcome tables holds.
+- **Outcome tables.** Every row of the design's required-outcome tables holds: lifecycle
+  re-entry, standing and answers, resume, made-ready, polling, policy, and local sync.
   Each table's test is written first. A row that answers otherwise stops for a
   ruling.
 - **Ctrl-C.** The promotion, closure, poll and context answers are recorded for
@@ -210,7 +213,8 @@ Also required:
 - **Real repository.** Every C5 verb runs on a disposable clone of this
   repository with fresh application data, in Task 11.
 - **Closure.** C5, `01M5MK57` and `01M669FJR2` close by canonical file edit before
-  merge (decision 9).
+  merge (decision 9), and the two old branches are deleted with the merge (decision 14).
+- **Cache loss.** Both verbs recover through a new prepare, with the closure's fields kept.
 - **Unchanged behaviour.** C1–C4's goldens change only through named edits.
 
 ## Product-Owner Decisions (2026-10-31)
@@ -254,10 +258,21 @@ Also required:
 11. **`poll resume` clears the pause and makes an eligible poll due.** "Clear and make
     due (Recommended)", following the runtime RFC. My first draft said flag only.
 
+12. **A `request cancel` between automatic retries is honoured.** "Re-check before
+    retrying (Recommended)". The next attempt stops with `cancelled`. R-20 gives this
+    outcome by acknowledging the flag, with no separate driver check.
+13. **A finished close isn't held open for its report.** "Finish, state not computed
+    (Recommended)". A failed or incomplete made-ready read after a complete closure stores
+    `index_pending`, with a note that it won't be recomputed.
+14. **The folded tickets' old branches are deleted with the merge.** "Delete with the merge
+    (Recommended)", after confirming that they hold only their ticket files.
+15. **Policy writes finish in the request's own transaction.** "Same-transaction record
+    (Recommended)". No observation token. This answers the former question 2.
+
 **Owner questions still open.** The documents are written to the recommended answers.
 
 1. `effective_identity`'s per-key cascade: keep it for C5, with a follow-up ticket (R-6).
-2. No observation token on policy verbs, in place of the outline's guard (R-7).
+2. Answered by decision 15.
 3. Conflict sides through `context show-local --token` with `--json` only (R-15).
 4. Accept C4's API-audit timing departure: the audit refresh is Task 0, not before
    planning.
@@ -273,7 +288,9 @@ Also required:
 | Research | "Recovery example" has no definition. | Decision | Decision 4. | Help schema; Wave C5. |
 | Research | Only one uncalled API clears the recovery suspension. | Decision | Decision 5. | `state.rs:6366`; `poll.rs` eligibility. |
 | Planning | The approved identity input could not deliver its stated benefit. | Decision | Decision 6 replaces it. | `sync.rs:3006`; `checkpoint.rs:540`. |
-| Planning | The outline's observation guard on policy verbs is weaker than a single-field update. | Owner question 2 | R-7. | `state.rs:6384`; audit row "no observation token". |
+| Planning | The outline's observation guard on policy verbs is weaker than a single-field update. | Decision 15 | R-7. | `state.rs:6384`; audit row "no observation token". |
 | Review round 1, source (2026-10-31, `10b77793`) | 30 findings: 7 blocking, 13 important, 5 minor, 5 suspected. Blocking: no journal row under a lifecycle, resume's route, cancellation unreachable, the `IndexPending` code, blockers lost at prepare, an impossible Task 0 step, an unbuildable inventory. | Ruling, decisions 8–9 | Design revised: re-entry, standing, answers, cancellation, inventory. | Source citations in the design's facts 29–35. |
 | Review round 1, contract (2026-10-31, `10b77793`) | 39 findings: 10 blocking, 19 important, 10 minor. Blocking: cancellation finality, resume reachability, `poll resume`, identity continuation, made-ready, later publication, inventory, missing tables, real-repository steps, closure. | Decisions 8–11, rulings | Design, Cycle and plan revised; five owner questions open. | Scoped re-review pending. |
+| Review round 2, source (2026-10-31, `63369dca`) | 4 blocking, 9 important, 8 minor. Blocking: `reenter` isn't called for a confirmed command, an unworkable `UNBOUND_COMMANDS` hold, the request flag cancelling every retry, poll stops that don't continue. | Rulings R-18 to R-20 | Facts 36–41, re-entry, Task 1 removed, cancellation. | Scoped re-review pending. |
+| Review round 2, contract and adversarial (2026-10-31, `63369dca`) | 4 blocking, 14 important, 9 minor. Blocking: no local-sync outcome table, poll continuation, a killed poll's lost ID, promotion identity against `01M5MK57`. | Decisions 12–15, rulings | Local-sync table, resume rows, domain identity check, cache-loss rows, branch deletion. | Scoped re-review pending. |
 | C4 ledger | Plans named gate commands that could not pass, and recovery paths never walked. | Ruling | Global Constraints; Task 13b's walk. | C4 execution ledger. |

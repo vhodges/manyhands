@@ -85,7 +85,7 @@ At `717b664d` (main `a52273ff` merged). Task 0 re-checks each one.
 14. `bind/resume.rs:333-337` answers an unfinished remote operation with no
     synchronization target `Named::NotResumable`, and `:36-37` and `:212-214` state
     that a poll, a promotion or a closure is `invalid_input`.
-15. `item republish` (`bind/republish.rs`) is the model confirmed binding: `Binding`
+15. `item republish` (`bind/republish.rs`) shows a confirmed binding's shape, not its row logic (fact 29): `Binding`
     with `ended_without_checkpoint`, `prepare`, `run`, `reenter`, `rerun`,
     `as_confirmed`; `Confirmed` with `preview`, `row`, `observe_again`.
 16. A finished record's stored envelope is replayed unchanged with no domain call
@@ -158,8 +158,9 @@ At `717b664d` (main `a52273ff` merged). Task 0 re-checks each one.
 30. Cancellation does not reach these calls today. Safe points read the lifecycle
     table's `cancel_requested` (`promotion/run.rs:226-232`), set only by
     `cancel_document_promotion` and `cancel_ticket_closure`
-    (`lifecycle_record.rs:942-961`). A retry path clears it (`:977`; Task 0 confirms
-    it covers a same-ID retry). `cancel_remote_operation` errors with no row
+    (`lifecycle_record.rs:942-961`). A same-ID retry clears it (`run.rs:491-498`, `:977`). The
+    request's own flag is separate, and only `take_cancellation` clears it
+    (`records.rs:967`). `cancel_remote_operation` errors with no row
     (`remote/reservation.rs:1231-1232`). None of the three domain calls takes a token,
     and the CLI's Ctrl-C handler only cancels a token (`interrupt.rs`).
 31. `without_preview` discards an answer's data (`mutation/confirm.rs:93-95`), and
@@ -171,9 +172,25 @@ At `717b664d` (main `a52273ff` merged). Task 0 re-checks each one.
     up to three times (`mutate.rs`, `RETRY_DELAYS_MS`).
 34. `stops_on_ctrl_c` is a closed list (`mutate.rs:53-63`), pinned at
     `collaboration_tests.rs:82`.
-35. `Command` is `pub(crate)`, so `tests/cli` cannot enumerate it; `mutation_remote`
-    mounts `src/lib.rs` and can. `tests/mutation_contract.rs:1455` holds
-    `UNBOUND_COMMANDS`.
+35. `request_store::bound_commands()` is public (`mutation/mod.rs:605-610`, used at
+    `tests/mutation_replay/conformance.rs:21`) and equals `Command::ALL`.
+    `tests/mutation_contract.rs:1476-1489` requires every bound command to have a
+    golden, and `tests/support/conformance.rs` `HOMES` a home, or four targets fail.
+36. A confirmed command's re-entry is `confirm::reenter`, "whatever its binding's own
+    `reenter` is" (`mutation/reenter.rs:175-181`). `Row::Recorded` with `Absent` is
+    `internal_error`.
+37. Bindings reach credentials only through `&dyn Session`, whose methods are
+    `synchronize`, `republish` and `verify_transport` (`progress.rs:184-225`).
+38. `outcome.rs:993-996` prepends `request.retry` for a stopping command with a left
+    record, and a binding's suggestion replaces a code's actions (`:660-671`).
+    `should_retry` applies to `Busy` or `Partial` with that action first.
+39. A poll's transport failure finishes its row as `failed`, and a same-ID call returns
+    the stored result (`remote/poll.rs:1233-1241,1385-1398`), reported as `Completed`
+    with an outcome category (`:1967-1985`). Only `Interrupted` continues with `restart`.
+40. `recorded_effects` matches `Command` exhaustively and returns nothing for `Absent`
+    (`bind/mod.rs:953-1052`).
+41. `PrimaryAdvanced` resets the context and leaves the parent unfinished
+    (`promotion/run.rs:648-653`). `integration_oid` is saved before the ref moves.
 
 ## Module Layout
 
@@ -186,8 +203,9 @@ At `717b664d` (main `a52273ff` merged). Task 0 re-checks each one.
 - Create `src/repository/mutation/bind/poll.rs`: `poll once` and the three policy
   bindings.
 - Modify `command.rs`, `mutation/mod.rs` (`Mutation`), `bind/mod.rs`,
-  `bind/resume.rs`, `dto.rs`, `outcome.rs`, `confirm.rs` (blocker data),
-  `progress.rs` (`cancel_request`), `schemas/v1/`.
+  `bind/resume.rs`, `dto.rs`, `outcome.rs`, `confirm.rs` (blocker data, `Row::Unfinished`),
+  `execute.rs` (policy transaction), `records.rs`, `progress.rs` (`Session` methods,
+  `cancel_request`), `schemas/v1/`.
 - Modify `promotion/` and `closure/` for the parent-record accessor, the cancellation
   probe and identity; `remote/poll.rs` for the probe; `remote/state.rs` for the atomic
   update; `remote/sync.rs` for identity.
@@ -212,6 +230,11 @@ At `717b664d` (main `a52273ff` merged). Task 0 re-checks each one.
 | `ticket close` | yes | yes | yes | no | no | Remote |
 | `poll once` | no | yes | yes | no | yes | Remote |
 | `poll configure`, `poll pause`, `poll resume` | no | no | no | no | no | none |
+
+The safe-point commands also finish as a synchronization, keeping the pinned equality
+`finishes == stops || resume` (`command.rs:719`): that predicate only decides how a
+replay reads a finished row (`replay.rs:109`), and Task 2a pins it for these commands.
+Other `command.rs` tests that name fixed sets are edited under E-9.
 
 For all six, `was_accepted_without_operation`, `restores_index` and
 `creates_its_repository` are no, and `stage` is the mutation stage of a remote
@@ -246,16 +269,17 @@ An unknown ID, wrong kind or unregistered repository answers as `item republish`
 reads the operation's parent record through a new crate-private accessor on each domain
 module: `lifecycle_parent(root, operation_id) -> Option<ParentView>` with `step`,
 `expectation`, `item_id`, `cancel_requested`, `cleanup` and the recorded closure and
-integration commits. The binding overrides `reenter` rather than using
-`confirm::reenter`:
+integration commits. A confirmed command's re-entry is always `confirm::reenter` (fact 36), so
+`row` reads the accessor first, and `confirm.rs` gains `Row::Unfinished`, which needs no
+journal row. `confirm_tests.rs` gets a named edit (E-15):
 
 | State found on re-entry | What happens |
 | --- | --- |
-| No parent record | Crash between acceptance and record creation. Observe again: a digest match runs as a first call with `preview().expectation()`. A mismatch answers `external_change`, and the record is deleted. |
-| Unfinished parent, any step | `Entered::Unfinished`. The domain is called with the **record's** expectation and the same operation ID. No digest comparison: the request's own work moved the state. |
-| Complete | The domain returns its stored outcome, with no transport. |
-| Refused and ended | The stored refusal. A new prepare goes on. |
-| Superseded | `request_mismatch`. |
+| No parent record | Crash between acceptance and record creation. `Row::Unrecorded`, then observe again: a digest match runs as a first call with `preview().expectation()`. A mismatch answers `external_change`. A preview now `Blocked` answers as Prepare. Each deletes the record. |
+| Unfinished parent, any step | The new `Row::Unfinished`: `Entered::Unfinished`. The domain is called with the **record's** expectation and the same operation ID. No digest comparison: the request's own work moved the state. |
+| Complete | `Row::Unfinished` too, and the domain returns its stored outcome, with no transport. |
+| Refused and ended | `Row::Answers`: the stored refusal, `Final`. |
+| Superseded | `Row::Answers`: `request_mismatch`, `Final`. |
 
 **Standing after a call.** Never `Stopped{Absent}` while a parent is unfinished.
 
@@ -263,38 +287,54 @@ integration commits. The binding overrides `reenter` rather than using
 | --- | --- | --- |
 | No record, refused before it began | `Stopped{Some(Absent)}`: record deleted, confirmation released, ID reusable (F2) | New prepare |
 | Ended by a consent refusal | `Final`: the refusal is stored | New prepare |
-| Unfinished, including cancelled and partial | `Owed` (decision 8) | Same request; `operation resume` if no request holds it |
+| Unfinished, including cancelled, partial and `PrimaryAdvanced` | `Owed` (decision 8) | Same request; `operation resume` if no request holds it |
 | Complete, index hand-off pending | `Owed` | Same request recomputes made-ready |
 | Complete | `Final` | None |
+| Superseded | `Final`, storing `request_mismatch` | The superseding request |
+
+A stop with no parent record, whatever its code, is the first row: the request is
+deleted, so its next step is a new prepare, and a same-ID resend after ten minutes answers
+`confirmation_expired`. An `Owed` request's consent stands however old it is. The Next column
+below is for `Owed`; both paths are tested past ten minutes.
+
+`recorded_effects` reads the parent record for these commands, so a stop with a written
+checkpoint and no journal row reports its effects (fact 40).
 
 **Answers.** Exit status is derived from the code and effects (`results.rs:282-289`), so
 this table states the code and the effects that decide it. "Durable" means the parent has
 a written closure checkpoint or an integration, read from the accessor, or a child made a
 durable effect.
 
-| Domain | Code | Exit | Next |
+| Domain | Code | Exit | Offered actions, in order |
 | --- | --- | --- | --- |
 | `Complete`, all done | `ok` | 0 | None |
-| `Complete`, publication `Pending{NoPublicationRemote}`, cleanup done | `ok` | 0 | Publication pending (RFC exit table); `repo sync` after a remote exists |
+| `Complete`, publication `Pending{NoPublicationRemote}`, cleanup done | `ok` | 0 | None. Publication pending (RFC exit table); `repo sync` after a remote exists |
 | `AlreadyContained`/`AlreadyCurrent`, nothing left | `ok` | 0 | None |
-| Publication `Pending{Synchronization(c)}` | `c` below | 4 | `request.retry` |
-| Publication or cleanup `Pending{Cancelled}` | `cancelled` | 130 | Same request (decision 8) |
-| Cleanup `Pending{ContextChanged, IgnoredFiles, RemoteContextChanged}` | `recovery_required` | 4 | `repo.inspect`, then the same request or a new prepare, which supersedes |
+| Publication `Pending{Synchronization(c)}` | `c` below | 4 | `request.retry`, then `c`'s |
+| Publication or cleanup `Pending{Cancelled}` | `cancelled` | 130 | `request.retry` (decision 8) |
+| Cleanup `Pending{ContextChanged, IgnoredFiles, RemoteContextChanged}` | `recovery_required` | 4 | `request.retry`, `repo.inspect`; a new prepare supersedes |
 | Cleanup `Pending{AwaitingPublication}` | the publication's code | 4 | `request.retry` |
-| Cleanup `Pending{RemoteDeletionFailed(c)}` | `c` below | 4 | Per `c` |
-| Cleanup `Pending{RecoveryRequired}` | `recovery_required` | 4 | `request.retry` |
+| Cleanup `Pending{RemoteDeletionFailed(c)}` | `c` below | 4 | `request.retry`, then `c`'s |
+| Cleanup `Pending{RecoveryRequired}` | `recovery_required` | 4 | `request.retry`, `repo.inspect` |
 | `IndexPending(outcome)`, nothing else pending | `discovery_pending` | 4 | `request.retry` |
-| `Blocked{..}` at run | As Prepare | 3, or 4 if durable | As Prepare |
-| `ExternalChange`, `ReconfirmationRequired`, `PrimaryAdvanced` | `external_change` | 3, or 4 if durable | `request.prepare` |
+| `Blocked{..}` at run | As Prepare | by class, or 4 if durable | As Prepare |
+| `ReconfirmationRequired`, consent `ExternalChange` | `external_change` | 3, or 4 if durable | `request.prepare`; record ended |
+| `PrimaryAdvanced` | `external_change` | 3, or 4 if durable | `request.retry`: the parent stays unfinished (fact 41) |
 | `IdentityRequired` | `identity_required` | 3, or 4 if durable | `repo.identity_set`; see Identity |
-| `ContextSynchronization(error)` | the child's code | per class | As `item sync`: host, unlock and transport answers |
-| `Transport(error)` | the error's code, as `item sync` | 5, or 4 if durable | As `item sync` |
+| `ContextSynchronization(error)` | the child's code | by class | As `item sync`, and `request.retry` first when the parent stands. A child's `remote_branch_deleted` is pinned by a row, since the child, not the envelope, holds the operation |
+| Refused closure checkpoint merge (a child's conflict, or the checkpoint's own) | `recovery_required` | 4 if durable, else 3 | `request.retry`, `repo.inspect`, with human lines naming `context observe-local`, `context sync-local`, `context show-local` and `context resolve-local`, and data naming the state. A recovery row and golden back it. |
+| `Transport(error)` | the error's code, as `item sync` | by class, or 4 if durable | As `item sync` |
 | `Busy` | `busy` | 5, or 4 if durable | `request.retry` |
 | `PollYielding` | `poll_yielding` | 5, or 4 if durable | `request.retry` |
-| `Interrupted`, cancellation asked | `cancelled` | 130 | Same request (decision 8) |
-| `Interrupted`, not asked | `recovery_required` | 3, or 4 if durable | `request.retry` |
+| `Interrupted`, cancellation asked | `cancelled` | 130 | `request.retry` (decision 8) |
+| `Interrupted`, not asked | `recovery_required` | 3, or 4 if durable | `request.retry`, `repo.inspect` |
 | `OperationMismatch` | `request_mismatch` | 2, or 4 after a replay's effects | None |
-| `RecoveryRequired`, `Repository(error)` | `recovery_required`, or the error's code | 3, or 4 if durable | `repo.inspect` |
+| `RecoveryRequired`, `Repository(error)` | `recovery_required`, or the error's code | by class, or 4 if durable | `repo.inspect`; `request.retry` first when `Owed` |
+
+"By class" is `results.rs`'s: `unlock_required`, `key_rejected`, `host_*` and
+`no_selected_key` are 3, input codes 2, transient codes 5 and `internal_error` 1. "Durable" is
+read from `Step`, at or past the written checkpoint or integration, not from `integration_oid`
+(fact 41).
 
 Categories: synchronization `Conflict` is `recovery_required`, `Rejected` is
 `push_rejected`, `Transport` is `transport_unavailable`, `Identity` is
@@ -306,8 +346,16 @@ is `host_approval_required`. The category carries no authority, so the host row'
 is `repo.inspect`, followed by `host observe` and `host approve`.
 
 A repository error of kind `ExternalChange` stays a repository error (fact 11). Task 2b's
-test is written first. C5 adds no `ResultCode`. Automatic bounded retries (fact 33) apply
-to rows whose first action is `request.retry`, so count-based assertions allow for them.
+test is written first. C5 adds no `ResultCode` or `RecoveryActionKind`. Automatic bounded
+retries (fact 33) apply to `Busy` or `Partial` with `request.retry` first, so count-based
+assertions allow for them. For the host stop the binding suggests `request.retry`, then
+`repo.inspect`, since a suggestion replaces the code's list (fact 38).
+
+**Cache loss** (RFC:1031, Cycle 10 item 9). Request records and lifecycle records are both in the
+registry, so losing it loses both. The same request answers `confirmation_not_found`. A new
+prepare then reads Git: a written, unintegrated checkpoint gives an existing closure, an
+integrated one gives cleanup-only, and `closed_at` and `closed_by` keep their first values.
+Each is a row for both verbs where it applies, with the remote branch present and gone.
 
 **Host and unlock.** Unattended runs pass `approval: None`. A host stop answers
 `host_approval_required`; `host approve` works while the request stands; the same request
@@ -320,22 +368,39 @@ have no journal row (fact 29). There is no liveness check (runtime RFC). Whether
 | Found | `operation resume` answers |
 | --- | --- |
 | Unfinished parent, an accepted request record holds it | `left_to_its_request`, naming the request: that request continues it |
-| Unfinished parent, no request record (cache loss, or begun by the library) | Continues with the record's expectation. Data is the same lifecycle DTO, made-ready included. Ctrl-C is as the verb's. |
+| Unfinished parent, no accepted request record | Continues with the record's expectation. Data is the same lifecycle DTO, made-ready included. Ctrl-C is as the verb's. |
 | Parent running in another process | The domain's `busy` |
 | Complete | `already_applied`, as F2 |
-| A poll | `invalid_input`, unchanged |
+| Refused and ended, or superseded | `invalid_input`: nothing is left to continue |
+| A poll an accepted request record holds | `original_request_required`, naming that request, since C5's boundary now begins polls |
+| A poll with no request record | `invalid_input`, unchanged. A kept reservation in this state is the known limit `01M4R19PC0T6ZPKM39X9DF26HX` |
+
+A resume request that continues a parent and then stops is itself `Owed`, and its accepted
+record holds the parent, so a later resume names it. Its data is tagged, so `from_stored`
+tells it from a synchronization's.
 
 Resume grants no new consent (RFC: "Resume never infers permission for a different
 target/action").
 
-**Cancellation (decision 8).** Cancelling is not final for these verbs, unlike a
-synchronization, and the RFC is amended. New crate-private `promote_document_observed` and
-`close_ticket_observed` wrap the runner with a cancellation probe that the runner's
-`cancelled` check also reads, so the public signatures are unchanged. The probe reads the
-token and the request's flag. `cancel_request` also calls the lifecycle's own
-`request_cancellation` for these commands. `stops_on_ctrl_c` gains both verbs. A same-ID
-retry clears the flag (fact 30). A press after the last safe point keeps the domain's
-answer. A second press or a kill leaves the record, and the same request continues.
+**Cancellation (decisions 8 and 12).** Cancelling is not final for these verbs, unlike a
+synchronization, and the RFC is amended. `LifecycleRequest` gains a crate-private probe field,
+reached through `promote_document_observed` and `close_ticket_observed`, so public signatures are
+unchanged. `cancelled::<L>` and `CancellationObserver` both read it, so it reaches a running child
+at the child's own safe points. A push already under way completes, and effects report it.
+
+- **The probe** reads the Ctrl-C token and the request's flag.
+- **`cancel_request`** also calls the lifecycle's `request_cancellation`, and skips `finish_fenced`
+  for these commands, whose parent decides standing. With no parent yet it reports `requested`, and
+  the request's flag stops the run at its first safe point.
+- **Acknowledging.** When a run answers `cancelled`, the binding takes the request's flag. A later
+  resend therefore starts clean, while the domain clears its own flag (fact 30).
+- **Automatic retries (decision 12).** A `request cancel` landing between automatic attempts isn't
+  acknowledged yet, so attempt 2's probe stops at its first safe point with `cancelled`. This gives the
+  decision's outcome with no separate check in the driver. A process killed before acknowledging answers
+  `cancelled` once more on its next resend, and the resend after that continues.
+- **`stops_on_ctrl_c`** gains both verbs. A press after the last safe point keeps the domain's answer.
+  A second press or a kill leaves the record, and the same request continues.
+- **`RecoveryActionKind::RequestCancel`'s doc** is corrected for these verbs.
 
 **R-38 interaction.** A pending local sync gives `LocalOperationPending` at closure
 prepare, so `recovery_required` naming it. For promotion the domain refuses at start, with
@@ -352,21 +417,21 @@ made_ready = direct dependents of T, in ID order,
 ```
 
 evaluated when the report is produced, not reconstructed from history (R-4; the RFC is
-amended to say so).
+amended to say so). Each state is exclusive, and read from `Step`:
 
-| Case | `made_ready_state` | `made_ready` |
-| --- | --- | --- |
-| This operation recorded the closure, or integrated it, and the index read is complete | `current` | the set |
-| `IndexPending`, a failed read, or an incomplete index (`complete: false`) | `index_pending` | empty |
-| Stopped before integration | `not_computed` | empty |
-| Cleanup-only or superseding run: `ClosureRecording::Existing` and already contained | `not_applicable` | empty |
+| Case | `made_ready_state` | `made_ready` | Standing |
+| --- | --- | --- | --- |
+| Before `Step` reaches integration, including a checkpoint only | `not_computed` | empty | `Owed` |
+| Integrated by this operation, the closure recorded or existing but newly on primary, with the read complete | `current` | the set | As the outcome's |
+| The same, domain `IndexPending` | `index_pending` | empty | `Owed`: the retry reads again |
+| The same, domain `Complete`, but the read fails or is incomplete | `index_pending` | empty | `Final` (decision 13). `Final` stores a `recomputed: false` note; `ticket ready` is the live view |
+| Cleanup-only or superseding run: `ClosureRecording::Existing` and already contained | `not_applicable` | empty | As the outcome's |
 
 - A new function in `read/graph.rs`, `tickets_made_ready(repo, id)`, uses `read_tickets` and
   `readiness_state`. An index `behind` flag, usual while the context exists, does not change
   the answer: the context holds the closure.
-- A partial run reports it too. Each retry evaluates again, and the request's final stored
-  envelope holds the last evaluation, so a replay of a finished request returns it unchanged.
-  `IndexPending` is `Owed`, so the retry computes on the first complete read.
+- A partial run reports it too. Each retry evaluates again, and the request's final stored envelope
+  holds the last evaluation, so a replay of a finished request returns it unchanged.
 - Readiness is lifecycle closure, by the index's effective copy. Status text plays no part.
 - Each entry is `{id, slug}`. No title is stored (Cycle 09 item 12's rule, extended to
   request records). The CLI's human output prints both.
@@ -394,27 +459,65 @@ observation does (RFC), not as a flag.
   `required_request_id` resend are proven through the binary.
 - `operation abandon` keeps routing a local sync to the gate's guarded abandonment.
 
+**Required outcomes.** Written from the gate's contract, and each is a test first in Task 10a or 10b.
+
+| Verb | Case | Code | Exit | Next |
+| --- | --- | --- | --- | --- |
+| `observe-local`, `show-local` | Unknown item or operation | `item_not_found`, `operation_not_found` | 2 | None |
+| `observe-local` | No context | Refused; no context is created (gate A4) | 2 or 3, as the read reports | `ticket save` or `document save` |
+| `show-local` | A remote operation's ID | `invalid_input` | 2 | `conflict show` |
+| `show-local --token` | Tampered, foreign or stale | `invalid_input` | 2 | None |
+| `sync-local` | Equal or contained | `already_applied` | 0 | None |
+| `sync-local` | Fast-forward or clean merge | `ok` | 0 | None |
+| `sync-local` | Discovery pending after the merge | `discovery_pending` | 4 | Same request |
+| `sync-local` | Stale observation, wrong branch or dirty context | `external_change` or `recovery_required`, as the golden pins | 3 | `context observe-local` |
+| `sync-local` | Missing identity on a merge | `identity_required` | 3 | `repo.identity_set`, then the same request |
+| `sync-local` | Unrelated histories, or incompatible closures | Refused, with no owner or effect (gate 10) | 3 | External repair |
+| `sync-local` | Eligible conflict | `recovery_required` | 4 | `context show-local`, `context resolve-local` |
+| `sync-local` | Mixed or unsupported conflict | `recovery_required`, external-only | 4 | External repair |
+| `sync-local` | Another owner: busy, or a closure at `Integrating` or later | `busy` or `recovery_required` | 5 or 3 | As the code |
+| `resolve-local` | Complete, valid set | `ok` | 0 | None |
+| `resolve-local` | Incomplete, duplicate, unknown or invalid before any write | `invalid_input` | 2 | `context show-local` |
+| `resolve-local` | Stale observation | `external_change` | 3 | `context show-local` |
+| `resolve-local` | Partial accepted resolution | `original_request_required` | 4 | The same request and source |
+| Both mutations | Cancelled at a safe point | `cancelled` | 130 | As the gate: effects kept, retry or abandon |
+
+The golden files `local_sync_*` and the audit's list fix any code Task 0 finds different; a change
+stops for a ruling.
+
 ## Polling Verbs
 
 **`poll once`.** `--repo`, `--request-id`, `--json`. No input. Explicit invocation, which
 skips eligibility (`remote/poll.rs:1241`), so it runs while paused or disabled; Cycle 08
 item 2 and the runtime RFC settle this. Before calling the domain the binding refuses a
-missing publication remote without writing, as republish does. Otherwise the domain's plan
-failure would write policy state (`poll.rs:1254-1283`).
+missing publication remote without writing, as republish does. Any other plan failure still
+writes the domain's stored state (`poll.rs:1254-1283`), a known limit.
 
 Data is `PollMutationDto`: operation ID, completion, completed time, next eligible time, and
 per-target `{target, kind, item_id, disposition, before_oid, after_oid}`, each nullable as the
-report is, for malformed rows.
+report is, for malformed rows. A slug is not added: a poll names refs and items as the domain
+reports them (R-17).
+
+Classify the authoritative report first, and index pending second, since `IndexPending` wraps any
+completion (`poll.rs:1987-2000`). The domain finishes a poll's row on a transport stop, so such a stop
+is final, and **a new request polls again** (fact 39, R-18).
 
 | Domain | Code | Exit | Standing and next |
 | --- | --- | --- | --- |
-| `Polled`, `Completed` | `ok` | 0 | `Final`. Dirty, diverged, conflicted, malformed, deleted and incomplete targets are data, with guidance, not failures (R-16) |
-| `IndexPending` | `discovery_pending` | 4 | `Final`; `index.refresh` (`hands_off_to_any_refresh`) |
+| `Polled`, `Completed`, category `Completed` | `ok` | 0 | `Final`. Dirty, diverged, conflicted, malformed, deleted and incomplete targets are data, with guidance, not failures (R-16) |
+| The same, wrapped in `IndexPending` | `discovery_pending` | 4 | `Final`; `index.refresh` |
 | No remote | `publication_remote_required` | 3 | Deleted; nothing written |
 | `Polled`, `Cancelled` | `cancelled` | 130 | `Final`; a new request polls again. Polls follow the RFC's final cancellation, since a new ID is not blocked |
 | `Polled`, `Interrupted`, or `Err(Interrupted)` | `recovery_required` | 3, or 4 if a target moved | `Owed`; the same request continues with `restart` |
-| `Polled` with an outcome category | that category's code, as `item sync` | per class | `Final` |
-| `Transport(error)` | the error's code: `unlock_required`, `host_approval_required`, `host_mismatch`, `key_rejected`, `no_selected_key`, `transport_unavailable`, `remote_unavailable` | 3 or 5 | Held as a synchronization's; `host approve` or unlock, then the same request |
+| Stored or returned category `ConfigurationRequired` | `publication_remote_required` | 3 | `Final`; new request |
+| `SelectedKeyUnavailable` | `no_selected_key` | 3 | `Final`; `key select`, new request |
+| `UnlockRequired` | `unlock_required` | 3 | `Final`; new request at a terminal |
+| `HostApprovalRequired` | `host_approval_required` | 3 | `Final`; `host approve`, new request |
+| `TransportUnavailable` | `transport_unavailable` | 5 | `Final`; new request |
+| `ProtocolRejected` | `remote_unavailable` | 5 | `Final`; new request |
+| `RepositoryUnavailable` | `repository_inaccessible` | 3 | `Final`; new request |
+| `Err(Transport(error))` before any reservation | the error's code, by `outcome.rs:109-155` | by class | Deleted; new request |
+| `Err(Repository(error))` | the error's code | by class | By the journal row |
 | `Busy` | `busy` | 5 | `request.retry` |
 | `PollYielding` | `poll_yielding` | 5 | `request.retry` |
 | `ConflictPending` | `recovery_required` | 3 | `repo.inspect` |
@@ -422,9 +525,10 @@ report is, for malformed rows.
 
 A restart reports what its own pass saw. A target an interrupted first pass materialized reads
 `current`, so the final envelope understates it; Git holds exactly one worktree (known limit).
-A killed poll keeps its reservation: the same request continues it, and if the ID is lost
-`operation list` names the operation (known limit, with `01M4R19PC0T6ZPKM39X9DF26HX`). Ctrl-C
-reaches it through a probe, as for the lifecycle.
+A killed poll keeps its reservation, and the same request continues it. If the ID is lost,
+`operation list` names the operation and `operation resume` names the request. Ctrl-C reaches it
+through a probe, as for the lifecycle, added with its caller in Task 5b. A stale remote context for a
+closed ticket gets its disposition from the domain, and a case pins it.
 
 **Policy verbs.**
 
@@ -432,9 +536,9 @@ reaches it through a probe, as for the lifecycle.
 | --- | --- | --- |
 | `poll configure` (`--input {interval_seconds}`, 60–3600, closed schema) | Sets the interval, leaving the stored due time | `already_applied`, 0 |
 | `poll pause` | Sets `paused` | `already_applied`, 0 |
-| `poll resume` | Clears `paused` and clears `next_eligible_at`, so an eligible poll is due (decision 11, runtime RFC) | `already_applied`, 0 |
+| `poll resume` | Clears `paused` and clears `next_eligible_at`, including a backoff deadline, so an eligible poll is due (decision 11, runtime RFC). The stored doubling state stays | Not paused: `already_applied`, 0, nothing written |
 
-- `poll resume` leaves `recovery_suspended`, `enabled` and the backoff alone, and its human
+- `poll resume` leaves `recovery_suspended`, `enabled` and the stored backoff value alone, and its human
   output names a suspension when one is set (decision 5).
 - No verb sets `enabled`.
 - An out-of-range interval is `invalid_input`, and nothing is written.
@@ -442,12 +546,18 @@ reaches it through a probe, as for the lifecycle.
 - An unregistered repository is `repository_not_registered`. A registered one always has its
   polling row (Task 0 confirms); pause survives a remote's removal and re-adding (RFC).
 
-**Atomic update (R-7, open question 2).** A new `update_remote_polling(root, change)` reads and
-writes one field in `with_transaction`. `set_remote_polling` has test callers only, and stays
-for them. D6 uses the boundary's bindings. The poll's own completion writes are field-scoped
-(`record_poll_attempt`, `state.rs:2389`); Task 0 confirms `state::configure` is. A retry of an
-unfinished policy request applies its own intent again, so a stale retry can win on that one
-field (known limit). A finished one replays.
+- An unenabled repository is `repository_not_enabled`, and an unavailable index
+  `index_unavailable`. A pending local sync does not refuse a policy verb: no Git work happens.
+
+**Atomic update, in one transaction with the request (R-7, decision 15).** A new
+`update_remote_polling(transaction, change)` writes one field, in the **same transaction** as the
+request's finish, through a new boundary path in `execute.rs` for these commands. A request is therefore
+either unwritten or finished, and replays its stored result, so a stale retry can never apply later:
+`poll resume` R1 interrupted, `poll pause` R2, then R1 resent, leaves the pause. Task 0 confirms that
+`request_records` and `remote_polling_state` share the registry connection; a difference stops for the
+owner. `set_remote_polling` has test callers only, and stays for them. D6 uses the boundary's bindings.
+The poll's own completion writes are field-scoped (`record_poll_attempt`, `state.rs:2389`); Task 0 confirms
+`state::configure` is.
 
 **No worker.** No thread, no child, no service. Transport starts only for `poll once`.
 
@@ -458,10 +568,12 @@ Decision 6 and `01M5MK57`. Both verbs pass `confirmed_identity: None`.
 | Stage | Case | Answer |
 | --- | --- | --- |
 | Closure prepare | `IdentityRequired` the only blocker | `identity_required`, `repo.identity_set`. No request exists: a **new prepare** follows. |
-| Promotion prepare | A merge commit is planned, and nothing else blocks | The same, through the binding's read-only selector check, made last (R-3) |
+| Promotion prepare | A merge commit is planned, and nothing else blocks | The same, through a read-only selector check, made last (R-3) |
+| Promotion confirm | No usable identity, and a merge commit planned | The same check in the domain **before `begin_record`**: `identity_required`, no record, nothing changed, as `01M5MK57` requires (R-3); a new prepare |
 | Either prepare | Already contained, or existing closure | No identity needed |
 | Closure confirm | The identity changed since prepare | The digest binds `closed_by`, so `external_change`, record ended; a new prepare |
-| Promotion confirm | Identity lost before integration | `identity_required`, `Owed`; after `repo identity-set` the same request continues |
+| Promotion | Identity lost after the record began | `identity_required`, `Owed`; after `repo identity-set` the same request continues. Only a change during the run reaches this |
+| Closure confirm | Identity removed or unusable | Refused, record ended, `identity_required`; a new prepare |
 | Either | A context child's `IdentityRequired` | `identity_required`, `Owed`; the same request continues |
 | After a closure checkpoint | | `closed_by` comes from the commit: none needed |
 
@@ -479,7 +591,11 @@ Reproduce through the binary in Task 0, on the merged baseline: `repo enable`, `
 sync` answers `worktree_not_clean`. After the fix, a successful `remote select` leaves the index
 matching its commit, Git status is clean for `.manyhands/config.toml`, and the immediately following
 synchronization proceeds. The fix is in `set_publication_remote_recorded` (`src/repository.rs`). The
-ticket's acceptance governs. C4's fixture seed stays.
+ticket's acceptance governs, in full: a library test as well as the binary path; other index entries
+unchanged; a retry and a replay of `remote select` leave the index current; and recovery after a stop
+between the commit and the index update, which Task 0 locates and may widen the scope's named function.
+Its "merged on its own" bullet is overridden by decision 10, recorded on that ticket. C4's fixture seed
+stays.
 
 ## Recovery Tables (decision 4)
 
@@ -494,10 +610,8 @@ no fixture reaches carries a reason, as in the exit table (R-10).
 
 **Inventory (R-9).**
 
-- `c5_inventory_commands` in `mutation_remote`, which mounts the library: `Command::ALL` names equal
-  the catalog's available mutating verbs in `help_root.json`, less the exempt `context prepare` and
-  `context release` (open question 5).
-- `tests/cli/inventory.rs`: every help-root verb appears in the RFC taxonomy or, for the relationship
+- `tests/cli/inventory.rs`: `bound_commands()` equals the catalog's available mutating verbs, less
+  the exempt `context prepare` and `context release` (open question 5). Every help-root verb appears in the RFC taxonomy or, for the relationship
   verbs, the relationships RFC's table, and the reverse. No verb is `Planned`. `<verb> --help --json`
   answers for every verb, with its catalog options. Every input-taking verb has exactly one input schema
   and example; every other verb is listed as no-input. Every verb's data type has an output schema.
@@ -514,8 +628,9 @@ applicable recovery/exit class").** Every cell holds, or carries its reason.
 
 | Verb | Human + JSON | Input failure | No-op | Prepare/confirm/interactive | Ctrl-C | `request cancel` | Replay | Mismatch | Same-request continuation | Lost stdout |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `document promote` | 7 | 7 | 7 | 7, 12b | 13a | 13a | 12b | 7 | 12b | 13a |
-| `ticket close` | 7 | 7 | 7 | 7, 12b | 13a | 13a | 12b | 7 | 12b | 13a |
+| `document promote` | 7 | 7 | 7 | 7 (prepare, confirm), 13a (PTY consent) | 13a | 13a | 12a | 7 | 12a | 13a |
+| `ticket close` | 7 | 7 | 7 | 7 (prepare, confirm), 13a (PTY consent) | 13a | 13a | 12a | 7 | 12a | 13a |
+| `operation resume` of a lifecycle | 12a | 12a | 12a | none | 13a | none: resume has no safe point of its own request | 12a | 12a | 12a | none |
 | `poll once` | 9 | 9 | none: every poll polls | none | 13a | 13a | 9 | 9 | 13a | 13a |
 | `poll configure` | 8 | 8 | 8 | none | none: no safe point | none | 8 | 8 | 8 | 8 |
 | `poll pause`, `poll resume` | 8 | 8 | 8 | none | none | none | 8 | 8 | 8 | 8 |
@@ -553,8 +668,10 @@ or partial result stops for the owner.
 **C5's own closure** is a canonical file edit before merge, as C4's was, on the owner's approval
 (decision 9). `ticket close` is itself the merge, push and cleanup, so it cannot precede a reviewed
 merge of its own branch. `01M5MK57` and `01M669FJR2` close the same way: their ticket files, which live
-only on their own branches, are added to this branch with the closure fields, each with a comment. Their
-stale branches are removed only on the owner's go-ahead.
+only on their own branches, are copied byte for byte to this branch, the closure fields are added in the
+same final commit, under the identity Task 0 settles, and each gets a comment. With the merge's go-ahead,
+after confirming that they hold only their ticket files, both remote branches are deleted (decision 14), so
+no open copy lingers. A case pins what `poll once` and reads show for such a context.
 
 **After merge,** in a separate session with its own go-ahead: close one real small ticket through
 `ticket close`, then switch AGENTS.md and `file-ticket` to it.
@@ -583,8 +700,9 @@ false` targets, split per row under the 100-second watchdog. Library lifecycle r
 | `cli` | Grammar, help, inventory, recovery tables, local-only journeys, context verbs |
 | `cli_remote` | Two-clone journeys, failures, Ctrl-C, no-worker |
 
-Application data is scanned for sentinel `closed_by` and title values after a closure: a confirmation
-stores a digest, previews are not persisted, and request records hold neither (Task 0 confirms).
+Application data is scanned in Task 7 for sentinel `closed_by` and title values after a closure, across
+the request, confirmation and lifecycle tables. A confirmation stores a digest, previews are not persisted,
+and request records hold neither (Task 0 confirms). The index's `closed_by` column is permitted by Cycle 10.
 
 ## Named Edits To Pre-Existing Tests
 
@@ -598,12 +716,13 @@ stores a digest, previews are not persisted, and request records hold neither (T
 | E-6 | `tests/cli/exits.rs:18,141-143` | The `ticket close` fixture moves to a test-only route or is replaced by the reason |
 | E-7 | `tests/fixtures/cli_v1/help_*` | Help goldens regenerate, read in the diff |
 | E-8 | `tests/cli/collaboration_exits.rs` | Code set grows |
-| E-9 | `command.rs` tests | New names; extend `the_published_names_are_the_ones_records_hold` |
-| E-10 | `tests/mutation_remote/resume.rs`, any case pinning promotion or closure as `invalid_input` | Now the resume table; polls unchanged |
+| E-9 | `command.rs` tests | New names in `the_published_names_are_the_ones_records_hold`; the fixed sets in `:660-667` (republish as the one stopping confirmed command), `:735`, `:760`, `:812` |
+| E-10 | `tests/mutation_replay/resume.rs:1186` | The poll pin gains an accepted-record case; no promotion or closure pin exists, and Task 0 confirms |
 | E-11 | `tests/mutation_contract.rs` registered cases, `tests/support/mutation_golden.rs` | Additive registration |
 | E-12 | `outcome_tests.rs` over `Command::ALL` | New commands' rows |
-| E-13 | `tests/mutation_contract.rs:1455` `UNBOUND_COMMANDS` | Holds any new command while unbound in Tasks 1–5, and returns to its present list |
+| E-13 | `tests/support/conformance.rs` `HOMES`, `tests/mutation_contract.rs:1510` `DATA_ROOTS` | Length and entries grow; each command gets its home, conformance row and golden in the task that binds it |
 | E-14 | `src/bin/manyhands-cli/collaboration_tests.rs:82` | New `stops_on_ctrl_c` rows |
+| E-15 | `src/repository/mutation/confirm_tests.rs` | `Row::Unfinished` cases |
 
 `tests/read_relationships.rs:1183,1190,1254` hold `"C5"` as Wave-graph data, and are not pins. Task 0
 greps for other pins (`NotResumable`, `"C5"`, `arrives with`, `Planned`). An unlisted hit stops for owner
@@ -617,11 +736,11 @@ review. This list is not yet proven complete.
   - recovery tables;
   - removal of "C5 remains cataloged as planned";
   - `:770` (`command_unavailable`);
-  - `:972`, `:993-998`: the Ctrl-C window, `request cancel` lists and lifecycle cancellation (decision 8);
+  - `:162`, `:972-983`, `:993-998`: resume, the Ctrl-C window, `request cancel` lists and lifecycle cancellation (decision 8);
   - `:1139-1142`: the fixed known limit (decision 10);
   - new known limits.
 - **Git workflow RFC `:411`:** lifecycle cancellation (decision 8).
-- **Wave:** track rules 2, 5 and 6 (decision 1; D5 and D6 wait for C5's merge, recorded as C4's D4 ordering was); C5's scope line for the two read verbs and two folded tickets; the "merge prerequisite remains in force" line marked historical; capability table; D6's section for decision 5; the API-audit timing departure (open question 4). `:351`'s "rebase" noted as superseded by AGENTS.md.
+- **Wave:** track rules 2, 5 and 6 (decision 1; D5 and D6 wait for C5's merge, recorded as C4's D4 ordering was); C5's scope line for the two read verbs and two folded tickets; the "merge prerequisite remains in force" line marked historical; capability table; D6's section for decision 5; the API-audit timing departure (open question 4). `:351`'s "rebase" noted as superseded by AGENTS.md; `:658`'s "closure remains canonical until C5".
 - **Gate Cycle:** "C4/D5 consume" becomes C5/D5.
 - **API audit:** C5 rows reconciled, and the unamended sentence near `:190`.
 - **Ticket relationships RFC:** the made-ready definition and its report-time evaluation.
@@ -635,11 +754,11 @@ review. This list is not yet proven complete.
 | --- | --- | --- |
 | R-1 | One generic lifecycle binding for both verbs, matching the domain's one runner. | Generic churn; split with no contract change. |
 | R-2 | Both verbs take no `--input`. | Adding later is additive. |
-| R-3 | Promotion's missing identity is checked by the binding at prepare, only when a merge commit is planned and last, leaving the stored mask untouched. | A second check site could drift; the runner remains the guard. |
+| R-3 | Promotion's missing identity is checked at prepare, and by the domain before `begin_record`, only when a merge commit is planned and last, leaving the stored mask untouched. | Two check sites could drift; the runner remains the guard. |
 | R-4 | Made-ready is direct dependents, evaluated at report time, with the four states. | The list can differ from a historical diff; the RFC says so. |
 | R-5 | An unusable confirmed identity keeps `ExternalChange`. | Library wording only. |
 | R-6 | `effective_identity`'s cascade is unchanged. **Owner question 1.** | The two selectors can disagree on a split configuration. |
-| R-7 | Policy verbs do a single-field atomic update with no observation token, replacing the outline's guard. **Owner question 2.** | A stale intent can win on its own field. |
+| R-7 | Policy verbs update one field in the request's own transaction, with no observation token (decision 15). | A boundary variant for three commands. |
 | R-8 | `command_unavailable` remains a code with an unreachable reason. | Removal later is simple. |
 | R-9 | The inventory parses the RFC tables. | Format coupling; a failing test names it. |
 | R-10 | Recovery rows are checked against goldens by parsing RFC tables. | Same. |
@@ -648,6 +767,10 @@ review. This list is not yet proven complete.
 | R-13 | Withdrawn: `poll once` under a pause is settled by Cycle 08 item 2 and the runtime RFC. | None. |
 | R-14 | Withdrawn: decision 10 replaces it. | None. |
 | R-15 | `context show-local --token` is JSON only. **Owner question 3.** | Humans read sides through `--json`. |
+| R-17 | Poll targets carry no slug. | Slug beside ULID applies where a ticket is named as a ticket; add later additively. |
+| R-18 | A poll's stop after reservation is final, and a new request polls, because the domain finishes its row. | Differs from a synchronization's continuation; the human `next:` says so. |
+| R-19 | `Row::Unfinished` is added to `confirm.rs`, since the existing rows cannot express a parent with no journal row. | A variant for two commands. |
+| R-20 | Decision 12's outcome comes from acknowledging the flag on a `cancelled` answer, not from a driver check. | A killed process's resend answers `cancelled` once more. |
 | R-16 | A completed poll with preserved or marked targets is `ok`, exit 0, with dispositions in data. The RFC says once is explicit polling, not synchronization. | A script checking only the exit misses a blocked target; human output names them. |
 
 ## Known Limits
@@ -657,9 +780,9 @@ review. This list is not yet proven complete.
 - `poll once` holds the remote reservation, so it answers `busy` beside another remote operation, and they answer it.
 - A CLI-only user sees `recovery_suspended` without a verb to clear it (decision 5).
 - A protected key answers `unlock_required` non-interactively, so agents' runs need a terminal until `01M67Y754SJ1FTYQJFR37Z4ZTY` lands.
-- A retried or restarted report reflects its own pass (made-ready, and poll targets).
+- A retried or restarted report reflects its own pass (made-ready, and poll targets). A superseding request reports `not_applicable`, and the set stays in the old request's partial envelope.
 - A killed poll with a lost request ID is found through `operation list`.
-- A stale retry of an unfinished policy request can win on its own field.
+- A poll plan failure other than a missing remote writes the domain's stored state.
 - A promotion blocked by a pending local sync issues a confirmation before refusing.
 
 ## Alternatives Rejected
@@ -669,14 +792,14 @@ review. This list is not yet proven complete.
 - **Extending `conflict show` to local syncs:** decision 3.
 - **Recovery examples in `--help`:** decision 4.
 - **A before/after readiness diff:** no case needs it (R-4).
-- **Observation-guarded policy writes:** R-7.
+- **Observation-guarded policy writes:** decision 15.
 - **Closing C5 with `ticket close`:** decision 9.
 
 ## Risks
 
 | Risk | Control |
 | --- | --- |
-| Re-entry mechanism meets a state the table lacks | Task 2a's table test comes first, and a failed row stops for a ruling. |
+| Re-entry mechanism meets a state the table lacks | Task 2b's table test comes first, and a failed row stops for a ruling. |
 | Counted-list conflicts with D-track merges | Additive; merge main at each Part. |
 | `mutation_remote` already runs near an hour | Filters in tasks; full suite once. |
 | Unfinished local syncs fence C4 verbs more often | Row in each outcome table, and the local-recovery journey. |
