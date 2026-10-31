@@ -5,6 +5,21 @@ certificate supplied by the maintainer. Both executables are signed and
 RFC 3161-timestamped with SHA-256. `signing.json` contains the timestamp
 endpoint. There is no unsigned fallback and no per-run certificate creation.
 
+The reviewed RFC 3161 endpoint is **`http://timestamp.digicert.com/`**, as
+shown in [Microsoft's SignTool examples](https://learn.microsoft.com/en-us/windows/win32/seccrypto/signtool#examples).
+The v0.1.3 native trial using Windows SDK 10.0.26100.0 rejected the previous
+HTTPS URL with `SignTool Error: Invalid Timestamp URL`. The helper validates
+and normalizes only this reviewed HTTP endpoint; changing the provider,
+transport, or URL path requires an explicit policy update. The root slash
+added by URI normalization is expected.
+
+HTTP transports the timestamp request/response, but the RFC 3161 timestamp
+token itself is cryptographically signed. Both `/fd SHA256` and `/td SHA256`
+remain required, as do native verification of the signatures, expected
+publisher identity, and presence of a verified timestamp. There is no
+untimestamped fallback. This correction does not change the persistent
+publisher certificate or signing secrets.
+
 Self-signing preserves a stable publisher identity but does **not** make
 Windows trust it or eliminate SmartScreen warnings. The package contains
 only the public `.cer`, its fingerprints, and an explanation. It never

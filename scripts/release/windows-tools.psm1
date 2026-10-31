@@ -42,6 +42,18 @@ function Find-SignTool {
     throw 'Windows SDK x64 SignTool is unavailable'
 }
 
+function Get-SignToolTimestampUrl {
+    param([string]$Url)
+    # Use Microsoft's documented RFC 3161 endpoint; native verification
+    # authenticates the signed timestamp token despite HTTP transport.
+    $endpoint = $null
+    if (-not [Uri]::TryCreate($Url, [UriKind]::Absolute, [ref]$endpoint) -or
+        $endpoint.AbsoluteUri -cne 'http://timestamp.digicert.com/') {
+        throw 'Timestamp endpoint must be the reviewed SignTool RFC 3161 URL: http://timestamp.digicert.com/'
+    }
+    return $endpoint.AbsoluteUri
+}
+
 function ConvertFrom-DumpbinDependencies {
     param([string]$Output)
     return @([regex]::Matches($Output, '(?im)^\s*([A-Z0-9_-][A-Z0-9_.-]*\.[A-Z0-9]+)\s*$') |
@@ -96,4 +108,4 @@ function Get-WindowsRuntimeReport {
     return [ordered]@{ system = 'windows'; architecture = 'x86_64'; crt = 'static'; binaries = $binaries }
 }
 
-Export-ModuleMember -Function Invoke-ReleaseTool, Find-SignTool, ConvertFrom-DumpbinDependencies, Assert-PeArchitecture, Assert-SystemDependency, Assert-SystemDependencies, Get-WindowsRuntimeReport
+Export-ModuleMember -Function Invoke-ReleaseTool, Find-SignTool, Get-SignToolTimestampUrl, ConvertFrom-DumpbinDependencies, Assert-PeArchitecture, Assert-SystemDependency, Assert-SystemDependencies, Get-WindowsRuntimeReport

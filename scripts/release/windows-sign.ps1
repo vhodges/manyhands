@@ -84,11 +84,10 @@ try {
     $runtime | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $runtimePath -Encoding utf8NoBOM
     if ($Mode -eq 'Sign') {
         $configuration = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '../../packaging/windows/signing.json') | ConvertFrom-Json
-        $timestamp = [Uri]$configuration.timestamp_url
-        if ($timestamp.Scheme -ne 'https') { throw 'Timestamp endpoint must use HTTPS' }
+        $timestamp = Get-SignToolTimestampUrl -Url $configuration.timestamp_url
         foreach ($file in $files) {
             Invoke-ReleaseTool $signTool @('sign', '/s', 'My', '/sha1', $certificate.Thumbprint,
-                '/fd', 'SHA256', '/tr', $timestamp.AbsoluteUri, '/td', 'SHA256', $file) | Out-Null
+                '/fd', 'SHA256', '/tr', $timestamp, '/td', 'SHA256', $file) | Out-Null
         }
     }
 
@@ -106,7 +105,7 @@ try {
             thumbprint_sha1 = $certificate.Thumbprint
             fingerprint_sha256 = $fingerprint
             expires_utc = $certificate.NotAfter.ToUniversalTime().ToString('o')
-            timestamp_url = $timestamp.AbsoluteUri
+            timestamp_url = $timestamp
         }
         $signerPath = Join-Path $temporary 'signer.json'
         $signer | ConvertTo-Json | Set-Content -LiteralPath $signerPath -Encoding utf8NoBOM
