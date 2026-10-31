@@ -228,10 +228,11 @@ Resolution step 4):
 
 Task 0 source-inspected this refresh on **2026-10-31 UTC**, at
 `131bddf9c869a559e4bd891e85dc8520a966afe7` (the approved plan), with
-`origin/main` at `a52273ffe9b2b8e82b8e2c6e2d004e3a973cb8f7`. Main had not moved
-since the planning merge `717b664d`, and `git diff 717b664d HEAD` shows no change
-under `src/`, `tests/`, `schemas/`, `Cargo.toml`, `Cargo.lock`, `scripts/`,
-`.github/` or `devenv.nix`. The [C5 Cycle](../Cycles/wave-03-cli-05-completion-and-polling.md)
+`origin/main` at `a52273ffe9b2b8e82b8e2c6e2d004e3a973cb8f7`, the planning merge
+`717b664d`'s main, and `git diff 717b664d 131bddf9` shows no change under `src/`,
+`tests/`, `schemas/`, `Cargo.toml`, `Cargo.lock`, `scripts/`, `.github/` or
+`devenv.nix`. Main moved to `87d87dea` during Task 0, in `docs/plans`,
+`packaging/windows` and `scripts/release` only, and that merge changes nothing here. The [C5 Cycle](../Cycles/wave-03-cli-05-completion-and-polling.md)
 accepts this timing in **owner question 4**: the audit refresh is Task 0, not
 before planning. The design's Baseline Facts 1–41 served as the planning audit,
 and this refresh updates the C5 rows of the inventory in place. These are Linux

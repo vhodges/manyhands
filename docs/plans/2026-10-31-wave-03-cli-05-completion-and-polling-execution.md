@@ -28,13 +28,19 @@ the Task 0 implementer.
 
 - **HEAD** at the start: `131bddf9c869a559e4bd891e85dc8520a966afe7`
   (`docs: record the owner's approval of the C5 plan`).
-- **`origin/main`**: `a52273ffe9b2b8e82b8e2c6e2d004e3a973cb8f7`. **Main did not
-  move** past the planning merge `717b664d`. No merge was needed.
-- `git merge-tree --write-tree HEAD origin/main` exited 0 with tree
-  `43ddf77e4ea21713b39d9fc4353e31755bc9b918`: no conflict.
+- **`origin/main`** was `a52273ffe9b2b8e82b8e2c6e2d004e3a973cb8f7` while the facts
+  were re-checked, then **moved during Task 0** to
+  `87d87dead12f4e94b226b5d0eba03e9c0110a44a` (Windows timestamp correction). It
+  touches only `docs/plans`, `packaging/windows` and `scripts/release`, so no fact,
+  pin or reproduction here is affected. It was merged after the first Task 0 commit,
+  `febf2a47`, without conflicts and without a rebase; that commit's check of main was
+  run in the same command as its commit and push, so the move was seen only afterwards.
+- `git merge-tree --write-tree` against `a52273ff` gave tree
+  `43ddf77e4ea21713b39d9fc4353e31755bc9b918`, and against `87d87dea` gave
+  `4d95dafe35e224de9b6a742ad43096b894bb9910`: no conflict.
 - `git diff 717b664d HEAD` over `src`, `tests`, `schemas`, `Cargo.toml`,
-  `Cargo.lock`, `scripts`, `.github` and `devenv.nix` is empty. The five changed
-  files are the Cycle, design, plan and two comments.
+  `Cargo.lock`, `scripts`, `.github` and `devenv.nix` is empty at `131bddf9`. The five
+  changed files are the Cycle, design, plan and two comments.
 - **Commit identity.** The owner approved a per-command identity at planning's
   approval. Every commit is
   `git -c user.name="Vince Hodges" -c user.email=vince@imbas.ca commit ...`, and
