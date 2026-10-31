@@ -7,9 +7,11 @@ deps:
 id: 01M4CC0VMWEQQ9G4W0DAG7ADPY
 title: 'Wave 03 C4: CLI Discussion, Synchronization And Conflict Recovery'
 type: cycle
-status: open
+status: closed
 project: manyhands
 team: core
+closed_at: '2026-10-31T02:59:34Z'
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---
