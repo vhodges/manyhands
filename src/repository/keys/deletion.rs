@@ -91,8 +91,11 @@ impl RepositoryService {
                     return Err(error(KeyMaterialErrorKind::Busy));
                 }
                 if read_operation(c, operation_id)?.is_none() {
-                    c.execute("INSERT INTO key_material_operations (operation_id,key_id,action,private_key_path,public_key_path,private_file_identity,public_file_identity,public_key_fingerprint,phase) VALUES (?1,?2,'delete',?3,?4,?5,?6,?7,'prepared')",
+                    let tx=c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate).map_err(registry_error)?;
+                    super::generation::require_available_id(&tx,operation_id)?;
+                    tx.execute("INSERT INTO key_material_operations (operation_id,key_id,action,private_key_path,public_key_path,private_file_identity,public_file_identity,public_key_fingerprint,phase) VALUES (?1,?2,'delete',?3,?4,?5,?6,?7,'prepared')",
                         params![operation_id.to_string(), review.registration.id.to_string(), review.registration.private_key_path.to_str(), review.registration.public_key_path.as_ref().and_then(|p| p.to_str()), review.evidence.private.encode().as_bytes(), review.evidence.public.encode().as_bytes(), review.registration.public_key_fingerprint]).map_err(registry_error)?;
+                    tx.commit().map_err(registry_error)?;
                 }
                 let mut op = read_operation(c, operation_id)?.ok_or_else(|| error(KeyMaterialErrorKind::RegistryUnavailable))?;
                 let work = (|| {

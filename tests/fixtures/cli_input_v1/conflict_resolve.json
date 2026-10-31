@@ -1,0 +1,1 @@
+{"observation":"conflict-v1:0000000000000000000000000000000000000000000000000000000000000000","resolutions":[{"token":"conflict-path-v1:1111111111111111111111111111111111111111111111111111111111111111","source":"---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAV\ntitle: The resolved ticket\ntype: task\nstatus: open\n---\nThe resolved body.\n"}]}

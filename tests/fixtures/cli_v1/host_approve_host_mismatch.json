@@ -1,0 +1,34 @@
+{
+  "code": "host_mismatch",
+  "command": "host approve",
+  "data": {
+    "algorithm": "ssh-ed25519",
+    "fingerprint": "<fingerprint>",
+    "host": "127.0.0.1",
+    "port": 0,
+    "presented_algorithm": "ssh-ed25519",
+    "presented_fingerprint": "<presented>"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The host did not present the expected fingerprint.",
+  "operation_id": null,
+  "outcome": "blocked",
+  "recovery": [],
+  "request_id": "<request-id>",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

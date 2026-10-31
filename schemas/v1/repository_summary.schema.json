@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 registered repository",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "root",
+    "enabled_at",
+    "accessibility",
+    "configuration",
+    "index",
+    "problem_count"
+  ],
+  "properties": {
+    "root": {
+      "type": "string"
+    },
+    "enabled_at": {
+      "type": ["string", "null"]
+    },
+    "accessibility": {
+      "type": "string",
+      "enum": ["accessible", "inaccessible"]
+    },
+    "configuration": {
+      "$ref": "repository_configuration.schema.json"
+    },
+    "index": {
+      "$ref": "repository_index.schema.json"
+    },
+    "problem_count": {
+      "type": "integer"
+    }
+  }
+}

@@ -1,0 +1,241 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing merged release tag, for example v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  prepare:
+    name: Validate release tag
+    runs-on: ubuntu-24.04
+    outputs:
+      commit: ${{ steps.identity.outputs.commit }}
+      manifest: ${{ steps.identity.outputs.manifest }}
+    steps:
+      - name: Require invocation from main
+        env:
+          INVOCATION_REF: ${{ github.ref }}
+        run: test "$INVOCATION_REF" = refs/heads/main
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve existing tag and validate versions
+        id: identity
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python3 -B scripts/release/prepare.py --tag "$RELEASE_TAG" --require-merged --output release-input.json --github-output "$GITHUB_OUTPUT"
+
+      - name: Check remote tag and release state without mutation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/assemble.py preflight --input release-input.json --repo "$GITHUB_REPOSITORY"
+
+  build:
+    name: Package ${{ matrix.target }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            os: linux
+            shell: bash
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            os: linux
+            shell: bash
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            os: windows
+            shell: pwsh
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            os: macos
+            shell: bash
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      TARGET: ${{ matrix.target }}
+      RELEASE_INPUT: ${{ needs.prepare.outputs.manifest }}
+      RUSTFLAGS: ${{ matrix.os == 'windows' && '-C target-feature=+crt-static' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify immutable checkout and materialize handoff
+        run: python -B scripts/release/workflow.py prepare
+
+      - name: Read pinned release tools
+        id: tools
+        run: python -B scripts/release/workflow.py tools
+
+      - name: Install Linux build dependencies
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            binutils git openssl libasound2-dev libfontconfig-dev libglib2.0-dev \
+            libgtk-3-dev libssl-dev libvulkan-dev libwayland-dev libx11-xcb-dev \
+            libxkbcommon-x11-dev pkg-config
+          docker info --format '{{.Architecture}}'
+
+      - name: Install macOS OpenSSL
+        if: matrix.os == 'macos'
+        shell: bash
+        run: |
+          brew install openssl@3
+          openssl_prefix="$(brew --prefix openssl@3)"
+          # openssl-sys otherwise prefers a preinstalled openssl@4.
+          printf 'OPENSSL_DIR=%s\n' "$openssl_prefix" >> "$GITHUB_ENV"
+
+      - name: Verify native Windows Perl for vendored OpenSSL
+        if: matrix.os == 'windows'
+        run: |
+          $perl = (Get-Command perl -ErrorAction Stop).Source
+          & $perl -MIPC::Cmd -e 'exit($^O ne q(MSWin32))'
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows Perl with IPC::Cmd is required' }
+
+      - name: Install pinned Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.tools.outputs.rust }}
+          targets: ${{ matrix.target }}
+
+      - name: Cache release Cargo outputs
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}-${{ steps.tools.outputs.rust }}
+          cache-on-failure: true
+
+      - name: Test release helpers
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: python -B -m unittest discover -s scripts/release/tests -v
+
+      - name: Test Windows import policy
+        if: matrix.os == 'windows'
+        run: ./scripts/release/tests/test_windows_tools.ps1
+
+      - name: Build release CLI without desktop features
+        run: python -B scripts/release/workflow.py build-cli
+
+      - name: Build release desktop
+        run: python -B scripts/release/workflow.py build-desktop
+
+      - name: Check the CLI dependency boundary
+        run: bash scripts/check-cli-no-gpui.sh
+
+      - name: Install pinned licence tool
+        run: python -B scripts/release/workflow.py install-about
+
+      - name: Generate target-specific licences and original notices
+        run: python -B scripts/release/workflow.py notices
+
+      - name: Stage binaries and documentation
+        run: python -B scripts/release/workflow.py stage
+
+      - name: Audit Linux runtime linkage
+        if: matrix.os == 'linux'
+        run: python -B scripts/release/workflow.py linux-audit
+
+      - name: Bundle and ad-hoc sign macOS
+        if: matrix.os == 'macos'
+        run: python -B scripts/release/workflow.py macos-package
+
+      - name: Audit and self-sign Windows executables
+        if: matrix.os == 'windows'
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: python -B scripts/release/workflow.py windows-sign
+
+      - name: Create platform archive
+        run: python -B scripts/release/workflow.py archive
+
+      - name: Verify extracted contents and CLI; record archive inventory
+        run: python -B scripts/release/workflow.py verify
+
+      - name: Verify extracted macOS signatures and linkage
+        if: matrix.os == 'macos'
+        run: python -B scripts/release/workflow.py macos-verify
+
+      - name: Verify extracted Windows signatures without signing secrets
+        if: matrix.os == 'windows'
+        run: python -B scripts/release/workflow.py windows-verify
+
+      - name: Verify Linux archive in an isolated Ubuntu runtime
+        if: matrix.os == 'linux'
+        run: python -B scripts/release/workflow.py linux-smoke
+
+      - name: Hand off verified archives to draft assembly
+        uses: actions/upload-artifact@v4
+        with:
+          name: manyhands-release-${{ matrix.target }}
+          path: release-dist/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  assemble:
+    name: Assemble draft GitHub Release
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      RELEASE_INPUT: ${{ needs.prepare.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify source handoff
+        run: python3 -B scripts/release/prepare.py --manifest-env RELEASE_INPUT --output release-input.json
+
+      - name: Download this run's native artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: manyhands-release-*
+          path: release-candidates
+          merge-multiple: false
+
+      - name: Assemble or repair the unpublished draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B scripts/release/assemble.py assemble --input release-input.json --assets release-candidates --repo "$GITHUB_REPOSITORY"

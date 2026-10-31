@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 synchronization mutation data",
+  "description": "The data of an item sync, repo sync or item republish envelope, or of the envelope of an operation resume that took up the operation of one, that stopped because its host is not trusted: the host it reached, the key that host presented, and the pin stored for the host. What it gives as presented_algorithm and presented_fingerprint is what host approve and host replace are given as algorithm and fingerprint, and pinned_fingerprint is what host replace is given as the old fingerprint. A synchronization that stopped on a conflict carries synchronization_conflict data instead, and every other result of one carries null: what it published is in its effects. One vocabulary names a host's keys in every shape of the mutation boundary: presented_algorithm and presented_fingerprint are the key the host presented when it was observed; pinned_algorithm and pinned_fingerprint are the pin stored for the host now; algorithm and fingerprint are the key a host approve or host replace request names.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "host",
+    "port",
+    "presented_algorithm",
+    "presented_fingerprint",
+    "pinned_algorithm",
+    "pinned_fingerprint"
+  ],
+  "properties": {
+    "host": {
+      "description": "The host, in lower case.",
+      "type": "string"
+    },
+    "port": {
+      "type": "integer"
+    },
+    "presented_algorithm": {
+      "description": "The algorithm of the key the host presented.",
+      "type": "string"
+    },
+    "presented_fingerprint": {
+      "description": "The fingerprint of the key the host presented: SHA256: and the digest of the public key.",
+      "type": "string"
+    },
+    "pinned_algorithm": {
+      "description": "The algorithm of the key the host is pinned to, when the host presented another key than its pin. Null for a host that has no pin.",
+      "type": ["string", "null"]
+    },
+    "pinned_fingerprint": {
+      "description": "The fingerprint the host is pinned to, when the host presented another key than its pin. Null for a host that has no pin.",
+      "type": ["string", "null"]
+    }
+  }
+}

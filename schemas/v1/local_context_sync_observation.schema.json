@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 local context synchronization observation",
+  "description": "Read-only observation of an existing registered context and committed local primary. The opaque observation binds the matched authority and Git snapshots; it is not write authority or a filesystem path.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "item_id", "context_worktree", "context_ref", "primary_ref", "context_head", "primary_head", "observation"],
+  "properties": {
+    "kind": {"type": "string", "enum": ["document", "ticket"]},
+    "item_id": {"type": "string"},
+    "context_worktree": {"type": "string"},
+    "context_ref": {"type": "string"},
+    "primary_ref": {"type": "string"},
+    "context_head": {"type": "string"},
+    "primary_head": {"type": "string"},
+    "observation": {"type": "string"}
+  }
+}
