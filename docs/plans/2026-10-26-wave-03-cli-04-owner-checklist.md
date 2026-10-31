@@ -75,6 +75,8 @@ Each candidate is a Known Limit already written into the documents. Creating a t
 | 3. Untrusted-host follow-up | Ticket `01M67BN4C1SY2HQBGNE9NBYMW8` |
 | 3. Filesystem-refusal follow-up | Ticket `01M67BN4DMYV41ME9FHEBCZ2RA` |
 | 3. Exit-evidence move | Ticket `01M67BN4F7M1TYRMTDHB4XNWCM` |
+| 3. ssh-agent support (from dogfooding) | Ticket `01M67Y754SJ1FTYQJFR37Z4ZTY` |
+| Step 4, the comment switch | Deferred by the owner, 2026-10-30 |
 | 4. Main-defect tickets | |
 | 4. C5, D3, D4 and D5 notes | |
 | 4. `ticket save` | |

@@ -5209,3 +5209,18 @@ cycle. By the owner's instruction, no tests ran on it.
 - `created_by` is `Claude Opus 5.5 <noreply@anthropic.com>`.
 - The owner sends it at the terminal.
 - `merge-tree` against `origin/main` is clean.
+
+**Step 5: the review-ready comment is published.** The owner sent request
+`01M67XSA5R5JZY6WV4FB1N6XVK` at the terminal. It answered `ok` and
+published commit `947aa6a0`.
+
+- `comment list` shows comment `01M67XSA523QPFGK4WXQDP88G8` with parent
+  `01M67X2FGGWT4YQDAJEA1PGTG9`, the noreply author and no problems.
+- The ticket branch on `origin` is at `947aa6a0`.
+- The ticket stays **open**.
+
+**The ssh-agent follow-up.** The owner asked for a ticket for ssh-agent
+support in Manyhands' SSH transport, expecting it to be useful beyond
+comments. It is `01M67Y754SJ1FTYQJFR37Z4ZTY` (`vh-z2d7f`), on its own
+pushed branch. It names revisiting the deferred comment switch as its
+follow-on.
