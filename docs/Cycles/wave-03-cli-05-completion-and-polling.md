@@ -12,7 +12,7 @@ id: "01M69C6RZ2K0Q8DWPXA3EY81DH"
 
 ## Status
 
-**Draft, 2026-10-31.** Awaiting independent review and the owner's approval.
+**Draft, 2026-10-31.** Reviewed in three rounds, and awaiting the owner's approval.
 Nothing here is implemented. Planning ran the checkpoint gate's check, format
 and clippy commands on the merged baseline, and no tests.
 
@@ -145,7 +145,7 @@ The design's verb sections are the detailed contract. In summary:
    directly on the closed ticket and are ready when the report is produced.
    Readiness is the relationships RFC's: every dependency resolves to a
    lifecycle-closed ticket. Status text plays no part. A state says when there is
-   no set: `index_pending`, `not_computed` or `not_applicable`. A finished request's
+   no set: `index_pending`, `index_unavailable_final`, `not_computed` or `not_applicable`. A finished request's
    report is stored, so a replay returns it unchanged. A retry evaluates again.
 5. **Local synchronization.** `context observe-local` issues the observation,
    `context sync-local` takes it, `context show-local` inspects an operation
@@ -159,9 +159,10 @@ The design's verb sections are the detailed contract. In summary:
    60–3600. `poll pause` sets the pause flag. `poll resume` clears it and makes an
    eligible poll due (decision 11), clearing any stored deadline, and leaving the
    recovery suspension and stored backoff value alone. Each policy verb writes one field
-   in its request's own transaction, so it can't overwrite another field or apply
-   after a newer request (decision 15). A poll's transport stop is final, and a new
-   request polls again.
+   in its request's own transaction, so it can't overwrite another field, and a committed
+   request replays. Last commit wins (decision 15): a request that never committed is a
+   new write when resent. A poll's transport stop is final, and a new request polls
+   again.
 7. **Identity.** Both verbs use the repository's configured identity. An
    unusable one counts as none. With none, the verb answers
    `identity_required` with `repo.identity_set`. What follows depends on the stage,
@@ -263,11 +264,12 @@ Also required:
     outcome by acknowledging the flag, with no separate driver check.
 13. **A finished close isn't held open for its report.** "Finish, state not computed
     (Recommended)". A failed or incomplete made-ready read after a complete closure stores
-    `index_pending`, with a note that it won't be recomputed.
+    `index_unavailable_final`, which says that it won't be recomputed.
 14. **The folded tickets' old branches are deleted with the merge.** "Delete with the merge
     (Recommended)", after confirming that they hold only their ticket files.
 15. **Policy writes finish in the request's own transaction.** "Same-transaction record
-    (Recommended)". No observation token. This answers the former question 2.
+    (Recommended)". No observation token. This answers the former question 2. My question
+    overstated it. See owner question 6: the third review showed last commit wins.
 
 **Owner questions still open.** The documents are written to the recommended answers.
 
@@ -277,6 +279,8 @@ Also required:
 4. Accept C4's API-audit timing departure: the audit refresh is Task 0, not before
    planning.
 5. `context prepare` and `context release` stay outside the CLI inventory.
+6. Accept last commit wins for policy verbs: a `poll resume` that never committed, when
+   resent, clears a pause made since. The alternative is an observation token.
 
 ## Review Record
 
@@ -293,4 +297,5 @@ Also required:
 | Review round 1, contract (2026-10-31, `10b77793`) | 39 findings: 10 blocking, 19 important, 10 minor. Blocking: cancellation finality, resume reachability, `poll resume`, identity continuation, made-ready, later publication, inventory, missing tables, real-repository steps, closure. | Decisions 8–11, rulings | Design, Cycle and plan revised; five owner questions open. | Scoped re-review pending. |
 | Review round 2, source (2026-10-31, `63369dca`) | 4 blocking, 9 important, 8 minor. Blocking: `reenter` isn't called for a confirmed command, an unworkable `UNBOUND_COMMANDS` hold, the request flag cancelling every retry, poll stops that don't continue. | Rulings R-18 to R-20 | Facts 36–41, re-entry, Task 1 removed, cancellation. | Scoped re-review pending. |
 | Review round 2, contract and adversarial (2026-10-31, `63369dca`) | 4 blocking, 14 important, 9 minor. Blocking: no local-sync outcome table, poll continuation, a killed poll's lost ID, promotion identity against `01M5MK57`. | Decisions 12–15, rulings | Local-sync table, resume rows, domain identity check, cache-loss rows, branch deletion. | Scoped re-review pending. |
+| Review round 3, source and adversarial (2026-10-31, `8b2bdf71`) | 2 blocking, 9 important, 12 minor. Blocking: the stale-retry claim, and the first-call transport stop. Re-entry and cancellation verified as workable. | Owner question 6, rulings | Last commit wins stated; poll table frozen as required outcomes, test-first with a checkpoint. | The resulting edits had no independent review. |
 | C4 ledger | Plans named gate commands that could not pass, and recovery paths never walked. | Ruling | Global Constraints; Task 13b's walk. | C4 execution ledger. |
