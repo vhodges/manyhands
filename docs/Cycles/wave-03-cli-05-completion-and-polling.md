@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C5: CLI Completion And One-Shot Polling"
 date: 2026-10-31
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,7 +12,7 @@ id: "01M69C6RZ2K0Q8DWPXA3EY81DH"
 
 ## Status
 
-**Draft, 2026-10-31.** Reviewed in three rounds, and awaiting the owner's approval.
+**Approved, 2026-10-31.** The owner approved the documents at `cddacc54` ("Docs are approved. Approved to proceed. Use sub agent drive development."), authorizing implementation, subagent-driven. The approval takes owner questions 1 and 3–6 at their written recommendations, named edits E-1 to E-15 and the per-command commit identity. Pushes beyond this branch, a PR, the merge, branch deletion, closure, `ticket save`, native CI and cleanup stay separately gated. Reviewed in three rounds; the edits after round 3 had no independent review.
 Nothing here is implemented. Planning ran the checkpoint gate's check, format
 and clippy commands on the merged baseline, and no tests.
 
@@ -271,7 +271,7 @@ Also required:
     (Recommended)". No observation token. This answers the former question 2. My question
     overstated it. See owner question 6: the third review showed last commit wins.
 
-**Owner questions still open.** The documents are written to the recommended answers.
+**Owner questions, approved at these recommendations on 2026-10-31.**
 
 1. `effective_identity`'s per-key cascade: keep it for C5, with a follow-up ticket (R-6).
 2. Answered by decision 15.

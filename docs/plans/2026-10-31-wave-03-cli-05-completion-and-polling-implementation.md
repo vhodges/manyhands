@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C5 CLI Completion And One-Shot Polling Implementation Plan"
 date: 2026-10-31
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
