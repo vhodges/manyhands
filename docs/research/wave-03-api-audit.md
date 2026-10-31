@@ -194,6 +194,299 @@ x86_64; typed permission injections and a Windows lock-safe harness ordering fix
 are not native Windows ACL/macOS evidence. Native CI remains separately authorized
 post-merge work.
 
+**Note, amended 2026-10-30 by C4** (decisions 19 and 20). This section is
+otherwise unchanged. C4 delivers the remote-conflict wire bindings for remote
+synchronizations: the read `show_conflict` and the `conflict resolve`
+binding, with the CLI's `conflict show` and `conflict resolve`. The local
+verbs and any local conflict inspection stay with C5/D5. C4's remote shapes
+depart from the local ones above where the remote operation needs it (the C4
+design's rulings R-9, R-10, R-12 and R-39, The Next Step, and Conflict
+Resolution step 4):
+- **Tokens.** A path token hashes the observation's digest and the path's
+  position in the inspection, not the parent operation and a snapshot
+  generation (R-9).
+- **Sides inline.** `ConflictDto` carries an item path's sides when the
+  library reads them as UTF-8 text, as `content_available` says, with
+  `historical` true once an attempt has written paths. There is no separate
+  content read (R-10, R-39).
+- **The lease.** `show_conflict` takes the repository lease while it reads
+  Git, so it can answer `busy`. The local reads above do not take the write
+  lease (R-12).
+- **Identity.** A missing identity is reported by `identity_required` and
+  `repo.identity_set`, not by a `set_identity` next action.
+- **External-only sets.** One, `incompatible_closures` included, is
+  `recovery_required` with `next_action: external_repair`, where the local
+  resolution answers `external_change`.
+- **Supersede.** A new request may supersede a remote attempt that has only
+  written paths, while those paths are unchanged (decision 18); the local
+  resolution has no supersede. The unfinished attempt's request is
+  `request_id`, not `required_request_id`.
+- **Cancellation.** A remote cancellation is final, and a new request
+  completes the work. The local operation keeps its Accepted requests.
+
+### Wave 03 CLI Cycle C4 refresh (2026-10-28)
+
+Task 0 source-inspected this refresh on **2026-10-28 UTC**, at
+`a352a3708856c6da3753d8d66dc3509e18bfeb34` (the approved plan), with
+`origin/main` at `a372edbef143f3a9b7201f2d040bf82d34e087e2`. Main had not moved
+since the planning merge `e920043`, and `git diff origin/main HEAD` shows no
+change under `src/`, `tests/`, `schemas/`, `Cargo.toml` or `Cargo.lock`. So the
+source the design's 2026-10-27 re-grounding read at `a372edb` is the source
+read here. This is entry-gate item 3's audit, taken after the design instead of
+before it. The [C4 Cycle](../Cycles/wave-03-cli-04-discussion-and-sync.md)
+accepts that departure in **decision 16**: the design's Baseline Facts 1–86
+served as the planning audit, and this refresh updates the C4 rows in place.
+
+The governing contract is the Cycle and its
+[design](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-design.md). The
+[execution ledger](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-execution.md)
+records the baseline checks, fact 81's expected red test and the named-edit
+classification. These are Linux checks and source reads, not native evidence.
+
+**Source or design.** Nothing of C4's own is on main: `Command` has no
+`CommentAdd`, `ConflictResolve` or `ItemRepublish`, and there is no conflict
+read. Every symbol marked *planned* below is the design's. `item sync`,
+`repo sync`, `operation resume` and `operation abandon` are existing F2
+bindings (`mutation/bind/sync.rs`, `resume.rs`, `abandon.rs`), and the catalog
+lists them as `planned(…, "C4")` (`src/bin/manyhands-cli/catalog.rs:876-882`).
+The rows these replace said "Missing public sync", "Missing generic deliberate
+resume", "Missing public conflict … read" and "pending-Wave-02". Those were
+true at the audit base and are wrong now. Wave 02 delivered clean and merging
+synchronization, conflict inspection and resolution, comment publication,
+resume and abandonment as library behavior, and F2 binds sync, resume and
+abandon. What is still missing is the CLI adapter, and for three verbs the F2
+binding (decision 1). This section supersedes those claims for C4, not the
+other historical rows.
+
+#### C4 signatures, inputs and result-set key
+
+Paths are relative to `src/repository/` unless prefixed; `bind/` abbreviates
+`mutation/bind/`. As in C2 and C3, **F2(V, I)** means `Mutation::V(I)` passed to
+the two methods below, not a direct call to the older domain operation:
+
+```rust
+prepare(&self, mutation: &Mutation) -> Envelope<PrepareDataDto>      // mutation/confirm.rs:286
+execute<P: SessionCredentialProvider>(
+    &self, call: MutationCall, credentials: &mut SessionCredentials<P>,
+    progress: &mut dyn ProgressSink, cancel: &CancellationToken,
+) -> Envelope<MutationDataDto>                                       // mutation/execute.rs:45
+show_conflict(&self, repo: &ResolvedRepository, operation_id: OperationId)
+    -> Result<ConflictDto, ReadError>                                // planned, Task 3
+```
+
+| Verb | Binding | Input type | Confirmed | Stops at safe points; operation | Data or preview |
+| --- | --- | --- | --- | --- | --- |
+| `comment add` | **planned** F2(`CommentAdd`, `CommentAddInput`), new `bind/comment.rs` (Tasks 2a, 2b), over the unchanged `submit_comment`, `retry_comment_publication` and `cancel_comment_publication` (`comment_publication.rs:178,330,365`) | `CommentAddInput { root: PathBuf, kind: AuthoringKind, id: ItemId, comment_id: ItemId, parent_id: Option<ItemId>, body: String, created_by: Option<String> }`; JSON input `comment_id`, `body`, optional `parent_id` and `created_by` | No: `--prepare` is `not_confirmable` | Yes; has an operation; stage `Writing` | `CommentMutationDto`, `type: "comment"` |
+| `item sync` | existing F2(`ItemSync`, `ItemSyncInput`); `SETTINGS` flips to `refuse_divergence: false` in Task 1 (`bind/sync.rs:101-103`) | `ItemSyncInput { root, kind: AuthoringKind, id: ItemId }` (`bind/sync.rs:61`); no JSON input | No | Yes; has an operation; `Connecting` | `SynchronizationMutationDto` (host data), or `SynchronizationConflictMutationDto`, `type: "synchronization_conflict"`, on a conflict |
+| `repo sync` | existing F2(`RepoSync`, `RepoSyncInput`); the same settings flip | `RepoSyncInput { root }` (`bind/sync.rs:69`); no JSON input | No | Yes; has an operation; `Connecting` | as `item sync` |
+| `item republish` | **planned** F2(`ItemRepublish`, `ItemRepublishInput`), new `bind/republish.rs` and a crate-private `Session::republish` (Task 5) | `ItemRepublishInput { root, kind: AuthoringKind, id: ItemId }`, derives `Clone`; no JSON input | **Yes**: `ItemRepublishPreviewDto`, effect `PreviewEffect::BranchRepublished`, one desktop arm (decision 10) | Yes; has an operation; `Connecting`; the first confirmed command that stops at safe points | none: `data` is null, the effects report the publication |
+| `conflict show` | **planned** read `RepositoryService::show_conflict`, new `remote/conflict_read.rs` (Task 3); takes the repository lease (R-12) | `operation_id: OperationId` | — (a read: no request ID, no confirmation) | — | `ConflictDto` with `ConflictPathDto` items (R-9, R-10, R-39, R-40) |
+| `conflict resolve` | **planned** F2(`ConflictResolve`, `ConflictResolveInput`), new `bind/conflict.rs` (Task 4a) | `ConflictResolveInput { root, operation_id: OperationId, observation: String, resolutions: Vec<ConflictResolutionInput { token: String, source: String }> }`; JSON input `observation`, `resolutions` | No | No: no safe points and no operation of its own (R-32, R-35); Ctrl-C reaches it | `ConflictResolutionMutationDto`, `type: "conflict_resolution"` |
+| `operation resume` | existing F2(`OperationResume`, `OperationResumeInput`); four routes added in Task 4b (R-20) | `OperationResumeInput { root, operation_id }` (`bind/resume.rs:64`); no JSON input | No | No: `request cancel` does not reach it (fact 11); Ctrl-C does; no operation of its own | `CommentMutationDto`, `SynchronizationConflictMutationDto`, null, or the gate's `LocalContextSyncMutationDto` (decision 19) |
+| `operation abandon` | existing F2(`OperationAbandon`, `OperationAbandonInput`), unchanged by C4; the CLI dispatches it (Task 7) | `OperationAbandonInput { root, operation_id }` (`bind/abandon.rs:33`); no JSON input | **Yes**: `OperationAbandonPreviewDto`, effects `operation_closed` and `request_released` | No safe point; no operation of its own | `OperationMutationDto` |
+
+Amended 2026-10-30 by C4 (Task 14): every symbol marked **planned** above
+is delivered on the C4 ticket branch. The
+[delivery reconciliation](#c4-delivery-reconciliation-2026-10-30) below gives
+each delivered entry point and where it differs from this table.
+
+Each row's **codes** is the union of its named groups and explicit additions. It
+is an upper bound, as in C2 and C3: it follows prepare, execution, re-entry,
+replay and the mappers, and inclusion is not a promise that a binary fixture can
+force the path. The groups are:
+
+- **S** = `ok busy index_unavailable internal_error`: request and confirmation
+  storage and read sessions (`read/mod.rs`, `mutation/records.rs`).
+- **M** = S + `request_mismatch cancelled`: the shared mutation paths
+  (`mutation/execute.rs:97-110,229-231,280-283`, `replay.rs:162`).
+- **P** = `invalid_path not_repository bare_repository repository_inaccessible
+  not_repository_root`; **R** = P + `repository_not_registered
+  repository_not_enabled`: root selection and registration, for mutations and
+  F1 reads (`bind/mod.rs`, `read/resolve.rs`).
+- **U** = `not_confirmable`: prepare, or a first execution that presents a
+  confirmation to an unconfirmed command (`mutation/confirm.rs:299,401`).
+- **C** = `confirmation_required confirmation_not_found confirmation_mismatch
+  confirmation_used confirmation_expired external_change`: confirmed commands
+  only (`confirm.rs:402-426`, `execute.rs:280,318`).
+- **I** = S + `item_not_found`: the `--id` kind lookup, one `show_item` read
+  whose failure passes through under the mutation's name (R-2), and a
+  synchronization whose target is not materialized (`outcome.rs:203`).
+- **T** = `invalid_remote publication_remote_required no_selected_key
+  key_unavailable external_change key_rejected unlock_required unlock_failed
+  host_approval_required host_replacement_required index_unavailable
+  recovery_required transport_unavailable remote_unavailable push_rejected
+  internal_error`: the whole image of `ssh_transport_error_code`
+  (`outcome.rs:109-155`), which every verb that reaches the transport forwards.
+  `host_mismatch` is not here: only a host approval reports it.
+- **Y** = `busy poll_yielding item_not_found worktree_not_clean
+  worktree_conflicted invalid_configuration remote_branch_deleted
+  identity_required push_rejected external_change recovery_required ok
+  already_applied publication_remote_required discovery_pending
+  repository_not_registered`: the image of `synchronization_error_code`
+  (`outcome.rs:197-231`), except `merge_required`, plus the results of
+  `synchronization_result_code` (`:339-361`). `Interrupted`, `HistoryUnknown`,
+  `ConflictPending` and `ExternalResolutionRequired` all map to
+  `recovery_required`, and the conflict is told apart by its data (decision 8).
+- **A** = `already_applied external_change identity_required
+  invalid_configuration item_not_found recovery_required worktree_not_clean
+  wrong_branch discovery_pending ticket_closed invalid_input occupied_path`:
+  the comment checkpoint's own refusals (`repository_error_code`,
+  `outcome.rs:41-100`), as C3's authoring set, plus `ticket_closed`
+  (`refuse_closed_ticket`), `invalid_input` (a malformed `created_by`) and
+  `occupied_path` (a comment ID that another file holds).
+
+| Verb | Codes | Count | Design anchor |
+| --- | --- | --- | --- |
+| `comment add` | M + R + U + I + T + Y + A | 41 | Comment Submission, required outcomes; Exit Statuses |
+| `item sync` | M + R + U + I + T + Y | 37 | Merging Synchronization, required outcomes |
+| `repo sync` | M + R + U + T + Y | 37 | the same table |
+| `item republish` | M + R + C + I + T + Y + `ticket_closed` | 42 | Republish, required outcomes; decision 17 |
+| `conflict show` | P + S + `repository_not_registered operation_not_found invalid_input` | 12 | Conflict Inspection, required outcomes; R-12 (`busy`). Amended 2026-10-30 by C4 (Task 0's review): this row read R and counted 13. A read answers a never-enabled root as `repository_not_registered` (`read/mod.rs`, `repository_error_code`), so `repository_not_enabled` is not one of its codes. The union is unchanged |
+| `conflict resolve` | M + R + U + T + Y + `operation_not_found invalid_input external_change recovery_required original_request_required identity_required` | 40 | Conflict Resolution steps 1–7; interrupted-resolution table |
+| `operation resume` | M + R + U + T + Y + `operation_not_found invalid_input original_request_required recovery_required already_applied external_change invalid_path` | 40 | Resume (R-20); `bind/resume.rs:104-483` |
+| `operation abandon` | M + R + C + `operation_not_found invalid_input already_applied recovery_required invalid_path` | 23 | `bind/abandon.rs:104-413` (unchanged); decision 6 |
+
+Notes on the sets, from the source:
+
+- `operation_not_found`, `invalid_input` and `already_applied` for `operation
+  abandon` and `operation resume` are the existing bindings' own answers: an
+  unknown ID, an ID the remote or key journal holds (abandon), and an end state
+  that already holds (`bind/abandon.rs:185,366,413`;
+  `bind/resume.rs:458-483,599,928`). `invalid_input` for a local-sync ID given
+  to `conflict show` or `conflict resolve` is the design's (decision 19, R-37).
+  Amended 2026-10-30 by C4: the `bind/resume.rs` lines were loose at Task 0
+  and have moved since. On the delivered branch, `refusal` answers
+  `Named::NotFound` with `operation_not_found`, `Named::Ended` with
+  `already_applied` and `Named::NotResumable` with `invalid_input`.
+  `hand_off` answers `already_applied` when another call ended the row
+  first, and `reenter` when a local operation has ended.
+- `recovery_required` for abandon is the gate's `map_local` answer for a
+  local-sync operation it will not abandon (`bridges/abandon.rs:444-476`).
+- A replay adds `recovery_required` when a reported commit is no longer
+  reachable (`mutation/replay.rs:65`); settlement and recovery offering do not
+  replace a result's code.
+- Exit status follows `Envelope::failure_class` (`src/results.rs:282`): a
+  partial outcome is 4 and a cancelled one is 130, ahead of the code's own class.
+
+**Comment operations under `operation abandon` (fact 10), checked in Task 0.**
+`abandon_operation` (`bridges/abandon.rs:432`) answers by the comment
+operation's *local* row, not by its publication:
+
+- a comment whose checkpoint is committed and whose local row has completed,
+  with publication pending in the child synchronization: preview is
+  `already_applied` (`AbandonableOperation::Completed`, `bind/abandon.rs:410`).
+  Nothing is closed, and the binding stays usable (R-20 has `operation resume` publish it);
+- the child synchronization's own ID is `invalid_input` (the remote journal
+  holds it);
+- a comment whose local row is still pending (stopped before the checkpoint
+  completed, an index hand-off owed, or waiting for registration) is
+  abandonable. The row closes as `abandoned`, and the binding is kept but
+  spent: replay, publication-only retry and cancellation all refuse it
+  (`recovery.rs:201`, `read_comment_binding`). Any commit already made stays on the
+  context branch, unpublished until an ordinary `item sync`. This is pinned by
+  `tests/mutation_confirmation/abandon.rs:1273`, and C4 changes none of it.
+
+#### C4 exit-coverage union
+
+The eight row sets expand to these **48 library codes**. `tests/cli/collaboration_exits.rs`
+(Task 13) asserts set equality with this block (R-27), mapping each code to a
+binary row or to an individually justified reason that no fixture reaches it.
+
+```text
+already_applied bare_repository busy cancelled confirmation_expired confirmation_mismatch confirmation_not_found confirmation_required confirmation_used discovery_pending external_change host_approval_required host_replacement_required identity_required index_unavailable internal_error invalid_configuration invalid_input invalid_path invalid_remote item_not_found key_rejected key_unavailable no_selected_key not_confirmable not_repository not_repository_root occupied_path ok operation_not_found original_request_required poll_yielding publication_remote_required push_rejected recovery_required remote_branch_deleted remote_unavailable repository_inaccessible repository_not_enabled repository_not_registered request_mismatch ticket_closed transport_unavailable unlock_failed unlock_required worktree_conflicted worktree_not_clean wrong_branch
+```
+
+Three exclusions, each deliberate:
+
+- **`merge_required`.** No C4 binding returns it: both synchronization bindings
+  pass `refuse_divergence: false` (decision 3, R-16). `synchronization_error_code`
+  still maps `SynchronizationError::MergeRequired` to it (`outcome.rs:212`), and
+  E-7 lists it in `CODES_NO_MUTATION_GOLDEN_HAS` and
+  `CODES_NO_FIXTURE_CAN_PRODUCE` with that reason. It is not part of the union.
+- **`registration_pending`.** No designed C4 outcome returns it. A comment's
+  index hand-off is `discovery_pending`. If Task 2b's binding does produce it,
+  Task 2b adds it to this block with its reason, and Task 13 follows.
+- **`host_mismatch`, `request_not_found` and the key-registry codes.** Only the
+  host-approval, request-read and key bindings return them.
+
+The CLI-only additions are unchanged from C3: `usage_error`, `invalid_input`,
+`invalid_id`, `invalid_path`, `cancelled` and `internal_error`. Only
+`usage_error` and `invalid_id` extend the library union, giving **50
+CLI-inclusive codes**. The C5 verbs still answer `command_unavailable`, a
+C2 code that C4 neither adds nor removes. `noop` is an outcome, not a code: its
+code is `already_applied`.
+
+#### C4 delivery reconciliation (2026-10-30)
+
+Amended 2026-10-30 by C4 (Task 14). This reconciles the C4 rows above and
+the C4 inventory rows below with what Tasks 1–13 delivered on the ticket
+branch, which has merged main through `f487cc74`, D3 included. Paths are
+relative to `src/repository/`.
+
+- **Entry points.**
+  - `comment add`: `Mutation::CommentAdd(CommentAddInput)` in
+    `mutation/bind/comment.rs`. It calls the crate-private
+    `submit_comment_with` and `retry_comment_publication_with`
+    (`comment_publication.rs`). Their synchronizer drives the context's
+    synchronization through `Session::synchronize`, with the merging
+    settings and a `Watch`. The checkpoint goes through the crate-private
+    `checkpoint_comment_locally_with` (`src/repository.rs`), which takes the
+    author and whether to release a binding that wrote nothing, and to which
+    `checkpoint_comment_locally` delegates. The public `submit_comment`,
+    `retry_comment_publication` and `cancel_comment_publication` are
+    unchanged.
+  - `item sync` and `repo sync`: both bindings pass `MERGING`
+    (`refuse_divergence: false`, `mutation/bind/sync.rs`) where this
+    section's table says `SETTINGS` flips. Neither returns `merge_required`.
+  - `item republish`: `Mutation::ItemRepublish(ItemRepublishInput)` in
+    `mutation/bind/republish.rs`, over the crate-private `Session::republish`
+    (`mutation/progress.rs`), which calls the crate-private
+    `RepositoryService::republish_context` (`remote/sync.rs`). Its preview is
+    `ItemRepublishPreviewDto`, with the effect `branch_republished`.
+  - `conflict show`: `RepositoryService::show_conflict(&ResolvedRepository,
+    OperationId) -> Result<ConflictDto, ReadError>` in
+    `remote/conflict_read.rs`, exported through `manyhands::repository` with
+    `ConflictDto`, `ConflictPathDto` and their enumerations.
+  - `conflict resolve`: `Mutation::ConflictResolve(ConflictResolveInput)` in
+    `mutation/bind/conflict.rs`. Its association table is
+    `remote_resolution_owners` (`remote/state.rs`), created by its own
+    migration step, with no foreign key.
+  - `operation resume`: `mutation/bind/resume.rs`, with the comment,
+    resolution, written-paths and republish routes. `operation abandon` is
+    unchanged.
+- **Schemas.** Output, under `schemas/v1/`: `comment_mutation`, `conflict`,
+  `conflict_path`, `conflict_next`, `synchronization_conflict_mutation`,
+  `conflict_resolution_mutation` and `item_republish_preview`. Input, under
+  `schemas/input/v1/`: `comment_add` and `conflict_resolve`, with examples
+  under `tests/fixtures/cli_input_v1/`.
+- **Codes.** The union above is unchanged: 48 library codes, 50 with the
+  CLI's own. `tests/cli/collaboration_exits.rs` reads it and asserts set
+  equality. Each code is reached through the binary by a C4 verb, or has a
+  reason: `remote_unavailable` and `confirmation_expired`, and off Unix also
+  `unlock_failed` and `original_request_required`.
+  - One row's count is corrected: `conflict show` has 12 codes, not 13.
+  - Through the binary, the `--id` verbs read the item's kind first (R-2),
+    and a read answers a never-enabled root as `repository_not_registered`.
+    The exit table records this for `comment add`. The rows' sets stay
+    upper bounds, since the library binding alone still answers
+    `repository_not_enabled`.
+  - `registration_pending` stays out of the union, as Task 0 recorded; no C4
+    task added it.
+- **Behavior the rows above did not state.** Each is in the C4 design,
+  dated 2026-10-30:
+  - a comment's `remote_branch_deleted` keeps its record accepted, offering
+    `[request.cancel]`;
+  - a refused republish, `external_change` or `push_rejected`, finishes its
+    record and ends its operation `cancelled`;
+  - an `operation resume` answered `remote_branch_deleted` offers no
+    recovery action (`recovery: []`);
+  - a cancelled comment publication, resumed, answers `recovery_required`
+    with `[repo.inspect]`, while any other cancelled operation answers as F2
+    does. A fenced comment publication, resumed by either ID, answers
+    `external_change`, as F2 answers a fenced synchronization;
+  - after a second Ctrl-C, the request stays accepted and keeps its
+    reservation.
+
 ### Wave 03 CLI Cycle C3 refresh (2026-10-24)
 
 Task 0 source-inspected this refresh on **2026-10-25 UTC**, at
@@ -1124,6 +1417,14 @@ history can publish; unsaved item buffers are not saved. Focused local tests
 are executed during this update; full Cycle acceptance and native evidence
 remain pending Tasks 2–6 in the Cycle 07 execution ledger.
 
+**Amended 2026-10-28 by C4 Task 0.** The "absent" and "Missing" claims above
+describe the original audit base. Wave 02 delivered clean and merging
+synchronization, conflict inspection and resolution, comment publication,
+promotion and closure as library behavior, and F2 binds sync, resume and
+abandon. Republishing a deleted branch is designed as the confirmed
+`item republish`, and the C4 CLI inventory rows carry each verb's current
+status (see the [C4 refresh](#wave-03-cli-cycle-c4-refresh-2026-10-28)).
+
 ## C5 — Desktop-only state and editor obligations
 
 [Desktop main](../../src/main.rs#L1) is HelloWorld/Button; it initializes Kit but
@@ -1268,9 +1569,10 @@ may have the application-local bookkeeping effects explicitly recorded in C0.
 | `ticket create` — C3 | F2(TicketCreate, TicketCreateInput); `mutation/bind/ticket.rs:582–598,681–702`; CLI `authoring.rs::ticket_create` | `--repo`, `--input` item_id/title/type/status; optional project/team/body/deps/parent/initials; full TicketDraft; missing/null deps/parent means none; no closure input | Local checkpoint; codes **C3-A + C3-U + invalid_input occupied_path invalid_relationship relationship_cycle initials_required invalid_slug_configuration ticket_closed** | Unconfirmed; validates relationships before context; domain closed-ticket guard can reject a raced create | Local identity, no prompt; missing initials leaves request ID free; slug/relationship IDs are public result data | Available; Linux binary evidence: `tests/cli/ticket_authoring.rs`, `authoring_exits.rs` | F2 relationships/slug + C3 input adapter; R-author |
 | `ticket save` — C3 | F2(TicketSave, TicketSaveInput); `mutation/bind/ticket.rs:601–634,681–702`; CLI `authoring.rs::ticket_save`, `fill.rs` | `--repo`, `--id`, `--input` observation and optional draft/relationship fields; C3 fills draft once, preserves token; null clears nullable fields | Local checkpoint; no-op requires intended content HEAD-equal; preserves closure/unknown values; codes **C3-A + C3-U + invalid_input occupied_path invalid_relationship relationship_cycle ticket_closed** | Unconfirmed; lifecycle-closed write refused; omitted deps/parent unchanged, null clears; [] clears deps | Local identity, no prompt; no body output; scoped fill failure/request ID passes through under decisions 5/7 | Available; Linux binary evidence: `tests/cli/ticket_authoring.rs`, `authoring_exits.rs` | F2 complete draft + C3 patch; R-author + R-domain |
 | `comment list` — C1/D4 | F1 `list_comments(repo: &ResolvedRepository, item: &ItemId) -> R<CommentListDto>` (`read/comments.rs:258`); codes SR + `item_not_found`, `repository_inaccessible` | Item's effective context; flattened threads, depth, nonconforming entries | Read session: yes; guarded item/comment reads; no checkpoint | No consent/context provisioning/refresh | F1 comment DTO includes requested content; no invented author | F1 baseline verified; CLI pending | F1 read; C1 Task 5; R-read |
-| `comment add` — W3-05/10 | Compound `submit_comment`, original receipt and body-free `retry_comment_publication` E-comment; Cycle 07 acceptance in progress | Exact item/context/comment ID/parent + Missing destination; one bound sync child | Scoped checkpoint/discovery, then context sync; separate Saved publication/index state; original action reused on retry | Immediate configured context sync; explicit child restart/cancel; source separate from unsaved item drafts | Local commit identity; caller-owned selected-key session/host approval; confirmation only for child merge | implementation-in-progress | W2-07 over W1-03 and W2-05/06; W3-02/05; R-domain |
-| `item sync` — W3-05/10 | Missing public sync; E-observe/E-reserve and private transfer helpers not service | Exact item/shared context/remote/ref observations; never unsaved caller input | No sync outcomes/tests; future fetch/FF/merge/push/discovery effects C4 | C2 safe cancel + deleted-branch republish consent required | Future selected-key/trust C3 | pending-Wave-02 | W2-05 clean + W2-06 merge; W3-02/05; R-domain |
-| `repo sync` — W3-05/10 | Missing public primary sync; E-observe is advertisement | Exact primary/remote, clean-primary observations | Future fetch/FF/merge/push/discovery, not polling; replay unproved | C2 progress/cancel, no inferred publication intent | Future selected-key/trust C3 | pending-Wave-02 | W2-05/06; W3-02/05; R-domain |
+| `comment add` — W3-05/10; C4 (D4 consumes) | F2(`CommentAdd`, `CommentAddInput { root, kind, id, comment_id, parent_id, body, created_by }`), `bind/comment.rs` (Tasks 2a, 2b), over the crate-private `submit_comment_with` and `retry_comment_publication_with`; the public `submit_comment`, `retry_comment_publication` and `cancel_comment_publication` are unchanged (Cycle 07, R-4). Not confirmed. Data `CommentMutationDto`. Codes: C4 key, 41 (M + R + U + I + T + Y + A) | Exact item (`--id`, kind by one `show_item` read, R-2), comment ID, optional parent, Missing destination; one bound child synchronization | Scoped checkpoint, then a merging context sync; `created_by` given or the Git identity, written once (decision 9, R-7); `identity_required` with nothing written releases the binding and the same request retries (R-34); `remote_branch_deleted` keeps the record accepted with `[request.cancel]`, and `request cancel` then one more call ends it `cancelled`; no remote is `ok` with publication pending; replay is body-free | No consent; C2 progress; stops at safe points; Ctrl-C window; a cancellation is final (fact 56) | Caller-owned selected-key session and host approval; body, source and token never in diagnostics, DTOs or stores | delivered-C4 on the ticket branch: binding, CLI verb, schemas and goldens; two-clone SSH journeys in `tests/cli_remote/collaboration.rs` | C4 Tasks 2a, 2b (library) and 8 (CLI); R-domain + R-adapter; reconciled 2026-10-30 by C4 (Task 14) |
+| `item sync` — W3-05/10; C4 | Existing F2(`ItemSync`, `ItemSyncInput { root, kind, id }`, `bind/sync.rs`). Since Task 1 it passes `MERGING` (`refuse_divergence: false`), so it merges. Not confirmed. Data `SynchronizationMutationDto`, or `SynchronizationConflictMutationDto` on a conflict. Codes: C4 key, 37 (M + R + U + I + T + Y) | Exact item, shared context, remote and ref observations; never unsaved caller input; `--id` kind by one read | Fetch, fast-forward, merge (remote context, then primary), push, discovery; a conflict is `recovery_required` with `conflict: {operation_id, next_action}` in data (decision 8); no body or source recorded | No consent; C2 progress; safe-point cancel; Ctrl-C window; republishing a deleted branch is the separate confirmed `item republish` (decision 7) | Selected-key and host trust per C3; fixed messages | delivered-C4 on the ticket branch: the binding merges, and the CLI verb is available; two-clone SSH journeys in `tests/cli_remote/collaboration.rs` and `conflicts.rs` | C4 Task 1 (library) and 7 (CLI); journeys in Tasks 12a, 12b; R-adapter + R-domain; reconciled 2026-10-30 by C4 (Task 14) |
+| `repo sync` — W3-05/10; C4 | Existing F2(`RepoSync`, `RepoSyncInput { root }`, `bind/sync.rs`), merging since Task 1, as `item sync`. Not confirmed. Data as `item sync`. Codes: C4 key, 37 (M + R + U + T + Y) | Exact primary and remote, clean-primary observations | Fetch, fast-forward, merge, push, discovery; not polling; replay stores the result | No consent; C2 progress; safe-point cancel; Ctrl-C window; no inferred publication intent | Selected-key and host trust per C3 | delivered-C4 on the ticket branch: the binding merges, and the CLI verb is available; two-clone SSH journeys in `tests/cli_remote/collaboration.rs` and `conflicts.rs` | C4 Task 1 (library) and 7 (CLI); R-adapter + R-domain; reconciled 2026-10-30 by C4 (Task 14) |
+| `item republish` — C4 (decisions 4, 7, 11, 17); added to the inventory | F2(`ItemRepublish`, `ItemRepublishInput { root, kind, id }`), `bind/republish.rs`, over the crate-private `Session::republish` and `RepositoryService::republish_context` (Task 5). **Confirmed**: `ItemRepublishPreviewDto`, effect `branch_republished`; the no-op preview is `already_applied`. Data null. Codes: C4 key, 42 (M + R + C + I + T + Y + `ticket_closed`) | Exact item, branch, remote, `last_published_oid` and `local_oid`; the preview reads stored evidence, with no reservation (fact 55) | Push-only: pushes exactly the previewed local tip and integrates nothing (decision 11, R-18); `external_change` if the context was advertised again or the tip moved; `ticket_closed` for a lifecycle-closed ticket; `external_change` and `push_rejected` finish the record, and the refused republish ends its operation `cancelled`; replay stores the result and pushes nothing twice | Consent through prepare and confirm (600 s); C2 progress; safe-point cancel; Ctrl-C at the prompt is exit 130 before execution; a cancellation is final and a new prepare follows | Selected-key and host trust per C3; the preview and results carry IDs and OIDs only | delivered-C4 on the ticket branch: binding, preview, CLI verb and the desktop arm; two-clone SSH journeys in `tests/cli_remote/conflicts.rs` | C4 Task 5 (library) and 10 (CLI); one desktop arm (decision 10); R-adapter + R-domain; reconciled 2026-10-30 by C4 (Task 14) |
 | `document promote` — W3-06/11 | Delivered headless `preview_document_promotion`, `promote_document`, `cancel_document_promotion`; Task 6 reviewed complete: SPEC PASS, QUALITY FINAL APPROVE, no findings | Exact item + whole branch/primary/remote/OIDs/paths/cleanup; local read-only Ready(preview/expectation) or Blocked | Complete(outcome) or IndexPending(same outcome); separate integration/publication/cleanup; identical-ID retry only unfinished work, completed replay no transport/deletion; completed publication wins over cancellation/lost return; accepted concurrency fence and approved T6-1 exception | C5/D5 boundary prepare/execute binding, ten-minute expiry, preview schema and accepted-consent adapters pending; current F2 resume NotResumable | Local confirmed identity + selected-key/trust if remote; NoPublicationRemote still permits local cleanup | headless domain delivered/reviewed; 188 targeted tests GREEN; frontend pending | W2-09 Task 7/8 gates + C5/D5; R-domain |
 | `ticket close` — W3-06/11 | Delivered headless (W2-10, 2026-10-18): `preview_ticket_closure`, `close_ticket`, `cancel_ticket_closure` | Exact ticket + whole branch incl. code; local read-only Ready(preview/expectation binding `closed_by`) or every Blocked category | `Close ticket` checkpoint + `Integrate closed ticket` merge in one lease, publication, guarded cleanup; Complete(outcome) or IndexPending(same outcome); same-ID retry only unfinished work; contained-and-closed cleanup-only replay | C5/D5 F2 prepare/execute binding, ten-minute expiry, preview schema values and ready-ticket report pending; F2 resume `Close` stays NotResumable | Effective or confirmed Git identity (bound in the digest) + selected-key/trust if remote | headless domain delivered; frontend pending | W2-10 + C5/D5; R-domain |
 | `index status` — C1/D1 | F1 `index_status(repo: &ResolvedRepository) -> R<IndexStatusDto>` (`read/status.rs:657`); `ok`, `busy`, `internal_error`, `repository_not_registered`; own `index_unavailable` becomes DTO | Resolved root; freshness, counts, problems and pending local work; CLI resolution adds `index_unavailable` (R-2) | Read session: yes; no fetch/refresh | No consent; stale/unavailable explicit | Fixed problem guidance, no backend text | F1 baseline verified; CLI pending | F1 read; C1 Task 4; R-read |
@@ -1286,10 +1588,10 @@ may have the application-local bookkeeping effects explicitly recorded in C0.
 | `request show` — C2 | `show_request(&self, request_id: RequestId) -> Envelope<RequestDto>`; `mutation/mod.rs:367–377` | Application-level canonical request ID; **codes S +** `request_not_found` | Reads record only; stored result has its own nested code, not this read's code; no replay/resume | None; `--request-id` selector, no `--repo` | No credential or network access | CLI evidence closed: `tests/cli/requests.rs`, `tests/cli/human.rs`, `tests/cli/privacy.rs` | F2; C2 Tasks 5, 11 |
 | `request cancel` — C2 | `cancel_request(&self, request_id: RequestId) -> Envelope<CancelDto>`; `mutation/progress.rs:366–481` | Application-level canonical request ID; **codes S +** `request_not_found` | Accepted local C2 commands report `requested: false`; finished records remain; safe-point commands set cancellation flag | None; selector is `--request-id`, not a new mutation intent | Fixed acknowledgement, no credential or network access | CLI evidence closed: `tests/cli/requests.rs`, `tests/cli/human.rs`, `tests/cli/privacy.rs` | F2; C2 Tasks 5, 11 |
 | `host observe` — C2 | `observe_host<P: SessionCredentialProvider>(&self, root: &Path, authority: Option<&SshAuthority>, credentials: &mut SessionCredentials<P>) -> Envelope<HostObservationDto>`; `mutation/bind/host.rs:904–1009` | Registered repository and optional configured authority; **codes S + R + T +** `invalid_input, invalid_configuration` | Networked read, no request ID, progress sink or pin write; untrusted/rotated host returned as success data | None; no prepare/confirm; may prompt to unlock when authentication is reached | Public host fingerprint; no unlock for isolated unpinned observation; caller's known-host trust can allow authentication | CLI evidence closed: `tests/cli_remote/hosts.rs` (including cross-platform missing selected source), `tests/cli_remote/unlock.rs`, `tests/cli_remote/journeys.rs` | F2; C2 Tasks 10–11; R-admin |
-| `operation abandon` — C4 | F2 `Command::OperationAbandon` through prepare/execute; added as planned (decision 12) | Deliberate abandonment, distinct from status read | F2 request/replay boundary; no C1 mutation | C4 publishes CLI confirmation rules | Fixed result/preview | F2 API present; CLI planned | F2 boundary; C4 consumer |
-| `operation resume` — W3-05/06/11 | Missing generic deliberate resume; exact local calls E-recovery / restart_remote_observation E-reserve only | Exact existing action/target; original input may be needed | C1 domain replay is not permission for other action; cache loss blocks if unprovable | C2 accepted consent eligible remainder only; progress/cancel needed | Future selected-key/trust if network; no secret/body record | partially-present | W3-02 adapter over W2-05…10; consumers W3-05/06; R-adapter + R-domain |
-| `conflict show` — W3-01/11 | Missing public conflict operation/path/base/local/remote read; no domain conflict record yet | Op ID/path observations, owned/noncanonical conflict kind | Read preserved sources; actual index state not marker-text heuristic | No consent/implicit staging/resolution | Requested comparison source allowed; errors redacted C0 | pending-Wave-02 | W2-06 domain, W3-01 DTO; R-read + R-domain |
-| `conflict resolve` — W3-05/11 | Missing public owned-canonical resolution/checkpoint/resume | All conflicted owned paths + observations + explicit sources; validate all before writes | Future checkpoint/eligible remainder; stale input preserved; no arbitrary code staging | C2 explicit per-path action, no blanket ours/theirs; safe cancel | Local identity + future selected-key; source not diagnostic C0/C3 | pending-Wave-02 | W2-06; W3-02/05; R-domain |
+| `operation abandon` — C4 | Existing F2(`OperationAbandon`, `OperationAbandonInput { root, operation_id }`, `bind/abandon.rs:33`), unchanged by C4. **Confirmed**: `OperationAbandonPreviewDto`, effects `operation_closed` and `request_released`. Data `OperationMutationDto`. Codes: C4 key, 23 (M + R + C + five additions) | A local operation ID only: one the remote or key journal holds is `invalid_input`; a completed, rejected or abandoned row is `already_applied`; a local-sync operation goes to the gate's guarded abandonment (decision 19); a pending remote conflict cannot be abandoned (decision 6) | One transaction closes the local row and releases its request; it touches no file, ref, index entry or worktree; a comment's pending local row spends its binding and any commit stays (fact 10, see the C4 refresh) | Consent through prepare and confirm; no safe point; Ctrl-C at the prompt is exit 130 before execution | Fixed result and preview; IDs and the remains' paths only, no content | F2 API present; CLI verb delivered-C4 on the ticket branch (Task 7) | F2 boundary; C4 Task 7 consumer; reconciled 2026-10-30 by C4 (Task 14) |
+| `operation resume` — W3-05/06/11; C4 | Existing F2(`OperationResume`, `OperationResumeInput { root, operation_id }`, `bind/resume.rs`): a local owed hand-off, a remote synchronization (merging since Task 1), and the gate's local-context sync. Task 4b added a comment's publication, a resolution finished from durable state, and `original_request_required` for an attempt with only written paths or a republish's operation (R-20). Not confirmed. Data `CommentMutationDto`, `SynchronizationConflictMutationDto`, null or the gate's `LocalContextSyncMutationDto`. Codes: C4 key, 40 | Exact existing operation by ID: the synchronization's, or a comment's operation resolved through its binding (R-5) | Never writes a comment; a cancelled comment publication is left to inspect (`recovery_required`, `[repo.inspect]`), any other cancelled operation answers as F2 does, and a new request completes the work (fact 56); a deleted remote branch is `remote_branch_deleted` with no recovery action; cache loss blocks if unprovable | Not confirmed; C2 progress; `request cancel` does not reach it (fact 11), Ctrl-C does | Selected-key and host trust if network; no secret or body record | delivered-C4 on the ticket branch: routes and CLI verb; SSH journeys in `tests/cli_remote/collaboration.rs` and `interruption.rs` | C4 Task 4b (library) and 7 (CLI); R-adapter + R-domain; reconciled 2026-10-30 by C4 (Task 14) |
+| `conflict show` — W3-01/11; C4 (D5 consumes through D4) | Read `RepositoryService::show_conflict(&ResolvedRepository, OperationId) -> Result<ConflictDto, ReadError>`, `remote/conflict_read.rs` (Task 3), over `inspect_synchronization_recovery` and `read_synchronization_conflict` (`remote/sync.rs`). No request ID; `--prepare` is a usage error. Data `ConflictDto`. Codes: C4 key, 12 (it counted 13 before 2026-10-30) | The synchronization's operation ID, or a comment's operation resolved through its binding (R-5); per-path kind and structure from `classify_conflict_entry`; remote synchronizations only, so a local-sync ID is `invalid_input` (decision 19) | Read-only from the live index stages, not a marker-text heuristic; takes the repository lease, so it can answer `busy` (R-12); the observation and tokens are strings re-derived on each call and never stored (R-9) | No consent, staging or resolution; no cancellation | A requested read returns the sides of each path whose kind is an item, when the library reads them as UTF-8 text, as `content_available` says; `display_path` is escaped (R-11); errors fixed | delivered-C4 on the ticket branch: read, DTOs, schemas, goldens and CLI verb | C4 Task 3 (library) and 9 (CLI); R-read + R-domain; reconciled 2026-10-30 by C4 (Task 14) |
+| `conflict resolve` — W3-05/11; C4 | F2(`ConflictResolve`, `ConflictResolveInput { root, operation_id, observation, resolutions: Vec of {token, source} }`), `bind/conflict.rs` (Task 4a), over `resolve_synchronization` (`remote/sync.rs`). Not confirmed. Data `ConflictResolutionMutationDto`. Codes: C4 key, 40 | Every conflicted path in one set, an observation and explicit sources; count before membership; an external-only set, `incompatible_closures` included, is `recovery_required` with `next_action: external_repair` | Replay before live tokens; a derived attempt ID and a durable association in the new table `remote_resolution_owners` (R-35, R-41); the same request finishes an interrupted resolution with the same commit; a new request may supersede an attempt with only written paths unchanged (decision 18); then it publishes under the same request (R-15) | No consent; no operation of its own, so no safe points and no `request cancel`; Ctrl-C window; a cancellation after the checkpoint leaves the synchronization resolved and resumable | Source text never in diagnostics, DTOs or stores (digests only); identity from Git configuration, else `identity_required` and `repo.identity_set` | delivered-C4 on the ticket branch: binding and CLI verb; every row of the interrupted-resolution table met; two-clone SSH journeys in `tests/cli_remote/conflicts.rs` | C4 Task 4a (library) and 9 (CLI); R-domain; no row stopped Task 4a at its design checkpoint; reconciled 2026-10-30 by C4 (Task 14) |
 | `id new` — C1 | F1 `new_item_id() -> NewIdDto` (`read/mod.rs:466`), not a Result; `ok` | No repository/context | Read session: no; generates an ID without reserving/writing it; C1 still opens service | No consent/progress/cancel | Canonical ULID only | F1 baseline verified; CLI pending | F1 utility; C1 Task 2; R-read |
 | `no arguments` — C1 | No F1 call; seven-line CLI main still initializes transport and exits silently | C1 will return root help, `ok`, exit 0 | Read session: no; C1 will open no service or data directory | No consent/progress | No credentials/network | CLI pending | C1 Tasks 1–3 |
 | `--help` — C1 | No F1 call; C1 will render `cli help` through `Envelope::read_success`, code `ok` | Root/resource/command help; available and planned catalog entries | Read session: no; service-free, transport-free | No consent/progress; exit 0 | No credentials/registry/network | CLI pending | C1 Tasks 1–3 |
@@ -1327,10 +1629,10 @@ that capability. Catalog evidence is adjacent domain evidence, never UI proof.
 | D21 dirty external-change three-way review and clean reload — W3-08/09 | C1 expected paths exists; missing base/new/current comparison DTO/model | Base context/source + new canonical + dirty draft, generation | Dirty never auto replaced by poll/CLI/refresh; clean deliberate reload preserves selection | Stale save preserves input, explicit review action | Requested comparison sources only, no logs | partially-present | W3-01 reads/02 observations then 08/09; R-read + R-draft |
 | D22 drafts survive removed/inaccessible repository or vanished context — W3-08 | E-remove/index do not implement draft store/tests | Persisted draft accessible independent of registration/context/cache | Preserve recovery/export on remove/rebuild; no auto worktree recreation | Explicit recover/discard, no hidden age cleanup | Owner-protected store separate C5 | absent | W3-08 over W3-01/02/03; R-draft |
 | D23 rich/source recoverable comment/reply composer — W3-10 | E-comment local checkpoint only; missing composer/draft/editor | Item/parent/comment IDs, body/base observation | One submission ID, do not include unsaved item draft; same fidelity as D07–D19 | Post and sync vs Save locally labels; partial publication retry | Local identity + future selected-key/trust C3/C4 | absent | W3-08/09 editor, W2-07 domain, W3-10; R-draft + R-domain |
-| D24 saved comment shown once; retry publication only — W3-10 | E-comment exact local replay; missing compound outcome/UI/tests | Retained comment/request/operation ID and original shared context | No new file/checkpoint/timestamp on publication retry C4 | Show completed/local saved and remaining publication; deliberate resume | Same session/trust boundary; redacted partial effects | pending-Wave-02 | W2-07 + W3-02 adapter then 10; R-domain |
+| D24 saved comment shown once; retry publication only — W3-10 | Amended 2026-10-30 by C4, replacing "E-comment exact local replay; missing compound outcome": Wave 02 Cycle 07 delivered the compound outcome (`CommentSubmissionOutcome`) and the publication-only retry, and C4 delivers the F2 `comment add` binding. A retry of the same request publishes without writing the comment again, and `operation resume` publishes a pending publication, with `CommentMutationDto` data. The desktop UI and its tests are missing (D4) | Retained comment/request/operation ID and original shared context | No new file/checkpoint/timestamp on publication retry C4 | Show completed/local saved and remaining publication; deliberate resume | Same session/trust boundary; redacted partial effects | library boundary delivered-C4 on the ticket branch; UI absent | W2-07 + C4's `comment add` binding, then D4; R-domain |
 | D25 explicit sync/completion dialogs distinguish branch-wide effects — W3-10/11 | Delivered/reviewed headless promotion preview/outcome: Merged/AlreadyContained, Published/AlreadyCurrent/Pending and Complete/Pending cleanup; Task 6 SPEC PASS and final quality approved; no desktop dialog | Whole branch incl code, primary/context/remote, final saved draft | Unsaved text separate; integration != publication != cleanup; NoPublicationRemote permits local cleanup; IndexPending preserves outcome; completed publication remains authoritative on cancellation; same-ID unfinished retry/completed replay covered by 188 targeted GREEN tests under approved T6-1 | C5/D5 boundary prepare/execute binding, ten-minute expiry, preview schema values and resume classification pending; current F2 promotion remains NotResumable | Confirmed Git identity + selected-key/trust | headless domain delivered/reviewed; dialog/boundary pending | W2-09 Task 7/8 + C5/D5; other sync/close owners unchanged; R-domain |
-| D26 canonical conflict base/local/remote/result editing — W3-11 | Missing W2-06 public resolution/read and UI/tests | Owned canonical paths + all expected observations/valid resolutions | Validate all before write/checkpoint; markers not Git-resolution authority | Per-path explicit Mark resolved, no automatic side choice | Requested source vs redacted progress C0 | pending-Wave-02 | W2-06 + W3-01/02/05 then 11; R-domain |
-| D27 noncanonical external recovery/recheck guidance — W3-11 | Missing public conflict/re-observe DTO/UI; private Git not frontend API | Code/binary/rename/delete/structural conflicts preserved | Open location deliberate; recheck actual Git, never arbitrary staging/publish | Explicit operation resume after real repair; no marker-only inference | Owned redacted recovery arguments C0 | pending-Wave-02 | W2-06 observations + W3-01/02/05 then 11; R-domain |
+| D26 canonical conflict base/local/remote/result editing — W3-11 | Amended 2026-10-30 by C4, replacing "Missing W2-06 public resolution/read": Wave 02 Cycle 06 delivered resolution, and C4 delivers the public read `show_conflict` (`ConflictDto`, with each path's string token, and an item path's base/local/incoming sides when the library reads them as UTF-8 text, as `content_available` says) and the F2 `conflict resolve` binding (`{observation, resolutions: [{token, source}]}`), for remote synchronizations. The desktop UI and its tests are missing (D5) | Owned canonical paths + all expected observations/valid resolutions | Validate all before write/checkpoint; markers not Git-resolution authority | Per-path explicit Mark resolved, no automatic side choice; resolution stays set-wide (C4 decision 12) | Requested source vs redacted progress C0 | library boundary delivered-C4 on the ticket branch; UI absent | W2-06 + C4's boundary, then D5 through D4; R-domain |
+| D27 noncanonical external recovery/recheck guidance — W3-11 | Amended 2026-10-30 by C4, replacing "Missing public conflict/re-observe DTO": C4's `ConflictDto` gives each path's kind and structure, `next_action: external_repair` for a set that is not all canonical, and the states `repaired` and `repair_refused` after an outside repair; `operation resume` continues an accepted repair. The desktop UI is missing (D5); private Git is not a frontend API | Code/binary/rename/delete/structural conflicts preserved | Open location deliberate; recheck actual Git, never arbitrary staging/publish | Explicit operation resume after real repair; no marker-only inference | Owned redacted recovery arguments C0 | library boundary delivered-C4 on the ticket branch; UI absent | W2-06 observations + C4's boundary, then D5 through D4; R-domain |
 | D28 keyboard focus/dialog Escape/action activation — W3-07…12 | Missing full control/focus contract/tests; Button scaffold only | Every core action labeled/focusable, tab order/visible focus/focus return | UI state only, color not sole state signal | Escape cancellation at dialog/request safe boundary | No secret text in UI diagnostics | absent | W3-07 shell, each feature, W3-13 gate; R-shell |
 | D29 native IME/Unicode/accessibility/high-DPI evidence — W3-09/13 | Missing native editor/control evidence; scaffold not proof | Supported OS/architecture native inputs, composition/selection | Preserve exact draft/source including bidi/combining/non-BMP | Keyboard minimum != screen-reader conformance | Synthetic redacted fixtures/evidence | absent | W3-09 editor, W3-13 native matrix; R-editor + R-shell |
 | D30 responsive owned async models and stale-completion guards — W3-07…12 | Missing worker/model/generation types/tests; RepositoryService is synchronous | Request ID/generation/repo/item identity before applying completion | Old result cannot replace newer draft/selected item; no git2 handle in UI | Bounded worker work off UI; typed progress/cancel C2 | No secret Debug/logs, session stays worker-owned C3 | absent | W3-01/02 headless boundary then 07/08/09; R-adapter + R-shell |

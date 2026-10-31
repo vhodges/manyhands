@@ -32,6 +32,8 @@ use super::{
 };
 
 pub(crate) mod abandon;
+pub(crate) mod comment;
+pub(crate) mod conflict;
 pub(crate) mod context;
 pub(crate) mod document;
 pub(crate) mod folder;
@@ -44,6 +46,7 @@ pub(crate) mod repair;
 pub(crate) mod repo;
 pub(crate) mod repo_identity;
 pub(crate) mod repo_remove;
+pub(crate) mod republish;
 pub(crate) mod resume;
 pub(crate) mod save;
 pub(crate) mod sync;
@@ -459,6 +462,24 @@ impl Accepted {
         })
     }
 
+    /// The request as the binding of a synchronization it takes up is to
+    /// see it: with that synchronization, `operation_id`, in place of its
+    /// own operation, and with nothing expected at a path. A resume and a
+    /// resolution's continuation take a synchronization up so, and a
+    /// comment's submission its child. The position stays the request's,
+    /// on the branch the synchronization synchronizes.
+    pub(crate) fn taking_up(&self, operation_id: OperationId) -> Self {
+        Self {
+            request_id: self.request_id,
+            attempt: self.attempt,
+            scope: self.scope.clone(),
+            family: Some(OperationFamily::Remote),
+            operation_id,
+            position: self.position.clone(),
+            expected: None,
+        }
+    }
+
     /// The request's operation, as its record and its results name it:
     /// none for a request that has no operation.
     pub(crate) fn operation(&self) -> Option<RequestOperation> {
@@ -803,6 +824,14 @@ pub(crate) trait Binding {
         Ok(super::confirm::scope_key(self.place()))
     }
 
+    /// Settles what the request names before its identity is taken from
+    /// `target` and `fields`, for a command whose input can name one thing
+    /// by more than one ID. Nothing changes by default. An answer refuses
+    /// the request before its record is read.
+    fn settle_target(&mut self, _service: &RepositoryService) -> Result<(), Answer> {
+        Ok(())
+    }
+
     /// The request's target within its repository.
     fn target(&self) -> String;
 
@@ -974,13 +1003,23 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         // An abandon has no operation, so none is ever found to have
         // run: this is not reached, and nothing is claimed.
         Some(Command::OperationAbandon) => Recorded::nothing(),
-        Some(Command::ItemSync | Command::RepoSync) => {
+        // A republish's operation is a synchronization of the context, and
+        // what it published is shown as a synchronization's is.
+        Some(Command::ItemSync | Command::RepoSync | Command::ItemRepublish) => {
             Recorded::of(sync::recorded_effects(service, &accepted))
         }
+        // The comment's write and checkpoint, as its binding and its
+        // context show them, and what its synchronization is known to
+        // have published.
+        Some(Command::CommentAdd) => Recorded::of(comment::recorded_effects(service, &accepted)),
         // A resume has no operation, so none is ever found to have run:
         // this is not reached, and nothing is claimed. What the
         // operation it names did is that operation's request's to say.
         Some(Command::OperationResume) => Recorded::nothing(),
+        // Nor has a resolution: this is not reached, and nothing is
+        // claimed. Its durable state is its attempt, and a refusal under
+        // its request ID carries no effects (R-32).
+        Some(Command::ConflictResolve) => Recorded::nothing(),
         // An identity has no operation either: this is not reached, and
         // nothing is claimed. It is set whole or not at all.
         Some(Command::RepoIdentitySet) => Recorded::nothing(),

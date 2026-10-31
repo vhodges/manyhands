@@ -707,18 +707,27 @@ pub(in super::super) fn operation_owner(
     scope_key: &str,
     operation_id: OperationId,
 ) -> rusqlite::Result<Option<String>> {
-    operation_holder(connection, OperationFamily::Local, scope_key, operation_id)
+    operation_holder(
+        connection,
+        OperationFamily::Local,
+        scope_key,
+        operation_id,
+        None,
+    )
 }
 
 /// `operation_owner`, for an operation of any journal: the request
 /// whose record holds the operation `operation_id` of `family` in
 /// `scope_key` and is not finished. That request, sent again, is what
-/// takes the operation up with the input it was begun with.
+/// takes the operation up with the input it was begun with. With
+/// `command`, only a request of that command is named: `None` when the
+/// one that holds the operation is of another.
 pub(super) fn operation_holder(
     connection: &Connection,
     family: OperationFamily,
     scope_key: &str,
     operation_id: OperationId,
+    command: Option<&str>,
 ) -> rusqlite::Result<Option<String>> {
     connection
         .query_row(
@@ -729,8 +738,14 @@ pub(super) fn operation_holder(
                 AND request_operations.operation_ulid = ?2
                 AND request_records.scope_key = ?1
                 AND request_records.state = 'accepted'
+                AND (?4 IS NULL OR request_records.command = ?4)
               ORDER BY request_records.request_ulid LIMIT 1",
-            params![scope_key, operation_id.to_string(), family.as_str()],
+            params![
+                scope_key,
+                operation_id.to_string(),
+                family.as_str(),
+                command
+            ],
             |row| row.get(0),
         )
         .optional()

@@ -229,6 +229,22 @@ Merge primary into <kind> <ULID>
 Resolve synchronization <kind> <ULID>
 ```
 
+Amended 2026-10-30 by C4 (decisions 3, 7 and 11):
+- **The bindings merge.** Wave 03's `item sync` and `repo sync` bindings
+  merge divergent history as this section and primary synchronization
+  describe. Until C4 they refused it, with `merge_required`, which they no
+  longer return.
+- **Republish is its own confirmed command.** The explicit republish
+  confirmation of step 3 is not an option of item synchronization, whose
+  consent is fixed per command; item synchronization always returns the
+  remote-branch-deleted outcome there. `item republish` is confirmed. Its
+  preview is built from stored evidence of the deletion, and its execution
+  fetches, refuses a context advertised again or a local tip that moved,
+  and then pushes exactly the previewed local commit with an ordinary
+  non-force push. It integrates nothing: steps 1 and 2 do not run, so the
+  pushed commit is the one the caller saw. The next item synchronization
+  integrates primary as usual.
+
 ### Dedicated Local-Primary Into Context Synchronization
 
 **Amendment, 2026-10-27:** the [closure-recovery library gate](../Cycles/wave-03-closure-recovery-gate.md)
@@ -336,6 +352,12 @@ discard local changes, or conceal conflict markers. The desktop and CLI RFCs
 define the interaction that edits a resolution and creates its recovery
 checkpoint before retrying the pending operation.
 
+Amended 2026-10-30 by C4 (decision 8): a synchronization that stops on a
+conflict answers `recovery_required`, and its data names the conflict's
+operation and next step, `resolve` for an all-canonical set or
+`external_repair` otherwise. No recovery action or result code is added for
+it.
+
 The operation record has enough state to identify the repository, item when
 applicable, branch, worktree, action, publication remote, affected local and
 tracking refs, observed local and remote object IDs, completed steps,
@@ -356,17 +378,39 @@ and resumes only the recorded incomplete synchronization step. A changed
 observation returns external-change or recovery-required without overwriting
 the worktree.
 
-**Local recovery amendment, 2026-10-27:** local inspection and explicit immutable
+**Local recovery amendment, 2026-10-27,** scoped to the local operation on
+2026-10-30 by C4 (decision 20): local inspection and explicit immutable
 side reads issue opaque tokens; resolution submits a complete `{token, source}`
 set with a top-level observation through `context resolve-local`. Display paths
 are presentation text, not writable input. The starting request S and resolution
 request R have separate durable identities. After R is accepted, exact R retry
-reconciles owned progress before fresh-token validation; partial R without a fully
-prepared candidate requires its original source bytes. `operation resume` names R
-through `original_request_required` rather than inventing source. Finished receipts
-are immutable; recoverable cancellation retains Accepted requests and acknowledges
-observed cancellation generations. Abandonment requires fresh artifact-free proof
-and atomically settles all associated Accepted S/R/U requests without deleting IDs.
+reconciles owned progress before fresh-token validation; in the local
+operation, partial R without a fully prepared candidate requires its original
+source bytes. `operation resume` names R through `original_request_required`
+rather than inventing source. Finished receipts are immutable; the local
+operation's recoverable cancellation retains Accepted requests and acknowledges
+observed cancellation generations. Local abandonment requires fresh
+artifact-free proof and atomically settles all associated Accepted S/R/U
+requests without deleting IDs.
+
+Amended 2026-10-30 by C4 (decisions 13, 18 and 20), the remote rule beside
+it. A remote synchronization's conflict is resolved with `conflict resolve`,
+which also submits a complete `{token, source}` set with a top-level
+observation. The same request reconciles its recorded attempt before any
+live token is checked, and finishes an interrupted resolution with the same
+commit.
+- A new request may supersede a remote attempt that has only written paths,
+  while every path it wrote still holds exactly what it wrote. The old
+  attempt is closed. The local rule has no such supersede.
+- With a written path since changed, a new request answers
+  `original_request_required`, naming the attempt's request. The resume rule
+  above applies to remote too: `operation resume` on an attempt with only
+  written paths names its request through `original_request_required`.
+- `operation resume` finishes an attempt whose candidate commit is
+  prepared, from durable state, with no input.
+- A remote cancellation is final: a new request completes the work.
+- An outside repair is refused while an attempt is unfinished, and accepted
+  again once none is.
 
 For fresh conflicts, distinct nonempty parsed closure pairs across **all three
 sides** make the whole set external-only. Known incompatible pairs in local
@@ -375,6 +419,14 @@ is not a winning-closure policy: an external resolution still needs a clean comm
 with the exact ordered recorded parents and all canonical invariants preserved.
 Removing markers, staging arbitrary files or choosing one incompatible closure is
 not proof of completion.
+
+Amended 2026-10-30 by C4 (its design's fact 85 and ruling R-40, decision 6): the
+same limit holds on remote. A ticket that two clones closed differently
+makes a remote synchronization's conflict external-only
+(`incompatible_closures`), and an outside repair that chooses one closure is
+not promised to be accepted. Abandoning a pending remote conflict stays on
+`01M4H33R34Z7C7EEKTY1ZCT950`, so until it lands such a conflict may have no
+in-product way out.
 
 Recovery assumes cooperative Manyhands writers using the common-Git lease. Observed
 foreign edits are preserved and refused; arbitrary concurrent filesystem namespace
@@ -412,6 +464,14 @@ with external-tool guidance. After external repair, re-observe actual Git state
 and require deliberate resume of eligible remaining work; do not stage arbitrary
 code or treat removal of text markers as proof of resolved Git conflict state.
 This does not expand the existing owned-path write boundary.
+
+Amended 2026-10-30 by C4 (decision 12): the CLI's `conflict show` reports
+each conflicted path's kind and structure, and resolution stays set-wide, so
+a conflict with any path not resolvable in-app is repaired outside as a
+whole. A noncanonical path's structure is the shared classifier's reading of
+the index stages, not a claim about the file's type: a text code file edited
+on both sides reads `binary`, and an add/add reads `delete`. After an outside
+repair, `conflict show` reports it, and `operation resume` continues it.
 
 ## Wave 1 Acceptance
 

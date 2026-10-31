@@ -84,13 +84,14 @@ Command catalog:
   index rebuild  Rebuild the index. Available now.
   path observe  Observe a path for authoring or repair. Available now.
   ticket check  Check ticket relationships. Available now.
-  comment add  Add a comment. Arrives with C4.
-  item sync  Synchronize an item. Arrives with C4.
-  repo sync  Synchronize a repository. Arrives with C4.
-  conflict show  Show a conflict. Arrives with C4.
-  conflict resolve  Resolve a conflict. Arrives with C4.
-  operation resume  Resume an operation. Arrives with C4.
-  operation abandon  Abandon an operation. Arrives with C4.
+  comment add  Add a comment. Available now.
+  item sync  Synchronize an item. Available now.
+  repo sync  Synchronize a repository. Available now.
+  item republish  Republish a deleted item branch. Available now.
+  conflict show  Show a conflict. Available now.
+  conflict resolve  Resolve a conflict. Available now.
+  operation resume  Resume an operation. Available now.
+  operation abandon  Abandon an operation. Available now.
   document promote  Promote a document. Arrives with C5.
   ticket close  Close a ticket. Arrives with C5.
   poll once  Poll a repository once. Arrives with C5.

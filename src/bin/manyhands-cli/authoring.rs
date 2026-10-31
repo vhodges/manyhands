@@ -210,12 +210,7 @@ pub fn document_create(
         let object = admin::input_object(session, spec, args, flags.request_id)?;
         let (id, path, draft) = (|| {
             object.only(&["item_id", "path", "title", "body"])?;
-            let id = object.string("item_id")?.parse::<ItemId>().map_err(|_| {
-                InputError::InvalidValue {
-                    field: "item_id",
-                    allowed: &["a canonical ULID"],
-                }
-            })?;
+            let id = ulid(object.string("item_id")?, "item_id")?;
             Ok((
                 id,
                 PathBuf::from(object.string("path")?),
@@ -253,7 +248,20 @@ pub fn document_create(
     )
 }
 
-fn document_id(
+/// A canonical ULID read from the input field `field`. A malformed one is
+/// `invalid_input`, naming the field and never the value; `invalid_id` is
+/// for flags. Shared by every verb whose input carries an ID.
+pub(crate) fn ulid(text: String, field: &'static str) -> Result<ItemId, InputError> {
+    text.parse::<ItemId>()
+        .map_err(|_| InputError::InvalidValue {
+            field,
+            allowed: &["a canonical ULID"],
+        })
+}
+
+/// The item `--id` names. A malformed ID is `invalid_id`, with the request
+/// named. Shared by every verb that selects an item with `--id`.
+pub(crate) fn item_id(
     session: &Session,
     spec: &CommandSpec,
     args: &ArgMatches,
@@ -294,7 +302,7 @@ pub fn document_save(
         })()
         .map_err(|e| admin::input_failure(session, spec, flags.request_id, e))?;
         let root = admin::mutation_root(session, spec, args, flags.request_id)?;
-        let id = document_id(session, spec, args, flags.request_id)?;
+        let id = item_id(session, spec, args, flags.request_id)?;
         // Fill once per invocation, before the driver. Replays retain the
         // caller's observation and bounded retries reuse this complete draft.
         let draft = if fill::needs_read_document(&fields) {
@@ -359,7 +367,7 @@ pub fn document_move(
         })()
         .map_err(|e| admin::input_failure(session, spec, flags.request_id, e))?;
         let root = admin::mutation_root(session, spec, args, flags.request_id)?;
-        let id = document_id(session, spec, args, flags.request_id)?;
+        let id = item_id(session, spec, args, flags.request_id)?;
         Ok((flags, root, id, observation, path, destination_observation))
     })() {
         Ok(values) => values,
@@ -405,12 +413,7 @@ pub fn ticket_create(
                 "item_id", "title", "type", "status", "body", "project", "team", "deps", "parent",
                 "initials",
             ])?;
-            let id = object.string("item_id")?.parse::<ItemId>().map_err(|_| {
-                InputError::InvalidValue {
-                    field: "item_id",
-                    allowed: &["a canonical ULID"],
-                }
-            })?;
+            let id = ulid(object.string("item_id")?, "item_id")?;
             let draft = TicketDraft {
                 title: object.string("title")?,
                 ticket_type: object.string("type")?,
@@ -504,7 +507,7 @@ pub fn ticket_save(
         })()
         .map_err(|e| admin::input_failure(session, spec, flags.request_id, e))?;
         let root = admin::mutation_root(session, spec, args, flags.request_id)?;
-        let id = document_id(session, spec, args, flags.request_id)?;
+        let id = item_id(session, spec, args, flags.request_id)?;
         // Relationships remain library patches. Only the six draft fields are
         // filled, once before the retry driver; retain the caller's observation.
         let draft = if fill::needs_read_ticket(&fields) {
@@ -570,7 +573,7 @@ pub fn ticket_slug_assign(
         })()
         .map_err(|e| admin::input_failure(session, spec, flags.request_id, e))?;
         let root = admin::mutation_root(session, spec, args, flags.request_id)?;
-        let id = document_id(session, spec, args, flags.request_id)?;
+        let id = item_id(session, spec, args, flags.request_id)?;
         Ok((flags, root, id, observation, initials))
     })() {
         Ok(values) => values,

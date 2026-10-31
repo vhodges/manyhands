@@ -33,6 +33,7 @@ use super::{
         SynchronizeRemoteRequest,
         keys::{SessionCredentialProvider, SessionCredentials},
         recovery::{FinalKind, JournalRow, PendingOperation},
+        remote::sync::RepublishConsent,
         transport::{SshTransportError, SshTransportVerified, VerifySshTransportRequest},
     },
     bind::{Accepted, Binding, sync},
@@ -199,6 +200,18 @@ pub(crate) trait Session {
         observer: &mut dyn SynchronizationObserver,
     ) -> Option<Result<SynchronizationResult, SynchronizationError>>;
 
+    /// Pushes a remotely deleted item branch again, at the commit its
+    /// owner consented to, with the session's credentials (R-18); see
+    /// `RepositoryService::republish_context`. `None` when the session has
+    /// no credentials, or they are in use: nothing was called.
+    fn republish(
+        &self,
+        service: &RepositoryService,
+        request: SynchronizeRemoteRequest,
+        consent: &RepublishConsent,
+        observer: &mut dyn SynchronizationObserver,
+    ) -> Option<Result<SynchronizationResult, SynchronizationError>>;
+
     /// Connects to the host of the publication remote with the session's
     /// credentials and sees the key it presents; see
     /// `RepositoryService::verify_ssh_transport`. `None` when the
@@ -280,6 +293,17 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         Some(service.synchronize_remote_observed(request, &mut credentials, settings, observer))
     }
 
+    fn republish(
+        &self,
+        service: &RepositoryService,
+        request: SynchronizeRemoteRequest,
+        consent: &RepublishConsent,
+        observer: &mut dyn SynchronizationObserver,
+    ) -> Option<Result<SynchronizationResult, SynchronizationError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        Some(service.republish_context(request, consent, &mut credentials, observer))
+    }
+
     fn verify_transport(
         &self,
         service: &RepositoryService,
@@ -307,6 +331,16 @@ impl Session for NoSession {
         _service: &RepositoryService,
         _request: SynchronizeRemoteRequest,
         _settings: SynchronizationSettings,
+        _observer: &mut dyn SynchronizationObserver,
+    ) -> Option<Result<SynchronizationResult, SynchronizationError>> {
+        None
+    }
+
+    fn republish(
+        &self,
+        _service: &RepositoryService,
+        _request: SynchronizeRemoteRequest,
+        _consent: &RepublishConsent,
         _observer: &mut dyn SynchronizationObserver,
     ) -> Option<Result<SynchronizationResult, SynchronizationError>> {
         None

@@ -57,9 +57,18 @@ mod replay;
 mod reply;
 mod settle;
 
+/// The synchronization a comment's operation publishes it by, for the
+/// conflict read (R-5).
+pub(super) use bind::comment::comment_synchronization;
+/// The attempt ID `conflict resolve` derives (R-14), for the
+/// source-included test target that plants a row under it.
+#[cfg(test)]
+pub(crate) use bind::conflict::attempt_for as conflict_resolve_attempt;
 use bind::{
     Binding, Confirmed,
     abandon::OperationAbandonBinding,
+    comment::CommentAddBinding,
+    conflict::ConflictResolveBinding,
     context::{ContextPrepareBinding, ContextReleaseBinding},
     document::DocumentBinding,
     folder::FolderCreateBinding,
@@ -72,12 +81,15 @@ use bind::{
     repo::RepoBinding,
     repo_identity::RepoIdentityBinding,
     repo_remove::RepoRemoveBinding,
+    republish::ItemRepublishBinding,
     resume::OperationResumeBinding,
     sync::SyncBinding,
     ticket::{SlugAssignBinding, TicketBinding},
 };
 pub use bind::{
     abandon::OperationAbandonInput,
+    comment::CommentAddInput,
+    conflict::{ConflictResolutionInput, ConflictResolveInput},
     context::{ContextPrepareInput, ContextPrepareIntent, ContextReleaseInput},
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
     folder::FolderCreateInput,
@@ -93,6 +105,7 @@ pub use bind::{
     repo::{RepoCreateInput, RepoEnableInput},
     repo_identity::RepoIdentitySetInput,
     repo_remove::RepoRemoveInput,
+    republish::ItemRepublishInput,
     resume::OperationResumeInput,
     sync::{ItemSyncInput, RepoSyncInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
@@ -100,15 +113,17 @@ pub use bind::{
 use command::Command;
 pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
-    CancelDto, ContextMutationDto, DocumentMutationDto, HostMutationDto, HostObservationDto,
-    HostPreviewDto, HostReplacementDto, IdentityMutationDto, IdentityPreviewDto,
+    CancelDto, CommentMutationDto, CommentMutationType, CommentPendingReason, ConflictNextAction,
+    ConflictNextDto, ConflictResolutionMutationDto, ConflictResolutionMutationType,
+    ContextMutationDto, DocumentMutationDto, HostMutationDto, HostObservationDto, HostPreviewDto,
+    HostReplacementDto, IdentityMutationDto, IdentityPreviewDto, ItemRepublishPreviewDto,
     KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState, KeyMutationDto, LocalIdentityDto,
     MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto, PrepareDataDto,
     PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
     PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto,
     RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
-    RequestOperationDto, RequestResultDto, RequestState, SynchronizationMutationDto,
-    TicketMutationDto,
+    RequestOperationDto, RequestResultDto, RequestState, SynchronizationConflictMutationDto,
+    SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -404,6 +419,9 @@ pub struct MutationCall {
 pub enum Mutation {
     LocalContextSync(LocalContextSyncInput),
     LocalContextResolve(LocalContextResolveInput),
+    CommentAdd(CommentAddInput),
+    ConflictResolve(ConflictResolveInput),
+    ItemRepublish(ItemRepublishInput),
     DocumentCreate(DocumentCreateInput),
     DocumentSave(DocumentSaveInput),
     DocumentMove(DocumentMoveInput),
@@ -448,6 +466,9 @@ impl Mutation {
         match self {
             Self::LocalContextSync(_) => Command::LocalContextSync,
             Self::LocalContextResolve(_) => Command::LocalContextResolve,
+            Self::CommentAdd(_) => Command::CommentAdd,
+            Self::ConflictResolve(_) => Command::ConflictResolve,
+            Self::ItemRepublish(_) => Command::ItemRepublish,
             Self::DocumentCreate(_) => Command::DocumentCreate,
             Self::DocumentSave(_) => Command::DocumentSave,
             Self::DocumentMove(_) => Command::DocumentMove,
@@ -488,7 +509,11 @@ impl Mutation {
     /// there is nothing to preview, and nothing is read of its input.
     fn confirmed(&self) -> Option<Box<dyn Confirmed>> {
         match self {
-            Self::LocalContextSync(_) | Self::LocalContextResolve(_) => None,
+            Self::LocalContextSync(_)
+            | Self::LocalContextResolve(_)
+            | Self::CommentAdd(_)
+            | Self::ConflictResolve(_) => None,
+            Self::ItemRepublish(input) => Some(Box::new(ItemRepublishBinding::from(input.clone()))),
             Self::RepoCreate(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RepoEnable(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RemoteRemove(input) => Some(Box::new(RemoteRemoveBinding::from(input.clone()))),
@@ -532,6 +557,9 @@ impl Mutation {
         match self {
             Self::LocalContextSync(input) => Box::new(LocalSyncBinding::Start(input)),
             Self::LocalContextResolve(input) => Box::new(LocalSyncBinding::Resolve(input)),
+            Self::CommentAdd(input) => Box::new(CommentAddBinding::from(input)),
+            Self::ConflictResolve(input) => Box::new(ConflictResolveBinding::from(input)),
+            Self::ItemRepublish(input) => Box::new(ItemRepublishBinding::from(input)),
             Self::DocumentCreate(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentSave(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentMove(input) => Box::new(DocumentBinding::from(input)),

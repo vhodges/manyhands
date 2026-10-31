@@ -84,6 +84,7 @@ const DESIGN: &[(&str, &[&str])] = &[
             "comment add",
             "item sync",
             "repo sync",
+            "item republish",
             "conflict show",
             "conflict resolve",
             "operation resume",

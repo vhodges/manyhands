@@ -23,6 +23,16 @@ pub fn item_id(args: &ArgMatches, repo: &ResolvedRepository) -> Result<ItemId, R
         .map_err(|_| ReadError::invalid_id().with_scope(repo.scope()))
 }
 
+/// The operation `--operation-id` names. A malformed ID is `invalid_id` in
+/// the repository's scope.
+pub fn operation_id(
+    args: &ArgMatches,
+    repo: &ResolvedRepository,
+) -> Result<OperationId, ReadError> {
+    OperationId::parse(value(args, "operation-id")?)
+        .map_err(|_| ReadError::invalid_id().with_scope(repo.scope()))
+}
+
 fn value<'a>(args: &'a ArgMatches, name: &str) -> Result<&'a str, ReadError> {
     args.get_one::<String>(name)
         .map(String::as_str)
@@ -78,7 +88,7 @@ pub fn resolve(
     service.resolve_repository(&repository_path(args)?)
 }
 
-fn read_output<T: serde::Serialize>(
+pub(crate) fn read_output<T: serde::Serialize>(
     name: &str,
     json: bool,
     result: Result<Envelope<T>, ReadError>,
@@ -267,8 +277,7 @@ fn operation_show(
     args: &ArgMatches,
 ) -> Result<Envelope<OperationDto>, ReadError> {
     let repo = resolve(service, args)?;
-    let id = OperationId::parse(value(args, "operation-id")?)
-        .map_err(|_| ReadError::invalid_id().with_scope(repo.scope()))?;
+    let id = operation_id(args, &repo)?;
     Ok(Envelope::read_success(
         "operation show",
         repo.scope(),
@@ -565,6 +574,20 @@ pub fn dispatch(
         "ticket save" => return crate::authoring::ticket_save(service, session, command, args),
         "ticket slug-assign" => {
             return crate::authoring::ticket_slug_assign(service, session, command, args);
+        }
+        "comment add" => return crate::discussion::comment_add(service, session, command, args),
+        "item sync" => return crate::collaboration::item_sync(service, session, command, args),
+        "item republish" => {
+            return crate::collaboration::item_republish(service, session, command, args);
+        }
+        "repo sync" => return crate::collaboration::repo_sync(service, session, command, args),
+        "conflict show" => return crate::conflict::show(service, session, command, args),
+        "conflict resolve" => return crate::conflict::resolve(service, session, command, args),
+        "operation resume" => {
+            return crate::collaboration::operation_resume(service, session, command, args);
+        }
+        "operation abandon" => {
+            return crate::collaboration::operation_abandon(service, session, command, args);
         }
         "repo enable" => return crate::admin::repo_enable(service, session, command, args),
         "repo remove" => return crate::admin::repo_remove(service, session, command, args),

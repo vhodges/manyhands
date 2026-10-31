@@ -341,6 +341,9 @@ pub fn repair_data(envelope: &Envelope<MutationDataDto>) -> &RepairMutationDto {
             | MutationDataDto::Key(_)
             | MutationDataDto::Operation(_)
             | MutationDataDto::Synchronization(_)
+            | MutationDataDto::SynchronizationConflict(_)
+            | MutationDataDto::Comment(_)
+            | MutationDataDto::ConflictResolution(_)
             | MutationDataDto::Identity(_)
             | MutationDataDto::Host(_)
             | MutationDataDto::Context(_),

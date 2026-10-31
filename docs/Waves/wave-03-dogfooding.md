@@ -138,6 +138,10 @@ work can proceed while native access is arranged:
    planned. Missing shared behavior must be assigned to a foundation Cycle, or
    handled through the shared-library change rule below, before a consumer is
    planned.
+   Amended 2026-10-30 by C4 (decision 16): for C4 the owner accepted a
+   departure from this item's timing. The design's Baseline Facts, read from
+   current source, served as C4's planning audit, and C4's Task 0 refreshed
+   the audit's C4 rows after the design was approved.
 4. The editor investigation evaluates a pinned `zorite-editor` first and a
    pinned Velotype extraction if needed. Record dependency compatibility with
    the one GPUI Kit graph, host-controlled persistence/resources, rich/source
@@ -200,8 +204,10 @@ distinguishes pre/post-fix evidence and Linux-only limitations. Production local
 start/read/resolve/resume and parent-specific wording are delivered on the ticket
 branch, with no owner final acceptance or merge claimed. **The merge prerequisite
 above remains in force.** This branch does not deliver CLI verbs, human-mode conflict artifacts or
-desktop conflict editing. C4/D5 must adapt the local boundary and still provide
-the separate remote-conflict wire boundary; C5/D5 still owe lifecycle
+desktop conflict editing. C5/D5 must adapt the local boundary (amended
+2026-10-30 by C4, decision 19, replacing "C4/D5 must adapt"), and C4/D5 still
+provide the separate remote-conflict wire boundary: C4 delivers it for the
+CLI, and D5 consumes it through D4. C5/D5 still owe lifecycle
 prepare/execute, expiry/schema/resume and made-ready reporting. See the
 [gate contract](../Cycles/wave-03-closure-recovery-gate.md) and
 [current API audit](../research/wave-03-api-audit.md#closure-recovery-library-amendment-2026-10-27).
@@ -326,6 +332,11 @@ codes, use the earlier numbers.
 2. **Track independence.** No Cycle depends on a Cycle of the other track. A
    plan that needs the other front end to exist is moved, split or changed
    before approval; it does not create a hidden cross-track dependency.
+   Amended 2026-10-30 by C4 (decision 5): one ordering is recorded here.
+   D4 waits until all of C4 is merged, because C4 carries the library
+   bindings that D4's Post and Sync consume (comment submission, merging
+   synchronization and the conflict data), under rule 5's exception below.
+   D4 needs no CLI verb; Part A of C4 is not merged early.
 3. **Early starts.** C1 and D2 consume only F1 and may start when F1 exits if
    capacity allows. This is an allowance, not a third track: at most one Cycle
    is in flight per track, plus at most one foundation Cycle.
@@ -341,6 +352,12 @@ codes, use the earlier numbers.
    next work boundary. Front-end Cycle branches otherwise leave
    `src/repository.rs` and `src/repository/` unchanged, which keeps the two
    tracks' branches from conflicting in the same files.
+   Amended 2026-10-30 by C4 (decision 1): the owner approved C4 as an
+   exception. C4's branch carries the library additions its verbs need,
+   limited to the files its design lists: the `comment add`,
+   `conflict resolve` and `item republish` bindings, the conflict read,
+   merging synchronization settings, resume's routes and the durable state
+   of an interrupted resolution. They merge with C4 as one Cycle.
 6. **Lifecycle bindings.** F2 defines confirmation and replay generically over
    effect previews and proves them with the operations available at its
    baseline. Promotion and closure do not exist until Wave 02 Cycles 09/10.
@@ -647,7 +664,119 @@ unless amended by the owner; that evidence is now met.
 
 ### C4: CLI Discussion, Synchronization And Conflict Recovery
 
-**Planned document:** `docs/Cycles/wave-03-cli-04-discussion-and-sync.md`
+**Cycle document:** [C4: CLI Discussion, Synchronization And Conflict Recovery](../Cycles/wave-03-cli-04-discussion-and-sync.md)
+
+**Amended 2026-10-30 by C4.** The Cycle, design and plan were approved on
+2026-10-28 at `8a94e9b`, with named edits E-1 to E-12, after the gate
+`01M57SKVF6TQ3QM6AXJ35JGGSY` merged at `a372edb`. The product-owner
+decisions, numbered in the Cycle document, change this section as follows:
+
+- **The library part is in C4** (decisions 1 and 2): an exception to track
+  rule 5, started after the gate merged. It adds the `comment add`,
+  `conflict resolve` and `item republish` bindings, the conflict read,
+  merging settings for both synchronization bindings, resume's routes and
+  the durable state of an interrupted resolution, with no new result code
+  or recovery action.
+- **Divergent synchronization merges** (decision 3). A canonical conflict
+  is resolved with `conflict show` and `conflict resolve`; any other gets
+  outside-repair guidance, then `operation resume`.
+- **Republish is its own confirmed verb, `item republish`** (decisions 4,
+  7, 11 and 17). It pushes exactly the commit its preview showed and
+  integrates nothing, and the next `item sync` integrates primary. A
+  lifecycle-closed ticket is `ticket_closed`.
+- **D4 waits for all of C4** (decision 5); see track rule 2.
+- **A pending remote conflict cannot be abandoned** (decision 6); that
+  stays on `01M4H33R34Z7C7EEKTY1ZCT950`.
+- **The next step is typed data** (decision 8): a conflict keeps
+  `recovery_required` and names `conflict: {operation_id, next_action}`.
+- **`comment add` takes an optional `created_by`** (decision 9), validated
+  as `Name <email>` and written once; without it, the Git identity.
+- **One desktop arm** shows the republish preview (decision 10), merged
+  beside D3's edit of the same match.
+- **A per-path kind and structure, with set-wide resolution** (decision
+  12): a mixed conflict is repaired outside as a whole.
+- **The same request finishes an interrupted resolution** with the same
+  commit (decision 13), and a lost one has a way out (decisions 18 and 20):
+  `operation resume` finishes a prepared commit, and a new request
+  supersedes an attempt whose written paths are unchanged.
+- **A Ctrl-C handler** stops the six stoppable verbs at their next safe
+  point, exit 130 (decision 14).
+- **The comment exception is extended** (decision 15):
+  `working-on-a-ticket` and `scripts/ticket-loop` keep canonical comment
+  files, with the noreply `created_by`, until that skill is revised.
+  Everything else switches to `comment add` in C4's final task.
+- **The audit timing** (decision 16): see entry-gate item 3.
+- **The gate's local verbs stay with C5** (decision 19). C4's
+  `conflict show` and `conflict resolve` take remote synchronizations only.
+- **C4 fixes main's red registry test** (decision 21) through named edit
+  E-12.
+
+**Delivery.** All eight verbs are implemented on the C4 ticket branch:
+`comment add`, `item sync`, `repo sync`, `item republish`, `conflict show`,
+`conflict resolve`, `operation resume` and `operation abandon`. Part A
+(the library) and Part B (the CLI) each passed a checkpoint gate and an
+independent review. Two-clone SSH journeys, interruption, lost output and
+the exit table follow. The branch merged main after D3, never rebasing.
+The [execution ledger](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-execution.md)
+records each task and ruling. Amended 2026-10-30 by C4: C4 is
+review-ready.
+- The full suite passed on the final code, and the whole-branch review is
+  done.
+- The dogfooding comment published through `comment add`, after a fix that
+  dogfooding found.
+- The instruction switch is deferred by the owner (see C4's exit evidence
+  below).
+
+Closure, PR, merge and native CI need their own authorization.
+
+**Known limits.** The [design](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-design.md#known-limits)
+lists each:
+
+- A pending remote conflict blocks other synchronizations and authoring in
+  its context until it is resolved or repaired, and cannot be abandoned. A
+  ticket two clones closed differently makes its conflict external-only,
+  with no promise that an outside repair choosing one closure is accepted.
+- An unfinished local-context sync anywhere in the repository makes C4's
+  verbs that reserve, begin a comment or re-acquire a conflict answer
+  `recovery_required`. `conflict show` does not inspect a local sync.
+- A cancelled operation is final, and a new request completes the work. A
+  second Ctrl-C leaves its request accepted with its reservation, so the
+  same request is sent again first. A Ctrl-C after the last safe point
+  leaves the run's own answer.
+- A refused or blocked synchronization holds its reservation until its
+  request is cancelled and sent once more (`01M4R19PC0T6ZPKM39X9DF26HX`).
+- A resolution whose written paths were edited by hand is continued by no
+  request until the edit is undone.
+- The republish push cannot be guarded as a create.
+- `created_by` is not authenticated, and a string token is valid only while
+  its conflict is unchanged.
+- Main's defects: a key selected after a publication remote is configured
+  blocks a never-published context's first publication
+  (`01M66HFV44YXNQ7ANJVA16TQ1H`), and `remote select` leaves the Git index
+  stale (`01M669FJR27FRHCNPWAMD6VH4V`).
+- The library defects `01M5E6DYJ6GN7DMW4424TH3V78` (a wrong passphrase),
+  `01M5MK57JKCSQFXBNZ8DBE548K` (an unusable identity refused late),
+  `01M4W5SCBV6WFJP11Y7PJF5VS8` (operation reads name no item for comment
+  rows) and `01M4PB7YZMBFAFFM94AZY08HWS` (an interrupted step-less save)
+  touch C4's verbs; C4 adds no workaround.
+- Amended 2026-10-30 by C4 (the final review's rulings). A comment's
+  publication stopped for an untrusted host offers `request.retry` only,
+  not `host.approve` or `host.replace`. Its way out is
+  `host observe --repo <root>`, which names the host and the key it
+  presents, then `host approve` or `host replace`, then the same
+  `comment add` request again.
+- Amended 2026-10-30 by C4 (the final review's rulings). Two requests
+  resolving one conflict at once can leave an attempt with no owner: a
+  later re-entry of the first after a stop is treated as a new request,
+  and `conflict show` names no request for it. No data is lost.
+- Amended 2026-10-30 by C4 (the final review's rulings). A file system
+  refusal after `conflict resolve` has written a path answers
+  `internal_error`, exit 4, with no `next:` line; `conflict show` names
+  `retry_resolution`, the way on.
+
+**Owed after merge.** The Windows Ctrl-C console handler is first compiled
+and checked natively, as a manual check. Native CI runs on main with its
+own approval.
 
 **Purpose:** Let CLI users collaborate deliberately and recover incomplete work.
 
@@ -666,9 +795,21 @@ resolutions, external noncanonical repair and no secret/raw-server output.
 Ctrl-C and lost stdout preserve recoverable effects and meaningful exit status.
 Switch ticket comment dogfooding to the CLI when supported.
 
+Amended 2026-10-30 by C4 (the owner's decision): C4's dogfooding comment
+published through `comment add`, but the instruction switch is deferred.
+With a passphrase-protected key, an agent's non-interactive publication
+stops at `unlock_required` and holds the remote reservation, so agents keep
+canonical comment files for now.
+
 ### C5: CLI Completion And One-Shot Polling
 
 **Planned document:** `docs/Cycles/wave-03-cli-05-completion-and-polling.md`
+
+**Amended 2026-10-30 by C4 (decision 19).** C5 exposes the gate's
+local-sync verbs, `context sync-local` and `context resolve-local`, with
+ticket closure, and any CLI inspection of a local-sync conflict they need.
+C4's `conflict show` and `conflict resolve` take remote synchronizations
+only, and answer a local sync's operation ID with `invalid_input`.
 
 **Purpose:** Complete the approved headless command contract.
 
@@ -807,6 +948,12 @@ synchronization and its exit evidence, thread ordering after posting and
 rebuild included. D4 may reuse D3's `context prepare` and `context release`
 for a comment's context, and the item-view handoff's composer design.
 
+**Amended 2026-10-30 by C4 (decision 5).** D4 waits until all of C4 is
+merged. Its Post and Sync consume C4's library bindings: `comment add`, with
+its stops at safe points and its retry that publishes without writing again,
+the merging `item sync` and `repo sync`, and the conflict data their results
+carry. See track rule 2.
+
 **Purpose:** Make discussion and explicit publication understandable and usable.
 
 **In scope:** Ordered threaded comments/replies with rich/source composers and
@@ -825,6 +972,11 @@ rebuild/thread ordering, unlock cancellation and continued UI responsiveness.
 ### D5: Desktop Conflict Recovery, Promotion And Closure
 
 **Planned document:** `docs/Cycles/wave-03-desktop-05-recovery-and-completion.md`
+
+**Amended 2026-10-30 by C4 (decisions 5 and 19).** D5 consumes C4's
+conflict read (`show_conflict`) and `conflict resolve` binding for remote
+synchronizations, through D4. With C5, it owns the gate's local-sync
+boundary.
 
 **Purpose:** Complete deliberate desktop collaboration lifecycles.
 
@@ -911,13 +1063,13 @@ a claim those public APIs exist.
 | Repository inventory, full canonical reads, malformed DTOs, public-key/host inspection, closure filter | F1 | Read-only library APIs; no front-end SQLite scraping or implicit fetch. |
 | Request digest, creation observations, consent, progress/cancel and replay | F2 | Wrap actual domain operations; preserve Git authority and existing leases. |
 | Ticket relationship fields, cycle rejection, short-code generation and graph reads | F1 (reads), F2 (writes) | Index edge records rebuilt from canonical files; ULID remains the only identity and mutation selector. |
-| Comment author (`created_by`) | F1 (reads), F2 (writes) | Written once at comment creation from the confirmed Git identity; never derived from Git history. |
+| Comment author (`created_by`) | F1 (reads), F2 (writes); C4 (the caller's value) | Written once at comment creation from the confirmed Git identity; never derived from Git history. Amended 2026-10-30 by C4 (decision 9): `comment add` may supply it instead, validated as `Name <email>`, and it is then written verbatim, once. |
 | Missing identity during create/enable and public identity configuration | F2 | Explicit confirmed local persistence, including a not-yet-created root. |
 | Configured-host approval | F2 | Scoped transport verification; no publication or remote-ref refresh. |
 | Folder creation and marker-only adoption/repair | F2 | Scoped filesystem boundary, stable IDs, expected observations, no hidden migration. |
 | Command grammar, envelopes, exit classes, terminal secret provider | C1, C2 | CLI-only; no domain logic and no secret through argv/environment/files/pipes. |
-| Discussion/sync/conflict and resume | C4, D4, D5 | Wave 02 operations and owned canonical paths only. |
-| Conflict inspection read | Local boundary: closure-recovery gate; remote boundary: first of C4 or D5, as a shared-library change | Local observation/inspection/immutable-side DTOs are implemented and code-reviewed on the review-ready gate branch, awaiting authorized lifecycle delivery and merge. Remote Cycle 06 wire reads remain downstream; front ends consume the shared boundaries and F1 redaction rules. |
+| Discussion/sync/conflict and resume | C4, D4, D5 | Wave 02 operations and owned canonical paths only. Amended 2026-10-30 by C4 (decision 1): C4 adds the bindings, `comment add`, `conflict resolve` and `item republish`, the merging settings of `item sync` and `repo sync`, and resume's routes; D4 and D5 consume them. |
+| Conflict inspection read | Local boundary: closure-recovery gate; remote boundary: C4 (amended 2026-10-30 by C4, decision 19) | Local observation/inspection/immutable-side DTOs are implemented and code-reviewed on the review-ready gate branch, awaiting authorized lifecycle delivery and merge. Remote: C4's `show_conflict` read and `conflict resolve` binding, through the CLI's `conflict show` and `conflict resolve`; D5 consumes them through D4. Front ends consume the shared boundaries and F1 redaction rules. |
 | One effective copy per item across worktrees | Defect ticket `01M4CKWWRA1DHFPMWKPNK7CQ1G`, before F1 | An item worktree contributes only its own item; every other item is read from primary. |
 | Promotion/close preflight and safe cleanup bindings | First of C5 or D5, as a shared-library change | Real effect preview and existing publication/cleanup ordering. |
 | Explicit one-shot polling | C5 | Existing Wave 02 one-shot operation; no resident worker. |

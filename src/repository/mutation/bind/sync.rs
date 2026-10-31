@@ -2,10 +2,34 @@
 //! branch with the publication remote. `repo sync` synchronizes the
 //! primary branch, `item sync` the editing branch of one item.
 //!
-//! Neither merges. Both call the sibling of `synchronize_remote` with
-//! its refuse-divergence setting, so a branch whose local and remote
-//! history have diverged is `merge_required` and nothing of a merge is
-//! begun.
+//! Both merge. They call the sibling of `synchronize_remote` with
+//! `MERGING`, so a branch whose local and remote history have diverged
+//! is merged as `synchronize_remote` merges it: one merge commit of the
+//! local and the incoming history, in that order, which is then
+//! published. Nothing is rebased. `merge_required` is a code no request
+//! of theirs is answered with.
+//!
+//! A merge that conflicts is left in the target worktree, with the
+//! branch where the merge began and the reservation released. The
+//! request is `recovery_required` with the integration pending, and its
+//! data is the conflict's next step: whether the conflict can be
+//! resolved in Manyhands or is repaired in Git outside it. The same
+//! request asks the domain again with `restart`, which answers a
+//! conflict still pending without transport. A new request, while a
+//! merge another synchronization left pending is in a worktree it
+//! inspects, is `busy`, as one that reaches the reservation is.
+//!
+//! A merge commit the request made stays whatever stops it, and the
+//! effects name it whether the request succeeds, stops or is cancelled:
+//! the integration complete and the commit. A request that stops after
+//! one is `partial`; a cancelled one keeps those effects and stays
+//! `cancelled`. A fast-forward or a plain push makes no merge commit and
+//! names none. A merge commit made before a conflict leaves the
+//! integration pending, and that request is `partial` too.
+//!
+//! A merge commits with the repository's own identity. With none it
+//! stops as `identity_required`, holding what it began, and the same
+//! request goes on once `repo identity-set` gives one.
 //!
 //! Neither is an authoring write, and both answer `SaysNothing`. What
 //! says a synchronization is done is its row in the remote journal and
@@ -25,28 +49,40 @@
 //! running operation: at each safe point it reports a stage, and asks
 //! the synchronization to stop when the call's token is cancelled or the
 //! request's record has been asked to.
+//!
+//! The binding of `item republish` makes its domain call through this one
+//! too (`republished`): the push-only path, in place of the
+//! synchronization, with the same observer and the same reading of what
+//! the domain returned (R-18).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use rusqlite::OptionalExtension;
 
 use crate::{
     canonical::ItemId,
-    results::{DiscoveryEffect, Effects, PublicationEffect, ResultCode, Scope},
+    results::{DiscoveryEffect, Effects, IntegrationEffect, PublicationEffect, ResultCode, Scope},
 };
 
 use super::{
     super::{
         super::{
-            AuthoringKind, ConfigurationInspection, OperationFamily, ReadError,
+            AuthoringKind, ConfigurationInspection, OperationFamily, OperationId, ReadError,
             RemoteOperationSafePoint, RepositoryOperation, RepositoryService, SafePointRequest,
             SynchronizationError, SynchronizationObserver, SynchronizationOutcome,
             SynchronizationResult, SynchronizationSettings, SynchronizationTarget,
             SynchronizeRemoteRequest, authoring_kind_segment, read_configuration_for,
             recovery::{FinalKind, JournalRow},
+            remote::{conflict_read, sync::RepublishConsent},
             transport::SshTransportErrorKind,
         },
         command::Command,
         context::context_names,
-        dto::{MutationDataDto, SynchronizationMutationDto},
+        dto::{
+            ConflictNextAction, ConflictNextDto, MutationDataDto,
+            SynchronizationConflictMutationDto, SynchronizationConflictType,
+            SynchronizationMutationDto,
+        },
         evidence::Position,
         identity::{IntentDigestBuilder, RequestId},
         outcome,
@@ -73,6 +109,10 @@ pub struct RepoSyncInput {
 pub(crate) struct SyncBinding {
     root: PathBuf,
     target: SynchronizationTarget,
+    /// The consent of an `item republish` this binding makes the domain
+    /// call of (R-18): the push-only path is called with it in place of
+    /// the synchronization. `None` for every synchronization.
+    republish: Option<RepublishConsent>,
 }
 
 impl From<ItemSyncInput> for SyncBinding {
@@ -83,6 +123,7 @@ impl From<ItemSyncInput> for SyncBinding {
         Self {
             root,
             target: SynchronizationTarget::Context { kind, item_id: id },
+            republish: None,
         }
     }
 }
@@ -93,13 +134,15 @@ impl From<RepoSyncInput> for SyncBinding {
         Self {
             root,
             target: SynchronizationTarget::Primary,
+            republish: None,
         }
     }
 }
 
-/// The bindings never merge.
-const SETTINGS: SynchronizationSettings = SynchronizationSettings {
-    refuse_divergence: true,
+/// How the bindings synchronize: divergent history is merged, and a
+/// synchronization that holds a merge of its own is continued.
+pub(super) const MERGING: SynchronizationSettings = SynchronizationSettings {
+    refuse_divergence: false,
 };
 
 /// The stage a synchronization is at when it reaches `point`: what it is
@@ -297,7 +340,12 @@ pub(crate) fn fenced_answer(
 /// is asked of the request that began the operation, and a resume that
 /// takes the operation up answers to it exactly as that request's own
 /// next call would.
-struct Watch<'a> {
+///
+/// A resolution's continuation owns the operation as its own request,
+/// and also answers to the request that holds it, the `holder`: its
+/// flag is read as the owner's is, and is left for that request's own
+/// next call to settle.
+pub(super) struct Watch<'a> {
     call: &'a CallContext<'a>,
     accepted: &'a Accepted,
     subject: Subject,
@@ -305,6 +353,10 @@ struct Watch<'a> {
     /// `request cancel` sets. `None` when no unfinished record holds
     /// it: there is then no flag, and only the call's token stops it.
     owner: Option<RequestId>,
+    /// Another request whose `request cancel` stops the call: the one
+    /// that holds the operation while a resolution's continuation owns
+    /// the call (R-15). Its flag is read and never cleared here.
+    holder: Option<RequestId>,
     /// The operation began this call with a push intended and nothing
     /// known of it.
     unsettled: bool,
@@ -317,6 +369,38 @@ struct Watch<'a> {
     /// What the domain said of the commit, from what the push endpoint
     /// advertised.
     verified: Option<Publication>,
+}
+
+impl<'a> Watch<'a> {
+    /// The observer of one domain call under `accepted`'s operation, for
+    /// the call `call`: its events are of `subject`, and a cancellation is
+    /// read from the call's token, from the flag of `owner`, the request
+    /// whose record holds the operation (fact 54), and from the flag of
+    /// `holder`, which is left set.
+    ///
+    /// `accepted` carries the operation the call synchronizes, which for
+    /// a comment is the binding's child `synchronization_id`, as a resume
+    /// builds one for the operation it takes up. Whether the operation
+    /// began this call with a push unsettled is read here, once.
+    pub(super) fn new(
+        accepted: &'a Accepted,
+        call: &'a CallContext<'a>,
+        subject: Subject,
+        owner: Option<RequestId>,
+        holder: Option<RequestId>,
+    ) -> Self {
+        Self {
+            call,
+            accepted,
+            subject,
+            owner,
+            holder,
+            unsettled: push_is_unsettled(call.service, accepted),
+            asked_at: None,
+            pushed: false,
+            verified: None,
+        }
+    }
 }
 
 impl Watch<'_> {
@@ -342,19 +426,21 @@ impl Watch<'_> {
     }
 
     /// Whether a cancellation is asked for and has not been passed on:
-    /// the call's token, or the request's flag, which is left as it is.
+    /// the call's token, or a request's flag, which is left as it is.
     /// A flag that cannot be read is not taken to be set.
     fn cancellation_is_pending(&self) -> bool {
-        self.call.session.cancelled() || self.asked_of_the_owner().unwrap_or(false)
+        self.call.session.cancelled() || self.asked_of_its_requests().unwrap_or(false)
     }
 
-    /// Whether the request that owns the operation has been asked to
-    /// stop. The flag is read and left set.
-    fn asked_of_the_owner(&self) -> Result<bool, ReadError> {
-        match self.owner {
-            Some(owner) => self.call.service.cancellation_requested(owner),
-            None => Ok(false),
+    /// Whether the request that owns the operation, or the one that
+    /// holds it, has been asked to stop. The flags are read and left set.
+    fn asked_of_its_requests(&self) -> Result<bool, ReadError> {
+        for request in [self.owner, self.holder].into_iter().flatten() {
+            if self.call.service.cancellation_requested(request)? {
+                return Ok(true);
+            }
         }
+        Ok(false)
     }
 }
 
@@ -405,7 +491,7 @@ impl SynchronizationObserver for Watch<'_> {
         let asked = if session.cancelled() {
             Ok(true)
         } else {
-            self.asked_of_the_owner()
+            self.asked_of_its_requests()
         };
         match asked {
             Ok(true) => {
@@ -491,15 +577,16 @@ struct Configured {
 }
 
 /// Takes up the synchronization of `target` that `accepted` names, for
-/// a request that did not begin it: `operation resume`. `accepted` is
-/// that request with the operation's ID and journal in place of its
-/// own, and `subject` the request as its events name it.
+/// `operation resume`, which did not begin it. `accepted` is that request
+/// with the operation's ID and journal in place of its own, and `subject`
+/// the request as its events name it.
 ///
 /// It is the call a re-entry of the synchronization's own request
 /// makes, with the same settings: the operation is taken up with
 /// `restart`, which asks the remote what it holds before it pushes
-/// anything, and nothing is merged. What the result says of a push is
-/// that operation's own evidence, as it is for its own request.
+/// anything, and merges as that request would. What the result says of
+/// a push is that operation's own evidence, as it is for its own
+/// request.
 ///
 /// `owner` is the request whose unfinished record holds the operation,
 /// when one does. A cancellation asked of it stops this call as it
@@ -515,8 +602,109 @@ pub(crate) fn resumed(
     SyncBinding {
         root: accepted.root(),
         target,
+        republish: None,
     }
-    .call(call, accepted, subject, owner, true)
+    .call(call, accepted, subject, owner, None, true)
+}
+
+/// Takes up the synchronization of `target` that `accepted` names, as
+/// `resumed` does, for the continuation of `conflict resolve` (R-15):
+/// `owner` is that request, which owns the call and whose flag is cleared
+/// once the operation is cancelled, and `holder` the request whose record
+/// holds the operation. `request cancel` of `holder` stops the call as it
+/// would stop that request's own; its flag is left for that request's
+/// own next call, which settles its record.
+pub(super) fn continued(
+    call: &CallContext<'_>,
+    accepted: &Accepted,
+    target: SynchronizationTarget,
+    subject: Subject,
+    owner: Option<RequestId>,
+    holder: Option<RequestId>,
+) -> Ran {
+    SyncBinding {
+        root: accepted.root(),
+        target,
+        republish: None,
+    }
+    .call(call, accepted, subject, owner, holder, true)
+}
+
+/// What the domain returned of one call of a synchronization: `None`
+/// when no call was made.
+pub(super) type Synchronized = Option<Result<SynchronizationResult, SynchronizationError>>;
+
+/// The synchronization a comment's submission publishes the comment by,
+/// for `comment add` (R-3): the child operation `accepted` names, called
+/// as `request` asks, with the merging settings and a `Watch` of the
+/// call, as a synchronization's own request calls it. `subject` is the
+/// `comment add` request as its events name it, and `owner` the request
+/// whose flag a cancellation is read from: that same request (fact 79).
+/// A resolution's continuation is `owner`, and the `comment add` request
+/// is then `holder`, whose flag is read and left set.
+///
+/// It gives back what the domain returned, which the submission reads,
+/// and what a synchronization's binding makes of it: the code, the
+/// effects of the publication and the integration, the conflict's next
+/// step, and the standing of the child's row.
+pub(super) fn of_a_comment(
+    call: &CallContext<'_>,
+    accepted: &Accepted,
+    request: SynchronizeRemoteRequest,
+    subject: Subject,
+    owner: Option<RequestId>,
+    holder: Option<RequestId>,
+) -> (Synchronized, Ran) {
+    let SynchronizeRemoteRequest {
+        root: _,
+        operation_id: _,
+        target,
+        // A host is approved by its own command, and a merge commits
+        // with the repository's own identity: the child is asked as a
+        // synchronization's own request asks, with neither.
+        approval: _,
+        confirmed_identity: _,
+        restart,
+    } = request;
+    SyncBinding {
+        root: accepted.root(),
+        target,
+        republish: None,
+    }
+    .observed(call, accepted, subject, owner, holder, restart)
+}
+
+/// The push-only path of `item republish` (R-18), for its binding: the
+/// operation `accepted` names is called as `consent` allows, with a `Watch`
+/// of the call, as a synchronization's own request calls the
+/// synchronization. `subject` is that request as its events name it, and
+/// its flag is the one a cancellation is read from. `restart` is set by a
+/// call that enters the request again.
+///
+/// It gives back what the domain returned and what a synchronization's
+/// binding makes of it: the code, the effects of the publication, a
+/// host's data, and the standing of the operation's row.
+pub(super) fn republished(
+    call: &CallContext<'_>,
+    accepted: &Accepted,
+    target: SynchronizationTarget,
+    consent: RepublishConsent,
+    subject: Subject,
+    restart: bool,
+) -> (Synchronized, Ran) {
+    SyncBinding {
+        root: accepted.root(),
+        target,
+        republish: Some(consent),
+    }
+    .observed(
+        call,
+        accepted,
+        subject,
+        Some(accepted.request_id),
+        None,
+        restart,
+    )
 }
 
 /// The position on its branch of a synchronization of `target` in the
@@ -531,6 +719,7 @@ pub(crate) fn resumed_position(
     let binding = SyncBinding {
         root: root.to_owned(),
         target,
+        republish: None,
     };
     let configured = binding.configured(service)?;
     binding.position(&configured)
@@ -580,6 +769,78 @@ impl SyncBinding {
         }
     }
 
+    /// Whether a merge that another synchronization of the repository
+    /// left pending, unresolved, is in a worktree a synchronization of
+    /// this target inspects before it reserves: primary's, which every
+    /// synchronization inspects, or the target's own. Read only. `false`
+    /// when the registry cannot be read: the domain's answer then stands.
+    fn beside_a_pending_merge(&self, service: &RepositoryService, accepted: &Accepted) -> bool {
+        service
+            .read_session(RepositoryOperation::Read, |connection| {
+                let mut statement = connection.prepare(
+                    "SELECT operation.action, operation.kind, operation.item_id
+                       FROM remote_integration_steps step
+                       JOIN remote_operation_records operation
+                         ON operation.id = step.operation_record_id
+                       JOIN repositories repository ON repository.id = operation.repository_id
+                      WHERE repository.root_path = ?1 AND operation.operation_ulid != ?2
+                        AND step.phase IN ('conflict_pending', 'resolution_prepared',
+                                           'commit_prepared')",
+                )?;
+                let pending = statement
+                    .query_map(
+                        rusqlite::params![
+                            accepted.scope.as_str(),
+                            accepted.operation_id.to_string()
+                        ],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, Option<String>>(1)?,
+                                row.get::<_, Option<String>>(2)?,
+                            ))
+                        },
+                    )?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(pending.iter().any(|(action, kind, item)| {
+                    action == "synchronize_primary"
+                        || match &self.target {
+                            SynchronizationTarget::Primary => false,
+                            SynchronizationTarget::Context {
+                                kind: own_kind,
+                                item_id,
+                            } => {
+                                action == "synchronize_context"
+                                    && kind.as_deref() == Some(authoring_kind_segment(own_kind))
+                                    && item.as_deref() == Some(item_id.to_string().as_str())
+                            }
+                        }
+                }))
+            })
+            .unwrap_or(false)
+    }
+
+    /// One domain call under `accepted`'s operation, observed by `watch`:
+    /// the synchronization, or the push-only path of a republish with its
+    /// consent. `None` when no call was made.
+    fn domain_call(
+        &self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        restart: bool,
+        watch: &mut Watch<'_>,
+    ) -> Synchronized {
+        let request = self.request(accepted, restart);
+        match &self.republish {
+            None => call
+                .session
+                .synchronize(call.service, request, MERGING, watch),
+            Some(consent) => call
+                .session
+                .republish(call.service, request, consent, watch),
+        }
+    }
+
     fn request(&self, accepted: &Accepted, restart: bool) -> SynchronizeRemoteRequest {
         SynchronizeRemoteRequest {
             root: accepted.root(),
@@ -587,7 +848,8 @@ impl SyncBinding {
             target: self.target.clone(),
             // A host is approved by its own command, never in passing.
             approval: None,
-            // Only a merge commits, and nothing here merges.
+            // A merge commits with the repository's own identity, which
+            // `repo identity-set` sets; none is confirmed in passing.
             confirmed_identity: None,
             restart,
         }
@@ -616,48 +878,56 @@ impl SyncBinding {
     /// `subject` is the request the call's events are of: the
     /// synchronization's own, or the resume that takes it up. `owner`
     /// is the request whose record holds the operation, whose flag a
-    /// cancellation is read from.
+    /// cancellation is read from; `holder` another request whose flag is
+    /// read as well, and never cleared (see `Watch`).
     fn call(
         &self,
         call: &CallContext<'_>,
         accepted: &Accepted,
         subject: Subject,
         owner: Option<RequestId>,
+        holder: Option<RequestId>,
         restart: bool,
     ) -> Ran {
+        self.observed(call, accepted, subject, owner, holder, restart)
+            .1
+    }
+
+    /// `call`, giving back as well what the domain returned: the last
+    /// call's result, which is the one the answer is of.
+    fn observed(
+        &self,
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        subject: Subject,
+        owner: Option<RequestId>,
+        holder: Option<RequestId>,
+        restart: bool,
+    ) -> (Synchronized, Ran) {
         let service = call.service;
         let root = accepted.root();
-        let mut watch = Watch {
-            call,
-            accepted,
-            subject,
-            owner,
-            unsettled: push_is_unsettled(service, accepted),
-            asked_at: None,
-            pushed: false,
-            verified: None,
-        };
-        let Some(result) = call.session.synchronize(
-            service,
-            self.request(accepted, restart),
-            SETTINGS,
-            &mut watch,
-        ) else {
+        let mut watch = Watch::new(accepted, call, subject, owner, holder);
+        let Some(result) = self.domain_call(call, accepted, restart, &mut watch) else {
             // No domain call was made. The record is the journal row's
             // to settle: with none, nothing is in flight.
-            return Ran {
+            let ran = Ran {
                 answer: Answer::stopped(ResultCode::InternalError),
                 standing: Standing::Stopped {
                     journal: accepted.journal_row(service),
                 },
             };
+            return (None, ran);
         };
         let error = match result {
-            Ok(result) => return self.finished(&result),
+            Ok(result) => {
+                let ran = self.finished(service, accepted, &result);
+                return (Some(Ok(result)), ran);
+            }
             Err(error) => error,
         };
         if !(watch.unsettled && watch.cancellation_is_pending()) {
-            return self.stopped(service, accepted, &watch, &error);
+            let ran = self.stopped(service, accepted, &watch, &error);
+            return (Some(Err(error)), ran);
         }
         // Only an operation that holds the reservation is asked, and the
         // second call is made only once the row says it was: a call
@@ -672,22 +942,23 @@ impl SyncBinding {
                 .is_some_and(|active| {
                     active.operation_id() == accepted.operation_id && active.cancel_requested()
                 });
-        if asked
-            && let Some(Err(acknowledged)) = call.session.synchronize(
-                service,
-                self.request(accepted, true),
-                SETTINGS,
-                &mut watch,
-            )
+        if asked && let Some(Err(acknowledged)) = self.domain_call(call, accepted, true, &mut watch)
         {
-            return self.stopped(service, accepted, &watch, &acknowledged);
+            let ran = self.stopped(service, accepted, &watch, &acknowledged);
+            return (Some(Err(acknowledged)), ran);
         }
-        self.stopped(service, accepted, &watch, &error)
+        let ran = self.stopped(service, accepted, &watch, &error);
+        (Some(Err(error)), ran)
     }
 
     /// The domain returned a result: the synchronization has its
     /// outcome, and all that can remain is its index hand-off.
-    fn finished(&self, result: &SynchronizationResult) -> Ran {
+    fn finished(
+        &self,
+        service: &RepositoryService,
+        accepted: &Accepted,
+        result: &SynchronizationResult,
+    ) -> Ran {
         let (outcome, discovery, standing) = match result {
             SynchronizationResult::Complete(outcome) => {
                 (outcome, DiscoveryEffect::Current, Standing::Final)
@@ -730,6 +1001,10 @@ impl SyncBinding {
                 };
             }
         };
+        // A merge commit the request made is named, as on every stop: the
+        // integration is complete. A fast-forward or a plain push names
+        // none.
+        let effects = with_merge(effects, merge_made(service, accepted));
         Ran {
             answer: Answer {
                 effects,
@@ -785,6 +1060,9 @@ impl SyncBinding {
                 let _ = service.take_cancellation(owner);
             }
         }
+        // A merge commit the request made stays whatever stopped it.
+        let merge = merge_made(service, accepted);
+        let local_change = merge.is_some();
         // What the remote holds has to be read to be said. A journal
         // that cannot be read gives no answer to store: the record is
         // left as it is, and the next call of the request, which finds
@@ -792,7 +1070,8 @@ impl SyncBinding {
         let Some(publication) = watch.publication() else {
             return Ran {
                 answer: Answer {
-                    effects: effects_so_far(Publication::Unknown),
+                    effects: with_merge(effects_so_far(Publication::Unknown), merge),
+                    local_change,
                     ..Answer::stopped(outcome::synchronization_error_code(error))
                 },
                 standing: Standing::Stopped { journal: None },
@@ -813,18 +1092,36 @@ impl SyncBinding {
             && !stopped_before_the_push
             && publication == Publication::Unknown
         {
+            let answer = not_confirmed();
             return Ran {
-                answer: not_confirmed(),
+                answer: Answer {
+                    effects: with_merge(answer.effects.clone(), merge),
+                    local_change,
+                    ..answer
+                },
                 standing: Standing::Final,
             };
         }
+        // Refused before it reserved, for a worktree it inspects that
+        // holds a merge another synchronization left pending: that
+        // synchronization holds the repository as a reservation would,
+        // and the request is answered as one refused by it.
+        let beside_a_pending_merge = matches!(journal, Some(JournalRow::Absent))
+            && matches!(
+                error,
+                SynchronizationError::WorktreeConflicted { target: _ }
+                    | SynchronizationError::TargetNotMaterialized
+            )
+            && self.beside_a_pending_merge(service, accepted);
         let code = if cancelled {
             ResultCode::Cancelled
+        } else if beside_a_pending_merge {
+            ResultCode::Busy
         } else {
             outcome::synchronization_error_code(error)
         };
         // With no row the operation never reserved: nothing was begun.
-        let effects = match &journal {
+        let mut effects = match &journal {
             Some(JournalRow::Absent) => Effects::not_requested(),
             Some(
                 JournalRow::Pending(_)
@@ -836,15 +1133,110 @@ impl SyncBinding {
             )
             | None => effects_so_far(publication),
         };
+        let data = match error {
+            // A merge of the request's own stopped on a conflict, which
+            // is left in the target worktree: the integration is begun
+            // and not finished, and the data is the conflict's next step.
+            SynchronizationError::ConflictPending {
+                target: _,
+                operation_id,
+                stage: _,
+            } if !cancelled => {
+                effects.integration = IntegrationEffect::Pending;
+                Some(MutationDataDto::SynchronizationConflict(
+                    SynchronizationConflictMutationDto {
+                        r#type: SynchronizationConflictType::SynchronizationConflict,
+                        conflict: conflict_next(service, &accepted.root(), *operation_id),
+                    },
+                ))
+            }
+            _ => {
+                effects = with_merge(effects, merge);
+                host_data(error)
+            }
+        };
         Ran {
             answer: Answer {
                 effects,
-                data: host_data(error),
+                data,
+                local_change,
                 ..Answer::stopped(code)
             },
             standing: Standing::Stopped { journal },
         }
     }
+}
+
+/// The next step of the conflict the synchronization `operation_id` of
+/// the repository at `root` stopped on, read from one inspection of it
+/// (R-8): `resolve` when it has paths and every one is canonical content
+/// that can be resolved in Manyhands, as the domain's resolution
+/// requires, and `external_repair` otherwise.
+pub(crate) fn conflict_next(
+    service: &RepositoryService,
+    root: &Path,
+    operation_id: OperationId,
+) -> ConflictNextDto {
+    // A conflict that cannot be inspected cannot be given a resolution in
+    // Manyhands either: it is repaired outside.
+    let canonical = service
+        .inspect_synchronization_recovery(root, operation_id)
+        .is_ok_and(|inspection| conflict_read::resolvable(&inspection));
+    ConflictNextDto {
+        operation_id: operation_id.to_string(),
+        next_action: if canonical {
+            ConflictNextAction::Resolve
+        } else {
+            ConflictNextAction::ExternalRepair
+        },
+    }
+}
+
+/// The merge commit the request's operation made, while the branch it
+/// synchronizes still holds it: the last integration step of the
+/// operation's journal that applied a merge candidate of its own, as the
+/// domain recorded it. A fast-forward applies no candidate, and is no
+/// such commit. A merge commit stays whatever stops the request.
+///
+/// `None` when the journal or Git cannot be read: nothing is claimed on
+/// that.
+fn merge_made(service: &RepositoryService, accepted: &Accepted) -> Option<git2::Oid> {
+    let merge = service
+        .read_session(RepositoryOperation::Read, |connection| {
+            Ok(connection
+                .query_row(
+                    "SELECT step.result_oid
+                       FROM remote_integration_steps step
+                       JOIN remote_operation_records operation
+                         ON operation.id = step.operation_record_id
+                       JOIN repositories repository ON repository.id = operation.repository_id
+                      WHERE repository.root_path = ?1 AND operation.operation_ulid = ?2
+                        AND step.phase = 'applied' AND step.candidate_oid IS NOT NULL
+                      ORDER BY step.window_number DESC, step.ordinal DESC
+                      LIMIT 1",
+                    rusqlite::params![accepted.scope.as_str(), accepted.operation_id.to_string()],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten())
+        })
+        .ok()??;
+    let merge = git2::Oid::from_str(&merge).ok()?;
+    let branch = accepted.position.base_ref.as_deref()?;
+    let repository = git2::Repository::open(accepted.root()).ok()?;
+    let tip = repository.refname_to_id(branch).ok()?;
+    (tip == merge || repository.graph_descendant_of(tip, merge).ok()?).then_some(merge)
+}
+
+/// `effects`, naming the merge commit the request made, when it made
+/// one: the integration is complete, and the commit is the one named
+/// unless a published commit already is.
+fn with_merge(mut effects: Effects, merge: Option<git2::Oid>) -> Effects {
+    if let Some(merge) = merge {
+        effects.integration = IntegrationEffect::Complete;
+        effects.commit_oid.get_or_insert_with(|| merge.to_string());
+    }
+    effects
 }
 
 /// What a call of the synchronization's own request leaves of its
@@ -858,7 +1250,7 @@ impl SyncBinding {
 /// record released, the request sent again would be a new one, find the
 /// remote current and be finished as a no-op, for a request that
 /// published. The same request is answered from the row.
-fn kept_for_its_result(ran: Ran) -> Ran {
+pub(super) fn kept_for_its_result(ran: Ran) -> Ran {
     let Ran {
         mut answer,
         standing,
@@ -904,17 +1296,21 @@ fn kept_for_its_result(ran: Ran) -> Ran {
 
 /// What the repository shows of an unfinished synchronization, for a
 /// call that is refused under its request ID: the push the remote is
-/// known to hold.
+/// known to hold, and the merge commit its operation made, which the
+/// branch still holds.
 ///
 /// This is the answer to another request, and stores nothing. With a
 /// journal that cannot be read it says the publication is pending,
 /// which is what "not confirmed" is written as: neither published nor
 /// not.
 pub(crate) fn recorded_effects(service: &RepositoryService, accepted: &Accepted) -> Effects {
-    effects_so_far(match recorded_publication(service, accepted) {
-        Some(publication) => publication,
-        None => Publication::Unknown,
-    })
+    with_merge(
+        effects_so_far(match recorded_publication(service, accepted) {
+            Some(publication) => publication,
+            None => Publication::Unknown,
+        }),
+        merge_made(service, accepted),
+    )
 }
 
 impl Binding for SyncBinding {
@@ -952,8 +1348,13 @@ impl Binding for SyncBinding {
 
     fn fields(&self, builder: IntentDigestBuilder) -> IntentDigestBuilder {
         // The command, the repository and the target are what the digest
-        // is begun with, and the binding holds nothing else.
-        let Self { root: _, target: _ } = self;
+        // is begun with, and the binding holds nothing else. A republish's
+        // consent is its own binding's, which never comes here.
+        let Self {
+            root: _,
+            target: _,
+            republish: _,
+        } = self;
         builder
     }
 
@@ -995,6 +1396,7 @@ impl Binding for SyncBinding {
             accepted,
             Subject::of(self, accepted),
             Some(accepted.request_id),
+            None,
             false,
         ))
     }
@@ -1032,6 +1434,7 @@ impl Binding for SyncBinding {
             accepted,
             Subject::of(self, accepted),
             Some(accepted.request_id),
+            None,
             true,
         ))
     }

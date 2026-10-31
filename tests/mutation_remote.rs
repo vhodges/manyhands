@@ -6,6 +6,12 @@
 #[path = "../src/lib.rs"]
 mod production;
 pub use production::*;
+#[path = "mutation_remote/comment.rs"]
+mod comment;
+#[path = "mutation_remote/comment_domain.rs"]
+mod comment_domain;
+#[path = "mutation_remote/conflict_read.rs"]
+mod conflict_read;
 #[path = "support/conformance.rs"]
 mod conformance;
 #[allow(dead_code)]
@@ -13,11 +19,19 @@ mod conformance;
 mod golden;
 #[path = "mutation_remote/host.rs"]
 mod host;
+#[path = "mutation_remote/merging.rs"]
+mod merging;
 #[allow(dead_code)]
 #[path = "support/mutation_golden.rs"]
 mod mutation_golden;
 #[path = "support/remote_world.rs"]
 mod remote_world;
+#[path = "mutation_remote/republish.rs"]
+mod republish;
+#[path = "mutation_remote/resolution.rs"]
+mod resolution;
+#[path = "mutation_remote/resume.rs"]
+mod resume;
 #[path = "support/schema.rs"]
 mod schema;
 #[path = "support/ssh_harness.rs"]
@@ -40,7 +54,18 @@ fn main() {
         eprintln!("SSH synchronization initialization failed");
         std::process::exit(1);
     }
-    let cases: Vec<_> = CASES.iter().chain(host::CASES).copied().collect();
+    let cases: Vec<_> = CASES
+        .iter()
+        .chain(host::CASES)
+        .chain(merging::CASES)
+        .chain(comment_domain::CASES)
+        .chain(comment::CASES)
+        .chain(conflict_read::CASES)
+        .chain(resolution::CASES)
+        .chain(resume::CASES)
+        .chain(republish::CASES)
+        .copied()
+        .collect();
     let controls: Vec<_> = OUTPUT_CONTROLS
         .iter()
         .chain(host::OUTPUT_CONTROLS)
@@ -91,8 +116,8 @@ const CASES: &[ssh_harness::Case] = &[
         a_repository_with_no_publication_remote_is_blocked,
     ),
     (
-        "a_divergent_remote_is_merge_required_and_holds_its_reservation",
-        a_divergent_remote_is_merge_required_and_holds_its_reservation,
+        "a_conflicting_divergent_remote_is_recovery_required_and_releases_its_reservation",
+        a_conflicting_divergent_remote_is_recovery_required_and_releases_its_reservation,
     ),
     (
         "a_remotely_deleted_item_branch_is_remote_branch_deleted_and_holds_its_reservation",
@@ -193,12 +218,12 @@ const CASES: &[ssh_harness::Case] = &[
         || a_cancellation_after_a_lost_push_reports_the_push(true),
     ),
     (
-        "a_lost_push_the_remote_has_since_built_on_is_merge_required_and_leaves_nothing_of_a_merge",
-        a_lost_push_the_remote_has_since_built_on_is_merge_required_and_leaves_nothing_of_a_merge,
+        "a_lost_push_the_remote_has_since_built_on_is_taken_up_by_the_same_request",
+        a_lost_push_the_remote_has_since_built_on_is_taken_up_by_the_same_request,
     ),
     (
-        "merge_required_is_not_finished_by_the_same_request_after_the_branch_is_rebased",
-        merge_required_is_not_finished_by_the_same_request_after_the_branch_is_rebased,
+        "a_divergent_remote_is_merged_by_the_same_request_with_no_rebase",
+        a_divergent_remote_is_merged_by_the_same_request_with_no_rebase,
     ),
     (
         "request_cancel_finishes_a_request_whose_operation_was_fenced",
@@ -257,12 +282,12 @@ const CASES: &[ssh_harness::Case] = &[
         a_resume_does_not_take_up_a_fenced_synchronization,
     ),
     (
-        "a_resume_never_merges_and_leaves_nothing_of_a_merge",
-        a_resume_never_merges_and_leaves_nothing_of_a_merge,
+        "a_resume_takes_up_a_lost_push_the_remote_has_since_built_on",
+        a_resume_takes_up_a_lost_push_the_remote_has_since_built_on,
     ),
     (
-        "a_resume_does_not_continue_a_merge_made_some_other_way",
-        a_resume_does_not_continue_a_merge_made_some_other_way,
+        "a_resume_of_a_synchronization_whose_conflict_is_pending_reports_it_with_no_transport",
+        a_resume_of_a_synchronization_whose_conflict_is_pending_reports_it_with_no_transport,
     ),
     (
         "a_resume_stopped_by_its_token_ends_the_synchronization_it_took_up",
@@ -320,10 +345,9 @@ const CASES: &[ssh_harness::Case] = &[
         "the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private",
         the_output_privacy_scan_passes_what_the_boundary_emits_and_fails_what_is_private,
     ),
-    (
-        "every_command_of_this_target_keeps_the_rules_of_the_boundary",
-        every_command_of_this_target_keeps_the_rules_of_the_boundary,
-    ),
+    ("c4_conformance_item_sync", c4_conformance_item_sync),
+    ("c4_conformance_repo_sync", c4_conformance_repo_sync),
+    ("c4_conformance_comment_add", c4_conformance_comment_add),
 ];
 
 /// Cases run only as children of the case above, which says of each
@@ -734,13 +758,21 @@ fn call_before_the_stores_hold_anything(
     let value = serde_json::to_value(&envelope).expect("an envelope serializes");
     schema::check_published("envelope.schema.json", &value).expect("the envelope schema");
     // A resume that took up a synchronization carries that
-    // synchronization's data.
+    // synchronization's data: a host's, or a conflict's, by its tag. One
+    // that took up a comment's publication carries the comment's, and one
+    // of a local-context sync the gate's (R-20).
     let synchronization = matches!(
         envelope.command.as_str(),
         "item sync" | "repo sync" | "operation resume"
     );
     if synchronization && !value["data"].is_null() {
-        schema::check_published("synchronization_mutation.schema.json", &value["data"])
+        let data_schema = match value["data"]["type"].as_str() {
+            Some("synchronization_conflict") => CONFLICT_SCHEMA,
+            Some("comment") => COMMENT_SCHEMA,
+            Some("local_context_sync") => LOCAL_CONTEXT_SYNC_SCHEMA,
+            _ => SYNCHRONIZATION_SCHEMA,
+        };
+        schema::check_published(data_schema, &value["data"])
             .expect("the synchronization data schema");
     }
     ssh_privacy::clean(format!("{envelope:?}").as_bytes(), &w.probes).expect("redacted envelope");
@@ -761,6 +793,9 @@ fn execute(w: &World, id: &str, mutation: Mutation) -> Envelope<MutationDataDto>
 }
 
 const SYNCHRONIZATION_SCHEMA: &str = "synchronization_mutation.schema.json";
+const CONFLICT_SCHEMA: &str = "synchronization_conflict_mutation.schema.json";
+const COMMENT_SCHEMA: &str = "comment_mutation.schema.json";
+const LOCAL_CONTEXT_SYNC_SCHEMA: &str = "local_context_sync_mutation.schema.json";
 const HOST_SCHEMA: &str = "host_mutation.schema.json";
 
 /// Checks an envelope against its golden fixture under
@@ -1133,6 +1168,111 @@ fn create_other(w: &World) -> Mutation {
     })
 }
 
+/// A commit of `bytes` at `path`, which may name a directory, on
+/// `parent`. No reference moves.
+fn commit_path(
+    repo: &git2::Repository,
+    parent: git2::Oid,
+    path: &str,
+    bytes: &[u8],
+) -> Result<git2::Oid, FixtureError> {
+    let parent = fixed(repo.find_commit(parent))?;
+    let mut index = fixed(git2::Index::new())?;
+    fixed(index.read_tree(&fixed(parent.tree())?))?;
+    fixed(index.add(&git2::IndexEntry {
+        ctime: git2::IndexTime::new(0, 0),
+        mtime: git2::IndexTime::new(0, 0),
+        dev: 0,
+        ino: 0,
+        mode: 0o100644,
+        uid: 0,
+        gid: 0,
+        file_size: 0,
+        id: fixed(repo.blob(bytes))?,
+        flags: 0,
+        flags_extended: 0,
+        path: path.as_bytes().to_vec(),
+    }))?;
+    let tree = fixed(repo.find_tree(fixed(index.write_tree_to(repo))?))?;
+    let signature = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
+    fixed(repo.commit(
+        None,
+        &signature,
+        &signature,
+        "owned fixture child",
+        &tree,
+        &[&parent],
+    ))
+}
+
+/// Commits `bytes` at `path` on `reference`, the branch checked out in
+/// `worktree`, which is left clean.
+fn commit_in(
+    worktree: &std::path::Path,
+    reference: &str,
+    path: &str,
+    bytes: &[u8],
+) -> Result<git2::Oid, FixtureError> {
+    let repo = fixed(git2::Repository::open(worktree))?;
+    let new = commit_path(&repo, fixed(repo.refname_to_id(reference))?, path, bytes)?;
+    fixed(repo.checkout_tree(
+        &fixed(repo.find_object(new, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repo.reference(reference, new, true, "owned fixture advance"))?;
+    Ok(new)
+}
+
+/// The requests of `leave_local_sync_conflict`: the ticket's creation,
+/// and its local synchronization.
+const LOCAL_SYNC_CREATE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FZ1";
+const LOCAL_SYNC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FZ2";
+
+/// Leaves a local-context synchronization stopped in a conflict, through
+/// the gate's own `context sync-local`, as `ConflictWorld::with_incoming`
+/// does (`tests/mutation_replay/local_sync.rs`): another ticket is
+/// created on its editing branch, primary is given other content at the
+/// same path, and the synchronization of primary into the ticket's branch
+/// stops on the two. It is unfinished, which refuses every remote
+/// reservation of the repository (fact 80, R-38). Returns its operation.
+fn leave_local_sync_conflict(w: &World) -> OperationId {
+    let created = execute(w, LOCAL_SYNC_CREATE, create_other(w));
+    assert_eq!(created.code, ResultCode::Ok);
+    let source = format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {OTHER_ITEM}\n\
+         title: Primary\ntype: task\nstatus: open\n---\nBody of Primary.\n"
+    );
+    commit_in(
+        &w.root,
+        "refs/heads/main",
+        &format!(".manyhands/tickets/{OTHER_ITEM}/ticket.md"),
+        source.as_bytes(),
+    )
+    .expect("a commit on primary");
+    let id: canonical::ItemId = OTHER_ITEM.parse().unwrap();
+    let observed = w
+        .service
+        .observe_local_context_sync(
+            &w.service.resolve_repository(&w.root).unwrap(),
+            AuthoringKind::Ticket,
+            &id,
+        )
+        .expect("the local synchronization's observation");
+    let stopped = execute(
+        w,
+        LOCAL_SYNC,
+        Mutation::LocalContextSync(LocalContextSyncInput {
+            root: w.root.clone(),
+            kind: AuthoringKind::Ticket,
+            id,
+            observation: observed.observation,
+        }),
+    );
+    assert_eq!(stopped.code, ResultCode::RecoveryRequired);
+    OperationId::parse(stopped.operation_id.as_deref().expect("its operation"))
+        .expect("an operation ID")
+}
+
 /// A synchronization that stops with an error after it reserved.
 struct Stopped {
     mutation: fn(&World) -> Mutation,
@@ -1321,56 +1461,93 @@ fn pin_a_held_reservation(
     Ok(first)
 }
 
-fn a_divergent_remote_is_merge_required_and_holds_its_reservation() -> Result<(), FixtureError> {
+/// The binding merges divergent history (R-16). One whose merge
+/// conflicts in canonical content is `recovery_required` with the
+/// conflict's next step, `resolve`: the merge is left in the worktree,
+/// the reservation is released, and the record stays for the same
+/// request.
+fn a_conflicting_divergent_remote_is_recovery_required_and_releases_its_reservation()
+-> Result<(), FixtureError> {
     let w = World::new()?;
     approve(&w)?;
     let repo = w.repo()?;
-    let local = advance(&repo, "refs/heads/main", "local-divergent")?;
-    let incoming = advance(&w.peer, "refs/heads/main", "remote-divergent")?;
+    // A ticket both clones hold on primary, which each titles another way.
+    let path = merging::ticket_path(merging::PRIMARY_TICKET);
+    let source = |title| merging::ticket_source(merging::PRIMARY_TICKET, title);
+    let base = commit_path(
+        &w.peer,
+        fixed(w.peer.refname_to_id("refs/heads/main"))?,
+        &path,
+        source("Base").as_bytes(),
+    )?;
+    fixed(w.peer.reference("refs/heads/main", base, true, "fixture"))?;
     push_peer(&w.peer, &w.server, "refs/heads/main")?;
-    let branches = local_branches(&repo)?;
+    assert_current(&execute(&w, REQUEST_4, repo_sync(&w)));
+    let local = commit_in(
+        &w.root,
+        "refs/heads/main",
+        &path,
+        source("Local").as_bytes(),
+    )?;
+    let incoming = commit_path(&w.peer, base, &path, source("Incoming").as_bytes())?;
+    fixed(
+        w.peer
+            .reference("refs/heads/main", incoming, true, "fixture"),
+    )?;
+    push_peer(&w.peer, &w.server, "refs/heads/main")?;
     let served = local_branches(&w.bare()?)?;
     let updates = w.server.receive_updates().len();
 
-    let first = pin_a_held_reservation(
-        &w,
-        &Stopped {
-            mutation: repo_sync,
-            code: ResultCode::MergeRequired,
-            locked: false,
-            retry: false,
-        },
-    )?;
-    assert_golden(&w, "repo_sync_merge_required", None, &first);
-    assert!(first.data.is_none());
-    // No merge commit, integration window or conflict exists, and
-    // neither side's branches moved.
-    assert_eq!(merge_rows(&w)?, 0);
-    assert_eq!(merge_commits(&repo)?, 0);
-    assert!(!repo.path().join("MERGE_HEAD").exists());
-    assert!(!fixed(repo.index())?.has_conflicts());
-    assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, local);
+    let first = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(first.code, ResultCode::RecoveryRequired);
+    assert_eq!(first.outcome, Outcome::Blocked);
     assert_eq!(
-        local_branches(&repo)?
-            .into_iter()
-            .filter(|(name, _)| branches.iter().any(|(known, _)| known == name))
-            .collect::<Vec<_>>(),
-        branches
+        first.effects,
+        Effects {
+            publication: PublicationEffect::Pending,
+            integration: results::IntegrationEffect::Pending,
+            ..Effects::not_requested()
+        }
     );
-    assert_eq!(local_branches(&w.bare()?)?, served);
-    assert_eq!(w.server.receive_updates().len(), updates);
-
-    // The existing function still merges the same fixture.
-    let result = fixed(w.sync(w.primary()))?;
-    let SynchronizationResult::Complete(SynchronizationOutcome::Published { oid, .. }) = result
-    else {
+    assert_eq!(
+        actions(&first),
+        [
+            RecoveryActionKind::RequestRetry,
+            RecoveryActionKind::RepoInspect
+        ]
+    );
+    assert_golden(
+        &w,
+        "repo_sync_recovery_required",
+        Some(CONFLICT_SCHEMA),
+        &first,
+    );
+    let Some(MutationDataDto::SynchronizationConflict(data)) = first.data.as_ref() else {
         return Err(FixtureError);
     };
-    let merge = fixed(repo.find_commit(oid))?;
-    assert_eq!(merge.parent_count(), 2);
-    assert_eq!(fixed(merge.parent_id(0))?, local);
-    assert_eq!(fixed(merge.parent_id(1))?, incoming);
-    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, oid);
+    assert_eq!(
+        data.conflict,
+        ConflictNextDto {
+            operation_id: first.operation_id.clone().ok_or(FixtureError)?,
+            next_action: ConflictNextAction::Resolve,
+        }
+    );
+    // The merge is left in the worktree, with the branch where it began
+    // and no merge commit.
+    assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, local);
+    assert!(repo.path().join("MERGE_HEAD").exists());
+    assert!(fixed(repo.index())?.has_conflicts());
+    assert_eq!(merge_commits(&repo)?, 0);
+    // The reservation is released, and the record stays for the same
+    // request.
+    assert!(!reserved(&w));
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Accepted
+    );
+    // Nothing was pushed.
+    assert_eq!(local_branches(&w.bare()?)?, served);
+    assert_eq!(w.server.receive_updates().len(), updates);
     Ok(())
 }
 
@@ -2688,13 +2865,15 @@ fn a_cancellation_after_a_lost_push_reports_the_push(by_token: bool) -> Result<(
     Ok(())
 }
 
-/// The review's I3. A push is taken and its result lost; a peer then
-/// builds on the pushed commit; the request is retried. Taking that up
-/// under the same operation would need the journal of merges, which a
-/// caller that never merges does not open: the retry is
-/// `merge_required`, nothing of a merge or of a publication attempt is
-/// left, and the result still says the remote holds the commit.
-fn a_lost_push_the_remote_has_since_built_on_is_merge_required_and_leaves_nothing_of_a_merge()
+/// The review's I3, under merging (R-16). A push is taken and its
+/// result lost; a peer then builds on the pushed commit; the request is
+/// retried. The retry takes the operation up: it asks the remote, which
+/// holds the commit the operation pushed and the peer's on top, and the
+/// local branch is behind it. As the divergent-synchronization table's
+/// "Local behind" row has it, the branch fast-forwards and nothing is
+/// pushed: `already_applied`, with the remote current. Nothing is
+/// merged.
+fn a_lost_push_the_remote_has_since_built_on_is_taken_up_by_the_same_request()
 -> Result<(), FixtureError> {
     let w = World::new()?;
     approve(&w)?;
@@ -2710,80 +2889,64 @@ fn a_lost_push_the_remote_has_since_built_on_is_merge_required_and_leaves_nothin
     let built = commit(&server, local, "peer-on-top", b"peer-on-top")?;
     fixed(server.reference("refs/heads/main", built, true, "fixture"))?;
 
-    for _ in 0..2 {
-        // The retry, and the retry of that: a re-entry both times.
-        let refused = execute(&w, REQUEST_1, repo_sync(&w));
-        assert_eq!(refused.code, ResultCode::MergeRequired);
-        // The fetch showed that the remote holds the commit.
-        assert_eq!(refused.outcome, Outcome::Partial);
-        assert_eq!(refused.effects, published_and_cancelled(local));
-        assert_eq!(actions(&refused), [RecoveryActionKind::RequestCancel]);
-        assert_eq!(refused.operation_id, lost.operation_id);
-        assert_eq!(merge_rows(&w)?, 0);
-        assert_eq!(merge_commits(&repo)?, 0);
-        assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, local);
-        assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, built);
-        assert!(reserved(&w));
-    }
-    // It is ended as every held reservation is, and still says what the
-    // remote holds.
-    assert!(
-        w.service
-            .cancel_request(request(REQUEST_1))
-            .data
-            .ok_or(FixtureError)?
-            .requested
-    );
-    let ended = execute(&w, REQUEST_1, repo_sync(&w));
-    assert_eq!(ended.code, ResultCode::Cancelled);
-    assert_eq!(ended.effects, published_and_cancelled(local));
-    assert_eq!(merge_rows(&w)?, 0);
+    let retried = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_current(&retried);
+    assert!(retried.recovery.is_empty());
+    assert_eq!(retried.operation_id, lost.operation_id);
+    assert_eq!(merge_commits(&repo)?, 0);
+    assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, built);
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, built);
     assert!(!reserved(&w));
     assert_eq!(accepted(&w.server), pushes + 1);
-    // A new request brings the local branch up to the remote's.
-    let fresh = execute(&w, REQUEST_2, repo_sync(&w));
-    assert_current(&fresh);
-    assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, built);
+    assert_eq!(
+        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
+        RequestState::Finished
+    );
+    // The same request is answered from its record, and a new one finds
+    // the remote current.
+    assert_eq!(execute(&w, REQUEST_1, repo_sync(&w)), retried);
+    assert_current(&execute(&w, REQUEST_2, repo_sync(&w)));
+    assert_eq!(accepted(&w.server), pushes + 1);
     Ok(())
 }
 
-/// The review's I5. `merge_required` is dealt with by rebasing the
-/// local branch onto the remote's, and the same request does not go on
-/// from there: its operation recorded the branch as it was. So the
-/// result does not offer the same request: it offers its cancellation.
-fn merge_required_is_not_finished_by_the_same_request_after_the_branch_is_rebased()
--> Result<(), FixtureError> {
+/// The review's I5, under merging (R-16). Divergent history no longer
+/// has to be rebased for a request to go on: the request merges it, the
+/// local history first, and publishes the merge, which keeps the
+/// remote's earlier tip as an ancestor. Nothing is offered.
+fn a_divergent_remote_is_merged_by_the_same_request_with_no_rebase() -> Result<(), FixtureError> {
     let w = World::new()?;
     approve(&w)?;
     let repo = w.repo()?;
-    advance(&repo, "refs/heads/main", "local-divergent")?;
+    let local = advance(&repo, "refs/heads/main", "local-divergent")?;
     let incoming = advance(&w.peer, "refs/heads/main", "remote-divergent")?;
     push_peer(&w.peer, &w.server, "refs/heads/main")?;
-    let refused = execute(&w, REQUEST_1, repo_sync(&w));
-    assert_eq!(refused.code, ResultCode::MergeRequired);
-    assert_eq!(actions(&refused), [RecoveryActionKind::RequestCancel]);
+    let pushes = accepted(&w.server);
 
-    // The user rebases: the local change, on top of the remote's.
-    let rebased = commit(&repo, incoming, "local-divergent", b"local-divergent")?;
-    fixed(repo.reference("refs/heads/main", rebased, true, "fixture"))?;
-    fixed(repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force())))?;
-
-    let again = execute(&w, REQUEST_1, repo_sync(&w));
-    assert_eq!(again.code, ResultCode::RecoveryRequired);
-    assert!(reserved(&w));
-    assert!(
-        w.service
-            .cancel_request(request(REQUEST_1))
-            .data
-            .ok_or(FixtureError)?
-            .requested
-    );
+    let merged = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_eq!(merged.code, ResultCode::Ok);
+    assert_eq!(merged.outcome, Outcome::Success);
+    assert!(merged.recovery.is_empty());
+    let merge = fixed(repo.refname_to_id("refs/heads/main"))?;
     assert_eq!(
-        execute(&w, REQUEST_1, repo_sync(&w)).code,
-        ResultCode::Cancelled
+        merged.effects,
+        Effects {
+            integration: results::IntegrationEffect::Complete,
+            ..published(merge)
+        }
     );
-    let fresh = execute(&w, REQUEST_2, repo_sync(&w));
-    assert_eq!(fresh.effects, published(rebased));
+    let commit = fixed(repo.find_commit(merge))?;
+    assert_eq!(commit.parent_ids().collect::<Vec<_>>(), [local, incoming]);
+    assert_eq!(commit.summary(), Some("Merge remote primary"));
+    assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, merge);
+    assert!(fixed(w.bare()?.graph_descendant_of(merge, incoming))?);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert!(!reserved(&w));
+    // The same request is answered from its record; a new one finds the
+    // remote current.
+    assert_eq!(execute(&w, REQUEST_1, repo_sync(&w)), merged);
+    assert_current(&execute(&w, REQUEST_2, repo_sync(&w)));
+    assert_eq!(accepted(&w.server), pushes + 1);
     Ok(())
 }
 
@@ -3611,7 +3774,13 @@ fn a_resume_does_not_take_up_a_fenced_synchronization() -> Result<(), FixtureErr
     Ok(())
 }
 
-fn a_resume_never_merges_and_leaves_nothing_of_a_merge() -> Result<(), FixtureError> {
+/// A resume takes a synchronization up with the bindings' merging
+/// settings, as its own request's next call would (R-16). A push the
+/// remote took and has since built on is reconciled: the local branch is
+/// behind the remote and fast-forwards, nothing is merged and nothing
+/// more is pushed, and the remote is current. The synchronization's own
+/// request is then answered alike, from its record.
+fn a_resume_takes_up_a_lost_push_the_remote_has_since_built_on() -> Result<(), FixtureError> {
     let w = World::new()?;
     approve(&w)?;
     let repo = w.repo()?;
@@ -3622,36 +3791,34 @@ fn a_resume_never_merges_and_leaves_nothing_of_a_merge() -> Result<(), FixtureEr
     let server = w.bare()?;
     let built = commit(&server, local, "peer-on-top", b"peer-on-top")?;
     fixed(server.reference("refs/heads/main", built, true, "fixture"))?;
-    let branches = local_branches(&repo)?;
 
-    let refused = execute(&w, REQUEST_2, resume(&w, &operation));
-    assert_eq!(refused.code, ResultCode::MergeRequired);
-    // The remote was asked, and holds the commit the operation pushed.
-    assert_eq!(refused.outcome, Outcome::Partial);
-    assert_eq!(refused.effects, published_and_cancelled(local));
-    // Neither the resume nor the synchronization's own request gets
-    // past history that has to be merged: neither is offered.
-    assert!(refused.recovery.is_empty());
-    assert_no_record_of(&w, REQUEST_2, &refused);
-    assert_eq!(merge_rows(&w)?, 0);
+    let resumed = execute(&w, REQUEST_2, resume(&w, &operation));
+    // The remote was asked, and holds the commit the operation pushed and
+    // more.
+    assert_current(&resumed);
+    assert!(resumed.recovery.is_empty());
     assert_eq!(merge_commits(&repo)?, 0);
-    assert_eq!(local_branches(&repo)?, branches);
+    assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, built);
     assert_eq!(fixed(w.bare()?.refname_to_id("refs/heads/main"))?, built);
     assert_eq!(accepted(&w.server), pushes + 1);
-    // The reservation is the operation's, and its request still holds
-    // it.
-    assert!(reserved(&w));
-    assert_eq!(
-        record(&w, REQUEST_1).ok_or(FixtureError)?.state,
-        RequestState::Accepted
-    );
+    assert!(!reserved(&w));
+    // The synchronization's own request is answered alike, from its
+    // record, with no connection.
+    let opened = connections(&w);
+    let own = execute(&w, REQUEST_1, repo_sync(&w));
+    assert_current(&own);
+    assert_eq!(own.operation_id, lost.operation_id);
+    assert_eq!(connections(&w), opened);
+    assert_eq!(accepted(&w.server), pushes + 1);
     Ok(())
 }
 
-/// F2's bindings cannot leave a merge. A synchronization that was begun
-/// some other way and stopped on a conflict is not a resume's to
-/// continue.
-fn a_resume_does_not_continue_a_merge_made_some_other_way() -> Result<(), FixtureError> {
+/// A resume takes a synchronization up as its own request's next call
+/// would, with the bindings' merging settings. One whose conflict is
+/// still pending is answered with that conflict, read again with no
+/// transport (fact 26): nothing is merged, published or recorded.
+fn a_resume_of_a_synchronization_whose_conflict_is_pending_reports_it_with_no_transport()
+-> Result<(), FixtureError> {
     let w = World::new()?;
     let repo = w.repo()?;
     let local_base = fixed(repo.refname_to_id("refs/heads/main"))?;
@@ -3676,32 +3843,36 @@ fn a_resume_does_not_continue_a_merge_made_some_other_way() -> Result<(), Fixtur
     let rows = merge_rows(&w)?;
     assert!(rows > 0);
     let before = phase(&w, merging.operation_id)?;
-    // What a restart changes of a row before anything else: it takes
-    // the operation from its executor, which raises the owner epoch.
-    let touched = || -> Result<(i64, i64), FixtureError> {
-        fixed(w.db()?.query_row(
-            "SELECT owner_epoch, updated_at FROM remote_operation_records
-              WHERE operation_ulid = ?1",
-            [merging.operation_id.to_string()],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ))
-    };
-    let untouched = touched()?;
     let opened = connections(&w);
     let pushes = accepted(&w.server);
 
-    let refused = execute(&w, REQUEST_1, resume(&w, &merging.operation_id.to_string()));
-    assert_eq!(refused.outcome, Outcome::Blocked);
-    assert_eq!(refused.code, ResultCode::RecoveryRequired);
-    assert_eq!(refused.effects.commit_oid, None);
-    assert_eq!(actions(&refused), [RecoveryActionKind::RepoInspect]);
-    assert_no_record_of(&w, REQUEST_1, &refused);
+    let pending = execute(&w, REQUEST_1, resume(&w, &merging.operation_id.to_string()));
+    assert_eq!(pending.outcome, Outcome::Blocked);
+    assert_eq!(pending.code, ResultCode::RecoveryRequired);
+    assert_eq!(pending.effects.commit_oid, None);
+    assert_eq!(
+        pending.effects.integration,
+        results::IntegrationEffect::Pending
+    );
+    // The conflict, of the synchronization the resume took up: a file
+    // that is no canonical content is repaired outside.
+    let Some(MutationDataDto::SynchronizationConflict(data)) = pending.data.as_ref() else {
+        return Err(FixtureError);
+    };
+    assert_eq!(
+        data.conflict,
+        ConflictNextDto {
+            operation_id: merging.operation_id.to_string(),
+            next_action: ConflictNextAction::ExternalRepair,
+        }
+    );
+    assert_eq!(actions(&pending), [RecoveryActionKind::RepoInspect]);
+    assert_no_record_of(&w, REQUEST_1, &pending);
+    // Nothing of the merge changed: no transport, and nothing written.
     assert_eq!(merge_rows(&w)?, rows);
     assert_eq!(phase(&w, merging.operation_id)?, before);
-    // It was refused before it was restarted: the row was not taken
-    // from its executor, and nothing of it was written.
-    assert_eq!(touched()?, untouched);
     assert_eq!(fixed(repo.refname_to_id("refs/heads/main"))?, local);
+    assert!(repo.path().join("MERGE_HEAD").exists());
     assert_eq!(connections(&w), opened);
     assert_eq!(accepted(&w.server), pushes);
     Ok(())
@@ -4420,7 +4591,7 @@ fn a_call_of_the_owning_request_fenced_by_a_resume_that_was_cancelled_settles_no
     assert_final(&w, REQUEST_1, &own)
 }
 
-// The conformance table, for the two commands that need a server; see
+// The conformance table, for the commands that need a server; see
 // `conformance`.
 
 /// One call of `execute` that presents `confirmation`, scanned as
@@ -4490,7 +4661,14 @@ fn conforming(
     Ok(())
 }
 
-const CONFORMANCE: [conformance::Row; 2] = [
+/// Every row is driven by a case of its own (owner, 2026-10-28 and
+/// 2026-10-29, beside E-9): each rule of a row builds a world with a
+/// server, and a case has a time it must end within. That of `conflict
+/// resolve` is `resolution::c4_resolution_conformance`, whose rules that
+/// need a finished request each make a conflict to resolve, and that of
+/// `item republish` is `republish::c4_republish_conformance`, whose rules
+/// each make a deleted branch to republish.
+const CONFORMANCE: [conformance::Row; 5] = [
     conformance::Row::new("item sync", false, "item_not_found", |rule| {
         conforming(
             |w, ask| match ask {
@@ -4522,17 +4700,81 @@ const CONFORMANCE: [conformance::Row; 2] = [
             rule,
         )
     }),
+    conformance::Row::new("comment add", false, "invalid_input", |rule| {
+        conforming(
+            |w, ask| {
+                let (body, created_by) = match ask {
+                    conformance::Ask::Same | conformance::Ask::Unconsented => {
+                        ("A comment of the conformance table.\n", None)
+                    }
+                    // Another body: a changed input under a finished
+                    // request's ID.
+                    conformance::Ask::Changed => ("Another comment.\n", None),
+                    // An author that is not written as one, refused
+                    // before the request is accepted.
+                    conformance::Ask::Refused => {
+                        ("A comment of the conformance table.\n", Some("no brackets"))
+                    }
+                };
+                Mutation::CommentAdd(CommentAddInput {
+                    root: w.root.clone(),
+                    kind: AuthoringKind::Ticket,
+                    id: ITEM.parse().unwrap(),
+                    comment_id: "01ARZ3NDEKTSV4RRFFQ69G5FC9".parse().unwrap(),
+                    parent_id: None,
+                    body: body.to_owned(),
+                    created_by: created_by.map(str::to_owned),
+                })
+            },
+            rule,
+        )
+    }),
+    conformance::Row::new(
+        "conflict resolve",
+        false,
+        "invalid_input",
+        resolution::conforming,
+    ),
+    conformance::Row::new(
+        "item republish",
+        true,
+        "confirmation_not_found",
+        republish::conforming,
+    ),
 ];
 
-fn every_command_of_this_target_keeps_the_rules_of_the_boundary() -> Result<(), FixtureError> {
-    // The rows of the two commands that approve a host are driven by
-    // a case of their own, in `host`: each rule of each row builds a
-    // world with a server, and a case has a time it must end within.
+/// Drives the row of `command` alone. Every other row of this target,
+/// those of `CONFORMANCE` and the two of `host`, is named as driven
+/// elsewhere, by its own case, so each is still checked against the
+/// target's whole set of commands.
+fn conformance_row(command: &str) -> Result<(), FixtureError> {
+    let at = CONFORMANCE
+        .iter()
+        .position(|row| row.command == command)
+        .ok_or(FixtureError)?;
+    let elsewhere: Vec<&str> = CONFORMANCE
+        .iter()
+        .chain(&host::CONFORMANCE)
+        .map(|row| row.command)
+        .filter(|other| *other != command)
+        .collect();
     conformance::run_part(
         conformance::Home::Remote,
         &request_store::bound_commands(),
-        &CONFORMANCE,
-        &host::CONFORMANCE.map(|row| row.command),
+        &CONFORMANCE[at..=at],
+        &elsewhere,
     );
     Ok(())
+}
+
+fn c4_conformance_item_sync() -> Result<(), FixtureError> {
+    conformance_row("item sync")
+}
+
+fn c4_conformance_repo_sync() -> Result<(), FixtureError> {
+    conformance_row("repo sync")
+}
+
+fn c4_conformance_comment_add() -> Result<(), FixtureError> {
+    conformance_row("comment add")
 }

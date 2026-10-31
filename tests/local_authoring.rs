@@ -5640,8 +5640,14 @@ fn recovery_comment_checkpoint_failure_preserves_absent_parent_and_retries() {
     assert_eq!(after_retry.registry_rows, before_checkpoint.registry_rows);
 }
 
+/// Amended 2026-10-30 by C4 (dogfooding; the owner's decision). This test
+/// was `comment_rejects_any_existing_context_problem_without_mutation`,
+/// and pinned that any nonconforming file in the context refused a
+/// comment. A problem refuses a comment only when it concerns what the
+/// comment depends on: the comment itself, its item, or its parent chain.
+/// Another item's malformed comment file concerns none of them.
 #[test]
-fn comment_rejects_any_existing_context_problem_without_mutation() {
+fn comment_is_not_refused_by_another_item_s_nonconforming_comment() {
     let fixture = support::born_repository();
     commit_source(&fixture, "docs/fixture.md", &support::document_source());
     let enabled = support::enabled_repository(&fixture);
@@ -5662,10 +5668,8 @@ fn comment_rejects_any_existing_context_problem_without_mutation() {
         .join(".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAW/bad.md");
     fs::create_dir_all(malformed.parent().unwrap()).unwrap();
     fs::write(&malformed, "not canonical markdown\n").unwrap();
-    let path = comment_path(&context, &support::root_comment_id());
-    let before = rejection_state(&fixture, &enabled.service, &context, &[&path]);
 
-    let error = comment_error(
+    let (context, commit_oid, _) = saved_comment(
         enabled
             .service
             .submit_comment_with_test_session(comment_request(
@@ -5676,14 +5680,198 @@ fn comment_rejects_any_existing_context_problem_without_mutation() {
                 support::root_comment_id(),
                 None,
                 "Body\n",
-            )),
+            ))
+            .unwrap(),
     );
-    assert_eq!(error.kind, RepositoryErrorKind::MissingAuthoringTarget);
-    assert!(!path.parent().unwrap().exists());
+    assert!(comment_path(&context, &support::root_comment_id()).exists());
+    // The malformed file is left as it was, and outside the checkpoint.
     assert_eq!(
-        rejection_state(&fixture, &enabled.service, &context, &[&path]),
-        before
+        fs::read(&malformed).unwrap(),
+        b"not canonical markdown\n".to_vec()
     );
+    let repository = Repository::open(&context.worktree).unwrap();
+    assert_eq!(
+        support::commit_tree_path(
+            &repository,
+            commit_oid,
+            ".manyhands/comments/01ARZ3NDEKTSV4RRFFQ69G5FAW/bad.md"
+        ),
+        None
+    );
+}
+
+/// Dogfooding (2026-10-30): an ordinary Markdown file under `docs/`, with
+/// no Manyhands front matter, is no problem of a comment's. Main holds
+/// such files, and `comment add` refused every comment beside them.
+#[test]
+fn comment_is_written_beside_a_plain_document_without_front_matter() {
+    let fixture = support::born_repository();
+    commit_source(
+        &fixture,
+        &ticket_relative_path().display().to_string(),
+        &support::ticket_source(),
+    );
+    let plain = "# Notes\n\nAn ordinary project document.\n";
+    commit_source(&fixture, "docs/notes.md", plain);
+    let enabled = support::enabled_repository(&fixture);
+    clean_configuration_index(&fixture);
+
+    let (context, commit_oid, publication) = saved_comment(
+        enabled
+            .service
+            .submit_comment_with_test_session(comment_request(
+                &fixture.root,
+                AuthoringKind::Ticket,
+                support::ticket_id(),
+                ContextIntent::Edit,
+                support::root_comment_id(),
+                None,
+                "Beside the notes\n",
+            ))
+            .unwrap(),
+    );
+    let relative = comment_relative_path(&support::ticket_id(), &support::root_comment_id());
+    let source = fs::read_to_string(comment_path(&context, &support::root_comment_id())).unwrap();
+    assert!(matches!(
+        manyhands::canonical::parse_item(&relative, &source),
+        Ok(manyhands::canonical::CanonicalItem::Comment(comment))
+            if comment.id == support::root_comment_id()
+                && comment.item_id == support::ticket_id()
+                && comment.parent_id.is_none()
+                && comment.body == "Beside the notes\n"
+    ));
+    // Checkpointed, with the plain document untouched beside it.
+    let repository = Repository::open(&context.worktree).unwrap();
+    assert_eq!(
+        repository.find_commit(commit_oid).unwrap().message(),
+        Some("Checkpoint comment 01ARZ3NDEKTSV4RRFFQ69G5FAX")
+    );
+    assert_eq!(
+        support::commit_tree_path(&repository, commit_oid, &relative),
+        Some(source.into_bytes())
+    );
+    assert_eq!(
+        support::commit_tree_path(&repository, commit_oid, "docs/notes.md"),
+        Some(plain.as_bytes().to_vec())
+    );
+    // With no publication remote, the publication is pending: `ok`.
+    assert!(matches!(
+        publication,
+        CommentPublicationState::Pending {
+            reason: manyhands::repository::CommentPublicationPendingReason::NoPublicationRemote
+        }
+    ));
+
+    // A reply goes through the parent check beside the same file.
+    let (_, _, _) = saved_comment(
+        enabled
+            .service
+            .submit_comment_with_test_session(comment_request(
+                &fixture.root,
+                AuthoringKind::Ticket,
+                support::ticket_id(),
+                ContextIntent::Edit,
+                support::reply_id(),
+                Some(support::root_comment_id()),
+                "Reply\n",
+            ))
+            .unwrap(),
+    );
+}
+
+/// The other half of the dogfooding rule: with the same plain document
+/// beside it, a comment is still refused for a problem of its own item or
+/// its parent chain, with nothing changed.
+#[test]
+fn comment_beside_a_plain_document_is_still_refused_for_its_item_or_parent() {
+    let new_comment: manyhands::canonical::ItemId = "01ARZ3NDEKTSV4RRFFQ69G5FAZ".parse().unwrap();
+    for case in [
+        "missing-parent",
+        "nonconforming-parent",
+        "cycle",
+        "nonconforming-item",
+    ] {
+        let fixture = support::born_repository();
+        commit_source(
+            &fixture,
+            &ticket_relative_path().display().to_string(),
+            &support::ticket_source(),
+        );
+        commit_source(&fixture, "docs/notes.md", "# Notes\n");
+        let enabled = support::enabled_repository(&fixture);
+        clean_configuration_index(&fixture);
+        let context = context_from(
+            enabled
+                .service
+                .prepare_context(target(
+                    &fixture.root,
+                    AuthoringKind::Ticket,
+                    support::ticket_id(),
+                    ContextIntent::Edit,
+                ))
+                .unwrap(),
+        );
+        // A reply of the ticket's whose own parent, the root comment, is
+        // not there.
+        let orphan = || {
+            let path = comment_path(&context, &support::reply_id());
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(
+                &path,
+                support::reply_source().replace(
+                    &support::document_id().to_string(),
+                    &support::ticket_id().to_string(),
+                ),
+            )
+            .unwrap();
+        };
+        let (comment_id, parent) = match case {
+            "missing-parent" => (new_comment.clone(), Some(support::reply_id())),
+            "nonconforming-parent" => {
+                orphan();
+                (new_comment.clone(), Some(support::reply_id()))
+            }
+            // The orphan's missing parent is the new comment, which would
+            // close a cycle through itself. The earlier parent checks
+            // refuse it, because the orphan is already nonconforming
+            // before the new comment exists, so no cycle forms at the
+            // narrowed context check.
+            "cycle" => {
+                orphan();
+                (support::root_comment_id(), Some(support::reply_id()))
+            }
+            "nonconforming-item" => {
+                fs::write(ticket_path(&context), "# Not a ticket any more\n").unwrap();
+                (new_comment.clone(), None)
+            }
+            _ => unreachable!(),
+        };
+        let path = comment_path(&context, &comment_id);
+        let before = rejection_state(&fixture, &enabled.service, &context, &[&path]);
+        let error = comment_error(enabled.service.submit_comment_with_test_session(
+            comment_request(
+                &fixture.root,
+                AuthoringKind::Ticket,
+                support::ticket_id(),
+                ContextIntent::Edit,
+                comment_id,
+                parent,
+                "Body\n",
+            ),
+        ));
+        // The context's preparation refuses a worktree whose item is not
+        // conforming before the comment's own checks run.
+        let expected = match case {
+            "nonconforming-item" => RepositoryErrorKind::MismatchedAuthoringContext,
+            _ => RepositoryErrorKind::MissingAuthoringTarget,
+        };
+        assert_eq!(error.kind, expected, "{case}");
+        assert_eq!(
+            rejection_state(&fixture, &enabled.service, &context, &[&path]),
+            before,
+            "{case} must not mutate state"
+        );
+    }
 }
 
 #[test]

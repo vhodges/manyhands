@@ -67,6 +67,9 @@ commands! {
     TicketRepair => "ticket repair",
     LocalContextSync => "context sync-local",
     LocalContextResolve => "context resolve-local",
+    CommentAdd => "comment add",
+    ConflictResolve => "conflict resolve",
+    ItemRepublish => "item republish",
     ContextPrepare => "context prepare",
     ContextRelease => "context release",
 }
@@ -90,6 +93,11 @@ impl Command {
         match self {
             Self::LocalContextSync => true,
             Self::LocalContextResolve => false,
+            // The comment's own operation, in the local journal: its
+            // write and its checkpoint. The synchronization that
+            // publishes it is a child the comment's binding names, made
+            // under an ID of its own that no record holds (fact 79).
+            Self::CommentAdd => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -126,9 +134,11 @@ impl Command {
             // One operation, in the remote journal. Its index hand-off
             // is a row of the local journal under the same ID, which
             // the remote row answers for: it owes work until the
-            // hand-off is done.
+            // hand-off is done. A republish's is recorded as a
+            // synchronization of the context (fact 78).
             | Self::ItemSync
-            | Self::RepoSync => true,
+            | Self::RepoSync
+            | Self::ItemRepublish => true,
             // Never made twice, and so recorded against nothing: a key's
             // ID is not registered again.
             Self::KeyRemove => false,
@@ -140,6 +150,11 @@ impl Command {
             // its own ID, in its own journal, and the resume's record
             // holds none.
             Self::OperationResume => false,
+            // So is the synchronization a resolution names. Its durable
+            // state is the resolution attempt, which the remote journal
+            // records against the synchronization, and which a table of
+            // its own associates with the request (R-35).
+            Self::ConflictResolve => false,
             // A few keys of Git configuration, set by one replacement
             // of the file under the repository lease, or not at all: no
             // operation ID and no row. What shows the work to be done
@@ -162,7 +177,11 @@ impl Command {
     /// operation, and for one that has none.
     pub(crate) const fn was_accepted_without_operation(self) -> bool {
         match self {
-            Self::LocalContextSync | Self::LocalContextResolve => false,
+            Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::CommentAdd
+            | Self::ConflictResolve
+            | Self::ItemRepublish => false,
             Self::KeyImport | Self::KeySelect | Self::KeyClear => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -202,7 +221,11 @@ impl Command {
     /// records and runs it.
     pub(crate) const fn restores_index(self) -> bool {
         match self {
-            Self::LocalContextSync | Self::LocalContextResolve => false,
+            Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::CommentAdd
+            | Self::ConflictResolve
+            | Self::ItemRepublish => false,
             Self::IndexRebuild => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -243,7 +266,11 @@ impl Command {
     /// lacks is supplied with the request.
     pub(crate) const fn creates_its_repository(self) -> bool {
         match self {
-            Self::LocalContextSync | Self::LocalContextResolve => false,
+            Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::CommentAdd
+            | Self::ConflictResolve
+            | Self::ItemRepublish => false,
             Self::RepoCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -281,15 +308,23 @@ impl Command {
 
     /// Whether the command's operation has safe points: places it can
     /// be stopped at once it is accepted, and a reservation it holds
-    /// from its first one on. Only a synchronization has. Such a
-    /// command honors a cancellation after acceptance and reports a
-    /// stage at each safe point, and a request of it that stopped with
-    /// its reservation held is continued by the same request, whatever
-    /// stopped it.
+    /// from its first one on. Only a synchronization has, a republish,
+    /// whose push-only operation is one, and a comment's submission, at
+    /// the safe points of the synchronization that publishes it. Such a
+    /// command honors a cancellation after acceptance and reports a stage
+    /// at each safe point, and a request of it that stopped with its
+    /// reservation held is continued by the same request, whatever stopped
+    /// it.
     pub(crate) const fn stops_at_safe_points(self) -> bool {
         match self {
             Self::LocalContextSync | Self::LocalContextResolve => true,
             Self::ItemSync | Self::RepoSync => true,
+            // `request cancel` sets the request's flag, which the
+            // publication's observer reads at its next safe point.
+            Self::CommentAdd => true,
+            // A republish pushes as a synchronization does, from the safe
+            // points of its own operation (R-32).
+            Self::ItemRepublish => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -328,6 +363,13 @@ impl Command {
             // that stopped is not offered again by the rule for a
             // synchronization.
             Self::OperationResume => false,
+            // As a resume (R-32, R-35): a resolution has no operation, and
+            // the publication it continues honors its call's token at the
+            // synchronization's safe points. Nothing is held for it between
+            // calls, so `request cancel` asks nothing of it (fact 11); the
+            // synchronization's own request is what `request cancel`
+            // reaches.
+            Self::ConflictResolve => false,
         }
     }
 
@@ -335,12 +377,17 @@ impl Command {
     /// synchronization: one that was stopped or fenced with its push not
     /// confirmed tells its caller to look at the repository, and says
     /// so again each time it is given again. A synchronization's own
-    /// result is one, and so is that of a resume that took one up. The
+    /// result is one, and so is that of a resume that took one up, and of
+    /// a comment's submission, which ends as its publication does. The
     /// finished results of every other command offer nothing.
     pub(crate) const fn finishes_as_a_synchronization(self) -> bool {
         match self {
             Self::LocalContextSync | Self::LocalContextResolve => true,
-            Self::ItemSync | Self::RepoSync | Self::OperationResume => true,
+            Self::ItemSync
+            | Self::RepoSync
+            | Self::OperationResume
+            | Self::CommentAdd
+            | Self::ItemRepublish => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -369,7 +416,11 @@ impl Command {
             | Self::DocumentRepair
             | Self::TicketRepair
             | Self::ContextPrepare
-            | Self::ContextRelease => false,
+            | Self::ContextRelease
+            // A resolution's result says what its request did, and a
+            // replay of it offers nothing (R-35): `conflict show` names
+            // the next step.
+            | Self::ConflictResolve => false,
         }
     }
 
@@ -379,7 +430,7 @@ impl Command {
         match self {
             Self::LocalContextSync | Self::LocalContextResolve => ProgressStage::Observing,
             Self::IndexRefresh | Self::IndexRebuild => ProgressStage::Indexing,
-            Self::ItemSync | Self::RepoSync => ProgressStage::Connecting,
+            Self::ItemSync | Self::RepoSync | Self::ItemRepublish => ProgressStage::Connecting,
             // An approval connects to the host to see the key it
             // presents, and does nothing else there.
             Self::HostApprove | Self::HostReplace => ProgressStage::Connecting,
@@ -410,6 +461,14 @@ impl Command {
             | Self::FolderCreate
             | Self::DocumentRepair
             | Self::TicketRepair
+            // What a comment's submission does first is write the
+            // comment and checkpoint it. Its publication then reports
+            // the stages of its synchronization's safe points.
+            | Self::CommentAdd
+            // What a resolution does first is write the resolved paths
+            // and commit them; its continuation then reports the stages
+            // of the synchronization's safe points.
+            | Self::ConflictResolve
             // What a context preparation does first is cut the branch.
             | Self::ContextPrepare
             // What a context release does is remove the worktree and
@@ -426,7 +485,11 @@ impl Command {
     /// would find nothing to take up.
     pub(crate) const fn hands_off_to_any_refresh(self) -> bool {
         match self {
-            Self::LocalContextSync | Self::LocalContextResolve => false,
+            Self::LocalContextSync
+            | Self::LocalContextResolve
+            | Self::CommentAdd
+            | Self::ConflictResolve
+            | Self::ItemRepublish => false,
             Self::FolderCreate => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -473,7 +536,13 @@ impl Command {
     /// `not_confirmable`, and so is an `execute` that presents one.
     pub(crate) const fn needs_confirmation(self) -> bool {
         match self {
-            Self::LocalContextSync | Self::LocalContextResolve => false,
+            // A comment adds a file that nothing held, in the item's own
+            // context, and publishes it as a synchronization would: there
+            // is nothing to show first.
+            Self::LocalContextSync | Self::LocalContextResolve | Self::CommentAdd => false,
+            // A resolution's caller was shown the conflict by `conflict
+            // show`, and presents its observation: a stale one is refused.
+            Self::ConflictResolve => false,
             Self::RepoCreate
             | Self::RepoEnable
             | Self::RemoteRemove
@@ -487,7 +556,11 @@ impl Command {
             // file over one that could not be read: its caller is shown
             // the ID, and whether it is being assigned, first.
             | Self::DocumentRepair
-            | Self::TicketRepair => true,
+            | Self::TicketRepair
+            // A republish recreates a branch the remote deleted: its
+            // caller is shown the branch, the remote and the commit, and
+            // consents to that commit (decisions 4 and 7).
+            | Self::ItemRepublish => true,
             Self::DocumentCreate
             | Self::DocumentSave
             | Self::DocumentMove
@@ -565,23 +638,33 @@ mod tests {
         assert_eq!(Command::FolderCreate.name(), "folder create");
         assert_eq!(Command::DocumentRepair.name(), "document repair");
         assert_eq!(Command::TicketRepair.name(), "ticket repair");
+        assert_eq!(Command::CommentAdd.name(), "comment add");
+        assert_eq!(Command::ConflictResolve.name(), "conflict resolve");
+        assert_eq!(Command::ItemRepublish.name(), "item republish");
     }
 
     #[test]
-    fn only_a_synchronization_stops_at_safe_points_and_none_needs_confirmation() {
+    fn the_stopping_commands_and_their_stages_and_confirmation() {
         for command in Command::ALL {
             let local = matches!(
                 command,
                 Command::LocalContextSync | Command::LocalContextResolve
             );
-            let synchronization = local || matches!(command, Command::ItemSync | Command::RepoSync);
-            assert_eq!(
-                command.stops_at_safe_points(),
-                synchronization,
-                "{command:?}"
-            );
-            if synchronization {
-                assert!(!command.needs_confirmation(), "{command:?}");
+            // A comment's submission publishes it by a synchronization
+            // of its own, and stops at that synchronization's safe
+            // points; what it does first is write the comment.
+            let comment = command == Command::CommentAdd;
+            // A republish pushes as a synchronization does, at its safe
+            // points, and is the one stopping command that needs
+            // confirmation (R-32).
+            let republish = command == Command::ItemRepublish;
+            let stopping = local
+                || comment
+                || republish
+                || matches!(command, Command::ItemSync | Command::RepoSync);
+            assert_eq!(command.stops_at_safe_points(), stopping, "{command:?}");
+            if stopping {
+                assert_eq!(command.needs_confirmation(), republish, "{command:?}");
                 assert_eq!(
                     command.has_operation(),
                     command != Command::LocalContextResolve,
@@ -591,6 +674,8 @@ mod tests {
                     command.stage(),
                     if local {
                         ProgressStage::Observing
+                    } else if comment {
+                        ProgressStage::Writing
                     } else {
                         ProgressStage::Connecting
                     },
@@ -598,6 +683,32 @@ mod tests {
                 );
             }
         }
+        // The rest of the comment submission's predicates (R-32).
+        assert!(Command::CommentAdd.finishes_as_a_synchronization());
+        assert!(!Command::CommentAdd.was_accepted_without_operation());
+        assert!(!Command::CommentAdd.restores_index());
+        assert!(!Command::CommentAdd.creates_its_repository());
+        assert!(!Command::CommentAdd.hands_off_to_any_refresh());
+        // The rest of the republish's predicates (R-32).
+        assert!(Command::ItemRepublish.has_operation());
+        assert!(Command::ItemRepublish.finishes_as_a_synchronization());
+        assert!(!Command::ItemRepublish.was_accepted_without_operation());
+        assert!(!Command::ItemRepublish.restores_index());
+        assert!(!Command::ItemRepublish.creates_its_repository());
+        assert!(!Command::ItemRepublish.hands_off_to_any_refresh());
+        assert_eq!(Command::ItemRepublish.stage(), ProgressStage::Connecting);
+        // A resolution does not stop at safe points, as a resume does not
+        // (R-32, R-35): it holds no operation, needs no confirmation and
+        // reports `Writing` first.
+        assert!(!Command::ConflictResolve.stops_at_safe_points());
+        assert!(!Command::ConflictResolve.has_operation());
+        assert!(!Command::ConflictResolve.needs_confirmation());
+        assert!(!Command::ConflictResolve.finishes_as_a_synchronization());
+        assert!(!Command::ConflictResolve.was_accepted_without_operation());
+        assert!(!Command::ConflictResolve.restores_index());
+        assert!(!Command::ConflictResolve.creates_its_repository());
+        assert!(!Command::ConflictResolve.hands_off_to_any_refresh());
+        assert_eq!(Command::ConflictResolve.stage(), ProgressStage::Writing);
         assert_eq!(Command::IndexRefresh.stage(), ProgressStage::Indexing);
         assert_eq!(Command::IndexRebuild.stage(), ProgressStage::Indexing);
         assert_eq!(Command::TicketSave.stage(), ProgressStage::Writing);
@@ -638,6 +749,7 @@ mod tests {
                         | Command::HostReplace
                         | Command::DocumentRepair
                         | Command::TicketRepair
+                        | Command::ItemRepublish
                 ),
                 "{command:?}"
             );
@@ -658,7 +770,7 @@ mod tests {
             // none of its own either.
             let names_another_s = matches!(
                 command,
-                Command::OperationResume | Command::LocalContextResolve
+                Command::OperationResume | Command::LocalContextResolve | Command::ConflictResolve
             );
             // An identity is Git configuration, written under the
             // repository lease with no row.

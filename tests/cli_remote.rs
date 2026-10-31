@@ -1,7 +1,15 @@
 //! Real CLI host commands, one isolated SSH fixture process per case.
 pub use manyhands::{repository, runtime};
+#[path = "support/cli_pair.rs"]
+mod cli_pair;
+#[path = "cli_remote/collaboration.rs"]
+mod collaboration;
+#[path = "cli_remote/conflicts.rs"]
+mod conflicts;
 #[path = "cli_remote/hosts.rs"]
 mod hosts;
+#[path = "cli_remote/interruption.rs"]
+mod interruption;
 #[path = "cli_remote/journeys.rs"]
 mod journeys;
 // As in the other SSH targets, preserve the shared fixture's domain error type.
@@ -90,6 +98,9 @@ fn main() {
         .iter()
         .chain(unlock::CASES)
         .chain(journeys::CASES)
+        .chain(interruption::CASES)
+        .chain(collaboration::CASES)
+        .chain(conflicts::CASES)
         .copied()
         .collect();
     ssh_harness::run(&cases);

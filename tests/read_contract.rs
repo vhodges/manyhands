@@ -1039,6 +1039,138 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             .map(manyhands::repository::LocalContextSyncDataType::as_str)
             .to_vec(),
     ));
+    use manyhands::repository::{ConflictNextAction, SynchronizationConflictType};
+    enumerations.extend([
+        (
+            "conflict_next.schema.json",
+            "next_action",
+            ConflictNextAction::ALL
+                .map(ConflictNextAction::as_str)
+                .to_vec(),
+        ),
+        (
+            "synchronization_conflict_mutation.schema.json",
+            "type",
+            SynchronizationConflictType::ALL
+                .map(SynchronizationConflictType::as_str)
+                .to_vec(),
+        ),
+    ]);
+    use manyhands::repository::{CommentMutationType, CommentPendingReason};
+    let comment = "comment_mutation.schema.json";
+    enumerations.extend([
+        (
+            comment,
+            "type",
+            CommentMutationType::ALL
+                .map(CommentMutationType::as_str)
+                .to_vec(),
+        ),
+        // A comment's publication is always asked for: never
+        // `not_requested`.
+        (
+            comment,
+            "publication",
+            PublicationEffect::ALL
+                .into_iter()
+                .filter(|effect| *effect != PublicationEffect::NotRequested)
+                .map(PublicationEffect::as_str)
+                .collect(),
+        ),
+        (
+            comment,
+            "pending_reason",
+            CommentPendingReason::ALL
+                .map(CommentPendingReason::as_str)
+                .to_vec(),
+        ),
+        (
+            comment,
+            "conflict.next_action",
+            ConflictNextAction::ALL
+                .map(ConflictNextAction::as_str)
+                .to_vec(),
+        ),
+    ]);
+    use manyhands::repository::ConflictResolutionMutationType;
+    let resolution = "conflict_resolution_mutation.schema.json";
+    enumerations.extend([
+        (
+            resolution,
+            "type",
+            ConflictResolutionMutationType::ALL
+                .map(ConflictResolutionMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            resolution,
+            "publication",
+            PublicationEffect::ALL
+                .map(PublicationEffect::as_str)
+                .to_vec(),
+        ),
+        (
+            resolution,
+            "conflict.next_action",
+            ConflictNextAction::ALL
+                .map(ConflictNextAction::as_str)
+                .to_vec(),
+        ),
+    ]);
+    use manyhands::repository::{
+        ConflictPathKind, ConflictPathStructure, ConflictReadEligibility, ConflictReadNextAction,
+        ConflictStage, ConflictState, ConflictTarget,
+    };
+    let conflict = "conflict.schema.json";
+    let conflict_path = "conflict_path.schema.json";
+    enumerations.extend([
+        (
+            conflict,
+            "target",
+            ConflictTarget::ALL.map(ConflictTarget::as_str).to_vec(),
+        ),
+        (
+            conflict,
+            "stage",
+            ConflictStage::ALL.map(ConflictStage::as_str).to_vec(),
+        ),
+        (
+            conflict,
+            "state",
+            ConflictState::ALL.map(ConflictState::as_str).to_vec(),
+        ),
+        (
+            conflict,
+            "next_action",
+            ConflictReadNextAction::ALL
+                .map(ConflictReadNextAction::as_str)
+                .to_vec(),
+        ),
+        (
+            conflict,
+            "eligibility",
+            ConflictReadEligibility::ALL
+                .map(ConflictReadEligibility::as_str)
+                .to_vec(),
+        ),
+        (
+            conflict_path,
+            "kind",
+            ConflictPathKind::ALL.map(ConflictPathKind::as_str).to_vec(),
+        ),
+        (
+            conflict_path,
+            "structure",
+            ConflictPathStructure::ALL
+                .map(ConflictPathStructure::as_str)
+                .to_vec(),
+        ),
+    ]);
+    enumerations.push((
+        "item_republish_preview.schema.json",
+        "details.kind",
+        ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+    ));
     enumerations
 }
 

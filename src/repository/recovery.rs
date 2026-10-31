@@ -387,6 +387,88 @@ impl super::RepositoryService {
         }
         Ok(())
     }
+
+    /// Releases the binding of a comment submission that wrote nothing
+    /// (R-34): in one transaction, the binding is deleted and the row
+    /// `record` is marked `rejected`. The row is kept, so the operation ID
+    /// stays bound to its target, and a repeat of it begins again as new
+    /// and binds afresh.
+    ///
+    /// It has two callers, both `checkpoint_comment_locally_with` with
+    /// the binding's semantics: a submission that stopped for an identity,
+    /// and one refused after its binding row was inserted, having begun no
+    /// effect (controller ruling, Task 2b concern 2).
+    ///
+    /// The caller has found the comment file absent. Here the row must
+    /// hold no step past the context's own, the binding no checkpoint, and
+    /// the child synchronization no row. Otherwise nothing changes and
+    /// `false` is returned: the binding and the row are the caller's to
+    /// keep, as for a submission that wrote. An error is a registry that
+    /// could not be read or written.
+    pub(super) fn release_unwritten_comment_binding(
+        &self,
+        root: &Path,
+        record: RecoveryRecord,
+        operation_id: OperationId,
+    ) -> Result<bool, RepositoryError> {
+        let failure = super::comment_publication::recovery_error;
+        if record.id == 0 {
+            return Ok(false);
+        }
+        let _guard = super::cache_write_guard(
+            &self.registry_path,
+            root,
+            RepositoryOperation::SubmitComment,
+        )?;
+        let mut connection = super::open_registry(&self.registry_path, &mut |_| {})?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| failure())?;
+        let operation = operation_id.to_string();
+        let unwritten: bool = tx
+            .query_row(
+                &format!(
+                    "SELECT EXISTS(SELECT 1 FROM operation_records o
+                       JOIN comment_publication_bindings b ON b.local_record_id = o.id
+                      WHERE o.id = ?1 AND o.operation_ulid = ?2 AND b.operation_ulid = ?2
+                        AND o.action = 'submit_comment' AND {NOT_ABANDONED}
+                        AND (o.completed_step IS NULL OR o.completed_step IN (?3, ?4, ?5))
+                        AND b.checkpoint_oid IS NULL
+                        AND NOT EXISTS(SELECT 1 FROM remote_operation_records
+                                        WHERE operation_ulid = b.synchronization_ulid))"
+                ),
+                params![
+                    record.id,
+                    operation,
+                    LocalStep::BranchObserved.as_str(),
+                    LocalStep::WorktreeObserved.as_str(),
+                    LocalStep::Completed.as_str(),
+                ],
+                |row| row.get(0),
+            )
+            .map_err(|_| failure())?;
+        if !unwritten {
+            return Ok(false);
+        }
+        let deleted = tx
+            .execute(
+                "DELETE FROM comment_publication_bindings WHERE operation_ulid = ?1 AND local_record_id = ?2",
+                params![operation, record.id],
+            )
+            .map_err(|_| failure())?;
+        let rejected = tx
+            .execute(
+                "UPDATE operation_records SET state = 'completed', completed_step = ?2, observed_at = ?3
+                  WHERE id = ?1",
+                params![record.id, LocalStep::Rejected.as_str(), now()],
+            )
+            .map_err(|_| failure())?;
+        if deleted != 1 || rejected != 1 {
+            return Err(failure());
+        }
+        tx.commit().map_err(|_| failure())?;
+        Ok(true)
+    }
     pub(super) fn comment_local_pending(
         &self,
         root: &Path,

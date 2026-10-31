@@ -24,6 +24,21 @@ mod authoring_reads;
 #[path = "cli/boundaries.rs"]
 mod boundaries;
 
+#[path = "cli/c4_support.rs"]
+mod c4_support;
+
+#[path = "cli/collaboration.rs"]
+mod collaboration;
+
+#[path = "cli/collaboration_exits.rs"]
+mod collaboration_exits;
+
+#[path = "cli/conflicts.rs"]
+mod conflicts;
+
+#[path = "cli/discussion.rs"]
+mod discussion;
+
 #[path = "cli/content.rs"]
 mod content;
 
@@ -59,6 +74,8 @@ mod remotes;
 mod repair;
 #[path = "cli/repository.rs"]
 mod repository;
+#[path = "cli/republish.rs"]
+mod republish;
 #[path = "cli/requests.rs"]
 mod requests;
 

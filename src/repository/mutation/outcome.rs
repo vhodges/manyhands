@@ -13,10 +13,10 @@ use crate::results::{
 
 use super::{
     super::{
-        GeneratedKeyDeletionPreflight, LocalCheckpoint, OperationId, PublicationRemoteOutcome,
-        PublishPendingReason, RefreshOutcome, RemoteOutcome, RemoveRegistrationOutcome,
-        RepositoryErrorKind, RepositoryOperation, RepositoryService, SaveOutcome,
-        SynchronizationError, SynchronizationOutcome, SynchronizationResult,
+        GeneratedKeyDeletionPreflight, LocalCheckpoint, OperationFamily, OperationId,
+        PublicationRemoteOutcome, PublishPendingReason, RefreshOutcome, RemoteOutcome,
+        RemoveRegistrationOutcome, RepositoryErrorKind, RepositoryOperation, RepositoryService,
+        SaveOutcome, SynchronizationError, SynchronizationOutcome, SynchronizationResult,
         UnregisterSharedKeyOutcome,
         bridges::abandon::stale_heartbeat,
         keys::{
@@ -26,7 +26,7 @@ use super::{
         leases_are_free, recovery,
         transport::SshTransportErrorKind,
     },
-    bind::resume,
+    bind::{comment, resume},
     command::Command,
     identity::RequestId,
     records,
@@ -209,12 +209,15 @@ pub(crate) fn synchronization_error_code(error: &SynchronizationError) -> Result
             target: _,
             expected_configuration: _,
         } => ResultCode::IdentityRequired,
+        // Only a caller set to refuse divergence is told this. The
+        // bindings merge, and none of their requests is answered with it.
         SynchronizationError::MergeRequired { target: _ } => ResultCode::MergeRequired,
         SynchronizationError::PushRejected => ResultCode::PushRejected,
         SynchronizationError::ExternalChange => ResultCode::ExternalChange,
-        // The bindings refuse divergence, so no request of theirs leaves a
-        // merge to resolve; one made some other way is not theirs to
-        // continue.
+        // A merge left to resolve or to repair outside, or a
+        // synchronization that cannot go on as it stands: the repository
+        // is what is looked at. A binding whose own merge stopped on a
+        // conflict says the conflict's next step in its data.
         SynchronizationError::ConflictPending {
             target: _,
             operation_id: _,
@@ -982,10 +985,7 @@ fn recovery(
         && retry
         && let Some(request_id) = request_id
     {
-        actions.push(RecoveryAction::new(
-            RecoveryActionKind::RequestCancel,
-            [(REQUEST_ARGUMENT, request_id.to_string().into())],
-        ));
+        actions.push(request_cancel(request_id));
     }
     let offered = actions
         .iter()
@@ -1000,8 +1000,24 @@ fn recovery(
 /// Whether `code`, from a synchronization, is one the same request
 /// never gets past; see the closing rule of `recovery`.
 fn never_finished_by_the_same_request(code: ResultCode, command: Option<Command>) -> bool {
-    command.is_some_and(Command::stops_at_safe_points)
-        && (code == ResultCode::MergeRequired || code == ResultCode::RemoteBranchDeleted)
+    command.is_some_and(Command::stops_at_safe_points) && never_gets_past(code)
+}
+
+/// Whether a synchronization that stopped with `code` is one its request
+/// never gets past, whatever is done: a branch whose history was merged or
+/// rebased, or one deleted at the remote. Its reservation is let go by
+/// `request cancel` of the request that holds it, and one more call of
+/// that request.
+pub(crate) fn never_gets_past(code: ResultCode) -> bool {
+    code == ResultCode::MergeRequired || code == ResultCode::RemoteBranchDeleted
+}
+
+/// `request.cancel` of the request `request_id`.
+pub(crate) fn request_cancel(request_id: RequestId) -> RecoveryAction {
+    RecoveryAction::new(
+        RecoveryActionKind::RequestCancel,
+        [(REQUEST_ARGUMENT, request_id.to_string().into())],
+    )
 }
 
 /// The argument of a recovery action that names a host.
@@ -1205,6 +1221,10 @@ impl RepositoryService {
     /// The reservation is read only for an envelope that offers the
     /// action. One that cannot be read drops it: the envelope then offers
     /// what it did before the action existed.
+    ///
+    /// A comment's request holds its comment's operation, and the
+    /// reservation is held by the synchronization that publishes the
+    /// comment: that synchronization is the request's own as well (R-5).
     fn offering_cancel<T>(&self, mut envelope: Envelope<T>) -> Envelope<T> {
         let offers = envelope
             .recovery
@@ -1219,17 +1239,85 @@ impl RepositoryService {
             .as_deref()
             .zip(envelope.operation_id.as_deref())
             .is_some_and(|(root, operation_id)| {
-                self.active_remote_operation(Path::new(root))
-                    .ok()
-                    .flatten()
-                    .is_some_and(|active| active.operation_id().to_string() == operation_id)
+                let Some(active) = self.active_remote_operation(Path::new(root)).ok().flatten()
+                else {
+                    return false;
+                };
+                let active = active.operation_id();
+                active.to_string() == operation_id
+                    || OperationId::parse(operation_id).is_ok_and(|operation_id| {
+                        let bound = self.read_session(RepositoryOperation::Read, |connection| {
+                            comment::comment_synchronization(
+                                connection,
+                                Path::new(root),
+                                operation_id,
+                            )
+                        });
+                        // An envelope carries no second error: a registry
+                        // that cannot say whose the reservation is offers
+                        // no cancellation of it.
+                        match bound {
+                            Ok(Some((comment, synchronization))) => {
+                                comment == operation_id && synchronization == active
+                            }
+                            Ok(None) | Err(_) => false,
+                        }
+                    })
             });
         if !own {
-            envelope
-                .recovery
-                .retain(|action| action.action != RecoveryActionKind::RequestCancel);
+            // A request with no operation of its own, as `conflict resolve`
+            // is, offers the cancellation of the request that holds the
+            // reservation: kept while that request does.
+            let root = envelope.scope.repository.clone();
+            let operation = envelope.operation_id.clone();
+            envelope.recovery.retain(|action| {
+                action.action != RecoveryActionKind::RequestCancel
+                    || (operation.is_none()
+                        && root
+                            .as_deref()
+                            .is_some_and(|root| self.holds_the_reservation(root, action)))
+            });
         }
         envelope
+    }
+
+    /// Whether the request `action` names holds the reservation of the
+    /// repository at `root`: its unfinished record holds the active remote
+    /// operation, or the comment that operation publishes (R-5, fact 79).
+    /// `false` when anything cannot be read.
+    fn holds_the_reservation(&self, root: &str, action: &RecoveryAction) -> bool {
+        let Some(named) = action
+            .arguments
+            .get(REQUEST_ARGUMENT)
+            .and_then(|request| request.as_str())
+        else {
+            return false;
+        };
+        let Some(active) = self
+            .active_remote_operation(Path::new(root))
+            .ok()
+            .flatten()
+            .map(|active| active.operation_id())
+        else {
+            return false;
+        };
+        self.read_session(RepositoryOperation::Read, |connection| {
+            if records::operation_holder(connection, OperationFamily::Remote, root, active, None)?
+                .is_some_and(|holder| holder == named)
+            {
+                return Ok(true);
+            }
+            let Some((comment, _)) =
+                comment::comment_synchronization(connection, Path::new(root), active)?
+            else {
+                return Ok(false);
+            };
+            Ok(
+                records::operation_holder(connection, OperationFamily::Local, root, comment, None)?
+                    .is_some_and(|holder| holder == named),
+            )
+        })
+        .unwrap_or(false)
     }
 
     /// Keeps `operation.resume` among what an envelope offers only
