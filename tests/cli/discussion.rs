@@ -7,6 +7,7 @@
 
 use std::fs;
 
+use manyhands::repository::RepositoryService;
 use serde_json::{Value, json};
 
 use super::{
@@ -185,6 +186,42 @@ fn a_comment_without_a_publication_remote_is_checkpointed_with_publication_pendi
 
     let record = f.request(REQUEST_1);
     assert_stored_result(&record, &value);
+}
+
+/// Dogfooding (2026-10-30): the real repository's `docs/` holds ordinary
+/// Markdown files with no Manyhands front matter, and `comment add`
+/// refused every comment beside them as `item_not_found`. Such a file is
+/// no problem of a comment's.
+#[test]
+fn a_plain_markdown_file_under_docs_does_not_block_a_comment() {
+    let f = Fixture::new();
+    let plain = "docs/notes.md";
+    items::write(
+        &f.repo.root,
+        plain,
+        "# Notes\n\nAn ordinary project document.\n",
+    );
+    items::commit(&f.repo, &[plain], items::COMMITTED_AT + 300);
+    {
+        let service = RepositoryService::open_at(&f.env.data).unwrap();
+        items::refresh_completely(&service, &f.repo.root);
+    }
+    let id = items::TICKET_A;
+    let input = json!({"comment_id": COMMENT, "body": "Beside the notes.\n"});
+    let value = f.add(id, REQUEST_1, &input, 0, "ok");
+    assert_eq!(value["effects"]["write"], "written");
+    assert_eq!(value["effects"]["checkpoint"], "committed");
+    assert_eq!(value["effects"]["publication"], "pending");
+    assert_eq!(value["data"]["pending_reason"], "no_publication_remote");
+    // A reply passes the parent check beside the same file.
+    let reply = json!({"comment_id": REPLY, "body": "reply\n", "parent_id": COMMENT});
+    let value = f.add(id, REQUEST_2, &reply, 0, "ok");
+    assert_eq!(value["data"]["parent_id"], COMMENT);
+    assert_eq!(
+        f.files(id),
+        [format!("{COMMENT}.md"), format!("{REPLY}.md")]
+    );
+    assert_eq!(f.comments(id).len(), 2);
 }
 
 #[test]

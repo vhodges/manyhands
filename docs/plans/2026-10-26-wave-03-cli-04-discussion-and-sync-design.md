@@ -875,6 +875,35 @@ every field, the body by digest.
 - **Parent check.** `checkpoint_comment_locally_with` checks the parent
   before it inserts the binding row, so a refused parent leaves no row
   (fact 19).
+- **Canonical problems.** Amended 2026-10-30 by C4 (dogfooding; the owner's
+  decision). Dogfooding found that `comment add` refused every comment in
+  the real repository as `item_not_found`. Before it writes, the submission
+  validated the whole context, and any problem there refused it
+  (`src/repository.rs`, "the selected context contains nonconforming
+  canonical content", from Wave 02's `62e5ee28`). Main's `docs/` holds
+  ordinary Markdown files without Manyhands front matter, each a
+  `missing_front_matter` problem. The rule is now:
+  - A canonical problem refuses a comment only when it concerns what the
+    comment depends on:
+    - the new comment itself: its path and its ID, a duplicate ID
+      included;
+    - its item: the target document or ticket file, missing or
+      nonconforming;
+    - its parent chain: a parent that is missing, belongs to another item
+      or forms a cycle.
+  - A problem anywhere else does not refuse it: a plain document's missing
+    front matter, another item's problems, another comment's problems.
+  - The cases that still refuse keep their code and message. The check
+    keeps a problem whose path is the comment's, the item's (a ticket's
+    deterministic path included), or that of a file claiming the item's,
+    the comment's or a parent chain comment's ID
+    (`comment_dependency_paths`).
+  - The submission's other content reads already used only the conforming
+    items, never the problem list: the context's preparation, the parent
+    check before the binding, and the item and parent checks after it.
+    The receipt replay and the publication read only the comment. The
+    one site changed is the comment path's own. `ticket save`,
+    `document save` and the other authoring verbs do not share it.
 - **Publication (R-3).** The binding passes the submission a crate-private
   synchronizer. That is a closure over
   `call.session.synchronize(service, request, MERGING, &mut watch)`.

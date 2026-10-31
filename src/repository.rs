@@ -3101,8 +3101,23 @@ impl RepositoryService {
             if !exists {
                 context_sources.push((path.clone(), serialized.clone()));
             }
+            // Only a problem of what the comment depends on refuses it.
+            // Amended 2026-10-30 by C4 (dogfooding): any problem in the
+            // context refused every comment, a plain document's missing
+            // front matter among them.
+            let dependencies = comment_dependency_paths(
+                &context_sources,
+                &path,
+                &context,
+                &request.comment_id,
+                request.parent_id.as_ref(),
+            );
             let validated = canonical::validate_context(context_sources);
-            if !validated.problems.is_empty() {
+            if validated
+                .problems
+                .iter()
+                .any(|problem| dependencies.contains(&problem.path))
+            {
                 return Err(authoring_error(
                     operation,
                     &context.root,
@@ -9154,6 +9169,54 @@ fn canonical_comment_paths_for_id(
         .collect())
 }
 
+/// The paths in `sources` that a new comment depends on: its own
+/// `comment_path`, its item's file and its parent chain's files, with
+/// every file that claims one of their IDs. A problem at one of these
+/// refuses the comment. A problem anywhere else, such as another item's,
+/// another comment's or a plain document's, does not (amended 2026-10-30
+/// by C4, dogfooding).
+fn comment_dependency_paths(
+    sources: &[(PathBuf, String)],
+    comment_path: &Path,
+    context: &ItemContext,
+    comment_id: &canonical::ItemId,
+    parent_id: Option<&canonical::ItemId>,
+) -> BTreeSet<PathBuf> {
+    let parsed = sources
+        .iter()
+        .filter_map(|(path, source)| Some((path, canonical::parse_item(path, source).ok()?)))
+        .collect::<Vec<_>>();
+    let mut ids = BTreeSet::from([context.item_id.clone(), comment_id.clone()]);
+    // Each parent's own parent, as every file under its ID names it, until
+    // the chain ends or meets an ID already taken.
+    let mut chain = parent_id.into_iter().cloned().collect::<Vec<_>>();
+    while let Some(id) = chain.pop() {
+        if !ids.insert(id.clone()) {
+            continue;
+        }
+        chain.extend(parsed.iter().filter_map(|(_, item)| match item {
+            canonical::CanonicalItem::Comment(comment) if comment.id == id => {
+                comment.parent_id.clone()
+            }
+            _ => None,
+        }));
+    }
+    let mut paths = parsed
+        .into_iter()
+        .filter(|(_, item)| ids.iter().any(|id| canonical_item_has_id(item, id)))
+        .map(|(path, _)| path.clone())
+        .collect::<BTreeSet<_>>();
+    paths.insert(comment_path.to_owned());
+    // A ticket's file has one path, whether or not it parses.
+    if matches!(context.kind, AuthoringKind::Ticket) {
+        paths.insert(PathBuf::from(format!(
+            ".manyhands/tickets/{}/ticket.md",
+            context.item_id
+        )));
+    }
+    paths
+}
+
 fn ensure_authoring_worktree_base(
     root: &Path,
     operation: RepositoryOperation,
@@ -11062,6 +11125,114 @@ fn committed_configuration_blob_oid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Amended 2026-10-30 by C4 (dogfooding). A comment's problems are
+    /// those of its own path, its item and its parent chain, with any file
+    /// that claims one of their IDs. A plain document, a malformed file,
+    /// a sibling reply and another item's comment are not its own.
+    #[test]
+    fn a_comment_depends_on_its_path_its_item_and_its_parent_chain_only() {
+        let id = |text: &str| text.parse::<canonical::ItemId>().unwrap();
+        let ticket = id("01ARZ3NDEKTSV4RRFFQ69G5FAW");
+        let other = id("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        let (first, reply, sibling, new) = (
+            id("01ARZ3NDEKTSV4RRFFQ69G5FAX"),
+            id("01ARZ3NDEKTSV4RRFFQ69G5FAY"),
+            id("01ARZ3NDEKTSV4RRFFQ69G5FB0"),
+            id("01ARZ3NDEKTSV4RRFFQ69G5FAZ"),
+        );
+        let comment_path = |item: &canonical::ItemId, comment: &canonical::ItemId| -> PathBuf {
+            format!(".manyhands/comments/{item}/{comment}.md").into()
+        };
+        let comment = |item: &canonical::ItemId,
+                       comment: &canonical::ItemId,
+                       parent: Option<&canonical::ItemId>| {
+            let parent = parent.map_or(String::new(), |parent| format!("parent_id: {parent}\n"));
+            (
+                comment_path(item, comment),
+                format!(
+                    "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: {comment}\n\
+                     item_id: {item}\n{parent}created_at: 2026-09-30T12:00:00Z\n---\n"
+                ),
+            )
+        };
+        let ticket_path = PathBuf::from(format!(".manyhands/tickets/{ticket}/ticket.md"));
+        let claims_first = PathBuf::from("docs/claims-first.md");
+        let context = ItemContext {
+            root: PathBuf::from("/repository"),
+            kind: AuthoringKind::Ticket,
+            item_id: ticket.clone(),
+            branch: format!("manyhands/ticket/{ticket}"),
+            worktree: PathBuf::from("/repository/.manyhands/worktrees").join(ticket.to_string()),
+        };
+        let mut sources = vec![
+            (PathBuf::from("docs/notes.md"), "# Notes\n".to_owned()),
+            (
+                ticket_path.clone(),
+                format!(
+                    "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {ticket}\n\
+                     title: Ticket\ntype: task\nstatus: open\n---\n"
+                ),
+            ),
+            comment(&ticket, &first, None),
+            comment(&ticket, &reply, Some(&first)),
+            comment(&ticket, &sibling, Some(&first)),
+            (
+                PathBuf::from(format!(".manyhands/comments/{ticket}/bad.md")),
+                "not canonical markdown\n".to_owned(),
+            ),
+            comment(&other, &id("01ARZ3NDEKTSV4RRFFQ69G5FB1"), None),
+            (
+                claims_first.clone(),
+                format!(
+                    "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {first}\n\
+                     title: Duplicate\n---\n"
+                ),
+            ),
+        ];
+        let new_path = comment_path(&ticket, &new);
+        sources.push(comment(&ticket, &new, Some(&reply)));
+        let expected = BTreeSet::from([
+            new_path.clone(),
+            ticket_path.clone(),
+            comment_path(&ticket, &reply),
+            comment_path(&ticket, &first),
+            claims_first,
+        ]);
+        assert_eq!(
+            comment_dependency_paths(&sources, &new_path, &context, &new, Some(&reply)),
+            expected
+        );
+        // These have problems of their own, and none is the comment's.
+        let problems = canonical::validate_context(sources.clone())
+            .problems
+            .into_iter()
+            .map(|problem| problem.path)
+            .collect::<BTreeSet<_>>();
+        for unrelated in [
+            PathBuf::from("docs/notes.md"),
+            PathBuf::from(format!(".manyhands/comments/{ticket}/bad.md")),
+            comment_path(&ticket, &sibling),
+            comment_path(&other, &id("01ARZ3NDEKTSV4RRFFQ69G5FB1")),
+        ] {
+            assert!(problems.contains(&unrelated), "{}", unrelated.display());
+            assert!(!expected.contains(&unrelated), "{}", unrelated.display());
+        }
+
+        // A chain that loops back to the new comment ends there.
+        sources[2] = comment(&ticket, &first, Some(&new));
+        assert_eq!(
+            comment_dependency_paths(&sources, &new_path, &context, &new, Some(&reply)),
+            expected
+        );
+        // A root comment depends on its own path and its item only, and
+        // the ticket's path counts when the ticket does not parse.
+        sources[1].1 = "# Not a ticket\n".to_owned();
+        assert_eq!(
+            comment_dependency_paths(&sources, &new_path, &context, &new, None),
+            BTreeSet::from([new_path, ticket_path])
+        );
+    }
 
     #[test]
     fn enablement_s_configuration_holds_a_prefix_only_when_one_is_asked_for() {

@@ -5002,3 +5002,141 @@ budget, on a machine loaded by other sessions. `--no-fail-fast` gave exit 0.
   - `created_by` is `Claude Opus 5.5 <noreply@anthropic.com>`.
   - The branch-built CLI sends it at the owner's terminal, because the key
     has a passphrase.
+
+### Dogfooding fix
+
+The owner's decision (2026-10-30): fix this in C4.
+
+**The defect.** Dogfooding step 2 found that `comment add` refused every
+comment in the real repository, a brand-new ticket's included, as
+`item_not_found` (exit 2, Final, no effects). The controller reproduced it in
+a throwaway clone with its own registry.
+
+**The site.** Before it writes, `checkpoint_comment_locally_with` validated
+the whole context and refused on any problem, as
+`MissingAuthoringTarget` ("the selected context contains nonconforming
+canonical content", `src/repository.rs`, then `:3105-3112`, now
+`:3116-3127`; from Wave 02's `62e5ee28`). Main's `docs/` holds 21 Markdown
+files without Manyhands front matter, each a `missing_front_matter` problem.
+
+- **Proof of the site.** The kind at that one line was changed, for one run
+  only, to `NotRepairable`. The library case then failed with
+  `NotRepairable`, and the CLI case with `not_repairable`. The line was then
+  restored. That site, and no other, refused.
+- **The comment path's other reads.** None refused on unrelated problems.
+  Each reads only the conforming items, never the problem list:
+  - the context's preparation (`canonical_context_at`, and
+    `validate_context_worktree`);
+  - `refuse_unknown_comment_parent`;
+  - the item and parent checks after the binding.
+
+  The receipt replay (`publish_comment_with_config`'s proved-receipt branch,
+  which `comment::resumed` and `conflict.rs::comment_continued` reach with
+  `restart`) and `checkpoint_comment` read only the comment's own file.
+  `bind/comment.rs` reads only the checkpointed comment's author. The
+  publication's merging synchronization checks the context tree's items, not
+  its problems.
+- **Other verbs.** `checkpoint_comment_locally_with` is the comment path's
+  alone: the public `submit_comment` and `comment add`. `ticket save`,
+  `document save` and the other authoring verbs do not share it, and no other
+  site refuses on `problems.is_empty()`.
+
+**The rule.** A canonical problem refuses a comment only when it concerns
+what the comment depends on: the new comment itself (its path and its ID, a
+duplicate ID included), its item (the target file, missing or
+nonconforming), and its parent chain (a parent that is missing, belongs to
+another item or forms a cycle). A new `comment_dependency_paths` gives those
+paths:
+
+- the comment's path;
+- every file that claims the item's ID, the comment's ID, or the ID of a
+  comment in the parent chain, followed through every file under each ID
+  until the chain ends or meets an ID already taken;
+- for a ticket, its deterministic path, whether or not it parses.
+
+The check refuses only for a problem at one of those paths, with the same
+code and message. Other problems, such as a plain document's, another item's
+or another comment's, no longer refuse.
+
+**Tests.**
+
+- **RED.** `cargo test --all-features --locked --test local_authoring --
+  comment_`: 24 passed, 3 failed.
+  - `comment_is_written_beside_a_plain_document_without_front_matter` and
+    `comment_is_not_refused_by_another_item_s_nonconforming_comment` failed
+    with `CommentSubmissionError { kind: MissingAuthoringTarget, .. }`.
+  - The third failure was the new refusal case's own expectation: a
+    nonconforming item in the context is refused by the context's
+    preparation as `MismatchedAuthoringContext`, before the comment's own
+    checks. That is unchanged behavior, and the case now expects it.
+- **RED, CLI.** `--test cli -- a_plain_markdown_file_under_docs`: exit 2,
+  `item_not_found`, every effect `not_requested`, as dogfooding saw.
+- **GREEN.** `--test local_authoring -- comment_`: 27 passed.
+  `--test cli -- a_plain_markdown_file_under_docs`: 1 passed.
+  `--lib a_comment_depends_on_its_path`: 1 passed.
+
+The new and changed tests:
+
+- `tests/local_authoring.rs`:
+  - `comment_is_written_beside_a_plain_document_without_front_matter` (new):
+    a ticket beside a plain `docs/notes.md`. The comment is written and
+    checkpointed, with the plain file untouched in the checkpoint's tree.
+    The publication is pending, `NoPublicationRemote`. A reply then passes
+    the parent check.
+  - `comment_beside_a_plain_document_is_still_refused_for_its_item_or_parent`
+    (new): the same fixture, with four cases that still refuse and change
+    nothing: a missing parent, a nonconforming parent, a cycle through the
+    new comment, and a nonconforming item.
+  - `comment_is_not_refused_by_another_item_s_nonconforming_comment`, which
+    was `comment_rejects_any_existing_context_problem_without_mutation`
+    (updated, the owner's decision). It pinned the old behavior: another
+    item's malformed `bad.md` refused a comment on the document. It now
+    asserts that the comment is written and checkpointed, and that the
+    malformed file is left as it was, outside the checkpoint.
+- `src/repository.rs`,
+  `a_comment_depends_on_its_path_its_item_and_its_parent_chain_only` (new):
+  the dependency set, with a duplicate ID in the chain, a loop back to the
+  new comment, and an unparseable ticket. The plain document, a malformed
+  file, a sibling reply and another item's comment all have problems, and
+  none is the comment's.
+- `tests/cli/discussion.rs`,
+  `a_plain_markdown_file_under_docs_does_not_block_a_comment` (new): a root
+  comment and a reply through the binary with a committed plain
+  `docs/notes.md`. Both are `ok`, with publication pending.
+- **Unchanged tests that still pin refusal.** These pin refusal for the
+  comment's own item or parent, and they pass as they were:
+  `comment_rejects_invalid_target_parent_and_conflicting_id_without_mutation`,
+  `c4_comment_domain_parent_refused_before_binding`,
+  `c4_comment_unknown_parent`, and
+  `a_parent_that_is_no_comment_of_this_item_is_item_not_found_and_writes_nothing`.
+
+**Verify.** Each command ran as `devenv shell -- cargo … --locked`, with logs
+in `logs/dogfood-fix1-*`:
+
+| Command | Result |
+| --- | --- |
+| `test --all-features --test local_authoring` | 142 passed |
+| `test --all-features --test comment_publication` | 41 SSH cases passed |
+| `test --all-features --lib repository::tests` | 23 passed |
+| `test --all-features --lib comment_publication` | 37 passed |
+| `test --all-features --test mutation_replay` | 383 passed |
+| `test --all-features --test mutation_confirmation` | 183 passed |
+| `test --all-features --test mutation_bridges` | 166 passed |
+| `test --all-features --test cli -- discussion` | 16 passed |
+| `test --all-features --test cli_remote -- c4_collaboration` | 8 SSH cases passed |
+| `test --all-features --test mutation_remote -- c4_comment` | 35 SSH cases passed |
+| `test --all-features --test mutation_remote -- c4_resume` | 17 SSH cases passed |
+| `clippy --all-targets --all-features -- -D warnings` | pass |
+| `check --features desktop --bin manyhands` | pass |
+| `clippy --features desktop --bin manyhands -- -D warnings` | pass |
+| `clippy --all-targets --features desktop -- -D warnings` | pass |
+| `fmt --check` | pass |
+
+**Documents.** The design's Comment Submission section gains a "Canonical
+problems" bullet, and the CLI contract RFC's `comment add` row an amendment.
+Both are dated "Amended 2026-10-30 by C4 (dogfooding; the owner's
+decision)".
+
+**Main.** `origin/main` moved during the fix, to `676ff193` (release CI and
+packaging, and the version fixtures). It is not merged here.
+`git merge-tree --write-tree HEAD origin/main` is clean.
