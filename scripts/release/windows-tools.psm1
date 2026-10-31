@@ -66,6 +66,18 @@ function Assert-SystemDependency {
     }
 }
 
+function Assert-SystemDependencies {
+    param([string[]]$Names, [string]$SystemDirectory = [Environment]::GetFolderPath('System'), [string]$BinaryName = 'executable')
+    $failures = [Collections.Generic.List[string]]::new()
+    foreach ($name in $Names) {
+        try { Assert-SystemDependency -Name $name -SystemDirectory $SystemDirectory }
+        catch { $failures.Add($_.Exception.Message) }
+    }
+    if ($failures.Count) {
+        throw "Windows runtime audit failed for ${BinaryName}:`n$($failures -join "`n")"
+    }
+}
+
 function Get-WindowsRuntimeReport {
     param([string]$Staging)
     $dumpbin = Find-Dumpbin
@@ -76,7 +88,7 @@ function Get-WindowsRuntimeReport {
         Assert-PeArchitecture (Invoke-ReleaseTool $dumpbin @('/HEADERS', $binary))
         $dependencies = @(ConvertFrom-DumpbinDependencies (Invoke-ReleaseTool $dumpbin @('/DEPENDENTS', $binary)))
         if ($dependencies.Count -eq 0) { throw "No imports found in Windows executable: $name" }
-        foreach ($dependency in $dependencies) { Assert-SystemDependency $dependency }
+        Assert-SystemDependencies -Names $dependencies -BinaryName $name
         $binaries[$name] = $dependencies
     }
     $extraLibraries = @(Get-ChildItem -LiteralPath (Join-Path $Staging 'bin') -Filter '*.dll' -File)
@@ -84,4 +96,4 @@ function Get-WindowsRuntimeReport {
     return [ordered]@{ system = 'windows'; architecture = 'x86_64'; crt = 'static'; binaries = $binaries }
 }
 
-Export-ModuleMember -Function Invoke-ReleaseTool, Find-SignTool, ConvertFrom-DumpbinDependencies, Assert-PeArchitecture, Assert-SystemDependency, Get-WindowsRuntimeReport
+Export-ModuleMember -Function Invoke-ReleaseTool, Find-SignTool, ConvertFrom-DumpbinDependencies, Assert-PeArchitecture, Assert-SystemDependency, Assert-SystemDependencies, Get-WindowsRuntimeReport
