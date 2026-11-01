@@ -181,10 +181,9 @@ type MadeReadyReport = (
 
 thread_local! {
     /// What a test stages for the next report's read. A boundary runs on the
-    /// thread its caller called it on. It is no field of the service because it
-    /// is the binding's alone, and because a report's read comes after the
-    /// domain's own calls, so that `set_request_hook_for_testing`'s hook has run
-    /// by then.
+    /// thread its caller called it on. It is no field of the service, as the
+    /// request hook is, so that the service holds no second test-only field for
+    /// one read, and what it stages needn't be `Send`.
     static MADE_READY_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
