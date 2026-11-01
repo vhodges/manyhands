@@ -10,6 +10,8 @@
     "integration_oid": "<integration>",
     "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
     "kind": "ticket",
+    "made_ready": [],
+    "made_ready_state": "index_pending",
     "publication": "pending",
     "publication_oid": null,
     "publication_pending": "rejected",

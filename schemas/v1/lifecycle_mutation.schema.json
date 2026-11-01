@@ -17,7 +17,9 @@
     "publication_pending",
     "cleanup",
     "cleanup_pending",
-    "blockers"
+    "blockers",
+    "made_ready",
+    "made_ready_state"
   ],
   "properties": {
     "type": {
@@ -174,6 +176,47 @@
           "identity_required"
         ]
       }
+    },
+    "made_ready": {
+      "description": "The tickets this closure made ready: direct dependents that the index reads as open with every dependency closed, when this report was made, in ID order. Empty unless made_ready_state is current. Null for a promotion, which makes no ticket ready.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "slug"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "slug": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "made_ready_state": {
+      "description": "What made_ready is. current: the set read for this answer. index_pending: none yet, and the same request reads again. index_unavailable_final: none, and none will be computed; ticket ready is the live view. not_computed: none, since the closure has not reached primary. not_applicable: none, since this operation only finished cleaning up what primary already held. Null for a promotion.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "current",
+        "index_pending",
+        "index_unavailable_final",
+        "not_computed",
+        "not_applicable",
+        null
+      ]
     }
   }
 }

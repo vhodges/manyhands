@@ -796,6 +796,30 @@ contract_enum!(
     }
 );
 
+contract_enum!(
+    /// What a closure's `made_ready` is: `current`, the set read when this
+    /// answer was made; `index_pending`, none yet, and the same request reads
+    /// again; `index_unavailable_final`, none, and none will be computed, so
+    /// `ticket ready` is the live view; `not_computed`, none, since the closure
+    /// has not reached primary; `not_applicable`, none, since this operation
+    /// only finished cleaning up what primary already held.
+    LifecycleMadeReadyState {
+        Current => "current",
+        IndexPending => "index_pending",
+        IndexUnavailableFinal => "index_unavailable_final",
+        NotComputed => "not_computed",
+        NotApplicable => "not_applicable",
+    }
+);
+
+/// A ticket a closure made ready. Its title is not held: a request record
+/// stores this.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LifecycleMadeReadyDto {
+    pub id: String,
+    pub slug: Option<String>,
+}
+
 /// What `document promote` and `ticket close` report. An operation that
 /// reached primary reports how far it got; one refused for its blockers
 /// names them, and the rest is null. It holds IDs, commits and fixed
@@ -822,6 +846,12 @@ pub struct LifecycleMutationDto {
     pub cleanup_pending: Option<LifecycleCleanupPendingReason>,
     /// What refused the operation, in the domain's order. Empty otherwise.
     pub blockers: Vec<LifecycleBlocker>,
+    /// The tickets this closure made ready, in ID order. Empty unless
+    /// `made_ready_state` is `current`. Null for a promotion, which makes no
+    /// ticket ready.
+    pub made_ready: Option<Vec<LifecycleMadeReadyDto>>,
+    /// What `made_ready` is. Null for a promotion.
+    pub made_ready_state: Option<LifecycleMadeReadyState>,
 }
 
 impl LifecycleMutationDto {
@@ -902,6 +932,29 @@ impl LifecycleMutationDto {
                     )
                 })
                 .collect::<Option<_>>()?,
+            made_ready: match stored.get("made_ready")? {
+                serde_json::Value::Null => None,
+                value => Some(
+                    value
+                        .as_array()?
+                        .iter()
+                        .map(|entry| {
+                            Some(LifecycleMadeReadyDto {
+                                id: entry.get("id")?.as_str()?.to_owned(),
+                                slug: match entry.get("slug")? {
+                                    serde_json::Value::Null => None,
+                                    slug => Some(slug.as_str()?.to_owned()),
+                                },
+                            })
+                        })
+                        .collect::<Option<_>>()?,
+                ),
+            },
+            made_ready_state: optional_known(
+                text("made_ready_state")?,
+                &LifecycleMadeReadyState::ALL,
+                LifecycleMadeReadyState::as_str,
+            )?,
         })
     }
 }

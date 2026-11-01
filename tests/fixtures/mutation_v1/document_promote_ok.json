@@ -10,6 +10,8 @@
     "integration_oid": "<integration>",
     "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FDC",
     "kind": "document",
+    "made_ready": null,
+    "made_ready_state": null,
     "publication": "published",
     "publication_oid": "<integration>",
     "publication_pending": null,

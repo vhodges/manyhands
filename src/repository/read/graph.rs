@@ -281,6 +281,32 @@ impl TicketGraph {
         })
     }
 
+    /// The tickets that closing `id` made ready, in ID order: its direct
+    /// dependents that are open with every dependency closed. `id` counts as
+    /// closed, whatever this graph read of it: a caller asks once the closure
+    /// is on primary, and the index's copy of it can be behind until the
+    /// closure's refresh. `None` for an ID that is no ticket's.
+    pub(super) fn made_ready(&self, id: &str) -> Option<Vec<&str>> {
+        let ticket = self.position(id)?;
+        let mut found: Vec<&str> = self.dependents[ticket]
+            .iter()
+            .filter(|dependent| {
+                !self.closed[**dependent]
+                    && self.deps[**dependent].iter().all(|edge| {
+                        matches!(
+                            edge,
+                            Edge::Ticket(dependency)
+                                if self.closed[*dependency] || *dependency == ticket
+                        )
+                    })
+            })
+            .map(|dependent| self.ids[*dependent].as_str())
+            .collect();
+        found.sort_unstable();
+        found.dedup();
+        Some(found)
+    }
+
     /// The ticket's readiness with its reasons, which only a blocked
     /// ticket has.
     pub(super) fn readiness(&self, id: &str) -> Option<ReadinessDto> {
@@ -777,6 +803,20 @@ fn parent_cycles(parents: &[Option<usize>]) -> Vec<Vec<usize>> {
 
 /// What one relationship read has to answer from: the effective copy of
 /// every ticket the index holds, and what they are to each other.
+/// A ticket a closure made ready, as a report holds it: no title.
+pub(crate) struct MadeReadyTicket {
+    pub(crate) id: String,
+    pub(crate) slug: Option<String>,
+}
+
+/// What the index says a closure made ready.
+pub(crate) struct MadeReady {
+    pub(crate) tickets: Vec<MadeReadyTicket>,
+    /// Whether the answer can be relied on: every ticket was seen, the closed
+    /// one among them. When not, `tickets` is empty.
+    pub(crate) complete: bool,
+}
+
 pub(super) struct Tickets<'a> {
     by_id: BTreeMap<&'a str, &'a StoredItem>,
     pub(super) related: Related<'a>,
@@ -868,6 +908,38 @@ impl RepositoryService {
             })
         })
         .map_err(|error| repo.failure(error))
+    }
+
+    /// What closing `id` made ready, by the index's effective copy, now. An
+    /// index that is behind on `id` itself changes nothing, as
+    /// `TicketGraph::made_ready` says. Readiness is lifecycle closure, and a
+    /// status text plays no part.
+    pub(crate) fn tickets_made_ready(
+        &self,
+        repo: &ResolvedRepository,
+        id: &ItemId,
+    ) -> Result<MadeReady, ReadError> {
+        let id = id.to_string();
+        self.read_tickets(repo, |tickets| {
+            let found = tickets
+                .complete
+                .then(|| tickets.graph().made_ready(&id))
+                .flatten();
+            Ok(MadeReady {
+                complete: found.is_some(),
+                tickets: found
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|ticket| MadeReadyTicket {
+                        id: ticket.to_owned(),
+                        slug: tickets
+                            .by_id
+                            .get(ticket)
+                            .and_then(|row| row.relationships.slug.clone()),
+                    })
+                    .collect(),
+            })
+        })
     }
 
     /// The open tickets `filter` matches, in the ticket list ordering:

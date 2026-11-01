@@ -31,8 +31,11 @@
 //! **`operation resume`** enters a parent no request record holds through
 //! `Confirmed::row` and `Binding::rerun`, and decides its own record.
 //!
-//! **Left for later tasks.** Task 4 the made-ready report, and Task 6 the
-//! promotion identity row.
+//! **The made-ready report** is a closure's, read when an answer is made, so
+//! each retry reads again and a finished request's stored envelope keeps the
+//! last. A promotion reports none, by null, and reads nothing.
+//!
+//! **Left for later tasks.** Task 6 the promotion identity row.
 
 use std::{marker::PhantomData, path::Path, path::PathBuf};
 
@@ -61,12 +64,13 @@ use super::{
             TicketClosurePreflight, TicketClosurePreview, TicketClosureResult, closure, promotion,
             promotion::{
                 ParentView,
-                lifecycle::{LifecyclePreview, ParentStep},
+                lifecycle::{LifecyclePreview, LifecycleRecord, ParentStep},
                 lifecycle_record::Refusal,
-                record::PublicationCategory,
+                record::{IntegrationKind, PublicationCategory},
             },
             read_configuration_for,
             recovery::JournalRow,
+            remote::state::with_transaction,
             transport::SshTransportError,
         },
         command::Command,
@@ -74,12 +78,12 @@ use super::{
         context::context_names,
         dto::{
             LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupPendingReason,
-            LifecycleCleanupState, LifecycleIntegrationKind, LifecycleMutationDto,
-            LifecycleMutationType, LifecyclePathChangeDto, LifecyclePathChangeKind,
-            LifecyclePlannedCleanupDto, LifecyclePlannedClosureDto, LifecyclePlannedIntegration,
-            LifecyclePlannedPublication, LifecyclePreviewDto, LifecyclePublicationPendingReason,
-            LifecyclePublicationState, LifecycleRecording, MutationDataDto, PreviewDetailsDto,
-            PreviewEffect,
+            LifecycleCleanupState, LifecycleIntegrationKind, LifecycleMadeReadyDto,
+            LifecycleMadeReadyState, LifecycleMutationDto, LifecycleMutationType,
+            LifecyclePathChangeDto, LifecyclePathChangeKind, LifecyclePlannedCleanupDto,
+            LifecyclePlannedClosureDto, LifecyclePlannedIntegration, LifecyclePlannedPublication,
+            LifecyclePreviewDto, LifecyclePublicationPendingReason, LifecyclePublicationState,
+            LifecycleRecording, MutationDataDto, PreviewDetailsDto, PreviewEffect,
         },
         evidence::{self, Position},
         identity::{IntentDigestBuilder, RequestId, ScopeKey},
@@ -184,6 +188,17 @@ pub(crate) trait LifecycleVerb {
         root: &Path,
         operation: OperationId,
     ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError>;
+
+    /// Whether the operation's record says primary already held its context,
+    /// which is what makes a run that wrote no closure a cleanup only. Only a
+    /// closure asks. Unreadable reads as not.
+    fn already_contained(
+        _service: &RepositoryService,
+        _root: &Path,
+        _operation: OperationId,
+    ) -> bool {
+        false
+    }
 }
 
 pub(crate) struct Promote;
@@ -469,6 +484,17 @@ impl LifecycleVerb for Close {
         Ok(closure::lifecycle_parent(service, root, operation)?
             .map(|parent| parent.of_blockers(closure_blocker)))
     }
+
+    fn already_contained(service: &RepositoryService, root: &Path, operation: OperationId) -> bool {
+        with_transaction(service, root, |transaction, repository_id| {
+            Ok(
+                closure::record::read_record(transaction, repository_id, operation)?.is_some_and(
+                    |record| record.integration_kind() == Some(IntegrationKind::AlreadyContained),
+                ),
+            )
+        })
+        .unwrap_or(false)
+    }
 }
 
 pub(crate) struct LifecycleBinding<V> {
@@ -533,6 +559,29 @@ fn blocked_code(blockers: &[LifecycleBlocker]) -> ResultCode {
         [LifecycleBlocker::IdentityRequired] => ResultCode::IdentityRequired,
         [LifecycleBlocker::AlreadyClosed] => ResultCode::TicketClosed,
         _ => ResultCode::RecoveryRequired,
+    }
+}
+
+/// `made_ready` and `made_ready_state`, both null for a promotion.
+type MadeReadyReport = (
+    Option<Vec<LifecycleMadeReadyDto>>,
+    Option<LifecycleMadeReadyState>,
+);
+
+thread_local! {
+    /// What a test stages for the next report's read. A boundary runs on the
+    /// thread its caller called it on.
+    static MADE_READY_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+impl RepositoryService {
+    /// Has `hook` run once on this thread, immediately before the next
+    /// made-ready report's read: after the domain has answered, so that a test
+    /// can fail a read which that answer did not depend on.
+    #[doc(hidden)]
+    pub fn set_made_ready_hook_for_testing(&self, hook: impl FnOnce() + 'static) {
+        MADE_READY_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
 }
 
@@ -751,6 +800,9 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             cleanup: None,
             cleanup_pending: None,
             blockers: Vec::new(),
+            made_ready: (V::KIND == AuthoringKind::Ticket).then(Vec::new),
+            made_ready_state: (V::KIND == AuthoringKind::Ticket)
+                .then_some(LifecycleMadeReadyState::NotComputed),
         }
     }
 
@@ -759,7 +811,70 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         MutationDataDto::Lifecycle(Box::new(self.data()))
     }
 
-    fn reached_data(&self, reached: &Reached) -> LifecycleMutationDto {
+    /// The made-ready report of an operation that reached primary, which the
+    /// caller has read from how it got there. `cleanup_only` is the table's
+    /// `not_applicable`. A read that fails or is incomplete is `final` only when
+    /// the answer is: an operation still owed is read again by its next call,
+    /// so it says that instead (decision 8).
+    fn made_ready(
+        &self,
+        service: &RepositoryService,
+        root: &Path,
+        cleanup_only: bool,
+        index_pending: bool,
+        answer_is_final: bool,
+    ) -> MadeReadyReport {
+        if V::KIND != AuthoringKind::Ticket {
+            return (None, None);
+        }
+        let none = |state| (Some(Vec::new()), Some(state));
+        if cleanup_only {
+            return none(LifecycleMadeReadyState::NotApplicable);
+        }
+        if index_pending {
+            return none(LifecycleMadeReadyState::IndexPending);
+        }
+        if let Some(hook) = MADE_READY_HOOK.with(std::cell::RefCell::take) {
+            hook();
+        }
+        let read = resolve_root(service, root)
+            .ok()
+            .and_then(|repository| service.tickets_made_ready(&repository, &self.id).ok());
+        match read {
+            Some(read) if read.complete => (
+                Some(
+                    read.tickets
+                        .into_iter()
+                        .map(|ticket| LifecycleMadeReadyDto {
+                            id: ticket.id,
+                            slug: ticket.slug,
+                        })
+                        .collect(),
+                ),
+                Some(LifecycleMadeReadyState::Current),
+            ),
+            _ if answer_is_final => none(LifecycleMadeReadyState::IndexUnavailableFinal),
+            _ => none(LifecycleMadeReadyState::IndexPending),
+        }
+    }
+
+    fn reached_data(
+        &self,
+        service: &RepositoryService,
+        root: &Path,
+        reached: &Reached,
+    ) -> LifecycleMutationDto {
+        let (made_ready, made_ready_state) = self.made_ready(
+            service,
+            root,
+            reached.recording == Some(ClosureRecording::Existing)
+                && matches!(
+                    reached.integration,
+                    PromotionIntegration::AlreadyContained { oid: _ }
+                ),
+            reached.index_pending,
+            reached_code(reached) == ResultCode::Ok,
+        );
         let (recording, checkpoint_oid) = match reached.recording {
             Some(ClosureRecording::Recorded { checkpoint_oid }) => {
                 (Some(LifecycleRecording::Record), Some(checkpoint_oid))
@@ -803,13 +918,15 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             publication_pending: pending,
             cleanup: Some(cleanup),
             cleanup_pending: cleanup_reason,
+            made_ready,
+            made_ready_state,
             ..self.data()
         }
     }
 
     /// The answer to an operation that reached primary. What it left to do
     /// is the same request's to continue, whatever stopped it (decision 8).
-    fn reached(&self, accepted: &Accepted, reached: &Reached) -> Ran {
+    fn reached(&self, service: &RepositoryService, accepted: &Accepted, reached: &Reached) -> Ran {
         let code = reached_code(reached);
         // A code's own action for each of these would be wrong: a hand-off
         // is continued by the request that recomputes what it reports, and
@@ -824,7 +941,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
                 effects: reached_effects(reached),
                 recovery,
                 ..Answer::stopped(code).with_data(MutationDataDto::Lifecycle(Box::new(
-                    self.reached_data(reached),
+                    self.reached_data(service, &accepted.root(), reached),
                 )))
             },
             standing: if code == ResultCode::Ok {
@@ -897,12 +1014,28 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             };
         }
         let effects = parent_effects::<V>(service, &root, primary, &view);
+        let (made_ready, made_ready_state) = if effects.integration == IntegrationEffect::Complete {
+            let cleanup_only = view.checkpoint.is_none()
+                && V::already_contained(service, &root, accepted.operation_id);
+            self.made_ready(service, &root, cleanup_only, false, false)
+        } else {
+            (self.data().made_ready, self.data().made_ready_state)
+        };
+        let reports = |data: LifecycleMutationDto| LifecycleMutationDto {
+            made_ready: made_ready.clone(),
+            made_ready_state,
+            ..data
+        };
+        // A closure's stop reports; a promotion's has only its blockers to say.
+        let report = (V::KIND == AuthoringKind::Ticket)
+            .then(|| MutationDataDto::Lifecycle(Box::new(reports(self.data()))));
         // This call's stop is not the request's last word: the next call gets
         // the outcome the parent stored.
         if view.step == ParentStep::Complete {
             return Ran {
                 answer: Answer {
                     effects,
+                    data: report,
                     recovery: vec![outcome::same_request(accepted.request_id)],
                     ..Answer::stopped(code)
                 },
@@ -926,17 +1059,22 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             },
             (None, false) => None,
         };
-        let data = blockers.map(|blockers| {
-            let checkpoint = view
-                .checkpoint
-                .filter(|_| effects.checkpoint == CheckpointEffect::Committed);
-            MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
-                blockers,
-                recording: checkpoint.map(|_| LifecycleRecording::Record),
-                checkpoint_oid: checkpoint.map(|oid| oid.to_string()),
-                ..self.data()
-            }))
-        });
+        let data = match blockers {
+            Some(blockers) => {
+                let checkpoint = view
+                    .checkpoint
+                    .filter(|_| effects.checkpoint == CheckpointEffect::Committed);
+                Some(MutationDataDto::Lifecycle(Box::new(reports(
+                    LifecycleMutationDto {
+                        blockers,
+                        recording: checkpoint.map(|_| LifecycleRecording::Record),
+                        checkpoint_oid: checkpoint.map(|oid| oid.to_string()),
+                        ..self.data()
+                    },
+                ))))
+            }
+            None => report,
+        };
         Ran {
             answer: Answer {
                 effects,
@@ -963,7 +1101,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             )
         });
         let ran = match called {
-            Some(Ok(reached)) => self.reached(accepted, &reached),
+            Some(Ok(reached)) => self.reached(call.service, accepted, &reached),
             Some(Err(stop)) => {
                 let stop = self.interrupted_as_asked(call, accepted, stop);
                 self.stopped(call.service, accepted, stop, entered_again)
@@ -1688,6 +1826,7 @@ mod tests {
     thread_local! {
         static PARENT: std::cell::RefCell<Option<ParentView<LifecycleBlocker>>> =
             const { std::cell::RefCell::new(None) };
+        static CONTAINED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
 
     impl LifecycleVerb for Fixed {
@@ -1722,9 +1861,58 @@ mod tests {
         ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError> {
             Ok(PARENT.with(|parent| parent.borrow_mut().take()))
         }
+
+        fn already_contained(
+            _service: &RepositoryService,
+            _root: &Path,
+            _operation: OperationId,
+        ) -> bool {
+            CONTAINED.with(std::cell::Cell::get)
+        }
     }
 
     const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+
+    fn made_ready_state_of(ran: &Ran) -> Option<LifecycleMadeReadyState> {
+        match &ran.answer.data {
+            Some(MutationDataDto::Lifecycle(data)) => {
+                assert_eq!(data.made_ready, Some(Vec::new()));
+                data.made_ready_state
+            }
+            _ => panic!("a closure's stop reports"),
+        }
+    }
+
+    /// A stop has no outcome to read the recording from, so its report comes
+    /// from the parent. The read fails here, since the root is nowhere: the
+    /// request is owed, so it says the next call reads again.
+    #[test]
+    fn a_closures_stop_reports_from_its_parent() {
+        CONTAINED.with(|contained| contained.set(false));
+        let before = stopped_with(ParentStep::ContextSynchronized, None, Stop::Busy);
+        assert_eq!(
+            made_ready_state_of(&before),
+            Some(LifecycleMadeReadyState::NotComputed)
+        );
+        let past = stopped_with(ParentStep::Integrated, None, Stop::Busy);
+        assert_eq!(
+            made_ready_state_of(&past),
+            Some(LifecycleMadeReadyState::IndexPending)
+        );
+        CONTAINED.with(|contained| contained.set(true));
+        let cleanup = stopped_with(ParentStep::Integrated, None, Stop::Busy);
+        assert_eq!(
+            made_ready_state_of(&cleanup),
+            Some(LifecycleMadeReadyState::NotApplicable)
+        );
+        // A parent that says it is complete, under a stop of this call's.
+        let complete = stopped_with(ParentStep::Complete, None, Stop::Busy);
+        assert_eq!(
+            made_ready_state_of(&complete),
+            Some(LifecycleMadeReadyState::NotApplicable)
+        );
+        CONTAINED.with(|contained| contained.set(false));
+    }
 
     /// What `stopped` answers `stop` with, the parent being at `step`.
     fn stopped_with(

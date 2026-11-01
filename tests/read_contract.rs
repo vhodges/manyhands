@@ -712,8 +712,8 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
     let effects = "effects.schema.json";
     use manyhands::repository::{
         LifecycleBlocker, LifecycleCleanupPendingReason, LifecycleCleanupState,
-        LifecycleIntegrationKind, LifecycleMutationType, LifecyclePathChangeKind,
-        LifecyclePlannedIntegration, LifecyclePlannedPublication,
+        LifecycleIntegrationKind, LifecycleMadeReadyState, LifecycleMutationType,
+        LifecyclePathChangeKind, LifecyclePlannedIntegration, LifecyclePlannedPublication,
         LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
     };
     let mut enumerations = vec![
@@ -813,6 +813,13 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "lifecycle_mutation.schema.json",
             "blockers.items",
             LifecycleBlocker::ALL.map(LifecycleBlocker::as_str).to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "made_ready_state",
+            LifecycleMadeReadyState::ALL
+                .map(LifecycleMadeReadyState::as_str)
+                .to_vec(),
         ),
         (
             "local_context_sync_observation.schema.json",

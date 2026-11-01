@@ -602,3 +602,54 @@ The first `mutation_replay` run failed only on the E-10 row's expected outcome. 
 **Corrected from Task 3's report.** Its risks on a resume's `discovery_pending` and on a child's `remote_branch_deleted` are closed by R-32 and decision 19.
 
 **Verified on the final code, all exit 0.** `c5_resume` 56 cases (438 s), `resume` filter 96 (885 s, detached), `mutation_replay` 384 (279 s), `mutation_contract` 44 (26 s), `read_contract` 72 (14 s), `--lib mutation` 142 (15 s), `cargo fmt --check`, clippy `-D warnings`. After those runs only comments changed (a ruling's number), and fmt and clippy were rerun. No golden changed.
+
+### Task 4: Made-Ready Report
+
+**Base.** `98a176a5`. `origin/main` had not moved, so nothing was merged.
+
+**Failed and incomplete reads: the test hook.** `set_made_ready_hook_for_testing` (doc-hidden, in `bind/lifecycle.rs`) runs once, on the calling thread, immediately before the report's read. The failed read's row uses it to set a stored context's kind to a value no read can decode, so the read answers `invalid_stored_data`. The incomplete read's row uses it to store a `source` problem at `.manyhands/tickets`. I did not use the parent-table rename because the report's read doesn't touch that table, and a rename can't be undone without restoring the registry image, which would lose the settlement. The existing failure points and hooks all fire before the domain answers. A hook field on the service would need `src/repository.rs`, which is outside the library scope. `cfg(test)` shouldn't be set under `harness = false`; I reasoned that and did not test it. Cost: one thread-local take on the production read path.
+
+**Rows that answered otherwise, for the controller to confirm. I did not stop on these.**
+
+1. **A refused push.** The row first expected `current` with the set. It answered `index_pending`, because the domain returns `IndexPending` for a publication stop. No read is made. The table's own row says this, so I changed the row (`push_rejected_is_index_pending`). The same applies to a poll yield. The golden shows that a rejected deletion is `index_pending` too. So most partial runs report `index_pending`, and `current` on a partial run was seen only for a cleanup stop (a file of the owner's in the worktree). "A partial run reports it too" is narrower in practice than the design reads.
+2. **A stop past integration.** I wrote two rows expecting a `Stop` past integration: a held lease, and a poll yield. The lease row did not answer `busy`; its actual code was not read. The yield answered `poll_yielding`, as an outcome with domain `IndexPending`. Both rows were removed. No world I tried reaches `stopped()` past integration.
+3. **`promotion_stop_has_no_data`.** It first stopped at `AfterIntegrationRef`, which is an outcome with data, so it now stops at `BeforeIntegrationRef`. This was my fixture error.
+
+**The design's gap, implemented and pinned, for a ruling.** A failed or incomplete read while the operation is unfinished. The table's row says `index_unavailable_final`, `Final`, and decision 13 speaks of a complete closure. Storing `Final` on an unfinished parent would contradict decision 8 and would end a request that still has work. So `Final` applies only when the answer's code is `ok`. Otherwise the report is `index_pending` and the request stays `Owed`, since its next call does read again. Pinned by `failed_read_on_partial_stays_owed`. The effects can then say discovery `current` beside `index_pending`.
+
+**The closed ticket counts as closed in the read.** `TicketGraph::made_ready` treats T as closed whatever the index's copy says. This departs from plain `readiness_state`. The design says the context holds the closure, but the index's row for T was seen open (`closed_at` null) after a refused push. I made the change on a wrong first diagnosis of that row, whose real cause was item 1. It is kept because it is what the design's "behind changes nothing" requires, but only a unit row pins it; no end-to-end row needs it. If the index has no row for T, the read is incomplete.
+
+**Other decisions.**
+
+- A closure's stop with a parent now always carries data, which it didn't before. A promotion's doesn't.
+- A stop with no parent and no blockers still has no data, so no `not_computed` there.
+- A refusal's data says `not_computed` with `Final`, not the table's `Owed`: the answers table's standing for a refusal stands.
+- `not_applicable` comes before `index_pending` in the check order, so a superseding run with domain `IndexPending` reports `not_applicable`.
+- A resume's `index_pending` has nothing to follow it: the next resume is `already_applied`, so that report is never computed (R-32's limit).
+- Promotion: both fields required and null in the schema, no read made, pinned.
+
+**Seen first.** The first 24 rows ran against the DTO and schema alone: 23 failed and `promotion_reports_none` passed. Most failures were by assertion. Eight gave no line: the five stop or remote rows that returned a fixture error, and three remote rows whose fixture was then wrong. Those three were fixed before the code was trusted. The final rows then ran with the library forced to `not_computed`: 22 of 25 failed by assertion. `checkpoint_only` and both promotion rows passed, since they pin what is expected of that state. `made_ready`'s unit rows and `a_closures_stop_reports_from_its_parent` were written with the code and not seen failing.
+
+**Not exercised.** `Close::already_contained`, the real read of the record, is run by no row. With the stop-path branch removed, `superseding_stop` still passes as far as its stop, which is an outcome. The unit row covers the branch through a stand-in verb. `stopped()`'s `Complete` arm is also unit only.
+
+**Goldens.** 14 changed, additive only, each read. One new: `ticket_close_index_unavailable_final`.
+
+**Verified on the final code, all exit 0.**
+
+| Command | Result | Time |
+| --- | --- | --- |
+| `--test mutation_remote -- c5_made_ready` | 25 cases | 137 s |
+| `--test mutation_remote -- c5_lifecycle` (with goldens updated) | 126 | 1058 s |
+| `--test mutation_remote -- c5_resume` | 56 | 425 s |
+| `--test mutation_remote -- c5_cancel_` | 86 | 1370 s |
+| `--test mutation_replay` | 384 | 279 s |
+| `--test mutation_contract` | 44 | 12 s |
+| `--test read_contract` | 72 | 9 s |
+| `--test read_relationships` | 17 | 5 s |
+| `--lib read::graph` | 24 | 10 s |
+| `--lib mutation` | 143 | 1 s |
+| `cargo fmt --check`, `cargo check --all-features --locked`, clippy `-D warnings` | ok | 10, 12, 24 s |
+
+`c5_lifecycle` ran with the update flag, so its goldens were written, not compared. `c5_cancel_` and `mutation_replay` are beyond the task's list, since a closure's stop data and the stored shape changed.
+
+**File outside the task's list.** `src/repository/read/graph_tests.rs`, `tests/read_contract.rs`, `tests/support/mutation_golden.rs` and the fixtures, all within the scope and named edits. No `promotion/` or `closure/` file changed.

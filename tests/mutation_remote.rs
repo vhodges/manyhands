@@ -10,6 +10,8 @@ pub use production::*;
 mod c5_cancel;
 #[path = "mutation_remote/c5_lifecycle.rs"]
 mod c5_lifecycle;
+#[path = "mutation_remote/c5_made_ready.rs"]
+mod c5_made_ready;
 #[path = "mutation_remote/comment.rs"]
 mod comment;
 #[path = "mutation_remote/comment_domain.rs"]
@@ -72,6 +74,7 @@ fn main() {
         .chain(republish::CASES)
         .chain(c5_lifecycle::CASES)
         .chain(c5_cancel::CASES)
+        .chain(c5_made_ready::CASES)
         .copied()
         .collect();
     let controls: Vec<_> = OUTPUT_CONTROLS

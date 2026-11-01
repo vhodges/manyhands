@@ -185,6 +185,7 @@ pub const CASES: &[&str] = &[
     "ticket_close_deletion_rejected",
     "ticket_close_discovery_pending",
     "ticket_close_identity_required",
+    "ticket_close_index_unavailable_final",
     "ticket_close_item_not_found",
     "ticket_close_local_only",
     "ticket_close_ok",

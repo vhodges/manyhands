@@ -12,6 +12,8 @@
     "integration_oid": null,
     "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
     "kind": "ticket",
+    "made_ready": [],
+    "made_ready_state": "not_computed",
     "publication": null,
     "publication_oid": null,
     "publication_pending": null,
