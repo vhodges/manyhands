@@ -525,7 +525,7 @@ These rows change a row by SQL, except `stays_past_its_fetch` and `released_reso
 
 **Base.** `3f6037c7`. `origin/main` had not moved, so nothing was merged.
 
-**Tests first.** 31 `c5_resume_` cases and the E-10 row ran against the unchanged library. 29 cases and the E-10 row failed by assertion on the answer. `pending_child`, both verbs, passed: it pins what exists. `no_record_past_integration` and `complete_with_record_accepted` first failed on fixture faults (below). Once those were fixed they were run against the old library again, with its three files put back for the run, and failed by assertion on the code (`operation_not_found`'s line).
+**Tests first.** 31 `c5_resume_` cases and the E-10 row ran against the unchanged library. 29 cases and the E-10 row failed by assertion on the answer. `pending_child`, both verbs, passed: it pins what exists. `no_record_past_integration` and `complete_with_record_accepted` first failed on fixture faults (below). Once those were fixed they were run against the old library again, with its three files put back for the run, and failed by assertion on the result code. The harness reports only the line, so which code the old library gave wasn't read.
 
 **Fixture faults, none a changed answer.**
 
