@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 lifecycle mutation",
-  "description": "The data of a result of document promote or ticket close. One that reached primary reports how far it got; one refused for its blockers names them, and the rest is null. It holds IDs, commits and fixed categories: no closed_by, title or body.",
+  "description": "The data of a result of document promote or ticket close, or of an operation resume that continued one. One that reached primary reports how far it got; one refused for its blockers names them, and the rest is null. It holds IDs, commits and fixed categories: no closed_by, title or body.",
   "type": "object",
   "additionalProperties": false,
   "required": [

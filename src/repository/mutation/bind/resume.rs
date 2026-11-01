@@ -105,19 +105,24 @@ pub struct OperationResumeInput {
 /// that stops leaves no record, and its request ID is free. Its record
 /// is finished when the operation's end state is reached or is final,
 /// and is kept accepted only where nothing could be read of the
-/// operation, for the same request to look again.
+/// operation, for the same request to look again, or where a call of it
+/// entered again met a failure that passes by itself and may be meeting the
+/// call it came after (R-35).
 ///
 /// **What its result claims** is what its own call did or the operation
 /// itself shows. A hand-off it ran is `discovery: current` and nothing
 /// else: the write and the commit are the result of the request that
 /// made them. A synchronization it took up reports what that operation
-/// reports to its own request, from the same evidence.
+/// reports to its own request, from the same evidence, and a promotion or a
+/// closure it continued reports what that verb reports, through its binding.
 ///
 /// **Cancellation.** The call's token is honored before the request is
 /// accepted, and at the safe points of a synchronization it takes up,
 /// where it ends that operation as it would for the operation's own
-/// request. `request cancel` asks nothing of a resume, but for a parent it
-/// continues: that domain call's safe points read this request's flag.
+/// request. `request cancel` asks nothing of a resume: its command does not
+/// stop at safe points, so the answer is `requested: false` and no flag is set.
+/// The one flag on a resume's record is the one its own call sets to let a
+/// parent's child go (decision 19; see `continued`).
 pub(crate) struct OperationResumeBinding {
     root: PathBuf,
     operation_id: OperationId,
@@ -227,6 +232,10 @@ enum Named {
     /// request record holds: it is continued under its own ID, with what its
     /// parent record holds.
     Lifecycle { verb: Verb, item_id: ItemId },
+    /// A promotion or a closure that is complete. A fresh resume has nothing
+    /// to do. One entered again may be what completed it, so it is given the
+    /// outcome the parent stored and its report (R-33).
+    Complete { verb: Verb, item_id: ItemId },
     /// What nothing takes up under its ID: a poll no accepted request record
     /// holds, and a promotion or a closure that a consent refusal ended or
     /// that was superseded. It is no operation this command is for.
@@ -241,7 +250,7 @@ enum Verb {
 }
 
 /// How a parent stands for a resume, from what its record holds. A complete
-/// parent is `already_applied`, whoever holds it, and one that ended or was
+/// parent is complete, whoever holds it, and one that ended or was
 /// superseded has nothing left to continue, whoever holds it.
 fn lifecycle_standing(
     connection: &rusqlite::Connection,
@@ -252,8 +261,9 @@ fn lifecycle_standing(
     ended_by_refusal: bool,
 ) -> rusqlite::Result<Named> {
     Ok(match record.step() {
-        ParentStep::Complete => Named::Ended {
-            synchronization: None,
+        ParentStep::Complete => Named::Complete {
+            verb,
+            item_id: record.item_id().clone(),
         },
         ParentStep::Abandoned | ParentStep::Superseded => Named::NotResumable,
         _ if ended_by_refusal => Named::NotResumable,
@@ -279,6 +289,17 @@ fn lifecycle_standing(
     })
 }
 
+/// The registered repository at `root`, the root as its rows name it.
+fn repository_id(connection: &rusqlite::Connection, root: &str) -> rusqlite::Result<Option<i64>> {
+    connection
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path = ?1",
+            [root],
+            |row| row.get(0),
+        )
+        .optional()
+}
+
 /// How the ID stands in the two parent tables of the repository at `root`.
 /// `None` when neither holds it, or the repository is not registered.
 #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
@@ -287,17 +308,10 @@ fn found_lifecycle(
     root: &str,
     operation_id: OperationId,
 ) -> Result<Option<Named>, ReadError> {
-    let repository: Option<i64> = connection
-        .query_row(
-            "SELECT id FROM repositories WHERE root_path = ?1",
-            [root],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let Some(repository) = repository else {
+    let Some(repository) = repository_id(connection, root)? else {
         return Ok(None);
     };
-    if recovery::has_table(connection, DOCUMENT_PROMOTIONS)?
+    if recovery::has_table(connection, promotion::record::TABLE)?
         && let Some(record) = promotion::record::read_record(connection, repository, operation_id)?
     {
         return Ok(Some(lifecycle_standing(
@@ -309,7 +323,7 @@ fn found_lifecycle(
             record.refusal().is_some(),
         )?));
     }
-    if recovery::has_table(connection, TICKET_CLOSURES)?
+    if recovery::has_table(connection, closure::record::TABLE)?
         && let Some(record) = closure::record::read_record(connection, repository, operation_id)?
     {
         return Ok(Some(lifecycle_standing(
@@ -323,10 +337,6 @@ fn found_lifecycle(
     }
     Ok(None)
 }
-
-/// The tables `promotion::record` and `closure::record` keep their parents in.
-const DOCUMENT_PROMOTIONS: &str = "document_promotions";
-const TICKET_CLOSURES: &str = "ticket_closures";
 
 /// The standing of a pending operation that only its own request goes
 /// on with: that request, when an unfinished record of `family` in
@@ -481,14 +491,7 @@ fn written_paths_only(
     root: &str,
     synchronization: OperationId,
 ) -> Result<Option<Named>, ReadError> {
-    let repository: Option<i64> = connection
-        .query_row(
-            "SELECT id FROM repositories WHERE root_path = ?1",
-            [root],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let Some(repository) = repository else {
+    let Some(repository) = repository_id(connection, root)? else {
         return Ok(None);
     };
     if !conflict::attempt_phases(connection, repository, synchronization)?
@@ -733,8 +736,8 @@ fn found_local(
 }
 
 /// How the operation `operation_id` stands for the repository at
-/// `root`, the root as its journal rows name it. One read of the three
-/// journals; see `OperationResumeBinding::observe`.
+/// `root`, the root as its journal rows name it. One read of the parent
+/// tables and the three journals; see `OperationResumeBinding::observe`.
 #[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
 fn named(
     service: &RepositoryService,
@@ -791,6 +794,10 @@ pub(crate) fn takes_up(service: &RepositoryService, root: &str, operation_id: Op
             | Named::Ended { synchronization: _ }
             | Named::LeftToInspect { synchronization: _ }
             | Named::OriginalRequest { request: _ }
+            | Named::Complete {
+                verb: _,
+                item_id: _,
+            }
             | Named::Fenced
             | Named::Unowned
             | Named::NotResumable,
@@ -801,13 +808,37 @@ pub(crate) fn takes_up(service: &RepositoryService, root: &str, operation_id: Op
 
 /// A parent's own binding, entered again: the record's expectation is read,
 /// and the domain is called with it under the parent's operation.
+///
+/// A stop the same call can't get past has no request whose cancellation could
+/// let its child go, so this call asks (decision 19): it sets its own record's
+/// flag, which the domain's safe points read, and calls once more. That call
+/// stops at its first safe point and the runner releases the child if its
+/// guards prove it safe. The parent's own flag would not do: a call that finds
+/// it clears it and goes on. What is answered is still the stop.
 fn continued<V: LifecycleVerb>(
     mut binding: LifecycleBinding<V>,
     call: &CallContext<'_>,
     operation: &Accepted,
 ) -> Ran {
     match Confirmed::row(&mut binding, call, operation, &NO_ROW) {
-        Row::Unfinished => Binding::rerun(&binding, call, operation, &Entered::Unfinished),
+        Row::Unfinished => {
+            let first = Binding::rerun(&binding, call, operation, &Entered::Unfinished);
+            if !outcome::never_gets_past(first.answer.code)
+                || !matches!(first.standing, Standing::Owed)
+                || !matches!(
+                    call.service.request_cancellation(operation.request_id),
+                    Ok(true)
+                )
+            {
+                return consent_refusal_named(first, &binding);
+            }
+            let second = Binding::rerun(&binding, call, operation, &Entered::Unfinished);
+            if second.answer.code == ResultCode::Cancelled {
+                return first;
+            }
+            let _ = call.service.take_cancellation(operation.request_id);
+            consent_refusal_named(second, &binding)
+        }
         Row::Answers(ran) => *ran,
         // It was there a moment ago. Nothing is known: the record is left.
         Row::Impossible | Row::Recorded | Row::Unrecorded => Ran {
@@ -815,6 +846,24 @@ fn continued<V: LifecycleVerb>(
             standing: Standing::Stopped { journal: None },
         },
     }
+}
+
+/// A consent refusal met by a resume ends the parent, and what goes on from it
+/// is a new prepare of the verb: named in the data, since the resume's own
+/// target is the operation (R-31).
+fn consent_refusal_named<V: LifecycleVerb>(ran: Ran, binding: &LifecycleBinding<V>) -> Ran {
+    let Ran { answer, standing } = ran;
+    let refused = matches!(standing, Standing::Final) && answer.code == ResultCode::ExternalChange;
+    let answer = if refused {
+        Answer {
+            recovery: vec![outcome::prepare_again()],
+            data: Some(answer.data.unwrap_or_else(|| binding.naming_its_item())),
+            ..answer
+        }
+    } else {
+        answer
+    };
+    Ran { answer, standing }
 }
 
 /// The position of the repository's primary branch, as a lifecycle request's
@@ -858,10 +907,11 @@ impl OperationResumeBinding {
     }
 
     /// Reads how the operation stands. Nothing is written and no lease
-    /// is taken. The three journals are asked in one read: the remote
-    /// one first, whose synchronizations also have a row of the local
-    /// journal under their ID for their index hand-off, then the key
-    /// journal, then the local one.
+    /// is taken. All are asked in one read: the parent tables first, since a
+    /// parent usually has no journal row (fact 29), then the remote journal,
+    /// whose synchronizations also have a row of the local journal under
+    /// their ID for their index hand-off, then the key journal, then the
+    /// local one.
     fn observe(&self, service: &RepositoryService) -> Result<(ScopeKey, Named), Answer> {
         let scope = self
             .scope_key()
@@ -893,7 +943,11 @@ impl OperationResumeBinding {
             Named::Abandoned => Answer::stopped(outcome::repository_error_code(
                 RepositoryErrorKind::OperationAbandoned,
             )),
-            Named::Ended { synchronization: _ } => Answer::stopped(ResultCode::AlreadyApplied),
+            Named::Ended { synchronization: _ }
+            | Named::Complete {
+                verb: _,
+                item_id: _,
+            } => Answer::stopped(ResultCode::AlreadyApplied),
             Named::LeftToInspect { synchronization: _ } => {
                 Answer::stopped(ResultCode::RecoveryRequired)
             }
@@ -1197,15 +1251,72 @@ impl OperationResumeBinding {
                 &operation,
             ),
         };
-        self.lifecycle_kept(ran, accepted)
+        let command = match verb {
+            Verb::Promote => Command::DocumentPromote,
+            Verb::Close => Command::TicketClose,
+        };
+        self.lifecycle_kept(ran, accepted, command)
+    }
+
+    /// The action that takes the named operation up again.
+    fn resume_action(&self) -> RecoveryAction {
+        RecoveryAction::for_operation(
+            RecoveryActionKind::OperationResume,
+            self.operation_id.to_string(),
+            [],
+        )
+    }
+
+    /// What a resume that stopped offers: a resume first, then what the verb
+    /// offers for the code, less what names a request, since none holds the
+    /// parent (R-30). A hand-off is owed by a parent that is complete, which no
+    /// resume takes up: the index is what is refreshed (R-32).
+    fn lifecycle_recovery(
+        &self,
+        answer: &Answer,
+        accepted: &Accepted,
+        command: Command,
+    ) -> Vec<RecoveryAction> {
+        let root = accepted.scope.repository();
+        if answer.code == ResultCode::DiscoveryPending {
+            return root.map(outcome::refresh_the_root).into_iter().collect();
+        }
+        let verbs = outcome::offered(
+            &outcome::Named {
+                code: answer.code,
+                command,
+                root,
+                request_id: Some(accepted.request_id),
+                operation_id: Some(self.operation_id),
+                retry: true,
+                unsettled: false,
+            },
+            answer.recovery.clone(),
+            answer.offers_nothing,
+            None,
+        );
+        if answer.offers_nothing {
+            return verbs;
+        }
+        std::iter::once(self.resume_action())
+            .chain(verbs.into_iter().filter(|action| {
+                !matches!(
+                    action.action,
+                    RecoveryActionKind::RequestRetry
+                        | RecoveryActionKind::RequestCancel
+                        | RecoveryActionKind::OperationResume
+                )
+            }))
+            .collect()
     }
 
     /// What becomes of this request's record, given what a parent's binding
     /// made of the call. An answer the parent has made final is stored.
     /// Anything else leaves no record of the resume, since the parent is what
-    /// stands: the request the binding would offer again is this operation's
-    /// next resume.
-    fn lifecycle_kept(&self, ran: Ran, accepted: &Accepted) -> Ran {
+    /// stands. But a call entered again that met a failure that passes by
+    /// itself may be meeting the call it came after, whose record it is too,
+    /// so it is left under that call (R-35, by R-27's rule).
+    fn lifecycle_kept(&self, ran: Ran, accepted: &Accepted, command: Command) -> Ran {
         let Ran { answer, standing } = ran;
         let gone = Standing::Stopped {
             journal: Some(NO_ROW),
@@ -1216,25 +1327,15 @@ impl OperationResumeBinding {
                 standing: Standing::Final,
             },
             Standing::Owed => {
-                let mut answer = answer;
-                let same_request = outcome::same_request(accepted.request_id);
-                let resume = RecoveryAction::for_operation(
-                    RecoveryActionKind::OperationResume,
-                    self.operation_id.to_string(),
-                    [],
-                );
-                if answer.recovery.is_empty() && !answer.offers_nothing {
-                    answer.recovery.push(resume);
+                let recovery = self.lifecycle_recovery(&answer, accepted, command);
+                let standing = if self.entered_again && outcome::passes_by_itself(answer.code) {
+                    Standing::Stopped { journal: None }
                 } else {
-                    for action in &mut answer.recovery {
-                        if *action == same_request {
-                            *action = resume.clone();
-                        }
-                    }
-                }
+                    gone
+                };
                 Ran {
-                    answer,
-                    standing: gone,
+                    answer: Answer { recovery, ..answer },
+                    standing,
                 }
             }
             Standing::Stopped { journal: None } => Ran {
@@ -1272,11 +1373,7 @@ impl OperationResumeBinding {
             // still owed, which a resume is what does.
             Standing::Owed => Ran {
                 answer: Answer {
-                    recovery: vec![RecoveryAction::for_operation(
-                        RecoveryActionKind::OperationResume,
-                        self.operation_id.to_string(),
-                        [],
-                    )],
+                    recovery: vec![self.resume_action()],
                     ..answer
                 },
                 standing: gone,
@@ -1346,6 +1443,11 @@ impl OperationResumeBinding {
                 target: _,
             } => self.publish_comment(call, accepted, comment, synchronization),
             Named::Lifecycle { verb, item_id } => self.lifecycle(call, accepted, verb, item_id),
+            // Its earlier call may be what completed it: the stored outcome
+            // and its report, with no transport (R-33).
+            Named::Complete { verb, item_id } if self.entered_again => {
+                self.lifecycle(call, accepted, verb, item_id)
+            }
             // A synchronization that has ended, met by a request whose
             // earlier call may be what ended it: the domain is asked
             // what the operation came to, which it answers from the row
@@ -1363,6 +1465,10 @@ impl OperationResumeBinding {
             | Named::Ended { synchronization: _ }
             | Named::LeftToInspect { synchronization: _ }
             | Named::OriginalRequest { request: _ }
+            | Named::Complete {
+                verb: _,
+                item_id: _,
+            }
             | Named::Fenced
             | Named::Unowned
             | Named::NotResumable => Ran {
@@ -1455,6 +1561,10 @@ impl Binding for OperationResumeBinding {
             | Named::LeftToInspect { synchronization: _ }
             | Named::HandOff
             | Named::OriginalRequest { request: _ }
+            | Named::Complete {
+                verb: _,
+                item_id: _,
+            }
             | Named::Fenced
             | Named::Unowned
             | Named::NotResumable => Position {
@@ -1533,6 +1643,10 @@ impl Binding for OperationResumeBinding {
                 target: _,
             }
             | Named::Lifecycle {
+                verb: _,
+                item_id: _,
+            }
+            | Named::Complete {
                 verb: _,
                 item_id: _,
             }

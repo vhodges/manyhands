@@ -270,7 +270,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 
 **Files:** Modify `tests/cli/collaboration_exits.rs` (E-8), `tests/cli/exits.rs`, `tests/cli_remote/lifecycle.rs`.
 
-- [ ] **Step 1:** Walk every `next:` line through the binary until the reservation is free, for each stop the lifecycle, poll and context verbs can print. Record each in the ledger.
+- [ ] **Step 1:** Walk every `next:` line through the binary until the reservation is free, for each stop the lifecycle, poll and context verbs can print. Include decision 19's route: an `operation resume` with no request record stopped at `remote_branch_deleted`, then `item republish`, then `operation resume`, one merge. Record each in the ledger.
 - [ ] **Step 2:** Extend the exit table's set equality, with a reason for each unreachable code.
 - [ ] **Step 3: Verify.** `--test cli_remote -- c5_lifecycle_walk`, `--test cli -- exits`.
 - [ ] **Step 4:** Commit `test: walk C5 recovery paths and account for exit codes`. Ticket comment. Push.

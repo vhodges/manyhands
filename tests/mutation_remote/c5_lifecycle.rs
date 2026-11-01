@@ -170,12 +170,34 @@ const RESUMES: &[ssh_harness::Case] = resumes![
     "ctrl_c" => resume_ctrl_c,
     "entered_again" => resume_entered_again,
     "index_pending" => resume_index_pending,
+    "child_identity_stop" => resume_child_identity_stop,
+    "cleanup_recovery" => resume_cleanup_recovery,
+    "superseded_no_record" => resume_superseded_no_record,
+    "refused_no_record" => resume_refused_no_record,
+    "before_integration_ref" => resume_before_integration_ref,
+    "after_integration_ref" => resume_after_integration_ref,
+    "ctrl_c_releases_child" => resume_ctrl_c_releases_child,
+    "request_cancel_asks_nothing" => resume_request_cancel_asks_nothing,
+    "walk_remote_branch_deleted" => resume_walk_remote_branch_deleted,
+    "kept_child_stays" => resume_kept_child_stays,
+    "concurrent_same_id" => resume_concurrent_same_id,
 ];
 
-const RESUMES_ONE: &[ssh_harness::Case] = &[(
-    "c5_resume_no_record_checkpoint_close",
-    resume_no_record_checkpoint,
-)];
+const RESUMES_ONE: &[ssh_harness::Case] = &[
+    (
+        "c5_resume_no_record_checkpoint_close",
+        resume_no_record_checkpoint,
+    ),
+    ("c5_resume_identity_stop_promote", resume_identity_stop),
+    (
+        "c5_resume_identity_after_checkpoint_close",
+        resume_identity_after_checkpoint,
+    ),
+    (
+        "c5_resume_refused_checkpoint_merge_close",
+        resume_refused_checkpoint_merge,
+    ),
+];
 
 const LIFECYCLE: [ssh_harness::Case; BOTH.len() + ONE.len()] = joined(BOTH, ONE);
 const RESUMING: [ssh_harness::Case; RESUMES.len() + RESUMES_ONE.len()] =
@@ -2735,6 +2757,16 @@ fn begun_outside(
     verb: Verb,
     root: &Path,
 ) -> Result<String, FixtureError> {
+    begun_outside_after(service, verb, root, || Ok(()))
+}
+
+/// `begun_outside`, with `between` run after its preview and before its call.
+fn begun_outside_after(
+    service: &RepositoryService,
+    verb: Verb,
+    root: &Path,
+    between: impl FnOnce() -> Result<(), FixtureError>,
+) -> Result<String, FixtureError> {
     let operation_id = OperationId::new();
     let item_id: canonical::ItemId = verb.id().parse().map_err(|_| FixtureError)?;
     let mut session = SessionCredentials::new(Provider);
@@ -2749,6 +2781,7 @@ fn begun_outside(
             else {
                 return Err(FixtureError);
             };
+            between()?;
             // A stop past integration is an outcome with its cleanup pending,
             // and one before it is an error: the parent stands either way.
             let _stopped = service.promote_document(
@@ -2773,6 +2806,7 @@ fn begun_outside(
             else {
                 return Err(FixtureError);
             };
+            between()?;
             let _stopped = service.close_ticket(
                 CloseTicketRequest {
                     root: root.to_owned(),
@@ -3102,20 +3136,28 @@ fn resume_grants_no_new_consent(verb: Verb) -> Result<(), FixtureError> {
         "{:?}",
         refused.data
     );
-    // A resume has no confirmation of its own to prepare again.
-    assert_eq!(refused.recovery, []);
+    assert_eq!(actions(&refused), [RecoveryActionKind::RequestPrepare]);
+    let data = lifecycle_of(&refused).ok_or(FixtureError)?;
+    assert_eq!(data.item_id, verb.id());
+    assert_eq!(data.kind, verb_kind(verb));
     assert_eq!(merges_on_primary(&local.repo()?)?, 0);
     assert_eq!(
         local_state(&local, RESUME),
         Some(RequestState::Finished),
         "the parent's end is final"
     );
+    // A replay gives what was stored, and no actions are stored (R-31).
+    let replayed = resumed_under(&local.service, RESUME, &local.root, &operation);
+    assert_eq!(replayed.code, ResultCode::ExternalChange);
+    assert_eq!(replayed.data, refused.data);
+    assert_eq!(replayed.recovery, []);
     let again = resumed_under(&local.service, SECOND, &local.root, &operation);
     assert_refused_resume(
         &again,
         ResultCode::InvalidInput,
         local_state(&local, SECOND),
     );
+    assert_eq!(again.recovery, []);
     Ok(())
 }
 
@@ -3207,8 +3249,7 @@ fn resume_ctrl_c(verb: Verb) -> Result<(), FixtureError> {
 }
 
 /// A resume that died once accepted is entered again and continues; one that
-/// died after finishing the parent is `already_applied`, as any other
-/// operation's end state is to a resume entered again.
+/// died after finishing the parent gets the stored outcome (R-33).
 fn resume_entered_again(verb: Verb) -> Result<(), FixtureError> {
     let (local, operation) = outside_local(verb, FailurePoint::AfterConfirmed)?;
     let dies = failing_service(&local_data(&local), FailurePoint::BeforeRequestDomainCall)?;
@@ -3220,9 +3261,21 @@ fn resume_entered_again(verb: Verb) -> Result<(), FixtureError> {
     assert_eq!(died.code, ResultCode::InternalError);
     assert_eq!(merges_on_primary(&local.repo()?)?, 1);
     assert_eq!(local_state(&local, RESUME), Some(RequestState::Accepted));
+    // The stored outcome and its report, from no transport: a local world has
+    // none to reach.
     let answered = resumed_under(&local.service, RESUME, &local.root, &operation);
-    assert_eq!(answered.code, ResultCode::AlreadyApplied);
+    assert_eq!(answered.code, ResultCode::Ok, "{:?}", answered.data);
+    assert_eq!(answered.effects.integration, IntegrationEffect::Complete);
+    assert!(lifecycle_of(&answered).is_some(), "the stored report");
+    assert_eq!(local_state(&local, RESUME), Some(RequestState::Finished));
     assert_eq!(merges_on_primary(&local.repo()?)?, 1);
+    // A fresh resume of the same parent stays a no-op.
+    let fresh = resumed_under(&local.service, SECOND, &local.root, &operation);
+    assert_refused_resume(
+        &fresh,
+        ResultCode::AlreadyApplied,
+        local_state(&local, SECOND),
+    );
     Ok(())
 }
 
@@ -3240,6 +3293,7 @@ fn resume_index_pending(verb: Verb) -> Result<(), FixtureError> {
     );
     assert_eq!(local_state(&local, RESUME), None, "no holding record");
     assert!(lifecycle_of(&pending).is_some());
+    assert_eq!(actions(&pending), [RecoveryActionKind::IndexRefresh]);
     assert_eq!(merges_on_primary(&local.repo()?)?, 1);
     let next = resumed_under(&local.service, RESUME, &local.root, &operation);
     assert_refused_resume(
@@ -3247,5 +3301,418 @@ fn resume_index_pending(verb: Verb) -> Result<(), FixtureError> {
         ResultCode::AlreadyApplied,
         local_state(&local, RESUME),
     );
+    Ok(())
+}
+
+fn verb_kind(verb: Verb) -> ItemDtoKind {
+    match verb {
+        Verb::Promote => ItemDtoKind::Document,
+        Verb::Close => ItemDtoKind::Ticket,
+    }
+}
+
+/// A promotion's merge with its identity gone: the resume first, then the
+/// verb's own action. No request is offered, since none holds the parent.
+fn resume_identity_stop() -> Result<(), FixtureError> {
+    let verb = Verb::Promote;
+    let (local, operation) = outside_local(verb, FailurePoint::AfterContextSync)?;
+    forget_identity(&local.repo()?)?;
+    let stopped = resumed_under(&local.service, RESUME, &local.root, &operation);
+    assert_identity_stop(&stopped);
+    assert_eq!(local_state(&local, RESUME), None, "no holding record");
+    assert_eq!(merges_on_primary(&local.repo()?)?, 0);
+    Ok(())
+}
+
+fn assert_identity_stop(stopped: &Envelope<MutationDataDto>) {
+    assert_eq!(
+        stopped.code,
+        ResultCode::IdentityRequired,
+        "{:?}",
+        stopped.data
+    );
+    assert_eq!(
+        actions(stopped),
+        [
+            RecoveryActionKind::OperationResume,
+            RecoveryActionKind::RepoIdentitySet
+        ]
+    );
+}
+
+/// After a closure's checkpoint `closed_by` comes from the commit, so none is
+/// needed (the design's Identity table): the closure finishes.
+fn resume_identity_after_checkpoint() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let (local, operation) = outside_local(verb, FailurePoint::AfterClosureCheckpoint)?;
+    forget_identity(&local.repo()?)?;
+    let done = resumed_under(&local.service, RESUME, &local.root, &operation);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(merges_on_primary(&local.repo()?)?, 1);
+    Ok(())
+}
+
+/// A context child that must merge a peer's commit, with the identity gone.
+fn resume_child_identity_stop(verb: Verb) -> Result<(), FixtureError> {
+    let mut w = remote(verb)?;
+    fixed(w.sync(w.request(context_target(verb)?)))?;
+    let peer = fixed(w.peer.workdir().ok_or(FixtureError).map(Path::to_owned))?;
+    let mut fetch = git2::FetchOptions::new();
+    fetch.remote_callbacks(callbacks(&w.server));
+    fixed(fixed(w.peer.find_remote("origin"))?.fetch(
+        &[format!("+{0}:{0}", verb.branch())],
+        Some(&mut fetch),
+        None,
+    ))?;
+    commit_in(&peer, verb.branch(), "peer.txt", b"the peer's\n")?;
+    push_peer(&w.peer, &w.server, verb.branch())?;
+    commit_in(
+        &verb.worktree(&w.root),
+        verb.branch(),
+        "own.txt",
+        b"the owner's\n",
+    )?;
+    let failing = failing_service(&w.data(), FailurePoint::AfterConfirmed)?;
+    let operation = begun_outside(&failing, verb, &w.root)?;
+    w.service = clean_service(&w.data())?;
+    forget_identity(&w.repo()?)?;
+    let stopped = resumed_under(&w.service, RESUME, &w.root, &operation);
+    assert_identity_stop(&stopped);
+    assert_eq!(state_of(&w, RESUME), None, "no holding record");
+    assert_eq!(merges_on_primary(&w.repo()?)?, 0);
+    Ok(())
+}
+
+/// `recovery_required` from cleanup: the whole list.
+fn resume_cleanup_recovery(verb: Verb) -> Result<(), FixtureError> {
+    let (w, operation) = outside_remote(verb, FailurePoint::AfterPublication)?;
+    let untracked = verb.worktree(&w.root).join("untracked.txt");
+    fixed(std::fs::write(&untracked, b"the owner's\n"))?;
+    let stopped = resumed_under(&w.service, RESUME, &w.root, &operation);
+    assert_eq!(
+        stopped.code,
+        ResultCode::RecoveryRequired,
+        "{:?}",
+        stopped.data
+    );
+    assert_eq!(
+        actions(&stopped),
+        [
+            RecoveryActionKind::OperationResume,
+            RecoveryActionKind::RepoInspect
+        ]
+    );
+    assert_eq!(state_of(&w, RESUME), None, "no holding record");
+    fixed(std::fs::remove_file(&untracked))?;
+    let done = resumed_under(&w.service, RESUME, &w.root, &operation);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(merges_on_primary(&w.repo()?)?, 1);
+    Ok(())
+}
+
+/// A closure checkpoint's refused merge under a resume: the whole list, with
+/// the blocker in the data.
+fn resume_refused_checkpoint_merge() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let (w, operation) = outside_remote(verb, FailurePoint::AfterClosureCheckpoint)?;
+    let conflicting = fixed(w.peer.workdir().ok_or(FixtureError).map(Path::to_owned))?;
+    commit_in(
+        &conflicting,
+        MAIN,
+        &format!(".manyhands/tickets/{ITEM}/ticket.md"),
+        b"conflicting\n",
+    )?;
+    push_peer(&w.peer, &w.server, MAIN)?;
+    poll(&w)?;
+    let refused = resumed_under(&w.service, RESUME, &w.root, &operation);
+    assert_eq!(
+        refused.code,
+        ResultCode::RecoveryRequired,
+        "{:?}",
+        refused.data
+    );
+    assert_eq!(
+        actions(&refused),
+        [
+            RecoveryActionKind::OperationResume,
+            RecoveryActionKind::RepoInspect
+        ]
+    );
+    let data = lifecycle_of(&refused).ok_or(FixtureError)?;
+    assert!(
+        data.blockers
+            .contains(&LifecycleBlocker::IntegrationConflict),
+        "{:?}",
+        data.blockers
+    );
+    assert_eq!(state_of(&w, RESUME), None, "no holding record");
+    Ok(())
+}
+
+/// Superseded with no request record ever holding it.
+fn resume_superseded_no_record(verb: Verb) -> Result<(), FixtureError> {
+    let (w, operation) = outside_remote(verb, FailurePoint::AfterPublication)?;
+    let untracked = verb.worktree(&w.root).join("untracked.txt");
+    fixed(std::fs::write(&untracked, b"the owner's\n"))?;
+    let stopped = resumed_under(&w.service, RESUME, &w.root, &operation);
+    assert_eq!(stopped.code, ResultCode::RecoveryRequired);
+    fixed(std::fs::remove_file(&untracked))?;
+    poll(&w)?;
+    let confirmation = confirmation_of(&prepared(&w.service, verb, &w.root, verb.id()));
+    let replaced = called(
+        &w.service,
+        SECOND,
+        Some(&confirmation),
+        verb.mutation(&w.root, verb.id()),
+    );
+    assert_eq!(replaced.code, ResultCode::Ok, "{:?}", replaced.data);
+    let refused = resumed_under(&w.service, RESUME, &w.root, &operation);
+    assert_refused_resume(&refused, ResultCode::InvalidInput, state_of(&w, RESUME));
+    assert_eq!(refused.recovery, []);
+    Ok(())
+}
+
+/// A consent refusal ended it, with no request record ever holding it.
+fn resume_refused_no_record(verb: Verb) -> Result<(), FixtureError> {
+    let local = Local::holding(verb)?;
+    let root = local.root.clone();
+    let operation = begun_outside_after(&local.service, verb, &local.root, || {
+        edit_context(verb, &root).map(|_| ())
+    })?;
+    assert_eq!(parents(&local.db()?, verb)?, 1);
+    let refused = resumed_under(&local.service, RESUME, &local.root, &operation);
+    assert_refused_resume(
+        &refused,
+        ResultCode::InvalidInput,
+        local_state(&local, RESUME),
+    );
+    assert_eq!(refused.recovery, []);
+    Ok(())
+}
+
+fn resume_integrating(verb: Verb, point: FailurePoint) -> Result<(), FixtureError> {
+    let (local, operation) = outside_local(verb, point)?;
+    let done = resumed_under(&local.service, RESUME, &local.root, &operation);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(merges_on_primary(&local.repo()?)?, 1);
+    Ok(())
+}
+
+fn resume_before_integration_ref(verb: Verb) -> Result<(), FixtureError> {
+    resume_integrating(verb, FailurePoint::BeforeIntegrationRef)
+}
+
+fn resume_after_integration_ref(verb: Verb) -> Result<(), FixtureError> {
+    resume_integrating(verb, FailurePoint::AfterIntegrationRef)
+}
+
+/// A provider that runs `asks` when the child's connection asks for its key.
+struct AskingProvider<F: FnMut()> {
+    asks: F,
+}
+
+impl<F: FnMut()> SessionCredentialProvider for AskingProvider<F> {
+    fn request_passphrase(&mut self, request: &UnlockRequest) -> PassphraseResponse {
+        (self.asks)();
+        Provider.request_passphrase(request)
+    }
+}
+
+/// One `operation resume` with what a call is given.
+fn resumed_with(
+    w: &World,
+    operation: &str,
+    provider: impl SessionCredentialProvider,
+    cancel: &CancellationToken,
+) -> Envelope<MutationDataDto> {
+    w.service.execute(
+        MutationCall {
+            request_id: request(RESUME),
+            confirmation: None,
+            mutation: resuming(&w.root, operation),
+        },
+        &mut SessionCredentials::new(provider),
+        &mut NoProgress,
+        cancel,
+    )
+}
+
+/// A Ctrl-C while a resume's child runs lets the child go, as the verb's does.
+fn resume_ctrl_c_releases_child(verb: Verb) -> Result<(), FixtureError> {
+    let (w, operation) = outside_remote(verb, FailurePoint::AfterConfirmed)?;
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+    let stopped = resumed_with(
+        &w,
+        &operation,
+        AskingProvider {
+            asks: || token.cancel(),
+        },
+        &cancel,
+    );
+    assert_eq!(stopped.code, ResultCode::Cancelled, "{:?}", stopped.data);
+    assert_eq!(actions(&stopped), [RecoveryActionKind::OperationResume]);
+    assert_eq!(state_of(&w, RESUME), None, "no holding record");
+    assert!(!reserved(&w), "the child let its reservation go");
+    assert_eq!(merges_on_primary(&w.repo()?)?, 0);
+    let done = resumed_under(&w.service, RESUME, &w.root, &operation);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(merges_on_primary(&w.repo()?)?, 1);
+    Ok(())
+}
+
+/// `request cancel` asks nothing of a resume, also while it continues a parent.
+fn resume_request_cancel_asks_nothing(verb: Verb) -> Result<(), FixtureError> {
+    let (local, operation) = outside_local(verb, FailurePoint::AfterConfirmed)?;
+    let data = local_data(&local);
+    let answered = Arc::new(std::sync::Mutex::new(None));
+    let seen = Arc::clone(&answered);
+    local.service.set_request_hook_for_testing(move || {
+        let other = RepositoryService::open_at(&data).expect("a second service");
+        let cancel = other.cancel_request(request(RESUME));
+        *seen.lock().unwrap() = cancel.data.map(|dto| dto.requested);
+    });
+    let done = resumed_under(&local.service, RESUME, &local.root, &operation);
+    assert_eq!(*answered.lock().unwrap(), Some(false), "requested: false");
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(merges_on_primary(&local.repo()?)?, 1);
+    Ok(())
+}
+
+/// A remote world whose context's branch was deleted at the remote after a
+/// parent, no record holding it, was begun.
+fn branch_deleted_outside(verb: Verb) -> Result<(World, String), FixtureError> {
+    let mut w = remote(verb)?;
+    fixed(w.sync(w.request(context_target(verb)?)))?;
+    let failing = failing_service(&w.data(), FailurePoint::AfterConfirmed)?;
+    let operation = begun_outside(&failing, verb, &w.root)?;
+    w.service = clean_service(&w.data())?;
+    fixed(fixed(w.bare()?.find_reference(verb.branch()))?.delete())?;
+    Ok((w, operation))
+}
+
+const REPUBLISH: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ6";
+
+/// Decision 19: with no request to cancel, the resume cancels and calls once
+/// more, the runner releases the child, and the route out finishes.
+fn resume_walk_remote_branch_deleted(verb: Verb) -> Result<(), FixtureError> {
+    let (w, operation) = branch_deleted_outside(verb)?;
+    let stopped = resumed_under(&w.service, RESUME, &w.root, &operation);
+    assert_eq!(
+        stopped.code,
+        ResultCode::RemoteBranchDeleted,
+        "{:?}",
+        stopped.data
+    );
+    assert_eq!(
+        actions(&stopped),
+        [
+            RecoveryActionKind::OperationResume,
+            RecoveryActionKind::RepoInspect
+        ]
+    );
+    assert_eq!(state_of(&w, RESUME), None, "no holding record");
+    assert!(!reserved(&w), "the runner let the child go");
+
+    let republish = Mutation::ItemRepublish(ItemRepublishInput {
+        root: w.root.clone(),
+        kind: match verb {
+            Verb::Promote => AuthoringKind::Document,
+            Verb::Close => AuthoringKind::Ticket,
+        },
+        id: fixed(verb.id().parse())?,
+    });
+    let preview = w.service.prepare(&republish);
+    let consent = preview
+        .data
+        .as_ref()
+        .and_then(PrepareDataDto::preview)
+        .ok_or(FixtureError)?
+        .confirmation_id
+        .clone();
+    let republished = w.service.execute(
+        MutationCall {
+            request_id: request(REPUBLISH),
+            confirmation: Some(ConfirmationId::parse(&consent).unwrap()),
+            mutation: republish,
+        },
+        &mut SessionCredentials::new(Provider),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(republished.code, ResultCode::Ok, "{:?}", republished.data);
+
+    let done = resumed_under(&w.service, RESUME, &w.root, &operation);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(merges_on_primary(&w.repo()?)?, 1);
+    Ok(())
+}
+
+/// A child the guards keep: the answer is the same, and the reservation stays.
+/// The row is marked while the first call's child runs, since nothing can come
+/// between that call and the one after it.
+fn resume_kept_child_stays(verb: Verb) -> Result<(), FixtureError> {
+    let (w, operation) = branch_deleted_outside(verb)?;
+    let stopped = resumed_with(
+        &w,
+        &operation,
+        AskingProvider {
+            asks: || {
+                w.db()
+                    .map_err(|_| rusqlite::Error::InvalidQuery)
+                    .and_then(|db| {
+                        db.execute(
+                            "UPDATE remote_operation_records SET reconciliation_required = 1
+                              WHERE phase NOT IN ('completed','interrupted','cancelled','failed')",
+                            [],
+                        )
+                    })
+                    .expect("the child's row is marked");
+            },
+        },
+        &CancellationToken::new(),
+    );
+    assert_eq!(
+        stopped.code,
+        ResultCode::RemoteBranchDeleted,
+        "{:?}",
+        stopped.data
+    );
+    assert_eq!(
+        actions(&stopped),
+        [
+            RecoveryActionKind::OperationResume,
+            RecoveryActionKind::RepoInspect
+        ]
+    );
+    assert!(reserved(&w), "the child stays");
+    assert_eq!(state_of(&w, RESUME), None, "no holding record");
+    Ok(())
+}
+
+/// A second call of a resume's ID, while the first holds the lease, leaves the
+/// record under that call (R-27's rule, R-35).
+fn resume_concurrent_same_id(verb: Verb) -> Result<(), FixtureError> {
+    let (local, operation) = outside_local(verb, FailurePoint::AfterConfirmed)?;
+    let dies = failing_service(&local_data(&local), FailurePoint::BeforeRequestDomainCall)?;
+    let first = resumed_under(&dies, RESUME, &local.root, &operation);
+    assert_eq!(first.code, ResultCode::InternalError);
+    assert_eq!(local_state(&local, RESUME), Some(RequestState::Accepted));
+    let held = fixed(RepositoryService::hold_lease_for_testing(
+        &local.root,
+        &local_data(&local),
+        LeaseKind::Repository,
+    ))?;
+    let busy = resumed_under(&local.service, RESUME, &local.root, &operation);
+    drop(held);
+    assert_eq!(busy.code, ResultCode::Busy, "{:?}", busy.data);
+    assert_eq!(
+        local_state(&local, RESUME),
+        Some(RequestState::Accepted),
+        "not deleted under the other call"
+    );
+    let done = resumed_under(&local.service, RESUME, &local.root, &operation);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(local_state(&local, RESUME), Some(RequestState::Finished));
     Ok(())
 }

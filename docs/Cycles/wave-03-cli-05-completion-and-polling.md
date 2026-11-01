@@ -281,6 +281,11 @@ Also required:
     (Recommended)". When a cancellation stops the parent, the runner retires a pending unowned child
     with no retained work. A retained conflict, or anything not proven safe, stays. No effect is
     discarded. `request.cancel` is offered on a child's `remote_branch_deleted` (E-17).
+19. **A resume lets a stopped child go (2026-10-31).** "Resume cancels and releases
+    (Recommended)". On a stop the request can't get past, a resume with no request record asks for
+    the cancellation and calls once more, and the runner releases the child only if its guards prove it
+    safe. A kept child stays, with the answer unchanged. No new `RecoveryActionKind`: the answer offers
+    `operation.resume` and `repo.inspect`, and Task 7's human lines print the route.
 
 **Owner questions, approved at these recommendations on 2026-10-31.**
 

@@ -532,7 +532,7 @@ These rows change a row by SQL, except `stays_past_its_fetch` and `released_reso
 - A domain stop past integration is an outcome with cleanup pending, not an error, so `begun_outside` doesn't assert an error.
 - A call that dies at `BeforeRequestSettlement` names no operation, so that row reads the ID from the parent table.
 - Past integration, one further accepted update is the context's deletion. The row asserts `pushes + 1`, and that primary doesn't move.
-- `grants_no_new_consent` first expected `request.prepare`. A resume offers nothing there, because its command has no confirmation. **For review:** the row pins an empty list, so the answer doesn't say that a new prepare of the verb is the way on.
+- **Not a fixture fault, and it should have stopped for a ruling:** `grants_no_new_consent` first expected `request.prepare`, the code answered an empty list, and I changed the expectation to match. Reverted by R-31, below.
 - The E-10 row first expected outcome `error`. `original_request_required` is `blocked`, as this file's other pins have it.
 
 **Commands, all exit 0, on the final library.**
@@ -556,7 +556,7 @@ The first `mutation_replay` run failed only on the E-10 row's expected outcome. 
 - **The poll arm is implemented,** since E-10 can test it: the row seeds an accepted record holding the poll. A poll with no record stays `invalid_input`. Task 5b has no resume arm left to add.
 - **A resume entered again that finds its parent complete answers `already_applied`,** as any other non-synchronization does, not the parent's stored outcome.
 - **The position is primary's,** so a stored commit is checked on the branch that holds it.
-- **`request cancel` of a resume that is continuing a parent stops it,** because that call's safe points read the resume's flag. By reading only, with no row. The binding's doc says so.
+- **Withdrawn (R-34, below):** this entry said `request cancel` of a resume that is continuing a parent stops it. That was false.
 
 **Deviation from the task's file list.** One comment in `bind/lifecycle.rs`'s header, which still listed resume as Task 3's to do. It is within the library scope.
 
@@ -568,3 +568,37 @@ The first `mutation_replay` run failed only on the E-10 row's expected outcome. 
 - **A child's `remote_branch_deleted` under a resume has no row.** By reading, `request.cancel` is dropped, because a resume's envelope names no operation, which would leave `repo.inspect` alone. Decision 18's release is reached through a request record's cancel.
 
 **Left.** Task 4: made-ready in the resume's data, so the plan's "pending child … and its made-ready" row is only half done here. Task 7: `stops_on_ctrl_c`.
+
+#### Task 3 review fixes (controller's rulings R-30 to R-36, owner's decision 19)
+
+**R-30, a stop's actions.** `operation.resume`, then the verb's list through `outcome::offered`, less `request.retry` and `request.cancel`. Rows assert the whole list: `identity_stop_promote` and `child_identity_stop` (`operation.resume`, `repo.identity_set`); `cleanup_recovery` and `refused_checkpoint_merge_close` (`operation.resume`, `repo.inspect`).
+
+**R-31, a consent refusal.** `Final`, `external_change`, `request.prepare`, data naming kind and item. **The replay's limit:** no actions are stored, so a replay of that request gives the same code and data and offers nothing. A later resume is `invalid_input`, with no actions.
+
+**R-32.** `discovery_pending` under a resume offers `index.refresh` at the root.
+
+**R-33.** `Named::Complete`. Entered again goes through `lifecycle()` and gets the stored outcome and report. A fresh resume stays `already_applied`. The row runs on a local world, which has no transport to reach, and it doesn't count connections.
+
+**R-34.** `request cancel` of a resume answers `requested: false`, pinned while a parent is continued, from a second service in the request hook. **No probe read needed removing:** the probe and `interrupted_as_asked` read the flag of whichever request the call is under, and nothing was resume-specific. The doc is corrected.
+
+**Decision 19.**
+
+- **The ruling's wording would not have stopped the call, so the mechanism differs (R-36), for review.** `run.rs:512-518` clears the parent's flag on entry and continues, so `cancel_document_promotion` then one more call would not stop. The resume sets its own record's flag instead, which the probe reads. Answered `cancelled`, the binding takes it. No `promotion/` behaviour changed, and the runner is untouched, so `c5_cancel_` wasn't run. Only `TABLE` constants moved into the two `record.rs` files.
+- **What it showed, both verbs.** `walk_remote_branch_deleted`: `remote_branch_deleted`, `operation.resume`, `repo.inspect`, no record, reservation free; `item republish` `ok`; resume `ok`, one merge. `kept_child_stays`: the same code and actions, reservation held.
+- **The kept row marks the child by SQL during the first call,** from the credential prompt, since nothing can come between the two calls. So it is staged, as the earlier `stays_` rows are.
+- **Limit: the answer does not tell released from kept.** The same `operation.resume` is a dead end for a kept child, and `repo inspect` shows the reservation.
+- **The route has no action kind,** as ruled. Task 7 prints it, and Task 13b walks it.
+
+**R-35, item 9.** Item 4 does not close it: it covers a complete parent, not a `busy` one. Against the old code, `concurrent_same_id` failed by assertion: the second call's `busy` deleted the record. Now a call entered again with a code that passes by itself leaves the record. A first call's `busy` still leaves none. Item 4 does help what follows: if the first call finishes after losing its attempt, the next resend gets the stored outcome. The row stages the first call by a death at `BeforeRequestDomainCall` and a held lease; two live processes aren't run.
+
+**Rows answering otherwise, stopped on or settled from the design.**
+
+- `identity_stop` on a closure past its checkpoint answered `ok`, not `identity_required`. **I changed no expectation to fit it without a source:** the design's Identity table says "After a closure checkpoint: `closed_by` comes from the commit: none needed". That row is now `identity_after_checkpoint_close`, pinning `ok`. The closure's identity stop is `child_identity_stop`, a context child that must merge. **For the controller to confirm.**
+
+**Seen first.** 54 cases ran against Task 3's library: 17 failed by assertion and 37 passed. Failing: `grants_no_new_consent`, `entered_again`, `index_pending`, `identity_stop`, `cleanup_recovery`, `walk_remote_branch_deleted`, `kept_child_stays`, `concurrent_same_id`, `refused_checkpoint_merge`. `child_identity_stop`, written after that run, failed by assertion against that library too. `identity_stop_close`'s failure was on the code, for the reason above. **Passed at once, so pinning what exists:** `superseded_no_record`, `refused_no_record`, `before_integration_ref`, `after_integration_ref`, `ctrl_c_releases_child`, `request_cancel_asks_nothing`. `identity_after_checkpoint_close` was not run against the old library.
+
+**Quality (item 8).** The schema's description names `operation resume`. The stale docs are corrected. `repository_id` and `resume_action` are the one helper and builder. `TABLE` is beside each record.
+
+**Corrected from Task 3's report.** Its risks on a resume's `discovery_pending` and on a child's `remote_branch_deleted` are closed by R-32 and decision 19.
+
+**Verified on the final code, all exit 0.** `c5_resume` 56 cases (438 s), `resume` filter 96 (885 s, detached), `mutation_replay` 384 (279 s), `mutation_contract` 44 (26 s), `read_contract` 72 (14 s), `--lib mutation` 142 (15 s), `cargo fmt --check`, clippy `-D warnings`. After those runs only comments changed (a ruling's number), and fmt and clippy were rerun. No golden changed.

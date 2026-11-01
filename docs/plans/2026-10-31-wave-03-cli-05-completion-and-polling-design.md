@@ -379,17 +379,26 @@ have no journal row (fact 29). There is no liveness check (runtime RFC). Whether
 | Found | `operation resume` answers |
 | --- | --- |
 | Unfinished parent, an accepted request record holds it | `original_request_required`, through `left_to_its_request`, naming the request: that request continues it |
-| Unfinished parent, no accepted request record | Continues with the record's expectation. Data is the same lifecycle DTO, made-ready included. Ctrl-C is as the verb's. |
+| Unfinished parent, no accepted request record | Continues with the record's expectation. Data is the same lifecycle DTO, made-ready included. Ctrl-C is as the verb's. A stop offers `operation.resume`, then the verb's list for the code less what names a request (R-30). |
 | Parent running in another process | The domain's `busy` |
-| Complete | `already_applied`, as F2 |
-| Refused and ended, or superseded | `invalid_input`: nothing is left to continue |
+| Complete, a fresh resume | `already_applied`, as F2 |
+| Complete, a resume entered again | The stored outcome and its report, with no transport, since its earlier call may be what completed it (R-33) |
+| Refused and ended, or superseded | `invalid_input`: nothing is left to continue, and nothing is offered |
+| A consent refusal met while continuing | `external_change`, `Final`, offering `request.prepare`, with data naming kind and item. A replay gives the same code and data with no actions, since none are stored (R-31) |
+| A hand-off owed once continued | `discovery_pending`, offering `index.refresh` at the root, since no resume takes up a complete parent (R-32) |
+| A stop the call can't get past (`never_gets_past`) | The stop's own code, offering `operation.resume`, `repo.inspect`, after the call lets the child go if it can (decision 19, below) |
 | A poll an accepted request record holds | `original_request_required`, naming that request, through `left_to_its_request`, since C5's boundary now begins polls |
 | A poll with no request record | `invalid_input`, unchanged. A kept reservation in this state is the known limit `01M4R19PC0T6ZPKM39X9DF26HX` |
 
 A resume request that continues a parent and stops leaves no holding record, as a resume does today
 (`bind/resume.rs:92`): the parent is the durable state, and a later resume continues it. A pending
 **child** row's ID keeps its existing resume behaviour, pinned by a row. Resume data is tagged, so
-`from_stored` tells it from a synchronization's.
+`from_stored` tells it from a synchronization's. One exception to leaving no record (R-35): a call
+**entered again** that meets a failure that passes by itself leaves the record, by R-27's rule, since
+it may be meeting the call it came after.
+
+`request cancel` asks nothing of a resume, even while it continues a parent: the command does not stop
+at safe points, so the answer is `requested: false` and no flag is set (R-34). Ctrl-C does reach it.
 
 Resume grants no new consent (RFC: "Resume never infers permission for a different
 target/action").
@@ -423,6 +432,15 @@ at the child's own safe points. A push already under way completes, and effects 
   same request (`ok`, one merge). `offering_cancel` treats a parent's child as the request's own, for these
   two commands only. It offers nothing when no reservation is held. A retained conflict whose branch is then
   deleted answers its conflict, `recovery_required`, so it is not offered a cancellation that wouldn't release it.
+- **Under a resume (decision 19, R-36).** No request holds the parent, so nothing could ask for the
+  cancellation that lets a child go. On a stop the request can't get past, the resume sets the flag on
+  its own record, which the domain's safe points read, and calls once more. The parent's own flag won't do,
+  because a call that finds it clears it and continues. The second call stops at its first safe point, and
+  `release_promotion_child`'s guards decide as above. A released child leaves the reservation free. The
+  route is `item republish` (`ok`), then `operation resume` (`ok`, one merge). No action kind names
+  `item republish` and none is added, so the answer offers `operation.resume`, `repo.inspect`, and Task 7's
+  human lines print the route. **A kept child gets the same answer and the reservation stays:** the JSON
+  answer does not tell the two apart, and `repo inspect` shows the reservation.
 - **A deletion's refusal.** A deletion refused by the reservation's own boundary with cancellation asked
   is `Pending{Cancelled}`. A rejection, a key failure or a transport failure keeps its own answer, whether or
   not cancellation was asked.
@@ -826,6 +844,13 @@ review. This list is not yet proven complete.
 | R-28 | With no parent, `internal_error` offers nothing. `Abandoned` with no refusal is answered, `external_change`, not run; `ended_answer` is the one test of an ended parent. | None: the record's own check makes that state unreachable. |
 | R-29 | A child's `merge_required` offers what `remote_branch_deleted` does, with `request.retry` out by `outcome.rs`'s rule. No binding is answered with it, so a unit row pins it and no walk proves it. | Decision 18's route has only the deleted branch to prove it on. |
 | R-16 | A completed poll with preserved or marked targets is `ok`, exit 0, with dispositions in data. The RFC says once is explicit polling, not synchronization. | A script checking only the exit misses a blocked target; human output names them. |
+| R-30 | A stopped resume offers `operation.resume`, then the verb's list for the code less `request.retry` and `request.cancel`, which name a request none holds. (Controller, Task 3's review.) | A longer list than a resume's own. |
+| R-31 | A consent refusal under a resume is `Final`, `external_change`, offering `request.prepare`, with data naming kind and item. A replay has no actions, since none are stored. A later resume is `invalid_input`. (Controller.) | A replay's reader has the data, not the action. |
+| R-32 | A resume's `discovery_pending` offers `index.refresh` at the root. (Controller.) | A refresh leaves any made-ready report to the request that holds it; here none does. |
+| R-33 | A complete parent has its own `Named` variant. A resume entered again gets the stored outcome and report, with no transport; a fresh one is `already_applied`. (Controller.) | One domain call that reads what is stored. |
+| R-34 | `request cancel` of a resume is `requested: false`, also while it continues a parent. (Controller.) | A continued parent is stopped only by Ctrl-C. |
+| R-35 | R-27's rule applies to a resume: a call entered again with a code that passes by itself leaves the record. (Controller.) | A record stays accepted until a resend. |
+| R-36 | Decision 19's call sets the resume's own record flag, not the parent's, which a call clears on entry. No runner change. (Implementation of the owner's decision, for review.) | None beyond decision 19's. |
 
 ## Known Limits
 

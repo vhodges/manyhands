@@ -582,6 +582,14 @@ pub(crate) fn inspect_the_root_it_lies_in(root: &Path) -> Vec<RecoveryAction> {
         .collect()
 }
 
+/// The refresh of the index of the repository at `root`.
+pub(crate) fn refresh_the_root(root: &str) -> RecoveryAction {
+    RecoveryAction::new(
+        RecoveryActionKind::IndexRefresh,
+        [(ROOT_ARGUMENT, root.into())],
+    )
+}
+
 /// The codes of a failure that passes by itself: a poll giving way, a lease
 /// another call holds, a remote or a network that could not be reached.
 macro_rules! passes_by_itself {

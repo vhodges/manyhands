@@ -223,6 +223,8 @@ impl std::fmt::Debug for ClosureRecord {
     }
 }
 
+/// The table parents are kept in.
+pub(in super::super) const TABLE: &str = "ticket_closures";
 const SCHEMA:&str="CREATE TABLE ticket_closures (
     repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
     operation_id TEXT NOT NULL UNIQUE CHECK(length(operation_id)=26),

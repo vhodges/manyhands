@@ -754,6 +754,11 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         }
     }
 
+    /// Data that names the item and nothing of how far it got.
+    pub(super) fn naming_its_item(&self) -> MutationDataDto {
+        MutationDataDto::Lifecycle(Box::new(self.data()))
+    }
+
     fn reached_data(&self, reached: &Reached) -> LifecycleMutationDto {
         let (recording, checkpoint_oid) = match reached.recording {
             Some(ClosureRecording::Recorded { checkpoint_oid }) => {
