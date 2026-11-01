@@ -1,4 +1,5 @@
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,7 +13,7 @@ import zipfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from package import archive_payload
-from verify import extract_archive, smoke_environment, verify_archive
+from verify import extract_archive, smoke_environment, validate_payload, verify_archive
 from payload_fixture import LINUX, MACOS, WINDOWS, PayloadFixture
 
 
@@ -66,6 +67,66 @@ class VerificationTests(unittest.TestCase):
             path.write_text(json.dumps(inventory))
             with self.subTest(inventory=inventory), self.assertRaisesRegex(ValueError, "inventory"):
                 self.archive()
+
+    def test_supplemental_original_hash_is_verified_after_staging(self):
+        path = self.fixture.staging / 'licenses/inventory.json'
+        inventory = json.loads(path.read_text())
+        inventory['packages'][0]['supplemental'] = [{
+            'path': 'dependencies/example/COPYING', 'sha256': '0' * 64,
+        }]
+        path.write_text(json.dumps(inventory))
+        with self.assertRaisesRegex(ValueError, 'supplemental.*checksum'):
+            self.archive()
+
+    def test_valid_supplemental_original_survives_archive_verification(self):
+        path = self.fixture.staging / 'licenses/inventory.json'
+        inventory = json.loads(path.read_text())
+        original = self.fixture.staging / 'licenses/dependencies/example/COPYING'
+        inventory['packages'][0]['supplemental'] = [{
+            'path': 'dependencies/example/COPYING',
+            'sha256': hashlib.sha256(original.read_bytes()).hexdigest(),
+        }]
+        path.write_text(json.dumps(inventory))
+        verify_archive(self.archive(), self.fixture.release, LINUX)
+
+    def test_malformed_supplemental_inventory_is_rejected(self):
+        path = self.fixture.staging / 'licenses/inventory.json'
+        original = json.loads(path.read_text())
+        for invalid in ({}, [None], [{'path': '../outside', 'sha256': '0' * 64}], [{'path': 'dependencies/example/COPYING', 'sha256': 'wrong'}]):
+            inventory = json.loads(json.dumps(original))
+            inventory['packages'][0]['supplemental'] = invalid
+            path.write_text(json.dumps(inventory))
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, 'supplemental'):
+                validate_payload(self.fixture.staging, self.fixture.release, LINUX)
+
+    def test_macos_app_must_keep_every_inventoried_notice_and_source_copy(self):
+        for relative in ('dependencies/example/COPYING', 'sources/example.crate'):
+            for damage in ('missing', 'corrupt'):
+                with self.subTest(relative=relative, damage=damage), tempfile.TemporaryDirectory() as temp:
+                    fixture = PayloadFixture(temp, MACOS)
+                    licenses = fixture.notices / 'licenses'
+                    source = licenses / 'sources/example.crate'
+                    source.parent.mkdir()
+                    source.write_bytes(b'original crate source fixture')
+                    inventory_file = licenses / 'inventory.json'
+                    inventory = json.loads(inventory_file.read_text())
+                    package = inventory['packages'][0]
+                    package['source'] = 'sources/example.crate'
+                    package['source_sha256'] = hashlib.sha256(source.read_bytes()).hexdigest()
+                    package['supplemental'] = [{
+                        'path': 'dependencies/example/COPYING',
+                        'sha256': hashlib.sha256((licenses / 'dependencies/example/COPYING').read_bytes()).hexdigest(),
+                    }]
+                    inventory_file.write_text(json.dumps(inventory))
+                    fixture.stage()
+                    validate_payload(fixture.staging, fixture.release, MACOS, final=False)
+                    copied = fixture.staging / 'Manyhands.app/Contents/Resources/licenses' / relative
+                    if damage == 'missing':
+                        copied.unlink()
+                    else:
+                        copied.write_bytes(b'changed app-only copy')
+                    with self.assertRaisesRegex(ValueError, 'missing|app bundle disclosure differs'):
+                        validate_payload(fixture.staging, fixture.release, MACOS, final=False)
 
     def test_cannot_smoke_an_executable_that_reports_failure(self):
         cli = self.fixture.staging / "bin/manyhands-cli"

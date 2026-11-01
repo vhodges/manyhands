@@ -88,6 +88,19 @@ def validate_payload(root: Path, release: dict, target: str, *, final: bool = Tr
             raise ValueError("invalid package in licence inventory")
         for notice in package["notices"]:
             require_file(root / "licenses", notice)
+        supplements = package.get("supplemental", [])
+        if not isinstance(supplements, list):
+            raise ValueError("invalid supplemental notice inventory")
+        for supplement in supplements:
+            if (not isinstance(supplement, dict)
+                or not isinstance(supplement.get("path"), str)
+                or supplement["path"] not in package["notices"]
+                or not isinstance(supplement.get("sha256"), str)
+                or not re.fullmatch(r"[a-f0-9]{64}", supplement["sha256"])):
+                raise ValueError("invalid supplemental notice inventory")
+            original = require_file(root / "licenses", supplement["path"])
+            if hashlib.sha256(original.read_bytes()).hexdigest() != supplement["sha256"]:
+                raise ValueError(f"supplemental notice checksum mismatch: {package['name']}")
         if "source" in package:
             source = require_file(root / "licenses", package["source"])
             if hashlib.sha256(source.read_bytes()).hexdigest() != package.get("source_sha256"):
@@ -100,6 +113,15 @@ def validate_payload(root: Path, release: dict, target: str, *, final: bool = Tr
             copied = require_file(resources, relative)
             if copied.read_bytes() != (root / relative).read_bytes():
                 raise ValueError(f"app bundle disclosure differs from package: {relative}")
+        for package in inventory["packages"]:
+            originals = list(package["notices"])
+            if "source" in package:
+                originals.append(package["source"])
+            for relative in originals:
+                copied = require_file(resources / "licenses", relative)
+                original = require_file(root / "licenses", relative)
+                if copied.read_bytes() != original.read_bytes():
+                    raise ValueError(f"app bundle disclosure differs from package: licenses/{relative}")
         if final:
             require_file(root, "Manyhands.app/Contents/Info.plist")
     else:
