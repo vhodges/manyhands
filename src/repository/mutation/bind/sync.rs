@@ -520,7 +520,7 @@ impl SynchronizationObserver for Watch<'_> {
 }
 
 /// What a host that is not trusted presented, as the result's data.
-fn host_data(error: &SynchronizationError) -> Option<MutationDataDto> {
+pub(super) fn host_data(error: &SynchronizationError) -> Option<MutationDataDto> {
     let SynchronizationError::Transport(error) = error else {
         return None;
     };

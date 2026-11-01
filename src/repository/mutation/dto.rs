@@ -725,6 +725,7 @@ pub enum MutationDataDto {
     Context(ContextMutationDto),
     Lifecycle(Box<LifecycleMutationDto>),
     PollPolicy(PollPolicyMutationDto),
+    Poll(PollMutationDto),
 }
 
 contract_enum!(
@@ -1585,6 +1586,110 @@ impl PollPolicyMutationDto {
     }
 }
 
+contract_enum!(
+    /// How a poll's pass ended. A poll that stopped on the way to its remote
+    /// completed too: its code says what stopped it.
+    PollMutationCompletion {
+        Completed => "completed",
+        Interrupted => "interrupted",
+        Cancelled => "cancelled",
+    }
+);
+
+contract_enum!(
+    /// What a poll did about one target. Anything but `current`,
+    /// `fast_forwarded` and `materialized` left the target as it was found, and
+    /// is data, not a failure (R-16).
+    PollTargetDisposition {
+        Current => "current",
+        FastForwarded => "fast_forwarded",
+        LocalAhead => "local_ahead",
+        Diverged => "diverged",
+        Dirty => "dirty",
+        Conflicted => "conflicted",
+        Inaccessible => "inaccessible",
+        Materialized => "materialized",
+        Nonconforming => "nonconforming",
+        BlockedByLocalState => "blocked_by_local_state",
+        MaterializationIncomplete => "materialization_incomplete",
+        Malformed => "malformed",
+        RemotelyDeleted => "remotely_deleted",
+        HistoryUnknown => "history_unknown",
+        NotReached => "not_reached",
+    }
+);
+
+/// One target of a poll, as the domain reports it (R-17). A malformed remote
+/// ref is reported with every field but its disposition null, and its name is
+/// nowhere in the result.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PollTargetDto {
+    pub target: Option<String>,
+    pub kind: Option<ItemDtoKind>,
+    pub item_id: Option<String>,
+    pub disposition: PollTargetDisposition,
+    pub before_oid: Option<String>,
+    pub after_oid: Option<String>,
+}
+
+/// What `poll once` reports. A restart reports what its own pass saw.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PollMutationDto {
+    pub operation_id: String,
+    pub completion: PollMutationCompletion,
+    pub completed_at: String,
+    pub next_eligible_at: Option<String>,
+    pub targets: Vec<PollTargetDto>,
+}
+
+impl PollMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        fn known<T: Copy>(all: &[T], name: fn(T) -> &'static str, text: &str) -> Option<T> {
+            all.iter().copied().find(|known| name(*known) == text)
+        }
+        fn optional(stored: &serde_json::Value, key: &str) -> Option<Option<String>> {
+            match stored.get(key)? {
+                serde_json::Value::Null => Some(None),
+                value => Some(Some(value.as_str()?.to_owned())),
+            }
+        }
+        let targets = stored
+            .get("targets")?
+            .as_array()?
+            .iter()
+            .map(|target| {
+                Some(PollTargetDto {
+                    target: optional(target, "target")?,
+                    kind: match optional(target, "kind")? {
+                        Some(kind) => Some(known(&ItemDtoKind::ALL, ItemDtoKind::as_str, &kind)?),
+                        None => None,
+                    },
+                    item_id: optional(target, "item_id")?,
+                    disposition: known(
+                        &PollTargetDisposition::ALL,
+                        PollTargetDisposition::as_str,
+                        target.get("disposition")?.as_str()?,
+                    )?,
+                    before_oid: optional(target, "before_oid")?,
+                    after_oid: optional(target, "after_oid")?,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(Self {
+            operation_id: stored.get("operation_id")?.as_str()?.to_owned(),
+            completion: known(
+                &PollMutationCompletion::ALL,
+                PollMutationCompletion::as_str,
+                stored.get("completion")?.as_str()?,
+            )?,
+            completed_at: stored.get("completed_at")?.as_str()?.to_owned(),
+            next_eligible_at: optional(stored, "next_eligible_at")?,
+            targets,
+        })
+    }
+}
+
 /// What `document create`, `document save` and `document move` report
 /// about the document.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -1681,7 +1786,10 @@ impl MutationDataDto {
             | Self::Context(_)
             // A lifecycle's category carries no authority (design, Answers).
             | Self::Lifecycle(_)
-            | Self::PollPolicy(_) => None,
+            | Self::PollPolicy(_)
+            // A poll's report names no host; a host it stopped for is reported
+            // as a synchronization's is.
+            | Self::Poll(_) => None,
         }
     }
 
@@ -1764,6 +1872,14 @@ impl MutationDataDto {
             }
             Command::PollConfigure | Command::PollPause | Command::PollResume => {
                 PollPolicyMutationDto::from_stored(stored).map(Self::PollPolicy)
+            }
+            // A poll's report, or the host it stopped for on its first call.
+            Command::PollOnce => {
+                if stored.get("completion").is_some() {
+                    PollMutationDto::from_stored(stored).map(Self::Poll)
+                } else {
+                    SynchronizationMutationDto::from_stored(stored).map(Self::Synchronization)
+                }
             }
             // A resume reports data only of a synchronization it took
             // up: the host that synchronization stopped for, or the

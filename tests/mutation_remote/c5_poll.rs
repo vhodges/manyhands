@@ -2,6 +2,9 @@
 //! and 15): a `c5_poll_` case per row of the design's policy table, and the
 //! rows of last commit wins. They need no server: each world is one local
 //! repository.
+//!
+//! `poll once` (Task 5b): a `c5_poll_once_` case per row of the design's frozen
+//! table, on a two-clone world, in the last part of this file.
 
 use std::path::Path;
 
@@ -103,6 +106,118 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         cancelled_before_it_writes,
     ),
     ("c5_poll_no_verb_sets_enabled", no_verb_sets_enabled),
+    ("c5_poll_once_ok", once_ok),
+    ("c5_poll_once_ok_replays", once_ok_replays),
+    ("c5_poll_once_dirty_is_data", once_dirty_is_data),
+    ("c5_poll_once_malformed_is_data", once_malformed_is_data),
+    ("c5_poll_once_discovery_pending", once_discovery_pending),
+    ("c5_poll_once_no_remote", once_no_remote),
+    (
+        "c5_poll_once_a_pause_does_not_refuse",
+        once_a_pause_does_not_refuse,
+    ),
+    (
+        "c5_poll_once_cancelled_by_the_token",
+        once_cancelled_by_the_token,
+    ),
+    (
+        "c5_poll_once_cancelled_by_the_flag",
+        once_cancelled_by_the_flag,
+    ),
+    (
+        "c5_poll_once_cancelled_by_request_cancel_while_running",
+        once_cancelled_by_request_cancel_while_running,
+    ),
+    (
+        "c5_poll_once_cancelled_at_the_last_safe_point",
+        once_cancelled_at_the_last_safe_point,
+    ),
+    ("c5_poll_once_flag_unreadable", once_flag_unreadable),
+    ("c5_poll_once_interrupted", once_interrupted),
+    (
+        "c5_poll_once_interrupted_after_a_target_moved",
+        once_interrupted_after_a_target_moved,
+    ),
+    ("c5_poll_once_err_interrupted", once_err_interrupted),
+    ("c5_poll_once_held_then_cancelled", once_held_then_cancelled),
+    ("c5_poll_once_fenced_is_final", once_fenced_is_final),
+    (
+        "c5_poll_once_stored_configuration_required",
+        once_stored_configuration_required,
+    ),
+    (
+        "c5_poll_once_stored_selected_key_unavailable",
+        once_stored_selected_key_unavailable,
+    ),
+    (
+        "c5_poll_once_stored_unlock_required",
+        once_stored_unlock_required,
+    ),
+    (
+        "c5_poll_once_stored_host_approval_required",
+        once_stored_host_approval_required,
+    ),
+    (
+        "c5_poll_once_stored_transport_unavailable",
+        once_stored_transport_unavailable,
+    ),
+    (
+        "c5_poll_once_stored_protocol_rejected",
+        once_stored_protocol_rejected,
+    ),
+    (
+        "c5_poll_once_stored_repository_unavailable",
+        once_stored_repository_unavailable,
+    ),
+    (
+        "c5_poll_once_transport_stop_is_final",
+        once_transport_stop_is_final,
+    ),
+    ("c5_poll_once_key_rejected", once_key_rejected),
+    (
+        "c5_poll_once_key_rejected_reentered",
+        once_key_rejected_reentered,
+    ),
+    ("c5_poll_once_no_selected_key", once_no_selected_key),
+    ("c5_poll_once_unlock_required", once_unlock_required),
+    (
+        "c5_poll_once_host_approval_required",
+        once_host_approval_required,
+    ),
+    (
+        "c5_poll_once_transport_with_no_row",
+        once_transport_with_no_row,
+    ),
+    ("c5_poll_once_invalid_remote", once_invalid_remote),
+    (
+        "c5_poll_once_repository_error_held",
+        once_repository_error_held,
+    ),
+    (
+        "c5_poll_once_repository_error_after_completion",
+        once_repository_error_after_completion,
+    ),
+    (
+        "c5_poll_once_killed_resent_restarts",
+        once_killed_resent_restarts,
+    ),
+    ("c5_poll_once_busy", once_busy),
+    ("c5_poll_once_poll_yielding", once_poll_yielding),
+    ("c5_poll_once_conflict_pending", once_conflict_pending),
+    ("c5_poll_once_pending_local_sync", once_pending_local_sync),
+    (
+        "c5_poll_once_resume_names_a_held_poll",
+        once_resume_names_a_held_poll,
+    ),
+    (
+        "c5_poll_once_resume_of_a_failed_poll",
+        once_resume_of_a_failed_poll,
+    ),
+    (
+        "c5_poll_once_pause_during_a_running_poll",
+        once_pause_during_a_running_poll,
+    ),
+    ("c5_poll_once_conformance", once_conformance),
 ];
 
 const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FP1";
@@ -876,9 +991,10 @@ fn resume_does_not_lift_the_suspension() -> Result<(), FixtureError> {
 /// `read_policy` isn't reached: opening the index refuses a registration with no
 /// policy row (`state::migrate`), and `write_records` converts that as a read.
 ///
-/// **The code is awaiting a ruling, so it isn't pinned.** It answers
-/// `internal_error`. The ruling asked for `recovery_required`, which
-/// `policy_row_unreadable_inside_the_path` pins where `write` is reached.
+/// It answers `internal_error`, by the controller's ruling: a registration with
+/// no policy row is refused at open, and `write_records` keeps its conversion.
+/// `policy_row_unreadable_inside_the_path` pins `recovery_required` where `write`
+/// is reached.
 fn policy_row_gone_inside_the_path() -> Result<(), FixtureError> {
     let local = Local::empty()?;
     let registry = local.directory.path().join("data").join(REGISTRY_FILE);
@@ -889,7 +1005,7 @@ fn policy_row_gone_inside_the_path() -> Result<(), FixtureError> {
             .expect("the policy row is removed");
     });
     let refused = called(&local.service, FIRST, pause(&local.root));
-    assert!(refused.code.failure_class().is_some(), "{:?}", refused.code);
+    assert_eq!(refused.code, ResultCode::InternalError);
     assert_eq!(refused.data, None);
     assert_eq!(request_rows(&local)?, 0);
     Ok(())
@@ -1040,4 +1156,1184 @@ fn no_verb_sets_enabled() -> Result<(), FixtureError> {
         }
     }
     Ok(())
+}
+
+// `poll once` (Task 5b): the design's frozen table, each row on its own world.
+
+const REPORT: &str = "poll_mutation.schema.json";
+const PEER_FILE: &str = "peer-advance";
+
+fn once(root: &Path) -> Mutation {
+    Mutation::PollOnce(PollOnceInput {
+        root: root.to_owned(),
+    })
+}
+
+fn execute_once(w: &World, id: &str) -> Envelope<MutationDataDto> {
+    execute(w, id, once(&w.root))
+}
+
+/// A world whose host is trusted, with primary observed as the remote holds it.
+fn observed() -> Result<World, FixtureError> {
+    let w = World::new()?;
+    trust(&w)?;
+    fixed(w.sync(w.primary()))?;
+    Ok(w)
+}
+
+/// `observed`, with a commit the peer pushed to primary that the world's clone
+/// does not hold.
+fn behind() -> Result<(World, git2::Oid), FixtureError> {
+    let w = observed()?;
+    let incoming = advance(&w.peer, MAIN, PEER_FILE)?;
+    push_peer(&w.peer, &w.server, MAIN)?;
+    Ok((w, incoming))
+}
+
+/// `behind`, with a second target: a ticket the clone saved and never published.
+fn behind_with_a_context() -> Result<(World, git2::Oid), FixtureError> {
+    let (mut w, incoming) = behind()?;
+    w.context()?;
+    Ok((w, incoming))
+}
+
+fn report(envelope: &Envelope<MutationDataDto>) -> &PollMutationDto {
+    match envelope.data.as_ref() {
+        Some(MutationDataDto::Poll(data)) => data,
+        other => panic!("{:?}: {other:?}", envelope.code),
+    }
+}
+
+fn primary_target(report: &PollMutationDto) -> &PollTargetDto {
+    report
+        .targets
+        .iter()
+        .find(|target| target.target.as_deref() == Some(MAIN))
+        .expect("primary is a target")
+}
+
+fn local_primary(w: &World) -> Result<git2::Oid, FixtureError> {
+    fixed(w.repo()?.refname_to_id(MAIN))
+}
+
+/// A golden of a poll's answer, with what differs from run to run replaced.
+fn golden_once(w: &World, name: &str, envelope: &Envelope<MutationDataDto>) {
+    let mut replaced: Vec<(String, &str)> = Vec::new();
+    let schema = match envelope.data.as_ref() {
+        Some(MutationDataDto::Poll(data)) => {
+            for target in &data.targets {
+                for oid in [&target.before_oid, &target.after_oid]
+                    .into_iter()
+                    .flatten()
+                {
+                    replaced.push((oid.clone(), "<oid>"));
+                }
+            }
+            replaced.push((data.completed_at.clone(), "<completed_at>"));
+            if let Some(next) = &data.next_eligible_at {
+                replaced.push((next.clone(), "<next_eligible_at>"));
+            }
+            Some(REPORT)
+        }
+        Some(_) => panic!("{name}: use the host's golden"),
+        None => None,
+    };
+    let replaced: Vec<(&str, &str)> = replaced
+        .iter()
+        .map(|(found, placeholder)| (found.as_str(), *placeholder))
+        .collect();
+    let root = w.root.canonicalize().expect("the root");
+    mutation_golden::assert_contract_at(
+        name,
+        root.to_str().expect("a UTF-8 root"),
+        schema,
+        &replaced,
+        envelope,
+    );
+}
+
+fn operation_of(envelope: &Envelope<MutationDataDto>) -> Result<OperationId, FixtureError> {
+    fixed(OperationId::parse(
+        envelope.operation_id.as_deref().ok_or(FixtureError)?,
+    ))
+}
+
+fn row_of(w: &World, operation: &str) -> Result<(String, Option<String>), FixtureError> {
+    fixed(w.db()?.query_row(
+        "SELECT phase, outcome FROM remote_operation_records WHERE operation_ulid = ?1",
+        [operation],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ))
+}
+
+fn poll_rows(w: &World) -> Result<i64, FixtureError> {
+    fixed(w.db()?.query_row(
+        "SELECT COUNT(*) FROM remote_operation_records WHERE action = 'poll'",
+        [],
+        |row| row.get(0),
+    ))
+}
+
+fn finished(w: &World, id: &str) -> Result<(), FixtureError> {
+    let held = record(w, id).ok_or(FixtureError)?;
+    assert_eq!(held.state, RequestState::Finished, "{id}");
+    Ok(())
+}
+
+fn left_accepted(w: &World, id: &str) -> Result<(), FixtureError> {
+    let held = record(w, id).ok_or(FixtureError)?;
+    assert_eq!(held.state, RequestState::Accepted, "{id}");
+    Ok(())
+}
+
+/// A new request polls: the stop held nothing.
+fn a_new_request_polls(w: &World, id: &str) -> Result<(), FixtureError> {
+    assert!(!reserved(w), "the reservation is free");
+    let again = execute_once(w, id);
+    assert_eq!(again.code, ResultCode::Ok, "{:?}", again.recovery);
+    assert_ne!(again.operation_id, None);
+    Ok(())
+}
+
+fn second_service(w: &World) -> Result<RepositoryService, FixtureError> {
+    fixed(RepositoryService::open_at(&w.data()))
+}
+
+fn dying_at(w: &World, point: FailurePoint) -> Result<RepositoryService, FixtureError> {
+    fixed(RepositoryService::open_at_with_failure_point_for_testing(
+        &w.data(),
+        point,
+    ))
+}
+
+fn once_ok() -> Result<(), FixtureError> {
+    let (w, incoming) = behind()?;
+    let pushes = accepted(&w.server);
+    let envelope = execute_once(&w, FIRST);
+    assert_eq!(envelope.code, ResultCode::Ok);
+    assert_eq!(envelope.outcome, Outcome::Success);
+    assert!(envelope.recovery.is_empty());
+    assert_eq!(envelope.effects.discovery, DiscoveryEffect::Current);
+    assert_eq!(
+        envelope.effects.publication,
+        PublicationEffect::NotRequested
+    );
+    assert_eq!(envelope.scope.branch.as_deref(), Some("main"));
+    let data = report(&envelope);
+    assert_eq!(data.completion, PollMutationCompletion::Completed);
+    assert_eq!(
+        Some(data.operation_id.as_str()),
+        envelope.operation_id.as_deref()
+    );
+    let primary = primary_target(data);
+    assert_eq!(primary.disposition, PollTargetDisposition::FastForwarded);
+    assert_eq!(primary.after_oid, Some(incoming.to_string()));
+    assert_eq!(primary.kind, None);
+    assert_eq!(local_primary(&w)?, incoming);
+    assert_eq!(accepted(&w.server), pushes, "a poll never pushes");
+    finished(&w, FIRST)?;
+    golden_once(&w, "poll_once", &envelope);
+    Ok(())
+}
+
+fn once_ok_replays() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    let first = execute_once(&w, FIRST);
+    assert_eq!(first.code, ResultCode::Ok);
+    let opened = connections(&w);
+    let rows = poll_rows(&w)?;
+    let again = execute_once(&w, FIRST);
+    assert_eq!(again, first);
+    assert_eq!(connections(&w), opened, "a replay has no transport");
+    assert_eq!(poll_rows(&w)?, rows);
+    Ok(())
+}
+
+/// R-16: a target the poll left alone is data, and the answer is `ok`.
+fn once_dirty_is_data() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    let before = local_primary(&w)?;
+    dirty_primary(&w.root)?;
+    let envelope = execute_once(&w, FIRST);
+    assert_eq!(envelope.code, ResultCode::Ok);
+    assert_eq!(
+        primary_target(report(&envelope)).disposition,
+        PollTargetDisposition::Dirty
+    );
+    assert_eq!(local_primary(&w)?, before);
+    Ok(())
+}
+
+/// A malformed remote ref is a target with nothing but its disposition, and its
+/// name is nowhere in the result.
+fn once_malformed_is_data() -> Result<(), FixtureError> {
+    const NAME: &str = "refs/heads/manyhands/ticket/not-a-ulid-sentinel";
+    let (w, incoming) = behind()?;
+    let bare = w.bare()?;
+    fixed(bare.reference(NAME, incoming, false, "malformed"))?;
+    let envelope = execute_once(&w, FIRST);
+    assert_eq!(envelope.code, ResultCode::Ok);
+    let malformed = report(&envelope)
+        .targets
+        .iter()
+        .find(|target| target.disposition == PollTargetDisposition::Malformed)
+        .ok_or(FixtureError)?;
+    assert_eq!(
+        (&malformed.target, &malformed.kind, &malformed.item_id),
+        (&None, &None, &None)
+    );
+    assert_eq!(
+        (&malformed.before_oid, &malformed.after_oid),
+        (&None, &None)
+    );
+    assert!(!fixed(serde_json::to_string(&envelope))?.contains("not-a-ulid-sentinel"));
+    Ok(())
+}
+
+/// The authoritative report first, and index pending second.
+fn once_discovery_pending() -> Result<(), FixtureError> {
+    let (w, incoming) = behind()?;
+    let dying = dying_at(&w, FailurePoint::BeforeIndexTransactionCommit)?;
+    let envelope = call(
+        &w,
+        &dying,
+        FIRST,
+        once(&w.root),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(envelope.code, ResultCode::DiscoveryPending);
+    assert_eq!(envelope.outcome, Outcome::Partial);
+    assert_eq!(envelope.effects.discovery, DiscoveryEffect::Pending);
+    assert_eq!(actions(&envelope), [RecoveryActionKind::IndexRefresh]);
+    assert_eq!(
+        report(&envelope).completion,
+        PollMutationCompletion::Completed
+    );
+    assert_eq!(local_primary(&w)?, incoming);
+    finished(&w, FIRST)?;
+    golden_once(&w, "poll_once_discovery_pending", &envelope);
+    assert_eq!(execute_once(&w, FIRST), envelope, "a replay is the same");
+    Ok(())
+}
+
+/// Refused before the domain, with nothing written.
+fn once_no_remote() -> Result<(), FixtureError> {
+    let local = Local::empty()?;
+    let policy_before = status(&local)?;
+    let envelope = called(&local.service, FIRST, once(&local.root));
+    assert_eq!(envelope.code, ResultCode::PublicationRemoteRequired);
+    assert_eq!(envelope.outcome, Outcome::Blocked);
+    assert_eq!(envelope.effects, Effects::not_requested());
+    assert_eq!(envelope.operation_id, None);
+    assert!(envelope.recovery.is_empty());
+    assert_eq!(request_rows(&local)?, 0);
+    assert_eq!(status(&local)?, policy_before, "nothing is written");
+    let rows: i64 = fixed(local.db()?.query_row(
+        "SELECT COUNT(*) FROM remote_operation_records",
+        [],
+        |row| row.get(0),
+    ))?;
+    assert_eq!(rows, 0);
+    let root = local.root.canonicalize().expect("the root");
+    mutation_golden::assert_contract_at(
+        "poll_once_no_remote",
+        root.to_str().expect("a UTF-8 root"),
+        None,
+        &[],
+        &envelope,
+    );
+    Ok(())
+}
+
+/// Explicit: a pause and a disabled policy each refuse nothing.
+fn once_a_pause_does_not_refuse() -> Result<(), FixtureError> {
+    let (w, incoming) = behind()?;
+    fixed(
+        w.db()?
+            .execute_batch("UPDATE remote_polling_state SET paused = 1, enabled = 0"),
+    )?;
+    let envelope = execute_once(&w, FIRST);
+    assert_eq!(envelope.code, ResultCode::Ok);
+    assert_eq!(local_primary(&w)?, incoming);
+    let flags: (bool, bool) = fixed(w.db()?.query_row(
+        "SELECT paused, enabled FROM remote_polling_state",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ))?;
+    assert_eq!(flags, (true, false), "the poll leaves the policy");
+    Ok(())
+}
+
+fn assert_cancelled(w: &World, envelope: &Envelope<MutationDataDto>) -> Result<(), FixtureError> {
+    assert_eq!(envelope.code, ResultCode::Cancelled);
+    assert_eq!(envelope.outcome, Outcome::Cancelled);
+    assert!(envelope.recovery.is_empty(), "{:?}", envelope.recovery);
+    assert_eq!(
+        report(envelope).completion,
+        PollMutationCompletion::Cancelled
+    );
+    let operation = envelope.operation_id.as_deref().ok_or(FixtureError)?;
+    assert_eq!(row_of(w, operation)?.0, "cancelled");
+    Ok(())
+}
+
+/// The call's token, at the first safe point: no connection is opened.
+fn once_cancelled_by_the_token() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    let opened = connections(&w);
+    let token = CancellationToken::new();
+    let asked = token.clone();
+    w.service
+        .set_request_hook_for_testing(move || asked.cancel());
+    let envelope = call(
+        &w,
+        &w.service,
+        FIRST,
+        once(&w.root),
+        Provider,
+        &mut NoProgress,
+        &token,
+    );
+    assert_cancelled(&w, &envelope)?;
+    assert_eq!(connections(&w), opened);
+    finished(&w, FIRST)?;
+    golden_once(&w, "poll_once_cancelled", &envelope);
+    assert_eq!(execute_once(&w, FIRST), envelope, "a replay is the same");
+    a_new_request_polls(&w, SECOND)
+}
+
+/// `request cancel` with no row yet: only the record's flag says so.
+fn once_cancelled_by_the_flag() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    let opened = connections(&w);
+    let other = second_service(&w)?;
+    w.service.set_request_hook_for_testing(move || {
+        let asked = other.cancel_request(request(FIRST));
+        assert!(asked.data.expect("the request").requested);
+    });
+    let envelope = execute_once(&w, FIRST);
+    assert_cancelled(&w, &envelope)?;
+    assert_eq!(connections(&w), opened);
+    assert!(!record(&w, FIRST).ok_or(FixtureError)?.cancel_requested);
+    a_new_request_polls(&w, SECOND)
+}
+
+/// `request cancel` while the poll runs, between two targets: what it moved
+/// stands, and the data names it.
+fn once_cancelled_by_request_cancel_while_running() -> Result<(), FixtureError> {
+    let (w, incoming) = behind_with_a_context()?;
+    let other = second_service(&w)?;
+    let mut armed = true;
+    w.service
+        .set_poll_boundary_hook_for_testing(move |point, ordinal| {
+            if armed && point == FailurePoint::PollBeforeTarget && ordinal == Some(1) {
+                armed = false;
+                let asked = other.cancel_request(request(FIRST));
+                assert!(asked.data.expect("the request").requested);
+            }
+        });
+    let envelope = execute_once(&w, FIRST);
+    assert_cancelled(&w, &envelope)?;
+    let primary = primary_target(report(&envelope));
+    assert_eq!(primary.disposition, PollTargetDisposition::FastForwarded);
+    assert_eq!(local_primary(&w)?, incoming);
+    finished(&w, FIRST)?;
+    a_new_request_polls(&w, SECOND)
+}
+
+/// The token, after the last target: the last safe point reads it, with no
+/// row flag to go by.
+fn once_cancelled_at_the_last_safe_point() -> Result<(), FixtureError> {
+    let (w, incoming) = behind()?;
+    let token = CancellationToken::new();
+    let asked = token.clone();
+    w.service
+        .set_poll_boundary_hook_for_testing(move |point, _| {
+            if point == FailurePoint::PollBeforeDiscovery {
+                asked.cancel();
+            }
+        });
+    let envelope = call(
+        &w,
+        &w.service,
+        FIRST,
+        once(&w.root),
+        Provider,
+        &mut NoProgress,
+        &token,
+    );
+    assert_cancelled(&w, &envelope)?;
+    assert_eq!(local_primary(&w)?, incoming);
+    a_new_request_polls(&w, SECOND)
+}
+
+/// A flag that cannot be read is not taken for "no": the poll stops at the safe
+/// point, and the same request goes on.
+fn once_flag_unreadable() -> Result<(), FixtureError> {
+    let (w, incoming) = behind()?;
+    let before = local_primary(&w)?;
+    let dying = dying_at(&w, FailurePoint::BeforeRequestCancellationRead)?;
+    let stopped = call(
+        &w,
+        &dying,
+        FIRST,
+        once(&w.root),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(stopped.code, ResultCode::RecoveryRequired);
+    assert_eq!(local_primary(&w)?, before);
+    left_accepted(&w, FIRST)?;
+    assert_eq!(
+        actions(&stopped),
+        [
+            RecoveryActionKind::RequestRetry,
+            RecoveryActionKind::RepoInspect
+        ]
+    );
+    let finished_after = execute_once(&w, FIRST);
+    assert_eq!(finished_after.code, ResultCode::Ok);
+    assert_eq!(local_primary(&w)?, incoming);
+    Ok(())
+}
+
+/// Asks the poll to give way before the target `at`, as a manual request asks an
+/// automatic poll: the row ends `interrupted`, with its generation.
+fn interrupted_before_target(w: &World, at: usize) {
+    let registry = w.data().join(REGISTRY_FILE);
+    let mut armed = true;
+    w.service
+        .set_poll_boundary_hook_for_testing(move |point, ordinal| {
+            if armed && point == FailurePoint::PollBeforeTarget && ordinal == Some(at) {
+                armed = false;
+                rusqlite::Connection::open(&registry)
+                    .expect("the registry")
+                    .execute(
+                        "UPDATE remote_operation_records SET yield_requested = 1",
+                        [],
+                    )
+                    .expect("the row is asked");
+            }
+        });
+}
+
+fn once_interrupted() -> Result<(), FixtureError> {
+    let (w, incoming) = behind()?;
+    let before = local_primary(&w)?;
+    interrupted_before_target(&w, 0);
+    let stopped = execute_once(&w, FIRST);
+    assert_eq!(stopped.code, ResultCode::RecoveryRequired);
+    assert_eq!(stopped.outcome, Outcome::Blocked, "nothing moved: exit 3");
+    assert_eq!(
+        report(&stopped).completion,
+        PollMutationCompletion::Interrupted
+    );
+    assert_eq!(
+        actions(&stopped),
+        [
+            RecoveryActionKind::RequestRetry,
+            RecoveryActionKind::RepoInspect
+        ]
+    );
+    assert_eq!(local_primary(&w)?, before);
+    left_accepted(&w, FIRST)?;
+    golden_once(&w, "poll_once_interrupted", &stopped);
+    let again = execute_once(&w, FIRST);
+    assert_eq!(again.code, ResultCode::Ok);
+    assert_eq!(again.operation_id, stopped.operation_id, "the same row");
+    assert_eq!(local_primary(&w)?, incoming);
+    finished(&w, FIRST)
+}
+
+fn once_interrupted_after_a_target_moved() -> Result<(), FixtureError> {
+    let (w, incoming) = behind_with_a_context()?;
+    interrupted_before_target(&w, 1);
+    let stopped = execute_once(&w, FIRST);
+    assert_eq!(stopped.code, ResultCode::RecoveryRequired);
+    assert_eq!(stopped.outcome, Outcome::Partial, "a target moved: exit 4");
+    assert_eq!(
+        primary_target(report(&stopped)).disposition,
+        PollTargetDisposition::FastForwarded
+    );
+    assert_eq!(local_primary(&w)?, incoming);
+    left_accepted(&w, FIRST)?;
+    // A restart reports what its own pass saw (known limit).
+    let again = execute_once(&w, FIRST);
+    assert_eq!(again.code, ResultCode::Ok);
+    assert_eq!(
+        primary_target(report(&again)).disposition,
+        PollTargetDisposition::Current
+    );
+    Ok(())
+}
+
+/// The endpoint changes while the transport is held, and is put back: the
+/// domain interrupts the row and returns an error, with no report.
+fn once_err_interrupted() -> Result<(), FixtureError> {
+    let (w, incoming) = behind()?;
+    let url = w.server.url();
+    let hold = w.server.hold_advertisement()?;
+    let data = w.data();
+    let root = w.root.clone();
+    let running = std::thread::spawn(move || {
+        let service = RepositoryService::open_at(&data).expect("a service");
+        service.execute(
+            MutationCall {
+                request_id: request(FIRST),
+                confirmation: None,
+                mutation: once(&root),
+            },
+            &mut SessionCredentials::new(Provider),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        )
+    });
+    hold.wait_until_held()?;
+    let repo = w.repo()?;
+    fixed(repo.remote_set_pushurl("origin", Some(&format!("{url}-changed"))))?;
+    hold.release()?;
+    let stopped = joined(&w, running)?;
+    assert_eq!(stopped.code, ResultCode::RecoveryRequired);
+    assert_eq!(stopped.data, None);
+    assert_eq!(
+        actions(&stopped),
+        [
+            RecoveryActionKind::RequestRetry,
+            RecoveryActionKind::RepoInspect
+        ]
+    );
+    left_accepted(&w, FIRST)?;
+    let operation = stopped.operation_id.as_deref().ok_or(FixtureError)?;
+    assert_eq!(row_of(&w, operation)?.0, "interrupted");
+    fixed(repo.remote_set_pushurl("origin", None))?;
+    let again = execute_once(&w, FIRST);
+    assert_eq!(again.code, ResultCode::Ok);
+    assert_eq!(local_primary(&w)?, incoming);
+    Ok(())
+}
+
+/// A held poll, `request cancel`, and the same request: `cancelled`, final.
+fn once_held_then_cancelled() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    interrupted_before_target(&w, 0);
+    let stopped = execute_once(&w, FIRST);
+    assert_eq!(stopped.code, ResultCode::RecoveryRequired);
+    let asked = w.service.cancel_request(request(FIRST));
+    assert!(asked.data.ok_or(FixtureError)?.requested);
+    let opened = connections(&w);
+    let ended = execute_once(&w, FIRST);
+    assert_cancelled(&w, &ended)?;
+    assert_eq!(connections(&w), opened);
+    finished(&w, FIRST)?;
+    a_new_request_polls(&w, SECOND)
+}
+
+/// A held poll whose endpoints have since changed. The call that finds the change
+/// raises the generation and the restart it then asks for is refused, so the
+/// record stays once. From then on the row is fenced and a restart would refuse
+/// it for good: the next answer is final, as `request cancel` would finish it.
+fn once_fenced_is_final() -> Result<(), FixtureError> {
+    let (w, incoming) = behind()?;
+    interrupted_before_target(&w, 0);
+    let stopped = execute_once(&w, FIRST);
+    assert_eq!(stopped.code, ResultCode::RecoveryRequired);
+    let url = w.server.url();
+    fixed(
+        w.repo()?
+            .remote_set_pushurl("origin", Some(&format!("{url}-changed"))),
+    )?;
+    let finding = execute_once(&w, FIRST);
+    assert_eq!(finding.code, ResultCode::RecoveryRequired);
+    left_accepted(&w, FIRST)?;
+    let ended = execute_once(&w, FIRST);
+    assert_eq!(ended.code, ResultCode::ExternalChange);
+    assert!(ended.recovery.is_empty(), "{:?}", ended.recovery);
+    finished(&w, FIRST)?;
+    a_new_request_polls(&w, SECOND)?;
+    assert_eq!(local_primary(&w)?, incoming);
+    Ok(())
+}
+
+/// The category as a later call reads it: a request left accepted over a row that
+/// ended with `category`. The row's outcome is staged, and the domain reads it.
+fn stored(category: &str, code: ResultCode) -> Result<World, FixtureError> {
+    let (w, _) = behind()?;
+    let dying = dying_at(&w, FailurePoint::BeforeRequestSettlement)?;
+    let lost = call(
+        &w,
+        &dying,
+        FIRST,
+        once(&w.root),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(lost.code, ResultCode::InternalError, "the answer is lost");
+    left_accepted(&w, FIRST)?;
+    fixed(w.db()?.execute(
+        "UPDATE remote_operation_records SET phase = 'failed', outcome = ?1 WHERE action = 'poll'",
+        [category],
+    ))?;
+    let opened = connections(&w);
+    let envelope = execute_once(&w, FIRST);
+    assert_eq!(envelope.code, code, "{category}");
+    assert_eq!(
+        report(&envelope).completion,
+        PollMutationCompletion::Completed
+    );
+    assert_eq!(connections(&w), opened, "no transport");
+    finished(&w, FIRST)?;
+    let replayed = execute_once(&w, FIRST);
+    assert_eq!(replayed, envelope, "a replay is the same");
+    a_new_request_polls(&w, SECOND)?;
+    Ok(w)
+}
+
+fn once_stored_configuration_required() -> Result<(), FixtureError> {
+    stored(
+        "configuration_required",
+        ResultCode::PublicationRemoteRequired,
+    )
+    .map(|_| ())
+}
+
+fn once_stored_selected_key_unavailable() -> Result<(), FixtureError> {
+    stored("selected_key_unavailable", ResultCode::NoSelectedKey).map(|_| ())
+}
+
+fn once_stored_unlock_required() -> Result<(), FixtureError> {
+    stored("unlock_required", ResultCode::UnlockRequired).map(|_| ())
+}
+
+fn once_stored_host_approval_required() -> Result<(), FixtureError> {
+    stored("host_approval_required", ResultCode::HostApprovalRequired).map(|_| ())
+}
+
+fn once_stored_transport_unavailable() -> Result<(), FixtureError> {
+    let w = stored("transport_unavailable", ResultCode::TransportUnavailable)?;
+    let replayed = execute_once(&w, FIRST);
+    assert!(replayed.recovery.is_empty(), "{:?}", replayed.recovery);
+    Ok(())
+}
+
+fn once_stored_protocol_rejected() -> Result<(), FixtureError> {
+    let w = stored("protocol_rejected", ResultCode::RemoteUnavailable)?;
+    let replayed = execute_once(&w, FIRST);
+    assert!(replayed.recovery.is_empty(), "{:?}", replayed.recovery);
+    Ok(())
+}
+
+fn once_stored_repository_unavailable() -> Result<(), FixtureError> {
+    stored("repository_unavailable", ResultCode::RepositoryInaccessible).map(|_| ())
+}
+
+/// The first call's `Err(Transport)` over the row the domain ended: `Final`, on a
+/// row the journal reads as pending. A replay offers nothing, holds no
+/// reservation, and a new request polls (R-18).
+fn once_transport_stop_is_final() -> Result<(), FixtureError> {
+    let (w, incoming) = behind()?;
+    // Longer than the transport waits for a server.
+    w.server.stall_at(
+        FixtureBoundary::Advertisement,
+        std::time::Duration::from_secs(45),
+    );
+    let first = execute_once(&w, FIRST);
+    assert_eq!(first.code, ResultCode::TransportUnavailable);
+    assert_eq!(first.outcome, Outcome::Error);
+    assert!(first.recovery.is_empty(), "{:?}", first.recovery);
+    assert_eq!(first.data, None);
+    golden_once(&w, "poll_once_transport_unavailable", &first);
+    let operation = first.operation_id.as_deref().ok_or(FixtureError)?;
+    assert_eq!(
+        row_of(&w, operation)?,
+        (
+            "failed".to_owned(),
+            Some("transport_unavailable".to_owned())
+        )
+    );
+    // The row the record was finished over is one the journal calls pending.
+    let scope = request_store::ScopeKey::for_repository(&w.root).ok_or(FixtureError)?;
+    let journal = fixed(w.service.journal_row(
+        OperationFamily::Remote,
+        &scope,
+        operation_of(&first)?,
+    ))?;
+    assert!(journal.in_flight(), "{journal:?}");
+    finished(&w, FIRST)?;
+    assert!(!reserved(&w));
+    w.server.clear_fault();
+    let opened = connections(&w);
+    let replayed = execute_once(&w, FIRST);
+    assert_eq!(replayed, first, "stored, and offering nothing");
+    assert_eq!(connections(&w), opened);
+    a_new_request_polls(&w, SECOND)?;
+    assert_eq!(local_primary(&w)?, incoming);
+    Ok(())
+}
+
+/// A row the first call's error named by its own code.
+fn once_key_rejected() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    w.server.accept_anonymous();
+    let first = execute_once(&w, FIRST);
+    assert_eq!(first.code, ResultCode::KeyRejected);
+    assert_eq!(first.outcome, Outcome::Blocked);
+    assert!(first.recovery.is_empty(), "{:?}", first.recovery);
+    finished(&w, FIRST)?;
+    golden_once(&w, "poll_once_key_rejected", &first);
+    assert!(!reserved(&w));
+    Ok(())
+}
+
+/// The same stop, with the first answer lost: the later call reads the stored
+/// category's code, which names it differently.
+fn once_key_rejected_reentered() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    w.server.accept_anonymous();
+    let dying = dying_at(&w, FailurePoint::BeforeRequestSettlement)?;
+    let lost = call(
+        &w,
+        &dying,
+        FIRST,
+        once(&w.root),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(lost.code, ResultCode::InternalError);
+    left_accepted(&w, FIRST)?;
+    let later = execute_once(&w, FIRST);
+    assert_eq!(later.code, ResultCode::NoSelectedKey);
+    assert!(later.recovery.is_empty(), "{:?}", later.recovery);
+    assert_eq!(report(&later).completion, PollMutationCompletion::Completed);
+    finished(&w, FIRST)?;
+    golden_once(&w, "poll_once_key_rejected_reentered", &later);
+    Ok(())
+}
+
+fn once_no_selected_key() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    let cleared = execute(&w, THIRD, Mutation::KeyClear(KeyClearInput {}));
+    assert_eq!(cleared.code, ResultCode::Ok);
+    let first = execute_once(&w, FIRST);
+    assert_eq!(first.code, ResultCode::NoSelectedKey);
+    assert!(first.recovery.is_empty(), "{:?}", first.recovery);
+    finished(&w, FIRST)?;
+    assert!(!reserved(&w));
+    Ok(())
+}
+
+/// A locked key with nothing to unlock it: final, and a new request at a terminal
+/// polls.
+fn once_unlock_required() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    let first = call(
+        &w,
+        &w.service,
+        FIRST,
+        once(&w.root),
+        NoPassphrase,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(first.code, ResultCode::UnlockRequired);
+    assert!(first.recovery.is_empty(), "{:?}", first.recovery);
+    finished(&w, FIRST)?;
+    golden_once(&w, "poll_once_unlock_required", &first);
+    let replayed = execute_once(&w, FIRST);
+    assert_eq!(
+        replayed, first,
+        "with a passphrase to hand, still the stored stop"
+    );
+    a_new_request_polls(&w, SECOND)
+}
+
+/// A host that isn't trusted: the first answer names it and offers its approval;
+/// the new request then polls.
+fn once_host_approval_required() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let first = execute_once(&w, FIRST);
+    assert_eq!(first.code, ResultCode::HostApprovalRequired);
+    assert_eq!(actions(&first), [RecoveryActionKind::HostApprove]);
+    finished(&w, FIRST)?;
+    assert_golden(
+        &w,
+        "poll_once_host_approval_required",
+        Some(SYNCHRONIZATION_SCHEMA),
+        &first,
+    );
+    let replayed = execute_once(&w, FIRST);
+    assert_eq!(replayed.code, first.code);
+    assert_eq!(replayed.data, first.data);
+    assert!(replayed.recovery.is_empty(), "no action is stored");
+    approve(&w)?;
+    a_new_request_polls(&w, SECOND)
+}
+
+/// The publication remote goes between the checks and the domain's call: the
+/// plan can't be made, so there is no row, and the record goes. The domain's
+/// stored state is written (known limit).
+fn once_transport_with_no_row() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    let config = w.root.join(".manyhands/config.toml");
+    let source = fixed(std::fs::read_to_string(&config))?;
+    let without = source.replace("publication_remote = \"origin\"\n", "");
+    assert_ne!(without, source);
+    let removed = config.clone();
+    w.service
+        .set_request_hook_for_testing(move || std::fs::write(removed, without).expect("written"));
+    let first = execute_once(&w, FIRST);
+    assert_eq!(first.code, ResultCode::PublicationRemoteRequired);
+    assert!(first.recovery.is_empty(), "{:?}", first.recovery);
+    assert!(record(&w, FIRST).is_none(), "deleted");
+    assert_eq!(poll_rows(&w)?, 0);
+    golden_once(&w, "poll_once_transport_with_no_row", &first);
+    fixed(std::fs::write(&config, source))?;
+    a_new_request_polls(&w, FIRST)
+}
+
+/// A remote whose location the transport can't use is found once the poll has
+/// reserved: a row after the call, so `Final`, under the error's own code.
+fn once_invalid_remote() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    let repo = w.repo()?;
+    fixed(repo.remote_set_url("origin", "https://example.invalid/not-ssh.git"))?;
+    let first = execute_once(&w, FIRST);
+    assert_eq!(first.code, ResultCode::InvalidRemote);
+    assert!(first.recovery.is_empty(), "{:?}", first.recovery);
+    finished(&w, FIRST)?;
+    assert_eq!(poll_rows(&w)?, 1);
+    golden_once(&w, "poll_once_invalid_remote", &first);
+    Ok(())
+}
+
+/// `Err(Repository)` over a row in flight: the error's code, and the record stays.
+fn once_repository_error_held() -> Result<(), FixtureError> {
+    let (w, incoming) = behind()?;
+    let dying = dying_at(&w, FailurePoint::PollBeforeTarget)?;
+    let stopped = call(
+        &w,
+        &dying,
+        FIRST,
+        once(&w.root),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(stopped.code, ResultCode::InternalError);
+    assert_eq!(actions(&stopped), [RecoveryActionKind::RequestRetry]);
+    left_accepted(&w, FIRST)?;
+    assert!(reserved(&w), "the row holds the reservation");
+    let again = execute_once(&w, FIRST);
+    assert_eq!(again.code, ResultCode::Ok);
+    assert_eq!(local_primary(&w)?, incoming);
+    assert!(!reserved(&w));
+    Ok(())
+}
+
+/// `Err(Repository)` over a row that completed: nothing is in flight, so the
+/// record goes, and the request ID is free.
+fn once_repository_error_after_completion() -> Result<(), FixtureError> {
+    let (w, incoming) = behind()?;
+    let dying = dying_at(&w, FailurePoint::PollAfterCompletion)?;
+    let stopped = call(
+        &w,
+        &dying,
+        FIRST,
+        once(&w.root),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(stopped.code, ResultCode::InternalError);
+    assert!(record(&w, FIRST).is_none());
+    assert_eq!(local_primary(&w)?, incoming);
+    a_new_request_polls(&w, SECOND)
+}
+
+/// A poll killed mid-pass: its service is gone and its row is left in flight,
+/// holding the reservation. A resend under its ID takes the same row up with a
+/// raised epoch, and the request finishes. A kill itself is Task 13a's, through
+/// the binary; a stop at the same boundary leaves the same row.
+fn once_killed_resent_restarts() -> Result<(), FixtureError> {
+    let (w, incoming) = behind()?;
+    let before = local_primary(&w)?;
+    let dying = dying_at(&w, FailurePoint::PollBeforeTarget)?;
+    let stopped = call(
+        &w,
+        &dying,
+        FIRST,
+        once(&w.root),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    drop(dying);
+    let operation = stopped.operation_id.clone().ok_or(FixtureError)?;
+    let epoch = |w: &World| -> Result<i64, FixtureError> {
+        fixed(w.db()?.query_row(
+            "SELECT owner_epoch FROM remote_operation_records WHERE operation_ulid = ?1",
+            [operation.as_str()],
+            |row| row.get(0),
+        ))
+    };
+    let held = epoch(&w)?;
+    let (phase, outcome) = row_of(&w, &operation)?;
+    assert!(
+        !matches!(
+            phase.as_str(),
+            "completed" | "cancelled" | "failed" | "interrupted"
+        ),
+        "{phase}"
+    );
+    assert_eq!(outcome, None);
+    assert!(reserved(&w));
+    assert_eq!(local_primary(&w)?, before);
+    left_accepted(&w, FIRST)?;
+    let again = execute_once(&w, FIRST);
+    assert_eq!(again.code, ResultCode::Ok, "{:?}", again.recovery);
+    assert_eq!(again.operation_id.as_deref(), Some(operation.as_str()));
+    assert_eq!(poll_rows(&w)?, 1);
+    assert!(epoch(&w)? > held, "the row was restarted");
+    assert_eq!(local_primary(&w)?, incoming);
+    assert!(!reserved(&w));
+    finished(&w, FIRST)
+}
+
+fn reserve_another(w: &World, priority: RemoteOperationPriority) -> Result<(), FixtureError> {
+    let plan = fixed(RemoteRefPlan::from_configuration("origin", "main"))?;
+    let held = fixed(w.service.reserve_remote_operation_with_priority(
+        &w.root,
+        OperationId::new(),
+        &RemoteOperationTarget::for_poll(&plan),
+        priority,
+    ))?;
+    assert!(matches!(held, RemoteReservationOutcome::Reserved(_)));
+    Ok(())
+}
+
+fn once_busy() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    reserve_another(&w, RemoteOperationPriority::Manual)?;
+    let opened = connections(&w);
+    let envelope = execute_once(&w, FIRST);
+    assert_eq!(envelope.code, ResultCode::Busy);
+    assert_eq!(actions(&envelope), [RecoveryActionKind::RequestRetry]);
+    assert!(record(&w, FIRST).is_none());
+    assert_eq!(connections(&w), opened);
+    golden_once(&w, "poll_once_busy", &envelope);
+    Ok(())
+}
+
+fn once_poll_yielding() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    reserve_another(&w, RemoteOperationPriority::Poll)?;
+    let opened = connections(&w);
+    let envelope = execute_once(&w, FIRST);
+    assert_eq!(envelope.code, ResultCode::PollYielding);
+    assert_eq!(actions(&envelope), [RecoveryActionKind::RequestRetry]);
+    assert!(record(&w, FIRST).is_none());
+    assert_eq!(connections(&w), opened);
+    golden_once(&w, "poll_once_poll_yielding", &envelope);
+    Ok(())
+}
+
+fn once_conflict_pending() -> Result<(), FixtureError> {
+    let w = observed()?;
+    let peer_root = w.peer.workdir().ok_or(FixtureError)?.to_owned();
+    commit_in(&peer_root, MAIN, "conflict", b"incoming")?;
+    push_peer(&w.peer, &w.server, MAIN)?;
+    commit_in(&w.root, MAIN, "conflict", b"local")?;
+    let synced = execute(&w, SECOND, repo_sync(&w));
+    assert_eq!(
+        synced.code,
+        ResultCode::RecoveryRequired,
+        "the merge conflicts"
+    );
+    let opened = connections(&w);
+    let envelope = execute_once(&w, FIRST);
+    assert_eq!(envelope.code, ResultCode::RecoveryRequired);
+    assert_eq!(envelope.data, None);
+    assert_eq!(actions(&envelope), [RecoveryActionKind::RepoInspect]);
+    assert!(record(&w, FIRST).is_none());
+    assert_eq!(connections(&w), opened);
+    Ok(())
+}
+
+/// The domain's answer to a pending local synchronization, pinned.
+fn once_pending_local_sync() -> Result<(), FixtureError> {
+    let w = remote(Verb::Close)?;
+    let source = format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {ITEM}\n\
+         title: Primary\ntype: task\nstatus: open\n---\nBody of Primary.\n"
+    );
+    commit_in(
+        &w.root,
+        MAIN,
+        &format!(".manyhands/tickets/{ITEM}/ticket.md"),
+        source.as_bytes(),
+    )?;
+    let id: canonical::ItemId = fixed(ITEM.parse())?;
+    let observed = fixed(w.service.observe_local_context_sync(
+        &fixed(w.service.resolve_repository(&w.root))?,
+        AuthoringKind::Ticket,
+        &id,
+    ))?;
+    let stopped = execute(
+        &w,
+        SECOND,
+        Mutation::LocalContextSync(LocalContextSyncInput {
+            root: w.root.clone(),
+            kind: AuthoringKind::Ticket,
+            id,
+            observation: observed.observation,
+        }),
+    );
+    assert_eq!(stopped.code, ResultCode::RecoveryRequired, "the sync pends");
+    let opened = connections(&w);
+    let envelope = execute_once(&w, FIRST);
+    assert_eq!(envelope.code, ResultCode::RecoveryRequired);
+    assert_eq!(envelope.outcome, Outcome::Blocked);
+    assert!(
+        actions(&envelope).contains(&RecoveryActionKind::RepoInspect),
+        "{:?}",
+        envelope.recovery
+    );
+    assert!(record(&w, FIRST).is_none());
+    assert_eq!(connections(&w), opened);
+    assert_eq!(poll_rows(&w)?, 0);
+    Ok(())
+}
+
+/// A poll the boundary began and that was left held: `operation resume` names its
+/// request, and that request is what goes on.
+fn once_resume_names_a_held_poll() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    let dying = dying_at(&w, FailurePoint::PollBeforeTarget)?;
+    let stopped = call(
+        &w,
+        &dying,
+        FIRST,
+        once(&w.root),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    left_accepted(&w, FIRST)?;
+    let operation = operation_of(&stopped)?;
+    let resumed = execute(
+        &w,
+        SECOND,
+        Mutation::OperationResume(OperationResumeInput {
+            root: w.root.clone(),
+            operation_id: operation,
+        }),
+    );
+    assert_eq!(resumed.code, ResultCode::OriginalRequestRequired);
+    assert_eq!(actions(&resumed), [RecoveryActionKind::RequestRetry]);
+    assert!(
+        resumed.recovery[0]
+            .arguments
+            .values()
+            .any(|value| value == FIRST),
+        "names the request: {:?}",
+        resumed.recovery
+    );
+    assert_eq!(execute_once(&w, FIRST).code, ResultCode::Ok);
+    Ok(())
+}
+
+/// A poll whose stop was final holds nothing a resume could take up.
+fn once_resume_of_a_failed_poll() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    w.server.accept_anonymous();
+    let first = execute_once(&w, FIRST);
+    assert_eq!(first.code, ResultCode::KeyRejected);
+    let resumed = execute(
+        &w,
+        SECOND,
+        Mutation::OperationResume(OperationResumeInput {
+            root: w.root.clone(),
+            operation_id: operation_of(&first)?,
+        }),
+    );
+    assert_eq!(resumed.code, ResultCode::InvalidInput);
+    assert!(resumed.recovery.is_empty());
+    Ok(())
+}
+
+/// Carried from Task 5a: a pause during a running poll doesn't stop that poll, and
+/// applies to the next automatic one.
+fn once_pause_during_a_running_poll() -> Result<(), FixtureError> {
+    let (w, incoming) = behind()?;
+    let other = second_service(&w)?;
+    let root = w.root.clone();
+    w.service
+        .set_poll_boundary_hook_for_testing(move |point, ordinal| {
+            if point == FailurePoint::PollBeforeTarget && ordinal == Some(0) {
+                let paused = other.execute(
+                    MutationCall {
+                        request_id: request(SECOND),
+                        confirmation: None,
+                        mutation: pause(&root),
+                    },
+                    &mut SessionCredentials::new(Provider),
+                    &mut NoProgress,
+                    &CancellationToken::new(),
+                );
+                assert_eq!(paused.code, ResultCode::Ok);
+            }
+        });
+    let envelope = execute_once(&w, FIRST);
+    assert_eq!(envelope.code, ResultCode::Ok);
+    assert_eq!(
+        primary_target(report(&envelope)).disposition,
+        PollTargetDisposition::FastForwarded
+    );
+    assert_eq!(local_primary(&w)?, incoming);
+    let repository = fixed(w.service.resolve_repository(&w.root))?;
+    assert!(fixed(w.service.polling_status(&repository))?.paused);
+    let automatic = fixed(w.service.poll_publication_remote(
+        PollPublicationRemoteRequest {
+            root: w.root.clone(),
+            operation_id: OperationId::new(),
+            invocation: RemotePollInvocation::Automatic,
+            approval: None,
+            restart: false,
+        },
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    assert!(
+        matches!(
+            automatic,
+            RemotePollResult::Complete(RemotePollOutcome::NotEligible {
+                reason: PollIneligibility::Paused,
+                ..
+            })
+        ),
+        "{automatic:?}"
+    );
+    Ok(())
+}
+
+pub(super) fn conforming_once(
+    rule: &mut dyn FnMut(&conformance::Subject<'_>),
+) -> Result<(), String> {
+    conforming(
+        |w, ask| match ask {
+            conformance::Ask::Same | conformance::Ask::Unconsented => once(&w.root),
+            // The command has no input but its repository: another command.
+            conformance::Ask::Changed => repo_sync(w),
+            // A directory that is no repository.
+            conformance::Ask::Refused => once(&w.data()),
+        },
+        rule,
+    )
+}
+
+fn once_conformance() -> Result<(), FixtureError> {
+    conformance_row("poll once")
 }

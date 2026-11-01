@@ -6,7 +6,9 @@ use time::OffsetDateTime;
 
 use super::{RemoteOutcomeCategory, RemotePollInvocation, RemotePollingConfiguration, state};
 use super::{RemoteRefPlan, SynchronizationError, SynchronizationTarget, refs, sync};
-use crate::repository::{RepositoryError, RepositoryService};
+use crate::repository::{
+    RepositoryError, RepositoryService, promotion::lifecycle::CancellationProbe,
+};
 use crate::{
     canonical,
     repository::{
@@ -1197,6 +1199,20 @@ impl RepositoryService {
         request: PollPublicationRemoteRequest,
         session: &mut crate::repository::keys::SessionCredentials<P>,
     ) -> Result<RemotePollResult, RemotePollError> {
+        self.poll_publication_remote_observed(request, session, None)
+    }
+
+    /// `poll_publication_remote`, stopped by `probe` as well: a request's token
+    /// and its flag are looked at at each safe point, where the poll is asked
+    /// to stop as `cancel_remote_operation` asks it. Only the boundary has one.
+    pub(in super::super) fn poll_publication_remote_observed<
+        P: crate::repository::keys::SessionCredentialProvider,
+    >(
+        &self,
+        request: PollPublicationRemoteRequest,
+        session: &mut crate::repository::keys::SessionCredentials<P>,
+        probe: Option<&CancellationProbe>,
+    ) -> Result<RemotePollResult, RemotePollError> {
         use super::{
             RemoteOperationPriority, RemoteOperationTarget, RemoteReservationOutcome as R,
             reservation::RemotePollReservationOutcome as PR,
@@ -1319,6 +1335,7 @@ impl RepositoryService {
             &root,
             &owner,
             super::RemoteOperationSafePoint::BeforeTransport,
+            probe,
         )? {
             return Ok(result);
         }
@@ -1347,8 +1364,13 @@ impl RepositoryService {
                         return true;
                     }
                     last = Some(now);
-                    let decision = super::reservation::poll_progress(self, &owner)
-                        .unwrap_or(super::RemoteSafePointOutcome::Interrupted);
+                    // The next safe point is what acknowledges either.
+                    let decision = match probe.map(|probe| probe.asked(self)) {
+                        Some(Ok(true)) => super::RemoteSafePointOutcome::Cancelled,
+                        Some(Err(_)) => super::RemoteSafePointOutcome::Interrupted,
+                        Some(Ok(false)) | None => super::reservation::poll_progress(self, &owner)
+                            .unwrap_or(super::RemoteSafePointOutcome::Interrupted),
+                    };
                     if decision != super::RemoteSafePointOutcome::Continue {
                         stopped = Some(decision);
                         false
@@ -1364,6 +1386,7 @@ impl RepositoryService {
                 &root,
                 &owner,
                 super::RemoteOperationSafePoint::AfterAdvertisement,
+                probe,
             )? {
                 return Ok(result);
             }
@@ -1375,14 +1398,20 @@ impl RepositoryService {
             };
         }
         match fetched {
-            Ok(advertised) => {
-                self.poll_after_fetch(&root, &owner, &plan, &configuration, advertised)
-            }
+            Ok(advertised) => self.poll_after_fetch_observed(
+                &root,
+                &owner,
+                &plan,
+                &configuration,
+                advertised,
+                probe,
+            ),
             Err(error) => {
                 if let Some(result) = self.poll_safe_point(
                     &root,
                     &owner,
                     super::RemoteOperationSafePoint::AfterAdvertisement,
+                    probe,
                 )? {
                     return Ok(result);
                 }
@@ -1404,6 +1433,7 @@ impl RepositoryService {
 
     /// Everything after a successful real fetch. Local tests supply actual ODB
     /// commits and test-installed tracking refs; this is not a transport adapter.
+    #[cfg(test)]
     pub(crate) fn poll_after_fetch(
         &self,
         root: &Path,
@@ -1412,18 +1442,32 @@ impl RepositoryService {
         configuration: &super::observation::ObservationConfiguration,
         advertised: Vec<(String, git2::Oid)>,
     ) -> Result<RemotePollResult, RemotePollError> {
+        self.poll_after_fetch_observed(root, owner, plan, configuration, advertised, None)
+    }
+
+    fn poll_after_fetch_observed(
+        &self,
+        root: &Path,
+        owner: &super::RemoteReservation,
+        plan: &RemoteRefPlan,
+        configuration: &super::observation::ObservationConfiguration,
+        advertised: Vec<(String, git2::Oid)>,
+        probe: Option<&CancellationProbe>,
+    ) -> Result<RemotePollResult, RemotePollError> {
         use super::{
             RemoteOperationSafePoint as S, RemoteRefClassification as C,
             RemoteSafePointOutcome as D,
         };
-        if let Some(result) = self.poll_safe_point(root, owner, S::AfterAdvertisement)? {
+        if let Some(result) = self.poll_safe_point(root, owner, S::AfterAdvertisement, probe)? {
             return Ok(result);
         }
         let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
         let previous = state::with_transaction(self, root, |tx, id| state::read_snapshot(tx, id))?;
         let mut observations = Vec::new();
         for (name, oid) in advertised {
-            if let Some(result) = self.poll_safe_point(root, owner, S::BetweenObservations)? {
+            if let Some(result) =
+                self.poll_safe_point(root, owner, S::BetweenObservations, probe)?
+            {
                 return Ok(result);
             }
             if let Some(observation) = super::RemoteRefObservation::from_advertisement(
@@ -1521,7 +1565,7 @@ impl RepositoryService {
                 })
             })
             .collect::<Vec<_>>();
-        if let Some(result) = self.poll_safe_point(root, owner, S::BeforeBatchCommit)? {
+        if let Some(result) = self.poll_safe_point(root, owner, S::BeforeBatchCommit, probe)? {
             return Ok(result);
         }
         if !self.poll_configuration_matches(root, plan, configuration)? {
@@ -1547,6 +1591,7 @@ impl RepositoryService {
             owner,
             S::AfterBatchCommit,
             Some((&targets, false)),
+            probe,
         )? {
             return Ok(result);
         }
@@ -1557,6 +1602,7 @@ impl RepositoryService {
                 owner,
                 S::BeforeLocalMutation,
                 Some((&targets, local_changes)),
+                probe,
             )? {
                 return Ok(result);
             }
@@ -1730,6 +1776,7 @@ impl RepositoryService {
                         owner,
                         S::BeforeLocalMutation,
                         Some((&targets, local_changes)),
+                        probe,
                     )? {
                         return Ok(result);
                     }
@@ -1756,6 +1803,7 @@ impl RepositoryService {
             owner,
             S::BeforeDiscovery,
             Some((&targets, local_changes)),
+            probe,
         )? {
             return Ok(result);
         }
@@ -1875,8 +1923,9 @@ impl RepositoryService {
         root: &Path,
         owner: &super::RemoteReservation,
         point: super::RemoteOperationSafePoint,
+        probe: Option<&CancellationProbe>,
     ) -> Result<Option<RemotePollResult>, RemotePollError> {
-        self.poll_safe_point_with_targets(root, owner, point, None)
+        self.poll_safe_point_with_targets(root, owner, point, None, probe)
     }
     fn poll_safe_point_with_targets(
         &self,
@@ -1884,7 +1933,16 @@ impl RepositoryService {
         owner: &super::RemoteReservation,
         point: super::RemoteOperationSafePoint,
         targets: Option<(&[PollTargetReport], bool)>,
+        probe: Option<&CancellationProbe>,
     ) -> Result<Option<RemotePollResult>, RemotePollError> {
+        // A flag that cannot be read is an error, and is not taken for "no". A
+        // request that cannot be recorded loses nothing: the flag stands, and
+        // the next safe point reads it.
+        if let Some(probe) = probe
+            && probe.asked(self)?
+        {
+            let _ = self.request_synchronization_cancellation(root, owner);
+        }
         let (decision, captured) =
             match self.remote_safe_point_with(root, owner, point, |tx, id, decision| {
                 self.poll_capture_stop(tx, id, owner.operation_id(), decision, targets)

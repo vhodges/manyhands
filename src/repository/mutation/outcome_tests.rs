@@ -1405,7 +1405,7 @@ fn a_hand_off_no_operation_owes_is_offered_as_a_refresh() {
     };
     for command in Command::ALL {
         let actions = offered(command, false);
-        if command == Command::FolderCreate {
+        if matches!(command, Command::FolderCreate | Command::PollOnce) {
             assert_eq!(actions.len(), 1);
             assert_eq!(actions[0].action, RecoveryActionKind::IndexRefresh);
             assert_eq!(actions[0].operation_id, None);
@@ -1746,6 +1746,35 @@ fn a_failure_that_passes_by_itself_is_offered_the_same_request() {
                 "{code:?}"
             );
         }
+    }
+}
+
+/// A poll's transport stop is final, so the same request is not offered: it
+/// would only read the stored failure. A record left accepted is what still
+/// goes on, and the codes that do pass by themselves are unchanged.
+#[test]
+fn a_polls_final_transport_stop_offers_nothing() {
+    for code in [
+        ResultCode::RemoteUnavailable,
+        ResultCode::TransportUnavailable,
+    ] {
+        assert_eq!(
+            actions_of(Command::PollOnce, code, false),
+            [""; 0],
+            "{code:?}"
+        );
+        assert_eq!(
+            actions_of(Command::PollOnce, code, true),
+            ["request.retry"],
+            "{code:?}"
+        );
+    }
+    for code in [ResultCode::PollYielding, ResultCode::Busy] {
+        assert_eq!(
+            actions_of(Command::PollOnce, code, false),
+            ["request.retry"],
+            "{code:?}"
+        );
     }
 }
 

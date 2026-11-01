@@ -7,8 +7,8 @@
 //!
 //! Cancellation is cooperative. It is honored before a request is
 //! accepted, by every command, and after that only where the request's
-//! operation has a safe point, which is a synchronization, a promotion or a
-//! closure: at each one the token and the flag `cancel_request` sets on the
+//! operation has a safe point, which is a synchronization, a promotion, a
+//! closure or a poll: at each one the token and the flag `cancel_request` sets on the
 //! request's record are looked at, and the operation stops there. A local
 //! operation has no safe point once it is accepted.
 
@@ -29,9 +29,10 @@ use crate::results::{Effects, Envelope, ResultCode, Scope, contract_enum};
 use super::{
     super::{
         CloseTicketRequest, DocumentPromotionError, DocumentPromotionResult, OperationFamily,
-        PromoteDocumentRequest, ReadError, RepositoryError, RepositoryService,
-        SynchronizationError, SynchronizationObserver, SynchronizationResult,
-        SynchronizationSettings, SynchronizeRemoteRequest, TicketClosureError, TicketClosureResult,
+        PollPublicationRemoteRequest, PromoteDocumentRequest, ReadError, RemotePollError,
+        RemotePollResult, RepositoryError, RepositoryService, SynchronizationError,
+        SynchronizationObserver, SynchronizationResult, SynchronizationSettings,
+        SynchronizeRemoteRequest, TicketClosureError, TicketClosureResult,
         keys::{SessionCredentialProvider, SessionCredentials},
         promotion::lifecycle::CancellationProbe,
         recovery::{FinalKind, JournalRow, PendingOperation},
@@ -236,6 +237,17 @@ pub(crate) trait Session {
         asked_of: RequestId,
     ) -> Option<Result<TicketClosureResult, TicketClosureError>>;
 
+    /// Polls with the session's credentials, stopped by the call's token and by
+    /// the flag of the request `asked_of`; see
+    /// `RepositoryService::poll_publication_remote`. `None` when the session
+    /// has no credentials, or they are in use: nothing was called.
+    fn poll_once(
+        &self,
+        service: &RepositoryService,
+        request: PollPublicationRemoteRequest,
+        asked_of: RequestId,
+    ) -> Option<Result<RemotePollResult, RemotePollError>>;
+
     /// Connects to the host of the publication remote with the session's
     /// credentials and sees the key it presents; see
     /// `RepositoryService::verify_ssh_transport`. `None` when the
@@ -350,6 +362,17 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         Some(service.close_ticket_observed(request, &mut credentials, probe))
     }
 
+    fn poll_once(
+        &self,
+        service: &RepositoryService,
+        request: PollPublicationRemoteRequest,
+        asked_of: RequestId,
+    ) -> Option<Result<RemotePollResult, RemotePollError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
+        Some(service.poll_publication_remote_observed(request, &mut credentials, Some(&probe)))
+    }
+
     fn verify_transport(
         &self,
         service: &RepositoryService,
@@ -407,6 +430,15 @@ impl Session for NoSession {
         _request: CloseTicketRequest,
         _asked_of: RequestId,
     ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
+        None
+    }
+
+    fn poll_once(
+        &self,
+        _service: &RepositoryService,
+        _request: PollPublicationRemoteRequest,
+        _asked_of: RequestId,
+    ) -> Option<Result<RemotePollResult, RemotePollError>> {
         None
     }
 

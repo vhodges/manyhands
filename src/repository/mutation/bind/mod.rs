@@ -1091,6 +1091,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         }
         // Answered above, from the parent record: this is not reached.
         Some(Command::DocumentPromote | Command::TicketClose) => Recorded::nothing(),
+        // A poll names refs and items in its data and has no effect to show:
+        // what it moved of an unfinished request is its report's to say.
+        Some(Command::PollOnce) => Recorded::nothing(),
         // A policy verb's record is finished in the transaction that wrote
         // it, so none is ever seen unfinished: this is not reached.
         Some(Command::PollConfigure | Command::PollPause | Command::PollResume) => {

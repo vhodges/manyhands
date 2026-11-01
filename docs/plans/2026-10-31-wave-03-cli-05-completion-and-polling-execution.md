@@ -761,3 +761,89 @@ Tests and documents only; no library behaviour changed. Decisions 1-6 above are 
 **Codes moved by the mapping.** On `update_remote_polling`'s two kinds: `RecoveryRequired` moves from `internal_error` to `recovery_required`. `RepositoryNotRegistered` stays, and `unregistered_after_the_check` passes. The mapping builds a plain `ReadError`, as the conversion's source and any recovery aren't read for this kind, and no other row moved.
 
 **Verified, compare mode, all exit 0.** See the Task 5a commit's report: `--test mutation_remote -- c5_poll` 36 cases, `--lib mutation`, `cargo fmt --check`, clippy `-D warnings`.
+
+### Task 5b: `poll once` Binding
+
+Base `d6aee381`; `origin/main` is contained, and `merge-tree` is clean.
+
+**Carried from Task 5a.** `policy_row_gone_inside_the_path` pins `internal_error`, by the controller's ruling, and its awaiting-a-ruling comment is gone.
+
+**What landed.** `Command::PollOnce` with every predicate as the design's row, `Mutation::PollOnce`, `PollOnceBinding`, `Session::poll_once` on both impls, `PollMutationDto` with `poll_mutation.schema.json` (a new data root), `from_stored`, the `Remote` conformance row, and 14 goldens. `poll_publication_remote` keeps its signature and calls `poll_publication_remote_observed`, which threads an optional `CancellationProbe` to every safe point. The named rule is `final_transport_stop` in `outcome.rs`: `remote_unavailable` and `transport_unavailable` of `poll once` offer nothing unless the record was left accepted, and `replay` reaches it through the same function.
+
+**The design checkpoint: every row answered as the frozen table says, and no mechanism changed.** Seven rows failed on the first real run. All seven were fixture faults, read and corrected without changing an expected code:
+
+| Row | Fault |
+| --- | --- |
+| `interrupted`, `interrupted_after_a_target_moved`, `held_then_cancelled`, `cancelled_by_request_cancel_while_running` | The boundary hook stayed armed, so it fired on the later poll. It fires once now |
+| `fenced_is_final` | A generation staged by SQL broke the next new poll. It now changes the push URL, which is a real fence. See the second decision below |
+| `err_interrupted` | Changing the fetch URL under a held transport made a fetch fail, which is a transport stop. It now changes the push URL, which only the configuration check reads |
+| `transport_with_no_row` | An `https` URL reserves before it fails, so it has a row and is `Final`. That is kept as `invalid_remote`, and the no-row case removes the remote in the request hook |
+
+**Checks the brief asked for.**
+
+- **`Final` over a pending-read `Failed` row settles.** `transport_stop_is_final` asserts the row `failed`, `JournalRow::in_flight()` true, the record finished, no reservation, a replay offering nothing with no transport, and a new request polling.
+- **Report first, index pending second.** With that order swapped (M3), `interrupted_after_a_target_moved` fails.
+- **A first call and a later one can differ, each with a golden.** `poll_once_key_rejected` holds `key_rejected` and null data. `poll_once_key_rejected_reentered` holds `no_selected_key` and a report.
+- **A killed poll resent restarts.** `killed_resent_restarts` holds the same operation, a raised `owner_epoch` and one row. The stop is a failure point at `PollBeforeTarget` on a service then dropped, which leaves the row a kill would. A real kill is Task 13a's.
+- **`operation resume` of a held poll.** Through a boundary-begun poll, it answers `original_request_required` naming the request, and that request finishes. A finally stopped poll answers `invalid_input`.
+- **Pause during a running poll** (carried). The poll finishes `ok` with primary moved, `paused` stands, and the next automatic call is `NotEligible{Paused}`.
+
+**Seen failing.** Against a binding whose `prepare` answered `internal_error`, all 42 rows then written failed, 42 of 42. The harness reports a line per case; the lines read were assertions, and not every one was read individually. `invalid_remote` was split off afterwards and was not run against the stub. The stub proves little beyond the assertions being reached, so these mutations were run against the real code, each reverted:
+
+| Mutation | Filter | Failed |
+| --- | --- | --- |
+| M1 no probe at safe points | `cancelled` | `by_the_token`, `by_the_flag`, `at_the_last_safe_point`. `by_request_cancel_while_running` **passes**: `request cancel` also sets the row's flag, so it doesn't prove the probe |
+| M2 no outcome rule | `stored_` | `transport_unavailable`, `protocol_rejected` |
+| M3 index pending classified first | `interrupted` | `after_a_target_moved` |
+| M4 the row settles a transport stop | `key_rejected` | `key_rejected`. `reentered` passes, as it should |
+| M5 `rerun` without `restart` | `killed` | `killed_resent_restarts` |
+| M6 `moved` always false | `interrupted_after` | that row |
+| M7 no fenced answer | `fenced` | `fenced_is_final` |
+| M8 no host data | `host` | `host_approval_required` |
+| M9 a stored category read as `ok` | `stored_unlock` | that row |
+| M10 no missing-remote pre-check | `no_remote` | `no_remote` |
+| No `take_cancellation` | `cancelled_by_the_flag` | that row |
+
+Filters ran only the named rows, so a mutation may fail others too.
+
+**Decisions, for review.**
+
+- **Host data on the first call.** The table's `host approve` needs an authority, so a first-call host stop carries `SynchronizationMutationDto`, as a sync's does, and `from_stored` tells the two shapes apart by `completion`. A replay or a re-entry offers no `host.approve`: no action is stored, and a category names no host.
+- **A fenced row is beyond the table.** A held row whose configuration changed can never restart. `reenter` answers `fenced_answer`, `Final`, `external_change`, which is what `request cancel`'s `finish_fenced` says "its own next call" gives. A `failed` row is excepted, so its stored category stands. **The call that discovers the change first answers `recovery_required`, offering `request.retry`,** since `configure_poll_endpoints` raises the generation inside it; only the next call is final. Pinned as three steps. `request cancel` of a `failed` row left accepted with a changed generation still finishes it `external_change`, not its category. That is an edge, and I wrote no row for it.
+- **`Err(Interrupted)` is exit 3, never 4.** It carries no targets. By reading, each path that returns it comes before any local move in that pass, or a safe point returned a report instead. Only `err_interrupted`'s path has a row.
+- **`Err(Repository)` over a cancelled row keeps the error's code**, as the table reads, and finishes by the row. A sync says `cancelled` there. It needs a repository failure at that moment, and has no row.
+- **Effects.** `discovery` is `current` on `ok`, `pending` whenever wrapped in `IndexPending`, and otherwise `not_requested`. No other effect is claimed, so `recorded_effects` is nothing for a mismatch against an unfinished poll, even one that moved a target.
+- **No guidance in the data.** The table says "with guidance" and the DTO's listed fields hold none. `PollDisposition::guidance` is public, so Task 9 can print it.
+- **Probe failures.** A flag that can't be read at a safe point is `Err(Repository)`, `recovery_required`, record kept (`flag_unreadable`). A cancellation that can't be recorded on the row is ignored until the next safe point. `poll_after_fetch` is now `#[cfg(test)]`, as `promote_with_io` is.
+- **Progress.** A poll reports its `Connecting` event only: no stages at safe points, and no `Stopping`.
+
+**Limits.**
+
+- **The probe in the transfer callback has no row that proves it.** Removing it changes no answer, as the next safe point reads the same token; it only stops a transfer sooner. It also reads the registry from that callback, every 250 ms at most, which `poll_progress` opens its own connection to do.
+- `remote_unavailable` has no golden. `poll_once_protocol_rejected` was written and removed, since it would have failed `CODES_NO_FIXTURE_CAN_PRODUCE`, whose reason still holds for a real fixture, and removing that is no named edit. The row asserts the code and no actions, on a staged category.
+- The seven `stored_` rows stage their category by SQL over a real row. `key_rejected_reentered` is the one real path to a stored category's code. The first-call codes `transport_unavailable`, `key_rejected`, `unlock_required`, `host_approval_required`, `no_selected_key` and `invalid_remote` are real. First-call `remote_unavailable` has no row.
+- A stale remote context of a closed ticket, and dirty, deleted and divergent contexts through the binary, are Task 9's. Only dirty primary and malformed are pinned here.
+
+**Files beyond the plan's list, test support only.** `tests/read_contract.rs` (three enumeration rows), `tests/mutation_remote.rs` (the row and the array's length), `tests/support/mutation.rs` and `tests/support/repair.rs` (panic arms). `bind/mod.rs` and `bind/sync.rs` (`host_data` made `pub(super)`) are within the library scope and not named by the task. `bind/resume.rs` needed no change. No desktop or bin arm was needed, so the desktop commands weren't run.
+
+**Named edits.** E-9 (`stopping`, and the hand-off set, whose test is renamed `only_a_folder_creation_and_a_poll_hand_off_to_any_refresh`), E-11, E-12 (`a_hand_off_no_operation_owes_is_offered_as_a_refresh`, which now expects a poll to take the refresh; `a_polls_final_transport_stop_offers_nothing` is added), E-13.
+
+**Verified, compare mode, all exit 0.**
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--test mutation_remote -- c5_poll` | 79 | 303 s |
+| `--test remote_polling` | 84 | 188 s |
+| `--test mutation_remote -- resume` | 108 | 900 s |
+| `--test mutation_replay` | 384 | 281 s |
+| `--test mutation_contract` | 44 | 11 s |
+| `--test read_contract` | 72 | 7 s |
+| `--test mutation_confirmation` | 183 | 58 s |
+| `--test mutation_bridges` | 166 | 57 s |
+| `--lib mutation` | 146 | 7 s |
+| `--lib remote` | 479 | 173 s |
+| `--lib local_sync` | 164 | 287 s |
+| `--lib integration` | 26 | 15 s |
+| `cargo fmt --check`, `cargo check --all-features --locked`, clippy `-D warnings` | ok | 10, 3, 7 s |
+
+**What ran after what.** The first pass of this set failed `--lib mutation` (one row, the E-12 edit above) and `--test mutation_contract` (two rows, the extra golden). After those test-only fixes, `--lib mutation`, `mutation_contract`, `read_contract`, `c5_poll_once_stored`, `c5_poll_once_conformance`, fmt and clippy were rerun. The `c5_poll` count is from before the fixes, which changed no library code and removed one golden assertion. The rest ran on the same library code.

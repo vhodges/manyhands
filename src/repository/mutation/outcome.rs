@@ -865,6 +865,14 @@ fn recovery(
             (true, true, Some(_)) => vec![at_root(RecoveryActionKind::RepoInspect)],
             (true, true, None) | (false, _, _) => Vec::new(),
         },
+        // A poll's transport stop is final: its record is finished, so the
+        // same request would only read the stored failure again, and a new
+        // request is what polls (R-18). `replay` asks this too.
+        ResultCode::RemoteUnavailable | ResultCode::TransportUnavailable
+            if final_transport_stop(command, retry) =>
+        {
+            Vec::new()
+        }
         // Nothing was accepted, or what was accepted is still there:
         // either way the same request is the one to send. So it is for
         // a failure that passes by itself: a poll that is giving way, a
@@ -1021,6 +1029,12 @@ fn recovery(
         actions.splice(0..0, retry_request());
     }
     actions
+}
+
+/// Whether a transport code is a final answer that offers nothing: of `poll
+/// once`, whose record was not left accepted (design, Polling Verbs).
+const fn final_transport_stop(command: Option<Command>, retry: bool) -> bool {
+    matches!(command, Some(Command::PollOnce)) && !retry
 }
 
 /// Whether `code`, from a synchronization, is one the same request

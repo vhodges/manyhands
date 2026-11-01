@@ -77,6 +77,7 @@ commands! {
     PollConfigure => "poll configure",
     PollPause => "poll pause",
     PollResume => "poll resume",
+    PollOnce => "poll once",
 }
 
 impl Command {
@@ -96,6 +97,8 @@ impl Command {
     /// a record any call of this build wrote.
     pub(crate) const fn has_operation(self) -> bool {
         match self {
+            // One row of the remote journal, reserved for the explicit poll.
+            Self::PollOnce => true,
             Self::LocalContextSync => true,
             Self::LocalContextResolve => false,
             // The comment's own operation, in the local journal: its
@@ -190,6 +193,7 @@ impl Command {
     /// operation, and for one that has none.
     pub(crate) const fn was_accepted_without_operation(self) -> bool {
         match self {
+            Self::PollOnce => false,
             Self::LocalContextSync
             | Self::LocalContextResolve
             | Self::CommentAdd
@@ -239,6 +243,7 @@ impl Command {
     /// records and runs it.
     pub(crate) const fn restores_index(self) -> bool {
         match self {
+            Self::PollOnce => false,
             Self::LocalContextSync
             | Self::LocalContextResolve
             | Self::CommentAdd
@@ -289,6 +294,7 @@ impl Command {
     /// lacks is supplied with the request.
     pub(crate) const fn creates_its_repository(self) -> bool {
         match self {
+            Self::PollOnce => false,
             Self::LocalContextSync
             | Self::LocalContextResolve
             | Self::CommentAdd
@@ -345,6 +351,8 @@ impl Command {
     /// it.
     pub(crate) const fn stops_at_safe_points(self) -> bool {
         match self {
+            // A poll's own safe points, which its probe reaches (Task 5b).
+            Self::PollOnce => true,
             Self::LocalContextSync | Self::LocalContextResolve => true,
             Self::ItemSync | Self::RepoSync => true,
             // `request cancel` sets the request's flag, which the
@@ -417,6 +425,8 @@ impl Command {
     /// finished results of every other command offer nothing.
     pub(crate) const fn finishes_as_a_synchronization(self) -> bool {
         match self {
+            // How a replay reads a finished row: it keeps the pinned equality.
+            Self::PollOnce => true,
             Self::LocalContextSync | Self::LocalContextResolve => true,
             Self::ItemSync
             | Self::RepoSync
@@ -470,6 +480,8 @@ impl Command {
     /// call: what that call is about to do.
     pub(crate) const fn stage(self) -> ProgressStage {
         match self {
+            // What a poll does first is connect, to fetch.
+            Self::PollOnce => ProgressStage::Connecting,
             Self::LocalContextSync | Self::LocalContextResolve => ProgressStage::Observing,
             Self::IndexRefresh | Self::IndexRebuild => ProgressStage::Indexing,
             Self::ItemSync
@@ -535,6 +547,9 @@ impl Command {
     /// would find nothing to take up.
     pub(crate) const fn hands_off_to_any_refresh(self) -> bool {
         match self {
+            // A poll's hand-off is a refresh of the whole repository, and the
+            // operation it finished owes nothing of it.
+            Self::PollOnce => true,
             Self::LocalContextSync
             | Self::LocalContextResolve
             | Self::CommentAdd
@@ -591,6 +606,9 @@ impl Command {
     /// `not_confirmable`, and so is an `execute` that presents one.
     pub(crate) const fn needs_confirmation(self) -> bool {
         match self {
+            // One fetch and clean fast-forwards: nothing is lost, and what it
+            // finds in the way it leaves.
+            Self::PollOnce => false,
             // A comment adds a file that nothing held, in the item's own
             // context, and publishes it as a synchronization would: there
             // is nothing to show first.
@@ -710,6 +728,7 @@ mod tests {
         assert_eq!(Command::PollConfigure.name(), "poll configure");
         assert_eq!(Command::PollPause.name(), "poll pause");
         assert_eq!(Command::PollResume.name(), "poll resume");
+        assert_eq!(Command::PollOnce.name(), "poll once");
     }
 
     #[test]
@@ -733,7 +752,10 @@ mod tests {
             let stopping = local
                 || comment
                 || confirmed
-                || matches!(command, Command::ItemSync | Command::RepoSync);
+                || matches!(
+                    command,
+                    Command::ItemSync | Command::RepoSync | Command::PollOnce
+                );
             assert_eq!(command.stops_at_safe_points(), stopping, "{command:?}");
             if stopping {
                 assert_eq!(command.needs_confirmation(), confirmed, "{command:?}");
@@ -890,11 +912,11 @@ mod tests {
     }
 
     #[test]
-    fn only_a_folder_creation_hands_off_to_any_refresh() {
+    fn only_a_folder_creation_and_a_poll_hand_off_to_any_refresh() {
         for command in Command::ALL {
             assert_eq!(
                 command.hands_off_to_any_refresh(),
-                command == Command::FolderCreate,
+                matches!(command, Command::FolderCreate | Command::PollOnce),
                 "{command:?}"
             );
         }
@@ -959,6 +981,21 @@ mod tests {
             assert!(!command.creates_its_repository(), "{command:?}");
             assert_eq!(command.stage(), ProgressStage::Connecting, "{command:?}");
         }
+    }
+
+    /// The design's Command Predicates row of `poll once`.
+    #[test]
+    fn a_poll_is_a_remote_operation_with_safe_points_and_no_confirmation() {
+        let command = Command::PollOnce;
+        assert!(!command.needs_confirmation());
+        assert!(command.has_operation());
+        assert!(command.stops_at_safe_points());
+        assert!(command.finishes_as_a_synchronization());
+        assert!(command.hands_off_to_any_refresh());
+        assert!(!command.was_accepted_without_operation());
+        assert!(!command.restores_index());
+        assert!(!command.creates_its_repository());
+        assert_eq!(command.stage(), ProgressStage::Connecting);
     }
 
     /// The design's Command Predicates row of the policy verbs.

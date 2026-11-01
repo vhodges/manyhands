@@ -4682,7 +4682,7 @@ fn conforming(
 /// need a finished request each make a conflict to resolve, and that of
 /// `item republish` is `republish::c4_republish_conformance`, whose rules
 /// each make a deleted branch to republish.
-const CONFORMANCE: [conformance::Row; 7] = [
+const CONFORMANCE: [conformance::Row; 8] = [
     conformance::Row::new("item sync", false, "item_not_found", |rule| {
         conforming(
             |w, ask| match ask {
@@ -4766,6 +4766,12 @@ const CONFORMANCE: [conformance::Row; 7] = [
         true,
         "confirmation_not_found",
         c5_lifecycle::conforming_close,
+    ),
+    conformance::Row::new(
+        "poll once",
+        false,
+        "not_repository",
+        c5_poll::conforming_once,
     ),
 ];
 

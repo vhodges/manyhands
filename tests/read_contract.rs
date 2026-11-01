@@ -715,6 +715,7 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         LifecycleIntegrationKind, LifecycleMadeReadyState, LifecycleMutationType,
         LifecyclePathChangeKind, LifecyclePlannedIntegration, LifecyclePlannedPublication,
         LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
+        PollMutationCompletion, PollTargetDisposition,
     };
     let mut enumerations = vec![
         (
@@ -819,6 +820,25 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "made_ready_state",
             LifecycleMadeReadyState::ALL
                 .map(LifecycleMadeReadyState::as_str)
+                .to_vec(),
+        ),
+        (
+            "poll_mutation.schema.json",
+            "completion",
+            PollMutationCompletion::ALL
+                .map(PollMutationCompletion::as_str)
+                .to_vec(),
+        ),
+        (
+            "poll_mutation.schema.json",
+            "targets.items.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "poll_mutation.schema.json",
+            "targets.items.disposition",
+            PollTargetDisposition::ALL
+                .map(PollTargetDisposition::as_str)
                 .to_vec(),
         ),
         (

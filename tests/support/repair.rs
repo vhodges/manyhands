@@ -333,7 +333,9 @@ impl Drop for Shelf {
 pub fn repair_data(envelope: &Envelope<MutationDataDto>) -> &RepairMutationDto {
     match envelope.data.as_ref() {
         Some(MutationDataDto::LocalContextSync(_)) => panic!("local synchronization data"),
-        Some(MutationDataDto::PollPolicy(_)) => panic!("a polling policy's data"),
+        Some(MutationDataDto::PollPolicy(_)) | Some(MutationDataDto::Poll(_)) => {
+            panic!("a polling policy's data")
+        }
         Some(MutationDataDto::Repair(data)) => data,
         Some(
             MutationDataDto::Document(_)
