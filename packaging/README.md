@@ -179,6 +179,13 @@ diagnostics/default panic-hook behavior remain; the CLI and debug/non-Windows
 behavior are unchanged. Injected-dialog tests on Linux do not establish
 native Windows dialog linkage or visibility.
 
+The panic hook runs before unwinding, including when a progress-sink panic is
+later caught and the request continues. The modal dialog blocks the panicking
+thread until dismissed; any locks it holds remain held during the dialog.
+The restart advice is conservative, not a claim that the app has terminated.
+This recovered-panic behavior is an explicitly accepted limitation; there is
+no per-path suppression or temporary replacement of the process-wide hook.
+
 User PATH integration is an **opt-in** `clipath` task (off for a new install).
 Reinstall/upgrade retains Inno's previous task selection. The installer reads
 only the registry's user PATH, never copies the process's merged system/user
@@ -209,8 +216,17 @@ After successful copying and before completion, the installer removes stale
 files only within its owned `bin` and `licenses` trees. The compiler embeds
 the incoming managed-file list derived from the exact verified ZIP plus the
 Inno licence and manifest itself; it does not trust an older installed list.
-Before any pruning, it validates the complete list, expected files, both owned
-trees and reparse-free ancestors. It also checks every expected file's SHA-256
+The embedded file/digest tables are validated once at startup. A sorted
+directory/file-prefix index rejects aliases and collisions without pairwise
+path splitting; a separate sorted lookup supports pruning membership checks
+without changing the file/digest order. Destination trees are still freshly
+enumerated and validated at preparation, install start and pruning.
+
+Reparse checks include `{app}` and everything beneath it, stopping at the
+application root. A junction in an unowned profile/AppData ancestor is allowed;
+a junction at the application root or inside its owned trees is rejected.
+Before any pruning, the installer checks expected files, both owned trees and
+the applicable in-root ancestors. It also checks every expected file's SHA-256
 against a separate compiler-embedded digest table derived from the verified
 ZIP and exact installer additions, including the installed manifest itself.
 The digest table is not installed; expectations are cached at startup and
@@ -288,10 +304,12 @@ policy functions: preparation cancellation, fatal checkpoint failures before
 copying, mid-install cancellation with overwritten bytes retained, malformed
 managed lists, missing expected files, reparse points, pruning failures, and
 successful fresh/upgrade completion. Additional cases cover old/wrong bytes
-at existing paths and forged installed/temporary digest metadata. A signing-
-failure fixture proves three bounded attempts without unsigned output. The
-complete local suite passed **255 tests with no skips**, including Ruby, FPC
-and all five Inno-engine tests after the content-validation correction. To reproduce
+at existing paths and forged installed/temporary digest metadata. Junction
+tests distinguish ancestors from the application root/descendants, and scale
+tests exercise 1,000 paths. A signing-failure fixture proves three bounded
+attempts without unsigned output. Current results and timing evidence are in
+the [follow-up execution record](../docs/plans/2026-11-01-packaging-review-follow-up-execution.md).
+To reproduce
 the engine subset on Linux with an already verified compiler and a fresh,
 owned Wine prefix:
 
@@ -307,7 +325,20 @@ On an authorized disposable native Windows machine, still exercise interactive
 and silent install, app launch, CLI PATH enabled/disabled, same-version reinstall,
 stable/prerelease upgrade, rejected downgrade, interrupted-upgrade repair,
 uninstall, readable installed disclosures, and retention of user data and
-pre-existing PATH entries. Verify the installed uninstaller's signature too.
+pre-existing PATH entries. Include a redirected profile/AppData ancestor and
+normal versus recovered-panic dialogs. Verify the installed uninstaller's
+signature too. The native Build workflow includes a Windows release build,
+but compilation alone does not replace these installer/dialog checks.
+Also run the opt-in engine suite natively with `INNO_COMPILER` pointing to the
+verified 7.1.1 compiler. Its root/descendant link-rejection fixtures need
+permission to create directory links; this is a fixture requirement, not an
+elevation requirement for the consumer installer:
+
+```powershell
+$env:INNO_COMPILER = 'C:\path\to\verified\ISCC.exe'
+python -B scripts/release/tests/test_installer_engine.py
+```
+
 For silent operation, Inno supports `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`;
 `/TASKS=clipath` opts into PATH and `/TASKS=` selects no optional tasks.
 No new release workflow run or native signing/install acceptance has occurred
