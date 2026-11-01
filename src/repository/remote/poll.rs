@@ -17,6 +17,10 @@ use crate::{
     },
 };
 
+/// How often a transfer's callback looks at what it has been asked: it runs for
+/// every packet.
+const POLL_PROGRESS_THROTTLE: std::time::Duration = std::time::Duration::from_millis(250);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PollDisposition {
     Current,
@@ -1202,7 +1206,7 @@ impl RepositoryService {
         request: PollPublicationRemoteRequest,
         session: &mut crate::repository::keys::SessionCredentials<P>,
     ) -> Result<RemotePollResult, RemotePollError> {
-        self.poll_publication_remote_observed(request, session, None)
+        self.poll_probed(request, session, None)
     }
 
     /// `poll_publication_remote`, stopped by `probe` as well: a request's token
@@ -1211,6 +1215,15 @@ impl RepositoryService {
     pub(in super::super) fn poll_publication_remote_observed<
         P: crate::repository::keys::SessionCredentialProvider,
     >(
+        &self,
+        request: PollPublicationRemoteRequest,
+        session: &mut crate::repository::keys::SessionCredentials<P>,
+        probe: CancellationProbe,
+    ) -> Result<RemotePollResult, RemotePollError> {
+        self.poll_probed(request, session, Some(&probe))
+    }
+
+    fn poll_probed<P: crate::repository::keys::SessionCredentialProvider>(
         &self,
         request: PollPublicationRemoteRequest,
         session: &mut crate::repository::keys::SessionCredentials<P>,
@@ -1363,7 +1376,7 @@ impl RepositoryService {
                     }
                     let now = std::time::Instant::now();
                     if last.is_some_and(|at: std::time::Instant| {
-                        now.duration_since(at) < std::time::Duration::from_millis(250)
+                        now.duration_since(at) < POLL_PROGRESS_THROTTLE
                     }) {
                         return true;
                     }

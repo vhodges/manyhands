@@ -370,7 +370,7 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
     ) -> Option<Result<RemotePollResult, RemotePollError>> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
         let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
-        Some(service.poll_publication_remote_observed(request, &mut credentials, Some(&probe)))
+        Some(service.poll_publication_remote_observed(request, &mut credentials, probe))
     }
 
     fn verify_transport(

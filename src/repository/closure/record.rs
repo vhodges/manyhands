@@ -788,6 +788,9 @@ pub(in super::super) fn clear_cancellation(
 }
 
 impl ParentRecord for ClosureRecord {
+    fn written_checkpoint(&self) -> Option<Oid> {
+        self.closure_oid
+    }
     const KIND: LifecycleKind = KIND;
     fn decode(row: &rusqlite::Row<'_>) -> Result<Self, RepositoryError> {
         decode(row)

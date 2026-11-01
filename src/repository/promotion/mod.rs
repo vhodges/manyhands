@@ -408,26 +408,32 @@ impl<B> ParentView<B> {
     }
 }
 
-/// The parent record of the promotion `operation`, when there is one.
-pub(super) fn lifecycle_parent(
+/// The parent record of `operation`, of the lifecycle `R` is the record of,
+/// when there is one.
+pub(super) fn lifecycle_parent<R, B>(
     service: &RepositoryService,
     root: &Path,
     operation: OperationId,
-) -> Result<Option<ParentView<PromotionBlocker>>, RepositoryError> {
-    use lifecycle::LifecycleRecord;
+) -> Result<Option<ParentView<B>>, RepositoryError>
+where
+    R: lifecycle_record::ParentRecord<Refusal = lifecycle_record::Refusal<B>>,
+    B: Clone,
+{
     crate::repository::remote::state::with_transaction(service, root, |tx, repository_id| {
         Ok(
-            record::read_record(tx, repository_id, operation)?.map(|parent| ParentView {
-                step: parent.step(),
-                refusal: parent.refusal().cloned(),
-                expectation: parent.expectation().to_bytes(),
-                item_id: parent.item_id().clone(),
-                checkpoint: None,
-                integration: parent.integration_oid(),
-                integration_kind: parent.integration_kind(),
-                publication: parent.publication(),
-                cancel_requested: parent.cancel_requested(),
-                children: [parent.context_sync_id(), parent.primary_sync_id()],
+            lifecycle_record::read_record::<R>(tx, repository_id, operation)?.map(|parent| {
+                ParentView {
+                    step: parent.step(),
+                    refusal: parent.refusal().cloned(),
+                    expectation: parent.expectation_bytes(),
+                    item_id: parent.item_id().clone(),
+                    checkpoint: parent.written_checkpoint(),
+                    integration: parent.integration_oid(),
+                    integration_kind: parent.integration_kind(),
+                    publication: parent.publication(),
+                    cancel_requested: parent.cancel_requested(),
+                    children: [parent.context_sync_id(), parent.primary_sync_id()],
+                }
             }),
         )
     })

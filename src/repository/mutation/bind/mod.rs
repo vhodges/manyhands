@@ -1104,6 +1104,28 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
     }
 }
 
+/// The position of the repository's primary branch, as a lifecycle request's
+/// own is.
+pub(super) fn primary_position(root: &Path) -> Result<Position, Answer> {
+    let configuration = match super::super::read_configuration_for(
+        root,
+        super::super::RepositoryOperation::RepositorySnapshot,
+    )
+    .map_err(refused)?
+    {
+        super::super::ConfigurationInspection::Valid(configuration) => configuration,
+        super::super::ConfigurationInspection::Missing
+        | super::super::ConfigurationInspection::Invalid(_) => {
+            return Err(Answer::stopped(ResultCode::InvalidConfiguration));
+        }
+    };
+    Position::of(
+        root,
+        &format!("refs/heads/{}", configuration.primary_branch),
+    )
+    .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))
+}
+
 #[cfg(test)]
 #[path = "before_tests.rs"]
 mod before_tests;

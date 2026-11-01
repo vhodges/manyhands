@@ -62,11 +62,10 @@ use crate::{
 use super::{
     super::{
         super::{
-            AuthoringKind, ConfigurationInspection, OperationFamily, OperationId, ReadError,
-            RefreshRepositoryRequest, RepositoryErrorKind, RepositoryOperation, RepositoryService,
-            SynchronizationTarget, closure, keys, promotion,
+            AuthoringKind, OperationFamily, OperationId, ReadError, RefreshRepositoryRequest,
+            RepositoryErrorKind, RepositoryOperation, RepositoryService, SynchronizationTarget,
+            closure, keys, promotion,
             promotion::lifecycle::{LifecycleRecord, ParentStep},
-            read_configuration_for,
             recovery::{self, FinalKind, JournalRow, LocalStanding, PendingOperation},
             remote::{self, state::ResolutionAttemptPhase},
         },
@@ -81,7 +80,7 @@ use super::{
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
     Prepared, Ran, Standing, comment, conflict,
     lifecycle::{DocumentPromoteInput, LifecycleBinding, LifecycleVerb, TicketCloseInput},
-    sync,
+    primary_position, sync,
 };
 
 /// The input of `operation resume`: the root of the repository, and the
@@ -230,22 +229,15 @@ enum Named {
     /// A promotion or a closure that has not ended and that no accepted
     /// request record holds: it is continued under its own ID, with what its
     /// parent record holds.
-    Lifecycle { verb: Verb, item_id: ItemId },
+    Lifecycle { command: Command, item_id: ItemId },
     /// A promotion or a closure that is complete. A fresh resume has nothing
     /// to do. One entered again may be what completed it, so it is given the
     /// outcome the parent stored and its report.
-    Complete { verb: Verb, item_id: ItemId },
+    Complete { command: Command, item_id: ItemId },
     /// What nothing takes up under its ID: a poll no accepted request record
     /// holds, and a promotion or a closure that a consent refusal ended or
     /// that was superseded. It is no operation this command is for.
     NotResumable,
-}
-
-/// Which parent table holds a lifecycle operation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Verb {
-    Promote,
-    Close,
 }
 
 /// How a parent stands for a resume, from what its record holds. A complete
@@ -255,13 +247,13 @@ fn lifecycle_standing(
     connection: &rusqlite::Connection,
     root: &str,
     operation_id: OperationId,
-    verb: Verb,
+    command: Command,
     record: &impl LifecycleRecord,
     ended_by_refusal: bool,
 ) -> rusqlite::Result<Named> {
     Ok(match record.step() {
         ParentStep::Complete => Named::Complete {
-            verb,
+            command,
             item_id: record.item_id().clone(),
         },
         ParentStep::Abandoned | ParentStep::Superseded => Named::NotResumable,
@@ -281,7 +273,7 @@ fn lifecycle_standing(
             root,
             operation_id,
             Named::Lifecycle {
-                verb,
+                command,
                 item_id: record.item_id().clone(),
             },
         )?,
@@ -317,7 +309,7 @@ fn found_lifecycle(
             connection,
             root,
             operation_id,
-            Verb::Promote,
+            Command::DocumentPromote,
             &record,
             record.refusal().is_some(),
         )?));
@@ -329,7 +321,7 @@ fn found_lifecycle(
             connection,
             root,
             operation_id,
-            Verb::Close,
+            Command::TicketClose,
             &record,
             record.refusal().is_some(),
         )?));
@@ -783,7 +775,7 @@ pub(crate) fn takes_up(service: &RepositoryService, root: &str, operation_id: Op
                 target: _,
             }
             | Named::Lifecycle {
-                verb: _,
+                command: _,
                 item_id: _,
             },
         ) => true,
@@ -794,7 +786,7 @@ pub(crate) fn takes_up(service: &RepositoryService, root: &str, operation_id: Op
             | Named::LeftToInspect { synchronization: _ }
             | Named::OriginalRequest { request: _ }
             | Named::Complete {
-                verb: _,
+                command: _,
                 item_id: _,
             }
             | Named::Fenced
@@ -865,24 +857,6 @@ fn consent_refusal_named<V: LifecycleVerb>(ran: Ran, binding: &LifecycleBinding<
     Ran { answer, standing }
 }
 
-/// The position of the repository's primary branch, as a lifecycle request's
-/// own is.
-fn primary_position(root: &Path) -> Result<Position, Answer> {
-    let configuration = match read_configuration_for(root, RepositoryOperation::RepositorySnapshot)
-        .map_err(super::refused)?
-    {
-        ConfigurationInspection::Valid(configuration) => configuration,
-        ConfigurationInspection::Missing | ConfigurationInspection::Invalid(_) => {
-            return Err(Answer::stopped(ResultCode::InvalidConfiguration));
-        }
-    };
-    Position::of(
-        root,
-        &format!("refs/heads/{}", configuration.primary_branch),
-    )
-    .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))
-}
-
 /// The index brought up to date, and nothing else: what a hand-off does.
 fn current() -> Answer {
     Answer {
@@ -933,7 +907,7 @@ impl OperationResumeBinding {
                 target: _,
             }
             | Named::Lifecycle {
-                verb: _,
+                command: _,
                 item_id: _,
             } => return None,
             Named::NotFound => Answer::stopped(ResultCode::OperationNotFound),
@@ -944,7 +918,7 @@ impl OperationResumeBinding {
             )),
             Named::Ended { synchronization: _ }
             | Named::Complete {
-                verb: _,
+                command: _,
                 item_id: _,
             } => Answer::stopped(ResultCode::AlreadyApplied),
             Named::LeftToInspect { synchronization: _ } => {
@@ -1233,26 +1207,29 @@ impl OperationResumeBinding {
         &self,
         call: &CallContext<'_>,
         accepted: &Accepted,
-        verb: Verb,
+        command: Command,
         item_id: ItemId,
     ) -> Ran {
         let root = self.root.clone();
         let operation = accepted.taking_up(self.operation_id);
-        let ran = match verb {
-            Verb::Promote => continued(
+        let ran = match command {
+            Command::DocumentPromote => continued(
                 LifecycleBinding::from(DocumentPromoteInput { root, id: item_id }),
                 call,
                 &operation,
             ),
-            Verb::Close => continued(
+            Command::TicketClose => continued(
                 LifecycleBinding::from(TicketCloseInput { root, id: item_id }),
                 call,
                 &operation,
             ),
-        };
-        let command = match verb {
-            Verb::Promote => Command::DocumentPromote,
-            Verb::Close => Command::TicketClose,
+            // `lifecycle_standing` names only those two.
+            _ => {
+                return Ran {
+                    answer: Answer::stopped(ResultCode::InternalError),
+                    standing: Standing::Stopped { journal: None },
+                };
+            }
         };
         self.lifecycle_kept(ran, accepted, command)
     }
@@ -1441,11 +1418,13 @@ impl OperationResumeBinding {
                 synchronization,
                 target: _,
             } => self.publish_comment(call, accepted, comment, synchronization),
-            Named::Lifecycle { verb, item_id } => self.lifecycle(call, accepted, verb, item_id),
+            Named::Lifecycle { command, item_id } => {
+                self.lifecycle(call, accepted, command, item_id)
+            }
             // Its earlier call may be what completed it: the stored outcome
             // and its report, with no transport.
-            Named::Complete { verb, item_id } if self.entered_again => {
-                self.lifecycle(call, accepted, verb, item_id)
+            Named::Complete { command, item_id } if self.entered_again => {
+                self.lifecycle(call, accepted, command, item_id)
             }
             // A synchronization that has ended, met by a request whose
             // earlier call may be what ended it: the domain is asked
@@ -1465,7 +1444,7 @@ impl OperationResumeBinding {
             | Named::LeftToInspect { synchronization: _ }
             | Named::OriginalRequest { request: _ }
             | Named::Complete {
-                verb: _,
+                command: _,
                 item_id: _,
             }
             | Named::Fenced
@@ -1551,7 +1530,7 @@ impl Binding for OperationResumeBinding {
             } => sync::resumed_position(call.service, Path::new(scope.as_str()), target)?,
             // What it integrates and publishes is primary's.
             Named::Lifecycle {
-                verb: _,
+                command: _,
                 item_id: _,
             } => primary_position(Path::new(scope.as_str()))?,
             Named::NotFound
@@ -1561,7 +1540,7 @@ impl Binding for OperationResumeBinding {
             | Named::HandOff
             | Named::OriginalRequest { request: _ }
             | Named::Complete {
-                verb: _,
+                command: _,
                 item_id: _,
             }
             | Named::Fenced
@@ -1642,11 +1621,11 @@ impl Binding for OperationResumeBinding {
                 target: _,
             }
             | Named::Lifecycle {
-                verb: _,
+                command: _,
                 item_id: _,
             }
             | Named::Complete {
-                verb: _,
+                command: _,
                 item_id: _,
             }
             | Named::Ended {

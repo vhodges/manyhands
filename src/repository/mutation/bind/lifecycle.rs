@@ -54,452 +54,45 @@ use crate::{
 use super::{
     super::{
         super::{
-            AuthoringKind, CloseTicketRequest, ClosureBlocker, ClosureExpectation,
-            ClosureRecording, ConfigurationInspection, DocumentPromotionError,
-            DocumentPromotionOutcome, DocumentPromotionPreflight, DocumentPromotionPreview,
-            DocumentPromotionResult, ItemDtoKind, OperationFamily, OperationId, PathChange,
-            PlannedCleanup, PlannedClosure, PlannedIntegration, PlannedPublication,
-            PreviewDocumentPromotionRequest, PreviewTicketClosureRequest, PromoteDocumentRequest,
-            PromotionBlocker, PromotionCleanup, PromotionCleanupPending, PromotionExpectation,
-            PromotionIntegration, PromotionPathChange, PromotionPublication,
-            PromotionPublicationPending, PromotionRemoteDeletionCategory,
-            PromotionSynchronizationCategory, RepositoryError, RepositoryOperation,
-            RepositoryService, SynchronizationError, SynchronizationTarget, TicketClosureError,
-            TicketClosureOutcome, TicketClosurePreflight, TicketClosurePreview,
-            TicketClosureResult, closure, promotion,
+            AuthoringKind, ClosureRecording, OperationFamily, OperationId, PlannedClosure,
+            PlannedIntegration, PlannedPublication, PromotionCleanup, PromotionCleanupPending,
+            PromotionIntegration, PromotionPublication, PromotionPublicationPending,
+            PromotionRemoteDeletionCategory, PromotionSynchronizationCategory, RepositoryService,
             promotion::{
                 ParentView,
-                lifecycle::{LifecyclePreview, ParentStep},
+                lifecycle::ParentStep,
                 lifecycle_record::Refusal,
                 record::{IntegrationKind, PublicationCategory},
             },
-            read_configuration_for,
             recovery::JournalRow,
-            remote::{state, sync},
-            transport::SshTransportError,
         },
         command::Command,
         confirm::{self, Row, Seen},
         context::context_names,
         dto::{
-            LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupPendingReason,
-            LifecycleCleanupState, LifecycleIntegrationKind, LifecycleMadeReadyDto,
-            LifecycleMadeReadyState, LifecycleMutationDto, LifecycleMutationType,
-            LifecyclePathChangeDto, LifecyclePathChangeKind, LifecyclePlannedCleanupDto,
-            LifecyclePlannedClosureDto, LifecyclePlannedIntegration, LifecyclePlannedPublication,
-            LifecyclePreviewDto, LifecyclePublicationPendingReason, LifecyclePublicationState,
-            LifecycleRecording, MutationDataDto, PreviewDetailsDto, PreviewEffect,
+            LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupState, LifecycleIntegrationKind,
+            LifecycleMadeReadyDto, LifecycleMadeReadyState, LifecycleMutationDto,
+            LifecycleMutationType, LifecyclePlannedCleanupDto, LifecyclePlannedClosureDto,
+            LifecyclePlannedIntegration, LifecyclePlannedPublication, LifecyclePreviewDto,
+            LifecyclePublicationState, LifecycleRecording, MutationDataDto, PreviewDetailsDto,
+            PreviewEffect,
         },
         evidence::{self, Position},
-        identity::{IntentDigestBuilder, RequestId, ScopeKey},
+        identity::{IntentDigestBuilder, ScopeKey},
         observe::{Observation, ObservationDigest},
         outcome,
-        progress::Session,
     },
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
-    Prepared, Previewed, Ran, Standing, refused, resolve_root,
+    Prepared, Previewed, Ran, Standing, primary_position, refused, resolve_root,
 };
 
-/// The input of `document promote`: the document.
-#[derive(Clone)]
-pub struct DocumentPromoteInput {
-    pub root: PathBuf,
-    pub id: ItemId,
-}
+#[path = "lifecycle_verb.rs"]
+mod verb;
+pub(in super::super) use verb::{Close, LifecycleVerb, Promote};
+pub use verb::{DocumentPromoteInput, TicketCloseInput};
+use verb::{Observed, Reached, Stop, cleanup_pending, path_change, publication_pending};
 
-/// The input of `ticket close`: the ticket.
-#[derive(Clone)]
-pub struct TicketCloseInput {
-    pub root: PathBuf,
-    pub id: ItemId,
-}
-
-/// What the preview of either verb shows and consents to.
-pub(crate) struct Ready {
-    expected: [u8; 32],
-    branch: String,
-    primary_branch: String,
-    remote: Option<String>,
-    context_oid: git2::Oid,
-    primary_oid: git2::Oid,
-    /// A context child runs before integration, by the verb's rule.
-    context_child: bool,
-    changes: Vec<PromotionPathChange>,
-    integration: PlannedIntegration,
-    publication: PlannedPublication,
-    cleanup: PlannedCleanup,
-    closure: Option<PlannedClosure>,
-}
-
-pub(crate) enum Observed {
-    Ready(Box<Ready>),
-    Blocked(Vec<LifecycleBlocker>),
-}
-
-/// How far an operation that reached primary got, of either verb.
-pub(crate) struct Reached {
-    recording: Option<ClosureRecording>,
-    integration: PromotionIntegration,
-    publication: PromotionPublication,
-    cleanup: PromotionCleanup,
-    index_pending: bool,
-}
-
-/// What stopped an operation before it could report that, of either verb.
-pub(crate) enum Stop {
-    Repository(RepositoryError),
-    Transport(Box<SshTransportError>),
-    Blocked(Vec<LifecycleBlocker>),
-    ExternalChange,
-    ReconfirmationRequired,
-    PrimaryAdvanced,
-    IdentityRequired,
-    ContextSynchronization(Box<SynchronizationError>),
-    Busy,
-    PollYielding,
-    Interrupted,
-    /// `Interrupted`, by a cancellation.
-    Cancelled,
-    OperationMismatch,
-    RecoveryRequired,
-}
-
-/// What is the verb's own: its command, its preview, its one domain call and
-/// its parent table.
-pub(crate) trait LifecycleVerb {
-    const COMMAND: Command;
-    const KIND: AuthoringKind;
-    const DTO_KIND: ItemDtoKind;
-
-    fn observe(
-        service: &RepositoryService,
-        root: &Path,
-        id: &ItemId,
-    ) -> Result<Observed, RepositoryError>;
-
-    /// `None` when the session has no credentials to call it with.
-    fn call(
-        session: &dyn Session,
-        service: &RepositoryService,
-        root: PathBuf,
-        operation_id: OperationId,
-        item_id: ItemId,
-        expected: [u8; 32],
-        request_id: RequestId,
-    ) -> Option<Result<Reached, Stop>>;
-
-    fn parent(
-        service: &RepositoryService,
-        root: &Path,
-        operation: OperationId,
-    ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError>;
-}
-
-pub(crate) struct Promote;
-pub(crate) struct Close;
-
-/// Whether a commit made now would have no usable identity. It only reads.
-fn identity_missing(root: &Path) -> Result<bool, RepositoryError> {
-    let operation = RepositoryOperation::RepositorySnapshot;
-    let repository = git2::Repository::open(root)
-        .map_err(|error| RepositoryError::git(operation, Some(root.to_owned()), error))?;
-    match sync::select_committing_identity(&repository, None, &SynchronizationTarget::Primary) {
-        Ok(_) => Ok(false),
-        Err(SynchronizationError::IdentityRequired { .. }) => Ok(true),
-        Err(SynchronizationError::Repository(error)) => Err(error),
-        Err(_) => Err(state::recovery_required()),
-    }
-}
-
-fn promotion_blocker(blocker: PromotionBlocker) -> LifecycleBlocker {
-    match blocker {
-        PromotionBlocker::NotADocument => LifecycleBlocker::NotADocument,
-        PromotionBlocker::ContextMissing => LifecycleBlocker::ContextMissing,
-        PromotionBlocker::ContextNonconforming => LifecycleBlocker::ContextNonconforming,
-        PromotionBlocker::ContextDirty => LifecycleBlocker::ContextDirty,
-        PromotionBlocker::ContextConflicted => LifecycleBlocker::ContextConflicted,
-        PromotionBlocker::ConflictPending => LifecycleBlocker::ConflictPending,
-        PromotionBlocker::PrimaryMissing => LifecycleBlocker::PrimaryMissing,
-        PromotionBlocker::PrimaryNotCheckedOut => LifecycleBlocker::PrimaryNotCheckedOut,
-        PromotionBlocker::PrimaryDirty => LifecycleBlocker::PrimaryDirty,
-        PromotionBlocker::PrimaryConflicted => LifecycleBlocker::PrimaryConflicted,
-        PromotionBlocker::PrimaryAheadOfRemote => LifecycleBlocker::PrimaryAheadOfRemote,
-        PromotionBlocker::ContextBehindRemote => LifecycleBlocker::ContextBehindRemote,
-        PromotionBlocker::IntegrationConflict => LifecycleBlocker::IntegrationConflict,
-        PromotionBlocker::RemoteContextDeleted => LifecycleBlocker::RemoteContextDeleted,
-        PromotionBlocker::HistoryUnknown => LifecycleBlocker::HistoryUnknown,
-        PromotionBlocker::DocumentInvalidAfterIntegration => {
-            LifecycleBlocker::DocumentInvalidAfterIntegration
-        }
-    }
-}
-
-fn closure_blocker(blocker: ClosureBlocker) -> LifecycleBlocker {
-    match blocker {
-        ClosureBlocker::NotATicket => LifecycleBlocker::NotATicket,
-        ClosureBlocker::ContextMissing => LifecycleBlocker::ContextMissing,
-        ClosureBlocker::ContextNonconforming => LifecycleBlocker::ContextNonconforming,
-        ClosureBlocker::ContextDirty => LifecycleBlocker::ContextDirty,
-        ClosureBlocker::ContextConflicted => LifecycleBlocker::ContextConflicted,
-        ClosureBlocker::ConflictPending => LifecycleBlocker::ConflictPending,
-        ClosureBlocker::LocalOperationPending => LifecycleBlocker::LocalOperationPending,
-        ClosureBlocker::CommentPublicationPending => LifecycleBlocker::CommentPublicationPending,
-        ClosureBlocker::PrimaryMissing => LifecycleBlocker::PrimaryMissing,
-        ClosureBlocker::PrimaryNotCheckedOut => LifecycleBlocker::PrimaryNotCheckedOut,
-        ClosureBlocker::PrimaryDirty => LifecycleBlocker::PrimaryDirty,
-        ClosureBlocker::PrimaryConflicted => LifecycleBlocker::PrimaryConflicted,
-        ClosureBlocker::PrimaryAheadOfRemote => LifecycleBlocker::PrimaryAheadOfRemote,
-        ClosureBlocker::ContextBehindRemote => LifecycleBlocker::ContextBehindRemote,
-        ClosureBlocker::IntegrationConflict => LifecycleBlocker::IntegrationConflict,
-        ClosureBlocker::RemoteContextDeleted => LifecycleBlocker::RemoteContextDeleted,
-        ClosureBlocker::HistoryUnknown => LifecycleBlocker::HistoryUnknown,
-        ClosureBlocker::AlreadyClosed => LifecycleBlocker::AlreadyClosed,
-        ClosureBlocker::PrimaryReopened => LifecycleBlocker::PrimaryReopened,
-        ClosureBlocker::TicketInvalidAfterClosure => LifecycleBlocker::TicketInvalidAfterClosure,
-        ClosureBlocker::IdentityRequired => LifecycleBlocker::IdentityRequired,
-    }
-}
-
-fn ready_of_promotion(preview: &DocumentPromotionPreview) -> Ready {
-    Ready {
-        expected: preview.expectation().to_bytes(),
-        branch: preview.context_branch().to_owned(),
-        primary_branch: preview.primary_branch().to_owned(),
-        remote: preview.publication_remote().map(str::to_owned),
-        context_oid: preview.context_oid(),
-        primary_oid: preview.primary_oid(),
-        // The runner's own rule, with the remote it asks for beside it.
-        context_child: preview.publication_remote().is_some()
-            && LifecyclePreview::runs_context_child(preview),
-        changes: preview.changes().to_vec(),
-        integration: preview.integration(),
-        publication: preview.publication(),
-        cleanup: preview.cleanup(),
-        closure: None,
-    }
-}
-
-fn ready_of_closure(preview: &TicketClosurePreview) -> Ready {
-    Ready {
-        expected: preview.expectation().to_bytes(),
-        branch: preview.context_branch().to_owned(),
-        primary_branch: preview.primary_branch().to_owned(),
-        remote: preview.publication_remote().map(str::to_owned),
-        context_oid: preview.context_oid(),
-        primary_oid: preview.primary_oid(),
-        // As `ClosureObservation::needs_context_child`: a contained context
-        // is never synchronized, and the checkpoint is never pushed.
-        context_child: preview.publication_remote().is_some()
-            && preview.integration() != PlannedIntegration::AlreadyContained,
-        changes: preview.changes().to_vec(),
-        integration: preview.integration(),
-        publication: preview.publication(),
-        cleanup: preview.cleanup(),
-        closure: Some(preview.closure().clone()),
-    }
-}
-
-fn promotion_reached(outcome: &DocumentPromotionOutcome, index_pending: bool) -> Reached {
-    Reached {
-        recording: None,
-        integration: outcome.integration(),
-        publication: outcome.publication(),
-        cleanup: outcome.cleanup(),
-        index_pending,
-    }
-}
-
-fn closure_reached(outcome: &TicketClosureOutcome, index_pending: bool) -> Reached {
-    Reached {
-        recording: Some(outcome.closure()),
-        integration: outcome.integration(),
-        publication: outcome.publication(),
-        cleanup: outcome.cleanup(),
-        index_pending,
-    }
-}
-
-impl LifecycleVerb for Promote {
-    const COMMAND: Command = Command::DocumentPromote;
-    const KIND: AuthoringKind = AuthoringKind::Document;
-    const DTO_KIND: ItemDtoKind = ItemDtoKind::Document;
-
-    fn observe(
-        service: &RepositoryService,
-        root: &Path,
-        id: &ItemId,
-    ) -> Result<Observed, RepositoryError> {
-        Ok(
-            match service.preview_document_promotion(PreviewDocumentPromotionRequest {
-                root: root.to_owned(),
-                item_id: id.clone(),
-            })? {
-                DocumentPromotionPreflight::Ready(preview)
-                    if preview.integration() == PlannedIntegration::MergeCommit
-                        && identity_missing(root)? =>
-                {
-                    Observed::Blocked(vec![LifecycleBlocker::IdentityRequired])
-                }
-                DocumentPromotionPreflight::Ready(preview) => {
-                    Observed::Ready(Box::new(ready_of_promotion(&preview)))
-                }
-                DocumentPromotionPreflight::Blocked { blockers } => {
-                    Observed::Blocked(blockers.into_iter().map(promotion_blocker).collect())
-                }
-            },
-        )
-    }
-
-    fn call(
-        session: &dyn Session,
-        service: &RepositoryService,
-        root: PathBuf,
-        operation_id: OperationId,
-        item_id: ItemId,
-        expected: [u8; 32],
-        request_id: RequestId,
-    ) -> Option<Result<Reached, Stop>> {
-        let result = session.promote_document(
-            service,
-            PromoteDocumentRequest {
-                root,
-                operation_id,
-                item_id,
-                expected: PromotionExpectation::from_bytes(expected),
-                approval: None,
-                confirmed_identity: None,
-            },
-            request_id,
-        )?;
-        Some(match result {
-            Ok(DocumentPromotionResult::Complete(outcome)) => {
-                Ok(promotion_reached(&outcome, false))
-            }
-            Ok(DocumentPromotionResult::IndexPending(pending)) => {
-                Ok(promotion_reached(&pending.authoritative, true))
-            }
-            Err(error) => Err(match error {
-                DocumentPromotionError::Repository(error) => Stop::Repository(error),
-                DocumentPromotionError::Transport(error) => Stop::Transport(error),
-                DocumentPromotionError::Blocked(blockers) => {
-                    Stop::Blocked(blockers.into_iter().map(promotion_blocker).collect())
-                }
-                DocumentPromotionError::ExternalChange => Stop::ExternalChange,
-                DocumentPromotionError::ReconfirmationRequired => Stop::ReconfirmationRequired,
-                DocumentPromotionError::PrimaryAdvanced => Stop::PrimaryAdvanced,
-                DocumentPromotionError::IdentityRequired {
-                    expected_configuration: _,
-                } => Stop::IdentityRequired,
-                DocumentPromotionError::ContextSynchronization(error) => {
-                    Stop::ContextSynchronization(error)
-                }
-                DocumentPromotionError::Busy => Stop::Busy,
-                DocumentPromotionError::PollYielding => Stop::PollYielding,
-                DocumentPromotionError::Interrupted => Stop::Interrupted,
-                DocumentPromotionError::OperationMismatch => Stop::OperationMismatch,
-                DocumentPromotionError::RecoveryRequired => Stop::RecoveryRequired,
-            }),
-        })
-    }
-
-    fn parent(
-        service: &RepositoryService,
-        root: &Path,
-        operation: OperationId,
-    ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError> {
-        Ok(promotion::lifecycle_parent(service, root, operation)?
-            .map(|parent| parent.of_blockers(promotion_blocker)))
-    }
-}
-
-impl LifecycleVerb for Close {
-    const COMMAND: Command = Command::TicketClose;
-    const KIND: AuthoringKind = AuthoringKind::Ticket;
-    const DTO_KIND: ItemDtoKind = ItemDtoKind::Ticket;
-
-    fn observe(
-        service: &RepositoryService,
-        root: &Path,
-        id: &ItemId,
-    ) -> Result<Observed, RepositoryError> {
-        Ok(
-            match service.preview_ticket_closure(PreviewTicketClosureRequest {
-                root: root.to_owned(),
-                item_id: id.clone(),
-                confirmed_identity: None,
-            })? {
-                TicketClosurePreflight::Ready(preview) => {
-                    Observed::Ready(Box::new(ready_of_closure(&preview)))
-                }
-                TicketClosurePreflight::Blocked {
-                    blockers,
-                    identity_configuration: _,
-                } => Observed::Blocked(blockers.into_iter().map(closure_blocker).collect()),
-            },
-        )
-    }
-
-    fn call(
-        session: &dyn Session,
-        service: &RepositoryService,
-        root: PathBuf,
-        operation_id: OperationId,
-        item_id: ItemId,
-        expected: [u8; 32],
-        request_id: RequestId,
-    ) -> Option<Result<Reached, Stop>> {
-        let result = session.close_ticket(
-            service,
-            CloseTicketRequest {
-                root,
-                operation_id,
-                item_id,
-                expected: ClosureExpectation::from_bytes(expected),
-                approval: None,
-                confirmed_identity: None,
-            },
-            request_id,
-        )?;
-        Some(match result {
-            Ok(TicketClosureResult::Complete(outcome)) => Ok(closure_reached(&outcome, false)),
-            Ok(TicketClosureResult::IndexPending(pending)) => {
-                Ok(closure_reached(&pending.authoritative, true))
-            }
-            Err(error) => Err(match error {
-                TicketClosureError::Repository(error) => Stop::Repository(error),
-                TicketClosureError::Transport(error) => Stop::Transport(error),
-                TicketClosureError::Blocked(blockers) => {
-                    Stop::Blocked(blockers.into_iter().map(closure_blocker).collect())
-                }
-                TicketClosureError::ExternalChange => Stop::ExternalChange,
-                TicketClosureError::ReconfirmationRequired => Stop::ReconfirmationRequired,
-                TicketClosureError::PrimaryAdvanced => Stop::PrimaryAdvanced,
-                TicketClosureError::IdentityRequired {
-                    expected_configuration: _,
-                } => Stop::IdentityRequired,
-                TicketClosureError::ContextSynchronization(error) => {
-                    Stop::ContextSynchronization(error)
-                }
-                TicketClosureError::Busy => Stop::Busy,
-                TicketClosureError::PollYielding => Stop::PollYielding,
-                TicketClosureError::Interrupted => Stop::Interrupted,
-                TicketClosureError::OperationMismatch => Stop::OperationMismatch,
-                TicketClosureError::RecoveryRequired => Stop::RecoveryRequired,
-            }),
-        })
-    }
-
-    fn parent(
-        service: &RepositoryService,
-        root: &Path,
-        operation: OperationId,
-    ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError> {
-        Ok(closure::lifecycle_parent(service, root, operation)?
-            .map(|parent| parent.of_blockers(closure_blocker)))
-    }
-}
-
-pub(crate) struct LifecycleBinding<V> {
+pub(in super::super) struct LifecycleBinding<V> {
     root: PathBuf,
     id: ItemId,
     /// The expectation the request consents to, as `Binding::prepare`
@@ -588,7 +181,10 @@ type MadeReadyReport = (
 
 thread_local! {
     /// What a test stages for the next report's read. A boundary runs on the
-    /// thread its caller called it on.
+    /// thread its caller called it on. It is no field of the service because it
+    /// is the binding's alone, and because a report's read comes after the
+    /// domain's own calls, so that `set_request_hook_for_testing`'s hook has run
+    /// by then.
     static MADE_READY_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
         const { std::cell::RefCell::new(None) };
 }
@@ -600,85 +196,6 @@ impl RepositoryService {
     #[doc(hidden)]
     pub fn set_made_ready_hook_for_testing(&self, hook: impl FnOnce() + 'static) {
         MADE_READY_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
-    }
-}
-
-/// What a preview of the item shows of its changes, relative to the repository.
-fn path_change(change: &PromotionPathChange) -> LifecyclePathChangeDto {
-    LifecyclePathChangeDto {
-        path: change.path().to_string_lossy().replace('\\', "/"),
-        change: match change.change() {
-            PathChange::Added => LifecyclePathChangeKind::Added,
-            PathChange::Modified => LifecyclePathChangeKind::Modified,
-            PathChange::Deleted => LifecyclePathChangeKind::Deleted,
-        },
-    }
-}
-
-fn publication_pending(reason: PromotionPublicationPending) -> LifecyclePublicationPendingReason {
-    match reason {
-        PromotionPublicationPending::NoPublicationRemote => {
-            LifecyclePublicationPendingReason::NoPublicationRemote
-        }
-        PromotionPublicationPending::Cancelled => LifecyclePublicationPendingReason::Cancelled,
-        PromotionPublicationPending::Synchronization(category) => match category {
-            PromotionSynchronizationCategory::Conflict => {
-                LifecyclePublicationPendingReason::Conflict
-            }
-            PromotionSynchronizationCategory::Rejected => {
-                LifecyclePublicationPendingReason::Rejected
-            }
-            PromotionSynchronizationCategory::Transport => {
-                LifecyclePublicationPendingReason::Transport
-            }
-            PromotionSynchronizationCategory::Identity => {
-                LifecyclePublicationPendingReason::Identity
-            }
-            PromotionSynchronizationCategory::Busy => LifecyclePublicationPendingReason::Busy,
-            PromotionSynchronizationCategory::Yielding => {
-                LifecyclePublicationPendingReason::Yielding
-            }
-            PromotionSynchronizationCategory::RecoveryRequired => {
-                LifecyclePublicationPendingReason::RecoveryRequired
-            }
-        },
-    }
-}
-
-fn cleanup_pending(reason: PromotionCleanupPending) -> LifecycleCleanupPendingReason {
-    match reason {
-        PromotionCleanupPending::AwaitingPublication => {
-            LifecycleCleanupPendingReason::AwaitingPublication
-        }
-        PromotionCleanupPending::ContextChanged => LifecycleCleanupPendingReason::ContextChanged,
-        PromotionCleanupPending::IgnoredFiles => LifecycleCleanupPendingReason::IgnoredFiles,
-        PromotionCleanupPending::RemoteContextChanged => {
-            LifecycleCleanupPendingReason::RemoteContextChanged
-        }
-        PromotionCleanupPending::RemoteDeletionFailed(category) => match category {
-            PromotionRemoteDeletionCategory::Transport => {
-                LifecycleCleanupPendingReason::RemoteDeletionTransport
-            }
-            PromotionRemoteDeletionCategory::Rejected => {
-                LifecycleCleanupPendingReason::RemoteDeletionRejected
-            }
-            PromotionRemoteDeletionCategory::Configuration => {
-                LifecycleCleanupPendingReason::RemoteDeletionConfiguration
-            }
-            PromotionRemoteDeletionCategory::Key => {
-                LifecycleCleanupPendingReason::RemoteDeletionKey
-            }
-            PromotionRemoteDeletionCategory::Unlock => {
-                LifecycleCleanupPendingReason::RemoteDeletionUnlock
-            }
-            PromotionRemoteDeletionCategory::Host => {
-                LifecycleCleanupPendingReason::RemoteDeletionHost
-            }
-        },
-        PromotionCleanupPending::RecoveryRequired => {
-            LifecycleCleanupPendingReason::RecoveryRequired
-        }
-        PromotionCleanupPending::Cancelled => LifecycleCleanupPendingReason::Cancelled,
     }
 }
 
@@ -818,9 +335,8 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             cleanup: None,
             cleanup_pending: None,
             blockers: Vec::new(),
-            made_ready: (V::KIND == AuthoringKind::Ticket).then(Vec::new),
-            made_ready_state: (V::KIND == AuthoringKind::Ticket)
-                .then_some(LifecycleMadeReadyState::NotComputed),
+            made_ready: V::REPORTS_MADE_READY.then(Vec::new),
+            made_ready_state: V::REPORTS_MADE_READY.then_some(LifecycleMadeReadyState::NotComputed),
         }
     }
 
@@ -838,7 +354,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         root: &Path,
         from: MadeReadyFrom,
     ) -> MadeReadyReport {
-        if V::KIND != AuthoringKind::Ticket {
+        if !V::REPORTS_MADE_READY {
             return (None, None);
         }
         let none = |state| (Some(Vec::new()), Some(state));
@@ -959,7 +475,9 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         // a host category carries no authority to approve.
         let recovery: Vec<RecoveryAction> = match code {
             ResultCode::DiscoveryPending => vec![outcome::same_request(accepted.request_id)],
-            ResultCode::HostApprovalRequired => retry_then_inspect(accepted),
+            ResultCode::HostApprovalRequired => {
+                then_inspect(outcome::same_request(accepted.request_id), accepted)
+            }
             _ => Vec::new(),
         };
         Ran {
@@ -998,17 +516,17 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
     ) -> Ran {
         let root = accepted.root();
         let primary = accepted.position.base_ref.as_deref();
+        let (code, blockers, offers_nothing) = stop_answer(&stop);
         let parent = match V::parent(service, &root, accepted.operation_id) {
             // Nothing can be said of what it left: the record is left.
             Err(_) => {
                 return Ran {
-                    answer: Answer::stopped(stop_answer(&stop).0),
+                    answer: Answer::stopped(code),
                     standing: Standing::Stopped { journal: None },
                 };
             }
             Ok(parent) => parent,
         };
-        let (code, blockers, offers_nothing) = stop_answer(&stop);
         let Some(view) = parent else {
             // A call entered again may be meeting the call it came after,
             // which has yet to begin its record: the record is that call's
@@ -1039,8 +557,8 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
                 standing: Standing::Final,
             };
         }
-        let effects = parent_effects::<V>(service, &root, primary, &view);
-        let (made_ready, made_ready_state) = self.made_ready(
+        let effects = parent_effects(&V::KIND, service, &root, primary, &view);
+        let report = self.made_ready(
             service,
             &root,
             if !parent_integrated(&root, primary, &view) {
@@ -1053,70 +571,88 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
                 MadeReadyFrom::Stop
             },
         );
-        let reports = |data: LifecycleMutationDto| LifecycleMutationDto {
-            made_ready: made_ready.clone(),
-            made_ready_state,
-            ..data
-        };
-        // A closure's stop reports; a promotion's has only its blockers to say.
-        let report = (V::KIND == AuthoringKind::Ticket)
-            .then(|| MutationDataDto::Lifecycle(Box::new(reports(self.data()))));
         // This call's stop is not the request's last word: the next call gets
         // the outcome the parent stored.
         if view.step == ParentStep::Complete {
             return Ran {
                 answer: Answer {
                     effects,
-                    data: report,
+                    data: self.stop_data(None, &view, CheckpointEffect::NotRequested, report),
                     recovery: vec![outcome::same_request(accepted.request_id)],
                     ..Answer::stopped(code)
                 },
                 standing: Standing::Owed,
             };
         }
-        // A refused merge, a child's conflict: the state is the repository's
-        // to name, and a preview reads it with nothing changed.
-        let names_its_state = match &stop {
-            Stop::RecoveryRequired => true,
-            Stop::ContextSynchronization(error) => {
-                outcome::synchronization_error_code(error) == ResultCode::RecoveryRequired
-            }
-            _ => false,
-        };
-        let blockers = match (blockers, names_its_state) {
-            (Some(blockers), _) => Some(blockers),
-            (None, true) => match V::observe(service, &root, &self.id) {
-                Ok(Observed::Blocked(blockers)) => Some(blockers),
-                Ok(Observed::Ready(_)) | Err(_) => None,
-            },
-            (None, false) => None,
-        };
-        let data = match blockers {
-            Some(blockers) => {
-                let checkpoint = view
-                    .checkpoint
-                    .filter(|_| effects.checkpoint == CheckpointEffect::Committed);
-                Some(MutationDataDto::Lifecycle(Box::new(reports(
-                    LifecycleMutationDto {
-                        blockers,
-                        recording: checkpoint.map(|_| LifecycleRecording::Record),
-                        checkpoint_oid: checkpoint.map(|oid| oid.to_string()),
-                        ..self.data()
-                    },
-                ))))
-            }
-            None => report,
-        };
+        let blockers = self.named_blockers(service, &root, &stop, blockers);
         Ran {
             answer: Answer {
+                data: self.stop_data(blockers, &view, effects.checkpoint, report),
                 effects,
-                data,
                 recovery: standing_recovery(code, accepted),
                 offers_nothing,
                 ..Answer::stopped(code)
             },
             standing: Standing::Owed,
         }
+    }
+
+    /// What a stop names as standing in the way. A refused merge or a child's
+    /// conflict is the repository's to name, and a preview reads it with
+    /// nothing changed.
+    fn named_blockers(
+        &self,
+        service: &RepositoryService,
+        root: &Path,
+        stop: &Stop,
+        blockers: Option<Vec<LifecycleBlocker>>,
+    ) -> Option<Vec<LifecycleBlocker>> {
+        let names_its_state = match stop {
+            Stop::RecoveryRequired => true,
+            Stop::ContextSynchronization(error) => {
+                outcome::synchronization_error_code(error) == ResultCode::RecoveryRequired
+            }
+            _ => false,
+        };
+        match (blockers, names_its_state) {
+            (Some(blockers), _) => Some(blockers),
+            (None, true) => match V::observe(service, root, &self.id) {
+                Ok(Observed::Blocked(blockers)) => Some(blockers),
+                Ok(Observed::Ready(_)) | Err(_) => None,
+            },
+            (None, false) => None,
+        }
+    }
+
+    /// The data of a stop: its blockers, with the checkpoint it wrote, and its
+    /// report. A closure's stop reports; a promotion's has only blockers to say.
+    fn stop_data(
+        &self,
+        blockers: Option<Vec<LifecycleBlocker>>,
+        view: &ParentView<LifecycleBlocker>,
+        checkpoint: CheckpointEffect,
+        (made_ready, made_ready_state): MadeReadyReport,
+    ) -> Option<MutationDataDto> {
+        let data = match blockers {
+            Some(blockers) => {
+                let written = view
+                    .checkpoint
+                    .filter(|_| checkpoint == CheckpointEffect::Committed);
+                LifecycleMutationDto {
+                    blockers,
+                    recording: written.map(|_| LifecycleRecording::Record),
+                    checkpoint_oid: written.map(|oid| oid.to_string()),
+                    ..self.data()
+                }
+            }
+            None if V::REPORTS_MADE_READY => self.data(),
+            None => return None,
+        };
+        Some(MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
+            made_ready,
+            made_ready_state,
+            ..data
+        })))
     }
 
     /// The one domain call, under the request's operation ID.
@@ -1198,7 +734,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         primary: Option<&str>,
         parent: &ParentView<LifecycleBlocker>,
     ) -> Option<Answer> {
-        let effects = parent_effects::<V>(service, root, primary, parent);
+        let effects = parent_effects(&V::KIND, service, root, primary, parent);
         let answer = match &parent.refusal {
             Some(Refusal::Blocked(blockers)) => Answer::stopped(blocked_code(blockers))
                 .with_data(self.blocked_data(blockers.clone())),
@@ -1281,20 +817,7 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
             return Err(Answer::stopped(ResultCode::IdentityRequired)
                 .with_data(self.blocked_data(blockers.clone())));
         }
-        let configuration =
-            match read_configuration_for(&root, RepositoryOperation::RepositorySnapshot)
-                .map_err(refused)?
-            {
-                ConfigurationInspection::Valid(configuration) => configuration,
-                ConfigurationInspection::Missing | ConfigurationInspection::Invalid(_) => {
-                    return Err(Answer::stopped(ResultCode::InvalidConfiguration));
-                }
-            };
-        let position = Position::of(
-            &root,
-            &format!("refs/heads/{}", configuration.primary_branch),
-        )
-        .map_err(|_| Answer::stopped(ResultCode::RepositoryInaccessible))?;
+        let position = primary_position(&root)?;
         self.expected = match &observed {
             Observed::Ready(ready) => Some(ready.expected),
             Observed::Blocked(_) => None,
@@ -1386,7 +909,7 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
         }
         // A label from the index: one it does not hold is shown as none, and
         // is no part of what is consented to.
-        let slug = if V::KIND == AuthoringKind::Ticket {
+        let slug = if V::REPORTS_MADE_READY {
             resolve_root(call.service, &root)
                 .ok()
                 .and_then(|repository| call.service.show_item(&repository, &self.id).ok())
@@ -1497,7 +1020,8 @@ pub(super) fn recorded_effects<V: LifecycleVerb>(
 ) -> Effects {
     let root = accepted.root();
     match V::parent(service, &root, accepted.operation_id) {
-        Ok(Some(parent)) => parent_effects::<V>(
+        Ok(Some(parent)) => parent_effects(
+            &V::KIND,
             service,
             &root,
             accepted.position.base_ref.as_deref(),
@@ -1552,7 +1076,8 @@ fn landed_push(
 /// context child's merge on the context's branch and its landed push. After it,
 /// the primary child's landed push, which the parent may not have recorded yet.
 /// Nothing is claimed of a row that can't be read.
-fn parent_effects<V: LifecycleVerb>(
+fn parent_effects(
+    kind: &AuthoringKind,
     service: &RepositoryService,
     root: &Path,
     primary: Option<&str>,
@@ -1562,7 +1087,7 @@ fn parent_effects<V: LifecycleVerb>(
     let scope = ScopeKey::for_repository(root);
     // A checkpoint is written once the context's branch holds it, or primary
     // once that branch is gone: never whatever is checked out.
-    let branch = context_names(root, &V::KIND, &parent.item_id.to_string()).branch_ref;
+    let branch = context_names(root, kind, &parent.item_id.to_string()).branch_ref;
     let branch_stands = git2::Repository::open(root)
         .is_ok_and(|repository| repository.refname_to_id(&branch).is_ok());
     let holder = if branch_stands {
@@ -1677,8 +1202,9 @@ fn no_parent_recovery(code: ResultCode) -> Vec<RecoveryAction> {
     }
 }
 
-fn retry_then_inspect(accepted: &Accepted) -> Vec<RecoveryAction> {
-    let mut actions = vec![outcome::same_request(accepted.request_id)];
+/// `first`, then a look at the repository.
+fn then_inspect(first: RecoveryAction, accepted: &Accepted) -> Vec<RecoveryAction> {
+    let mut actions = vec![first];
     actions.extend(outcome::inspect_the_root_it_lies_in(&accepted.root()));
     actions
 }
@@ -1692,12 +1218,10 @@ fn retry_then_inspect(accepted: &Accepted) -> Vec<RecoveryAction> {
 fn standing_recovery(code: ResultCode, accepted: &Accepted) -> Vec<RecoveryAction> {
     match code {
         ResultCode::HostApprovalRequired | ResultCode::HostReplacementRequired => {
-            retry_then_inspect(accepted)
+            then_inspect(outcome::same_request(accepted.request_id), accepted)
         }
         _ if outcome::never_gets_past(code) => {
-            let mut actions = vec![outcome::request_cancel(accepted.request_id)];
-            actions.extend(outcome::inspect_the_root_it_lies_in(&accepted.root()));
-            actions
+            then_inspect(outcome::request_cancel(accepted.request_id), accepted)
         }
         _ => Vec::new(),
     }
@@ -1749,406 +1273,5 @@ fn names_no_item(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::repository::{RepositoryErrorKind, RepositoryOperation};
-
-    fn reached(publication: PromotionPublication, cleanup: PromotionCleanup) -> Reached {
-        Reached {
-            recording: None,
-            integration: PromotionIntegration::Merged {
-                oid: git2::Oid::zero(),
-            },
-            publication,
-            cleanup,
-            index_pending: false,
-        }
-    }
-
-    fn pending_publication(reason: PromotionPublicationPending) -> PromotionPublication {
-        PromotionPublication::Pending { reason }
-    }
-
-    fn pending_cleanup(reason: PromotionCleanupPending) -> PromotionCleanup {
-        PromotionCleanup::Pending { reason }
-    }
-
-    const AWAITING: PromotionCleanup = PromotionCleanup::Pending {
-        reason: PromotionCleanupPending::AwaitingPublication,
-    };
-
-    #[test]
-    fn a_publication_that_stopped_answers_with_its_category() {
-        use PromotionSynchronizationCategory as Category;
-        for (category, code) in [
-            (Category::Conflict, ResultCode::RecoveryRequired),
-            (Category::Rejected, ResultCode::PushRejected),
-            (Category::Transport, ResultCode::TransportUnavailable),
-            (Category::Identity, ResultCode::IdentityRequired),
-            (Category::Busy, ResultCode::Busy),
-            (Category::Yielding, ResultCode::PollYielding),
-            (Category::RecoveryRequired, ResultCode::RecoveryRequired),
-        ] {
-            let stopped = reached(
-                pending_publication(PromotionPublicationPending::Synchronization(category)),
-                AWAITING,
-            );
-            assert_eq!(reached_code(&stopped), code, "{category:?}");
-        }
-    }
-
-    #[test]
-    fn a_deletion_that_stopped_answers_with_its_category() {
-        use PromotionRemoteDeletionCategory as Category;
-        for (category, code) in [
-            (Category::Transport, ResultCode::TransportUnavailable),
-            (Category::Rejected, ResultCode::PushRejected),
-            (Category::Configuration, ResultCode::RecoveryRequired),
-            (Category::Key, ResultCode::NoSelectedKey),
-            (Category::Unlock, ResultCode::UnlockRequired),
-            (Category::Host, ResultCode::HostApprovalRequired),
-        ] {
-            let stopped = reached(
-                PromotionPublication::Published {
-                    oid: git2::Oid::zero(),
-                },
-                pending_cleanup(PromotionCleanupPending::RemoteDeletionFailed(category)),
-            );
-            assert_eq!(reached_code(&stopped), code, "{category:?}");
-        }
-    }
-
-    #[test]
-    fn cleanup_stops_that_name_no_category_are_recovery() {
-        for reason in [
-            PromotionCleanupPending::ContextChanged,
-            PromotionCleanupPending::IgnoredFiles,
-            PromotionCleanupPending::RemoteContextChanged,
-            PromotionCleanupPending::RecoveryRequired,
-        ] {
-            let stopped = reached(
-                PromotionPublication::Published {
-                    oid: git2::Oid::zero(),
-                },
-                pending_cleanup(reason),
-            );
-            assert_eq!(reached_code(&stopped), ResultCode::RecoveryRequired);
-        }
-    }
-
-    #[test]
-    fn cancelled_publication_or_cleanup_is_cancelled() {
-        assert_eq!(
-            reached_code(&reached(
-                pending_publication(PromotionPublicationPending::Cancelled),
-                AWAITING
-            )),
-            ResultCode::Cancelled
-        );
-        assert_eq!(
-            reached_code(&reached(
-                PromotionPublication::Published {
-                    oid: git2::Oid::zero()
-                },
-                pending_cleanup(PromotionCleanupPending::Cancelled)
-            )),
-            ResultCode::Cancelled
-        );
-    }
-
-    /// No failure point yields this after a checkpoint, so this is the row. A
-    /// repository error of kind `ExternalChange` is `external_change` by its
-    /// own mapping, and is not a consent refusal: a standing parent decides
-    /// what is left, and the domain's half is `closure/run_tests.rs`.
-    #[test]
-    fn a_repository_external_change_stays_a_repository_error() {
-        let stop = Stop::Repository(RepositoryError::new(
-            RepositoryOperation::RepositorySnapshot,
-            None,
-            RepositoryErrorKind::ExternalChange,
-            "moved",
-        ));
-        let (code, blockers, offers_nothing) = stop_answer(&stop);
-        assert_eq!(code, ResultCode::ExternalChange);
-        assert_eq!(blockers, None);
-        assert!(!offers_nothing);
-    }
-
-    #[test]
-    fn a_stop_answers_with_the_tables_code() {
-        for (stop, code) in [
-            (Stop::Busy, ResultCode::Busy),
-            (Stop::PollYielding, ResultCode::PollYielding),
-            (Stop::Interrupted, ResultCode::RecoveryRequired),
-            (Stop::RecoveryRequired, ResultCode::RecoveryRequired),
-            (Stop::IdentityRequired, ResultCode::IdentityRequired),
-            (Stop::PrimaryAdvanced, ResultCode::ExternalChange),
-            (Stop::ExternalChange, ResultCode::ExternalChange),
-            (Stop::ReconfirmationRequired, ResultCode::ExternalChange),
-        ] {
-            assert_eq!(stop_answer(&stop).0, code);
-        }
-        let (code, _, offers_nothing) = stop_answer(&Stop::OperationMismatch);
-        assert_eq!(code, ResultCode::RequestMismatch);
-        assert!(offers_nothing);
-    }
-
-    #[test]
-    fn with_no_parent_a_code_that_would_resend_prepares_again() {
-        for code in [
-            ResultCode::Busy,
-            ResultCode::PollYielding,
-            ResultCode::TransportUnavailable,
-            ResultCode::RemoteUnavailable,
-        ] {
-            let offered = no_parent_recovery(code);
-            assert_eq!(offered.len(), 1);
-            assert_eq!(
-                offered[0].action,
-                crate::results::RecoveryActionKind::RequestPrepare
-            );
-        }
-        assert!(no_parent_recovery(ResultCode::RecoveryRequired).is_empty());
-        assert!(no_parent_recovery(ResultCode::InternalError).is_empty());
-    }
-
-    /// A verb whose parent is what the test says it is.
-    struct Fixed;
-
-    thread_local! {
-        static PARENT: std::cell::RefCell<Option<ParentView<LifecycleBlocker>>> =
-            const { std::cell::RefCell::new(None) };
-        static KIND: std::cell::Cell<Option<IntegrationKind>> =
-            const { std::cell::Cell::new(None) };
-    }
-
-    impl LifecycleVerb for Fixed {
-        const COMMAND: Command = Command::TicketClose;
-        const KIND: AuthoringKind = AuthoringKind::Ticket;
-        const DTO_KIND: ItemDtoKind = ItemDtoKind::Ticket;
-
-        fn observe(
-            _service: &RepositoryService,
-            _root: &Path,
-            _id: &ItemId,
-        ) -> Result<Observed, RepositoryError> {
-            Ok(Observed::Blocked(Vec::new()))
-        }
-
-        fn call(
-            _session: &dyn Session,
-            _service: &RepositoryService,
-            _root: PathBuf,
-            _operation_id: OperationId,
-            _item_id: ItemId,
-            _expected: [u8; 32],
-            _request_id: RequestId,
-        ) -> Option<Result<Reached, Stop>> {
-            None
-        }
-
-        fn parent(
-            _service: &RepositoryService,
-            _root: &Path,
-            _operation: OperationId,
-        ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError> {
-            Ok(PARENT.with(|parent| parent.borrow_mut().take()))
-        }
-    }
-
-    const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
-
-    fn made_ready_state_of(ran: &Ran) -> Option<LifecycleMadeReadyState> {
-        match &ran.answer.data {
-            Some(MutationDataDto::Lifecycle(data)) => {
-                assert_eq!(data.made_ready, Some(Vec::new()));
-                data.made_ready_state
-            }
-            _ => panic!("a closure's stop reports"),
-        }
-    }
-
-    /// A stop has no outcome to read the recording from, so its report comes
-    /// from the parent. The read fails here, since the root is nowhere: the
-    /// request is owed, so it says the next call reads again.
-    #[test]
-    fn a_closures_stop_reports_from_its_parent() {
-        let before = stopped_with(ParentStep::ContextSynchronized, None, Stop::Busy);
-        assert_eq!(
-            made_ready_state_of(&before),
-            Some(LifecycleMadeReadyState::NotComputed)
-        );
-        let past = stopped_with(ParentStep::Integrated, None, Stop::Busy);
-        assert_eq!(
-            made_ready_state_of(&past),
-            Some(LifecycleMadeReadyState::IndexPending)
-        );
-        KIND.with(|kind| kind.set(Some(IntegrationKind::AlreadyContained)));
-        let cleanup = stopped_with(ParentStep::Integrated, None, Stop::Busy);
-        assert_eq!(
-            made_ready_state_of(&cleanup),
-            Some(LifecycleMadeReadyState::NotApplicable)
-        );
-        // A parent that says it is complete, under a stop of this call's.
-        let complete = stopped_with(ParentStep::Complete, None, Stop::Busy);
-        assert_eq!(
-            made_ready_state_of(&complete),
-            Some(LifecycleMadeReadyState::NotApplicable)
-        );
-        KIND.with(|kind| kind.set(None));
-    }
-
-    /// What `stopped` answers `stop` with, the parent being at `step`.
-    fn stopped_with(
-        step: ParentStep,
-        refusal: Option<Refusal<LifecycleBlocker>>,
-        stop: Stop,
-    ) -> Ran {
-        let id: ItemId = ITEM.parse().unwrap();
-        PARENT.with(|parent| {
-            *parent.borrow_mut() = Some(ParentView {
-                step,
-                refusal,
-                expectation: [0; 32],
-                item_id: id.clone(),
-                checkpoint: None,
-                integration: None,
-                integration_kind: KIND.with(std::cell::Cell::get),
-                publication: None,
-                cancel_requested: false,
-                children: [None, None],
-            });
-        });
-        let data = tempfile::tempdir().unwrap();
-        let service = RepositoryService::open_at(data.path()).unwrap();
-        let binding = LifecycleBinding::<Fixed> {
-            root: PathBuf::from("/nowhere"),
-            id,
-            expected: None,
-            verb: PhantomData,
-        };
-        binding.stopped(&service, &accepted(), stop, true)
-    }
-
-    fn accepted() -> Accepted {
-        Accepted {
-            request_id: crate::repository::mutation::identity::RequestId::new(),
-            attempt: 1,
-            scope: crate::repository::mutation::identity::ScopeKey::application(),
-            family: Some(OperationFamily::Remote),
-            operation_id: OperationId::new(),
-            position: Position {
-                base_ref: None,
-                base_oid: None,
-            },
-            expected: None,
-        }
-    }
-
-    /// A stop is not stored because the parent has since completed.
-    #[test]
-    fn a_stop_of_a_complete_parent_leaves_the_record_for_its_stored_outcome() {
-        let ran = stopped_with(ParentStep::Complete, None, Stop::Busy);
-        assert_eq!(ran.answer.code, ResultCode::Busy);
-        assert!(matches!(ran.standing, Standing::Owed));
-        assert_eq!(ran.answer.recovery.len(), 1);
-        assert_eq!(
-            ran.answer.recovery[0].action,
-            crate::results::RecoveryActionKind::RequestRetry
-        );
-    }
-
-    /// A stop of a superseded parent answers as the parent does.
-    #[test]
-    fn a_stop_of_a_superseded_parent_is_its_request_mismatch() {
-        let ran = stopped_with(ParentStep::Superseded, None, Stop::Busy);
-        assert_eq!(ran.answer.code, ResultCode::RequestMismatch);
-        assert!(ran.answer.offers_nothing);
-        assert!(matches!(ran.standing, Standing::Final));
-    }
-
-    /// A stop of a refused parent answers with the stored refusal.
-    #[test]
-    fn a_stop_of_a_refused_parent_is_its_refusal() {
-        let ran = stopped_with(
-            ParentStep::Abandoned,
-            Some(Refusal::Blocked(vec![LifecycleBlocker::PrimaryDirty])),
-            Stop::Busy,
-        );
-        assert_eq!(ran.answer.code, ResultCode::RecoveryRequired);
-        assert!(matches!(ran.standing, Standing::Final));
-    }
-
-    /// `ended_answer` answers whatever `abandoned` holds: it is not run.
-    #[test]
-    fn an_abandoned_parent_with_no_refusal_is_answered() {
-        let ran = stopped_with(ParentStep::Abandoned, None, Stop::Busy);
-        assert_eq!(ran.answer.code, ResultCode::ExternalChange);
-        assert!(matches!(ran.standing, Standing::Final));
-    }
-
-    /// `merge_required` is told only to a caller set to refuse
-    /// divergence, and the bindings merge, so this is the row that can be had.
-    #[test]
-    fn a_stop_the_request_cannot_get_past_offers_its_cancellation() {
-        use crate::results::RecoveryActionKind as Kind;
-        for code in [ResultCode::MergeRequired, ResultCode::RemoteBranchDeleted] {
-            let offered = standing_recovery(code, &accepted());
-            assert_eq!(offered[0].action, Kind::RequestCancel, "{code:?}");
-            assert!(
-                offered
-                    .iter()
-                    .all(|action| action.action != Kind::RequestRetry),
-                "{code:?}"
-            );
-        }
-    }
-
-    /// With no reservation to let go, or none that can be read, the action
-    /// that would let it go isn't offered, whatever a stop suggested.
-    #[test]
-    fn a_cancellation_is_not_offered_when_nothing_is_held() {
-        use crate::results::{Envelope, RecoveryActionKind as Kind};
-        let data = tempfile::tempdir().unwrap();
-        let service = RepositoryService::open_at(data.path()).unwrap();
-        let mut envelope: Envelope<MutationDataDto> = Envelope::failure(
-            Command::TicketClose.name(),
-            Scope {
-                repository: Some(data.path().to_string_lossy().into_owned()),
-                ..Scope::default()
-            },
-            ResultCode::RemoteBranchDeleted,
-            standing_recovery(ResultCode::RemoteBranchDeleted, &accepted()),
-        );
-        envelope.operation_id = Some(OperationId::new().to_string());
-        let offered = service.offering(envelope, outcome::CallKind::Execute);
-        assert!(
-            offered
-                .recovery
-                .iter()
-                .all(|action| action.action != Kind::RequestCancel)
-        );
-    }
-
-    /// On a re-entry a transient code with no parent leaves the record.
-    #[test]
-    fn a_transient_stop_entered_again_with_no_parent_leaves_the_record() {
-        let data = tempfile::tempdir().unwrap();
-        let service = RepositoryService::open_at(data.path()).unwrap();
-        let binding = LifecycleBinding::<Fixed> {
-            root: PathBuf::from("/nowhere"),
-            id: ITEM.parse().unwrap(),
-            expected: None,
-            verb: PhantomData,
-        };
-        let again = binding.stopped(&service, &accepted(), Stop::Busy, true);
-        assert!(matches!(again.standing, Standing::Owed));
-        let first = binding.stopped(&service, &accepted(), Stop::Busy, false);
-        assert!(matches!(
-            first.standing,
-            Standing::Stopped {
-                journal: Some(JournalRow::Absent)
-            }
-        ));
-    }
-}
+#[path = "lifecycle_tests.rs"]
+mod tests;

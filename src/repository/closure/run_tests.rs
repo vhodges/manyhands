@@ -1536,10 +1536,14 @@ fn contained(tracking: bool) -> Fixture {
 fn the_parent_view_says_how_the_operation_reached_primary() {
     use crate::repository::promotion::record::IntegrationKind;
     let kind = |f: &Fixture, request: &CloseTicketRequest| {
-        lifecycle_parent(&f.service, f.root(), request.operation_id)
-            .unwrap()
-            .unwrap()
-            .integration_kind
+        crate::repository::promotion::lifecycle_parent::<record::ClosureRecord, _>(
+            &f.service,
+            f.root(),
+            request.operation_id,
+        )
+        .unwrap()
+        .unwrap()
+        .integration_kind
     };
     let merged = Fixture::new();
     let request = merged.request();

@@ -265,6 +265,10 @@ pub(in super::super) trait ParentRecord: LifecycleRecord + Sized {
     fn context_attempt(&self) -> u32;
     fn primary_attempt(&self) -> u32;
     fn expectation_bytes(&self) -> [u8; 32];
+    /// The closure checkpoint the record holds. A promotion writes none.
+    fn written_checkpoint(&self) -> Option<Oid> {
+        None
+    }
 }
 
 pub(in super::super) fn read_record<R: ParentRecord>(
