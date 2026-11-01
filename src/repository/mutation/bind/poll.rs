@@ -12,7 +12,9 @@
 //! domain finishes the row of a transport stop as `failed`, which the journal
 //! reads as pending, so the answer's standing is `Final` and not the row's to
 //! say. Only an interrupted pass is owed: the same request continues it with
-//! `restart`. So does a poll that was killed, whose row was left as it was.
+//! `restart`. So does a poll that was killed, whose row was left as it was. A
+//! resend during a live poll takes the row over as after a kill: the repository's
+//! lease serializes every local effect, and the older call can't record its row.
 //!
 //! **No accepted state.** The record is inserted and finished with the write, so
 //! a request is absent or finished. A committed request replays. One that never
@@ -28,7 +30,6 @@
 use std::path::PathBuf;
 
 use rusqlite::Transaction;
-use time::OffsetDateTime;
 
 use crate::results::{DiscoveryEffect, Effects, ResultCode, Scope, timestamp_string};
 
@@ -320,7 +321,6 @@ fn dto_target(target: &PollTargetReport) -> PollTargetDto {
 
 /// The report as the result's data. `None` for a time that cannot be written.
 fn poll_data(report: &RemotePollReport) -> Option<PollMutationDto> {
-    let time = |at: OffsetDateTime| timestamp_string(at);
     Some(PollMutationDto {
         operation_id: report.operation_id().to_string(),
         completion: match report.completion() {
@@ -328,22 +328,24 @@ fn poll_data(report: &RemotePollReport) -> Option<PollMutationDto> {
             PollCompletion::Interrupted => PollMutationCompletion::Interrupted,
             PollCompletion::Cancelled => PollMutationCompletion::Cancelled,
         },
-        completed_at: time(report.completed_at())?,
+        completed_at: timestamp_string(report.completed_at())?,
         next_eligible_at: match report.next_eligible_at() {
-            Some(at) => Some(time(at)?),
+            Some(at) => Some(timestamp_string(at)?),
             None => None,
         },
         targets: report.targets().iter().map(dto_target).collect(),
     })
 }
 
-/// Whether a target of the report was moved or made: an interrupted pass that
-/// did so is partial.
-fn moved(target: &PollTargetReport) -> bool {
+/// Whether a poll's row ended `failed`, which the journal reads as pending: its
+/// stored category stands, whatever was changed since.
+pub(crate) fn ended_failed(journal: &JournalRow) -> bool {
     matches!(
-        target.disposition(),
-        PollDisposition::FastForwarded | PollDisposition::Materialized
-    ) || target.before_oid() != target.after_oid()
+        journal,
+        JournalRow::Pending(PendingOperation::Remote {
+            phase: RemoteOperationPhase::Failed
+        })
+    )
 }
 
 /// The code of a stored category, which a later call reads where the first
@@ -438,7 +440,7 @@ impl PollOnceBinding {
             PollCompletion::Interrupted => (
                 ResultCode::RecoveryRequired,
                 discovery(DiscoveryEffect::NotRequested),
-                report.targets().iter().any(moved),
+                report.local_changes(),
                 Standing::Owed,
             ),
             PollCompletion::Completed => match report.outcome() {
@@ -497,16 +499,34 @@ impl PollOnceBinding {
                         answer,
                         standing: Standing::Stopped { journal },
                     },
-                    // The domain ended the row, and the same request would
-                    // only read it. The journal reads `failed` as pending, and
-                    // the record is finished all the same.
+                    // The row has ended or holds nothing: the domain finished it
+                    // `failed`, or its plan failure fenced a restart to
+                    // `interrupted`. The same request could only read that, and the
+                    // journal reads either as pending, so the record is finished
+                    // whatever the row says.
                     Some(JournalRow::Pending(_) | JournalRow::Final { .. }) => Ran {
                         answer,
                         standing: Standing::Final,
                     },
                 }
             }
-            RemotePollError::Repository(error) => Self::by_the_row(call, accepted, refused(error)),
+            RemotePollError::Repository(error) => {
+                let journal = accepted.journal_row(call.service);
+                let answer = refused(error);
+                match journal {
+                    // The row has its result, and this failure is the call's: it
+                    // isn't stored as the request's answer, and the next call
+                    // reads the row.
+                    Some(JournalRow::Final { .. }) => Ran {
+                        answer,
+                        standing: Standing::Owed,
+                    },
+                    journal => Ran {
+                        answer,
+                        standing: Standing::Stopped { journal },
+                    },
+                }
+            }
             RemotePollError::Busy => plain(ResultCode::Busy),
             RemotePollError::PollYielding => plain(ResultCode::PollYielding),
             RemotePollError::ConflictPending => plain(ResultCode::RecoveryRequired),
@@ -582,9 +602,10 @@ impl Binding for PollOnceBinding {
     }
 
     /// Every row is the domain's to read, which answers a row that ended from
-    /// what it stored. A row fenced by a change of configuration isn't: a
-    /// restart refuses it for good, so its answer is final, the one `request
-    /// cancel` finishes it with. A failed row has ended, and its stored category
+    /// what it stored. A row already fenced by a change of configuration
+    /// isn't: a restart refuses it for good, so its answer is final, the one
+    /// `request cancel` finishes it with. A change no call has yet found is found
+    /// by the domain, which answers `recovery_required` once. A failed row has ended, and its stored category
     /// stands whatever was changed since.
     fn reenter(
         &mut self,
@@ -592,13 +613,8 @@ impl Binding for PollOnceBinding {
         accepted: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
-        let ended = matches!(
-            journal,
-            JournalRow::Pending(PendingOperation::Remote {
-                phase: RemoteOperationPhase::Failed
-            })
-        );
-        if !ended && let Some(answer) = sync::fenced_answer(call.service, accepted, Some(&journal))
+        if !ended_failed(&journal)
+            && let Some(answer) = sync::fenced_answer(call.service, accepted, Some(&journal))
         {
             return Err(Ran {
                 answer,

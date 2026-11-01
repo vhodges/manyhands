@@ -576,11 +576,15 @@ only replay the stored failure.
 | `RepositoryUnavailable` | `repository_inaccessible` | 3 | `Final`; new request |
 | `Err(Transport(error))`, no row after the call | the error's code, by `outcome.rs:109-155` | by class | Deleted; new request |
 | `Err(Transport(error))`, a row after the call (the common first-call failure) | the error's code. A later re-entry reads the stored category's code above, which can name the same stop differently (`key_rejected` against `no_selected_key`), and a golden pins each | by class | `Final`; new request |
-| `Err(Repository(error))` | the error's code | by class | By the journal row |
+| `Err(Repository(error))` | the error's code | by class | By the journal row, except over a `Final` row: `Owed`, so the next call reads the stored result. A failure of this call is not stored as the answer (amended by the controller's ruling on Task 5b's review) |
 | `Busy` | `busy` | 5 | `request.retry` |
 | `PollYielding` | `poll_yielding` | 5 | `request.retry` |
 | `ConflictPending` | `recovery_required` | 3 | `repo.inspect` |
 | Pending local sync | the domain's answer, pinned | 3 | `repo.inspect` |
+
+A first call's host stop carries `SynchronizationMutationDto`, so that `host.approve` can be offered, followed by a **new request**. A replay or re-entry offers no such action (decision (a), Task 5b's review). A held poll fenced by a change of configuration answers `external_change`, `Final`; the call that discovers the change first answers `recovery_required`, since it raises the generation itself. A `failed` row is excepted, also under `request cancel`: its stored category stands. A stopped poll wrapped in `IndexPending` offers no `index.refresh`: the stop's own recovery runs first.
+
+A resend during a live poll takes the row over as after a kill. The repository's lease serializes every local effect and every tracking update: the new pass can't fetch or reach a target while the older one is inside an effect, and the older one then can't record its row, so no effect is duplicated (`c5_poll_once_resend_during_a_materialization`). The new pass's refused fetch is a protocol failure, so that request answers `internal_error`, final, and a new request polls.
 
 A restart reports what its own pass saw. A target an interrupted first pass materialized reads
 `current`, so the final envelope understates it; Git holds exactly one worktree (known limit).
@@ -872,6 +876,8 @@ review. This list is not yet proven complete.
 - A killed poll with a lost request ID is found through `operation list`.
 - Policy verbs are last commit wins: resending a request that never committed writes again (decision 15).
 - A poll plan failure other than a missing remote writes the domain's stored state.
+- A poll's fetch meeting the repository's lease held by anyone reports a protocol failure, so its request answers `internal_error`, final. The domain's mapping (`transport/remote.rs:639`), and a new request polls.
+- A poll configures its endpoints before it asks for the reservation. With the endpoints changed, it raises the generation and fences whatever is running, a lifecycle's child among them, and then polls (`c5_poll_once_fences_a_lifecycle_child`). The domain's order, and predates C5.
 - A promotion blocked by a pending local sync issues a confirmation before refusing.
 - After an external `git pull`, with the index not marked behind, an item on primary with no context answers `item_not_found` until `index refresh`. An index marked behind keeps the `recovery_required` answer naming `context_missing`.
 

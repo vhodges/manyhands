@@ -211,7 +211,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 
 **Files:** Modify `polling.rs`, `catalog.rs`, `catalog_tests.rs`, `parse_tests.rs`, `startup_tests.rs`, `mutate.rs`, `collaboration_tests.rs`, `tests/cli_remote.rs`. Create `tests/cli_remote/polling.rs`.
 
-- [ ] **Step 1:** Implement with unlock handling and the Ctrl-C window. Human output per target (Review Focus 7). Gate `planned()` and `Availability::Planned` now (R-8).
+- [ ] **Step 1:** Implement with unlock handling and the Ctrl-C window. Human output per target (Review Focus 7), printing `PollTargetDisposition::guidance`. On host and unlock stops it says a **new request** follows, and on `busy` it hints `operation list` then `operation resume`. Gate `planned()` and `Availability::Planned` now (R-8).
 - [ ] **Step 2:** `c5_polling_` cases, with human and JSON goldens: fast-forward and materialize once; dirty, divergent, malformed and deleted contexts preserved, with no push, checkpoint, merge or cleanup; a remote context of a closed ticket; host and unlock stops, each a final answer, then a new request after correction; no remote; usage failure; replay; mismatch; a second-process `busy`.
 - [ ] **Step 3: Verify.** `--test cli_remote -- c5_polling`.
 - [ ] **Step 4:** Commit `feat: add poll once to the CLI`. Ticket comment. Push.

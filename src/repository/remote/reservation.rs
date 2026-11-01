@@ -931,7 +931,6 @@ impl RepositoryService {
             Ok(RemoteReservationOutcome::Reserved(token(self, id, &record)))
         })
     }
-    #[allow(dead_code)] // Full-poll orchestration is introduced in Task 6.
     pub(crate) fn reserve_remote_poll(
         &self,
         root: &Path,
@@ -952,7 +951,6 @@ impl RepositoryService {
         )
     }
 
-    #[allow(dead_code)] // Full-poll orchestration is introduced in Task 6.
     pub(crate) fn restart_remote_poll(
         &self,
         root: &Path,
@@ -1329,8 +1327,8 @@ impl RepositoryService {
         })
     }
 
-    /// Also usable by future transfer-progress callbacks; Cycle 04 invokes only
-    /// these non-transfer boundaries. Returns only after the durable transition.
+    /// Invoked at non-transfer boundaries only: a transfer's callback uses
+    /// `poll_progress`. Returns only after the durable transition.
     pub fn remote_safe_point(
         &self,
         root: &Path,

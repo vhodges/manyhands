@@ -351,7 +351,7 @@ impl Command {
     /// it.
     pub(crate) const fn stops_at_safe_points(self) -> bool {
         match self {
-            // A poll's own safe points, which its probe reaches (Task 5b).
+            // A poll's own safe points, which its probe reaches.
             Self::PollOnce => true,
             Self::LocalContextSync | Self::LocalContextResolve => true,
             Self::ItemSync | Self::RepoSync => true,

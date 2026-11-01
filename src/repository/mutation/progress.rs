@@ -8,9 +8,9 @@
 //! Cancellation is cooperative. It is honored before a request is
 //! accepted, by every command, and after that only where the request's
 //! operation has a safe point, which is a synchronization, a promotion, a
-//! closure or a poll: at each one the token and the flag `cancel_request` sets on the
-//! request's record are looked at, and the operation stops there. A local
-//! operation has no safe point once it is accepted.
+//! closure or a poll: at each one the token and the flag `cancel_request` sets
+//! on the request's record are looked at, and the operation stops there. A
+//! local operation has no safe point once it is accepted.
 
 use std::{
     cell::RefCell,
@@ -39,7 +39,7 @@ use super::{
         remote::sync::RepublishConsent,
         transport::{SshTransportError, SshTransportVerified, VerifySshTransportRequest},
     },
-    bind::{Accepted, Binding, sync},
+    bind::{Accepted, Binding, poll, sync},
     command::Command,
     dto::{CancelDto, RequestState},
     identity::RequestId,
@@ -460,6 +460,13 @@ impl RepositoryService {
     fn finish_fenced(&self, record: &RequestRecord) -> Option<Result<(), ReadError>> {
         let accepted = Accepted::of_record(record, record.attempt)?;
         let journal = accepted.journal_row(self);
+        // A poll's row that ended `failed` is read by its next call, whatever
+        // the generation: that stored category is what it answers.
+        if Command::parse(&record.command) == Some(Command::PollOnce)
+            && journal.as_ref().is_some_and(poll::ended_failed)
+        {
+            return None;
+        }
         let answer = sync::fenced_answer(self, &accepted, journal.as_ref())?;
         Some(
             self.finish(record.request_id, record.attempt, &answer)

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Manyhands JSON v1 poll mutation data",
-  "description": "The data of a poll once envelope that has a report: a poll's pass as the domain reports it. Dirty, diverged, conflicted, malformed, deleted and incomplete targets are data, not failures. A restart reports what its own pass saw.",
+  "description": "The data of a poll once envelope that has a report: a poll's pass as the domain reports it. Dirty, diverged, conflicted, malformed, deleted and incomplete targets are data, not failures. A restart reports what its own pass saw. A poll whose first call stopped on a host that is not trusted carries synchronization_mutation data instead, and is followed by host approve and a new request: its stop is final. Guidance for each disposition is the front end's, from PollTargetDisposition::guidance.",
   "type": "object",
   "additionalProperties": false,
   "required": [

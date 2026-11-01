@@ -1191,8 +1191,9 @@ fn a_resume_of_a_poll_that_has_not_ended_is_not_taken_up() {
     let before = stored_remote(&world, OPERATION_A);
 
     let refused = world.execute(REQUEST_1, resume(&world, OPERATION_A));
-    // No request begins a poll, and nothing takes one up under its ID:
-    // the ID is not one this command is for.
+    // No accepted record holds this poll, and nothing takes one up under its
+    // ID: the ID is not one this command is for. A record that holds it is
+    // named, in the row below.
     assert_refused(
         &world,
         REQUEST_1,

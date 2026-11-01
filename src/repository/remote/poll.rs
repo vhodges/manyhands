@@ -17,8 +17,6 @@ use crate::{
     },
 };
 
-// Task 4 internal seams are consumed by the Task 6 orchestrator.
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PollDisposition {
     Current,
@@ -37,7 +35,6 @@ pub enum PollDisposition {
     HistoryUnknown,
     NotReached,
 }
-#[allow(dead_code)]
 impl PollDisposition {
     pub fn guidance(self) -> &'static str {
         match self {
@@ -79,7 +76,6 @@ pub(super) enum PollRelation {
     Diverged,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Absent-ref states are supplied by the Task 6 batch orchestrator.
 pub(super) enum PollTrackingState {
     Present(git2::Oid),
     RemotelyDeleted,
@@ -101,7 +97,6 @@ pub(super) struct PollFastForward {
     pub before: git2::Oid,
     pub after: git2::Oid,
 }
-#[allow(dead_code)]
 pub(super) fn classify_relation<E>(
     local: git2::Oid,
     remote: git2::Oid,
@@ -198,7 +193,6 @@ fn poll_materialized_target(
     Ok(linked)
 }
 
-#[allow(dead_code)]
 pub(super) fn classify_local_target(
     root: &Path,
     primary: &str,
@@ -245,7 +239,7 @@ pub(super) fn classify_local_target(
     })
 }
 impl RepositoryService {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(super) fn materialize_context(
         &self,
         root: &Path,
@@ -430,11 +424,7 @@ impl RepositoryService {
         let intent = intent
             .as_ref()
             .ok_or(SynchronizationError::RecoveryRequired)?;
-        self.check_failure(
-            FailurePoint::PollAfterMaterializationIntent,
-            operation,
-            root,
-        )?;
+        self.poll_boundary(FailurePoint::PollAfterMaterializationIntent, None, root)?;
         // Parent creation is part of the guarded local provisioning step, after
         // refusal/conformity/intent. No pre-existing deterministic entry is used.
         ensure_authoring_worktree_base(root, operation)?;
@@ -533,7 +523,7 @@ impl RepositoryService {
         Ok(PollMaterializationOutcome::Materialized)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(super) fn poll_fast_forward(
         &self,
         root: &Path,
@@ -701,7 +691,6 @@ impl RepositoryService {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone)]
 pub(super) struct PollMaterializationRequest {
     pub operation_id: crate::repository::OperationId,
@@ -710,7 +699,6 @@ pub(super) struct PollMaterializationRequest {
     pub oid: git2::Oid,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PollMaterializationOutcome {
     Materialized,
@@ -866,7 +854,6 @@ fn poll_retiring_directory_obstructed(
     Ok(false)
 }
 
-#[allow(dead_code)]
 pub(super) fn conforming_context_tree(
     repository: &git2::Repository,
     tree: &git2::Tree<'_>,
@@ -1012,7 +999,6 @@ pub(super) fn eligibility(
 /// `None` means keep the stored deadline, not clear it. Busy, yield, interruption,
 /// conflict-pending and not-eligible have no outcome category and do not call this.
 /// The policy is the pre-finish policy; reservation finish still owns backoff writes.
-#[allow(dead_code)] // Consumed by reservation finish in Cycle 08 Task 2.
 pub(super) fn next_eligible(
     category: RemoteOutcomeCategory,
     invocation: RemotePollInvocation,
@@ -1074,7 +1060,6 @@ impl RepositoryService {
     }
 }
 
-// Task 6 contracts; behavior is introduced after the recorded regression RED.
 #[derive(Clone)]
 pub struct PollPublicationRemoteRequest {
     pub root: std::path::PathBuf,
@@ -1120,7 +1105,7 @@ impl PollTargetReport {
         self.after_oid
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct RemotePollReport {
     operation_id: crate::repository::OperationId,
     completion: PollCompletion,
@@ -1128,8 +1113,26 @@ pub struct RemotePollReport {
     next_eligible_at: Option<OffsetDateTime>,
     targets: Vec<PollTargetReport>,
     outcome: Option<RemoteOutcomeCategory>,
+    /// Whether this pass changed a target, as its executor saw: a moved branch,
+    /// or a worktree or registration that appeared or went. A stored report has
+    /// no executor, so this is no part of what makes two reports the same.
+    local_changes: bool,
 }
+impl PartialEq for RemotePollReport {
+    fn eq(&self, other: &Self) -> bool {
+        self.operation_id == other.operation_id
+            && self.completion == other.completion
+            && self.completed_at == other.completed_at
+            && self.next_eligible_at == other.next_eligible_at
+            && self.targets == other.targets
+            && self.outcome == other.outcome
+    }
+}
+impl Eq for RemotePollReport {}
 impl RemotePollReport {
+    pub(in super::super) fn local_changes(&self) -> bool {
+        self.local_changes
+    }
     pub fn operation_id(&self) -> crate::repository::OperationId {
         self.operation_id
     }
@@ -1364,12 +1367,15 @@ impl RepositoryService {
                         return true;
                     }
                     last = Some(now);
-                    // The next safe point is what acknowledges either.
-                    let decision = match probe.map(|probe| probe.asked(self)) {
-                        Some(Ok(true)) => super::RemoteSafePointOutcome::Cancelled,
-                        Some(Err(_)) => super::RemoteSafePointOutcome::Interrupted,
-                        Some(Ok(false)) | None => super::reservation::poll_progress(self, &owner)
-                            .unwrap_or(super::RemoteSafePointOutcome::Interrupted),
+                    // The registry's flag isn't read here: a cache lock someone
+                    // holds would abort a healthy fetch. `request cancel` sets the
+                    // row's flag too, which `poll_progress` reads on a connection
+                    // of its own. The next safe point acknowledges either.
+                    let decision = if probe.is_some_and(CancellationProbe::token_asked) {
+                        super::RemoteSafePointOutcome::Cancelled
+                    } else {
+                        super::reservation::poll_progress(self, &owner)
+                            .unwrap_or(super::RemoteSafePointOutcome::Interrupted)
                     };
                     if decision != super::RemoteSafePointOutcome::Continue {
                         stopped = Some(decision);
@@ -2041,6 +2047,7 @@ impl RepositoryService {
             next_eligible_at,
             targets,
             outcome: record.outcome,
+            local_changes: original_targets.is_some_and(|(_, changed)| changed),
         });
         let pending: bool = tx
             .query_row(

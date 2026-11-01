@@ -218,6 +218,38 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         once_pause_during_a_running_poll,
     ),
     ("c5_poll_once_conformance", once_conformance),
+    (
+        "c5_poll_once_token_stops_a_transfer",
+        once_token_stops_a_transfer,
+    ),
+    (
+        "c5_poll_once_repository_error_over_a_cancelled_row",
+        once_repository_error_over_a_cancelled_row,
+    ),
+    (
+        "c5_poll_once_resend_during_a_materialization",
+        once_resend_during_a_materialization,
+    ),
+    (
+        "c5_poll_once_interrupted_then_one_worktree",
+        once_interrupted_then_one_worktree,
+    ),
+    (
+        "c5_poll_once_request_cancel_of_a_failed_fenced_row",
+        once_request_cancel_of_a_failed_fenced_row,
+    ),
+    (
+        "c5_poll_once_killed_then_the_remote_removed",
+        once_killed_then_the_remote_removed,
+    ),
+    (
+        "c5_poll_once_busy_beside_a_lifecycle_child",
+        once_busy_beside_a_lifecycle_child,
+    ),
+    (
+        "c5_poll_once_fences_a_lifecycle_child",
+        once_fences_a_lifecycle_child,
+    ),
 ];
 
 const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FP1";
@@ -1780,6 +1812,7 @@ fn stored(category: &str, code: ResultCode) -> Result<World, FixtureError> {
     let opened = connections(&w);
     let envelope = execute_once(&w, FIRST);
     assert_eq!(envelope.code, code, "{category}");
+    assert_eq!(actions(&envelope), [], "{category}: a final answer");
     assert_eq!(
         report(&envelope).completion,
         PollMutationCompletion::Completed
@@ -2034,8 +2067,8 @@ fn once_repository_error_held() -> Result<(), FixtureError> {
     Ok(())
 }
 
-/// `Err(Repository)` over a row that completed: nothing is in flight, so the
-/// record goes, and the request ID is free.
+/// `Err(Repository)` over a row that completed: the record stays, and the next
+/// call reads what is stored, with no transport.
 fn once_repository_error_after_completion() -> Result<(), FixtureError> {
     let (w, incoming) = behind()?;
     let dying = dying_at(&w, FailurePoint::PollAfterCompletion)?;
@@ -2049,9 +2082,18 @@ fn once_repository_error_after_completion() -> Result<(), FixtureError> {
         &CancellationToken::new(),
     );
     assert_eq!(stopped.code, ResultCode::InternalError);
-    assert!(record(&w, FIRST).is_none());
+    assert_eq!(actions(&stopped), [RecoveryActionKind::RequestRetry]);
+    left_accepted(&w, FIRST)?;
     assert_eq!(local_primary(&w)?, incoming);
-    a_new_request_polls(&w, SECOND)
+    let opened = connections(&w);
+    // No refresh ran, so what is stored reads as the same report with its index
+    // behind: the table's `IndexPending` row.
+    let read = execute_once(&w, FIRST);
+    assert_eq!(read.code, ResultCode::DiscoveryPending);
+    assert_eq!(actions(&read), [RecoveryActionKind::IndexRefresh]);
+    assert_eq!(read.operation_id, stopped.operation_id);
+    assert_eq!(connections(&w), opened);
+    finished(&w, FIRST)
 }
 
 /// A poll killed mid-pass: its service is gone and its row is left in flight,
@@ -2336,4 +2378,346 @@ pub(super) fn conforming_once(
 
 fn once_conformance() -> Result<(), FixtureError> {
     conformance_row("poll once")
+}
+
+/// A press during the transfer stops the transfer, not only the next safe point:
+/// what the fetch was bringing isn't kept. The registry isn't read in that
+/// callback, so the token is what it looks at, and the row's flag `poll_progress`.
+fn once_token_stops_a_transfer() -> Result<(), FixtureError> {
+    const TRACKING: &str = "refs/remotes/origin/main";
+    let (w, _) = behind()?;
+    let tracked = fixed(w.repo()?.refname_to_id(TRACKING))?;
+    let hold = w.server.hold_transfer_after(1)?;
+    let token = CancellationToken::new();
+    let asked = token.clone();
+    let (data, root) = (w.data(), w.root.clone());
+    let running = std::thread::spawn(move || {
+        let service = RepositoryService::open_at(&data).expect("a service");
+        service.execute(
+            MutationCall {
+                request_id: request(FIRST),
+                confirmation: None,
+                mutation: once(&root),
+            },
+            &mut SessionCredentials::new(Provider),
+            &mut NoProgress,
+            &asked,
+        )
+    });
+    hold.wait_until_held()?;
+    token.cancel();
+    // Past the callback's own throttle, which its first call may have begun.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    hold.release()?;
+    let envelope = joined(&w, running)?;
+    assert_cancelled(&w, &envelope)?;
+    assert_eq!(fixed(w.repo()?.refname_to_id(TRACKING))?, tracked);
+    Ok(())
+}
+
+/// `Err(Repository)` over a row that was cancelled: not stored as the request's
+/// answer, which would replay for good. The next call reads `cancelled`.
+fn once_repository_error_over_a_cancelled_row() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    let dying = dying_at(&w, FailurePoint::PollAfterCompletion)?;
+    let token = CancellationToken::new();
+    let asked = token.clone();
+    dying.set_request_hook_for_testing(move || asked.cancel());
+    let stopped = call(
+        &w,
+        &dying,
+        FIRST,
+        once(&w.root),
+        Provider,
+        &mut NoProgress,
+        &token,
+    );
+    assert_eq!(stopped.code, ResultCode::InternalError);
+    assert_eq!(actions(&stopped), [RecoveryActionKind::RequestRetry]);
+    left_accepted(&w, FIRST)?;
+    let operation = stopped.operation_id.as_deref().ok_or(FixtureError)?;
+    assert_eq!(row_of(&w, operation)?.0, "cancelled");
+    let read = execute_once(&w, FIRST);
+    assert_cancelled(&w, &read)?;
+    finished(&w, FIRST)?;
+    assert_eq!(execute_once(&w, FIRST), read, "a replay is the same");
+    a_new_request_polls(&w, SECOND)
+}
+
+/// A ticket the peer published that the world's clone doesn't hold.
+fn published_by_the_peer(w: &World) -> Result<git2::Oid, FixtureError> {
+    let source = format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {ITEM}\n\
+         title: Peer\ntype: task\nstatus: open\n---\nBody of Peer.\n"
+    );
+    let tip = fixed(w.peer.refname_to_id(MAIN))?;
+    let new = commit_path(
+        &w.peer,
+        tip,
+        &format!(".manyhands/tickets/{ITEM}/ticket.md"),
+        source.as_bytes(),
+    )?;
+    fixed(
+        w.peer
+            .reference(TICKET_BRANCH, new, true, "the peer's ticket"),
+    )?;
+    push_peer(&w.peer, &w.server, TICKET_BRANCH)?;
+    Ok(new)
+}
+
+fn one_worktree(w: &World, tip: git2::Oid) -> Result<(), FixtureError> {
+    let repo = w.repo()?;
+    let worktrees = fixed(repo.worktrees())?;
+    let names: Vec<_> = worktrees.iter().flatten().collect();
+    assert_eq!(names, [ITEM], "one worktree");
+    assert_eq!(fixed(repo.refname_to_id(TICKET_BRANCH))?, tip);
+    assert!(Verb::Close.worktree(&w.root).join(".manyhands").exists());
+    Ok(())
+}
+
+/// The resend that matters: A has passed its `owned` check and holds the lease,
+/// inside a materialization. B raises the epoch and resets the phase, and its own
+/// pass can't move a tracking reference or reach a target while A holds the lease,
+/// so it stops. A finishes its effect, and is refused its row. A new request finds
+/// the worktree there. Git holds one branch and one worktree: takeover matches a
+/// kill.
+fn once_resend_during_a_materialization() -> Result<(), FixtureError> {
+    let w = observed()?;
+    let tip = published_by_the_peer(&w)?;
+    let mut other = Some(second_service(&w)?);
+    let root = w.root.clone();
+    let registry = w.data().join(REGISTRY_FILE);
+    let mut armed = true;
+    let during = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let seen = during.clone();
+    w.service
+        .set_poll_boundary_hook_for_testing(move |point, _| {
+            if armed && point == FailurePoint::PollAfterMaterializationIntent {
+                armed = false;
+                let epoch = |db: &rusqlite::Connection| -> i64 {
+                    db.query_row(
+                        "SELECT owner_epoch FROM remote_operation_records WHERE action = 'poll'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .expect("the row")
+                };
+                let db = rusqlite::Connection::open(&registry).expect("the registry");
+                let before = epoch(&db);
+                // On a thread of its own, as a second process is.
+                let (service, again) = (other.take().expect("one call"), root.clone());
+                let resent = std::thread::spawn(move || {
+                    service.execute(
+                        MutationCall {
+                            request_id: request(FIRST),
+                            confirmation: None,
+                            mutation: once(&again),
+                        },
+                        &mut SessionCredentials::new(Provider),
+                        &mut NoProgress,
+                        &CancellationToken::new(),
+                    )
+                })
+                .join()
+                .expect("the resend");
+                *seen.lock().expect("the answer") = Some((resent.code, before, epoch(&db)));
+            }
+        });
+    let a = execute_once(&w, FIRST);
+    let (code, before, after) = during
+        .lock()
+        .expect("the answer")
+        .take()
+        .ok_or(FixtureError)?;
+    // B's fetch needs the lease to move tracking references, and its refusal
+    // there reaches the poll as a protocol failure: `Err(Transport)` over a row,
+    // so final, under that error's code. Nothing of B's touched the target.
+    assert_eq!(code, ResultCode::InternalError);
+    assert!(after > before, "B raised the epoch");
+    assert_eq!(a.code, ResultCode::RecoveryRequired, "A lost its row");
+    one_worktree(&w, tip)?;
+    finished(&w, FIRST)?;
+    let replayed = execute_once(&w, FIRST);
+    assert_eq!(replayed.code, ResultCode::InternalError);
+    assert_eq!(poll_rows(&w)?, 1);
+    a_new_request_polls(&w, SECOND)?;
+    one_worktree(&w, tip)
+}
+
+/// Interrupted past a materialization, then restarted: a target it made reads as
+/// partial, and the restart reports what its own pass saw over one worktree.
+fn once_interrupted_then_one_worktree() -> Result<(), FixtureError> {
+    let w = observed()?;
+    let tip = published_by_the_peer(&w)?;
+    let registry = w.data().join(REGISTRY_FILE);
+    let mut armed = true;
+    w.service
+        .set_poll_boundary_hook_for_testing(move |point, _| {
+            if armed && point == FailurePoint::PollBeforeDiscovery {
+                armed = false;
+                rusqlite::Connection::open(&registry)
+                    .expect("the registry")
+                    .execute(
+                        "UPDATE remote_operation_records SET yield_requested = 1",
+                        [],
+                    )
+                    .expect("the row is asked");
+            }
+        });
+    let stopped = execute_once(&w, FIRST);
+    assert_eq!(stopped.code, ResultCode::RecoveryRequired);
+    assert_eq!(stopped.outcome, Outcome::Partial);
+    assert!(
+        report(&stopped)
+            .targets
+            .iter()
+            .any(|target| target.disposition == PollTargetDisposition::Materialized)
+    );
+    one_worktree(&w, tip)?;
+    let again = execute_once(&w, FIRST);
+    assert_eq!(again.code, ResultCode::Ok);
+    assert!(
+        report(&again)
+            .targets
+            .iter()
+            .all(|target| target.disposition != PollTargetDisposition::Materialized),
+        "its own pass made nothing"
+    );
+    one_worktree(&w, tip)
+}
+
+/// `request cancel` of a request whose row ended `failed`, with the generation
+/// moved since: it gives what its own next call gives, the stored category.
+fn once_request_cancel_of_a_failed_fenced_row() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    let dying = dying_at(&w, FailurePoint::BeforeRequestSettlement)?;
+    w.server.accept_anonymous();
+    let lost = call(
+        &w,
+        &dying,
+        FIRST,
+        once(&w.root),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(lost.code, ResultCode::InternalError);
+    let phase: String = fixed(w.db()?.query_row(
+        "SELECT phase FROM remote_operation_records WHERE action = 'poll'",
+        [],
+        |row| row.get(0),
+    ))?;
+    assert_eq!(phase, "failed");
+    fixed(w.db()?.execute_batch(
+        "UPDATE remote_polling_state SET configuration_generation = configuration_generation + 1",
+    ))?;
+    let asked = w.service.cancel_request(request(FIRST));
+    let asked = asked.data.ok_or(FixtureError)?;
+    assert_eq!(asked.state, RequestState::Accepted, "not finished for it");
+    left_accepted(&w, FIRST)?;
+    let next = execute_once(&w, FIRST);
+    assert_eq!(next.code, ResultCode::NoSelectedKey);
+    assert_eq!(actions(&next), []);
+    finished(&w, FIRST)
+}
+
+/// A kill leaves the row in flight, and the remote goes without the generation
+/// moving. The resend's plan fails, and `state::configure` fences the row to
+/// `interrupted`: no row ended by a transport stop, but a row after the call, so
+/// `Final`. Interrupted holds no reservation, and a new request polls.
+fn once_killed_then_the_remote_removed() -> Result<(), FixtureError> {
+    let (w, _) = behind()?;
+    let dying = dying_at(&w, FailurePoint::PollBeforeTarget)?;
+    let stopped = call(
+        &w,
+        &dying,
+        FIRST,
+        once(&w.root),
+        Provider,
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    let operation = stopped.operation_id.clone().ok_or(FixtureError)?;
+    drop(dying);
+    assert!(reserved(&w));
+    let config = w.root.join(".manyhands/config.toml");
+    let source = fixed(std::fs::read_to_string(&config))?;
+    let without = source.replace("publication_remote = \"origin\"\n", "");
+    assert_ne!(without, source);
+    fixed(std::fs::write(&config, without))?;
+    let ended = execute_once(&w, FIRST);
+    assert_eq!(ended.code, ResultCode::PublicationRemoteRequired);
+    assert_eq!(actions(&ended), []);
+    assert_eq!(
+        row_of(&w, &operation)?,
+        (
+            "interrupted".to_owned(),
+            Some("configuration_required".to_owned())
+        )
+    );
+    finished(&w, FIRST)?;
+    assert!(!reserved(&w));
+    fixed(std::fs::write(&config, source))?;
+    a_new_request_polls(&w, SECOND)
+}
+
+/// A close stopped with its child holding the reservation: `busy`, nothing done.
+/// The child's row is left as it was when the endpoints haven't changed.
+fn child_holding_the_reservation() -> Result<(World, String), FixtureError> {
+    let w = remote(Verb::Close)?;
+    fixed(w.sync(w.request(SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: fixed(ITEM.parse())?,
+    })))?;
+    let preview = w.service.prepare(&Verb::Close.mutation(&w.root, ITEM));
+    let confirmation = preview
+        .data
+        .as_ref()
+        .and_then(PrepareDataDto::preview)
+        .ok_or(FixtureError)?
+        .confirmation_id
+        .clone();
+    fixed(fixed(w.bare()?.find_reference(TICKET_BRANCH))?.delete())?;
+    let stopped = presenting(
+        &w,
+        SECOND,
+        Some(&confirmation),
+        Verb::Close.mutation(&w.root, ITEM),
+    );
+    assert_eq!(stopped.code, ResultCode::RemoteBranchDeleted);
+    assert!(reserved(&w));
+    let child = fixed(w.service.active_remote_operation(&w.root))?
+        .ok_or(FixtureError)?
+        .operation_id()
+        .to_string();
+    Ok((w, child))
+}
+
+fn once_busy_beside_a_lifecycle_child() -> Result<(), FixtureError> {
+    let (w, child) = child_holding_the_reservation()?;
+    let phase = row_of(&w, &child)?;
+    let opened = connections(&w);
+    let envelope = execute_once(&w, FIRST);
+    assert_eq!(envelope.code, ResultCode::Busy);
+    assert_eq!(actions(&envelope), [RecoveryActionKind::RequestRetry]);
+    assert!(record(&w, FIRST).is_none());
+    assert_eq!(connections(&w), opened);
+    assert_eq!(row_of(&w, &child)?, phase, "the child is left");
+    Ok(())
+}
+
+/// Known limit (S2): a poll configures its endpoints before it asks for the
+/// reservation. With the endpoints changed, that raises the generation and fences
+/// whatever is running, a lifecycle's child among them, and the poll then polls.
+fn once_fences_a_lifecycle_child() -> Result<(), FixtureError> {
+    let (w, child) = child_holding_the_reservation()?;
+    let url = w.server.url();
+    fixed(
+        w.repo()?
+            .remote_set_pushurl("origin", Some(&format!("{url}-changed"))),
+    )?;
+    let envelope = execute_once(&w, FIRST);
+    assert_eq!(row_of(&w, &child)?.0, "interrupted", "fenced");
+    assert_eq!(envelope.code, ResultCode::Ok);
+    Ok(())
 }

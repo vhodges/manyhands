@@ -847,3 +847,55 @@ Filters ran only the named rows, so a mutation may fail others too.
 | `cargo fmt --check`, `cargo check --all-features --locked`, clippy `-D warnings` | ok | 10, 3, 7 s |
 
 **What ran after what.** The first pass of this set failed `--lib mutation` (one row, the E-12 edit above) and `--test mutation_contract` (two rows, the extra golden). After those test-only fixes, `--lib mutation`, `mutation_contract`, `read_contract`, `c5_poll_once_stored`, `c5_poll_once_conformance`, fmt and clippy were rerun. The `c5_poll` count is from before the fixes, which changed no library code and removed one golden assertion. The rest ran on the same library code.
+
+#### Task 5b review fixes (controller's rulings)
+
+Decisions (a), (b), (c), (e), (f) and (g) above stand. Decision (d), `Err(Repository)` over a cancelled row keeping the error as a stored answer, is overruled by item 2.
+
+**A correction to the section above.** It says only `invalid_remote` missed the stub run. `err_interrupted`, `fenced_is_final` and `transport_with_no_row` were also rewritten after that run and not rerun against it.
+
+**1. The transfer callback.** It no longer reads the registry. `CancellationProbe::token_asked` reads the token only, and `poll_progress` then reads the row's flag. `token_stops_a_transfer` uses `hold_transfer_after`: the token is cancelled during the transfer, and the tracking ref doesn't move. It passed before the fix too, since the old code also read the token. With the token check removed (mutated), it fails, so this limit from the section above is closed.
+
+**2. `Err(Repository)` over a `Final` row is `Owed`.** The design's row is amended. `repository_error_over_a_cancelled_row` failed before the fix and passes after it: `internal_error`, then `cancelled`, then a replay. `repository_error_after_completion` changed for the same reason. I first expected `ok` on its re-read and it answered `discovery_pending`. No refresh ran, so that is the table's `IndexPending` row, and the expectation was mine, written this round. The one-shot failure is `PollAfterCompletion` at a safe point's capture. I found no seam inside `poll_stored_result` itself.
+
+**3. The suspected race: no effect can duplicate, so takeover stays.**
+
+- **By reading.** Every local effect in the target loop runs under `repository_lease`, taken before the `owned` check and held through `materialize_context_unlocked` or `poll_fast_forward_unlocked`, up to the row's write. The fetch also takes that lease to move tracking refs (`transport/remote.rs:639`). So B can raise the epoch and reset the phase while A is inside an effect, and B then can't fetch or reach a target until A is done. If B's frozen state predates A's effect, its per-target check interrupts it. If it follows A's effect, B reads `current` or `Present`.
+- **By a row.** `resend_during_a_materialization`, staged in a hook at `PollAfterMaterializationIntent`, with B on its own thread. To reach that point, `check_failure` there became `poll_boundary`, which does the same check and then calls the hook. B raises the epoch and answers `internal_error`. A finishes the effect and answers `recovery_required`, having lost its row. Git holds one branch and one worktree, before and after a new request polls.
+- **The fast-forward has no row of its own**, as no hook sits inside its lease. It rests on the same lease by reading.
+- **A finding, and a new known limit in the design.** A poll's fetch that meets the lease held by anyone, whether a resend or a local write, reports `ProtocolFailure`. By the table that is `Err(Transport)` over a row, so the request answers `internal_error`, final, and a new request polls. That is the domain's mapping, unchanged. A's own answer then isn't what the request stores.
+
+**4. `finish_fenced`.** It skips a poll's `failed` row, so `request cancel` is `requested` and the next call gives the stored category. `request_cancel_of_a_failed_fenced_row` failed before the fix and fails again with the skip mutated. Its generation is staged by SQL.
+
+**5. Documents.** The design's `poll once` section records decision (a), a fenced held poll, the takeover and M6. Both schema descriptions name the new request. `PollTargetDisposition::guidance` gives the domain's words. The plan's Task 9 says to print guidance, to say "new request" on host and unlock stops, and to hint `operation list` then `operation resume` on `busy`.
+
+**6. Stale text.** All named sites are done. Removing the `allow`s left `materialize_context` and `poll_fast_forward` used only by tests, so both are `#[cfg(test)]`, and clippy accepts the rest. `killed_then_the_remote_removed` pins the comment's correction: the plan failure fences a restart to `interrupted` with `configuration_required`, and the answer is `publication_remote_required`, `Final`, with a new request polling. It passed before any fix. **`bind/poll.rs:369` could not be matched exactly,** since the numbering didn't line up with the file. I took it to be `reenter`'s doc on a fenced row, and corrected that.
+
+**7. Tests.**
+
+- The `stored` rows assert empty next actions. First-call rows already did, or assert the whole list.
+- `interrupted_then_one_worktree` passes: `Partial`, then a restart over one worktree. It passed before any fix.
+- `busy_beside_a_lifecycle_child` passes, with the child's row unchanged. It passed before any fix.
+- **S1 was wrong, by reading, and is fixed.** `moved` read dispositions and OIDs, so a worktree that appeared under `Refused(MaterializationIncomplete)` on a branch that already existed read as unmoved, where the domain's `changed` says otherwise. The report now carries the executor's own `local_changes`, excluded from equality, since a stored report has no executor and `remote_polling` compares a replay with the original. **No row reaches that refusal,** since no seam makes the validation fail after the worktree is added. `interrupted_after_a_target_moved` fails with the flag mutated false, which shows the new source is used, not that the refused path is right.
+- **S2 is confirmed, and is a known limit in the design.** `fences_a_lifecycle_child`: with the push URL changed and a close's child holding the reservation, the poll answers `ok` and the child's row ends `interrupted`. It's the order in the domain, `configure_poll_endpoints` before the reservation. I did not trace what the close then answers.
+- **M6** is left as it is, and recorded in the design.
+
+**Verified on the final tree, compare mode, whole filters, all exit 0.**
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--test mutation_remote -- c5_poll` | 87 | 359 s |
+| `--test remote_polling` | 84 | 187 s |
+| `--test mutation_remote -- resume` | 108 | 894 s |
+| `--test mutation_replay` | 384 | 281 s |
+| `--test mutation_contract` | 44 | 12 s |
+| `--test read_contract` | 72 | 13 s |
+| `--test mutation_confirmation` | 183 | 56 s |
+| `--test mutation_bridges` | 166 | 59 s |
+| `--lib mutation` | 146 | 30 s |
+| `--lib remote` | 479 | 176 s |
+| `--lib local_sync` | 164 | 295 s |
+| `--lib integration` | 26 | 16 s |
+| `cargo fmt --check`, `cargo check --all-features --locked`, clippy `-D warnings` | ok | 11, 9, 9 s |
+
+Only this ledger and a ticket comment changed after that run.

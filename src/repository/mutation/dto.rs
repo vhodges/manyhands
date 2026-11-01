@@ -1619,6 +1619,32 @@ contract_enum!(
     }
 );
 
+impl PollTargetDisposition {
+    /// What a person is told of the target, in the domain's words. A front end
+    /// prints this; it is no part of the data.
+    pub fn guidance(self) -> &'static str {
+        use super::super::PollDisposition as Domain;
+        match self {
+            Self::Current => Domain::Current,
+            Self::FastForwarded => Domain::FastForwarded,
+            Self::LocalAhead => Domain::LocalAhead,
+            Self::Diverged => Domain::Diverged,
+            Self::Dirty => Domain::Dirty,
+            Self::Conflicted => Domain::Conflicted,
+            Self::Inaccessible => Domain::Inaccessible,
+            Self::Materialized => Domain::Materialized,
+            Self::Nonconforming => Domain::Nonconforming,
+            Self::BlockedByLocalState => Domain::BlockedByLocalState,
+            Self::MaterializationIncomplete => Domain::MaterializationIncomplete,
+            Self::Malformed => Domain::Malformed,
+            Self::RemotelyDeleted => Domain::RemotelyDeleted,
+            Self::HistoryUnknown => Domain::HistoryUnknown,
+            Self::NotReached => Domain::NotReached,
+        }
+        .guidance()
+    }
+}
+
 /// One target of a poll, as the domain reports it (R-17). A malformed remote
 /// ref is reported with every field but its disposition null, and its name is
 /// nowhere in the result.

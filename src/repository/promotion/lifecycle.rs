@@ -87,6 +87,12 @@ impl CancellationProbe {
     pub(in super::super) fn new(token: CancellationToken, request: RequestId) -> Self {
         Self { token, request }
     }
+    /// Whether the call's token has been cancelled. It reads nothing, so a
+    /// transfer's callback can ask it with no registry involved.
+    pub(in super::super) fn token_asked(&self) -> bool {
+        self.token.is_cancelled()
+    }
+
     /// Whether the run has been asked to stop. The flag is read and left set:
     /// the boundary takes it once the request has answered `cancelled`. A flag
     /// that cannot be read is an error, and is not taken for "no".
