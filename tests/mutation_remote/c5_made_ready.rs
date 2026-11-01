@@ -1,4 +1,4 @@
-//! The made-ready report of `ticket close` (Task 4, R-4, decision 13): a
+//! The made-ready report of `ticket close`: a
 //! `c5_made_ready_` case per row of the design's table, and the ways a closure
 //! gets to its answer: retried, stored, replayed and resumed.
 //!
@@ -173,20 +173,6 @@ fn ids(tickets: &[LifecycleMadeReadyDto]) -> Vec<&str> {
     tickets.iter().map(|ticket| ticket.id.as_str()).collect()
 }
 
-fn local_data(local: &Local) -> std::path::PathBuf {
-    local.directory.path().join("data")
-}
-
-fn clean_service(data: &Path) -> Result<RepositoryService, FixtureError> {
-    fixed(RepositoryService::open_at(data))
-}
-
-fn failing_service(data: &Path, point: FailurePoint) -> Result<RepositoryService, FixtureError> {
-    fixed(RepositoryService::open_at_with_failure_point_for_testing(
-        data, point,
-    ))
-}
-
 fn confirmation_for(
     service: &RepositoryService,
     verb: Verb,
@@ -344,34 +330,6 @@ fn incomplete_index(data: &Path) {
         .expect("a staged problem");
 }
 
-/// A golden of a closure's answer, its commits replaced.
-fn golden_at(root: &Path, name: &str, envelope: &Envelope<MutationDataDto>) {
-    let value = whole(envelope);
-    let mut replaced: Vec<(String, &str)> = Vec::new();
-    for (pointer, placeholder) in [
-        ("/data/checkpoint_oid", "<checkpoint>"),
-        ("/data/integration_oid", "<integration>"),
-        ("/data/publication_oid", "<publication>"),
-        ("/effects/commit_oid", "<integration>"),
-    ] {
-        if let Some(found) = value.pointer(pointer).and_then(|found| found.as_str()) {
-            replaced.push((found.to_owned(), placeholder));
-        }
-    }
-    let replaced: Vec<(&str, &str)> = replaced
-        .iter()
-        .map(|(found, placeholder)| (found.as_str(), *placeholder))
-        .collect();
-    let root = root.canonicalize().unwrap();
-    mutation_golden::assert_contract_at(
-        name,
-        root.to_str().unwrap(),
-        Some(MUTATION),
-        &replaced,
-        &value,
-    );
-}
-
 /// The dependent is reported with its ID and short code, and nothing else.
 fn one() -> Result<(), FixtureError> {
     let local = local_with_a_dependent()?;
@@ -386,7 +344,12 @@ fn one() -> Result<(), FixtureError> {
         whole(&done)["data"]["made_ready"],
         serde_json::json!([{"id": DEPENDENT_A, "slug": SLUG}])
     );
-    golden_at(&local.root, "ticket_close_made_ready", &done);
+    golden_at(
+        &local.root,
+        "ticket_close_made_ready",
+        Some(MUTATION),
+        &done,
+    );
     Ok(())
 }
 
@@ -616,7 +579,12 @@ fn incomplete_read_is_final() -> Result<(), FixtureError> {
         request_state(&local.service, FIRST),
         Some(RequestState::Finished)
     );
-    golden_at(&local.root, "ticket_close_index_unavailable_final", &done);
+    golden_at(
+        &local.root,
+        "ticket_close_index_unavailable_final",
+        Some(MUTATION),
+        &done,
+    );
     assert_eq!(
         whole(&resent(&local.service, FIRST, &local.root)),
         whole(&done)
@@ -1033,7 +1001,7 @@ fn resume_entered_again() -> Result<(), FixtureError> {
     Ok(())
 }
 
-/// The row Task 3 left half done. A child is taken up by a resume of its own ID,
+/// A child is taken up by a resume of its own ID,
 /// and that answer holds no data, so no made-ready; the parent's request then
 /// reports it.
 fn pending_child() -> Result<(), FixtureError> {

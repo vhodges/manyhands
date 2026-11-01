@@ -14,6 +14,8 @@ mod c5_lifecycle;
 mod c5_made_ready;
 #[path = "mutation_remote/c5_poll.rs"]
 mod c5_poll;
+#[path = "mutation_remote/c5_resume.rs"]
+mod c5_resume;
 #[path = "mutation_remote/comment.rs"]
 mod comment;
 #[path = "mutation_remote/comment_domain.rs"]
@@ -75,6 +77,7 @@ fn main() {
         .chain(resume::CASES)
         .chain(republish::CASES)
         .chain(c5_lifecycle::CASES)
+        .chain(c5_resume::CASES)
         .chain(c5_cancel::CASES)
         .chain(c5_made_ready::CASES)
         .chain(c5_poll::CASES)

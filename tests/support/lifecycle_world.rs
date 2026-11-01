@@ -5,14 +5,26 @@
 //! `tests/ticket_closure.rs` and `tests/document_promotion.rs` keep their
 //! helpers private, and small duplication is accepted over moving them
 //! (design, Testing).
-#![allow(dead_code)]
 
 use crate::{
+    mutation_golden, record,
     remote_world::{BODY, ITEM, Provider, World},
     repository::{keys::*, transport::*, *},
+    ssh_harness,
     ssh_remote::*,
 };
 use std::path::{Path, PathBuf};
+
+/// A case per row and verb, each named `<prefix><row>_promote` or `_close`.
+macro_rules! both_verbs {
+    ($prefix:literal; $( $name:literal => $row:expr ),+ $(,)?) => {
+        &[$(
+            (concat!($prefix, $name, "_promote"), || $row(Verb::Promote)),
+            (concat!($prefix, $name, "_close"), || $row(Verb::Close)),
+        )+]
+    };
+}
+pub(crate) use both_verbs;
 
 /// The world's document.
 pub const DOCUMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FDC";
@@ -275,4 +287,119 @@ pub fn retire_context(
     prune.valid(true).working_tree(true);
     fixed(worktree.prune(Some(&mut prune)))?;
     fixed(fixed(repo.find_reference(verb.branch()))?.delete())
+}
+
+/// The verb's parent table.
+pub fn table(verb: Verb) -> &'static str {
+    match verb {
+        Verb::Promote => "document_promotions",
+        Verb::Close => "ticket_closures",
+    }
+}
+
+/// The synchronization target of the verb's context.
+pub fn context_target(verb: Verb) -> Result<SynchronizationTarget, FixtureError> {
+    Ok(SynchronizationTarget::Context {
+        kind: match verb {
+            Verb::Promote => AuthoringKind::Document,
+            Verb::Close => AuthoringKind::Ticket,
+        },
+        item_id: fixed(verb.id().parse())?,
+    })
+}
+
+/// Two case lists as one.
+pub const fn joined_cases<const N: usize>(
+    first: &[ssh_harness::Case],
+    second: &[ssh_harness::Case],
+) -> [ssh_harness::Case; N] {
+    let mut all = [first[0]; N];
+    let mut at = 0;
+    while at < first.len() {
+        all[at] = first[at];
+        at += 1;
+    }
+    while at < N {
+        all[at] = second[at - first.len()];
+        at += 1;
+    }
+    all
+}
+
+/// The commits on primary that merged a context: one, however many calls.
+pub fn merges_on_primary(repo: &git2::Repository) -> Result<usize, FixtureError> {
+    let mut walk = fixed(repo.revwalk())?;
+    fixed(walk.push(fixed(repo.refname_to_id(MAIN))?))?;
+    // Primary's own line: a context's synchronization merges primary into it,
+    // on the side.
+    fixed(walk.simplify_first_parent())?;
+    let mut merges = 0;
+    for oid in walk {
+        if fixed(repo.find_commit(fixed(oid)?))?.parent_count() == 2 {
+            merges += 1;
+        }
+    }
+    Ok(merges)
+}
+
+/// The state of the request's record, if it has one.
+pub fn state_of(w: &World, id: &str) -> Option<RequestState> {
+    record(w, id).map(|record| record.state)
+}
+
+/// A service with no failure staged, over the same data.
+pub fn clean_service(data: &Path) -> Result<RepositoryService, FixtureError> {
+    fixed(RepositoryService::open_at(data))
+}
+
+/// A service that stops at `point`, over the same data.
+pub fn failing_service(
+    data: &Path,
+    point: FailurePoint,
+) -> Result<RepositoryService, FixtureError> {
+    fixed(RepositoryService::open_at_with_failure_point_for_testing(
+        data, point,
+    ))
+}
+
+/// A local world's application data.
+pub fn local_data(local: &Local) -> std::path::PathBuf {
+    local.directory.path().join("data")
+}
+
+/// The result against its golden, with what a run makes up replaced.
+pub fn golden_at(
+    root: &std::path::Path,
+    name: &str,
+    data_schema: Option<&str>,
+    envelope: &impl serde::Serialize,
+) {
+    let value = serde_json::to_value(envelope).unwrap();
+    let mut replaced: Vec<(String, &str)> = Vec::new();
+    for (pointer, placeholder) in [
+        ("/data/confirmation_id", "<confirmation>"),
+        ("/data/expires_at", "<expires>"),
+        ("/data/details/context_oid", "<context>"),
+        ("/data/details/primary_oid", "<primary>"),
+        ("/data/checkpoint_oid", "<checkpoint>"),
+        ("/data/integration_oid", "<integration>"),
+        ("/data/publication_oid", "<publication>"),
+        ("/effects/commit_oid", "<integration>"),
+    ] {
+        if let Some(found) = value.pointer(pointer).and_then(|found| found.as_str()) {
+            replaced.push((found.to_owned(), placeholder));
+        }
+    }
+    let replaced: Vec<(&str, &str)> = replaced
+        .iter()
+        .map(|(found, placeholder)| (found.as_str(), *placeholder))
+        .collect();
+    let root = root.canonicalize().unwrap();
+    mutation_golden::assert_contract_at(
+        name,
+        root.to_str().unwrap(),
+        data_schema,
+        &replaced,
+        &value,
+    );
 }

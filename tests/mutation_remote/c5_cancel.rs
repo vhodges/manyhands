@@ -1,5 +1,5 @@
-//! Cancellation of `document promote` and `ticket close` (Task 2c, decisions 8
-//! and 12): a `c5_cancel_` case per row and verb.
+//! Cancellation of `document promote` and `ticket close`: a `c5_cancel_` case
+//! per row and verb.
 //!
 //! Each row stops a request where it says, by a failure point or from inside
 //! the credentials a child asks for, since a lifecycle reports no progress.
@@ -10,16 +10,7 @@ use super::*;
 use lifecycle_world::*;
 use results::{CleanupEffect, FailureClass, IntegrationEffect};
 
-macro_rules! both {
-    ($( $name:literal => $row:expr ),+ $(,)?) => {
-        &[$(
-            (concat!("c5_cancel_", $name, "_promote"), || $row(Verb::Promote)),
-            (concat!("c5_cancel_", $name, "_close"), || $row(Verb::Close)),
-        )+]
-    };
-}
-
-const BOTH: &[ssh_harness::Case] = both![
+const BOTH: &[ssh_harness::Case] = both_verbs!["c5_cancel_";
     "stage_after_confirmed" => |verb| stage(verb, FailurePoint::AfterConfirmed, false),
     "stage_after_context_sync" => |verb| stage(verb, FailurePoint::AfterContextSync, false),
     "stage_before_integration_ref" => |verb| stage(verb, FailurePoint::BeforeIntegrationRef, false),
@@ -92,24 +83,8 @@ const ONE: &[ssh_harness::Case] = &[
     }),
 ];
 
-const fn joined<const N: usize>(
-    first: &[ssh_harness::Case],
-    second: &[ssh_harness::Case],
-) -> [ssh_harness::Case; N] {
-    let mut all = [first[0]; N];
-    let mut at = 0;
-    while at < first.len() {
-        all[at] = first[at];
-        at += 1;
-    }
-    while at < N {
-        all[at] = second[at - first.len()];
-        at += 1;
-    }
-    all
-}
-
-pub(crate) const CASES: &[ssh_harness::Case] = &joined::<{ BOTH.len() + ONE.len() }>(BOTH, ONE);
+pub(crate) const CASES: &[ssh_harness::Case] =
+    &joined_cases::<{ BOTH.len() + ONE.len() }>(BOTH, ONE);
 
 const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ1";
 const SECOND: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ2";
@@ -204,10 +179,6 @@ fn stopped_at(w: &mut World, verb: Verb, point: FailurePoint) -> Result<(), Fixt
     Ok(())
 }
 
-fn state_of(w: &World, id: &str) -> Option<RequestState> {
-    record(w, id).map(|record| record.state)
-}
-
 fn lifecycle_of(envelope: &Envelope<MutationDataDto>) -> &LifecycleMutationDto {
     match envelope.data.as_ref() {
         Some(MutationDataDto::Lifecycle(data)) => data,
@@ -215,30 +186,9 @@ fn lifecycle_of(envelope: &Envelope<MutationDataDto>) -> &LifecycleMutationDto {
     }
 }
 
-/// The commits on primary that merged a context: one, however many calls.
-fn merges_on_primary(repo: &git2::Repository) -> Result<usize, FixtureError> {
-    let mut walk = fixed(repo.revwalk())?;
-    fixed(walk.push(fixed(repo.refname_to_id(MAIN))?))?;
-    fixed(walk.simplify_first_parent())?;
-    let mut merges = 0;
-    for oid in walk {
-        if fixed(repo.find_commit(fixed(oid)?))?.parent_count() == 2 {
-            merges += 1;
-        }
-    }
-    Ok(merges)
-}
-
 fn parent_operation(w: &World, id: &str) -> Result<OperationId, FixtureError> {
     let found = record(w, id).ok_or(FixtureError)?;
     Ok(found.operations.first().ok_or(FixtureError)?.operation_id)
-}
-
-fn table(verb: Verb) -> &'static str {
-    match verb {
-        Verb::Promote => "document_promotions",
-        Verb::Close => "ticket_closures",
-    }
 }
 
 /// The parent's own flag, and the context child's row: its phase and flag.
@@ -1532,14 +1482,4 @@ fn fenced_past_publication(verb: Verb) -> Result<(), FixtureError> {
     stopped_at(&mut w, verb, FailurePoint::AfterPublication)?;
     fence(&w)?;
     assert_stuck(&w, verb)
-}
-
-fn context_target(verb: Verb) -> Result<SynchronizationTarget, FixtureError> {
-    Ok(SynchronizationTarget::Context {
-        kind: match verb {
-            Verb::Promote => AuthoringKind::Document,
-            Verb::Close => AuthoringKind::Ticket,
-        },
-        item_id: fixed(verb.id().parse())?,
-    })
 }

@@ -1,9 +1,8 @@
-//! `poll configure`, `poll pause` and `poll resume` (Task 5a, decisions 5, 11
-//! and 15): a `c5_poll_` case per row of the design's policy table, and the
+//! `poll configure`, `poll pause` and `poll resume`: a `c5_poll_` case per row of the design's policy table, and the
 //! rows of last commit wins. They need no server: each world is one local
 //! repository.
 //!
-//! `poll once` (Task 5b): a `c5_poll_once_` case per row of the design's frozen
+//! `poll once`: a `c5_poll_once_` case per row of the design's frozen
 //! table, on a two-clone world, in the last part of this file.
 
 use std::path::Path;
@@ -1194,7 +1193,7 @@ fn no_verb_sets_enabled() -> Result<(), FixtureError> {
     Ok(())
 }
 
-// `poll once` (Task 5b): the design's frozen table, each row on its own world.
+// `poll once`: the design's frozen table, each row on its own world.
 
 const REPORT: &str = "poll_mutation.schema.json";
 const PEER_FILE: &str = "peer-advance";
@@ -2108,7 +2107,7 @@ fn once_repository_error_after_completion() -> Result<(), FixtureError> {
 
 /// A poll killed mid-pass: its service is gone and its row is left in flight,
 /// holding the reservation. A resend under its ID takes the same row up with a
-/// raised epoch, and the request finishes. A kill itself is Task 13a's, through
+/// raised epoch, and the request finishes. A kill itself is for the CLI's interruption cases, through
 /// the binary; a stop at the same boundary leaves the same row.
 fn once_killed_resent_restarts() -> Result<(), FixtureError> {
     let (w, incoming) = behind()?;
@@ -2376,7 +2375,7 @@ fn once_resume_of_a_failed_poll() -> Result<(), FixtureError> {
     Ok(())
 }
 
-/// Carried from Task 5a: a pause during a running poll doesn't stop that poll, and
+/// A pause during a running poll doesn't stop that poll, and
 /// applies to the next automatic one.
 fn once_pause_during_a_running_poll() -> Result<(), FixtureError> {
     let (w, incoming) = behind()?;
