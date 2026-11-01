@@ -1386,3 +1386,42 @@ than only in a reboot-volatile temporary directory. Push this branch over
 SSH and use `https://github.com/vhodges/manyhands/compare/main...phase-ii-packaging?expand=1`
 for the owner to submit the PR if `gh` remains unavailable. Keep this
 worktree for review/follow-up; no automatic merge or cleanup is authorized.
+
+### Supporting Nix Directory Relocation
+
+On 2026-11-01 the owner revised the earlier placement decision and approved
+moving all supporting `nix/` files directly to `packaging/nix/`, while
+retaining `flake.nix` and `flake.lock` at the root. This supersedes the
+root-level supporting-directory choice recorded above; earlier paths and
+store outputs remain historical evidence. No old-path forwarding file or
+symlink is retained. The owner also approved a follow-up commit/push on the
+same branch; no merge, workflow, tag, release or credential change is included.
+
+The root imports, internal relative licence/runtime-manifest references,
+README source-filter/install paths and current documentation links/plans
+were updated. Eight new source-policy cases first failed against the old
+layout, then passed after the relocation. They verify the relocated guide
+and its ancestors are included, the old location is excluded, and private,
+implementation and symbolic-link files remain excluded from build sources.
+
+Verification passed: both architectures' package/app/check outputs evaluate;
+the x86_64 source-policy/transitive vendor-isolation and desktop-loader
+derivations build; and all 213 portable packaging tests pass without skips.
+The lockfile, dependencies, toolchain, Devenv, application code, disclosure
+inputs, build commands and runtime wrapper logic are unchanged.
+
+Comparison with the successfully built pre-relocation derivations confirmed
+the only changed derivation fields are the filtered source, resulting output
+address and guide installation path. All 719 desktop-source and 430 CLI-source
+file hashes/modes match after accounting for the guide move and the root
+README's updated hyperlink. Evidence: `/tmp/opencode/check-nix-layout.py`
+and `/tmp/opencode/nix-layout-equivalence.json`. This verifies a layout-only
+change; application executables were not rebuilt or relaunched after it.
+The preceding successful binary builds, full flake checks and owner-confirmed
+Wayland rendering remain explicitly pre-relocation results.
+
+Scoped read-only review accepted the relocation with no actionable findings.
+It independently repeated offline both-architecture evaluation and the
+719/430-file source/derivation comparison, confirmed current filtered sources
+match the working tree, and checked relative references, exclusion policy,
+unchanged pinned inputs and documentation consistency. Whitespace checks pass.

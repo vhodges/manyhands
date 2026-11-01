@@ -80,7 +80,7 @@ rustPlatform.buildRustPackage {
     runHook preInstall
     install -Dm755 target/${target}/release/manyhands-cli "$out/bin/manyhands-cli"
     mkdir -p ${doc}
-    install -m644 LICENSE nix/README.md ${doc}/
+    install -m644 LICENSE packaging/nix/README.md ${doc}/
     cp -r "$TMPDIR/manyhands-notices/THIRD-PARTY-NOTICES.html" "$TMPDIR/manyhands-notices/licenses" ${doc}/
     wrapProgram "$out/bin/manyhands-cli" --prefix PATH : ${lib.makeBinPath [ gitMinimal ]}
     ${lib.optionalString desktop ''

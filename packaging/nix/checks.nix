@@ -58,7 +58,7 @@ in {
   } ''
     python3 - <<'PY'
     import ctypes
-    for line in ${builtins.toJSON (lib.splitString "\n" (builtins.readFile ../packaging/linux/dynamic-libraries.txt))}:
+    for line in ${builtins.toJSON (lib.splitString "\n" (builtins.readFile ../linux/dynamic-libraries.txt))}:
         if line and not line.startswith('#'):
             ctypes.CDLL(line)
     PY

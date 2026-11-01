@@ -37,8 +37,8 @@ dependency or licence-selection changes. Editor feasibility is outside scope.
 ### Task 2: Retain Reviewed Supplemental Originals
 
 **Files:** `packaging/licenses/supplemental.json`,
-`packaging/licenses/supplemental/*`, `nix/source-filter.nix`,
-`nix/tests/source-filter.nix`, `scripts/release/tests/test_notices.py`.
+`packaging/licenses/supplemental/*`, `packaging/nix/source-filter.nix`,
+`packaging/nix/tests/source-filter.nix`, `scripts/release/tests/test_notices.py`.
 
 1. Add failing tests for full reviewed input coverage, exact Cargo.lock
    checksums, text SHA-256, immutable URLs/source linkage, CLI exclusion,
@@ -69,8 +69,8 @@ dependency or licence-selection changes. Editor feasibility is outside scope.
 
 ### Task 4: Preserve Separately Licensed Protocol Material
 
-**Files:** `nix/package.nix`, `scripts/release/notices.py`, notice tests,
-`packaging/licenses/README.md`, `nix/README.md`, `packaging/README.md`.
+**Files:** `packaging/nix/package.nix`, `scripts/release/notices.py`, notice tests,
+`packaging/licenses/README.md`, `packaging/nix/README.md`, `packaging/README.md`.
 
 1. Test preservation/checksums of the original Plasma source crate and XML/
    LGPL notices and exclusion from unrelated CLI/target graphs.

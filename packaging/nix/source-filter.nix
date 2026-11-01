@@ -8,7 +8,7 @@ let
   desktopCode = relative == "src/desktop" || lib.hasPrefix "src/desktop/" relative;
   # Read beside this filter rather than under root: policy tests deliberately
   # use a nonexistent root. Only explicitly listed, safe basenames enter src.
-  supplemental = builtins.fromJSON (builtins.readFile ../packaging/licenses/supplemental.json);
+  supplemental = builtins.fromJSON (builtins.readFile ../licenses/supplemental.json);
   supplementalNames = map (notice: notice.file)
     (lib.filter (notice: notice ? file) supplemental.notices);
   safeSupplementalName = name: builtins.isString name
@@ -22,7 +22,7 @@ let
     "packaging/tool-versions.env"
     "packaging/licenses/about.toml" "packaging/licenses/about.hbs"
     "packaging/licenses/README.md" "packaging/licenses/README-cli.md"
-    "nix/README.md"
+    "packaging/nix/README.md"
   ] ++ lib.optionals desktop [
     "packaging/licenses/supplemental.json"
     "packaging/icons/manyhands-1024.png" "packaging/linux/manyhands.desktop"

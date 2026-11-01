@@ -53,7 +53,7 @@ nix build .#default             # desktop plus a separately built CLI
 nix run .                      # desktop; needs Wayland and host graphics drivers
 ```
 
-See the [Nix guide](nix/README.md) for tag-pinned installation, NixOS/Home
+See the [Nix guide](packaging/nix/README.md) for tag-pinned installation, NixOS/Home
 Manager selection, installed licences/source disclosures, and runtime checks.
 `v0.1.6` predates the flake; remote installation needs a later published tag
 containing it. Devenv remains the development environment.

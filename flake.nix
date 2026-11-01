@@ -12,13 +12,13 @@
       packagesFor = system:
         let
           pkgs = import nixpkgs { inherit system; };
-          noticesTool = pkgs.callPackage ./nix/cargo-about.nix { };
-          cli = pkgs.callPackage ./nix/package.nix {
+          noticesTool = pkgs.callPackage ./packaging/nix/cargo-about.nix { };
+          cli = pkgs.callPackage ./packaging/nix/package.nix {
             inherit noticesTool;
             root = self.outPath;
             desktop = false;
           };
-          desktop = pkgs.callPackage ./nix/package.nix {
+          desktop = pkgs.callPackage ./packaging/nix/package.nix {
             inherit noticesTool;
             root = self.outPath;
             desktop = true;
@@ -48,6 +48,6 @@
         let
           pkgs = import nixpkgs { inherit system; };
           packages = self.packages.${system};
-        in import ./nix/checks.nix { inherit pkgs packages; });
+        in import ./packaging/nix/checks.nix { inherit pkgs packages; });
     };
 }

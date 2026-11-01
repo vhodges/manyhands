@@ -37,6 +37,9 @@ flake, packages, checks and consumer guidance are implemented; the current
 x86_64 CLI/desktop packages and flake checks pass. The owner confirmed the
 isolated NixOS/COSMIC Wayland window opened and text rendered, then closed it.
 ARM64 executable/runtime and later tagged-consumer acceptance remain.
+The above executable/runtime evidence precedes the approved layout-only
+move to `packaging/nix/`; its evaluation, policy and source/derivation
+comparison results are recorded separately, not called new binary builds.
 Shared disclosure remediation and all four offline target inventories are
 verified. On 2026-11-01 the owner authorized finishing local checks, committing,
 pushing `phase-ii-packaging`, and opening a PR. Merge, tags, workflow dispatch,
@@ -671,10 +674,10 @@ Record these results; Linux tests cannot validate Inno Setup behavior.
 **Files:**
 - Create: `flake.nix`
 - Create: `flake.lock`
-- Create: `nix/package.nix`
-- Create: `nix/cargo-about.nix`, `nix/checks.nix`
-- Create: `nix/source-filter.nix`, `nix/tests/source-filter.nix`
-- Create: `nix/README.md`, `packaging/licenses/README-cli.md`
+- Create: `packaging/nix/package.nix`
+- Create: `packaging/nix/cargo-about.nix`, `packaging/nix/checks.nix`
+- Create: `packaging/nix/source-filter.nix`, `packaging/nix/tests/source-filter.nix`
+- Create: `packaging/nix/README.md`, `packaging/licenses/README-cli.md`
 - Create: `packaging/linux/manyhands.desktop`
 - Modify: `scripts/release/notices.py`, `scripts/release/tests/test_notices.py`
 - Modify: `packaging/README.md`
@@ -686,8 +689,9 @@ small two-system mapping for `x86_64-linux` and `aarch64-linux`. Export
 nixpkgs/toolchain combination matching the release Rust version and
 assert/document that relationship. Keep Devenv inputs and shell behavior
 intact. Commit `flake.lock` with `flake.nix` when authorized.
-Per owner direction, keep the flake/lock at root and all supporting Nix
-expressions in root-level `nix/`, not underneath `packaging/`.
+Per the owner's revised direction on 2026-11-01, keep the flake/lock at root
+and supporting Nix files in `packaging/nix/`. This supersedes the earlier
+root-level `nix/` choice; no forwarding files or symlinks remain there.
 
 **Step 2: Implement the CLI derivation first.** Use `buildRustPackage`,
 `cargoLock.lockFile`, explicit `--no-default-features --bin manyhands-cli`,

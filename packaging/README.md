@@ -262,7 +262,7 @@ for this checkpoint.
 ## Linux Nix source packages
 
 The consumer flake and lock live at the project root; supporting expressions
-and the [installation/runtime guide](../nix/README.md) live in `nix/`.
+and the [installation/runtime guide](nix/README.md) live in `packaging/nix/`.
 They do not modify `devenv.nix`, `devenv.yaml`, or `devenv.lock`.
 For `x86_64-linux` and `aarch64-linux`, `default`/`manyhands` provides desktop
 plus a separately built featureless CLI; `manyhands-cli` provides just the
@@ -270,7 +270,7 @@ CLI, without desktop fonts or graphics runtime libraries. Do not install
 both variants into one profile: their CLI executable paths overlap.
 
 Nixpkgs revision `c7def046b9a883d46974757852106483d741586f` supplies matching
-Rust/Cargo **1.98.1**. `nix/cargo-about.nix` separately pins **0.9.3** and its
+Rust/Cargo **1.98.1**. `packaging/nix/cargo-about.nix` separately pins **0.9.3** and its
 vendor hash. Evaluation asserts agreement with `tool-versions.env`.
 Cargo dependencies and original MPL/libgit2 `.crate` archives are fixed
 inputs verified against `Cargo.lock`; notice generation runs frozen/offline
@@ -310,9 +310,12 @@ preserving notices is not a claim to resolve every possible binary-
 distribution obligation. See the Task 12
 [execution record](../docs/plans/2026-10-30-release-workflow-execution.md)
 for actual local package-build/runtime evidence and remaining distribution
-decisions. Current x86_64 CLI/desktop package builds and flake checks pass;
-the owner confirmed an isolated NixOS/COSMIC Wayland launch and correct text
-rendering. ARM64 executable/runtime and later tagged-consumer checks remain;
+decisions. The x86_64 CLI/desktop builds and flake checks passed before the
+supporting-directory relocation, and the owner confirmed an isolated
+NixOS/COSMIC Wayland launch and correct text rendering. The layout-only
+relocation passes evaluation/isolation/loader checks and source/derivation
+comparison; application binaries were not rebuilt for it. ARM64
+executable/runtime and later tagged-consumer checks remain;
 evaluation/loader success alone does not establish those outcomes.
 
 ## Tool versions and local checks

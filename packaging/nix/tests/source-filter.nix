@@ -23,6 +23,14 @@ let
     { path = "packaging/licenses/supplemental/.private/key.pem"; type = "regular"; cli = false; desktop = false; }
     { path = "packaging/licenses/supplemental/taffy-0.13.0-LICENSE"; type = "symlink"; cli = false; desktop = false; }
     { path = "scripts/release/notices.py"; type = "regular"; cli = true; desktop = true; }
+    { path = "packaging"; type = "directory"; cli = true; desktop = true; }
+    { path = "packaging/nix"; type = "directory"; cli = true; desktop = true; }
+    { path = "packaging/nix/README.md"; type = "regular"; cli = true; desktop = true; }
+    { path = "packaging/nix/README.md"; type = "symlink"; cli = false; desktop = false; }
+    { path = "packaging/nix/package.nix"; type = "regular"; cli = false; desktop = false; }
+    { path = "packaging/nix/private.pfx"; type = "regular"; cli = false; desktop = false; }
+    { path = "nix"; type = "directory"; cli = false; desktop = false; }
+    { path = "nix/README.md"; type = "regular"; cli = false; desktop = false; }
     { path = "packaging/icons/manyhands-1024.png"; type = "regular"; cli = false; desktop = true; }
     { path = "packaging/linux/manyhands.desktop"; type = "regular"; cli = false; desktop = true; }
     { path = ".manyhands"; type = "directory"; cli = false; desktop = false; }
@@ -44,7 +52,7 @@ let
     filter false "${root}/${case.path}" case.type == case.cli
     && filter true "${root}/${case.path}" case.type == case.desktop
   ) cases;
-  supplemental = builtins.fromJSON (builtins.readFile ../../packaging/licenses/supplemental.json);
+  supplemental = builtins.fromJSON (builtins.readFile ../../licenses/supplemental.json);
   listedFiles = map (notice: notice.file)
     (lib.filter (notice: notice ? file) supplemental.notices);
   allListedFiles = lib.all (file:
