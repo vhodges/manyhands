@@ -899,3 +899,80 @@ Decisions (a), (b), (c), (e), (f) and (g) above stand. Decision (d), `Err(Reposi
 | `cargo fmt --check`, `cargo check --all-features --locked`, clippy `-D warnings` | ok | 11, 9, 9 s |
 
 Only this ledger and a ticket comment changed after that run.
+
+### Task 6: Identity And Remote Selection Fixes (Steps 1-5)
+
+**Not complete. Three rulings are needed, listed under Blockers.** The code is committed in two commits, identity then index, so each ruling can be applied alone. No pre-existing test was edited. `--lib promotion` and `--test repository_enablement` fail until blockers 2 and 3 are ruled, so the Part A gate can't pass yet.
+
+**Reproduction of `01M5MK57`, before the fix, measured by temporary probes.**
+
+| Path | Identity | Answer before the fix | What it left |
+| --- | --- | --- | --- |
+| Synchronization | Bracketed, configured | `RecoveryRequired` | No commit |
+| Synchronization | Trimmed, configured | **Success** | A merge signed `Example Person`, not the configured `Example Person,`, and pushed |
+| Synchronization | Bracketed, confirmed | `RecoveryRequired` | **The identity written to local configuration**, confirmation `applied` |
+| Promotion | Bracketed, configured | Repository unavailable | Record stuck at `context_synchronized` |
+| Promotion | Trimmed, configured | **Success** | Merge signed with the altered name |
+| Closure | Bracketed, configured | Preview `Ready`, then `reconfirmation_required` | Row `abandoned` |
+| Closure | Trimmed, configured | Preview `Ready`, then **success** | Merge signed with the altered name |
+
+**Does the ticket's reasoning hold?** Yes for the bracketed and confirmed cases. It says the commit fails, which is **incomplete**: a trimmed identity doesn't fail, it silently commits and publishes under a name other than the configured one, so that case is worse than the ticket describes. Its open question on durable effects before the refusal is answered by blocker 1.
+
+**Reproduction of `01M669FJR2`.** It matches the ticket and Task 0. Eight new rows failed on the stale index before the fix.
+
+**Seen failing before the fix** (rows as first written).
+
+| Target | Failed | Passed before the fix |
+| --- | --- | --- |
+| `remote_synchronization -- c5_identity` | 4 of 5 | Plain control |
+| `document_promotion -- c5_identity` | 4 of 5 | Plain control |
+| `ticket_closure -- c5_identity` | 3 of 5 | Plain control, kept records |
+| `mutation_remote -- c5_lifecycle_identity` | 11 of 20 | The rest, which pin behaviour that already held, including the R-21 race row, since a bracketed identity already ended `abandoned` |
+| `repository_enablement`, new rows | 8 of 8 | None |
+
+Two corrections to those counts. `identity_child_stop_continues` (2 of the 11) failed on an expectation of mine that was wrong, see decision (c), and not on the defect. `identity_prepare_missing_promote` also had a double removal in its fixture, since fixed; its assertion on the code comes first, and I didn't separately confirm where it stopped before the fix. `the_synchronization_after_a_selection_...` was rewritten after the fix, with a stale index as its control, which answers `worktree_not_clean` in the same row. The final form wasn't run against the unfixed code.
+
+**The fix.** `select_committing_identity` applies `commits_unchanged` to both identities. Promotion's prepare check is in `bind/lifecycle.rs`, reached only for a ready preview planning a merge commit. The domain's check is `Lifecycle::require_identity`, a no-op default that only promotion overrides, called with no prior record once the preview is unchanged. `publish_configuration_index` runs after the commit and on the already-selected branch, and takes no lock when the entry is current. `FailurePoint::AfterPublicationConfigurationCommit` is the one new variant (decision 17).
+
+**Decisions.**
+
+- (a) **A failed index update is an error**, unlike enablement's `let _ =`. Ignoring it would report success with the ticket's stale index. The row is pending, and the same request heals it.
+- (b) **Two commits, not the plan's one**, so a ruling can be applied to either alone.
+- (c) **A context child's identity stop continues, and then ends `external_change`.** The design says the same request continues. It does: the stopped child row finishes. But the child merges a peer's commit the preview never showed. A control in the same world with no identity stop answers `external_change` too, for both verbs, so the stop isn't the cause. The row pins this. A merging child can't end `ok` in this world, so the design's row may want that sentence.
+- (d) **A stale confirmation on a promotion with no prior record** is now refused with no record, where it used to begin a record. It follows from `require_identity` using the selector's whole answer.
+- (e) `effective_identity`'s per-key cascade stays (R-6). **A follow-up ticket is needed and has not been created.**
+- (f) **Decision 10 overrides `01M669FJR2`'s "merged on its own" bullet:** the fix ships inside C5. It is recorded here and on this ticket's comment. Neither that ticket nor `01M5MK57` has been edited: both live on their own branches, and R-21's note is also unrecorded there.
+
+**Blockers.**
+
+1. **Synchronization's refusal can't leave refs and journal unchanged.** The plan, R-21 and the ticket ask for "journal unchanged" and "no unfinished row" on synchronization. The selector runs only once a merge is known to be needed, which is after the fetch. Measured on the fixed code with a bracketed identity: the answer is `IdentityRequired`, `refs/remotes/origin/main` moved, a new operation row stands in `fetch_observed` with one prepared step, and the same ID without `restart` answers `recovery_required`. Before the fix, a missing identity left the same shape, and the ticket asks for "as when no identity is configured", so the two acceptance lines conflict. The committed rows assert what holds: configuration, local primary, pushes and confirmation rows unchanged, and they say in a comment what they leave out. The strict row is not committed. A check before the fetch would refuse fast-forward synchronizations that need no identity, so I didn't add one. Ruling needed: narrow the ticket for synchronization, as R-21 did for closure, or ask for a different mechanism.
+2. **`tests/repository_enablement.rs:3816` pins the defect.** `assert_recovery...` asserts the index bytes are unchanged after a retry that commits the selection, which contradicts `01M669FJR2`. It fails `recovery_before_publication_configuration_commit_restores_config_and_live_index` and `enablement_rollback_and_recovery_with_symlink_parent_use_canonical_roots`. It isn't a named edit. Ruling needed: a new named edit, which would assert the configuration is current and the other entries unchanged.
+3. **`promotion::run_tests::identity_and_mismatch_do_not_strand_the_item` pins the record R-3 removes.** With no identity, its first call is now refused with no record, so its wrong-digest call on the same ID no longer answers `operation_mismatch`. It isn't a named edit, and wasn't in Task 6's verify list: an extra `--lib promotion` run found it. Ruling needed: a new named edit.
+
+**Risks.**
+
+- **Conflict resolution isn't covered.** `resolve_synchronization` reads `repository.signature()` and doesn't use the selector, so by reading a trimmed identity is still altered there and a bracketed one still answers `RecoveryRequired`. Not run. It is outside the design's fix and the ticket's acceptance lines, though the ticket names that request as reachable.
+- **`repo sync` in the library row** answers `internal_error` past the clean check, where the binary answered `no_selected_key` in Task 0. Not investigated. The row asserts only that it isn't refused as not clean and that publication was requested.
+- **No golden** was added for a promotion's `identity_required`, since the golden support files are outside Task 6's Files.
+
+**Verified.**
+
+| Command | Result | Time |
+| --- | --- | --- |
+| `--test remote_synchronization -- identity` | 5 passed | 52 s |
+| `--test document_promotion -- identity` | 5 passed | 27 s |
+| `--test ticket_closure -- identity` | 6 passed | 30 s |
+| `--test mutation_remote -- c5_lifecycle_identity` | 20 passed | 83 s |
+| `--test repository_enablement` | **101 passed, 2 failed** (blocker 2) | 18 s |
+| `--lib remote` | 479 passed | 200 s |
+| `--lib local_sync` | 164 passed | 299 s |
+| `--lib integration` | 26 passed | 15 s |
+| `--lib mutation` | 146 passed | 2 s |
+| `--lib promotion` (beyond the plan) | **204 passed, 1 failed** (blocker 3) | 136 s |
+| `--lib closure` (beyond the plan) | 200 passed | 79 s |
+| `--test document_promotion` (beyond the plan) | 79 passed | 794 s |
+| `--test mutation_remote -- c5_lifecycle` | 145 passed | 1098 s |
+| `--test mutation_replay -- remote` (beyond the plan) | 38 passed | under 300 s |
+| `cargo fmt --check`, `cargo check --all-features --locked`, clippy `-D warnings` | ok | |
+
+After that set, only a test-file lint fix and a comment changed. The three `c5_identity` filters, fmt and clippy were rerun on the final tree, and passed 5, 5 and 5. `--test ticket_closure` as a whole, `mutation_replay` as a whole and the Part A gate were not run.
