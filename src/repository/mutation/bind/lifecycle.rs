@@ -1823,6 +1823,32 @@ mod tests {
         }
     }
 
+    /// With no reservation to let go, or none that can be read, the action
+    /// that would let it go isn't offered, whatever a stop suggested.
+    #[test]
+    fn a_cancellation_is_not_offered_when_nothing_is_held() {
+        use crate::results::{Envelope, RecoveryActionKind as Kind};
+        let data = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let mut envelope: Envelope<MutationDataDto> = Envelope::failure(
+            Command::TicketClose.name(),
+            Scope {
+                repository: Some(data.path().to_string_lossy().into_owned()),
+                ..Scope::default()
+            },
+            ResultCode::RemoteBranchDeleted,
+            standing_recovery(ResultCode::RemoteBranchDeleted, &accepted()),
+        );
+        envelope.operation_id = Some(OperationId::new().to_string());
+        let offered = service.offering(envelope, outcome::CallKind::Execute);
+        assert!(
+            offered
+                .recovery
+                .iter()
+                .all(|action| action.action != Kind::RequestCancel)
+        );
+    }
+
     /// R-27: on a re-entry a transient code with no parent leaves the record.
     #[test]
     fn a_transient_stop_entered_again_with_no_parent_leaves_the_record() {

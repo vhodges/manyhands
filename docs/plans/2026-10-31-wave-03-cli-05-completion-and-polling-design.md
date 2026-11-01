@@ -410,15 +410,22 @@ at the child's own safe points. A push already under way completes, and effects 
   acknowledged yet, so attempt 2's probe stops at its first safe point with `cancelled`. This gives the
   decision's outcome with no separate check in the driver. A process killed before acknowledging answers
   `cancelled` once more on its next resend, and the resend after that continues.
-- **Releasing the child (decision 18).** When a cancellation stops the parent, before the child's step
-  has run again, the runner retires the context or primary child it stopped on, by what `child()` does on
-  a retry: the row ends `cancelled` with no connection, and the reservation is free. It does so only for
-  an unowned, unfinished child with no resolution, no reconciliation owed, no push recorded, and a
-  checkpoint no further than its fetch. Anything else stays for the same request, so a retained conflict
-  is not removed, and a push of unknown fate is still found out about. The route out of a child's
+- **Releasing the child (decision 18).** When a cancellation stops the parent, at its safe point or because
+  its context or primary child has just failed with cancellation asked, `release_promotion_child`
+  (`remote/reservation.rs`) reads the child and answers in one immediate transaction. A child with nothing to
+  lose ends `cancelled` with no connection, and the reservation is free: unfinished, current generation, no
+  authority, no retained or released resolution, no reconciliation owed, no integration begun, no
+  publication attempt or recorded push, and a checkpoint no further than its fetch. Any other child keeps all
+  of that, and only the flag `request cancel` set on its row goes, since the cancellation has been answered:
+  left, it would end the row at the next restart. So a retained conflict and a resolution still to publish
+  stay, and a push of unknown fate is still found out about. The route out of a child's
   `remote_branch_deleted` is `request cancel`, the same request (`cancelled`), `item republish` (`ok`), the
   same request (`ok`, one merge). `offering_cancel` treats a parent's child as the request's own, for these
-  two commands only.
+  two commands only. It offers nothing when no reservation is held. A retained conflict whose branch is then
+  deleted answers its conflict, `recovery_required`, so it is not offered a cancellation that wouldn't release it.
+- **A deletion's refusal.** A deletion refused by the reservation's own boundary with cancellation asked
+  is `Pending{Cancelled}`. A rejection, a key failure or a transport failure keeps its own answer, whether or
+  not cancellation was asked.
 - **`stops_on_ctrl_c`** gains both verbs. A press after the last safe point keeps the domain's answer.
   A second press or a kill leaves the record, and the same request continues.
 - **`RecoveryActionKind::RequestCancel`'s doc** is corrected for these verbs.
@@ -760,7 +767,7 @@ and request records hold neither (Task 0 confirms). The index's `closed_by` colu
 | E-14 | `src/bin/manyhands-cli/collaboration_tests.rs:82` | New `stops_on_ctrl_c` rows |
 | E-15 | `src/repository/mutation/confirm_tests.rs` | `Row::Unfinished` cases |
 | E-16 | `src/bin/manyhands-cli/startup_tests.rs:171`, `parse_tests.rs:563` | Move to the test-only planned spec (decision 16), done with E-3 and E-4 in Task 9 |
-| E-17 | `tests/mutation_remote/c5_lifecycle.rs` `child_remote_branch_deleted` | The offered actions become `request.cancel`, `repo.inspect`, and its stale comment is fixed (decision 18) |
+| E-17 | `tests/mutation_remote/c5_lifecycle.rs` `child_remote_branch_deleted`; `bind/lifecycle.rs` `a_stop_the_request_cannot_get_past_offers_its_cancellation` (rewritten from `a_childs_way_past_needs_the_request_and_a_look_at_the_repository`) | The offered actions become `request.cancel`, `repo.inspect`, and the stale comment is fixed (decision 18) |
 
 `tests/read_relationships.rs:1183,1190,1254` hold `"C5"` as Wave-graph data, and are not pins. Task 0
 greps for other pins (`NotResumable`, `"C5"`, `arrives with`, `Planned`). An unlisted hit stops for owner
@@ -822,6 +829,7 @@ review. This list is not yet proven complete.
 
 ## Known Limits
 
+- **A second live process on the same parent.** A resend's cancellation can stop the child that another live process's call of the same request is running. No liveness is checked. That process is fenced at its next safe point, a new attempt learns of any push by fetching, and `child()`'s retry already has the same exposure (decision 18).
 - Closes record the configured identity (decision 6).
 - A closure race may have no CLI way out until `01M4H33R34Z7C7EEKTY1ZCT950` lands.
 - `poll once` holds the remote reservation, so it answers `busy` beside another remote operation, and they answer it.

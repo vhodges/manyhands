@@ -242,7 +242,9 @@ fn cancelled<L: Lifecycle>(
     }
 }
 
-fn lifecycle_request(request: PromoteDocumentRequest) -> LifecycleRequest<PromotionExpectation> {
+pub(super) fn lifecycle_request(
+    request: PromoteDocumentRequest,
+) -> LifecycleRequest<PromotionExpectation> {
     let PromoteDocumentRequest {
         root,
         operation_id,
@@ -583,7 +585,7 @@ fn promote_inner<L: Lifecycle>(
     }
     if cancelled::<L>(service, &request, &r)? {
         if r.step() == Step::Confirmed {
-            release_child::<L>(service, &request, &r, ChildRole::Context, io);
+            release_child::<L>(service, &request, &r, ChildRole::Context);
         }
         return Err(L::Error::interrupted());
     }
@@ -602,6 +604,7 @@ fn promote_inner<L: Lifecycle>(
             && let Err(error) = child::<L>(service, &request, &mut r, ChildRole::Context, io)
         {
             if cancelled::<L>(service, &request, &r)? {
+                release_child::<L>(service, &request, &r, ChildRole::Context);
                 return Err(L::Error::interrupted());
             }
             return Err(L::Error::context_synchronization(Box::new(error)));
@@ -784,78 +787,24 @@ fn child_id<R: LifecycleRecord>(r: &R, role: ChildRole) -> Option<OperationId> {
         ChildRole::Primary => r.primary_sync_id(),
     }
 }
-/// Ends an unowned child's row and lets its reservation go: it is cancelled,
-/// and a restart acknowledges that with no connection.
-fn retire_child<L: Lifecycle>(
-    service: &RepositoryService,
-    request: &LifecycleRequest<L::Expectation>,
-    r: &L::Record,
-    role: ChildRole,
-    child: OperationId,
-    io: &mut impl PromotionIo,
-) -> Result<(), SynchronizationError> {
-    let root = &request.root;
-    service.cancel_remote_operation(root, child)?;
-    let ack = SynchronizeRemoteRequest {
-        root: root.clone(),
-        operation_id: child,
-        target: synchronization_target(L::KIND, role, r.item_id()),
-        approval: request.approval.clone(),
-        confirmed_identity: request.confirmed_identity.clone(),
-        restart: true,
-    };
-    let mut observer = CancellationObserver::<L> {
-        service,
-        request,
-        record: r,
-    };
-    let execution = L::child_execution(r, role)?;
-    let _ack_result = io.synchronize(service, ack, &mut observer, &execution);
-    Ok(())
-}
-
 /// A cancellation that stops the parent lets its stopped child go (decision
-/// 18), or the child's reservation would refuse what the caller does next.
-/// Only a child proven to have nothing to lose: unowned, unfinished, with no
-/// resolution, and no further than its fetch, so no local update or push may be
-/// left to find out about. Anything else, or anything that cannot be read,
-/// stays as it is for the same request. A failure here loses nothing either.
+/// 18), or the child's reservation would refuse what the caller does next. The
+/// guards and the end of its row are one transaction, in
+/// `release_promotion_child`. Nothing proves that no other process still runs
+/// the child: one that does is fenced at its next safe point, as `child()`'s
+/// retry would fence it, and a new attempt learns of any push by fetching. A
+/// failure here leaves the row as it was, for the same request.
 fn release_child<L: Lifecycle>(
     service: &RepositoryService,
     request: &LifecycleRequest<L::Expectation>,
     r: &L::Record,
     role: ChildRole,
-    io: &mut impl PromotionIo,
 ) {
-    let root = &request.root;
-    let Ok(ChildState::Unowned(stored)) =
-        state::with_transaction(service, root, |tx, _| L::child_state(tx, r, role))
-    else {
+    let Some(child) = child_id(r, role) else {
         return;
     };
-    let safe = !matches!(
-        stored.phase,
-        RemoteOperationPhase::Cancelled
-            | RemoteOperationPhase::Interrupted
-            | RemoteOperationPhase::Failed
-            | RemoteOperationPhase::Completed
-    ) && !stored.reconciliation_required
-        && stored.sync_evidence.push_oid.is_none()
-        && matches!(
-            stored.sync_checkpoint,
-            None | Some(
-                state::SynchronizationCheckpoint::FetchPrepared
-                    | state::SynchronizationCheckpoint::FetchObserved
-            )
-        )
-        && matches!(
-            state::with_transaction(service, root, |tx, _| {
-                reservation::promotion_child_has_resolution(tx, &stored)
-            }),
-            Ok(false)
-        );
-    if safe {
-        let _ = retire_child::<L>(service, request, r, role, stored.operation_id, io);
+    if let Ok(execution) = L::child_execution(r, role) {
+        let _ = service.release_promotion_child(&request.root, child, &execution);
     }
 }
 fn child<L: Lifecycle>(
@@ -901,7 +850,22 @@ fn child<L: Lifecycle>(
                         | RemoteOperationPhase::Interrupted
                         | RemoteOperationPhase::Failed
                 ) {
-                    retire_child::<L>(service, request, r, role, stored.operation_id, io)?;
+                    service.cancel_remote_operation(root, stored.operation_id)?;
+                    let ack = SynchronizeRemoteRequest {
+                        root: root.clone(),
+                        operation_id: stored.operation_id,
+                        target: synchronization_target(L::KIND, role, r.item_id()),
+                        approval: request.approval.clone(),
+                        confirmed_identity: request.confirmed_identity.clone(),
+                        restart: true,
+                    };
+                    let mut observer = CancellationObserver::<L> {
+                        service,
+                        request,
+                        record: &*r,
+                    };
+                    let execution = L::child_execution(r, role)?;
+                    let _ack_result = io.synchronize(service, ack, &mut observer, &execution);
                 }
                 // A cancellation acknowledgement may itself return RecoveryRequired;
                 // durable ownership/terminal state, never that error, decides.
@@ -1138,7 +1102,7 @@ fn finish_steps<L: Lifecycle>(
     }
     if cancelled::<L>(service, request, r).map_err(recovery)? {
         if matches!(r.step(), Step::Integrated | Step::PublicationPending) {
-            release_child::<L>(service, request, r, ChildRole::Primary, io);
+            release_child::<L>(service, request, r, ChildRole::Primary);
             r.set_publication(Some(Pub::Cancelled));
             r.set_step(Step::PublicationPending);
         }
@@ -1170,6 +1134,9 @@ fn finish_steps<L: Lifecycle>(
                     r.set_step(Step::PublicationPending);
                 }
                 Err(error) => {
+                    if cancelled::<L>(service, request, r).unwrap_or(false) {
+                        release_child::<L>(service, request, r, ChildRole::Primary);
+                    }
                     r.set_publication(Some(publication_error(&error)));
                     r.set_step(Step::PublicationPending);
                 }
@@ -1310,14 +1277,17 @@ fn finish_steps<L: Lifecycle>(
                     published_context,
                     r.item_id(),
                 )
-                .map_err(|e| {
-                    // A cancellation refuses the deletion at its boundary, in
-                    // whatever words: it is the cancellation that stopped it.
-                    if cancelled::<L>(service, request, r).unwrap_or(false) {
+                .map_err(|e| match &e {
+                    // The reservation's own boundary refuses a run asked to
+                    // stop, around the transport call and with no word of it.
+                    // A rejection, a key or a transport failure is its own.
+                    SynchronizationError::Repository(error)
+                        if error.kind == RepositoryErrorKind::RecoveryRequired
+                            && cancelled::<L>(service, request, r).unwrap_or(false) =>
+                    {
                         Clean::Cancelled
-                    } else {
-                        deletion_error(&e)
                     }
+                    _ => deletion_error(&e),
                 })?;
             safe(
                 service,

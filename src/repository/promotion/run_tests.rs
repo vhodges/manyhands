@@ -5116,3 +5116,67 @@ fn refresh_failure_keeps_identical_authoritative_outcome_and_replay_repairs_inde
             .refresh_required
     );
 }
+
+/// The observer's half of a flag that can't be read: a child is stopped where
+/// it is, not told to go on. A run's own safe point reads the flag first, so
+/// the read fails here only inside the child.
+#[test]
+fn an_unreadable_flag_stops_a_child() {
+    use crate::repository::mutation::{CancellationToken, RequestId};
+    struct Unreadable {
+        answer: Rc<RefCell<Option<SafePointRequest>>>,
+        registry: PathBuf,
+    }
+    impl run::PromotionIo for Unreadable {
+        fn synchronize(
+            &mut self,
+            _: &RepositoryService,
+            _: SynchronizeRemoteRequest,
+            observer: &mut dyn SynchronizationObserver,
+            _: &record::ChildExecution,
+        ) -> Result<SynchronizationResult, SynchronizationError> {
+            let db = rusqlite::Connection::open(&self.registry).unwrap();
+            db.execute_batch("ALTER TABLE request_records RENAME TO hidden_records")
+                .unwrap();
+            *self.answer.borrow_mut() =
+                Some(observer.safe_point(RemoteOperationSafePoint::BeforeFetch));
+            db.execute_batch("ALTER TABLE hidden_records RENAME TO request_records")
+                .unwrap();
+            Err(SynchronizationError::RecoveryRequired)
+        }
+        #[allow(clippy::too_many_arguments)]
+        fn delete(
+            &mut self,
+            _: &RepositoryService,
+            _: VerifySshTransportRequest,
+            _: &RemoteRefPlan,
+            _: &RemoteReservation,
+            _: &crate::repository::remote::observation::ObservationConfiguration,
+            _: Oid,
+            _: &ItemId,
+        ) -> Result<DeleteObservation, SynchronizationError> {
+            unreachable!("the run stops in its child")
+        }
+    }
+    let f = Fixture::new();
+    f.remote();
+    let answer = Rc::new(RefCell::new(None));
+    let mut io = Unreadable {
+        answer: answer.clone(),
+        registry: f.service.registry_path.clone(),
+    };
+    let request = lifecycle::LifecycleRequest {
+        probe: Some(lifecycle::CancellationProbe::new(
+            CancellationToken::new(),
+            RequestId::new(),
+        )),
+        ..run::lifecycle_request(f.request())
+    };
+    let _ = run::run_with_io(
+        &lifecycle::DocumentPromotionLifecycle,
+        &f.service,
+        request,
+        &mut io,
+    );
+    assert!(matches!(*answer.borrow(), Some(SafePointRequest::Stop)));
+}

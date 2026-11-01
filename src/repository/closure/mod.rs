@@ -2,6 +2,7 @@
 //! closure checkpoint, and `close_ticket` over the one generic lifecycle
 //! runner (C3).
 use crate::canonical::ItemId;
+use crate::repository::promotion::lifecycle::CancellationProbe;
 use crate::repository::{
     ConfirmedCommitIdentity, ExpectedConfiguration, IndexPending, OperationId, PlannedCleanup,
     PlannedIntegration, PlannedPublication, PromotionCleanup, PromotionIntegration,
@@ -394,7 +395,7 @@ impl RepositoryService {
         &self,
         request: CloseTicketRequest,
         session: &mut SessionCredentials<P>,
-        probe: crate::repository::promotion::lifecycle::CancellationProbe,
+        probe: CancellationProbe,
     ) -> Result<TicketClosureResult, TicketClosureError> {
         lifecycle::close(self, request, session, Some(probe))
     }

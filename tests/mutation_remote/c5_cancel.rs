@@ -39,12 +39,28 @@ const BOTH: &[ssh_harness::Case] = both![
     "new_id_before_integration" => new_id_before_integration,
     "new_id_after_integration" => new_id_after_integration,
     "between_attempts" => between_attempts,
-    "killed_before_acknowledging" => killed_before_acknowledging,
+    "killed_before_the_domain_call" => killed_before_the_domain_call,
+    "answered_without_taking_the_flag" => answered_without_taking_the_flag,
+    "flag_unreadable_at_a_safe_point" => flag_unreadable_at_a_safe_point,
     "killed_after_acknowledging" => killed_after_acknowledging,
     "complete_with_record_accepted" => complete_with_record_accepted,
     "child_flag_unowned" => child_flag_unowned,
     "child_push_unknown_stays" => child_push_unknown_stays,
     "publication_child_released" => publication_child_released,
+    "release_by_token" => release_by_token,
+    "request_during_failed_child" => request_during_failed_child,
+    "token_during_failed_child" => token_during_failed_child,
+    "retained_conflict_is_kept" => retained_conflict_is_kept,
+    "released_resolution_publishes" => released_resolution_publishes,
+    "stays_released_resolution" => stays_released_resolution,
+    "stays_reconciliation_required" => stays_reconciliation_required,
+    "stays_recorded_push" => stays_recorded_push,
+    "stays_past_its_fetch" => stays_past_its_fetch,
+    "stays_local_prepared" => stays_local_prepared,
+    "stays_applied_merge_at_fetch_observed" => stays_applied_merge_at_fetch_observed,
+    "deletion_rejected_keeps_its_answer" => deletion_rejected_keeps_its_answer,
+    "deletion_transport_keeps_its_answer" => deletion_transport_keeps_its_answer,
+    "retained_child_remote_branch_deleted" => retained_child_remote_branch_deleted,
     "walk_remote_branch_deleted" => walk_remote_branch_deleted,
 ];
 
@@ -59,7 +75,6 @@ const ONE: &[ssh_harness::Case] = &[
     ("c5_cancel_stage_after_checkpoint_close", || {
         stage(Verb::Close, FailurePoint::AfterClosureCheckpoint, false)
     }),
-    ("c5_cancel_child_flag_retained_close", child_flag_retained),
 ];
 
 const fn joined<const N: usize>(
@@ -573,9 +588,9 @@ fn between_attempts(verb: Verb) -> Result<(), FixtureError> {
     assert_finishes(&w, FIRST, verb)
 }
 
-/// A process killed before it acknowledged: the flag stands, so the resend
-/// answers `cancelled` once more, and the one after continues (R-20).
-fn killed_before_acknowledging(verb: Verb) -> Result<(), FixtureError> {
+/// A process killed before its domain call asked nothing of the flag: it
+/// stands, so the resend answers `cancelled`, and the one after continues.
+fn killed_before_the_domain_call(verb: Verb) -> Result<(), FixtureError> {
     let mut w = remote(verb)?;
     stopped_at(&mut w, verb, FailurePoint::AfterContextSync)?;
     asked(&w.service, FIRST)?;
@@ -656,13 +671,7 @@ fn child_push_unknown_stays(verb: Verb) -> Result<(), FixtureError> {
     assert!(reserved(&w));
     let child = child_id(&w, verb, FIRST)?;
     asked(&w.service, FIRST)?;
-    let row = row_of(&w, child)?;
-    assert_cancelled(&w, FIRST, &resent(&w, FIRST, verb))?;
-    assert!(
-        reserved(&w),
-        "the push's fate is still the child's to learn"
-    );
-    assert_eq!(row_of(&w, child)?, row, "untouched");
+    assert_kept(&w, verb, child)?;
     assert_finishes(&w, FIRST, verb)
 }
 
@@ -685,14 +694,11 @@ fn publication_child_released(verb: Verb) -> Result<(), FixtureError> {
     assert_finishes(&w, FIRST, verb)
 }
 
-/// A conflict the context's child retains has already ended interrupted, so
-/// `request cancel` sets no flag on its row. The cancellation is answered once,
-/// and the same request then finds the conflict as it left it.
-fn child_flag_retained() -> Result<(), FixtureError> {
-    let verb = Verb::Close;
-    let w = remote(verb)?;
-    fixed(w.sync(w.context_request()))?;
-    let path = format!(".manyhands/tickets/{ITEM}/ticket.md");
+// What a release leaves as it is.
+
+/// The context's branch, with a local commit and a peer's on it.
+fn diverged(w: &World, verb: Verb, path: &str, peer_bytes: &[u8]) -> Result<(), FixtureError> {
+    fixed(w.sync(w.request(context_target(verb)?)))?;
     let peer = fixed(w.peer.workdir().ok_or(FixtureError).map(Path::to_owned))?;
     let mut fetch = git2::FetchOptions::new();
     fetch.remote_callbacks(callbacks(&w.server));
@@ -701,24 +707,54 @@ fn child_flag_retained() -> Result<(), FixtureError> {
         Some(&mut fetch),
         None,
     ))?;
-    commit_in(&peer, verb.branch(), &path, b"the peer's\n")?;
+    commit_in(&peer, verb.branch(), path, peer_bytes)?;
     push_peer(&w.peer, &w.server, verb.branch())?;
+    Ok(())
+}
+
+fn item_path(verb: Verb) -> String {
+    match verb {
+        Verb::Promote => DOCUMENT_PATH.to_owned(),
+        Verb::Close => format!(".manyhands/tickets/{ITEM}/ticket.md"),
+    }
+}
+
+/// A conflict the context's child stops on, retained.
+fn conflicted(w: &World, verb: Verb) -> Result<(), FixtureError> {
+    let path = item_path(verb);
     let worktree = verb.worktree(&w.root);
     let source = fixed(std::fs::read_to_string(worktree.join(&path)))?;
+    diverged(
+        w,
+        verb,
+        &path,
+        format!("{source}\nthe peer's edit\n").as_bytes(),
+    )?;
     commit_in(
         &worktree,
         verb.branch(),
         &path,
-        source.replacen("task", "bug", 1).as_bytes(),
+        format!("{source}\nthe local edit\n").as_bytes(),
     )?;
     let confirmation = confirmation_of(&w.service, verb, &w.root);
     let stopped = called(&w.service, FIRST, Some(&confirmation), verb, &w.root);
     assert_eq!(stopped.code, ResultCode::RecoveryRequired);
+    Ok(())
+}
+
+/// A retained conflict has already ended `interrupted`, so `request cancel`
+/// sets no flag on its row. The cancellation is answered once and removes
+/// nothing: the same request finds the conflict as it left it.
+fn retained_conflict_is_kept(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    conflicted(&w, verb)?;
     asked(&w.service, FIRST)?;
     let interrupted = ("interrupted".to_owned(), false);
     assert_eq!(child_row(&w, verb, FIRST)?, interrupted);
     assert_cancelled(&w, FIRST, &resent(&w, FIRST, verb))?;
     assert_eq!(child_row(&w, verb, FIRST)?, interrupted);
+    let index = fixed(fixed(git2::Repository::open(verb.worktree(&w.root)))?.index())?;
+    assert!(index.has_conflicts(), "the conflict stands");
     let next = resent(&w, FIRST, verb);
     assert_eq!(next.code, ResultCode::RecoveryRequired);
     assert_eq!(
@@ -730,6 +766,480 @@ fn child_flag_retained() -> Result<(), FixtureError> {
     );
     assert_eq!(child_row(&w, verb, FIRST)?, interrupted);
     Ok(())
+}
+
+/// A conflict resolved by the user, published by nothing yet, with the child
+/// stopped by a transport fault as the same request goes on. It returns the
+/// child and the resolution's commit.
+fn resolved_then_stopped(w: &World, verb: Verb) -> Result<(OperationId, git2::Oid), FixtureError> {
+    conflicted(w, verb)?;
+    let child = child_id(w, verb, FIRST)?;
+    let inspection = fixed(w.service.inspect_synchronization_recovery(&w.root, child))?;
+    let mut results = Vec::new();
+    for path in &inspection.paths {
+        let sides = fixed(w.service.read_synchronization_conflict(&path.token))?;
+        results.push((path.token.clone(), sides.local.ok_or(FixtureError)?));
+    }
+    let resolved = match fixed(w.service.resolve_synchronization(
+        ResolveSynchronizationRequest::new(
+            w.root.clone(),
+            child,
+            OperationId::new(),
+            inspection.observation,
+            results,
+            None,
+        ),
+    ))? {
+        ResolveSynchronizationOutcome::LocalCheckpointComplete { commit_oid } => commit_oid,
+        _ => return Err(FixtureError),
+    };
+    w.server.disconnect_at(FixtureBoundary::Advertisement);
+    let stopped = resent(w, FIRST, verb);
+    w.server.clear_fault();
+    assert_eq!(stopped.code, ResultCode::TransportUnavailable);
+    assert!(reserved(w));
+    Ok((child, resolved))
+}
+
+/// As it really stands, a resolved child owes a reconciliation too. Asked, it
+/// stays, and the same request publishes what the user resolved.
+fn released_resolution_publishes(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    let (_, resolved) = resolved_then_stopped(&w, verb)?;
+    asked(&w.service, FIRST)?;
+    assert_cancelled(&w, FIRST, &resent(&w, FIRST, verb))?;
+    assert!(reserved(&w));
+    assert_finishes(&w, FIRST, verb)?;
+    let bare = fixed(w.bare())?;
+    let served = fixed(bare.refname_to_id(MAIN))?;
+    assert!(fixed(bare.graph_descendant_of(served, resolved))?);
+    Ok(())
+}
+
+/// The serious guard, alone: a released resolution in an unfinished phase, with
+/// no reconciliation owed, which is put there since it is what would otherwise
+/// be retired. A retire would drop the publication of what the user resolved.
+fn stays_released_resolution(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    let (child, _) = resolved_then_stopped(&w, verb)?;
+    fixed(fixed(w.db())?.execute(
+        "UPDATE remote_operation_records
+            SET reconciliation_required = 0, phase = sync_checkpoint
+          WHERE operation_ulid = ?1",
+        [child.to_string()],
+    ))?;
+    asked(&w.service, FIRST)?;
+    assert_eq!(
+        row_of(&w, child)?.0,
+        "fetch_observed",
+        "its checkpoint allows a release"
+    );
+    assert_kept(&w, verb, child)
+}
+
+/// A transport-stopped child, whose row a guard's row then changes by one
+/// column; asked, it is kept as it is, and the reservation with it.
+fn stays_with(verb: Verb, column: &str, value: &str) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    let confirmation = confirmation_of(&w.service, verb, &w.root);
+    w.server.disconnect_at(FixtureBoundary::Advertisement);
+    called(&w.service, FIRST, Some(&confirmation), verb, &w.root);
+    w.server.clear_fault();
+    let child = child_id(&w, verb, FIRST)?;
+    fixed(fixed(w.db())?.execute(
+        &format!("UPDATE remote_operation_records SET {column} = ?2 WHERE operation_ulid = ?1"),
+        [child.to_string(), value.to_owned()],
+    ))?;
+    asked(&w.service, FIRST)?;
+    assert_kept(&w, verb, child)
+}
+
+/// Asked, it's answered `cancelled` and kept, phase and reservation: only the
+/// flag goes, since the cancellation has been answered.
+fn assert_kept(w: &World, verb: Verb, child: OperationId) -> Result<(), FixtureError> {
+    let (phase, flag) = row_of(w, child)?;
+    assert!(flag, "asked of its row");
+    assert_cancelled(w, FIRST, &resent(w, FIRST, verb))?;
+    assert_eq!(row_of(w, child)?, (phase, false), "kept");
+    assert!(reserved(w));
+    Ok(())
+}
+
+fn stays_reconciliation_required(verb: Verb) -> Result<(), FixtureError> {
+    stays_with(verb, "reconciliation_required", "1")
+}
+
+/// A recorded push, at a checkpoint that alone would allow the release.
+fn stays_recorded_push(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    let tip = fixed(w.repo()?.refname_to_id(verb.branch()))?;
+    drop(w);
+    stays_with(verb, "push_oid", &tip.to_string())
+}
+
+/// A local update prepared, whose ref may or may not have moved, alone: the
+/// row has no recorded push, no integration and nothing else to keep it.
+fn stays_local_prepared(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    let confirmation = confirmation_of(&w.service, verb, &w.root);
+    w.server.disconnect_at(FixtureBoundary::Advertisement);
+    called(&w.service, FIRST, Some(&confirmation), verb, &w.root);
+    w.server.clear_fault();
+    let child = child_id(&w, verb, FIRST)?;
+    let tip = fixed(w.repo()?.refname_to_id(verb.branch()))?.to_string();
+    fixed(fixed(w.db())?.execute(
+        "UPDATE remote_operation_records
+            SET phase = 'local_prepared', sync_checkpoint = 'local_prepared',
+                expected_oid = ?2, local_oid = ?2, primary_tracking_oid = ?2
+          WHERE operation_ulid = ?1",
+        [child.to_string(), tip],
+    ))?;
+    asked(&w.service, FIRST)?;
+    assert_eq!(row_of(&w, child)?.0, "local_prepared");
+    assert_kept(&w, verb, child)
+}
+
+/// Runs `at` once, while `run` is held at the first advertisement of a call
+/// that finds a row in `phase`: there is no safe point from there to whatever
+/// that connection is for.
+fn at_advertisement_in_phase<T>(
+    w: &World,
+    phase: &'static str,
+    at: impl FnOnce() + Send,
+    run: impl FnOnce() -> T,
+) -> Result<T, FixtureError> {
+    let server = &w.server;
+    let registry = w.data().join("manyhands.sqlite3");
+    let first = server.hold_advertisement()?;
+    std::thread::scope(|scope| {
+        let holder = scope.spawn(move || -> Result<(), FixtureError> {
+            let mut held = first;
+            loop {
+                held.wait_until_held()?;
+                let found: bool = fixed(fixed(rusqlite::Connection::open(&registry))?.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE phase = ?1)",
+                    [phase],
+                    |row| row.get(0),
+                ))?;
+                if found {
+                    at();
+                    return held.release();
+                }
+                let next = server.hold_advertisement()?;
+                held.release()?;
+                held = next;
+            }
+        });
+        let ran = run();
+        holder.join().map_err(|_| FixtureError)??;
+        Ok(ran)
+    })
+}
+
+/// A clean merge of a peer's commit with a local one, on the branch, with the
+/// child stopped by a transport fault at the push endpoint.
+fn merged_then_stopped(w: &World, verb: Verb) -> Result<OperationId, FixtureError> {
+    let path = item_path(verb);
+    let worktree = verb.worktree(&w.root);
+    let source = fixed(std::fs::read_to_string(worktree.join(&path)))?;
+    diverged(
+        w,
+        verb,
+        &path,
+        format!("{source}\nthe peer's edit\n").as_bytes(),
+    )?;
+    commit_in(
+        &worktree,
+        verb.branch(),
+        &path,
+        source.replacen(TITLE, "the local title", 1).as_bytes(),
+    )?;
+    let confirmation = confirmation_of(&w.service, verb, &w.root);
+    let server = &w.server;
+    let stopped = at_advertisement_in_phase(
+        w,
+        "local_fast_forwarded",
+        move || server.disconnect_at(FixtureBoundary::Advertisement),
+        || called(&w.service, FIRST, Some(&confirmation), verb, &w.root),
+    )?;
+    w.server.clear_fault();
+    assert_eq!(
+        stopped.code,
+        ResultCode::TransportUnavailable,
+        "{:?}",
+        stopped.data
+    );
+    child_id(w, verb, FIRST)
+}
+
+/// A child past its fetch: a local update has been made, whose branch the
+/// same request must carry on from. Kept.
+fn stays_past_its_fetch(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    let child = merged_then_stopped(&w, verb)?;
+    asked(&w.service, FIRST)?;
+    assert_eq!(row_of(&w, child)?.0, "local_fast_forwarded");
+    assert_kept(&w, verb, child)
+}
+
+/// A merge is applied and its checkpoint isn't written, which is a kill between
+/// the two, and is not otherwise reachable: the checkpoint is put back. The
+/// branch holds the merge, so the child isn't one with nothing to find out.
+fn stays_applied_merge_at_fetch_observed(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    let child = merged_then_stopped(&w, verb)?;
+    fixed(fixed(w.db())?.execute(
+        "UPDATE remote_operation_records
+            SET phase = 'fetch_observed', sync_checkpoint = 'fetch_observed'
+          WHERE operation_ulid = ?1",
+        [child.to_string()],
+    ))?;
+    asked(&w.service, FIRST)?;
+    assert_eq!(row_of(&w, child)?.0, "fetch_observed");
+    assert_kept(&w, verb, child)
+}
+
+/// A release the call's own token reaches, with no `request cancel`.
+fn release_by_token(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    let confirmation = confirmation_of(&w.service, verb, &w.root);
+    w.server.disconnect_at(FixtureBoundary::Advertisement);
+    called(&w.service, FIRST, Some(&confirmation), verb, &w.root);
+    w.server.clear_fault();
+    assert!(reserved(&w));
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let before = connections(&w);
+    let stopped = call_with(
+        &w.service,
+        FIRST,
+        None,
+        verb.mutation(&w.root, verb.id()),
+        Provider,
+        &cancel,
+    );
+    assert_cancelled(&w, FIRST, &stopped)?;
+    assert_eq!(connections(&w), before);
+    assert!(!reserved(&w));
+    assert_finishes(&w, FIRST, verb)
+}
+
+/// `request cancel` lands during a child that then ends `remote_branch_deleted`
+/// with no safe point between: the child failed, the parent stops `cancelled`,
+/// and that lets the child go, with no second cancel.
+fn request_during_failed_child(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    fixed(w.sync(w.request(context_target(verb)?)))?;
+    let confirmation = confirmation_of(&w.service, verb, &w.root);
+    fixed(fixed(w.bare()?.find_reference(verb.branch()))?.delete())?;
+    let elsewhere = fixed(RepositoryService::open_at(&w.data()))?;
+    let stopped = at_advertisement_in_phase(
+        &w,
+        "fetch_observed",
+        move || asked(&elsewhere, FIRST).expect("asked"),
+        || called(&w.service, FIRST, Some(&confirmation), verb, &w.root),
+    )?;
+    assert_cancelled(&w, FIRST, &stopped)?;
+    assert!(!reserved(&w), "the cancellation let the child go");
+    republished(&w, verb)?;
+    assert_finishes(&w, FIRST, verb)
+}
+
+/// The same with the call's token, which no boundary of the child reads: the
+/// child ends `remote_branch_deleted`, and only the parent then stops.
+fn token_during_failed_child(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    fixed(w.sync(w.request(context_target(verb)?)))?;
+    let confirmation = confirmation_of(&w.service, verb, &w.root);
+    fixed(fixed(w.bare()?.find_reference(verb.branch()))?.delete())?;
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+    let stopped = at_advertisement_in_phase(
+        &w,
+        "fetch_observed",
+        move || token.cancel(),
+        || {
+            call_with(
+                &w.service,
+                FIRST,
+                Some(&confirmation),
+                verb.mutation(&w.root, verb.id()),
+                Provider,
+                &cancel,
+            )
+        },
+    )?;
+    assert_cancelled(&w, FIRST, &stopped)?;
+    assert!(!reserved(&w), "the cancellation let the child go");
+    assert_eq!(child_row(&w, verb, FIRST)?.0, "cancelled");
+    republished(&w, verb)?;
+    assert_finishes(&w, FIRST, verb)
+}
+
+/// Item republish, previewed and confirmed: `ok`.
+fn republished(w: &World, verb: Verb) -> Result<(), FixtureError> {
+    let republish = Mutation::ItemRepublish(ItemRepublishInput {
+        root: w.root.clone(),
+        kind: match verb {
+            Verb::Promote => AuthoringKind::Document,
+            Verb::Close => AuthoringKind::Ticket,
+        },
+        id: fixed(verb.id().parse())?,
+    });
+    let preview = w.service.prepare(&republish);
+    let consent = preview
+        .data
+        .as_ref()
+        .and_then(PrepareDataDto::preview)
+        .ok_or(FixtureError)?
+        .confirmation_id
+        .clone();
+    let done = w.service.execute(
+        MutationCall {
+            request_id: request(REPUBLISH),
+            confirmation: Some(ConfirmationId::parse(&consent).unwrap()),
+            mutation: republish,
+        },
+        &mut SessionCredentials::new(Provider),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert!(fixed(w.bare())?.find_reference(verb.branch()).is_ok());
+    Ok(())
+}
+
+/// A refusal of the deletion itself, with cancellation asked, keeps its own
+/// answer: it isn't the cancellation that stopped it.
+fn deletion_rejected_keeps_its_answer(verb: Verb) -> Result<(), FixtureError> {
+    let mut w = remote(verb)?;
+    fixed(w.sync(w.request(context_target(verb)?)))?;
+    w.server.reject_context_deletion(true)?;
+    fixed(fixed(w.bare())?.set_head(verb.branch()))?;
+    stopped_at(&mut w, verb, FailurePoint::AfterPublication)?;
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+    let stopped = call_with(
+        &w.service,
+        FIRST,
+        None,
+        verb.mutation(&w.root, verb.id()),
+        Asking {
+            asks: || token.cancel(),
+        },
+        &cancel,
+    );
+    assert_eq!(stopped.code, ResultCode::PushRejected, "{:?}", stopped.data);
+    assert_eq!(
+        lifecycle_of(&stopped).cleanup_pending,
+        Some(LifecycleCleanupPendingReason::RemoteDeletionRejected)
+    );
+    Ok(())
+}
+
+/// So does a transport failure of the deletion: what became of it is not known,
+/// and the cancellation isn't what stopped it.
+fn deletion_transport_keeps_its_answer(verb: Verb) -> Result<(), FixtureError> {
+    let mut w = remote(verb)?;
+    stopped_at(&mut w, verb, FailurePoint::AfterPublication)?;
+    w.server.disconnect_at(FixtureBoundary::Advertisement);
+    let cancel = CancellationToken::new();
+    let token = cancel.clone();
+    let stopped = call_with(
+        &w.service,
+        FIRST,
+        None,
+        verb.mutation(&w.root, verb.id()),
+        Asking {
+            asks: || token.cancel(),
+        },
+        &cancel,
+    );
+    w.server.clear_fault();
+    assert_eq!(
+        stopped.code,
+        ResultCode::TransportUnavailable,
+        "{:?}",
+        stopped.data
+    );
+    assert_eq!(
+        lifecycle_of(&stopped).cleanup_pending,
+        Some(LifecycleCleanupPendingReason::RemoteDeletionTransport)
+    );
+    assert_finishes(&w, FIRST, verb)
+}
+
+/// A retained conflict whose branch is then deleted at the remote never answers
+/// `remote_branch_deleted`: the conflict is what it answers, with no reservation
+/// and no `request.cancel` offered that would not release it.
+fn retained_child_remote_branch_deleted(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    conflicted(&w, verb)?;
+    fixed(fixed(w.bare()?.find_reference(verb.branch()))?.delete())?;
+    let stopped = resent(&w, FIRST, verb);
+    assert_eq!(stopped.code, ResultCode::RecoveryRequired);
+    assert_eq!(
+        actions(&stopped),
+        [
+            RecoveryActionKind::RequestRetry,
+            RecoveryActionKind::RepoInspect
+        ]
+    );
+    assert!(!reserved(&w));
+    Ok(())
+}
+
+// A flag that was not taken, or can't be read.
+
+/// The real window of a kill: a run that answered `cancelled` and didn't take
+/// the flag, which its read's failure stands in for. The resend answers
+/// `cancelled` once more, and the one after continues (R-20).
+fn answered_without_taking_the_flag(verb: Verb) -> Result<(), FixtureError> {
+    let mut w = remote(verb)?;
+    stopped_at(&mut w, verb, FailurePoint::AfterContextSync)?;
+    asked(&w.service, FIRST)?;
+    let failing = fixed(RepositoryService::open_at_with_failure_point_for_testing(
+        &w.data(),
+        FailurePoint::BeforeRequestCancellationRead,
+    ))?;
+    // The token answers each probe, so the one read is the taking.
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+    let answered = call_with(
+        &failing,
+        FIRST,
+        None,
+        verb.mutation(&w.root, verb.id()),
+        Provider,
+        &cancel,
+    );
+    assert_eq!(answered.code, ResultCode::Cancelled, "{:?}", answered.data);
+    assert!(record(&w, FIRST).ok_or(FixtureError)?.cancel_requested);
+    assert_cancelled(&w, FIRST, &resent(&w, FIRST, verb))?;
+    assert_finishes(&w, FIRST, verb)
+}
+
+/// A flag that can't be read at a safe point isn't taken for "no": the run stops
+/// there, its record kept, with nothing done past it. The observer's half is a
+/// unit row, `an_unreadable_flag_stops_a_child`, since a safe point always
+/// reads first here and the failure point fires once.
+fn flag_unreadable_at_a_safe_point(verb: Verb) -> Result<(), FixtureError> {
+    let mut w = remote(verb)?;
+    stopped_at(&mut w, verb, FailurePoint::AfterContextSync)?;
+    let failing = fixed(RepositoryService::open_at_with_failure_point_for_testing(
+        &w.data(),
+        FailurePoint::BeforeRequestCancellationRead,
+    ))?;
+    let stopped = called(&failing, FIRST, None, verb, &w.root);
+    assert_eq!(
+        stopped.code,
+        ResultCode::RecoveryRequired,
+        "{:?}",
+        stopped.data
+    );
+    assert_eq!(merges_on_primary(&w.repo()?)?, 0);
+    assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
+    assert_finishes(&w, FIRST, verb)
 }
 
 // R-24.

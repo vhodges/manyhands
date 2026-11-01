@@ -1222,6 +1222,78 @@ impl RepositoryService {
         })
     }
 
+    /// Answers a cancellation that stopped a promotion's or a closure's parent
+    /// for its child `child`, in one immediate transaction, so that no owner
+    /// passes a checkpoint between the guards and the write. It returns whether
+    /// the child was let go (decision 18).
+    ///
+    /// A child with nothing to lose ends `cancelled` here, with no connection,
+    /// and the reservation is free: unfinished, under the current generation,
+    /// with no authority, no retained or released resolution, no reconciliation
+    /// owed, no integration begun, no publication attempt or recorded push, and
+    /// a checkpoint no further than its fetch. Any other child keeps all of that
+    /// for the same request, and only the flag `request cancel` set on its row
+    /// goes, since the cancellation has been answered: left, it would end the
+    /// row at the next restart.
+    ///
+    /// Whether an owner is alive isn't known. One that is finds its row ended,
+    /// or goes on, and is fenced by a restart as for any other retry.
+    pub(in super::super) fn release_promotion_child(
+        &self,
+        root: &Path,
+        child: OperationId,
+        execution: &crate::repository::promotion::record::ChildExecution,
+    ) -> Result<bool, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            execution.validate(tx, id, child)?;
+            let Some(record) = state::read_operation(tx, id, child)? else {
+                return Ok(false);
+            };
+            if !active(record.phase) {
+                return Ok(false);
+            }
+            use state::SynchronizationCheckpoint as C;
+            let window = state::latest_integration_window(tx, &record)?;
+            let nothing_to_lose = record.authority.is_none()
+                && record.generation == state::generation(tx, id)?
+                && !record.reconciliation_required
+                && record.sync_evidence.push_oid.is_none()
+                && matches!(
+                    record.sync_checkpoint,
+                    None | Some(C::FetchPrepared | C::FetchObserved)
+                )
+                && !retains_promotion_child(tx, &record)?
+                && !promotion_child_has_resolution(tx, &record)?
+                && window.intent.is_none()
+                && state::integration_step_in_window(tx, record.id, window.number, 0)?.is_none()
+                && state::integration_step_in_window(tx, record.id, window.number, 1)?.is_none()
+                && state::latest_publication_attempt(tx, &record)?.is_none();
+            if !nothing_to_lose {
+                tx.execute(
+                    "UPDATE remote_operation_records SET cancel_requested=0,updated_at=max(updated_at,?2) WHERE id=?1",
+                    params![record.id, now()],
+                )
+                .map_err(|_| state::recovery_required())?;
+                return Ok(false);
+            }
+            tx.execute(
+                "UPDATE remote_operation_records SET cancel_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",
+                params![record.id, now()],
+            )
+            .map_err(|_| state::recovery_required())?;
+            let record =
+                state::read_operation(tx, id, child)?.ok_or_else(state::recovery_required)?;
+            acknowledge(
+                tx,
+                &record,
+                record
+                    .completed_step
+                    .unwrap_or(RemoteOperationSafePoint::BeforeFetch),
+            )?;
+            Ok(true)
+        })
+    }
+
     pub fn cancel_remote_operation(
         &self,
         root: &Path,

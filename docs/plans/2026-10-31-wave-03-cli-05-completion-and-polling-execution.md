@@ -476,3 +476,47 @@ The owner ruled on Task 2c's stop: "Runner releases the child (Recommended)".
 **Seen first.** Against the runner before this, `walk`, `child_flag_unowned`, `publication_child_released` and `c5_lifecycle_child_remote_branch_deleted` failed by assertion, both verbs. `child_push_unknown_stays` and `new_id_after_integration` passed at once: they pin what must not change. The unit row was rewritten with the fix.
 
 **Verified on the final code, all exit 0.** `c5_cancel_` 55 cases (889 s), `c5_lifecycle` 126 (1034 s), `document_promotion` 74 (749 s), `ticket_closure` 73 (668 s), `--lib mutation` 141 (34 s), `cargo fmt --check`, clippy `-D warnings` (28 s). `src/repository/remote/` was not touched, so the three lib filters were not rerun for this change.
+
+#### Task 2c review fixes (controller's rulings, within decision 18)
+
+**1. Atomic release.** `release_promotion_child` evaluates the guards and ends the row in one immediate transaction, with `acknowledge` inside it, so no flag is left if the ack would fail, and no owner passes a checkpoint between. `retire_child` is gone: `child()`'s retry is back as it was, and the release makes no `io` call. `release_child`'s comment says there's no liveness proof, and that a live owner is fenced. The design's Known Limits has the second live process.
+
+**A row answered otherwise, and I fixed it, for review.** `request cancel` also sets the flag on a child's row (`lifecycle_record.rs:961`). A kept child held that flag, so the next restart ended the row and answered `recovery_required` once, then `ok`. On a real resolved child that made "stays" false. So the same transaction clears the flag on a kept child, since the cancellation has been answered. The rows' `assert_kept` pins phase unchanged and flag cleared. `released_resolution_publishes` then finishes on the next resend, and primary at the remote holds the resolution. This clearing is beyond the ruling's wording.
+
+**2. The guards, each with its conjunct removed (`--test mutation_remote`, closure rows).**
+
+| Removed | Row | With it removed |
+| --- | --- | --- |
+| `reconciliation_required` | `stays_reconciliation_required` | failed by assertion |
+| `push_oid` | `stays_recorded_push` | failed by assertion |
+| the checkpoint match | `stays_local_prepared` | failed by assertion |
+| window intent and steps | `stays_applied_merge_at_fetch_observed` | failed by assertion |
+| resolution alone | `stays_released_resolution` | **passed**: the resolution's integration steps also keep it |
+| resolution and steps together | `stays_released_resolution` | failed by assertion |
+
+So the resolution guard is second to the step guard on this state, and either alone keeps it. Not exercised by removal: `retains_promotion_child`, which `retained_conflict_is_kept` can't show since its row is already `interrupted`; the publication attempt; the generation.
+
+These rows change a row by SQL, except `stays_past_its_fetch` and `released_resolution_publishes`, which are real. `stays_past_its_fetch` doesn't finish: a peer's commit changes what the preview consented to, so the next resend is `external_change`, as it is with no cancellation. Also added: `release_by_token`, and a promote variant of the retained conflict, renamed `retained_conflict_is_kept`.
+
+**3. After a failed child.** `release_child` also runs at the context child's failure and in the primary's `Err` arm, when cancellation is asked.
+
+- `token_during_failed_child` lands the token at the first advertisement after `fetch_observed`. No boundary reads a token, so the child ends `remote_branch_deleted`. With the context arm's release call removed it failed by assertion (`!reserved`), and it passes with it restored.
+- **`request_during_failed_child` passed against the code before this fix.** A `request cancel` also flags the child's row, and I did not trace where the child acts on that, so this row may not reach the failed path. It pins the route, not the arm.
+- The primary's `Err` arm has no row of its own.
+
+**4. Deletion mapping: narrowed.** It can be told apart. Only `Repository(RecoveryRequired)`, which is what the boundary gives, maps to `Pending{Cancelled}`. `deletion_transport_keeps_its_answer` failed against the wider mapping and passes. `deletion_rejected_keeps_its_answer` passed against both, so it doesn't prove the narrowing: the rejection reaches a different path. **Limit:** the boundary also runs after the transport call (`sync.rs` `with_scoped_action_remote`), so a cancellation landing just then answers `cancelled` after a deletion went through. The next call's guarded delete reconciles it. I did not write a row for that.
+
+**5.** E-17 names the unit row's rewrite.
+
+**6. A killed process.** `answered_without_taking_the_flag` is the real window: the token answers each probe, so the only flag read is the taking, and its one-shot failure leaves the flag. It answers `cancelled`, then `cancelled` once more, then finishes. The old row is renamed `killed_before_the_domain_call`. `flag_unreadable_at_a_safe_point` answers `recovery_required`, with no merge, and the same request finishes. The observer's `Stop` can't be reached that way, since the failure point fires once and a safe point reads first, so it's the unit row `an_unreadable_flag_stops_a_child`, which hides the table.
+
+**7. What the suspected cases showed.**
+
+- **A retained child hitting `remote_branch_deleted`: doesn't arise on this route.** A retained conflict whose branch is then deleted answers `recovery_required`, `request.retry`, `repo.inspect`, with no reservation, so no cancellation is offered (`retained_child_remote_branch_deleted`). I checked that one route only.
+- **`offering_cancel` with nothing held:** it drops `request.cancel`, leaving `repo.inspect`. The unit row `a_cancellation_is_not_offered_when_nothing_is_held` reaches it through a repository that isn't registered, so the read fails. The branch for a read of no reservation is the same code, by reading, and isn't run.
+- **A clean `Applied` merge at `fetch_observed`.** `checkpoint_synchronization_merge_applied` moves the row to `local_fast_forwarded` in one transaction, after `integrate_divergence` has moved the branch, so this state exists only for a kill between the two. The merge is on the branch, so nothing is lost if retired, but it isn't proven to have nothing to find out, so the guard keeps it. The row reaches the state by putting the checkpoint back by SQL.
+- `close_ticket_observed`'s path is tidied.
+
+**Not run:** `--test remote_synchronization`. The reservation change is one added function, which only `release_child` calls.
+
+**Verified on the final code, all exit 0.** `c5_cancel_` 86 cases (1382 s), `c5_lifecycle` 126 (1031 s), `document_promotion` 74 (743 s), `ticket_closure` 73 (665 s), `--lib mutation` 142 (7 s), `--lib remote` 478 (176 s), `--lib local_sync` 164 (293 s), `--lib integration` 26 (16 s), `cargo fmt --check`, clippy `-D warnings` (11 s). `an_unreadable_flag_stops_a_child`, which those filters don't select, passed on its own (1 test). No lib source changed after it, apart from the removal above, which was restored.
