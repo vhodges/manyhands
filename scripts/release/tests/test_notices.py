@@ -35,6 +35,11 @@ CURLY_HEADERS = tuple(
         'Copyright (c) 2026 Original Authors\n',
     )
 )
+AUTHOR_HEADERS = tuple(
+    'Copyright (c) 2024 ' + left + label + right + '\n'
+    for left, right in (('<', '>'), ('[', ']'), ('{', '}'), ('{{', '}}'))
+    for label in ('author', 'authors', '\n AUTHOR \n', '\n AUTHORS \n')
+)
 ISC_GRANT = '''Permission to use, copy, modify, and/or distribute this software for any
 purpose with or without fee is hereby granted, provided that the above
 copyright notice and this permission notice appear in all copies.
@@ -477,6 +482,45 @@ class NoticeTests(unittest.TestCase):
             with self.subTest(header=header):
                 self.assertFalse(named_attribution(header))
 
+    def test_author_template_headers_are_not_named_attribution(self):
+        from notices import named_attribution
+        for header in AUTHOR_HEADERS:
+            with self.subTest(header=header):
+                self.assertFalse(named_attribution(header))
+
+    def test_author_templates_do_not_supply_a_complete_original_grant(self):
+        original = self.crate / 'LICENSE'
+        for header in AUTHOR_HEADERS:
+            with self.subTest(header=header):
+                original.write_text(header + '\n' + MIT_GRANT, encoding='utf-8')
+                inventory = gather_disclosures(self.repo, [self.package], set(), self.output)
+                with self.assertRaisesRegex(ValueError, 'unresolved.*option-ext'):
+                    self.validate_mit(inventory)
+
+    def test_author_canonical_templates_require_original_attribution(self):
+        from notices import validate_attributions
+        inventory = [{'name': 'option-ext', 'version': '0.2.0', 'notices': []}]
+        for header in AUTHOR_HEADERS:
+            with self.subTest(header=header):
+                data = {'licenses': [{'id': 'MIT', 'text': header + '\n' + MIT_GRANT,
+                                      'used_by': [{'crate': self.package}]}]}
+                with self.assertRaisesRegex(ValueError, 'unresolved.*option-ext'):
+                    validate_attributions(data, inventory, self.output)
+
+    def test_author_templates_in_bound_and_scoped_grants_are_rejected(self):
+        for scoped in (False, True):
+            for header in AUTHOR_HEADERS:
+                with self.subTest(scoped=scoped, header=header):
+                    raw = (header + '\n' + MIT_GRANT).replace('\n', '\r\n').encode('utf-8')
+                    if scoped:
+                        original, _ = self.scoped_supplemental(selected=raw)
+                    else:
+                        original, _ = self.supplemental(raw.decode('utf-8'))
+                    inventory = gather_disclosures(self.repo, [self.package], set(), self.output)
+                    with self.assertRaisesRegex(ValueError, 'unresolved.*option-ext'):
+                        self.validate_mit(inventory)
+                    self.assertEqual((self.output / inventory[0]['supplemental'][0]['path']).read_bytes(), original.read_bytes())
+
     def test_curly_delimiters_recognize_only_the_existing_placeholder_vocabulary(self):
         from notices import named_attribution
         for left, right in (('{', '}'), ('{{', '}}')):
@@ -488,7 +532,8 @@ class NoticeTests(unittest.TestCase):
 
     def test_ordinary_holders_including_literal_curly_braces_remain_named_attribution(self):
         from notices import named_attribution
-        for holder in ('Original Authors', 'Zoë García', '{Original Authors}', '{{Original Authors}}',
+        for holder in ('Original Authors', 'Original Author', 'The authors of Example',
+                       '{Authors of Example}', 'Zoë García', '{Original Authors}', '{{Original Authors}}',
                        'Yearwood and Fullname Ltd.', '{yearly} {fullnames}'):
             with self.subTest(holder=holder):
                 self.assertTrue(named_attribution('Copyright © 2026 ' + holder))
