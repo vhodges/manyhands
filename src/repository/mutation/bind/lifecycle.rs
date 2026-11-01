@@ -1041,7 +1041,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         let (made_ready, made_ready_state) = self.made_ready(
             service,
             &root,
-            if effects.integration != IntegrationEffect::Complete {
+            if !parent_integrated(&root, primary, &view) {
                 MadeReadyFrom::BeforeIntegration
             } else if view.checkpoint.is_none()
                 && view.integration_kind == Some(IntegrationKind::AlreadyContained)
@@ -1505,17 +1505,16 @@ pub(super) fn recorded_effects<V: LifecycleVerb>(
     }
 }
 
-/// The effects a parent shows, read from its step: a commit named by the
-/// record is not yet an effect (fact 41), until primary holds it, which a kill
-/// between the ref and the record leaves at `integrating`. A superseded parent
-/// had reached cleanup, and only that is ever superseded.
-fn parent_effects<V: LifecycleVerb>(
-    service: &RepositoryService,
+/// Whether primary holds what the parent integrates, read from its step: a
+/// commit named by the record is not yet there (fact 41), until primary holds
+/// it, which a kill between the ref and the record leaves at `integrating`. A
+/// superseded parent had reached cleanup, and only that is ever superseded.
+fn parent_integrated(
     root: &Path,
     primary: Option<&str>,
     parent: &ParentView<LifecycleBlocker>,
-) -> Effects {
-    let integrated = match parent.step {
+) -> bool {
+    match parent.step {
         ParentStep::Integrated
         | ParentStep::Published
         | ParentStep::PublicationPending
@@ -1529,7 +1528,36 @@ fn parent_effects<V: LifecycleVerb>(
             .integration
             .is_some_and(|commit| evidence::still_reachable(root, primary, commit)),
         ParentStep::Confirmed | ParentStep::ContextSynchronized | ParentStep::Abandoned => false,
-    };
+    }
+}
+
+/// The commit a child's push is known to have put on the remote.
+fn landed_push(
+    service: &RepositoryService,
+    scope: &ScopeKey,
+    child: OperationId,
+) -> Option<git2::Oid> {
+    service
+        .stored_push(scope, child)
+        .ok()
+        .flatten()
+        .filter(|stored| stored.accepted)
+        .map(|stored| stored.commit)
+}
+
+/// The effects a parent shows: its own, by its step, and what its children made
+/// that stays whatever stopped it (decision 25). Before integration that is the
+/// context child's merge on the context's branch and its landed push. After it,
+/// the primary child's landed push, which the parent may not have recorded yet.
+/// Nothing is claimed of a row that can't be read.
+fn parent_effects<V: LifecycleVerb>(
+    service: &RepositoryService,
+    root: &Path,
+    primary: Option<&str>,
+    parent: &ParentView<LifecycleBlocker>,
+) -> Effects {
+    let integrated = parent_integrated(root, primary, parent);
+    let scope = ScopeKey::for_repository(root);
     // A checkpoint is written once the context's branch holds it, or primary
     // once that branch is gone: never whatever is checked out.
     let branch = context_names(root, &V::KIND, &parent.item_id.to_string()).branch_ref;
@@ -1548,26 +1576,59 @@ fn parent_effects<V: LifecycleVerb>(
     } else {
         CheckpointEffect::NotRequested
     };
-    if !integrated {
-        return Effects {
-            checkpoint,
-            ..Effects::not_requested()
-        };
-    }
-    Effects {
-        write: WriteEffect::NotRequested,
-        checkpoint,
-        discovery: if service
+    let discovery = || {
+        if service
             .repository_snapshot(root)
             .is_ok_and(|snapshot| !snapshot.refresh_required)
         {
             DiscoveryEffect::Current
         } else {
             DiscoveryEffect::Pending
-        },
+        }
+    };
+    let [context_child, primary_child] = parent.children;
+    if !integrated {
+        let on_context = context_child.zip(scope.as_ref());
+        let pushed = on_context.and_then(|(child, scope)| landed_push(service, scope, child));
+        let merged = on_context
+            .and_then(|(child, scope)| super::sync::merge_made_on(service, scope, child, &branch));
+        if pushed.is_none() && merged.is_none() {
+            return Effects {
+                checkpoint,
+                ..Effects::not_requested()
+            };
+        }
+        return Effects {
+            checkpoint,
+            discovery: discovery(),
+            publication: if pushed.is_some() {
+                PublicationEffect::Published
+            } else {
+                PublicationEffect::NotRequested
+            },
+            integration: if merged.is_some() {
+                IntegrationEffect::Complete
+            } else {
+                IntegrationEffect::NotRequested
+            },
+            commit_oid: pushed.or(merged).map(|oid| oid.to_string()),
+            ..Effects::not_requested()
+        };
+    }
+    Effects {
+        write: WriteEffect::NotRequested,
+        checkpoint,
+        discovery: discovery(),
         publication: match parent.publication {
             Some(PublicationCategory::Published) => PublicationEffect::Published,
             Some(PublicationCategory::AlreadyCurrent) => PublicationEffect::Current,
+            _ if primary_child
+                .zip(scope.as_ref())
+                .and_then(|(child, scope)| landed_push(service, scope, child))
+                .is_some() =>
+            {
+                PublicationEffect::Published
+            }
             _ => PublicationEffect::Pending,
         },
         integration: IntegrationEffect::Complete,

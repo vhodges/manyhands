@@ -13,8 +13,7 @@ id: "01M69C6RZ2K0Q8DWPXA3EY81DH"
 ## Status
 
 **Approved, 2026-10-31.** The owner approved the documents at `cddacc54` ("Docs are approved. Approved to proceed. Use sub agent drive development."), authorizing implementation, subagent-driven. The approval takes owner questions 1 and 3–6 at their written recommendations, named edits E-1 to E-15 and the per-command commit identity. Pushes beyond this branch, a PR, the merge, branch deletion, closure, `ticket save`, native CI and cleanup stay separately gated. Reviewed in three rounds; the edits after round 3 had no independent review.
-Nothing here is implemented. Planning ran the checkpoint gate's check, format
-and clippy commands on the merged baseline, and no tests.
+Implementation is in progress: Part A's library work is on this branch and under review, and Parts B and C are not begun.
 
 - [Design](../plans/2026-10-31-wave-03-cli-05-completion-and-polling-design.md)
 - [Implementation plan](../plans/2026-10-31-wave-03-cli-05-completion-and-polling-implementation.md)
@@ -299,6 +298,15 @@ Also required:
     applies the same identity check before any write.
 24. **Poll overlap answers `busy` (2026-11-01).** "Answer `busy`": a poll's fetch meeting a held
     repository lease is told apart from a protocol failure, and answers `busy`, exit 5, retryable.
+
+25. **A stop reports what its child did (2026-11-01).** "Fix the code": the answer reads the child's row
+    too, so that a merge on the context branch or a landed push is reported, and it exits 4. `parent_effects`
+    reads the child's durable state, and `recorded_effects` reads it through that.
+26. **Local synchronization's identity (2026-11-01).** "Fix it in C5": an unusable identity answers as a
+    missing one, `identity_required`, before any write in `src/repository/local_sync/run.rs`. A row first
+    establishes whether a trimmed or bracketed identity is altered there.
+27. **One verb for rows of shared code (2026-11-01).** "One verb for those rows": rows reaching only shared
+    `LifecycleBinding` code run for one verb, each noting why. A row with a verb's own branch keeps both.
 
 **Owner questions, approved at these recommendations on 2026-10-31.**
 

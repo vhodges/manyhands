@@ -8,7 +8,7 @@ use std::path::Path;
 
 use super::*;
 use lifecycle_world::*;
-use results::{CleanupEffect, IntegrationEffect};
+use results::{CleanupEffect, FailureClass, IntegrationEffect};
 
 macro_rules! both {
     ($( $name:literal => $row:expr ),+ $(,)?) => {
@@ -62,6 +62,10 @@ const BOTH: &[ssh_harness::Case] = both![
     "deletion_transport_keeps_its_answer" => deletion_transport_keeps_its_answer,
     "retained_child_remote_branch_deleted" => retained_child_remote_branch_deleted,
     "walk_remote_branch_deleted" => walk_remote_branch_deleted,
+    "child_merged_then_refused_push" => child_merged_then_refused_push,
+    "child_push_landed_then_cancelled" => child_push_landed_then_cancelled,
+    "supersede_after_a_cancelled_answer" => supersede_after_a_cancelled_answer,
+    "supersede_straight_after_the_cancel" => supersede_straight_after_the_cancel,
 ];
 
 const ONE: &[ssh_harness::Case] = &[
@@ -74,6 +78,17 @@ const ONE: &[ssh_harness::Case] = &[
     }),
     ("c5_cancel_stage_after_checkpoint_close", || {
         stage(Verb::Close, FailurePoint::AfterClosureCheckpoint, false)
+    }),
+    // The runner's rules for a fenced child are the same for either verb, and
+    // these stagings are slow.
+    ("c5_cancel_fenced_retained_conflict_close", || {
+        fenced_retained_conflict(Verb::Close)
+    }),
+    ("c5_cancel_fenced_released_resolution_close", || {
+        fenced_released_resolution(Verb::Close)
+    }),
+    ("c5_cancel_fenced_past_publication_close", || {
+        fenced_past_publication(Verb::Close)
     }),
 ];
 
@@ -99,6 +114,7 @@ pub(crate) const CASES: &[ssh_harness::Case] = &joined::<{ BOTH.len() + ONE.len(
 const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ1";
 const SECOND: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ2";
 const REPUBLISH: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ3";
+const POLL: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ4";
 
 fn confirmation_of(service: &RepositoryService, verb: Verb, root: &Path) -> String {
     let envelope = service.prepare(&verb.mutation(root, verb.id()));
@@ -936,9 +952,9 @@ fn at_advertisement_in_phase<T>(
     })
 }
 
-/// A clean merge of a peer's commit with a local one, on the branch, with the
-/// child stopped by a transport fault at the push endpoint.
-fn merged_then_stopped(w: &World, verb: Verb) -> Result<OperationId, FixtureError> {
+/// A peer's commit and a local one on the branch, which a child will merge
+/// cleanly. It returns the confirmation of a preview taken before that.
+fn merges_cleanly(w: &World, verb: Verb) -> Result<String, FixtureError> {
     let path = item_path(verb);
     let worktree = verb.worktree(&w.root);
     let source = fixed(std::fs::read_to_string(worktree.join(&path)))?;
@@ -954,7 +970,13 @@ fn merged_then_stopped(w: &World, verb: Verb) -> Result<OperationId, FixtureErro
         &path,
         source.replacen(TITLE, "the local title", 1).as_bytes(),
     )?;
-    let confirmation = confirmation_of(&w.service, verb, &w.root);
+    Ok(confirmation_of(&w.service, verb, &w.root))
+}
+
+/// A clean merge of a peer's commit with a local one, on the branch, with the
+/// child stopped by a transport fault at the push endpoint.
+fn merged_then_stopped(w: &World, verb: Verb) -> Result<OperationId, FixtureError> {
+    let confirmation = merges_cleanly(w, verb)?;
     let server = &w.server;
     let stopped = at_advertisement_in_phase(
         w,
@@ -1296,6 +1318,220 @@ fn walk_remote_branch_deleted(verb: Verb) -> Result<(), FixtureError> {
     assert_eq!(republished.code, ResultCode::Ok, "{:?}", republished.data);
     assert!(fixed(w.bare())?.find_reference(verb.branch()).is_ok());
     assert_finishes(&w, FIRST, verb)
+}
+
+// What a child did before the parent stopped (decision 25).
+
+/// The child merges on the context's branch and its push is refused. The merge
+/// stays, whatever stopped the request, so the answer reports it and exits 4,
+/// with nothing on primary, and so does a call that only finds the record.
+fn child_merged_then_refused_push(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    let confirmation = merges_cleanly(&w, verb)?;
+    // The served branch is what the receiver refuses to update.
+    fixed(fixed(w.bare())?.set_head(verb.branch()))?;
+    w.server.reject_primary_updates(true)?;
+    let stopped = called(&w.service, FIRST, Some(&confirmation), verb, &w.root);
+    assert_eq!(stopped.code, ResultCode::PushRejected, "{:?}", stopped.data);
+    assert_eq!(stopped.outcome, Outcome::Partial, "{:?}", stopped.effects);
+    assert_eq!(stopped.failure_class(), Some(FailureClass::Incomplete));
+    let repo = w.repo()?;
+    let merge = fixed(repo.refname_to_id(verb.branch()))?;
+    assert_eq!(fixed(repo.find_commit(merge))?.parent_count(), 2);
+    assert_eq!(stopped.effects.integration, IntegrationEffect::Complete);
+    assert_eq!(stopped.effects.commit_oid, Some(merge.to_string()));
+    assert_eq!(stopped.effects.publication, PublicationEffect::NotRequested);
+    assert_eq!(merges_on_primary(&repo)?, 0, "nothing reached primary");
+    // Another request under its ID finds the record, and is shown what it did.
+    let mismatch = call_with(
+        &w.service,
+        FIRST,
+        None,
+        verb.mutation(&w.root, "01ARZ3NDEKTSV4RRFFQ69G5FJ9"),
+        Provider,
+        &CancellationToken::new(),
+    );
+    assert_eq!(mismatch.code, ResultCode::RequestMismatch);
+    assert_eq!(mismatch.outcome, Outcome::Partial);
+    assert_eq!(mismatch.effects, stopped.effects);
+    Ok(())
+}
+
+/// The child's push lands and the parent is then cancelled at its next safe
+/// point: the push is reported, and the answer stays `cancelled`, exit 130,
+/// which the RFC gives a cancellation even after a durable effect.
+fn child_push_landed_then_cancelled(verb: Verb) -> Result<(), FixtureError> {
+    let mut w = remote(verb)?;
+    stopped_at(&mut w, verb, FailurePoint::AfterContextSync)?;
+    let landed = fixed(w.bare()?.refname_to_id(verb.branch()))?;
+    assert_eq!(landed, fixed(w.repo()?.refname_to_id(verb.branch()))?);
+    asked(&w.service, FIRST)?;
+    let stopped = resent(&w, FIRST, verb);
+    assert_cancelled(&w, FIRST, &stopped)?;
+    assert_eq!(stopped.effects.publication, PublicationEffect::Published);
+    assert_eq!(stopped.effects.commit_oid, Some(landed.to_string()));
+    assert_eq!(stopped.effects.integration, IntegrationEffect::NotRequested);
+    assert_eq!(stopped.failure_class(), Some(FailureClass::Cancelled));
+    assert_eq!(merges_on_primary(&w.repo()?)?, 0);
+    assert_finishes(&w, FIRST, verb)
+}
+
+// A cancellation beside a supersedable stop.
+
+/// Stopped in cleanup on a file the owner left in the worktree, with the request
+/// accepted. It returns that file.
+fn stopped_on_context_changed(
+    w: &mut World,
+    verb: Verb,
+) -> Result<std::path::PathBuf, FixtureError> {
+    stopped_at(w, verb, FailurePoint::AfterPublication)?;
+    let untracked = verb.worktree(&w.root).join("untracked.txt");
+    fixed(std::fs::write(&untracked, b"the owner's\n"))?;
+    assert_context_changed(&resent(w, FIRST, verb));
+    Ok(untracked)
+}
+
+fn assert_context_changed(answer: &Envelope<MutationDataDto>) {
+    assert_eq!(
+        answer.code,
+        ResultCode::RecoveryRequired,
+        "{:?}",
+        answer.data
+    );
+    assert_eq!(
+        lifecycle_of(answer).cleanup_pending,
+        Some(LifecycleCleanupPendingReason::ContextChanged)
+    );
+}
+
+/// The file gone and what was published observed, so that a preview is ready,
+/// a new ID answers.
+fn new_id_answer(
+    w: &World,
+    verb: Verb,
+    untracked: &Path,
+) -> Result<Envelope<MutationDataDto>, FixtureError> {
+    fixed(std::fs::remove_file(untracked))?;
+    fixed(w.sync(w.primary()))?;
+    let confirmation = confirmation_of(&w.service, verb, &w.root);
+    Ok(called(
+        &w.service,
+        SECOND,
+        Some(&confirmation),
+        verb,
+        &w.root,
+    ))
+}
+
+/// A `cancelled` answer overwrites the supersedable reason, so a new ID is `busy`
+/// until one more resend of the same request finds the reason again.
+fn supersede_after_a_cancelled_answer(verb: Verb) -> Result<(), FixtureError> {
+    let mut w = remote(verb)?;
+    let untracked = stopped_on_context_changed(&mut w, verb)?;
+    asked(&w.service, FIRST)?;
+    assert_cancelled(&w, FIRST, &resent(&w, FIRST, verb))?;
+    let refused = new_id_answer(&w, verb, &untracked)?;
+    assert_eq!(refused.code, ResultCode::Busy, "{:?}", refused.data);
+    assert_eq!(state_of(&w, SECOND), None);
+    fixed(std::fs::write(&untracked, b"the owner's\n"))?;
+    assert_context_changed(&resent(&w, FIRST, verb));
+    let replaced = new_id_answer(&w, verb, &untracked)?;
+    assert_eq!(replaced.code, ResultCode::Ok, "{:?}", replaced.data);
+    assert_eq!(resent(&w, FIRST, verb).code, ResultCode::RequestMismatch);
+    assert_eq!(merges_on_primary(&w.repo()?)?, 1);
+    Ok(())
+}
+
+/// `request cancel` sets flags and leaves the reason, so a new ID supersedes the
+/// parent at once, and the old request answers from that.
+fn supersede_straight_after_the_cancel(verb: Verb) -> Result<(), FixtureError> {
+    let mut w = remote(verb)?;
+    let untracked = stopped_on_context_changed(&mut w, verb)?;
+    asked(&w.service, FIRST)?;
+    let replaced = new_id_answer(&w, verb, &untracked)?;
+    assert_eq!(replaced.code, ResultCode::Ok, "{:?}", replaced.data);
+    assert_eq!(resent(&w, FIRST, verb).code, ResultCode::RequestMismatch);
+    assert_eq!(merges_on_primary(&w.repo()?)?, 1);
+    Ok(())
+}
+
+// A poll's fence over a child that can't be replaced (design, Known Limits).
+
+/// A poll under a changed push URL, which raises the generation, with the URL
+/// then put back: only the generation is left to answer for.
+fn fence(w: &World) -> Result<(), FixtureError> {
+    let url = w.server.url();
+    let repo = w.repo()?;
+    let generation = || -> Result<i64, FixtureError> {
+        fixed(fixed(w.db())?.query_row(
+            "SELECT configuration_generation FROM remote_polling_state",
+            [],
+            |row| row.get(0),
+        ))
+    };
+    let before = generation()?;
+    fixed(repo.remote_set_pushurl("origin", Some(&format!("{url}-changed"))))?;
+    let poll = w.service.execute(
+        MutationCall {
+            request_id: request(POLL),
+            confirmation: None,
+            mutation: Mutation::PollOnce(PollOnceInput {
+                root: w.root.clone(),
+            }),
+        },
+        &mut SessionCredentials::new(Provider),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    fixed(repo.remote_set_pushurl("origin", None))?;
+    assert!(generation()? > before, "fenced");
+    // It polls, or the conflict it has just fenced still refuses it. Either
+    // way the generation has been raised, which comes first in the domain.
+    assert!(
+        matches!(poll.code, ResultCode::Ok | ResultCode::RecoveryRequired),
+        "{:?}",
+        poll.code
+    );
+    Ok(())
+}
+
+fn assert_stuck(w: &World, verb: Verb) -> Result<(), FixtureError> {
+    let answer = resent(w, FIRST, verb);
+    assert_eq!(
+        answer.code,
+        ResultCode::RecoveryRequired,
+        "{:?}",
+        answer.data
+    );
+    assert_eq!(state_of(w, FIRST), Some(RequestState::Accepted));
+    Ok(())
+}
+
+/// A retained child is restarted, not replaced, and a restart under another
+/// generation is refused. The code alone doesn't show that, since an unfenced
+/// conflict answers the same: `fence` shows the generation moved.
+fn fenced_retained_conflict(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    conflicted(&w, verb)?;
+    fence(&w)?;
+    assert_stuck(&w, verb)
+}
+
+/// A released resolution continues its child the same way.
+fn fenced_released_resolution(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    resolved_then_stopped(&w, verb)?;
+    fence(&w)?;
+    assert_stuck(&w, verb)
+}
+
+/// Past `published`, the cleanup's owner requires that the primary child is of
+/// the generation that holds now.
+fn fenced_past_publication(verb: Verb) -> Result<(), FixtureError> {
+    let mut w = remote(verb)?;
+    stopped_at(&mut w, verb, FailurePoint::AfterPublication)?;
+    fence(&w)?;
+    assert_stuck(&w, verb)
 }
 
 fn context_target(verb: Verb) -> Result<SynchronizationTarget, FixtureError> {

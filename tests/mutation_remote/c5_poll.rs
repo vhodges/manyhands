@@ -2780,6 +2780,7 @@ fn once_busy_beside_a_lifecycle_child() -> Result<(), FixtureError> {
 /// whatever is running, a lifecycle's child among them, and the poll then polls.
 fn once_fences_a_lifecycle_child() -> Result<(), FixtureError> {
     let (w, child) = child_holding_the_reservation()?;
+    let before_close = fixed(w.repo()?.refname_to_id(MAIN))?;
     let url = w.server.url();
     fixed(
         w.repo()?
@@ -2788,5 +2789,33 @@ fn once_fences_a_lifecycle_child() -> Result<(), FixtureError> {
     let envelope = execute_once(&w, FIRST);
     assert_eq!(row_of(&w, &child)?.0, "interrupted", "fenced");
     assert_eq!(envelope.code, ResultCode::Ok);
+    // A child with nothing retained is replaced, so the close survives the fence
+    // once its branch and its URL are back. `c5_cancel_fenced_` has the ones
+    // that don't.
+    fixed(w.repo()?.remote_set_pushurl("origin", None))?;
+    let tip = fixed(w.repo()?.refname_to_id(TICKET_BRANCH))?;
+    fixed(
+        w.bare()?
+            .reference(TICKET_BRANCH, tip, true, "owned fixture"),
+    )?;
+    let resent = w.service.execute(
+        MutationCall {
+            request_id: request(SECOND),
+            confirmation: None,
+            mutation: Verb::Close.mutation(&w.root, ITEM),
+        },
+        &mut SessionCredentials::new(Provider),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(resent.code, ResultCode::Ok, "{:?}", resent.data);
+    let primary = w.repo()?;
+    let merge = fixed(primary.find_commit(fixed(primary.refname_to_id(MAIN))?))?;
+    assert_eq!(merge.parent_count(), 2, "one merge");
+    assert_eq!(
+        fixed(merge.parent_id(0))?,
+        before_close,
+        "and only that one"
+    );
     Ok(())
 }

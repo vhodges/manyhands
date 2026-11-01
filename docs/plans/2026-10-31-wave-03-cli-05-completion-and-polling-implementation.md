@@ -28,6 +28,8 @@ id: "01M69C6SHD04G8PT6D1Y36CDN7"
 - **Library scope (decision 1).** Library changes are Part A's only, and only in:
   - `src/repository/mutation/`;
   - `src/repository/remote/{state,sync,poll}.rs`;
+  - `src/repository/remote/reservation.rs`, for `release_promotion_child` only (decision 18);
+  - `src/repository/local_sync/run.rs`, for the identity check only (decision 26);
   - `src/repository/transport/remote.rs`, for telling a poll's held lease from a protocol failure only (decision 24);
   - `src/repository/promotion/` and `src/repository/closure/`, for the parent-record accessor, the cancellation probe and the identity path only;
   - `src/repository/read/{mod,dto,graph}.rs`, for exports, the corrected comment and the made-ready read;
@@ -261,7 +263,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 
 **Files:** Modify `tests/cli_remote/interruption.rs`.
 
-- [ ] **Step 1:** Ctrl-C at a safe point for both lifecycle verbs, `poll once` and both context mutations, and after the last one (Review Focus 4), `#[cfg(unix)]`. `request cancel` from a second invocation. Cancel, then same request, then new ID. A second press, a Ctrl-C during `operation resume` of a lifecycle, and a killed `poll once` resent under its ID. The interactive consent prompt for both lifecycle verbs, and a press at it.
+- [ ] **Step 1:** Ctrl-C at a safe point for both lifecycle verbs, `poll once` and both context mutations, and after the last one (Review Focus 4), `#[cfg(unix)]`. `request cancel` from a second invocation. Cancel, then same request, then new ID. A second press, a Ctrl-C during `operation resume` of a lifecycle, and a killed `poll once` resent under its ID. The row the library tables owe: a primary child that fails with cancellation asked (`publish`'s `Err` arm, `promotion/run.rs:1139-1145`), which releases that child. The interactive consent prompt for both lifecycle verbs, and a press at it.
 - [ ] **Step 2:** Lost stdout, with a replay making no second effect.
 - [ ] **Step 3:** `c5_interruption_no_resident_worker`: after each of `poll once`, `ticket close` and `document promote`, the process exited, both pipes reach EOF and, on Unix, no process remains in the child's session (`setsid`, `tests/support/cli.rs:71`). A positive control leaves a sleeping child and shows the check fails.
 - [ ] **Step 4: Verify.** `--test cli_remote -- c5_interruption`.
@@ -271,7 +273,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 
 **Files:** Modify `tests/cli/collaboration_exits.rs` (E-8), `tests/cli/exits.rs`, `tests/cli_remote/lifecycle.rs`.
 
-- [ ] **Step 1:** Walk every `next:` line through the binary until the reservation is free, for each stop the lifecycle, poll and context verbs can print. Include decision 19's route: an `operation resume` with no request record stopped at `remote_branch_deleted`, then `item republish`, then `operation resume`, one merge. Record each in the ledger.
+- [ ] **Step 1:** Walk every `next:` line through the binary until the reservation is free, for each stop the lifecycle, poll and context verbs can print. Include decision 19's route: an `operation resume` with no request record stopped at `remote_branch_deleted`, then `item republish`, then `operation resume`, one merge. Also a released resolution whose branch is deleted: if no route frees it, stop for the owner. Record each in the ledger.
 - [ ] **Step 2:** Extend the exit table's set equality, with a reason for each unreachable code.
 - [ ] **Step 3: Verify.** `--test cli_remote -- c5_lifecycle_walk`, `--test cli -- exits`.
 - [ ] **Step 4:** Commit `test: walk C5 recovery paths and account for exit codes`. Ticket comment. Push.

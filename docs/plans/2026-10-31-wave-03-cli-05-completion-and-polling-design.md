@@ -309,7 +309,12 @@ one leaves the record, offering `request.retry`, so that the next call gets the 
 below is for `Owed`; both paths are tested past ten minutes.
 
 `recorded_effects` branches early for these commands, before its `Absent` return, and reads the
-parent record, so a stop with a written checkpoint and no journal row reports its effects (fact 40).
+parent record, so a stop with a written checkpoint and no journal row reports its effects (fact 40). The
+parent's effects include its children's (decision 25): before integration, the context child's merge on the
+context's branch (`integration: complete`, naming the commit) and its landed push (`publication: published`);
+after it, the primary child's landed push. The data's `integration` stays the parent's, and made-ready reads the
+parent's step, so neither takes a context's merge for primary's. Such a stop is partial, exit 4, unless it is
+`cancelled`, which stays 130 with the effects reported (RFC, "even after a durable effect").
 
 **Answers.** Exit status is derived from the code and effects (`results.rs:282-289`), so
 this table states the code and the effects that decide it. "Durable" means the parent has
@@ -323,7 +328,7 @@ durable effect.
 | `AlreadyContained`/`AlreadyCurrent`, nothing left | `ok` | 0 | None |
 | Publication `Pending{Synchronization(c)}` | `c` below | 4 | `request.retry`, then `c`'s |
 | Publication or cleanup `Pending{Cancelled}` | `cancelled` | 130 | `request.retry` (decision 8) |
-| Cleanup `Pending{ContextChanged, IgnoredFiles, RemoteContextChanged}` | `recovery_required` | 4 | `request.retry`, `repo.inspect`; a new prepare supersedes |
+| Cleanup `Pending{ContextChanged, IgnoredFiles, RemoteContextChanged}` | `recovery_required` | 4 | `request.retry`, `repo.inspect`; a new prepare supersedes. A `cancelled` answer replaces this reason, so a new ID is `busy` until one more resend finds it again; `request cancel` alone leaves it, and a new ID supersedes at once |
 | Cleanup `Pending{AwaitingPublication}` | the publication's code | 4 | `request.retry` |
 | Cleanup `Pending{RemoteDeletionFailed(c)}` | `c` below | 4 | `request.retry`, then `c`'s |
 | Cleanup `Pending{RecoveryRequired}` | `recovery_required` | 4 | `request.retry`, `repo.inspect` |
@@ -381,7 +386,7 @@ have no journal row (fact 29). There is no liveness check (runtime RFC). Whether
 | --- | --- |
 | Unfinished parent, an accepted request record holds it | `original_request_required`, through `left_to_its_request`, naming the request: that request continues it |
 | Unfinished parent, no accepted request record | Continues with the record's expectation. Data is the same lifecycle DTO, made-ready included. Ctrl-C is as the verb's. A stop offers `operation.resume`, then the verb's list for the code less what names a request (R-30). |
-| Parent running in another process | The domain's `busy` |
+| Parent running in another process | The domain's `busy`, only from a lease or reservation it meets: with neither to meet, nothing tells that the other is running |
 | Complete, a fresh resume | `already_applied`, as F2 |
 | Complete, a resume entered again | The stored outcome and its report, with no transport, since its earlier call may be what completed it (R-33) |
 | Refused and ended, or superseded | `invalid_input`: nothing is left to continue, and nothing is offered |
@@ -890,7 +895,9 @@ review. This list is not yet proven complete.
 - A killed poll with a lost request ID is found through `operation list`.
 - Policy verbs are last commit wins: resending a request that never committed writes again (decision 15).
 - A poll plan failure other than a missing remote writes the domain's stored state.
-- A poll configures its endpoints before it asks for the reservation. With the endpoints changed, it raises the generation and fences whatever is running, a lifecycle's child among them, and then polls (`c5_poll_once_fences_a_lifecycle_child`). The domain's order, and predates C5.
+- A poll configures its endpoints before it asks for the reservation. With the endpoints changed, it raises the generation and fences whatever is running, a lifecycle's child among them, and then polls (`c5_poll_once_fences_a_lifecycle_child`). The domain's order, and predates C5. A child with nothing retained is replaced, so the same request then finishes with one merge. **Two cases stay stuck, answering `recovery_required`:** a retained or released-resolution child, since the runner restarts it and a restart under another generation is refused (`c5_cancel_fenced_retained_conflict_close`, `c5_cancel_fenced_released_resolution_close`); and a primary child complete or past `Published`, since cleanup's owner requires that child's generation to be current (`c5_cancel_fenced_past_publication_close`). Nothing in C5 frees either.
+- A live call can lose its stop when the flag is cleared on a kept child. `release_promotion_child` clears the row's flag once the cancellation has been answered, so a second live process running that child doesn't read it at its next safe point. The request's own flag and the parent's are separate, and no liveness is checked.
+- A `cancelled` answer can follow a guarded deletion that went through. The reservation's boundary refuses a run asked to stop around the transport call and with no word of it, so the branch may be gone with the step not yet `remote_deleted`. The same request's next delete finds no branch and answers `deleted` (`transport/remote.rs:240`), which reconciles it.
 - A promotion blocked by a pending local sync issues a confirmation before refusing.
 - After an external `git pull`, with the index not marked behind, an item on primary with no context answers `item_not_found` until `index refresh`. An index marked behind keeps the `recovery_required` answer naming `context_missing`.
 
