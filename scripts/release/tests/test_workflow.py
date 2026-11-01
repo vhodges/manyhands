@@ -51,7 +51,7 @@ class WorkflowTests(unittest.TestCase):
         workflow = Path(__file__).resolve().parents[3] / ".github/workflows/release.yml"
         steps = workflow.read_text(encoding="utf-8").split("      - name: ")
         for name in ("Test Windows release helpers", "Audit and self-sign Windows executables",
-                     "Verify extracted Windows signatures without signing secrets"):
+                     "Verify extracted Windows signatures without signing secrets", "Build and sign Windows installer"):
             with self.subTest(step=name):
                 matches = [step for step in steps if step.startswith(name + "\n")]
                 self.assertEqual(len(matches), 1)
@@ -64,11 +64,26 @@ class WorkflowTests(unittest.TestCase):
         steps = text.split("      - name: ")
         matches = [step for step in steps if step.startswith("Test Windows ")]
         self.assertEqual(len(matches), 1)
-        for name in ("test_windows_tools.ps1", "test_windows_process.ps1", "test_windows_signing.ps1", "test_windows_trust.ps1"):
+        for name in ("test_windows_tools.ps1", "test_windows_process.ps1", "test_windows_signing.ps1", "test_windows_trust.ps1", "test_windows_installer.ps1"):
             self.assertIn(f"./scripts/release/tests/{name}", matches[0])
         self.assertIn("if: matrix.os == 'windows'", matches[0])
         self.assertNotIn("WINDOWS_SIGNING_", matches[0])
         self.assertLess(text.index(matches[0]), text.index("Audit and self-sign Windows executables"))
+
+    def test_installer_build_consumes_extracted_verified_payload_and_pinned_compiler(self):
+        env = {**self.env, 'INNO_COMPILER': 'pinned compiler path/ISCC.exe'}
+        command = command_for_stage('windows-installer', env, self.repo)
+        self.assertEqual(command[command.index('-Mode') + 1], 'BuildInstaller')
+        self.assertEqual(command[command.index('-Staging') + 1], env['EXTRACTED'])
+        self.assertEqual(command[command.index('-Archive') + 1], env['ARCHIVE'])
+        self.assertEqual(command[command.index('-Compiler') + 1], env['INNO_COMPILER'])
+        workflow = (Path(__file__).resolve().parents[3] / '.github/workflows/release.yml').read_text()
+        self.assertLess(workflow.index('Install pinned Inno Setup compiler'), workflow.index('Test Windows release helpers'))
+        self.assertLess(workflow.index('Verify extracted Windows signatures without signing secrets'), workflow.index('Build and sign Windows installer'))
+        self.assertLess(workflow.index('Build and sign Windows installer'), workflow.index('Hand off verified archives'))
+        step = next(step for step in workflow.split('      - name: ') if step.startswith('Build and sign Windows installer\n'))
+        self.assertIn('WINDOWS_SIGNING_PFX_BASE64:', step)
+        self.assertIn('WINDOWS_SIGNING_PFX_PASSWORD:', step)
 
     def test_handoff_does_not_resolve_the_tag_again(self):
         command = command_for_stage("prepare", self.env, self.repo)

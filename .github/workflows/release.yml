@@ -143,6 +143,11 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: python -B -m unittest discover -s scripts/release/tests -v
 
+      - name: Install pinned Inno Setup compiler
+        if: matrix.os == 'windows'
+        timeout-minutes: 10
+        run: python -B scripts/release/workflow.py windows-compiler
+
       - name: Test Windows release helpers
         if: matrix.os == 'windows'
         timeout-minutes: 10
@@ -151,6 +156,7 @@ jobs:
           ./scripts/release/tests/test_windows_process.ps1
           ./scripts/release/tests/test_windows_signing.ps1
           ./scripts/release/tests/test_windows_trust.ps1
+          ./scripts/release/tests/test_windows_installer.ps1
 
       - name: Build release CLI without desktop features
         run: python -B scripts/release/workflow.py build-cli
@@ -204,6 +210,14 @@ jobs:
       - name: Verify Linux archive in an isolated Ubuntu runtime
         if: matrix.os == 'linux'
         run: python -B scripts/release/workflow.py linux-smoke
+
+      - name: Build and sign Windows installer
+        if: matrix.os == 'windows'
+        timeout-minutes: 10
+        env:
+          WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: python -B scripts/release/workflow.py windows-installer
 
       - name: Hand off verified archives to draft assembly
         uses: actions/upload-artifact@v4

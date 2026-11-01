@@ -1,0 +1,23 @@
+cask "manyhands" do
+  version "$VERSION"
+  sha256 "$SHA256"
+
+  url "https://github.com/$REPOSITORY/releases/download/v#{version}/manyhands-v#{version}-aarch64-apple-darwin.zip"
+  name "Manyhands"
+  desc "Local-first, Git-backed project management and documentation"
+  homepage "https://github.com/$REPOSITORY"
+
+  depends_on arch: :arm64
+  depends_on formula: "git"
+  $MACOS_DEPENDENCY
+
+  app "manyhands-v#{version}-aarch64-apple-darwin/Manyhands.app"
+  binary "manyhands-v#{version}-aarch64-apple-darwin/bin/manyhands-cli"
+
+  caveats <<~EOS
+    This personal-tap build is ad-hoc signed, not Developer ID signed or notarized.
+    macOS may block opening it; use macOS's normal approval flow if you trust it.
+    The CLI's libraries and disclosures remain in the Caskroom beside bin/.
+    Do not move the CLI out of that layout. Uninstall preserves your user data.
+  EOS
+end

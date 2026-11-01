@@ -6,11 +6,13 @@ function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
 }
 
+Assert-True ($null -ne (Get-Command Confirm-Signatures -ErrorAction SilentlyContinue)) 'Installer callbacks need the shared mandatory signature verifier'
+
 # Execute only the real verification function, not the script's Windows-only
 # certificate-store entry point. Its two platform APIs are stubbed below.
 $tokens = $null
 $parseErrors = $null
-$ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../windows-sign.ps1'), [ref]$tokens, [ref]$parseErrors)
+$ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../windows-tools.psm1'), [ref]$tokens, [ref]$parseErrors)
 if ($parseErrors.Count) { throw ($parseErrors | Out-String) }
 $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Confirm-Signatures' }, $true)
 . ([scriptblock]::Create($definition.Extent.Text))
@@ -96,5 +98,30 @@ Invoke-Test 'native verification failures propagate before the Authenticode call
     Assert-True (-not ($records -join "`n").Contains('Completed SignTool verification: manyhands.exe')) 'Failed native verification was announced as complete'
 }
 
+foreach ($fails in @($false, $true)) {
+    Invoke-Test "shared signing keeps exact identity, digests, and timestamp (failure=$fails)" {
+        $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-ReleaseSignatures' }, $true)
+        . ([scriptblock]::Create($definition.Extent.Text))
+        $signingState = @{ Calls = 0 }
+        # AST-loaded functions have no original $PSScriptRoot. Stub the config
+        # path/read boundary, not the production signing/timestamp body.
+        function Join-Path { param([string]$Path, [string]$ChildPath) return 'fixture-signing-config.json' }
+        function Get-Content { param([string]$LiteralPath, [switch]$Raw) return '{"timestamp_url":"http://timestamp.digicert.com/"}' }
+        function Invoke-ReleaseTool {
+            param([string]$File, [string[]]$Arguments)
+            Assert-True ($File -ceq 'signtool-fixture') 'Wrong signing tool'
+            Assert-True (($Arguments[0..11] -join ' ') -ceq 'sign /s My /sha1 PUBLIC-FIXTURE-IDENTITY /fd SHA256 /tr http://timestamp.digicert.com/ /td SHA256 C:/fixture/setup.exe') 'Signing flags, identity, timestamp, or path changed'
+            $signingState.Calls++
+            if ($fails) { throw 'fixture signing failed' }
+        }
+        $failure = $null
+        try { Set-ReleaseSignatures @('C:/fixture/setup.exe') $certificate 'signtool-fixture' }
+        catch { $failure = $_.Exception.Message }
+        Assert-True ($signingState.Calls -eq 1) "SignTool signing was not called exactly once ($failure)"
+        if ($fails) { Assert-True ($failure -ceq 'fixture signing failed') 'Signing failure was hidden' }
+        else { Assert-True ($null -eq $failure) 'Valid signing failed' }
+    }
+}
+
 if ($failures.Count) { throw ($failures -join "`n") }
-Write-Output 'Windows signing-progress tests passed (5 cases; platform APIs stubbed).'
+Write-Output 'Windows signing-progress tests passed (7 cases; platform APIs stubbed).'

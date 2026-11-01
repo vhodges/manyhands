@@ -105,6 +105,37 @@ function Get-SignToolTimestampUrl {
     return $endpoint.AbsoluteUri
 }
 
+function Confirm-Signatures {
+    param([string[]]$Files, $Certificate, [string]$SignTool)
+    foreach ($file in $Files) {
+        $name = [IO.Path]::GetFileName($file)
+        Write-ReleaseProgress "Starting SignTool verification: $name"
+        Invoke-ReleaseTool $SignTool @('verify', '/pa', '/all', '/tw', $file) | Out-Null
+        Write-ReleaseProgress "Completed SignTool verification: $name"
+        Write-ReleaseProgress "Starting Windows Authenticode verification: $name"
+        $signature = Get-AuthenticodeSignature -LiteralPath $file
+        if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate -or
+            $signature.SignerCertificate.Thumbprint -ne $Certificate.Thumbprint -or
+            $null -eq $signature.TimeStamperCertificate) {
+            throw "Invalid, untimestamped, or unexpected Authenticode identity: $file"
+        }
+        Write-ReleaseProgress "Completed Windows Authenticode verification: $name"
+    }
+}
+
+function Set-ReleaseSignatures {
+    param([string[]]$Files, $Certificate, [string]$SignTool)
+    $configuration = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '../../packaging/windows/signing.json') | ConvertFrom-Json
+    $timestamp = Get-SignToolTimestampUrl -Url $configuration.timestamp_url
+    foreach ($file in $Files) {
+        $name = [IO.Path]::GetFileName($file)
+        Write-ReleaseProgress "Starting signing and RFC 3161 timestamping: $name"
+        Invoke-ReleaseTool $SignTool @('sign', '/s', 'My', '/sha1', $Certificate.Thumbprint,
+            '/fd', 'SHA256', '/tr', $timestamp, '/td', 'SHA256', $file) | Out-Null
+        Write-ReleaseProgress "Completed signing and RFC 3161 timestamping: $name"
+    }
+}
+
 function Get-VerificationTrustStore {
     param([bool]$Windows, [string]$Actions, [string]$RunnerEnvironment, [bool]$Administrator)
     if (-not $Windows -or $Actions -cne 'true' -or $RunnerEnvironment -cne 'github-hosted' -or -not $Administrator) {
@@ -179,6 +210,12 @@ function Assert-PeArchitecture {
     if ($Headers -notmatch '(?im)^\s*8664 machine \(x64\)\s*$') { throw 'PE architecture is not x86_64' }
 }
 
+function Assert-PeSubsystem {
+    param([string]$Headers, [ValidateSet('Windows', 'Console')][string]$Expected)
+    $pattern = if ($Expected -eq 'Windows') { '(?im)^\s*2 subsystem \(Windows GUI\)\s*$' } else { '(?im)^\s*3 subsystem \(Windows CUI\)\s*$' }
+    if ($Headers -notmatch $pattern) { throw "PE subsystem is not $Expected" }
+}
+
 function Assert-SystemDependency {
     param([string]$Name, [string]$SystemDirectory = [Environment]::GetFolderPath('System'))
     if ($Name -notmatch '^[A-Za-z0-9_-][A-Za-z0-9_.-]*\.[A-Za-z0-9]+$') { throw "Invalid PE dependency name: $Name" }
@@ -211,7 +248,10 @@ function Get-WindowsRuntimeReport {
     foreach ($name in @('manyhands.exe', 'manyhands-cli.exe')) {
         $binary = Join-Path $Staging "bin/$name"
         if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw "Missing Windows executable: $name" }
-        Assert-PeArchitecture (Invoke-ReleaseTool $dumpbin @('/HEADERS', $binary))
+        $headers = Invoke-ReleaseTool $dumpbin @('/HEADERS', $binary)
+        Assert-PeArchitecture $headers
+        $subsystem = if ($name -eq 'manyhands.exe') { 'Windows' } else { 'Console' }
+        Assert-PeSubsystem -Headers $headers -Expected $subsystem
         $dependencies = @(ConvertFrom-DumpbinDependencies (Invoke-ReleaseTool $dumpbin @('/DEPENDENTS', $binary)))
         if ($dependencies.Count -eq 0) { throw "No imports found in Windows executable: $name" }
         Assert-SystemDependencies -Names $dependencies -BinaryName $name
@@ -222,4 +262,4 @@ function Get-WindowsRuntimeReport {
     return [ordered]@{ system = 'windows'; architecture = 'x86_64'; crt = 'static'; binaries = $binaries }
 }
 
-Export-ModuleMember -Function Write-ReleaseProgress, Invoke-ReleaseTool, Find-SignTool, Get-SignToolTimestampUrl, Get-VerificationTrustStore, Get-HostedVerificationTrustStore, Add-VerificationTrust, Remove-VerificationTrust, ConvertFrom-DumpbinDependencies, Assert-PeArchitecture, Assert-SystemDependency, Assert-SystemDependencies, Get-WindowsRuntimeReport
+Export-ModuleMember -Function Write-ReleaseProgress, Invoke-ReleaseTool, Find-SignTool, Get-SignToolTimestampUrl, Confirm-Signatures, Set-ReleaseSignatures, Get-VerificationTrustStore, Get-HostedVerificationTrustStore, Add-VerificationTrust, Remove-VerificationTrust, ConvertFrom-DumpbinDependencies, Assert-PeArchitecture, Assert-PeSubsystem, Assert-SystemDependency, Assert-SystemDependencies, Get-WindowsRuntimeReport
