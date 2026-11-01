@@ -798,8 +798,9 @@ contract_enum!(
 
 contract_enum!(
     /// What a closure's `made_ready` is: `current`, the set read when this
-    /// answer was made; `index_pending`, none yet, and the same request reads
-    /// again; `index_unavailable_final`, none, and none will be computed, so
+    /// answer was made; `index_pending`, none yet: a request sent again reads
+    /// again, and a resume has no request to send, so `ticket ready` is its
+    /// live view; `index_unavailable_final`, none, and none will be computed, so
     /// `ticket ready` is the live view; `not_computed`, none, since the closure
     /// has not reached primary; `not_applicable`, none, since this operation
     /// only finished cleaning up what primary already held.

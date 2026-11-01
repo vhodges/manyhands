@@ -52,6 +52,14 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         "c5_made_ready_push_rejected_is_index_pending",
         push_rejected_is_index_pending,
     ),
+    (
+        "c5_made_ready_peer_reopens_the_ticket",
+        peer_reopens_the_ticket,
+    ),
+    (
+        "c5_made_ready_remote_context_changed",
+        remote_context_changed,
+    ),
     ("c5_made_ready_superseded", superseded),
     ("c5_made_ready_superseding_stop", superseding_stop),
     ("c5_made_ready_replay_unchanged", replay_unchanged),
@@ -73,6 +81,7 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
 const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ1";
 const SECOND: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ2";
 const RESUME: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ5";
+const SYNC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ6";
 
 const DEPENDENT_A: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD1";
 const DEPENDENT_B: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD2";
@@ -335,7 +344,7 @@ fn incomplete_index(data: &Path) {
         .expect("a staged problem");
 }
 
-/// The golden of the answer that says none will be computed.
+/// A golden of a closure's answer, its commits replaced.
 fn golden_at(root: &Path, name: &str, envelope: &Envelope<MutationDataDto>) {
     let value = whole(envelope);
     let mut replaced: Vec<(String, &str)> = Vec::new();
@@ -377,6 +386,7 @@ fn one() -> Result<(), FixtureError> {
         whole(&done)["data"]["made_ready"],
         serde_json::json!([{"id": DEPENDENT_A, "slug": SLUG}])
     );
+    golden_at(&local.root, "ticket_close_made_ready", &done);
     Ok(())
 }
 
@@ -521,8 +531,8 @@ fn checkpoint_only() -> Result<(), FixtureError> {
 }
 
 /// Stopped once primary holds the closure, which the domain answers as an
-/// outcome with its cleanup pending. The index is behind here, which changes
-/// nothing: the context holds the closure.
+/// outcome with its cleanup pending. The domain's refresh has run by then, so
+/// the index reads the ticket as closed.
 fn stop_past_integration() -> Result<(), FixtureError> {
     let (local, stopped) = local_stopped(FailurePoint::AfterIntegrationRef)?;
     assert_eq!(stopped.effects.integration, IntegrationEffect::Complete);
@@ -709,6 +719,96 @@ fn push_rejected_is_index_pending() -> Result<(), FixtureError> {
     state_is(&done, LifecycleMadeReadyState::Current, &the_dependent())
 }
 
+/// What `ticket ready` lists now, of the dependent.
+fn ticket_ready_lists_the_dependent(w: &World) -> Result<bool, FixtureError> {
+    let repo = fixed(w.service.resolve_repository(&w.root))?;
+    let ready = fixed(w.service.ticket_readiness(
+        &repo,
+        &TicketFilter {
+            readiness: Some(ReadinessFilter::Ready),
+            ..TicketFilter::default()
+        },
+    ))?;
+    Ok(ready
+        .items
+        .iter()
+        .any(|item| item.id.as_deref() == Some(DEPENDENT_A)))
+}
+
+/// A peer reopens the ticket on primary while its closure is stopped in cleanup.
+/// The report says what `ticket ready` says: nothing false is stored.
+fn peer_reopens_the_ticket() -> Result<(), FixtureError> {
+    let (w, partial, untracked) = stopped_in_cleanup(|_| ())?;
+    state_is(&partial, LifecycleMadeReadyState::Current, &the_dependent())?;
+    merging::fetch_into_peer(&w, MAIN)?;
+    let (path, source) = ticket(Verb::Close.id(), "open", "");
+    let tip = fixed(w.peer.refname_to_id(MAIN))?;
+    let reopened = commit_path(&w.peer, tip, &path, source.as_bytes())?;
+    fixed(w.peer.reference(MAIN, reopened, true, "a peer's reopening"))?;
+    push_peer(&w.peer, &w.server, MAIN)?;
+    let synced = called(&w.service, SYNC, None, repo_sync(&w));
+    // Fast-forwarding primary from what the peer pushed leaves nothing to publish.
+    assert_eq!(synced.code, ResultCode::AlreadyApplied, "{:?}", synced.data);
+    assert_eq!(fixed(w.repo()?.refname_to_id(MAIN))?, reopened);
+    fixed(std::fs::remove_file(&untracked))?;
+    let done = resent(&w.service, FIRST, &w.root);
+    let (state, tickets) = report(&done)?;
+    assert_eq!(
+        state,
+        Some(LifecycleMadeReadyState::Current),
+        "{:?}",
+        done.code
+    );
+    assert_eq!(
+        !tickets.ok_or(FixtureError)?.is_empty(),
+        ticket_ready_lists_the_dependent(&w)?,
+        "the report and `ticket ready` agree"
+    );
+    Ok(())
+}
+
+/// The guarded delete meets a peer's push to the context. This row asserts the
+/// stop, and no made-ready state: it answers `index_pending` with no set, so
+/// a superseding request leaves no set behind in the old request's envelope,
+/// contrary to the design's Known Limits. That is before the controller, and
+/// pinning either answer here would choose it.
+fn remote_context_changed() -> Result<(), FixtureError> {
+    let mut w = remote_with_a_dependent()?;
+    fixed(w.sync(w.request(SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: fixed(Verb::Close.id().parse())?,
+    })))?;
+    let confirmation = confirmation_for(&w.service, Verb::Close, &w.root)?;
+    let failing = failing_service(&w.data(), FailurePoint::AfterPublication)?;
+    let _stopped = called(
+        &failing,
+        FIRST,
+        Some(confirmation),
+        Verb::Close.mutation(&w.root, Verb::Close.id()),
+    );
+    drop(failing);
+    w.service = clean_service(&w.data())?;
+    let bare = fixed(w.bare())?;
+    let old = fixed(bare.refname_to_id(Verb::Close.branch()))?;
+    let peer = commit(&bare, old, "peer-race", b"peer\n")?;
+    w.server.race_update(Verb::Close.branch(), old, peer)?;
+    let changed = resent(&w.service, FIRST, &w.root);
+    assert_eq!(
+        changed.code,
+        ResultCode::RecoveryRequired,
+        "{:?}",
+        changed.data
+    );
+    let Some(MutationDataDto::Lifecycle(data)) = changed.data.as_ref() else {
+        return Err(FixtureError);
+    };
+    assert_eq!(
+        data.cleanup_pending,
+        Some(LifecycleCleanupPendingReason::RemoteContextChanged)
+    );
+    Ok(())
+}
+
 /// Cleanup stopped on a supersedable reason, as `c5_lifecycle`'s row has it: the
 /// old request's partial answer holds the set, the superseding request reports
 /// `not_applicable`, and the old request's next answer holds no report.
@@ -889,7 +989,18 @@ fn resume_index_pending() -> Result<(), FixtureError> {
         "{:?}",
         pending.data
     );
-    state_is(&pending, LifecycleMadeReadyState::IndexPending, &[])
+    state_is(&pending, LifecycleMadeReadyState::IndexPending, &[])?;
+    // No request holds it, so no call will read again.
+    assert_eq!(
+        request_state(&local.service, RESUME),
+        None,
+        "the record is gone"
+    );
+    assert_eq!(actions(&pending), [RecoveryActionKind::IndexRefresh]);
+    let next = resumed(&local.service, &local.root, &operation);
+    assert_eq!(next.code, ResultCode::AlreadyApplied, "{:?}", next.data);
+    assert_eq!(next.data, None);
+    Ok(())
 }
 
 /// R-33's route: a resume that died after finishing the parent is entered again
@@ -923,8 +1034,8 @@ fn resume_entered_again() -> Result<(), FixtureError> {
 }
 
 /// The row Task 3 left half done. A child is taken up by a resume of its own ID,
-/// and that answer is a synchronization's, with no made-ready; the parent's
-/// request then reports it.
+/// and that answer holds no data, so no made-ready; the parent's request then
+/// reports it.
 fn pending_child() -> Result<(), FixtureError> {
     let w = remote_with_a_dependent()?;
     let confirmation = confirmation_for(&w.service, Verb::Close, &w.root)?;
@@ -946,11 +1057,7 @@ fn pending_child() -> Result<(), FixtureError> {
     ))?;
     let taken_up = resumed(&w.service, &w.root, &child);
     assert_eq!(taken_up.code, ResultCode::Ok, "{:?}", taken_up.data);
-    assert!(
-        !matches!(taken_up.data, Some(MutationDataDto::Lifecycle(_))),
-        "a synchronization's: {:?}",
-        taken_up.data
-    );
+    assert_eq!(taken_up.data, None, "no lifecycle's report, and no other");
     let done = resent(&w.service, FIRST, &w.root);
     assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
     state_is(&done, LifecycleMadeReadyState::Current, &the_dependent())

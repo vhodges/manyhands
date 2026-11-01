@@ -64,13 +64,12 @@ use super::{
             TicketClosurePreflight, TicketClosurePreview, TicketClosureResult, closure, promotion,
             promotion::{
                 ParentView,
-                lifecycle::{LifecyclePreview, LifecycleRecord, ParentStep},
+                lifecycle::{LifecyclePreview, ParentStep},
                 lifecycle_record::Refusal,
                 record::{IntegrationKind, PublicationCategory},
             },
             read_configuration_for,
             recovery::JournalRow,
-            remote::state::with_transaction,
             transport::SshTransportError,
         },
         command::Command,
@@ -188,17 +187,6 @@ pub(crate) trait LifecycleVerb {
         root: &Path,
         operation: OperationId,
     ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError>;
-
-    /// Whether the operation's record says primary already held its context,
-    /// which is what makes a run that wrote no closure a cleanup only. Only a
-    /// closure asks. Unreadable reads as not.
-    fn already_contained(
-        _service: &RepositoryService,
-        _root: &Path,
-        _operation: OperationId,
-    ) -> bool {
-        false
-    }
 }
 
 pub(crate) struct Promote;
@@ -484,17 +472,6 @@ impl LifecycleVerb for Close {
         Ok(closure::lifecycle_parent(service, root, operation)?
             .map(|parent| parent.of_blockers(closure_blocker)))
     }
-
-    fn already_contained(service: &RepositoryService, root: &Path, operation: OperationId) -> bool {
-        with_transaction(service, root, |transaction, repository_id| {
-            Ok(
-                closure::record::read_record(transaction, repository_id, operation)?.is_some_and(
-                    |record| record.integration_kind() == Some(IntegrationKind::AlreadyContained),
-                ),
-            )
-        })
-        .unwrap_or(false)
-    }
 }
 
 pub(crate) struct LifecycleBinding<V> {
@@ -560,6 +537,22 @@ fn blocked_code(blockers: &[LifecycleBlocker]) -> ResultCode {
         [LifecycleBlocker::AlreadyClosed] => ResultCode::TicketClosed,
         _ => ResultCode::RecoveryRequired,
     }
+}
+
+/// Where a made-ready report comes from, which says what it can answer.
+enum MadeReadyFrom {
+    /// Not yet on primary.
+    BeforeIntegration,
+    /// A cleanup only: this operation put nothing on primary.
+    CleanupOnly,
+    /// The domain's own `IndexPending`: its refresh is yet to run.
+    IndexPending,
+    /// The domain's outcome. `finished` is an answer that is the request's
+    /// last, so a read that fails will not be made again.
+    Outcome { finished: bool },
+    /// A stop past integration, with no outcome from the domain. The request
+    /// is owed, and an index that reads the ticket as open says nothing yet.
+    Stop,
 }
 
 /// `made_ready` and `made_ready_state`, both null for a promotion.
@@ -811,28 +804,26 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         MutationDataDto::Lifecycle(Box::new(self.data()))
     }
 
-    /// The made-ready report of an operation that reached primary, which the
-    /// caller has read from how it got there. `cleanup_only` is the table's
-    /// `not_applicable`. A read that fails or is incomplete is `final` only when
-    /// the answer is: an operation still owed is read again by its next call,
-    /// so it says that instead (decision 8).
+    /// The made-ready report, read now. A read that fails or is incomplete is
+    /// `final` only for an answer that is: an operation still owed is read
+    /// again by its next call, so it says that instead (decision 8).
     fn made_ready(
         &self,
         service: &RepositoryService,
         root: &Path,
-        cleanup_only: bool,
-        index_pending: bool,
-        answer_is_final: bool,
+        from: MadeReadyFrom,
     ) -> MadeReadyReport {
         if V::KIND != AuthoringKind::Ticket {
             return (None, None);
         }
         let none = |state| (Some(Vec::new()), Some(state));
-        if cleanup_only {
-            return none(LifecycleMadeReadyState::NotApplicable);
-        }
-        if index_pending {
-            return none(LifecycleMadeReadyState::IndexPending);
+        match from {
+            MadeReadyFrom::BeforeIntegration => {
+                return none(LifecycleMadeReadyState::NotComputed);
+            }
+            MadeReadyFrom::CleanupOnly => return none(LifecycleMadeReadyState::NotApplicable),
+            MadeReadyFrom::IndexPending => return none(LifecycleMadeReadyState::IndexPending),
+            MadeReadyFrom::Outcome { finished: _ } | MadeReadyFrom::Stop => {}
         }
         if let Some(hook) = MADE_READY_HOOK.with(std::cell::RefCell::take) {
             hook();
@@ -840,8 +831,9 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         let read = resolve_root(service, root)
             .ok()
             .and_then(|repository| service.tickets_made_ready(&repository, &self.id).ok());
+        let stop = matches!(from, MadeReadyFrom::Stop);
         match read {
-            Some(read) if read.complete => (
+            Some(read) if read.complete && (read.target_closed || !stop) => (
                 Some(
                     read.tickets
                         .into_iter()
@@ -853,7 +845,9 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
                 ),
                 Some(LifecycleMadeReadyState::Current),
             ),
-            _ if answer_is_final => none(LifecycleMadeReadyState::IndexUnavailableFinal),
+            _ if matches!(from, MadeReadyFrom::Outcome { finished: true }) => {
+                none(LifecycleMadeReadyState::IndexUnavailableFinal)
+            }
             _ => none(LifecycleMadeReadyState::IndexPending),
         }
     }
@@ -864,16 +858,23 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         root: &Path,
         reached: &Reached,
     ) -> LifecycleMutationDto {
+        let cleanup_only = reached.recording == Some(ClosureRecording::Existing)
+            && matches!(
+                reached.integration,
+                PromotionIntegration::AlreadyContained { oid: _ }
+            );
         let (made_ready, made_ready_state) = self.made_ready(
             service,
             root,
-            reached.recording == Some(ClosureRecording::Existing)
-                && matches!(
-                    reached.integration,
-                    PromotionIntegration::AlreadyContained { oid: _ }
-                ),
-            reached.index_pending,
-            reached_code(reached) == ResultCode::Ok,
+            if cleanup_only {
+                MadeReadyFrom::CleanupOnly
+            } else if reached.index_pending {
+                MadeReadyFrom::IndexPending
+            } else {
+                MadeReadyFrom::Outcome {
+                    finished: reached_code(reached) == ResultCode::Ok,
+                }
+            },
         );
         let (recording, checkpoint_oid) = match reached.recording {
             Some(ClosureRecording::Recorded { checkpoint_oid }) => {
@@ -1014,13 +1015,19 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             };
         }
         let effects = parent_effects::<V>(service, &root, primary, &view);
-        let (made_ready, made_ready_state) = if effects.integration == IntegrationEffect::Complete {
-            let cleanup_only = view.checkpoint.is_none()
-                && V::already_contained(service, &root, accepted.operation_id);
-            self.made_ready(service, &root, cleanup_only, false, false)
-        } else {
-            (self.data().made_ready, self.data().made_ready_state)
-        };
+        let (made_ready, made_ready_state) = self.made_ready(
+            service,
+            &root,
+            if effects.integration != IntegrationEffect::Complete {
+                MadeReadyFrom::BeforeIntegration
+            } else if view.checkpoint.is_none()
+                && view.integration_kind == Some(IntegrationKind::AlreadyContained)
+            {
+                MadeReadyFrom::CleanupOnly
+            } else {
+                MadeReadyFrom::Stop
+            },
+        );
         let reports = |data: LifecycleMutationDto| LifecycleMutationDto {
             made_ready: made_ready.clone(),
             made_ready_state,
@@ -1826,7 +1833,8 @@ mod tests {
     thread_local! {
         static PARENT: std::cell::RefCell<Option<ParentView<LifecycleBlocker>>> =
             const { std::cell::RefCell::new(None) };
-        static CONTAINED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        static KIND: std::cell::Cell<Option<IntegrationKind>> =
+            const { std::cell::Cell::new(None) };
     }
 
     impl LifecycleVerb for Fixed {
@@ -1861,14 +1869,6 @@ mod tests {
         ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError> {
             Ok(PARENT.with(|parent| parent.borrow_mut().take()))
         }
-
-        fn already_contained(
-            _service: &RepositoryService,
-            _root: &Path,
-            _operation: OperationId,
-        ) -> bool {
-            CONTAINED.with(std::cell::Cell::get)
-        }
     }
 
     const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -1888,7 +1888,6 @@ mod tests {
     /// request is owed, so it says the next call reads again.
     #[test]
     fn a_closures_stop_reports_from_its_parent() {
-        CONTAINED.with(|contained| contained.set(false));
         let before = stopped_with(ParentStep::ContextSynchronized, None, Stop::Busy);
         assert_eq!(
             made_ready_state_of(&before),
@@ -1899,7 +1898,7 @@ mod tests {
             made_ready_state_of(&past),
             Some(LifecycleMadeReadyState::IndexPending)
         );
-        CONTAINED.with(|contained| contained.set(true));
+        KIND.with(|kind| kind.set(Some(IntegrationKind::AlreadyContained)));
         let cleanup = stopped_with(ParentStep::Integrated, None, Stop::Busy);
         assert_eq!(
             made_ready_state_of(&cleanup),
@@ -1911,7 +1910,7 @@ mod tests {
             made_ready_state_of(&complete),
             Some(LifecycleMadeReadyState::NotApplicable)
         );
-        CONTAINED.with(|contained| contained.set(false));
+        KIND.with(|kind| kind.set(None));
     }
 
     /// What `stopped` answers `stop` with, the parent being at `step`.
@@ -1929,6 +1928,7 @@ mod tests {
                 item_id: id.clone(),
                 checkpoint: None,
                 integration: None,
+                integration_kind: KIND.with(std::cell::Cell::get),
                 publication: None,
                 cancel_requested: false,
                 children: [None, None],

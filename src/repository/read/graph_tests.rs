@@ -840,18 +840,25 @@ fn made_ready_is_the_direct_dependents_with_every_dependency_closed() {
         // Ready, and nothing to do with `t`.
         ticket("elsewhere", &["done"]),
     ]);
-    assert_eq!(graph.made_ready("t"), Some(vec!["a", "twice", "z"]));
+    assert_eq!(graph.made_ready("t"), Some((vec!["a", "twice", "z"], true)));
 }
 
 #[test]
-fn made_ready_counts_the_ticket_as_closed_when_the_index_is_behind_on_it() {
-    let graph = graph([
-        ticket("t", &[]),
-        ticket("d", &["t"]),
-        ticket("open", &[]),
-        ticket("e", &["t", "open"]),
-    ]);
-    assert_eq!(graph.made_ready("t"), Some(vec!["d"]));
+fn made_ready_is_empty_and_says_so_for_a_ticket_that_reads_open() {
+    let graph = graph([ticket("t", &[]), ticket("d", &["t"])]);
+    assert_eq!(graph.made_ready("t"), Some((vec![], false)));
+}
+
+#[test]
+fn made_ready_never_lists_the_ticket_itself() {
+    assert_eq!(
+        graph([closed("t", &["t"])]).made_ready("t"),
+        Some((vec![], true))
+    );
+    assert_eq!(
+        graph([ticket("t", &["t"])]).made_ready("t"),
+        Some((vec![], false))
+    );
 }
 
 #[test]
@@ -861,5 +868,8 @@ fn made_ready_has_no_answer_for_an_id_that_is_no_tickets() {
 
 #[test]
 fn made_ready_is_empty_with_no_dependents() {
-    assert_eq!(graph([closed("t", &[])]).made_ready("t"), Some(vec![]));
+    assert_eq!(
+        graph([closed("t", &[])]).made_ready("t"),
+        Some((vec![], true))
+    );
 }

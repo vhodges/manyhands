@@ -204,7 +204,7 @@
       }
     },
     "made_ready_state": {
-      "description": "What made_ready is. current: the set read for this answer. index_pending: none yet, and the same request reads again. index_unavailable_final: none, and none will be computed; ticket ready is the live view. not_computed: none, since the closure has not reached primary. not_applicable: none, since this operation only finished cleaning up what primary already held. Null for a promotion.",
+      "description": "What made_ready is. current: the set read for this answer. index_pending: none yet. A request sent again reads again; a resume has no request to send, so ticket ready is its live view. index_unavailable_final: none, and none will be computed; ticket ready is the live view. not_computed: none, since the closure has not reached primary. not_applicable: none, since this operation only finished cleaning up what primary already held. Null for a promotion.",
       "type": [
         "string",
         "null"

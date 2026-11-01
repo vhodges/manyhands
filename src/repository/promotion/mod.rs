@@ -372,6 +372,9 @@ pub(super) struct ParentView<B> {
     /// while the step is `closing`.
     pub(super) checkpoint: Option<Oid>,
     pub(super) integration: Option<Oid>,
+    /// How that commit reached primary: `already_contained` is a context
+    /// primary held already.
+    pub(super) integration_kind: Option<record::IntegrationKind>,
     pub(super) publication: Option<record::PublicationCategory>,
     /// The parent's own flag, which `cancel_document_promotion` or
     /// `cancel_ticket_closure` sets as well as `request cancel`.
@@ -397,6 +400,7 @@ impl<B> ParentView<B> {
             item_id: self.item_id,
             checkpoint: self.checkpoint,
             integration: self.integration,
+            integration_kind: self.integration_kind,
             publication: self.publication,
             cancel_requested: self.cancel_requested,
             children: self.children,
@@ -420,6 +424,7 @@ pub(super) fn lifecycle_parent(
                 item_id: parent.item_id().clone(),
                 checkpoint: None,
                 integration: parent.integration_oid(),
+                integration_kind: parent.integration_kind(),
                 publication: parent.publication(),
                 cancel_requested: parent.cancel_requested(),
                 children: [parent.context_sync_id(), parent.primary_sync_id()],

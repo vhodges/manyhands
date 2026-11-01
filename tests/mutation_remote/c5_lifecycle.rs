@@ -2615,6 +2615,20 @@ fn poll_yielding_past_integration(verb: Verb) -> Result<(), FixtureError> {
     })?;
     assert_eq!(yielded.code, ResultCode::PollYielding, "{:?}", yielded.data);
     assert_eq!(yielded.outcome, Outcome::Partial);
+    let reported = lifecycle_of(&yielded).ok_or(FixtureError)?;
+    match verb {
+        Verb::Promote => {
+            assert_eq!(reported.made_ready, None);
+            assert_eq!(reported.made_ready_state, None);
+        }
+        Verb::Close => {
+            assert_eq!(reported.made_ready, Some(Vec::new()));
+            assert_eq!(
+                reported.made_ready_state,
+                Some(LifecycleMadeReadyState::IndexPending)
+            );
+        }
+    }
     assert_eq!(actions(&yielded), [RecoveryActionKind::RequestRetry]);
     assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     let done = resent(&w.service, FIRST, verb, &w.root);

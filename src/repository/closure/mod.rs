@@ -359,6 +359,7 @@ pub(super) fn lifecycle_parent(
                     item_id: parent.item_id().clone(),
                     checkpoint: parent.closure_oid,
                     integration: parent.integration_oid(),
+                    integration_kind: parent.integration_kind(),
                     publication: parent.publication(),
                     cancel_requested: parent.cancel_requested(),
                     children: [parent.context_sync_id(), parent.primary_sync_id()],

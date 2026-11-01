@@ -470,14 +470,19 @@ amended to say so). Each state is exclusive, and read from `Step`:
 | Before `Step` reaches integration, including a checkpoint only | `not_computed` | empty | `Owed` |
 | Integrated by this operation, the closure recorded or existing but newly on primary, with the read complete | `current` | the set | As the outcome's |
 | The same, domain `IndexPending` | `index_pending` | empty | `Owed`: the retry reads again |
-| The same, domain `Complete`, but the read fails or is incomplete | `index_unavailable_final` | empty | `Final` (decision 13). The state itself says it won't be recomputed; `ticket ready` is the live view |
+| The same, domain `Complete` and the operation complete, but the read fails or is incomplete | `index_unavailable_final` | empty | `Final` (decision 13). The state itself says it won't be recomputed; `ticket ready` is the live view |
+| The same, the operation unfinished, and the read fails or is incomplete | `index_pending` | empty | `Owed`: the next call reads again (decision 8; R-37) |
 | Cleanup-only or superseding run: `ClosureRecording::Existing` and already contained | `not_applicable` | empty | As the outcome's |
 
 - A new function in `read/graph.rs`, `tickets_made_ready(repo, id)`, uses `read_tickets` and
-  `readiness_state`. An index `behind` flag, usual while the context exists, does not change
-  the answer: the context holds the closure.
-- A partial run reports it too. Each retry evaluates again, and the request's final stored envelope
-  holds the last evaluation, so a replay of a finished request returns it unchanged.
+  the graph's readiness, and also says whether T read as closed. The index's own reading of T
+  is used, with no override: an override could store a false `current` when a peer has reopened T
+  (R-38). If T reads open, an answer from the domain's outcome reports the true set, `[]` with
+  `current` when the read is complete, and a stop answers `index_pending`, `Owed`.
+- A partial run reports it too, but most partial runs report `index_pending`: the domain answers
+  `IndexPending` for a publication stop, a poll yield and a rejected deletion, so no read is made.
+  `current` on a partial run was seen for a cleanup stop. Each retry evaluates again, and the request's
+  final stored envelope holds the last evaluation, so a replay of a finished request returns it unchanged.
 - Readiness is lifecycle closure, by the index's effective copy. Status text plays no part.
 - Each entry is `{id, slug}`. No title is stored (Cycle 09 item 12's rule, extended to
   request records). The CLI's human output prints both.
@@ -851,6 +856,8 @@ review. This list is not yet proven complete.
 | R-34 | `request cancel` of a resume is `requested: false`, also while it continues a parent. (Controller.) | A continued parent is stopped only by Ctrl-C. |
 | R-35 | R-27's rule applies to a resume: a call entered again with a code that passes by itself leaves the record. (Controller.) | A record stays accepted until a resend. |
 | R-36 | Decision 19's call sets the resume's own record flag, not the parent's, which a call clears on entry. No runner change. (Implementation of the owner's decision, for review.) | None beyond decision 19's. |
+| R-37 | A failed or incomplete made-ready read on an unfinished operation is `index_pending`, `Owed`. `index_unavailable_final` is for a complete closure only. (Controller, Task 4's review.) | `index_pending` also covers a read that failed. |
+| R-38 | Made-ready uses the index's reading of T, with no override. If T reads open, an outcome reports the true set and a stop answers `index_pending`. (Controller, Task 4's review.) | A set can be empty because the index is behind on T. |
 
 ## Known Limits
 
