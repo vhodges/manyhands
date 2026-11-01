@@ -28,8 +28,11 @@
 //! request stays accepted, with its flag taken, so that the same request
 //! continues (decision 8, R-20).
 //!
-//! **Left for later tasks.** Task 3 `operation resume`, Task 4 the made-ready
-//! report, and Task 6 the promotion identity row.
+//! **`operation resume`** enters a parent no request record holds through
+//! `Confirmed::row` and `Binding::rerun`, and decides its own record.
+//!
+//! **Left for later tasks.** Task 4 the made-ready report, and Task 6 the
+//! promotion identity row.
 
 use std::{marker::PhantomData, path::Path, path::PathBuf};
 

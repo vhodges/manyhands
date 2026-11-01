@@ -520,3 +520,51 @@ These rows change a row by SQL, except `stays_past_its_fetch` and `released_reso
 **Not run:** `--test remote_synchronization`. The reservation change is one added function, which only `release_child` calls.
 
 **Verified on the final code, all exit 0.** `c5_cancel_` 86 cases (1382 s), `c5_lifecycle` 126 (1031 s), `document_promotion` 74 (743 s), `ticket_closure` 73 (665 s), `--lib mutation` 142 (7 s), `--lib remote` 478 (176 s), `--lib local_sync` 164 (293 s), `--lib integration` 26 (16 s), `cargo fmt --check`, clippy `-D warnings` (11 s). `an_unreadable_flag_stops_a_child`, which those filters don't select, passed on its own (1 test). No lib source changed after it, apart from the removal above, which was restored.
+
+### Task 3: Resume Routes
+
+**Base.** `3f6037c7`. `origin/main` had not moved, so nothing was merged.
+
+**Tests first.** 31 `c5_resume_` cases and the E-10 row ran against the unchanged library. 29 cases and the E-10 row failed by assertion on the answer. `pending_child`, both verbs, passed: it pins what exists. `no_record_past_integration` and `complete_with_record_accepted` first failed on fixture faults (below). Once those were fixed they were run against the old library again, with its three files put back for the run, and failed by assertion on the code (`operation_not_found`'s line).
+
+**Fixture faults, none a changed answer.**
+
+- A domain stop past integration is an outcome with cleanup pending, not an error, so `begun_outside` doesn't assert an error.
+- A call that dies at `BeforeRequestSettlement` names no operation, so that row reads the ID from the parent table.
+- Past integration, one further accepted update is the context's deletion. The row asserts `pushes + 1`, and that primary doesn't move.
+- `grants_no_new_consent` first expected `request.prepare`. A resume offers nothing there, because its command has no confirmation. **For review:** the row pins an empty list, so the answer doesn't say that a new prepare of the verb is the way on.
+- The E-10 row first expected outcome `error`. `original_request_required` is `blocked`, as this file's other pins have it.
+
+**Commands, all exit 0, on the final library.**
+
+| Command | Result | Time |
+| --- | --- | --- |
+| `--test mutation_remote -- c5_resume` | 31 cases | 202 s |
+| `--test mutation_remote -- resume` | 71 cases | 657 s, detached |
+| `--test mutation_replay` | 384 (383 and E-10) | 283 s |
+| `--lib mutation` | 142 | 2 s |
+| `cargo fmt --check`; `cargo clippy --all-targets --all-features --locked -- -D warnings` | ok | 10 s each |
+
+The first `mutation_replay` run failed only on the E-10 row's expected outcome. It was rerun in full after that test-only fix. No schema, golden or desktop file changed. `src/repository/remote/` wasn't touched.
+
+**Decisions, for review.**
+
+- **The route reads the parent tables directly, inside `named`'s one read.** `lifecycle_parent` takes an immediate transaction, and `takes_up` runs on every envelope that offers a resume. A parent table that doesn't exist yet, or a repository that isn't registered, reads as no parent.
+- **The order is the table's.** Complete, then refused or superseded, are decided before any holder is looked for. So a complete parent with an accepted record is `already_applied`, and that request still gets its stored outcome.
+- **A continuation goes through the verb's own binding,** by `Confirmed::row` and `Binding::rerun`, so the expectation is the record's and a parent that ended since answers from what it holds. `bind/lifecycle.rs` needed no code. Only its header comment changed.
+- **A stop leaves no record.** Each same-request action becomes `operation.resume` of the parent, and a stop with no actions gets that one, unless it offers nothing. A final answer is stored, and its replay is unchanged through the `lifecycle` tag.
+- **The poll arm is implemented,** since E-10 can test it: the row seeds an accepted record holding the poll. A poll with no record stays `invalid_input`. Task 5b has no resume arm left to add.
+- **A resume entered again that finds its parent complete answers `already_applied`,** as any other non-synchronization does, not the parent's stored outcome.
+- **The position is primary's,** so a stored commit is checked on the branch that holds it.
+- **`request cancel` of a resume that is continuing a parent stops it,** because that call's safe points read the resume's flag. By reading only, with no row. The binding's doc says so.
+
+**Deviation from the task's file list.** One comment in `bind/lifecycle.rs`'s header, which still listed resume as Task 3's to do. It is within the library scope.
+
+**The Ctrl-C row.** `ctrl_c` runs at the library, by a token cancelled in the request hook: `cancelled`, no record, `operation.resume`, then a finish with one merge. `stops_on_ctrl_c` for `operation resume` is Task 7's.
+
+**Risks, for review.**
+
+- **A resume's `discovery_pending` offers nothing.** The parent is complete by then, so `offering_resume` drops the action, and the next resume is `already_applied`. Pinned by `index_pending`. Nothing in the answer says how the hand-off gets done.
+- **A child's `remote_branch_deleted` under a resume has no row.** By reading, `request.cancel` is dropped, because a resume's envelope names no operation, which would leave `repo.inspect` alone. Decision 18's release is reached through a request record's cancel.
+
+**Left.** Task 4: made-ready in the resume's data, so the plan's "pending child … and its made-ready" row is only half done here. Task 7: `stops_on_ctrl_c`.

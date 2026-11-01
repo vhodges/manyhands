@@ -1615,6 +1615,15 @@ impl MutationDataDto {
             {
                 CommentMutationDto::from_stored(stored).map(Self::Comment)
             }
+            // A resume that continued a promotion or a closure gives the
+            // lifecycle's data, told apart by its own tag.
+            Command::OperationResume
+                if stored.get("type").and_then(|t| t.as_str())
+                    == Some(LifecycleMutationType::Lifecycle.as_str()) =>
+            {
+                LifecycleMutationDto::from_stored(stored)
+                    .map(|data| Self::Lifecycle(Box::new(data)))
+            }
             Command::DocumentCreate | Command::DocumentSave | Command::DocumentMove => {
                 DocumentMutationDto::from_stored(stored).map(Self::Document)
             }
