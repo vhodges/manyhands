@@ -1425,3 +1425,11 @@ It independently repeated offline both-architecture evaluation and the
 719/430-file source/derivation comparison, confirmed current filtered sources
 match the working tree, and checked relative references, exclusion policy,
 unchanged pinned inputs and documentation consistency. Whitespace checks pass.
+
+### Eight-Finding Review Follow-Up
+
+The owner approved the scoped review fixes on 2026-11-01. Current implementation,
+red/green evidence, verification results and remaining native limitations
+continue in [the review-fix execution record](2026-11-01-packaging-review-fixes-execution.md).
+Earlier package outputs and acceptance results above remain historical;
+they do not automatically verify the new review changes.

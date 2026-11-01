@@ -117,7 +117,7 @@ The cask moves the versioned directory's `Manyhands.app` into the configured
 application directory and links `bin/manyhands-cli` from the retained
 versioned Caskroom payload. The sibling `lib/` and disclosures stay beside
 the CLI; do not copy the executable out on its own. The app carries its own
-disclosures. The cask requires Apple Silicon and the `git` formula, does not
+disclosures. The cask requires Apple Silicon, does not
 alter quarantine/Gatekeeper, and makes no Developer ID/notarization claim.
 It defines no user-data removal (`zap`) action; normal uninstall preserves
 settings, credentials, repositories, and Manyhands data.
@@ -166,12 +166,18 @@ synthetic archive tests, and Ruby syntax do not establish Homebrew acceptance.
 ## Windows per-user installer
 
 The Inno Setup EXE installs the same files as the verified portable ZIP into
-`%LOCALAPPDATA%\Programs\Manyhands`, plus the brand icon and Inno licence.
+`%LOCALAPPDATA%\Programs\Manyhands`, plus the brand icon, Inno licence and
+managed-file manifest.
 It requires no elevation, adds a current-user Start menu shortcut, and keeps
 the stable AppId **`io.github.vhodges.manyhands`**. The initial target is native
 x86_64 Windows, with the same Windows 10 1703/system ICU floor as the ZIP.
 The desktop's release build uses the GUI PE subsystem; the featureless CLI
 keeps the console subsystem. Both are checked from actual native PE headers.
+Windows release desktop startup failures and panics display a fixed-text
+native error dialog without exposing panic payloads or paths. Existing stderr
+diagnostics/default panic-hook behavior remain; the CLI and debug/non-Windows
+behavior are unchanged. Injected-dialog tests on Linux do not establish
+native Windows dialog linkage or visibility.
 
 User PATH integration is an **opt-in** `clipath` task (off for a new install).
 Reinstall/upgrade retains Inno's previous task selection. The installer reads
@@ -186,21 +192,42 @@ Installer-owned metadata lives at `HKCU\Software\Manyhands\Installer` in the
 64-bit view. Full SemVer precedence rejects downgrades, including stable to
 older prerelease transitions, and permits same-version reinstall. Numeric
 Windows file metadata is `MAJOR.MINOR.PATCH.0`; fields above 65535 fail before
-compilation. A `PendingVersion` floor is written before changing installed
-files and cleared only after completion. After an interrupted install or
+compilation. Preparation is read-only. A `PendingVersion` floor is written at
+the actual install-start boundary, before copying, and cleared only after
+completion; a checkpoint failure prevents copying. Cancelling preparation
+does not establish a new floor. After an interrupted install or
 upgrade, rerun the **same or newer** installer; an older payload cannot be
-used to overwrite partially upgraded files. Invalid/unreadable metadata
+used to overwrite partially upgraded files. Once files may have changed,
+cancellation retains the floor: Inno rollback does not generally restore
+overwritten pre-existing files. Invalid/unreadable metadata
 fails closed. Changing the installation directory requires uninstall first.
 An incomplete post-install operation returns exit code **42**, even when
 Inno has handled/suppressed its error dialog; repair with the same/newer
 installer rather than treating it as a successful silent install.
 
+After successful copying and before completion, the installer removes stale
+files only within its owned `bin` and `licenses` trees. The compiler embeds
+the incoming managed-file list derived from the exact verified ZIP plus the
+Inno licence and manifest itself; it does not trust an older installed list.
+Before any pruning, it validates the complete list, expected files, both owned
+trees and reparse-free ancestors. It also checks every expected file's SHA-256
+against a separate compiler-embedded digest table derived from the verified
+ZIP and exact installer additions, including the installed manifest itself.
+The digest table is not installed; expectations are cached at startup and
+never reloaded from mutable installed or temporary metadata. Old/wrong bytes
+left by Inno's Keep existing/Skip paths cannot authorize pruning or completion.
+Unsafe paths, missing/mismatched files or deletion
+failures leave installation incomplete, return 42 and retain the repair floor.
+No pre-install tree deletion is performed. Root/user files are not pruned;
+empty obsolete directories may remain. Treat `bin` and `licenses` as
+installer-owned, not as locations for personal files.
+
 Normal uninstall removes tracked installation files, its shortcut, owned
 PATH addition, and installer metadata only. It does not delete settings,
 credentials, project repositories, or Manyhands user data. There is no
 certificate-import action; self-signing still does not establish public
-publisher trust or remove SmartScreen warnings. Keep Git available for Git
-helper operations.
+publisher trust or remove SmartScreen warnings. Local Git operations use the
+linked libgit2 library; a client-side Git executable is not required.
 
 ### Build and signing boundary
 
@@ -221,6 +248,13 @@ on the compiler command line, and no unsigned/untimestamped fallback exists.
 The internal installer inventory binds its bytes to the source identity,
 exact Windows ZIP hash, signer, and pinned compiler. Assembly requires and
 validates both that installer and its inventory before draft mutation.
+ISCC has an explicit **1,800-second** deadline, including mandatory signing
+and verification, with **two signing retries / 2,000 ms delay**. The installer
+workflow step allows **45 minutes**, leaving 15 minutes for surrounding
+verification, CLI smoke testing and cleanup. Ordinary callback/native tools
+retain 180-second deadlines; application signing and extracted-verification
+steps retain their ten-minute limits. No timeout or retry permits unsigned or
+untimestamped output. See [signing deadlines](windows/SIGNING.md#progress-and-deadlines).
 
 The `.ico` is derived from the committed 1024 PNG with ImageMagick 7.1.2-34:
 
@@ -248,6 +282,26 @@ Inno's real post-install event boundary and requires exit 42 on failure,
 production definition were also checked locally under Wine; this is not
 native Windows acceptance. The production definition was compiled with
 output disabled, so that check did not produce or sign an installer.
+
+Additional opt-in pinned-engine tests exercise the actual lifecycle, not just
+policy functions: preparation cancellation, fatal checkpoint failures before
+copying, mid-install cancellation with overwritten bytes retained, malformed
+managed lists, missing expected files, reparse points, pruning failures, and
+successful fresh/upgrade completion. Additional cases cover old/wrong bytes
+at existing paths and forged installed/temporary digest metadata. A signing-
+failure fixture proves three bounded attempts without unsigned output. The
+complete local suite passed **255 tests with no skips**, including Ruby, FPC
+and all five Inno-engine tests after the content-validation correction. To reproduce
+the engine subset on Linux with an already verified compiler and a fresh,
+owned Wine prefix:
+
+```sh
+nix shell nixpkgs#wineWow64Packages.stable nixpkgs#xvfb-run --command \
+  env INNO_COMPILER=/path/to/verified/ISCC.exe \
+  MANYHANDS_INNO_WINEPREFIX=/tmp/opencode/manyhands-owned-fresh-wine-prefix \
+  WINEDLLOVERRIDES=mscoree,mshtml= \
+  xvfb-run -a python3 -B scripts/release/tests/test_installer_engine.py
+```
 
 On an authorized disposable native Windows machine, still exercise interactive
 and silent install, app launch, CLI PATH enabled/disabled, same-version reinstall,
@@ -284,10 +338,12 @@ Installed terms/source archives are under `share/doc/manyhands`. The CLI's
 disclosures omit the desktop graph and fonts; separate Nix runtime library
 packages retain their own pinned Nixpkgs sources and terms.
 
-The desktop wrapper supplies GPUI's dynamic loader paths; the CLI wrapper
-does not. Both supply minimal Git for helper operations. The source filter
+The desktop wrapper supplies GPUI's dynamic loader paths; the CLI is installed
+directly without a wrapper. Neither package includes a runtime Git executable;
+local operations and SSH transport use linked libraries. The source filter
 excludes private project state, worktrees, build outputs, and hidden files.
-Flake checks cover these boundaries, CLI help/closure, desktop installed
+Flake checks cover these boundaries, CLI help/repository creation with an
+empty PATH and Git-/graphics-free closure, desktop installed
 files, and required dynamic libraries. Loader success does not prove a
 Wayland window or working host graphics driver, and ARM64 evaluation alone
 does not establish an ARM64 build. Those acceptance checks and exact remote
@@ -309,14 +365,15 @@ established violations or prerequisites to reviewing this packaging PR;
 preserving notices is not a claim to resolve every possible binary-
 distribution obligation. See the Task 12
 [execution record](../docs/plans/2026-10-30-release-workflow-execution.md)
-for actual local package-build/runtime evidence and remaining distribution
-decisions. The x86_64 CLI/desktop builds and flake checks passed before the
-supporting-directory relocation, and the owner confirmed an isolated
-NixOS/COSMIC Wayland launch and correct text rendering. The layout-only
-relocation passes evaluation/isolation/loader checks and source/derivation
-comparison; application binaries were not rebuilt for it. ARM64
-executable/runtime and later tagged-consumer checks remain;
-evaluation/loader success alone does not establish those outcomes.
+for historical package-build/runtime evidence and remaining distribution
+decisions. The current [review-fix execution record](../docs/plans/2026-11-01-packaging-review-fixes-execution.md)
+records rebuilt x86_64 CLI/desktop packages, all current-system flake checks,
+installed original disclosures and empty-PATH repository creation with both
+installed CLIs. The owner confirmed an isolated NixOS/COSMIC Wayland launch
+and correct text rendering on the earlier pre-review build; that manual window
+check was not repeated for the review-fix outputs. ARM64 executable/runtime
+and later tagged-consumer checks remain; evaluation/loader success alone
+does not establish those outcomes.
 
 ## Tool versions and local checks
 
@@ -458,4 +515,6 @@ Both modes require an elevated GitHub-hosted Windows runner. Only the public
 certificate is temporarily trusted in `LocalMachine\Root`; its private signing
 identity remains in `CurrentUser\My`. Existing trust is preserved and only
 owned additions are removed. The native helper fixture runs before release
-secrets, and all Windows certificate-operation steps have ten-minute limits.
+secrets. Application signing and extracted-verification steps have ten-minute
+limits; the installer step has a 45-minute backstop around its explicit
+1,800-second compiler deadline, as detailed above.
