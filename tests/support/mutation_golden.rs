@@ -54,6 +54,7 @@ pub const CASES: &[&str] = &[
     "document_promote_blocked_at_run",
     "document_promote_deletion_rejected",
     "document_promote_discovery_pending",
+    "document_promote_identity_required",
     "document_promote_local_only",
     "document_promote_ok",
     "document_promote_preview",

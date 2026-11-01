@@ -202,6 +202,10 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         once_killed_resent_restarts,
     ),
     ("c5_poll_once_busy", once_busy),
+    (
+        "c5_poll_once_busy_on_a_held_lease",
+        once_busy_on_a_held_lease,
+    ),
     ("c5_poll_once_poll_yielding", once_poll_yielding),
     ("c5_poll_once_conflict_pending", once_conflict_pending),
     ("c5_poll_once_pending_local_sync", once_pending_local_sync),
@@ -2170,6 +2174,65 @@ fn once_busy() -> Result<(), FixtureError> {
     Ok(())
 }
 
+/// Decision 24: the repository's lease held when a fetch comes to move its
+/// tracking refs is another's short local work, and no protocol failure. Nothing
+/// is stored as this poll's result, so no failure replays and no backoff grows,
+/// and the same request polls once the lease is free.
+fn once_busy_on_a_held_lease() -> Result<(), FixtureError> {
+    use fs4::fs_std::FileExt;
+    const TRACKING: &str = "refs/remotes/origin/main";
+    let (w, incoming) = behind()?;
+    let repo = w.repo()?;
+    let tracked = fixed(repo.refname_to_id(TRACKING))?;
+    let hold = w.server.hold_transfer_after(1)?;
+    let (data, root) = (w.data(), w.root.clone());
+    let running = std::thread::spawn(move || {
+        let service = RepositoryService::open_at(&data).expect("a service");
+        service.execute(
+            MutationCall {
+                request_id: request(FIRST),
+                confirmation: None,
+                mutation: once(&root),
+            },
+            &mut SessionCredentials::new(Provider),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        )
+    });
+    hold.wait_until_held()?;
+    let lease = fixed(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(repo.commondir().join("manyhands-operation.lock")),
+    )?;
+    assert!(fixed(FileExt::try_lock_exclusive(&lease))?);
+    hold.release()?;
+    let envelope = joined(&w, running)?;
+    assert_eq!(envelope.code, ResultCode::Busy, "{:?}", envelope.data);
+    assert_eq!(envelope.outcome, Outcome::Error, "a transient code");
+    assert_eq!(actions(&envelope), [RecoveryActionKind::RequestRetry]);
+    assert_eq!(fixed(repo.refname_to_id(TRACKING))?, tracked);
+    left_accepted(&w, FIRST)?;
+    let operation = envelope.operation_id.as_deref().ok_or(FixtureError)?;
+    let stored: Option<String> = fixed(w.db()?.query_row(
+        "SELECT outcome FROM remote_operation_records WHERE operation_ulid = ?1",
+        [operation],
+        |row| row.get(0),
+    ))?;
+    assert_eq!(stored, None, "nothing is stored as the poll's result");
+    fixed(FileExt::unlock(&lease))?;
+    let polled = execute_once(&w, FIRST);
+    assert_eq!(polled.code, ResultCode::Ok, "{:?}", polled.data);
+    assert_eq!(polled.operation_id.as_deref(), Some(operation));
+    assert_eq!(fixed(repo.refname_to_id(TRACKING))?, incoming);
+    finished(&w, FIRST)?;
+    assert_eq!(execute_once(&w, FIRST), polled, "a replay is the same");
+    Ok(())
+}
+
 fn once_poll_yielding() -> Result<(), FixtureError> {
     let (w, _) = behind()?;
     reserve_another(&w, RemoteOperationPriority::Poll)?;
@@ -2529,18 +2592,18 @@ fn once_resend_during_a_materialization() -> Result<(), FixtureError> {
         .expect("the answer")
         .take()
         .ok_or(FixtureError)?;
-    // B's fetch needs the lease to move tracking references, and its refusal
-    // there reaches the poll as a protocol failure: `Err(Transport)` over a row,
-    // so final, under that error's code. Nothing of B's touched the target.
-    assert_eq!(code, ResultCode::InternalError);
+    // B's fetch needs the lease to move tracking references, and A holds it:
+    // `busy` (decision 24), with nothing of B's at the target, nothing stored
+    // as a failure, and the request held for its retry.
+    assert_eq!(code, ResultCode::Busy);
     assert!(after > before, "B raised the epoch");
     assert_eq!(a.code, ResultCode::RecoveryRequired, "A lost its row");
     one_worktree(&w, tip)?;
+    left_accepted(&w, FIRST)?;
+    let retried = execute_once(&w, FIRST);
+    assert_eq!(retried.code, ResultCode::Ok, "{:?}", retried.data);
     finished(&w, FIRST)?;
-    let replayed = execute_once(&w, FIRST);
-    assert_eq!(replayed.code, ResultCode::InternalError);
     assert_eq!(poll_rows(&w)?, 1);
-    a_new_request_polls(&w, SECOND)?;
     one_worktree(&w, tip)
 }
 

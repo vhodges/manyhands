@@ -111,6 +111,10 @@ const ONE: &[ssh_harness::Case] = &[
         identity_prepare_close(TRIMMED_NAME)
     }),
     (
+        "c5_lifecycle_remote_select_then_sync_finds_no_key",
+        remote_select_then_sync_finds_no_key,
+    ),
+    (
         "c5_lifecycle_identity_prepare_check_is_last_promote",
         identity_prepare_check_is_last,
     ),
@@ -3812,7 +3816,16 @@ fn identity_prepare_promote(name: Option<&str>) -> Result<(), FixtureError> {
         Some(name) => configure_identity(&repo, name)?,
         None => forget_identity(&repo)?,
     }
-    assert_identity_required(&prepared(&local.service, verb, &local.root, verb.id()));
+    let envelope = prepared(&local.service, verb, &local.root, verb.id());
+    assert_identity_required(&envelope);
+    if name.is_none() {
+        golden_at(
+            &local.root,
+            "document_promote_identity_required",
+            Some(BLOCKED),
+            &envelope,
+        );
+    }
     assert_eq!(parents(&local.db()?, verb)?, 0);
     configure_identity(&repo, "Fixture")?;
     confirmation_of(&prepared(&local.service, verb, &local.root, verb.id()));
@@ -4093,5 +4106,40 @@ fn identity_none_needed_after_a_checkpoint() -> Result<(), FixtureError> {
     let done = resent(&w.service, FIRST, verb, &w.root);
     assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
     assert_eq!(merges_on_primary(&repo)?, 1);
+    Ok(())
+}
+
+/// `01M669FJR2`'s journey where the transport's runtime is initialized, as in
+/// the binary: past the clean check to what is really missing, a key.
+fn remote_select_then_sync_finds_no_key() -> Result<(), FixtureError> {
+    let local = Local::empty()?;
+    fixed(local.service.add_remote(AddRemoteRequest {
+        root: local.root.clone(),
+        name: "origin".into(),
+        url: "git@example.invalid:project.git".into(),
+        operation_id: OperationId::new(),
+    }))?;
+    fixed(
+        local
+            .service
+            .set_publication_remote(SetPublicationRemoteRequest {
+                root: local.root.clone(),
+                name: Some("origin".into()),
+                operation_id: OperationId::new(),
+            }),
+    )?;
+    let synchronized = local.service.execute(
+        MutationCall {
+            request_id: request(FIRST),
+            confirmation: None,
+            mutation: Mutation::RepoSync(RepoSyncInput {
+                root: local.root.clone(),
+            }),
+        },
+        &mut SessionCredentials::new(Provider),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(synchronized.code, ResultCode::NoSelectedKey);
     Ok(())
 }

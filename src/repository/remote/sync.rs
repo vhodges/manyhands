@@ -5009,11 +5009,12 @@ impl RepositoryService {
         {
             return Ok(merge::ResolveSynchronizationOutcome::StaleObservation);
         }
-        let effective_identity = repository.signature().ok().and_then(|signature| {
-            let name = signature.name().unwrap_or_default();
-            let email = signature.email().unwrap_or_default();
-            (!name.is_empty() && !email.is_empty()).then(|| (name.to_owned(), email.to_owned()))
-        });
+        // Held to what `select_committing_identity` holds a merge's to. That
+        // selector can't serve here: a resolution's confirmation is bound to its
+        // observation's digest, not to the identity's alone.
+        let effective_identity = effective_identity(&repository)?
+            .filter(commits_unchanged)
+            .map(|identity| (identity.name, identity.email));
         // A caller confirmation is evidence only when no effective repository
         // identity exists. Supplying one beside a valid signature must not
         // alter attempt input, durable bindings, or retry semantics.
@@ -5022,6 +5023,7 @@ impl RepositoryService {
             .then(|| {
                 request.identity.as_ref().filter(|identity| {
                     identity.expected_configuration.0 == request.observation.configuration
+                        && commits_unchanged(&identity.identity)
                 })
             })
             .flatten();

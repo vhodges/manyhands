@@ -8,6 +8,8 @@ use crate::repository::{
 struct PollTransfer<'a> {
     plan: &'a RemoteRefPlan,
     progress: &'a mut dyn FnMut(git2::Progress<'_>) -> bool,
+    /// Set when the fetch failed because the repository's lease is held.
+    lease_busy: &'a std::cell::Cell<bool>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -164,9 +166,21 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     /// caller owns throttling and stop intent; this hook has no reservation
     /// knowledge and runs only during download, outside the repository lease.
     #[allow(dead_code)] // Consumed by the later one-shot poll orchestrator.
+    #[cfg(test)]
     pub(crate) fn fetch_poll_set(
         &mut self,
         plan: &RemoteRefPlan,
+        progress: impl FnMut(git2::Progress<'_>) -> bool,
+    ) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
+        self.fetch_poll_set_noting_lease(plan, &std::cell::Cell::new(false), progress)
+    }
+
+    /// `lease_busy` tells a held lease from a protocol failure, which the
+    /// error's kind doesn't: only a poll answers it differently (decision 24).
+    pub(crate) fn fetch_poll_set_noting_lease(
+        &mut self,
+        plan: &RemoteRefPlan,
+        lease_busy: &std::cell::Cell<bool>,
         mut progress: impl FnMut(git2::Progress<'_>) -> bool,
     ) -> Result<Vec<(String, git2::Oid)>, SshTransportError> {
         self.validate_plan(plan, SshDirection::Fetch)?;
@@ -177,6 +191,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
             Some(PollTransfer {
                 plan,
                 progress: &mut progress,
+                lease_busy,
             }),
         )
     }
@@ -641,7 +656,12 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
                 &self.context.root,
                 crate::repository::RepositoryOperation::Inspect,
             )
-            .map_err(|_| {
+            .map_err(|error| {
+                if let Some(poll) = poll.as_ref()
+                    && error.kind == crate::repository::RepositoryErrorKind::RepositoryBusy
+                {
+                    poll.lease_busy.set(true);
+                }
                 self.context
                     .with_kind(SshTransportErrorKind::ProtocolFailure)
             })?;

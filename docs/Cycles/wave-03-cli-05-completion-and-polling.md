@@ -290,6 +290,15 @@ Also required:
 20. **A superseded close may report no made-ready set (2026-11-01).** "Known limit
     (Recommended)". A close stopped on `remote_context_changed` answers `index_pending`, and
     if a new request supersedes it, no answer may hold the set. `ticket ready` is the live view.
+21. **Synchronization's identity refusal narrows (2026-11-01).** "Narrow the ticket". It makes no
+    configuration write, no local-branch move, no merge and no push. A fetch's tracking refs and its
+    recoverable row may remain, as for a missing identity.
+22. **Two more named edits (2026-11-01).** "Approve E-18 and E-19": the index assertion at
+    `tests/repository_enablement.rs:3816`, and `identity_and_mismatch_do_not_strand_the_item`.
+23. **Conflict resolution is in C5 (2026-11-01).** "Include it in C5": `resolve_synchronization`
+    applies the same identity check before any write.
+24. **Poll overlap answers `busy` (2026-11-01).** "Answer `busy`": a poll's fetch meeting a held
+    repository lease is told apart from a protocol failure, and answers `busy`, exit 5, retryable.
 
 **Owner questions, approved at these recommendations on 2026-10-31.**
 

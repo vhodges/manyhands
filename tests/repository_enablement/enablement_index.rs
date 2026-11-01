@@ -432,8 +432,10 @@ fn a_stop_between_the_commit_and_the_index_recovers_on_retry() {
 }
 
 /// The ticket's journey, through the boundary, with its stale index as the
-/// control: refused as not clean, every effect `not_requested`, and with the
-/// index brought up to date past that refusal to the transport's own answer.
+/// control: refused as not clean. This target doesn't initialize the
+/// transport's runtime, so past the clean check the answer is
+/// `RuntimeUninitialized`'s `internal_error`, and this row says only that it got
+/// past. `c5_lifecycle_remote_select_then_sync_finds_no_key` has the real code.
 #[test]
 fn the_synchronization_after_a_selection_is_not_refused_as_not_clean() {
     let (fixture, _data, service) = selectable();

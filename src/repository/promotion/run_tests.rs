@@ -4876,9 +4876,17 @@ fn new_blocker_is_stored_and_replayed_before_any_child() {
 #[test]
 fn identity_and_mismatch_do_not_strand_the_item() {
     let f = Fixture::new();
+    // A record to mismatch against: R-3 begins none with no identity.
+    let mut req = f.request();
+    RepositoryService::open_at_with_failure_point_for_testing(
+        f.data.path(),
+        FailurePoint::AfterConfirmed,
+    )
+    .unwrap()
+    .promote_document(req.clone(), &mut SessionCredentials::new(NoCredentials))
+    .unwrap_err();
     f.repo.config().unwrap().set_str("user.name", "").unwrap();
     f.repo.config().unwrap().set_str("user.email", "").unwrap();
-    let mut req = f.request();
     let expected_configuration = match f.run(req.clone()) {
         Err(DocumentPromotionError::IdentityRequired {
             expected_configuration,

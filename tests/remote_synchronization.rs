@@ -45,6 +45,7 @@ const CASES: &[ssh_harness::Case] = &[
         c5_identity_confirmed_unusable,
     ),
     ("c5_identity_plain_control", c5_identity_plain_control),
+    ("c5_identity_same_id_recovers", c5_identity_same_id_recovers),
     (
         "c5_identity_kept_replay_and_recovery",
         c5_identity_kept_replay_and_recovery,
@@ -2978,9 +2979,11 @@ fn c5_published(result: SynchronizationResult) -> Result<git2::Oid, FixtureError
 /// refusal, with the observed digest, which then accepts a usable
 /// confirmation.
 ///
-/// `C5Kept` leaves out the tracking ref and the operation's own rows. The
-/// refusal comes after the fetch, as a missing identity's does, and both move:
-/// the ticket's "refs and journal unchanged" awaits a ruling for this path.
+/// The rule for synchronization (decision 21): a refusal makes no configuration
+/// write, no local-branch move, no merge and no push, which is `C5Kept`. A
+/// fetch's tracking refs and its recoverable row may remain, as for a missing
+/// identity: the refusal can only come once the fetch has shown a merge is
+/// needed.
 fn c5_identity_configured_refused(name: &str) -> Result<(), FixtureError> {
     let w = c5_diverged()?;
     c5_set_identity(&w, name, IDENTITY_EMAIL)?;
@@ -3027,6 +3030,38 @@ fn c5_identity_confirmed_unusable() -> Result<(), FixtureError> {
         ));
         assert_eq!(c5_kept(&w)?, kept);
     }
+    Ok(())
+}
+
+/// Decision 21: what a refusal may leave is recoverable. The same operation
+/// asks for its restart, and with a usable identity that restart merges.
+fn c5_identity_same_id_recovers() -> Result<(), FixtureError> {
+    let w = c5_diverged()?;
+    c5_set_identity(&w, BRACKETED_NAME, IDENTITY_EMAIL)?;
+    let kept = c5_kept(&w)?;
+    let request = w.primary();
+    assert!(matches!(
+        w.sync(request.clone()),
+        Err(SynchronizationError::IdentityRequired { .. })
+    ));
+    assert!(matches!(
+        w.sync(request.clone()),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    assert_eq!(c5_kept(&w)?, kept);
+    c5_set_identity(&w, "Example Person", IDENTITY_EMAIL)?;
+    let merged = c5_published(fixed(w.sync(c5_restart(&request)))?)?;
+    let repo = w.repo()?;
+    assert_eq!(fixed(repo.refname_to_id(PRIMARY))?, merged);
+    let commit = fixed(repo.find_commit(merged))?;
+    assert_eq!(commit.parent_count(), 2);
+    assert_eq!(commit.author().name(), Some("Example Person"));
+    let unfinished: i64 = fixed(w.db()?.query_row(
+        "SELECT count(*) FROM remote_operation_records WHERE operation_ulid=?1 AND phase!='completed'",
+        [request.operation_id.to_string()],
+        |row| row.get(0),
+    ))?;
+    assert_eq!(unfinished, 0);
     Ok(())
 }
 

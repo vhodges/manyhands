@@ -1344,6 +1344,7 @@ impl RepositoryService {
         }
         let mut stopped = None;
         let mut last = None;
+        let lease_busy = std::cell::Cell::new(false);
         let fetched = self.with_authenticated_remote_policy_expected(
             VerifySshTransportRequest {
                 root: root.clone(),
@@ -1356,7 +1357,7 @@ impl RepositoryService {
                 .transport_expectation(SshDirection::Fetch)
                 .as_ref(),
             |remote| {
-                remote.fetch_poll_set(&plan, |_| {
+                remote.fetch_poll_set_noting_lease(&plan, &lease_busy, |_| {
                     if stopped.is_some() {
                         return false;
                     }
@@ -1420,6 +1421,13 @@ impl RepositoryService {
                     probe,
                 )? {
                     return Ok(result);
+                }
+                // Another's short local work, and no failure of this poll: no
+                // category is stored to replay and no backoff grows. The row is
+                // left for the same request to restart (decision 24).
+                if lease_busy.get() {
+                    self.poll_interrupt(&root, &owner, None)?;
+                    return Err(RemotePollError::Busy);
                 }
                 let (decision, captured) = self.finish_remote_operation_with(
                     &root,

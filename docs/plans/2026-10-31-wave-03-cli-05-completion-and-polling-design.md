@@ -578,13 +578,14 @@ only replay the stored failure.
 | `Err(Transport(error))`, a row after the call (the common first-call failure) | the error's code. A later re-entry reads the stored category's code above, which can name the same stop differently (`key_rejected` against `no_selected_key`), and a golden pins each | by class | `Final`; new request |
 | `Err(Repository(error))` | the error's code | by class | By the journal row, except over a `Final` row: `Owed`, so the next call reads the stored result. A failure of this call is not stored as the answer (amended by the controller's ruling on Task 5b's review) |
 | `Busy` | `busy` | 5 | `request.retry` |
+| A fetch meeting the repository's lease held (decision 24) | `busy` | 5 | `request.retry`. The request stays accepted and its row `interrupted`, with no category stored and no backoff; the same request restarts it under the same operation. A real protocol failure stays `Err(Transport)` |
 | `PollYielding` | `poll_yielding` | 5 | `request.retry` |
 | `ConflictPending` | `recovery_required` | 3 | `repo.inspect` |
 | Pending local sync | the domain's answer, pinned | 3 | `repo.inspect` |
 
 A first call's host stop carries `SynchronizationMutationDto`, so that `host.approve` can be offered, followed by a **new request**. A replay or re-entry offers no such action (decision (a), Task 5b's review). A held poll fenced by a change of configuration answers `external_change`, `Final`; the call that discovers the change first answers `recovery_required`, since it raises the generation itself. A `failed` row is excepted, also under `request cancel`: its stored category stands. A stopped poll wrapped in `IndexPending` offers no `index.refresh`: the stop's own recovery runs first.
 
-A resend during a live poll takes the row over as after a kill. The repository's lease serializes every local effect and every tracking update: the new pass can't fetch or reach a target while the older one is inside an effect, and the older one then can't record its row, so no effect is duplicated (`c5_poll_once_resend_during_a_materialization`). The new pass's refused fetch is a protocol failure, so that request answers `internal_error`, final, and a new request polls.
+A resend during a live poll takes the row over as after a kill. The repository's lease serializes every local effect and every tracking update: the new pass can't fetch or reach a target while the older one is inside an effect, and the older one then can't record its row, so no effect is duplicated (`c5_poll_once_resend_during_a_materialization`). The new pass's refused fetch answers `busy`, as the table says, and the same request then polls.
 
 A restart reports what its own pass saw. A target an interrupted first pass materialized reads
 `current`, so the final envelope understates it; Git holds exactly one worktree (known limit).
@@ -643,8 +644,8 @@ Decision 6 and `01M5MK57`. Both verbs pass `confirmed_identity: None`.
 | Closure confirm | The identity changed since prepare | The digest binds `closed_by`, so `external_change`, record ended; a new prepare |
 | Promotion | Identity lost after the record began | `identity_required`, `Owed`; after `repo identity-set` the same request continues. Only a change during the run reaches this |
 | Closure confirm | Identity removed or unusable, seen by the boundary's observation as `[IdentityRequired]` alone | `Binding::prepare` answers `identity_required`, with no record and no domain call; a new prepare (R-22). Other states blocked since their preview stay `external_change` |
-| Closure confirm | Identity removed in the race after that check | Refused through `refuse_record`, which writes a terminal row. A terminal refused row is no recovery obligation, so `01M5MK57`'s "journal unchanged" is read as no unfinished row for closure (R-21, recorded on that ticket) |
-| Either | A context child's `IdentityRequired` | `identity_required`, `Owed`; the same request continues |
+| Closure confirm | Identity removed in the race after that check | Refused through `refuse_record`, which writes a terminal row. A terminal refused row is no recovery obligation, so `01M5MK57`'s "journal unchanged" is read as no unfinished row for closure (R-21, recorded on that ticket by Task 15's closure, which adds its file and comments) |
+| Either | A context child's `IdentityRequired` | `identity_required`, `Owed`; the same request continues. The child then merges a commit the preview never showed, so the request ends `external_change`, as one that never stopped does in that world |
 | After a closure checkpoint | | `closed_by` comes from the commit: none needed |
 
 **The fix.** Reproduce first, with a failing test per path. Apply `commits_unchanged` to effective
@@ -655,6 +656,17 @@ library tests do. Each refusal asserts configuration, refs and journal unchanged
 obligation is created. A regression pins that existing recovery records and replay results are kept.
 `effective_identity`'s per-key cascade stays (R-6, open question 1).
 
+**Synchronization's refusal (decision 21, beside R-21).** An identity refusal makes no configuration
+write, no local-branch move, no merge and no push. A fetch's tracking refs and its recoverable row may
+remain, as for a missing identity, since the refusal can only come once the fetch has shown that a merge
+is needed. `01M5MK57`'s "refs and journal unchanged" is narrowed to that for synchronization. The same
+operation recovers with `restart`.
+
+**Conflict resolution (decision 23).** `resolve_synchronization` holds both identities to the same check,
+before any write. It can't route through the selector, because its confirmation is bound to its
+observation's digest. Anything unusable answers its existing `IdentityRequired`, as a confirmation bound
+to another observation already does on that path, and not `ExternalChange`.
+
 ## Remote Selection Fix (`01M669FJR2`, decision 10)
 
 Reproduce through the binary in Task 0, on the merged baseline: `repo enable`, `remote select`, `repo
@@ -664,7 +676,7 @@ synchronization proceeds. The fix is in `set_publication_remote_recorded` (`src/
 ticket's acceptance governs, in full: a library test as well as the binary path; other index entries
 unchanged; a retry and a replay of `remote select` leave the index current; and recovery after a stop
 between the commit and the index update, which Task 0 locates and may widen the scope's named function.
-Re-entry to that function's already-selected branch (`src/repository.rs:4500`) updates the index too, and one `FailurePoint` variant stages the stop (decision 17). Its "merged on its own" bullet is overridden by decision 10, recorded on that ticket. C4's fixture seed
+Re-entry to that function's already-selected branch (`src/repository.rs:4500`) updates the index too, and one `FailurePoint` variant stages the stop (decision 17). Its "merged on its own" bullet is overridden by decision 10, recorded on that ticket by Task 15's closure, which adds its file and comments. C4's fixture seed
 stays.
 
 ## Recovery Tables (decision 4)
@@ -796,6 +808,8 @@ and request records hold neither (Task 0 confirms). The index's `closed_by` colu
 | E-15 | `src/repository/mutation/confirm_tests.rs` | `Row::Unfinished` cases |
 | E-16 | `src/bin/manyhands-cli/startup_tests.rs:171`, `parse_tests.rs:563` | Move to the test-only planned spec (decision 16), done with E-3 and E-4 in Task 9 |
 | E-17 | `tests/mutation_remote/c5_lifecycle.rs` `child_remote_branch_deleted`; `bind/lifecycle.rs` `a_stop_the_request_cannot_get_past_offers_its_cancellation` (rewritten from `a_childs_way_past_needs_the_request_and_a_look_at_the_repository`) | The offered actions become `request.cancel`, `repo.inspect`, and the stale comment is fixed (decision 18) |
+| E-18 | `tests/repository_enablement.rs:3816` | Asserts the index now matches the commit (decision 22) |
+| E-19 | `promotion::run_tests::identity_and_mismatch_do_not_strand_the_item` | Its mismatch call has a real record, from a stop before the identity is removed; it still asserts the item isn't stranded (decision 22) |
 
 `tests/read_relationships.rs:1183,1190,1254` hold `"C5"` as Wave-graph data, and are not pins. Task 0
 greps for other pins (`NotResumable`, `"C5"`, `arrives with`, `Planned`). An unlisted hit stops for owner
@@ -876,7 +890,6 @@ review. This list is not yet proven complete.
 - A killed poll with a lost request ID is found through `operation list`.
 - Policy verbs are last commit wins: resending a request that never committed writes again (decision 15).
 - A poll plan failure other than a missing remote writes the domain's stored state.
-- A poll's fetch meeting the repository's lease held by anyone reports a protocol failure, so its request answers `internal_error`, final. The domain's mapping (`transport/remote.rs:639`), and a new request polls.
 - A poll configures its endpoints before it asks for the reservation. With the endpoints changed, it raises the generation and fences whatever is running, a lifecycle's child among them, and then polls (`c5_poll_once_fences_a_lifecycle_child`). The domain's order, and predates C5.
 - A promotion blocked by a pending local sync issues a confirmation before refusing.
 - After an external `git pull`, with the index not marked behind, an item on primary with no context answers `item_not_found` until `index refresh`. An index marked behind keeps the `recovery_required` answer naming `context_missing`.

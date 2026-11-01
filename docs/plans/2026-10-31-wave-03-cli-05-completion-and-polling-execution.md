@@ -976,3 +976,41 @@ Two corrections to those counts. `identity_child_stop_continues` (2 of the 11) f
 | `cargo fmt --check`, `cargo check --all-features --locked`, clippy `-D warnings` | ok | |
 
 After that set, only a test-file lint fix and a comment changed. The three `c5_identity` filters, fmt and clippy were rerun on the final tree, and passed 5, 5 and 5. `--test ticket_closure` as a whole, `mutation_replay` as a whole and the Part A gate were not run.
+
+#### Task 6: the owner's rulings (decisions 21-24)
+
+The three blockers above are settled. Each is in the Cycle's decisions, with the design and the plan amended. No row answered otherwise on the final code, and nothing stopped this round.
+
+- **Decision 21.** The rows stand, and their comment now states the rule. `c5_identity_same_id_recovers` is new: refused, the same ID without `restart` answers `recovery_required`, and with a usable identity its restart merges and completes.
+- **Decision 22.** E-18 asserts the index matches the commit. E-19 takes a stop at `AfterConfirmed` before the identity goes, so its mismatch has a real record. The rest of that test is unchanged.
+- **Decision 23.** I read `resolve_synchronization` and did not route it through the selector, since its confirmation is bound to its observation's digest, not the selector's. It applies `commits_unchanged` to both identities before any write. Anything unusable answers `IdentityRequired`, as a confirmation bound to another observation does there. **Correction to the risk above:** a bracketed configured identity already answered `IdentityRequired`, because `repository.signature()` fails and was read as none; that row and the control passed before the fix. The trimmed and confirmed rows failed before it.
+- **Decision 24.** `fetch_poll_set_noting_lease` reports a held lease in a `Cell`, so no public error kind changed and no exhaustive match grew. The domain then interrupts its row and returns `RemotePollError::Busy`. **What the row says:** `busy`, outcome `error`, `request.retry`, record `accepted`, row `interrupted` with no stored outcome, so no failure replays and no backoff grows. The same request completes under the same operation, and a replay is identical. A cancel still comes first, at the safe point before it. `c5_poll_once_resend_during_a_materialization` changed with the ruling: B answers `busy`, and the same request then finishes where it used to answer `internal_error` for good. It is C5's own row. **Synchronization shares the defect by reading:** its fetch passes the same line, so a held lease answers `internal_error`. I left it alone, since its row's retry isn't what this ruling covers, and no row pins it.
+
+**The `internal_error` risk: not a defect.** `tests/repository_enablement` never initializes the transport's runtime, unlike the binary and the SSH harness, so `transport/operation.rs:83-85` answers `RuntimeUninitialized`, which maps to `internal_error`. With the runtime initialized the same journey answers `no_selected_key`: `c5_lifecycle_remote_select_then_sync_finds_no_key`. The enablement row keeps its stale-index control and says why it can't name the final code.
+
+**Also done.** The design's sentence on a child's identity stop ending `external_change`. A promotion's `identity_required` golden, `document_promote_identity_required`, added now rather than in Task 7, read before commit. The two-commit split is recorded in the plan. The design's "recorded on that ticket" now points at Task 15's closure, and those branches were not edited.
+
+**Verified on the final tree, all exit 0.**
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--test remote_synchronization -- identity` | 6 | 69 s |
+| `--test document_promotion` | 79 | 766 s |
+| `--test ticket_closure` | 78 | 686 s |
+| `--test mutation_remote -- c5_lifecycle_identity` | 20 | 83 s |
+| `--test mutation_remote -- c5_poll` | 88 | 359 s |
+| `--test remote_polling` | 84 | 184 s |
+| `--test repository_enablement` | 103 | 17 s |
+| `--test remote_merge_recovery` | 29 | 237 s |
+| `--test mutation_remote -- conflict` | 41 | 399 s |
+| `--test mutation_contract` | 44 | 11 s |
+| `--lib promotion` | 205 | 130 s |
+| `--lib closure` | 200 | 74 s |
+| `--lib remote` | 479 | 171 s |
+| `--lib local_sync` | 164 | 279 s |
+| `--lib integration` | 26 | 16 s |
+| `--lib mutation` | 146 | 1 s |
+| `--test mutation_remote -- c5_lifecycle_remote_select` | 1 | |
+| `cargo fmt --check`, `cargo check --all-features --locked`, clippy `-D warnings` | ok | |
+
+`--test ssh_transport -- poll` passed 9 after the transport edit. `--test mutation_remote -- c5_lifecycle` as a whole was last run before this round's library changes, with 145 passing. The Part A gate is the controller's.
