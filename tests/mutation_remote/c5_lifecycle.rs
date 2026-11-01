@@ -1272,7 +1272,11 @@ fn unfinished_continues(verb: Verb) -> Result<(), FixtureError> {
     let mut w = remote(verb)?;
     let (_, stopped) = stopped_at(&mut w, verb, FailurePoint::AfterContextSync)?;
     assert_eq!(stopped.code, ResultCode::InternalError);
-    assert_ne!(stopped.outcome, Outcome::Partial, "nothing durable yet");
+    // The context's push has landed, so the stop is partial, whatever stopped
+    // it, with nothing yet on primary.
+    assert_eq!(stopped.outcome, Outcome::Partial);
+    assert_eq!(stopped.effects.publication, PublicationEffect::Published);
+    assert_eq!(stopped.effects.integration, IntegrationEffect::NotRequested);
     assert_eq!(actions(&stopped)[0], RecoveryActionKind::RequestRetry);
     assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     assert_eq!(parents(&w.db()?, verb)?, 1);

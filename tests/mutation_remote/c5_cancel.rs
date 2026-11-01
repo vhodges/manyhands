@@ -72,8 +72,8 @@ const ONE: &[ssh_harness::Case] = &[
     }),
     // The runner's rules for a fenced child are the same for either verb, and
     // these stagings are slow.
-    ("c5_cancel_fenced_retained_conflict_close", || {
-        fenced_retained_conflict(Verb::Close)
+    ("c5_cancel_poll_leaves_a_retained_conflict_close", || {
+        poll_leaves_a_retained_conflict(Verb::Close)
     }),
     ("c5_cancel_fenced_released_resolution_close", || {
         fenced_released_resolution(Verb::Close)
@@ -1407,19 +1407,20 @@ fn supersede_straight_after_the_cancel(verb: Verb) -> Result<(), FixtureError> {
 
 // A poll's fence over a child that can't be replaced (design, Known Limits).
 
-/// A poll under a changed push URL, which raises the generation, with the URL
-/// then put back: only the generation is left to answer for.
-fn fence(w: &World) -> Result<(), FixtureError> {
+/// The generation that fences a remote operation.
+fn generation(w: &World) -> Result<i64, FixtureError> {
+    fixed(fixed(w.db())?.query_row(
+        "SELECT configuration_generation FROM remote_polling_state",
+        [],
+        |row| row.get(0),
+    ))
+}
+
+/// A poll's answer under a changed push URL, with the URL then put back: only
+/// the generation is left to answer for.
+fn polled_under_a_changed_url(w: &World) -> Result<ResultCode, FixtureError> {
     let url = w.server.url();
     let repo = w.repo()?;
-    let generation = || -> Result<i64, FixtureError> {
-        fixed(fixed(w.db())?.query_row(
-            "SELECT configuration_generation FROM remote_polling_state",
-            [],
-            |row| row.get(0),
-        ))
-    };
-    let before = generation()?;
     fixed(repo.remote_set_pushurl("origin", Some(&format!("{url}-changed"))))?;
     let poll = w.service.execute(
         MutationCall {
@@ -1434,14 +1435,14 @@ fn fence(w: &World) -> Result<(), FixtureError> {
         &CancellationToken::new(),
     );
     fixed(repo.remote_set_pushurl("origin", None))?;
-    assert!(generation()? > before, "fenced");
-    // It polls, or the conflict it has just fenced still refuses it. Either
-    // way the generation has been raised, which comes first in the domain.
-    assert!(
-        matches!(poll.code, ResultCode::Ok | ResultCode::RecoveryRequired),
-        "{:?}",
-        poll.code
-    );
+    Ok(poll.code)
+}
+
+/// A poll that raises the generation.
+fn fence(w: &World) -> Result<(), FixtureError> {
+    let before = generation(w)?;
+    assert_eq!(polled_under_a_changed_url(w)?, ResultCode::Ok);
+    assert!(generation(w)? > before, "fenced");
     Ok(())
 }
 
@@ -1457,17 +1458,24 @@ fn assert_stuck(w: &World, verb: Verb) -> Result<(), FixtureError> {
     Ok(())
 }
 
-/// A retained child is restarted, not replaced, and a restart under another
-/// generation is refused. The code alone doesn't show that, since an unfenced
-/// conflict answers the same: `fence` shows the generation moved.
-fn fenced_retained_conflict(verb: Verb) -> Result<(), FixtureError> {
+/// A poll never fences a retained conflict: it refuses on the pending conflict
+/// before it configures its endpoints, so the generation stays, and the conflict
+/// stands as it was.
+fn poll_leaves_a_retained_conflict(verb: Verb) -> Result<(), FixtureError> {
     let w = remote(verb)?;
     conflicted(&w, verb)?;
-    fence(&w)?;
+    let before = generation(&w)?;
+    assert_eq!(
+        polled_under_a_changed_url(&w)?,
+        ResultCode::RecoveryRequired
+    );
+    assert_eq!(generation(&w)?, before, "not fenced");
     assert_stuck(&w, verb)
 }
 
-/// A released resolution continues its child the same way.
+/// A released resolution is restarted, not replaced, and a restart under another
+/// generation is refused. Unfenced, the same request publishes it
+/// (`released_resolution_publishes`).
 fn fenced_released_resolution(verb: Verb) -> Result<(), FixtureError> {
     let w = remote(verb)?;
     resolved_then_stopped(&w, verb)?;

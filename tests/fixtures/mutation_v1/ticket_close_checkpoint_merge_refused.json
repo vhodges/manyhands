@@ -23,10 +23,10 @@
   "effects": {
     "checkpoint": "committed",
     "cleanup": "not_requested",
-    "commit_oid": null,
-    "discovery": "not_requested",
+    "commit_oid": "<integration>",
+    "discovery": "pending",
     "integration": "not_requested",
-    "publication": "not_requested",
+    "publication": "published",
     "write": "not_requested"
   },
   "message": "Recovery is required before this can continue.",
