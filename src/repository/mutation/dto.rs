@@ -724,6 +724,7 @@ pub enum MutationDataDto {
     Repair(RepairMutationDto),
     Context(ContextMutationDto),
     Lifecycle(Box<LifecycleMutationDto>),
+    PollPolicy(PollPolicyMutationDto),
 }
 
 contract_enum!(
@@ -1548,6 +1549,42 @@ impl RemoteMutationDto {
     }
 }
 
+/// What `poll configure`, `poll pause` and `poll resume` report: the
+/// registration's polling policy as the request's transaction left it. A
+/// replay gives it as it was then; `poll status` reads what is stored now.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct PollPolicyMutationDto {
+    pub enabled: bool,
+    pub paused: bool,
+    pub interval_seconds: u64,
+    pub backoff_seconds: Option<u64>,
+    /// Automatic polls stay blocked while this is set, whatever a
+    /// `poll resume` did: it is not lifted here (decision 5).
+    pub recovery_suspended: bool,
+    /// Null when no deadline is stored, so an eligible poll is due.
+    pub next_eligible_at: Option<String>,
+}
+
+impl PollPolicyMutationDto {
+    /// The data as a finished record stored it.
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        Some(Self {
+            enabled: stored.get("enabled")?.as_bool()?,
+            paused: stored.get("paused")?.as_bool()?,
+            interval_seconds: stored.get("interval_seconds")?.as_u64()?,
+            backoff_seconds: match stored.get("backoff_seconds")? {
+                serde_json::Value::Null => None,
+                value => Some(value.as_u64()?),
+            },
+            recovery_suspended: stored.get("recovery_suspended")?.as_bool()?,
+            next_eligible_at: match stored.get("next_eligible_at")? {
+                serde_json::Value::Null => None,
+                value => Some(value.as_str()?.to_owned()),
+            },
+        })
+    }
+}
+
 /// What `document create`, `document save` and `document move` report
 /// about the document.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -1643,7 +1680,8 @@ impl MutationDataDto {
             | Self::Repair(_)
             | Self::Context(_)
             // A lifecycle's category carries no authority (design, Answers).
-            | Self::Lifecycle(_) => None,
+            | Self::Lifecycle(_)
+            | Self::PollPolicy(_) => None,
         }
     }
 
@@ -1723,6 +1761,9 @@ impl MutationDataDto {
             Command::DocumentPromote | Command::TicketClose => {
                 LifecycleMutationDto::from_stored(stored)
                     .map(|data| Self::Lifecycle(Box::new(data)))
+            }
+            Command::PollConfigure | Command::PollPause | Command::PollResume => {
+                PollPolicyMutationDto::from_stored(stored).map(Self::PollPolicy)
             }
             // A resume reports data only of a synchronization it took
             // up: the host that synchronization stopped for, or the

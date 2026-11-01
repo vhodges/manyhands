@@ -675,3 +675,54 @@ The first `mutation_replay` run failed only on the E-10 row's expected outcome. 
 **File beyond the plan's list, as ruled.** `promotion/mod.rs`, `closure/mod.rs`, `closure/run_tests.rs`, and the additive assertion in `tests/mutation_remote/c5_lifecycle.rs`.
 
 **Verified on the final code, in compare mode with no `MANYHANDS_UPDATE_GOLDEN`, all exit 0.** `c5_made_ready` 27 cases (189 s), `c5_lifecycle` 126 (1032 s, detached), `c5_resume` 56 (423 s), `mutation_contract` 44 (12 s), `read_contract` 72 (7 s), `read_relationships` 17 (5 s), `--lib read::graph` 25 (10 s), `--lib mutation` 143 (2 s), `--lib the_parent_view` 1 (1 s), `cargo fmt --check`, clippy `-D warnings`. Not rerun: `c5_cancel_`, `mutation_replay`. After those runs only the order of two rows in the design's table changed.
+
+### Task 5a: Policy Bindings
+
+Base `9fba2036`; `origin/main` is contained, and `merge-tree` is clean.
+
+**What landed.** `poll configure`, `poll pause` and `poll resume` with every predicate, `from_stored`, `recorded_effects` and `Replay` conformance rows. `update_remote_polling` reads the policy and writes only its own field in the caller's transaction. A binding offering `one_transaction` goes through `written_with_its_record` in `execute.rs` and `finish_in_one_transaction` in `records.rs`, which insert the record, write and finish it in one transaction under `cache_write_guard`. `stored_result` in `settle.rs` is now what both writers of a finished result use, and the "one writer" comment says so. `read/dto.rs:723` is corrected.
+
+**Decisions the design left open, for review.**
+
+- **Data.** The design names no data for these verbs. They report `PollPolicyMutationDto` (`poll_policy_mutation.schema.json`, new data root): the policy as the transaction left it, on success and on a no-op. It has no enum, so `read_contract` needed no row. It lets Task 8 name a suspension without a second read. A replay gives the policy as it was then.
+- **Progress.** The path reports the `Writing` stage before the transaction and no `Accepted` event, since there is no accepted state to report.
+- **Position.** Null, as for an index refresh: nothing is committed, and the design's primary-branch line can only apply to a command with a commit to check on replay.
+- **Fault points.** Existing ones reused, no new variant: `BeforeRequestDomainCall` before the transaction and `BeforeRequestSettlement` inside it.
+- **`maximum`.** The schema checker doesn't support the keyword, so the interval's schema has `minimum: 60` and states the upper bound in its description. The binding enforces it.
+- **The rows' home.** The three conformance rows are in `tests/mutation_replay/remotes.rs`.
+
+**Files beyond the plan's list, test support only.** `tests/support/mutation.rs` and `tests/support/repair.rs` gained one panic arm per exhaustive match on `MutationDataDto`; `tests/mutation_replay/remotes.rs` as above. E-9 needed the new names and one set (`unjournaled`) in `command.rs`, plus a new predicate test. E-12 needed no edit: `outcome_tests.rs` iterates `Command::ALL` and passes unchanged, so that listed file is untouched. No desktop or bin arm was needed, so the desktop gate commands weren't run separately; `--all-features` check and clippy passed.
+
+**Seen failing.** Against a binding whose `prepare` answers `internal_error`, 22 of the first 25 rows failed by assertion, each at its own line. Three passed against it, which proves nothing of them: `unavailable_index`, `crash_before_the_transaction` and `stop_inside_the_transaction`. The last two are shown by the mutations below; `unavailable_index` was not mutated. Each mutation was run against the real code and reverted:
+
+| Mutation | Rows that failed |
+| --- | --- |
+| Pause also writes `interval_seconds=300` | `stale_pause_keeps_the_newer_interval` |
+| Resume also clears backoff and suspension | `resume_success` |
+| Resume leaves the deadline | `resume_success` |
+| A failed write commits what it wrote | `stop_inside_the_transaction`, `unregistered_after_the_check` |
+| Fault points not honoured | `crash_before_the_transaction`, `stop_inside_the_transaction`, `never_committed_resend_is_a_new_write` |
+| `set_remote_polling` stops writing the interval | `stale_whole_tuple_control`, the Review Focus 6 control |
+
+Not mutated: `stale_resume_keeps_the_newer_interval`, `the_same_request_races`, and the remaining rows, which were only seen failing against the stub. `the_same_request_races` and `unregistered_after_the_check` were written after the stub run, and only the second has been seen to fail.
+
+**Verified, compare mode, all exit 0.**
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--test mutation_remote -- c5_poll` | 27 | 17 s |
+| `--test read_status` | 24 | 4 s |
+| `--test read_contract` | 72 | 8 s |
+| `--test mutation_contract` | 44 | 10 s |
+| `--test mutation_replay` | 384 | 286 s |
+| `--test mutation_confirmation` | 183 | 58 s |
+| `--test mutation_bridges` | 166 | 60 s |
+| `--lib mutation` | 144 | 1 s |
+| `--lib remote` | 478 | 185 s |
+| `--lib local_sync` | 164 | 302 s |
+| `--lib integration` | 26 | 17 s |
+| `cargo fmt --check`, `cargo check --all-features --locked`, clippy `-D warnings` | ok | 10, 10, 25 s |
+
+`mutation_replay` ran before the last two `c5_poll` rows were added, which changed only `c5_poll.rs`, with no library change since.
+
+**Limits.** A registration removed mid-call answers `repository_not_registered` from the transaction, with no recovery beyond what the read gives. `human` output for these verbs is Task 8, and `poll once` is Task 5b.

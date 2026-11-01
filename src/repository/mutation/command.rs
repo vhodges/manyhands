@@ -74,6 +74,9 @@ commands! {
     ContextRelease => "context release",
     DocumentPromote => "document promote",
     TicketClose => "ticket close",
+    PollConfigure => "poll configure",
+    PollPause => "poll pause",
+    PollResume => "poll resume",
 }
 
 impl Command {
@@ -145,6 +148,10 @@ impl Command {
             // and, once it deletes the remote context, in the remote
             // journal under the same ID (fact 29).
             Self::DocumentPromote | Self::TicketClose => true,
+            // One write in the request's own transaction, with no operation
+            // ID and no row (decision 15): the record finished with it is
+            // what says it was made.
+            Self::PollConfigure | Self::PollPause | Self::PollResume => false,
             // Never made twice, and so recorded against nothing: a key's
             // ID is not registered again.
             Self::KeyRemove => false,
@@ -219,7 +226,10 @@ impl Command {
             | Self::DocumentRepair
             | Self::TicketRepair
             | Self::ContextPrepare
-            | Self::ContextRelease => false,
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume => false,
         }
     }
 
@@ -267,7 +277,10 @@ impl Command {
             | Self::DocumentRepair
             | Self::TicketRepair
             | Self::ContextPrepare
-            | Self::ContextRelease => false,
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume => false,
         }
     }
 
@@ -314,7 +327,10 @@ impl Command {
             | Self::DocumentRepair
             | Self::TicketRepair
             | Self::ContextPrepare
-            | Self::ContextRelease => false,
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume => false,
         }
     }
 
@@ -369,7 +385,10 @@ impl Command {
             | Self::DocumentRepair
             | Self::TicketRepair
             | Self::ContextPrepare
-            | Self::ContextRelease => false,
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume => false,
             // A resume has no operation. One that takes up another
             // request's synchronization honors its own call's token at
             // that operation's safe points and reports their stages, but
@@ -440,7 +459,10 @@ impl Command {
             // A resolution's result says what its request did, and a
             // replay of it offers nothing (R-35): `conflict show` names
             // the next step.
-            | Self::ConflictResolve => false,
+            | Self::ConflictResolve
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume => false,
         }
     }
 
@@ -497,7 +519,11 @@ impl Command {
             | Self::ContextPrepare
             // What a context release does is remove the worktree and
             // the branch.
-            | Self::ContextRelease => ProgressStage::Writing,
+            | Self::ContextRelease
+            // What a policy verb does is write its one field.
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume => ProgressStage::Writing,
         }
     }
 
@@ -551,7 +577,10 @@ impl Command {
             | Self::ContextPrepare
             // A release's hand-off is its operation's to owe, as a
             // save's is, and `operation resume` takes it up (R-32).
-            | Self::ContextRelease => false,
+            | Self::ContextRelease
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume => false,
         }
     }
 
@@ -620,7 +649,12 @@ impl Command {
             | Self::ContextRelease
             // A resume does only what an operation already owes and
             // was consented to when it began.
-            | Self::OperationResume => false,
+            | Self::OperationResume
+            // One field of a stored policy: a pause and an interval lose
+            // nothing, and what they replace is shown by `poll status`.
+            | Self::PollConfigure
+            | Self::PollPause
+            | Self::PollResume => false,
         }
     }
 }
@@ -673,6 +707,9 @@ mod tests {
         assert_eq!(Command::ItemRepublish.name(), "item republish");
         assert_eq!(Command::DocumentPromote.name(), "document promote");
         assert_eq!(Command::TicketClose.name(), "ticket close");
+        assert_eq!(Command::PollConfigure.name(), "poll configure");
+        assert_eq!(Command::PollPause.name(), "poll pause");
+        assert_eq!(Command::PollResume.name(), "poll resume");
     }
 
     #[test]
@@ -813,9 +850,16 @@ mod tests {
             // repository lease with no row.
             // So is a host's pin, written by the pin store's own
             // transaction with no row.
+            // So is a polling policy, written in its request's own
+            // transaction with no row.
             let unjournaled = matches!(
                 command,
-                Command::RepoIdentitySet | Command::HostApprove | Command::HostReplace
+                Command::RepoIdentitySet
+                    | Command::HostApprove
+                    | Command::HostReplace
+                    | Command::PollConfigure
+                    | Command::PollPause
+                    | Command::PollResume
             );
             assert_eq!(
                 command.has_operation(),
@@ -914,6 +958,26 @@ mod tests {
             assert!(!command.restores_index(), "{command:?}");
             assert!(!command.creates_its_repository(), "{command:?}");
             assert_eq!(command.stage(), ProgressStage::Connecting, "{command:?}");
+        }
+    }
+
+    /// The design's Command Predicates row of the policy verbs.
+    #[test]
+    fn a_policy_verb_is_a_local_write_with_no_operation_and_no_confirmation() {
+        for command in [
+            Command::PollConfigure,
+            Command::PollPause,
+            Command::PollResume,
+        ] {
+            assert!(!command.needs_confirmation(), "{command:?}");
+            assert!(!command.has_operation(), "{command:?}");
+            assert!(!command.stops_at_safe_points(), "{command:?}");
+            assert!(!command.finishes_as_a_synchronization(), "{command:?}");
+            assert!(!command.hands_off_to_any_refresh(), "{command:?}");
+            assert!(!command.was_accepted_without_operation(), "{command:?}");
+            assert!(!command.restores_index(), "{command:?}");
+            assert!(!command.creates_its_repository(), "{command:?}");
+            assert_eq!(command.stage(), ProgressStage::Writing, "{command:?}");
         }
     }
 

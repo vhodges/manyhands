@@ -6381,6 +6381,8 @@ impl crate::repository::RepositoryService {
             .map(|snapshot| snapshot.remote)
     }
 
+    /// Writes all three fields, whatever was read of them and whenever. Only
+    /// tests call this: a policy verb goes through `update_remote_polling`.
     pub fn set_remote_polling(
         &self,
         root: &Path,
@@ -6395,6 +6397,80 @@ impl crate::repository::RepositoryService {
             Ok(())
         })
     }
+}
+
+/// What a polling policy verb changes. Each names only what it writes, so a
+/// verb can't overwrite a field another caller changed since it last read one.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PollingChange {
+    /// The interval, and not the stored due time.
+    Interval(PollingInterval),
+    /// The pause.
+    Pause,
+    /// The pause and the stored deadline, so an eligible poll is due (decision
+    /// 11). The suspension, `enabled` and the backoff value stay.
+    Resume,
+}
+
+/// The policy as an `update_remote_polling` left it.
+#[derive(Clone, Debug)]
+pub(crate) struct PollingUpdate {
+    /// False when the policy was already so, and nothing was written.
+    pub(crate) changed: bool,
+    pub(crate) polling: RemotePollingConfiguration,
+    pub(crate) next_eligible_at: Option<OffsetDateTime>,
+}
+
+/// Applies `change` to the policy of the registration whose root is
+/// `root_path`, in the caller's transaction, so the request's record commits
+/// with it or not at all (decision 15). Whether it is already so is read in the
+/// same transaction. Unlike `set_remote_polling`, it writes no other field.
+pub(in super::super) fn update_remote_polling(
+    transaction: &Transaction<'_>,
+    root_path: &str,
+    change: PollingChange,
+) -> Result<PollingUpdate, RepositoryError> {
+    let id: i64 = transaction
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path=?1",
+            [root_path],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| recovery_required())?
+        .ok_or_else(|| {
+            RepositoryError::new(
+                RepositoryOperation::RepositorySnapshot,
+                None,
+                RepositoryErrorKind::RepositoryNotRegistered,
+                "the repository is not registered",
+            )
+        })?;
+    let before = read_policy(transaction, id)?.polling;
+    let written = match change {
+        PollingChange::Interval(interval) if before.interval() != interval.duration() => {
+            transaction.execute(
+                "UPDATE remote_polling_state SET interval_seconds=?2 WHERE repository_id=?1",
+                params![id, interval.duration().as_secs()],
+            )
+        }
+        PollingChange::Pause if !before.paused() => transaction.execute(
+            "UPDATE remote_polling_state SET paused=1 WHERE repository_id=?1",
+            [id],
+        ),
+        PollingChange::Resume if before.paused() => transaction.execute(
+            "UPDATE remote_polling_state SET paused=0,next_eligible_at=NULL WHERE repository_id=?1",
+            [id],
+        ),
+        PollingChange::Interval(_) | PollingChange::Pause | PollingChange::Resume => Ok(0),
+    }
+    .map_err(|_| recovery_required())?;
+    let after = read_policy(transaction, id)?;
+    Ok(PollingUpdate {
+        changed: written != 0,
+        polling: after.polling,
+        next_eligible_at: after.next_eligible_at,
+    })
 }
 
 /// A short cache-recovery-guarded transaction, never held across Git or network

@@ -12,11 +12,11 @@ use crate::results::{Effects, Envelope, ResultCode};
 
 use super::{
     super::{
-        FailurePoint, OperationId, RepositoryOperation, RepositoryService,
+        FailurePoint, OperationId, ReadError, RepositoryOperation, RepositoryService,
         keys::{SessionCredentialProvider, SessionCredentials},
     },
     CancellationToken, MutationCall, ProgressSink,
-    bind::{self, Accepted, Answer, Binding, CallContext, Place, Ran},
+    bind::{self, Accepted, Answer, Binding, CallContext, OneTransaction, Place, Ran},
     command::Command,
     confirm::Consent,
     dto::{MutationDataDto, RequestState},
@@ -25,6 +25,7 @@ use super::{
     progress::{CallSession, ProgressStage, Session, Subject},
     records::{ConfirmationRecord, InsertRequestOutcome, NewRequest},
     reply::{Kept, Reply, RequestIdentity},
+    settle::stored_result,
 };
 
 impl RepositoryService {
@@ -303,7 +304,7 @@ impl RepositoryService {
             expected: prepared.expected,
         };
         self.run_acceptance_hook();
-        let inserted = self.insert_request(&NewRequest {
+        let request = NewRequest {
             request_id: accepted.request_id,
             scope,
             command: binding.command().name().to_owned(),
@@ -314,7 +315,11 @@ impl RepositoryService {
             base_oid: accepted.position.base_oid,
             expected_digest: accepted.expected.clone(),
             operations: accepted.operation().into_iter().collect(),
-        });
+        };
+        if let Some(write) = reply.binding.one_transaction() {
+            return self.written_with_its_record(&reply, &accepted, &request, write, session);
+        }
+        let inserted = self.insert_request(&request);
         match inserted {
             Ok(InsertRequestOutcome::Inserted) => {}
             Ok(InsertRequestOutcome::RequestExists) => return None,
@@ -338,6 +343,47 @@ impl RepositoryService {
         Some(self.called(&reply, &accepted, session, || {
             reply.binding.run(&call, &accepted)
         }))
+    }
+
+    /// A request whose whole effect is one write, in one transaction with its
+    /// record (decision 15). It is absent or finished, with no accepted state to
+    /// re-enter and no settling. So a request that never committed can't be told
+    /// from one never sent, and sending it again is a new write: last commit
+    /// wins. `None` when another call of the same request committed first: the
+    /// next look answers from its record.
+    ///
+    /// The fault points stand in for a process that died before the transaction
+    /// and inside it, where the write is made and the record isn't finished.
+    fn written_with_its_record(
+        &self,
+        reply: &Reply<'_>,
+        accepted: &Accepted,
+        request: &NewRequest,
+        write: &dyn OneTransaction,
+        session: &dyn Session,
+    ) -> Option<Envelope<MutationDataDto>> {
+        if self.dies_at(FailurePoint::BeforeRequestDomainCall, accepted) {
+            return Some(reply.stopped(ResultCode::InternalError));
+        }
+        self.run_request_hook();
+        session.report(
+            &Subject::of(reply.binding, accepted)
+                .event(reply.binding.command().stage(), Effects::not_requested()),
+        );
+        let written = self.finish_in_one_transaction(request, |transaction| {
+            let answer = write.write(transaction, &accepted.scope)?;
+            if self.dies_at(FailurePoint::BeforeRequestSettlement, accepted) {
+                return Err(ReadError::new(ResultCode::InternalError));
+            }
+            let result =
+                stored_result(&answer).ok_or_else(|| ReadError::new(ResultCode::InternalError))?;
+            Ok((result, answer))
+        });
+        match written {
+            Ok(Some(answer)) => Some(reply.envelope(answer, Some(accepted), Kept::No)),
+            Ok(None) => None,
+            Err(error) => Some(reply.read_failure(&error)),
+        }
     }
 
     /// What this call gives a binding to work with: the service, the

@@ -12,6 +12,8 @@ mod c5_cancel;
 mod c5_lifecycle;
 #[path = "mutation_remote/c5_made_ready.rs"]
 mod c5_made_ready;
+#[path = "mutation_remote/c5_poll.rs"]
+mod c5_poll;
 #[path = "mutation_remote/comment.rs"]
 mod comment;
 #[path = "mutation_remote/comment_domain.rs"]
@@ -75,6 +77,7 @@ fn main() {
         .chain(c5_lifecycle::CASES)
         .chain(c5_cancel::CASES)
         .chain(c5_made_ready::CASES)
+        .chain(c5_poll::CASES)
         .copied()
         .collect();
     let controls: Vec<_> = OUTPUT_CONTROLS

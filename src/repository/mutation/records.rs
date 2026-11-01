@@ -830,6 +830,34 @@ impl RepositoryService {
         })
     }
 
+    /// Accepts a request and finishes it in one transaction with what `write`
+    /// wrote, under the exclusive index lock, so the request is absent or
+    /// finished and never accepted. `write` gives the result to store and what
+    /// the caller answers with. `None`, with nothing written, for a request ID
+    /// a record already holds. An `Err` leaves neither the record nor the write.
+    pub(super) fn finish_in_one_transaction<T>(
+        &self,
+        request: &NewRequest,
+        write: impl FnOnce(&Transaction<'_>) -> Result<(RequestResult, T), ReadError>,
+    ) -> Result<Option<T>, ReadError> {
+        let now = self.record_time();
+        self.write_records(|transaction| {
+            match insert_request(transaction, request, now, false)? {
+                InsertRequestOutcome::Inserted => {}
+                InsertRequestOutcome::RequestExists => return Ok(None),
+                // A request of this path presents no confirmation.
+                InsertRequestOutcome::ConfirmationUnavailable => {
+                    return Err(ReadError::new(ResultCode::InternalError));
+                }
+            }
+            let (result, value) = write(transaction)?;
+            if !finish_request(transaction, request.request_id, 1, &result, now)? {
+                return Err(ReadError::new(ResultCode::InternalError));
+            }
+            Ok(Some(value))
+        })
+    }
+
     /// The record of a request, or `None` when no record holds its ID.
     #[doc(hidden)]
     pub fn request_record(

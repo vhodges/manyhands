@@ -44,6 +44,7 @@ pub(crate) mod index;
 pub(crate) mod key;
 pub(crate) mod lifecycle;
 pub(crate) mod local_sync;
+pub(crate) mod poll;
 pub(crate) mod remote;
 pub(crate) mod repair;
 pub(crate) mod repo;
@@ -778,6 +779,19 @@ pub(crate) enum EndedWithoutCheckpoint {
     SaysNothing,
 }
 
+/// The whole effect of a request that is one write in its record's own
+/// transaction, as a policy verb's is (decision 15): the boundary inserts the
+/// record, calls this and finishes the record, and commits all of it or none.
+pub(crate) trait OneTransaction {
+    /// Makes the write and answers with what it left, for the record to store.
+    /// An `Err` rolls it back, with the record.
+    fn write(
+        &self,
+        transaction: &rusqlite::Transaction<'_>,
+        scope: &ScopeKey,
+    ) -> Result<Answer, ReadError>;
+}
+
 pub(crate) trait Binding {
     /// The command. Its name is what the envelope gives.
     fn command(&self) -> Command;
@@ -856,6 +870,13 @@ pub(crate) trait Binding {
     /// `Err` answers the request without accepting it: nothing is
     /// recorded and no domain call is made.
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer>;
+
+    /// The binding as one whose request is written in one transaction with its
+    /// record. Such a binding's `run`, `reenter` and `rerun` are never reached:
+    /// its record is never left accepted. `None` for every other binding.
+    fn one_transaction(&self) -> Option<&dyn OneTransaction> {
+        None
+    }
 
     /// Makes the domain call for an accepted request, under the recorded
     /// operation ID and expectation, and reports what the repository shows
@@ -1070,6 +1091,11 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         }
         // Answered above, from the parent record: this is not reached.
         Some(Command::DocumentPromote | Command::TicketClose) => Recorded::nothing(),
+        // A policy verb's record is finished in the transaction that wrote
+        // it, so none is ever seen unfinished: this is not reached.
+        Some(Command::PollConfigure | Command::PollPause | Command::PollResume) => {
+            Recorded::nothing()
+        }
         // A record of no bound command: nothing is known of its effects.
         None => Recorded::nothing(),
     }

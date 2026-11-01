@@ -720,8 +720,8 @@ pub struct PollingStatusDto {
     /// The remote operation that holds the registration's reservation now,
     /// whatever its action, and null when none does.
     pub active_operation_id: Option<String>,
-    /// Null when it is not known when the next attempt is due. Nothing
-    /// stores that so far, so no read fills it.
+    /// The stored deadline of the next attempt. Null when none is stored;
+    /// a null or past deadline is due.
     pub next_eligible_at: Option<String>,
 }
 
