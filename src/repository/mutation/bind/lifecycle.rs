@@ -35,7 +35,9 @@
 //! each retry reads again and a finished request's stored envelope keeps the
 //! last. A promotion reports none, by null, and reads nothing.
 //!
-//! **Left for later tasks.** Task 6 the promotion identity row.
+//! **Identity.** A promotion's preview has no blocker for it, so a ready
+//! preview that plans a merge commit is answered as blocked here, last, with
+//! nothing else in the way (R-3). A closure's preview names it itself.
 
 use std::{marker::PhantomData, path::Path, path::PathBuf};
 
@@ -60,8 +62,9 @@ use super::{
             PromotionIntegration, PromotionPathChange, PromotionPublication,
             PromotionPublicationPending, PromotionRemoteDeletionCategory,
             PromotionSynchronizationCategory, RepositoryError, RepositoryOperation,
-            RepositoryService, SynchronizationError, TicketClosureError, TicketClosureOutcome,
-            TicketClosurePreflight, TicketClosurePreview, TicketClosureResult, closure, promotion,
+            RepositoryService, SynchronizationError, SynchronizationTarget, TicketClosureError,
+            TicketClosureOutcome, TicketClosurePreflight, TicketClosurePreview,
+            TicketClosureResult, closure, promotion,
             promotion::{
                 ParentView,
                 lifecycle::{LifecyclePreview, ParentStep},
@@ -70,6 +73,7 @@ use super::{
             },
             read_configuration_for,
             recovery::JournalRow,
+            remote::{state, sync},
             transport::SshTransportError,
         },
         command::Command,
@@ -191,6 +195,19 @@ pub(crate) trait LifecycleVerb {
 
 pub(crate) struct Promote;
 pub(crate) struct Close;
+
+/// Whether a commit made now would have no usable identity. It only reads.
+fn identity_missing(root: &Path) -> Result<bool, RepositoryError> {
+    let operation = RepositoryOperation::RepositorySnapshot;
+    let repository = git2::Repository::open(root)
+        .map_err(|error| RepositoryError::git(operation, Some(root.to_owned()), error))?;
+    match sync::select_committing_identity(&repository, None, &SynchronizationTarget::Primary) {
+        Ok(_) => Ok(false),
+        Err(SynchronizationError::IdentityRequired { .. }) => Ok(true),
+        Err(SynchronizationError::Repository(error)) => Err(error),
+        Err(_) => Err(state::recovery_required()),
+    }
+}
 
 fn promotion_blocker(blocker: PromotionBlocker) -> LifecycleBlocker {
     match blocker {
@@ -315,6 +332,12 @@ impl LifecycleVerb for Promote {
                 root: root.to_owned(),
                 item_id: id.clone(),
             })? {
+                DocumentPromotionPreflight::Ready(preview)
+                    if preview.integration() == PlannedIntegration::MergeCommit
+                        && identity_missing(root)? =>
+                {
+                    Observed::Blocked(vec![LifecycleBlocker::IdentityRequired])
+                }
                 DocumentPromotionPreflight::Ready(preview) => {
                     Observed::Ready(Box::new(ready_of_promotion(&preview)))
                 }

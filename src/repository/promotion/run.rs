@@ -450,6 +450,9 @@ fn promote_inner<L: Lifecycle>(
             Ok(Err(blocked)) => Some(blocked),
             Ok(Ok(p)) => {
                 let changed = p.expectation() != request.expected;
+                if !changed {
+                    L::require_identity(&p, &repository, request.confirmed_identity.as_ref())?;
+                }
                 observed = Some(p);
                 changed.then(L::Refusal::external_change)
             }

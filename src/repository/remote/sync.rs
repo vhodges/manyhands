@@ -3003,12 +3003,19 @@ pub(in super::super) enum CommittingIdentity {
 /// Shared read-only selection. Persistence belongs to the committing caller:
 /// synchronization retains its existing owned journal; promotion uses an atomic
 /// local-config edit under its integration lease and Git's config lock.
+///
+/// An identity a commit would not carry unchanged is none: a configured one
+/// is `IdentityRequired`, as if it were absent, and a confirmed one
+/// `ExternalChange`, before anything persists it. The configured pair still
+/// comes from Git's cascade per key, not from one level as
+/// `resolve_identity`'s does (R-6), so the two can disagree on a split
+/// configuration.
 pub(in super::super) fn select_committing_identity(
     repository: &git2::Repository,
     confirmation: Option<&ConfirmedCommitIdentity>,
     target: &SynchronizationTarget,
 ) -> Result<CommittingIdentity, SynchronizationError> {
-    if let Some(identity) = effective_identity(repository)? {
+    if let Some(identity) = effective_identity(repository)?.filter(commits_unchanged) {
         return Ok(CommittingIdentity::Effective(identity));
     }
     let Some(confirmation) = confirmation else {
@@ -3019,10 +3026,7 @@ pub(in super::super) fn select_committing_identity(
             )?),
         });
     };
-    if confirmation.identity.name.is_empty()
-        || confirmation.identity.email.is_empty()
-        || confirmation.identity.name.contains('\0')
-        || confirmation.identity.email.contains('\0')
+    if !commits_unchanged(&confirmation.identity)
         || configuration_identity_digest(repository)? != confirmation.expected_configuration.0
     {
         return Err(SynchronizationError::ExternalChange);

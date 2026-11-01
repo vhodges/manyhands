@@ -58,6 +58,9 @@ const BOTH: &[ssh_harness::Case] = both![
     "kept_record_past_ten_minutes" => kept_record_past_ten_minutes,
     "stopped_past_integration" => stopped_past_integration,
     "complete_with_record_accepted" => complete_with_record_accepted,
+    "identity_unusable_after_prepare" => identity_unusable_after_prepare,
+    "identity_finished_resend_keeps_its_outcome" => identity_finished_resend,
+    "identity_child_stop_continues" => identity_child_stop_continues,
     "refused_with_record_accepted" => refused_with_record_accepted,
     "consent_refused_at_run" => consent_refused_at_run,
     "superseded" => superseded,
@@ -92,6 +95,53 @@ const BOTH: &[ssh_harness::Case] = both![
 ];
 
 const ONE: &[ssh_harness::Case] = &[
+    ("c5_lifecycle_identity_prepare_missing_promote", || {
+        identity_prepare_promote(None)
+    }),
+    ("c5_lifecycle_identity_prepare_bracketed_promote", || {
+        identity_prepare_promote(Some(BRACKETED_NAME))
+    }),
+    ("c5_lifecycle_identity_prepare_trimmed_promote", || {
+        identity_prepare_promote(Some(TRIMMED_NAME))
+    }),
+    ("c5_lifecycle_identity_prepare_bracketed_close", || {
+        identity_prepare_close(BRACKETED_NAME)
+    }),
+    ("c5_lifecycle_identity_prepare_trimmed_close", || {
+        identity_prepare_close(TRIMMED_NAME)
+    }),
+    (
+        "c5_lifecycle_identity_prepare_check_is_last_promote",
+        identity_prepare_check_is_last,
+    ),
+    (
+        "c5_lifecycle_identity_contained_needs_none_promote",
+        identity_contained_needs_none,
+    ),
+    (
+        "c5_lifecycle_identity_existing_closure_needs_none_close",
+        identity_existing_closure_needs_none,
+    ),
+    (
+        "c5_lifecycle_identity_changed_since_prepare_close",
+        identity_changed_since_prepare,
+    ),
+    (
+        "c5_lifecycle_identity_lost_past_the_record_promote",
+        identity_lost_past_the_record,
+    ),
+    (
+        "c5_lifecycle_identity_domain_refuses_before_its_record_promote",
+        identity_domain_refuses_before_its_record,
+    ),
+    (
+        "c5_lifecycle_identity_race_past_the_check_close",
+        identity_race_past_the_check,
+    ),
+    (
+        "c5_lifecycle_identity_none_needed_after_a_checkpoint_close",
+        identity_none_needed_after_a_checkpoint,
+    ),
     (
         "c5_lifecycle_prepare_identity_required_close",
         prepare_identity_required,
@@ -3728,5 +3778,320 @@ fn resume_concurrent_same_id(verb: Verb) -> Result<(), FixtureError> {
     let done = resumed_under(&local.service, RESUME, &local.root, &operation);
     assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
     assert_eq!(local_state(&local, RESUME), Some(RequestState::Finished));
+    Ok(())
+}
+
+// The design's Identity table, with `01M5MK57`'s unusable identities beside a
+// missing one. Each counts as none.
+
+const BRACKETED_NAME: &str = "Example <fixture@example.invalid>";
+/// Git drops a trailing comma: the commit would carry another name.
+const TRIMMED_NAME: &str = "Example Person,";
+
+fn configure_identity(repo: &git2::Repository, name: &str) -> Result<(), FixtureError> {
+    let mut config = fixed(repo.config())?;
+    fixed(config.set_str("user.name", name))?;
+    fixed(config.set_str("user.email", "fixture@example.invalid"))
+}
+
+fn assert_identity_required(envelope: &Envelope<PrepareDataDto>) {
+    assert_eq!(envelope.code, ResultCode::IdentityRequired);
+    assert_eq!(blockers_of(envelope), [LifecycleBlocker::IdentityRequired]);
+    assert_eq!(
+        prepare_actions(envelope),
+        [RecoveryActionKind::RepoIdentitySet]
+    );
+}
+
+/// A merge commit is planned and nothing else blocks.
+fn identity_prepare_promote(name: Option<&str>) -> Result<(), FixtureError> {
+    let verb = Verb::Promote;
+    let local = Local::holding(verb)?;
+    let repo = local.repo()?;
+    match name {
+        Some(name) => configure_identity(&repo, name)?,
+        None => forget_identity(&repo)?,
+    }
+    assert_identity_required(&prepared(&local.service, verb, &local.root, verb.id()));
+    assert_eq!(parents(&local.db()?, verb)?, 0);
+    configure_identity(&repo, "Fixture")?;
+    confirmation_of(&prepared(&local.service, verb, &local.root, verb.id()));
+    Ok(())
+}
+
+fn identity_prepare_close(name: &str) -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let local = Local::holding(verb)?;
+    configure_identity(&local.repo()?, name)?;
+    assert_identity_required(&prepared(&local.service, verb, &local.root, verb.id()));
+    assert_eq!(parents(&local.db()?, verb)?, 0);
+    Ok(())
+}
+
+/// R-3: what else stands in the way is what a prepare names.
+fn identity_prepare_check_is_last() -> Result<(), FixtureError> {
+    let verb = Verb::Promote;
+    let local = Local::holding(verb)?;
+    forget_identity(&local.repo()?)?;
+    dirty_primary(&local.root)?;
+    let envelope = prepared(&local.service, verb, &local.root, verb.id());
+    assert_eq!(blockers_of(&envelope), [LifecycleBlocker::PrimaryDirty]);
+    Ok(())
+}
+
+/// An identity lost since the preview: the answer says so, with no record,
+/// nothing changed, and a new prepare says the same.
+fn identity_unusable_after_prepare(verb: Verb) -> Result<(), FixtureError> {
+    let local = Local::holding(verb)?;
+    let repo = local.repo()?;
+    let main = fixed(repo.refname_to_id(MAIN))?;
+    let tip = fixed(repo.refname_to_id(verb.branch()))?;
+    let confirmation = confirmation_of(&prepared(&local.service, verb, &local.root, verb.id()));
+    configure_identity(&repo, BRACKETED_NAME)?;
+    let configuration = fixed(std::fs::read(repo.path().join("config")))?;
+    let envelope = called(
+        &local.service,
+        FIRST,
+        Some(&confirmation),
+        verb.mutation(&local.root, verb.id()),
+    );
+    assert_eq!(
+        envelope.code,
+        ResultCode::IdentityRequired,
+        "{:?}",
+        envelope.data
+    );
+    assert_eq!(actions(&envelope), [RecoveryActionKind::RepoIdentitySet]);
+    assert_eq!(local_state(&local, FIRST), None);
+    assert_eq!(parents(&local.db()?, verb)?, 0);
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, main);
+    assert_eq!(fixed(repo.refname_to_id(verb.branch()))?, tip);
+    assert_eq!(
+        fixed(std::fs::read(repo.path().join("config")))?,
+        configuration
+    );
+    assert_identity_required(&prepared(&local.service, verb, &local.root, verb.id()));
+    Ok(())
+}
+
+/// A finished request's resend keeps its stored outcome, whatever the
+/// identity has become.
+fn identity_finished_resend(verb: Verb) -> Result<(), FixtureError> {
+    let local = Local::holding(verb)?;
+    let confirmation = confirmation_of(&prepared(&local.service, verb, &local.root, verb.id()));
+    let done = called(
+        &local.service,
+        FIRST,
+        Some(&confirmation),
+        verb.mutation(&local.root, verb.id()),
+    );
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    let repo = local.repo()?;
+    let main = fixed(repo.refname_to_id(MAIN))?;
+    forget_identity(&repo)?;
+    let again = resent(&local.service, FIRST, verb, &local.root);
+    assert_eq!(again.code, ResultCode::Ok, "{:?}", again.data);
+    assert_eq!(again.data, done.data);
+    assert_eq!(again.effects, done.effects);
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, main);
+    Ok(())
+}
+
+/// A context child that must merge a peer's commit with the identity gone:
+/// `identity_required`, kept, and the same request continues.
+fn identity_child_stop_continues(verb: Verb) -> Result<(), FixtureError> {
+    let mut w = remote(verb)?;
+    fixed(w.sync(w.request(context_target(verb)?)))?;
+    let peer = fixed(w.peer.workdir().ok_or(FixtureError).map(Path::to_owned))?;
+    {
+        let mut fetch = git2::FetchOptions::new();
+        fetch.remote_callbacks(callbacks(&w.server));
+        fixed(fixed(w.peer.find_remote("origin"))?.fetch(
+            &[format!("+{0}:{0}", verb.branch())],
+            Some(&mut fetch),
+            None,
+        ))?;
+    }
+    commit_in(&peer, verb.branch(), "peer.txt", b"the peer's\n")?;
+    push_peer(&w.peer, &w.server, verb.branch())?;
+    commit_in(
+        &verb.worktree(&w.root),
+        verb.branch(),
+        "own.txt",
+        b"the owner's\n",
+    )?;
+    stopped_at(&mut w, verb, FailurePoint::AfterConfirmed)?;
+    let repo = w.repo()?;
+    forget_identity(&repo)?;
+    let stopped = resent(&w.service, FIRST, verb, &w.root);
+    assert_eq!(
+        stopped.code,
+        ResultCode::IdentityRequired,
+        "{:?}",
+        stopped.data
+    );
+    assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
+    assert_eq!(merges_on_primary(&repo)?, 0);
+    configure_identity(&repo, "Fixture")?;
+    // It goes on from the stop: the child finishes its merge. What it merged
+    // is a peer's commit the preview never showed, so the request ends as one
+    // that never stopped does in this world, which checked: `external_change`.
+    let done = resent(&w.service, FIRST, verb, &w.root);
+    assert_eq!(done.operation_id, stopped.operation_id);
+    assert_eq!(done.code, ResultCode::ExternalChange, "{:?}", done.data);
+    assert_eq!(state_of(&w, FIRST), Some(RequestState::Finished));
+    let unfinished: i64 = fixed(w.db()?.query_row(
+        "SELECT count(*) FROM remote_operation_records WHERE phase != 'completed'",
+        [],
+        |row| row.get(0),
+    ))?;
+    assert_eq!(
+        unfinished, 0,
+        "the child's stopped row went on and finished"
+    );
+    assert_eq!(merges_on_primary(&repo)?, 0);
+    Ok(())
+}
+
+/// Already contained: no merge commit, so no identity is needed.
+fn identity_contained_needs_none() -> Result<(), FixtureError> {
+    let verb = Verb::Promote;
+    let local = Local::holding(verb)?;
+    let repo = local.repo()?;
+    let tip = fast_forward_primary(&repo, verb)?;
+    forget_identity(&repo)?;
+    let confirmation = confirmation_of(&prepared(&local.service, verb, &local.root, verb.id()));
+    let done = called(
+        &local.service,
+        FIRST,
+        Some(&confirmation),
+        verb.mutation(&local.root, verb.id()),
+    );
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, tip);
+    Ok(())
+}
+
+/// A closure already recorded, already contained: nothing to sign.
+fn identity_existing_closure_needs_none() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let local = Local::holding(verb)?;
+    let worktree = verb.worktree(&local.root);
+    let path = format!(".manyhands/tickets/{}/ticket.md", verb.id());
+    let source = fixed(std::fs::read_to_string(worktree.join(&path)))?;
+    let closed = source.replacen(
+        "---\n",
+        "---\nclosed_at: 2027-01-15T08:00:00Z\nclosed_by: Fixture <fixture@example.invalid>\n",
+        1,
+    );
+    commit_in(&worktree, verb.branch(), &path, closed.as_bytes())?;
+    let repo = local.repo()?;
+    let tip = fast_forward_primary(&repo, verb)?;
+    forget_identity(&repo)?;
+    let confirmation = confirmation_of(&prepared(&local.service, verb, &local.root, verb.id()));
+    let done = called(
+        &local.service,
+        FIRST,
+        Some(&confirmation),
+        verb.mutation(&local.root, verb.id()),
+    );
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, tip);
+    Ok(())
+}
+
+/// The digest binds `closed_by`: another usable identity is an external
+/// change, and a new prepare shows it.
+fn identity_changed_since_prepare() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let local = Local::holding(verb)?;
+    let repo = local.repo()?;
+    let confirmation = confirmation_of(&prepared(&local.service, verb, &local.root, verb.id()));
+    configure_identity(&repo, "Someone Else")?;
+    let envelope = called(
+        &local.service,
+        FIRST,
+        Some(&confirmation),
+        verb.mutation(&local.root, verb.id()),
+    );
+    assert_eq!(
+        envelope.code,
+        ResultCode::ExternalChange,
+        "{:?}",
+        envelope.data
+    );
+    assert_eq!(actions(&envelope), [RecoveryActionKind::RequestPrepare]);
+    assert_ne!(local_state(&local, FIRST), Some(RequestState::Accepted));
+    assert_eq!(merges_on_primary(&repo)?, 0);
+    confirmation_of(&prepared(&local.service, verb, &local.root, verb.id()));
+    Ok(())
+}
+
+/// Only a change during the run reaches this: `identity_required`, owed, and
+/// the same request continues after an identity is set.
+fn identity_lost_past_the_record() -> Result<(), FixtureError> {
+    let verb = Verb::Promote;
+    let mut w = remote(verb)?;
+    stopped_at(&mut w, verb, FailurePoint::AfterContextSync)?;
+    let repo = w.repo()?;
+    configure_identity(&repo, BRACKETED_NAME)?;
+    let stopped = resent(&w.service, FIRST, verb, &w.root);
+    assert_eq!(
+        stopped.code,
+        ResultCode::IdentityRequired,
+        "{:?}",
+        stopped.data
+    );
+    assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
+    assert_eq!(merges_on_primary(&repo)?, 0);
+    configure_identity(&repo, "Fixture")?;
+    let done = resent(&w.service, FIRST, verb, &w.root);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(done.operation_id, stopped.operation_id);
+    assert_eq!(merges_on_primary(&repo)?, 1);
+    Ok(())
+}
+
+/// R-3's second site, past the boundary's own check: no record.
+fn identity_domain_refuses_before_its_record() -> Result<(), FixtureError> {
+    let verb = Verb::Promote;
+    let local = Local::holding(verb)?;
+    let repo = local.repo()?;
+    let main = fixed(repo.refname_to_id(MAIN))?;
+    begun_outside_after(&local.service, verb, &local.root, || forget_identity(&repo))?;
+    assert_eq!(parents(&local.db()?, verb)?, 0);
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, main);
+    Ok(())
+}
+
+/// R-21: past the boundary's check, closure's refusal is one terminal row.
+fn identity_race_past_the_check() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let local = Local::holding(verb)?;
+    let repo = local.repo()?;
+    let main = fixed(repo.refname_to_id(MAIN))?;
+    begun_outside_after(&local.service, verb, &local.root, || {
+        configure_identity(&repo, BRACKETED_NAME)
+    })?;
+    let steps: String = fixed(local.db()?.query_row(
+        "SELECT group_concat(step) FROM ticket_closures",
+        [],
+        |row| row.get(0),
+    ))?;
+    assert_eq!(steps, "abandoned");
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, main);
+    Ok(())
+}
+
+/// `closed_by` comes from the checkpoint's commit.
+fn identity_none_needed_after_a_checkpoint() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let mut w = remote(verb)?;
+    stopped_at(&mut w, verb, FailurePoint::AfterClosureCheckpoint)?;
+    let repo = w.repo()?;
+    configure_identity(&repo, BRACKETED_NAME)?;
+    let done = resent(&w.service, FIRST, verb, &w.root);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(merges_on_primary(&repo)?, 1);
     Ok(())
 }

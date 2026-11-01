@@ -2,8 +2,19 @@
 //! preservation snapshots, poll priority, pending comment publication, the
 //! C5 guard and discoverability.
 use super::*;
+#[path = "identity.rs"]
+mod identity;
 
 pub(super) const CASES: &[ssh_harness::Case] = &[
+    ("c5_identity_configured_bracketed", || {
+        identity::configured(identity::BRACKETED_NAME)
+    }),
+    ("c5_identity_configured_trimmed", || {
+        identity::configured(identity::TRIMMED_NAME)
+    }),
+    ("c5_identity_confirmed_unusable", identity::confirmed),
+    ("c5_identity_plain_control", identity::plain),
+    ("c5_identity_kept_records_and_replays", identity::kept),
     ("happy_collaborator_poll_and_context_never_held", happy),
     ("local_only_then_primary_publication", local_only),
     ("existing_closure_fields_merge_without_checkpoint", existing),

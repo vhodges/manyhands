@@ -18,10 +18,10 @@ use crate::{
     repository::{
         AuthoringKind, CommitIdentity, ConfirmedCommitIdentity, ExpectedConfiguration,
         IndexPending, OperationId, RemoteOperationAction, RepositoryError, RepositoryService,
-        SynchronizationError,
+        SynchronizationError, SynchronizationTarget,
         cleanup::RetirementEvidence,
         mutation::{CancellationToken, RequestId},
-        remote::{reservation::RemoteReservation, state},
+        remote::{reservation::RemoteReservation, state, sync},
         transport::HostApproval,
     },
 };
@@ -437,6 +437,16 @@ pub(in super::super) trait Lifecycle {
     ) -> Result<Self::Preflight, RepositoryError>;
     /// A ready preview, or the `Blocked` refusal of a blocked preflight.
     fn ready(preflight: Self::Preflight) -> Result<Self::Preview, Self::Refusal>;
+    /// What a new record needs of the identity, asked once its preview is
+    /// known unchanged. A refusal leaves no record. Closure needs nothing
+    /// here: its preview has checked, and a change is `ExternalChange`.
+    fn require_identity(
+        _preview: &Self::Preview,
+        _repository: &git2::Repository,
+        _confirmation: Option<&ConfirmedCommitIdentity>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
     fn refusal_error(refusal: &Self::Refusal) -> Self::Error;
 
     // Integration.
@@ -860,6 +870,32 @@ impl Lifecycle for DocumentPromotionLifecycle {
         repository: &git2::Repository,
     ) -> Result<DocumentPromotionPreflight, RepositoryError> {
         observation.revalidate(service, repository)
+    }
+    /// R-3: a planned merge commit needs a usable identity, and a request
+    /// that has none has not begun. A record's own run stays the guard.
+    fn require_identity(
+        preview: &DocumentPromotionPreview,
+        repository: &git2::Repository,
+        confirmation: Option<&ConfirmedCommitIdentity>,
+    ) -> Result<(), DocumentPromotionError> {
+        if preview.integration() == PlannedIntegration::AlreadyContained {
+            return Ok(());
+        }
+        sync::select_committing_identity(repository, confirmation, &SynchronizationTarget::Primary)
+            .map(|_| ())
+            .map_err(|error| match error {
+                SynchronizationError::IdentityRequired {
+                    expected_configuration,
+                    ..
+                } => DocumentPromotionError::IdentityRequired {
+                    expected_configuration,
+                },
+                SynchronizationError::ExternalChange => DocumentPromotionError::ExternalChange,
+                SynchronizationError::Repository(error) => {
+                    DocumentPromotionError::Repository(error)
+                }
+                _ => DocumentPromotionError::RecoveryRequired,
+            })
     }
     fn ready(
         preflight: DocumentPromotionPreflight,
