@@ -1263,6 +1263,15 @@ impl RepositoryService {
                 };
                 let active = active.operation_id();
                 active.to_string() == operation_id
+                    || OperationId::parse(operation_id).is_ok_and(|operation| {
+                        super::bind::lifecycle::held_by_its_child(
+                            self,
+                            Command::parse(&envelope.command),
+                            Path::new(root),
+                            operation,
+                            active,
+                        )
+                    })
                     || OperationId::parse(operation_id).is_ok_and(|operation_id| {
                         let bound = self.read_session(RepositoryOperation::Read, |connection| {
                             comment::comment_synchronization(

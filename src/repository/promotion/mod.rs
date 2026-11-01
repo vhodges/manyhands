@@ -376,6 +376,8 @@ pub(super) struct ParentView<B> {
     /// The parent's own flag, which `cancel_document_promotion` or
     /// `cancel_ticket_closure` sets as well as `request cancel`.
     pub(super) cancel_requested: bool,
+    /// The children it has bound, either of which may hold the reservation.
+    pub(super) children: [Option<OperationId>; 2],
 }
 
 impl<B> ParentView<B> {
@@ -397,6 +399,7 @@ impl<B> ParentView<B> {
             integration: self.integration,
             publication: self.publication,
             cancel_requested: self.cancel_requested,
+            children: self.children,
         }
     }
 }
@@ -419,6 +422,7 @@ pub(super) fn lifecycle_parent(
                 integration: parent.integration_oid(),
                 publication: parent.publication(),
                 cancel_requested: parent.cancel_requested(),
+                children: [parent.context_sync_id(), parent.primary_sync_id()],
             }),
         )
     })

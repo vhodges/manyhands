@@ -1850,7 +1850,9 @@ fn child_transport_stop(verb: Verb) -> Result<(), FixtureError> {
 }
 
 /// The context's branch deleted at the remote, found by its synchronization:
-/// the parent stands, so its request is offered, not the child's cancellation.
+/// the same request cannot get past it, so the cancellation that lets the
+/// child go is offered (E-17, decision 18). `c5_cancel_walk_remote_branch_deleted`
+/// walks it to a finish.
 fn child_remote_branch_deleted(verb: Verb) -> Result<(), FixtureError> {
     let w = remote(verb)?;
     fixed(w.sync(w.request(context_target(verb)?)))?;
@@ -1869,13 +1871,13 @@ fn child_remote_branch_deleted(verb: Verb) -> Result<(), FixtureError> {
         stopped.data
     );
     let offered = [
-        RecoveryActionKind::RequestRetry,
+        RecoveryActionKind::RequestCancel,
         RecoveryActionKind::RepoInspect,
     ];
     assert_eq!(actions(&stopped), offered);
     assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     assert_eq!(parents(&w.db()?, verb)?, 1);
-    // The same request is refused the same way: the way out is Task 2c's walk.
+    // The same request is refused the same way.
     let again = resent(&w.service, FIRST, verb, &w.root);
     assert_eq!(again.code, ResultCode::RemoteBranchDeleted);
     assert_eq!(actions(&again), offered);

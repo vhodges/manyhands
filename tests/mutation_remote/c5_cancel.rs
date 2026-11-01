@@ -43,6 +43,8 @@ const BOTH: &[ssh_harness::Case] = both![
     "killed_after_acknowledging" => killed_after_acknowledging,
     "complete_with_record_accepted" => complete_with_record_accepted,
     "child_flag_unowned" => child_flag_unowned,
+    "child_push_unknown_stays" => child_push_unknown_stays,
+    "publication_child_released" => publication_child_released,
     "walk_remote_branch_deleted" => walk_remote_branch_deleted,
 ];
 
@@ -518,6 +520,19 @@ fn new_id_after_integration(verb: Verb) -> Result<(), FixtureError> {
     assert_cancelled(&w, FIRST, &resent(&w, FIRST, verb))?;
     let refused = w.service.prepare(&verb.mutation(&w.root, verb.id()));
     assert_eq!(refused.code, ResultCode::RecoveryRequired);
+    // What refuses it is that the remote is ahead of what was last fetched.
+    // `remote_context_deleted`, named beside it, reads a missing tracking ref
+    // and isn't so: the branch stands, so its value isn't pinned.
+    match refused.data.as_ref() {
+        Some(PrepareDataDto::LifecycleBlocked(data)) => {
+            assert!(
+                data.blockers
+                    .contains(&LifecycleBlocker::PrimaryAheadOfRemote)
+            );
+        }
+        other => panic!("blockers: {other:?}"),
+    }
+    assert!(fixed(w.bare())?.find_reference(verb.branch()).is_ok());
     assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     assert_finishes(&w, FIRST, verb)?;
     let again = w.service.prepare(&verb.mutation(&w.root, verb.id()));
@@ -601,11 +616,12 @@ fn complete_with_record_accepted(verb: Verb) -> Result<(), FixtureError> {
 
 // A pending child's flag, set while nothing runs.
 
-/// A child stopped by a transport fault holds its reservation and no
-/// resolution. `request cancel` sets its row's flag with nothing running, and
-/// the `cancelled` answer leaves it there, since no child ran. `restart` does
-/// not clear the flag: it acknowledges it, so the row ends `cancelled`, flag
-/// and all, and the next call runs a new attempt under a new ID.
+/// A child stopped by a transport fault before any local or remote effect
+/// holds its reservation and no resolution. `request cancel` sets its row's
+/// flag with nothing running. The cancellation stops the parent, which retires
+/// the child with no connection (decision 18): `restart` acknowledges the flag
+/// rather than clearing it, so the row ends `cancelled`, flag and all, and the
+/// next call runs a new attempt under a new ID.
 fn child_flag_unowned(verb: Verb) -> Result<(), FixtureError> {
     let w = remote(verb)?;
     let confirmation = confirmation_of(&w.service, verb, &w.root);
@@ -618,12 +634,55 @@ fn child_flag_unowned(verb: Verb) -> Result<(), FixtureError> {
     let (phase, flag) = row_of(&w, child)?;
     assert_ne!(phase, "cancelled");
     assert!(flag, "set with nothing running");
+    let before = connections(&w);
     assert_cancelled(&w, FIRST, &resent(&w, FIRST, verb))?;
-    assert_eq!(row_of(&w, child)?, (phase, true), "no child ran");
-    assert!(reserved(&w), "still the child's");
-    assert_finishes(&w, FIRST, verb)?;
+    assert_eq!(connections(&w), before, "a retire connects to nothing");
     assert_eq!(row_of(&w, child)?, ("cancelled".to_owned(), true));
+    assert!(!reserved(&w), "the cancellation let the child go");
+    assert_finishes(&w, FIRST, verb)?;
+    assert_ne!(child_id(&w, verb, FIRST)?, child);
     Ok(())
+}
+
+/// A child whose push may have landed is not proven safe to retire: the
+/// `cancelled` answer leaves it holding the reservation, and the same request
+/// finds out what became of the push and finishes, with no second merge.
+fn child_push_unknown_stays(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    let confirmation = confirmation_of(&w.service, verb, &w.root);
+    w.server.disconnect_at(FixtureBoundary::AfterReceivePack);
+    called(&w.service, FIRST, Some(&confirmation), verb, &w.root);
+    w.server.clear_fault();
+    assert!(reserved(&w));
+    let child = child_id(&w, verb, FIRST)?;
+    asked(&w.service, FIRST)?;
+    let row = row_of(&w, child)?;
+    assert_cancelled(&w, FIRST, &resent(&w, FIRST, verb))?;
+    assert!(
+        reserved(&w),
+        "the push's fate is still the child's to learn"
+    );
+    assert_eq!(row_of(&w, child)?, row, "untouched");
+    assert_finishes(&w, FIRST, verb)
+}
+
+/// A child's reservation of the primary's publication is let go the same way,
+/// and the integration stands.
+fn publication_child_released(verb: Verb) -> Result<(), FixtureError> {
+    let mut w = remote(verb)?;
+    stopped_at(&mut w, verb, FailurePoint::AfterIntegrationRef)?;
+    w.server.disconnect_at(FixtureBoundary::Advertisement);
+    let stopped = resent(&w, FIRST, verb);
+    w.server.clear_fault();
+    assert_eq!(stopped.code, ResultCode::TransportUnavailable);
+    assert!(reserved(&w));
+    asked(&w.service, FIRST)?;
+    let cancelled = resent(&w, FIRST, verb);
+    assert_cancelled(&w, FIRST, &cancelled)?;
+    assert_eq!(cancelled.effects.integration, IntegrationEffect::Complete);
+    assert!(!reserved(&w));
+    assert_eq!(merges_on_primary(&w.repo()?)?, 1);
+    assert_finishes(&w, FIRST, verb)
 }
 
 /// A conflict the context's child retains has already ended interrupted, so
@@ -675,12 +734,9 @@ fn child_flag_retained() -> Result<(), FixtureError> {
 
 // R-24.
 
-/// A child's `remote_branch_deleted`, walked to a finish. `cancelled` does not
-/// let the child's reservation go, since the parent stops before any child
-/// runs, so `item republish` is still `busy`. `repo inspect` names the child as
-/// the active operation, and its `operation resume` acknowledges the flag and
-/// frees the reservation. Then `item republish` runs, and the same request
-/// finishes.
+/// A child's `remote_branch_deleted`, walked to a finish (decision 18). The
+/// cancellation stops the parent, which retires the child and frees the
+/// reservation, so `item republish` runs, and the same request finishes.
 fn walk_remote_branch_deleted(verb: Verb) -> Result<(), FixtureError> {
     let w = remote(verb)?;
     let context = context_target(verb)?;
@@ -692,37 +748,24 @@ fn walk_remote_branch_deleted(verb: Verb) -> Result<(), FixtureError> {
     assert_eq!(
         actions(&stopped),
         [
-            RecoveryActionKind::RequestRetry,
+            RecoveryActionKind::RequestCancel,
             RecoveryActionKind::RepoInspect
         ]
     );
+    assert!(reserved(&w));
     asked(&w.service, FIRST)?;
     assert_cancelled(&w, FIRST, &resent(&w, FIRST, verb))?;
-    assert!(reserved(&w), "the child still holds it");
+    assert!(!reserved(&w), "the cancellation let the child go");
 
-    let republish = || {
-        Mutation::ItemRepublish(ItemRepublishInput {
-            root: w.root.clone(),
-            kind: match verb {
-                Verb::Promote => AuthoringKind::Document,
-                Verb::Close => AuthoringKind::Ticket,
-            },
-            id: verb.id().parse().expect("the world's ID"),
-        })
-    };
-    let republish_with = |id: &str, confirmation: &str| {
-        w.service.execute(
-            MutationCall {
-                request_id: request(id),
-                confirmation: Some(ConfirmationId::parse(confirmation).unwrap()),
-                mutation: republish(),
-            },
-            &mut SessionCredentials::new(Provider),
-            &mut NoProgress,
-            &CancellationToken::new(),
-        )
-    };
-    let preview = w.service.prepare(&republish());
+    let republish = Mutation::ItemRepublish(ItemRepublishInput {
+        root: w.root.clone(),
+        kind: match verb {
+            Verb::Promote => AuthoringKind::Document,
+            Verb::Close => AuthoringKind::Ticket,
+        },
+        id: fixed(verb.id().parse())?,
+    });
+    let preview = w.service.prepare(&republish);
     let consent = preview
         .data
         .as_ref()
@@ -730,27 +773,16 @@ fn walk_remote_branch_deleted(verb: Verb) -> Result<(), FixtureError> {
         .ok_or(FixtureError)?
         .confirmation_id
         .clone();
-    assert_eq!(republish_with(REPUBLISH, &consent).code, ResultCode::Busy);
-
-    let active = fixed(w.service.active_remote_operation(&w.root))?.ok_or(FixtureError)?;
-    assert_eq!(active.operation_id(), child_id(&w, verb, FIRST)?);
-    let resumed = w.service.execute(
+    let republished = w.service.execute(
         MutationCall {
-            request_id: request(SECOND),
-            confirmation: None,
-            mutation: Mutation::OperationResume(OperationResumeInput {
-                root: w.root.clone(),
-                operation_id: active.operation_id(),
-            }),
+            request_id: request(REPUBLISH),
+            confirmation: Some(ConfirmationId::parse(&consent).unwrap()),
+            mutation: republish,
         },
         &mut SessionCredentials::new(Provider),
         &mut NoProgress,
         &CancellationToken::new(),
     );
-    assert_eq!(resumed.code, ResultCode::Cancelled);
-    assert!(!reserved(&w), "the resume let it go");
-
-    let republished = republish_with(REPUBLISH, &consent);
     assert_eq!(republished.code, ResultCode::Ok, "{:?}", republished.data);
     assert!(fixed(w.bare())?.find_reference(verb.branch()).is_ok());
     assert_finishes(&w, FIRST, verb)

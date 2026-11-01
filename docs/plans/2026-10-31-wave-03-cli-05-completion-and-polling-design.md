@@ -331,7 +331,7 @@ durable effect.
 | `ReconfirmationRequired`, consent `ExternalChange` | `external_change` | 3, or 4 if durable | `request.prepare`; record ended |
 | `PrimaryAdvanced` | `external_change` | 3, or 4 if durable | `request.retry`, `repo.inspect`: the parent stays unfinished (fact 41) |
 | `IdentityRequired` | `identity_required` | 3, or 4 if durable | `request.retry` when `Owed`, `repo.identity_set`; see Identity |
-| `ContextSynchronization(error)` | the child's code | by class | As `item sync`, and `request.retry` first when the parent stands. A child's `remote_branch_deleted` or `merge_required` offers `request.retry`, then `repo.inspect`, since the child, not the envelope, holds the operation (R-24) |
+| `ContextSynchronization(error)` | the child's code | by class | As `item sync`, and `request.retry` first when the parent stands. A child's `remote_branch_deleted` or `merge_required` offers `request.cancel`, then `repo.inspect`, and not `request.retry`, which cannot get past it (R-24, decision 18) |
 | Refused closure checkpoint merge (a child's conflict, or the checkpoint's own) | `recovery_required` | 4 if durable, else 3 | `request.retry`, `repo.inspect`, with human lines naming `context observe-local`, `context sync-local`, `context show-local` and `context resolve-local`, and data naming the state. A recovery row and golden back it. |
 | `Transport(error)` | the error's code, as `item sync` | by class, or 4 if durable | As `item sync` |
 | `Busy` | `busy` | 5, or 4 if durable | `request.retry` |
@@ -410,6 +410,15 @@ at the child's own safe points. A push already under way completes, and effects 
   acknowledged yet, so attempt 2's probe stops at its first safe point with `cancelled`. This gives the
   decision's outcome with no separate check in the driver. A process killed before acknowledging answers
   `cancelled` once more on its next resend, and the resend after that continues.
+- **Releasing the child (decision 18).** When a cancellation stops the parent, before the child's step
+  has run again, the runner retires the context or primary child it stopped on, by what `child()` does on
+  a retry: the row ends `cancelled` with no connection, and the reservation is free. It does so only for
+  an unowned, unfinished child with no resolution, no reconciliation owed, no push recorded, and a
+  checkpoint no further than its fetch. Anything else stays for the same request, so a retained conflict
+  is not removed, and a push of unknown fate is still found out about. The route out of a child's
+  `remote_branch_deleted` is `request cancel`, the same request (`cancelled`), `item republish` (`ok`), the
+  same request (`ok`, one merge). `offering_cancel` treats a parent's child as the request's own, for these
+  two commands only.
 - **`stops_on_ctrl_c`** gains both verbs. A press after the last safe point keeps the domain's answer.
   A second press or a kill leaves the record, and the same request continues.
 - **`RecoveryActionKind::RequestCancel`'s doc** is corrected for these verbs.
@@ -751,6 +760,7 @@ and request records hold neither (Task 0 confirms). The index's `closed_by` colu
 | E-14 | `src/bin/manyhands-cli/collaboration_tests.rs:82` | New `stops_on_ctrl_c` rows |
 | E-15 | `src/repository/mutation/confirm_tests.rs` | `Row::Unfinished` cases |
 | E-16 | `src/bin/manyhands-cli/startup_tests.rs:171`, `parse_tests.rs:563` | Move to the test-only planned spec (decision 16), done with E-3 and E-4 in Task 9 |
+| E-17 | `tests/mutation_remote/c5_lifecycle.rs` `child_remote_branch_deleted` | The offered actions become `request.cancel`, `repo.inspect`, and its stale comment is fixed (decision 18) |
 
 `tests/read_relationships.rs:1183,1190,1254` hold `"C5"` as Wave-graph data, and are not pins. Task 0
 greps for other pins (`NotResumable`, `"C5"`, `arrives with`, `Planned`). An unlisted hit stops for owner
@@ -802,11 +812,12 @@ review. This list is not yet proven complete.
 | R-21 | Closure's refused identity leaves a terminal row, read as no recovery obligation under `01M5MK57`. | The ticket's literal "journal unchanged" is narrowed for closure. |
 | R-22 | A closure observed as exactly `[IdentityRequired]` at execute answers `identity_required` from `Binding::prepare`, with no record and no domain call, not `external_change`. Amends the Identity table; R-21's terminal row now covers only the race after this check. (Controller's ruling on Task 2a's review, 2026-10-31.) | One state the boundary's digest comparison doesn't answer. |
 | R-23 | A stop does not settle a request on a parent that has since ended. Refused or superseded answers from `ended_answer`, `Final`; complete is `Owed`, offering `request.retry`. (Controller, Task 2b's review.) | One more call for a concurrent retry. |
-| R-24 | A child's `remote_branch_deleted` and `merge_required` offer `request.retry`, `repo.inspect`. Task 2c owes the walk of the way out (cancel, republish, retry) to a finish, and if it cannot finish, that stops for the owner there. | An offered retry that alone does not get past the stop. |
+| R-24 | Superseded on what is offered by decision 18. A child's `remote_branch_deleted` and `merge_required` offer `request.retry`, `repo.inspect`. Task 2c owes the walk of the way out (cancel, republish, retry) to a finish, and if it cannot finish, that stops for the owner there. | An offered retry that alone does not get past the stop. |
 | R-25 | `parent_effects` at `Integrating` asks whether primary holds `integration_oid`. | One Git read. |
 | R-26 | A checkpoint's holder is the context's branch, or primary once it is gone, never `HEAD`. | None. |
 | R-27 | A re-entered call with no parent and a code that passes by itself leaves the record and offers `request.retry`. Qualifies "whatever its code". | A record that stays accepted until a resend, which then runs or is refused. |
 | R-28 | With no parent, `internal_error` offers nothing. `Abandoned` with no refusal is answered, `external_change`, not run; `ended_answer` is the one test of an ended parent. | None: the record's own check makes that state unreachable. |
+| R-29 | A child's `merge_required` offers what `remote_branch_deleted` does, with `request.retry` out by `outcome.rs`'s rule. No binding is answered with it, so a unit row pins it and no walk proves it. | Decision 18's route has only the deleted branch to prove it on. |
 | R-16 | A completed poll with preserved or marked targets is `ok`, exit 0, with dispositions in data. The RFC says once is explicit polling, not synchronization. | A script checking only the exit misses a blocked target; human output names them. |
 
 ## Known Limits

@@ -582,6 +582,9 @@ fn promote_inner<L: Lifecycle>(
         boundary(service, &root, FailurePoint::AfterConfirmed)?;
     }
     if cancelled::<L>(service, &request, &r)? {
+        if r.step() == Step::Confirmed {
+            release_child::<L>(service, &request, &r, ChildRole::Context, io);
+        }
         return Err(L::Error::interrupted());
     }
     if r.step() == Step::Confirmed {
@@ -781,6 +784,80 @@ fn child_id<R: LifecycleRecord>(r: &R, role: ChildRole) -> Option<OperationId> {
         ChildRole::Primary => r.primary_sync_id(),
     }
 }
+/// Ends an unowned child's row and lets its reservation go: it is cancelled,
+/// and a restart acknowledges that with no connection.
+fn retire_child<L: Lifecycle>(
+    service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>,
+    r: &L::Record,
+    role: ChildRole,
+    child: OperationId,
+    io: &mut impl PromotionIo,
+) -> Result<(), SynchronizationError> {
+    let root = &request.root;
+    service.cancel_remote_operation(root, child)?;
+    let ack = SynchronizeRemoteRequest {
+        root: root.clone(),
+        operation_id: child,
+        target: synchronization_target(L::KIND, role, r.item_id()),
+        approval: request.approval.clone(),
+        confirmed_identity: request.confirmed_identity.clone(),
+        restart: true,
+    };
+    let mut observer = CancellationObserver::<L> {
+        service,
+        request,
+        record: r,
+    };
+    let execution = L::child_execution(r, role)?;
+    let _ack_result = io.synchronize(service, ack, &mut observer, &execution);
+    Ok(())
+}
+
+/// A cancellation that stops the parent lets its stopped child go (decision
+/// 18), or the child's reservation would refuse what the caller does next.
+/// Only a child proven to have nothing to lose: unowned, unfinished, with no
+/// resolution, and no further than its fetch, so no local update or push may be
+/// left to find out about. Anything else, or anything that cannot be read,
+/// stays as it is for the same request. A failure here loses nothing either.
+fn release_child<L: Lifecycle>(
+    service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>,
+    r: &L::Record,
+    role: ChildRole,
+    io: &mut impl PromotionIo,
+) {
+    let root = &request.root;
+    let Ok(ChildState::Unowned(stored)) =
+        state::with_transaction(service, root, |tx, _| L::child_state(tx, r, role))
+    else {
+        return;
+    };
+    let safe = !matches!(
+        stored.phase,
+        RemoteOperationPhase::Cancelled
+            | RemoteOperationPhase::Interrupted
+            | RemoteOperationPhase::Failed
+            | RemoteOperationPhase::Completed
+    ) && !stored.reconciliation_required
+        && stored.sync_evidence.push_oid.is_none()
+        && matches!(
+            stored.sync_checkpoint,
+            None | Some(
+                state::SynchronizationCheckpoint::FetchPrepared
+                    | state::SynchronizationCheckpoint::FetchObserved
+            )
+        )
+        && matches!(
+            state::with_transaction(service, root, |tx, _| {
+                reservation::promotion_child_has_resolution(tx, &stored)
+            }),
+            Ok(false)
+        );
+    if safe {
+        let _ = retire_child::<L>(service, request, r, role, stored.operation_id, io);
+    }
+}
 fn child<L: Lifecycle>(
     service: &RepositoryService,
     request: &LifecycleRequest<L::Expectation>,
@@ -824,22 +901,7 @@ fn child<L: Lifecycle>(
                         | RemoteOperationPhase::Interrupted
                         | RemoteOperationPhase::Failed
                 ) {
-                    service.cancel_remote_operation(root, stored.operation_id)?;
-                    let ack = SynchronizeRemoteRequest {
-                        root: root.clone(),
-                        operation_id: stored.operation_id,
-                        target: synchronization_target(L::KIND, role, r.item_id()),
-                        approval: request.approval.clone(),
-                        confirmed_identity: request.confirmed_identity.clone(),
-                        restart: true,
-                    };
-                    let mut observer = CancellationObserver::<L> {
-                        service,
-                        request,
-                        record: &*r,
-                    };
-                    let execution = L::child_execution(r, role)?;
-                    let _ack_result = io.synchronize(service, ack, &mut observer, &execution);
+                    retire_child::<L>(service, request, r, role, stored.operation_id, io)?;
                 }
                 // A cancellation acknowledgement may itself return RecoveryRequired;
                 // durable ownership/terminal state, never that error, decides.
@@ -1076,6 +1138,7 @@ fn finish_steps<L: Lifecycle>(
     }
     if cancelled::<L>(service, request, r).map_err(recovery)? {
         if matches!(r.step(), Step::Integrated | Step::PublicationPending) {
+            release_child::<L>(service, request, r, ChildRole::Primary, io);
             r.set_publication(Some(Pub::Cancelled));
             r.set_step(Step::PublicationPending);
         }

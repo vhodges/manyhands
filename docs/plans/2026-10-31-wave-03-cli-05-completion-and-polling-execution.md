@@ -400,6 +400,8 @@ The design's Rulings table holds R-23 to R-28, and its standing and answers sect
 
 `src/repository/remote/` was not touched. No schema, golden or desktop file changed, so `read_contract` and the desktop commands weren't run.
 
+**Superseded by decision 18, below.** What follows records what the walk found before it.
+
 **R-24, the walk: a way out finishes, and it isn't the one the ruling named.** Cancel, republish, retry does not finish. Found by testing, for both verbs:
 
 | Step | Answer |
@@ -434,10 +436,43 @@ The row is `c5_cancel_walk_remote_branch_deleted`. It reads the active operation
 
 **Risks, for review.**
 
-- `remote_context_deleted` in that prepare is reported while the branch still stands at the remote (the row asserts it is there only for `cleanup_pending_by_request`, a separate path). It's what the preview's stored evidence says; this task doesn't change it.
+- `remote_context_deleted` in that prepare: see decision 18's section, which explains it.
 - A non-cancelled stop between a `request cancel` and its answer leaves the flag, so the next resend answers `cancelled`, as R-20 intends.
-- The comment on `c5_lifecycle_child_remote_branch_deleted` still says "the way out is Task 2c's walk".
 
 **Deviation.** `tests/mutation_remote/c5_cancel.rs` duplicates a few helpers, since `c5_lifecycle.rs`'s are private and outside this task's files.
 
 **Left.** The ruling above. Task 5b: the probe on `remote/poll.rs`. Task 7: `stops_on_ctrl_c`, and the human lines.
+
+#### Decision 18: the runner releases the child
+
+The owner ruled on Task 2c's stop: "Runner releases the child (Recommended)".
+
+**The route now, both verbs, `c5_cancel_walk_remote_branch_deleted`.** `remote_branch_deleted` offering `request.cancel`, `repo.inspect`; `request cancel`; the same request, `cancelled`, reservation free; `item republish`, `ok`; the same request, `ok`, one merge. No resume step.
+
+**What is retired.** `release_child` runs at the two places a cancellation stops a parent before its child runs again: the first safe point at `confirmed` (context child), and `finish_steps`'s first check at `integrated` or `publication_pending` (primary child). It reuses `retire_child`, extracted from `child()`. It retires only an unowned, unfinished row with no resolution, no reconciliation owed, no recorded push, and a checkpoint of none, `fetch_prepared` or `fetch_observed`. That list is stricter than `child()`'s retry path, which also retires later rows and then has its new attempt find out what happened. No connection is made, and a failure leaves the row for the same request.
+
+**What stays, pinned.**
+
+- `c5_cancel_child_push_unknown_stays`: a push that may have landed. `cancelled`, the row untouched and still reserved. The same request finishes, with one merge.
+- `c5_cancel_child_flag_retained_close`: a retained conflict, untouched. `recovery_required` afterwards.
+- Later checkpoints (a local update prepared or made) stay by the same rule, with no row of their own.
+
+**Also released:** the primary's child, `c5_cancel_publication_child_released`. The ruling says "its pending unowned child", and this is the same stop after integration. Integration stands, and one merge.
+
+**A pending child's flag.** `restart` still doesn't clear it. In `c5_cancel_child_flag_unowned`, the retire ends the row `cancelled` with the flag still 1, with no connection, and the next call runs a new attempt under a new ID.
+
+**`request.retry` is out.** A child's `remote_branch_deleted` offers `request.cancel`, `repo.inspect`, by `outcome.rs`'s rule that the same request is not offered for what it cannot do. The resend is refused the same way (`c5_lifecycle_child_remote_branch_deleted`, E-17). `cancelled` offers `request.retry`, which by then can succeed.
+
+**`merge_required` (R-29).** It takes the same actions, through `never_gets_past`. **The walk does not prove it:** no binding is answered with it, so only a unit row pins it.
+
+**`offering_cancel`.** It asks `bind::lifecycle::held_by_its_child`, which answers false for every command but these two, so no other command's list changes. `ParentView` gains `children`.
+
+**`AfterPublication`'s `remote_context_deleted` is a false report, and it predates this work.** Read in the row, at that prepare: the branch stands at the remote, the context has no tracking ref, and primary's tracking ref is behind the remote's primary. `promotion/observe.rs:919-928` checks only when the tracking context is absent and the integration isn't already contained, and the base it plans from is the stale tracking primary, so the check is reached. `remote_context_history` then reads stored publication evidence as `Deleted`, and absent tracking is all it had to go on: **it means "published, and no tracking ref", not "deleted".** The 2b ledger's note applies: a push doesn't advance tracking. `closure/observe.rs:792-799` is the same check. The values were logged for the closure; the promotion row asserts the blockers and the branch. `primary_ahead_of_remote` beside it is true, and a prepare is refused either way until a poll.
+
+**The row doesn't pin the value.** `new_id_after_integration` asserts the code, `primary_ahead_of_remote` among the blockers and that the branch stands. Pinning `remote_context_deleted` would freeze a wrong word. Correcting it is outside this task, and is for the owner to ticket if wanted.
+
+**v0.1.6.** `git diff --stat b411e208 818ddf88` has 16 files: `.github/workflows/release.yml`, `Cargo.toml` and `Cargo.lock` (version), docs, packaging, `scripts/release`, and `tests/fixtures/cli_v1/version*`. **No file under `src/`.** The run below is on that merge.
+
+**Seen first.** Against the runner before this, `walk`, `child_flag_unowned`, `publication_child_released` and `c5_lifecycle_child_remote_branch_deleted` failed by assertion, both verbs. `child_push_unknown_stays` and `new_id_after_integration` passed at once: they pin what must not change. The unit row was rewritten with the fix.
+
+**Verified on the final code, all exit 0.** `c5_cancel_` 55 cases (889 s), `c5_lifecycle` 126 (1034 s), `document_promotion` 74 (749 s), `ticket_closure` 73 (668 s), `--lib mutation` 141 (34 s), `cargo fmt --check`, clippy `-D warnings` (28 s). `src/repository/remote/` was not touched, so the three lib filters were not rerun for this change.

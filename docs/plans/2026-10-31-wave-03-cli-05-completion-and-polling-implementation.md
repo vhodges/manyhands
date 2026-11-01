@@ -42,7 +42,7 @@ id: "01M69C6SHD04G8PT6D1Y36CDN7"
 - **Content and secrets.** No type holding source or a token derives `Debug`, `Display` or `Serialize`, except the content read's DTO. `closed_by` appears only in the preview, canonical content, the index and Git, as Cycle 10 lists. Previews aren't persisted, and request records hold no `closed_by` or title. No input value, source, token or backend text reaches a diagnostic.
 - **Test placement.** Library tables are modules of `tests/mutation_remote.rs`, on the new `tests/support/lifecycle_world.rs`. Cases in `harness = false` targets are `ssh_harness` cases named `c5_<module>_<case>`, registered in `CASES`, split per row under the 100-second watchdog. `#[test]` functions do not run there. `tests/cli_remote.rs` reaches public items only.
 - **Test isolation.** Every CLI child goes through `tests/support/cli.rs`, `tests/support/pty.rs` or the SSH harness. Tests never touch developer keys, global Git configuration, the real terminal or real application data.
-- **Pre-existing tests.** Only named edits E-1 to E-16. Any other semantic edit stops for owner review.
+- **Pre-existing tests.** Only named edits E-1 to E-17. Any other semantic edit stops for owner review.
 - **Outcome tables.** Each table's test is written first and seen to fail. It is committed together with the code that passes it. A row that answers otherwise stops for a ruling.
 - **Test runs.**
   - Each task runs only the targets and filters it names. Check that more than zero tests ran. Cargo takes one positional filter per command.
@@ -122,7 +122,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 
 ## Task 2c: Cancellation Reach
 
-**Files:** Modify `promotion/run.rs`, `promotion/lifecycle.rs`, `promotion/mod.rs`, `closure/lifecycle.rs`, `closure/mod.rs`, `mutation/progress.rs`, `mutation/records.rs`, `results.rs` (the `RequestCancel` doc), `bind/lifecycle.rs`, `tests/mutation_remote/c5_cancel.rs`, `tests/mutation_remote.rs`.
+**Files:** Modify `promotion/run.rs`, `promotion/lifecycle.rs`, `promotion/mod.rs`, `closure/lifecycle.rs`, `closure/mod.rs`, `mutation/progress.rs`, `mutation/records.rs`, `mutation/outcome.rs`, `results.rs` (the `RequestCancel` doc), `bind/lifecycle.rs`, `tests/mutation_remote/c5_cancel.rs`, `tests/mutation_remote/c5_lifecycle.rs` (E-17), `tests/mutation_remote.rs`.
 
 - [ ] **Step 1:** Write first, as `c5_cancel_` cases: `cancel_request` during each lifecycle stage, and with no parent yet; a token probe at a safe point and during a child; cancel by `request cancel`, then same request completing, then a new ID, before and after integration; a `request cancel` between automatic attempts stops attempt 2; a killed process's resend answers `cancelled` once, and the next continues; `Pending{Cancelled}` rows.
 - [ ] **Step 2:** Implement the observed entry points and the `cancel_request` route. Public signatures stay.
@@ -328,11 +328,11 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 | Closure | 15 |
 | Unchanged behaviour | 11, 15 |
 
-**Rulings to tasks:** R-1 Task 2a; R-2 Task 7; R-3 Task 6; R-4 Task 4; R-5, R-6 Task 6; R-7 Task 5a; R-8 Task 7; R-9, R-10 Task 14a; R-11 all; R-12 Task 11; R-15 Task 10a; R-16, R-17, R-18 Task 5b; R-19 Task 2b; R-20 Task 2c; R-21 Task 6. R-13 and R-14 are withdrawn.
+**Rulings to tasks:** R-1 Task 2a; R-2 Task 7; R-3 Task 6; R-4 Task 4; R-5, R-6 Task 6; R-7 Task 5a; R-8 Task 7; R-9, R-10 Task 14a; R-11 all; R-12 Task 11; R-15 Task 10a; R-16, R-17, R-18 Task 5b; R-19 Task 2b; R-20, R-29 Task 2c; R-21 Task 6. R-13 and R-14 are withdrawn.
 
-**Decisions to tasks:** 1 all of Part A; 2 Task 6; 3 Task 10a; 4 Task 14a; 5 Tasks 5a, 8; 6 Tasks 2a, 6; 7 authorizes the documents, no task; 8 Tasks 2b, 2c, 13a; 9 Tasks 11, 15; 10 Tasks 0, 6; 11 Task 5a; 12 Task 2c; 13 Task 4; 14 Task 15; 15 Task 5a.
+**Decisions to tasks:** 1 all of Part A; 2 Task 6; 3 Task 10a; 4 Task 14a; 5 Tasks 5a, 8; 6 Tasks 2a, 6; 7 authorizes the documents, no task; 8 Tasks 2b, 2c, 13a; 9 Tasks 11, 15; 10 Tasks 0, 6; 11 Task 5a; 12 Task 2c; 13 Task 4; 14 Task 15; 15 Task 5a; 18 Task 2c.
 
-**Named edits:** E-1 to E-7, E-14 and E-16 in 7–10b; E-8 in 13b; E-9, E-12, E-13 in 2a, 5a, 5b; E-10 in 3; E-11 in 2a, 4, 5a, 5b; E-15 in 2b.
+**Named edits:** E-1 to E-7, E-14 and E-16 in 7–10b; E-8 in 13b; E-9, E-12, E-13 in 2a, 5a, 5b; E-10 in 3; E-11 in 2a, 4, 5a, 5b; E-15 in 2b; E-17 in 2c.
 
 **Stops built in:** Task 0: identity, a changed fact, an unlisted pin, a reproduction surprise. Outcome-table rows in 2a–5b. Task 11: a refusal on real content. Task 14a: a behaviour gap. Task 15: a suite failure, closure.
 

@@ -277,6 +277,10 @@ Also required:
 17. **A `FailurePoint` variant for `remote select` (2026-10-31).** "Allow a FailurePoint variant
     (Recommended)": one variant in `src/repository.rs`, so the stop between commit and index
     update has a real test.
+18. **A cancellation lets a stopped child go (2026-10-31).** "Runner releases the child
+    (Recommended)". When a cancellation stops the parent, the runner retires a pending unowned child
+    with no retained work. A retained conflict, or anything not proven safe, stays. No effect is
+    discarded. `request.cancel` is offered on a child's `remote_branch_deleted` (E-17).
 
 **Owner questions, approved at these recommendations on 2026-10-31.**
 

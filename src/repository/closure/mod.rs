@@ -360,6 +360,7 @@ pub(super) fn lifecycle_parent(
                     integration: parent.integration_oid(),
                     publication: parent.publication(),
                     cancel_requested: parent.cancel_requested(),
+                    children: [parent.context_sync_id(), parent.primary_sync_id()],
                 }
             }),
         )

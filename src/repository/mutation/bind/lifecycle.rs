@@ -1447,22 +1447,40 @@ fn retry_then_inspect(accepted: &Accepted) -> Vec<RecoveryAction> {
 
 /// What a code would offer wrongly while a parent stands. A host stop carries
 /// no authority to approve. A child's `remote_branch_deleted` or
-/// `merge_required` holds the child's reservation, not the request's, so its
-/// `request.cancel` would be dropped: the request is offered, and the repository
-/// is what shows what happened to the branch. The same request does not get
-/// past either alone. A deleted branch's way out, walked by
-/// `c5_cancel_walk_remote_branch_deleted`, is `request cancel`, `operation
-/// resume` of the child `repo inspect` names, `item republish`, then the same
-/// request (R-24). Every other
-/// code's own actions follow the same request.
+/// `merge_required` is one the same request cannot get past, so it isn't
+/// offered: its cancellation lets the child go, and the repository shows what
+/// happened to the branch (decision 18). Every other code's own actions follow
+/// the same request.
 fn standing_recovery(code: ResultCode, accepted: &Accepted) -> Vec<RecoveryAction> {
     match code {
         ResultCode::HostApprovalRequired | ResultCode::HostReplacementRequired => {
             retry_then_inspect(accepted)
         }
-        _ if outcome::never_gets_past(code) => retry_then_inspect(accepted),
+        _ if outcome::never_gets_past(code) => {
+            let mut actions = vec![outcome::request_cancel(accepted.request_id)];
+            actions.extend(outcome::inspect_the_root_it_lies_in(&accepted.root()));
+            actions
+        }
         _ => Vec::new(),
     }
+}
+
+/// Whether `active`, the repository's reservation, is held by a child of the
+/// parent `operation` of a promotion's or a closure's request. For any other
+/// command there is no such parent.
+pub(in super::super) fn held_by_its_child(
+    service: &RepositoryService,
+    command: Option<Command>,
+    root: &Path,
+    operation: OperationId,
+    active: OperationId,
+) -> bool {
+    let parent = match command {
+        Some(Command::DocumentPromote) => Promote::parent(service, root, operation),
+        Some(Command::TicketClose) => Close::parent(service, root, operation),
+        _ => return false,
+    };
+    matches!(parent, Ok(Some(parent)) if parent.children.contains(&Some(active)))
 }
 
 /// An ID no item of this kind holds, as `item republish` answers it. An item
@@ -1717,6 +1735,7 @@ mod tests {
                 integration: None,
                 publication: None,
                 cancel_requested: false,
+                children: [None, None],
             });
         });
         let data = tempfile::tempdir().unwrap();
@@ -1787,15 +1806,18 @@ mod tests {
         assert!(matches!(ran.standing, Standing::Final));
     }
 
-    /// R-24: `merge_required` is told only to a caller set to refuse
+    /// Decision 18. `merge_required` is told only to a caller set to refuse
     /// divergence, and the bindings merge, so this is the row that can be had.
     #[test]
-    fn a_childs_way_past_needs_the_request_and_a_look_at_the_repository() {
+    fn a_stop_the_request_cannot_get_past_offers_its_cancellation() {
+        use crate::results::RecoveryActionKind as Kind;
         for code in [ResultCode::MergeRequired, ResultCode::RemoteBranchDeleted] {
             let offered = standing_recovery(code, &accepted());
-            assert_eq!(
-                offered[0].action,
-                crate::results::RecoveryActionKind::RequestRetry,
+            assert_eq!(offered[0].action, Kind::RequestCancel, "{code:?}");
+            assert!(
+                offered
+                    .iter()
+                    .all(|action| action.action != Kind::RequestRetry),
                 "{code:?}"
             );
         }

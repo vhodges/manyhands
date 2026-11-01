@@ -414,8 +414,9 @@ recovery_actions! {
     RequestPrepare => "request.prepare", [];
     /// Cancel the request `request_id`, then submit it once more: that
     /// call ends it cancelled and lets go of what it holds. A `document
-    /// promote` or `ticket close` that answers `cancelled` is not ended: its
-    /// record stays, and the same request submitted again continues it.
+    /// promote` or `ticket close` that answers `cancelled` lets go of a child
+    /// it has stopped but is not ended: its record stays, and the same request
+    /// submitted again continues it.
     RequestCancel => "request.cancel", ["request_id"];
     /// Abandon the operation the action names, in the repository at `root`.
     OperationAbandon => "operation.abandon", ["root"];
