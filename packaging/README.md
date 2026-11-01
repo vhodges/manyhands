@@ -3,7 +3,9 @@
 The manual [Release workflow](../.github/workflows/release.yml) builds the
 four native archive targets and assembles an unpublished GitHub Release.
 The Build workflow supplies the separate native build/test checks.
-Homebrew, a Windows installer, and Nix consumer packages are Stage 2 work.
+Stage 2 now generates a personal Homebrew cask and signed Windows Inno Setup
+installer alongside the archives. The root Nix flake separately builds Linux
+consumer packages from source. Native channel acceptance remains.
 
 Release jobs use Bash on Linux/macOS and PowerShell on Windows. Shared
 argument construction lives in `scripts/release/workflow.py`, which passes
@@ -62,13 +64,15 @@ metadata, byte size, and SHA-256. Those inventories travel in seven-day
 Actions artifacts; assembly checks the complete target set, compares the
 inventory with each extracted archive's manifest, and verifies its hash.
 
-The draft has six workflow-owned downloads:
+With the Homebrew and installer checkpoints, the draft has eight workflow-owned downloads:
 
 - Two Linux `.tar.gz` archives (x86_64 and ARM64).
 - One Apple Silicon macOS ZIP with `Manyhands.app` and the CLI.
 - One Windows x86_64 ZIP with both executables.
-- `release.json`: immutable source identity and target/archive descriptors.
-- `SHA256SUMS`: current checksums for the four archives and `release.json`.
+- `manyhands-v<VERSION>-x86_64-pc-windows-msvc-setup.exe`: per-user installer.
+- `manyhands.rb`: a version/checksum-specific personal Homebrew cask.
+- `release.json`: immutable source identity, target/archive and channel descriptors.
+- `SHA256SUMS`: checksums for the four archives, installer, cask, and `release.json`.
 
 Detailed compiler, signing, and runtime data lives in each archive's own
 `release.json`. The release-level source manifest is uploaded first and
@@ -80,7 +84,9 @@ cannot safely identify the draft and fails before mutation.
 
 Reruns preserve owner-written notes and unrelated attachments. After all
 new candidates are verified, assembly clears any stale `SHA256SUMS`,
-replaces only the four owned archives, and uploads fresh checksums last.
+replaces only the four owned archives, installer, and generated cask, and uploads fresh
+checksums last. The cask's archive hash may change after a native rebuild;
+only source-determined asset names/targets belong in the immutable manifest.
 An interrupted upload leaves a repairable draft with no completion checksum
 file. A source mismatch, moved tag, incorrect prerelease classification,
 or published release fails rather than updating that release.
@@ -90,6 +96,224 @@ checks draft state before each mutation and stops when it observes
 publication, but cannot atomically lock the release UI. Publish only after
 the workflow has completed successfully and the downloads have been
 reviewed. The workflow itself never publishes a draft.
+
+The new asset contract applies to a new source version/tag containing this
+checkpoint, not the existing `v0.1.6` draft. Never retrofit or clobber an
+existing immutable source manifest to add channels. The observed initial
+draft-visibility failure still requires an assembly-only failed-job rerun;
+automatic post-create retries are deliberately deferred during Stage 2.
+
+## Homebrew personal cask
+
+Assembly renders `manyhands.rb` from the verified Apple Silicon macOS ZIP,
+using its SHA-256, full version, source repository, and actual deployment
+metadata. It checks that the app's `LSMinimumSystemVersion` agrees with the
+archive manifest. Current Homebrew uses named macOS major releases in
+`depends_on`; an unknown major or a nonzero point-release requirement fails
+generation instead of being silently rounded down. Big Sur uses the bare
+macOS requirement (Homebrew's own floor); newer releases use named minimums.
+
+The cask moves the versioned directory's `Manyhands.app` into the configured
+application directory and links `bin/manyhands-cli` from the retained
+versioned Caskroom payload. The sibling `lib/` and disclosures stay beside
+the CLI; do not copy the executable out on its own. The app carries its own
+disclosures. The cask requires Apple Silicon and the `git` formula, does not
+alter quarantine/Gatekeeper, and makes no Developer ID/notarization claim.
+It defines no user-data removal (`zap`) action; normal uninstall preserves
+settings, credentials, repositories, and Manyhands data.
+
+For local generation from an existing matching release input and ZIP:
+
+```sh
+devenv shell -- python3 -B scripts/release/homebrew.py --input release-input.json --archive "$MACOS_ARCHIVE" --repo vhodges/manyhands --output /tmp/opencode/manyhands.rb
+nix shell nixpkgs#ruby -c ruby -c /tmp/opencode/manyhands.rb
+```
+
+`--repo` is the repository hosting the release, **not** the tap. Assembly
+generates the cask itself before any draft mutation; native candidates stay
+the exact four archives plus inventories. Prebuilt casks injected into the
+candidate directory are rejected. No cross-repository write token is needed.
+
+### Manual tap update and native acceptance
+
+The proposed repository is `vhodges/homebrew-tap`, but its name, existence,
+and access still need owner confirmation. No external tap is created or
+modified by this implementation. After an authorized release run, review
+and publish the release manually before updating the tap: draft downloads
+are not publicly installable.
+
+After publication, download `manyhands.rb`, `SHA256SUMS`, and the matching
+macOS archive, and verify their checksums. With separate tap authorization,
+copy the generated file to `Casks/m/manyhands.rb` in the confirmed tap.
+On Apple Silicon macOS, set `TAP` to that tap's Homebrew name and run:
+
+```sh
+brew style --cask Casks/m/manyhands.rb
+brew audit --cask --online "$TAP/manyhands"
+brew install --cask "$TAP/manyhands"
+manyhands-cli --help
+open -a Manyhands
+brew uninstall --cask "$TAP/manyhands"
+```
+
+Validate the CLI **through Homebrew's symlink**, with inherited `DYLD_*`
+overrides unset, to check real relative-library loading. Confirm installed
+app/CLI notices are readable, normal macOS approval/security behavior is
+accurately documented, and uninstall preserves user data. These native
+checks, `brew style`, and the cask audit are pending; Linux generation,
+synthetic archive tests, and Ruby syntax do not establish Homebrew acceptance.
+
+## Windows per-user installer
+
+The Inno Setup EXE installs the same files as the verified portable ZIP into
+`%LOCALAPPDATA%\Programs\Manyhands`, plus the brand icon and Inno licence.
+It requires no elevation, adds a current-user Start menu shortcut, and keeps
+the stable AppId **`io.github.vhodges.manyhands`**. The initial target is native
+x86_64 Windows, with the same Windows 10 1703/system ICU floor as the ZIP.
+The desktop's release build uses the GUI PE subsystem; the featureless CLI
+keeps the console subsystem. Both are checked from actual native PE headers.
+
+User PATH integration is an **opt-in** `clipath` task (off for a new install).
+Reinstall/upgrade retains Inno's previous task selection. The installer reads
+only the registry's user PATH, never copies the process's merged system/user
+PATH, and preserves unrelated entries and REG_SZ/REG_EXPAND_SZ type. Quoted,
+case-varied, trailing-backslash, and environment-expanded existing entries
+are not claimed. Uninstall or deselecting the task removes at most one exact
+entry recorded as installer-owned. PATH changes apply to **new terminals**.
+Directories containing a semicolon or quote cannot opt into PATH integration.
+
+Installer-owned metadata lives at `HKCU\Software\Manyhands\Installer` in the
+64-bit view. Full SemVer precedence rejects downgrades, including stable to
+older prerelease transitions, and permits same-version reinstall. Numeric
+Windows file metadata is `MAJOR.MINOR.PATCH.0`; fields above 65535 fail before
+compilation. A `PendingVersion` floor is written before changing installed
+files and cleared only after completion. After an interrupted install or
+upgrade, rerun the **same or newer** installer; an older payload cannot be
+used to overwrite partially upgraded files. Invalid/unreadable metadata
+fails closed. Changing the installation directory requires uninstall first.
+An incomplete post-install operation returns exit code **42**, even when
+Inno has handled/suppressed its error dialog; repair with the same/newer
+installer rather than treating it as a successful silent install.
+
+Normal uninstall removes tracked installation files, its shortcut, owned
+PATH addition, and installer metadata only. It does not delete settings,
+credentials, project repositories, or Manyhands user data. There is no
+certificate-import action; self-signing still does not establish public
+publisher trust or remove SmartScreen warnings. Keep Git available for Git
+helper operations.
+
+### Build and signing boundary
+
+`windows/inno-setup.json` pins the upstream **Inno Setup 7.1.1 x64** compiler
+installer and SHA-256. The Windows job verifies the download before running
+it and checks `ISCC --version`; it never uses a drifting preinstalled compiler.
+The upstream licence is retained as `licenses/installer/INNO-LICENSE.txt` in
+the installation. See [Inno's licence](https://github.com/jrsoftware/issrc/blob/is-7_1_1/license.txt)
+and [commercial-use FAQ](https://jrsoftware.org/isorder.php#required).
+
+After extracted ZIP verification, the job imports the existing signing
+identity again inside the guarded cleanup scope. `installer.py` compares
+**every payload file** with the verified ZIP, before and after compilation.
+Inno's mandatory signing callback signs/timestamps/verifies the embedded
+uninstaller, setup self-copies, and final EXE with the same publisher identity.
+The parent independently verifies the final EXE. No signing secret is passed
+on the compiler command line, and no unsigned/untimestamped fallback exists.
+The internal installer inventory binds its bytes to the source identity,
+exact Windows ZIP hash, signer, and pinned compiler. Assembly requires and
+validates both that installer and its inventory before draft mutation.
+
+The `.ico` is derived from the committed 1024 PNG with ImageMagick 7.1.2-34:
+
+```sh
+nix shell nixpkgs#imagemagick -c magick packaging/icons/manyhands-1024.png -define icon:auto-resize=256,128,64,48,32,24,16 packaging/windows/manyhands.ico
+```
+
+### Installer checks and remaining acceptance
+
+Python tests validate version/file metadata, source binding, compiler pins,
+and assembly/recovery. With FPC available, they compile and run the exact
+shared Pascal SemVer/PATH policy, not a Python rewrite:
+
+```sh
+nix shell nixpkgs#ruby nixpkgs#fpc -c devenv shell -- python3 -B -m unittest discover -s scripts/release/tests -v
+```
+
+The Windows helper step runs the same policy/cases through Inno's real Pascal
+Script engine before release secrets. Its registry adapter fixture uses a
+fresh, guarded HKCU GUID subtree for version/ownership/environment tests,
+cleans it in `finally`, and exits before installation. It never edits the
+runner's actual PATH. A separate no-payload completion fixture exercises
+Inno's real post-install event boundary and requires exit 42 on failure,
+0 on success; it writes only its owned result file. These fixtures and the
+production definition were also checked locally under Wine; this is not
+native Windows acceptance. The production definition was compiled with
+output disabled, so that check did not produce or sign an installer.
+
+On an authorized disposable native Windows machine, still exercise interactive
+and silent install, app launch, CLI PATH enabled/disabled, same-version reinstall,
+stable/prerelease upgrade, rejected downgrade, interrupted-upgrade repair,
+uninstall, readable installed disclosures, and retention of user data and
+pre-existing PATH entries. Verify the installed uninstaller's signature too.
+For silent operation, Inno supports `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART`;
+`/TASKS=clipath` opts into PATH and `/TASKS=` selects no optional tasks.
+No new release workflow run or native signing/install acceptance has occurred
+for this checkpoint.
+
+## Linux Nix source packages
+
+The consumer flake and lock live at the project root; supporting expressions
+and the [installation/runtime guide](../nix/README.md) live in `nix/`.
+They do not modify `devenv.nix`, `devenv.yaml`, or `devenv.lock`.
+For `x86_64-linux` and `aarch64-linux`, `default`/`manyhands` provides desktop
+plus a separately built featureless CLI; `manyhands-cli` provides just the
+CLI, without desktop fonts or graphics runtime libraries. Do not install
+both variants into one profile: their CLI executable paths overlap.
+
+Nixpkgs revision `c7def046b9a883d46974757852106483d741586f` supplies matching
+Rust/Cargo **1.98.1**. `nix/cargo-about.nix` separately pins **0.9.3** and its
+vendor hash. Evaluation asserts agreement with `tool-versions.env`.
+Cargo dependencies and original MPL/libgit2 `.crate` archives are fixed
+inputs verified against `Cargo.lock`; notice generation runs frozen/offline
+inside the sandbox, without developer Cargo caches or remote licence lookup.
+Reviewed upstream licence originals absent from published crates are retained
+as checksum-pinned offline supplements; unresolved canonical copyright
+placeholders fail notice generation. The vendor lockfile is an isolated,
+content-only store input, so its symlink cannot retain the unfiltered flake
+snapshot. Source-policy checks also inspect transitive vendor references.
+Installed terms/source archives are under `share/doc/manyhands`. The CLI's
+disclosures omit the desktop graph and fonts; separate Nix runtime library
+packages retain their own pinned Nixpkgs sources and terms.
+
+The desktop wrapper supplies GPUI's dynamic loader paths; the CLI wrapper
+does not. Both supply minimal Git for helper operations. The source filter
+excludes private project state, worktrees, build outputs, and hidden files.
+Flake checks cover these boundaries, CLI help/closure, desktop installed
+files, and required dynamic libraries. Loader success does not prove a
+Wayland window or working host graphics driver, and ARM64 evaluation alone
+does not establish an ARM64 build. Those acceptance checks and exact remote
+tag examples remain separate from local evaluation/build verification.
+
+No Nix binary cache, automatic Nixpkgs submission, release-asset upload, or
+signing-identity change is introduced. These packages build source rather
+than consuming the signed native archives. Existing `v0.1.6` predates the
+flake; consumer tag-pinned testing needs a later published source tag.
+
+**Implementation checkpoint:** shared-disclosure remediation now passes
+offline generation and original-file/source integrity checks for all four
+targets. Six exact release declarations have the owner's dated, checksum-
+bound grant-by-reference approval; unknown cases still fail closed. Two
+upstream licensing uncertainties remain documented: whether KDE's LGPL
+protocol definitions cover generated bindings, and the objc2 project's
+Apple SDK caveat (the same caveat across 18 dependencies). These are not
+established violations or prerequisites to reviewing this packaging PR;
+preserving notices is not a claim to resolve every possible binary-
+distribution obligation. See the Task 12
+[execution record](../docs/plans/2026-10-30-release-workflow-execution.md)
+for actual local package-build/runtime evidence and remaining distribution
+decisions. Current x86_64 CLI/desktop package builds and flake checks pass;
+the owner confirmed an isolated NixOS/COSMIC Wayland launch and correct text
+rendering. ARM64 executable/runtime and later tagged-consumer checks remain;
+evaluation/loader success alone does not establish those outcomes.
 
 ## Tool versions and local checks
 

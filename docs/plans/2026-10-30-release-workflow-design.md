@@ -2,7 +2,7 @@
 
 Date: 2026-10-30
 
-Status: Stage 1 implemented and locally reviewed; native acceptance pending after merge
+Status: Stage 1 native packaging/signing/assembly passed at v0.1.6; manual GUI acceptance pending. Stage 2 Homebrew and Windows installer implemented locally; native channel acceptance and Nix pending.
 
 ## Goal
 
@@ -288,6 +288,20 @@ tap after the release is published so it never points at draft-only assets.
 Cross-repository publication needs separate owner authorization and tap
 access. No automatic removal of macOS quarantine protections.
 
+The Task 10 checkpoint generates the cask in assembly from the verified ZIP,
+not from a second native upload. Use the versioned enclosing directory in
+both `app` and `binary` paths; linking the CLI leaves its sibling `lib/` and
+disclosures in the Caskroom. Verify the manifest's minimum OS against the
+bundle plist. Use Homebrew's named major-release requirements (or its bare
+macOS floor for Big Sur); fail on unknown/point-release minimums rather than
+understate compatibility. Native symlink-loading/install/removal acceptance
+is separate from portable generation tests.
+
+Add `manyhands.rb` to replaceable owned assets/checksums and an immutable
+source-only channel descriptor to `release.json`. Do not put its changing
+archive checksum in the source anchor. Old drafts with a different source
+manifest contract must not be retrofitted; use a new matching source tag.
+
 ### Windows Installer
 
 Use Inno Setup for a per-user installer containing both executables and
@@ -302,6 +316,27 @@ SemVer value for display. Prereleases use the same install identity; the
 installer must prevent an older stable/prerelease payload from silently
 replacing a newer one. Include the finished, signed installer in release
 checksums. WinGet submission is subsequent distribution work.
+
+The Task 11 checkpoint fixes AppId `io.github.vhodges.manyhands` and the
+per-user LocalAppData install root. SemVer/PATH policy is shared executable
+Pascal, with an isolated GUID-subtree registry fixture. Preserve user PATH
+registry type and unrelated entries; claim only new additions and remove at
+most one exact owned token. Check installed and pending version floors before
+mutating files; incomplete attempts are repairable by the same/newer version,
+not silently downgraded. Inno tracks installed files; no broad user-data
+deletion or certificate import is permitted.
+Track post-install completion explicitly: Inno handles exceptions from that
+event, so an incomplete operation must return custom exit code 42 rather
+than silent success. Retain the pending floor for same/newer repair.
+
+Use pinned Inno Setup 7.1.1 x64 and its verified upstream download hash.
+Compiler callbacks sign/timestamp/verify embedded uninstall/self-copy code
+and the final installer under the existing parent-owned certificate/trust
+lifecycle. Compare all compiler payload files with the verified portable ZIP
+before/after compilation. An internal inventory binds installer bytes to
+that ZIP, source identity, signer, and compiler. Add only a source-determined
+installer descriptor to the immutable anchor; assembly checks all candidates
+before mutation and checksums the installer as a replaceable owned asset.
 
 ### Nix
 

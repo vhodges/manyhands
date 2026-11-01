@@ -27,8 +27,20 @@ commit authorization is present, not permission to commit automatically.
 Stage 1 Tasks 1–8 are now implemented and locally checked; see the
 [execution record](2026-10-30-release-workflow-execution.md) for evidence,
 implementation refinements, and code-review results. Task 9's review/handoff
-record is written; actual native acceptance remains post-merge work with
-fresh owner authorization. Stage 2 Tasks 10–12 are not yet implemented.
+record is written. The `v0.1.6` native packaging/signing/assembly run passed
+after an assembly-only retry; manual desktop/download acceptance remains.
+Stage 2 Task 10 generation/assembly is now implemented and locally verified;
+native Homebrew acceptance is pending. Task 11 is implemented and reviewed;
+Rust test-target coverage completed across the original run and scoped
+continuations, while native installer acceptance remains. Task 12's root
+flake, packages, checks and consumer guidance are implemented; the current
+x86_64 CLI/desktop packages and flake checks pass. The owner confirmed the
+isolated NixOS/COSMIC Wayland window opened and text rendered, then closed it.
+ARM64 executable/runtime and later tagged-consumer acceptance remain.
+Shared disclosure remediation and all four offline target inventories are
+verified. On 2026-11-01 the owner authorized finishing local checks, committing,
+pushing `phase-ii-packaging`, and opening a PR. Merge, tags, workflow dispatch,
+release publication and external tap changes are not included.
 
 Before implementation, fetch origin and merge `origin/main` into this
 branch. If the owner assigns this work to a Manyhands ticket/Cycle, use its
@@ -546,6 +558,16 @@ permission for native runs.
 
 ### Task 10: Generate A Homebrew Cask For A Personal Tap
 
+**Checkpoint:** Implemented in `.worktrees/phase-ii-packaging` on
+`phase-ii-packaging`, based on `818ddf88` after fetching/merging origin/main.
+The portable generator, Ruby syntax check, and assembly/recovery tests pass.
+The cask is generated inside assembly from the verified ZIP; no native
+handoff format change is needed. `brew style`, online audit, and real
+installation/symlink-loading/removal remain pending on macOS. No external
+tap operation, commit, merge, push, version/tag change, workflow dispatch,
+or publication is authorized by the owner's request to continue packaging.
+The owner explicitly deferred automatic post-create draft-lookup retries.
+
 **Files:**
 - Create: `packaging/homebrew/manyhands.rb.in`
 - Create: `scripts/release/homebrew.py`
@@ -575,6 +597,21 @@ repository. Initially document a manual tap update; no cross-repository
 write token is required in Release.
 
 ### Task 11: Add The Windows Installer
+
+**Checkpoint:** Continuing on `phase-ii-packaging` after the owner's approval
+of the Homebrew checkpoint. Implementation uses pinned Inno Setup 7.1.1 x64,
+stable AppId `io.github.vhodges.manyhands`, shared executable Pascal policy
+and isolated registry tests, mandatory component signing under the existing
+identity, exact portable-ZIP payload binding, and strict installer handoff/
+assembly checks. A pending-version floor prevents interrupted upgrades from
+being downgraded; the same/newer installer can repair them. The production
+definition compiled with output disabled under Wine, and the real Inno
+Pascal policy/registry fixture passed under Wine. Local compiler checks do
+not establish native signing/installation. Review's post-install exit-code
+finding was corrected and re-reviewed: the shared actual Inno completion
+fixture returns 42 on failure and 0 on success. The full Rust suite is still
+running; all other recorded local checks passed. No new native run, commit/push,
+tag/version, publication, or external tap operation is authorized.
 
 **Files:**
 - Create: `packaging/windows/manyhands.iss`
@@ -634,8 +671,12 @@ Record these results; Linux tests cannot validate Inno Setup behavior.
 **Files:**
 - Create: `flake.nix`
 - Create: `flake.lock`
-- Create: `packaging/nix/package.nix`
+- Create: `nix/package.nix`
+- Create: `nix/cargo-about.nix`, `nix/checks.nix`
+- Create: `nix/source-filter.nix`, `nix/tests/source-filter.nix`
+- Create: `nix/README.md`, `packaging/licenses/README-cli.md`
 - Create: `packaging/linux/manyhands.desktop`
+- Modify: `scripts/release/notices.py`, `scripts/release/tests/test_notices.py`
 - Modify: `packaging/README.md`
 - Modify: `README.md`
 
@@ -645,6 +686,8 @@ small two-system mapping for `x86_64-linux` and `aarch64-linux`. Export
 nixpkgs/toolchain combination matching the release Rust version and
 assert/document that relationship. Keep Devenv inputs and shell behavior
 intact. Commit `flake.lock` with `flake.nix` when authorized.
+Per owner direction, keep the flake/lock at root and all supporting Nix
+expressions in root-level `nix/`, not underneath `packaging/`.
 
 **Step 2: Implement the CLI derivation first.** Use `buildRustPackage`,
 `cargoLock.lockFile`, explicit `--no-default-features --bin manyhands-cli`,
