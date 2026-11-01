@@ -1,23 +1,25 @@
 //! `document promote` and `ticket close`: one binding over the domain's one
-//! lifecycle runner, generic over a small verb (R-1).
+//! lifecycle runner, generic over a small verb.
 //!
 //! **The preview** is the domain's: it contacts no remote and takes no lease.
 //! `Ready` gives a confirmation whose observation digest binds the domain's
 //! expectation, which binds everything the preview shows. `Blocked` gives no
 //! confirmation and answers with every blocker. `Binding::prepare` observes
-//! the same way and checks nothing, so a request whose state has moved since
-//! its preview is `external_change` with no record.
+//! the same way, so a request whose state has moved since its preview is
+//! `external_change` with no record. The one thing it answers itself is an
+//! identity removed since the preview, alone, since a new preview would say the
+//! same.
 //!
 //! **A run** calls the domain under the request's operation ID, with no host
-//! approval and no confirmed identity (decision 6). What is left of the
+//! approval and no confirmed identity. What is left of the
 //! request is read from the parent record, not the journal, because a parent
-//! usually has no journal row (fact 29): no parent, the request is deleted and
+//! usually has no journal row: no parent, the request is deleted and
 //! a new prepare follows, unless a call entered again met a failure that
 //! passes by itself; a parent a consent refusal ended or a superseded one
 //! answers from what it holds, and that is stored; a complete one, or one
 //! unfinished, leaves the request accepted, and never `Stopped{Absent}`.
 //!
-//! **Entered again,** `Confirmed::row` reads the same record (R-19). An
+//! **Entered again,** `Confirmed::row` reads the same record. An
 //! unfinished or complete parent is called again with the record's own
 //! expectation and nothing compared, since the request's own work moved the
 //! state. A parent that ended answers from what it holds. With no parent, what
@@ -26,7 +28,7 @@
 //! **Cancellation.** The domain's safe points read the call's token and the
 //! request's flag. A run that stops for either answers `cancelled` and its
 //! request stays accepted, with its flag taken, so that the same request
-//! continues (decision 8, R-20).
+//! continues.
 //!
 //! **`operation resume`** enters a parent no request record holds through
 //! `Confirmed::row` and `Binding::rerun`, and decides its own record.
@@ -37,7 +39,7 @@
 //!
 //! **Identity.** A promotion's preview has no blocker for it, so a ready
 //! preview that plans a merge commit is answered as blocked here, last, with
-//! nothing else in the way (R-3). A closure's preview names it itself.
+//! nothing else in the way. A closure's preview names it itself.
 
 use std::{marker::PhantomData, path::Path, path::PathBuf};
 
@@ -829,7 +831,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
 
     /// The made-ready report, read now. A read that fails or is incomplete is
     /// `final` only for an answer that is: an operation still owed is read
-    /// again by its next call, so it says that instead (decision 8).
+    /// again by its next call, so it says that instead.
     fn made_ready(
         &self,
         service: &RepositoryService,
@@ -949,7 +951,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
     }
 
     /// The answer to an operation that reached primary. What it left to do
-    /// is the same request's to continue, whatever stopped it (decision 8).
+    /// is the same request's to continue, whatever stopped it.
     fn reached(&self, service: &RepositoryService, accepted: &Accepted, reached: &Reached) -> Ran {
         let code = reached_code(reached);
         // A code's own action for each of these would be wrong: a hand-off
@@ -986,7 +988,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
 
     /// The answer to an operation that stopped. What it left is the parent's
     /// to say: it is read after the call, and another call of the request may
-    /// have moved it since this one's stop (R-23).
+    /// have moved it since this one's stop.
     fn stopped(
         &self,
         service: &RepositoryService,
@@ -1010,7 +1012,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         let Some(view) = parent else {
             // A call entered again may be meeting the call it came after,
             // which has yet to begin its record: the record is that call's
-            // too, and is not deleted under it (R-27).
+            // too, and is not deleted under it.
             let (recovery, standing) = if entered_again && outcome::passes_by_itself(code) {
                 (Vec::new(), Standing::Owed)
             } else {
@@ -1145,7 +1147,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         };
         // The cancellation is answered, so the next call starts clean. A
         // call that dies before this, or a take that fails, leaves the flag,
-        // and the next call answers `cancelled` once more (R-20).
+        // and the next call answers `cancelled` once more.
         if ran.answer.code == ResultCode::Cancelled {
             let _ = call.service.take_cancellation(accepted.request_id);
         }
@@ -1224,7 +1226,7 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
     }
 
     /// A parent's row is in the remote journal when it has one, and records
-    /// phases and no checkpoint step (fact 15).
+    /// phases and no checkpoint step.
     fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint {
         EndedWithoutCheckpoint::SaysNothing
     }
@@ -1268,7 +1270,7 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
 
     /// Observes, and gives the digest the boundary compares with the
     /// confirmation's. What the preview covers is not checked here, with one
-    /// exception (R-22): an identity removed since the preview, alone, is
+    /// exception: an identity removed since the preview, alone, is
     /// answered as what it is, since a new preview would only say the same.
     /// The request is placed on primary, whose reachability a replay checks.
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
@@ -1506,7 +1508,7 @@ pub(super) fn recorded_effects<V: LifecycleVerb>(
 }
 
 /// Whether primary holds what the parent integrates, read from its step: a
-/// commit named by the record is not yet there (fact 41), until primary holds
+/// commit named by the record is not yet there, until primary holds
 /// it, which a kill between the ref and the record leaves at `integrating`. A
 /// superseded parent had reached cleanup, and only that is ever superseded.
 fn parent_integrated(
@@ -1546,7 +1548,7 @@ fn landed_push(
 }
 
 /// The effects a parent shows: its own, by its step, and what its children made
-/// that stays whatever stopped it (decision 25). Before integration that is the
+/// that stays whatever stopped it. Before integration that is the
 /// context child's merge on the context's branch and its landed push. After it,
 /// the primary child's landed push, which the parent may not have recorded yet.
 /// Nothing is claimed of a row that can't be read.
@@ -1643,8 +1645,7 @@ fn parent_effects<V: LifecycleVerb>(
 
 /// The code a stop answers with, the blockers it names, and whether the code's
 /// actions are not to be offered. A repository error of any kind stays one: it
-/// may follow a written checkpoint, so it never reads as a consent refusal
-/// (fact 11).
+/// may follow a written checkpoint, so it never reads as a consent refusal.
 fn stop_answer(stop: &Stop) -> (ResultCode, Option<Vec<LifecycleBlocker>>, bool) {
     match stop {
         Stop::Repository(error) => (outcome::repository_error_code(error.kind), None, false),
@@ -1667,7 +1668,7 @@ fn stop_answer(stop: &Stop) -> (ResultCode, Option<Vec<LifecycleBlocker>>, bool)
 
 /// With no parent the request is deleted, so a code whose own action is to
 /// send it again offers a new preview. Any other code's action stands, and
-/// `internal_error` has none (R-28).
+/// `internal_error` has none.
 fn no_parent_recovery(code: ResultCode) -> Vec<RecoveryAction> {
     if outcome::passes_by_itself(code) {
         vec![outcome::prepare_again()]
@@ -1686,7 +1687,7 @@ fn retry_then_inspect(accepted: &Accepted) -> Vec<RecoveryAction> {
 /// no authority to approve. A child's `remote_branch_deleted` or
 /// `merge_required` is one the same request cannot get past, so it isn't
 /// offered: its cancellation lets the child go, and the repository shows what
-/// happened to the branch (decision 18). Every other code's own actions follow
+/// happened to the branch. Every other code's own actions follow
 /// the same request.
 fn standing_recovery(code: ResultCode, accepted: &Accepted) -> Vec<RecoveryAction> {
     match code {
@@ -1855,7 +1856,7 @@ mod tests {
         );
     }
 
-    /// Task 0 found no failure point that yields this after a checkpoint. A
+    /// No failure point yields this after a checkpoint, so this is the row. A
     /// repository error of kind `ExternalChange` is `external_change` by its
     /// own mapping, and is not a consent refusal: a standing parent decides
     /// what is left, and the domain's half is `closure/run_tests.rs`.
@@ -2044,7 +2045,7 @@ mod tests {
         }
     }
 
-    /// R-23: a stop is not stored because the parent has since completed.
+    /// A stop is not stored because the parent has since completed.
     #[test]
     fn a_stop_of_a_complete_parent_leaves_the_record_for_its_stored_outcome() {
         let ran = stopped_with(ParentStep::Complete, None, Stop::Busy);
@@ -2057,7 +2058,7 @@ mod tests {
         );
     }
 
-    /// R-23: a stop of a superseded parent answers as the parent does.
+    /// A stop of a superseded parent answers as the parent does.
     #[test]
     fn a_stop_of_a_superseded_parent_is_its_request_mismatch() {
         let ran = stopped_with(ParentStep::Superseded, None, Stop::Busy);
@@ -2066,7 +2067,7 @@ mod tests {
         assert!(matches!(ran.standing, Standing::Final));
     }
 
-    /// R-23: a stop of a refused parent answers with the stored refusal.
+    /// A stop of a refused parent answers with the stored refusal.
     #[test]
     fn a_stop_of_a_refused_parent_is_its_refusal() {
         let ran = stopped_with(
@@ -2078,7 +2079,7 @@ mod tests {
         assert!(matches!(ran.standing, Standing::Final));
     }
 
-    /// R-28: `ended_answer` answers whatever `abandoned` holds: it is not run.
+    /// `ended_answer` answers whatever `abandoned` holds: it is not run.
     #[test]
     fn an_abandoned_parent_with_no_refusal_is_answered() {
         let ran = stopped_with(ParentStep::Abandoned, None, Stop::Busy);
@@ -2086,7 +2087,7 @@ mod tests {
         assert!(matches!(ran.standing, Standing::Final));
     }
 
-    /// Decision 18. `merge_required` is told only to a caller set to refuse
+    /// `merge_required` is told only to a caller set to refuse
     /// divergence, and the bindings merge, so this is the row that can be had.
     #[test]
     fn a_stop_the_request_cannot_get_past_offers_its_cancellation() {
@@ -2129,7 +2130,7 @@ mod tests {
         );
     }
 
-    /// R-27: on a re-entry a transient code with no parent leaves the record.
+    /// On a re-entry a transient code with no parent leaves the record.
     #[test]
     fn a_transient_stop_entered_again_with_no_parent_leaves_the_record() {
         let data = tempfile::tempdir().unwrap();

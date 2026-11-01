@@ -3008,7 +3008,7 @@ pub(in super::super) enum CommittingIdentity {
 /// is `IdentityRequired`, as if it were absent, and a confirmed one
 /// `ExternalChange`, before anything persists it. The configured pair still
 /// comes from Git's cascade per key, not from one level as
-/// `resolve_identity`'s does (R-6), so the two can disagree on a split
+/// `resolve_identity`'s does, so the two can disagree on a split
 /// configuration.
 pub(in super::super) fn select_committing_identity(
     repository: &git2::Repository,

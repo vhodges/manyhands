@@ -348,7 +348,7 @@ impl RepositoryService {
     }
 
     /// A request whose whole effect is one write, in one transaction with its
-    /// record (decision 15). It is absent or finished, with no accepted state to
+    /// record. It is absent or finished, with no accepted state to
     /// re-enter and no settling. So a request that never committed can't be told
     /// from one never sent, and sending it again is a new write: last commit
     /// wins. `None` when another call of the same request committed first: the

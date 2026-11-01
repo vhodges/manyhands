@@ -358,7 +358,7 @@ pub enum DocumentPromotionPreflight {
 }
 
 /// What the mutation boundary reads of a parent record: a lifecycle parent
-/// usually has no journal row (fact 29), so this is where it stands. It holds
+/// usually has no journal row, so this is where it stands. It holds
 /// IDs, OIDs, the consent's digest and fixed categories.
 pub(super) struct ParentView<B> {
     pub(super) step: lifecycle::ParentStep,

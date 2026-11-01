@@ -968,7 +968,7 @@ pub enum FailurePoint {
     AfterInitializationCommit,
     BeforePublicationConfigurationCommit,
     /// `set_publication_remote`, after the commit and the step that records
-    /// it, before the Git index is brought up to it (decision 17).
+    /// it, before the Git index is brought up to it.
     AfterPublicationConfigurationCommit,
     BeforeContextBranchCreation,
     AfterContextBranchBeforeWorktreeGitFailure,

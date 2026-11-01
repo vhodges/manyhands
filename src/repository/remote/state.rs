@@ -6423,7 +6423,7 @@ pub(crate) struct PollingUpdate {
 
 /// Applies `change` to the policy of the registration whose root is
 /// `root_path`, in the caller's transaction, so the request's record commits
-/// with it or not at all (decision 15). Whether it is already so is read in the
+/// with it or not at all. Whether it is already so is read in the
 /// same transaction. Unlike `set_remote_polling`, it writes no other field.
 pub(in super::super) fn update_remote_polling(
     transaction: &Transaction<'_>,

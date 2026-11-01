@@ -145,7 +145,7 @@ pub(crate) enum Row {
     /// a request with no row is `internal_error`, and nothing is run.
     Recorded,
     /// The operation's own parent record says it began, and a parent usually
-    /// has no journal row (fact 29, R-19). Nothing is compared, for the same
+    /// has no journal row. Nothing is compared, for the same
     /// reason as `Recorded`, and the domain is called: it continues the
     /// parent, or gives the outcome it stored.
     Unfinished,

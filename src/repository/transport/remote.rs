@@ -165,7 +165,6 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     /// Fetch only parsed advertised contexts and the advertised primary. The
     /// caller owns throttling and stop intent; this hook has no reservation
     /// knowledge and runs only during download, outside the repository lease.
-    #[allow(dead_code)] // Consumed by the later one-shot poll orchestrator.
     #[cfg(test)]
     pub(crate) fn fetch_poll_set(
         &mut self,
@@ -176,7 +175,7 @@ impl<'repo, 'a> AuthenticatedSshRemote<'repo, 'a> {
     }
 
     /// `lease_busy` tells a held lease from a protocol failure, which the
-    /// error's kind doesn't: only a poll answers it differently (decision 24).
+    /// error's kind doesn't: only a poll answers it differently.
     pub(crate) fn fetch_poll_set_noting_lease(
         &mut self,
         plan: &RemoteRefPlan,

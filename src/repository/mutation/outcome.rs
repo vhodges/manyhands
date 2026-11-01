@@ -867,7 +867,7 @@ fn recovery(
         },
         // A poll's transport stop is final: its record is finished, so the
         // same request would only read the stored failure again, and a new
-        // request is what polls (R-18). `replay` asks this too.
+        // request is what polls. `replay` asks this too.
         ResultCode::RemoteUnavailable | ResultCode::TransportUnavailable
             if final_transport_stop(command, retry) =>
         {

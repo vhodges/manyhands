@@ -1,6 +1,6 @@
 //! `poll once`, the explicit poll, and `poll configure`, `poll pause` and
 //! `poll resume`: one field of a registration's polling policy, written in the
-//! request's own transaction (R-7, decision 15).
+//! request's own transaction.
 //!
 //! **`poll once`** is one explicit fetch, clean fast-forward, materialization
 //! and index pass. It skips eligibility, so a pause refuses nothing, and a pause
@@ -8,7 +8,7 @@
 //! report is classified first and index pending second, since `IndexPending`
 //! wraps any completion: see `PollOnceBinding::reported`.
 //!
-//! **A stop after the reservation is final, and a new request polls (R-18).** The
+//! **A stop after the reservation is final, and a new request polls.** The
 //! domain finishes the row of a transport stop as `failed`, which the journal
 //! reads as pending, so the answer's standing is `Final` and not the row's to
 //! say. Only an interrupted pass is owed: the same request continues it with
@@ -25,7 +25,7 @@
 //! stored even when the policy was already so. Nothing needs Git, so a pending
 //! local synchronization refuses nothing. A pause during a running poll applies
 //! to the next automatic one. No verb sets `enabled`, and `poll resume` doesn't
-//! lift the recovery suspension (decision 5): its data names one that is set.
+//! lift the recovery suspension: its data names one that is set.
 
 use std::path::PathBuf;
 

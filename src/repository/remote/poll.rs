@@ -1424,7 +1424,7 @@ impl RepositoryService {
                 }
                 // Another's short local work, and no failure of this poll: no
                 // category is stored to replay and no backoff grows. The row is
-                // left for the same request to restart (decision 24).
+                // left for the same request to restart.
                 if lease_busy.get() {
                     self.poll_interrupt(&root, &owner, None)?;
                     return Err(RemotePollError::Busy);

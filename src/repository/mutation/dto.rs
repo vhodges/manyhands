@@ -1560,7 +1560,7 @@ pub struct PollPolicyMutationDto {
     pub interval_seconds: u64,
     pub backoff_seconds: Option<u64>,
     /// Automatic polls stay blocked while this is set, whatever a
-    /// `poll resume` did: it is not lifted here (decision 5).
+    /// `poll resume` did: it is not lifted here.
     pub recovery_suspended: bool,
     /// Null when no deadline is stored, so an eligible poll is due.
     pub next_eligible_at: Option<String>,
@@ -1599,7 +1599,7 @@ contract_enum!(
 contract_enum!(
     /// What a poll did about one target. Anything but `current`,
     /// `fast_forwarded` and `materialized` left the target as it was found, and
-    /// is data, not a failure (R-16).
+    /// is data, not a failure.
     PollTargetDisposition {
         Current => "current",
         FastForwarded => "fast_forwarded",
@@ -1645,7 +1645,7 @@ impl PollTargetDisposition {
     }
 }
 
-/// One target of a poll, as the domain reports it (R-17). A malformed remote
+/// One target of a poll, as the domain reports it. A malformed remote
 /// ref is reported with every field but its disposition null, and its name is
 /// nowhere in the result.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

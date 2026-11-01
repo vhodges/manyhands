@@ -149,10 +149,10 @@ impl Command {
             | Self::ItemRepublish => true,
             // One parent operation, recorded in its lifecycle's own table
             // and, once it deletes the remote context, in the remote
-            // journal under the same ID (fact 29).
+            // journal under the same ID.
             Self::DocumentPromote | Self::TicketClose => true,
             // One write in the request's own transaction, with no operation
-            // ID and no row (decision 15): the record finished with it is
+            // ID and no row: the record finished with it is
             // what says it was made.
             Self::PollConfigure | Self::PollPause | Self::PollResume => false,
             // Never made twice, and so recorded against nothing: a key's
@@ -362,8 +362,7 @@ impl Command {
             // points of its own operation (R-32).
             Self::ItemRepublish => true,
             // A promotion and a closure stop at the safe points of their
-            // one runner, and of the children it runs (Task 2c connects a
-            // cancellation to them).
+            // one runner, and of the children it runs.
             Self::DocumentPromote | Self::TicketClose => true,
             Self::DocumentCreate
             | Self::DocumentSave
@@ -743,7 +742,7 @@ mod tests {
             // points; what it does first is write the comment.
             let comment = command == Command::CommentAdd;
             // A republish pushes as a synchronization does, at its safe
-            // points, and needs confirmation (R-32), as a promotion and a
+            // points, and needs confirmation, as a promotion and a
             // closure do, which stop at the safe points of their runner.
             let confirmed = matches!(
                 command,

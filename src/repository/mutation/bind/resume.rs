@@ -17,11 +17,10 @@
 //!   synchronization that publishes it, once the comment is checkpointed
 //!   and its publication is pending and was not cancelled: it is taken up
 //!   by the comment's own synchronizer-driven retry, which proves the
-//!   comment's checkpoint before it publishes and never writes a comment
-//!   (R-20);
+//!   comment's checkpoint before it publishes and never writes a comment;
 //! - a promotion or a closure no accepted request record holds, which is
 //!   looked for in its own table first, since a parent usually has no journal
-//!   row (fact 29). It is called again with the expectation its record began
+//!   row. It is called again with the expectation its record began
 //!   with, so nothing new is consented to, and a stop leaves no record of the
 //!   resume: the parent is what stands, and a later resume continues it.
 //!
@@ -107,7 +106,7 @@ pub struct OperationResumeInput {
 /// and is kept accepted only where nothing could be read of the
 /// operation, for the same request to look again, or where a call of it
 /// entered again met a failure that passes by itself and may be meeting the
-/// call it came after (R-35).
+/// call it came after.
 ///
 /// **What its result claims** is what its own call did or the operation
 /// itself shows. A hand-off it ran is `discovery: current` and nothing
@@ -122,7 +121,7 @@ pub struct OperationResumeInput {
 /// request. `request cancel` asks nothing of a resume: its command does not
 /// stop at safe points, so the answer is `requested: false` and no flag is set.
 /// The one flag on a resume's record is the one its own call sets to let a
-/// parent's child go (decision 19; see `continued`).
+/// parent's child go (see `continued`).
 pub(crate) struct OperationResumeBinding {
     root: PathBuf,
     operation_id: OperationId,
@@ -234,7 +233,7 @@ enum Named {
     Lifecycle { verb: Verb, item_id: ItemId },
     /// A promotion or a closure that is complete. A fresh resume has nothing
     /// to do. One entered again may be what completed it, so it is given the
-    /// outcome the parent stored and its report (R-33).
+    /// outcome the parent stored and its report.
     Complete { verb: Verb, item_id: ItemId },
     /// What nothing takes up under its ID: a poll no accepted request record
     /// holds, and a promotion or a closure that a consent refusal ended or
@@ -810,7 +809,7 @@ pub(crate) fn takes_up(service: &RepositoryService, root: &str, operation_id: Op
 /// and the domain is called with it under the parent's operation.
 ///
 /// A stop the same call can't get past has no request whose cancellation could
-/// let its child go, so this call asks (decision 19): it sets its own record's
+/// let its child go, so this call asks: it sets its own record's
 /// flag, which the domain's safe points read, and calls once more. That call
 /// stops at its first safe point and the runner releases the child if its
 /// guards prove it safe. The parent's own flag would not do: a call that finds
@@ -850,7 +849,7 @@ fn continued<V: LifecycleVerb>(
 
 /// A consent refusal met by a resume ends the parent, and what goes on from it
 /// is a new prepare of the verb: named in the data, since the resume's own
-/// target is the operation (R-31).
+/// target is the operation.
 fn consent_refusal_named<V: LifecycleVerb>(ran: Ran, binding: &LifecycleBinding<V>) -> Ran {
     let Ran { answer, standing } = ran;
     let refused = matches!(standing, Standing::Final) && answer.code == ResultCode::ExternalChange;
@@ -908,7 +907,7 @@ impl OperationResumeBinding {
 
     /// Reads how the operation stands. Nothing is written and no lease
     /// is taken. All are asked in one read: the parent tables first, since a
-    /// parent usually has no journal row (fact 29), then the remote journal,
+    /// parent usually has no journal row, then the remote journal,
     /// whose synchronizations also have a row of the local journal under
     /// their ID for their index hand-off, then the key journal, then the
     /// local one.
@@ -1269,8 +1268,8 @@ impl OperationResumeBinding {
 
     /// What a resume that stopped offers: a resume first, then what the verb
     /// offers for the code, less what names a request, since none holds the
-    /// parent (R-30). A hand-off is owed by a parent that is complete, which no
-    /// resume takes up: the index is what is refreshed (R-32).
+    /// parent. A hand-off is owed by a parent that is complete, which no
+    /// resume takes up: the index is what is refreshed.
     fn lifecycle_recovery(
         &self,
         answer: &Answer,
@@ -1315,7 +1314,7 @@ impl OperationResumeBinding {
     /// Anything else leaves no record of the resume, since the parent is what
     /// stands. But a call entered again that met a failure that passes by
     /// itself may be meeting the call it came after, whose record it is too,
-    /// so it is left under that call (R-35, by R-27's rule).
+    /// so it is left under that call.
     fn lifecycle_kept(&self, ran: Ran, accepted: &Accepted, command: Command) -> Ran {
         let Ran { answer, standing } = ran;
         let gone = Standing::Stopped {
@@ -1444,7 +1443,7 @@ impl OperationResumeBinding {
             } => self.publish_comment(call, accepted, comment, synchronization),
             Named::Lifecycle { verb, item_id } => self.lifecycle(call, accepted, verb, item_id),
             // Its earlier call may be what completed it: the stored outcome
-            // and its report, with no transport (R-33).
+            // and its report, with no transport.
             Named::Complete { verb, item_id } if self.entered_again => {
                 self.lifecycle(call, accepted, verb, item_id)
             }

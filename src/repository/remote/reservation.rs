@@ -1223,7 +1223,7 @@ impl RepositoryService {
     /// Answers a cancellation that stopped a promotion's or a closure's parent
     /// for its child `child`, in one immediate transaction, so that no owner
     /// passes a checkpoint between the guards and the write. It returns whether
-    /// the child was let go (decision 18).
+    /// the child was let go.
     ///
     /// A child with nothing to lose ends `cancelled` here, with no connection,
     /// and the reservation is free: unfinished, under the current generation,

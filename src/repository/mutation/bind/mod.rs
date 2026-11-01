@@ -780,7 +780,7 @@ pub(crate) enum EndedWithoutCheckpoint {
 }
 
 /// The whole effect of a request that is one write in its record's own
-/// transaction, as a policy verb's is (decision 15): the boundary inserts the
+/// transaction, as a policy verb's is: the boundary inserts the
 /// record, calls this and finishes the record, and commits all of it or none.
 pub(crate) trait OneTransaction {
     /// Makes the write and answers with what it left, for the record to store.
@@ -977,7 +977,7 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
     let Some(accepted) = Accepted::of_record(record, record.attempt) else {
         return Recorded::nothing();
     };
-    // A parent usually has no row, and what it did is its own to say (fact 40).
+    // A parent usually has no row, and what it did is its own to say.
     match Command::parse(&record.command) {
         Some(Command::DocumentPromote) => {
             return Recorded::of(lifecycle::recorded_effects::<lifecycle::Promote>(

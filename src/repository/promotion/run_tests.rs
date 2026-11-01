@@ -4876,7 +4876,7 @@ fn new_blocker_is_stored_and_replayed_before_any_child() {
 #[test]
 fn identity_and_mismatch_do_not_strand_the_item() {
     let f = Fixture::new();
-    // A record to mismatch against: R-3 begins none with no identity.
+    // A record to mismatch against: a missing identity begins none.
     let mut req = f.request();
     RepositoryService::open_at_with_failure_point_for_testing(
         f.data.path(),

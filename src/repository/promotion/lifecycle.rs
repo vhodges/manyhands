@@ -871,7 +871,7 @@ impl Lifecycle for DocumentPromotionLifecycle {
     ) -> Result<DocumentPromotionPreflight, RepositoryError> {
         observation.revalidate(service, repository)
     }
-    /// R-3: a planned merge commit needs a usable identity, and a request
+    /// A planned merge commit needs a usable identity, and a request
     /// that has none has not begun. A record's own run stays the guard.
     fn require_identity(
         preview: &DocumentPromotionPreview,
