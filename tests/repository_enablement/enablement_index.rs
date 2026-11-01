@@ -2,8 +2,8 @@ use super::*;
 use std::path::Path;
 
 use manyhands::{
-    repository::{Mutation, TicketCreateInput},
-    results::ResultCode,
+    repository::{Mutation, RemoteSelectInput, RepoSyncInput, TicketCreateInput},
+    results::{PublicationEffect, ResultCode},
 };
 use support::{items, mutation};
 
@@ -236,4 +236,233 @@ fn foreign_lock_on_unborn_enable_leaves_no_index_until_domain_retry() {
     std::fs::remove_file(lock).unwrap();
     service.enable(request).unwrap();
     assert_configuration_current(&fixture.root);
+}
+
+// `01M669FJR2`: a remote selection leaves the index current for what it
+// commits.
+
+/// An enabled repository holding a remote, ready to select.
+fn selectable() -> (
+    support::TestRepository,
+    tempfile::TempDir,
+    RepositoryService,
+) {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    let mut request = enable_request(&fixture.root, "main");
+    request.identity = create_request(&fixture.root, "main").identity;
+    service.enable(request).unwrap();
+    service
+        .add_remote(add_remote_request(
+            &fixture.root,
+            "origin",
+            "git@example.invalid:project.git",
+        ))
+        .unwrap();
+    assert_configuration_current(&fixture.root);
+    (fixture, data, service)
+}
+
+/// What a selection made before the fix left: HEAD and the worktree hold the
+/// new configuration, and the index the one before it.
+fn stale_index_of_a_selection(root: &Path) {
+    let repository = Repository::open(root).unwrap();
+    let path = Path::new(canonical::CONFIG_PATH);
+    let head = repository.head().unwrap().peel_to_commit().unwrap();
+    let parent = head.parent(0).unwrap();
+    let entry = parent.tree().unwrap().get_path(path).unwrap();
+    let mut index = repository.index().unwrap();
+    let mut stale = index.get_path(path, 0).unwrap();
+    stale.id = entry.id();
+    index.add(&stale).unwrap();
+    index.write().unwrap();
+    assert_ne!(
+        Repository::open(root).unwrap().status_file(path).unwrap(),
+        git2::Status::CURRENT
+    );
+}
+
+#[test]
+fn remote_select_leaves_the_configuration_current() {
+    let (fixture, _data, service) = selectable();
+    assert!(matches!(
+        service
+            .set_publication_remote(publication_request(&fixture.root, Some("origin")))
+            .unwrap(),
+        PublicationRemoteOutcome::Changed { .. }
+    ));
+    assert_configuration_current(&fixture.root);
+    // Clearing it commits the file again.
+    assert!(matches!(
+        service
+            .set_publication_remote(publication_request(&fixture.root, None))
+            .unwrap(),
+        PublicationRemoteOutcome::Changed { .. }
+    ));
+    assert_configuration_current(&fixture.root);
+}
+
+#[test]
+fn remote_select_leaves_other_index_entries_as_they_are() {
+    let (fixture, _data, service) = selectable();
+    std::fs::write(fixture.root.join("staged.txt"), b"staged\n").unwrap();
+    std::fs::write(fixture.root.join("unstaged.txt"), b"tracked\n").unwrap();
+    let staged = {
+        let repository = Repository::open(&fixture.root).unwrap();
+        let mut index = repository.index().unwrap();
+        index.add_path(Path::new("staged.txt")).unwrap();
+        index.write().unwrap();
+        index.get_path(Path::new("staged.txt"), 0).unwrap().id
+    };
+    let others = |root: &Path| -> Vec<(Vec<u8>, git2::Oid)> {
+        Repository::open(root)
+            .unwrap()
+            .index()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.path != canonical::CONFIG_PATH.as_bytes())
+            .map(|entry| (entry.path, entry.id))
+            .collect()
+    };
+    let before = others(&fixture.root);
+    assert!(before.iter().any(|(_, id)| *id == staged));
+    service
+        .set_publication_remote(publication_request(&fixture.root, Some("origin")))
+        .unwrap();
+    assert_eq!(others(&fixture.root), before);
+    let repository = Repository::open(&fixture.root).unwrap();
+    assert_eq!(
+        repository.status_file(Path::new("staged.txt")).unwrap(),
+        git2::Status::INDEX_NEW
+    );
+    assert_eq!(
+        repository.status_file(Path::new("unstaged.txt")).unwrap(),
+        git2::Status::WT_NEW
+    );
+    assert_configuration_current(&fixture.root);
+}
+
+#[test]
+fn a_retry_of_a_remote_select_leaves_the_index_current() {
+    let (fixture, _data, service) = selectable();
+    let operation_id = support::operation_id();
+    let request =
+        || publication_request_with_operation_id(&fixture.root, Some("origin"), operation_id);
+    let first = service.set_publication_remote(request()).unwrap();
+    assert_configuration_current(&fixture.root);
+    assert_eq!(service.set_publication_remote(request()).unwrap(), first);
+    assert_configuration_current(&fixture.root);
+}
+
+#[test]
+fn a_retry_heals_an_index_a_selection_left_stale() {
+    let (fixture, _data, service) = selectable();
+    let operation_id = support::operation_id();
+    let request =
+        || publication_request_with_operation_id(&fixture.root, Some("origin"), operation_id);
+    let first = service.set_publication_remote(request()).unwrap();
+    stale_index_of_a_selection(&fixture.root);
+    assert_eq!(service.set_publication_remote(request()).unwrap(), first);
+    assert_configuration_current(&fixture.root);
+}
+
+#[test]
+fn a_new_no_op_selection_heals_an_index_a_selection_left_stale() {
+    let (fixture, _data, service) = selectable();
+    service
+        .set_publication_remote(publication_request(&fixture.root, Some("origin")))
+        .unwrap();
+    stale_index_of_a_selection(&fixture.root);
+    let head = support::head_commit(&fixture.repository);
+    service
+        .set_publication_remote(publication_request(&fixture.root, Some("origin")))
+        .unwrap();
+    assert_eq!(support::head_commit(&fixture.repository), head);
+    assert_configuration_current(&fixture.root);
+}
+
+#[test]
+fn a_new_no_op_selection_leaves_a_current_index_alone_under_a_lock() {
+    let (fixture, _data, service) = selectable();
+    service
+        .set_publication_remote(publication_request(&fixture.root, Some("origin")))
+        .unwrap();
+    // Another Git process holds the index: a selection that has nothing to
+    // write there has no reason to wait for it or to fail.
+    let lock = fixture.repository.path().join("index.lock");
+    std::fs::write(&lock, b"").unwrap();
+    let answered =
+        service.set_publication_remote(publication_request(&fixture.root, Some("origin")));
+    std::fs::remove_file(&lock).unwrap();
+    assert!(answered.is_ok());
+    assert_configuration_current(&fixture.root);
+}
+
+#[test]
+fn a_stop_between_the_commit_and_the_index_recovers_on_retry() {
+    let (fixture, data, _service) = selectable();
+    let failing = support::FailOnce::at(FailurePoint::AfterPublicationConfigurationCommit)
+        .open_service(data.path());
+    let operation_id = support::operation_id();
+    let request =
+        || publication_request_with_operation_id(&fixture.root, Some("origin"), operation_id);
+    let before = support::head_commit(&fixture.repository);
+    let error = failing.set_publication_remote(request()).unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::InjectedFailure);
+    let committed = support::head_commit(&fixture.repository).unwrap();
+    assert_ne!(Some(committed), before);
+    let repository = Repository::open(&fixture.root).unwrap();
+    let path = Path::new(canonical::CONFIG_PATH);
+    assert_ne!(
+        repository.status_file(path).unwrap(),
+        git2::Status::CURRENT,
+        "the stop came before the index moved"
+    );
+    drop(repository);
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    assert_eq!(
+        service.set_publication_remote(request()).unwrap(),
+        PublicationRemoteOutcome::Changed {
+            commit_oid: committed
+        }
+    );
+    assert_eq!(support::head_commit(&fixture.repository), Some(committed));
+    assert_configuration_current(&fixture.root);
+}
+
+/// The ticket's journey, through the boundary, with its stale index as the
+/// control: refused as not clean, every effect `not_requested`, and with the
+/// index brought up to date past that refusal to the transport's own answer.
+#[test]
+fn the_synchronization_after_a_selection_is_not_refused_as_not_clean() {
+    let (fixture, _data, service) = selectable();
+    let select = || {
+        Mutation::RemoteSelect(RemoteSelectInput {
+            root: fixture.root.clone(),
+            name: Some("origin".to_owned()),
+        })
+    };
+    let sync = || {
+        Mutation::RepoSync(RepoSyncInput {
+            root: fixture.root.clone(),
+        })
+    };
+    let selected = mutation::execute_with(&service, mutation::REQUEST_1, select());
+    assert_eq!(selected.code, ResultCode::Ok, "{}", selected.message);
+    assert_configuration_current(&fixture.root);
+    let replayed = mutation::execute_with(&service, mutation::REQUEST_1, select());
+    assert_eq!(replayed.code, ResultCode::Ok);
+    assert_configuration_current(&fixture.root);
+
+    let synchronized = mutation::execute_with(&service, mutation::REQUEST_2, sync());
+    assert_ne!(synchronized.code, ResultCode::WorktreeNotClean);
+    assert_ne!(
+        synchronized.effects.publication,
+        PublicationEffect::NotRequested
+    );
+
+    stale_index_of_a_selection(&fixture.root);
+    let refused = mutation::execute_with(&service, mutation::REQUEST_3, sync());
+    assert_eq!(refused.code, ResultCode::WorktreeNotClean);
 }
