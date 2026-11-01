@@ -383,7 +383,7 @@ fn token_at_first_safe_point(verb: Verb) -> Result<(), FixtureError> {
 /// A token cancelled while a child runs stops it at the child's own safe
 /// point: the probe reaches it.
 fn token_during_child(verb: Verb) -> Result<(), FixtureError> {
-    let w = remote(verb)?;
+    let w = protected(verb)?;
     let confirmation = confirmation_of(&w.service, verb, &w.root);
     let cancel = CancellationToken::new();
     let token = cancel.clone();
@@ -406,7 +406,7 @@ fn token_during_child(verb: Verb) -> Result<(), FixtureError> {
 
 /// `request cancel` from elsewhere while a child runs.
 fn request_during_child(verb: Verb) -> Result<(), FixtureError> {
-    let w = remote(verb)?;
+    let w = protected(verb)?;
     let confirmation = confirmation_of(&w.service, verb, &w.root);
     let stopped = call_with(
         &w.service,
@@ -429,7 +429,7 @@ fn request_during_child(verb: Verb) -> Result<(), FixtureError> {
 /// Stopped during the primary's child: integration stands, publication is
 /// pending `cancelled`, and the same request publishes it.
 fn publication_pending_cancelled(verb: Verb) -> Result<(), FixtureError> {
-    let mut w = remote(verb)?;
+    let mut w = protected(verb)?;
     stopped_at(&mut w, verb, FailurePoint::AfterIntegrationRef)?;
     let cancel = CancellationToken::new();
     let token = cancel.clone();
@@ -458,7 +458,7 @@ fn publication_pending_cancelled(verb: Verb) -> Result<(), FixtureError> {
 /// A token cancelled while the remote branch is being deleted: the deletion
 /// under way completes, the effects report it, and cleanup is pending.
 fn cleanup_pending_by_token(verb: Verb) -> Result<(), FixtureError> {
-    let mut w = remote(verb)?;
+    let mut w = protected(verb)?;
     stopped_at(&mut w, verb, FailurePoint::AfterPublication)?;
     let cancel = CancellationToken::new();
     let token = cancel.clone();
@@ -487,7 +487,7 @@ fn cleanup_pending_by_token(verb: Verb) -> Result<(), FixtureError> {
 /// which refuses the deletion. That refusal is the cancellation, and the next
 /// call's restart does not read it as a stop of its own.
 fn cleanup_pending_by_request(verb: Verb) -> Result<(), FixtureError> {
-    let mut w = remote(verb)?;
+    let mut w = protected(verb)?;
     stopped_at(&mut w, verb, FailurePoint::AfterPublication)?;
     let stopped = call_with(
         &w.service,
@@ -1112,7 +1112,7 @@ fn republished(w: &World, verb: Verb) -> Result<(), FixtureError> {
 /// A refusal of the deletion itself, with cancellation asked, keeps its own
 /// answer: it isn't the cancellation that stopped it.
 fn deletion_rejected_keeps_its_answer(verb: Verb) -> Result<(), FixtureError> {
-    let mut w = remote(verb)?;
+    let mut w = protected(verb)?;
     fixed(w.sync(w.request(context_target(verb)?)))?;
     w.server.reject_context_deletion(true)?;
     fixed(fixed(w.bare())?.set_head(verb.branch()))?;
@@ -1140,7 +1140,7 @@ fn deletion_rejected_keeps_its_answer(verb: Verb) -> Result<(), FixtureError> {
 /// So does a transport failure of the deletion: what became of it is not known,
 /// and the cancellation isn't what stopped it.
 fn deletion_transport_keeps_its_answer(verb: Verb) -> Result<(), FixtureError> {
-    let mut w = remote(verb)?;
+    let mut w = protected(verb)?;
     stopped_at(&mut w, verb, FailurePoint::AfterPublication)?;
     w.server.disconnect_at(FixtureBoundary::Advertisement);
     let cancel = CancellationToken::new();

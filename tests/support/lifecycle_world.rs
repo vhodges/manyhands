@@ -148,9 +148,19 @@ pub fn trust(w: &World) -> Result<(), FixtureError> {
 }
 
 /// A two-clone world whose host is trusted, whose primary is observed as the
-/// remote holds it, and which holds the verb's item, saved and unpublished.
+/// remote holds it, and which holds the verb's item, saved and unpublished. Its
+/// key needs no passphrase, which saves a row about nine seconds of its fifteen.
 pub fn remote(verb: Verb) -> Result<World, FixtureError> {
-    let w = World::new()?;
+    ready(World::plain_key()?, verb)
+}
+
+/// `remote`, for a row that asks about unlocking, or that stops a child from
+/// inside the credentials it asks for: the world's key asks for its passphrase.
+pub fn protected(verb: Verb) -> Result<World, FixtureError> {
+    ready(World::new()?, verb)
+}
+
+fn ready(w: World, verb: Verb) -> Result<World, FixtureError> {
     trust(&w)?;
     // The fixture's seed push does not move the tracking reference.
     fixed(w.sync(w.primary()))?;

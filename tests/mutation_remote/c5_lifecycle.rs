@@ -39,8 +39,6 @@ const BOTH: &[ssh_harness::Case] = both![
     "prepare_index_not_marked" => prepare_index_not_marked,
     "prepare_unknown_id" => prepare_unknown_id,
     "prepare_wrong_kind" => prepare_wrong_kind,
-    "prepare_not_enabled" => prepare_not_enabled,
-    "prepare_not_registered" => prepare_not_registered,
     "stale_at_confirm" => stale_at_confirm,
     "published" => published,
     "local_only" => local_only,
@@ -69,7 +67,6 @@ const BOTH: &[ssh_harness::Case] = both![
     "push_rejected_continues" => push_rejected_continues,
     "deletion_rejected" => deletion_rejected,
     "index_pending" => index_pending,
-    "busy_with_no_parent" => busy_with_no_parent,
     "local_sync_pending" => local_sync_pending,
     "unlock_stop" => unlock_stop,
     "child_host_stop" => child_host_stop,
@@ -82,16 +79,47 @@ const BOTH: &[ssh_harness::Case] = both![
     "cache_loss_request" => cache_loss_request,
     "cache_loss_integrated" => cache_loss_integrated,
     "cache_loss_remote_gone" => cache_loss_remote_gone,
-    "busy_lease_on_reentry" => busy_lease_on_reentry,
     "integrating_before_ref" => integrating_before_ref,
     "integrating_after_ref" => integrating_after_ref,
-    "parent_unreadable_on_reentry" => parent_unreadable_on_reentry,
-    "parent_unreadable_after_stop" => parent_unreadable_after_stop,
-    "parent_unreadable_on_mismatch" => parent_unreadable_on_mismatch,
     "external_refusal_with_record_accepted" => external_refusal_with_record_accepted,
-    "busy_with_a_standing_parent" => busy_with_a_standing_parent,
     "poll_yielding_past_integration" => poll_yielding_past_integration,
     "interrupted_by_a_changed_remote" => interrupted_by_a_changed_remote,
+];
+
+/// Rows that reach only `LifecycleBinding`'s shared code, so one verb is enough
+/// (decision 27). A row with a branch of its verb's keeps both, as
+/// `poll_yielding_past_integration` does, on `made_ready`.
+const ONE_VERB: &[ssh_harness::Case] = &[
+    // `resolve_root` answers before the verb is asked anything.
+    ("c5_lifecycle_prepare_not_enabled_close", || {
+        prepare_not_enabled(Verb::Close)
+    }),
+    ("c5_lifecycle_prepare_not_registered_close", || {
+        prepare_not_registered(Verb::Close)
+    }),
+    // A new ID's `busy` for each verb's own record is
+    // `c5_cancel_new_id_before_integration`. What is left of it is the binding's.
+    ("c5_lifecycle_busy_with_no_parent_close", || {
+        busy_with_no_parent(Verb::Close)
+    }),
+    // The repository's lease is the runner's, before either verb's record.
+    ("c5_lifecycle_busy_lease_on_reentry_close", || {
+        busy_lease_on_reentry(Verb::Close)
+    }),
+    ("c5_lifecycle_busy_with_a_standing_parent_close", || {
+        busy_with_a_standing_parent(Verb::Close)
+    }),
+    // Each verb's `parent` only names its table. The arms an error reaches are
+    // the binding's: `row`, `stopped` and `recorded_effects`.
+    ("c5_lifecycle_parent_unreadable_on_reentry_close", || {
+        parent_unreadable_on_reentry(Verb::Close)
+    }),
+    ("c5_lifecycle_parent_unreadable_after_stop_close", || {
+        parent_unreadable_after_stop(Verb::Close)
+    }),
+    ("c5_lifecycle_parent_unreadable_on_mismatch_close", || {
+        parent_unreadable_on_mismatch(Verb::Close)
+    }),
 ];
 
 const ONE: &[ssh_harness::Case] = &[
@@ -253,7 +281,8 @@ const RESUMES_ONE: &[ssh_harness::Case] = &[
     ),
 ];
 
-const LIFECYCLE: [ssh_harness::Case; BOTH.len() + ONE.len()] = joined(BOTH, ONE);
+const SINGLE: [ssh_harness::Case; ONE_VERB.len() + ONE.len()] = joined(ONE_VERB, ONE);
+const LIFECYCLE: [ssh_harness::Case; BOTH.len() + SINGLE.len()] = joined(BOTH, &SINGLE);
 const RESUMING: [ssh_harness::Case; RESUMES.len() + RESUMES_ONE.len()] =
     joined(RESUMES, RESUMES_ONE);
 
@@ -1865,7 +1894,7 @@ fn context_target(verb: Verb) -> Result<SynchronizationTarget, FixtureError> {
 /// A protected key with nobody to ask stops at the context's synchronization,
 /// and the same request goes on with one.
 fn unlock_stop(verb: Verb) -> Result<(), FixtureError> {
-    let w = remote(verb)?;
+    let w = protected(verb)?;
     let confirmation = confirmation_of(&prepared(&w.service, verb, &w.root, verb.id()));
     let stopped = presenting_with(&w, FIRST, &confirmation, verb, NoPassphrase);
     assert_eq!(
@@ -2054,7 +2083,7 @@ fn deletion_transport(verb: Verb) -> Result<(), FixtureError> {
 
 /// The deletion's unlock stop: `unlock_required`, partial.
 fn deletion_unlock(verb: Verb) -> Result<(), FixtureError> {
-    let mut w = remote(verb)?;
+    let mut w = protected(verb)?;
     let (confirmation, _) = stopped_at(&mut w, verb, FailurePoint::AfterPublication)?;
     let stopped = presenting_with(&w, FIRST, &confirmation, verb, NoPassphrase);
     assert_eq!(
@@ -2894,7 +2923,15 @@ fn begun_outside_after(
 /// A remote world whose parent was begun outside the boundary and stopped at
 /// `point`.
 fn outside_remote(verb: Verb, point: FailurePoint) -> Result<(World, String), FixtureError> {
-    let mut w = remote(verb)?;
+    outside_in(remote(verb)?, verb, point)
+}
+
+/// `outside_remote` in the world given.
+fn outside_in(
+    mut w: World,
+    verb: Verb,
+    point: FailurePoint,
+) -> Result<(World, String), FixtureError> {
     let failing = failing_service(&w.data(), point)?;
     let operation = begun_outside(&failing, verb, &w.root)?;
     w.service = clean_service(&w.data())?;
@@ -3607,7 +3644,7 @@ fn resumed_with(
 
 /// A Ctrl-C while a resume's child runs lets the child go, as the verb's does.
 fn resume_ctrl_c_releases_child(verb: Verb) -> Result<(), FixtureError> {
-    let (w, operation) = outside_remote(verb, FailurePoint::AfterConfirmed)?;
+    let (w, operation) = outside_in(protected(verb)?, verb, FailurePoint::AfterConfirmed)?;
     let cancel = CancellationToken::new();
     let token = cancel.clone();
     let stopped = resumed_with(
@@ -3650,7 +3687,11 @@ fn resume_request_cancel_asks_nothing(verb: Verb) -> Result<(), FixtureError> {
 /// A remote world whose context's branch was deleted at the remote after a
 /// parent, no record holding it, was begun.
 fn branch_deleted_outside(verb: Verb) -> Result<(World, String), FixtureError> {
-    let mut w = remote(verb)?;
+    branch_deleted_outside_in(remote(verb)?, verb)
+}
+
+/// `branch_deleted_outside` in the world given.
+fn branch_deleted_outside_in(mut w: World, verb: Verb) -> Result<(World, String), FixtureError> {
     fixed(w.sync(w.request(context_target(verb)?)))?;
     let failing = failing_service(&w.data(), FailurePoint::AfterConfirmed)?;
     let operation = begun_outside(&failing, verb, &w.root)?;
@@ -3720,7 +3761,7 @@ fn resume_walk_remote_branch_deleted(verb: Verb) -> Result<(), FixtureError> {
 /// The row is marked while the first call's child runs, since nothing can come
 /// between that call and the one after it.
 fn resume_kept_child_stays(verb: Verb) -> Result<(), FixtureError> {
-    let (w, operation) = branch_deleted_outside(verb)?;
+    let (w, operation) = branch_deleted_outside_in(protected(verb)?, verb)?;
     let stopped = resumed_with(
         &w,
         &operation,

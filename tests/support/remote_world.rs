@@ -126,6 +126,13 @@ pub fn advance(
     fixed(repo.reference(reference, new, true, "owned fixture advance"))?;
     Ok(new)
 }
+/// Whether a world's key asks for its passphrase.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KeyProtection {
+    Passphrase,
+    None,
+}
+
 pub struct World {
     pub server: SshRemoteFixture,
     pub service: RepositoryService,
@@ -137,6 +144,17 @@ pub struct World {
 }
 impl World {
     pub fn new() -> Result<Self, FixtureError> {
+        Self::with_key(KeyProtection::Passphrase)
+    }
+
+    /// `new`, with a key that needs no passphrase. Decrypting a protected key
+    /// is most of a row's time, so a row that doesn't ask about unlocking
+    /// needn't pay it on every connection.
+    pub fn plain_key() -> Result<Self, FixtureError> {
+        Self::with_key(KeyProtection::None)
+    }
+
+    fn with_key(protection: KeyProtection) -> Result<Self, FixtureError> {
         let server = SshRemoteFixture::start()?;
         let plain = fixed(std::fs::read(server.client_key_path()))?;
         let key = fixed(ssh_key::PrivateKey::read_openssh_file(
@@ -146,10 +164,12 @@ impl World {
             fixed(key.encrypt(&mut ssh_key::rand_core::OsRng, PASSWORD))?
                 .to_openssh(ssh_key::LineEnding::LF),
         )?;
-        fixed(std::fs::write(
-            server.client_key_path(),
-            encrypted.as_bytes(),
-        ))?;
+        if protection == KeyProtection::Passphrase {
+            fixed(std::fs::write(
+                server.client_key_path(),
+                encrypted.as_bytes(),
+            ))?;
+        }
         let directory = fixed(tempfile::tempdir())?;
         let root = directory.path().join("clone-a");
         let repo = clone_owned(&server, &root)?;

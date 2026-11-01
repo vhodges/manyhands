@@ -1211,7 +1211,11 @@ fn execute_once(w: &World, id: &str) -> Envelope<MutationDataDto> {
 
 /// A world whose host is trusted, with primary observed as the remote holds it.
 fn observed() -> Result<World, FixtureError> {
-    let w = World::new()?;
+    observed_in(World::plain_key()?)
+}
+
+/// `observed`, in the world given.
+fn observed_in(w: World) -> Result<World, FixtureError> {
     trust(&w)?;
     fixed(w.sync(w.primary()))?;
     Ok(w)
@@ -1966,7 +1970,9 @@ fn once_no_selected_key() -> Result<(), FixtureError> {
 /// A locked key with nothing to unlock it: final, and a new request at a terminal
 /// polls.
 fn once_unlock_required() -> Result<(), FixtureError> {
-    let (w, _) = behind()?;
+    let w = observed_in(World::new()?)?;
+    advance(&w.peer, MAIN, PEER_FILE)?;
+    push_peer(&w.peer, &w.server, MAIN)?;
     let first = call(
         &w,
         &w.service,
@@ -1991,7 +1997,7 @@ fn once_unlock_required() -> Result<(), FixtureError> {
 /// A host that isn't trusted: the first answer names it and offers its approval;
 /// the new request then polls.
 fn once_host_approval_required() -> Result<(), FixtureError> {
-    let w = World::new()?;
+    let w = World::plain_key()?;
     let first = execute_once(&w, FIRST);
     assert_eq!(first.code, ResultCode::HostApprovalRequired);
     assert_eq!(actions(&first), [RecoveryActionKind::HostApprove]);
