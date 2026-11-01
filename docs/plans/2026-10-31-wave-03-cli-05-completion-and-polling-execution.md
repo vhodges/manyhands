@@ -735,7 +735,7 @@ Tests and documents only; no library behaviour changed. Decisions 1-6 above are 
 
 **Item 3, the mutation.** `write` moved before `insert_request` in `finish_in_one_transaction`, then reverted. `the_same_request_races` **catches it**, and so does the new `the_race_is_lost_to_another_verb`; the other 33 rows passed. This supersedes the note above that the first had never been seen to fail.
 
-**The rest.** Eligibility rows `resume_makes_a_poll_due` and `resume_does_not_lift_the_suspension` answered as the review expected. `*_leaves_the_rest` stage every column and a current batch, and compare the whole `PollingStatusDto` and every other raw column of the row; only `active_operation_id` stays null, since it reads the remote journal. `unavailable_index` asserts the registry bytes and `index.rebuild`. `stop_inside_the_transaction` includes resume, and the never-committed row loops over both fault points. `request_show_and_cancel_of_a_policy_record` pins `finished`, `requested: false` and an unchanged record. The design's position line, `polling_status`'s description, the progress schema's clause, the comments and Task 0's "guards differ" entry (mode only, same lock file) are corrected. Only the new rows' last-named mutations were run; the new `*_leaves_the_rest` and eligibility rows were not seen to fail.
+**The rest.** Eligibility rows `resume_makes_a_poll_due` and `resume_does_not_lift_the_suspension` answered as the review expected. `*_leaves_the_rest` stage every column and a current batch, and compare the whole `PollingStatusDto` and every other raw column of the row; only `active_operation_id` stays null, since it reads the remote journal. `unavailable_index` asserts the registry bytes and `index.rebuild`. `stop_inside_the_transaction` includes resume, and the never-committed row loops over both fault points. `request_show_and_cancel_of_a_policy_record` pins `finished`, `requested: false` and an unchanged record. The design's position line, `polling_status`'s description, the progress schema's clause, the comments and Task 0's "guards differ" entry (mode only, same lock file) are corrected. The new `*_leaves_the_rest` and eligibility rows passed the first time they ran, and no mutation was run against them, so they have not been seen to fail.
 
 **Carried forward.**
 
@@ -743,3 +743,21 @@ Tests and documents only; no library behaviour changed. Decisions 1-6 above are 
 - D6: a policy verb sends no `Accepted` event, so `running.accepted` at `src/desktop/services/worker.rs:790` stays false for one. The desktop must not read that as "nothing was recorded".
 
 **Verified, compare mode, all exit 0.** `--test mutation_remote -- c5_poll` 35 cases (18 s), `--test mutation_contract` 44 (10 s), `--test read_contract` 72 (8 s), `--lib mutation` 144 (8 s), `cargo fmt --check`, clippy `-D warnings` (10 s).
+
+#### Task 5a item 4: the ruling, and a row still open
+
+**The ruling.** `OneTransaction::write` in `bind/poll.rs` maps repository errors through `outcome::repository_error_code`, so a repository error on this path keeps its real code. Done.
+
+**My earlier diagnosis was wrong, and this corrects it.** The section above says the missing row's `internal_error` comes from `read_policy` through the read mapping. `read_policy` is not reached. `write_records` runs `migrate_registry`, whose `state::migrate` refuses a registration with no policy row (`missing_policy`), and its `?` converts that as a read, before `write` is called. Shown by running the rows three ways:
+
+| Build | `policy_row_gone_inside_the_path`, pinned to `recovery_required` | `policy_row_unreadable_inside_the_path` |
+| --- | --- | --- |
+| Without the mapping | fails | fails |
+| With the mapping | **still fails**: `internal_error` | passes |
+| With the mapping, `missing_policy` check removed (reverted) | passes | passes |
+
+**Open, for a ruling.** The ruling can't move `policy_row_gone_inside_the_path`, so I stopped on it, and it pins a failure, null data and no record, with its code unpinned. The new `policy_row_unreadable_inside_the_path` stages a remote name no ref plan can be made from, which reaches `read_policy`, and pins `recovery_required`, no record and every column unchanged. It is the row that was seen to fail before the change. Pinning the first row needs one of: accept `internal_error` for it; or map the error in `write_records`, which every record function shares and so reaches beyond this path.
+
+**Codes moved by the mapping.** On `update_remote_polling`'s two kinds: `RecoveryRequired` moves from `internal_error` to `recovery_required`. `RepositoryNotRegistered` stays, and `unregistered_after_the_check` passes. The mapping builds a plain `ReadError`, as the conversion's source and any recovery aren't read for this kind, and no other row moved.
+
+**Verified, compare mode, all exit 0.** See the Task 5a commit's report: `--test mutation_remote -- c5_poll` 36 cases, `--lib mutation`, `cargo fmt --check`, clippy `-D warnings`.

@@ -30,6 +30,7 @@ use super::{
         dto::{MutationDataDto, PollPolicyMutationDto},
         evidence::Position,
         identity::{FieldValue, IntentDigestBuilder, ScopeKey},
+        outcome,
     },
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered,
     OneTransaction, Place, Prepared, Ran, Standing, resolve_root,
@@ -133,7 +134,10 @@ impl OneTransaction for PollPolicyBinding {
         let change = self
             .change()
             .ok_or_else(|| ReadError::new(ResultCode::InvalidInput))?;
-        let update = update_remote_polling(transaction, scope.as_str(), change)?;
+        // A repository error keeps a mutation's code for it: the conversion to
+        // a `ReadError` is a read's, and calls most of them internal.
+        let update = update_remote_polling(transaction, scope.as_str(), change)
+            .map_err(|error| ReadError::new(outcome::repository_error_code(error.kind)))?;
         let code = if update.changed {
             ResultCode::Ok
         } else {

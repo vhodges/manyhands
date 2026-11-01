@@ -90,6 +90,10 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         policy_row_gone_inside_the_path,
     ),
     (
+        "c5_poll_policy_row_unreadable_inside_the_path",
+        policy_row_unreadable_inside_the_path,
+    ),
+    (
         "c5_poll_an_already_applied_replay_stays_so",
         an_already_applied_replay_stays_so,
     ),
@@ -868,12 +872,13 @@ fn resume_does_not_lift_the_suspension() -> Result<(), FixtureError> {
     Ok(())
 }
 
-/// The policy row goes after `prepare`, so `read_policy` refuses it inside the
-/// path, and neither a record nor a write stands.
+/// The policy row goes after `prepare`, and neither a record nor a write stands.
+/// `read_policy` isn't reached: opening the index refuses a registration with no
+/// policy row (`state::migrate`), and `write_records` converts that as a read.
 ///
-/// **The code is awaiting a ruling, so it isn't pinned.** The review asked for
-/// `recovery_required`. The answer is `internal_error`, because the path's
-/// `RepositoryError` becomes a `ReadError` through the read mapping.
+/// **The code is awaiting a ruling, so it isn't pinned.** It answers
+/// `internal_error`. The ruling asked for `recovery_required`, which
+/// `policy_row_unreadable_inside_the_path` pins where `write` is reached.
 fn policy_row_gone_inside_the_path() -> Result<(), FixtureError> {
     let local = Local::empty()?;
     let registry = local.directory.path().join("data").join(REGISTRY_FILE);
@@ -887,6 +892,20 @@ fn policy_row_gone_inside_the_path() -> Result<(), FixtureError> {
     assert!(refused.code.failure_class().is_some(), "{:?}", refused.code);
     assert_eq!(refused.data, None);
     assert_eq!(request_rows(&local)?, 0);
+    Ok(())
+}
+
+/// A row `read_policy` itself refuses, and opening the index doesn't: a remote
+/// name no ref plan can be made from. The repository error keeps its code.
+fn policy_row_unreadable_inside_the_path() -> Result<(), FixtureError> {
+    let local = Local::empty()?;
+    stage(&local, "remote_name='bad name',primary_branch='main'")?;
+    let before = policy_columns(&local)?;
+    let refused = called(&local.service, FIRST, pause(&local.root));
+    assert_eq!(refused.code, ResultCode::RecoveryRequired);
+    assert_eq!(refused.data, None);
+    assert_eq!(request_rows(&local)?, 0);
+    assert_eq!(policy_columns(&local)?, before);
     Ok(())
 }
 
