@@ -36,6 +36,7 @@ var
   FixtureInitialized: Boolean;
   PreparationChecked: Boolean;
   FixtureCancelSeen: Boolean;
+  InvalidInputRejected: Boolean;
 
 #include "..\..\..\packaging\windows\installer-policy.pas"
 #include "..\..\..\packaging\windows\installer-managed-policy.pas"
@@ -77,6 +78,11 @@ begin
   App := ExpandConstant('{param:FixtureDir}\app');
   if (ExpandConstant('{param:FixtureDir}') = '') or DirExists(App) or
      RegKeyExists(HKCU64, '{#FixtureRoot}') then RaiseException('Refusing unowned fixture state.');
+  if ExpandConstant('{param:Mode}') = 'root-reparse' then begin
+    ForceDirectories(ExpandConstant('{param:FixtureDir}\root-target'));
+    if CreateFixtureDirectoryLink(App, ExpandConstant('{param:FixtureDir}\root-target'), 1) = 0 then
+      RaiseException('Could not create the isolated application-root reparse point.');
+  end;
   if ExpandConstant('{param:Mode}') <> 'fresh' then begin
     ForceDirectories(App + '\bin');
     ForceDirectories(App + '\licenses\old-crate');
@@ -90,7 +96,19 @@ begin
   ForceDirectories(ExpandConstant('{param:FixtureDir}\outside'));
   SaveStringToFile(ExpandConstant('{param:FixtureDir}\outside\keep.txt'), 'outside managed trees', False);
   FixtureInitialized := True;
-  LoadIncomingManagedFiles;
+  try
+    LoadIncomingManagedFiles;
+  except
+    if (Pos('invalid-input-', ExpandConstant('{param:Mode}')) = 1) and
+       (Pos('embedded installer managed-file or digest list is invalid', GetExceptionMessage) <> 0) then begin
+      InvalidInputRejected := True;
+      Result := False;
+      Exit;
+    end;
+    RaiseException(GetExceptionMessage);
+  end;
+  if Pos('invalid-input-', ExpandConstant('{param:Mode}')) = 1 then
+    RaiseException('Invalid embedded input was accepted.');
   Result := True;
 end;
 
@@ -100,9 +118,14 @@ begin
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  I: Integer;
+  Outside: TArrayOfString;
+  Rejected: Boolean;
 begin
   Result := CheckInstallPreparation('2.0.0');
-  if ExpandConstant('{param:Mode}') = 'pre-reparse' then begin
+  if (ExpandConstant('{param:Mode}') = 'pre-reparse') or
+     (ExpandConstant('{param:Mode}') = 'root-reparse') then begin
     if Pos('reparse point', Result) = 0 then RaiseException('Pre-copy reparse traversal was not rejected.');
     Exit;
   end;
@@ -110,7 +133,21 @@ begin
   if RegValueExists(HKCU64, InstallerKey, 'PendingVersion') then
     RaiseException('Preparation wrote a pending floor.');
   PreparationChecked := True;
-  if ExpandConstant('{param:Mode}') = 'preparecancel' then begin
+  if ExpandConstant('{param:Mode}') = 'boundary-checks' then begin
+    Outside := SplitPolicyString(ExpandConstant('{app}-sibling') + '|' +
+      ExpandConstant('{app}\..\outside'), '|');
+    for I := 0 to Length(Outside) - 1 do begin
+      Rejected := False;
+      try
+        CheckManagedAncestors(Outside[I], True);
+      except
+        Rejected := Pos('outside the application directory', GetExceptionMessage) <> 0;
+      end;
+      if not Rejected then RaiseException('An outside path passed the application boundary.');
+    end;
+  end;
+  if (ExpandConstant('{param:Mode}') = 'preparecancel') or
+     (ExpandConstant('{param:Mode}') = 'boundary-checks') then begin
     Result := 'Controlled cancellation before install start.';
   end;
 end;
@@ -120,7 +157,8 @@ begin
   { Preparation temporarily disables Cancel. Cancel once the engine has
     returned to the preparing page with its normal enabled Cancel button. }
   if (CurPageID = wpPreparing) and PreparationChecked and
-     (ExpandConstant('{param:Mode}') = 'preparecancel') then WizardForm.Close;
+     ((ExpandConstant('{param:Mode}') = 'preparecancel') or
+      (ExpandConstant('{param:Mode}') = 'boundary-checks')) then WizardForm.Close;
 end;
 
 procedure BeginInstaller;
@@ -170,8 +208,6 @@ begin
   if Mode = 'forged-temporary-digests' then
     WriteFixtureForgedDigests(ExpandConstant('{tmp}\managed-digests.txt'));
   if Mode = 'missing' then DeleteFile(ExpandConstant('{app}\bin\manyhands-cli.exe'));
-  if Mode = 'malformed' then IncomingManagedFiles[0] := 'bin\..\user-state.txt';
-  if Mode = 'collision' then IncomingManagedFiles[0] := 'bin\MANYHANDS-CLI.exe';
   if Mode = 'post-reparse' then AddFixtureReparsePoint;
   if Mode = 'prunefail' then
     if not SetFixtureFileAttributes(ExpandConstant('{app}\bin\stale.dll'), FILE_ATTRIBUTE_READONLY) then
@@ -193,16 +229,23 @@ end;
 
 procedure DeinitializeSetup;
 var
-  Mode, Value: String;
+  Mode, Value, App: String;
   Contents: AnsiString;
   Untouched, Completed: Boolean;
 begin
   if not FixtureInitialized then Exit;
   Mode := ExpandConstant('{param:Mode}');
-  Untouched := (Mode = 'preparecancel') or (Mode = 'startfail') or (Mode = 'pre-reparse');
+  { Invalid embedded inputs stop InitializeSetup before the application
+    directory constant exists. The fixture's destination is known separately. }
+  App := ExpandConstant('{param:FixtureDir}\app');
+  Untouched := (Mode = 'preparecancel') or (Mode = 'startfail') or
+    (Mode = 'pre-reparse') or (Mode = 'root-reparse') or
+    (Mode = 'boundary-checks') or (Pos('invalid-input-', Mode) = 1);
   Completed := (Mode = 'success') or (Mode = 'fresh');
   try
-    if ((Mode = 'preparecancel') or (Mode = 'midcancel')) and not FixtureCancelSeen then
+    if (Pos('invalid-input-', Mode) = 1) and not InvalidInputRejected then
+      RaiseException('Invalid embedded input did not fail at the trusted loading boundary.');
+    if ((Mode = 'preparecancel') or (Mode = 'boundary-checks') or (Mode = 'midcancel')) and not FixtureCancelSeen then
       RaiseException('The actual engine cancellation path was not reached.');
     if not RegQueryStringValue(HKCU64, InstallerKey, 'Version', Value) then RaiseException('Missing fixture version.');
     if Completed then begin
@@ -216,24 +259,25 @@ begin
       if CheckInstalledVersion('2.1.0') <> '' then RaiseException('Newer repair rejected.');
     end;
     if Untouched then begin
-      if not LoadStringFromFile(ExpandConstant('{app}\bin\manyhands.exe'), Contents) or (Contents <> 'old executable') then
+      if not LoadStringFromFile(App + '\bin\manyhands.exe', Contents) or (Contents <> 'old executable') then
         RaiseException('Cancelled/failed start modified the executable.');
       if CheckInstalledVersion('1.5.0') <> '' then RaiseException('Read-only preparation left a floor.');
     end;
     if Mode = 'midcancel' then
-      if not LoadStringFromFile(ExpandConstant('{app}\bin\manyhands.exe'), Contents) or (Contents = 'old executable') then
+      if not LoadStringFromFile(App + '\bin\manyhands.exe', Contents) or (Contents = 'old executable') then
         RaiseException('Mid-copy cancellation fixture did not overwrite its executable.');
-    if FileExists(ExpandConstant('{app}\bin\stale.dll')) = Completed then RaiseException('Wrong stale executable state.');
-    if FileExists(ExpandConstant('{app}\licenses\old-crate\COPYING')) = Completed then RaiseException('Wrong stale licence state.');
+    if FileExists(App + '\bin\stale.dll') = Completed then RaiseException('Wrong stale executable state.');
+    if FileExists(App + '\licenses\old-crate\COPYING') = Completed then RaiseException('Wrong stale licence state.');
     if Mode <> 'fresh' then
-      if not LoadStringFromFile(ExpandConstant('{app}\user-state.txt'), Contents) or (Contents <> 'preserve user state') then
+      if not LoadStringFromFile(App + '\user-state.txt', Contents) or (Contents <> 'preserve user state') then
         RaiseException('User state changed.');
     if not LoadStringFromFile(ExpandConstant('{param:FixtureDir}\outside\keep.txt'), Contents) or (Contents <> 'outside managed trees') then
       RaiseException('Reparse point traversal modified an outside file.');
     if not SaveStringToFile(ExpandConstant('{param:ResultFile}'), 'passed', False) then RaiseException('Cannot record fixture result.');
   finally
-    SetFixtureFileAttributes(ExpandConstant('{param:FixtureDir}\app\bin\manyhands.exe'), FILE_ATTRIBUTE_NORMAL);
-    SetFixtureFileAttributes(ExpandConstant('{param:FixtureDir}\app\bin\stale.dll'), FILE_ATTRIBUTE_NORMAL);
-    if not RegDeleteKeyIncludingSubkeys(HKCU64, '{#FixtureRoot}') then RaiseException('Fixture registry cleanup failed.');
+    SetFixtureFileAttributes(App + '\bin\manyhands.exe', FILE_ATTRIBUTE_NORMAL);
+    SetFixtureFileAttributes(App + '\bin\stale.dll', FILE_ATTRIBUTE_NORMAL);
+    if RegKeyExists(HKCU64, '{#FixtureRoot}') and
+       not RegDeleteKeyIncludingSubkeys(HKCU64, '{#FixtureRoot}') then RaiseException('Fixture registry cleanup failed.');
   end;
 end;

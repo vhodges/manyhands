@@ -39,25 +39,112 @@ begin
     if CompareText(Files[I], Name) = 0 then begin Result := True; Exit; end;
 end;
 
-function ValidManagedPaths(Files: TArrayOfString): Boolean;
+function ManagedSortCompare(Left, Right: String; Tagged: Boolean): Integer;
+begin
+  if Tagged then begin
+    Delete(Left, 1, 1);
+    Delete(Right, 1, 1);
+  end;
+  Result := CompareText(Left, Right);
+end;
+
+procedure SortManagedStrings(var Values: TArrayOfString; Tagged: Boolean);
 var
-  I, J, K, Count: Integer;
-  LeftParts, RightParts: TArrayOfString;
+  Work: TArrayOfString;
+  Count, Width, Start, Middle, Finish, Left, Right, Output, I: Integer;
+begin
+  { Bottom-up merge sort: no recursion or quadratic worst case. Tagged
+    prefix nodes sort by their path, never by their directory/file marker. }
+  Count := Length(Values);
+  if Count < 2 then Exit;
+  SetArrayLength(Work, Count);
+  Width := 1;
+  while Width < Count do begin
+    Start := 0;
+    while Start < Count do begin
+      Middle := Start + Width;
+      if Middle > Count then Middle := Count;
+      Finish := Middle + Width;
+      if Finish > Count then Finish := Count;
+      Left := Start;
+      Right := Middle;
+      Output := Start;
+      while (Left < Middle) and (Right < Finish) do begin
+        if ManagedSortCompare(Values[Left], Values[Right], Tagged) <= 0 then begin
+          Work[Output] := Values[Left];
+          Left := Left + 1;
+        end else begin
+          Work[Output] := Values[Right];
+          Right := Right + 1;
+        end;
+        Output := Output + 1;
+      end;
+      while Left < Middle do begin
+        Work[Output] := Values[Left];
+        Left := Left + 1;
+        Output := Output + 1;
+      end;
+      while Right < Finish do begin
+        Work[Output] := Values[Right];
+        Right := Right + 1;
+        Output := Output + 1;
+      end;
+      Start := Finish;
+    end;
+    for I := 0 to Count - 1 do Values[I] := Work[I];
+    if Width > Count div 2 then Width := Count else Width := Width * 2;
+  end;
+end;
+
+function SortedManagedListContains(Files: TArrayOfString; Name: String): Boolean;
+var
+  First, Last, Middle, Order: Integer;
 begin
   Result := False;
+  First := 0;
+  Last := Length(Files) - 1;
+  while First <= Last do begin
+    Middle := First + (Last - First) div 2;
+    Order := CompareText(Name, Files[Middle]);
+    if Order = 0 then begin Result := True; Exit; end;
+    if Order < 0 then Last := Middle - 1 else First := Middle + 1;
+  end;
+end;
+
+function ValidManagedPaths(Files: TArrayOfString): Boolean;
+var
+  I, J, Count, Next: Integer;
+  Nodes: TArrayOfString;
+  Name, Previous: String;
+begin
+  Result := False;
+  Count := 0;
   for I := 0 to Length(Files) - 1 do begin
     if not ValidManagedPath(Files[I]) then Exit;
-    LeftParts := SplitPolicyString(Files[I], '\');
-    for J := 0 to I - 1 do begin
-      RightParts := SplitPolicyString(Files[J], '\');
-      Count := Length(LeftParts);
-      if Length(RightParts) < Count then Count := Length(RightParts);
-      for K := 0 to Count - 1 do begin
-        if CompareText(LeftParts[K], RightParts[K]) <> 0 then Break;
-        { Equal components must use identical case, including directories. }
-        if LeftParts[K] <> RightParts[K] then Exit;
-        if K = Count - 1 then Exit; { Duplicate or file/directory collision. }
+    Count := Count + 1;
+    for J := 1 to Length(Files[I]) do
+      if Files[I][J] = '\' then Count := Count + 1;
+  end;
+  SetArrayLength(Nodes, Count);
+  Next := 0;
+  for I := 0 to Length(Files) - 1 do begin
+    Name := Files[I];
+    for J := 1 to Length(Name) do
+      if Name[J] = '\' then begin
+        Nodes[Next] := 'D' + Copy(Name, 1, J - 1);
+        Next := Next + 1;
       end;
+    Nodes[Next] := 'F' + Name;
+    Next := Next + 1;
+  end;
+  SortManagedStrings(Nodes, True);
+  for I := 1 to Length(Nodes) - 1 do begin
+    Name := Copy(Nodes[I], 2, Length(Nodes[I]));
+    Previous := Copy(Nodes[I - 1], 2, Length(Nodes[I - 1]));
+    if CompareText(Previous, Name) = 0 then begin
+      { Every prefix is indexed, so foo/foo-bar/foo\child cannot hide a
+        collision. Only identically spelled directory nodes may repeat. }
+      if (Previous <> Name) or (Nodes[I][1] <> 'D') or (Nodes[I - 1][1] <> 'D') then Exit;
     end;
   end;
   Result := True;

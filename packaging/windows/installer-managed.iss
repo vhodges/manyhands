@@ -1,7 +1,8 @@
 { Filesystem adapter. The incoming list is embedded by the compiler from the
   verified ZIP, never read from an older installation or mutable installed list. }
 var
-  IncomingManagedFiles, IncomingManagedDigests: TArrayOfString;
+  IncomingManagedFiles, IncomingManagedDigests, IncomingManagedLookup: TArrayOfString;
+  IncomingManagedReady: Boolean;
 
 function ManagedFileAttributes(Name: String): Cardinal;
   external 'GetFileAttributesW@kernel32.dll stdcall';
@@ -32,15 +33,24 @@ end;
 
 procedure CheckManagedAncestors(Name: String; AllowMissing: Boolean);
 var
-  Parent: String;
+  Parent, Root, Normalized: String;
   Attributes: Cardinal;
 begin
-  while Name <> '' do begin
+  Root := NormalizePolicyPath(ExpandFileName(ExpandConstant('{app}')));
+  Name := ExpandFileName(Name);
+  Normalized := NormalizePolicyPath(Name);
+  if (Normalized <> Root) and (Copy(Normalized, 1, Length(Root) + 1) <> Root + '\') then
+    RaiseException('Installer path is outside the application directory: ' + Name);
+  while True do begin
     Attributes := CheckedManagedAttributes(Name, AllowMissing);
     if (Attributes <> $FFFFFFFF) and ((Attributes and FILE_ATTRIBUTE_DIRECTORY) = 0) then
       RaiseException('Installer directory is not a directory: ' + Name);
+    { The app and its descendants are owned. A relocated profile/AppData
+      ancestor is not: allow its junction without following it for pruning. }
+    if NormalizePolicyPath(Name) = Root then Exit;
     Parent := ExtractFileDir(Name);
-    if Parent = Name then Exit;
+    if (Parent = '') or (Parent = Name) then
+      RaiseException('Installer path does not reach the application directory.');
     Name := Parent;
   end;
 end;
@@ -76,7 +86,10 @@ begin
 end;
 
 procedure LoadIncomingManagedFiles;
+var
+  I: Integer;
 begin
+  if IncomingManagedReady then RaiseException('Installer expectations are already loaded.');
   ExtractTemporaryFile('managed-files.txt');
   ExtractTemporaryFile('managed-digests.txt');
   if not LoadStringsFromFile(ExpandConstant('{tmp}\managed-files.txt'), IncomingManagedFiles) or
@@ -85,14 +98,18 @@ begin
     RaiseException('The embedded installer managed-file or digest list is invalid.');
   { Cache embedded expectations once. Never consult mutable installed trust
     metadata (or reread temporary trust inputs) during completion. }
+  SetArrayLength(IncomingManagedLookup, Length(IncomingManagedFiles));
+  for I := 0 to Length(IncomingManagedFiles) - 1 do
+    IncomingManagedLookup[I] := IncomingManagedFiles[I];
+  SortManagedStrings(IncomingManagedLookup, False);
+  IncomingManagedReady := True;
 end;
 
 procedure ValidateInstallerDestination;
 var
   Existing: TArrayOfString;
 begin
-  if not ValidManagedDigestList(IncomingManagedFiles, IncomingManagedDigests) then
-    RaiseException('Invalid incoming managed-file or digest list.');
+  if not IncomingManagedReady then RaiseException('Installer expectations have not been loaded.');
   CheckManagedAncestors(ExpandConstant('{app}'), True);
   SetArrayLength(Existing, 0);
   CollectManagedFiles('bin', True, Existing);
@@ -107,22 +124,22 @@ var
   Name: String;
   Attributes: Cardinal;
 begin
-  { Validate the entire list, every expected file, and both complete trees
-    before the first deletion. Missing/corrupt/reparsed inputs never authorize
-    deletion. Repeat ancestor checks at mutation boundaries as defence in depth. }
-  if not ValidManagedDigestList(IncomingManagedFiles, IncomingManagedDigests) then
-    RaiseException('Invalid incoming managed-file or digest list.');
+  { The embedded expectations were validated once at loading. Validate every
+    expected file and fresh complete trees before the first deletion. Missing/
+    corrupt/reparsed destination inputs never authorize deletion. }
+  if not IncomingManagedReady then RaiseException('Installer expectations have not been loaded.');
   CheckManagedAncestors(ExpandConstant('{app}'), False);
   SetArrayLength(Existing, 0);
   CollectManagedFiles('bin', False, Existing);
   CollectManagedFiles('licenses', False, Existing);
   if not ValidManagedPaths(Existing) then RaiseException('Colliding installed managed-file paths.');
+  SortManagedStrings(Existing, False);
   for I := 0 to Length(IncomingManagedFiles) - 1 do begin
     Name := ExpandConstant('{app}\') + IncomingManagedFiles[I];
     CheckManagedAncestors(ExtractFileDir(Name), False);
     Attributes := CheckedManagedAttributes(Name, False);
     if ((Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0) or
-       not ManagedListContains(Existing, IncomingManagedFiles[I]) then
+        not SortedManagedListContains(Existing, IncomingManagedFiles[I]) then
       RaiseException('Missing expected installed managed file: ' + IncomingManagedFiles[I]);
     { Inno Keep existing/Skip may reach ssPostInstall with old bytes at a valid
       path. Verify ALL bytes, including this manifest and the Inno licence,
@@ -131,7 +148,7 @@ begin
       RaiseException('Installed managed file contents do not match the incoming installer: ' + IncomingManagedFiles[I]);
   end;
   for I := 0 to Length(Existing) - 1 do
-    if not ManagedListContains(IncomingManagedFiles, Existing[I]) then begin
+    if not SortedManagedListContains(IncomingManagedLookup, Existing[I]) then begin
       Name := ExpandConstant('{app}\') + Existing[I];
       CheckManagedAncestors(ExtractFileDir(Name), False);
       Attributes := CheckedManagedAttributes(Name, False);

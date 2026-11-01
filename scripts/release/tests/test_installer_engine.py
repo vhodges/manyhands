@@ -57,11 +57,32 @@ class InstallerEngineTests(unittest.TestCase):
             return 'C:\\' + str(Path(path).relative_to(Path(WINE) / 'drive_c')).replace('/', '\\')
         return 'Z:' + str(path).replace('/', '\\')
 
-    def run_tool(self, executable, *args):
+    def run_tool(self, executable, *args, timeout=120):
         command = [str(executable), *args]
         if os.name != 'nt':
             command.insert(0, 'wine')
-        return subprocess.run(command, env=self.env, capture_output=True, text=True, timeout=120)
+        return subprocess.run(command, env=self.env, capture_output=True, text=True, timeout=timeout)
+
+    def test_managed_path_validation_scales_to_a_thousand_entries(self):
+        names = ['bin/manyhands.exe', 'bin/manyhands-cli.exe', 'licenses/README.md']
+        names += [f'licenses/dependencies/review-crate-{i:04}/native/component/COPYING' for i in range(995)]
+        managed, digests = self.write_compiler_inputs({name: '0' * 64 for name in names})
+        result = self.run_tool(COMPILER, '/Q', '/O' + self.winpath(self.root),
+                               self.winpath(REPO / 'scripts/release/tests/installer_scale.iss'))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = self.root / 'scale.txt'
+        result = self.run_tool(self.root / 'installer-scale-test.exe', '/VERYSILENT', '/SUPPRESSMSGBOXES', '/SP-',
+                               '/ManagedFiles=' + self.winpath(managed), '/ManagedDigests=' + self.winpath(digests),
+                               '/ResultFile=' + self.winpath(report), timeout=300)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        timings = dict(line.split('=', 1) for line in report.read_text().splitlines())
+        self.assertEqual(int(timings.pop('file_count')), 1000)
+        self.assertLess(int(timings.pop('membership_ms')), 5000, 'Pruning membership lookups stalled Setup.')
+        self.assertEqual(len(timings), 7)
+        milliseconds = [int(value) for value in timings.values()]
+        print('Pinned-engine 1000-path validation timings (ms): ' + repr(milliseconds), flush=True)
+        self.assertLess(max(milliseconds), 5000, 'A validation pass stalled Setup: ' + repr(timings))
+        self.assertLess(sum(milliseconds), 20000, 'Repeated validation stalled Setup: ' + repr(timings))
 
     def test_mandatory_signing_failure_retries_are_bounded_without_unsigned_output(self):
         production = (REPO / 'packaging/windows/manyhands.iss').read_text()
@@ -119,40 +140,78 @@ class InstallerEngineTests(unittest.TestCase):
             self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
             self.assertEqual(report.read_text(), 'attempted')
 
-    def write_compiler_inputs(self, payload_hashes):
-        managed = self.root / 'managed-files.txt'
-        digests = self.root / 'managed-digests.txt'
+    def write_compiler_inputs(self, payload_hashes, *, directory=None):
+        directory = self.root if directory is None else directory
+        managed = directory / 'managed-files.txt'
+        digests = directory / 'managed-digests.txt'
         write_managed_file_list(managed, list(payload_hashes))
         write_managed_digests(digests, payload_hashes, managed.read_bytes(),
                               (REPO / 'packaging/windows/INNO-LICENSE.txt').read_bytes())
         return managed, digests
 
-    def compile_lifecycle_fixture(self):
+    def compile_lifecycle_fixture(self, *, invalid=None):
         source = REPO / 'scripts/release/tests/installer_lifecycle.iss'
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        directory = self.root
+        if invalid:
+            directory = self.root / ('inputs-' + invalid)
+            directory.mkdir()
         managed, digests = self.write_compiler_inputs({name: digest for name in
-                                                      ('bin/manyhands.exe', 'bin/manyhands-cli.exe', 'licenses/README.md')})
+                                                      ('bin/manyhands.exe', 'bin/manyhands-cli.exe', 'licenses/README.md')},
+                                                     directory=directory)
+        if invalid:
+            replacement = {'traversal': b'bin\\..\\user-state.txt', 'collision': b'bin\\Manyhands.exe'}[invalid]
+            managed.write_bytes(managed.read_bytes().replace(b'bin\\manyhands-cli.exe', replacement))
         result = self.run_tool(COMPILER, '/Q', '/O' + self.winpath(self.root),
                                 '/DManagedFiles=' + self.winpath(managed), '/DFixtureId=' + uuid.uuid4().hex,
                                '/DManagedDigests=' + self.winpath(digests), self.winpath(source))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def run_lifecycle_scenario(self, mode, expected):
-        scenario = self.root / mode
+    def run_lifecycle_scenario(self, mode, expected, *, ancestor_junction=False):
+        scenario = self.root / (mode + ('-ancestor-junction' if ancestor_junction else ''))
         scenario.mkdir()
+        fixture = scenario
+        if ancestor_junction:
+            target = scenario / 'relocated-profile'
+            target.mkdir()
+            fixture = scenario / 'profile-junction'
+            linked = self.run_tool('cmd.exe', '/D', '/C', 'mklink', '/J', self.winpath(fixture), self.winpath(target))
+            self.assertEqual(linked.returncode, 0, linked.stdout + linked.stderr)
         report = scenario / 'passed.txt'
         result = self.run_tool(self.root / 'installer-lifecycle-test.exe', '/SILENT', '/SUPPRESSMSGBOXES',
-                               '/NORESTART', '/SP-', '/Mode=' + mode, '/FixtureDir=' + self.winpath(scenario),
+                               '/NORESTART', '/SP-', '/Mode=' + mode, '/FixtureDir=' + self.winpath(fixture),
                                '/ResultFile=' + self.winpath(report), '/LOG=' + self.winpath(scenario / 'setup.log'))
         evidence = result.stdout + result.stderr + (scenario / 'setup.log').read_text(encoding='utf-8-sig', errors='replace')
-        evidence += '\nstale_bin_exists=' + str((scenario / 'app/bin/stale.dll').exists())
-        evidence += '\nstale_licence_exists=' + str((scenario / 'app/licenses/old-crate/COPYING').exists())
+        evidence += '\nstale_bin_exists=' + str((fixture / 'app/bin/stale.dll').exists())
+        evidence += '\nstale_licence_exists=' + str((fixture / 'app/licenses/old-crate/COPYING').exists())
         self.assertEqual(result.returncode, expected, evidence)
         self.assertTrue(report.exists(), 'Engine did not pass deinitialization assertions: ' + mode + '\n' + evidence)
         self.assertEqual(report.read_text(), 'passed')
         if expected == 0:
-            self.assertFalse((scenario / 'app/licenses/installer/managed-digests.txt').exists(),
-                             'Embedded digest trust metadata must never be installed')
+            self.assertFalse((fixture / 'app/licenses/installer/managed-digests.txt').exists(),
+                              'Embedded digest trust metadata must never be installed')
+
+    def test_profile_junction_above_app_allows_fresh_and_upgrade(self):
+        self.compile_lifecycle_fixture()
+        for mode in ('fresh', 'success'):
+            with self.subTest(mode=mode):
+                self.run_lifecycle_scenario(mode, 0, ancestor_junction=True)
+
+    def test_reparse_points_at_and_below_app_remain_rejected(self):
+        self.compile_lifecycle_fixture()
+        for mode in ('root-reparse', 'pre-reparse'):
+            with self.subTest(mode=mode):
+                self.run_lifecycle_scenario(mode, 7)
+
+    def test_invalid_embedded_paths_are_rejected_before_checkpoint(self):
+        for invalid in ('traversal', 'collision'):
+            with self.subTest(invalid=invalid):
+                self.compile_lifecycle_fixture(invalid=invalid)
+                self.run_lifecycle_scenario('invalid-input-' + invalid, 1)
+
+    def test_application_boundary_rejects_siblings_and_dotdot(self):
+        self.compile_lifecycle_fixture()
+        self.run_lifecycle_scenario('boundary-checks', 7)
 
     def test_existing_expected_paths_with_wrong_bytes_block_completion(self):
         self.compile_lifecycle_fixture()
@@ -165,7 +224,7 @@ class InstallerEngineTests(unittest.TestCase):
         self.compile_lifecycle_fixture()
         for mode, expected in [('preparecancel', 7), ('startfail', 3), ('startpartial', 3),
                                ('midcancel', 5), ('pre-reparse', 7),
-                               ('missing', 42), ('malformed', 42), ('collision', 42), ('post-reparse', 42),
+                               ('missing', 42), ('post-reparse', 42),
                                ('prunefail', 42), ('success', 0), ('fresh', 0)]:
             with self.subTest(mode=mode):
                 self.run_lifecycle_scenario(mode, expected)
