@@ -23,6 +23,18 @@ MIT_GRANT = 'Permission is hereby granted' + (
 ).read_text(encoding='utf-8').split('Permission is hereby granted', 1)[1]
 MIT_ORIGINAL = 'Copyright (c) 2026 Original Authors\n\n' + MIT_GRANT
 MIT_CANONICAL = 'Copyright (c) <year> <copyright holders>\n\n' + MIT_GRANT
+CURLY_HEADERS = tuple(
+    header
+    for left, right in (('{', '}'), ('{{', '}}'))
+    for header in (
+        f'Copyright (c) {left}year{right} {left}fullname{right}\n',
+        f'Copyright (c) 2026 {left}fullname{right}\n',
+        f'Copyright (c) {left}year{right}\n{left}fullname{right}\n'
+        'Copyright (c) 2026 Original Authors\n',
+        f'Copyright (c) 2026 {left}\n FULLNAME \n{right}\n'
+        'Copyright (c) 2026 Original Authors\n',
+    )
+)
 ISC_GRANT = '''Permission to use, copy, modify, and/or distribute this software for any
 purpose with or without fee is hereby granted, provided that the above
 copyright notice and this permission notice appear in all copies.
@@ -145,7 +157,7 @@ class NoticeTests(unittest.TestCase):
 
     def supplemental(self, text=MIT_ORIGINAL):
         directory = self.repo / 'packaging/licenses/supplemental'
-        directory.mkdir(parents=True)
+        directory.mkdir(parents=True, exist_ok=True)
         license_file = directory / 'option-ext-0.2.0-LICENSE'
         license_file.write_text(text, encoding='utf-8')
         entry = {
@@ -459,6 +471,110 @@ class NoticeTests(unittest.TestCase):
         validate_attributions({'licenses': [{'id': 'MIT', 'text': MIT_CANONICAL,
                                             'used_by': [{'crate': self.package}]}]}, inventory, self.output)
 
+    def test_curly_template_headers_are_not_named_attribution(self):
+        from notices import named_attribution
+        for header in CURLY_HEADERS:
+            with self.subTest(header=header):
+                self.assertFalse(named_attribution(header))
+
+    def test_curly_delimiters_recognize_only_the_existing_placeholder_vocabulary(self):
+        from notices import named_attribution
+        for left, right in (('{', '}'), ('{{', '}}')):
+            for label in ('year', 'years', 'yyyy', 'copyright holder', 'copyright holders',
+                          'fullname', 'owner', 'name of copyright owner', 'name of the copyright owner'):
+                placeholder = left + '\n ' + label.upper().replace(' ', '\n ') + ' \n' + right
+                with self.subTest(placeholder=placeholder):
+                    self.assertFalse(named_attribution('Copyright (c) 2026 Original Authors\n' + placeholder))
+
+    def test_ordinary_holders_including_literal_curly_braces_remain_named_attribution(self):
+        from notices import named_attribution
+        for holder in ('Original Authors', 'Zoë García', '{Original Authors}', '{{Original Authors}}',
+                       'Yearwood and Fullname Ltd.', '{yearly} {fullnames}'):
+            with self.subTest(holder=holder):
+                self.assertTrue(named_attribution('Copyright © 2026 ' + holder))
+
+    def test_root_complete_mit_grants_with_curly_templates_are_rejected(self):
+        original = self.crate / 'LICENSE'
+        for header in CURLY_HEADERS:
+            with self.subTest(header=header):
+                original.write_text(header + '\n' + MIT_GRANT, encoding='utf-8')
+                inventory = gather_disclosures(self.repo, [self.package], set(), self.output)
+                with self.assertRaisesRegex(ValueError, 'unresolved.*option-ext'):
+                    self.validate_mit(inventory)
+
+    def test_bound_supplement_roles_cannot_use_curly_template_holders(self):
+        (self.crate / 'LICENSE').write_text(MIT_GRANT, encoding='utf-8')
+        for role in ('grant', 'attribution', 'grant-by-reference'):
+            for header in CURLY_HEADERS:
+                with self.subTest(role=role, header=header):
+                    original, manifest = self.supplemental(header + '\n' + MIT_GRANT)
+                    data = json.loads(manifest.read_text())
+                    data['notices'][0]['binding'].update(role=role, reason='Exact reviewed original evidence.')
+                    manifest.write_text(json.dumps(data))
+                    inventory = gather_disclosures(self.repo, [self.package], set(), self.output)
+                    with self.assertRaisesRegex(ValueError, 'unresolved.*option-ext'):
+                        self.validate_mit(inventory)
+                    self.assertEqual((self.output / inventory[0]['supplemental'][0]['path']).read_bytes(), original.read_bytes())
+
+    def test_reviewed_unnamed_resolution_cannot_override_curly_template_evidence(self):
+        for header in CURLY_HEADERS:
+            with self.subTest(header=header):
+                _, manifest = self.supplemental(header + '\n' + MIT_GRANT)
+                data = json.loads(manifest.read_text())
+                data['notices'][0]['resolution'] = {
+                    'kind': 'original-grant-no-named-header', 'license': 'MIT',
+                    'reason': 'A reviewed unnamed grant cannot excuse a remaining template.',
+                }
+                manifest.write_text(json.dumps(data))
+                inventory = gather_disclosures(self.repo, [self.package], set(), self.output)
+                with self.assertRaisesRegex(ValueError, 'unresolved.*option-ext'):
+                    self.validate_mit(inventory)
+
+    def test_curly_canonical_tool_text_requires_original_attribution(self):
+        from notices import validate_attributions
+        inventory = [{'name': 'option-ext', 'version': '0.2.0', 'notices': []}]
+        for header in CURLY_HEADERS:
+            with self.subTest(header=header):
+                data = {'licenses': [{'id': 'MIT', 'text': header + '\n' + MIT_GRANT,
+                                      'used_by': [{'crate': self.package}]}]}
+                with self.assertRaisesRegex(ValueError, 'unresolved.*option-ext'):
+                    validate_attributions(data, inventory, self.output)
+
+    def test_curly_canonical_tool_text_accepts_complete_named_originals(self):
+        from notices import validate_attributions
+        (self.crate / 'LICENSE').write_text(MIT_ORIGINAL, encoding='utf-8')
+        inventory = gather_disclosures(self.repo, [self.package], set(), self.output)
+        for header in CURLY_HEADERS:
+            with self.subTest(header=header):
+                validate_attributions({'licenses': [{'id': 'MIT', 'text': header + '\n' + MIT_GRANT,
+                                                    'used_by': [{'crate': self.package}]}]}, inventory, self.output)
+
+    def test_curly_canonical_tool_text_keeps_reviewed_no_header_grants(self):
+        from notices import validate_attributions
+        original, manifest = self.supplemental(MIT_GRANT)
+        data = json.loads(manifest.read_text())
+        data['notices'][0]['resolution'] = {
+            'kind': 'original-grant-no-named-header', 'license': 'MIT',
+            'reason': 'Exact reviewed original grant contains no named header.',
+        }
+        manifest.write_text(json.dumps(data))
+        inventory = gather_disclosures(self.repo, [self.package], set(), self.output)
+        for header in CURLY_HEADERS:
+            with self.subTest(header=header):
+                validate_attributions({'licenses': [{'id': 'MIT', 'text': header + '\n' + MIT_GRANT,
+                                                    'used_by': [{'crate': self.package}]}]}, inventory, self.output)
+        self.assertEqual((self.output / inventory[0]['supplemental'][0]['path']).read_bytes(), original.read_bytes())
+
+    def test_curly_canonical_tool_text_keeps_approved_release_declarations(self):
+        from notices import validate_attributions
+        original, _ = self.approved_declaration()
+        inventory = gather_disclosures(self.repo, [self.package], set(), self.output)
+        for header in CURLY_HEADERS:
+            with self.subTest(header=header):
+                validate_attributions({'licenses': [{'id': 'MIT', 'text': header + '\n' + MIT_GRANT,
+                                                    'used_by': [{'crate': self.package}]}]}, inventory, self.output)
+        self.assertEqual((self.output / inventory[0]['supplemental'][0]['path']).read_bytes(), original.read_bytes())
+
     def scoped_supplemental(self, selected=MIT_ORIGINAL.encode('utf-8'),
                             before=b'Compound licence document.\n\n',
                             after=b'\nApache appendix: Copyright [yyyy] [name of copyright owner]\n'):
@@ -472,6 +588,31 @@ class NoticeTests(unittest.TestCase):
                            'sha256': hashlib.sha256(selected).hexdigest()}
         manifest.write_text(json.dumps(data))
         return original, manifest
+
+    def test_curly_templates_in_raw_crlf_scoped_grants_are_rejected(self):
+        for header in CURLY_HEADERS:
+            with self.subTest(header=header):
+                selected = (header + '\n' + MIT_GRANT).replace('\n', '\r\n').encode('utf-8')
+                original, _ = self.scoped_supplemental(
+                    selected=selected,
+                    before='Copyright © 2026 Zoë García; unrelated component.\r\n\r\n'.encode('utf-8'),
+                )
+                inventory = gather_disclosures(self.repo, [self.package], set(), self.output)
+                with self.assertRaisesRegex(ValueError, 'unresolved.*option-ext'):
+                    self.validate_mit(inventory)
+                self.assertEqual((self.output / inventory[0]['supplemental'][0]['path']).read_bytes(), original.read_bytes())
+
+    def test_curly_templates_outside_scope_preserve_whole_utf8_crlf_originals(self):
+        selected = MIT_ORIGINAL.replace('Original Authors', 'Zoë García').replace('\n', '\r\n').encode('utf-8')
+        for header in CURLY_HEADERS:
+            with self.subTest(header=header):
+                original, _ = self.scoped_supplemental(
+                    selected=selected, before=(header + '\n').replace('\n', '\r\n').encode('utf-8'),
+                    after=b'\r\nUnselected appendix.\r\n',
+                )
+                inventory = gather_disclosures(self.repo, [self.package], set(), self.output)
+                self.validate_mit(inventory)
+                self.assertEqual((self.output / inventory[0]['supplemental'][0]['path']).read_bytes(), original.read_bytes())
 
     def test_pinned_compound_document_scope_resolves_mit_without_dropping_other_terms(self):
         original, manifest = self.scoped_supplemental()

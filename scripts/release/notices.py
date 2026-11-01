@@ -17,8 +17,10 @@ from common import TARGETS, target_info, write_json
 
 REPO = Path(__file__).resolve().parents[2]
 OWNER_APPROVED_DECLARATION = "owner-approved-release-declaration"
+# A double-curly template also contains an inner single-curly token. Keep
+# recognizing only these placeholder labels, not arbitrary brace-wrapped names.
 ATTRIBUTION_PLACEHOLDERS = re.compile(
-    r"[<\[]\s*(?:years?|yyyy|copyright\s+holders?|fullname|owner|name\s+of\s+(?:the\s+)?copyright\s+owner)\s*[>\]]", re.I,
+    r"[<\[{]\s*(?:years?|yyyy|copyright\s+holders?|fullname|owner|name\s+of\s+(?:the\s+)?copyright\s+owner)\s*[>\]}]", re.I,
 )
 COPYRIGHT_LINE = re.compile(r"^[ \t]*(?://|/\*|\*)?[ \t]*copyright[ \t]+(?:\(c\)|©)?[ \t]*(.*)$", re.I | re.M)
 # These delimit complete standard grants in cargo-about's selected licence
