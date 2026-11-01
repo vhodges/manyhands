@@ -12,8 +12,9 @@ tool. This package contains the desktop application and the headless CLI.
 $INSTALLATION
 
 Keep the accompanying files together when extracting this package. The
-desktop and CLI share the same application data by default. Install Git
-and make it available on PATH for operations that invoke Git helpers.
+desktop and CLI share the same application data by default. Local Git
+operations use the linked libgit2 library; a client-side Git executable
+does not need to be installed or added to PATH.
 
 ## Runtime and signing
 

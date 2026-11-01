@@ -8,8 +8,9 @@ dependencies. These are not repackaged Ubuntu release binaries.
 The desktop requires a Wayland session and working host graphics drivers.
 Its wrapper supplies GPUI's dynamically loaded libraries, including Wayland,
 Vulkan, EGL, and GL. It does not install drivers or replace the system graphics
-configuration. The CLI has no graphics loader override. Both wrappers make
-the pinned minimal Git available while preserving the rest of the user's PATH.
+configuration. The CLI is installed directly, without a wrapper or graphics
+loader override. Git operations and SSH transport use the linked libraries;
+no client-side Git executable is required or added to PATH.
 
 Installed disclosures are under `share/doc/manyhands/`: Manyhands' MIT
 `LICENSE`, complete Rust dependency notices, original nested notices, and
@@ -106,11 +107,14 @@ nix flake check                         # builds this machine's checks
 nix path-info -r .#manyhands-cli         # inspect runtime closure
 ```
 
-Checks exercise source filtering, isolated packaged CLI help, the CLI's
-graphics-free runtime closure, installed desktop disclosures/entry/icon, and
+Checks exercise source filtering, isolated packaged CLI help and repository
+creation with an empty PATH, the CLI's Git-/graphics-free runtime closure,
+installed desktop disclosures/entry/icon, and
 loading GPUI's required shared libraries in a sandbox. They do not open a
 desktop window or prove Vulkan driver/device access. Package builds also
-generate complete disclosures offline; project Rust tests remain a separate
+generate complete disclosures offline. Source-archive/protocol checks derive
+selected package versions and checksums from Cargo.lock and the installed
+inventory, rather than duplicating version literals. Project Rust tests remain a separate
 Devenv/native gate, not a repeated package-build dependency.
 
 For desktop acceptance, use NixOS/Wayland with working host drivers, unset

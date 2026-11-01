@@ -81,7 +81,6 @@ def finalize_windows(root: Path, runtime: dict, signer: dict) -> None:
         "Windows x86_64 with working graphics drivers; native release checks run on Windows Server 2022",
         "Windows system ICU common C runtime (icuuc.dll), provided since Windows 10 version 1703",
         "MSVC CRT is statically linked; no Visual Studio runtime installation is required",
-        "Git available on PATH",
     ]
     manifest["signing_mode"] = "self-signed-authenticode"
     refresh_documents(root, manifest)

@@ -8,7 +8,6 @@ cask "manyhands" do
   homepage "https://github.com/$REPOSITORY"
 
   depends_on arch: :arm64
-  depends_on formula: "git"
   $MACOS_DEPENDENCY
 
   app "manyhands-v#{version}-aarch64-apple-darwin/Manyhands.app"

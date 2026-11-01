@@ -1,5 +1,5 @@
 { lib, stdenv, rustPlatform, rustc, cargo, fetchurl, linkFarm, makeWrapper
-, pkg-config, python3, openssl, zlib, gitMinimal, clang
+, pkg-config, python3, openssl, zlib, clang
 , wayland, vulkan-loader, vulkan-headers, libxcb, libxkbcommon, libglvnd
 , atk, fontconfig, freetype, glib, gtk3, alsa-lib
 , root, noticesTool, desktop ? true
@@ -30,6 +30,8 @@ let
       sha256 = package.checksum;
     };
   }) sourcePackages);
+  lockedSourceManifest = builtins.toFile "manyhands-locked-source-packages.json"
+    (builtins.toJSON (map (package: { inherit (package) name version checksum; }) sourcePackages));
   runtimeLibraries = [
     wayland vulkan-loader libxcb libxkbcommon libglvnd
     atk fontconfig freetype glib gtk3 openssl
@@ -49,8 +51,8 @@ rustPlatform.buildRustPackage {
   # that symlink cannot retain/transfer the unfiltered flake's private state.
   cargoLock.lockFile = builtins.toFile "manyhands-Cargo.lock"
     (builtins.readFile (root + "/Cargo.lock"));
-  nativeBuildInputs = [ pkg-config makeWrapper python3 noticesTool ]
-    ++ lib.optionals desktop [ clang rustPlatform.bindgenHook ];
+  nativeBuildInputs = [ pkg-config python3 noticesTool ]
+    ++ lib.optionals desktop [ makeWrapper clang rustPlatform.bindgenHook ];
   buildInputs = [ openssl zlib ] ++ lib.optionals desktop [
     wayland vulkan-loader vulkan-headers libxcb libxkbcommon
     fontconfig freetype glib gtk3 alsa-lib
@@ -82,13 +84,11 @@ rustPlatform.buildRustPackage {
     mkdir -p ${doc}
     install -m644 LICENSE packaging/nix/README.md ${doc}/
     cp -r "$TMPDIR/manyhands-notices/THIRD-PARTY-NOTICES.html" "$TMPDIR/manyhands-notices/licenses" ${doc}/
-    wrapProgram "$out/bin/manyhands-cli" --prefix PATH : ${lib.makeBinPath [ gitMinimal ]}
     ${lib.optionalString desktop ''
       install -Dm755 target/${target}/release/manyhands "$out/bin/manyhands"
       install -Dm644 packaging/linux/manyhands.desktop "$out/share/applications/manyhands.desktop"
       install -Dm644 packaging/icons/manyhands-1024.png "$out/share/icons/hicolor/1024x1024/apps/manyhands.png"
-      wrapProgram "$out/bin/manyhands" --prefix PATH : ${lib.makeBinPath [ gitMinimal ]} \
-        --prefix LD_LIBRARY_PATH : ${runtimePath}
+      wrapProgram "$out/bin/manyhands" --prefix LD_LIBRARY_PATH : ${runtimePath}
     ''}
     runHook postInstall
   '';
@@ -103,7 +103,9 @@ rustPlatform.buildRustPackage {
     test -s ${doc}/LICENSE
     test -s ${doc}/THIRD-PARTY-NOTICES.html
     test -s ${doc}/licenses/inventory.json
-    test -s ${doc}/licenses/sources/option-ext-0.2.0.crate
+    test ! -e "$out/bin/.manyhands-cli-wrapped"
+    python3 ${./check_disclosures.py} --licenses ${doc}/licenses \
+      --locked-sources ${lockedSourceManifest} ${lib.optionalString desktop "--desktop"}
     ${if desktop then ''
       test -s ${doc}/licenses/fonts/LICENSE.txt
       test -s ${doc}/licenses/fonts/README.md
@@ -115,6 +117,7 @@ rustPlatform.buildRustPackage {
   '';
   passthru = {
     inherit desktop noticesTool;
+    inherit lockedSourceManifest;
     runtimeLibraries = lib.optionals desktop runtimeLibraries;
     toolchainVersion = rustc.version;
   };

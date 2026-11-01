@@ -15,7 +15,7 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from assemble import ApiError, GitHub, assemble, parse_api_response, preflight, source_marker
+from assemble import ApiError, GitHub, assemble, parse_api_response, preflight, release_notes, source_marker
 from common import TARGETS, archive_inventory, payload_name
 from installer import installer_inventory, installer_name
 from package import archive_payload, refresh_documents
@@ -72,6 +72,11 @@ class FakeGitHub:
 
 
 class AssemblyTests(unittest.TestCase):
+    def test_release_notes_do_not_require_a_local_git_executable(self):
+        notes = release_notes(self.release, [])
+        self.assertNotIn('Install Git', notes)
+        self.assertIn('libgit2', notes)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="release assembly ")
         self.addCleanup(self.temp.cleanup)

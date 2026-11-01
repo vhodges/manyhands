@@ -71,7 +71,7 @@ class HomebrewTests(unittest.TestCase):
         self.assertIn(cli, names)
         self.assertIn(str(Path(cli).parent.parent / "lib/libcrypto.3.dylib"), names)
         self.assertIn('depends_on arch: :arm64', cask)
-        self.assertIn('depends_on formula: "git"', cask)
+        self.assertNotIn('depends_on formula: "git"', cask)
         self.assertIn('depends_on macos: :sonoma', cask)
 
     def test_minimum_os_is_derived_and_unknown_or_finer_minimums_fail_closed(self):

@@ -28,6 +28,7 @@ let
     { path = "packaging/nix/README.md"; type = "regular"; cli = true; desktop = true; }
     { path = "packaging/nix/README.md"; type = "symlink"; cli = false; desktop = false; }
     { path = "packaging/nix/package.nix"; type = "regular"; cli = false; desktop = false; }
+    { path = "packaging/nix/check_disclosures.py"; type = "regular"; cli = false; desktop = false; }
     { path = "packaging/nix/private.pfx"; type = "regular"; cli = false; desktop = false; }
     { path = "nix"; type = "directory"; cli = false; desktop = false; }
     { path = "nix/README.md"; type = "regular"; cli = false; desktop = false; }

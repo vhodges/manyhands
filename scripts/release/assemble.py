@@ -233,8 +233,8 @@ licence, complete third-party/font notices, and relevant original source.
 Linux downloads target Ubuntu 24.04-compatible GNU/Linux and require
 Wayland/working graphics drivers for the desktop. macOS downloads target
 Apple Silicon; the archive README records the actual minimum OS version.
-Windows downloads use a statically linked MSVC CRT. Install Git for operations
-that invoke Git helpers.
+Windows downloads use a statically linked MSVC CRT. Local Git operations use
+the linked libgit2 library; a Git executable on the client PATH is not required.
 
 macOS ad-hoc signatures do not provide Developer ID trust or notarization.
 Windows self-signing does not provide public publisher trust or remove
