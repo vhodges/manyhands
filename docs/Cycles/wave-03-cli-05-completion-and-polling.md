@@ -287,6 +287,10 @@ Also required:
     safe. A kept child stays, with the answer unchanged. No new `RecoveryActionKind`: the answer offers
     `operation.resume` and `repo.inspect`, and Task 7's human lines print the route.
 
+20. **A superseded close may report no made-ready set (2026-11-01).** "Known limit
+    (Recommended)". A close stopped on `remote_context_changed` answers `index_pending`, and
+    if a new request supersedes it, no answer may hold the set. `ticket ready` is the live view.
+
 **Owner questions, approved at these recommendations on 2026-10-31.**
 
 1. `effective_identity`'s per-key cascade: keep it for C5, with a follow-up ticket (R-6).

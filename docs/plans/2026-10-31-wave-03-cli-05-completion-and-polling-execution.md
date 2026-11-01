@@ -244,6 +244,8 @@ near `:190`, and the audit's other document amendments, stay with Task 14b.
 
 **Settled (owner, 2026-10-31, decisions 16 and 17):** E-16 for `startup_tests.rs:171` and `parse_tests.rs:563`; the other unlisted hits are no-edit, and one that fails when its verb is bound stops for the owner. One `FailurePoint` variant is allowed in Task 6. Task 0 is complete.
 
+**Decision 20 (owner, 2026-11-01):** Task 4's stop on `remote_context_changed` is a known limit. `c5_made_ready_remote_context_changed` stays as written, and no library change follows.
+
 ## Task log
 
 ### Task 0: Baseline, Re-Grounding, Audit Refresh And Ledger

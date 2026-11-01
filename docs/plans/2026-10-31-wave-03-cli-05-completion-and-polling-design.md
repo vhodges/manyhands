@@ -867,7 +867,7 @@ review. This list is not yet proven complete.
 - `poll once` holds the remote reservation, so it answers `busy` beside another remote operation, and they answer it.
 - A CLI-only user sees `recovery_suspended` without a verb to clear it (decision 5).
 - A protected key answers `unlock_required` non-interactively, so agents' runs need a terminal until `01M67Y754SJ1FTYQJFR37Z4ZTY` lands.
-- A retried or restarted report reflects its own pass (made-ready, and poll targets). A superseding request reports `not_applicable`, and the set stays in the old request's partial envelope.
+- A retried or restarted report reflects its own pass (made-ready, and poll targets). A superseding request reports `not_applicable`, and the set stays in the old request's partial envelope only if that envelope held one: a close stopped on `remote_context_changed` answers `index_pending`, so no answer may hold the set, and `ticket ready` is the live view (decision 20).
 - A killed poll with a lost request ID is found through `operation list`.
 - Policy verbs are last commit wins: resending a request that never committed writes again (decision 15).
 - A poll plan failure other than a missing remote writes the domain's stored state.
