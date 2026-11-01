@@ -4,6 +4,7 @@ import contextlib
 import io
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -51,12 +52,26 @@ class WorkflowTests(unittest.TestCase):
         workflow = Path(__file__).resolve().parents[3] / ".github/workflows/release.yml"
         steps = workflow.read_text(encoding="utf-8").split("      - name: ")
         for name in ("Test Windows release helpers", "Audit and self-sign Windows executables",
-                     "Verify extracted Windows signatures without signing secrets", "Build and sign Windows installer"):
+                     "Verify extracted Windows signatures without signing secrets"):
             with self.subTest(step=name):
                 matches = [step for step in steps if step.startswith(name + "\n")]
                 self.assertEqual(len(matches), 1)
                 self.assertRegex(matches[0], r"(?m)^        timeout-minutes: 10$")
                 self.assertIn("if: matrix.os == 'windows'", matches[0])
+
+    def test_installer_budget_leaves_verification_and_cleanup_after_explicit_compiler_deadline(self):
+        repo = Path(__file__).resolve().parents[3]
+        workflow = (repo / '.github/workflows/release.yml').read_text(encoding='utf-8')
+        step = next(step for step in workflow.split('      - name: ') if step.startswith('Build and sign Windows installer\n'))
+        self.assertIn("if: matrix.os == 'windows'", step)
+        self.assertRegex(step, r'(?m)^        timeout-minutes: 45$')
+        compiler = (repo / 'scripts/release/windows-installer.ps1').read_text(encoding='utf-8')
+        self.assertIn('Invoke-ReleaseTool $Path $Arguments -TimeoutSeconds 1800', compiler)
+        self.assertIn('Invoke-InnoCompiler $Compiler $arguments', compiler)
+        workflow_minutes = int(re.search(r'timeout-minutes: (\d+)', step)[1])
+        compiler_seconds = int(re.search(r'Invoke-ReleaseTool \$Path \$Arguments -TimeoutSeconds (\d+)', compiler)[1])
+        self.assertEqual(workflow_minutes * 60 - compiler_seconds, 15 * 60)
+        self.assertIn('15 minutes for verification, smoke tests and cleanup', step)
 
     def test_all_windows_helper_suites_run_before_signing_secrets_are_available(self):
         workflow = Path(__file__).resolve().parents[3] / ".github/workflows/release.yml"

@@ -1,6 +1,7 @@
 """Bind a native signed Inno installer to its verified portable ZIP payload."""
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -13,6 +14,86 @@ from common import IDENTITY_KEYS, hash_file, parse_release_tag, payload_name, re
 REPO = Path(__file__).resolve().parents[2]
 TARGET = 'x86_64-pc-windows-msvc'
 APP_ID = 'io.github.vhodges.manyhands'
+MANAGED_MANIFEST = 'licenses/installer/managed-files.txt'
+INSTALLER_LICENSE = 'licenses/installer/INNO-LICENSE.txt'
+
+
+def managed_file_list(payload_files: list[str]) -> list[str]:
+    """Canonical Windows paths for installer-owned trees, never user/root data.
+
+    Keep the deliberately narrow ASCII/Win32 policy in sync with the Pascal
+    reader. Reject aliases at every directory level, not just full filenames.
+    """
+    # ExtractTemporaryFile identifies the two compiler inputs by basename.
+    # No portable entry may shadow either embedded trust input, in any tree.
+    if any(isinstance(name, str) and name.rsplit('/', 1)[-1].lower() in
+           ('managed-files.txt', 'managed-digests.txt') for name in payload_files):
+        raise ValueError('reserved embedded managed-file input basename')
+    nodes = {}
+    managed = []
+    for name in [*payload_files, INSTALLER_LICENSE, MANAGED_MANIFEST]:
+        if not isinstance(name, str) or not name or '\\' in name:
+            raise ValueError('invalid managed file path')
+        parts = name.split('/')
+        if parts[0].lower() in ('bin', 'licenses') and parts[0] not in ('bin', 'licenses'):
+            raise ValueError('managed path root must use canonical case')
+        for index, part in enumerate(parts):
+            if not part or part in ('.', '..') or part[-1] in '. ' or any(
+                ord(char) < 32 or ord(char) > 126 or char in '<>:"|?*' for char in part
+            ) or re.fullmatch(r'CON|CONIN\$|CONOUT\$|PRN|AUX|NUL|COM[1-9]|LPT[1-9]',
+                             part.split('.', 1)[0].rstrip(' '), re.I):
+                raise ValueError(f'unsafe managed file path: {name}')
+            prefix = '/'.join(parts[:index + 1])
+            key = prefix.upper()
+            is_file = index == len(parts) - 1
+            if key in nodes:
+                previous, was_file = nodes[key]
+                if previous != prefix or was_file or is_file:
+                    raise ValueError(f'colliding or reserved managed file path: {name}')
+            nodes[key] = (prefix, is_file)
+        if parts[0] in ('bin', 'licenses'):
+            if len(parts) < 2:
+                raise ValueError('managed tree root is not a file')
+            managed.append(name.replace('/', '\\'))
+    if not {'bin\\manyhands.exe', 'bin\\manyhands-cli.exe', 'licenses\\README.md'}.issubset(managed):
+        raise ValueError('managed file list is missing required payload files')
+    return sorted(managed, key=str.upper)
+
+
+def write_managed_file_list(destination: Path, payload_files: list[str]) -> None:
+    data = '\ufeff' + '\r\n'.join(managed_file_list(payload_files)) + '\r\n'
+    # Production uses a fresh compiler directory. Exclusive creation also
+    # prevents an existing symlink from redirecting this write into staging.
+    with destination.open('xb') as output:
+        output.write(data.encode('utf-8'))
+
+
+def managed_digest_list(payload_hashes: dict[str, str], manifest: bytes, installer_license: bytes) -> list[str]:
+    """Bind every managed file to verified ZIP bytes or exact installer additions.
+
+    This list is embedded only (dontcopy), not installed: the installed file
+    manifest has a digest here, without a digest-list self-hash cycle.
+    """
+    if not isinstance(payload_hashes, dict) or any(
+        not isinstance(value, str) or not re.fullmatch(r'[0-9a-f]{64}', value) for value in payload_hashes.values()
+    ):
+        raise ValueError('managed payload digests must be canonical SHA-256 values')
+    paths = managed_file_list(list(payload_hashes))
+    canonical = ('\ufeff' + '\r\n'.join(paths) + '\r\n').encode('utf-8')
+    if not isinstance(manifest, bytes) or manifest != canonical:
+        raise ValueError('managed digests require the exact canonical file manifest bytes')
+    if not isinstance(installer_license, bytes) or not installer_license:
+        raise ValueError('managed digests require the exact nonempty installer licence bytes')
+    hashes = {name.replace('/', '\\'): value for name, value in payload_hashes.items()}
+    hashes[MANAGED_MANIFEST.replace('/', '\\')] = hashlib.sha256(manifest).hexdigest()
+    hashes[INSTALLER_LICENSE.replace('/', '\\')] = hashlib.sha256(installer_license).hexdigest()
+    return [hashes[name] + '  ' + name for name in paths]
+
+
+def write_managed_digests(destination: Path, payload_hashes: dict[str, str], manifest: bytes, installer_license: bytes) -> None:
+    records = managed_digest_list(payload_hashes, manifest, installer_license)
+    with destination.open('xb') as output:
+        output.write(('\ufeff' + '\r\n'.join(records) + '\r\n').encode('utf-8'))
 
 
 def installer_name(release: dict) -> str:
@@ -69,7 +150,7 @@ def validate_installer(release: dict, setup: Path, inventory: dict, archive: Pat
         raise ValueError('installer inventory identity, source archive, signer, compiler, or installer bytes mismatch')
 
 
-def verify_installer_payload(staging: Path, archive: Path, release: dict) -> None:
+def verify_installer_payload(staging: Path, archive: Path, release: dict) -> dict[str, str]:
     from verify import validate_payload, verify_archive
     validate_payload(staging, release, TARGET)
     with tempfile.TemporaryDirectory(prefix='manyhands-installer-payload-') as temp:
@@ -80,8 +161,12 @@ def verify_installer_payload(staging: Path, archive: Path, release: dict) -> Non
         def files(root):
             return {path.relative_to(root).as_posix(): hash_file(path) for path in root.rglob('*') if path.is_file()}
 
-        if files(staging) != files(original):
+        original_files = files(original)
+        if files(staging) != original_files:
             raise ValueError('installer payload files differ from the verified portable ZIP')
+        # Retain the hashes computed from the verified ZIP, not fresh hashes of
+        # mutable staging inputs after this equality check.
+        return original_files
 
 
 def main() -> int:
@@ -97,13 +182,25 @@ def main() -> int:
         manifest = verify_windows(args.staging)
         if args.archive is None:
             raise ValueError('installer construction needs its verified --archive')
-        verify_installer_payload(args.staging, args.archive, manifest)
+        payload_hashes = verify_installer_payload(args.staging, args.archive, manifest)
         if args.command == 'parameters':
+            # Kept outside staging: both pre/post compile comparisons still
+            # require exact ZIP equality, including every disclosure byte.
+            managed = args.output.resolve().parent / 'managed-files.txt'
+            digests = args.output.resolve().parent / 'managed-digests.txt'
+            if managed.is_relative_to(args.staging.resolve()):
+                raise ValueError('managed file list must be outside the portable payload')
+            license_path = REPO / 'packaging/windows/INNO-LICENSE.txt'
+            file_record(license_path)
+            license_bytes = license_path.read_bytes()
+            write_managed_file_list(managed, list(payload_hashes))
+            write_managed_digests(digests, payload_hashes, managed.read_bytes(), license_bytes)
             write_json(args.output, {'version': manifest['version'], 'numeric_version': numeric_version(manifest['version']),
-                                     'name': installer_name(manifest), 'app_id': APP_ID, 'compiler': compiler_config()})
+                                     'name': installer_name(manifest), 'app_id': APP_ID, 'compiler': compiler_config(),
+                                     'managed_files': str(managed), 'managed_digests': str(digests)})
         else:
-            if args.archive is None or args.installer is None:
-                raise ValueError('inventory needs --archive and --installer')
+            if args.installer is None:
+                raise ValueError('inventory needs --installer')
             # Check the archive's structural/source identity as well as matching
             # the retained extraction. Native signature checks run before this.
             write_json(args.output, installer_inventory(manifest, args.archive, manifest, args.installer))

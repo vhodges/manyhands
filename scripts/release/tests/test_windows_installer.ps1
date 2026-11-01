@@ -8,6 +8,19 @@ $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRo
 if ($errors.Count) { throw ($errors | Out-String) }
 $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-InnoCompilerArguments' }, $true)
 . ([scriptblock]::Create($definition.Extent.Text))
+$definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-InnoCompiler' }, $true)
+if ($null -eq $definition) { throw 'Compiler build needs an explicit larger native timeout' }
+. ([scriptblock]::Create($definition.Extent.Text))
+& {
+    function Invoke-ReleaseTool {
+        param([string]$File, [string[]]$Arguments, [int]$TimeoutSeconds)
+        if ($File -cne 'fixture-iscc' -or ($Arguments -join ' ') -cne '/Q fixture.iss' -or $TimeoutSeconds -ne 1800) {
+            throw 'Compiler must receive its full argument vector and explicit 1800-second budget'
+        }
+        return 'compiled'
+    }
+    if ((Invoke-InnoCompiler 'fixture-iscc' @('/Q', 'fixture.iss')) -cne 'compiled') { throw 'Compiler result was lost' }
+}
 $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Assert-InnoCompiler' }, $true)
 if ($null -eq $definition) { throw 'Compiler version must be checked through its actual engine version command' }
 . ([scriptblock]::Create($definition.Extent.Text))
@@ -27,8 +40,9 @@ if ($null -eq $definition) { throw 'Compiler version must be checked through its
 $arguments = Get-InnoCompilerArguments -Payload 'C:\payload with spaces' -Output 'C:\output with spaces' `
     -Version '1.2.3-rc.1' -NumericVersion '1.2.3.0' -Identity ('A' * 40) `
     -Signer 'C:\SDK tools\signtool.exe' -PowerShell 'C:\Program Files\PowerShell\pwsh.exe' `
-    -Callback 'C:\source files\windows-sign-file.ps1' -Definition 'C:\source files\manyhands.iss'
-foreach ($expected in @('/DPayloadDir=C:\payload with spaces', '/OC:\output with spaces', '/DAppVersion=1.2.3-rc.1', '/DNumericVersion=1.2.3.0')) {
+    -Callback 'C:\source files\windows-sign-file.ps1' -Definition 'C:\source files\manyhands.iss' `
+    -ManagedFiles 'C:\output with spaces\managed-files.txt' -ManagedDigests 'C:\output with spaces\managed-digests.txt'
+foreach ($expected in @('/DPayloadDir=C:\payload with spaces', '/OC:\output with spaces', '/DAppVersion=1.2.3-rc.1', '/DNumericVersion=1.2.3.0', '/DManagedFiles=C:\output with spaces\managed-files.txt', '/DManagedDigests=C:\output with spaces\managed-digests.txt')) {
     if ($arguments -cnotcontains $expected) { throw "Missing argument-vector element: $expected" }
 }
 $signing = @($arguments | Where-Object { $_.StartsWith('/Smanyhands=') })
@@ -73,6 +87,9 @@ if ($IsWindows) {
     } finally { Remove-Item -LiteralPath $owned -Recurse -Force }
     Write-Output 'Native Inno Pascal Script SemVer/PATH fixture passed; no installation performed.'
     Write-Output 'Native Inno completion fixture returned 42 on post-install failure and 0 on success; no app files/registry changed.'
+    # Real-engine lifecycle/pruning and mandatory-signing retry fixtures use
+    # fresh owned directories/registry keys, never the user's app or PATH.
+    Invoke-ReleaseTool (Get-Command python -ErrorAction Stop).Source @('-B', (Join-Path $PSScriptRoot 'test_installer_engine.py')) -TimeoutSeconds 300 | Out-Null
 } else {
     Write-Output 'Native Inno policy fixture skipped outside Windows; local FPC executes the same policy/cases.'
 }

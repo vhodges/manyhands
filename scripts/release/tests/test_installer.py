@@ -1,8 +1,10 @@
 """Installer metadata and shared Pascal policy; native installation is separate."""
 
 import copy
+import contextlib
 import hashlib
 import json
+import io
 from pathlib import Path
 import shutil
 import struct
@@ -10,12 +12,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from installer import compiler_config, installer_inventory, numeric_version, validate_installer, verify_installer_payload
 from package import archive_payload, refresh_documents
 from payload_fixture import REPO, WINDOWS, PayloadFixture
+import installer
 
 
 class InstallerTests(unittest.TestCase):
@@ -93,11 +97,163 @@ class InstallerTests(unittest.TestCase):
         manifest['signing_mode'] = 'self-signed-authenticode'
         refresh_documents(fixture.staging, manifest)
         archive = archive_payload(fixture.release, WINDOWS, fixture.staging, fixture.dist)
-        verify_installer_payload(fixture.staging, archive, fixture.release)
+        verified_files = verify_installer_payload(fixture.staging, archive, fixture.release)
+        self.assertEqual(verified_files, {path.relative_to(fixture.staging).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                                         for path in fixture.staging.rglob('*') if path.is_file()})
+        compiler_inputs = self.root / 'compiler inputs'
+        compiler_inputs.mkdir()
+        parameters = compiler_inputs / 'parameters.json'
+        arguments = ['installer.py', 'parameters', '--staging', str(fixture.staging), '--archive', str(archive),
+                     '--output', str(parameters)]
+        with patch.object(sys, 'argv', arguments), patch('windows.verify_windows', return_value=manifest):
+            self.assertEqual(installer.main(), 0)
+        managed = Path(json.loads(parameters.read_text())['managed_files'])
+        self.assertEqual(managed.read_text(encoding='utf-8-sig').splitlines(), installer.managed_file_list(verified_files))
+        digests = Path(json.loads(parameters.read_text())['managed_digests'])
+        self.assertEqual(digests.read_text(encoding='utf-8-sig').splitlines(),
+                         installer.managed_digest_list(verified_files, managed.read_bytes(),
+                                                       (REPO / 'packaging/windows/INNO-LICENSE.txt').read_bytes()))
+        # Installer-only inputs must not enter or mutate the portable ZIP tree.
+        self.assertFalse((fixture.staging / 'licenses/installer/managed-files.txt').exists())
+        self.assertFalse((fixture.staging / 'licenses/installer/managed-digests.txt').exists())
+        self.assertEqual(verify_installer_payload(fixture.staging, archive, fixture.release), verified_files)
         binary = fixture.staging / 'bin/manyhands.exe'
         binary.write_bytes(b'different binary with the same manifest')
         with self.assertRaisesRegex(ValueError, 'payload'):
             verify_installer_payload(fixture.staging, archive, fixture.release)
+        for command in ('parameters', 'inventory'):
+            output = self.root / (command + '.json')
+            arguments = ['installer.py', command, '--staging', str(fixture.staging), '--archive', str(archive),
+                         '--output', str(output), '--installer', str(self.setup)]
+            with self.subTest(command=command), patch.object(sys, 'argv', arguments), \
+                    patch('windows.verify_windows', return_value=manifest), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(installer.main(), 1)
+                self.assertFalse(output.exists())
+                self.assertFalse((self.root / 'managed-files.txt').exists())
+
+    def test_managed_manifest_is_canonical_and_includes_installer_additions(self):
+        paths = ['release.json', 'licenses/README.md', 'bin/manyhands.exe', 'bin/manyhands-cli.exe']
+        expected = ['bin\\manyhands-cli.exe', 'bin\\manyhands.exe', 'licenses\\installer\\INNO-LICENSE.txt',
+                    'licenses\\installer\\managed-files.txt', 'licenses\\README.md']
+        self.assertEqual(installer.managed_file_list(paths), expected)
+        destination = self.root / 'managed-files.txt'
+        installer.write_managed_file_list(destination, paths)
+        self.assertEqual(destination.read_bytes(), ('\ufeff' + '\r\n'.join(expected) + '\r\n').encode('utf-8'))
+
+    def test_managed_manifest_cannot_overwrite_an_existing_or_linked_input(self):
+        paths = ['bin/manyhands.exe', 'bin/manyhands-cli.exe', 'licenses/README.md']
+        target = self.root / 'portable-input.txt'
+        target.write_bytes(b'portable bytes must remain unchanged')
+        destination = self.root / 'managed-files.txt'
+        destination.symlink_to(target)
+        with self.assertRaises(OSError):
+            installer.write_managed_file_list(destination, paths)
+        self.assertEqual(target.read_bytes(), b'portable bytes must remain unchanged')
+        with self.assertRaises(OSError):
+            installer.write_managed_file_list(target, paths)
+
+    def test_managed_manifest_rejects_windows_aliases_collisions_and_reserved_additions(self):
+        base = ['bin/manyhands.exe', 'bin/manyhands-cli.exe', 'licenses/README.md']
+        for bad in ('bin/../outside', 'bin//file', '/bin/file', 'bin\\file', 'bin/a:stream',
+                    'bin/con.txt', 'bin/COM1', 'bin/CONIN$', 'bin/con .txt', 'bin/file.', 'bin/file ', 'bin/a\nfile',
+                    'bin/<file>', 'BIN/manyhands.exe', 'bin/Manyhands.exe',
+                    'licenses/installer/managed-files.txt', 'licenses/installer/INNO-LICENSE.txt',
+                    'bin/managed-files.txt', 'licenses/other/MANAGED-DIGESTS.txt', 'signing/managed-digests.txt'):
+            with self.subTest(path=bad), self.assertRaisesRegex(ValueError, 'managed|path|reserved'):
+                installer.managed_file_list(base + [bad])
+        for extra in (['licenses/Dir/a', 'licenses/dir/b'], ['bin/extra', 'bin/extra/child']):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                installer.managed_file_list(base + extra)
+
+    def test_managed_digests_bind_verified_bytes_license_and_manifest_without_self_hash_cycle(self):
+        payload = {'licenses/README.md': hashlib.sha256(b'new README').hexdigest(),
+                   'bin/manyhands.exe': hashlib.sha256(b'final signed executable').hexdigest(),
+                   'bin/manyhands-cli.exe': hashlib.sha256(b'final signed CLI').hexdigest(),
+                   'release.json': 'a' * 64}
+        original = copy.deepcopy(payload)
+        paths = installer.managed_file_list(payload)
+        manifest = ('\ufeff' + '\r\n'.join(paths) + '\r\n').encode('utf-8')
+        license_bytes = b'exact original Inno licence bytes\r\n'
+        expected = {name.replace('/', '\\'): digest for name, digest in payload.items() if name != 'release.json'}
+        expected['licenses\\installer\\INNO-LICENSE.txt'] = hashlib.sha256(license_bytes).hexdigest()
+        expected['licenses\\installer\\managed-files.txt'] = hashlib.sha256(manifest).hexdigest()
+        records = [expected[name] + '  ' + name for name in paths]
+        self.assertEqual(installer.managed_digest_list(payload, manifest, license_bytes), records)
+        self.assertEqual(payload, original, 'Generating installer additions may not mutate verified ZIP records')
+        destination = self.root / 'managed-digests.txt'
+        installer.write_managed_digests(destination, payload, manifest, license_bytes)
+        self.assertEqual(destination.read_bytes(), ('\ufeff' + '\r\n'.join(records) + '\r\n').encode('utf-8'))
+        with self.assertRaises(OSError):
+            installer.write_managed_digests(destination, payload, manifest, license_bytes)
+        target = self.root / 'portable-input.txt'
+        target.write_bytes(b'unchanged portable bytes')
+        linked = self.root / 'linked-digests.txt'
+        linked.symlink_to(target)
+        with self.assertRaises(OSError):
+            installer.write_managed_digests(linked, payload, manifest, license_bytes)
+        self.assertEqual(target.read_bytes(), b'unchanged portable bytes')
+        self.assertNotIn('licenses\\installer\\managed-digests.txt', paths, 'Trust metadata is embedded, not installed/self-hashed')
+
+    def test_managed_digests_reject_noncanonical_hashes_and_manifest_binding(self):
+        payload = {'bin/manyhands.exe': 'a' * 64, 'bin/manyhands-cli.exe': 'b' * 64, 'licenses/README.md': 'c' * 64}
+        manifest = ('\ufeff' + '\r\n'.join(installer.managed_file_list(payload)) + '\r\n').encode('utf-8')
+        for bad in ('A' * 64, 'a' * 63, 'g' * 64, 'a' * 64 + '\n', None):
+            with self.subTest(digest=bad), self.assertRaises(ValueError):
+                installer.managed_digest_list({**payload, 'bin/manyhands.exe': bad}, manifest, b'licence')
+        for bad in (b'', manifest[3:], manifest.replace(b'\r\n', b'\n'), manifest.replace(b'manyhands.exe', b'Manyhands.exe'),
+                    manifest + b'bin\\extra.exe\r\n'):
+            with self.subTest(manifest=bad), self.assertRaises(ValueError):
+                installer.managed_digest_list(payload, bad, b'licence')
+        for bad in (b'', None, 'not byte data'):
+            with self.subTest(license=bad), self.assertRaises(ValueError):
+                installer.managed_digest_list(payload, manifest, bad)
+        with self.assertRaises(ValueError):
+            installer.managed_digest_list({**payload, 'bin/Manyhands.exe': 'd' * 64}, manifest, b'licence')
+
+    def test_parameters_and_inventory_recheck_payload_before_writing_outputs(self):
+        # These are the pre-compile and post-compile entry points, not source-text
+        # assertions. A changed payload may never emit a managed list/inventory.
+        manifest = {**self.package, 'version': '0.1.0'}
+        for command in ('parameters', 'inventory'):
+            output = self.root / (command + '.json')
+            arguments = ['installer.py', command, '--staging', str(self.root), '--archive', str(self.archive),
+                         '--output', str(output), '--installer', str(self.setup)]
+            with self.subTest(command=command), patch.object(sys, 'argv', arguments), \
+                    patch('windows.verify_windows', return_value=manifest), \
+                    patch.object(installer, 'verify_installer_payload', side_effect=ValueError('changed payload')) as verify:
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(installer.main(), 1)
+                verify.assert_called_once_with(self.root, self.archive, manifest)
+                self.assertFalse(output.exists())
+                self.assertFalse((self.root / 'managed-files.txt').exists())
+
+    def test_parameters_derive_managed_list_only_from_verified_payload(self):
+        manifest = {**self.package, 'version': '0.1.0'}
+        output = self.root / 'parameters.json'
+        paths = ['bin/manyhands.exe', 'bin/manyhands-cli.exe', 'licenses/README.md']
+        arguments = ['installer.py', 'parameters', '--staging', str(self.root / 'staging'), '--archive', str(self.archive),
+                     '--output', str(output)]
+        with patch.object(sys, 'argv', arguments), patch('windows.verify_windows', return_value=manifest), \
+                patch.object(installer, 'verify_installer_payload', return_value={name: 'a' * 64 for name in paths}):
+            self.assertEqual(installer.main(), 0)
+        managed = Path(json.loads(output.read_text())['managed_files'])
+        self.assertEqual(managed, self.root / 'managed-files.txt')
+        self.assertEqual(managed.read_text(encoding='utf-8-sig').splitlines(), installer.managed_file_list(paths))
+        digests = Path(json.loads(output.read_text())['managed_digests'])
+        self.assertEqual(digests, self.root / 'managed-digests.txt')
+
+    def test_generated_managed_list_may_not_change_the_portable_payload(self):
+        output = self.root / 'parameters.json'
+        args = ['installer.py', 'parameters', '--staging', str(self.root), '--archive', str(self.archive),
+                '--output', str(output)]
+        paths = ['bin/manyhands.exe', 'bin/manyhands-cli.exe', 'licenses/README.md']
+        with patch.object(sys, 'argv', args), patch('windows.verify_windows', return_value=self.package), \
+                patch.object(installer, 'verify_installer_payload', return_value={name: 'a' * 64 for name in paths}), \
+                contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(installer.main(), 1)
+        self.assertIn('outside the portable payload', errors.getvalue())
+        self.assertFalse(output.exists())
+        self.assertFalse((self.root / 'managed-files.txt').exists())
 
     def test_committed_icon_contains_standard_sizes_and_a_256_pixel_image(self):
         data = (REPO / 'packaging/windows/manyhands.ico').read_bytes()

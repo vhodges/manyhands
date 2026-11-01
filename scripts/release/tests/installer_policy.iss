@@ -19,13 +19,16 @@ OutputBaseFilename=installer-policy-test
 
 [Code]
 #include "..\..\..\packaging\windows\installer-policy.pas"
+#include "..\..\..\packaging\windows\installer-managed-policy.pas"
 #include "..\..\..\packaging\windows\installer-state.iss"
 #include "installer_policy_cases.pas"
+#include "installer_managed_cases.pas"
 #include "installer_state_cases.pas"
 
 function InitializeSetup: Boolean;
 begin
   RunInstallerPolicyTests;
+  RunInstallerManagedTests;
   if RegKeyExists(HKCU64, '{#FixtureRoot}') then RaiseException('Refusing pre-existing fixture state.');
   try
     RunInstallerStateTests;

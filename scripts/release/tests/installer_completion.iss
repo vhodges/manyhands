@@ -13,6 +13,10 @@ DisableProgramGroupPage=yes
 OutputBaseFilename=installer-completion-test
 
 [Code]
+procedure BeginInstaller;
+begin
+end;
+
 procedure CompleteInstaller;
 begin
   if not SaveStringToFile(ExpandConstant('{param:ResultFile}'), 'attempted', False) then

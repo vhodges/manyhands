@@ -15,13 +15,22 @@ Import-Module (Join-Path $PSScriptRoot 'windows-tools.psm1') -Force
 
 function Get-InnoCompilerArguments {
     param([string]$Payload, [string]$Output, [string]$Version, [string]$NumericVersion,
-        [string]$Identity, [string]$Signer, [string]$PowerShell, [string]$Callback, [string]$Definition)
+        [string]$Identity, [string]$Signer, [string]$PowerShell, [string]$Callback, [string]$Definition,
+        [Parameter(Mandatory)][string]$ManagedFiles, [Parameter(Mandatory)][string]$ManagedDigests)
     # $q/$f are Inno's documented quoting/file substitutions. No password,
     # PFX, shell evaluation, /NS unsigned mode, or generic $p callback is used.
     $command = '$q' + $PowerShell + '$q -NoLogo -NoProfile -File $q' + $Callback +
         '$q -FilePath $f -Thumbprint ' + $Identity + ' -SignTool $q' + $Signer + '$q'
-    return @('/Q', '/NI', "/DPayloadDir=$Payload", "/DAppVersion=$Version", "/DNumericVersion=$NumericVersion",
+    return @('/Q', '/NI', "/DPayloadDir=$Payload", "/DManagedFiles=$ManagedFiles", "/DManagedDigests=$ManagedDigests", "/DAppVersion=$Version", "/DNumericVersion=$NumericVersion",
         "/O$Output", "/Smanyhands=$command", $Definition)
+}
+
+function Invoke-InnoCompiler {
+    param([string]$Path, [string[]]$Arguments)
+    # Compression plus mandatory signing/timestamp verification (including two
+    # bounded Inno retries) needs more than the generic 180-second tool budget.
+    # The workflow allows 45 minutes: 30 here, 15 for pre/post checks and cleanup.
+    Invoke-ReleaseTool $Path $Arguments -TimeoutSeconds 1800
 }
 
 function Assert-InnoCompiler {
@@ -70,8 +79,9 @@ $parameters = Get-Content -Raw -LiteralPath $parametersPath | ConvertFrom-Json
 $arguments = Get-InnoCompilerArguments -Payload (Resolve-Path -LiteralPath $Staging).Path -Output $output `
     -Version $parameters.version -NumericVersion $parameters.numeric_version -Identity $Thumbprint -Signer $SignTool `
     -PowerShell (Join-Path $PSHOME 'pwsh.exe') -Callback (Join-Path $PSScriptRoot 'windows-sign-file.ps1') `
-    -Definition (Join-Path $PSScriptRoot '../../packaging/windows/manyhands.iss')
-Invoke-ReleaseTool $Compiler $arguments | Out-Null
+    -Definition (Join-Path $PSScriptRoot '../../packaging/windows/manyhands.iss') `
+    -ManagedFiles $parameters.managed_files -ManagedDigests $parameters.managed_digests
+Invoke-InnoCompiler $Compiler $arguments | Out-Null
 $installer = Join-Path $output $parameters.name
 if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) { throw 'Compiler did not produce the expected installer' }
 return $installer

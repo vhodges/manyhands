@@ -213,7 +213,9 @@ jobs:
 
       - name: Build and sign Windows installer
         if: matrix.os == 'windows'
-        timeout-minutes: 10
+        # ISCC has a 30-minute native deadline including mandatory signing
+        # retries; leave 15 minutes for verification, smoke tests and cleanup.
+        timeout-minutes: 45
         env:
           WINDOWS_SIGNING_PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
           WINDOWS_SIGNING_PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}

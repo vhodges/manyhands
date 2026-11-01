@@ -146,8 +146,10 @@ Messages do not print private material, passwords, environment contents, or
 complete argument lists. The last operation with a start but no completion
 message identifies the boundary to investigate; it is not proof of a cause.
 
-Each native tool has a **180-second deadline**, including stdout/stderr
-collection. Both pipes drain concurrently. Expiry fails the operation, kills
+Ordinary native tools have a **180-second deadline**, including stdout/stderr
+collection. ISCC has an explicit **1,800-second deadline** for compression and
+its mandatory signing/verification callbacks. Both pipes drain concurrently.
+Expiry fails the operation, kills
 the live process tree, allows up to five seconds for process exit, and throws
 through the existing signing cleanup. Nonzero exit codes still fail with
 captured tool output. If a tool has already exited but a detached child keeps
@@ -155,9 +157,11 @@ its output pipes open, the output-drain deadline still fails promptly; the old
 parent handle cannot guarantee termination of that detached child. Such jobs
 must continue to use disposable runners, not persistent signing machines.
 
-The Windows helper-test, application signing, extracted-verification, and installer steps
-also have a **ten-minute limit**. This is a backstop for in-process certificate cmdlets
-and cumulative work, not permission to wait ten minutes for each native tool.
+The Windows helper-test, application signing, and extracted-verification steps
+also have a **ten-minute limit**. The installer step has a **45-minute limit**:
+30 minutes for ISCC, leaving 15 minutes for surrounding verification, the CLI
+smoke test, and cleanup. These are backstops for in-process certificate cmdlets
+and cumulative work, not extensions of individual native-tool deadlines.
 A workflow hard cancellation can interrupt `finally`; only the ordinary
 native-tool timeout is designed to return through normal cleanup. Hosted
 runner teardown remains the isolation backstop for hard cancellation. No
@@ -194,11 +198,16 @@ the shared SignTool and Authenticode verifiers before returning. This covers
 the embedded uninstaller and temporary setup self-copies as well as the outer
 installer; signing only the final EXE after compilation would miss those.
 The parent verifies the completed installer independently before handoff.
+Inno permits **two signing retries with a 2,000 ms delay** (three attempts in
+total), still inside the compiler deadline. Every successful attempt must
+pass the same mandatory signature, exact-identity and RFC 3161 timestamp
+checks; exhausted retries fail rather than producing unsigned output.
 
 The callback borrows the parent's temporary hosted-runner trust. It neither
 imports a certificate nor deletes the parent's key/trust. The parent removes
 only its owned material in `finally`, even after compiler/callback failure.
-Callback/native processes retain the 180-second deadlines; the build/sign
-step has a ten-minute backstop. A timeout, missing timestamp, wrong identity,
+Callback native tools retain their 180-second deadlines; the compiler has
+1,800 seconds and the installer workflow step has a 45-minute backstop.
+A timeout, missing timestamp, wrong identity,
 verification failure, or cleanup failure fails the job. No `/NS`, public trust
 installation on consumers, new publisher identity, or unsigned fallback is added.

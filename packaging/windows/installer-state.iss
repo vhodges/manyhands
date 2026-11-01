@@ -6,6 +6,9 @@
 #ifndef InstallerEnvironmentKey
   #define InstallerEnvironmentKey "Environment"
 #endif
+#ifndef InstallerCheckpointWrite
+  #define InstallerCheckpointWrite "RegWriteStringValue"
+#endif
 
 const
   InstallerKey = '{#InstallerStateKey}';
@@ -80,6 +83,14 @@ begin
   end;
   if not Known and RegKeyExists(HKCU64, InstallerKey) then
     Result := 'Cannot read installed Manyhands version metadata. Uninstall it before recovery.';
+end;
+
+procedure CheckpointInstaller(Incoming, Directory: String);
+begin
+  { Pending first: any partial metadata failure still blocks older payloads. }
+  if not {#InstallerCheckpointWrite}(HKCU64, InstallerKey, 'PendingVersion', Incoming) or
+     not {#InstallerCheckpointWrite}(HKCU64, InstallerKey, 'InstallDir', Directory) then
+    RaiseException('Cannot checkpoint installer recovery metadata.');
 end;
 
 procedure UpdateUserPath(Selected: Boolean; Entry: String);

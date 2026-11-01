@@ -123,5 +123,22 @@ foreach ($fails in @($false, $true)) {
     }
 }
 
+Invoke-Test 'supplied timestamp avoids config reread but is independently validated' {
+    $definition = $ast.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Set-ReleaseSignatures' }, $true)
+    . ([scriptblock]::Create($definition.Extent.Text))
+    function Get-Content { throw 'Unexpected signing configuration reread' }
+    $signingState = @{ Calls = 0 }
+    function Invoke-ReleaseTool {
+        param([string]$File, [string[]]$Arguments)
+        Assert-True ($Arguments[8] -ceq 'http://timestamp.digicert.com/') 'Required RFC 3161 timestamp changed'
+        $signingState.Calls++
+    }
+    Set-ReleaseSignatures @('fixture.exe') $certificate 'signtool-fixture' -TimestampUrl 'http://timestamp.digicert.com/'
+    $rejected = $false
+    try { Set-ReleaseSignatures @('fixture.exe') $certificate 'signtool-fixture' -TimestampUrl 'http://example.com/' }
+    catch { $rejected = $_.Exception.Message.Contains('reviewed SignTool RFC 3161 URL') }
+    Assert-True ($rejected -and $signingState.Calls -eq 1) 'Supplied invalid timestamp reached signing'
+}
+
 if ($failures.Count) { throw ($failures -join "`n") }
-Write-Output 'Windows signing-progress tests passed (7 cases; platform APIs stubbed).'
+Write-Output 'Windows signing-progress tests passed (8 cases; platform APIs stubbed).'

@@ -124,9 +124,14 @@ function Confirm-Signatures {
 }
 
 function Set-ReleaseSignatures {
-    param([string[]]$Files, $Certificate, [string]$SignTool)
-    $configuration = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '../../packaging/windows/signing.json') | ConvertFrom-Json
-    $timestamp = Get-SignToolTimestampUrl -Url $configuration.timestamp_url
+    param([Parameter(Mandatory)][string[]]$Files, [Parameter(Mandatory)]$Certificate,
+        [Parameter(Mandatory)][string]$SignTool, [string]$TimestampUrl)
+    if (-not $PSBoundParameters.ContainsKey('TimestampUrl')) {
+        $configuration = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '../../packaging/windows/signing.json') | ConvertFrom-Json
+        $TimestampUrl = $configuration.timestamp_url
+    }
+    # Revalidate supplied configuration too; compiler callbacks use the default.
+    $timestamp = Get-SignToolTimestampUrl -Url $TimestampUrl
     foreach ($file in $Files) {
         $name = [IO.Path]::GetFileName($file)
         Write-ReleaseProgress "Starting signing and RFC 3161 timestamping: $name"

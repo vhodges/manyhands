@@ -98,7 +98,7 @@ try {
     if ($Mode -eq 'Sign') {
         $configuration = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '../../packaging/windows/signing.json') | ConvertFrom-Json
         $timestamp = Get-SignToolTimestampUrl -Url $configuration.timestamp_url
-        Set-ReleaseSignatures $files $certificate $signTool
+        Set-ReleaseSignatures $files $certificate $signTool -TimestampUrl $timestamp
     }
 
     Add-VerificationTrust -CertificatePath (Join-Path $root 'signing/manyhands.cer') `

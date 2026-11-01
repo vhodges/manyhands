@@ -7,6 +7,12 @@
 #ifndef PayloadDir
   #error PayloadDir is required
 #endif
+#ifndef ManagedFiles
+  #error ManagedFiles is required (generated from the verified portable ZIP)
+#endif
+#ifndef ManagedDigests
+  #error ManagedDigests is required (generated from verified payload and installer additions)
+#endif
 
 [Setup]
 AppId=io.github.vhodges.manyhands
@@ -37,7 +43,8 @@ WizardStyle=modern
 ChangesEnvironment=yes
 SignTool=manyhands
 SignedUninstaller=yes
-SignToolRetryCount=0
+SignToolRetryCount=2
+SignToolRetryDelay=2000
 CloseApplications=yes
 RestartApplications=no
 LicenseFile={#PayloadDir}\LICENSE
@@ -48,6 +55,8 @@ Name: "clipath"; Description: "Add Manyhands CLI to my user PATH (new terminals 
 [Files]
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "INNO-LICENSE.txt"; DestDir: "{app}\licenses\installer"; Flags: ignoreversion
+Source: "{#ManagedFiles}"; DestDir: "{app}\licenses\installer"; DestName: "managed-files.txt"; Flags: ignoreversion
+Source: "{#ManagedDigests}"; DestName: "managed-digests.txt"; Flags: dontcopy
 Source: "manyhands.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
@@ -55,7 +64,10 @@ Name: "{userprograms}\Manyhands"; Filename: "{app}\bin\manyhands.exe"; WorkingDi
 
 [Code]
 #include "installer-policy.pas"
+#include "installer-managed-policy.pas"
 #include "installer-state.iss"
+#include "installer-managed.iss"
+#include "installer-lifecycle.iss"
 
 function InitializeSetup: Boolean;
 var
@@ -64,45 +76,29 @@ begin
   Failure := CheckInstalledVersion('{#AppVersion}');
   Result := Failure = '';
   if not Result then SuppressibleMsgBox(Failure, mbError, MB_OK, IDOK);
+  if Result then begin
+    try
+      LoadIncomingManagedFiles;
+    except
+      SuppressibleMsgBox(GetExceptionMessage, mbError, MB_OK, IDOK);
+      Result := False;
+    end;
+  end;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
-var
-  PreviousDir, PreviousOwned, Current, Updated, NextOwned, Entry: String;
-  PathType: Cardinal;
 begin
-  Result := CheckInstalledVersion('{#AppVersion}');
-  if Result <> '' then Exit;
-  try
-    if RegValueExists(HKCU64, InstallerKey, 'InstallDir') then begin
-      if not RegQueryStringValue(HKCU64, InstallerKey, 'InstallDir', PreviousDir) then
-        RaiseException('Cannot read the previous installer directory.');
-      if NormalizePolicyPath(PreviousDir) <> NormalizePolicyPath(ExpandConstant('{app}')) then
-        RaiseException('Uninstall Manyhands before changing its install directory.');
-    end;
-    PreviousOwned := '';
-    if RegValueExists(HKCU64, InstallerKey, 'OwnedPath') and
-       not RegQueryStringValue(HKCU64, InstallerKey, 'OwnedPath', PreviousOwned) then
-      RaiseException('Cannot read installer PATH ownership.');
-    if WizardIsTaskSelected('clipath') or (PreviousOwned <> '') then begin
-      PathType := ReadUserPath(Current);
-      Entry := ExpandConstant('{app}\bin');
-      if not PlanPathUpdate(Current, ExpandPathEnvironment(Current), Entry, PreviousOwned,
-        WizardIsTaskSelected('clipath'), Updated, NextOwned) then
-        RaiseException('Invalid installer PATH ownership or a directory unsuitable for PATH.');
-    end;
-    { Establish a fail-closed version floor before changing installed files.
-      Interrupted installs/upgrades can be repaired by the same or newer version. }
-    if not RegWriteStringValue(HKCU64, InstallerKey, 'PendingVersion', '{#AppVersion}') or
-       not RegWriteStringValue(HKCU64, InstallerKey, 'InstallDir', ExpandConstant('{app}')) then
-      RaiseException('Cannot checkpoint installer recovery metadata.');
-  except
-    Result := GetExceptionMessage;
-  end;
+  Result := CheckInstallPreparation('{#AppVersion}');
+end;
+
+procedure BeginInstaller;
+begin
+  StartInstaller('{#AppVersion}');
 end;
 
 procedure CompleteInstaller;
 begin
+  PruneInstallerManagedFiles;
   if not RegWriteStringValue(HKCU64, InstallerKey, 'InstallDir', ExpandConstant('{app}')) or
      not RegWriteStringValue(HKCU64, InstallerKey, 'Version', '{#AppVersion}') then
     RaiseException('Cannot record the installed Manyhands version.');
