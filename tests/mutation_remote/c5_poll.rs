@@ -65,7 +65,30 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         never_committed_resend_is_a_new_write,
     ),
     ("c5_poll_the_same_request_races", the_same_request_races),
+    (
+        "c5_poll_the_race_is_lost_to_another_verb",
+        the_race_is_lost_to_another_verb,
+    ),
     ("c5_poll_replay_of_each_verb", replay_of_each_verb),
+    (
+        "c5_poll_request_show_and_cancel_of_a_policy_record",
+        request_show_and_cancel_of_a_policy_record,
+    ),
+    ("c5_poll_pause_leaves_the_rest", pause_leaves_the_rest),
+    ("c5_poll_resume_leaves_the_rest", resume_leaves_the_rest),
+    (
+        "c5_poll_configure_leaves_the_rest",
+        configure_leaves_the_rest,
+    ),
+    ("c5_poll_resume_makes_a_poll_due", resume_makes_a_poll_due),
+    (
+        "c5_poll_resume_does_not_lift_the_suspension",
+        resume_does_not_lift_the_suspension,
+    ),
+    (
+        "c5_poll_policy_row_gone_inside_the_path",
+        policy_row_gone_inside_the_path,
+    ),
     (
         "c5_poll_an_already_applied_replay_stays_so",
         an_already_applied_replay_stays_so,
@@ -259,7 +282,7 @@ fn resume_not_paused_with_a_future_deadline() -> Result<(), FixtureError> {
     Ok(())
 }
 
-/// Leaves the stored due time, and every other field.
+/// Leaves the stored due time. `configure_leaves_the_rest` pins every other field.
 fn configure_success() -> Result<(), FixtureError> {
     let local = Local::empty()?;
     stage(&local, &format!("paused=1,next_eligible_at={FUTURE}"))?;
@@ -391,6 +414,19 @@ fn unavailable_index() -> Result<(), FixtureError> {
         let refused = called(&service, id, mutation);
         assert_eq!(refused.code, ResultCode::IndexUnavailable);
         assert_eq!(refused.data, None);
+        assert!(
+            refused
+                .recovery
+                .iter()
+                .any(|action| action.action.as_str() == "index.rebuild"),
+            "{:?}",
+            refused.recovery
+        );
+        assert_eq!(
+            fixed(std::fs::read(data.join(REGISTRY_FILE)))?,
+            b"not sqlite",
+            "a policy verb doesn't replace the index"
+        );
     }
     Ok(())
 }
@@ -581,11 +617,17 @@ fn crash_before_the_transaction() -> Result<(), FixtureError> {
 /// The two are one write, so there is no accepted record to find.
 fn stop_inside_the_transaction() -> Result<(), FixtureError> {
     let local = Local::empty()?;
-    let before = status(&local)?;
-    for (mutation, name) in [
-        (pause(&local.root), "pause"),
-        (configure(&local.root, 120), "configure"),
+    for (mutation, name, assignment) in [
+        (pause(&local.root), "pause", "paused=0"),
+        (
+            resume(&local.root),
+            "resume",
+            "paused=1,next_eligible_at=1893456000",
+        ),
+        (configure(&local.root, 120), "configure", "paused=0"),
     ] {
+        stage(&local, assignment)?;
+        let before = status(&local)?;
         let dying = at_failure_point(&local, FailurePoint::BeforeRequestSettlement)?;
         let died = called(&dying, FIRST, mutation);
         assert_eq!(died.code, ResultCode::InternalError, "{name}");
@@ -615,23 +657,28 @@ fn committed_reply_lost_replays_and_the_pause_stands() -> Result<(), FixtureErro
 /// R2 pauses. R1 resent is a new write and clears the pause: last commit wins,
 /// and its answer says what it did (owner question 6).
 fn never_committed_resend_is_a_new_write() -> Result<(), FixtureError> {
-    let local = Local::empty()?;
-    stage(&local, "paused=1")?;
-    let dying = at_failure_point(&local, FailurePoint::BeforeRequestDomainCall)?;
-    let died = called(&dying, FIRST, resume(&local.root));
-    assert_eq!(died.code, ResultCode::InternalError);
-    assert!(status(&local)?.paused, "R1 wrote nothing");
-    let paused = called(&local.service, SECOND, pause(&local.root));
-    assert_eq!(
-        paused.code,
-        ResultCode::AlreadyApplied,
-        "R2 finds it paused"
-    );
-    let resent = called(&local.service, FIRST, resume(&local.root));
-    assert_eq!(resent.code, ResultCode::Ok, "a new write");
-    assert!(!policy(&resent).paused, "the answer says so");
-    assert!(!status(&local)?.paused, "the pause is cleared");
-    finished_record(&local, FIRST)?;
+    for point in [
+        FailurePoint::BeforeRequestDomainCall,
+        FailurePoint::BeforeRequestSettlement,
+    ] {
+        let local = Local::empty()?;
+        stage(&local, "paused=1")?;
+        let dying = at_failure_point(&local, point)?;
+        let died = called(&dying, FIRST, resume(&local.root));
+        assert_eq!(died.code, ResultCode::InternalError, "{point:?}");
+        assert!(status(&local)?.paused, "{point:?}: R1 wrote nothing");
+        let paused = called(&local.service, SECOND, pause(&local.root));
+        assert_eq!(
+            paused.code,
+            ResultCode::AlreadyApplied,
+            "{point:?}: R2 finds it paused"
+        );
+        let resent = called(&local.service, FIRST, resume(&local.root));
+        assert_eq!(resent.code, ResultCode::Ok, "{point:?}: a new write");
+        assert!(!policy(&resent).paused, "{point:?}: the answer says so");
+        assert!(!status(&local)?.paused, "{point:?}: the pause is cleared");
+        finished_record(&local, FIRST)?;
+    }
     Ok(())
 }
 
@@ -657,6 +704,222 @@ fn the_same_request_races() -> Result<(), FixtureError> {
     assert_eq!(request_rows(&local)?, 1);
     finished_record(&local, FIRST)?;
     Ok(())
+}
+
+/// As above, with the winner of another verb under the same ID: the loser is
+/// another request, refused, and leaves the winner's record and write.
+fn the_race_is_lost_to_another_verb() -> Result<(), FixtureError> {
+    let local = Local::empty()?;
+    let data = local.directory.path().join("data");
+    let root = local.root.clone();
+    local.service.set_acceptance_hook_for_testing(move || {
+        let other = RepositoryService::open_at(&data).expect("another call's service");
+        let won = called(&other, FIRST, pause(&root));
+        assert_eq!(won.code, ResultCode::Ok);
+    });
+    let lost = called(&local.service, FIRST, resume(&local.root));
+    assert_eq!(lost.code, ResultCode::RequestMismatch);
+    assert!(status(&local)?.paused, "the winner's write stands");
+    let record = finished_record(&local, FIRST)?;
+    assert_eq!(record.command, "poll pause");
+    assert_eq!(request_rows(&local)?, 1);
+    Ok(())
+}
+
+/// Every column of the policy row, by name, as text.
+fn policy_columns(local: &Local) -> Result<Vec<(String, String)>, FixtureError> {
+    let db = local.db()?;
+    let mut statement = fixed(db.prepare("SELECT * FROM remote_polling_state"))?;
+    let names: Vec<String> = statement
+        .column_names()
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    fixed(statement.query_row([], |row| {
+        names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| {
+                let value: rusqlite::types::Value = row.get(index)?;
+                Ok((name.clone(), format!("{value:?}")))
+            })
+            .collect()
+    }))
+}
+
+/// Every column a verb must leave, set to a value other than its default, and
+/// a current observation batch. Only `active_operation_id` stays null: it reads
+/// the remote journal, not this row.
+fn stage_every_column(local: &Local, paused: i64) -> Result<(), FixtureError> {
+    stage(
+        local,
+        &format!(
+            "enabled=0,paused={paused},interval_seconds=900,automatic_backoff_seconds=240,\
+             recovery_suspended=1,history_unknown=1,configuration_generation=3,\
+             endpoint_digest=zeroblob(32),remote_name='origin',primary_branch='main',\
+             latest_outcome='transport_unavailable',latest_attempt_at=1000,\
+             next_eligible_at={FUTURE}"
+        ),
+    )?;
+    fixed(local.db()?.execute_batch(
+        "INSERT INTO remote_observation_batches
+            (repository_id,remote_name,primary_branch,configuration_generation,observed_at,is_current)
+         SELECT id,'origin','main',3,1000,1 FROM repositories",
+    ))
+}
+
+/// The verb changes exactly `named`: the whole status equals `expected`, and
+/// every other column of the row is as it was.
+fn leaves_the_rest(
+    local: &Local,
+    mutation: Mutation,
+    named: &[&str],
+    change: impl FnOnce(&mut PollingStatusDto),
+) -> Result<(), FixtureError> {
+    let mut expected = status(local)?;
+    let columns = policy_columns(local)?;
+    change(&mut expected);
+    let done = called(&local.service, FIRST, mutation);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(status(local)?, expected);
+    let unnamed = |columns: Vec<(String, String)>| -> Vec<(String, String)> {
+        columns
+            .into_iter()
+            .filter(|(name, _)| !named.contains(&name.as_str()))
+            .collect()
+    };
+    assert_eq!(unnamed(policy_columns(local)?), unnamed(columns));
+    Ok(())
+}
+
+fn pause_leaves_the_rest() -> Result<(), FixtureError> {
+    let local = Local::empty()?;
+    stage_every_column(&local, 0)?;
+    leaves_the_rest(&local, pause(&local.root), &["paused"], |expected| {
+        expected.paused = true;
+    })
+}
+
+fn resume_leaves_the_rest() -> Result<(), FixtureError> {
+    let local = Local::empty()?;
+    stage_every_column(&local, 1)?;
+    leaves_the_rest(
+        &local,
+        resume(&local.root),
+        &["paused", "next_eligible_at"],
+        |expected| {
+            expected.paused = false;
+            expected.next_eligible_at = None;
+        },
+    )
+}
+
+fn configure_leaves_the_rest() -> Result<(), FixtureError> {
+    let local = Local::empty()?;
+    stage_every_column(&local, 1)?;
+    leaves_the_rest(
+        &local,
+        configure(&local.root, 120),
+        &["interval_seconds"],
+        |expected| expected.interval_seconds = 120,
+    )
+}
+
+/// Decision 11: a backoff deadline is cleared, so an eligible poll is due, with
+/// the backoff value left for the next failure.
+fn resume_makes_a_poll_due() -> Result<(), FixtureError> {
+    let local = Local::empty()?;
+    stage(
+        &local,
+        &format!(
+            "enabled=1,recovery_suspended=0,paused=1,automatic_backoff_seconds=240,\
+             next_eligible_at={FUTURE}"
+        ),
+    )?;
+    let done = called(&local.service, FIRST, resume(&local.root));
+    assert_eq!(done.code, ResultCode::Ok);
+    assert_eq!(
+        fixed(local.service.automatic_poll_eligibility(&local.root))?,
+        AutomaticPollEligibility::Eligible
+    );
+    assert_eq!(status(&local)?.backoff_seconds, Some(240));
+    Ok(())
+}
+
+/// Decision 5: the suspension still blocks automatic polls after a resume.
+fn resume_does_not_lift_the_suspension() -> Result<(), FixtureError> {
+    let local = Local::empty()?;
+    stage(
+        &local,
+        &format!(
+            "enabled=1,recovery_suspended=1,paused=1,automatic_backoff_seconds=240,\
+             next_eligible_at={FUTURE}"
+        ),
+    )?;
+    let done = called(&local.service, FIRST, resume(&local.root));
+    assert_eq!(done.code, ResultCode::Ok);
+    assert!(matches!(
+        fixed(local.service.automatic_poll_eligibility(&local.root))?,
+        AutomaticPollEligibility::NotEligible {
+            reason: PollIneligibility::RecoverySuspended,
+            ..
+        }
+    ));
+    Ok(())
+}
+
+/// The policy row goes after `prepare`, so `read_policy` refuses it inside the
+/// path, and neither a record nor a write stands.
+///
+/// **The code is awaiting a ruling, so it isn't pinned.** The review asked for
+/// `recovery_required`. The answer is `internal_error`, because the path's
+/// `RepositoryError` becomes a `ReadError` through the read mapping.
+fn policy_row_gone_inside_the_path() -> Result<(), FixtureError> {
+    let local = Local::empty()?;
+    let registry = local.directory.path().join("data").join(REGISTRY_FILE);
+    local.service.set_acceptance_hook_for_testing(move || {
+        rusqlite::Connection::open(registry)
+            .expect("the registry")
+            .execute("DELETE FROM remote_polling_state", [])
+            .expect("the policy row is removed");
+    });
+    let refused = called(&local.service, FIRST, pause(&local.root));
+    assert!(refused.code.failure_class().is_some(), "{:?}", refused.code);
+    assert_eq!(refused.data, None);
+    assert_eq!(request_rows(&local)?, 0);
+    Ok(())
+}
+
+/// `request show` reads a policy record as finished, with its result. `request
+/// cancel` finds nothing to cancel and sets no flag: nothing is left accepted.
+fn request_show_and_cancel_of_a_policy_record() -> Result<(), FixtureError> {
+    let local = Local::empty()?;
+    let done = called(&local.service, FIRST, pause(&local.root));
+    assert_eq!(done.code, ResultCode::Ok);
+    let record = finished_record(&local, FIRST)?;
+    let shown = local.service.show_request(request(FIRST));
+    assert_eq!(shown.code, ResultCode::Ok);
+    let shown = whole_of(&shown);
+    assert_eq!(shown["data"]["state"], "finished", "{shown}");
+    assert_eq!(
+        shown["data"]["operations"],
+        serde_json::json!([]),
+        "{shown}"
+    );
+    assert_eq!(shown["data"]["result"]["code"], "ok", "{shown}");
+    assert_eq!(shown["data"]["result"]["data"]["paused"], true, "{shown}");
+
+    let cancelled = whole_of(&local.service.cancel_request(request(FIRST)));
+    assert_eq!(cancelled["data"]["state"], "finished", "{cancelled}");
+    assert_eq!(cancelled["data"]["requested"], false, "{cancelled}");
+    let after = finished_record(&local, FIRST)?;
+    assert_eq!(after, record, "cancel changed the record");
+    assert!(!after.cancel_requested);
+    Ok(())
+}
+
+fn whole_of(envelope: &impl serde::Serialize) -> serde_json::Value {
+    serde_json::to_value(envelope).expect("an envelope serializes")
 }
 
 fn whole(envelope: &Envelope<MutationDataDto>) -> serde_json::Value {

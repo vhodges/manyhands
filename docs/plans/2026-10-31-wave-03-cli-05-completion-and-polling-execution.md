@@ -147,9 +147,9 @@ record as no-edit (the reading above), and whether `parse_tests.rs:563`'s name a
 - **`request_records` and `remote_polling_state` share the registry connection.**
   Yes: both open `open_registry(&registry_path)` in an `Immediate` transaction
   (`mutation/records.rs:802-808`, `remote/state.rs:6402-6414`), and the one file
-  `manyhands.sqlite3` held both tables when opened read-only. **The guards differ:**
+  `manyhands.sqlite3` held both tables when opened read-only. **The guards differ in mode only, over the same lock file (`cache_lock_path`):**
   records take `cache_write_guard` over the data directory, and `with_transaction`
-  takes `cache_read_guard` over the root. Task 5a's boundary path takes the write
+  takes `cache_read_guard` (the root is only named in its errors). Task 5a's boundary path takes the write
   guard, as the design says.
 - **Recovery after a stop in `set_publication_remote_recorded`.** It has no separate
   module. Re-entry goes through `set_publication_remote` (`src/repository.rs:4406`)
@@ -726,3 +726,20 @@ Not mutated: `stale_resume_keeps_the_newer_interval`, `the_same_request_races`, 
 `mutation_replay` ran before the last two `c5_poll` rows were added, which changed only `c5_poll.rs`, with no library change since.
 
 **Limits.** A registration removed mid-call answers `repository_not_registered` from the transaction, with no recovery beyond what the read gives. `human` output for these verbs is Task 8, and `poll once` is Task 5b.
+
+#### Task 5a review fixes (controller's list)
+
+Tests and documents only; no library behaviour changed. Decisions 1-6 above are approved.
+
+**Open, for a ruling: item 4's row answered otherwise, and I stopped on it.** With `remote_polling_state`'s row deleted by an acceptance hook, `poll pause` answers `internal_error`, not the `recovery_required` the review named. Established by running the row against each code: `internal_error` passes. `read_policy` does give `RepositoryErrorKind::RecoveryRequired`, but the error reaches the boundary through `From<RepositoryError> for ReadError`, whose read mapping (`read/mod.rs`) sends that kind to `InternalError`; `outcome::repository_error_code` would give `recovery_required`. Mapping it in the binding's `write` would be a behaviour change, so I made none. `policy_row_gone_inside_the_path` pins a failure, no data and `request_rows == 0`, and deliberately leaves the code unpinned until the ruling. `unregistered_after_the_check` is unaffected: that kind maps the same either way.
+
+**Item 3, the mutation.** `write` moved before `insert_request` in `finish_in_one_transaction`, then reverted. `the_same_request_races` **catches it**, and so does the new `the_race_is_lost_to_another_verb`; the other 33 rows passed. This supersedes the note above that the first had never been seen to fail.
+
+**The rest.** Eligibility rows `resume_makes_a_poll_due` and `resume_does_not_lift_the_suspension` answered as the review expected. `*_leaves_the_rest` stage every column and a current batch, and compare the whole `PollingStatusDto` and every other raw column of the row; only `active_operation_id` stays null, since it reads the remote journal. `unavailable_index` asserts the registry bytes and `index.rebuild`. `stop_inside_the_transaction` includes resume, and the never-committed row loops over both fault points. `request_show_and_cancel_of_a_policy_record` pins `finished`, `requested: false` and an unchanged record. The design's position line, `polling_status`'s description, the progress schema's clause, the comments and Task 0's "guards differ" entry (mode only, same lock file) are corrected. Only the new rows' last-named mutations were run; the new `*_leaves_the_rest` and eligibility rows were not seen to fail.
+
+**Carried forward.**
+
+- Task 5b: the row for a pause during a running poll (review item 12).
+- D6: a policy verb sends no `Accepted` event, so `running.accepted` at `src/desktop/services/worker.rs:790` stays false for one. The desktop must not read that as "nothing was recorded".
+
+**Verified, compare mode, all exit 0.** `--test mutation_remote -- c5_poll` 35 cases (18 s), `--test mutation_contract` 44 (10 s), `--test read_contract` 72 (8 s), `--lib mutation` 144 (8 s), `cargo fmt --check`, clippy `-D warnings` (10 s).

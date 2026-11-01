@@ -240,8 +240,9 @@ For all six, `was_accepted_without_operation`, `restores_index` and
 `creates_its_repository` are no, and `stage` is the mutation stage of a remote
 operation for the first three and of a local write for the policy verbs. Each is pinned
 by a named test. Every lifecycle and poll row is `EndedWithoutCheckpoint::SaysNothing`
-(fact 15), and `Prepared.position` is the primary branch, whose reachability a replay checks
-(`evidence.rs:552-562`). The policy verbs' conformance home is `Replay`, since they need no server.
+(fact 15). `Prepared.position` is the primary branch for the lifecycle verbs and `poll once`, whose
+reachability a replay checks (`evidence.rs:552-562`); the policy verbs commit nothing and have a null
+position. The policy verbs' conformance home is `Replay`, since they need no server.
 
 ## `document promote` And `ticket close`
 

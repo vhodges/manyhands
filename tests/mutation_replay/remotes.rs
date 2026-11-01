@@ -4,6 +4,9 @@
 //!
 //! `remote select`: a commit of the configuration file on primary. Its
 //! commit is read from Git, never taken from what the domain names.
+//!
+//! This file also holds the conformance rows of `poll configure`, `poll pause`
+//! and `poll resume`; their other rows are in `tests/mutation_remote/c5_poll.rs`.
 
 use manyhands::{
     repository::{

@@ -242,7 +242,9 @@ impl RepositoryService {
         })
     }
 
-    /// A request no record holds: validate, check, accept, run, settle.
+    /// A request no record holds: validate, check, accept, run, settle. A
+    /// binding that offers `one_transaction` does the last three as one
+    /// transaction, in `written_with_its_record`.
     /// `None` when another call accepted the same request ID meanwhile.
     ///
     /// A command that needs confirmation is run only with a confirmation

@@ -152,7 +152,8 @@ impl Binding for PollPolicyBinding {
         }
     }
 
-    /// There is no row of any kind: `reenter` is not reached.
+    /// There is no row of any kind. No call of this build leaves a record
+    /// accepted; `reenter` releases one that some other build did.
     fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint {
         EndedWithoutCheckpoint::SaysNothing
     }
@@ -206,8 +207,9 @@ impl Binding for PollPolicyBinding {
         Some(self)
     }
 
-    /// Not reached: see `one_transaction`. A record that says otherwise is no
-    /// record of this build, and nothing is written on it.
+    /// Not reached by this build's own records: see `one_transaction`. For an
+    /// accepted record it did not write, no policy is written; the record is
+    /// released, and the next call runs as new.
     fn run(&self, _call: &CallContext<'_>, _accepted: &Accepted) -> Ran {
         Ran {
             answer: Answer::stopped(ResultCode::InternalError),
