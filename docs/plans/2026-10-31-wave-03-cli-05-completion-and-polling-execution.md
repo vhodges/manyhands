@@ -1060,7 +1060,7 @@ The three blockers above are settled. Each is in the Cycle's decisions, with the
 
 Base `9832423f`. `document promote` and `ticket close` are available: `lifecycle.rs` through `mutate::drive`, inside the Ctrl-C window, with `human_lifecycle.rs` for text. Neither reads the item first, since the library answers an unknown ID and a wrong kind.
 
-**Seen first.** Against the unchanged binary, 16 of the 17 rows of `tests/cli/lifecycle.rs` failed by assertion on `command_unavailable`, and `the_window_covers...` on `false != true`. The 17th, the resume row below, passed, since it pins existing code. With a stub renderer, 8 of the 12 `lifecycle_tests` rows failed by assertion. The other four pin C2's fallback, its passphrase hint and blockers named by the field list.
+**Seen first.** Against the unchanged binary, 15 of the 16 rows of `tests/cli/lifecycle.rs` failed by assertion on `command_unavailable`, and `the_window_covers...` on `false != true`. The 16th, the resume row below, passed, since it pins existing code. With a stub renderer, 8 of the 11 `lifecycle_tests` rows failed by assertion. The other three pin C2's fallback, its passphrase hint and blockers named by the field list. The filter `--test cli -- lifecycle` also matches one row of `ticket_authoring`, hence 17 below.
 
 **Corrected rows: three of my expectations, none a row of the design.**
 
