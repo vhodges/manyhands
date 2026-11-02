@@ -10,6 +10,16 @@ use super::ItemPane;
 pub(super) struct ShareState {}
 
 impl ItemPane {
+    /// The tab opened: what Share reads of the repository (its
+    /// publication remote) is read into `ShareState`, so the header reads
+    /// it from there. Nothing yet: Task 8 reads it.
+    pub(super) fn share_opened(&mut self, _cx: &mut Context<Self>) {}
+
+    /// The request model changed: how the tab's share stands, its stage
+    /// and its outcome, is taken into `ShareState`. Nothing yet: Tasks 8
+    /// to 10b follow it.
+    pub(super) fn share_progressed(&mut self, _cx: &mut Context<Self>) {}
+
     /// Share, after Edit or Save/Done in the header. Nothing yet.
     pub(super) fn share_button(
         &self,

@@ -17,10 +17,14 @@
 //! Not now (`Cancelled`) marks the key declined for the session (R-13):
 //! a later request for it answers `Cancelled` at once, with no prompt,
 //! until Unlock… clears the mark through `WorkerHandle::clear_declined`.
-//! The set is shared by the worker's provider and its handle.
+//! The set is shared by the worker's provider and its handle. Each key the
+//! provider answers `Cancelled`, declined now or before, is also recorded
+//! against the request whose attempt asked for it, so Unlock… on that
+//! request's outcome clears its keys (`WorkerHandle::clear_declined_for`)
+//! without the outcome naming one (R-3, R-13, R-17).
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex, PoisonError},
 };
 
@@ -36,7 +40,7 @@ use manyhands::repository::{
     },
 };
 
-use super::worker::WorkerEvent;
+use super::{requests::DesktopRequestId, worker::WorkerEvent};
 
 /// A passphrase the library asks for while a job runs. The worker waits
 /// for `reply`; a dropped sender reads as `Unavailable`.
@@ -64,28 +68,82 @@ pub(crate) enum PromptReply {
 }
 
 /// The keys declined with Not now this session (R-13), shared by the
-/// worker's provider and its handle.
+/// worker's provider and its handle, and which request's attempt each
+/// was answered `Cancelled` for.
 #[derive(Clone, Default)]
-pub(crate) struct DeclinedKeys(Arc<Mutex<HashSet<SharedKeyId>>>);
+pub(crate) struct DeclinedKeys(Arc<Mutex<Declined>>);
+
+#[derive(Default)]
+struct Declined {
+    keys: HashSet<SharedKeyId>,
+    /// The request whose attempt the worker is running, if any.
+    attempt: Option<DesktopRequestId>,
+    /// The keys each request's last attempt was answered `Cancelled` for.
+    by_request: HashMap<DesktopRequestId, HashSet<SharedKeyId>>,
+}
 
 impl DeclinedKeys {
-    /// The set. A panic elsewhere while it was held leaves a set of IDs,
+    /// The set. A panic elsewhere while it was held leaves sets of IDs,
     /// whole, so a poisoned lock is taken.
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashSet<SharedKeyId>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Declined> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Answers `Cancelled` for `key_id` when it is declined, recording it
+    /// against the running attempt's request.
     fn declined(&self, key_id: SharedKeyId) -> bool {
-        self.lock().contains(&key_id)
+        let mut declined = self.lock();
+        if !declined.keys.contains(&key_id) {
+            return false;
+        }
+        declined.record(key_id);
+        true
     }
 
+    /// Not now: `key_id` is declined, and recorded against the running
+    /// attempt's request.
     fn decline(&self, key_id: SharedKeyId) {
-        self.lock().insert(key_id);
+        let mut declined = self.lock();
+        declined.keys.insert(key_id);
+        declined.record(key_id);
+    }
+
+    /// The worker begins an attempt of `id`, or, with `None`, runs no
+    /// request's attempt: what a later answer is recorded against. An
+    /// attempt begun forgets what the request's last one recorded.
+    pub(crate) fn attempting(&self, id: Option<DesktopRequestId>) {
+        let mut declined = self.lock();
+        declined.attempt = id;
+        if let Some(id) = id {
+            declined.by_request.remove(&id);
+        }
     }
 
     /// Clears `key_id`'s mark; true when it was declined.
     pub(crate) fn clear(&self, key_id: SharedKeyId) -> bool {
-        self.lock().remove(&key_id)
+        self.lock().keys.remove(&key_id)
+    }
+
+    /// Clears the marks of the keys the request `id`'s last attempt was
+    /// answered `Cancelled` for, so its next attempt prompts for them
+    /// again; true when any was still declined.
+    pub(crate) fn clear_for(&self, id: DesktopRequestId) -> bool {
+        let mut declined = self.lock();
+        let keys = declined.by_request.remove(&id).unwrap_or_default();
+        // Every key is cleared, not only the first one found declined.
+        let mut cleared = false;
+        for key_id in &keys {
+            cleared |= declined.keys.remove(key_id);
+        }
+        cleared
+    }
+}
+
+impl Declined {
+    fn record(&mut self, key_id: SharedKeyId) {
+        if let Some(id) = self.attempt {
+            self.by_request.entry(id).or_default().insert(key_id);
+        }
     }
 }
 

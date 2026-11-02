@@ -156,6 +156,7 @@ impl ItemPane {
         self.save_progressed(cx);
         self.follow_done(cx);
         self.follow_close_save(cx);
+        self.share_progressed(cx);
         let Some(id) = self.refreshing else {
             return;
         };

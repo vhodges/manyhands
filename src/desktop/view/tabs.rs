@@ -12,8 +12,8 @@
 use super::{
     item::text,
     item::{
-        CloseThisTab, DraftDiscarded, FollowItem, InitialsInSettings, ItemPane, OpenDetails,
-        ReviewInDrafts,
+        CloseThisTab, DraftDiscarded, FollowItem, InitialsInSettings, ItemPane, ItemRoute,
+        OpenDetails, ReviewInDrafts,
         tokens::{ItemColors, item_colors},
     },
     relationships::OpenRelated,
@@ -203,9 +203,10 @@ pub(crate) struct TabContent {
     /// Each pane's related item opened, its Review in Drafts, its restored
     /// draft discarded, its chips' requests for the details sheet, its
     /// create's ask for Settings on its repository, its
-    /// own close once its unsaved work was settled, and its repair's item
-    /// to follow.
-    related: HashMap<TabId, [Subscription; 7]>,
+    /// own close once its unsaved work was settled, its repair's item
+    /// to follow, and the workspace places its share and post controls
+    /// open (`ItemRoute`).
+    related: HashMap<TabId, [Subscription; 8]>,
     scroll: ContentScroll,
     /// The strip's own scroll handle, and the tabs the last frame saw shown
     /// and focused, so a change is scrolled into view once.
@@ -334,9 +335,14 @@ impl TabContent {
         let follow = cx.subscribe(&pane, move |this, _, event: &FollowItem, cx| {
             this.follow_tab(id, event.0.clone(), cx)
         });
+        let route = cx.subscribe(&pane, |this, _, event: &ItemRoute, cx| {
+            this.item_route(event, cx)
+        });
         self.related.insert(
             id,
-            [related, review, discarded, details, settings, close, follow],
+            [
+                related, review, discarded, details, settings, close, follow, route,
+            ],
         );
         self.panes.insert(id, pane);
     }

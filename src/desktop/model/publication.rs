@@ -39,7 +39,6 @@ pub(crate) const NOTHING_TO_SHARE: &str = "Nothing to share yet: this item has n
 /// One finished attempt of a post: whether it re-sent a comment ID
 /// already sent (an adopted draft's first post, or a Retry), where its
 /// record stood afterwards, and whether it was a Give up's re-send.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Attempt {
     pub(crate) resend: bool,
@@ -48,7 +47,6 @@ pub(crate) struct Attempt {
 }
 
 /// Where a post stands, by the design's comment outcome rows.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum CommentOutcome {
     /// Row 0: the request's input differs from its record (P12).
@@ -91,7 +89,6 @@ pub(crate) enum CommentOutcome {
 }
 
 /// A post's outcome, with the attempt it was classified under.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct CommentResult {
     pub(crate) outcome: CommentOutcome,
@@ -122,7 +119,6 @@ pub(crate) enum CommentOffer {
 }
 
 /// The outcome of a post's attempt.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
 pub(crate) fn comment_outcome(
     envelope: &Envelope<MutationDataDto>,
     attempt: Attempt,
@@ -204,7 +200,6 @@ fn saved_outcome(
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
 impl CommentOutcome {
     /// Whether the comment's checkpoint committed.
     pub(crate) fn is_saved(&self) -> bool {

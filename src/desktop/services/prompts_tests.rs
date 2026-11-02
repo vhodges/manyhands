@@ -24,7 +24,10 @@ use manyhands::repository::{
 
 use super::{DesktopProvider, PromptReply};
 use crate::desktop::{
-    services::worker::{WorkerEvent, WorkerHandle},
+    services::{
+        requests::DesktopRequestId,
+        worker::{WorkerEvent, WorkerHandle},
+    },
     test_support::fixtures::Fixture,
 };
 
@@ -230,6 +233,53 @@ fn clearing_a_declined_key_through_the_handle_prompts_again() {
     );
     assert_eq!(first, ("cancelled", true));
     assert!(worker.clear_declined(key_id));
+    let secret = SecretPassphrase::new("correct horse".to_owned()).unwrap();
+    let again = ask_through(
+        worker.provider(),
+        request,
+        &mut events,
+        PromptReply::Supplied(secret),
+    );
+    assert_eq!(again, ("supplied", true));
+}
+
+/// R-3, R-13, R-17: a key answered `Cancelled` for a request's attempt,
+/// declined then or before, is recorded against that request, and Unlock…
+/// on its outcome clears it through the request alone; the next request
+/// for the key prompts again. Another request's record is not touched.
+#[test]
+fn a_declined_key_is_cleared_through_its_request() {
+    let fixture = Fixture::new();
+    let (worker, mut events) = WorkerHandle::spawn(fixture.delaying_backend());
+    let directory = tempfile::tempdir().unwrap();
+    let key_id = SharedKeyId::new();
+    let request = unlock(&directory.path().join("key"), key_id, "primary");
+    let (first, second) = (DesktopRequestId(901), DesktopRequestId(902));
+
+    worker.attempting_for_testing(Some(first));
+    let declined = ask_through(
+        worker.provider(),
+        request.clone(),
+        &mut events,
+        PromptReply::Cancelled,
+    );
+    assert_eq!(declined, ("cancelled", true));
+    // A later request is answered at once, and records the key too.
+    worker.attempting_for_testing(Some(second));
+    let secret = SecretPassphrase::new("correct horse".to_owned()).unwrap();
+    let at_once = ask_through(
+        worker.provider(),
+        request.clone(),
+        &mut events,
+        PromptReply::Supplied(secret),
+    );
+    assert_eq!(at_once, ("cancelled", false));
+    worker.attempting_for_testing(None);
+
+    assert!(worker.clear_declined_for(second));
+    // Cleared already: the first request's record finds nothing declined.
+    assert!(!worker.clear_declined_for(first));
+    assert!(!worker.clear_declined_for(second));
     let secret = SecretPassphrase::new("correct horse".to_owned()).unwrap();
     let again = ask_through(
         worker.provider(),

@@ -389,13 +389,11 @@ impl WorkerHandle {
     /// attempt; `None` for a command that does not stop at safe points,
     /// or before its first attempt finished. Kept before the UI hears of
     /// the attempt, so a `Finished` event's reader finds it.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10a.
     pub(crate) fn record_state(&self, id: DesktopRequestId) -> Option<RecordState> {
         self.shared().lock().submitted.get(&id)?.record
     }
 
     /// What the request `id`'s last Give up found, until a retry.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10b.
     pub(crate) fn gave_up(&self, id: DesktopRequestId) -> Option<GaveUp> {
         self.shared().lock().submitted.get(&id)?.gave_up
     }
@@ -405,6 +403,16 @@ impl WorkerHandle {
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10a.
     pub(crate) fn clear_declined(&self, key_id: SharedKeyId) -> bool {
         self.shared().declined.clear(key_id)
+    }
+
+    /// Unlock… on the outcome of the request `id`, before it is retried,
+    /// and Share after a finished `NeedsUnlock`, before the new request:
+    /// clears the Not now marks of the keys `id`'s last attempt was
+    /// answered `Cancelled` for, so the next request prompts for them
+    /// again (R-3, R-13, R-17). True when any was still declined.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10a.
+    pub(crate) fn clear_declined_for(&self, id: DesktopRequestId) -> bool {
+        self.shared().declined.clear_for(id)
     }
 
     /// Queues the request `id` again, under its own request ID, with the
@@ -550,6 +558,14 @@ impl WorkerHandle {
     pub(crate) fn provider(&self) -> DesktopProvider {
         let shared = self.shared();
         DesktopProvider::with_declined(shared.events.clone(), shared.declined.clone())
+    }
+
+    /// Marks the request `id`'s attempt running for the declined keys, as
+    /// the worker does before it runs one: for a test that raises a prompt
+    /// from a plain thread through `provider`.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn attempting_for_testing(&self, id: Option<DesktopRequestId>) {
+        self.shared().declined.attempting(id);
     }
 
     /// The running job, if any.
@@ -757,6 +773,10 @@ fn run(shared: &Shared, backend: &dyn Backend) {
             busy_retries,
             ..
         } = job;
+        // A key the provider answers `Cancelled` is recorded against the
+        // request whose attempt asked for it (R-13).
+        let attempt = matches!(work, Work::Execute { .. } | Work::GiveUp { .. }).then_some(id);
+        shared.declined.attempting(attempt);
         match work {
             Work::Execute {
                 request_id,

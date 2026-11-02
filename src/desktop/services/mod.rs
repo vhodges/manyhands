@@ -249,7 +249,11 @@ impl Services {
     /// while it prepared releases the context it made.
     ///
     /// A comment's end is passed to `Submissions` after the request model
-    /// has it, so a post's answer lands whether or not a tab is open (P9).
+    /// has it, so a post's answer lands whether or not a tab is open (P9),
+    /// and so is a comment's request queued again, a retry or a Give up
+    /// sent from anywhere, the operation area among them, so the post is
+    /// posting again and the attempt is a re-send (P10). Each in the order
+    /// the worker sent them.
     pub(crate) fn start(backend: Arc<dyn Backend>, cx: &mut App) -> Self {
         let (worker, mut events) = WorkerHandle::spawn(backend.clone());
         let operations = cx.new(|_| Operations::default());
@@ -280,15 +284,23 @@ impl Services {
                             _ => None,
                         };
                         // A comment's end, for `Submissions`: its answer, or
-                        // `None` when it never ran.
+                        // that it never ran.
                         if let Some(request) = ended
                             && matches!(request.intent, requests::Intent::CommentAdd { .. })
                         {
-                            let envelope = match &event {
-                                WorkerEvent::Finished(_, envelope) => Some(envelope.clone()),
-                                _ => None,
-                            };
-                            posted.push((request.id, envelope));
+                            posted.push(match &event {
+                                WorkerEvent::Finished(_, envelope) => {
+                                    PostEvent::Finished(request.id, envelope.clone())
+                                }
+                                _ => PostEvent::Ended(request.id),
+                            });
+                        }
+                        // A comment queued again under its own request.
+                        if let WorkerEvent::Queued(request) = &event
+                            && request.attempt > 1
+                            && matches!(request.intent, requests::Intent::CommentAdd { .. })
+                        {
+                            posted.push(PostEvent::Resent(request.id));
                         }
                         // A prepare's end, for release on leave: what it
                         // made, if anything. One removed from the queue, or
@@ -323,11 +335,20 @@ impl Services {
                 };
                 if !posted.is_empty() {
                     let _ = posts.update(cx, |submissions, cx| {
-                        for (id, envelope) in posted {
-                            match envelope {
-                                Some(envelope) => submissions.finished(id, envelope),
-                                None => submissions.ended(id),
-                            };
+                        for event in posted {
+                            match event {
+                                PostEvent::Resent(id) => {
+                                    submissions.resent(id);
+                                }
+                                // What it leaves, the draft of a saved
+                                // comment, is Task 13's to retire (P9).
+                                PostEvent::Finished(id, envelope) => {
+                                    let _ = submissions.finished(id, envelope);
+                                }
+                                PostEvent::Ended(id) => {
+                                    submissions.ended(id);
+                                }
+                            }
                         }
                         cx.notify();
                     });
@@ -435,6 +456,15 @@ impl Services {
     pub(crate) fn backend(&self) -> &Arc<dyn Backend> {
         &self.backend
     }
+}
+
+/// What the drain hands `Submissions` of a comment's request.
+enum PostEvent {
+    /// Queued again under its own request: a retry or a Give up.
+    Resent(requests::DesktopRequestId),
+    Finished(requests::DesktopRequestId, worker::FinishedEnvelope),
+    /// Removed from the queue, or not sent: that attempt never ran.
+    Ended(requests::DesktopRequestId),
 }
 
 /// What a finished request means to the draft registry.

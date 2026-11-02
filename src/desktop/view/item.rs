@@ -60,13 +60,14 @@ mod source;
 mod status;
 pub(crate) mod tokens;
 
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, path::PathBuf, rc::Rc};
 
 use gpui_kit::{
-    AnyElement, App, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
-    Render, Styled, Subscription, Task, TestSupportExt, Window,
+    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, InteractiveElement, IntoElement,
+    ParentElement, Render, Styled, Subscription, Task, TestSupportExt, Window,
     component::{input::TextareaState, v_flex},
 };
+use manyhands::repository::transport::SshAuthority;
 
 use super::{relationships::RowKey, scroll::ContentScroll};
 use crate::desktop::{
@@ -111,6 +112,34 @@ pub(crate) const BACK_TO_TOP: &str = "Back to top";
 /// it is given. It is built as the pane is drawn, so it is always the
 /// frame's own.
 pub(crate) type RegionEnd = Rc<dyn Fn(&ContentScroll, &mut Window, &mut App) -> Option<AnyElement>>;
+
+/// A place in the workspace a share's or a post's control opens (design,
+/// Lane B, Outcomes and routes): the item tab asks, and the workspace,
+/// which subscribes to every tab, opens it.
+#[allow(dead_code)] // Constructed from Task 8.
+pub(crate) enum ItemRoute {
+    /// Share… with no publication remote, or Set up sharing: Settings ›
+    /// Remotes for the repository.
+    Remotes(PathBuf),
+    /// Open Sharing & keys: the Keys page.
+    SharingAndKeys,
+    /// Check host: the host the outcome names, or, with none, the
+    /// repository's Hosts page (K-3).
+    CheckHost {
+        root: PathBuf,
+        authority: Option<SshAuthority>,
+    },
+    /// Set identity: the repository's identity form.
+    SetIdentity(PathBuf),
+    /// Show it, on `busy`: the request of this session that may hold the
+    /// repository, or, with none, its pending operations list.
+    Holder {
+        root: PathBuf,
+        request: Option<DesktopRequestId>,
+    },
+}
+
+impl EventEmitter<ItemRoute> for ItemPane {}
 
 pub(crate) struct ItemPane {
     pub(super) model: ItemView,
@@ -254,6 +283,7 @@ impl ItemPane {
         pane.watch_edit_tab(cx);
         let stamp = pane.model.load();
         pane.read(stamp, cx);
+        pane.share_opened(cx);
         pane
     }
 

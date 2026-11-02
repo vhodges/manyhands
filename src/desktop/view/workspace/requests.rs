@@ -9,6 +9,7 @@ use crate::desktop::{
     },
     view::{
         confirm::{confirm, prepare_again},
+        item::ItemRoute,
         operations::recovery_id,
     },
 };
@@ -87,6 +88,15 @@ impl Workspace {
         // Only requests that can change items reload tabs (ruling R-B2).
         self.reload_tabs(&changed.items, cx);
         self.load_repositories(cx);
+    }
+
+    /// A tab's share or post control asked for a place in the workspace
+    /// (`ItemRoute`). Nothing opens yet: Lane B's tasks open each.
+    pub(in crate::desktop::view) fn item_route(
+        &mut self,
+        _route: &ItemRoute,
+        _cx: &mut Context<Self>,
+    ) {
     }
 
     pub(crate) fn maintain_index(
