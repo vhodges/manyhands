@@ -19,6 +19,7 @@ Approved 2026-11-02 (`5c26a5cd`); execution is subagent-driven
 | 0 | done | `605ff289` | `dba94593`, `38b3c18f` (main), `2394b88e` | Full suite at `605ff289`: 32 result lines, 4901 passed, 0 failed, 1 ignored | Orchestrator spot-check of U-items | Decisions 17, 18; main's tiered gate adopted. |
 | 1 | done | `45028fc9` | `71f8eefe` | `requests`: 11 passed; fmt, check, both clippy lines clean | APPROVE, 0 Blocking, 0 Important, 2 Minor (optional, not applied) | E-12 applied; `DelayingBackend` needed no change. |
 | 2 | done | `31ce9f15` | `0a54d50a`, fixes `7af85640` | `worker` 37, `prompts` 8, `submissions` 7 (each twice); `services::` 153; desktop bin 1107 at `0a54d50a`; four lines clean | Round 1 CHANGES REQUIRED (1 Important: a dropped re-send forgot a written post; 5 Minor); all fixed; re-review APPROVE | Record state kept on the handle (not on `Finished`); `request_not_found` counts as Finished (P16 calls `show_request` itself); test-only constructed answers in `DelayingBackend`; Give up with a failing `cancel_request` on an accepted record is untested (no tool). Carry: `model/operations.rs` marks acceptance only on `Accepted` (R-14) — Lane B Task 9/10a. `worker.rs` ~1100 lines. |
+| 3 | done | `8e4aca09` | `2f1b1925`, fixes `5bd74b38`, `79d1b84a` | `publication` 40 (37 in the module); four lines clean | Round 1 APPROVE with 2 Important (record decoupled from offers; P14 unmodelled) and a design gap; fixed; re-review APPROVE; row 14 extension checked by the orchestrator | Ruling R-17 (no same-request resend on a Finished record; row 14 Finished: Discard, Copy text, Check again). Renamed tests: `request_mismatch_is_mismatched`, `internal_error_is_maybe_saved_only_on_a_resend`. `sync_outcome` takes `ShareAttempt { target, record, after_give_up }`. Carry to Lane B: Share offered after a finished NeedsUnlock must clear the declined key first (R-3, R-13). |
 
 ### Task 0 record
 
@@ -76,6 +77,8 @@ Not started.
 
 - 2026-11-02, Task 0: decisions 17 (separate sync job kinds, E-12) and 18
   ("Nothing to share yet" copy).
+- 2026-11-02, Task 3 review: orchestrator ruling R-17 (design), derived
+  from R-12 and round 4's no-loop rule where the design was silent.
 - 2026-11-02, Task 0: main moved to `0dfd5a68` (`AGENTS.md` tiered test
   gate); merged as `38b3c18f`, no conflict, no code change. The running
   Task 0 full suite is allowed to finish (owner). From then on the full

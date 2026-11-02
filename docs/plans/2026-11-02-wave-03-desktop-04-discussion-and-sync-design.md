@@ -671,6 +671,7 @@ Applied in the approval commit:
 | R-14 | The worker treats any progress stage after `Accepted` as acceptance (fact 10). | Stop would not show on a retry. |
 | R-15 | Stop is shown only when the repository has a publication remote. | A no-remote post would show a Stop that does nothing. |
 | R-13 | A declined key is not prompted again until Unlock…. | A second request gets `unlock_required` without asking. |
+| R-17 | (Task 3 review, 2026-11-02; the design was silent.) A finished record only replays, so no outcome offers a same-request resend (Retry sharing, Unlock and resend, Retry) when its record is Finished, except a share's transient codes the library still retries (`busy`, `poll_yielding`, `remote_unavailable`, `transport_unavailable`, `registration_pending`). Comment rows 6, 7, 8 and 9c then offer their fix step (if any) and Share; row 14 (written, uncommitted, its journal row final) offers Discard, Copy text and Check again, never Edit text; a share offers its fix step and Share. Outcomes carry the record they were classified under, and after a Give up no outcome offers Give up again (P14). | A dead-end button that replays the same answer forever. |
 
 R-2, R-5, R-6, R-7 and R-11 of revision 1 became owner decisions 8, 10,
 9, 13 and 14 (Cycle).
