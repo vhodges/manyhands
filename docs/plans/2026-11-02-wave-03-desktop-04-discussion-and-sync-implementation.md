@@ -10,7 +10,7 @@ id: "01M6E696JQ4NAKG1RT7103FQJ3"
 
 # Desktop Discussion And Deliberate Synchronization Implementation Plan
 
-> **For agentic workers:** Draft, revision 3, not approved. Implementation
+> **For agentic workers:** Draft, revision 4, not approved. Implementation
 > starts only once the owner has approved the documents and authorized it.
 > Then use `implementing-a-cycle` task by task, re-read the design, repeat
 > the ticket preflight, and record every checkpoint on ticket
@@ -222,13 +222,20 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
     `a_later_stage_marks_a_retry_accepted` (R-14);
     `giving_up_an_accepted_record_cancels_then_sends_the_same_request`;
     `giving_up_a_finished_record_reports_already_finished`;
-    `give_up_and_retry_of_one_request_refuse_each_other`.
+    `give_up_reports_whatever_the_resent_request_answers` (fact 14d;
+    `hold_job_return` with a constructed answer);
+    `give_up_and_retry_of_one_request_refuse_each_other`;
+    `a_finished_attempt_carries_its_record_state` (`show_request`);
+    `submit_with_request_id_uses_the_given_id` (R-16).
   - `services/prompts_tests.rs` (the declined set shared by the handle
     and the provider, `Arc<Mutex<HashSet<…>>>`):
     `a_declined_key_answers_cancelled_without_a_prompt`,
     `clearing_a_declined_key_through_the_handle_prompts_again`.
   - `services/submissions_tests.rs`: `a_second_submit_while_posting_is_refused`,
-    `retry_keeps_the_request_id`, `restart_makes_a_new_request`,
+    `a_posts_request_id_is_its_comment_id` (R-16),
+    `retry_keeps_the_request_id`, `restart_moves_to_a_new_comment_id`,
+    and, as a `#[gpui_kit::test]` through the services harness
+    (`start(&fixture, cx)`, as `services/drafts_tests.rs` does),
     `a_finished_event_with_no_tab_open_updates_the_submission` (P9).
 - [ ] **Code:** `services/worker.rs` (R-1, R-14, `Work::GiveUp`),
   `services/prompts.rs` (R-13), `services/submissions.rs`, and in
@@ -240,8 +247,12 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
 
 - [ ] **Tests first** (`model/publication_tests.rs`): one test per row of
   both tables, plus `rows_match_in_precedence_order` (an envelope matching
-  two rows takes the earlier), `a_stop_after_the_push_is_shared`, and
-  `internal_error_is_maybe_saved_only_for_an_adopted_first_post`. Build envelopes as
+  two rows takes the earlier), `a_stop_after_the_push_is_shared`,
+  `internal_error_is_maybe_saved_only_for_an_adopted_first_post`,
+  `request_mismatch_is_maybe_saved`,
+  `an_owed_unshared_comment_offers_retry_and_a_final_one_offers_share`
+  (rows 9a/9b), and `identity_required_routes_to_set_identity` (row 9c,
+  `NeedsIdentity`). Build envelopes as
   `model/operations_tests.rs` does.
 - [ ] **Code:** `model/publication.rs`; one `mod` line in `model/mod.rs`.
 - [ ] **Verify:** `… publication`, then the four lines.
@@ -341,7 +352,8 @@ done
   `no_selected_key_opens_sharing_and_keys`;
   `a_host_code_checks_the_host_with_its_authority`;
   `a_hostless_comment_stop_opens_the_roots_hosts_page` (K-3);
-  `busy_names_a_holding_request_of_this_session`;
+  `busy_may_name_an_accepted_holder_of_this_session`;
+  `busy_ignores_requests_that_hold_no_reservation`;
   `busy_without_a_known_holder_points_to_pending_operations`;
   `a_deleted_branch_offers_give_up_and_no_share`;
   `the_conflict_banner_says_work_is_safe_and_offers_nothing`.
@@ -353,9 +365,9 @@ done
 
 ## Task 10b: Give Up And Resume
 
-- [ ] **Tests first:** `give_up_is_offered_for_an_owed_share_or_post`
+- [ ] **Tests first:** `give_up_is_offered_exactly_when_the_record_is_accepted`
   (including `unlock_required` after Not now);
-  `give_up_is_not_offered_for_ok_or_cancelled`;
+  `give_up_is_not_offered_for_busy_or_a_finished_failure`;
   `stop_is_not_offered_without_a_remote` (R-15); E-10;
   `resume_is_offered_for_a_comment_publication_row`;
   `resume_is_not_offered_for_a_local_context_sync`;
@@ -429,10 +441,10 @@ owner. Only then Step 3 writes the code.
   `p1_a_shared_post_is_one_file_one_checkpoint_shown_once`,
   `p2_retry_sharing_writes_nothing_more` (`publish_over_ssh`, U-2),
   `p3_a_stopped_post_offers_share_not_retry`,
-  `p4_an_adopted_draft_is_checked_before_its_first_post`,
-  `p5_maybe_saved_offers_post_as_new_only_after_check_again_finds_nothing`,
-  `p6_a_finished_failure_that_wrote_nothing_posts_again_as_a_new_request`,
-  `p7_an_owed_failure_offers_only_retry`,
+  `p4_an_adopted_draft_is_listed_first_then_posted_as_the_same_request`,
+  `p5_post_as_new_needs_no_record_and_no_listed_comment`,
+  `p6_edited_text_after_a_finished_failure_posts_under_a_new_comment_id`,
+  `p7_an_owed_failure_offers_retry_discard_and_copy`,
   `p8_occupied_path_keeps_the_text_and_offers_discard`,
   `p9_closing_the_tab_while_posting_still_retires_the_draft`,
   `p10_a_second_submit_while_posting_is_refused`;
@@ -443,7 +455,10 @@ owner. Only then Step 3 writes the code.
   `posting_never_commits_the_dirty_body`;
   `the_reply_composer_cannot_move_while_posting`;
   `an_outcome_applies_only_to_its_comments_composer`;
-  `typing_after_submit_is_not_replaced_by_the_outcome` (A17);
+  `an_outcome_after_a_tab_switch_or_reopen_never_replaces_newer_text` (A17);
+  `quitting_during_an_accepted_post_leaves_it_saved_and_cancelled` (decision 15,
+  K-10: request hook holds the post after acceptance; quit; the envelope is
+  `cancelled` with the checkpoint committed; no Resume row is offered);
   `navigation_save_done_close_and_quit_submit_no_publication` (A16).
 - [ ] **Design checkpoint** (Step 2 above), recorded in the ledger.
 - [ ] **Code:** `view/item/posting.rs`, `view/item/discussion/rows.rs`,
@@ -544,7 +559,8 @@ devenv shell -- cargo run --locked --features desktop --bin manyhands
 | Decision 12 | K-8; native §6 |
 | Decision 13 | 10a |
 | Decision 14 | 13, 14 |
-| Decision 15 | native §4 |
+| Decision 15 | 13; native §4 |
+| R-16 | 2, 13 |
 | R-14 | 2 |
 | R-15 | 10b |
 | P1–P10 | 13 |

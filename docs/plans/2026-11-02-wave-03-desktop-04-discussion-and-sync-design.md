@@ -46,9 +46,12 @@ of main changes.
 11. Error mapping (`outcome.rs:109-154`): a cancelled or unavailable passphrase → `unlock_required`; `UnlockFailed` → `unlock_failed`; `NoSelectedKey` → `no_selected_key`; key problems → `key_unavailable`/`key_rejected`; host approval/replacement → `host_approval_required`/`host_replacement_required` (with host data for syncs only, K-3); `RuntimeUninitialized` → `internal_error` (`outcome.rs:151-153`).
 12. Replay (`execute.rs:34-39, 199-229`): a finished record replays its stored result; an accepted record is re-entered; the same ID with different input is `request_mismatch`. "A cancellation is final. A same-ID retry returns the stored `cancelled` result. A new request completes the work: `item sync` … for a comment's … publication" (`docs/RFC/cli-contract.md:993-997`).
 13. A second `comment add` with a new request ID and an already-bound `comment_id` is refused by `bind_comment_publication`'s collision check as `OperationMismatch` (`src/repository/recovery.rs:291-297`), which maps to `internal_error` (`outcome.rs:79`). `occupied_path` means the comment's path holds different content (`src/repository.rs:3030-3046`).
-14. `busy`, `poll_yielding`, `remote_unavailable`, `transport_unavailable` and `registration_pending` always offer `request.retry` of their own request (`outcome.rs:843-850`), whatever the record's state. `request.cancel` is offered only with the request's own ID for codes the same request never gets past (`outcome.rs:983-990`) and by `conflict resolve`'s continuation; `offering_cancel` only filters it (`outcome.rs:1263-1276`). A `busy` answer does not name the request holding the reservation. A sync reserves before it uses the transport (`remote/sync.rs`), so `unlock_required` and transport failures arrive with the reservation held and the record accepted (fact 8).
+14. `busy`, `poll_yielding`, `remote_unavailable`, `transport_unavailable` and `registration_pending` always offer `request.retry` of their own request (`outcome.rs:843-850`), whatever the record's state. `request.cancel` is offered only with the request's own ID for codes the same request never gets past (`outcome.rs:983-990`) and by `conflict resolve`'s continuation; `offering_cancel` only filters it (`outcome.rs:1263-1276`). A `busy` answer does not name the request holding the reservation. A sync reserves before it uses the transport (`remote/sync.rs`), so `unlock_required` and transport failures after reserving may arrive with the reservation held and the record accepted (fact 8); transient codes refused before reserving do not.
 14a. Quitting cancels the running job's token (`desktop/services/worker.rs:495-499`); an accepted safe-point job then stops at its next safe point, and a stopped comment publication is final (fact 4).
-14b. `identity_required` keeps a comment's record accepted (`bind/comment.rs:556-566`); `Intent::RepoIdentitySet` exists (`services/requests.rs`).
+14b. `identity_required` keeps a comment's record accepted (`bind/comment.rs:556-566`), and a sync's merge commit can stop on it too (`bind/sync.rs` module doc); `Intent::RepoIdentitySet` exists (`services/requests.rs`).
+14c. `RequestId::parse(&str)` accepts any canonical uppercase ULID (`mutation/identity.rs:21-24`), so a request ID can equal a comment ID.
+14d. A Give up's re-sent request does not always end `cancelled`: with an unsettled push it asks the remote first and may end `recovery_required` (`bind/sync.rs:250-264, 468-486`), and `cancel_request` on a fenced record finishes it with the fenced answer (`progress.rs:436-453`).
+14e. `OperationDto.item_id` is null for `submit_comment` rows (`read/dto.rs:866-868`; known limit `01M4W5SCBV6WFJP11Y7PJF5VS8`): no operation read names a comment.
 15. `list_comments` returns canonical order flattened with `depth`, malformed files last, from the effective copy, and only what the index has seen (`read/comments.rs:216-270`). No read reports publication state or counts unpublished work.
 16. `RepositoryService::set_request_hook_for_testing(hook)` runs after acceptance and before the domain call (`mutation/mod.rs:163-173`).
 17. Transport-backed calls return `RuntimeUninitialized` before preparing a key or asking for a passphrase (`transport/operation.rs:83-85`), so no desktop test reaches a passphrase prompt through the library.
@@ -75,7 +78,7 @@ of main changes.
 - U-1. What `item sync` answers for an item with no editing context.
 - U-2. The exact envelope of a comment posted with `publish_over_ssh` in a desktop test: expected `internal_error`, checkpoint committed, publication pending, `pending_reason: synchronization`, owed (fact 11).
 - U-3. For a comment, which codes offer `request.retry` while the record is finished (fact 14 lists the transient ones); R-12 treats those by `show_request`'s state, not by the offer alone.
-- U-4. Whether a refused post that wrote nothing releases its binding, so a new request with the same comment ID is accepted (`bind/comment.rs` Standing: "A binding that wrote nothing is released").
+- U-4. Retired by R-16: an edited text always posts under a new comment ID.
 - U-5. After a restart, how a reservation held by a request of the previous session is ended: whether `operation resume` of the pending remote row, then Stop at a safe point, ends it (fact 9: resume honours the token).
 
 Any answer that differs from expectation stops for the owner.
@@ -151,8 +154,7 @@ C together.
 | Lane D | `view/item/posting.rs`, `view/item/posting_tests.rs` (new), `view/item/discussion.rs`, `view/item/discussion/rows.rs`, `view/item/discussion_tests.rs`, `model/discussion.rs`, `view/item/reads.rs`, `view/item.rs`, `view/item/pill.rs` (after Lane B merges; "Updating the list…"), `services/mod.rs` (the drain hook that retires comment drafts, P9), `services/created_contexts.rs`, `services/created_contexts_tests.rs` |
 | Part E | `view/keyboard_tests.rs` (one `mod` line), `view/keyboard_tests/discussion.rs` (new), `view/editing_privacy_tests.rs`, `docs/plans/2026-11-02-wave-03-desktop-04-on-screen-checklist.md` (new) |
 
-`view/item/header.rs` and `discussion.rs` pass from Part 0 to Lanes B and
-D in sequence; Part 0 finishes with them before the lanes start.
+Files named in two rows pass between owners in sequence: `view/item/header.rs`, `discussion.rs`, `services/mod.rs` and `view/item.rs` from Part 0 to Lanes B or D; `view/item/pill.rs` from Lane B to Lane D. Part 0 finishes before the lanes start, and Lane D starts only after Lanes A, B and C have merged.
 
 ## Part 0: Seams
 
@@ -181,12 +183,18 @@ no safe point).
 
 ### Give up (Task 2, decision 8)
 
-**Give up** ("Stop trying to share") is offered on a finished attempt of a
-request of this session whose intent stops at safe points, whose answer
-was not `ok` or `cancelled`. It runs as a `Work::GiveUp` job on the user
-lane: `show_request`; if the record is still `accepted`,
-`cancel_request(request_id)` and then the same request again, which ends
-`cancelled` (facts 8, 10); otherwise it reports "Already finished". A
+**Give up** ("Stop trying to share") is offered exactly when the attempt's
+`record_accepted` is true (below) and its intent stops at safe points. It
+runs as a `Work::GiveUp` job on the user lane: `show_request`; if the
+record is still `accepted`, `cancel_request(request_id)` and then the same
+request again; otherwise "Already finished". The re-sent request usually
+ends `cancelled` (facts 8, 10), but not always (fact 14d): its answer is
+rendered through `sync_outcome`/`comment_outcome` like any other, and it
+may need the network or prompt (a declined key answers at once).
+
+**`record_accepted`.** After every finished attempt of a comment or sync
+request, the worker calls `show_request` and attaches the record's state
+to the `Finished` event; the outcome functions take it in `Attempt`. A
 Give up is refused while a retry of the same request is queued or running,
 and a retry is refused while its Give up is (source round 2, M9).
 
@@ -195,12 +203,14 @@ an error, including `unlock_required` after Not now (fact 14).
 
 ### Busy repositories
 
-A `busy` answer names no holder (fact 14). The desktop finds one: an owed
-safe-point request of this session on the same repository (the
-`Operations` model's last answer for it was not `ok` or `cancelled`), shown
-as "Waiting for {its label}" with a link to its row; otherwise "Another
-share is holding this repository" with a link to the pending operations
-list. Retry stays offered (fact 14).
+A `busy` answer names no holder (fact 14). The desktop names a possible
+one: a request of this session on the same root whose last attempt has
+`record_accepted` and a code answered after reserving
+(`unlock_required`, `unlock_failed`, key and host codes,
+`transport_unavailable`, `remote_unavailable`, `push_rejected`,
+`remote_branch_deleted`), shown as "May be waiting for {its label}" with a
+link to its row; otherwise "Another share may be holding this repository"
+with a link to the pending operations list. Retry stays offered.
 
 ### Declined keys (Task 2, R-13)
 
@@ -219,6 +229,7 @@ A session registry, shared by every item tab, keyed by
 ```rust
 pub(crate) struct Submission {
     pub request: DesktopRequestId,     // the worker request, for retry
+                                       // (its library RequestId is the comment ID, R-16)
     pub draft: Option<DraftId>,        // retired by Lane D's drain hook
     pub state: SubmissionState,        // Posting | Finished(CommentOutcome)
 }
@@ -228,8 +239,16 @@ pub(crate) struct Submission {
   comment ID is `Posting` (contract 3, A5); the composer then shows
   "Already posting" rather than nothing.
 - `retry(comment_id)` resubmits the same request through `worker.retry`.
-- `restart(comment_id, intent)` forgets the old request and submits a new
-  one; only where R-12 allows.
+- `restart(old_comment_id, new_comment_id, intent)` forgets the old
+  submission and submits under a new comment ID (and so a new request ID);
+  only where R-12 allows.
+- **Durable request (R-16).** A post's library `RequestId` is
+  `RequestId::parse(&comment_id.to_string())` (fact 14c). The worker gains
+  `submit_with_request_id`. The composer's draft is flushed and the flush
+  awaited before Submit, so a restored draft's text equals what was
+  posted. The first post after a relaunch is therefore the same request:
+  a finished record replays its result, an accepted one is re-entered and
+  checkpoints a written file once and publishes once (fact 4).
 - **It is updated from the services event drain** (`Services::start`,
   `services/mod.rs`), not from tabs, so an outcome with no tab open still
   lands, and later submits are not refused forever (round 2, I3).
@@ -237,7 +256,7 @@ pub(crate) struct Submission {
 ### Outcomes (Task 3, `model/publication.rs`)
 
 `comment_outcome(&Envelope<MutationDataDto>, Attempt) -> CommentOutcome`,
-where `Attempt { adopted_first_post: bool }` is supplied by Lane D. Rows
+where `Attempt { adopted_first_post: bool, record_accepted: bool }`. Rows
 in precedence order (first match wins). "Saved" means `checkpoint:
 committed`.
 
@@ -251,22 +270,24 @@ committed`.
 | 6 | saved, `code: unlock_required` or `unlock_failed` | `SavedNeedsUnlock` | Unlock…, Give up |
 | 7 | saved, `code: no_selected_key`, `key_unavailable`, `key_rejected` | `SavedNeedsKey` | Open Sharing & keys, Retry sharing, Give up |
 | 8 | saved, `code: host_approval_required`, `host_replacement_required` | `SavedNeedsHost` | Check host, Retry sharing, Give up |
-| 9 | saved, other pending | `SavedNotShared { code }` | Retry sharing, Give up |
+| 9a | saved, other pending, `record_accepted` | `SavedNotShared { code }` | Retry sharing, Give up |
+| 9b | saved, other pending, record finished | `SavedNotSharedFinal { code }` | Share (a new `item sync`) |
+| 9c | saved, `code: identity_required` (the child's merge) | `SavedNeedsIdentity` | Set identity, Retry sharing |
 | 10 | not saved, `outcome: cancelled` | `NotSavedStopped` | Post again (R-12) |
-| 11 | not saved, `code: identity_required` | `NotSavedIdentity` | Set identity, then Retry (fact 14b) |
+| 11 | not saved, `code: identity_required` | `NotSavedIdentity` | Set identity, then Retry; Discard, Copy text |
 | 12 | not saved, `code: occupied_path` | `NotSavedConflicting` | Discard; text kept |
-| 13 | not saved, `code: internal_error`, `adopted_first_post` | `MaybeSaved` | Rebuild index and check again (R-8) |
-| 14 | not saved, `effects.write: written` or the record accepted | `NotSavedOwed { code }` | Retry only (R-12) |
-| 15 | otherwise | `NotSaved { code }` | Edit text / Post again (R-12) |
+| 13 | not saved, `code: request_mismatch`, or `internal_error` with `adopted_first_post` | `MaybeSaved` | Check again (R-8) |
+| 14 | not saved, `effects.write: written` or `record_accepted` | `NotSavedOwed { code }` | Retry; Discard, Copy text (R-12) |
+| 15 | otherwise | `NotSaved { code }` | Edit text, which posts under a new comment ID (R-12) |
 
 `sync_outcome(&Envelope<MutationDataDto>) -> SyncOutcome`, in order:
 `published` → `Published`; `current` → `Current`; `cancelled` →
 `Stopped { completed }` (completed = the effects show completed work,
 `results.rs:312-321`); conflict data → `Conflict { next }`;
 `remote_branch_deleted` → `BranchDeleted`; `unlock_*` → `NeedsUnlock`; key
-codes → `NeedsKey`; host codes → `NeedsHost { data }`; `busy` → `Busy`
+codes → `NeedsKey`; host codes → `NeedsHost { data }`; `identity_required` → `NeedsIdentity` (Set identity, Retry); `busy` → `Busy`
 (holder found as in Busy repositories); `publication_remote_required` →
-`NoRemote`; otherwise `Failed { code, retry }`.
+`NoRemote`; otherwise `Failed { code, retry }`. `sync_outcome` also takes `record_accepted`.
 
 Lanes B and D render these and never read envelope fields themselves.
 
@@ -377,8 +398,9 @@ on this computer; Share sends the rest."
 | `BranchDeleted` | "The shared copy of this item was deleted. Republishing it arrives in a later release." | Give up; no Share |
 | `Failed { retry }` | the code's fixed message | Retry if `retry`; Give up if owed |
 
-Every owed outcome of a share (`NeedsUnlock`, `NeedsKey`, `NeedsHost`,
-`BranchDeleted`, owed `Failed`) also offers **Give up** (decision 8).
+Every outcome whose `record_accepted` is true also offers **Give up**
+(decision 8); a `Failed` outcome whose record is finished offers Share,
+not Retry.
 
 The conflict banner reads: "You and someone else both changed this since
 it was last shared. Your work is safe. Resolving it in Manyhands arrives
@@ -464,10 +486,10 @@ state machine to the orchestrator before writing code.
 | P1 | A post's checkpoint commits and its publication succeeds | One file, one checkpoint; row shown once; draft retired; composer cleared. |
 | P2 | The checkpoint commits, publication fails, the user presses Retry sharing any number of times | No further file or checkpoint; the same request each time; chip until shared. |
 | P3 | The checkpoint commits, the user stops the publication, or quits while it runs | Saved, publication cancelled (final); Share (a new `item sync`) publishes it; no same-ID retry is offered. |
-| P4 | The process dies after the checkpoint commits and before the tab hears of it | On relaunch the adopted draft is **not** posted until the listing (after an `IndexRefresh`) and the pending operations are checked; if the comment is listed or a `submit_comment` operation of the item is pending, the draft is retired or left to Resume; never a second comment. |
-| P5 | The first post of an adopted draft answers `internal_error` | "This comment may already be saved." with **Check again** (rebuild index, list, check pending operations). **Post as a new comment** (new comment ID, same text) is offered only after a check finds neither the comment nor a pending operation for it. |
-| P6 | A post fails before writing anything, and the record is finished | Edit text is allowed; the next post is a new request with the same comment ID (U-4). |
-| P7 | A post fails after writing, or its record is accepted (`identity_required`, transient codes) | Only Retry (and Set identity for `identity_required`); no Edit text; no new request. |
+| P4 | The process dies at any point after Submit (before the write, after the write, after the checkpoint, during publication) | On relaunch the adopted draft is first checked against the listing (after an `IndexRefresh`): if listed, the draft is retired. Otherwise its post is **the same request** (R-16): a finished record replays its result, an accepted one checkpoints a written file once and publishes once. Never a second comment. |
+| P5 | A post answers `MaybeSaved` (`request_mismatch`, or `internal_error` on an adopted draft's first post) | "This comment may already be saved." with **Check again** (`IndexRefresh`, listing, `show_request`). **Post as a new comment** (new comment ID, same text) is offered only when `show_request` answers that no record exists and the listing lacks the comment. Operation rows cannot be matched to a comment (fact 14e). |
+| P6 | A post fails before writing anything, and the record is finished | Edit text is allowed; the edited text posts under a new comment ID and request (R-16). |
+| P7 | A post fails after writing, or its record is accepted (`identity_required`, transient codes) | Retry (and Set identity for `identity_required`); no Edit text. Discard (with "This comment may still be saved later if it was written") and Copy text keep the user from being trapped; after Discard the comment ID stays reserved and later posts use new IDs. |
 | P8 | `occupied_path` | Text kept; Discard offered; never retired silently. |
 | P9 | The tab is closed while posting | The outcome lands in `Submissions` from the drain; the draft is retired there on a committed checkpoint; reopening shows the comment and any chip. |
 | P10 | A second Submit while posting | Refused, with "Already posting". |
@@ -627,10 +649,11 @@ Applied in the approval commit:
 | R-1 | Token cancel after acceptance only for intents that stop at safe points (including `OperationResume`); no `cancel_request` for running jobs. | Stop does nothing; Task 2's test pins the token. |
 | R-3 | Unlock… = clear the declined mark, then Retry under the same request ID. | Several locked keys prompt in turn. |
 | R-4 | A committed comment checkpoint removes the context from `CreatedContexts`. | Leaving could release a context holding an unpublished comment. |
-| R-8 | Before the first post of an adopted draft, `Submissions`, a refreshed listing and the pending operations are checked (P4). `internal_error` on that post is `MaybeSaved` with Check again; Post as a new comment only after a check finds nothing (P5). | If the checks miss a saved comment, a second comment could be posted; P4/P5 tests pin each check. |
+| R-8 | Before the first post of an adopted draft, a refreshed listing is checked; the post is then the same request (P4, R-16). `MaybeSaved` offers Check again; Post as a new comment only when no record exists and the listing lacks the comment (P5). | If the checks miss a saved comment, a second comment could be posted; P4/P5 tests pin each check. |
 | R-9 | Footer copy by remote and kind. | Copy. |
 | R-10 | A restored comment draft's load normalization is not an edit. | A spurious flush. |
-| R-12 | When the post wrote its file or its record is accepted (`show_request`), only a same-request Retry is offered (P7). When nothing was written and the record is finished, Edit text is allowed and the next post is a new request with the same comment ID (P6, U-4). | Wrong: a finished failure replays forever, or an orphaned pending post duplicates the comment later. |
+| R-12 | When the post wrote its file or its record is accepted (`record_accepted`), a same-request Retry is offered, with Discard and Copy text (P7). When nothing was written and the record is finished, Edit text is allowed and posts under a new comment ID (P6). | Wrong: a finished failure replays forever, or an orphaned pending post duplicates the comment later. |
+| R-16 | A post's request ID is its comment ID; the draft is flushed before Submit (fact 14c). | If request records are lost (they are not a journal), the same request is treated as new and a bound comment collides as `internal_error`, which P5 handles. |
 | R-14 | The worker treats any progress stage after `Accepted` as acceptance (fact 10). | Stop would not show on a retry. |
 | R-15 | Stop is shown only when the repository has a publication remote. | A no-remote post would show a Stop that does nothing. |
 | R-13 | A declined key is not prompted again until Unlock…. | A second request gets `unlock_required` without asking. |
@@ -714,3 +737,9 @@ R-2, R-5, R-6, R-7 and R-11 of revision 1 became owner decisions 8, 10,
 | Round 2 I5 | Edit text could orphan a written post | Ruling R-12 | P6/P7. | `bind/comment.rs:556-602`. |
 | Round 2 I6 | Quit stops a running publication | Decision 15, K-10 | Native §4. | Fact 14a. |
 | Round 2 I7 | Reply composer moved while posting | Settled | Move disabled; outcomes matched by comment ID. | — |
+| Round 3, scoped with adversarial brief (`0fa796dd`) | 1 Blocking, 5 Important, 6 Minor | — | Revision 4 (not independently re-reviewed; skill rule for a third round). | Planning comment. |
+| Round 3 B1 | P4/P5 could not match operations to comments | Ruling R-16 | Durable request ID = comment ID; P4/P5 restated. | Facts 14c, 14e. |
+| Round 3 I1 | Give up's re-send may not end cancelled | Decision 8 reworded | Render its answer. | Fact 14d. |
+| Round 3 I2, I5 | Outcomes need record state; Give up too wide | Settled | `record_accepted`; rows 9a/9b. | Fact 10. |
+| Round 3 I3 | Holder lookup named non-holders | Settled | Narrowed; "may be waiting". | Fact 14. |
+| Round 3 I4 | Owed unsaved post trapped text | Ruling R-12 | Discard and Copy text. | — |

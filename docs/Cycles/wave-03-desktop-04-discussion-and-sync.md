@@ -15,7 +15,7 @@ Ticket `01M4CC0VN1KTQFSVR99378TDHV`. Design:
 Plan:
 [2026-11-02-wave-03-desktop-04-discussion-and-sync-implementation.md](../plans/2026-11-02-wave-03-desktop-04-discussion-and-sync-implementation.md).
 
-Status: **draft, revision 3**, planned at `00bef3da` (origin/main
+Status: **draft, revision 4**, planned at `00bef3da` (origin/main
 `15a23125` merged into the ticket branch). Nothing has been built or run.
 
 ## Purpose And Authority
@@ -191,10 +191,12 @@ await confirmation:
 7. **The design's words** in the UI: Share, Share main, Retry sharing,
    Reply and sync, Save reply locally; the desktop RFC is amended to match.
 8. **Give up** ("Stop trying to share") is offered on any share or post
-   of this session that stopped with an error and still holds its record
-   (including after Not now). It ends that request `cancelled` and
-   releases the repository's reservation; the comment stays saved and
-   Share sends it later. After a deleted shared branch, no Share is
+   of this session whose library record is still accepted (including after
+   Not now). It cancels that request and sends it once more, which
+   normally ends it `cancelled` and releases the repository's
+   reservation; when a push's outcome is unknown it may first ask the
+   remote, and its answer is shown as it comes. The comment stays saved
+   and Share sends it later. After a deleted shared branch, no Share is
    offered (republishing is D5's).
 9. **No Share dialog.** Scope is stated in the tooltip and the operation
    entry; API audit row D25 is amended.
@@ -230,3 +232,4 @@ Decisions 5–15 await confirmation.
 | Review round 1, source and feasibility (`eec96a4c`) | 5 Blocking, 10 Important, 7 Minor | — | Revision 2. | Design Review Record. |
 | Review round 1, contract and consistency (`eec96a4c`) | 3 Blocking, 18 Important, 1 Minor group | — | Revision 2; rulings that changed behaviour became decisions 8–14. | Design Review Record. |
 | Review round 2, scoped with adversarial brief (`6ed12ae6`) | 2 Blocking, 7 Important, 9 Minor | — | Revision 3: required outcomes P1–P10; decision 8 widened; decision 15. | Design Review Record. |
+| Review round 3, scoped with adversarial brief (`0fa796dd`) | 1 Blocking, 5 Important, 6 Minor | — | Revision 4: durable request ID (R-16), record state in outcomes. Not independently re-reviewed; Task 13's design checkpoint guards the mechanism. | Design Review Record. |
