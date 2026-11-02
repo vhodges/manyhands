@@ -38,7 +38,7 @@ use crate::{
     catalog::CommandSpec,
     collaboration, dispatch, fill, human_admin, human_lifecycle,
     input::{InputError, InputObject},
-    mutate::{self, Driven, Plan, Session},
+    mutate::{self, Session},
     render::{self, Human, Output, field, note_lines, quoted},
 };
 
@@ -327,16 +327,12 @@ pub fn sync(
         Ok(values) => values,
         Err(out) => return out,
     };
-    let plan = Plan {
-        identity_prompt: false,
-        retry: true,
-    };
-    match mutate::drive(
+    let driven = mutate::drive(
         service,
         session,
         spec,
         flags,
-        plan,
+        mutate::RETRYING,
         &mut |_| {
             Mutation::LocalContextSync(LocalContextSyncInput {
                 root: root.clone(),
@@ -346,26 +342,25 @@ pub fn sync(
             })
         },
         &mut std::thread::sleep,
-    ) {
-        Driven::Answered(output) => output,
-        Driven::Prepared(envelope) => render::prepare_output(session.json, &envelope),
-        Driven::Executed { envelope, supplied } if session.json => {
-            render::mutation_output(true, &envelope, supplied)
-        }
-        Driven::Executed { envelope, supplied } => {
+    );
+    mutate::finish(
+        session.json,
+        driven,
+        |envelope| render::prepare_output(false, envelope),
+        |envelope, supplied| {
             let reobserve = matches!(
                 envelope.code,
                 ResultCode::InvalidInput
                     | ResultCode::ExternalChange
                     | ResultCode::WorktreeNotClean
             );
-            let mut output = local_output(&envelope, supplied, reobserve);
+            let mut output = local_output(envelope, supplied, reobserve);
             output
                 .stderr
-                .extend(way_on(&envelope, &root.to_string_lossy(), &id.to_string()).into_bytes());
+                .extend(way_on(envelope, &root.to_string_lossy(), &id.to_string()).into_bytes());
             output
-        }
-    }
+        },
+    )
 }
 
 /// The input of `context resolve-local`. It holds the sources, so it derives
@@ -467,16 +462,12 @@ pub fn resolve(
             );
         }
     }
-    let plan = Plan {
-        identity_prompt: false,
-        retry: true,
-    };
-    match mutate::drive(
+    let driven = mutate::drive(
         service,
         session,
         spec,
         flags,
-        plan,
+        mutate::RETRYING,
         &mut |_| {
             Mutation::LocalContextResolve(LocalContextResolveInput {
                 root: root.clone(),
@@ -493,21 +484,20 @@ pub fn resolve(
             })
         },
         &mut std::thread::sleep,
-    ) {
-        Driven::Answered(output) => output,
-        Driven::Prepared(envelope) => render::prepare_output(session.json, &envelope),
-        Driven::Executed { envelope, supplied } if session.json => {
-            render::mutation_output(true, &envelope, supplied)
-        }
-        Driven::Executed { envelope, supplied } => {
+    );
+    mutate::finish(
+        session.json,
+        driven,
+        |envelope| render::prepare_output(false, envelope),
+        |envelope, supplied| {
             let reobserve = matches!(
                 envelope.code,
                 ResultCode::InvalidInput | ResultCode::ExternalChange
             );
-            let mut output = local_output(&envelope, supplied, reobserve);
+            let mut output = local_output(envelope, supplied, reobserve);
             // The original request, as the data names it, or the inspection
             // does after a stop that names none (the gate: it is resent).
-            let original = data_of(&envelope)
+            let original = data_of(envelope)
                 .and_then(|data| data.required_request_id.clone())
                 .or_else(|| {
                     matches!(
@@ -523,7 +513,7 @@ pub fn resolve(
                 });
             output.stderr.extend(
                 resolve_way_on(
-                    &envelope,
+                    envelope,
                     &root.to_string_lossy(),
                     &operation.to_string(),
                     original.as_deref(),
@@ -531,8 +521,8 @@ pub fn resolve(
                 .into_bytes(),
             );
             output
-        }
-    }
+        },
+    )
 }
 
 fn show_line(root: &str, operation: &str) -> String {

@@ -144,6 +144,11 @@ pub struct Plan {
     pub identity_prompt: bool,
     pub retry: bool,
 }
+/// C2's bounded retry, with no identity prompt: what most verbs run.
+pub const RETRYING: Plan = Plan {
+    identity_prompt: false,
+    retry: true,
+};
 pub fn note(line: &str) {
     let _ = writeln!(std::io::stderr().lock(), "{line}");
 }
@@ -157,12 +162,30 @@ pub fn run(
     build: &mut dyn FnMut(&Extras) -> Mutation,
     sleep: &mut dyn FnMut(Duration),
 ) -> Output {
-    match drive(boundary, session, spec, flags, plan, build, sleep) {
+    finish(
+        session.json,
+        drive(boundary, session, spec, flags, plan, build, sleep),
+        |envelope| render::prepare_output(false, envelope),
+        |envelope, supplied| render::mutation_output(false, envelope, supplied),
+    )
+}
+
+/// The tail a verb's `drive` shares: an answer as it is, JSON as C2 renders
+/// it, and in human mode a prepare by `prepared` and a result by `executed`.
+pub fn finish(
+    json: bool,
+    driven: Driven,
+    prepared: impl FnOnce(&Envelope<PrepareDataDto>) -> Output,
+    executed: impl FnOnce(&Envelope<MutationDataDto>, bool) -> Output,
+) -> Output {
+    match driven {
         Driven::Answered(output) => output,
-        Driven::Prepared(envelope) => render::prepare_output(session.json, &envelope),
-        Driven::Executed { envelope, supplied } => {
-            render::mutation_output(session.json, &envelope, supplied)
+        Driven::Prepared(envelope) if json => render::prepare_output(true, &envelope),
+        Driven::Prepared(envelope) => prepared(&envelope),
+        Driven::Executed { envelope, supplied } if json => {
+            render::mutation_output(true, &envelope, supplied)
         }
+        Driven::Executed { envelope, supplied } => executed(&envelope, supplied),
     }
 }
 

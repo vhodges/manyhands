@@ -35,7 +35,7 @@ fn policy_envelope(recovery_suspended: bool) -> Envelope<MutationDataDto> {
 
 #[test]
 fn a_suspension_is_named_from_the_answer_s_own_data() {
-    let output = policy_output(false, &policy_envelope(true), false);
+    let output = policy_output(&policy_envelope(true), false);
     assert_eq!(
         stderr(&output),
         format!("note: {SUSPENDED_NOTE}\n"),
@@ -46,13 +46,21 @@ fn a_suspension_is_named_from_the_answer_s_own_data() {
 
 #[test]
 fn no_suspension_has_no_note() {
-    let output = policy_output(false, &policy_envelope(false), false);
+    let output = policy_output(&policy_envelope(false), false);
     assert!(stderr(&output).is_empty());
 }
 
 #[test]
 fn json_mode_holds_one_envelope_and_no_note() {
-    let output = policy_output(true, &policy_envelope(true), false);
+    let output = crate::mutate::finish(
+        true,
+        crate::mutate::Driven::Executed {
+            envelope: Box::new(policy_envelope(true)),
+            supplied: false,
+        },
+        |_| unreachable!("no prepare"),
+        policy_output,
+    );
     assert!(stderr(&output).is_empty());
     let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["data"]["recovery_suspended"], true);

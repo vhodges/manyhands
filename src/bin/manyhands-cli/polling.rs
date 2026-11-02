@@ -26,7 +26,7 @@ use crate::{
     admin,
     catalog::CommandSpec,
     human_admin,
-    mutate::{self, Driven, MutationFlags, Plan, Session},
+    mutate::{self, MutationFlags, Session},
     render::{self, Output, field, note_lines, quoted, refusal_of},
 };
 
@@ -59,14 +59,6 @@ fn selected(
     Ok((flags, root))
 }
 
-/// Every polling verb runs C2's bounded retry and asks for no identity.
-fn plan() -> Plan {
-    Plan {
-        identity_prompt: false,
-        retry: true,
-    }
-}
-
 pub fn once(
     service: &RepositoryService,
     session: &mut Session,
@@ -77,24 +69,22 @@ pub fn once(
         Ok(values) => values,
         Err(out) => return out,
     };
-    match mutate::drive(
+    // Every polling verb runs C2's bounded retry and asks for no identity.
+    let driven = mutate::drive(
         service,
         session,
         spec,
         flags,
-        plan(),
+        mutate::RETRYING,
         &mut |_| Mutation::PollOnce(PollOnceInput { root: root.clone() }),
         &mut std::thread::sleep,
-    ) {
-        Driven::Answered(output) => output,
-        Driven::Prepared(envelope) => render::prepare_output(session.json, &envelope),
-        Driven::Executed { envelope, supplied } if session.json => {
-            render::mutation_output(true, &envelope, supplied)
-        }
-        Driven::Executed { envelope, supplied } => {
-            once_output(&envelope, supplied, root.to_string_lossy().as_ref())
-        }
-    }
+    );
+    mutate::finish(
+        session.json,
+        driven,
+        |envelope| render::prepare_output(false, envelope),
+        |envelope, supplied| once_output(envelope, supplied, root.to_string_lossy().as_ref()),
+    )
 }
 
 /// A value of a target's line. A malformed ref's fields are all null.
@@ -276,35 +266,36 @@ fn policy(
     flags: MutationFlags,
     build: &mut dyn FnMut(&mutate::Extras) -> Mutation,
 ) -> Output {
-    match mutate::drive(
+    let driven = mutate::drive(
         service,
         session,
         spec,
         flags,
-        plan(),
+        mutate::RETRYING,
         build,
         &mut std::thread::sleep,
-    ) {
-        Driven::Answered(output) => output,
-        Driven::Prepared(envelope) => render::prepare_output(session.json, &envelope),
-        Driven::Executed { envelope, supplied } => policy_output(session.json, &envelope, supplied),
-    }
+    );
+    mutate::finish(
+        session.json,
+        driven,
+        |envelope| render::prepare_output(false, envelope),
+        policy_output,
+    )
 }
 
 /// C2's output, and in human mode a note when the answer's data holds a
 /// suspension, or the range an interval is refused for.
-fn policy_output(json: bool, envelope: &Envelope<MutationDataDto>, supplied: bool) -> Output {
+fn policy_output(envelope: &Envelope<MutationDataDto>, supplied: bool) -> Output {
     // The CLI checks the interval's type, so an `invalid_input` of `poll
     // configure` is its range.
-    if !json && envelope.command == "poll configure" && envelope.code == ResultCode::InvalidInput {
+    if envelope.command == "poll configure" && envelope.code == ResultCode::InvalidInput {
         let mut extra = human_admin::failure_extra(envelope, supplied);
         extra.push_str(RANGE_DETAIL);
         let refusal = refusal_of(envelope, envelope.recovery.clone());
         return render::failure_output(false, &refusal, Some(extra));
     }
-    let mut output = render::mutation_output(json, envelope, supplied);
-    if !json
-        && let Some(MutationDataDto::PollPolicy(data)) = &envelope.data
+    let mut output = render::mutation_output(false, envelope, supplied);
+    if let Some(MutationDataDto::PollPolicy(data)) = &envelope.data
         && data.recovery_suspended
     {
         output

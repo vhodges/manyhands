@@ -16,8 +16,8 @@ use crate::{
     admin, authoring,
     catalog::CommandSpec,
     human_lifecycle,
-    mutate::{self, Driven, Plan, Session},
-    render::{self, Output},
+    mutate::{self, Session},
+    render::Output,
 };
 
 pub fn document_promote(
@@ -59,27 +59,21 @@ fn run(
         Ok(values) => values,
         Err(out) => return out,
     };
-    let plan = Plan {
-        identity_prompt: false,
-        retry: true,
-    };
-    match mutate::drive(
+    let driven = mutate::drive(
         service,
         session,
         spec,
         flags,
-        plan,
+        mutate::RETRYING,
         &mut |_| build(root.clone(), id.clone()),
         &mut std::thread::sleep,
-    ) {
-        Driven::Answered(output) => output,
-        Driven::Prepared(envelope) if session.json => render::prepare_output(true, &envelope),
-        Driven::Prepared(envelope) => human_lifecycle::prepare(&envelope),
-        Driven::Executed { envelope, supplied } if session.json => {
-            render::mutation_output(true, &envelope, supplied)
-        }
-        Driven::Executed { envelope, supplied } => human_lifecycle::output(&envelope, supplied),
-    }
+    );
+    mutate::finish(
+        session.json,
+        driven,
+        human_lifecycle::prepare,
+        human_lifecycle::output,
+    )
 }
 
 #[cfg(test)]
