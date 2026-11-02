@@ -1720,3 +1720,122 @@ and items 1 onwards were not begun.
 `document_promotion -- blocker_primary_ahead` and `ticket_closure -- blocker_primary_ahead_of_remote`
 (a local unpushed commit), and `ticket_closure -- true_race_distinct_identities_needs_external_recovery`
 (B's primary diverged by a refused push).
+
+### The rulings on item 0, and the round
+
+The controller's rulings: owner decision 33, "Refuse, name the holder", and decision 32's "published" test
+from stored push evidence, not the tracking ref.
+
+**Decision 33.** `LifecycleBinding::preview` (the prepare) first reads the item's unfinished parent through a
+new `ParentRecord::supersedable` and `promotion::unfinished_holder`, and `LifecycleVerb::holder`. A parent a
+new request couldn't supersede refuses the prepare: `recovery_required`, exit 3, no data, one action:
+`request.retry` for the request whose accepted record holds the operation (`records::operation_holder`), or
+`operation.resume` with the operation. Supersedable cleanup stops (`context_changed`, `ignored_files`,
+`remote_context_changed`) still prepare. Human output prints the verb with `--request-id <holder>`, or the
+resume, and a note. Rows, both verbs; the two `new_id` rows and `prepare_names_the_resume` were seen
+failing with the check removed:
+
+- `c5_cancel_new_id_after_integration`: refused naming `FIRST`, the original finishes with one merge, then a
+  new prepare isn't `ok`. A consequence of decision 29, then 33: its expectation was `PrimaryAheadOfRemote`.
+- `c5_cancel_new_id_before_integration`: the same before integration. Its prepare answer changed (it was a
+  preview, then `busy` at confirm), a consequence, recorded.
+- `c5_cancel_supersede_straight_after_the_cancel` (unchanged) still prepares and supersedes.
+  `c5_cancel_supersede_after_a_cancelled_answer`: its `cancelled` answer overwrites the supersedable reason,
+  so the new ID's prepare is now held (it was a preview, then `busy`), a consequence, recorded.
+- `c5_resume_prepare_names_the_resume`: a parent no record holds names `operation.resume` with its operation;
+  the resume finishes it with one merge.
+- `c5_lifecycle_busy_with_no_parent_close`, a consequence too: it took its confirmation after the parent
+  stood. It now takes it before the first request runs, which keeps the row's `busy` at confirm, and asserts
+  that a prepare made once the parent stands is held.
+- CLI: `a_prepare_while_a_request_holds_the_item_names_the_request` (`tests/cli/lifecycle.rs`), JSON and text
+  goldens `ticket_close_prepare_held`, `_text`.
+
+All 419 other `c5_` cases of `mutation_remote` passed against decision 33's binary before the busy row's fix
+(`c5_` 420 cases, run detached, 1 failed, the busy row, since passing).
+
+**Decision 32: stopped for a ruling. Nothing of it was changed.** The ruling's row "a never-pushed context's
+preview has `remote_branch: false` ... and the run deletes nothing remote" answers otherwise:
+
+- the run publishes a never-pushed context itself. Its context child (`runs_context_child`,
+  `promotion/lifecycle.rs:242`, and closure's `needs_context_child`) runs unless the context is already
+  contained with no tracking context, and pushes the context branch; cleanup then deletes it, guarded by that
+  child's publication authority (`promotion/run.rs`, the remote delete). Item 0's probe saw it: the fixture's
+  item is "saved and unpublished" (`lifecycle_world::remote`), and after `FIRST` stopped at
+  `AfterPublication` the branch stood on the remote. So for that case the preview's `remote_branch: true` is
+  what happens, and false would leave the published branch behind;
+- the case item 0 found (contained, branch on the remote, no tracking ref) previews `false` because the runner
+  plans no deletion there either (`remote_deletion_required`, `promotion/lifecycle.rs:187`,
+  `closure/record.rs:902`), and has no guard OID for one (`remote_delete_guard` with no child and no tracking
+  answers none). Previewing `true` from stored push evidence needs the runner to delete with that evidence as
+  its guard: a change to the run, beyond "promotion/ and closure/ observe".
+
+**Spec review fixes.**
+
+1. Decision 29's guards, `c5_lifecycle_tracking_split_endpoints` (a second server as `pushurl`, tracking
+   unchanged), `_moved_past_before_the_update` and `_moved_beside_before_the_update` (an observer moves
+   tracking at `AfterPushVerification`, which is left), `_fenced_at_verification` (the observer takes the
+   reservation's epoch: the push lands, tracking unchanged). Each fails with its guard removed: the endpoint
+   check, the descendant check, and the move placed before the safe point.
+2. Known Limits gains tracking that isn't advanced, with the follow-up candidate: advance from a verified
+   fetch-side read. A blocked prepare whose blockers are only `primary_ahead_of_remote` or `primary_missing`,
+   plus perhaps `context_missing`, prints `poll once` and "Then prepare again"
+   (`c5_polling_a_missing_tracking_ref_names_the_poll`, which then polls and prepares `ok`; golden
+   `ticket_close_prepare_primary_missing_text`; bin row `a_tracking_ref_behind_or_missing_names_the_poll`).
+3. `sync-local`'s external-only stop with an operation says "After the repair, send this same request again
+   (<id>)"; `resolve-local`'s external refusal names the inspection's `starting_request_id`. Goldens.
+4. `c5_polling_promote_then_close_needs_no_poll`: `document create`, a save, promote `--confirm` published,
+   `ticket close --prepare` ready and confirmed, and a re-prepare is `ticket_closed`, all through the binary.
+5. The schema checker takes no `minItems` (`tests/support/schema.rs` refuses unknown keywords), so the
+   description of `resolutions` says an empty list is `invalid_input`. The row is
+   `an_incomplete_duplicate_unknown_or_invalid_set_is_invalid_input_before_any_write` (`tests/cli/local_sync.rs`),
+   whose `empty` case answers `invalid_input` with nothing written.
+6. `worktree_not_clean`, a malformed observation's `invalid_input`, and the refused no-owner external cases say
+   to observe again and use a new request, in `OBSERVE_NOTE`'s words.
+7. A preview prints `Changes: <change> <path>` per change; blockers print once, `Blockers: a, b`. Known Limits
+   gains the `-` against `none` placeholders, `progress: writing` on `already_applied`, and
+   `write: not_requested` on the policy verbs.
+8. The repair note names `{"observation": "..."}` for `sync-local`, and the save note what `ticket save` and
+   `document save` take.
+9. The Cycle's decisions are in number order, with 32 (stopped) and 33 added.
+
+**S2.** Neither comment publication (`synchronize_comment_receipt`) nor republish (`republish_reserved`) holds
+the repository lease when it reaches the advance; read in the source, and recorded in the design.
+
+**Quality review fixes, no behaviour change.**
+
+1. `render::compact` for the four compact renderers; C4's inline refusal is `render::refusal_of` through it.
+2. `mutate::finish` for the `drive` tails; `mutate::RETRYING` for `{identity_prompt: false, retry: true}`.
+3. `way_on` and `resolve_way_on` return `WayOn { lines, replaces_next_action }`, and `local_output` takes that.
+   The `original` branch prints no line to look again, so it keeps `Next action:` now: the one golden change,
+   `context_resolve_local_after_partial_text` gains `Next action: external_repair`.
+4. `human_local_sync.rs` holds the context verbs' human output (its tests are `human_local_sync_tests.rs`);
+   `save_line` and `NO_CONTEXT_NOTE` are in `render.rs`.
+5. The six policy JSON goldens repeating `mutation_v1` (`poll_pause`, `_noop`, `poll_resume`, `_noop`,
+   `poll_configure`, `_noop`) and `poll_once_usage` are gone; text goldens and schema checks stay, and
+   `poll_pause_usage` is the one usage golden.
+6. `cli::stdout`, `cli::stderr`, `cli::run_text`, `cli::scrub_text` and `cli::text_golden_scrubbed`.
+7. Permanent comments name tests and files.
+8. The policy test is two (`a_request_refused_for_its_input_...`, `a_request_refused_busy_...`);
+   `the_refused_merges_strings_work_exactly` is `the_refused_merges_first_three_commands_parse_and_reach_their_verbs`;
+   the cleanup-only goldens are `*_already_contained`.
+9-18. The module doc of `local_sync.rs`; `resolve_line`; notes named `*_NOTE`, `*_DETAIL`, `*_HINT`
+   (`TOKEN_JSON_DETAIL`, `NEW_REQUEST_NOTE`, `REPAIR_NOTE`, module-level `REFUSED_NOTE`) and
+   `render::note_line`; `data_fields` through `fields_without`, and `fields` `pub(crate)` beside it; the
+   lifecycle verb passes its `ItemDtoKind` to `prepare`; `policy_toggle` and `MUTATION_NO_INPUT`;
+   `state.rs`'s `Resume` doc rewrapped; decision 29's helper doc tightened and its single-use `let` gone;
+   decision 28's comment trimmed; `LocalConflictResolutionInput` derives `Clone` only, and the verb clones it.
+19. `PLANNED` has three readers, not one: `startup_tests.rs`, `parse_tests.rs` and `catalog_tests.rs` (E-16
+   moved the first two to it).
+
+**Verified on the final tree (`1d35433a`), all exit 0.**
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `check`, `fmt --check`, whole-tree clippy `-D warnings`, desktop `check` and clippy, CLI `check`, `check-cli-no-gpui.sh` | ok | |
+| `--lib` | 1507 | 842 s |
+| `--bin manyhands-cli`, `--test cli`, `read_contract`, `mutation_contract`, `mutation_replay`, `mutation_confirmation`, `mutation_bridges` | 300, 455, 72, 44, 384, 183, 166 | 573 s |
+| `read_status`, `read_relationships`, `repository_enablement`, `remote_merge_recovery`, `comment_publication` | exit 0 | 547 s |
+| `mutation_remote`, `document_promotion`, `ticket_closure`, `remote_polling`, `remote_synchronization`, `cli_remote` | 682, 79, 78, 84, 69, 84 SSH cases | 7298 s |
+
+`origin/main` then moved to `0dfd5a68`, an `AGENTS.md` change only, and was merged (`0b04fd0c`) with no
+conflict; `git merge-tree --write-tree HEAD origin/main` is clean.
