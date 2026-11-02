@@ -13,19 +13,21 @@ use std::{
 
 use futures::channel::mpsc::{TryRecvError, UnboundedReceiver};
 use manyhands::{
+    canonical::CONFIG_PATH,
     repository::{
-        ConfirmationId, MutationDataDto, PrepareDataDto, ProgressEvent, ProgressStage,
+        AuthoringKind, ConfirmationId, MutationDataDto, PrepareDataDto, ProgressEvent,
+        ProgressStage, REGISTRY_FILE, RequestId, RequestState as RequestRecordState,
         ResolvedRepository, keys::SecretPassphrase,
     },
-    results::{Envelope, Outcome, ResultCode},
+    results::{Envelope, Outcome, ResultCode, Scope},
 };
 
-use super::{CancelResult, NotSent, QuitState, WorkerEvent, WorkerHandle};
+use super::{CancelResult, GaveUp, NotSent, QuitState, RecordState, WorkerEvent, WorkerHandle};
 use crate::desktop::{
     model::operations::Operations,
     services::{
         JobKind,
-        requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
+        requests::{CommentBody, DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
     },
     test_support::{delaying::DelayingBackend, fixtures::Fixture},
 };
@@ -892,4 +894,319 @@ fn a_job_answered_busy_after_quit_finishes_with_its_answer() {
             .any(|event| matches!(event, Seen::Removed(removed) if *removed == id))
     );
     assert_eq!(harness.worker.quit(), QuitState::Idle);
+}
+
+// Part 0, Task 2: stop at a safe point (R-1, R-14), Give up (decision
+// 8), each attempt's record state, and a request ID of the caller's
+// (R-16).
+
+const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
+const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG1";
+
+impl Harness {
+    fn repo_sync(&self) -> Intent {
+        Intent::RepoSync {
+            root: self.root.clone(),
+        }
+    }
+
+    /// A new comment on a ticket of the root, which has no remote: it is
+    /// saved, and its record finished.
+    fn comment(&self) -> Intent {
+        self.fixture.create_ticket(&self.root, ITEM, "One", "open");
+        Intent::CommentAdd {
+            root: self.root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: ITEM.parse().unwrap(),
+            comment_id: COMMENT.parse().unwrap(),
+            parent_id: None,
+            body: CommentBody::new("A comment.".to_owned()),
+        }
+    }
+
+    /// Holds the next request the service accepts on the worker thread,
+    /// after its acceptance and before its domain call (fact 16). The
+    /// first receiver hears when it is held; a send on the second, or its
+    /// drop, lets it go.
+    fn hold_after_acceptance(&self) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (reached_tx, reached) = mpsc::channel();
+        let (release, released) = mpsc::channel::<()>();
+        self.fixture
+            .service()
+            .set_request_hook_for_testing(move || {
+                reached_tx.send(()).unwrap();
+                let _ = released.recv_timeout(WAIT);
+            });
+        (reached, release)
+    }
+
+    /// Selects an SSH publication remote for the root, and commits the
+    /// selection, which `remote select` leaves staged (K-2).
+    fn share_over_ssh(&self) {
+        self.fixture.publish_over_ssh(&self.root);
+        let config = std::fs::read(self.root.join(CONFIG_PATH)).unwrap();
+        self.fixture.commit_file(&self.root, CONFIG_PATH, &config);
+    }
+
+    /// A share of main over SSH that stopped with an error after its
+    /// acceptance, with its record left accepted (fact 14).
+    fn accepted_sync(&mut self) -> DesktopRequestId {
+        self.share_over_ssh();
+        let id = self.worker.submit(self.repo_sync(), Lane::User, None, None);
+        let seen = self.until_end_of(id);
+        assert_eq!(
+            self.worker.record_state(id),
+            Some(RecordState::Accepted),
+            "{:?}: {}",
+            finished(&seen, id).code,
+            finished(&seen, id).message
+        );
+        id
+    }
+}
+
+/// R-1: an accepted share stops at its next safe point, so Stop cancels
+/// its token.
+#[test]
+fn cancelling_an_accepted_sync_signals_its_token() {
+    let mut harness = Harness::new();
+    harness.share_over_ssh();
+    let (reached, release) = harness.hold_after_acceptance();
+    let id = harness
+        .worker
+        .submit(harness.repo_sync(), Lane::User, None, None);
+    reached.recv_timeout(WAIT).expect("the share was accepted");
+    let running = harness.worker.running_job().expect("a running job");
+    assert_eq!(running.id, id);
+    assert!(running.accepted);
+    assert!(!running.cancelled);
+
+    assert_eq!(harness.worker.cancel(id), CancelResult::Signalled);
+    assert!(harness.worker.running_job().unwrap().cancelled);
+    release.send(()).unwrap();
+    harness.until_end_of(id);
+}
+
+/// A local command cannot be stopped once accepted (R-1): its token is
+/// left alone.
+#[test]
+fn cancelling_an_accepted_local_job_is_still_too_late() {
+    let mut harness = Harness::new();
+    let (reached, release) = harness.hold_after_acceptance();
+    let id = harness
+        .worker
+        .submit(harness.refresh(), Lane::User, None, None);
+    reached
+        .recv_timeout(WAIT)
+        .expect("the refresh was accepted");
+    assert!(harness.worker.running_job().unwrap().accepted);
+
+    assert_eq!(harness.worker.cancel(id), CancelResult::TooLate);
+    assert!(!harness.worker.running_job().unwrap().cancelled);
+    release.send(()).unwrap();
+    let seen = harness.until_end_of(id);
+    assert_eq!(finished(&seen, id).code, ResultCode::Ok);
+}
+
+/// R-14: a same-ID re-entry never reports `Accepted` (fact 10); its first
+/// later stage marks it accepted, so Stop still reaches it.
+#[test]
+fn a_later_stage_marks_a_retry_accepted() {
+    let mut harness = Harness::new();
+    let id = harness.accepted_sync();
+    let returned = harness.backend.hold_job_return(JobKind::SynchronizeRepo);
+    assert!(harness.worker.retry(id, None));
+    returned.wait_reached();
+    let running = harness.worker.running_job().expect("the retry runs");
+    assert_eq!(running.id, id);
+    assert!(running.accepted);
+    returned.release();
+
+    let seen = harness.until_end_of(id);
+    let stages: Vec<ProgressStage> = seen
+        .iter()
+        .filter_map(|event| match event {
+            Seen::Progress(of, progress) if *of == id => Some(progress.stage),
+            _ => None,
+        })
+        .collect();
+    assert!(!stages.is_empty(), "the re-entry reports a stage");
+    assert!(!stages.contains(&ProgressStage::Accepted));
+}
+
+/// Decision 8: Give up of an accepted record asks the library to cancel
+/// it, then sends the same request, which ends it.
+#[test]
+fn giving_up_an_accepted_record_cancels_then_sends_the_same_request() {
+    let mut harness = Harness::new();
+    let id = harness.accepted_sync();
+    let request_id = harness.operations.request(id).unwrap().request_id;
+
+    assert!(harness.worker.give_up(id));
+    let seen = harness.until_end_of(id);
+    let Seen::Queued(queued) = &seen[0] else {
+        panic!("a Give up is queued first");
+    };
+    assert_eq!(queued.id, id);
+    assert_eq!(queued.request_id, request_id);
+    assert_eq!(queued.attempt, 2);
+    let envelope = finished(&seen, id);
+    assert_eq!(
+        envelope.request_id.as_deref(),
+        Some(request_id.to_string().as_str())
+    );
+    assert_eq!(envelope.code, ResultCode::Cancelled, "{}", envelope.message);
+    assert_eq!(harness.worker.gave_up(id), Some(GaveUp::Resent));
+    assert_eq!(harness.worker.record_state(id), Some(RecordState::Finished));
+    assert_eq!(
+        harness
+            .backend
+            .jobs_seen()
+            .iter()
+            .filter(|kind| **kind == JobKind::SynchronizeRepo)
+            .count(),
+        2
+    );
+}
+
+/// A record already finished is not cancelled: the same request replays
+/// its stored answer, and the Give up says it was already finished.
+#[test]
+fn giving_up_a_finished_record_reports_already_finished() {
+    let mut harness = Harness::new();
+    let id = harness
+        .worker
+        .submit(harness.comment(), Lane::User, None, None);
+    let seen = harness.until_end_of(id);
+    let first = finished(&seen, id).clone();
+    assert_eq!(harness.worker.record_state(id), Some(RecordState::Finished));
+
+    assert!(harness.worker.give_up(id));
+    let seen = harness.until_end_of(id);
+    let replayed = finished(&seen, id);
+    assert_eq!(harness.worker.gave_up(id), Some(GaveUp::AlreadyFinished));
+    assert_eq!(replayed.request_id, first.request_id);
+    assert_eq!(replayed.outcome, first.outcome);
+    assert_eq!(replayed.code, first.code);
+    assert_eq!(harness.worker.record_state(id), Some(RecordState::Finished));
+}
+
+/// Fact 14d: the re-sent request need not end `cancelled`; Give up
+/// reports whatever it answered.
+#[test]
+fn give_up_reports_whatever_the_resent_request_answers() {
+    let mut harness = Harness::new();
+    let id = harness.accepted_sync();
+    let answer = Envelope::failure(
+        "repo sync",
+        Scope::default(),
+        ResultCode::RecoveryRequired,
+        vec![],
+    );
+    let returned = harness
+        .backend
+        .hold_job_return_answering(JobKind::SynchronizeRepo, answer);
+    assert!(harness.worker.give_up(id));
+    returned.wait_reached();
+    returned.release();
+    let seen = harness.until_end_of(id);
+    assert_eq!(finished(&seen, id).code, ResultCode::RecoveryRequired);
+    assert_eq!(harness.worker.gave_up(id), Some(GaveUp::Resent));
+}
+
+/// A Give up is refused while a retry of the same request is queued or
+/// running, and a retry while its Give up is.
+#[test]
+fn give_up_and_retry_of_one_request_refuse_each_other() {
+    let mut harness = Harness::new();
+    let id = harness.accepted_sync();
+
+    let held = harness.backend.hold_job(JobKind::SynchronizeRepo);
+    assert!(harness.worker.give_up(id));
+    held.wait_reached();
+    assert!(!harness.worker.retry(id, None));
+    assert!(!harness.worker.give_up(id));
+    held.release();
+    harness.until_end_of(id);
+
+    let held = harness.backend.hold_job(JobKind::SynchronizeRepo);
+    assert!(harness.worker.retry(id, None));
+    held.wait_reached();
+    assert!(!harness.worker.give_up(id));
+    held.release();
+    harness.until_end_of(id);
+
+    // A request whose command has no safe point is never given up.
+    let refresh = harness
+        .worker
+        .submit(harness.refresh(), Lane::User, None, None);
+    harness.until_end_of(refresh);
+    assert!(!harness.worker.give_up(refresh));
+}
+
+/// After each finished attempt of a command that stops at safe points,
+/// the worker asks `show_request` and keeps the record's state; one whose
+/// record cannot be read is Unknown (P17). Other commands keep none.
+#[test]
+fn a_finished_attempt_carries_its_record_state() {
+    let mut harness = Harness::new();
+    let comment = harness
+        .worker
+        .submit(harness.comment(), Lane::User, None, None);
+    harness.until_end_of(comment);
+    assert_eq!(
+        harness.worker.record_state(comment),
+        Some(RecordState::Finished)
+    );
+
+    let refresh = harness
+        .worker
+        .submit(harness.refresh(), Lane::User, None, None);
+    harness.until_end_of(refresh);
+    assert_eq!(harness.worker.record_state(refresh), None);
+
+    let sync = harness.accepted_sync();
+    let request_id = harness.operations.request(sync).unwrap().request_id;
+    let shown = harness.fixture.service().show_request(request_id);
+    assert_eq!(
+        shown.data.map(|request| request.state),
+        Some(RequestRecordState::Accepted)
+    );
+
+    // The index is unreadable once the retry has returned: its record
+    // state cannot be known.
+    let returned = harness.backend.hold_job_return(JobKind::SynchronizeRepo);
+    assert!(harness.worker.retry(sync, None));
+    returned.wait_reached();
+    std::fs::write(
+        harness.fixture.data_dir().join(REGISTRY_FILE),
+        b"not a database",
+    )
+    .unwrap();
+    returned.release();
+    harness.until_end_of(sync);
+    assert_eq!(
+        harness.worker.record_state(sync),
+        Some(RecordState::Unknown)
+    );
+}
+
+/// R-16: the caller's request ID is the request's, for every attempt.
+#[test]
+fn submit_with_request_id_uses_the_given_id() {
+    let mut harness = Harness::new();
+    let request_id = RequestId::parse(COMMENT).unwrap();
+    let id = harness
+        .worker
+        .submit_with_request_id(harness.comment(), Lane::User, request_id);
+    let seen = harness.until_end_of(id);
+    let Seen::Queued(queued) = &seen[0] else {
+        panic!("queued first");
+    };
+    assert_eq!(queued.request_id, request_id);
+    assert_eq!(finished(&seen, id).request_id.as_deref(), Some(COMMENT));
+
+    assert!(harness.worker.retry(id, None));
+    let seen = harness.until_end_of(id);
+    assert_eq!(finished(&seen, id).request_id.as_deref(), Some(COMMENT));
 }

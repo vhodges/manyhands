@@ -2,7 +2,10 @@
 //! test can hold.
 //!
 //! It only delays. It never fails or fabricates a call; failures in tests
-//! come from the library's own failure points and hooks.
+//! come from the library's own failure points and hooks. The one exception
+//! is `hold_job_return_answering`: after the library's real call returns,
+//! a test's constructed answer stands in place of its answer, for an
+//! answer no fixture can reach.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -14,7 +17,8 @@ use std::{
 use futures::channel::oneshot;
 use manyhands::{
     drafts::{DraftError, DraftStore},
-    repository::{RepositoryService, keys::KeyStore},
+    repository::{MutationDataDto, RepositoryService, keys::KeyStore},
+    results::Envelope,
 };
 
 use crate::desktop::services::{
@@ -37,8 +41,9 @@ pub(crate) struct DelayingBackend {
     drafts: Result<DraftStore, DraftStoreUnavailable>,
     reads: Mutex<HashMap<ReadKind, VecDeque<ReadGate>>>,
     jobs: Mutex<HashMap<JobKind, VecDeque<Arc<Gate>>>>,
-    /// Holds taken after a job's library call returns.
-    returned: Mutex<HashMap<JobKind, VecDeque<Arc<Gate>>>>,
+    /// Holds taken after a job's library call returns, each with the
+    /// answer, if any, that stands in place of the library's.
+    returned: Mutex<HashMap<JobKind, VecDeque<Returned>>>,
     /// Every read kind a read or prepare asked its gate for, in order:
     /// only observed.
     reads_seen: Mutex<Vec<ReadKind>>,
@@ -100,13 +105,32 @@ impl DelayingBackend {
     /// gate is released or dropped.
     #[must_use = "dropping the handle releases the hold"]
     pub(crate) fn hold_job_return(&self, kind: JobKind) -> JobGate {
+        self.hold_return(kind, None)
+    }
+
+    /// Holds the next job of `kind` as `hold_job_return` does, then gives
+    /// the worker `answer` in place of the library's: the call itself
+    /// still runs.
+    #[must_use = "dropping the handle releases the hold"]
+    pub(crate) fn hold_job_return_answering(
+        &self,
+        kind: JobKind,
+        answer: Envelope<MutationDataDto>,
+    ) -> JobGate {
+        self.hold_return(kind, Some(answer))
+    }
+
+    fn hold_return(&self, kind: JobKind, answer: Option<Envelope<MutationDataDto>>) -> JobGate {
         let gate = Arc::new(Gate::default());
         self.returned
             .lock()
             .unwrap()
             .entry(kind)
             .or_default()
-            .push_back(gate.clone());
+            .push_back(Returned {
+                gate: gate.clone(),
+                answer,
+            });
         JobGate(gate)
     }
 
@@ -183,17 +207,23 @@ impl Backend for DelayingBackend {
         }
     }
 
-    fn after_job(&self, kind: JobKind) {
-        let gate = self
+    fn after_job(&self, kind: JobKind) -> Option<Envelope<MutationDataDto>> {
+        let returned = self
             .returned
             .lock()
             .unwrap()
             .get_mut(&kind)
-            .and_then(VecDeque::pop_front);
-        if let Some(gate) = gate {
-            gate.wait();
-        }
+            .and_then(VecDeque::pop_front)?;
+        returned.gate.wait();
+        returned.answer
     }
+}
+
+/// A hold after a job's library call, and the answer that stands in place
+/// of the library's, if any.
+struct Returned {
+    gate: Arc<Gate>,
+    answer: Option<Envelope<MutationDataDto>>,
 }
 
 #[derive(Default)]

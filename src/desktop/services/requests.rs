@@ -431,7 +431,6 @@ impl Intent {
     /// command, at a synchronization's safe points (fact 9): the comment,
     /// the two syncs and `operation resume`. Every other command, the saves
     /// among them, cannot be stopped once accepted.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 2.
     pub(crate) fn stops_at_safe_points(&self) -> bool {
         match self {
             Self::OperationResume { .. }
