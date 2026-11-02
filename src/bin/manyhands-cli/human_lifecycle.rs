@@ -35,7 +35,8 @@ use manyhands::{
 /// walk through the binary is Task 10b's, and until it lands these verbs answer
 /// `usage_error`.
 const REPAIR: &str = "The commands above are the local repair to try: the <...> values are placeholders to fill in, --input - takes the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict.";
-const MISSING_NOTE: &str = "this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in. Then prepare again.";
+/// What a missing context's note says, here and in `context observe-local`.
+pub(crate) const NO_CONTEXT_NOTE: &str = "this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in.";
 const NO_REMOTE_NOTE: &str = "primary is not published, because this repository has no publication remote; once one is selected, repo sync publishes it.";
 const NO_SET_NOTE: &str = "this answer holds no made-ready set; ticket ready is the live view.";
 const DELETED_NOTE: &str = "the refused request's context synchronization keeps its reservation until the request is cancelled; sending the request again then answers cancelled and releases it. After the republish, sending it once more finishes the work.";
@@ -223,6 +224,19 @@ fn route_of(envelope: &Envelope<MutationDataDto>, data: &LifecycleMutationDto) -
     route
 }
 
+/// The save that makes an item's editing context, as a pasteable command.
+pub(crate) fn save_line(kind: ItemDtoKind, root: &str, item: &str) -> String {
+    let save = match kind {
+        ItemDtoKind::Document => "document save",
+        ItemDtoKind::Ticket => "ticket save",
+    };
+    format!(
+        "manyhands-cli {save} --repo {} --id {} --input - --request-id <new-request-id>",
+        quoted(root),
+        field(item)
+    )
+}
+
 /// The way out of a blocked prepare: what to run, and what it says of that.
 fn way_out(
     command: &str,
@@ -235,18 +249,14 @@ fn way_out(
         LocalOperationPending,
     };
     if blockers == [ContextMissing] {
-        let save = if command == "document promote" {
-            "document save"
+        let kind = if command == "document promote" {
+            ItemDtoKind::Document
         } else {
-            "ticket save"
+            ItemDtoKind::Ticket
         };
         return Some((
-            vec![format!(
-                "manyhands-cli {save} --repo {} --id {} --input - --request-id <new-request-id>",
-                quoted(root),
-                field(item)
-            )],
-            MISSING_NOTE.to_owned(),
+            vec![save_line(kind, root, item)],
+            format!("{NO_CONTEXT_NOTE} Then prepare again."),
         ));
     }
     // `sync-local` refuses a dirty or conflicted context, and a pending conflict

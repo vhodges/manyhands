@@ -97,15 +97,37 @@ fn only_a_repair_outside_says_so() {
         ResultCode::RecoveryRequired,
         LocalContextSyncNextAction::ExternalRepair,
     );
-    for (reason, says) in [
-        (LocalContextSyncReason::UnsupportedConflict, true),
-        (LocalContextSyncReason::UnrelatedHistories, true),
-        (LocalContextSyncReason::ImmutableClosureDisagreement, true),
-        (LocalContextSyncReason::AuthorityMissing, false),
-        (LocalContextSyncReason::AmbiguousBackend, false),
-    ] {
+    for (action, reason, says) in [
+        (
+            LocalContextSyncNextAction::None,
+            LocalContextSyncReason::UnrelatedHistories,
+            true,
+        ),
+        (
+            LocalContextSyncNextAction::None,
+            LocalContextSyncReason::ImmutableClosureDisagreement,
+            true,
+        ),
+        (
+            LocalContextSyncNextAction::None,
+            LocalContextSyncReason::ForeignChange,
+            false,
+        ),
+    ]
+    .into_iter()
+    .chain(
+        [
+            (LocalContextSyncReason::UnsupportedConflict, true),
+            (LocalContextSyncReason::UnrelatedHistories, true),
+            (LocalContextSyncReason::ImmutableClosureDisagreement, true),
+            (LocalContextSyncReason::AuthorityMissing, false),
+            (LocalContextSyncReason::AmbiguousBackend, false),
+        ]
+        .map(|(reason, says)| (LocalContextSyncNextAction::ExternalRepair, reason, says)),
+    ) {
         if let Some(MutationDataDto::LocalContextSync(data)) = &mut envelope.data {
             data.reason = reason;
+            data.next_action = action;
         }
         assert_eq!(
             way_on(&envelope, ROOT, ITEM).contains(EXTERNAL_NOTE),

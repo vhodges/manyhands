@@ -819,6 +819,7 @@ and request records hold neither (Task 0 confirms). The index's `closed_by` colu
 | E-18 | `tests/repository_enablement.rs:3816` | Asserts the index now matches the commit (decision 22) |
 | E-19 | `promotion::run_tests::identity_and_mismatch_do_not_strand_the_item` | Its mismatch call has a real record, from a stop before the identity is removed; it still asserts the item isn't stranded (decision 22) |
 | E-20 | `tests/cli/help.rs` `root_help_and_bare_call_match_in_both_modes_without_data` | Drops `.chain([None])`: only a planned verb has no repository rule, and nothing stays planned (R-8) |
+| E-21 | `tests/mutation_contract.rs` `CODES_NO_FIXTURE_CAN_PRODUCE` | Gains `command_unavailable`, with R-8's reason: no verb stays planned, and `startup_tests.rs` pins its answer on a test-only planned spec |
 
 `tests/read_relationships.rs:1183,1190,1254` hold `"C5"` as Wave-graph data, and are not pins. Task 0
 greps for other pins (`NotResumable`, `"C5"`, `arrives with`, `Planned`). An unlisted hit stops for owner
@@ -907,6 +908,8 @@ review. This list is not yet proven complete.
 - **For the owner's attention:** a result's `Item id:` carries no slug, because `LifecycleMutationDto` holds none. A preview shows `Slug:`, and `made ready:` lines show theirs. The preview's `Item id:` and `Slug:` aren't adjacent, since the field list is sorted.
 - A promotion blocked by a pending local sync issues a confirmation before refusing.
 - Decision 28 covers only a clone that has no copy yet: a remote branch whose tip primary holds is reported `current` and not materialized. A clone that materialized such a branch before then isn't repaired. Its copy stays until it is cleaned up, and `item sync` of it takes it up to primary and publishes that, so the remote branch then holds the closure. A remote branch with a commit primary lacks, diverged or not, isn't covered: it materializes as before.
+- A `sync-local` replay after the item has left the index answers `item_not_found`, since the verb reads the item's kind first; the stored answer stays available through `request show`, as the RFC says for a save.
+- `busy` from a cache lock held before acceptance carries no `request_id` and offers no retry.
 - After an external `git pull`, with the index not marked behind, an item on primary with no context answers `item_not_found` until `index refresh`. An index marked behind keeps the `recovery_required` answer naming `context_missing`.
 
 ## Alternatives Rejected

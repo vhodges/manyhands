@@ -37,6 +37,19 @@ pub fn republish_noop(envelope: &Envelope<PrepareDataDto>) -> Option<Human> {
 
 // Only published, content-free DTOs reach this formatter. Inputs never do.
 // Nested field names retain their context, and every dynamic scalar is escaped.
+/// `fields`, less the top-level keys a caller shows in its own form.
+pub(crate) fn fields_without(dto: &impl serde::Serialize, keys: &[&str]) -> String {
+    let Ok(mut value) = serde_json::to_value(dto) else {
+        return String::new();
+    };
+    if let Some(fields) = value.as_object_mut() {
+        for key in keys {
+            fields.remove(*key);
+        }
+    }
+    fields(&value)
+}
+
 pub(super) fn fields(dto: &impl serde::Serialize) -> String {
     fn walk(prefix: &str, value: &serde_json::Value, out: &mut String) {
         match value {

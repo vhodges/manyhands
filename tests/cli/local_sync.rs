@@ -462,13 +462,21 @@ fn an_unknown_operation_is_operation_not_found() {
 fn a_remote_operation_is_invalid_input_pointing_to_conflict_show() {
     let case = Case::new();
     operations::configure_remote(case.world.data.path());
-    operations::insert_remote_poll(
+    operations::insert_remote_synchronization(
         case.world.data.path(),
         REMOTE_OPERATION,
-        "reserved",
-        None,
+        Some(("ticket", TICKET)),
+        "interrupted",
+        Some("before_fetch"),
         None,
     );
+    // The window a synchronization's record is read with.
+    items::index(case.world.data.path())
+        .execute(
+            "INSERT INTO remote_integration_windows(operation_record_id,number,configuration_generation,owner_epoch,kind) SELECT id,0,configuration_generation,0,'legacy' FROM remote_operation_records WHERE operation_ulid=?1",
+            [REMOTE_OPERATION],
+        )
+        .unwrap();
     let value = case.show(REMOTE_OPERATION, 2, "invalid_input");
     assert_eq!(value["data"], Value::Null);
     case.golden("context_show_local_remote_operation", &value);
@@ -476,6 +484,23 @@ fn a_remote_operation_is_invalid_input_pointing_to_conflict_show() {
     assert_eq!(run.status, 2);
     assert!(stderr(&run).contains("conflict show"), "{}", stderr(&run));
     case.text_golden("context_show_local_remote_operation_text", &run);
+}
+
+#[test]
+fn a_remote_poll_is_invalid_input_and_names_no_conflict_show() {
+    let case = Case::new();
+    operations::configure_remote(case.world.data.path());
+    operations::insert_remote_poll(
+        case.world.data.path(),
+        REMOTE_OPERATION,
+        "reserved",
+        None,
+        None,
+    );
+    case.show(REMOTE_OPERATION, 2, "invalid_input");
+    let run = case.run(&case.show_args(REMOTE_OPERATION, None), &[]);
+    assert_eq!(run.status, 2);
+    assert!(!stderr(&run).contains("conflict show"), "{}", stderr(&run));
 }
 
 #[test]
@@ -714,6 +739,10 @@ fn discovery_pending_is_finished_by_the_same_request() {
         answer.data
     );
     assert_eq!(answer.failure_class(), Some(FailureClass::Incomplete));
+    case.golden(
+        "context_sync_local_discovery_pending",
+        &serde_json::to_value(&answer).unwrap(),
+    );
     let tip = case.world.branch_tip(TICKET);
     let value = case.sync_json(REQUEST_1, &observation, 0, "ok");
     assert_eq!(
@@ -810,9 +839,14 @@ fn no_identity_on_a_merge_is_identity_required_then_the_same_request() {
     case.sync_json(REQUEST_1, &observation, 0, "ok");
 }
 
-fn assert_refused_without_effect(case: &Case, observation: &str) {
+fn assert_refused_without_effect(case: &Case, observation: &str, golden: &str) {
     let tip = case.world.branch_tip(TICKET);
     let value = case.sync_json(REQUEST_1, observation, 3, "recovery_required");
+    case.golden(golden, &value);
+    let run = case.sync_text(REQUEST_2, observation);
+    assert_eq!(run.status, 3);
+    assert!(stderr(&run).contains("repair outside"), "{}", stderr(&run));
+    case.text_golden(&format!("{golden}_text"), &run);
     assert_eq!(case.world.branch_tip(TICKET), tip);
     assert!(
         value["operation_id"].is_null() || value["data"]["state"] == "refused",
@@ -852,7 +886,7 @@ fn unrelated_histories_are_refused_with_no_owner_or_effect() {
         )
         .unwrap();
     let observation = case.observation();
-    assert_refused_without_effect(&case, &observation);
+    assert_refused_without_effect(&case, &observation, "context_sync_local_unrelated");
 }
 
 #[test]
@@ -873,7 +907,7 @@ fn incompatible_closures_are_refused_with_no_owner_or_effect() {
         case.git(&directory, &["commit", "--quiet", "-m", "closed"]);
     }
     let observation = case.observation();
-    assert_refused_without_effect(&case, &observation);
+    assert_refused_without_effect(&case, &observation, "context_sync_local_closures");
 }
 
 #[cfg(unix)]
@@ -883,7 +917,7 @@ fn an_unsupported_entry_is_refused_with_no_owner_or_effect() {
     std::os::unix::fs::symlink("elsewhere", case.world.root.join("a-link")).unwrap();
     items::commit(&case.world.fixture, &["a-link"], items::COMMITTED_AT + 60);
     let observation = case.observation();
-    assert_refused_without_effect(&case, &observation);
+    assert_refused_without_effect(&case, &observation, "context_sync_local_unsupported");
 }
 
 #[test]
@@ -1062,8 +1096,9 @@ fn a_prepare_is_not_confirmable() {
     assert!(value["data"].is_null(), "{value}");
 }
 
-/// The bytes of `human_lifecycle::merge_refused`'s first three lines, past the
-/// program's name, with the placeholders filled and nothing added.
+/// `human_lifecycle::merge_refused`'s first three commands, in its argument
+/// order with its placeholders filled: each parses and reaches its verb. The
+/// walk from a refused closure to its finish is Task 10b's.
 #[test]
 fn the_refused_merges_strings_work_exactly() {
     let (case, operation) = Case::conflicted("");
@@ -1142,6 +1177,16 @@ fn nothing_here_contacts_a_remote_or_moves_primary() {
     assert_eq!(value["effects"]["publication"], "not_requested", "{value}");
     case.show(value["operation_id"].as_str().unwrap(), 0, "ok");
     assert_eq!(case.primary_refs(), primary);
+    // A conflict's sides, read through the same configured remote.
+    case.primary_moved_the_ticket("");
+    let primary = case.primary_refs();
+    let observation = case.observation();
+    let value = case.sync_json(REQUEST_2, &observation, 4, "recovery_required");
+    let operation = value["operation_id"].as_str().unwrap().to_owned();
+    let token = token_of(&case, &operation);
+    let args = case.show_args(&operation, Some(&token));
+    case.json(&args, &[], 0, "ok", Some(CONTENT_SCHEMA));
+    assert_eq!(case.primary_refs(), primary);
     assert_eq!(
         listener.accept().err().map(|error| error.kind()),
         Some(std::io::ErrorKind::WouldBlock),
@@ -1167,6 +1212,141 @@ pub fn the_example_input_is_accepted(example: &Value) {
 fn a_closed_ticket_is_read_like_any_item() {
     let case = Case::new();
     case.observe(TICKET_CLOSED, 2, "item_not_found");
+    // A save of a closed ticket is refused, so none is offered.
+    let run = case.run(&case.observe_args(TICKET_CLOSED), &[]);
+    assert_eq!(run.status, 2);
+    assert!(!stderr(&run).contains("save"), "{}", stderr(&run));
+}
+
+/// The context has lost the item: no save makes it again, so none is offered.
+#[test]
+fn a_context_that_lost_its_item_gets_no_save_hint() {
+    let case = Case::saved();
+    let path = items::ticket_path(TICKET);
+    case.git(&case.context(), &["rm", "--quiet", "--", &path]);
+    case.git(&case.context(), &["commit", "--quiet", "-m", "removed"]);
+    let before = case.refs();
+    case.observe(TICKET, 2, "item_not_found");
+    let run = case.run(&case.observe_args(TICKET), &[]);
+    assert_eq!(run.status, 2);
+    assert!(!stderr(&run).contains("save"), "{}", stderr(&run));
+    assert_eq!(case.refs(), before);
+}
+
+#[test]
+fn sync_local_on_an_item_with_no_context_creates_none() {
+    let case = Case::new();
+    let before = case.refs();
+    let value = case.sync_json(REQUEST_1, OTHER_OBSERVATION, 2, "item_not_found");
+    assert_eq!(value["request_id"], REQUEST_1);
+    let run = case.sync_text(REQUEST_1, OTHER_OBSERVATION);
+    assert_eq!(run.status, 2);
+    case.request_absent(REQUEST_1);
+    assert_eq!(case.refs(), before);
+    assert!(!case.world.worktree(TICKET).exists());
+}
+
+#[test]
+fn an_empty_observation_is_the_librarys_invalid_input() {
+    let case = Case::saved();
+    let tip = case.world.branch_tip(TICKET);
+    let value = case.sync_json(REQUEST_1, "", 2, "invalid_input");
+    assert!(value["data"].is_null(), "{value}");
+    assert_eq!(case.world.branch_tip(TICKET), tip);
+}
+
+/// A listed token whose sides aren't text answers as the library does.
+#[test]
+fn a_listed_unreadable_token_is_the_librarys_answer() {
+    let case = Case::saved();
+    let path = "blob.bin";
+    let context = case.context();
+    fs::write(context.join(path), [0xff, 0xfe, 0x01]).unwrap();
+    case.git(&context, &["add", "--", path]);
+    case.git(&context, &["commit", "--quiet", "-m", "local blob"]);
+    fs::write(case.world.root.join(path), [0xff, 0x00, 0x02]).unwrap();
+    items::commit(&case.world.fixture, &[path], items::COMMITTED_AT + 60);
+    let observation = case.observation();
+    let value = case.sync_json(REQUEST_1, &observation, 4, "recovery_required");
+    let operation = value["operation_id"].as_str().unwrap().to_owned();
+    let view = case.show(&operation, 0, "ok");
+    let entry = view["data"]["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["content_available"] == false)
+        .unwrap_or_else(|| panic!("no unreadable path: {view}"))
+        .clone();
+    let token = entry["token"].as_str().unwrap();
+    let library = case
+        .world
+        .service
+        .read_local_context_conflict(
+            &case.world.resolved(),
+            OperationId::parse(&operation).unwrap(),
+            token,
+        )
+        .err()
+        .map(|error| error.code().as_str())
+        .unwrap_or("ok");
+    assert_eq!(library, "external_change");
+    let value = case.json(
+        &case.show_args(&operation, Some(token)),
+        &[],
+        3,
+        library,
+        None,
+    );
+    assert_eq!(value["data"], Value::Null);
+}
+
+/// A state that lists no paths while it goes on: the library's to judge, so
+/// the binary gives whatever its read gives.
+#[test]
+fn a_token_where_the_inspection_lists_no_paths_is_the_librarys_answer() {
+    let (case, operation) = Case::conflicted("");
+    let token = token_of(&case, &operation);
+    items::index(case.world.data.path())
+        .execute(
+            "UPDATE local_context_sync_records SET state='recovery_required' WHERE operation_ulid=?1",
+            [&operation],
+        )
+        .unwrap();
+    let view = case.world.service.inspect_local_context_sync(
+        &case.world.resolved(),
+        OperationId::parse(&operation).unwrap(),
+    );
+    let Ok(view) = view else {
+        panic!(
+            "the seeded state's inspection fails: {:?}",
+            view.err().map(|e| e.code())
+        );
+    };
+    assert!(view.paths.is_empty());
+    let library = case.world.service.read_local_context_conflict(
+        &case.world.resolved(),
+        OperationId::parse(&operation).unwrap(),
+        &token,
+    );
+    let args = case.show_args(&operation, Some(&token));
+    match library {
+        Ok(_) => {
+            let value = case.json(&args, &[], 0, "ok", Some(CONTENT_SCHEMA));
+            assert!(value.to_string().contains(INCOMING_TITLE));
+        }
+        Err(error) => {
+            let code = error.code();
+            assert_ne!(
+                code,
+                ResultCode::InvalidInput,
+                "the library refuses as the binary would"
+            );
+            let mut json_args = args.clone();
+            json_args.push("--json");
+            let out = case.run(&json_args, &[]);
+            assert_eq!(cli::json(&out)["code"], code.as_str());
+        }
+    }
 }
 
 #[test]

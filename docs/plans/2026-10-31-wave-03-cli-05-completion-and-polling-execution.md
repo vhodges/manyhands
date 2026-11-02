@@ -1354,3 +1354,18 @@ Some rows passed at once, as they pin what existed: the `--confirm` row (`not_co
 | fmt, clippy `-D warnings`, no-GPUI | ok | |
 
 The library filters, `remote_polling`, `read_contract` and `c5_poll` ran on decision 28's commit, and no library file has changed since.
+
+### Task 10a review's follow-ups (controller's rulings)
+
+The verb-side answers for an unknown operation, another operation and a bad token are accepted.
+
+- **S1. The save hint** prints only when the item's effective copy is primary's (`item.context.kind` is `primary`), as lifecycle keys its note on `ContextMissing`. It also stays off for a lifecycle-closed ticket, since `ticket save` refuses one (`bind/ticket.rs` `refuse_closed`); that is my addition, and the closed-ticket row asserts it. New row: a context whose item file was removed and committed gets no save hint. Its read also offers `index.refresh`, which is the library's.
+- **C1.** The `conflict show` hint keys on `SynchronizeContext` or `SynchronizePrimary`, not the remote family. The remote row now seeds a synchronization: `insert_remote_synchronization` plus the `remote_integration_windows` row a synchronization is read with. Without that row `show_operation` answers `internal_error`. A poll's ID answers `invalid_input` with no hint.
+- **C2. The token check** refuses with `invalid_input` only where `conflict::read` refuses too: the inspection lists paths and not this token, or the operation has finished and lists none. A listed token, readable or not, and any state that lists no paths while it goes on, go to the library. New rows: a binary file's listed token, `content_available: false`, answers `external_change`, as the library's read does in the test's process. A conflict seeded to `recovery_required` lists no paths, and the library's read gives the sides, and so does the binary. Control: with 10a's check both rows failed by assertion (`invalid_input`, against `external_change` and `ok`).
+- **C4.** Added goldens and text runs for the three refusals with no owner (`context_sync_local_unrelated`, `_closures`, `_unsupported`), and `context_sync_local_discovery_pending` (the library's envelope). New rows: `sync-local` on an item with no context (`item_not_found`, nothing created, no request), and `{"observation":""}` (the library's `invalid_input`). The walk test's docstring is corrected. `nothing_here_contacts_a_remote_or_moves_primary` now also reads a conflict's sides with `--token`.
+  - **The repair-outside note** now keys on the reason alone. The library offers `next_action: none` for unrelated histories and a closure disagreement, and the table's "External repair" holds for them too. This is human text only.
+  - **`LocalSyncBeforeSideRead` is not armed.** A CLI child can't take a failure point: the binary opens its service with `open_at`, and no environment variable or flag sets one. Review Focus 5's evidence stays the refusals with no side read and the positive control.
+- **C5.** `collaboration::authoring_kind` replaces the local copy. `human_admin::fields_without` is shared with `polling.rs`. The save line and the note's first sentence come from `human_lifecycle` (`save_line`, `NO_CONTEXT_NOTE`). `sides` is a plain renderer for the JSON-only path.
+- **C6.** `5c318b51` also carried E-20, the transport sentence and the closed-ticket Known Limit. "No transport start" for 10a means no remote contact, shown by the listener test, and not that `startup.rs` skips the transport's start.
+- **Design.** Known Limits gains the replay after the item leaves the index and the `busy` with no request ID. Named edits gain E-21.
+

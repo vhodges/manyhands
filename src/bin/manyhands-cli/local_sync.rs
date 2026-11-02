@@ -9,8 +9,9 @@
 //!   synchronization, as an execution must. `show_operation` tells an unknown ID
 //!   (`operation_not_found`) and another operation's (`invalid_input`) from it;
 //! - the library answers a well-formed token that names no path of the live
-//!   conflict `external_change`. The inspection's list tells that from a change
-//!   under a good token, so such a token is `invalid_input` with no side read.
+//!   conflict `external_change`. Where the inspection's list shows `read` would
+//!   refuse it too, such a token is `invalid_input` with no side read; any other
+//!   token is the library's to judge (`refused_unread`).
 //!
 //! A conflict's sides are content: only `--json` carries them (R-15).
 
@@ -18,10 +19,11 @@ use clap::ArgMatches;
 use manyhands::{
     canonical::ItemId,
     repository::{
-        AuthoringKind, ItemDto, ItemDtoKind, LocalContextSyncInput, LocalContextSyncInspectionDto,
-        LocalContextSyncMutationDto, LocalContextSyncNextAction, LocalContextSyncObservationDto,
-        LocalContextSyncReason, Mutation, MutationDataDto, OperationAction, OperationFamily,
-        OperationId, ReadError, RepositoryService, ResolvedRepository,
+        ClosureState, ItemContextKind, ItemDto, LocalContextConflictContentDto,
+        LocalContextSyncInput, LocalContextSyncInspectionDto, LocalContextSyncMutationDto,
+        LocalContextSyncNextAction, LocalContextSyncObservationDto, LocalContextSyncReason,
+        LocalContextSyncState, Mutation, MutationDataDto, OperationAction, OperationId, ReadError,
+        RepositoryService, ResolvedRepository,
     },
     results::{Envelope, ResultCode},
 };
@@ -29,7 +31,7 @@ use manyhands::{
 use crate::{
     admin, authoring,
     catalog::CommandSpec,
-    dispatch, fill, human_admin,
+    collaboration, dispatch, fill, human_admin, human_lifecycle,
     mutate::{self, Driven, Plan, Session},
     render::{self, Human, Output, field, note_lines, quoted},
 };
@@ -38,7 +40,6 @@ const TOKEN_NEEDS_JSON: &str =
     "--token reads a conflict's sides, and only --json prints them: add --json.";
 const INPUT_NOTE: &str = "context sync-local's --input takes this as {\"observation\": \"...\"}.";
 const SIDES_NOTE: &str = "context show-local --token <token> --json reads a path's sides.";
-const NO_CONTEXT_NOTE: &str = "this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in.";
 const DIRTY_NOTE: &str = "commit or save what the context holds, then observe it again.";
 const OBSERVE_NOTE: &str =
     "sending this observation again gets the same answer: observe again, and use a new request.";
@@ -46,13 +47,6 @@ const RESOLVE_NOTE: &str = "<new-request-id> is a placeholder to fill in, and --
 const IDENTITY_NOTE: &str =
     "once an identity is set, send this same request again: a merge commit needs one.";
 const EXTERNAL_NOTE: &str = "Manyhands can't resolve this: it takes a repair outside it, with Git.";
-
-fn kind_of(item: &ItemDto) -> AuthoringKind {
-    match item.kind {
-        ItemDtoKind::Document => AuthoringKind::Document,
-        ItemDtoKind::Ticket => AuthoringKind::Ticket,
-    }
-}
 
 fn observe_line(root: &str, item: &str) -> String {
     format!(
@@ -62,18 +56,21 @@ fn observe_line(root: &str, item: &str) -> String {
     )
 }
 
-/// What an observation's refusal adds: a save, for an item with no context.
-fn no_context(item: &ItemDto, root: &str, id: &str) -> String {
-    let save = match item.kind {
-        ItemDtoKind::Document => "document save",
-        ItemDtoKind::Ticket => "ticket save",
-    };
-    format!(
-        "next: manyhands-cli {save} --repo {} --id {} --input - --request-id <new-request-id>\n{}",
-        quoted(root),
-        field(id),
-        note_lines(&[NO_CONTEXT_NOTE.to_owned()])
-    )
+/// What an observation's refusal adds: a save, when the item's effective copy
+/// is primary's and a save of it is allowed, as lifecycle's `ContextMissing`
+/// way out. A context that has lost the item, or a closed ticket, gets none.
+fn no_context(item: &ItemDto, root: &str, id: &str) -> Option<String> {
+    let closed = item
+        .closure
+        .as_ref()
+        .is_some_and(|closure| closure.state == ClosureState::Closed);
+    (item.context.kind == ItemContextKind::Primary && !closed).then(|| {
+        format!(
+            "next: {}\n{}",
+            human_lifecycle::save_line(item.kind, root, id),
+            note_lines(&[human_lifecycle::NO_CONTEXT_NOTE.to_owned()])
+        )
+    })
 }
 
 pub fn observe(
@@ -97,7 +94,7 @@ pub fn observe(
     };
     let mut scope = repo.scope();
     scope.item_id = Some(id.to_string());
-    match service.observe_local_context_sync(&repo, kind_of(&item), &id) {
+    match service.observe_local_context_sync(&repo, collaboration::authoring_kind(item.kind), &id) {
         Ok(data) => render::envelope_output(
             session.json,
             &Envelope::read_success(&name, scope, data),
@@ -106,7 +103,7 @@ pub fn observe(
         Err(error) if error.code() == ResultCode::ItemNotFound => {
             let root = repo.root().to_string_lossy();
             let extra = no_context(&item, &root, &id.to_string());
-            failed(error, Some(extra))
+            failed(error, extra)
         }
         Err(error) => failed(error, None),
     }
@@ -171,11 +168,7 @@ pub fn show(
         );
     };
     let content = inspection.and_then(|view| {
-        if !view
-            .paths
-            .iter()
-            .any(|path| path.token == *token && path.content_available)
-        {
+        if refused_unread(&view, token) {
             return Err(invalid());
         }
         service
@@ -186,8 +179,35 @@ pub fn show(
         &name,
         true,
         content.map(|data| Envelope::read_success(&name, repo.scope(), data)),
-        |_| unreachable!("--token is refused in human mode above"),
+        sides,
     )
+}
+
+/// Whether a token is one `conflict::read` refuses too, so that no side is
+/// read for it: the inspection lists the live conflict's paths and not this
+/// token, or the operation has finished and lists none. A listed token is the
+/// library's, readable or not, and so is any state that lists no paths while
+/// it is going on, since `read` judges those itself.
+fn refused_unread(view: &LocalContextSyncInspectionDto, token: &str) -> bool {
+    if view.paths.iter().any(|path| path.token == token) {
+        return false;
+    }
+    !view.paths.is_empty()
+        || matches!(
+            view.state,
+            LocalContextSyncState::Complete
+                | LocalContextSyncState::Cancelled
+                | LocalContextSyncState::Abandoned
+        )
+}
+
+/// A token's sides print with `--json` only, which `show` holds to; in human
+/// mode this renderer is never reached, and would print no side.
+fn sides(_: &LocalContextConflictContentDto) -> Human {
+    Human {
+        stdout: String::new(),
+        notes: Vec::new(),
+    }
 }
 
 struct Refused {
@@ -196,7 +216,7 @@ struct Refused {
 }
 
 /// An unknown ID is `operation_not_found`, and another operation's is
-/// `invalid_input`; a remote operation's conflict is `conflict show`'s.
+/// `invalid_input`; a synchronization's conflict is `conflict show`'s.
 fn is_a_local_sync(
     service: &RepositoryService,
     repo: &ResolvedRepository,
@@ -208,7 +228,12 @@ fn is_a_local_sync(
     if operation.action == OperationAction::ContextSyncLocal {
         return Ok(());
     }
-    let extra = (operation.family == OperationFamily::Remote).then(|| {
+    // Only a synchronization's conflict is `conflict show`'s.
+    let synchronization = matches!(
+        operation.action,
+        OperationAction::SynchronizeContext | OperationAction::SynchronizePrimary
+    );
+    let extra = synchronization.then(|| {
         format!(
             "next: manyhands-cli conflict show --repo {} --operation-id {id}\n",
             quoted(&repo.root().to_string_lossy())
@@ -222,13 +247,7 @@ fn is_a_local_sync(
 
 /// The inspection's fields, then a line per conflicted path. No side.
 fn inspected(data: &LocalContextSyncInspectionDto) -> Human {
-    let mut stdout = String::new();
-    if let Ok(mut value) = serde_json::to_value(data) {
-        if let Some(fields) = value.as_object_mut() {
-            fields.remove("paths");
-        }
-        stdout.push_str(&human_admin::fields(&value));
-    }
+    let mut stdout = human_admin::fields_without(data, &["paths"]);
     for path in &data.paths {
         stdout.push_str(&format!(
             "path: {} token={} content_available={}\n",
@@ -263,7 +282,13 @@ pub fn sync(
         let root = admin::mutation_root(session, spec, args, flags.request_id)?;
         let id = authoring::item_id(session, spec, args, flags.request_id)?;
         let (_, item) = fill::read_any_item(service, session, spec, &root, &id, flags.request_id)?;
-        Ok((flags, observation, root, id, kind_of(&item)))
+        Ok((
+            flags,
+            observation,
+            root,
+            id,
+            collaboration::authoring_kind(item.kind),
+        ))
     };
     let (flags, observation, root, id, kind) = match selected() {
         Ok(values) => values,
@@ -339,15 +364,16 @@ fn way_on(envelope: &Envelope<MutationDataDto>, root: &str, item: &str) -> Strin
             }
             None => String::new(),
         },
-        // A closure's or a lost authority's stop also says `external_repair`,
-        // and its way on is its code's, so it gets no such note.
-        LocalContextSyncNextAction::ExternalRepair
-            if matches!(
-                data.reason,
-                LocalContextSyncReason::UnrelatedHistories
-                    | LocalContextSyncReason::ImmutableClosureDisagreement
-                    | LocalContextSyncReason::UnsupportedConflict
-            ) =>
+        // The refusals the gate leaves to a repair outside (gate 10): the
+        // library offers nothing for two of them, and `external_repair` for
+        // the third. A closure's or a lost authority's `external_repair` has
+        // its code's way on, so it gets no such note.
+        _ if matches!(
+            data.reason,
+            LocalContextSyncReason::UnrelatedHistories
+                | LocalContextSyncReason::ImmutableClosureDisagreement
+                | LocalContextSyncReason::UnsupportedConflict
+        ) =>
         {
             notes(EXTERNAL_NOTE)
         }

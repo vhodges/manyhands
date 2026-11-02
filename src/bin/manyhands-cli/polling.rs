@@ -105,13 +105,7 @@ fn shown(value: Option<&str>) -> String {
 /// The report's fields, then a line per target with the domain's guidance. A
 /// slug isn't added: a poll names refs and items as the domain reports them.
 fn report(data: &PollMutationDto) -> String {
-    let mut out = String::new();
-    if let Ok(mut value) = serde_json::to_value(data) {
-        if let Some(fields) = value.as_object_mut() {
-            fields.remove("targets");
-        }
-        out.push_str(&human_admin::fields(&value));
-    }
+    let mut out = human_admin::fields_without(data, &["targets"]);
     if data.targets.is_empty() {
         out.push_str("targets: none\n");
     }

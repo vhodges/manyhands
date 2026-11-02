@@ -1,0 +1,21 @@
+--- stderr
+progress: accepted
+progress: observing
+error: Recovery is required before this can continue.
+code: recovery_required
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX2
+operation: <id>
+Cancel acknowledged: false
+Eligibility: none
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
+Kind: ticket
+Next action: none
+Operation id: none
+Reason: unrelated_histories
+Required request id: none
+Resolution request id: none
+Result oid: none
+State: refused
+Type: local_context_sync
+note: Manyhands can't resolve this: it takes a repair outside it, with Git.
+--- exit 3
