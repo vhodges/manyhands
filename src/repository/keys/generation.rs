@@ -282,6 +282,7 @@ fn reserve_generation(
     label: &str,
     store: &KeyStore,
 ) -> Result<SharedKeyId, KeyMaterialError> {
+    require_available_id(tx, operation_id)?;
     let mut bytes = Zeroizing::new([0u8; 16]);
     entropy(bytes.as_mut())?;
     let timestamp = std::time::SystemTime::now()
@@ -437,6 +438,7 @@ pub(super) fn read_operation(
     c: &Connection,
     id: OperationId,
 ) -> Result<Option<MaterialOperation>, KeyMaterialError> {
+    require_available_id(c, id)?;
     let raw = c.query_row("SELECT key_id,action,generation_label,private_key_path,public_key_path,private_file_identity,public_file_identity,public_key_fingerprint,phase,failure_code FROM key_material_operations WHERE operation_id=?1", [id.to_string()], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,Option<Vec<u8>>>(5)?,r.get::<_,Option<Vec<u8>>>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,String>(8)?,r.get::<_,Option<String>>(9)?))).optional().map_err(registry_error)?;
     raw.map(|r| {
         Ok(MaterialOperation {
@@ -459,6 +461,19 @@ pub(super) fn read_operation(
     })
     .transpose()
 }
+
+pub(super) fn require_available_id(
+    c: &Connection,
+    id: OperationId,
+) -> Result<(), KeyMaterialError> {
+    super::super::local_sync::record::require_foreign_id_available(c, id).map_err(|e| {
+        if e.kind == super::super::RepositoryErrorKind::OperationMismatch {
+            error(KeyMaterialErrorKind::OperationMismatch)
+        } else {
+            registry_error(e)
+        }
+    })
+}
 fn phase_value(phase: KeyMaterialPhase) -> &'static str {
     match phase {
         KeyMaterialPhase::Reserved => "reserved",
@@ -471,7 +486,7 @@ fn phase_value(phase: KeyMaterialPhase) -> &'static str {
         KeyMaterialPhase::RetainedForInspection => "retained-for-inspection",
     }
 }
-fn parse_phase(value: &str) -> Result<KeyMaterialPhase, KeyMaterialError> {
+pub(super) fn parse_phase(value: &str) -> Result<KeyMaterialPhase, KeyMaterialError> {
     match value {
         "reserved" => Ok(KeyMaterialPhase::Reserved),
         "private-written" => Ok(KeyMaterialPhase::PrivateWritten),
@@ -484,7 +499,7 @@ fn parse_phase(value: &str) -> Result<KeyMaterialPhase, KeyMaterialError> {
         _ => Err(error(KeyMaterialErrorKind::RegistryUnavailable)),
     }
 }
-pub(super) fn failure_code(kind: KeyMaterialErrorKind) -> &'static str {
+pub(in super::super) fn failure_code(kind: KeyMaterialErrorKind) -> &'static str {
     match kind {
         KeyMaterialErrorKind::RegistryUnavailable => "registry-unavailable",
         KeyMaterialErrorKind::SourceMissing => "source-missing",

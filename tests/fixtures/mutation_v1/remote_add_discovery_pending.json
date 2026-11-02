@@ -1,0 +1,50 @@
+{
+  "code": "discovery_pending",
+  "command": "remote add",
+  "data": {
+    "location": "https://example.invalid/team/project.git",
+    "name": "origin"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "pending",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The change is recorded; the index has not been updated yet.",
+  "operation_id": "<operation>",
+  "outcome": "partial",
+  "recovery": [
+    {
+      "action": "operation.resume",
+      "arguments": {},
+      "operation_id": "<operation>"
+    },
+    {
+      "action": "repo.inspect",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": null
+    },
+    {
+      "action": "operation.abandon",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": "<operation>"
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": "origin",
+    "repository": "<root>",
+    "worktree": null
+  }
+}

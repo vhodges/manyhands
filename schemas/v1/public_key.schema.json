@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 SSH public key",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "public_key", "fingerprint", "matches_registration"],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "public_key": {
+      "type": "string"
+    },
+    "fingerprint": {
+      "type": "string"
+    },
+    "matches_registration": {
+      "type": "boolean"
+    }
+  }
+}

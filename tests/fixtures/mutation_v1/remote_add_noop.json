@@ -1,0 +1,30 @@
+{
+  "code": "already_applied",
+  "command": "remote add",
+  "data": {
+    "location": "https://example.invalid/team/project.git",
+    "name": "origin"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request was already applied; nothing changed.",
+  "operation_id": "<operation>",
+  "outcome": "noop",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX2",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": "origin",
+    "repository": "<root>",
+    "worktree": null
+  }
+}

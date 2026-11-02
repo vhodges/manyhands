@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 conflicted path",
+  "description": "One path of a live synchronization conflict: how to show it, the token that names it to a resolution, what it holds, and its three sides when it is an item's canonical text.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "display_path",
+    "token",
+    "kind",
+    "structure",
+    "content_available",
+    "base",
+    "local",
+    "incoming"
+  ],
+  "properties": {
+    "display_path": {
+      "description": "The path for display: each byte outside printable ASCII as \\xNN, and a backslash doubled. It is never a writable path.",
+      "type": "string"
+    },
+    "token": {
+      "description": "conflict-path-v1: and a digest that binds the path to the observation. It is re-derived on every read and is valid only while the conflict is unchanged.",
+      "type": "string"
+    },
+    "kind": {
+      "description": "What the path holds: an item's canonical source, or content that is no canonical item.",
+      "type": "string",
+      "enum": ["document", "ticket", "comment", "noncanonical"]
+    },
+    "structure": {
+      "description": "The shape of the path's sides. Only regular canonical content can be resolved in Manyhands; incompatible_closures is a ticket the two sides closed differently.",
+      "type": "string",
+      "enum": [
+        "regular",
+        "binary",
+        "executable",
+        "symlink",
+        "rename",
+        "delete",
+        "identity_changed",
+        "incompatible_closures"
+      ]
+    },
+    "content_available": {
+      "description": "Whether the sides are given: only for a path whose kind is an item (document, ticket or comment), whatever its structure, when the library reads them as text. A path of kind noncanonical, text or not, is given none. When false, base, local and incoming are null.",
+      "type": "boolean"
+    },
+    "base": {
+      "description": "The merge base's side, or null when it has none or it is not read.",
+      "type": ["string", "null"]
+    },
+    "local": {
+      "description": "The local branch's side, or null when it has none or it is not read.",
+      "type": ["string", "null"]
+    },
+    "incoming": {
+      "description": "The incoming side, or null when it has none or it is not read.",
+      "type": ["string", "null"]
+    }
+  }
+}

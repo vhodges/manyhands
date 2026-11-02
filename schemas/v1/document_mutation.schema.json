@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 document mutation data",
+  "description": "The data of a document create, document save or document move envelope. It may accompany any outcome: a success, a no-op, a partial result, and a rejection that is about the document. It never holds the document's title, body or source.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "path"],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "path": {
+      "description": "The file the request writes, relative to the document's context, with forward slashes: for a move, the destination. Null when the request stopped before the document's file was found.",
+      "type": ["string", "null"]
+    }
+  }
+}

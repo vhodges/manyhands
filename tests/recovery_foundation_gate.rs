@@ -22,6 +22,7 @@ use manyhands::repository::{
 use rusqlite::{Connection, params};
 
 mod support;
+use support::comment_publication::TestCommentSession;
 
 #[test]
 fn corrupt_recovery_publishes_permanent_host_trust_fence() {
@@ -160,21 +161,37 @@ fn common_git_lease_child() {
 fn failed_lease_holder_is_reported_before_ready_timeout() {
     let fixture = support::born_repository();
     let data = tempfile::tempdir().unwrap();
+    let missing = fixture.root.join("missing");
+    let repository_before = support::repository_and_worktree_snapshot(&fixture);
+    let git_before = support::repository_git_file_bytes(&fixture);
     let start = Instant::now();
     let panic = std::panic::catch_unwind(|| {
-        support::hold_lease_in_child(
-            &fixture.root.join("missing"),
-            data.path(),
-            LeaseKind::Repository,
-        );
+        support::hold_lease_in_child(&missing, data.path(), LeaseKind::Repository);
     })
     .unwrap_err();
 
     assert!(start.elapsed() < Duration::from_secs(2));
     let message = panic_message(panic.as_ref());
-    assert!(message.contains("child exited before ready"));
-    assert!(message.contains("exit status"));
-    assert!(message.contains("No such file or directory"));
+    let diagnostic = message
+        .strip_prefix("lease holder child exited before ready (")
+        .expect("early child exit has its own diagnostic category");
+    let (status, output) = diagnostic.split_once("):\nstdout:\n").unwrap();
+    // ExitStatus's label differs by host; libtest's panic exit code does not.
+    assert_eq!(status.rsplit_once(": ").unwrap().1, "101");
+    let (stdout, stderr) = output.split_once("\nstderr:\n").unwrap();
+    assert!(stdout.contains("test common_git_lease_child ... FAILED"));
+    assert!(stderr.contains("common_git_lease_child"));
+    assert!(stderr.contains("panicked at"));
+    assert!(stderr.contains("operation: Inspect, kind: Io"));
+    assert!(stderr.contains("kind: NotFound"));
+    assert!(!message.contains("timed out waiting"));
+    assert!(!missing.exists());
+    assert_eq!(
+        support::repository_and_worktree_snapshot(&fixture),
+        repository_before
+    );
+    assert_eq!(support::repository_git_file_bytes(&fixture), git_before);
+    assert_eq!(fs::read_dir(data.path()).unwrap().count(), 0);
 }
 
 fn panic_message(panic: &(dyn Any + Send)) -> &str {
@@ -259,7 +276,6 @@ fn authoring_context_and_save_wait_for_common_git_lease_then_replay_after_releas
     service
         .enable(support::enable_request(&fixture.root))
         .unwrap();
-    stage_configuration(&fixture);
     let context_operation = OperationId::new();
     let save_operation = OperationId::new();
     let context_target = || AuthoringTarget {
@@ -324,7 +340,6 @@ fn authoring_save_respects_an_in_process_repository_lease() {
     service
         .enable(support::enable_request(&fixture.root))
         .unwrap();
-    stage_configuration(&fixture);
     let repository = git2::Repository::open(&fixture.root).unwrap();
     let lock_path = repository.commondir().join("manyhands-operation.lock");
     let (acquired_sender, acquired) = mpsc::channel();
@@ -389,7 +404,6 @@ fn remove_remote_holds_the_lease_through_its_unselected_observation() {
             operation_id: OperationId::new(),
         })
         .unwrap();
-    stage_configuration(&fixture);
     let (observed_at, observed) = mpsc::channel();
     let (released, release) = mpsc::channel();
     holder.set_lifecycle_lease_hook_for_testing(
@@ -452,7 +466,6 @@ fn publication_selection_holds_the_lease_through_its_remote_observation() {
             operation_id: OperationId::new(),
         })
         .unwrap();
-    stage_configuration(&fixture);
     let (observed_at, observed) = mpsc::channel();
     let (released, release) = mpsc::channel();
     holder.set_lifecycle_lease_hook_for_testing(
@@ -527,14 +540,6 @@ fn assert_remote_configuration(
         .map(|remote| remote.name.as_str())
         .collect::<Vec<_>>();
     assert_eq!(names, remotes);
-}
-
-fn stage_configuration(fixture: &support::TestRepository) {
-    let mut index = fixture.repository.index().unwrap();
-    index
-        .add_path(std::path::Path::new(".manyhands/config.toml"))
-        .unwrap();
-    index.write().unwrap();
 }
 
 #[test]
@@ -846,9 +851,31 @@ fn pending_lifecycle_records_block_differently_identified_mutations_without_side
 
 #[test]
 fn pending_create_blocks_a_different_create_before_repository_initialization() {
-    let data = tempfile::tempdir().unwrap();
     let parent = tempfile::tempdir().unwrap();
-    let root = parent.path().join("created");
+    assert_pending_create_blocks_different_create(parent.path());
+}
+
+#[cfg(unix)]
+#[test]
+fn alias_parent_pending_create_blocks_different_create_without_root_or_cache_mutation() {
+    let parent = tempfile::tempdir().unwrap();
+    let aliases = tempfile::tempdir().unwrap();
+    let alias = aliases.path().join("parent");
+    std::os::unix::fs::symlink(parent.path(), &alias).unwrap();
+    assert!(
+        alias != alias.canonicalize().unwrap(),
+        "request uses a parent alias"
+    );
+    assert_pending_create_blocks_different_create(&alias);
+    assert!(!parent.path().join("created").exists());
+}
+
+fn assert_pending_create_blocks_different_create(parent: &std::path::Path) {
+    let data = tempfile::tempdir().unwrap();
+    let root = parent.join("created");
+    assert!(!root.exists());
+    // Creation keys canonicalize the existing parent, never the absent root.
+    let registered_root = parent.canonicalize().unwrap().join("created");
     let service = RepositoryService::open_at(data.path()).unwrap();
     service
         .with_registry_connection_for_testing(|connection| {
@@ -857,7 +884,10 @@ fn pending_create_blocks_a_different_create_before_repository_initialization() {
                     "INSERT INTO operation_records (
                         root_path, operation_ulid, action, target, state, observed_at
                      ) VALUES (?1, ?2, 'create_and_enable', 'main', 'created', 0)",
-                    params![root.to_str().unwrap(), OperationId::new().to_string()],
+                    params![
+                        registered_root.to_str().unwrap(),
+                        OperationId::new().to_string()
+                    ],
                 )
                 .unwrap();
         })
@@ -1072,9 +1102,9 @@ fn failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly() {
     assert!(RepositoryService::open_at(data.path()).is_err());
     let connection = Connection::open(&database).unwrap();
     for table in [
+        "comment_publication_bindings",
         "operation_records",
         "operation_record_contexts",
-        "registry_migrations",
     ] {
         assert!(
             !connection
@@ -1083,9 +1113,29 @@ fn failed_recovery_migration_leaves_no_partial_schema_and_retries_cleanly() {
                     [table],
                     |row| row.get::<_, bool>(0)
                 )
-                .unwrap()
+                .unwrap(),
+            "unexpected partial recovery table: {table}"
         );
     }
+    // Cycle 09's registry-schema transaction commits before the independent
+    // recovery migration. Its shared marker table must survive, but neither
+    // marker from the failed recovery transaction may leak into it.
+    let committed_markers = connection
+        .prepare("SELECT name FROM registry_migrations ORDER BY name")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        committed_markers,
+        [
+            "cycle_09_context_publication_evidence",
+            "cycle_09_document_promotions",
+            "cycle_09_retired_contexts",
+            "cycle_10_ticket_closures",
+        ]
+    );
     let legacy_columns = connection
         .prepare("SELECT name FROM pragma_table_info('index_operations') ORDER BY cid")
         .unwrap()
@@ -1215,6 +1265,45 @@ fn registration_removal_requires_its_own_pending_record() {
 
     assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
     assert_eq!(service.recovery_inspection(&fixture.root).unwrap().len(), 1);
+}
+
+#[test]
+fn registration_removal_after_restart_preserves_missing_root_recovery_evidence() {
+    let fixture = support::born_repository();
+    let data = tempfile::tempdir().unwrap();
+    let service = RepositoryService::open_at(data.path()).unwrap();
+    service
+        .enable(support::enable_request(&fixture.root))
+        .unwrap();
+    let root = fixture.root.canonicalize().unwrap();
+    let pending = OperationId::new();
+    service.with_registry_connection_for_testing(|connection| {
+        connection.execute("INSERT INTO operation_records(root_path,operation_ulid,action,state,observed_at) VALUES(?1,?2,'refresh','observed',1)", params![root.to_str().unwrap(), pending.to_string()]).unwrap();
+    }).unwrap();
+    drop(service);
+    drop(fixture.repository);
+    let displaced = tempfile::tempdir().unwrap();
+    std::fs::rename(&root, displaced.path().join("repository")).unwrap();
+    let before = support::confirmation::tree(displaced.path());
+    let reopened = RepositoryService::open_at(data.path()).unwrap();
+    let error = reopened
+        .remove_registration(RemoveRegistrationRequest {
+            root: root.clone(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap_err();
+    assert_eq!(error.kind, RepositoryErrorKind::RecoveryRequired);
+    assert_eq!(registered_repository_count(data.path()), 1);
+    let db = Connection::open(data.path().join(manyhands::repository::REGISTRY_FILE)).unwrap();
+    let found: (String, i64) = db
+        .query_row(
+            "SELECT state,observed_at FROM operation_records WHERE operation_ulid=?1",
+            [pending.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(found, ("observed".into(), 1));
+    assert_eq!(support::confirmation::tree(displaced.path()), before);
 }
 
 #[test]
@@ -1403,7 +1492,15 @@ fn create_replay_after_repository_initialization_uses_the_observed_step() {
     assert!(failing.create_and_enable(request.clone()).is_err());
     drop(failing);
     let repository = git2::Repository::open(&root).unwrap();
-    assert!(repository.is_empty().unwrap());
+    assert_eq!(
+        repository.find_reference("HEAD").unwrap().symbolic_target(),
+        Some("refs/heads/main")
+    );
+    assert_eq!(
+        repository.head().err().unwrap().code(),
+        git2::ErrorCode::UnbornBranch
+    );
+    assert_eq!(repository.references().unwrap().count(), 0);
 
     let replay = RepositoryService::open_at(data.path()).unwrap();
     assert!(matches!(
@@ -1903,7 +2000,6 @@ fn wave_one_real_repository_journey_covers_the_recovery_gate() {
             operation_id: OperationId::new(),
         })
         .unwrap();
-    stage_configuration(&born);
     assert!(matches!(
         service
             .set_publication_remote(SetPublicationRemoteRequest {
@@ -1941,7 +2037,7 @@ fn wave_one_real_repository_journey_covers_the_recovery_gate() {
     );
     assert!(
         service
-            .submit_comment(comment_request(&born.root, OperationId::new()))
+            .submit_comment_with_test_session(comment_request(&born.root, OperationId::new()))
             .is_ok()
     );
 
@@ -2045,7 +2141,6 @@ fn fresh_service_replays_each_wave_one_failure_without_duplicate_artifacts() {
                     .unwrap()
                     .enable(support::enable_request(&fixture.root))
                     .unwrap();
-                stage_configuration(&fixture);
                 let request = authoring_target(
                     &fixture.root,
                     AuthoringKind::Document,
@@ -2070,6 +2165,8 @@ fn fresh_service_replays_each_wave_one_failure_without_duplicate_artifacts() {
                     context.worktree,
                     fixture
                         .root
+                        .canonicalize()
+                        .unwrap()
                         .join(".manyhands/worktrees")
                         .join(support::document_id().to_string())
                 );
@@ -2079,7 +2176,6 @@ fn fresh_service_replays_each_wave_one_failure_without_duplicate_artifacts() {
                 setup
                     .enable(support::enable_request(&fixture.root))
                     .unwrap();
-                stage_configuration(&fixture);
                 let request = document_request(&fixture.root, operation_id);
                 let first = support::FailOnce::at(point).open_service(data.path());
                 assert!(first.save_document(request.clone()).is_err(), "{name}");

@@ -60,8 +60,36 @@ pub(super) struct RootObservation {
     pub(super) sources: Vec<(PathBuf, String)>,
     pub(super) validation: canonical::ValidatedContext,
     pub(super) items: Vec<ObservedItem>,
+    /// Every directory under `docs/` of this worktree that the
+    /// observation listed, in path order; see `ObservedFolder`.
+    pub(super) folders: Vec<ObservedFolder>,
     pub(super) problems: Vec<RootObservationProblem>,
     pub(super) active_contexts: Vec<ActiveContextObservation>,
+}
+
+/// A directory under `docs/` that an observation listed.
+///
+/// `path` is relative to the worktree, begins with `docs/` and is
+/// written with forward slashes on every platform. `empty` says the
+/// listing gave no entry of any kind: no file, no directory and no link.
+///
+/// A directory is here only when it was listed. One the observation did
+/// not read is left out, and a problem at `docs` or under it says the
+/// observation was not whole: a directory that could not be opened, one
+/// below the depth the observation goes to, and every directory it had
+/// not reached when it met its limit on entries. A directory named
+/// `.git` is never listed, as it is never read for documents.
+///
+/// Nor is a directory whose path the list cannot carry: one with a name
+/// that is not UTF-8, since the index stores paths as text, or with a
+/// backslash in a name, which only a Unix file system allows and which a
+/// stored path, written with forward slashes for every platform, cannot
+/// tell from a separator. Such a directory is still read for documents.
+/// A problem at its parent says the folders there are not all listed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ObservedFolder {
+    pub(super) path: String,
+    pub(super) empty: bool,
 }
 
 #[derive(Debug)]
@@ -85,9 +113,178 @@ pub(super) struct ObservedItem {
     pub(super) project: Option<String>,
     pub(super) team: Option<String>,
     pub(super) closed_at: Option<OffsetDateTime>,
+    pub(super) closed_by: Option<String>,
+    pub(super) unknown_metadata: UnknownMetadata,
+    /// A ticket's short code, parent and dependencies, and which of their
+    /// values were ignored. Empty for a document.
+    pub(super) relationships: canonical::TicketRelationships,
     pub(super) comments: Vec<ObservedCommentThread>,
     pub(super) activity_at: OffsetDateTime,
     pub(super) activity_source: super::DiscoveryActivitySource,
+}
+
+/// The front matter keys of an item that Manyhands does not define, as JSON.
+///
+/// `values` holds every key that is a string, in key order at every depth.
+/// A YAML value JSON cannot express is `null` there: a mapping with a key
+/// that is not a string, a tagged value, a number that is not finite, and a
+/// sequence or mapping nested more than `MAX_UNKNOWN_METADATA_DEPTH` deep. A
+/// top-level key that is not a string cannot be a JSON key and is left out.
+/// `not_representable` says that at least one of those happened, since a
+/// `null` or an absent key alone cannot.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(super) struct UnknownMetadata {
+    pub(super) values: serde_json::Map<String, serde_json::Value>,
+    pub(super) not_representable: bool,
+}
+
+impl UnknownMetadata {
+    const VALUES: &'static str = "values";
+    const NOT_REPRESENTABLE: &'static str = "not_representable";
+
+    pub(super) fn from_yaml(unknown: &serde_yaml::Mapping) -> Self {
+        let mut not_representable = false;
+        let values = match yaml_mapping_to_json(unknown, &mut not_representable, 0) {
+            serde_json::Value::Object(values) => values,
+            _ => serde_json::Map::new(),
+        };
+        Self {
+            values,
+            not_representable,
+        }
+    }
+
+    /// A ticket's, without the relationship keys: those are read as fields
+    /// of their own and are not unknown to Manyhands.
+    pub(super) fn from_ticket(ticket: &canonical::Ticket) -> Self {
+        let mut unknown = ticket.unknown.clone();
+        for key in canonical::RELATIONSHIP_KEYS {
+            unknown.shift_remove(key);
+        }
+        Self::from_yaml(&unknown)
+    }
+
+    /// The text of the index column: one JSON object holding both fields.
+    pub(super) fn to_stored(&self) -> String {
+        let mut stored = serde_json::Map::new();
+        stored.insert(
+            Self::NOT_REPRESENTABLE.to_owned(),
+            self.not_representable.into(),
+        );
+        stored.insert(Self::VALUES.to_owned(), self.values.clone().into());
+        serde_json::Value::Object(stored).to_string()
+    }
+
+    /// Reads the column back, or `None` when it does not hold what
+    /// `to_stored` writes.
+    pub(super) fn from_stored(stored: &str) -> Option<Self> {
+        let serde_json::Value::Object(mut stored) = serde_json::from_str(stored).ok()? else {
+            return None;
+        };
+        let serde_json::Value::Object(values) = stored.remove(Self::VALUES)? else {
+            return None;
+        };
+        let not_representable = stored.remove(Self::NOT_REPRESENTABLE)?.as_bool()?;
+        stored.is_empty().then_some(Self {
+            values,
+            not_representable,
+        })
+    }
+}
+
+/// How deep a sequence or mapping may be nested in an item's unknown
+/// metadata, counting a top-level key's own value as 1. One nested deeper is
+/// `null` and flagged.
+///
+/// YAML front matter is read up to 128 containers deep, while the stored
+/// JSON text reads back only to its parser's own limit, which the two
+/// objects the column wraps the values in count against. This is well under
+/// both, so whatever is stored reads back.
+pub(super) const MAX_UNKNOWN_METADATA_DEPTH: usize = 64;
+
+/// `value` as JSON, or `null` with `not_representable` set where it has no
+/// JSON form. `depth` is how deep `value` is nested if it is a sequence or
+/// a mapping, counting itself.
+fn yaml_to_json(
+    value: &serde_yaml::Value,
+    not_representable: &mut bool,
+    depth: usize,
+) -> serde_json::Value {
+    if depth > MAX_UNKNOWN_METADATA_DEPTH
+        && matches!(
+            value,
+            serde_yaml::Value::Sequence(_) | serde_yaml::Value::Mapping(_)
+        )
+    {
+        *not_representable = true;
+        return serde_json::Value::Null;
+    }
+    match value {
+        serde_yaml::Value::Null => serde_json::Value::Null,
+        serde_yaml::Value::Bool(value) => (*value).into(),
+        serde_yaml::Value::String(value) => value.as_str().into(),
+        serde_yaml::Value::Number(number) => {
+            let json = match (number.as_i64(), number.as_u64(), number.as_f64()) {
+                (Some(integer), _, _) => Some(integer.into()),
+                (None, Some(integer), _) => Some(integer.into()),
+                // `None` for a number that is not finite.
+                (None, None, Some(float)) => serde_json::Number::from_f64(float),
+                (None, None, None) => None,
+            };
+            json.map(serde_json::Value::Number).unwrap_or_else(|| {
+                *not_representable = true;
+                serde_json::Value::Null
+            })
+        }
+        serde_yaml::Value::Sequence(values) => values
+            .iter()
+            .map(|value| yaml_to_json(value, not_representable, depth + 1))
+            .collect(),
+        serde_yaml::Value::Mapping(mapping) => {
+            yaml_mapping_to_json(mapping, not_representable, depth)
+        }
+        serde_yaml::Value::Tagged(_) => {
+            *not_representable = true;
+            serde_json::Value::Null
+        }
+    }
+}
+
+/// A YAML mapping as a JSON object with its keys in order. A key that is
+/// not a string makes a nested mapping `null`; at the top level, where the
+/// result must stay an object, that one key is left out instead. `depth` is
+/// how deep the mapping is nested, and 0 for the top level.
+fn yaml_mapping_to_json(
+    mapping: &serde_yaml::Mapping,
+    not_representable: &mut bool,
+    depth: usize,
+) -> serde_json::Value {
+    let mut entries = Vec::with_capacity(mapping.len());
+    for (key, value) in mapping {
+        match key.as_str() {
+            Some(key) => entries.push((key, value)),
+            None => {
+                *not_representable = true;
+                if depth > 0 {
+                    return serde_json::Value::Null;
+                }
+            }
+        }
+    }
+    // Inserted in key order, so the object is ordered whether or not
+    // `serde_json` keeps insertion order.
+    entries.sort_by(|left, right| left.0.cmp(right.0));
+    serde_json::Value::Object(
+        entries
+            .into_iter()
+            .map(|(key, value)| {
+                (
+                    key.to_owned(),
+                    yaml_to_json(value, not_representable, depth + 1),
+                )
+            })
+            .collect(),
+    )
 }
 
 #[derive(Debug)]
@@ -98,7 +295,29 @@ pub(super) struct ObservedCommentThread {
     pub(super) replies: Vec<ObservedCommentThread>,
 }
 
+#[cfg(test)]
+type ScanHook = Box<dyn FnMut()>;
+#[cfg(test)]
+thread_local! { static SCAN_HOOKS: std::cell::RefCell<std::collections::BTreeMap<PathBuf,ScanHook>> = std::cell::RefCell::new(std::collections::BTreeMap::new()); }
+#[cfg(test)]
+pub(super) fn set_scan_hook(root: PathBuf, hook: impl FnMut() + 'static) {
+    SCAN_HOOKS.with(|h| h.borrow_mut().insert(root, Box::new(hook)));
+}
+#[cfg(test)]
+pub(super) fn clear_scan_hook(root: &Path) {
+    SCAN_HOOKS.with(|h| h.borrow_mut().remove(root));
+}
+#[cfg(test)]
+pub(super) fn scan_checkpoint(root: &Path) {
+    let hook = SCAN_HOOKS.with(|h| h.borrow_mut().remove(root));
+    if let Some(mut hook) = hook {
+        hook();
+        SCAN_HOOKS.with(|h| h.borrow_mut().insert(root.into(), hook));
+    }
+}
 pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservation {
+    #[cfg(test)]
+    scan_checkpoint(root);
     let mut problems = Vec::new();
     let configuration = observe_configuration(root, &mut problems);
     let configuration_source = fs::read(root.join(canonical::CONFIG_PATH)).ok();
@@ -129,13 +348,21 @@ pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservat
         }
     };
     let mut sources = Vec::new();
-    collect_root_sources(root, &mut sources, &mut problems);
-    let validation = canonical::validate_context(sources.clone());
-    let items = observe_items(repository, root, &sources, &validation);
+    let mut folders = Vec::new();
+    collect_root_sources(root, &mut sources, &mut folders, &mut problems);
+    let mut validation = canonical::validate_context(sources.clone());
+    let mut items = observe_items(repository, root, &sources, &validation);
     let active_contexts = match configuration {
         RootConfiguration::Valid(_) => observe_active_contexts(repository, root, &mut problems),
         RootConfiguration::Missing | RootConfiguration::Invalid(_) => Vec::new(),
     };
+    leave_active_items_to_their_contexts(
+        root,
+        &active_contexts,
+        &mut items,
+        &mut validation.problems,
+        &mut problems,
+    );
 
     RootObservation {
         configuration_blob_oid: configuration_blob_oid(repository, configuration_source.as_deref()),
@@ -151,6 +378,7 @@ pub(super) fn observe_root(repository: &Repository, root: &Path) -> RootObservat
         sources,
         validation,
         items,
+        folders,
         problems,
         active_contexts,
     }
@@ -268,7 +496,13 @@ fn observe_active_contexts(
             continue;
         }
         let mut sources = Vec::new();
-        collect_root_sources(&expected_path, &mut sources, &mut context_problems);
+        collect_authoring_item_sources(
+            &expected_path,
+            kind,
+            &path_id,
+            &mut sources,
+            &mut context_problems,
+        );
         let validation = canonical::validate_context(sources.clone());
         if !validation
             .items
@@ -340,6 +574,9 @@ fn observe_items(
                     None,
                     None,
                     None,
+                    None,
+                    UnknownMetadata::from_yaml(&document.unknown),
+                    canonical::TicketRelationships::default(),
                 )),
                 canonical::CanonicalItem::Ticket(ticket) if ticket.id == *id => Some((
                     AuthoringKind::Ticket,
@@ -349,6 +586,9 @@ fn observe_items(
                     ticket.project.clone(),
                     ticket.team.clone(),
                     ticket.closed_at,
+                    ticket.closed_by.clone(),
+                    UnknownMetadata::from_ticket(ticket),
+                    canonical::ticket_relationships(ticket),
                 )),
                 _ => None,
             })?;
@@ -382,6 +622,9 @@ fn observe_items(
                 project: metadata.4,
                 team: metadata.5,
                 closed_at: metadata.6,
+                closed_by: metadata.7,
+                unknown_metadata: metadata.8,
+                relationships: metadata.9,
                 comments,
                 activity_at,
                 activity_source,
@@ -515,7 +758,54 @@ fn parse_authoring_branch(
     Some((kind, item_id))
 }
 
-fn authoring_item_matches(
+fn item_ticket_directory(item_id: &canonical::ItemId) -> PathBuf {
+    Path::new(".manyhands/tickets").join(item_id.to_string())
+}
+
+fn item_comment_directory(item_id: &canonical::ItemId) -> PathBuf {
+    Path::new(".manyhands/comments").join(item_id.to_string())
+}
+
+/// An item with its own active context is observed there. The primary context
+/// neither lists its copy of that item nor reports problems inside that
+/// item's ticket and comment directories.
+///
+/// Only those directories are attributed by path. A primary document that
+/// cannot be parsed carries no ID, so it cannot be attributed to an item and
+/// stays a primary problem.
+fn leave_active_items_to_their_contexts(
+    root: &Path,
+    active_contexts: &[ActiveContextObservation],
+    items: &mut Vec<ObservedItem>,
+    validation_problems: &mut Vec<canonical::ValidationProblem>,
+    problems: &mut Vec<RootObservationProblem>,
+) {
+    let directories = active_contexts
+        .iter()
+        .filter_map(|context| context.context.item_id.as_ref())
+        .flat_map(|id| [item_ticket_directory(id), item_comment_directory(id)])
+        .collect::<Vec<_>>();
+    if directories.is_empty() {
+        return;
+    }
+    let owned = |relative: &Path| {
+        directories
+            .iter()
+            .any(|directory| relative.starts_with(directory))
+    };
+    items.retain(|item| {
+        !active_contexts
+            .iter()
+            .any(|context| context.context.item_id.as_ref() == Some(&item.id))
+    });
+    validation_problems.retain(|problem| !owned(&problem.path));
+    problems.retain(|problem| match problem {
+        RootObservationProblem::Source { path, .. } => !path.strip_prefix(root).is_ok_and(&owned),
+        _ => true,
+    });
+}
+
+pub(crate) fn authoring_item_matches(
     item: &canonical::CanonicalItem,
     kind: crate::repository::AuthoringKind,
     item_id: &canonical::ItemId,
@@ -639,12 +929,61 @@ fn observe_head(
     }
 }
 
-fn collect_root_sources(
+/// An item worktree is a full checkout, so it also holds a copy of every other
+/// item as of its branch point. Only the item its authoring branch identifies,
+/// and that item's comments, belong to the context; every other item is
+/// observed from the primary context.
+fn collect_authoring_item_sources(
     root: &Path,
+    kind: crate::repository::AuthoringKind,
+    item_id: &canonical::ItemId,
     sources: &mut Vec<(PathBuf, String)>,
     problems: &mut Vec<RootObservationProblem>,
 ) {
-    collect_documents(root, sources, problems);
+    match kind {
+        crate::repository::AuthoringKind::Ticket => {
+            let directory = root.join(item_ticket_directory(item_id));
+            if directory_exists(&root.join(".manyhands/tickets"), problems)
+                && directory_exists(&directory, problems)
+            {
+                collect_source(root, &directory.join("ticket.md"), sources, problems);
+            }
+        }
+        crate::repository::AuthoringKind::Document => {
+            // A document can be anywhere under docs/, so the tree is scanned
+            // and every source carrying this ID is kept. A second one fails
+            // validation as a duplicate, which rejects the context.
+            //
+            // Problems with the rest of the tree are the primary context's to
+            // report, not this one's, so they are not kept. The scan is still
+            // bounded by the whole-tree limits: a document beyond them is not
+            // found, and the context is rejected as missing its item.
+            let mut documents = Vec::new();
+            collect_documents(root, &mut documents, &mut Vec::new(), &mut Vec::new());
+            documents.retain(|(path, source)| {
+                canonical::parse_item(path, source)
+                    .is_ok_and(|item| canonical_item_id(&item) == item_id)
+            });
+            sources.append(&mut documents);
+        }
+    }
+    let directory = root.join(item_comment_directory(item_id));
+    if directory_exists(&root.join(".manyhands/comments"), problems)
+        && directory_exists(&directory, problems)
+    {
+        let mut entries = 0;
+        collect_comment_directory(root, &directory, &mut entries, sources, problems);
+    }
+    sources.sort_by(|left, right| left.0.cmp(&right.0));
+}
+
+fn collect_root_sources(
+    root: &Path,
+    sources: &mut Vec<(PathBuf, String)>,
+    folders: &mut Vec<ObservedFolder>,
+    problems: &mut Vec<RootObservationProblem>,
+) {
+    collect_documents(root, sources, folders, problems);
     collect_tickets(root, sources, problems);
     collect_comments(root, sources, problems);
     collect_managed_out_of_path_sources(root, sources, problems);
@@ -659,8 +998,11 @@ fn collect_managed_out_of_path_sources(
     let mut directories = vec![(root.to_owned(), 0)];
     let mut entries = 0;
     while let Some((directory, depth)) = directories.pop() {
-        let (directory_entries, overflowed) =
-            read_marker_directory(&directory, &mut entries, problems);
+        let DirectoryListing {
+            entries: directory_entries,
+            overflowed,
+            empty: _,
+        } = read_marker_directory(&directory, &mut entries, problems);
         for entry in directory_entries {
             let path = entry.path();
             let Ok(file_type) = entry.file_type() else {
@@ -748,20 +1090,56 @@ fn yaml_declares_managed_marker(front_matter: &str) -> bool {
         == Some(true)
 }
 
+/// Collects the documents under `docs/`, and with them every directory
+/// there that was listed; see `ObservedFolder`. The one walk gives both,
+/// so a folder is in the index exactly when the refresh that stored the
+/// documents saw it.
 fn collect_documents(
     root: &Path,
     sources: &mut Vec<(PathBuf, String)>,
+    folders: &mut Vec<ObservedFolder>,
     problems: &mut Vec<RootObservationProblem>,
 ) {
     let docs = root.join("docs");
     if !directory_exists(&docs, problems) {
         return;
     }
-    let mut directories = vec![(docs, 0)];
+    let mut directories = vec![(docs.clone(), 0)];
     let mut entries = 0;
     while let Some((directory, depth)) = directories.pop() {
-        let (directory_entries, overflowed) =
-            read_document_directory(&directory, &mut entries, problems);
+        let DirectoryListing {
+            entries: directory_entries,
+            overflowed,
+            empty,
+        } = read_document_directory(&directory, &mut entries, problems);
+        // `docs` itself is no folder under `docs/`.
+        if depth > 0 {
+            match folder_path(root, &directory) {
+                Some(path) => {
+                    if let Some(empty) = empty {
+                        folders.push(ObservedFolder { path, empty });
+                    }
+                }
+                // Said at the nearest directory above it whose own path
+                // can be stored: a problem is stored by its path too. A
+                // directory named as a Markdown file is passed over: a
+                // read of the list takes a problem at such a path for
+                // one about a file, which hides no folder.
+                None => {
+                    let above = directory
+                        .ancestors()
+                        .skip(1)
+                        .find(|above| {
+                            folder_path(root, above).is_some_and(|path| !path.ends_with(".md"))
+                        })
+                        .unwrap_or(&docs);
+                    problems.push(source_problem(
+                        above,
+                        "a directory here has a name the folder list cannot hold",
+                    ));
+                }
+            }
+        }
         for entry in directory_entries {
             let path = entry.path();
             let Ok(file_type) = entry.file_type() else {
@@ -793,9 +1171,61 @@ fn collect_documents(
             }
         }
         if overflowed {
-            return;
+            break;
         }
     }
+    folders.sort_by(|left, right| left.path.cmp(&right.path));
+}
+
+/// How many entries the walk of `collect_documents` reads under
+/// `docs/` of the worktree at `root`, counted as that walk counts
+/// them: every entry of `docs` and of each directory under it that the
+/// walk goes into, whatever the entry is. `None` when the walk meets
+/// its limit: the tree already holds more than a refresh reads.
+///
+/// This is what says whether one more directory would be the entry
+/// that crosses the limit, so it shares the walk's own reading of a
+/// directory and its own rules for which it goes into.
+pub(super) fn count_document_entries(root: &Path) -> Option<usize> {
+    let docs = root.join("docs");
+    let mut problems = Vec::new();
+    if !directory_exists(&docs, &mut problems) {
+        return Some(0);
+    }
+    let mut directories = vec![(docs, 0)];
+    let mut entries = 0;
+    while let Some((directory, depth)) = directories.pop() {
+        let listing = read_document_directory(&directory, &mut entries, &mut problems);
+        if listing.overflowed {
+            return None;
+        }
+        for entry in listing.entries {
+            let path = entry.path();
+            let goes_into = entry
+                .file_type()
+                .is_ok_and(|kind| kind.is_dir() && !kind.is_symlink())
+                && !is_excluded_directory(&path)
+                && depth < MAX_DOCUMENT_DIRECTORY_DEPTH;
+            if goes_into {
+                directories.push((path, depth + 1));
+            }
+        }
+    }
+    Some(entries)
+}
+
+/// A directory's path as the index stores it: relative to the worktree,
+/// its native components joined with forward slashes. `None` for one
+/// that is not under `root`, or has a component that is not UTF-8 or
+/// holds a backslash: joined with forward slashes, such a path is not
+/// one a read of the list takes for a path.
+fn folder_path(root: &Path, directory: &Path) -> Option<String> {
+    let relative = directory.strip_prefix(root).ok()?;
+    let components = relative
+        .iter()
+        .map(|component| component.to_str().filter(|name| !name.contains('\\')))
+        .collect::<Option<Vec<_>>>()?;
+    Some(components.join("/"))
 }
 
 fn collect_tickets(
@@ -853,24 +1283,34 @@ fn collect_comments(
                 "symbolic links are not canonical sources",
             ));
         } else if file_type.is_dir() && !is_excluded_directory(&path) {
-            for entry in read_managed_directory(&path, &mut entries, problems) {
-                let path = entry.path();
-                let Ok(file_type) = entry.file_type() else {
-                    problems.push(source_problem(
-                        path,
-                        "the directory entry type cannot be read",
-                    ));
-                    continue;
-                };
-                if file_type.is_symlink() {
-                    problems.push(source_problem(
-                        path,
-                        "symbolic links are not canonical sources",
-                    ));
-                } else if file_type.is_file() && path.extension() == Some(OsStr::new("md")) {
-                    collect_source(root, &path, sources, problems);
-                }
-            }
+            collect_comment_directory(root, &path, &mut entries, sources, problems);
+        }
+    }
+}
+
+fn collect_comment_directory(
+    root: &Path,
+    directory: &Path,
+    entries: &mut usize,
+    sources: &mut Vec<(PathBuf, String)>,
+    problems: &mut Vec<RootObservationProblem>,
+) {
+    for entry in read_managed_directory(directory, entries, problems) {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            problems.push(source_problem(
+                path,
+                "the directory entry type cannot be read",
+            ));
+            continue;
+        };
+        if file_type.is_symlink() {
+            problems.push(source_problem(
+                path,
+                "symbolic links are not canonical sources",
+            ));
+        } else if file_type.is_file() && path.extension() == Some(OsStr::new("md")) {
+            collect_source(root, &path, sources, problems);
         }
     }
 }
@@ -949,11 +1389,23 @@ fn directory_exists(path: &Path, problems: &mut Vec<RootObservationProblem>) -> 
     }
 }
 
+/// What listing one directory of a bounded walk gave.
+struct DirectoryListing {
+    /// The entries that were read, in name order.
+    entries: Vec<fs::DirEntry>,
+    /// The walk's limit on entries was met in this directory: the walk
+    /// ends here.
+    overflowed: bool,
+    /// Whether the directory holds nothing at all. `None` when it could
+    /// not be opened, so nothing is known of what it holds.
+    empty: Option<bool>,
+}
+
 fn read_document_directory(
     path: &Path,
     entries: &mut usize,
     problems: &mut Vec<RootObservationProblem>,
-) -> (Vec<fs::DirEntry>, bool) {
+) -> DirectoryListing {
     let mut directory = match fs::read_dir(path) {
         Ok(directory) => directory,
         Err(error) => {
@@ -961,15 +1413,23 @@ fn read_document_directory(
                 path,
                 format!("the directory cannot be read: {error}"),
             ));
-            return (Vec::new(), false);
+            return DirectoryListing {
+                entries: Vec::new(),
+                overflowed: false,
+                empty: None,
+            };
         }
     };
     let mut collected = Vec::new();
     let mut overflowed = false;
+    // An entry that could not be read, or that met the limit, is an
+    // entry all the same.
+    let mut empty = true;
     loop {
         let Some(entry) = directory.next() else {
             break;
         };
+        empty = false;
         if *entries >= MAX_DOCUMENT_DIRECTORY_ENTRIES {
             problems.push(source_problem(
                 path,
@@ -988,14 +1448,18 @@ fn read_document_directory(
         }
     }
     collected.sort_by_key(|entry| entry.file_name());
-    (collected, overflowed)
+    DirectoryListing {
+        entries: collected,
+        overflowed,
+        empty: Some(empty),
+    }
 }
 
 fn read_marker_directory(
     path: &Path,
     entries: &mut usize,
     problems: &mut Vec<RootObservationProblem>,
-) -> (Vec<fs::DirEntry>, bool) {
+) -> DirectoryListing {
     read_document_directory(path, entries, problems)
 }
 
@@ -1265,8 +1729,153 @@ pub(super) fn migrate_registry(connection: &mut Connection) -> Result<(), Reposi
     super::keys::migrate_material_schema(&transaction)?;
     super::transport::trust::migrate_host_pins(&transaction)?;
     super::remote::state::migrate(&transaction)?;
+    super::promotion::record::migrate(&transaction)?;
+    super::closure::record::migrate(&transaction)?;
     transaction.commit().map_err(RepositoryError::sqlite)?;
-    super::recovery::migrate_operation_records(connection)
+    migrate_item_read_schema(connection)?;
+    super::recovery::migrate_operation_records(connection)?;
+    super::mutation::migrate_request_tables(connection)
+}
+
+/// The columns the item reads need: who closed a ticket, an item's unknown
+/// front matter, when a registration was last refreshed, and a ticket's
+/// short code.
+const ITEM_READ_COLUMNS: [(&str, &str, &str); 4] = [
+    ("discovered_items", "closed_by", "TEXT"),
+    ("discovered_items", "unknown_metadata", "TEXT"),
+    ("repositories", "refreshed_at", "INTEGER"),
+    ("discovered_items", "slug", "TEXT"),
+];
+
+/// The tables and indexes the relationship reads need, each by its kind and
+/// name in `sqlite_master` and the statement that creates it, in an order
+/// in which they can be created once the columns are there.
+///
+/// An edge is one `deps` entry or the `parent` of the ticket whose row it
+/// belongs to; `target_id` is the item ID the file names, whether or not
+/// the index holds that item. An item problem is a relationship value that
+/// was ignored; `detail` is the item ID it is about, or NULL, and never
+/// text from the file. Both go when their item row goes, and an item row
+/// goes when its context is replaced, so neither outlives nor precedes the
+/// items of a context.
+///
+/// A folder is a directory under `docs/` of the primary worktree, as the
+/// refresh or rebuild that stored its context listed it; see
+/// `ObservedFolder`. Its rows go when its context row goes, as an item's
+/// do, so the folders of a context are always those of the observation
+/// that stored the context. An index from before the table holds no
+/// folder for any registration, and is marked stale for it as for the
+/// rest: it would otherwise report that a repository has no folders.
+const ITEM_READ_OBJECTS: [(&str, &str, &str); 5] = [
+    (
+        "table",
+        "item_edges",
+        "CREATE TABLE item_edges (
+            id INTEGER PRIMARY KEY,
+            item_id INTEGER NOT NULL REFERENCES discovered_items(id) ON DELETE CASCADE,
+            target_id TEXT NOT NULL,
+            kind TEXT NOT NULL CHECK (kind IN ('deps', 'parent')),
+            UNIQUE (item_id, target_id, kind)
+        )",
+    ),
+    (
+        "table",
+        "item_problems",
+        "CREATE TABLE item_problems (
+            id INTEGER PRIMARY KEY,
+            item_id INTEGER NOT NULL REFERENCES discovered_items(id) ON DELETE CASCADE,
+            code TEXT NOT NULL,
+            detail TEXT
+        )",
+    ),
+    (
+        "index",
+        "discovered_items_slug",
+        "CREATE INDEX discovered_items_slug ON discovered_items(slug)",
+    ),
+    (
+        "index",
+        "item_problems_item_id_idx",
+        "CREATE INDEX item_problems_item_id_idx ON item_problems(item_id)",
+    ),
+    (
+        "table",
+        "discovered_folders",
+        "CREATE TABLE discovered_folders (
+            id INTEGER PRIMARY KEY,
+            context_id INTEGER NOT NULL REFERENCES contexts(id) ON DELETE CASCADE,
+            path TEXT NOT NULL,
+            is_empty INTEGER NOT NULL CHECK (is_empty IN (0, 1)),
+            UNIQUE (context_id, path)
+        )",
+    ),
+];
+
+/// Adds the item read columns, tables and indexes to an index that lacks
+/// them.
+///
+/// Rows stored before a column or table existed hold nothing in it, so an
+/// index that gains one here is marked as needing a refresh for every
+/// registration: it then reports itself stale instead of reporting, say,
+/// that no ticket has unknown metadata or a dependency.
+///
+/// An index that already has them all is only read, so opening it takes no
+/// write lock. One that lacks any is migrated in a transaction that takes
+/// the write lock before it looks again: of two processes that open an old
+/// index at once, the second waits for the first, then finds everything
+/// there and adds nothing.
+fn migrate_item_read_schema(connection: &mut Connection) -> Result<(), RepositoryError> {
+    if missing_item_read_schema(connection)?.is_empty() {
+        return Ok(());
+    }
+    let transaction = connection
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .map_err(RepositoryError::sqlite)?;
+    let missing = missing_item_read_schema(&transaction)?;
+    for statement in &missing {
+        transaction
+            .execute_batch(statement)
+            .map_err(RepositoryError::sqlite)?;
+    }
+    if !missing.is_empty() {
+        transaction
+            .execute("UPDATE repositories SET refresh_required = 1", [])
+            .map_err(RepositoryError::sqlite)?;
+    }
+    transaction.commit().map_err(RepositoryError::sqlite)
+}
+
+/// The statements that add what the index lacks, in the order to run them:
+/// the columns first, since an index is created on one of them.
+fn missing_item_read_schema(connection: &Connection) -> Result<Vec<String>, RepositoryError> {
+    let mut missing = Vec::new();
+    for (table, column, definition) in ITEM_READ_COLUMNS {
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+                [table, column],
+                |row| row.get(0),
+            )
+            .map_err(RepositoryError::sqlite)?;
+        if !exists {
+            missing.push(format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            ));
+        }
+    }
+    for (kind, name, statement) in ITEM_READ_OBJECTS {
+        let exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = ?1 AND name = ?2)",
+                [kind, name],
+                |row| row.get(0),
+            )
+            .map_err(RepositoryError::sqlite)?;
+        if !exists {
+            missing.push(statement.to_owned());
+        }
+    }
+    Ok(missing)
 }
 
 #[cfg(test)]
@@ -1283,6 +1892,379 @@ mod tests {
         canonical,
         repository::{DiscoveryActivitySource, DiscoveryContextKind, MAX_DOCUMENT_DIRECTORY_DEPTH},
     };
+
+    fn column_names(connection: &Connection, table: &str) -> Vec<String> {
+        connection
+            .prepare("SELECT name FROM pragma_table_info(?1)")
+            .unwrap()
+            .query_map([table], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    fn object_count(connection: &Connection, kind: &str, name: &str) -> i64 {
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = ?1 AND name = ?2",
+                [kind, name],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    const ITEM_READ_ADDITIONS: usize = ITEM_READ_COLUMNS.len() + ITEM_READ_OBJECTS.len();
+
+    /// An index file from before the item read columns, tables and
+    /// indexes, with one registration that needs no refresh.
+    fn index_without_item_read_schema(directory: &Path) -> std::path::PathBuf {
+        let path = directory.join("index.sqlite3");
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut connection).unwrap();
+        connection
+            .execute(
+                "INSERT INTO repositories (root_path, enabled_at, accessibility, refresh_required)
+                 VALUES ('/repository', 1, 'accessible', 0)",
+                [],
+            )
+            .unwrap();
+        // An index goes before the table or the column it is on.
+        for (kind, name, _) in ITEM_READ_OBJECTS.iter().rev() {
+            connection
+                .execute_batch(&format!("DROP {kind} {name}"))
+                .unwrap();
+        }
+        for (table, column, _) in ITEM_READ_COLUMNS {
+            connection
+                .execute_batch(&format!("ALTER TABLE {table} DROP COLUMN {column}"))
+                .unwrap();
+        }
+        assert_eq!(
+            missing_item_read_schema(&connection).unwrap().len(),
+            ITEM_READ_ADDITIONS
+        );
+        path
+    }
+
+    fn assert_item_read_schema_once_and_marked(path: &Path) {
+        let connection = open_registry(path, &mut |_| {}).unwrap();
+        for (kind, name, _) in ITEM_READ_OBJECTS {
+            assert_eq!(object_count(&connection, kind, name), 1, "{kind} {name}");
+        }
+        for (table, column, _) in ITEM_READ_COLUMNS {
+            assert_eq!(
+                column_names(&connection, table)
+                    .iter()
+                    .filter(|name| name.as_str() == column)
+                    .count(),
+                1,
+                "{table}.{column}"
+            );
+        }
+        let marked: bool = connection
+            .query_row("SELECT refresh_required FROM repositories", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(marked);
+    }
+
+    // Two processes migrating one old index: the other holds the write lock
+    // and has added one column when this one, which saw everything missing,
+    // asks for it.
+    #[test]
+    fn a_migration_waits_for_one_in_progress_and_adds_only_what_is_still_missing() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = index_without_item_read_schema(directory.path());
+        let first = open_registry(&path, &mut |_| {}).unwrap();
+        first
+            .execute_batch(
+                "BEGIN IMMEDIATE;
+                 ALTER TABLE discovered_items ADD COLUMN closed_by TEXT;",
+            )
+            .unwrap();
+
+        let second = std::thread::spawn({
+            let path = path.clone();
+            move || {
+                let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+                assert_eq!(
+                    missing_item_read_schema(&connection).unwrap().len(),
+                    ITEM_READ_ADDITIONS
+                );
+                migrate_item_read_schema(&mut connection).map_err(|error| format!("{error:?}"))
+            }
+        });
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!second.is_finished(), "the second migration did not wait");
+        first.execute_batch("COMMIT").unwrap();
+
+        second.join().unwrap().unwrap();
+        assert_item_read_schema_once_and_marked(&path);
+    }
+
+    #[test]
+    fn migrations_started_together_all_succeed() {
+        for _ in 0..8 {
+            let directory = tempfile::tempdir().unwrap();
+            let path = index_without_item_read_schema(directory.path());
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(4));
+            let migrations: Vec<_> = (0..4)
+                .map(|_| {
+                    let (path, barrier) = (path.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+                        barrier.wait();
+                        migrate_item_read_schema(&mut connection)
+                            .map_err(|error| format!("{error:?}"))
+                    })
+                })
+                .collect();
+
+            for migration in migrations {
+                migration.join().unwrap().unwrap();
+            }
+            assert_item_read_schema_once_and_marked(&path);
+        }
+    }
+
+    #[test]
+    fn migrate_item_read_schema_takes_no_write_lock_on_an_up_to_date_index() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("index.sqlite3");
+        let mut holder = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut holder).unwrap();
+        holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        // Another writer would wait the whole busy timeout and then fail.
+        let started = std::time::Instant::now();
+
+        migrate_item_read_schema(&mut connection).unwrap();
+
+        assert!(started.elapsed() < REGISTRY_BUSY_TIMEOUT / 2);
+        // The lock really is held: a writer is refused. It need not wait
+        // the whole timeout to show that.
+        connection
+            .busy_timeout(std::time::Duration::from_millis(100))
+            .unwrap();
+        assert!(
+            connection
+                .execute_batch("BEGIN IMMEDIATE")
+                .is_err_and(
+                    |error| error.sqlite_error_code() == Some(rusqlite::ErrorCode::DatabaseBusy)
+                )
+        );
+    }
+
+    #[test]
+    fn migrating_twice_adds_each_item_read_column_once() {
+        let mut connection = Connection::open_in_memory().unwrap();
+
+        migrate_registry(&mut connection).unwrap();
+        let once = (
+            column_names(&connection, "discovered_items"),
+            column_names(&connection, "repositories"),
+        );
+        migrate_registry(&mut connection).unwrap();
+
+        for (table, column, _) in ITEM_READ_COLUMNS {
+            assert_eq!(
+                column_names(&connection, table)
+                    .iter()
+                    .filter(|name| name.as_str() == column)
+                    .count(),
+                1,
+                "{table}.{column}"
+            );
+        }
+        for (kind, name, _) in ITEM_READ_OBJECTS {
+            assert_eq!(object_count(&connection, kind, name), 1, "{kind} {name}");
+        }
+        assert_eq!(
+            (
+                column_names(&connection, "discovered_items"),
+                column_names(&connection, "repositories"),
+            ),
+            once
+        );
+    }
+
+    // An index written when the item read columns existed and the
+    // relationship column, tables and indexes did not.
+    #[test]
+    fn an_index_from_before_relationships_gains_only_what_it_lacks_and_is_marked() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = index_without_item_read_schema(directory.path());
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        connection
+            .execute_batch(
+                "ALTER TABLE discovered_items ADD COLUMN closed_by TEXT;
+                 ALTER TABLE discovered_items ADD COLUMN unknown_metadata TEXT;
+                 ALTER TABLE repositories ADD COLUMN refreshed_at INTEGER;
+                 UPDATE repositories SET refreshed_at = 7;",
+            )
+            .unwrap();
+        assert_eq!(
+            missing_item_read_schema(&connection).unwrap().len(),
+            1 + ITEM_READ_OBJECTS.len()
+        );
+
+        migrate_item_read_schema(&mut connection).unwrap();
+
+        assert!(missing_item_read_schema(&connection).unwrap().is_empty());
+        drop(connection);
+        assert_item_read_schema_once_and_marked(&path);
+        // What the index already held is kept.
+        let refreshed_at: i64 = open_registry(&path, &mut |_| {})
+            .unwrap()
+            .query_row("SELECT refreshed_at FROM repositories", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(refreshed_at, 7);
+    }
+
+    // An index written by the build before folders were recorded: it has
+    // every other table and column, a registration that needs no refresh
+    // and a context with an item.
+    #[test]
+    fn an_index_from_before_folders_gains_the_table_and_is_marked_once() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("index.sqlite3");
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required, refreshed_at)
+                 VALUES (1, '/repository', 1, 'accessible', 0, 7);
+                 INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required, refreshed_at)
+                 VALUES (2, '/other', 1, 'accessible', 0, 9);
+                 INSERT INTO contexts (id, repository_id, kind, worktree_path)
+                 VALUES (1, 1, 'primary', '/repository');
+                 INSERT INTO discovered_items
+                    (context_id, item_id, kind, canonical_path, title, activity_at, activity_source)
+                 VALUES (1, '01ARZ3NDEKTSV4RRFFQ69G5FAV', 'document', 'docs/a.md', 'A', 0, 'git');
+                 DROP TABLE discovered_folders;",
+            )
+            .unwrap();
+        assert_eq!(object_count(&connection, "table", "discovered_folders"), 0);
+        assert_eq!(missing_item_read_schema(&connection).unwrap().len(), 1);
+        let marks = |connection: &Connection| -> Vec<bool> {
+            connection
+                .prepare("SELECT refresh_required FROM repositories ORDER BY id")
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        };
+        assert_eq!(marks(&connection), [false, false]);
+        drop(connection);
+
+        // Opening the index is what migrates it.
+        let mut connection = open_registry(&path, &mut |_| {}).unwrap();
+        migrate_registry(&mut connection).unwrap();
+
+        assert_eq!(object_count(&connection, "table", "discovered_folders"), 1);
+        assert_eq!(
+            column_names(&connection, "discovered_folders"),
+            ["id", "context_id", "path", "is_empty"]
+        );
+        // Every registration is stale until it is refreshed: none has a
+        // folder stored.
+        assert_eq!(marks(&connection), [true, true]);
+        // What the index held is kept.
+        let kept: (i64, i64, i64) = connection
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM contexts), (SELECT COUNT(*) FROM discovered_items),
+                        (SELECT refreshed_at FROM repositories WHERE id = 1)",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(kept, (1, 1, 7));
+
+        // The table takes a folder of a context, refuses one of none and
+        // one stored twice, and lets its rows go with their context.
+        connection
+            .execute_batch(
+                "INSERT INTO discovered_folders (context_id, path, is_empty) VALUES (1, 'docs/a', 1)",
+            )
+            .unwrap();
+        for refused in [
+            "INSERT INTO discovered_folders (context_id, path, is_empty) VALUES (1, 'docs/a', 0)",
+            "INSERT INTO discovered_folders (context_id, path, is_empty) VALUES (9, 'docs/b', 0)",
+            "INSERT INTO discovered_folders (context_id, path, is_empty) VALUES (1, 'docs/b', 2)",
+        ] {
+            assert!(connection.execute_batch(refused).is_err(), "{refused}");
+        }
+        connection
+            .execute_batch("DELETE FROM contexts WHERE id = 1")
+            .unwrap();
+        let left: i64 = connection
+            .query_row("SELECT COUNT(*) FROM discovered_folders", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(left, 0);
+
+        // A second opening adds nothing and marks nothing.
+        connection
+            .execute_batch("UPDATE repositories SET refresh_required = 0")
+            .unwrap();
+        migrate_registry(&mut connection).unwrap();
+        assert_eq!(object_count(&connection, "table", "discovered_folders"), 1);
+        assert_eq!(marks(&connection), [false, false]);
+    }
+
+    #[test]
+    fn edges_and_item_problems_go_with_their_item_and_reject_what_is_not_one() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .unwrap();
+        migrate_registry(&mut connection).unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO repositories (id, root_path, enabled_at, accessibility, refresh_required)
+                 VALUES (1, '/repository', 1, 'accessible', 0);
+                 INSERT INTO contexts (id, repository_id, kind, worktree_path)
+                 VALUES (1, 1, 'primary', '/repository');
+                 INSERT INTO discovered_items
+                    (id, context_id, item_id, kind, canonical_path, title, activity_at, activity_source)
+                 VALUES (1, 1, 'A', 'ticket', 'p', 'T', 0, 'git');
+                 INSERT INTO item_edges (item_id, target_id, kind) VALUES (1, 'B', 'deps');
+                 INSERT INTO item_edges (item_id, target_id, kind) VALUES (1, 'B', 'parent');
+                 INSERT INTO item_problems (item_id, code) VALUES (1, 'invalid-slug');",
+            )
+            .unwrap();
+        let count = |connection: &Connection, table: &str| -> i64 {
+            connection
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        };
+
+        for rejected in [
+            // The same edge twice, a kind that is not one, and an item row
+            // that does not exist.
+            "INSERT INTO item_edges (item_id, target_id, kind) VALUES (1, 'B', 'deps')",
+            "INSERT INTO item_edges (item_id, target_id, kind) VALUES (1, 'C', 'related')",
+            "INSERT INTO item_edges (item_id, target_id, kind) VALUES (2, 'C', 'deps')",
+            "INSERT INTO item_problems (item_id, code) VALUES (2, 'invalid-slug')",
+        ] {
+            assert!(connection.execute(rejected, []).is_err(), "{rejected}");
+        }
+        assert_eq!(count(&connection, "item_edges"), 2);
+
+        // Replacing a context is deleting it: its items, and with them
+        // their edges and problems, go in that one statement.
+        connection.execute("DELETE FROM contexts", []).unwrap();
+        assert_eq!(count(&connection, "discovered_items"), 0);
+        assert_eq!(count(&connection, "item_edges"), 0);
+        assert_eq!(count(&connection, "item_problems"), 0);
+    }
 
     fn repository_on_main() -> (tempfile::TempDir, Repository) {
         let directory = tempfile::tempdir().unwrap();
@@ -1736,12 +2718,30 @@ mod tests {
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, source).unwrap();
         }
+        // A folder two levels down, made with native separators as well.
+        fs::create_dir_all(directory.path().join("docs").join("nested").join("inner")).unwrap();
         let mut sources = Vec::new();
+        let mut folders = Vec::new();
         let mut problems = Vec::new();
 
-        collect_root_sources(directory.path(), &mut sources, &mut problems);
+        collect_root_sources(directory.path(), &mut sources, &mut folders, &mut problems);
 
         assert!(problems.is_empty());
+        // A folder's path is written with forward slashes on every
+        // platform, as an item's is.
+        assert_eq!(
+            folders,
+            [
+                ObservedFolder {
+                    path: "docs/nested".to_owned(),
+                    empty: false
+                },
+                ObservedFolder {
+                    path: "docs/nested/inner".to_owned(),
+                    empty: true
+                },
+            ]
+        );
         assert_eq!(sources.len(), fixtures.len());
         for (expected, _) in fixtures {
             assert!(
@@ -1768,7 +2768,12 @@ mod tests {
         let mut sources = Vec::new();
         let mut problems = Vec::new();
 
-        collect_root_sources(directory.path(), &mut sources, &mut problems);
+        collect_root_sources(
+            directory.path(),
+            &mut sources,
+            &mut Vec::new(),
+            &mut problems,
+        );
 
         assert!(problems.is_empty());
         assert_eq!(sources.len(), 1);

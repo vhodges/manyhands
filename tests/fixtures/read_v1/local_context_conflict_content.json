@@ -1,0 +1,34 @@
+{
+  "code": "ok",
+  "command": "context read-local-conflict",
+  "data": {
+    "base": "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FC0\ntitle: Open ticket\ntype: task\nstatus: open\n---\nBody of Open ticket.\n",
+    "historical": false,
+    "incoming": "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: 01ARZ3NDEKTSV4RRFFQ69G5FC0\ntitle: Incoming\ntype: task\nstatus: open\n---\nBody of Incoming.\n",
+    "local": "---\nid: 01ARZ3NDEKTSV4RRFFQ69G5FC0\ntitle: Saved SENTINEL-TITLE-7f3a\ntype: task\nstatus: open\nmanyhands_managed: true\nmanyhands_kind: ticket\n---\nSaved body SENTINEL-BODY-91c2.\n",
+    "operation_id": "<operation>",
+    "token": "<token>"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": null,
+    "worktree": null
+  }
+}

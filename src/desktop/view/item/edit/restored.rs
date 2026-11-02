@@ -1,0 +1,357 @@
+//! The restored-draft route (design, Restored drafts and the close dialog;
+//! R-35, R-42, R-79): Continue editing of a draft stored for the tab's
+//! item or restored in it, and Save from a restored draft.
+//!
+//! - **Continue editing** (the draft banner, D2's restored section, Edit,
+//!   `e`). A stored draft is claimed into the tab first, as D2's Restore
+//!   claims it; a refused claim says why, in D2's words, and prepares
+//!   nothing. Then `context prepare` runs with the Edit intent, as Edit's
+//!   does (`prepare`): a refusal leaves the draft restored in the tab. Once
+//!   the item is read again in that context, the edit editor opens on the
+//!   draft: its text goes in exactly (R-79), the caret at the start, and
+//!   the tab is dirty, with Save enabled. The base is the draft's own. It
+//!   takes the read's token and context only when the branch alone changed
+//!   the token (`model::edit::adopted_base`), and D2's draft moves onto it;
+//!   otherwise the review opens (`review`).
+//! - **Save** from a restored draft (D2's section, or the close dialog)
+//!   runs those steps, then saves. It waits, saying why, while the draft
+//!   leaves a required field empty.
+//! - **The route** is the draft's classification against the tab's read
+//!   (R-42): a new item's draft whose item is missing (`NotCreated`) is
+//!   continued through `context prepare` with the Create intent, and its
+//!   editor opens with no item read (`create`); any other draft takes the
+//!   Edit intent. A new item's draft whose item exists after all goes on
+//!   as an ordinary unverified draft (`model::drafts::create::unmarked`),
+//!   and the review opens.
+//!
+//! A context is so always provisioned through `context prepare`. Nothing
+//! here holds draft text but the session it opens.
+
+use gpui_kit::{
+    AnyElement, App, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement, Role,
+    StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    component::{Disableable, button::Button},
+    div,
+};
+use manyhands::{
+    drafts::{DraftBase, DraftId, TargetState, is_new_item_base},
+    repository::ItemDto,
+};
+
+use super::{
+    DraftLink, Phase,
+    open::{Opening, Text},
+    saved::body_of,
+};
+use crate::desktop::{
+    model::{
+        drafts::create::unmarked,
+        edit::save_state::SAVE,
+        edit::{CONTINUE_EDITING, adopted_base, base_for_edit, edit_offered},
+        tabs::TabKey,
+    },
+    view::item::ItemPane,
+};
+
+/// What Continue editing goes on to once the editor opens.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Then {
+    Edit,
+    Save,
+}
+
+/// The draft Continue editing continues, from its prepare until the
+/// editor opens on it.
+pub(super) struct Continuing {
+    pub(super) draft: DraftId,
+    pub(super) then: Then,
+    /// A new item's draft whose item is not created yet: prepared with the
+    /// Create intent (R-42).
+    pub(super) create: bool,
+}
+
+/// The draft Continue editing would continue.
+#[derive(Clone, Copy)]
+pub(super) enum Continued {
+    /// Restored in this tab, with no edit session.
+    Restored(DraftId),
+    /// Stored for this tab's item, not claimed by this process.
+    Stored(DraftId),
+}
+
+impl ItemPane {
+    /// The draft of this tab's item that Continue editing continues: one
+    /// restored here with no edit session, else one stored for the item.
+    pub(super) fn continued(&self, cx: &App) -> Option<Continued> {
+        if self.has_session() {
+            return None;
+        }
+        let tab = self.tab_key();
+        let TabKey::Item { repo, kind, id } = &tab else {
+            return None;
+        };
+        let registry = self.services.drafts().read(cx);
+        if let Some(id) = registry.attached(&tab) {
+            return Some(Continued::Restored(id));
+        }
+        registry.stored_for(repo, *kind, id).map(Continued::Stored)
+    }
+
+    /// Continue editing the draft stored or restored here, going on to
+    /// `then` once the editor opens: by its classification against the
+    /// tab's read, with the Create intent for a new item's draft whose item
+    /// is not created yet, and otherwise the Edit intent (R-42). False when
+    /// there is none, so Edit prepares as it does for an item with no draft.
+    pub(super) fn continue_requested(&mut self, then: Then, cx: &mut Context<Self>) -> bool {
+        let Some(continued) = self.continued(cx) else {
+            return false;
+        };
+        let create = self.continued_not_created(cx);
+        match continued {
+            Continued::Restored(id) => self.continue_restored(id, then, create, cx),
+            Continued::Stored(id) => self.claim(
+                id,
+                move |pane, id, cx| pane.continue_restored(id, then, create, cx),
+                cx,
+            ),
+        }
+        true
+    }
+
+    /// The restored draft `draft` is continued: the context is prepared,
+    /// with the Create intent when `create`, and the editor opens on the
+    /// draft once the item is read again.
+    fn continue_restored(
+        &mut self,
+        draft: DraftId,
+        then: Then,
+        create: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.edit.phase != Phase::Viewing {
+            return;
+        }
+        self.edit.continuing = Some(Continuing {
+            draft,
+            then,
+            create,
+        });
+        self.prepare_continued(cx);
+    }
+
+    /// A close dialog's Save still in Continue editing's steps was
+    /// cancelled, or the dialog closed otherwise: the editor still opens on
+    /// the draft, but nothing is saved (Task 18 fix 1, M1).
+    pub(in crate::desktop::view) fn continue_without_saving(&mut self) {
+        if let Some(continuing) = &mut self.edit.continuing {
+            continuing.then = Then::Edit;
+        }
+        // Nor one that waits for the open's relationship check (N1).
+        self.edit.save.continued = false;
+    }
+
+    /// Continue editing's Save, its steps done and the editor open, as the
+    /// frame that opened it is drawn: the opening checks a proposal that
+    /// differs from the base, and the Save waits for that check rather than
+    /// stopping on it (Task 27 fix 2, N1). It is sent then unless something
+    /// blocks it, which the toolbar says. A press of Save meanwhile waits
+    /// as ever (`relations_blocked`).
+    pub(super) fn save_continued(&mut self, cx: &mut Context<Self>) {
+        self.edit.save.continued = true;
+        self.follow_continued_save(cx);
+    }
+
+    /// A relationship check landed, or another replaced it, or none was
+    /// asked: a Save Continue editing carried out, waiting for the check of
+    /// what the session proposes now, is started once none runs. A session
+    /// that ended, or a tab that closed, has none waiting.
+    pub(in crate::desktop::view::item) fn follow_continued_save(&mut self, cx: &mut Context<Self>) {
+        if !self.edit.save.continued || self.relations_checking() {
+            return;
+        }
+        self.edit.save.continued = false;
+        self.start_save(cx);
+    }
+
+    /// The registry changed: a continued draft that has ended (discarded
+    /// elsewhere, or let go of) is no longer continued, so a later Retry
+    /// of its prepare opens the item as Edit does (M1).
+    pub(in crate::desktop::view::item) fn follow_continuing(&mut self, cx: &App) {
+        let ended = self.edit.continuing.as_ref().is_some_and(|continuing| {
+            self.services
+                .drafts()
+                .read(cx)
+                .current_id(continuing.draft)
+                .is_none()
+        });
+        if ended {
+            self.edit.continuing = None;
+        }
+    }
+
+    /// Save from D2's restored section: Continue editing's steps, then the
+    /// save.
+    fn save_restored(&mut self, cx: &mut Context<Self>) {
+        if self.edit_available(cx) {
+            self.continue_requested(Then::Save, cx);
+        }
+    }
+
+    /// Loading's read, `item`, landed for a continued draft: the edit
+    /// editor opens on it (R-42, R-79). A draft gone meanwhile opens
+    /// nothing.
+    pub(super) fn open_restored(
+        &mut self,
+        continuing: Continuing,
+        item: &ItemDto,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let drafts = self.services.drafts().clone();
+        let registry = drafts.read(cx);
+        let Some(id) = registry.current_id(continuing.draft) else {
+            return;
+        };
+        let Some(session) = registry.session(id) else {
+            return;
+        };
+        let (Some(read), Some(body)) = (base_for_edit(item), item.body.as_deref()) else {
+            return;
+        };
+        let meta = session.current().clone();
+        // R-42: a new item's draft whose item exists after all goes on as an
+        // ordinary unverified draft, and the review opens on it.
+        let (drafted, unmarking) = match session.base().cloned() {
+            Some(base) if is_new_item_base(&base) => (Some(unmarked(base)), true),
+            base => (base, false),
+        };
+        let adopted = drafted.as_ref().and_then(|base| adopted_base(base, item));
+        // A draft with no base is unverified against the item as read.
+        let base = adopted.clone().or(drafted).unwrap_or(DraftBase {
+            observation: None,
+            ..read
+        });
+        if adopted.is_some() || unmarking {
+            let moved = base.clone();
+            drafts.update(cx, |registry, cx| registry.adopt_base(id, moved, cx));
+        }
+        let text = body_of(&meta).to_owned();
+        let opening = Opening {
+            base,
+            meta,
+            draft: DraftLink::Live(id),
+        };
+        self.open_session(opening, body, Text::Draft(&text), window, cx);
+        if adopted.is_none() {
+            self.open_review(cx);
+        } else if continuing.then == Then::Save {
+            // Once the frame that opened the editor is drawn.
+            cx.defer_in(window, |pane, _, cx| pane.save_continued(cx));
+        }
+    }
+
+    /// Whether the draft restored here holds what the item does not: its
+    /// Save has something to save. A new item's draft whose item is not
+    /// created yet always does (R-73).
+    pub(in crate::desktop::view::item) fn restored_unsaved(&self, cx: &App) -> bool {
+        let registry = self.services.drafts().read(cx);
+        let Some(id) = registry.attached(&self.tab_key()) else {
+            return false;
+        };
+        let Some(read) = self.model.item_read() else {
+            return false;
+        };
+        let offered = match read {
+            Ok(item) => edit_offered(self.model.target(), item),
+            Err(_) => self.continued_not_created(cx),
+        };
+        offered
+            && !matches!(
+                registry.classify(id, read),
+                Some(TargetState::AlreadySaved) | None
+            )
+    }
+
+    /// Continue editing, as the button `id` of the draft banner or D2's
+    /// section: offered while Edit can start.
+    pub(in crate::desktop::view::item) fn continue_button(
+        &self,
+        id: &'static str,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let enabled = self.edit_available(cx);
+        action(id, CONTINUE_EDITING, enabled, None)
+            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                this.edit_requested(window, cx);
+            }))
+            .into_any_element()
+    }
+
+    /// D2's section's Save: offered while Edit can start and the draft
+    /// holds what the item does not; unavailable, with its note, for one
+    /// that leaves a required field empty, whose note says which. A new
+    /// item's draft is created (R-42).
+    pub(in crate::desktop::view::item) fn restored_save_button(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let enabled = self.edit_available(cx) && self.restored_unsaved(cx);
+        let note = self.save_blocked(cx);
+        action("draft-save", SAVE, enabled, note)
+            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.save_restored(cx)))
+            .into_any_element()
+    }
+}
+
+/// A draft action, the button `id`-button in the wrapper `id`: enabled or
+/// not, and, with a `note`, unavailable and saying why: a required field's
+/// message.
+fn action(
+    id: &'static str,
+    label: &'static str,
+    enabled: bool,
+    note: Option<&'static str>,
+) -> Action {
+    Action {
+        id,
+        label,
+        enabled: enabled && note.is_none(),
+        note,
+    }
+}
+
+/// A draft action before it takes its press.
+struct Action {
+    id: &'static str,
+    label: &'static str,
+    enabled: bool,
+    note: Option<&'static str>,
+}
+
+impl Action {
+    fn on_click(
+        self,
+        press: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> impl IntoElement {
+        let button = Button::new(gpui_kit::ElementId::from(format!("{}-button", self.id)))
+            .label(self.label)
+            .disabled(!self.enabled)
+            .on_click(press);
+        let wrapper = div()
+            .id(self.id)
+            .test_support()
+            .role(Role::Group)
+            .aria_label(self.label)
+            .flex_none();
+        let Some(note) = self.note else {
+            return wrapper.child(button);
+        };
+        wrapper.aria_description(note).child(
+            div()
+                .id(gpui_kit::ElementId::from(format!("{}-note", self.id)))
+                .test_support()
+                .aria_label(note)
+                .child(button.tooltip(note)),
+        )
+    }
+}

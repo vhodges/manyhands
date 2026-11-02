@@ -1,0 +1,12 @@
+The request completed.
+request: <request-id>
+Action: save_ticket
+Committed: true
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
+Operation id: <operation-id>
+Paths: none
+Paths complete: true
+Released request id: 01ARZ3NDEKTSV4RRFFQ69G5FX1
+State: failed
+Step: authoring_checkpoint_observed
+Worktree: .manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC0

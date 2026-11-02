@@ -1,0 +1,63 @@
+{
+  "code": "ok",
+  "command": "operation abandon",
+  "data": {
+    "command": "operation abandon",
+    "confirmation_id": "<confirmation>",
+    "details": {
+      "action": "save_ticket",
+      "committed": false,
+      "files_changed": false,
+      "git_state_changed": false,
+      "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+      "operation_id": "<abandoned>",
+      "paths": [
+        ".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC0/.manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC0/ticket.md"
+      ],
+      "paths_complete": true,
+      "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+      "root": "<root>",
+      "state": "worktree_observed",
+      "step": "worktree_observed",
+      "worktree": ".manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC0"
+    },
+    "effects": [
+      {
+        "effect": "operation_closed"
+      },
+      {
+        "effect": "request_released"
+      }
+    ],
+    "expires_at": "2023-11-14T22:23:20Z",
+    "scope": {
+      "branch": null,
+      "item_id": null,
+      "remote": null,
+      "repository": "<root>",
+      "worktree": null
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

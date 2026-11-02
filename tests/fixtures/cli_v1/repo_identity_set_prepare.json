@@ -1,0 +1,61 @@
+{
+  "code": "ok",
+  "command": "repo identity-set",
+  "data": {
+    "command": "repo identity-set",
+    "confirmation_id": "<confirmation-id>",
+    "details": {
+      "current": {
+        "email": "manyhands-test@example.invalid",
+        "initials": null,
+        "name": "Manyhands Test"
+      },
+      "effective": {
+        "email": "manyhands-test@example.invalid",
+        "initials": "mt",
+        "initials_source": "derived",
+        "name": "Manyhands Test",
+        "source": "repository"
+      },
+      "email": "new@example.invalid",
+      "initials": "np",
+      "name": "New Person",
+      "root": "<repository>"
+    },
+    "effects": [
+      {
+        "effect": "identity_written"
+      }
+    ],
+    "expires_at": "<expires-at>",
+    "scope": {
+      "branch": null,
+      "item_id": null,
+      "remote": null,
+      "repository": "<repository>",
+      "worktree": null
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

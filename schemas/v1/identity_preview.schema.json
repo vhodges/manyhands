@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 identity preview",
+  "description": "The data of a prepare envelope that gives a preview of repo identity-set: what the repository's own Git configuration will hold, and the confirmation an execute of the same command, repository and input presents to write it. A prepare that gives no preview carries no preview data: a rejection, and a no-op for a repository whose own configuration already holds what is asked.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["confirmation_id", "expires_at", "command", "scope", "effects", "details"],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "description": "The identity that will be written, and what is there now. The command writes the repository's own Git configuration and no other: not the global, the XDG or the system one. The repository need not be one Manyhands was enabled on.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "name", "email", "initials", "current", "effective"],
+      "properties": {
+        "root": {
+          "description": "The repository's root, as the request's records name it.",
+          "type": "string"
+        },
+        "name": {
+          "description": "The name that will be written.",
+          "type": "string"
+        },
+        "email": {
+          "description": "The email that will be written.",
+          "type": "string"
+        },
+        "initials": {
+          "description": "The initials the repository's own configuration will hold: the ones the request sets, in lower case, or the ones it holds now when the request says nothing of them. Null when it will hold none: the request clears them, or says nothing of them and none are set.",
+          "type": ["string", "null"]
+        },
+        "current": {
+          "description": "What the repository's own Git configuration holds now. This is what the confirmation is for: a request whose repository holds anything else by the time it runs is external_change.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "email", "initials"],
+          "properties": {
+            "name": {
+              "type": ["string", "null"]
+            },
+            "email": {
+              "type": ["string", "null"]
+            },
+            "initials": {
+              "description": "manyhands.initials as it is written. It need not be initials a short code can be composed with.",
+              "type": ["string", "null"]
+            }
+          }
+        },
+        "effective": {
+          "description": "The identity a commit in the repository would carry now, with the level of Git configuration it comes from, and the initials a short code would be composed with. It is shown and is no part of what the confirmation is for.",
+          "$ref": "identity.schema.json"
+        }
+      }
+    }
+  }
+}

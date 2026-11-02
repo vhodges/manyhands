@@ -11,10 +11,10 @@ use std::{
     net::{SocketAddr, TcpListener},
     path::{Path, PathBuf},
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{runtime::Runtime, sync::watch};
 
@@ -25,6 +25,30 @@ pub struct AdvertisementHold {
 }
 pub(super) struct AdvertisementGate {
     pub reached: std::sync::mpsc::Sender<()>,
+    pub release: tokio::sync::oneshot::Receiver<()>,
+}
+/// A real upload-pack relay pauses only after forwarding this many transfer
+/// bytes. The same controller contract as advertisements; no synthetic transport.
+pub(super) struct TransferGate {
+    pub after_bytes: usize,
+    pub gate: AdvertisementGate,
+}
+/// Fixed labels shared by the gated receiver-receipt regression and its worker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReceiveAuditEvent {
+    PublicationHeld,
+    TransportReturned,
+    ReceiptWaiting,
+    HelperReturned,
+}
+pub struct ReceiveAuditHold(tokio::sync::oneshot::Sender<()>);
+impl ReceiveAuditHold {
+    pub fn release(self) -> Result<(), FixtureError> {
+        fixed(self.0.send(()))
+    }
+}
+pub(super) struct ReceiveAuditGate {
+    pub events: std::sync::mpsc::Sender<ReceiveAuditEvent>,
     pub release: tokio::sync::oneshot::Receiver<()>,
 }
 impl AdvertisementHold {
@@ -95,6 +119,7 @@ pub enum FixtureBoundary {
 #[derive(Clone, Copy)]
 pub(super) enum Fault {
     Disconnect(FixtureBoundary),
+    DisconnectAfterTransferBytes(usize),
     Stall(FixtureBoundary, Duration),
     Pace(Duration),
 }
@@ -105,18 +130,30 @@ pub(super) struct Shared {
     pub reject: AtomicBool,
     pub anonymous: AtomicBool,
     pub accepted: Mutex<Vec<Vec<u8>>>,
+    /// Every socket the listener accepted, whatever became of it.
+    pub sockets: AtomicUsize,
+    pub authentication_attempts: AtomicUsize,
+    pub upload_pack_bytes: AtomicUsize,
+    pub byte_disconnects: AtomicUsize,
+    pub rejected_authentications: AtomicUsize,
     pub helpers: AtomicUsize,
     pub command_path: Mutex<String>,
     pub commands: Mutex<Vec<Vec<u8>>>,
     pub active_helpers: AtomicUsize,
     pub completed_helpers: AtomicUsize,
+    pub helper_audits: Mutex<(usize, usize)>,
+    pub helper_audits_changed: Condvar,
     pub helper_tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     pub fault: Mutex<Option<Fault>>,
     pub advertisement_hold: Mutex<Option<AdvertisementGate>>,
+    pub transfer_hold: Mutex<Option<TransferGate>>,
+    pub receive_audit_hold: Mutex<Option<ReceiveAuditGate>>,
+    pub receive_receipt_events: Mutex<Option<std::sync::mpsc::Sender<ReceiveAuditEvent>>>,
     pub hostile: Mutex<Option<String>>,
     pub receive_status_withheld: AtomicBool,
-    pub receive_race: Mutex<Option<(git2::Oid, git2::Oid)>>,
+    pub receive_race: Mutex<Option<(String, git2::Oid, git2::Oid)>>,
     pub receive_updates: Mutex<Vec<ReceiveUpdate>>,
+    pub receive_updates_changed: Condvar,
     pub receive_advertisements: AtomicUsize,
     pub repository: PathBuf,
     pub upload: GitHelper,
@@ -145,6 +182,33 @@ pub struct SshRemoteFixture {
 }
 
 impl SshRemoteFixture {
+    /// Hold the next proven ref effect after forwarding report-status but before
+    /// publishing its receipt. Dropping the controller refuses accepted evidence.
+    pub fn hold_receive_audit(
+        &self,
+        events: std::sync::mpsc::Sender<ReceiveAuditEvent>,
+    ) -> Result<ReceiveAuditHold, FixtureError> {
+        let mut hold = fixed(self.shared.receive_audit_hold.lock())?;
+        let mut receipt_events = fixed(self.shared.receive_receipt_events.lock())?;
+        if hold.is_some() || receipt_events.is_some() {
+            return Err(FixtureError);
+        }
+        let (release, released) = tokio::sync::oneshot::channel();
+        *receipt_events = Some(events.clone());
+        *hold = Some(ReceiveAuditGate {
+            events,
+            release: released,
+        });
+        Ok(ReceiveAuditHold(release))
+    }
+
+    pub fn fixture_push_transport_returned(&self) -> Result<(), FixtureError> {
+        if let Some(events) = fixed(self.shared.receive_receipt_events.lock())?.as_ref() {
+            fixed(events.send(ReceiveAuditEvent::TransportReturned))?;
+        }
+        Ok(())
+    }
+
     pub fn hold_advertisement(&self) -> Result<AdvertisementHold, FixtureError> {
         let mut gate = fixed(self.shared.advertisement_hold.lock())?;
         if gate.is_some() {
@@ -155,6 +219,26 @@ impl SshRemoteFixture {
         *gate = Some(AdvertisementGate {
             reached: ready,
             release: released,
+        });
+        Ok(AdvertisementHold { reached, release })
+    }
+
+    pub fn hold_transfer_after(
+        &self,
+        after_bytes: usize,
+    ) -> Result<AdvertisementHold, FixtureError> {
+        let mut hold = fixed(self.shared.transfer_hold.lock())?;
+        if hold.is_some() || after_bytes == 0 {
+            return Err(FixtureError);
+        }
+        let (ready, reached) = std::sync::mpsc::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *hold = Some(TransferGate {
+            after_bytes,
+            gate: AdvertisementGate {
+                reached: ready,
+                release: released,
+            },
         });
         Ok(AdvertisementHold { reached, release })
     }
@@ -233,18 +317,29 @@ impl SshRemoteFixture {
             reject: AtomicBool::new(false),
             anonymous: AtomicBool::new(false),
             accepted: Mutex::new(Vec::new()),
+            sockets: AtomicUsize::new(0),
+            authentication_attempts: AtomicUsize::new(0),
+            upload_pack_bytes: AtomicUsize::new(0),
+            byte_disconnects: AtomicUsize::new(0),
+            rejected_authentications: AtomicUsize::new(0),
             helpers: AtomicUsize::new(0),
             command_path: Mutex::new("/fixture.git".into()),
             commands: Mutex::new(Vec::new()),
             active_helpers: AtomicUsize::new(0),
             completed_helpers: AtomicUsize::new(0),
+            helper_audits: Mutex::new((0, 0)),
+            helper_audits_changed: Condvar::new(),
             helper_tasks: Mutex::new(Vec::new()),
             fault: Mutex::new(None),
             advertisement_hold: Mutex::new(None),
+            transfer_hold: Mutex::new(None),
+            receive_audit_hold: Mutex::new(None),
+            receive_receipt_events: Mutex::new(None),
             hostile: Mutex::new(None),
             receive_status_withheld: AtomicBool::new(false),
             receive_race: Mutex::new(None),
             receive_updates: Mutex::new(Vec::new()),
+            receive_updates_changed: Condvar::new(),
             receive_advertisements: AtomicUsize::new(0),
             repository: repo_path,
             upload: helpers.0,
@@ -279,21 +374,98 @@ impl SshRemoteFixture {
         expected: git2::Oid,
         competing: git2::Oid,
     ) -> Result<(), FixtureError> {
+        self.race_update("refs/heads/main", expected, competing)
+    }
+    pub fn race_context_update(
+        &self,
+        reference: ObservationRef,
+        expected: git2::Oid,
+        competing: git2::Oid,
+    ) -> Result<(), FixtureError> {
+        if !matches!(
+            reference,
+            ObservationRef::RemoteDocument
+                | ObservationRef::RemoteTicket
+                | ObservationRef::LocalTicket
+        ) {
+            return Err(FixtureError);
+        }
+        self.race_update(reference.name(), expected, competing)
+    }
+    /// The same single competing write for any one owned branch.
+    pub fn race_update(
+        &self,
+        reference: &str,
+        expected: git2::Oid,
+        competing: git2::Oid,
+    ) -> Result<(), FixtureError> {
         let repo = fixed(git2::Repository::open_bare(&self.shared.repository))?;
         fixed(repo.find_commit(competing))?;
-        if fixed(repo.refname_to_id("refs/heads/main"))? != expected
+        if fixed(repo.refname_to_id(reference))? != expected
             || self.shared.receive_race.lock().unwrap().is_some()
         {
             return Err(FixtureError);
         }
-        *self.shared.receive_race.lock().unwrap() = Some((expected, competing));
+        *self.shared.receive_race.lock().unwrap() = Some((reference.into(), expected, competing));
         Ok(())
     }
     pub fn receive_updates(&self) -> Vec<ReceiveUpdate> {
         self.shared.receive_updates.lock().unwrap().clone()
     }
+    /// Await the exact receipt appended after a cursor captured before the push.
+    /// Existing identical receipts and rejected commands cannot prove success.
+    pub fn wait_for_receive_update(
+        &self,
+        after: usize,
+        expected: &ReceiveUpdate,
+    ) -> Result<(), FixtureError> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut updates = fixed(self.shared.receive_updates.lock())?;
+        loop {
+            let tail = updates.get(after..).ok_or(FixtureError)?;
+            if let Some(update) = tail.iter().find(|update| {
+                update.reference == expected.reference
+                    && update.old_oid == expected.old_oid
+                    && update.new_oid == expected.new_oid
+            }) {
+                return if update.accepted == expected.accepted {
+                    Ok(())
+                } else {
+                    Err(FixtureError)
+                };
+            }
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or(FixtureError)?;
+            if let Some(events) = fixed(self.shared.receive_receipt_events.lock())?.take() {
+                fixed(events.send(ReceiveAuditEvent::ReceiptWaiting))?;
+            }
+            (updates, _) = fixed(
+                self.shared
+                    .receive_updates_changed
+                    .wait_timeout(updates, remaining),
+            )?;
+        }
+    }
     pub fn receive_advertisements(&self) -> usize {
         self.shared.receive_advertisements.load(Ordering::SeqCst)
+    }
+    /// Settle all started helper relays, including their receive audit, before
+    /// comparing counters. No new operation may start while this barrier runs.
+    pub fn wait_for_helper_audits(&self) -> Result<(), FixtureError> {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut audits = fixed(self.shared.helper_audits.lock())?;
+        while audits.0 != audits.1 {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or(FixtureError)?;
+            (audits, _) = fixed(
+                self.shared
+                    .helper_audits_changed
+                    .wait_timeout(audits, remaining),
+            )?;
+        }
+        Ok(())
     }
     pub fn clear_fault(&self) {
         *self.shared.fault.lock().unwrap() = None;
@@ -305,6 +477,17 @@ impl SshRemoteFixture {
         fixed(config.set_bool("core.bare", !reject))?;
         fixed(config.set_str(
             "receive.denyCurrentBranch",
+            if reject { "refuse" } else { "ignore" },
+        ))
+    }
+    /// Native receive-pack refusal, scoped to fixture-owned context deletions.
+    pub fn reject_context_deletion(&self, reject: bool) -> Result<(), FixtureError> {
+        let repo = fixed(git2::Repository::open_bare(&self.shared.repository))?;
+        let mut config = fixed(repo.config())?;
+        fixed(config.set_bool("core.bare", !reject))?;
+        fixed(repo.set_head(ObservationRef::RemoteDocument.name()))?;
+        fixed(config.set_str(
+            "receive.denyDeleteCurrent",
             if reject { "refuse" } else { "ignore" },
         ))
     }
@@ -360,8 +543,20 @@ impl SshRemoteFixture {
     pub fn allow_client_public_key(&self, key: PublicKey) {
         *self.shared.allowed.lock().unwrap() = key;
     }
+    /// How many connections the server has accepted: every socket, also
+    /// one whose client went away before it authenticated, as a client
+    /// that refuses the host's key does.
+    pub fn accepted_sockets(&self) -> usize {
+        self.shared.sockets.load(Ordering::SeqCst)
+    }
     pub fn accepted_keys(&self) -> Vec<Vec<u8>> {
         self.shared.accepted.lock().unwrap().clone()
+    }
+    pub fn authentication_counts(&self) -> (usize, usize) {
+        (
+            self.shared.authentication_attempts.load(Ordering::SeqCst),
+            self.shared.rejected_authentications.load(Ordering::SeqCst),
+        )
     }
     /// Choose one exact virtual target; helpers always receive the owned repo path.
     pub fn expect_command_path(&self, path: &str) {
@@ -417,6 +612,19 @@ impl SshRemoteFixture {
     pub fn disconnect_at(&self, boundary: FixtureBoundary) {
         *self.shared.fault.lock().unwrap() = Some(Fault::Disconnect(boundary));
     }
+    /// Disconnect a negotiated upload only after this many response bytes have
+    /// actually been forwarded. Install while its byte barrier is held.
+    pub fn disconnect_after_transfer_bytes(&self, after_bytes: usize) {
+        assert!(after_bytes > 0);
+        *self.shared.fault.lock().unwrap() = Some(Fault::DisconnectAfterTransferBytes(after_bytes));
+    }
+    /// Sideband-1 PACK payload bytes, excluding framing, ACKs and progress text.
+    pub fn upload_pack_bytes(&self) -> usize {
+        self.shared.upload_pack_bytes.load(Ordering::SeqCst)
+    }
+    pub fn byte_disconnects(&self) -> usize {
+        self.shared.byte_disconnects.load(Ordering::SeqCst)
+    }
     pub fn stall_at(&self, boundary: FixtureBoundary, delay: Duration) {
         *self.shared.fault.lock().unwrap() = Some(Fault::Stall(boundary, delay));
     }
@@ -466,4 +674,10 @@ pub fn generate_key() -> Result<PrivateKey, FixtureError> {
 
 pub fn receiver_command_fragmentation() -> Result<(), FixtureError> {
     server::receiver_command_fragmentation()
+}
+pub fn deletion_effect_proof(path: &Path, oid: git2::Oid) -> Result<(), FixtureError> {
+    server::deletion_effect_proof(path, oid)
+}
+pub fn upload_pack_counter_fragmentation() -> Result<(), FixtureError> {
+    server::upload_pack_counter_fragmentation()
 }

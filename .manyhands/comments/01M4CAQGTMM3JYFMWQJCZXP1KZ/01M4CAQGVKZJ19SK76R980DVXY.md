@@ -1,9 +1,10 @@
 ---
+id: 01M4CAQGVKZJ19SK76R980DVXY
+item_id: 01M4CAQGTMM3JYFMWQJCZXP1KZ
+created_at: 2026-10-07T23:21:12Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4CAQGVKZJ19SK76R980DVXY"
-item_id: "01M4CAQGTMM3JYFMWQJCZXP1KZ"
-created_at: "2026-10-07T23:21:12Z"
 ---
 
 Planning checkpoint: the product owner asked to replan Wave 03 into two

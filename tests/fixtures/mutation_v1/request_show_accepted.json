@@ -1,0 +1,44 @@
+{
+  "code": "ok",
+  "command": "request show",
+  "data": {
+    "accepted_at": "2023-11-14T22:13:20Z",
+    "command": "document save",
+    "finished_at": null,
+    "operations": [
+      {
+        "family": "local",
+        "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA0"
+      },
+      {
+        "family": "remote",
+        "operation_id": "01ARZ3NDEKTSV4RRFFQ69G5FA1"
+      }
+    ],
+    "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FQ0",
+    "result": null,
+    "state": "accepted"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

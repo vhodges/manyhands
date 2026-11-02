@@ -1,0 +1,102 @@
+Usage: manyhands-cli [OPTIONS] [COMMAND]
+
+Commands:
+  repo       
+  remote     
+  key        
+  host       
+  document   
+  folder     
+  ticket     
+  comment    
+  index      
+  poll       
+  operation  
+  id         
+  request    
+  path       
+  item       
+  conflict   
+
+Options:
+      --json             Write a JSON result.
+      --non-interactive  Run without terminal prompts.
+      --help             Show help.
+      --version          Show the version.
+
+Command catalog:
+  repo list  List registered repositories. Available now.
+  repo inspect  Inspect a repository, including an unregistered one. Available now.
+  repo identity  Show repository identity. Available now.
+  remote list  List redacted repository remotes. Available now.
+  key list  List registered keys. Available now.
+  key show  Show key metadata. Available now.
+  key public  Print public key text. Available now.
+  host list  List stored host pins. Available now.
+  host inspect  Inspect a stored host pin. Available now.
+  document list  List documents. Available now.
+  document show  Show a document by ID or path. Available now.
+  folder list  List document folders. Available now.
+  ticket list  List tickets, open and closed unless filtered. Available now.
+  ticket show  Show a ticket by ID or path. Available now.
+  ticket ready  List ready tickets. Available now.
+  ticket blocked  List blocked tickets and their reasons. Available now.
+  ticket deps  Show ticket dependencies. Available now.
+  ticket children  List child tickets. Available now.
+  ticket cycles  List ticket relationship cycles. Available now.
+  ticket plan  Show ticket execution batches. Available now.
+  ticket critical-path  Show the ticket critical path. Available now.
+  ticket find  Find tickets by short code. Available now.
+  comment list  List comments for an item. Available now.
+  index status  Show index status. Available now.
+  poll status  Show polling status. Available now.
+  operation list  List repository operations. Available now.
+  operation show  Show a repository operation. Available now.
+  id new  Generate a new item ID. Available now.
+  repo create  Create a repository. Available now.
+  repo enable  Enable Manyhands in a repository. Available now.
+  repo remove  Remove a repository registration. Available now.
+  repo identity-set  Set repository identity. Available now.
+  remote add  Add a repository remote. Available now.
+  remote remove  Remove a repository remote. Available now.
+  remote select  Select a repository remote. Available now.
+  key generate  Generate a key. Available now.
+  key import  Import a key. Available now.
+  key select  Select a key for a repository. Available now.
+  key clear  Clear a repository's selected key. Available now.
+  key remove  Remove a key registration. Available now.
+  key delete  Delete a key. Available now.
+  host approve  Approve a host pin. Available now.
+  host replace  Replace a host pin. Available now.
+  host observe  Observe a host key. Available now.
+  request show  Show a request. Available now.
+  request cancel  Cancel a request. Available now.
+  folder create  Create a document folder. Available now.
+  document create  Create a document. Available now.
+  document save  Save a document. Available now.
+  document move  Move a document. Available now.
+  document repair  Repair a document. Available now.
+  ticket create  Create a ticket. Available now.
+  ticket save  Save a ticket. Available now.
+  ticket repair  Repair a ticket. Available now.
+  ticket slug-assign  Assign a ticket short code. Available now.
+  index refresh  Refresh the index. Available now.
+  index rebuild  Rebuild the index. Available now.
+  path observe  Observe a path for authoring or repair. Available now.
+  ticket check  Check ticket relationships. Available now.
+  comment add  Add a comment. Available now.
+  item sync  Synchronize an item. Available now.
+  repo sync  Synchronize a repository. Available now.
+  item republish  Republish a deleted item branch. Available now.
+  conflict show  Show a conflict. Available now.
+  conflict resolve  Resolve a conflict. Available now.
+  operation resume  Resume an operation. Available now.
+  operation abandon  Abandon an operation. Available now.
+  document promote  Promote a document. Arrives with C5.
+  ticket close  Close a ticket. Arrives with C5.
+  poll once  Poll a repository once. Arrives with C5.
+  poll configure  Configure polling. Arrives with C5.
+  poll pause  Pause polling. Arrives with C5.
+  poll resume  Resume polling. Arrives with C5.
+
+MANYHANDS_DATA_DIR: advanced/testing data-directory override; relative paths use the invocation directory.

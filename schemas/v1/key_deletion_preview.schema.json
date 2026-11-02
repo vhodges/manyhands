@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 key deletion preview",
+  "description": "The data of a prepare envelope that gives a preview of key delete: what the deletion will do, and the confirmation an execute of the same command and key presents to do it. A prepare that gives no preview carries no preview data: a rejection, as for a key that is selected, that Manyhands did not generate or that is not registered.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["confirmation_id", "expires_at", "command", "scope", "effects", "details"],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "description": "The key that will be deleted and its files, as the key list gives them. It holds no key material.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "fingerprint", "private_key_path", "public_key_path"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "fingerprint": {
+          "description": "The fingerprint the key's registration stores.",
+          "type": ["string", "null"]
+        },
+        "private_key_path": {
+          "description": "The private key file that will be deleted.",
+          "type": "string"
+        },
+        "public_key_path": {
+          "description": "The public key file that will be deleted.",
+          "type": ["string", "null"]
+        }
+      }
+    }
+  }
+}

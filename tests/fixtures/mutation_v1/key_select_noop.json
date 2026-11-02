@@ -1,0 +1,33 @@
+{
+  "code": "already_applied",
+  "command": "key select",
+  "data": {
+    "deletion": null,
+    "fingerprint": null,
+    "generation": null,
+    "id": "<key>",
+    "label": "Work laptop"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request was already applied; nothing changed.",
+  "operation_id": "<operation>",
+  "outcome": "noop",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX2",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": null,
+    "worktree": null
+  }
+}

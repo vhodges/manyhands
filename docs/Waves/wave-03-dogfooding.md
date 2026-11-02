@@ -43,7 +43,7 @@ identifiers and the Wave 02 entry dependency changed; see
 
 ## Authority And Traceability
 
-This Wave implements [PRD v0.5](../PRD/mvp.md), the
+This Wave implements [PRD v0.6](../PRD/mvp.md), the
 [MVP architecture RFC](../RFC/mvp-rfc.md), and these approved technical RFCs:
 
 - [Desktop information architecture and editor](../RFC/desktop-information-architecture-and-editor.md).
@@ -54,17 +54,21 @@ This Wave implements [PRD v0.5](../PRD/mvp.md), the
 - [Repository index persistence and refresh](../RFC/repository-index-persistence-and-refresh.md).
 - [Authentication and credential handling](../RFC/authentication-and-credential-handling.md).
 - [Test and compatibility strategy](../RFC/test-and-compatibility-strategy.md).
+- [Ticket relationships and short codes](../RFC/ticket-relationships-and-short-codes.md).
 
 The [RFC approval register](../RFC/wave-03-rfc-review.md) records the approved
 choices and remaining feasibility obligations. Wave planning does not reopen
 rich-text/source mode, desktop-only background polling, canonical-only in-app
 conflict resolution, the shared SSH key, or full ULIDs as mutation selectors.
+The short code added on 2026-10-07 is a search key for people and does not
+change that last rule.
 
 | PRD area | Owning Cycles and acceptance |
 | --- | --- |
 | `MH-PROD-001/002`, `MH-UX-001` | F1–F2, C1–C5 and D1–D6 compose complete front ends; G1 proves non-developer dogfooding. |
 | `MH-REPO-001`–`004`, `MH-CRED-001` | Shared bridges in F2; CLI administration in C2; desktop onboarding/settings in D1; selected-key/session evidence in both tracks. |
 | `MH-CONTENT-001`–`004` | Shared reads and bridges in F1/F2; CLI discovery/authoring in C1/C3; desktop discovery in D1 and rich-text/source authoring in D2/D3. |
+| `MH-CONTENT-005/006` | Fields, validation, short-code generation and graph reads in F1/F2; CLI queries in C1 and authoring in C3; desktop display in D1 and editing in D3; made-ready reporting on close in C5/D5. |
 | `MH-COMMENT-001/002` | CLI discussion in C4; desktop discussion in D4; ordering/rebuild recovery in G1. |
 | `MH-COLLAB-001/002` | Shared request/recovery boundary in F2; local authoring in C3/D2/D3. |
 | `MH-COLLAB-003/004` | Deliberate CLI collaboration in C4/C5; desktop collaboration in D4/D5; automatic polling in D6. |
@@ -134,6 +138,10 @@ work can proceed while native access is arranged:
    planned. Missing shared behavior must be assigned to a foundation Cycle, or
    handled through the shared-library change rule below, before a consumer is
    planned.
+   Amended 2026-10-30 by C4 (decision 16): for C4 the owner accepted a
+   departure from this item's timing. The design's Baseline Facts, read from
+   current source, served as C4's planning audit, and C4's Task 0 refreshed
+   the audit's C4 rows after the design was approved.
 4. The editor investigation evaluates a pinned `zorite-editor` first and a
    pinned Velotype extraction if needed. Record dependency compatibility with
    the one GPUI Kit graph, host-controlled persistence/resources, rich/source
@@ -173,6 +181,37 @@ work can proceed while native access is arranged:
 | D6 | 08 | One-shot polling and materialization. |
 | G1 | Complete Wave 02 integration gate | Integrated journeys on the final revision. |
 
+C4, C5 and D5 also need the Cycle 10 follow-up ticket "2.10 follow up:
+closure recovery gaps before C4, C5 and D5" (`01M57SKVF6TQ3QM6AXJ35JGGSY`)
+merged to main first (added 2026-10-18). Under track rule 5 those Cycles cannot
+work around its gaps in their front ends:
+
+- C4 and D5 would otherwise offer an in-product resolution for a race in which
+  two clones close the same ticket differently, and that resolution always
+  fails.
+- C5 and D5 would otherwise leave a manual Git merge as the only way out of a
+  refused closure checkpoint merge.
+- C5 and D5 users would see promotion wording in closure error messages.
+
+The other Cycle 10 cleanup ticket ("2.10 follow up",
+`01M57SBA7MKR9BZR7PYECSJ05G`) does not gate any Wave 03 Cycle.
+
+**Final gate checkpoint, 2026-10-27:** the prerequisite's Tasks 0–9 are complete
+and its open ticket is `review_ready`. Whole-branch SPEC and QUALITY approve
+`0464c42..f92bc00` with zero findings, and scoped local verification is complete;
+the [final ledger checkpoint](../plans/2026-10-25-closure-recovery-gate-execution.md#task-9-final-review-ready-checkpoint)
+distinguishes pre/post-fix evidence and Linux-only limitations. Production local
+start/read/resolve/resume and parent-specific wording are delivered on the ticket
+branch, with no owner final acceptance or merge claimed. **The merge prerequisite
+above remains in force.** This branch does not deliver CLI verbs, human-mode conflict artifacts or
+desktop conflict editing. C5/D5 must adapt the local boundary (amended
+2026-10-30 by C4, decision 19, replacing "C4/D5 must adapt"), and C4/D5 still
+provide the separate remote-conflict wire boundary: C4 delivers it for the
+CLI, and D5 consumes it through D4. C5/D5 still owe lifecycle
+prepare/execute, expiry/schema/resume and made-ready reporting. See the
+[gate contract](../Cycles/wave-03-closure-recovery-gate.md) and
+[current API audit](../research/wave-03-api-audit.md#closure-recovery-library-amendment-2026-10-27).
+
 Items 3–6 are readiness activities with the deadlines above, not a hidden Cycle 00
 or an instruction to implement a prototype during this planning request.
 Any executable feasibility probe needs its own bounded scope and authorization.
@@ -192,7 +231,7 @@ owning RFC/PRD before planning the affected implementation.
 | Full command-specific JSON schemas and malformed-content DTO details are not yet published. | Every CLI Cycle publishes schemas/fixtures with its verbs. C5 cannot exit until the complete command inventory has schemas and documented exit behavior. |
 | Marker-only repair needs an identity and context before it can become conforming; duplicate/mismatched IDs are different problems. | F2 provides explicit adoption previews, stable ID allocation and retry evidence. Ambiguous identity stays non-editable; no implicit migration during refresh. |
 | A pristine worktree may have an unsaved editor draft, including while a CLI action changes or cleans up its context. | D2/D3 preserve base/current drafts and reject stale writes. A removed context leaves an exportable/recoverable draft; never silently recreate a closed ticket context or lose the draft. |
-| Existing transport bootstrap runs before argument handling and emits plain stderr on failure in the unmerged Cycle 03 design. | C1 must preserve the pre-thread initialization boundary while adapting handled startup failures to the CLI envelope when `--json` is recognizable. Verify actual merged startup rather than overwriting it. |
+| Wave 02 Cycle 03 is merged; its original bootstrap ran before argument handling and emitted plain stderr on failure. | Amended 2026-10-18 by C1 (ruling R-1): C1 parses arguments first, without starting threads or native Git. Commands opening services initialize transport before any thread or native Git activity; help, version, usage errors and unavailable commands do not initialize it. Handled startup failures use the CLI envelope when `--json` is recognizable, preserving the pre-thread boundary. |
 
 The two CLI/discovery refinements were approved with this Wave and adopted in
 the CLI and desktop RFCs:
@@ -239,7 +278,10 @@ publication is introduced.
 The following are outside this Wave: boards/rollups, templates/scaffolding,
 multi-repository planning, Git-forge key upload, application authorization,
 HTTP(S) publication, cloning, ticket reopening, comment editing/deletion,
-lossy short IDs, a custom status vocabulary and automated attachment imports.
+short codes as identities or mutation selectors, a custom status vocabulary
+and automated attachment imports. Ticket analytics beyond plan and critical
+path, typed links, priority, assignment and full-text search are on the PRD
+roadmap, not in this Wave.
 In-app conflict editing covers owned canonical Markdown. Other conflicts get
 external-tool guidance and safe re-observation before deliberate resume.
 
@@ -290,6 +332,11 @@ codes, use the earlier numbers.
 2. **Track independence.** No Cycle depends on a Cycle of the other track. A
    plan that needs the other front end to exist is moved, split or changed
    before approval; it does not create a hidden cross-track dependency.
+   Amended 2026-10-30 by C4 (decision 5): one ordering is recorded here.
+   D4 waits until all of C4 is merged, because C4 carries the library
+   bindings that D4's Post and Sync consume (comment submission, merging
+   synchronization and the conflict data), under rule 5's exception below.
+   D4 needs no CLI verb; Part A of C4 is not merged early.
 3. **Early starts.** C1 and D2 consume only F1 and may start when F1 exits if
    capacity allows. This is an allowance, not a third track: at most one Cycle
    is in flight per track, plus at most one foundation Cycle.
@@ -305,6 +352,12 @@ codes, use the earlier numbers.
    next work boundary. Front-end Cycle branches otherwise leave
    `src/repository.rs` and `src/repository/` unchanged, which keeps the two
    tracks' branches from conflicting in the same files.
+   Amended 2026-10-30 by C4 (decision 1): the owner approved C4 as an
+   exception. C4's branch carries the library additions its verbs need,
+   limited to the files its design lists: the `comment add`,
+   `conflict resolve` and `item republish` bindings, the conflict read,
+   merging synchronization settings, resume's routes and the durable state
+   of an interrupted resolution. They merge with C4 as one Cycle.
 6. **Lifecycle bindings.** F2 defines confirmation and replay generically over
    effect previews and proves them with the operations available at its
    baseline. Promotion and closure do not exist until Wave 02 Cycles 09/10.
@@ -330,10 +383,21 @@ through, so neither front end scrapes SQLite, Git or the filesystem itself.
 error and recovery-action taxonomy; redaction; and versioned, serializable
 JSON v1 DTOs for every read. Read services cover repository/identity/remote/
 key/host inspection, public-key text, document/ticket/comment reads,
-operation/conflict inspection, index/poll status and ID generation. Ticket
+operation inspection, index/poll status and ID generation. Conflict
+inspection is not in F1: no conflict record exists before Wave 02 Cycle 06,
+so whichever of C4 or D5 is planned first lands that read as a shared-library
+change under track rule 5 (product owner, 2026-10-07). Ticket
 lists carry the approved lifecycle closure filter, independent of status text.
+Ticket DTOs carry `slug`, `parent`, `deps`, readiness and relationship
+problems. Read services cover the ticket relationship queries: ready, blocked,
+dependencies in both directions, children, cycles, plan, critical path and
+find by short code, over index edge records rebuilt from canonical files.
 Fill narrow missing read APIs and report stale/malformed state honestly; reads
-do not perform implicit refresh or network contact.
+do not perform implicit refresh or network contact. Reads list what the index
+holds and never list a directory or scan; the indexer picks up new files, and
+a short delay before a new file appears is accepted (product owner,
+2026-10-08). Comment reads return one flat, ordered list with each entry's
+depth, and report a comment's `created_by` as its author without writing it.
 
 **Out of scope:** Command parsing, human output, exit codes and help; desktop
 views; canonical/config/key writes; network attempts; request replay; polling
@@ -342,7 +406,10 @@ scheduling. No CLI verb or desktop screen is delivered by this Cycle.
 **Exit evidence:** Library integration tests against real repositories cover
 every read service, typed malformed rows, deterministic ordering and complete
 lists. Golden DTO schemas and redaction fixtures are published. An open ticket
-whose status text is `closed` is listed as lifecycle-open. No display or GPUI
+whose status text is `closed` is listed as lifecycle-open.
+Relationship queries are proven across primary and active worktrees with an
+unresolved dependency, a merged-in cycle and a duplicate short code, each
+reported and none repaired. No display or GPUI
 dependency, no canonical mutation and no resident process.
 
 ### F2: Request Replay, Confirmation And Shared Mutation Bridges
@@ -360,8 +427,18 @@ not-yet-created repository root; preview must not initialize a repository as a
 side effect. Use actual Wave 02 preflights and reservations; do not create an
 alternate journal or lock authority. Add the shared bridges: confirmed local
 identity configuration for create/enable, configured-host approval through
-scoped transport verification, folder creation, and marker-only
+scoped transport verification, folder creation and the listing of folders
+under `docs/` (product owner, 2026-10-10), and marker-only
 repair/adoption with stable ID allocation.
+Add a confirmed abandon of a pending local operation, which closes its
+journal record and changes no file (product owner, 2026-10-10).
+Ticket create and save accept `deps` and `parent`, write them in canonical
+form and reject a cycle before any write. Create generates the short code;
+add the explicit short-code assign operation, repository-local initials and
+the optional repository prefix.
+Comment creation writes the comment's optional `created_by` field from the
+confirmed Git identity, as the canonical schema RFC defines; F1 only reads it
+(product owner, 2026-10-08).
 
 **Out of scope:** New Git lifecycle algorithms, CLI verbs, terminal secret
 interaction, desktop confirmations and background scheduling. Promotion and
@@ -372,7 +449,9 @@ rejection, changed-input rejection, accepted-consent retry, lost output
 reconciliation, cache-loss recovery and no duplicate effects. Cancellation is
 observed at approved safe points. Each bridge has expected-observation, retry
 and failure evidence; host approval publishes nothing and refreshes no remote
-ref; ambiguous identity stays non-editable. No body/secret enters request
+ref; ambiguous identity stays non-editable.
+Golden vectors fix the short-code and initials derivations; a short code is
+unchanged by rename, identity change and prefix change. No body/secret enters request
 records.
 
 ## CLI Track
@@ -387,9 +466,17 @@ mutation commands prematurely.
 **In scope:** Command parsing, no-argument/help/version, human output, JSON v1
 envelopes over the F1 DTOs, stable error/exit mapping, and every read verb F1
 serves, including `ticket list --closure open|closed|all` defaulting to `all`.
+Include the relationship read verbs: `ticket ready`, `blocked`, `deps`,
+`children`, `cycles`, `plan`, `critical-path` and `find`. A short code
+passed as `--id` is rejected as an invalid ID.
 Preserve early transport initialization while adapting handled startup
 failures to the CLI envelope when `--json` is recognizable, and test that
 failure output boundary against the actual merged startup.
+
+Amended 2026-10-18 by C1: `path observe` and `ticket check` move to C3,
+which owns the repair and authoring flows they feed. C1 includes `folder list`
+and by-path `document show`/`ticket show` with optional `--context`, and lists
+the moved verbs as planned rather than executing them.
 
 **Out of scope:** Canonical/config/key writes, network attempts, request replay,
 desktop views and polling scheduling. Help must distinguish the implemented
@@ -401,14 +488,24 @@ canonical mutation or resident process.
 
 ### C2: CLI Repository And Credential Administration
 
-**Planned document:** `docs/Cycles/wave-03-cli-02-repository-and-credentials.md`
+**Cycle document:** `docs/Cycles/wave-03-cli-02-repository-and-credentials.md`
+
+**Amended 2026-10-20 by C2.** The Cycle, design and plan were approved on
+2026-10-22. Prerequisite `01M5B0Z6PNP7X4WH4JV3N0VQJ6` (create/enable leave
+the committed configuration in the Git index) merged before approval, so remote
+selection follows onboarding without an external Git workaround (decision 1).
+Delivery is one Cycle in three independently checked/reviewed Parts (decision 4):
+A, mutation layer/terminal/repository/remote/request verbs; B, keys/passphrase
+entry; C, hosts/SSH unlock/exit journeys. Task 12 still owns final Cycle verification.
 
 **Purpose:** Make repository onboarding and SSH setup usable without GUI or
 external Git/key-generation commands.
 
 **In scope:** Create/enable/remove, confirmed local identity, remote add/remove/
 publication selection, key generation/import/select/clear/unregister/delete,
-host approve/replace, terminal secret interaction and noninteractive recovery.
+host observe/approve/replace, request show/cancel, terminal secret interaction
+and noninteractive recovery. Include optional `ticket_slug_prefix` on create/
+enable and optional nullable `initials` on identity-set (decision 5).
 Apply the approved missing-identity input refinement. Use F2 for request IDs,
 confirmation, replay and the identity/host bridges.
 
@@ -420,17 +517,95 @@ cancelled/wrong unlock, exact host replacement, imported-key non-deletion,
 generated-key deletion retry and configuration failures. Publish schemas for
 each new verb; prove no prompt consumes JSON/body stdin or persists a secret.
 
+**Amended 2026-10-20 by C2 (decision 9):** wrong unlock proves the current
+`transport_unavailable`/exit 5, no pin, no automatic retry and a human hint after
+supplying a passphrase. `unlock_failed`/exit 3 is proven with the right passphrase
+and a server that rejects the key. Library defect `01M5E6DYJ6GN7DMW4424TH3V78`
+owns the future wrong-passphrase code change; C2 does not wait for it. Cancelled
+unlock remains `unlock_required`/exit 3, distinct from pre-execute prompt
+cancellation (`cancelled`/130).
+
 ### C3: CLI Authoring And Discovery Maintenance
 
-**Planned document:** `docs/Cycles/wave-03-cli-03-authoring-and-discovery.md`
+**Cycle document:** [C3: CLI Authoring And Discovery Maintenance](../Cycles/wave-03-cli-03-authoring-and-discovery.md)
+
+**Amended 2026-10-24 by C3.** The Cycle, design and plan were approved on
+2026-10-24 at `e7b2b71`. All thirteen verbs are implemented on the C3 ticket
+branch: document create/save/move/repair, folder create, ticket
+create/save/repair/slug-assign, index refresh/rebuild, path observe and ticket
+check. Parts A and B have spec and quality approval. The Part B checkpoint
+at `9a2a5170c4704ef03420ef2276911c6b1bfa3959` passed six local gates and
+**593 tests** (188 CLI unit, 290 CLI integration, 71 read-contract and
+44 mutation-contract), as recorded in the
+[execution ledger](../plans/2026-10-24-wave-03-cli-03-authoring-and-discovery-execution.md).
+This is the historical Task 8 checkpoint evidence. **Updated 2026-10-25:** C3
+is review-ready through Task 9 Step 5. Whole-branch SPEC/QUALITY approved
+`ad4d3f0..806057d3`, dogfooding completed in `8da3890`, and switch SPEC/QUALITY
+approved `8da3890..297bd781`. The owner accepted the original **4528 passed /
+1 failed / 1 ignored**, exit **101**, plus the authorized correction's **46
+distinct passing tests** and check/fmt/clippy as an explicit verification
+exception (`5cba600`). No green full-suite run or second full run is claimed.
+
+The product-owner decisions govern delivery:
+
+1. **Known defects, not prerequisites:** `01M4PB82G07RZSQMNJZN672S3W`
+   (partial database damage), `01M4PB80T7SVB23TQ6466RDHCB` (repeat committed
+   document move, whose existing F2 workaround is outside the lease), and
+   `01M4PB7YZMBFAFFM94AZY08HWS` (an interrupted save's step-less row is
+   rejected although its file was written). C3 adds no library workaround.
+   Index evidence covers deletion and whole-file corruption, removing WAL
+   sidecars first, not the partial-damage defect.
+2. **CLI-owned save patch:** one fill read when a draft field is omitted,
+   preserving the caller's observation. Later retries recompute omissions;
+   a changed omitted field can cause `request_mismatch` after a successful
+   save, while `request show` still exposes its stored result.
+3. **Dogfooding in Task 9, with the owner's go-ahead then:** save dependencies
+   C4 → C3 and gate `01M57SKVF6TQ3QM6AXJ35JGGSY`; C5 → C4 and gate;
+   D4 → D3; D5 → D4 and gate; D6 → D5; G1 → C5 and D6. The approved
+   procedure requires fresh preflight, clean checks, per-request records,
+   value checks and separately authorized pushes of those six branches.
+4. **One Cycle in two Parts:** A delivers shared CLI changes, both reads,
+   index/folder and document create/save/move; B delivers ticket authoring,
+   both repairs and the remaining evidence. Each Part has an all-feature
+   checkpoint and independent review; the final dogfooding switch is completed
+   and separately approved, as recorded below.
+5. **Fill-read failures pass through:** under the save command, retain the
+   read's code, scope and recovery plus the request ID, with no effects.
+   Wrong-kind/unfillable items give item-scoped `item_not_found`. The fill
+   read precedes replay, so a failed read can mask a finished result on
+   retry; `request show` still returns that result.
+6. **Exit evidence:** exit 4 has a reason backed by a library actor leaving
+   a save partial and the CLI completing it. Exit 5 is reached through a
+   child-held lease, and repair consent cancellation/130 through a Unix PTY.
+   The table accounts for exactly 40 library / 42 CLI-inclusive codes.
+7. **Accepted fill/full-field difference:** an unregistered-root fill read
+   gives `repository_not_registered` with no recovery. A full-field save
+   gives `repository_not_enabled` for a never-enabled root, or
+   `repository_not_registered` with `index.rebuild` after cache loss. Both
+   forms have evidence; the optional read-recovery library ticket was not filed.
 
 **Purpose:** Make local document/ticket lifecycle and explicit discovery repair
 available for agents and project dogfooding.
 
 **In scope:** Document/ticket create/save, document move, folder creation,
 explicit repair/adoption, index refresh/rebuild and identity recovery, over
-the F2 bridges. Preserve unknown metadata, ULIDs and body content; use actual
-context provisioning and source/destination observations. Empty folders are
+the F2 bridges.
+Ticket create and save take `deps` and `parent`; add `ticket slug-assign`.
+Both relationships accept null: on create it means none; on save it clears,
+while omission leaves the relationship unchanged. `ticket check` checks a
+complete proposal, with omitted flags proposing none and rejection inside
+`ok`/exit 0. `path observe` reports what is at the path in the selected active
+context, including another item's file. Mutations have no `--context` in C3;
+the multi-item-context ticket remains later work. Index execution requires a
+request ID in JSON/noninteractive mode and takes no input. C3 adds no identity
+prompt; after configuring identity, a save retry uses a fresh observation
+because a refused save may have allocated a context, and can reuse the freed
+request ID. Only the two repairs use confirmation.
+**Amended 2026-10-20 by C2 (decision 5):** repository-local initials and the
+create/enable prefix ship in C2 with their administration verbs, not in C3.
+Record the Wave 03 Cycle dependencies in the project's own tickets when these
+operations meet this gate. Preserve unknown metadata values, ULIDs and body content;
+use actual context provisioning and source/destination observations. Empty folders are
 local until they contain tracked content; do not add hidden placeholder
 commits. Index-only actions never fetch or rewrite canonical state.
 
@@ -443,9 +618,165 @@ refresh-failure preserve actual Git/filesystem state. New JSON schemas and
 documented command examples pass. Switch ticket create/update dogfooding to the
 CLI when those operations meet this gate.
 
+**Runtime qualifications and known limits:** these preserve the approved
+Task 0/3 rulings and the library as built.
+
+- Front matter is re-emitted in canonical style when rewritten; a hand-written
+  document save can commit normalization without changing values. Both save
+  no-ops require intended content already committed (HEAD-equal); equal
+  uncommitted ticket values may skip rewriting yet still checkpoint. A
+  current-token no-change save can provision a context without adding a commit.
+- Design fact 15's owner-approved correction: a primary-only document
+  committed at its current path can move to itself as `already_applied`/`noop`,
+  exit 0, without creating a context or commit. `Position::of` falls back to
+  primary HEAD when the document branch is absent.
+- Partial outcomes classify as Incomplete/exit 4 regardless of the code,
+  including the repair actor's `internal_error` and the interrupted-save
+  retry's `request_mismatch`/`external_change`. An actor has no process exit.
+- A pending save fences only requests reaching a new domain operation;
+  early binding no-ops/refusals and finished-request replay retain their
+  answers. A same-request retry completes while its intended bytes remain.
+  After an intervening edit, an omitted-field retry mismatches and a full-field
+  retry is stale. Restore the bytes it committed to finish in C3; otherwise
+  recovery waits for C4's `operation abandon`.
+- `index rebuild` retains the owner-approved root-selection exception: it
+  propagates only `repository_not_enabled` from ordinary root resolution,
+  then validates the selected Git repository's own workdir. There is no
+  universal `not_repository_root` promise for linked roots, and no claim
+  that every such rebuild succeeds; this qualification is source-inspected.
+- `folder create` is primary-only, with no placeholder commit. A repaired
+  document can be listed twice until its context merges. Item reads of
+  duplicated/mismatched contexts can give `item_not_found`, which fill inherits.
+- Native CI is post-merge and separately authorized. Windows repair consent
+  remains a native manual check; Linux evidence does not satisfy it.
+
+**Dogfooding and switch complete, 2026-10-25.** The owner separately authorized
+the saves/pushes and the fresh resume after the recorded checker error. All six
+saves, value checks and pushes succeeded (`8da3890`); the subsequent AGENTS.md /
+file-ticket switch (`297bd781`) has separate SPEC/QUALITY approval. At the
+historical Task 8 checkpoint these steps were owed and those files unchanged.
+Comments remain canonical until C4; closure remains canonical until C5, with
+the explicit working-on-a-ticket exception. The normal main-based CLI workflow
+becomes available after C3 merges. C3 is review-ready with its ticket **open**;
+closure, PR, merge, cleanup and native CI require their own authorization. The
+approved rule still forbids closure/merge while dogfooding evidence is owed
+unless amended by the owner; that evidence is now met.
+
 ### C4: CLI Discussion, Synchronization And Conflict Recovery
 
-**Planned document:** `docs/Cycles/wave-03-cli-04-discussion-and-sync.md`
+**Cycle document:** [C4: CLI Discussion, Synchronization And Conflict Recovery](../Cycles/wave-03-cli-04-discussion-and-sync.md)
+
+**Amended 2026-10-30 by C4.** The Cycle, design and plan were approved on
+2026-10-28 at `8a94e9b`, with named edits E-1 to E-12, after the gate
+`01M57SKVF6TQ3QM6AXJ35JGGSY` merged at `a372edb`. The product-owner
+decisions, numbered in the Cycle document, change this section as follows:
+
+- **The library part is in C4** (decisions 1 and 2): an exception to track
+  rule 5, started after the gate merged. It adds the `comment add`,
+  `conflict resolve` and `item republish` bindings, the conflict read,
+  merging settings for both synchronization bindings, resume's routes and
+  the durable state of an interrupted resolution, with no new result code
+  or recovery action.
+- **Divergent synchronization merges** (decision 3). A canonical conflict
+  is resolved with `conflict show` and `conflict resolve`; any other gets
+  outside-repair guidance, then `operation resume`.
+- **Republish is its own confirmed verb, `item republish`** (decisions 4,
+  7, 11 and 17). It pushes exactly the commit its preview showed and
+  integrates nothing, and the next `item sync` integrates primary. A
+  lifecycle-closed ticket is `ticket_closed`.
+- **D4 waits for all of C4** (decision 5); see track rule 2.
+- **A pending remote conflict cannot be abandoned** (decision 6); that
+  stays on `01M4H33R34Z7C7EEKTY1ZCT950`.
+- **The next step is typed data** (decision 8): a conflict keeps
+  `recovery_required` and names `conflict: {operation_id, next_action}`.
+- **`comment add` takes an optional `created_by`** (decision 9), validated
+  as `Name <email>` and written once; without it, the Git identity.
+- **One desktop arm** shows the republish preview (decision 10), merged
+  beside D3's edit of the same match.
+- **A per-path kind and structure, with set-wide resolution** (decision
+  12): a mixed conflict is repaired outside as a whole.
+- **The same request finishes an interrupted resolution** with the same
+  commit (decision 13), and a lost one has a way out (decisions 18 and 20):
+  `operation resume` finishes a prepared commit, and a new request
+  supersedes an attempt whose written paths are unchanged.
+- **A Ctrl-C handler** stops the six stoppable verbs at their next safe
+  point, exit 130 (decision 14).
+- **The comment exception is extended** (decision 15):
+  `working-on-a-ticket` and `scripts/ticket-loop` keep canonical comment
+  files, with the noreply `created_by`, until that skill is revised.
+  Everything else switches to `comment add` in C4's final task.
+- **The audit timing** (decision 16): see entry-gate item 3.
+- **The gate's local verbs stay with C5** (decision 19). C4's
+  `conflict show` and `conflict resolve` take remote synchronizations only.
+- **C4 fixes main's red registry test** (decision 21) through named edit
+  E-12.
+
+**Delivery.** All eight verbs are implemented on the C4 ticket branch:
+`comment add`, `item sync`, `repo sync`, `item republish`, `conflict show`,
+`conflict resolve`, `operation resume` and `operation abandon`. Part A
+(the library) and Part B (the CLI) each passed a checkpoint gate and an
+independent review. Two-clone SSH journeys, interruption, lost output and
+the exit table follow. The branch merged main after D3, never rebasing.
+The [execution ledger](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-execution.md)
+records each task and ruling. Amended 2026-10-30 by C4: C4 is
+review-ready.
+- The full suite passed on the final code, and the whole-branch review is
+  done.
+- The dogfooding comment published through `comment add`, after a fix that
+  dogfooding found.
+- The instruction switch is deferred by the owner (see C4's exit evidence
+  below).
+
+Closure, PR, merge and native CI need their own authorization.
+
+**Known limits.** The [design](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-design.md#known-limits)
+lists each:
+
+- A pending remote conflict blocks other synchronizations and authoring in
+  its context until it is resolved or repaired, and cannot be abandoned. A
+  ticket two clones closed differently makes its conflict external-only,
+  with no promise that an outside repair choosing one closure is accepted.
+- An unfinished local-context sync anywhere in the repository makes C4's
+  verbs that reserve, begin a comment or re-acquire a conflict answer
+  `recovery_required`. `conflict show` does not inspect a local sync.
+- A cancelled operation is final, and a new request completes the work. A
+  second Ctrl-C leaves its request accepted with its reservation, so the
+  same request is sent again first. A Ctrl-C after the last safe point
+  leaves the run's own answer.
+- A refused or blocked synchronization holds its reservation until its
+  request is cancelled and sent once more (`01M4R19PC0T6ZPKM39X9DF26HX`).
+- A resolution whose written paths were edited by hand is continued by no
+  request until the edit is undone.
+- The republish push cannot be guarded as a create.
+- `created_by` is not authenticated, and a string token is valid only while
+  its conflict is unchanged.
+- Main's defects: a key selected after a publication remote is configured
+  blocks a never-published context's first publication
+  (`01M66HFV44YXNQ7ANJVA16TQ1H`), and `remote select` leaves the Git index
+  stale (`01M669FJR27FRHCNPWAMD6VH4V`).
+- The library defects `01M5E6DYJ6GN7DMW4424TH3V78` (a wrong passphrase),
+  `01M5MK57JKCSQFXBNZ8DBE548K` (an unusable identity refused late),
+  `01M4W5SCBV6WFJP11Y7PJF5VS8` (operation reads name no item for comment
+  rows) and `01M4PB7YZMBFAFFM94AZY08HWS` (an interrupted step-less save)
+  touch C4's verbs; C4 adds no workaround.
+- Amended 2026-10-30 by C4 (the final review's rulings). A comment's
+  publication stopped for an untrusted host offers `request.retry` only,
+  not `host.approve` or `host.replace`. Its way out is
+  `host observe --repo <root>`, which names the host and the key it
+  presents, then `host approve` or `host replace`, then the same
+  `comment add` request again.
+- Amended 2026-10-30 by C4 (the final review's rulings). Two requests
+  resolving one conflict at once can leave an attempt with no owner: a
+  later re-entry of the first after a stop is treated as a new request,
+  and `conflict show` names no request for it. No data is lost.
+- Amended 2026-10-30 by C4 (the final review's rulings). A file system
+  refusal after `conflict resolve` has written a path answers
+  `internal_error`, exit 4, with no `next:` line; `conflict show` names
+  `retry_resolution`, the way on.
+
+**Owed after merge.** The Windows Ctrl-C console handler is first compiled
+and checked natively, as a manual check. Native CI runs on main with its
+own approval.
 
 **Purpose:** Let CLI users collaborate deliberately and recover incomplete work.
 
@@ -464,16 +795,29 @@ resolutions, external noncanonical repair and no secret/raw-server output.
 Ctrl-C and lost stdout preserve recoverable effects and meaningful exit status.
 Switch ticket comment dogfooding to the CLI when supported.
 
+Amended 2026-10-30 by C4 (the owner's decision): C4's dogfooding comment
+published through `comment add`, but the instruction switch is deferred.
+With a passphrase-protected key, an agent's non-interactive publication
+stops at `unlock_required` and holds the remote reservation, so agents keep
+canonical comment files for now.
+
 ### C5: CLI Completion And One-Shot Polling
 
 **Planned document:** `docs/Cycles/wave-03-cli-05-completion-and-polling.md`
+
+**Amended 2026-10-30 by C4 (decision 19).** C5 exposes the gate's
+local-sync verbs, `context sync-local` and `context resolve-local`, with
+ticket closure, and any CLI inspection of a local-sync conflict they need.
+C4's `conflict show` and `conflict resolve` take remote synchronizations
+only, and answer a local sync's operation ID with `invalid_input`.
 
 **Purpose:** Complete the approved headless command contract.
 
 **In scope:** Document promotion, ticket close, their prepare/confirm/resume
 flows, explicit poll once and polling policy controls. Verify whole-branch
 effects, closure identity, local-only pending publication, remote-first cleanup
-ordering and cleanup-only retries through Wave 02 services. Complete every
+ordering and cleanup-only retries through Wave 02 services.
+Ticket close reports the tickets it made ready. Complete every
 command's input/output schema, help, recovery example and exit mapping.
 
 **Out of scope:** CLI background scheduling/indexing, desktop behavior,
@@ -497,7 +841,10 @@ prove command exit leaves no resident worker. This is the CLI contract gate.
 filter, multiple open-item tabs, active-context provenance, malformed/stale
 views, repository/remotes/identity/key/host settings, manual refresh/rebuild,
 operation area and asynchronous service calls. Lists default to lifecycle-open
-tickets with a visible Closed/All filter. Settings mutations use F2
+tickets with a visible Closed/All filter.
+Show each ticket's short code, offer ready and blocked filters with reasons,
+find by short code with every match listed, and show a ticket's dependencies,
+dependents, parent and children read-only. Settings mutations use F2
 confirmation, replay and bridges directly; they do not wait for or call the
 CLI. Viewing does not provision a context. Restore focus after prompts; do not
 serialize credential-bearing state into UI diagnostics. Preserve pre-thread
@@ -534,7 +881,32 @@ stale or vanished targets remain recoverable and never silently overwritten.
 
 ### D3: Rich-Text And Source Authoring
 
-**Planned document:** `docs/Cycles/wave-03-desktop-03-rich-text-and-source-authoring.md`
+**Cycle document:** [D3: Rich-Text And Source Authoring](../Cycles/wave-03-desktop-03-rich-text-and-source-authoring.md)
+
+**Amended 2026-10-24 and 2026-10-26 by D3.** The Cycle, design and plan were
+approved on 2026-10-26 at `c3904c7`. The product-owner decisions, numbered
+in the Cycle document, change this section as follows:
+
+- **Shape** (decisions 5 and 13): one Cycle in six Parts, 0 and A–E, each
+  with a checkpoint review. This departs from the risk row's "split before
+  its plan is approved"; the owner may split at a checkpoint.
+- **Part 0 inside D3** (decisions 2 and 11): the library gains two F2
+  commands, `context prepare` and `context release`, reviewed on their own
+  before any desktop Part. This departs from track rule 5. `src/drafts/`
+  also gains one target state for a never-created item (ruling R-20).
+- **The item-view design** (decision 12): the tab strip, a fixed header, a
+  white page, the inline display of comments, front matter in a details
+  sheet and an editor toolbar, from `docs/design/item_view/`.
+- **The read view** is the editor, read-only, so text can be copied
+  (decision 17).
+- **Unsupported constructs** are shown literally and edited in place, not as
+  labeled source fallback (decision 8; desktop RFC amendment).
+- **Safe local resource rendering** means local raster images inside the
+  repository and link resolution between documents (decisions 9 and 10).
+- **Untouched-byte evidence** keeps front matter by value: the library
+  re-emits it on every save.
+- **Context release** applies only to contexts the desktop process created
+  (decision 18).
 
 **Purpose:** Deliver the selected editor experience with trustworthy local saves.
 
@@ -545,7 +917,9 @@ exact normalizations before the implementation plan is approved.
 
 **In scope:** Integrate the chosen native editor through GPUI Kit, shared draft/
 undo state across rich/source modes, metadata controls, item create/edit/save,
-document moves/folders, explicit repair and stale-edit review. Use D2 recovery
+document moves/folders, explicit repair and stale-edit review.
+Metadata controls edit `deps` and `parent` by choosing tickets and explain a
+rejected cycle before any save. Use D2 recovery
 and the F2 observation/progress results and bridges. Support source fallback
 for unsupported constructs, safe local resource rendering and keyboard
 formatting. Expose unsaved/local checkpoint/index-pending states accurately.
@@ -566,6 +940,20 @@ recovery never loses newer text.
 
 **Planned document:** `docs/Cycles/wave-03-desktop-04-discussion-and-sync.md`
 
+**Amended 2026-10-26 by D3 (decision 12).** D3 builds the read-only,
+ordered display of comment threads inline below the item, with read-only
+comment editors, and disabled Share, Close ticket… and Approve and merge…
+actions in the item header. D4 keeps the composers, posting,
+synchronization and its exit evidence, thread ordering after posting and
+rebuild included. D4 may reuse D3's `context prepare` and `context release`
+for a comment's context, and the item-view handoff's composer design.
+
+**Amended 2026-10-30 by C4 (decision 5).** D4 waits until all of C4 is
+merged. Its Post and Sync consume C4's library bindings: `comment add`, with
+its stops at safe points and its retry that publishes without writing again,
+the merging `item sync` and `repo sync`, and the conflict data their results
+carry. See track rule 2.
+
 **Purpose:** Make discussion and explicit publication understandable and usable.
 
 **In scope:** Ordered threaded comments/replies with rich/source composers and
@@ -585,6 +973,11 @@ rebuild/thread ordering, unlock cancellation and continued UI responsiveness.
 
 **Planned document:** `docs/Cycles/wave-03-desktop-05-recovery-and-completion.md`
 
+**Amended 2026-10-30 by C4 (decisions 5 and 19).** D5 consumes C4's
+conflict read (`show_conflict`) and `conflict resolve` binding for remote
+synchronizations, through D4. With C5, it owns the gate's local-sync
+boundary.
+
 **Purpose:** Complete deliberate desktop collaboration lifecycles.
 
 **In scope:** Base/local/remote/result comparison, explicit canonical-path
@@ -592,6 +985,7 @@ resolution and checkpoint/resume, external guidance for unsupported conflicts,
 Approve and merge/Close ticket effect summaries, exact confirmation, final
 draft-save boundary and partial publication/cleanup recovery. Show all affected
 branch paths and lifecycle closure metadata separately from project status.
+A completed close lists the tickets it made ready.
 Primary publication success is not equivalent to cleanup success.
 
 **Out of scope:** Arbitrary code/binary resolution writes, forced overwrite,
@@ -668,11 +1062,15 @@ a claim those public APIs exist.
 | --- | --- | --- |
 | Repository inventory, full canonical reads, malformed DTOs, public-key/host inspection, closure filter | F1 | Read-only library APIs; no front-end SQLite scraping or implicit fetch. |
 | Request digest, creation observations, consent, progress/cancel and replay | F2 | Wrap actual domain operations; preserve Git authority and existing leases. |
+| Ticket relationship fields, cycle rejection, short-code generation and graph reads | F1 (reads), F2 (writes) | Index edge records rebuilt from canonical files; ULID remains the only identity and mutation selector. |
+| Comment author (`created_by`) | F1 (reads), F2 (writes); C4 (the caller's value) | Written once at comment creation from the confirmed Git identity; never derived from Git history. Amended 2026-10-30 by C4 (decision 9): `comment add` may supply it instead, validated as `Name <email>`, and it is then written verbatim, once. |
 | Missing identity during create/enable and public identity configuration | F2 | Explicit confirmed local persistence, including a not-yet-created root. |
 | Configured-host approval | F2 | Scoped transport verification; no publication or remote-ref refresh. |
 | Folder creation and marker-only adoption/repair | F2 | Scoped filesystem boundary, stable IDs, expected observations, no hidden migration. |
 | Command grammar, envelopes, exit classes, terminal secret provider | C1, C2 | CLI-only; no domain logic and no secret through argv/environment/files/pipes. |
-| Discussion/sync/conflict and resume | C4, D4, D5 | Wave 02 operations and owned canonical paths only. |
+| Discussion/sync/conflict and resume | C4, D4, D5 | Wave 02 operations and owned canonical paths only. Amended 2026-10-30 by C4 (decision 1): C4 adds the bindings, `comment add`, `conflict resolve` and `item republish`, the merging settings of `item sync` and `repo sync`, and resume's routes; D4 and D5 consume them. |
+| Conflict inspection read | Local boundary: closure-recovery gate; remote boundary: C4 (amended 2026-10-30 by C4, decision 19) | Local observation/inspection/immutable-side DTOs are implemented and code-reviewed on the review-ready gate branch, awaiting authorized lifecycle delivery and merge. Remote: C4's `show_conflict` read and `conflict resolve` binding, through the CLI's `conflict show` and `conflict resolve`; D5 consumes them through D4. Front ends consume the shared boundaries and F1 redaction rules. |
+| One effective copy per item across worktrees | Defect ticket `01M4CKWWRA1DHFPMWKPNK7CQ1G`, before F1 | An item worktree contributes only its own item; every other item is read from primary. |
 | Promotion/close preflight and safe cleanup bindings | First of C5 or D5, as a shared-library change | Real effect preview and existing publication/cleanup ordering. |
 | Explicit one-shot polling | C5 | Existing Wave 02 one-shot operation; no resident worker. |
 | Protected draft store and base snapshots | D2 | Separate from canonical files/cache/journals; versioned recoverable local files. |
@@ -765,6 +1163,20 @@ On the same date the product owner approved `zorite-editor` as the editor.
 The product owner also accepted the byte changes its load normalization makes;
 the desktop/editor and canonical RFCs are amended accordingly. Neither
 decision completes the native evidence D3 and G1 owe.
+
+On 2026-10-07 the product owner also directed that ticket dependencies, a
+parent hierarchy and a human short code be added in this Wave, with the ULID
+remaining the canonical identity. PRD v0.6 and the
+[ticket relationships and short codes RFC](../RFC/ticket-relationships-and-short-codes.md) define them. The product
+owner approved that RFC and this Wave's allocation of it on 2026-10-07, on
+ticket `01M4CGDANTBDR4T8AGFZP8ZGP7`.
+
+On 2026-10-08 the product owner authorized amendments on the F1 ticket,
+`01M4CC0VMQ7R15A7M9SPN3KB67`, to bring this Wave and the CLI, relationships
+and index RFCs into agreement with rulings made while implementing F1. In
+this document they add writing the comment `created_by` field to F2, and
+state that reads list what the index holds and that comments are read as a
+flat list.
 
 The refreshed API audit, native tester/machine
 assignments and implementation-baseline evidence remain open; none is implied by design

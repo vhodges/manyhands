@@ -1,0 +1,276 @@
+use std::path::PathBuf;
+
+use super::{
+    super::{
+        Mutation, TicketCreateInput, TicketSaveInput,
+        bind::{CallContext, Confirmed, Entered, Place, Prepared},
+        command::Command,
+        evidence::Position,
+        identity::IntentDigestBuilder,
+    },
+    *,
+};
+use crate::{repository::recovery::PendingOperation, results::Scope};
+
+/// A binding of a command whose completed journal row never records a
+/// checkpoint step, whatever the command did: an index refresh, say, or a
+/// confirmed command. Only what it says of such a row is asked of it.
+struct NeverCheckpoints {
+    root: PathBuf,
+}
+
+impl Binding for NeverCheckpoints {
+    // The set of commands is closed, and no bound command is of this kind
+    // yet: the name is not what is asked of this binding.
+    fn command(&self) -> Command {
+        Command::TicketSave
+    }
+
+    fn ended_without_checkpoint(&self) -> EndedWithoutCheckpoint {
+        EndedWithoutCheckpoint::SaysNothing
+    }
+
+    fn place(&self) -> Place<'_> {
+        Place::Repository(&self.root)
+    }
+
+    fn target(&self) -> String {
+        String::new()
+    }
+
+    fn fields(&self, builder: IntentDigestBuilder) -> IntentDigestBuilder {
+        builder
+    }
+
+    fn scope(&self, repository: Option<String>, _position: Option<&Position>) -> Scope {
+        Scope {
+            repository,
+            ..Scope::default()
+        }
+    }
+
+    fn prepare(&mut self, _call: &CallContext<'_>) -> Result<Prepared, Answer> {
+        unreachable!("the decision is made before any check")
+    }
+
+    fn run(&self, _call: &CallContext<'_>, _accepted: &Accepted) -> Ran {
+        unreachable!("the decision is made before any domain call")
+    }
+
+    fn reenter(
+        &mut self,
+        _call: &CallContext<'_>,
+        _accepted: &Accepted,
+        _journal: JournalRow,
+    ) -> Result<Entered, Ran> {
+        unreachable!("the decision is made before the evidence is read")
+    }
+
+    fn as_confirmed(&mut self) -> Option<&mut dyn Confirmed> {
+        None
+    }
+
+    fn rerun(&self, _call: &CallContext<'_>, _accepted: &Accepted, _entered: &Entered) -> Ran {
+        unreachable!("the decision is made before any domain call")
+    }
+}
+
+fn never_checkpoints() -> NeverCheckpoints {
+    NeverCheckpoints {
+        root: PathBuf::from("/nowhere"),
+    }
+}
+
+fn a_ticket_create() -> Box<dyn Binding> {
+    Mutation::TicketCreate(TicketCreateInput {
+        root: PathBuf::from("/nowhere"),
+        id: "01ARZ3NDEKTSV4RRFFQ69G5FAW".parse().expect("a ULID"),
+        draft: draft(),
+        deps: Vec::new(),
+        parent: None,
+        initials: None,
+    })
+    .into_binding()
+}
+
+fn a_ticket_save() -> Box<dyn Binding> {
+    Mutation::TicketSave(TicketSaveInput {
+        root: PathBuf::from("/nowhere"),
+        id: "01ARZ3NDEKTSV4RRFFQ69G5FAW".parse().expect("a ULID"),
+        draft: draft(),
+        deps: crate::repository::RelationshipWrite::Unchanged,
+        parent: crate::repository::RelationshipWrite::Unchanged,
+        observation: String::new(),
+    })
+    .into_binding()
+}
+
+fn draft() -> crate::repository::TicketDraft {
+    crate::repository::TicketDraft {
+        title: "A title".to_owned(),
+        ticket_type: "task".to_owned(),
+        status: "open".to_owned(),
+        project: None,
+        team: None,
+        body: String::new(),
+    }
+}
+
+fn completed(owes_work: bool, checkpointed: bool) -> JournalRow {
+    JournalRow::Final {
+        kind: FinalKind::Completed,
+        owes_work,
+        checkpointed,
+    }
+}
+
+/// Every row a journal can show for an operation.
+fn every_row() -> Vec<JournalRow> {
+    let mut rows = vec![
+        JournalRow::Absent,
+        JournalRow::Pending(PendingOperation::Local {
+            state: "created".to_owned(),
+            step: None,
+        }),
+    ];
+    for kind in [
+        FinalKind::Completed,
+        FinalKind::Cancelled,
+        FinalKind::RetainedForInspection,
+    ] {
+        for owes_work in [false, true] {
+            for checkpointed in [false, true] {
+                rows.push(JournalRow::Final {
+                    kind,
+                    owes_work,
+                    checkpointed,
+                });
+            }
+        }
+    }
+    rows
+}
+
+#[test]
+fn a_row_that_ended_without_a_checkpoint_does_not_release_the_record_of_a_binding_that_never_checkpoints()
+ {
+    // The command completed and its output was lost. Its row has no
+    // checkpoint step because its operation records none: the record is
+    // kept, and the call is not run as a new request.
+    let binding = never_checkpoints();
+    assert_eq!(
+        Reentry::of(&completed(false, false), binding.ended_without_checkpoint()),
+        Reentry::AsRecorded
+    );
+}
+
+#[test]
+fn a_binding_that_never_checkpoints_is_re_entered_as_recorded_whatever_its_row() {
+    let binding = never_checkpoints();
+    for journal in every_row() {
+        assert_eq!(
+            Reentry::of(&journal, binding.ended_without_checkpoint()),
+            Reentry::AsRecorded,
+            "{journal:?}"
+        );
+    }
+}
+
+#[test]
+fn a_row_without_a_checkpoint_is_taken_as_a_row_with_one_by_a_binding_that_never_checkpoints() {
+    let binding = never_checkpoints();
+    for kind in [
+        FinalKind::Completed,
+        FinalKind::Cancelled,
+        FinalKind::RetainedForInspection,
+    ] {
+        for owes_work in [false, true] {
+            let row = |checkpointed| JournalRow::Final {
+                kind,
+                owes_work,
+                checkpointed,
+            };
+            assert_eq!(
+                Reentry::of(&row(false), binding.ended_without_checkpoint()),
+                Reentry::of(&row(true), binding.ended_without_checkpoint()),
+                "{kind:?} {owes_work}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_ticket_request_that_ended_without_a_checkpoint_is_run_as_new() {
+    for binding in [a_ticket_create(), a_ticket_save()] {
+        assert_eq!(
+            binding.ended_without_checkpoint(),
+            EndedWithoutCheckpoint::DidNothing
+        );
+        for journal in every_row() {
+            let expected = if journal == completed(false, false) {
+                Reentry::AsNew
+            } else {
+                Reentry::AsRecorded
+            };
+            assert_eq!(
+                Reentry::of(&journal, binding.ended_without_checkpoint()),
+                expected,
+                "{journal:?}"
+            );
+        }
+    }
+}
+
+/// A selection has no token of its caller's: its record is released for
+/// the same row a save's is, and only once its binding has been asked
+/// whether the setting moved.
+#[test]
+fn a_selection_that_ended_without_a_checkpoint_is_run_as_new_only_unless_its_setting_moved() {
+    let binding = Mutation::RemoteSelect(crate::repository::RemoteSelectInput {
+        root: PathBuf::from("/nowhere"),
+        name: None,
+    })
+    .into_binding();
+    assert_eq!(
+        binding.ended_without_checkpoint(),
+        EndedWithoutCheckpoint::DidNothingToASetting
+    );
+    for journal in every_row() {
+        let expected = if journal == completed(false, false) {
+            Reentry::NewUnlessMoved
+        } else {
+            Reentry::AsRecorded
+        };
+        assert_eq!(
+            Reentry::of(&journal, binding.ended_without_checkpoint()),
+            expected,
+            "{journal:?}"
+        );
+    }
+}
+
+/// A binding that names the rule and gives no probe is refused, with its
+/// record left: it is not run as new on nothing.
+#[test]
+fn a_binding_that_gives_no_probe_of_its_setting_is_not_released() {
+    let service = RepositoryService::open_at(tempfile::tempdir().expect("a directory").path())
+        .expect("a service");
+    let binding = never_checkpoints();
+    let record_free = Accepted {
+        request_id: crate::repository::RequestId::new(),
+        attempt: 2,
+        scope: crate::repository::mutation::identity::ScopeKey::application(),
+        family: None,
+        operation_id: crate::repository::OperationId::new(),
+        position: Position {
+            base_ref: None,
+            base_oid: None,
+        },
+        expected: None,
+    };
+    let Some(Ran { answer, standing }) = binding.moved(&service, &record_free) else {
+        panic!("the default lets the record go");
+    };
+    assert_eq!(answer.code, ResultCode::InternalError);
+    assert!(matches!(standing, Standing::Stopped { journal: None }));
+}
