@@ -10,7 +10,7 @@ id: "01M6E696JQ4NAKG1RT7103FQJ3"
 
 # Desktop Discussion And Deliberate Synchronization Implementation Plan
 
-> **For agentic workers:** Draft, revision 2, not approved. Implementation
+> **For agentic workers:** Draft, revision 3, not approved. Implementation
 > starts only once the owner has approved the documents and authorized it.
 > Then use `implementing-a-cycle` task by task, re-read the design, repeat
 > the ticket preflight, and record every checkpoint on ticket
@@ -219,16 +219,20 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
     (repository with `publish_over_ssh`; hold the job after acceptance with
     `set_request_hook_for_testing`; assert `Signalled` and the token
     cancelled); `cancelling_an_accepted_local_job_is_still_too_late`;
-    `giving_up_cancels_then_sends_the_same_request`.
-  - `services/prompts_tests.rs`:
+    `a_later_stage_marks_a_retry_accepted` (R-14);
+    `giving_up_an_accepted_record_cancels_then_sends_the_same_request`;
+    `giving_up_a_finished_record_reports_already_finished`;
+    `give_up_and_retry_of_one_request_refuse_each_other`.
+  - `services/prompts_tests.rs` (the declined set shared by the handle
+    and the provider, `Arc<Mutex<HashSet<…>>>`):
     `a_declined_key_answers_cancelled_without_a_prompt`,
-    `clearing_a_declined_key_prompts_again`.
+    `clearing_a_declined_key_through_the_handle_prompts_again`.
   - `services/submissions_tests.rs`: `a_second_submit_while_posting_is_refused`,
     `retry_keeps_the_request_id`, `restart_makes_a_new_request`,
-    `a_submission_outlives_its_tab`.
-- [ ] **Code:** `services/worker.rs` (R-1, `Work::GiveUp`),
-  `services/prompts.rs` (R-13), `services/submissions.rs` and its
-  registration in `services/mod.rs`.
+    `a_finished_event_with_no_tab_open_updates_the_submission` (P9).
+- [ ] **Code:** `services/worker.rs` (R-1, R-14, `Work::GiveUp`),
+  `services/prompts.rs` (R-13), `services/submissions.rs`, and in
+  `services/mod.rs` its registration and its update from the event drain.
 - [ ] **Verify:** `… worker`, `… prompts`, `… submissions`, then the four lines.
 - [ ] **Commit.**
 
@@ -236,7 +240,8 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
 
 - [ ] **Tests first** (`model/publication_tests.rs`): one test per row of
   both tables, plus `rows_match_in_precedence_order` (an envelope matching
-  two rows takes the earlier). Build envelopes as
+  two rows takes the earlier), `a_stop_after_the_push_is_shared`, and
+  `internal_error_is_maybe_saved_only_for_an_adopted_first_post`. Build envelopes as
   `model/operations_tests.rs` does.
 - [ ] **Code:** `model/publication.rs`; one `mod` line in `model/mod.rs`.
 - [ ] **Verify:** `… publication`, then the four lines.
@@ -336,7 +341,9 @@ done
   `no_selected_key_opens_sharing_and_keys`;
   `a_host_code_checks_the_host_with_its_authority`;
   `a_hostless_comment_stop_opens_the_roots_hosts_page` (K-3);
-  `waiting_for_names_the_holding_request`;
+  `busy_names_a_holding_request_of_this_session`;
+  `busy_without_a_known_holder_points_to_pending_operations`;
+  `a_deleted_branch_offers_give_up_and_no_share`;
   `the_conflict_banner_says_work_is_safe_and_offers_nothing`.
 - [ ] **Code:** `model/operations.rs`, `view/operations.rs`,
   `view/item/banners.rs`, `view/item/share.rs`, Keys and Hosts routes in
@@ -346,8 +353,10 @@ done
 
 ## Task 10b: Give Up And Resume
 
-- [ ] **Tests first:** `give_up_is_offered_only_for_the_rows_own_request`;
-  `give_up_ends_the_request_cancelled`; E-10;
+- [ ] **Tests first:** `give_up_is_offered_for_an_owed_share_or_post`
+  (including `unlock_required` after Not now);
+  `give_up_is_not_offered_for_ok_or_cancelled`;
+  `stop_is_not_offered_without_a_remote` (R-15); E-10;
   `resume_is_offered_for_a_comment_publication_row`;
   `resume_is_not_offered_for_a_local_context_sync`;
   `an_accepted_resume_offers_stop`.
@@ -379,7 +388,7 @@ done
 
 - [ ] **Tests first:** `ctrl_enter_submits_and_an_empty_composer_does_not`,
   `posting_is_read_only_and_submits_nothing`,
-  `failed_is_read_only_with_retry_when_offered_and_edit_text`,
+  `failed_offers_exactly_the_actions_its_owner_sets`,
   `esc_with_text_asks_to_discard_and_keep_editing_keeps_it`,
   `esc_when_empty_cancels_silently`, `tab_leaves_the_composer`.
 - [ ] **Code:** `view/item/composer.rs`.
@@ -408,25 +417,37 @@ removed.
 - [ ] **Verify:** `… discussion`, `… posting`, then the four lines.
 - [ ] **Commit; review.**
 
-## Task 13: Posting And Outcomes
+## Task 13: Posting And Outcomes (test-first, design checkpoint)
 
-- [ ] **Tests first** (`view/item/posting_tests.rs`):
+Task 13 implements the design's **Required outcomes of posting recovery**
+(P1–P10). Step 1 writes one test per row; Step 2, before any code, the
+implementer proposes the posting state machine to the orchestrator, who
+checks it against P1–P10 and the outcome table and approves it or asks the
+owner. Only then Step 3 writes the code.
+
+- [ ] **Tests first** (`view/item/posting_tests.rs`), one per P-row:
+  `p1_a_shared_post_is_one_file_one_checkpoint_shown_once`,
+  `p2_retry_sharing_writes_nothing_more` (`publish_over_ssh`, U-2),
+  `p3_a_stopped_post_offers_share_not_retry`,
+  `p4_an_adopted_draft_is_checked_before_its_first_post`,
+  `p5_maybe_saved_offers_post_as_new_only_after_check_again_finds_nothing`,
+  `p6_a_finished_failure_that_wrote_nothing_posts_again_as_a_new_request`,
+  `p7_an_owed_failure_offers_only_retry`,
+  `p8_occupied_path_keeps_the_text_and_offers_discard`,
+  `p9_closing_the_tab_while_posting_still_retires_the_draft`,
+  `p10_a_second_submit_while_posting_is_refused`;
+  and:
   `saving_locally_without_a_remote_shows_saved_here` (real library);
-  `an_unreachable_remote_saves_once_and_retry_sharing_writes_nothing_more`
-  (U-2; one file and one checkpoint after two retries);
   `a_failed_checkpoint_keeps_the_text_and_adds_no_row`;
-  `a_finished_failure_posts_again_as_a_new_request` (R-12);
-  `occupied_path_keeps_the_text_and_offers_discard`;
-  `a_cancelled_post_offers_share_not_retry`;
   `posting_shows_a_pending_row_until_the_outcome`;
-  `a_second_submit_while_posting_queues_nothing`;
   `posting_never_commits_the_dirty_body`;
-  `an_adopted_draft_already_listed_is_retired` (R-8);
-  `a_bound_but_unwritten_draft_posts_as_a_new_comment` (R-8, constructed
-  `internal_error`);
+  `the_reply_composer_cannot_move_while_posting`;
+  `an_outcome_applies_only_to_its_comments_composer`;
   `typing_after_submit_is_not_replaced_by_the_outcome` (A17);
   `navigation_save_done_close_and_quit_submit_no_publication` (A16).
-- [ ] **Code:** `view/item/posting.rs`, `view/item/discussion/rows.rs`.
+- [ ] **Design checkpoint** (Step 2 above), recorded in the ledger.
+- [ ] **Code:** `view/item/posting.rs`, `view/item/discussion/rows.rs`,
+  the drain hook in `services/mod.rs` (P9).
 - [ ] **Verify:** `… posting`, then the four lines.
 - [ ] **Commit; review.**
 
@@ -502,7 +523,7 @@ devenv shell -- cargo run --locked --features desktop --bin manyhands
 | A7 | 2, 9, 10a; native §5 |
 | A8 | 13; native §6 |
 | A9 | 2, 9, 10b; native §6 |
-| A10 | 3, 10a; native §7 |
+| A10 | 3, 10a, 13; native §7 |
 | A11 | 6, 12; native §2 |
 | A12 | 13 |
 | A13 | 10a; native §5 |
@@ -515,11 +536,18 @@ devenv shell -- cargo run --locked --features desktop --bin manyhands
 | R-8 | 13 |
 | R-9, R-10 | 11a |
 | R-12 | 3, 11b, 13 |
-| Decision 8 | 2, 10b |
+| Decision 5 | 12 |
+| Decision 7 | 8, 11a |
+| Decision 8 | 2, 10a, 10b |
 | Decisions 9, 10 | 8 |
 | Decision 11 | 10b |
+| Decision 12 | K-8; native §6 |
 | Decision 13 | 10a |
 | Decision 14 | 13, 14 |
+| Decision 15 | native §4 |
+| R-14 | 2 |
+| R-15 | 10b |
+| P1–P10 | 13 |
 | E-1 – E-7 | 4 (E-6 also 8) |
 | E-8, E-9 | 7 |
 | E-10 | 10b |

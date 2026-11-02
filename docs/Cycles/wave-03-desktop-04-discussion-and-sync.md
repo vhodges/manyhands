@@ -15,7 +15,7 @@ Ticket `01M4CC0VN1KTQFSVR99378TDHV`. Design:
 Plan:
 [2026-11-02-wave-03-desktop-04-discussion-and-sync-implementation.md](../plans/2026-11-02-wave-03-desktop-04-discussion-and-sync-implementation.md).
 
-Status: **draft, revision 2**, planned at `00bef3da` (origin/main
+Status: **draft, revision 3**, planned at `00bef3da` (origin/main
 `15a23125` merged into the ticket branch). Nothing has been built or run.
 
 ## Purpose And Authority
@@ -75,7 +75,8 @@ D4 merges main whenever it moves (design, Lane mechanics).
 1. **Composers.** A new-comment composer after the threads and one reply
    composer at a time inside a thread: small `zorite-editor` instances with
    the Rich text / Markdown switch (decision 3), a mini toolbar, Ctrl Enter
-   to post, Esc to cancel with "Discard this reply?" when text is present.
+   to post, Esc to cancel with "Discard this reply?" (or "Discard this
+   comment?") when text is present.
 2. **Comment drafts.** Each composer's text is a D2 draft with a comment
    target, flushed within 1 s, restored after a crash, per item and
    thread, separate from the body draft. The Drafts page opens them.
@@ -119,7 +120,8 @@ D4 merges main whenever it moves (design, Lane mechanics).
 1. **No implicit publication.** Only Post/Reply and sync, Share, Share
    main, Retry sharing, Unlock…, Resume and Give up start or end a
    synchronization. Navigation, Save, Done, closing a tab and quitting
-   never start one.
+   never start one. Quitting stops a running one at a safe point
+   (decision 15).
 2. **Unsaved body text is never posted or shared.**
 3. **One comment, once.** No path creates a second comment for one
    composer text, and no retry writes a comment twice.
@@ -188,9 +190,12 @@ await confirmation:
 6. **Linux-only native evidence** for D4, with the owner as tester.
 7. **The design's words** in the UI: Share, Share main, Retry sharing,
    Reply and sync, Save reply locally; the desktop RFC is amended to match.
-8. **Give up** is offered only on a finished request whose own envelope
-   offers `request.cancel`; it ends that request `cancelled`, leaving the
-   comment saved and Share to send it.
+8. **Give up** ("Stop trying to share") is offered on any share or post
+   of this session that stopped with an error and still holds its record
+   (including after Not now). It ends that request `cancelled` and
+   releases the repository's reservation; the comment stays saved and
+   Share sends it later. After a deleted shared branch, no Share is
+   offered (republishing is D5's).
 9. **No Share dialog.** Scope is stated in the tooltip and the operation
    entry; API audit row D25 is amended.
 10. **Share is enabled whenever a publication remote exists**; the library
@@ -204,10 +209,14 @@ await confirmation:
 14. **The "not shared yet" chip is session-only.** After a restart the
     pending publication shows as an operation row with Resume; a library
     read for a persistent marker becomes its own ticket.
+15. **Quitting while sending stops at a safe point.** D1's quit cancels
+    the running request; a stopped publication is final, so after relaunch
+    nothing marks the comment and Share publishes it (K-10). D6 owns
+    shutdown.
 
 ## Open Questions
 
-Decisions 5–14 await confirmation.
+Decisions 5–15 await confirmation.
 
 ## Review Record
 
@@ -220,3 +229,4 @@ Decisions 5–14 await confirmation.
 | Planning research | Design vocabulary differs from the RFC | Decision 7 | Pending. | RFC desktop IA 257–262. |
 | Review round 1, source and feasibility (`eec96a4c`) | 5 Blocking, 10 Important, 7 Minor | — | Revision 2. | Design Review Record. |
 | Review round 1, contract and consistency (`eec96a4c`) | 3 Blocking, 18 Important, 1 Minor group | — | Revision 2; rulings that changed behaviour became decisions 8–14. | Design Review Record. |
+| Review round 2, scoped with adversarial brief (`6ed12ae6`) | 2 Blocking, 7 Important, 9 Minor | — | Revision 3: required outcomes P1–P10; decision 8 widened; decision 15. | Design Review Record. |
