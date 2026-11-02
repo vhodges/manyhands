@@ -348,16 +348,9 @@ pub fn sync(
         driven,
         |envelope| render::prepare_output(false, envelope),
         |envelope, supplied| {
-            let reobserve = matches!(
-                envelope.code,
-                ResultCode::InvalidInput
-                    | ResultCode::ExternalChange
-                    | ResultCode::WorktreeNotClean
-            );
-            let mut output = local_output(envelope, supplied, reobserve);
-            output
-                .stderr
-                .extend(way_on(envelope, &root.to_string_lossy(), &id.to_string()).into_bytes());
+            let way = way_on(envelope, &root.to_string_lossy(), &id.to_string());
+            let mut output = local_output(envelope, supplied, way.replaces_next_action);
+            output.stderr.extend(way.lines.into_bytes());
             output
         },
     )
@@ -490,11 +483,6 @@ pub fn resolve(
         driven,
         |envelope| render::prepare_output(false, envelope),
         |envelope, supplied| {
-            let reobserve = matches!(
-                envelope.code,
-                ResultCode::InvalidInput | ResultCode::ExternalChange
-            );
-            let mut output = local_output(envelope, supplied, reobserve);
             // The original request, as the data names it, or the inspection
             // does after a stop that names none (the gate: it is resent).
             let original = data_of(envelope)
@@ -511,15 +499,14 @@ pub fn resolve(
                     })
                     .and_then(|view| view.required_request_id)
                 });
-            output.stderr.extend(
-                resolve_way_on(
-                    envelope,
-                    &root.to_string_lossy(),
-                    &operation.to_string(),
-                    original.as_deref(),
-                )
-                .into_bytes(),
+            let way = resolve_way_on(
+                envelope,
+                &root.to_string_lossy(),
+                &operation.to_string(),
+                original.as_deref(),
             );
+            let mut output = local_output(envelope, supplied, way.replaces_next_action);
+            output.stderr.extend(way.lines.into_bytes());
             output
         },
     )
@@ -533,6 +520,30 @@ fn show_line(root: &str, operation: &str) -> String {
     )
 }
 
+/// The lines a verb adds to a result's, and whether one of them, a line to
+/// look again, replaces the data's `next action`: there, looking again is the
+/// way on, not a repair outside.
+struct WayOn {
+    lines: String,
+    replaces_next_action: bool,
+}
+
+impl WayOn {
+    fn adds(lines: String) -> Self {
+        Self {
+            lines,
+            replaces_next_action: false,
+        }
+    }
+
+    fn looks_again(lines: String) -> Self {
+        Self {
+            lines,
+            replaces_next_action: true,
+        }
+    }
+}
+
 /// What a resolution's stop adds, by the required outcomes' last column. With
 /// an original request to finish the resolution, that request is the way on,
 /// as `request.retry`, unless C2's lines already name it.
@@ -541,7 +552,7 @@ fn resolve_way_on(
     root: &str,
     operation: &str,
     original: Option<&str>,
-) -> String {
+) -> WayOn {
     if let Some(original) = original.filter(|id| envelope.request_id.as_deref() != Some(*id)) {
         let named = envelope.recovery.iter().any(|action| {
             action.action == RecoveryActionKind::RequestRetry
@@ -552,12 +563,17 @@ fn resolve_way_on(
         } else {
             format!("next: request.retry request_id={}\n", field(original))
         };
-        return format!("{retry}{}", note_lines(&[ORIGINAL_NOTE.to_owned()]));
+        return WayOn::adds(format!(
+            "{retry}{}",
+            note_lines(&[ORIGINAL_NOTE.to_owned()])
+        ));
     }
     match envelope.code {
-        ResultCode::InvalidInput | ResultCode::ExternalChange => show_line(root, operation),
-        ResultCode::OriginalRequestRequired => note_lines(&[ORIGINAL_NOTE.to_owned()]),
-        _ => String::new(),
+        ResultCode::InvalidInput | ResultCode::ExternalChange => {
+            WayOn::looks_again(show_line(root, operation))
+        }
+        ResultCode::OriginalRequestRequired => WayOn::adds(note_lines(&[ORIGINAL_NOTE.to_owned()])),
+        _ => WayOn::adds(String::new()),
     }
 }
 
@@ -565,7 +581,7 @@ fn resolve_way_on(
 /// data's non-empty fields only, as `human_collaboration`'s compact lines do,
 /// and no `operation:` line when the data names no operation (a refusal with
 /// no owner). `reobserve` drops a `next action` that the verb's own line
-/// replaces: there, looking again is the way on, not a repair outside.
+/// replaces (`WayOn`).
 fn local_output(envelope: &Envelope<MutationDataDto>, supplied: bool, reobserve: bool) -> Output {
     let mut plain = envelope.clone();
     plain.data = None;
@@ -599,25 +615,21 @@ fn data_of(envelope: &Envelope<MutationDataDto>) -> Option<&LocalContextSyncMuta
 }
 
 /// What a stop's human lines add to C2's, by the required outcomes' last column.
-fn way_on(envelope: &Envelope<MutationDataDto>, root: &str, item: &str) -> String {
+fn way_on(envelope: &Envelope<MutationDataDto>, root: &str, item: &str) -> WayOn {
     let notes = |note: &str| note_lines(&[note.to_owned()]);
+    let again =
+        |note: &str| WayOn::looks_again(format!("{}{}", observe_line(root, item), notes(note)));
     match envelope.code {
-        ResultCode::InvalidInput => {
-            return format!("{}{}", observe_line(root, item), notes(MALFORMED_NOTE));
-        }
-        ResultCode::ExternalChange => {
-            return format!("{}{}", observe_line(root, item), notes(OBSERVE_NOTE));
-        }
-        ResultCode::WorktreeNotClean => {
-            return format!("{}{}", observe_line(root, item), notes(DIRTY_NOTE));
-        }
-        ResultCode::IdentityRequired => return notes(IDENTITY_NOTE),
+        ResultCode::InvalidInput => return again(MALFORMED_NOTE),
+        ResultCode::ExternalChange => return again(OBSERVE_NOTE),
+        ResultCode::WorktreeNotClean => return again(DIRTY_NOTE),
+        ResultCode::IdentityRequired => return WayOn::adds(notes(IDENTITY_NOTE)),
         _ => {}
     }
     let Some(data) = data_of(envelope) else {
-        return String::new();
+        return WayOn::adds(String::new());
     };
-    match data.next_action {
+    WayOn::adds(match data.next_action {
         LocalContextSyncNextAction::Resolve => match data.operation_id.as_deref() {
             Some(operation) => {
                 let (root, operation) = (quoted(root), field(operation));
@@ -645,7 +657,7 @@ fn way_on(envelope: &Envelope<MutationDataDto>, root: &str, item: &str) -> Strin
             }
         }
         _ => String::new(),
-    }
+    })
 }
 
 #[cfg(test)]

@@ -49,7 +49,8 @@ fn a_conflict_names_the_same_commands_a_refused_merge_prints() {
         ),
         ROOT,
         ITEM,
-    );
+    )
+    .lines;
     let root = quoted(ROOT);
     assert!(lines.contains(&format!(
         "next: manyhands-cli context show-local --repo {root} --operation-id {OPERATION}\n"
@@ -68,7 +69,7 @@ fn only_a_resolvable_conflict_offers_resolve_local() {
         LocalContextSyncNextAction::SetIdentity,
         LocalContextSyncNextAction::RetryResolution,
     ] {
-        let lines = way_on(&stopped(ResultCode::RecoveryRequired, action), ROOT, ITEM);
+        let lines = way_on(&stopped(ResultCode::RecoveryRequired, action), ROOT, ITEM).lines;
         assert!(!lines.contains("resolve-local"), "{action:?}: {lines}");
     }
 }
@@ -80,7 +81,7 @@ fn a_stale_or_dirty_stop_goes_back_to_observe() {
         ResultCode::ExternalChange,
         ResultCode::WorktreeNotClean,
     ] {
-        let lines = way_on(&stopped(code, LocalContextSyncNextAction::None), ROOT, ITEM);
+        let lines = way_on(&stopped(code, LocalContextSyncNextAction::None), ROOT, ITEM).lines;
         assert!(
             lines.starts_with(&format!(
                 "next: manyhands-cli context observe-local --repo {} --id {ITEM}\n",
@@ -130,7 +131,7 @@ fn only_a_repair_outside_says_so() {
             data.next_action = action;
         }
         assert_eq!(
-            way_on(&envelope, ROOT, ITEM).contains(EXTERNAL_NOTE),
+            way_on(&envelope, ROOT, ITEM).lines.contains(EXTERNAL_NOTE),
             says,
             "{reason:?}"
         );
@@ -146,7 +147,8 @@ fn identity_required_says_the_same_request_follows() {
         ),
         ROOT,
         ITEM,
-    );
+    )
+    .lines;
     assert!(lines.contains("same request"), "{lines}");
 }
 
@@ -158,7 +160,8 @@ fn a_refused_resolution_goes_back_to_show_local() {
             ROOT,
             OPERATION,
             None,
-        );
+        )
+        .lines;
         assert_eq!(
             lines,
             format!(
@@ -176,7 +179,8 @@ fn a_refused_resolution_goes_back_to_show_local() {
         ROOT,
         OPERATION,
         None,
-    );
+    )
+    .lines;
     assert!(lines.contains("same input"), "{lines}");
 }
 
@@ -192,7 +196,8 @@ fn a_new_request_after_a_partial_resolution_names_the_original_one() {
         ROOT,
         OPERATION,
         Some(ORIGINAL),
-    );
+    )
+    .lines;
     assert!(
         lines.starts_with(&format!("next: request.retry request_id={ORIGINAL}\n")),
         "{lines}"
@@ -213,7 +218,25 @@ fn the_original_request_is_named_once() {
             manyhands::results::RecoveryActionKind::RequestRetry,
             [("request_id", ORIGINAL.into())],
         ));
-    let lines = resolve_way_on(&envelope, ROOT, OPERATION, Some(ORIGINAL));
+    let lines = resolve_way_on(&envelope, ROOT, OPERATION, Some(ORIGINAL)).lines;
     assert!(!lines.contains("next: request.retry"), "{lines}");
     assert!(lines.contains("same input"), "{lines}");
+}
+
+/// The data's `next action` is left out only where a line to look again takes
+/// its place: an original request named in its place keeps it.
+#[test]
+fn only_a_line_to_look_again_replaces_next_action() {
+    let stale = stopped(
+        ResultCode::ExternalChange,
+        LocalContextSyncNextAction::RetryResolution,
+    );
+    assert!(resolve_way_on(&stale, ROOT, OPERATION, None).replaces_next_action);
+    assert!(!resolve_way_on(&stale, ROOT, OPERATION, Some(ORIGINAL)).replaces_next_action);
+    assert!(way_on(&stale, ROOT, ITEM).replaces_next_action);
+    let refused = stopped(
+        ResultCode::RecoveryRequired,
+        LocalContextSyncNextAction::ExternalRepair,
+    );
+    assert!(!way_on(&refused, ROOT, ITEM).replaces_next_action);
 }

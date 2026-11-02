@@ -6,6 +6,7 @@ code: external_change
 request: 01ARZ3NDEKTSV4RRFFQ69G5FX5
 Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
 Kind: ticket
+Next action: external_repair
 Operation id: <id>
 Reason: foreign_change
 State: resolution_prepared
