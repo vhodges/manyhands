@@ -6712,8 +6712,8 @@ impl RepositoryService {
             return Err(SynchronizationError::RecoveryRequired);
         }
         self.synchronization_boundary(root, owner)?;
-        // Before the row is completed, so a stop between the two leaves a
-        // verified row whose next pass comes back here (decision 29).
+        // Before the row is completed: a stop between the two leaves a verified
+        // row whose next pass comes back here (decision 29).
         advance_tracking_to_authority(root, plan, configuration, &request.target, authority.oid());
         decision(self.classify_synchronization(root, owner, authority)?)?;
         self.synchronization_refresh(
@@ -7934,14 +7934,12 @@ impl RepositoryService {
     }
 }
 
-/// Moves the pushed ref's existing tracking ref forward to `oid`, which the
-/// Push endpoint has been verified to hold (decision 29). Only when Fetch and
-/// Push are one endpoint, since tracking describes Fetch. A tracking ref that
-/// doesn't exist isn't created: a context's would then outlive a remote
-/// deletion whose cleanup a cache loss forgot, and no fetch prunes it. One
-/// already at `oid`, or moved past or beside it since, is left as it is. A
-/// failure leaves tracking as stale as it was before this rule, and the next
-/// fetch corrects it, so it is not the publication's failure.
+/// Decision 29: moves the pushed ref's tracking ref forward to `oid`, which
+/// the Push endpoint is verified to hold. Only when Fetch and Push are one
+/// endpoint, since tracking describes Fetch, and only a ref that exists: one
+/// made here would outlive a remote deletion that a cache loss forgot. A ref
+/// already at `oid`, or past or beside it, is left. A failure leaves tracking
+/// as stale as before, for the next fetch to correct, and fails nothing.
 fn advance_tracking_to_authority(
     root: &Path,
     plan: &RemoteRefPlan,
@@ -7959,9 +7957,8 @@ fn advance_tracking_to_authority(
     else {
         return;
     };
-    let target = target_ref(plan, target);
-    let tracking = target.tracking_ref();
-    let message = "manyhands: tracking a verified push";
+    let pushed = target_ref(plan, target);
+    let tracking = pushed.tracking_ref();
     let Some(current) = repository
         .find_reference(tracking)
         .ok()
@@ -7976,7 +7973,13 @@ fn advance_tracking_to_authority(
     {
         return;
     }
-    let _ = repository.reference_matching(tracking, oid, true, current, message);
+    let _ = repository.reference_matching(
+        tracking,
+        oid,
+        true,
+        current,
+        "manyhands: tracking a verified push",
+    );
 }
 
 fn authority_outcome(

@@ -5,7 +5,7 @@
 //! these rows hold what the refused merge says of them until then.
 
 use crate::{
-    human_lifecycle::{output, prepare},
+    human_lifecycle::{self, output},
     mutate::should_retry,
     render::test_support::{no_raw_control, stderr, stdout},
 };
@@ -92,6 +92,16 @@ fn cancel() -> RecoveryAction {
 
 fn inspect() -> RecoveryAction {
     RecoveryAction::new(RecoveryActionKind::RepoInspect, [("root", ROOT.into())])
+}
+
+/// The verb's prepare, its kind the one the envelope's command acts on.
+fn prepare(envelope: &Envelope<PrepareDataDto>) -> crate::render::Output {
+    let kind = if envelope.command == "document promote" {
+        ItemDtoKind::Document
+    } else {
+        ItemDtoKind::Ticket
+    };
+    human_lifecycle::prepare(kind, envelope)
 }
 
 fn next_lines(text: &str) -> Vec<&str> {

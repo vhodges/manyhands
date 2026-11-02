@@ -37,9 +37,8 @@ use manyhands::{
 /// What the repair's lines leave to the reader. The route these lines print is
 /// walked through the binary, from a refused closure to its finish, by
 /// `tests/cli/local_sync.rs` `the_refused_merges_route_finishes_the_close`.
-const REPAIR: &str = "The commands above are the local repair: the <...> values are placeholders to fill in, context sync-local's --input - takes {\"observation\": \"...\"} with the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict.";
-/// What a missing context's note says, here and in `context observe-local`.
-pub(crate) const NO_CONTEXT_NOTE: &str = "this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in, and the save's --input - takes {\"observation\": \"...\"}, with the observation ticket show or document show prints, and the fields it changes, such as \"body\".";
+const REPAIR_NOTE: &str = "The commands above are the local repair: the <...> values are placeholders to fill in, context sync-local's --input - takes {\"observation\": \"...\"} with the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict.";
+const REFUSED_NOTE: &str = "primary refused this closure's checkpoint.";
 const POLL_NOTE: &str = "this repository's record of the remote's primary is behind or missing, and a poll reads it; <new-request-id> is a placeholder to fill in.";
 const HELD_NOTE: &str = "an unfinished request holds this item; send it again to finish it, and prepare again only once it has.";
 const HELD_RESUME_NOTE: &str = "an unfinished operation that no request holds has this item; resume it (add --request-id unless you run it at a terminal), and prepare again only once it has finished.";
@@ -53,21 +52,14 @@ const RESUME_DELETED_NOTE: &str = "this resume released the operation's context 
 /// for a promotion, a state that says nothing. Its blockers are one line,
 /// which sorts first.
 fn data_fields(data: &LifecycleMutationDto) -> String {
-    let Ok(mut value) = serde_json::to_value(data) else {
-        return String::new();
-    };
-    if let Some(fields) = value.as_object_mut() {
-        fields.remove("type");
-        fields.remove("blockers");
-        fields.remove("made_ready");
-        if data.made_ready_state.is_none() {
-            fields.remove("made_ready_state");
-        }
+    let mut left_out = vec!["type", "blockers", "made_ready"];
+    if data.made_ready_state.is_none() {
+        left_out.push("made_ready_state");
     }
     format!(
         "{}{}",
         blockers_line(&data.blockers),
-        human_admin::fields(&value)
+        human_admin::fields_without(data, &left_out)
     )
 }
 
@@ -191,11 +183,10 @@ fn merge_refused_route(
     item: &str,
     route: &mut Route,
 ) {
-    const REFUSED: &str = "primary refused this closure's checkpoint.";
     if action_index(envelope, RecoveryActionKind::RequestRetry).is_some() {
         route.next = merge_refused(root, item);
         route.notes.push(format!(
-            "{REFUSED} {REPAIR} Then send this request again; the closure's fields are kept."
+            "{REFUSED_NOTE} {REPAIR_NOTE} Then send this request again; the closure's fields are kept."
         ));
     } else if let Some(index) = action_index(envelope, RecoveryActionKind::OperationResume) {
         route.next = merge_refused(root, item);
@@ -204,7 +195,7 @@ fn merge_refused_route(
             route.next.push(line);
         }
         route.notes.push(format!(
-            "{REFUSED} {REPAIR} Then resume it again (add --request-id unless you run it at a terminal); the closure's fields are kept."
+            "{REFUSED_NOTE} {REPAIR_NOTE} Then resume it again (add --request-id unless you run it at a terminal); the closure's fields are kept."
         ));
     }
 }
@@ -245,22 +236,9 @@ fn route_of(envelope: &Envelope<MutationDataDto>, data: &LifecycleMutationDto) -
     route
 }
 
-/// The save that makes an item's editing context, as a pasteable command.
-pub(crate) fn save_line(kind: ItemDtoKind, root: &str, item: &str) -> String {
-    let save = match kind {
-        ItemDtoKind::Document => "document save",
-        ItemDtoKind::Ticket => "ticket save",
-    };
-    format!(
-        "manyhands-cli {save} --repo {} --id {} --input - --request-id <new-request-id>",
-        quoted(root),
-        field(item)
-    )
-}
-
 /// The way out of a blocked prepare: what to run, and what it says of that.
 fn way_out(
-    command: &str,
+    kind: ItemDtoKind,
     blockers: &[LifecycleBlocker],
     root: &str,
     item: &str,
@@ -285,14 +263,9 @@ fn way_out(
         ));
     }
     if blockers == [ContextMissing] {
-        let kind = if command == "document promote" {
-            ItemDtoKind::Document
-        } else {
-            ItemDtoKind::Ticket
-        };
         return Some((
-            vec![save_line(kind, root, item)],
-            format!("{NO_CONTEXT_NOTE} Then prepare again."),
+            vec![render::save_line(kind, root, item)],
+            format!("{} Then prepare again.", render::NO_CONTEXT_NOTE),
         ));
     }
     // `sync-local` refuses a dirty or conflicted context, and a pending conflict
@@ -309,7 +282,7 @@ fn way_out(
     reachable.then(|| {
         (
             merge_refused(root, item),
-            format!("this context can't merge into primary. {REPAIR} Then prepare again."),
+            format!("this context can't merge into primary. {REPAIR_NOTE} Then prepare again."),
         )
     })
 }
@@ -353,15 +326,13 @@ fn held(envelope: &Envelope<PrepareDataDto>) -> Option<Output> {
     };
     let refusal = refusal_of(envelope, Vec::new());
     let mut output = render::failure_output(false, &refusal, Some(format!("next: {line}\n")));
-    output
-        .stderr
-        .extend(note_lines(&[note.to_owned()]).into_bytes());
+    output.stderr.extend(render::note_line(note).into_bytes());
     Some(output)
 }
 
 /// The human output of a prepare of these verbs: C2's, with a blocked prepare's
 /// way out.
-pub fn prepare(envelope: &Envelope<PrepareDataDto>) -> Output {
+pub fn prepare(kind: ItemDtoKind, envelope: &Envelope<PrepareDataDto>) -> Output {
     if let Some(output) = held(envelope) {
         return output;
     }
@@ -373,7 +344,7 @@ pub fn prepare(envelope: &Envelope<PrepareDataDto>) -> Output {
     ) else {
         return render::prepare_output(false, envelope);
     };
-    let Some((next, note)) = way_out(&envelope.command, &data.blockers, root, item) else {
+    let Some((next, note)) = way_out(kind, &data.blockers, root, item) else {
         let refusal = refusal_of(envelope, envelope.recovery.clone());
         return render::failure_output(false, &refusal, Some(blockers_line(&data.blockers)));
     };
@@ -383,7 +354,7 @@ pub fn prepare(envelope: &Envelope<PrepareDataDto>) -> Output {
     }
     let refusal = refusal_of(envelope, envelope.recovery.clone());
     let mut output = render::failure_output(false, &refusal, Some(extra));
-    output.stderr.extend(note_lines(&[note]).into_bytes());
+    output.stderr.extend(render::note_line(&note).into_bytes());
     output
 }
 

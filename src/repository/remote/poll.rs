@@ -397,13 +397,10 @@ impl RepositoryService {
         )? {
             return Ok(refused(PollDisposition::Nonconforming));
         }
-        // Decision 28: the latest copy is authoritative. A branch whose tip
-        // primary already holds, locally or as last fetched, is an older copy,
-        // as when a closure's remote deletion was refused. Nothing it holds is
-        // missing here, so it is current, and no branch or worktree is made.
-        // A started materialization goes on, and a branch with a commit primary
-        // lacks still materializes. It follows every refusal before it, so a
-        // nonconforming tree still says so, and it precedes every effect.
+        // Decision 28: a branch whose tip primary already holds, locally or as
+        // last fetched, is an older copy, so it is current and nothing is
+        // made. A started materialization goes on. After every refusal, before
+        // every effect.
         if action == MaterializationAction::Start
             && intent.is_none()
             && primary_holds(repository, plan, request.oid)

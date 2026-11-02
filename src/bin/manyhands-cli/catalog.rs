@@ -245,6 +245,8 @@ const fn planned(
 pub const PLANNED: CommandSpec = planned("poll", "future", "A planned verb.", "C9");
 
 use RepoRule::{Refused, Required};
+/// A repository mutation that takes no input.
+const MUTATION_NO_INPUT: &[OptionSpec] = &[REPO, REQUEST_ID, PREPARE, CONFIRM];
 const MUTATION_INPUT: &[OptionSpec] = &[
     REPO,
     OptionSpec {
@@ -447,7 +449,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary: "Remove a repository registration.",
         availability: Availability::Available("C2"),
         repo: Some(Required),
-        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        options: MUTATION_NO_INPUT,
         kind: Kind::Mutation {
             confirmed: true,
             input: InputRule::Refused,
@@ -826,7 +828,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary: "Refresh the index.",
         availability: Availability::Available("C3"),
         repo: Some(Required),
-        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        options: MUTATION_NO_INPUT,
         kind: Kind::Mutation {
             confirmed: false,
             input: InputRule::Refused,
@@ -838,7 +840,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary: "Rebuild the index.",
         availability: Availability::Available("C3"),
         repo: Some(Required),
-        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        options: MUTATION_NO_INPUT,
         kind: Kind::Mutation {
             confirmed: false,
             input: InputRule::Refused,
@@ -926,7 +928,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary: "Synchronize a repository.",
         availability: Availability::Available("C4"),
         repo: Some(Required),
-        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        options: MUTATION_NO_INPUT,
         kind: Kind::Mutation {
             confirmed: false,
             input: InputRule::Refused,
@@ -1029,7 +1031,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary: "Poll a repository once.",
         availability: Availability::Available("C5"),
         repo: Some(Required),
-        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        options: MUTATION_NO_INPUT,
         kind: Kind::Mutation {
             confirmed: false,
             input: InputRule::Refused,
@@ -1053,7 +1055,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary: "Pause polling.",
         availability: Availability::Available("C5"),
         repo: Some(Required),
-        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        options: MUTATION_NO_INPUT,
         kind: Kind::Mutation {
             confirmed: false,
             input: InputRule::Refused,
@@ -1065,7 +1067,7 @@ pub const COMMANDS: &[CommandSpec] = &[
         summary: "Resume polling.",
         availability: Availability::Available("C5"),
         repo: Some(Required),
-        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        options: MUTATION_NO_INPUT,
         kind: Kind::Mutation {
             confirmed: false,
             input: InputRule::Refused,

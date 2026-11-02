@@ -50,7 +50,7 @@ pub(crate) fn fields_without(dto: &impl serde::Serialize, keys: &[&str]) -> Stri
 
 // Only published, content-free DTOs reach this formatter. Inputs never do.
 // Nested field names retain their context, and every dynamic scalar is escaped.
-pub(super) fn fields(dto: &impl serde::Serialize) -> String {
+pub(crate) fn fields(dto: &impl serde::Serialize) -> String {
     fn walk(prefix: &str, value: &serde_json::Value, out: &mut String) {
         match value {
             serde_json::Value::Object(values) => {

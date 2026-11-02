@@ -27,7 +27,7 @@ use crate::{
     catalog::CommandSpec,
     human_admin,
     mutate::{self, MutationFlags, Session},
-    render::{self, Output, field, note_lines, quoted, refusal_of},
+    render::{self, Output, field, quoted, refusal_of},
 };
 
 /// Decision 5: `poll resume` does not lift the suspension, and clearing it is
@@ -36,7 +36,7 @@ const SUSPENDED_NOTE: &str = "automatic polls are suspended for recovery, and po
 
 /// What follows a stop no resend gets past. Each says "new request" because
 /// sending the same one gets this answer back, or is no help.
-const NEW_REQUEST: &str = "polling again takes a new request.";
+const NEW_REQUEST_NOTE: &str = "polling again takes a new request.";
 const HOST_NOTE: &str = "once the host is approved or replaced, polling again takes a new request.";
 const UNLOCK_NOTE: &str =
     "polling again takes a new request, made at a terminal, where it can ask for the passphrase.";
@@ -142,13 +142,13 @@ fn final_note(envelope: &Envelope<MutationDataDto>) -> Option<&'static str> {
         | ResultCode::RepositoryInaccessible
         | ResultCode::InvalidRemote
         | ResultCode::ExternalChange
-        | ResultCode::Cancelled => Some(NEW_REQUEST),
+        | ResultCode::Cancelled => Some(NEW_REQUEST_NOTE),
         // Final when nothing above offers a way on: a host that couldn't be
         // verified, an index that can't be read, an internal stop.
         ResultCode::RecoveryRequired | ResultCode::IndexUnavailable | ResultCode::InternalError
             if !inspect =>
         {
-            Some(NEW_REQUEST)
+            Some(NEW_REQUEST_NOTE)
         }
         _ => None,
     }
@@ -185,12 +185,10 @@ fn once_output(envelope: &Envelope<MutationDataDto>, supplied: bool, root: &str)
         output.stderr.extend(busy_route(root).into_bytes());
         output
             .stderr
-            .extend(note_lines(&[BUSY_NOTE.to_owned()]).into_bytes());
+            .extend(render::note_line(BUSY_NOTE).into_bytes());
     }
     if let Some(note) = final_note(envelope) {
-        output
-            .stderr
-            .extend(note_lines(&[note.to_owned()]).into_bytes());
+        output.stderr.extend(render::note_line(note).into_bytes());
     }
     output
 }
@@ -229,7 +227,7 @@ pub fn pause(
     spec: &'static CommandSpec,
     args: &ArgMatches,
 ) -> Output {
-    flagged(service, session, spec, args, |root| {
+    policy_toggle(service, session, spec, args, |root| {
         Mutation::PollPause(PollPauseInput { root })
     })
 }
@@ -240,12 +238,13 @@ pub fn resume(
     spec: &'static CommandSpec,
     args: &ArgMatches,
 ) -> Output {
-    flagged(service, session, spec, args, |root| {
+    policy_toggle(service, session, spec, args, |root| {
         Mutation::PollResume(PollResumeInput { root })
     })
 }
 
-fn flagged(
+/// `poll pause` or `poll resume`: one flag of the policy, set or cleared.
+fn policy_toggle(
     service: &RepositoryService,
     session: &mut Session,
     spec: &'static CommandSpec,
@@ -300,7 +299,7 @@ fn policy_output(envelope: &Envelope<MutationDataDto>, supplied: bool) -> Output
     {
         output
             .stderr
-            .extend(note_lines(&[SUSPENDED_NOTE.to_owned()]).into_bytes());
+            .extend(render::note_line(SUSPENDED_NOTE).into_bytes());
     }
     output
 }

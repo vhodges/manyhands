@@ -35,6 +35,8 @@ mod human_authoring;
 mod human_collaboration;
 #[path = "manyhands-cli/human_lifecycle.rs"]
 mod human_lifecycle;
+#[path = "manyhands-cli/human_local_sync.rs"]
+mod human_local_sync;
 #[path = "manyhands-cli/input.rs"]
 mod input;
 #[path = "manyhands-cli/interrupt.rs"]

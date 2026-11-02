@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use crate::human_admin;
 use manyhands::results::{Envelope, FailureClass, RecoveryAction, ResultCode};
 use manyhands::{
-    repository::{MutationDataDto, PrepareDataDto},
+    repository::{ItemDtoKind, MutationDataDto, PrepareDataDto},
     results::Outcome,
 };
 use serde::Serialize;
@@ -205,6 +205,27 @@ pub fn refusal_of<T>(
         data: None,
         recovery,
     }
+}
+
+/// What a missing context's note says, here and in `context observe-local`.
+pub const NO_CONTEXT_NOTE: &str = "this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in, and the save's --input - takes {\"observation\": \"...\"}, with the observation ticket show or document show prints, and the fields it changes, such as \"body\".";
+
+/// The save that makes an item's editing context, as a pasteable command.
+pub fn save_line(kind: ItemDtoKind, root: &str, item: &str) -> String {
+    let save = match kind {
+        ItemDtoKind::Document => "document save",
+        ItemDtoKind::Ticket => "ticket save",
+    };
+    format!(
+        "manyhands-cli {save} --repo {} --id {} --input - --request-id <new-request-id>",
+        quoted(root),
+        field(item)
+    )
+}
+
+/// `note` as one `note:` line, ended.
+pub fn note_line(note: &str) -> String {
+    format!("note: {note}\n")
 }
 
 /// `notes` as `note:` lines, each ended.

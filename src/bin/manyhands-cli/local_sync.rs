@@ -1,18 +1,23 @@
 //! `context observe-local`, `context show-local`, `context sync-local` and
 //! `context resolve-local`.
 //!
-//! All three are local: none touches a remote, primary or a remote ref. The item's
+//! All four are local: none touches a remote, primary or a remote ref. The item's
 //! kind comes from the item, and the bin holds no merge logic: what it adds to
 //! the library is the reading of what an ID or token names, in the design's
 //! required outcomes:
 //!
-//! - the library's inspection answers `recovery_required` for an ID with no local
-//!   synchronization, as an execution must. `show_operation` tells an unknown ID
-//!   (`operation_not_found`) and another operation's (`invalid_input`) from it;
-//! - the library answers a well-formed token that names no path of the live
-//!   conflict `external_change`. Where the inspection's list shows `read` would
-//!   refuse it too, such a token is `invalid_input` with no side read; any other
-//!   token is the library's to judge (`refused_unread`).
+//! - `show-local` and `resolve-local` tell an unknown operation
+//!   (`operation_not_found`) and another kind of operation (`invalid_input`) from
+//!   a local synchronization, through `show_operation`, before the inspection,
+//!   which would answer both `recovery_required`;
+//! - `show-local --token` refuses a token the inspection's list shows `read`
+//!   would refuse too, as `invalid_input`, with no side read
+//!   (`refused_unread`); any other token is the library's to judge;
+//! - `resolve-local` refuses up front, from the inspection, an external-only
+//!   conflict (`recovery_required`) and a token the live conflict doesn't list
+//!   (`unlisted`, `invalid_input`), each with nothing accepted or written.
+//!
+//! Human output is `human_local_sync.rs`'s.
 //!
 //! A conflict's sides are content: only `--json` carries them (R-15). A
 //! resolution's sources are read from `--input` and handed to the library,
@@ -23,76 +28,30 @@ use clap::ArgMatches;
 use manyhands::{
     canonical::ItemId,
     repository::{
-        ClosureState, ItemContextKind, ItemDto, LocalConflictResolutionInput,
-        LocalContextConflictContentDto, LocalContextResolveInput, LocalContextSyncEligibility,
-        LocalContextSyncInput, LocalContextSyncInspectionDto, LocalContextSyncMutationDto,
-        LocalContextSyncNextAction, LocalContextSyncObservationDto, LocalContextSyncReason,
-        LocalContextSyncState, Mutation, MutationDataDto, OperationAction, OperationId, ReadError,
+        LocalConflictResolutionInput, LocalContextResolveInput, LocalContextSyncEligibility,
+        LocalContextSyncInput, LocalContextSyncInspectionDto, LocalContextSyncReason,
+        LocalContextSyncState, Mutation, OperationAction, OperationId, ReadError,
         RepositoryService, ResolvedRepository,
     },
-    results::{Envelope, RecoveryActionKind, ResultCode},
+    results::{Envelope, ResultCode},
 };
 
 use crate::{
     admin, authoring,
     catalog::CommandSpec,
-    collaboration, dispatch, fill, human_admin, human_lifecycle,
+    collaboration, dispatch, fill,
+    human_local_sync::{
+        data_of, external_then, inspected, local_output, no_context, observation, resolve_way_on,
+        show_line, sides, way_on,
+    },
     input::{InputError, InputObject},
     mutate::{self, Session},
-    render::{self, Human, Output, field, note_lines, quoted},
+    render::{self, Output, quoted},
 };
 
 const NO_CONTEXT_MESSAGE: &str = "This item has no editing context.";
-const TOKEN_NEEDS_JSON: &str =
+const TOKEN_JSON_DETAIL: &str =
     "--token reads a conflict's sides, and only --json prints them: add --json.";
-const INPUT_NOTE: &str = "context sync-local's --input takes this as {\"observation\": \"...\"}.";
-const SIDES_NOTE: &str = "context show-local --token <token> --json reads a path's sides.";
-const DIRTY_NOTE: &str =
-    "commit or save what the context holds, then observe again, and use a new request.";
-const MALFORMED_NOTE: &str =
-    "this observation can't be used: observe again, and use a new request.";
-const OBSERVE_NOTE: &str =
-    "sending this observation again gets the same answer: observe again, and use a new request.";
-const RESOLVE_NOTE: &str = "<new-request-id> is a placeholder to fill in, and --input - takes the observation and a source for each token that context show-local prints.";
-const IDENTITY_NOTE: &str =
-    "once an identity is set, send this same request again: a merge commit needs one.";
-const ORIGINAL_NOTE: &str = "this resolution is the original request's to finish: send that request again, with the same input.";
-const EXTERNAL_NOTE: &str = "Manyhands can't resolve this: it takes a repair outside it, with Git.";
-/// What follows the repair of a refusal that kept nothing to go on with.
-const EXTERNAL_REFUSED_NOTE: &str = "Manyhands can't resolve this: it takes a repair outside it, with Git. After the repair, observe again, and use a new request.";
-
-/// What follows the repair of a conflict a request holds: that request again.
-fn external_then(holder: &str, request: &str) -> String {
-    format!(
-        "{EXTERNAL_NOTE} After the repair, send {holder} again ({}).",
-        field(request)
-    )
-}
-
-fn observe_line(root: &str, item: &str) -> String {
-    format!(
-        "next: manyhands-cli context observe-local --repo {} --id {}\n",
-        quoted(root),
-        field(item)
-    )
-}
-
-/// What an observation's refusal adds: a save, when the item's effective copy
-/// is primary's and a save of it is allowed, as lifecycle's `ContextMissing`
-/// way out. A context that has lost the item, or a closed ticket, gets none.
-fn no_context(item: &ItemDto, root: &str, id: &str) -> Option<String> {
-    let closed = item
-        .closure
-        .as_ref()
-        .is_some_and(|closure| closure.state == ClosureState::Closed);
-    (item.context.kind == ItemContextKind::Primary && !closed).then(|| {
-        format!(
-            "next: {}\n{}",
-            human_lifecycle::save_line(item.kind, root, id),
-            note_lines(&[human_lifecycle::NO_CONTEXT_NOTE.to_owned()])
-        )
-    })
-}
 
 pub fn observe(
     service: &RepositoryService,
@@ -144,13 +103,6 @@ fn resolved(
     Ok((repo, id))
 }
 
-fn observation(data: &LocalContextSyncObservationDto) -> Human {
-    Human {
-        stdout: human_admin::fields(data),
-        notes: vec![INPUT_NOTE.to_owned()],
-    }
-}
-
 pub fn show(
     service: &RepositoryService,
     session: &mut Session,
@@ -164,7 +116,7 @@ pub fn show(
         return render::failure_output(
             false,
             &error.to_envelope(&name),
-            Some(TOKEN_NEEDS_JSON.to_owned()),
+            Some(TOKEN_JSON_DETAIL.to_owned()),
         );
     }
     let failed = |error: ReadError, extra: Option<String>| {
@@ -234,15 +186,6 @@ fn unlisted(view: &LocalContextSyncInspectionDto, token: &str) -> bool {
     !view.paths.is_empty() && !view.paths.iter().any(|path| path.token == token)
 }
 
-/// A token's sides print with `--json` only, which `show` holds to; in human
-/// mode this renderer is never reached, and would print no side.
-fn sides(_: &LocalContextConflictContentDto) -> Human {
-    Human {
-        stdout: String::new(),
-        notes: Vec::new(),
-    }
-}
-
 struct Refused {
     error: ReadError,
     extra: Option<String>,
@@ -276,27 +219,6 @@ fn is_a_local_sync(
         error: ReadError::new(ResultCode::InvalidInput).with_scope(repo.scope()),
         extra,
     })
-}
-
-/// The inspection's fields, then a line per conflicted path. No side.
-fn inspected(data: &LocalContextSyncInspectionDto) -> Human {
-    let mut stdout = human_admin::fields_without(data, &["paths"]);
-    for path in &data.paths {
-        stdout.push_str(&format!(
-            "path: {} token={} content_available={}\n",
-            field(&path.display_path),
-            field(&path.token),
-            path.content_available
-        ));
-    }
-    Human {
-        stdout,
-        notes: if data.paths.is_empty() {
-            Vec::new()
-        } else {
-            vec![SIDES_NOTE.to_owned()]
-        },
-    }
 }
 
 pub fn sync(
@@ -430,7 +352,7 @@ pub fn resolve(
                 &name,
                 flags.request_id,
                 ResultCode::RecoveryRequired,
-                Some(note_lines(&[note]).trim_end().to_owned()),
+                Some(render::note_line(&note).trim_end().to_owned()),
             );
         }
         // A token that names no path of the live conflict, which
@@ -466,14 +388,7 @@ pub fn resolve(
                 root: root.clone(),
                 operation_id: operation,
                 observation: input.observation.clone(),
-                resolutions: input
-                    .resolutions
-                    .iter()
-                    .map(|pair| LocalConflictResolutionInput {
-                        token: pair.token.clone(),
-                        source: pair.source.clone(),
-                    })
-                    .collect(),
+                resolutions: input.resolutions.clone(),
             })
         },
         &mut std::thread::sleep,
@@ -511,155 +426,3 @@ pub fn resolve(
         },
     )
 }
-
-fn show_line(root: &str, operation: &str) -> String {
-    format!(
-        "next: manyhands-cli context show-local --repo {} --operation-id {}\n",
-        quoted(root),
-        field(operation)
-    )
-}
-
-/// The lines a verb adds to a result's, and whether one of them, a line to
-/// look again, replaces the data's `next action`: there, looking again is the
-/// way on, not a repair outside.
-struct WayOn {
-    lines: String,
-    replaces_next_action: bool,
-}
-
-impl WayOn {
-    fn adds(lines: String) -> Self {
-        Self {
-            lines,
-            replaces_next_action: false,
-        }
-    }
-
-    fn looks_again(lines: String) -> Self {
-        Self {
-            lines,
-            replaces_next_action: true,
-        }
-    }
-}
-
-/// What a resolution's stop adds, by the required outcomes' last column. With
-/// an original request to finish the resolution, that request is the way on,
-/// as `request.retry`, unless C2's lines already name it.
-fn resolve_way_on(
-    envelope: &Envelope<MutationDataDto>,
-    root: &str,
-    operation: &str,
-    original: Option<&str>,
-) -> WayOn {
-    if let Some(original) = original.filter(|id| envelope.request_id.as_deref() != Some(*id)) {
-        let named = envelope.recovery.iter().any(|action| {
-            action.action == RecoveryActionKind::RequestRetry
-                && action.arguments.get("request_id").and_then(|v| v.as_str()) == Some(original)
-        });
-        let retry = if named {
-            String::new()
-        } else {
-            format!("next: request.retry request_id={}\n", field(original))
-        };
-        return WayOn::adds(format!(
-            "{retry}{}",
-            note_lines(&[ORIGINAL_NOTE.to_owned()])
-        ));
-    }
-    match envelope.code {
-        ResultCode::InvalidInput | ResultCode::ExternalChange => {
-            WayOn::looks_again(show_line(root, operation))
-        }
-        ResultCode::OriginalRequestRequired => WayOn::adds(note_lines(&[ORIGINAL_NOTE.to_owned()])),
-        _ => WayOn::adds(String::new()),
-    }
-}
-
-/// A local synchronization's result in human mode: C2's lines, with the
-/// data's non-empty fields only, as `human_collaboration`'s compact lines do,
-/// and no `operation:` line when the data names no operation (a refusal with
-/// no owner). `reobserve` drops a `next action` that the verb's own line
-/// replaces (`WayOn`).
-fn local_output(envelope: &Envelope<MutationDataDto>, supplied: bool, reobserve: bool) -> Output {
-    let mut plain = envelope.clone();
-    plain.data = None;
-    let mut body = String::new();
-    if let Some(data) = data_of(envelope) {
-        if data.operation_id.is_none() {
-            plain.operation_id = None;
-        }
-        if let Ok(serde_json::Value::Object(mut fields)) = serde_json::to_value(data) {
-            fields.remove("type");
-            if reobserve {
-                fields.remove("next_action");
-            }
-            fields.retain(|_, value| {
-                !matches!(
-                    value,
-                    serde_json::Value::Null | serde_json::Value::Bool(false)
-                ) && value.as_str() != Some("none")
-            });
-            body = human_admin::fields(&serde_json::Value::Object(fields));
-        }
-    }
-    render::compact(&plain, supplied, &body, "", plain.recovery.clone(), "")
-}
-
-fn data_of(envelope: &Envelope<MutationDataDto>) -> Option<&LocalContextSyncMutationDto> {
-    match &envelope.data {
-        Some(MutationDataDto::LocalContextSync(data)) => Some(data),
-        _ => None,
-    }
-}
-
-/// What a stop's human lines add to C2's, by the required outcomes' last column.
-fn way_on(envelope: &Envelope<MutationDataDto>, root: &str, item: &str) -> WayOn {
-    let notes = |note: &str| note_lines(&[note.to_owned()]);
-    let again =
-        |note: &str| WayOn::looks_again(format!("{}{}", observe_line(root, item), notes(note)));
-    match envelope.code {
-        ResultCode::InvalidInput => return again(MALFORMED_NOTE),
-        ResultCode::ExternalChange => return again(OBSERVE_NOTE),
-        ResultCode::WorktreeNotClean => return again(DIRTY_NOTE),
-        ResultCode::IdentityRequired => return WayOn::adds(notes(IDENTITY_NOTE)),
-        _ => {}
-    }
-    let Some(data) = data_of(envelope) else {
-        return WayOn::adds(String::new());
-    };
-    WayOn::adds(match data.next_action {
-        LocalContextSyncNextAction::Resolve => match data.operation_id.as_deref() {
-            Some(operation) => {
-                let (root, operation) = (quoted(root), field(operation));
-                format!(
-                    "next: manyhands-cli context show-local --repo {root} --operation-id {operation}\nnext: manyhands-cli context resolve-local --repo {root} --operation-id {operation} --input - --request-id <new-request-id>\n{}",
-                    notes(RESOLVE_NOTE)
-                )
-            }
-            None => String::new(),
-        },
-        // The refusals the gate leaves to a repair outside (gate 10): the
-        // library offers nothing for two of them, and `external_repair` for
-        // the third. A closure's or a lost authority's `external_repair` has
-        // its code's way on, so it gets no such note.
-        _ if matches!(
-            data.reason,
-            LocalContextSyncReason::UnrelatedHistories
-                | LocalContextSyncReason::ImmutableClosureDisagreement
-                | LocalContextSyncReason::UnsupportedConflict
-        ) =>
-        {
-            match (&data.operation_id, envelope.request_id.as_deref()) {
-                (Some(_), Some(request)) => notes(&external_then("this same request", request)),
-                _ => notes(EXTERNAL_REFUSED_NOTE),
-            }
-        }
-        _ => String::new(),
-    })
-}
-
-#[cfg(test)]
-#[path = "local_sync_tests.rs"]
-mod tests;

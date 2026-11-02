@@ -9,7 +9,9 @@ use std::path::PathBuf;
 use clap::ArgMatches;
 use manyhands::{
     canonical::ItemId,
-    repository::{DocumentPromoteInput, Mutation, RepositoryService, TicketCloseInput},
+    repository::{
+        DocumentPromoteInput, ItemDtoKind, Mutation, RepositoryService, TicketCloseInput,
+    },
 };
 
 use crate::{
@@ -26,9 +28,14 @@ pub fn document_promote(
     spec: &'static CommandSpec,
     args: &ArgMatches,
 ) -> Output {
-    run(service, session, spec, args, |root, id| {
-        Mutation::DocumentPromote(DocumentPromoteInput { root, id })
-    })
+    run(
+        service,
+        session,
+        spec,
+        args,
+        ItemDtoKind::Document,
+        |root, id| Mutation::DocumentPromote(DocumentPromoteInput { root, id }),
+    )
 }
 
 pub fn ticket_close(
@@ -37,9 +44,14 @@ pub fn ticket_close(
     spec: &'static CommandSpec,
     args: &ArgMatches,
 ) -> Output {
-    run(service, session, spec, args, |root, id| {
-        Mutation::TicketClose(TicketCloseInput { root, id })
-    })
+    run(
+        service,
+        session,
+        spec,
+        args,
+        ItemDtoKind::Ticket,
+        |root, id| Mutation::TicketClose(TicketCloseInput { root, id }),
+    )
 }
 
 fn run(
@@ -47,6 +59,7 @@ fn run(
     session: &mut Session,
     spec: &'static CommandSpec,
     args: &ArgMatches,
+    kind: ItemDtoKind,
     build: fn(PathBuf, ItemId) -> Mutation,
 ) -> Output {
     let selected = || -> Result<_, Output> {
@@ -71,7 +84,7 @@ fn run(
     mutate::finish(
         session.json,
         driven,
-        human_lifecycle::prepare,
+        |envelope| human_lifecycle::prepare(kind, envelope),
         human_lifecycle::output,
     )
 }
