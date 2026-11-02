@@ -478,6 +478,7 @@ pub const CLI_TEXT_CASES: &[&str] = &[
     "poll_resume_suspended_text",
     "poll_configure_text",
     "poll_configure_invalid_text",
+    "poll_configure_out_of_range_text",
     "document_promote_preview_text",
     "ticket_close_preview_text",
     "document_promote_local_only_text",

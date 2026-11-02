@@ -1309,3 +1309,48 @@ Base `5c318b51`; `origin/main` at `15a23125` is contained. The owner's "Go with 
 **`mutation_contract`'s failure predates this change.** `every_result_code_has_a_golden_or_a_reason_no_fixture_can_produce_it` says `command_unavailable` has neither a golden nor a reason. Its only golden, `unavailable_ticket_close.json`, went in Task 7 (E-2, `56477a7f`), and no verify list since has run this target. The review-fix commit adds the reason, as E-6 did for the exit table.
 
 After the clippy fix, which changed one test line, `c5_poll_once_a_` was rerun.
+
+## Tasks 8-9 review fixes (controller's rulings)
+
+Base `744b7b5d`. No library file changed in this commit.
+
+**Seen first.** Against the unchanged renderer, these failed by assertion:
+- `a_final_stop_says_a_new_request_and_never_this_one`, with the four added codes;
+- `the_unlock_and_host_stops_say_what_comes_first`, with "approved or replaced";
+- `busy_hints_operation_list_and_then_operation_resume`, with the new words;
+- `the_interval_s_bounds_hold_and_nothing_is_written_beyond_them`, on the range detail.
+
+Some rows passed at once, as they pin what existed: the `--confirm` row (`not_confirmable`), the `600.0` row and the closed-pipe lost-stdout row. So did `a_recovery_with_a_way_on_has_no_final_note`, which pins an absence.
+
+1. **`final_note`.** `HostReplacementRequired` shares the host note, now "once the host is approved or replaced". `recovery_required` (for `HostVerificationUnavailable`), `index_unavailable` and `internal_error` get the new-request note when Final. The envelope carries no standing, so Final is read as: no `request.retry` and no `repo.inspect` offered. A conflict or a pending local operation, which offers `repo.inspect`, gets no note, and a row pins both exclusions.
+2. —
+3. **`busy` note.** It adds "If it names only this request, wait and send this request again (add --request-id unless you run it at a terminal)."
+4. Decision 28's commit.
+5. **Lost stdout.** The pipe's read end is closed before spawn (`std::io::pipe`, then the child's `status()`), so no write to stdout can succeed.
+6. **The overlap row.**
+   - A mutation run, `RemotePollError::Busy => PollYielding` in `bind/poll.rs`, failed this row at its `busy` assertion, and also failed `c5_polling_a_second_process_holds_the_lease`. It is reverted.
+   - The hold's 10 s wait is fixed in `ssh_remote.rs`, and the helper takes no other, so it wasn't raised.
+   - A `Reaped` guard kills and reaps the first process if the case stops before collecting it.
+7. **`whole_number`** is `number.as_u64().ok_or(..)`, and the CLI row has `600.0`.
+8. **An out-of-range interval** in human mode adds "Input field interval_seconds must be from 60 to 3600." The CLI checks only the type, so the library's `invalid_input` for `poll configure` is the range. JSON is unchanged. Golden: `poll_configure_out_of_range_text`.
+9. **`--prepare` and `--confirm` for Task 14a and the RFC.** All four poll verbs list both options, as every C2 mutation does, because `parse::mode_rules` reads `prepare`. The design's option list for `poll once` (`--repo`, `--request-id`, `--json`) is therefore not the catalog's. Task 14a's inventory and the RFC's grammar table should list them, with `--prepare` answering `not_confirmable` and `--confirm` the same, exit 2. Rows: `pause --prepare`, `configure --prepare`, `pause --confirm`, and `poll once --prepare` over SSH.
+10. **The human replay after host approval** says a new request takes it, and prints no `host.approve`.
+11. **Helpers.** `selected` and `plan()` serve all four verbs. `refusal_of` moved to `render.rs`. `nothing_but_a_fetch`'s doc names what it compares: the server's refs, the clone's branches and worktrees, and accepted pushes, not tracking refs.
+12. —
+13. **`repository_not_registered`** is covered for all three policy verbs by the library's `c5_poll_unregistered`, so no CLI row was added.
+
+**Also fixed: a failure that predates this work.** `tests/mutation_contract.rs`'s `CODES_NO_FIXTURE_CAN_PRODUCE` gains `command_unavailable`, with R-8's reason. Its only golden left in Task 7 (E-2, `56477a7f`). This is a reason row, as E-6 is for the exit table, and not a named edit: **for a ruling.**
+
+**Goldens regenerated and read:** `poll_once_busy_text` and `poll_once_host_stop_text`, for the new words only, and the new `poll_configure_out_of_range_text`.
+
+**Verified, compare mode.** All exit 0.
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--bin manyhands-cli` | 294 | 4 s |
+| `--test cli` | 431 | 105 s |
+| `--test cli_remote -- c5_polling` | 16 | 80 s |
+| `--test mutation_contract` | 44 | 9 s |
+| fmt, clippy `-D warnings`, no-GPUI | ok | |
+
+The library filters, `remote_polling`, `read_contract` and `c5_poll` ran on decision 28's commit, and no library file has changed since.

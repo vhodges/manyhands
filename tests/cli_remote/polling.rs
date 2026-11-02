@@ -310,7 +310,9 @@ fn sides(p: &CliPair, clone: &CliClone) -> Result<Sides, FixtureError> {
 }
 
 /// No push, checkpoint, merge or cleanup: `before` and `after` agree on every
-/// ref at both ends and on the worktrees.
+/// ref the server holds, on the clone's branches and worktrees, and on the
+/// pushes the server accepted. The clone's tracking refs aren't compared: a
+/// fetch moves them.
 fn nothing_but_a_fetch(before: &Sides, after: &Sides) {
     assert_eq!(before, after);
 }
@@ -839,6 +841,19 @@ fn c5_polling_host_stop_is_final_then_a_new_request() -> Result<(), FixtureError
         after["recovery"].as_array().unwrap().is_empty(),
         "still final"
     );
+    // The human replay of the stopped request says so too.
+    let out = text_once(&env, root, R2);
+    assert_eq!(out.status, 3);
+    assert!(
+        stderr(&out).contains("polling again takes a new request."),
+        "{}",
+        stderr(&out)
+    );
+    assert!(
+        !stderr(&out).contains("next: host.approve"),
+        "{}",
+        stderr(&out)
+    );
     assert_ne!(fixed(w.repo()?.refname_to_id(PRIMARY))?, incoming);
 
     let value = json_once(&env, root, R3, "ok", 0);
@@ -1089,6 +1104,19 @@ fn c5_polling_a_second_process_holds_the_lease() -> Result<(), FixtureError> {
 
 /// A real second process, while the first is inside its transfer (decision 24):
 /// it answers `busy` and the first goes on. The same request then polls.
+/// A child process that is killed and reaped if the case stops before it is
+/// collected.
+struct Reaped(Option<std::process::Child>);
+
+impl Drop for Reaped {
+    fn drop(&mut self) {
+        if let Some(child) = self.0.as_mut() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
 fn c5_polling_a_second_poll_overlaps() -> Result<(), FixtureError> {
     let p = CliPair::new()?;
     let a = &p.a;
@@ -1097,13 +1125,14 @@ fn c5_polling_a_second_poll_overlaps() -> Result<(), FixtureError> {
     let mut args = once(a.root(), R1);
     args.push("--json");
     let argv: Vec<_> = args.iter().map(OsStr::new).collect();
-    let running = fixed(
+    let mut running = Reaped(Some(fixed(
         cli::cli_command(&argv, &a.env)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn(),
-    )?;
+    )?));
+    // The helper's wait is fixed at 10 s, and takes no other.
     hold.wait_until_held()?;
 
     let second = run(&a.env, &[once(a.root(), R2), vec!["--json"]].concat(), &[]);
@@ -1111,7 +1140,7 @@ fn c5_polling_a_second_poll_overlaps() -> Result<(), FixtureError> {
     assert_eq!(second["code"], "busy", "{second}");
     assert_eq!(second["recovery"][0]["action"], "request.retry");
     hold.release()?;
-    let first = cli::collect_cli(running);
+    let first = cli::collect_cli(running.0.take().ok_or(FixtureError)?);
     scan_output(&first);
     assert_eq!(
         first.status,

@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 
 use crate::human_admin;
-use manyhands::results::{Envelope, FailureClass, ResultCode};
+use manyhands::results::{Envelope, FailureClass, RecoveryAction, ResultCode};
 use manyhands::{
     repository::{MutationDataDto, PrepareDataDto},
     results::Outcome,
@@ -154,6 +154,26 @@ fn json_output<T: Serialize>(envelope: &Envelope<T>) -> Output {
             );
             json_output(&failure)
         }
+    }
+}
+
+/// A refusal's lines without its data, which the caller has shown.
+pub fn refusal_of<T>(
+    envelope: &Envelope<T>,
+    recovery: Vec<RecoveryAction>,
+) -> Envelope<serde_json::Value> {
+    Envelope {
+        schema_version: envelope.schema_version,
+        command: envelope.command.clone(),
+        request_id: envelope.request_id.clone(),
+        operation_id: envelope.operation_id.clone(),
+        outcome: envelope.outcome,
+        code: envelope.code,
+        message: envelope.message.clone(),
+        scope: envelope.scope.clone(),
+        effects: envelope.effects.clone(),
+        data: None,
+        recovery,
     }
 }
 

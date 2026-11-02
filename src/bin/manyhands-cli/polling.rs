@@ -26,9 +26,8 @@ use crate::{
     admin,
     catalog::CommandSpec,
     human_admin,
-    human_lifecycle::refusal_of,
     mutate::{self, Driven, MutationFlags, Plan, Session},
-    render::{self, Output, field, note_lines, quoted},
+    render::{self, Output, field, note_lines, quoted, refusal_of},
 };
 
 /// Decision 5: `poll resume` does not lift the suspension, and clearing it is
@@ -38,14 +37,35 @@ const SUSPENDED_NOTE: &str = "automatic polls are suspended for recovery, and po
 /// What follows a stop no resend gets past. Each says "new request" because
 /// sending the same one gets this answer back, or is no help.
 const NEW_REQUEST: &str = "polling again takes a new request.";
-const HOST_NOTE: &str = "once the host is approved, polling again takes a new request.";
+const HOST_NOTE: &str = "once the host is approved or replaced, polling again takes a new request.";
 const UNLOCK_NOTE: &str =
     "polling again takes a new request, made at a terminal, where it can ask for the passphrase.";
 const KEY_NOTE: &str = "once a usable key is selected, polling again takes a new request.";
 const REMOTE_NOTE: &str =
     "once a publication remote is selected, polling again takes a new request.";
 const PASSPHRASE_HINT: &str = "hint: if the passphrase was wrong, poll again with a new request\n";
-const BUSY_NOTE: &str = "something else holds this repository: operation list names it, and operation resume, with its operation ID for the <operation-id> placeholder, names the request that holds it.";
+const BUSY_NOTE: &str = "something else holds this repository: operation list names it, and operation resume, with its operation ID for the <operation-id> placeholder, names the request that holds it. If it names only this request, wait and send this request again (add --request-id unless you run it at a terminal).";
+/// The library refuses an interval out of range with no detail of its own.
+const RANGE_DETAIL: &str = "Input field interval_seconds must be from 60 to 3600.\n";
+
+/// The flags and root every polling verb starts from.
+fn selected(
+    session: &Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Result<(MutationFlags, PathBuf), Output> {
+    let flags = admin::flags(session, spec, args)?;
+    let root = admin::mutation_root(session, spec, args, flags.request_id)?;
+    Ok((flags, root))
+}
+
+/// Every polling verb runs C2's bounded retry and asks for no identity.
+fn plan() -> Plan {
+    Plan {
+        identity_prompt: false,
+        retry: true,
+    }
+}
 
 pub fn once(
     service: &RepositoryService,
@@ -53,25 +73,16 @@ pub fn once(
     spec: &'static CommandSpec,
     args: &ArgMatches,
 ) -> Output {
-    let selected = || -> Result<_, Output> {
-        let flags = admin::flags(session, spec, args)?;
-        let root = admin::mutation_root(session, spec, args, flags.request_id)?;
-        Ok((flags, root))
-    };
-    let (flags, root) = match selected() {
+    let (flags, root) = match selected(session, spec, args) {
         Ok(values) => values,
         Err(out) => return out,
-    };
-    let plan = Plan {
-        identity_prompt: false,
-        retry: true,
     };
     match mutate::drive(
         service,
         session,
         spec,
         flags,
-        plan,
+        plan(),
         &mut |_| Mutation::PollOnce(PollOnceInput { root: root.clone() }),
         &mut std::thread::sleep,
     ) {
@@ -129,8 +140,14 @@ fn final_note(envelope: &Envelope<MutationDataDto>) -> Option<&'static str> {
     {
         return None;
     }
+    // A conflict or a pending local operation answers `recovery_required`
+    // with `repo.inspect`: what it waits for isn't this request's.
+    let inspect = envelope
+        .recovery
+        .iter()
+        .any(|action| action.action == RecoveryActionKind::RepoInspect);
     match envelope.code {
-        ResultCode::HostApprovalRequired => Some(HOST_NOTE),
+        ResultCode::HostApprovalRequired | ResultCode::HostReplacementRequired => Some(HOST_NOTE),
         ResultCode::UnlockRequired | ResultCode::UnlockFailed => Some(UNLOCK_NOTE),
         ResultCode::NoSelectedKey | ResultCode::KeyRejected | ResultCode::KeyUnavailable => {
             Some(KEY_NOTE)
@@ -142,6 +159,13 @@ fn final_note(envelope: &Envelope<MutationDataDto>) -> Option<&'static str> {
         | ResultCode::InvalidRemote
         | ResultCode::ExternalChange
         | ResultCode::Cancelled => Some(NEW_REQUEST),
+        // Final when nothing above offers a way on: a host that couldn't be
+        // verified, an index that can't be read, an internal stop.
+        ResultCode::RecoveryRequired | ResultCode::IndexUnavailable | ResultCode::InternalError
+            if !inspect =>
+        {
+            Some(NEW_REQUEST)
+        }
         _ => None,
     }
 }
@@ -254,12 +278,7 @@ fn flagged(
     args: &ArgMatches,
     build: fn(PathBuf) -> Mutation,
 ) -> Output {
-    let selected = || -> Result<_, Output> {
-        let flags = admin::flags(session, spec, args)?;
-        let root = admin::mutation_root(session, spec, args, flags.request_id)?;
-        Ok((flags, root))
-    };
-    let (flags, root) = match selected() {
+    let (flags, root) = match selected(session, spec, args) {
         Ok(values) => values,
         Err(out) => return out,
     };
@@ -273,16 +292,12 @@ fn policy(
     flags: MutationFlags,
     build: &mut dyn FnMut(&mutate::Extras) -> Mutation,
 ) -> Output {
-    let plan = Plan {
-        identity_prompt: false,
-        retry: true,
-    };
     match mutate::drive(
         service,
         session,
         spec,
         flags,
-        plan,
+        plan(),
         build,
         &mut std::thread::sleep,
     ) {
@@ -293,8 +308,16 @@ fn policy(
 }
 
 /// C2's output, and in human mode a note when the answer's data holds a
-/// suspension.
+/// suspension, or the range an interval is refused for.
 fn policy_output(json: bool, envelope: &Envelope<MutationDataDto>, supplied: bool) -> Output {
+    // The CLI checks the interval's type, so an `invalid_input` of `poll
+    // configure` is its range.
+    if !json && envelope.command == "poll configure" && envelope.code == ResultCode::InvalidInput {
+        let mut extra = human_admin::failure_extra(envelope, supplied);
+        extra.push_str(RANGE_DETAIL);
+        let refusal = refusal_of(envelope, envelope.recovery.clone());
+        return render::failure_output(false, &refusal, Some(extra));
+    }
     let mut output = render::mutation_output(json, envelope, supplied);
     if !json
         && let Some(MutationDataDto::PollPolicy(data)) = &envelope.data

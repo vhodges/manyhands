@@ -178,6 +178,10 @@ fn a_final_stop_says_a_new_request_and_never_this_one() {
         ResultCode::InvalidRemote,
         ResultCode::ExternalChange,
         ResultCode::Cancelled,
+        ResultCode::HostReplacementRequired,
+        ResultCode::RecoveryRequired,
+        ResultCode::IndexUnavailable,
+        ResultCode::InternalError,
     ] {
         let mut envelope = poll_envelope(code, Vec::new());
         envelope.data = None;
@@ -196,9 +200,41 @@ fn the_unlock_and_host_stops_say_what_comes_first() {
     envelope.recovery.clear();
     let said = once_output(&envelope, false, ROOT);
     assert!(stderr(&said).contains("at a terminal"));
-    envelope.code = ResultCode::HostApprovalRequired;
-    let said = once_output(&envelope, false, ROOT);
-    assert!(stderr(&said).contains("once the host is approved"));
+    for code in [
+        ResultCode::HostApprovalRequired,
+        ResultCode::HostReplacementRequired,
+    ] {
+        envelope.code = code;
+        let said = once_output(&envelope, false, ROOT);
+        assert!(
+            stderr(&said).contains("once the host is approved or replaced"),
+            "{code:?}"
+        );
+    }
+}
+
+/// A recovery the same request or an inspection gets past isn't final.
+#[test]
+fn a_recovery_with_a_way_on_has_no_final_note() {
+    for kind in [
+        RecoveryActionKind::RepoInspect,
+        RecoveryActionKind::RequestRetry,
+    ] {
+        for code in [
+            ResultCode::RecoveryRequired,
+            ResultCode::IndexUnavailable,
+            ResultCode::InternalError,
+        ] {
+            let mut envelope = poll_envelope(code, Vec::new());
+            envelope.data = None;
+            envelope.recovery = vec![match kind {
+                RecoveryActionKind::RequestRetry => retry(),
+                _ => RecoveryAction::new(kind, [("root", serde_json::Value::from(ROOT))]),
+            }];
+            let said = once_output(&envelope, false, ROOT);
+            assert!(!stderr(&said).contains("new request"), "{code:?} {kind:?}");
+        }
+    }
 }
 
 /// A wrong passphrase: C2's "run the command again" would replay this request.
@@ -245,6 +281,10 @@ fn busy_hints_operation_list_and_then_operation_resume() {
     assert!(retried < list && list < resume, "{said}");
     assert!(!said.contains("new request"), "{said}");
     assert!(said.contains(BUSY_NOTE));
+    assert!(
+        said.contains("If it names only this request, wait and send this request again (add --request-id unless you run it at a terminal)."),
+        "{said}"
+    );
 }
 
 #[test]

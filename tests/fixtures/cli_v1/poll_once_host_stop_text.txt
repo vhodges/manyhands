@@ -12,5 +12,5 @@ Port: 0
 Presented algorithm: ssh-ed25519
 Presented fingerprint: <fingerprint>
 next: host.approve authority=127.0.0.1:0 root=<repository>
-note: once the host is approved, polling again takes a new request.
+note: once the host is approved or replaced, polling again takes a new request.
 --- exit 3

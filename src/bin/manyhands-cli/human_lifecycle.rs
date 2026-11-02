@@ -21,14 +21,14 @@
 use crate::{
     human_admin,
     human_collaboration::republish,
-    render::{self, Output, field, note_lines, quoted},
+    render::{self, Output, field, note_lines, quoted, refusal_of},
 };
 use manyhands::{
     repository::{
         ItemDtoKind, LifecycleBlocker, LifecycleMadeReadyState, LifecycleMutationDto,
         LifecyclePublicationPendingReason, LifecycleRecording, MutationDataDto, PrepareDataDto,
     },
-    results::{Envelope, RecoveryAction, RecoveryActionKind, ResultCode},
+    results::{Envelope, RecoveryActionKind, ResultCode},
 };
 
 /// What the repair's lines leave to the reader. It says "to try": the route's
@@ -221,26 +221,6 @@ fn route_of(envelope: &Envelope<MutationDataDto>, data: &LifecycleMutationDto) -
         _ => {}
     }
     route
-}
-
-/// A refusal's lines without its data, which the caller has shown.
-pub(crate) fn refusal_of<T>(
-    envelope: &Envelope<T>,
-    recovery: Vec<RecoveryAction>,
-) -> Envelope<serde_json::Value> {
-    Envelope {
-        schema_version: envelope.schema_version,
-        command: envelope.command.clone(),
-        request_id: envelope.request_id.clone(),
-        operation_id: envelope.operation_id.clone(),
-        outcome: envelope.outcome,
-        code: envelope.code,
-        message: envelope.message.clone(),
-        scope: envelope.scope.clone(),
-        effects: envelope.effects.clone(),
-        data: None,
-        recovery,
-    }
 }
 
 /// The way out of a blocked prepare: what to run, and what it says of that.

@@ -313,6 +313,22 @@ fn the_interval_s_bounds_hold_and_nothing_is_written_beyond_them() {
         }
         assert_eq!(case.policy(), before, "{seconds}");
         case.request_absent(REQUEST_3);
+        // Human mode names the range.
+        let run = case.text(
+            "configure",
+            &["--request-id", REQUEST_3],
+            &interval(seconds),
+        );
+        assert_eq!(run.status, 2);
+        assert!(
+            stderr(&run).contains("Input field interval_seconds must be from 60 to 3600.\n"),
+            "{}",
+            stderr(&run)
+        );
+        if seconds == 3601 {
+            case.text_golden("poll_configure_out_of_range_text", &run);
+        }
+        case.request_absent(REQUEST_3);
     }
 }
 
@@ -335,6 +351,10 @@ fn input_failures_answer_invalid_input_and_write_nothing() {
         ),
         (
             br#"{"interval_seconds":-60}"#,
+            "Input field interval_seconds must be a whole number.",
+        ),
+        (
+            br#"{"interval_seconds":600.0}"#,
             "Input field interval_seconds must be a whole number.",
         ),
         (
@@ -401,6 +421,12 @@ fn usage_failures_reach_nothing_in_both_modes() {
             "usage_error",
         ),
         ("pause", &["--prepare"][..], &[][..], "not_confirmable"),
+        (
+            "pause",
+            &["--request-id", REQUEST_1, "--confirm", REQUEST_2][..],
+            &[][..],
+            "not_confirmable",
+        ),
         (
             "configure",
             &["--prepare"][..],
@@ -523,14 +549,16 @@ fn lost_stdout_then_the_same_request_is_the_answer() {
     let args = case.args("pause", &["--request-id", REQUEST_1, "--json"]);
     let argv: Vec<_> = args.iter().map(OsStr::new).collect();
     let mut command: Command = cli::cli_command(&argv, &case.env);
-    let mut child = command
+    // A pipe whose read end is closed before the process starts, so no write
+    // to stdout can ever succeed.
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let status = command
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(writer)
         .stderr(Stdio::null())
-        .spawn()
+        .status()
         .unwrap();
-    drop(child.stdout.take());
-    let status = child.wait().unwrap();
     assert!(!status.success(), "nothing could be written to stdout");
     assert_eq!(case.status()["paused"], true, "the write stands");
     case.sql("UPDATE remote_polling_state SET interval_seconds=900");

@@ -10,5 +10,5 @@ operation: <id>
 next: request.retry request_id=01ARZ3NDEKTSV4RRFFQ69G5FR1
 next: manyhands-cli operation list --repo '<repository>'
 next: manyhands-cli operation resume --repo '<repository>' --operation-id <operation-id>
-note: something else holds this repository: operation list names it, and operation resume, with its operation ID for the <operation-id> placeholder, names the request that holds it.
+note: something else holds this repository: operation list names it, and operation resume, with its operation ID for the <operation-id> placeholder, names the request that holds it. If it names only this request, wait and send this request again (add --request-id unless you run it at a terminal).
 --- exit 5

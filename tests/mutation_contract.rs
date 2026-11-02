@@ -1686,7 +1686,12 @@ fn every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root() 
 
 /// The result codes no fixture can produce, each with the reason. Every
 /// other code is the code of a golden envelope.
-const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 2] = [
+const CODES_NO_FIXTURE_CAN_PRODUCE: [(ResultCode, &str); 3] = [
+    (
+        ResultCode::CommandUnavailable,
+        "a CLI code for a planned verb, and no verb is planned once poll once is bound \
+         (R-8); startup_tests.rs pins its answer on a test-only planned spec",
+    ),
     (
         ResultCode::RemoteUnavailable,
         "the transport gives it only when libgit2 says the remote is not found, and the test \
