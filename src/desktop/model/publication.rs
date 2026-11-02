@@ -3,11 +3,8 @@
 //! attempt it was classified under, and the controls it offers. The
 //! views render these and never read envelope fields themselves.
 //!
-//! Each function takes the design's rows in precedence order, and the
-//! first that matches wins. "Saved" means the checkpoint committed. The
-//! outcomes hold no comment text.
-//!
-//! The offers follow from the outcome and the attempt's record:
+//! Rows match in the design's precedence order, first match wins.
+//! "Saved" means the checkpoint committed. Outcomes hold no comment text.
 //!
 //! - Give up ("Stop trying to share") is offered only while the record
 //!   is still accepted (decision 8), on the rows that name it, and never
@@ -245,6 +242,10 @@ impl CommentResult {
             C::MaybeSaved => return vec![O::CheckAgain],
             C::NotSavedOwed { .. } if record == RecordState::Unknown => {
                 return vec![O::Retry, O::CheckAgain];
+            }
+            // A Retry only replays; the file exists, so no Edit text (P7).
+            C::NotSavedOwed { .. } if record == RecordState::Finished => {
+                return vec![O::Discard, O::CopyText, O::CheckAgain];
             }
             C::NotSavedOwed { .. } => return vec![O::Retry, O::Discard, O::CopyText],
             C::SavedBranchDeleted => (None, None),

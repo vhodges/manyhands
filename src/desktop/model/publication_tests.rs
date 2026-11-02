@@ -416,7 +416,7 @@ fn row_14_a_written_or_accepted_post_is_owed_and_offers_retry() {
         ),
     );
     let accepted = post(ResultCode::TransportUnavailable, nothing());
-    for (envelope, attempt) in [(&written, FINISHED), (&accepted, ACCEPTED)] {
+    for (envelope, attempt) in [(&written, ACCEPTED), (&accepted, ACCEPTED)] {
         assert_eq!(
             outcome(envelope, attempt),
             CommentOutcome::NotSavedOwed {
@@ -488,6 +488,25 @@ fn give_up_needs_an_accepted_record() {
 /// share takes its place. Only the transient codes keep Retry (fact 14).
 #[test]
 fn a_finished_record_never_offers_a_same_request_resend() {
+    // Row 14: written, not committed, record finished.
+    let written = post(
+        ResultCode::TransportUnavailable,
+        effects(
+            WriteEffect::Written,
+            CheckpointEffect::Pending,
+            PublicationEffect::NotRequested,
+        ),
+    );
+    assert_eq!(
+        outcome(&written, FINISHED),
+        CommentOutcome::NotSavedOwed {
+            code: ResultCode::TransportUnavailable
+        }
+    );
+    assert_eq!(
+        offers(&written, FINISHED),
+        [C::Discard, C::CopyText, C::CheckAgain]
+    );
     let comment_rows = [
         (ResultCode::UnlockRequired, vec![C::Share]),
         (
