@@ -1,0 +1,22 @@
+--- stderr
+progress: accepted
+progress: observing
+error: What the request was based on has changed.
+code: external_change
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX5
+Cancel acknowledged: false
+Eligibility: none
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
+Kind: ticket
+Next action: external_repair
+Operation id: <id>
+Reason: foreign_change
+Required request id: none
+Resolution request id: none
+Result oid: none
+State: resolution_prepared
+Type: local_context_sync
+next: repo.inspect root=<repository>
+next: request.retry request_id=01ARZ3NDEKTSV4RRFFQ69G5FX3
+note: this resolution is the original request's to finish: send that request again, with the same input.
+--- exit 3

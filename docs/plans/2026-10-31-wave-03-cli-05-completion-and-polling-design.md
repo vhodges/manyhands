@@ -540,7 +540,7 @@ observation does (RFC), not as a flag.
 | `resolve-local` | Complete, valid set | `ok` | 0 | None |
 | `resolve-local` | Incomplete, duplicate, unknown or invalid before any write | `invalid_input` | 2 | `context show-local` |
 | `resolve-local` | Stale observation | `external_change` | 3 | `context show-local` |
-| `resolve-local` | Partial accepted resolution | `original_request_required` | 4 | The same request and source |
+| `resolve-local` | A new request after a partial accepted resolution | `external_change`: the original request is the one to resend (gate, Local operation 5–6; owner decision 4) | 3 | `request.retry` of the original request, with the same source; human output names it from `required_request_id` or the inspection |
 | Both mutations | Cancelled at a safe point | `cancelled` | 130 | As the gate: effects kept, retry or abandon |
 
 The golden files `local_sync_*` and the audit's list fix any code Task 0 finds different; a change

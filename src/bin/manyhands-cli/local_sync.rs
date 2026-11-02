@@ -30,7 +30,7 @@ use manyhands::{
         MutationDataDto, OperationAction, OperationId, ReadError, RepositoryService,
         ResolvedRepository,
     },
-    results::{Envelope, ResultCode},
+    results::{Envelope, RecoveryActionKind, ResultCode},
 };
 
 use crate::{
@@ -384,6 +384,38 @@ pub fn resolve(
         Ok(values) => values,
         Err(out) => return out,
     };
+    let repo = service.resolve_repository(&root).ok();
+    let inspect = || {
+        repo.as_ref()
+            .and_then(|repo| service.inspect_local_context_sync(repo, operation).ok())
+    };
+    // As `show-local`'s: a token `conflict::read` would refuse too is
+    // `invalid_input` before anything is accepted or written. Without an
+    // inspection, the library judges every token, and a request it holds a
+    // record of is its to replay or mismatch.
+    let recorded = flags
+        .request_id
+        .is_some_and(|id| service.show_request(id).failure_class().is_none());
+    if !recorded
+        && let Some(view) = inspect()
+        && input
+            .resolutions
+            .iter()
+            .any(|pair| refused_unread(&view, &pair.token))
+    {
+        let root = root.to_string_lossy();
+        return mutate::refusal(
+            session,
+            &admin::name(spec),
+            flags.request_id,
+            ResultCode::InvalidInput,
+            Some(
+                show_line(&root, &operation.to_string())
+                    .trim_end()
+                    .to_owned(),
+            ),
+        );
+    }
     let plan = Plan {
         identity_prompt: false,
         retry: true,
@@ -418,24 +450,67 @@ pub fn resolve(
         }
         Driven::Executed { envelope, supplied } => {
             let mut output = render::mutation_output(false, &envelope, supplied);
+            // The original request, as the data names it, or the inspection
+            // does after a stop that names none (the gate: it is resent).
+            let original = data_of(&envelope)
+                .and_then(|data| data.required_request_id.clone())
+                .or_else(|| {
+                    matches!(
+                        envelope.code,
+                        ResultCode::ExternalChange | ResultCode::OriginalRequestRequired
+                    )
+                    .then(inspect)
+                    .flatten()
+                    .filter(|view| {
+                        view.reason == LocalContextSyncReason::OriginalResolutionRequired
+                    })
+                    .and_then(|view| view.required_request_id)
+                });
             output.stderr.extend(
-                resolve_way_on(&envelope, &root.to_string_lossy(), &operation.to_string())
-                    .into_bytes(),
+                resolve_way_on(
+                    &envelope,
+                    &root.to_string_lossy(),
+                    &operation.to_string(),
+                    original.as_deref(),
+                )
+                .into_bytes(),
             );
             output
         }
     }
 }
 
-/// What a resolution's stop adds, by the required outcomes' last column.
-fn resolve_way_on(envelope: &Envelope<MutationDataDto>, root: &str, operation: &str) -> String {
-    let show = format!(
+fn show_line(root: &str, operation: &str) -> String {
+    format!(
         "next: manyhands-cli context show-local --repo {} --operation-id {}\n",
         quoted(root),
         field(operation)
-    );
+    )
+}
+
+/// What a resolution's stop adds, by the required outcomes' last column. With
+/// an original request to finish the resolution, that request is the way on,
+/// as `request.retry`, unless C2's lines already name it.
+fn resolve_way_on(
+    envelope: &Envelope<MutationDataDto>,
+    root: &str,
+    operation: &str,
+    original: Option<&str>,
+) -> String {
+    if let Some(original) = original.filter(|id| envelope.request_id.as_deref() != Some(*id)) {
+        let named = envelope.recovery.iter().any(|action| {
+            action.action == RecoveryActionKind::RequestRetry
+                && action.arguments.get("request_id").and_then(|v| v.as_str()) == Some(original)
+        });
+        let retry = if named {
+            String::new()
+        } else {
+            format!("next: request.retry request_id={}\n", field(original))
+        };
+        return format!("{retry}{}", note_lines(&[ORIGINAL_NOTE.to_owned()]));
+    }
     match envelope.code {
-        ResultCode::InvalidInput | ResultCode::ExternalChange => show,
+        ResultCode::InvalidInput | ResultCode::ExternalChange => show_line(root, operation),
         ResultCode::OriginalRequestRequired => note_lines(&[ORIGINAL_NOTE.to_owned()]),
         _ => String::new(),
     }

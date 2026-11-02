@@ -1417,3 +1417,12 @@ In the partial case, `original_request_required` comes from `operation resume`. 
 
 `fmt --check`, whole-tree clippy with `-D warnings` and the no-GPUI script pass. `merge-tree` against `origin/main` is clean.
 
+### Task 10b: the owner's rulings
+
+1. **"One merge" means the close merges once.** The resolution's checkpoint merge is the repair. The walk's assertion stands: primary holds the resolution's merge and the closure's one integration. The plan's Task 10b wording now says so.
+2. **An unknown token on `resolve-local`** is `invalid_input`, exit 2, before any write. A verb-side check matches `show-local`'s: it uses `refused_unread`, so it refuses only where `conflict::read` would. With no inspection, the library judges every token. A request the library already holds a record of is left to it, so a replay or mismatch isn't pre-empted; the complete-set row's replay failed without that and passes with it. The row is no longer ignored, and has a text golden.
+3. **A new request after a partial accepted resolution** is the library's `external_change`, exit 3. That follows the gate (Local operation 5–6, owner decision 4): the original request is the one to resend. The design's row is corrected. Human output names the original request as `next: request.retry request_id=<original>` with a note. The ID comes from the data's `required_request_id`, or, after an `external_change` or `original_request_required` that names none, from the inspection's (`reason: original_resolution_required`). JSON keeps the library's envelope. The row covers the sent observation and a re-read one, then the pinned finish by the original request, with JSON and text goldens.
+
+The resolve schema's example row expected `external_change`. Its made-up token now meets the verb's check, so the row expects `invalid_input`, and asserts the refusal is the check's (the `show-local` line) and not the input reading's.
+
+No `#[ignore]` remains. Verification: `--test cli` whole 448 (112 s), `--bin manyhands-cli` 297 (2.4 s), `--test mutation_replay -- local_sync` 75 (124 s), `fmt --check` and whole-tree clippy with `-D warnings` pass.

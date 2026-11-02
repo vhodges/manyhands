@@ -157,6 +157,7 @@ fn a_refused_resolution_goes_back_to_show_local() {
             &stopped(code, LocalContextSyncNextAction::Resolve),
             ROOT,
             OPERATION,
+            None,
         );
         assert_eq!(
             lines,
@@ -174,6 +175,45 @@ fn a_refused_resolution_goes_back_to_show_local() {
         ),
         ROOT,
         OPERATION,
+        None,
     );
+    assert!(lines.contains("same input"), "{lines}");
+}
+
+const ORIGINAL: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX3";
+
+#[test]
+fn a_new_request_after_a_partial_resolution_names_the_original_one() {
+    let lines = resolve_way_on(
+        &stopped(
+            ResultCode::ExternalChange,
+            LocalContextSyncNextAction::ExternalRepair,
+        ),
+        ROOT,
+        OPERATION,
+        Some(ORIGINAL),
+    );
+    assert!(
+        lines.starts_with(&format!("next: request.retry request_id={ORIGINAL}\n")),
+        "{lines}"
+    );
+    assert!(lines.contains("same input"), "{lines}");
+    assert!(!lines.contains("show-local"), "{lines}");
+}
+
+#[test]
+fn the_original_request_is_named_once() {
+    let mut envelope = stopped(
+        ResultCode::OriginalRequestRequired,
+        LocalContextSyncNextAction::RetryResolution,
+    );
+    envelope
+        .recovery
+        .push(manyhands::results::RecoveryAction::new(
+            manyhands::results::RecoveryActionKind::RequestRetry,
+            [("request_id", ORIGINAL.into())],
+        ));
+    let lines = resolve_way_on(&envelope, ROOT, OPERATION, Some(ORIGINAL));
+    assert!(!lines.contains("next: request.retry"), "{lines}");
     assert!(lines.contains("same input"), "{lines}");
 }

@@ -232,7 +232,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 **Files:** Create `schemas/input/v1/context_resolve_local.schema.json`, its example. Modify `local_sync.rs`, `human_collaboration.rs`, `catalog.rs`, `dispatch.rs`, `tests/cli/local_sync.rs`.
 
 - [ ] **Step 1:** Write the design's required outcomes for `context resolve-local` first. Implement with goldens, replay, mismatch and `operation abandon`'s guarded answer. A source sentinel is absent from application data and diagnostics.
-- [ ] **Step 2:** Walk the route Task 7's human lines print, through the binary, a test first: a refused closure checkpoint merge, the four verbs, the same request, `ok`, one merge. Task 7 prints it as a route "to try", and nothing has walked it. The walk must use these exact strings, pinned at `human_lifecycle.rs`'s `merge_refused` and by the `ticket_close_checkpoint_merge_refused_text` golden; a change to one changes the other:
+- [ ] **Step 2:** Walk the route Task 7's human lines print, through the binary, a test first: a refused closure checkpoint merge, the four verbs, the same request, `ok`, and the close merges once (the resolution's own checkpoint merge is the repair). Task 7 prints it as a route "to try", and nothing has walked it. The walk must use these exact strings, pinned at `human_lifecycle.rs`'s `merge_refused` and by the `ticket_close_checkpoint_merge_refused_text` golden; a change to one changes the other:
 
   ```text
   manyhands-cli context observe-local --repo <root> --id <item>

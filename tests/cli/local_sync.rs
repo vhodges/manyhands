@@ -1619,11 +1619,9 @@ fn an_incomplete_duplicate_unknown_or_invalid_set_is_invalid_input_before_any_wr
     case.resolve_json(&operation, REQUEST_1, &input, 0, "ok");
 }
 
-/// The design's row: an unknown token, well formed, is `invalid_input` before
-/// any write. It answers `external_change`, exit 3, so it waits for a ruling
-/// (ledger, Task 10b). Nothing is written either way.
+/// An unknown token, well formed, is `invalid_input` before any write: the
+/// verb's check, as `show-local`'s, since `conflict::read` refuses it too.
 #[test]
-#[ignore = "answers external_change, exit 3; awaiting the owner's ruling"]
 fn an_unknown_token_is_invalid_input_before_any_write() {
     let (case, operation) = Case::two_paths_conflicted();
     let input = case.resolution(&operation);
@@ -1631,9 +1629,21 @@ fn an_unknown_token_is_invalid_input_before_any_write() {
     let mut unknown = input.clone();
     let token = input["resolutions"][0]["token"].as_str().unwrap();
     unknown["resolutions"][0]["token"] = json!(tampered(token));
-    case.resolve_json(&operation, REQUEST_3, &unknown, 2, "invalid_input");
+    let value = case.resolve_json(&operation, REQUEST_3, &unknown, 2, "invalid_input");
+    assert!(value["data"].is_null(), "{value}");
+    case.request_absent(REQUEST_3);
+    let run = case.resolve_text(&operation, REQUEST_3, &unknown);
+    assert_eq!(run.status, 2);
+    assert!(
+        stderr(&run).contains("context show-local"),
+        "{}",
+        stderr(&run)
+    );
+    case.text_golden("context_resolve_local_unknown_token_text", &run);
     assert_eq!(case.context_files(), files);
     assert_eq!(case.state(&operation), "conflict_pending");
+    // The same request with the live tokens then resolves.
+    case.resolve_json(&operation, REQUEST_3, &input, 0, "ok");
 }
 
 #[test]
@@ -1740,39 +1750,33 @@ fn a_partial_accepted_resolution_is_finished_by_the_same_request_and_source() {
     );
 }
 
-/// The design's row: a new `resolve-local` request after a partial accepted
-/// resolution answers `original_request_required`, exit 4. It answers
-/// `external_change`, exit 3, even with the observation read again, so it
-/// waits for a ruling (ledger, Task 10b).
+/// A new `resolve-local` request after a partial accepted resolution is
+/// `external_change`, exit 3, as the gate has it: the original request is the
+/// one to resend. Human output names it, from what `show-local` reads.
 #[test]
-#[ignore = "answers external_change, exit 3; awaiting the owner's ruling"]
-fn a_new_request_after_a_partial_resolution_is_original_request_required() {
+fn a_new_request_after_a_partial_resolution_is_external_change_naming_the_original() {
     let (case, operation, input) = partially_resolved();
-    let refused = case.resolve_json(
-        &operation,
-        REQUEST_4,
-        &input,
-        4,
-        "original_request_required",
-    );
-    assert_eq!(
-        refused["data"]["required_request_id"], REQUEST_3,
-        "{refused}"
-    );
     let view = case.show(&operation, 0, "ok");
     let mut fresh = input.clone();
     fresh["observation"] = view["data"]["observation"].clone();
-    let refused = case.resolve_json(
-        &operation,
-        REQUEST_4,
-        &fresh,
-        4,
-        "original_request_required",
+    // With the observation it sent, or one read again: the same refusal.
+    for body in [&input, &fresh] {
+        let refused = case.resolve_json(&operation, REQUEST_4, body, 3, "external_change");
+        assert_eq!(refused["effects"]["write"], "not_requested", "{refused}");
+        case.request_absent(REQUEST_4);
+    }
+    let refused = case.resolve_json(&operation, REQUEST_4, &input, 3, "external_change");
+    case.golden("context_resolve_local_after_partial", &refused);
+    let run = case.resolve_text(&operation, REQUEST_4, &input);
+    assert_eq!(run.status, 3);
+    assert!(
+        stderr(&run).contains(&format!("next: request.retry request_id={REQUEST_3}\n")),
+        "{}",
+        stderr(&run)
     );
-    assert_eq!(
-        refused["data"]["required_request_id"], REQUEST_3,
-        "{refused}"
-    );
+    case.text_golden("context_resolve_local_after_partial_text", &run);
+    let done = case.resolve_json(&operation, REQUEST_3, &input, 0, "ok");
+    assert_eq!(done["data"]["state"], "complete", "{done}");
 }
 
 /// The gate's guarded abandonment: refused while the conflict's files remain.
@@ -1862,19 +1866,28 @@ fn resolve_local_has_its_help_golden() {
     cli::assert_cli_golden("help_context_resolve_local", &value, &[]);
 }
 
-/// The resolve verb's closed input: what its example says, the binary takes,
-/// and hands to the library, which finds no such operation's conflict.
+/// The resolve verb's closed input: what its example says, the binary takes.
+/// Its token names no path of the live conflict, so the verb's token check
+/// refuses it, and not the input's reading.
 pub fn the_resolve_example_input_is_accepted(example: &Value) {
     let (case, operation) = Case::conflicted("");
     let args = case.resolve_args(&operation, REQUEST_3);
-    let value = case.json(
+    case.json(
         &args,
         example.to_string().as_bytes(),
-        3,
-        "external_change",
+        2,
+        "invalid_input",
         None,
     );
-    assert!(!value["data"].is_null(), "{value}");
+    let run = case.run(&args, example.to_string().as_bytes());
+    assert_eq!(run.status, 2);
+    assert!(
+        stderr(&run).contains("context show-local"),
+        "{}",
+        stderr(&run)
+    );
+    assert!(!stderr(&run).contains("Input field"), "{}", stderr(&run));
+    assert!(!stderr(&run).contains("Required input"), "{}", stderr(&run));
 }
 
 /// Splits a `next:` line as a POSIX shell would, for the quoting `quoted` uses.
