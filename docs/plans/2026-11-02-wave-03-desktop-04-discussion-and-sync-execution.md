@@ -18,6 +18,7 @@ Approved 2026-11-02 (`5c26a5cd`); execution is subagent-driven
 | --- | --- | --- | --- | --- | --- | --- |
 | 0 | done | `605ff289` | `dba94593`, `38b3c18f` (main), `2394b88e` | Full suite at `605ff289`: 32 result lines, 4901 passed, 0 failed, 1 ignored | Orchestrator spot-check of U-items | Decisions 17, 18; main's tiered gate adopted. |
 | 1 | done | `45028fc9` | `71f8eefe` | `requests`: 11 passed; fmt, check, both clippy lines clean | APPROVE, 0 Blocking, 0 Important, 2 Minor (optional, not applied) | E-12 applied; `DelayingBackend` needed no change. |
+| 2 | done | `31ce9f15` | `0a54d50a`, fixes `7af85640` | `worker` 37, `prompts` 8, `submissions` 7 (each twice); `services::` 153; desktop bin 1107 at `0a54d50a`; four lines clean | Round 1 CHANGES REQUIRED (1 Important: a dropped re-send forgot a written post; 5 Minor); all fixed; re-review APPROVE | Record state kept on the handle (not on `Finished`); `request_not_found` counts as Finished (P16 calls `show_request` itself); test-only constructed answers in `DelayingBackend`; Give up with a failing `cancel_request` on an accepted record is untested (no tool). Carry: `model/operations.rs` marks acceptance only on `Accepted` (R-14) — Lane B Task 9/10a. `worker.rs` ~1100 lines. |
 
 ### Task 0 record
 
