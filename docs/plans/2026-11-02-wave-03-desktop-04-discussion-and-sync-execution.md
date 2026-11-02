@@ -16,13 +16,15 @@ Approved 2026-11-02 (`5c26a5cd`); execution is subagent-driven
 
 | Task | State | Base | Commits | Tests | Review | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| 0 | in progress | `605ff289` | — | — | — | Merge of `origin/main` `15a23125` is a no-op. |
+| 0 | done | `605ff289` | `dba94593`, `38b3c18f` (main), `2394b88e` | Full suite at `605ff289`: 32 result lines, 4901 passed, 0 failed, 1 ignored | Orchestrator spot-check of U-items | Decisions 17, 18; main's tiered gate adopted. |
 
 ### Task 0 record
 
 - **Step 1.** `origin/main` `15a23125` already merged; the merge is a
   no-op. Gates (check all-features, fmt, clippy all-targets, check and
-  clippy desktop, `check-cli-no-gpui.sh`) passed. Full suite: see below.
+  clippy desktop, `check-cli-no-gpui.sh`) passed. Full suite
+  (`cargo test --all-features --locked`): 4901 passed, 0 failed, 1 ignored,
+  exit 0.
 - **Step 2.** `git diff --stat 00bef3da HEAD` touches only the approved
   RFC and Wave amendments; no source fact moved. Amendments 1–6 applied
   (`5c26a5cd`, `3eb38cdb`).
