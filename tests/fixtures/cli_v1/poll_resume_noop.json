@@ -1,0 +1,34 @@
+{
+  "code": "already_applied",
+  "command": "poll resume",
+  "data": {
+    "backoff_seconds": null,
+    "enabled": true,
+    "interval_seconds": 300,
+    "next_eligible_at": "2100-01-01T00:00:00Z",
+    "paused": false,
+    "recovery_suspended": false
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request was already applied; nothing changed.",
+  "operation_id": null,
+  "outcome": "noop",
+  "recovery": [],
+  "request_id": "<request-id>",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

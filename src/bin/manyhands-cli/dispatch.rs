@@ -585,6 +585,9 @@ pub fn dispatch(
             return crate::lifecycle::document_promote(service, session, command, args);
         }
         "ticket close" => return crate::lifecycle::ticket_close(service, session, command, args),
+        "poll configure" => return crate::polling::configure(service, session, command, args),
+        "poll pause" => return crate::polling::pause(service, session, command, args),
+        "poll resume" => return crate::polling::resume(service, session, command, args),
         "conflict show" => return crate::conflict::show(service, session, command, args),
         "conflict resolve" => return crate::conflict::resolve(service, session, command, args),
         "operation resume" => {

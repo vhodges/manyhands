@@ -95,8 +95,8 @@ Command catalog:
   document promote  Promote a document. Available now.
   ticket close  Close a ticket. Available now.
   poll once  Poll a repository once. Arrives with C5.
-  poll configure  Configure polling. Arrives with C5.
-  poll pause  Pause polling. Arrives with C5.
-  poll resume  Resume polling. Arrives with C5.
+  poll configure  Configure polling. Available now.
+  poll pause  Pause polling. Available now.
+  poll resume  Resume polling. Available now.
 
 MANYHANDS_DATA_DIR: advanced/testing data-directory override; relative paths use the invocation directory.

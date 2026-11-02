@@ -43,6 +43,27 @@ fn host_input_schemas_match_closed_required_shapes_and_examples_reach_prepare() 
 }
 
 #[test]
+fn poll_configure_schema_is_closed_and_its_example_is_accepted() {
+    let file = "poll_configure.schema.json";
+    let example = read_json(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/cli_input_v1/poll_configure.json"),
+    );
+    schema::check(&directory(), file, &example).unwrap();
+    for bad in [
+        serde_json::json!({}),
+        serde_json::json!({"interval_seconds": "600"}),
+        serde_json::json!({"interval_seconds": null}),
+        serde_json::json!({"interval_seconds": 59}),
+        serde_json::json!({"interval_seconds": 600.5}),
+        serde_json::json!({"interval_seconds": 600, "enabled": false}),
+    ] {
+        assert!(schema::check(&directory(), file, &bad).is_err(), "{bad}");
+    }
+    super::polling::the_example_input_is_accepted(&example);
+}
+
+#[test]
 fn protection_accepts_passphrase_and_none_only() {
     let f = super::keys::Fixture::new();
     for protection in ["passphrase", "none", "secret"] {

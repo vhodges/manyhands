@@ -1133,3 +1133,35 @@ Goldens were written with `MANYHANDS_UPDATE_GOLDEN=1` and read. Help's four move
 **Follow-up candidate:** `progress: connecting` in a local-only run comes from `command.rs:490`, whose `stage` gives `Connecting` for both verbs whatever the repository has.
 
 **Part A's corrections, at `2a9bc6f3`, went beyond the brief in one place:** a second wrapped rule number, "(decision 11)" at `remote/state.rs:6410`, was also removed.
+
+## Task 8: CLI policy verbs
+
+Base `08ac45ca`; `origin/main` at `15a23125` is contained. `poll configure`, `poll pause` and `poll resume` are available through `polling.rs`, with `poll_configure.schema.json` and its example. Each answer renders by C2's lines, with one added note.
+
+**Seen first.** Against the unchanged binary, all 18 rows of `tests/cli/polling.rs` and `input_schemas::poll_configure_schema_is_closed_and_its_example_is_accepted` failed by assertion, on `command_unavailable` or its exit, each read. No expected code was changed afterwards. Two faults of my own, neither in an expected code: a `request show` and a `poll status` under the held lease answered `busy`, so those reads moved after its release; and the text cases' registration missed by a bad edit. With the note's condition mutated false, `a_suspension_is_named_from_the_answer_s_own_data`, `resume_names_a_suspension_it_does_not_lift` and `a_suspension_is_named_on_a_noop_and_by_the_other_verbs` failed, and the mutation is reverted. `no_suspension_has_no_note` and `json_mode_holds_one_envelope_and_no_note` pin an absence, and weren't seen to fail.
+
+**The renderer and progress.** `progress: writing` is the one stage, and no `accepted` appears. `HumanProgress` renders what the library sends, so no change was needed. A no-op prints it too, since the stage comes before the transaction. Goldens pin both.
+
+**Decisions, for review.**
+
+- **The suspension note prints for all three verbs, and on a no-op.** The design names `poll resume`. The data holds the fact on any policy answer, and the note is true on each; narrowing it would add a condition with no gain. It reads only the answer's data, and a unit row shows that on a built envelope.
+- **Options carry `--prepare` and `--confirm`, as every mutation's do.** `parse::mode_rules` calls `get_flag("prepare")`, which panics for an option the spec doesn't declare, and `parse.rs` isn't in the Files. So `--prepare` answers `not_confirmable`, exit 2, as `item sync`'s does. The design's list for `poll once` reads `--repo`, `--request-id`, `--json`; Task 9 follows the same convention, and Task 14a's inventory should read it so.
+- **The interval's upper bound stays with the library**, as Task 5a's schema note says. The schema has `minimum: 60` and states 3600 in its description. An input of 3601 passes the CLI's type check and gets `invalid_input` from the library, with no detail line, as the golden shows.
+- **"Same-request continuation" and "lost stdout" for a one-transaction verb.** There is no accepted state. Continuation is shown two ways through the binary: a refused `invalid_input` under R1, then R1 corrected, is a new write; and a `busy` with the lease held by a second process, through all bounded retries, then the same request, which writes. Lost stdout is a closed pipe: the process exits non-zero, the write stands, and the same request replays the stored answer, which a direct column change after it shows was not rewritten.
+- **A policy `busy` leaves no record.** `request show` answers `request_not_found` after the release. The binary's rows pin it.
+
+**Files beyond the plan's list, each harmless.** `src/bin/manyhands-cli/input.rs` and `input_tests.rs`: `InputObject`'s fields are private and no reader took a number, so `whole_number` is added, with its row. `tests/cli/input_schemas.rs`: the schema's row, as its verify names that filter. `tests/support/cli.rs`: registration, which the Global Constraints name. `tests/fixtures/cli_v1/help_root*`: regenerate for the three verbs only, read in the diff.
+
+**Planned rows.** No row names these three as planned: Task 7 already moved the planned rows to `poll once`, which still answers them, so the move here is the help goldens. `tests/cli/help.rs` and the four help goldens of the poll verbs are Task 9's.
+
+**Verified, compare mode, no golden variable.** All exit 0.
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--bin manyhands-cli` | 275 | 2 s |
+| `--test cli -- polling` | 18 | 3 s |
+| `--test cli -- input_schemas` | 8 | 1 s |
+| `--test cli`, whole | 390 | 91 s |
+| `cargo fmt --check`, clippy `-D warnings` | ok | under 10 s each |
+
+**Left.** `poll once` is Task 9, with `stops_on_ctrl_c`'s rows for all four verbs.

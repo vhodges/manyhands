@@ -189,6 +189,23 @@ impl InputObject {
             .map(|values| values.map_or(ListChange::Missing, ListChange::Value))
     }
 
+    /// A required whole number that is not negative.
+    pub fn whole_number(&self, field: &'static str) -> Result<u64, InputError> {
+        match self.fields.get(field) {
+            None => Err(InputError::Missing(field)),
+            Some(Json::Number(number)) if number.is_u64() => {
+                number.as_u64().ok_or(InputError::WrongType {
+                    field,
+                    expected: "a whole number",
+                })
+            }
+            Some(_) => Err(InputError::WrongType {
+                field,
+                expected: "a whole number",
+            }),
+        }
+    }
+
     pub fn optional_object(&self, field: &'static str) -> Result<Option<InputObject>, InputError> {
         match self.fields.get(field) {
             None => Ok(None),

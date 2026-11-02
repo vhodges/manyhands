@@ -45,6 +45,8 @@ mod lifecycle;
 mod mutate;
 #[path = "manyhands-cli/parse.rs"]
 mod parse;
+#[path = "manyhands-cli/polling.rs"]
+mod polling;
 #[path = "manyhands-cli/progress.rs"]
 mod progress;
 #[path = "manyhands-cli/prompt.rs"]

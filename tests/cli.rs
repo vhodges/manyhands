@@ -65,6 +65,8 @@ mod keys;
 mod lifecycle;
 #[path = "cli/mutation.rs"]
 mod mutation;
+#[path = "cli/polling.rs"]
+mod polling;
 #[path = "cli/privacy.rs"]
 mod privacy;
 #[cfg(unix)]

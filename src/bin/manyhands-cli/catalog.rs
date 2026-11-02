@@ -1009,9 +1009,42 @@ pub const COMMANDS: &[CommandSpec] = &[
         },
     },
     planned("poll", "once", "Poll a repository once.", "C5"),
-    planned("poll", "configure", "Configure polling.", "C5"),
-    planned("poll", "pause", "Pause polling.", "C5"),
-    planned("poll", "resume", "Resume polling.", "C5"),
+    CommandSpec {
+        resource: "poll",
+        verb: "configure",
+        summary: "Configure polling.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: MUTATION_INPUT,
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
+    CommandSpec {
+        resource: "poll",
+        verb: "pause",
+        summary: "Pause polling.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "poll",
+        verb: "resume",
+        summary: "Resume polling.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
 ];
 
 pub fn find(resource: &str, verb: &str) -> Option<&'static CommandSpec> {
