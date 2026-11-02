@@ -135,6 +135,21 @@ const ONE: &[ssh_harness::Case] = &[
         "c5_lifecycle_tracking_stop_before_the_update",
         tracking_stop_before_the_update,
     ),
+    (
+        "c5_lifecycle_tracking_split_endpoints",
+        tracking_split_endpoints,
+    ),
+    ("c5_lifecycle_tracking_moved_past_before_the_update", || {
+        tracking_moved_before_the_update(true)
+    }),
+    (
+        "c5_lifecycle_tracking_moved_beside_before_the_update",
+        || tracking_moved_before_the_update(false),
+    ),
+    (
+        "c5_lifecycle_tracking_fenced_at_verification",
+        tracking_fenced_at_verification,
+    ),
     ("c5_lifecycle_identity_prepare_missing_promote", || {
         identity_prepare_promote(None)
     }),
@@ -1651,11 +1666,15 @@ fn index_pending(verb: Verb) -> Result<(), FixtureError> {
 }
 
 /// A new ID while another request's parent is unfinished: no parent of its
-/// own, so its record is deleted and a new prepare is what follows.
+/// own, so its record is deleted and a new prepare is what follows. Since
+/// decision 33 a prepare made once the parent stands is refused, so the new
+/// ID's confirmation is one made before it began.
 fn busy_with_no_parent(verb: Verb) -> Result<(), FixtureError> {
     let mut w = remote(verb)?;
-    stopped_at(&mut w, verb, FailurePoint::AfterContextSync)?;
     let confirmation = confirmation_of(&prepared(&w.service, verb, &w.root, verb.id()));
+    stopped_at(&mut w, verb, FailurePoint::AfterContextSync)?;
+    let held = prepared(&w.service, verb, &w.root, verb.id());
+    assert_eq!(held.code, ResultCode::RecoveryRequired, "{:?}", held.data);
     let busy = called(
         &w.service,
         SECOND,
@@ -3269,5 +3288,145 @@ fn tracking_stop_before_the_update() -> Result<(), FixtureError> {
         "{done:?}"
     );
     assert_eq!(tracking_of(&w, TRACKING_MAIN)?, Some(tip));
+    Ok(())
+}
+
+/// A push URL apart from the fetch URL: tracking describes Fetch, which the
+/// push didn't reach, so it stays where the last fetch left it.
+fn tracking_split_endpoints() -> Result<(), FixtureError> {
+    let w = remote(Verb::Close)?;
+    let before = tracking_of(&w, TRACKING_MAIN)?;
+    let push = SshRemoteFixture::start()?;
+    push.allow_client_public_key(fixed(russh::keys::PublicKey::from_bytes(
+        &w.server.allowed_client_public_key(),
+    ))?);
+    ssh_privacy::save(&[push.url().into_bytes()])?;
+    let repo = w.repo()?;
+    let push_repo = fixed(git2::Repository::open_bare(push.repository_path()))?;
+    let (source, target) = (fixed(repo.odb())?, fixed(push_repo.odb())?);
+    let mut objects = Vec::new();
+    fixed(source.foreach(|oid| {
+        objects.push(*oid);
+        true
+    }))?;
+    for oid in objects {
+        let object = fixed(source.read(oid))?;
+        fixed(target.write(object.kind(), object.data()))?;
+    }
+    let main = fixed(repo.refname_to_id(MAIN))?;
+    fixed(push_repo.reference(MAIN, main, true, "owned shared ancestry"))?;
+    fixed(repo.remote_set_pushurl("origin", Some(&push.url())))?;
+    fixed(w.service.verify_ssh_transport(
+        VerifySshTransportRequest {
+            root: w.root.clone(),
+            direction: SshDirection::Push,
+            approval: Some(HostApproval {
+                authority: SshAuthority {
+                    host: "127.0.0.1".into(),
+                    port: push.address().port(),
+                },
+                expected: None,
+                presented: push.host_identity(),
+            }),
+        },
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    let tip = advance(&repo, MAIN, "split.txt")?;
+    let synced = execute(&w, FIRST, repo_sync(&w));
+    assert_eq!(synced.code, ResultCode::Ok, "{:?}", synced.data);
+    assert_eq!(fixed(push_repo.refname_to_id(MAIN))?, tip, "pushed to Push");
+    assert_eq!(tracking_of(&w, TRACKING_MAIN)?, before);
+    Ok(())
+}
+
+/// At `AfterPushVerification`, moves primary's tracking ref to `to`, as a
+/// fetch by another process would, and lets the synchronization go on.
+struct MovesTracking {
+    root: std::path::PathBuf,
+    to: git2::Oid,
+}
+impl SynchronizationObserver for MovesTracking {
+    fn safe_point(&mut self, point: RemoteOperationSafePoint) -> SafePointRequest {
+        if point == RemoteOperationSafePoint::AfterPushVerification {
+            let repo = git2::Repository::open(&self.root).expect("the clone");
+            repo.reference(TRACKING_MAIN, self.to, true, "owned fixture fetch")
+                .expect("tracking moved");
+        }
+        SafePointRequest::Continue
+    }
+}
+
+/// Tracking moved past the pushed commit (`past`), or beside it, between the
+/// push's verification and the update: it is left where it was moved.
+fn tracking_moved_before_the_update(past: bool) -> Result<(), FixtureError> {
+    let w = remote(Verb::Close)?;
+    let repo = w.repo()?;
+    let base = fixed(repo.refname_to_id(MAIN))?;
+    let tip = advance(&repo, MAIN, "pushed.txt")?;
+    let moved = commit(
+        &repo,
+        if past { tip } else { base },
+        "moved.txt",
+        b"moved\n",
+    )?;
+    let stopped = w.service.synchronize_remote_observed(
+        w.primary(),
+        &mut SessionCredentials::new(Provider),
+        SynchronizationSettings::default(),
+        &mut MovesTracking {
+            root: w.root.clone(),
+            to: moved,
+        },
+    );
+    // What the synchronization answers isn't the point here, only tracking.
+    drop(stopped);
+    assert_eq!(
+        fixed(w.bare()?.refname_to_id(MAIN))?,
+        tip,
+        "the push landed"
+    );
+    assert_eq!(tracking_of(&w, TRACKING_MAIN)?, Some(moved));
+    Ok(())
+}
+
+/// At `AfterPushVerification`, takes the synchronization's reservation from
+/// it, as a newer owner does.
+struct Fences {
+    data: std::path::PathBuf,
+}
+impl SynchronizationObserver for Fences {
+    fn safe_point(&mut self, point: RemoteOperationSafePoint) -> SafePointRequest {
+        if point == RemoteOperationSafePoint::AfterPushVerification {
+            let db = rusqlite::Connection::open(self.data.join(REGISTRY_FILE)).expect("registry");
+            db.execute(
+                "UPDATE remote_operation_records SET owner_epoch = owner_epoch + 1
+                  WHERE outcome IS NULL",
+                [],
+            )
+            .expect("fenced");
+        }
+        SafePointRequest::Continue
+    }
+}
+
+/// A synchronization fenced at its verification safe point stops there, so
+/// tracking stays where it was, though the push landed.
+fn tracking_fenced_at_verification() -> Result<(), FixtureError> {
+    let w = remote(Verb::Close)?;
+    let before = tracking_of(&w, TRACKING_MAIN)?;
+    let tip = advance(&w.repo()?, MAIN, "fenced.txt")?;
+    let stopped = w.service.synchronize_remote_observed(
+        w.primary(),
+        &mut SessionCredentials::new(Provider),
+        SynchronizationSettings::default(),
+        &mut Fences { data: w.data() },
+    );
+    assert!(stopped.is_err(), "the fence holds");
+    assert_eq!(
+        fixed(w.bare()?.refname_to_id(MAIN))?,
+        tip,
+        "the push landed"
+    );
+    assert_eq!(tracking_of(&w, TRACKING_MAIN)?, before);
     Ok(())
 }

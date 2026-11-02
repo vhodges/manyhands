@@ -47,7 +47,7 @@ use crate::{
     canonical::ItemId,
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, IntegrationEffect,
-        PublicationEffect, RecoveryAction, ResultCode, Scope, WriteEffect,
+        PublicationEffect, RecoveryAction, RecoveryActionKind, ResultCode, Scope, WriteEffect,
     },
 };
 
@@ -57,7 +57,8 @@ use super::{
             AuthoringKind, ClosureRecording, OperationFamily, OperationId, PlannedClosure,
             PlannedIntegration, PlannedPublication, PromotionCleanup, PromotionCleanupPending,
             PromotionIntegration, PromotionPublication, PromotionPublicationPending,
-            PromotionRemoteDeletionCategory, PromotionSynchronizationCategory, RepositoryService,
+            PromotionRemoteDeletionCategory, PromotionSynchronizationCategory, RepositoryOperation,
+            RepositoryService,
             promotion::{
                 ParentView,
                 lifecycle::ParentStep,
@@ -78,9 +79,9 @@ use super::{
             PreviewEffect,
         },
         evidence::{self, Position},
-        identity::{IntentDigestBuilder, ScopeKey},
+        identity::{IntentDigestBuilder, RequestId, ScopeKey},
         observe::{Observation, ObservationDigest},
-        outcome,
+        outcome, records,
     },
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
     Prepared, Previewed, Ran, Standing, primary_position, refused, resolve_root,
@@ -317,6 +318,41 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         let root = repository.root().to_owned();
         let observed = V::observe(service, &root, &self.id).map_err(refused)?;
         Ok((root, observed))
+    }
+
+    /// Decision 33: while an unfinished parent that a new request can't
+    /// supersede holds the item, a prepare is refused, and the way on is that
+    /// parent's: the request whose accepted record holds its operation, or a
+    /// resume of the operation when no record does.
+    fn held(&self, service: &RepositoryService, root: &Path) -> Result<(), Answer> {
+        let Some(operation) = V::holder(service, root, &self.id).map_err(refused)? else {
+            return Ok(());
+        };
+        let key = ScopeKey::for_repository(&self.root)
+            .ok_or_else(|| Answer::stopped(ResultCode::InvalidPath))?;
+        let holder = service
+            .read_session(RepositoryOperation::Read, |db| {
+                Ok(records::operation_holder(
+                    db,
+                    OperationFamily::Remote,
+                    key.as_str(),
+                    operation,
+                    None,
+                )?)
+            })
+            .map_err(|error| Answer::of_read(&error))?;
+        let action = match holder.and_then(|holder| RequestId::parse(&holder).ok()) {
+            Some(request) => outcome::same_request(request),
+            None => RecoveryAction::for_operation(
+                RecoveryActionKind::OperationResume,
+                operation.to_string(),
+                [],
+            ),
+        };
+        Err(Answer {
+            recovery: vec![action],
+            ..Answer::stopped(ResultCode::RecoveryRequired)
+        })
     }
 
     fn data(&self) -> LifecycleMutationDto {
@@ -854,6 +890,7 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
 impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
     fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer> {
         let (root, observed) = self.observe(call.service)?;
+        self.held(call.service, &root)?;
         let digest = digest_of(V::COMMAND, &observed);
         let ready = match observed {
             Observed::Ready(ready) => ready,

@@ -265,6 +265,9 @@ pub(in super::super) trait ParentRecord: LifecycleRecord + Sized {
     fn context_attempt(&self) -> u32;
     fn primary_attempt(&self) -> u32;
     fn expectation_bytes(&self) -> [u8; 32];
+    /// Whether a new request may supersede this unfinished record: only a
+    /// cleanup stop of the kinds `begin_record` replaces.
+    fn supersedable(&self) -> bool;
     /// The closure checkpoint the record holds. A promotion writes none.
     fn written_checkpoint(&self) -> Option<Oid> {
         None

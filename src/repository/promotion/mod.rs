@@ -439,6 +439,22 @@ where
     })
 }
 
+/// The operation of the item's unfinished parent record of the lifecycle `R`
+/// is the record of, when a new request could not supersede it (decision 33).
+pub(super) fn unfinished_holder<R: lifecycle_record::ParentRecord>(
+    service: &RepositoryService,
+    root: &Path,
+    item: &ItemId,
+) -> Result<Option<OperationId>, RepositoryError> {
+    crate::repository::remote::state::with_transaction(service, root, |tx, repository_id| {
+        Ok(
+            lifecycle_record::unfinished_record::<R>(tx, repository_id, item)?
+                .filter(|parent| !parent.supersedable())
+                .map(|parent| parent.operation_id()),
+        )
+    })
+}
+
 impl RepositoryService {
     pub fn promote_document<P: SessionCredentialProvider>(
         &self,

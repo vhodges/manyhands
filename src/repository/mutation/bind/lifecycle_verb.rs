@@ -127,6 +127,13 @@ pub(in super::super::super) trait LifecycleVerb {
         root: &Path,
         operation: OperationId,
     ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError>;
+
+    /// The item's unfinished parent that a new request can't supersede.
+    fn holder(
+        service: &RepositoryService,
+        root: &Path,
+        id: &ItemId,
+    ) -> Result<Option<OperationId>, RepositoryError>;
 }
 
 pub(in super::super::super) struct Promote;
@@ -349,6 +356,14 @@ impl LifecycleVerb for Promote {
             .map(|parent| parent.of_blockers(promotion_blocker)),
         )
     }
+
+    fn holder(
+        service: &RepositoryService,
+        root: &Path,
+        id: &ItemId,
+    ) -> Result<Option<OperationId>, RepositoryError> {
+        promotion::unfinished_holder::<promotion::record::PromotionRecord>(service, root, id)
+    }
 }
 
 impl LifecycleVerb for Close {
@@ -440,6 +455,14 @@ impl LifecycleVerb for Close {
             )?
             .map(|parent| parent.of_blockers(closure_blocker)),
         )
+    }
+
+    fn holder(
+        service: &RepositoryService,
+        root: &Path,
+        id: &ItemId,
+    ) -> Result<Option<OperationId>, RepositoryError> {
+        promotion::unfinished_holder::<closure::record::ClosureRecord>(service, root, id)
     }
 }
 

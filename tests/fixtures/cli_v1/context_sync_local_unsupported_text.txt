@@ -11,5 +11,5 @@ Next action: external_repair
 Reason: unsupported_conflict
 State: refused
 next: repo.inspect root=<repository>
-note: Manyhands can't resolve this: it takes a repair outside it, with Git.
+note: Manyhands can't resolve this: it takes a repair outside it, with Git. After the repair, observe again, and use a new request.
 --- exit 3

@@ -788,6 +788,9 @@ pub(in super::super) fn clear_cancellation(
 }
 
 impl ParentRecord for ClosureRecord {
+    fn supersedable(&self) -> bool {
+        supersedable(self)
+    }
     fn written_checkpoint(&self) -> Option<Oid> {
         self.closure_oid
     }

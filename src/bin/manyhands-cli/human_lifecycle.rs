@@ -11,8 +11,11 @@
 //!   them, and none may be added (design, Answers). The context verbs'
 //!   grammar answers to this text, which `lifecycle_tests.rs` pins.
 //!   Any other form of that blocker relies on its offered actions;
-//! - for a blocked prepare, its way out: the same repair, or the save that
-//!   makes a missing context, and then a new prepare;
+//! - for a blocked prepare, its way out: the same repair, the save that
+//!   makes a missing context, or the poll that reads a primary tracking ref
+//!   left behind or missing, and then a new prepare;
+//! - for a prepare refused because an unfinished request or operation holds
+//!   the item (decision 33), that request sent again, or the resume;
 //! - for a child's `remote_branch_deleted`, the route out of decision 18:
 //!   cancel, the same request, the republish, the same request. Under a
 //!   resume, decision 19's: the republish, then the resume, since the resume
@@ -34,9 +37,12 @@ use manyhands::{
 /// What the repair's lines leave to the reader. The route these lines print is
 /// walked through the binary, from a refused closure to its finish, by
 /// `tests/cli/local_sync.rs` `the_refused_merges_route_finishes_the_close`.
-const REPAIR: &str = "The commands above are the local repair: the <...> values are placeholders to fill in, --input - takes the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict.";
+const REPAIR: &str = "The commands above are the local repair: the <...> values are placeholders to fill in, context sync-local's --input - takes {\"observation\": \"...\"} with the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict.";
 /// What a missing context's note says, here and in `context observe-local`.
-pub(crate) const NO_CONTEXT_NOTE: &str = "this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in.";
+pub(crate) const NO_CONTEXT_NOTE: &str = "this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in, and the save's --input - takes {\"observation\": \"...\"}, with the observation ticket show or document show prints, and the fields it changes, such as \"body\".";
+const POLL_NOTE: &str = "this repository's record of the remote's primary is behind or missing, and a poll reads it; <new-request-id> is a placeholder to fill in.";
+const HELD_NOTE: &str = "an unfinished request holds this item; send it again to finish it, and prepare again only once it has.";
+const HELD_RESUME_NOTE: &str = "an unfinished operation that no request holds has this item; resume it (add --request-id unless you run it at a terminal), and prepare again only once it has finished.";
 const NO_REMOTE_NOTE: &str = "primary is not published, because this repository has no publication remote; once one is selected, repo sync publishes it.";
 const NO_SET_NOTE: &str = "this answer holds no made-ready set; ticket ready is the live view.";
 const DELETED_NOTE: &str = "the refused request's context synchronization keeps its reservation until the request is cancelled; sending the request again then answers cancelled and releases it. After the republish, sending it once more finishes the work.";
@@ -44,19 +50,34 @@ const DELETED_NOTE: &str = "the refused request's context synchronization keeps 
 const RESUME_DELETED_NOTE: &str = "this resume released the operation's context synchronization if nothing it holds could be lost. If repo inspect still shows its reservation, it was kept, and the republish answers busy. Add --request-id to the resume unless you run it at a terminal.";
 
 /// The data's fields, without its tag, its made-ready set (`made_ready`) and,
-/// for a promotion, a state that says nothing.
+/// for a promotion, a state that says nothing. Its blockers are one line,
+/// which sorts first.
 fn data_fields(data: &LifecycleMutationDto) -> String {
     let Ok(mut value) = serde_json::to_value(data) else {
         return String::new();
     };
     if let Some(fields) = value.as_object_mut() {
         fields.remove("type");
+        fields.remove("blockers");
         fields.remove("made_ready");
         if data.made_ready_state.is_none() {
             fields.remove("made_ready_state");
         }
     }
-    human_admin::fields(&value)
+    format!(
+        "{}{}",
+        blockers_line(&data.blockers),
+        human_admin::fields(&value)
+    )
+}
+
+/// `Blockers:` once, with the list.
+fn blockers_line(blockers: &[LifecycleBlocker]) -> String {
+    if blockers.is_empty() {
+        return "Blockers: none\n".into();
+    }
+    let names: Vec<&str> = blockers.iter().map(|blocker| blocker.as_str()).collect();
+    format!("Blockers: {}\n", names.join(", "))
 }
 
 /// The `made ready:` lines, when the state says the set is what was read.
@@ -246,8 +267,23 @@ fn way_out(
 ) -> Option<(Vec<String>, String)> {
     use LifecycleBlocker::{
         ConflictPending, ContextConflicted, ContextDirty, ContextMissing, IntegrationConflict,
-        LocalOperationPending,
+        LocalOperationPending, PrimaryAheadOfRemote, PrimaryMissing,
     };
+    let behind =
+        |blocker: &LifecycleBlocker| matches!(blocker, PrimaryAheadOfRemote | PrimaryMissing);
+    if blockers.iter().any(behind)
+        && blockers
+            .iter()
+            .all(|blocker| behind(blocker) || *blocker == ContextMissing)
+    {
+        return Some((
+            vec![format!(
+                "manyhands-cli poll once --repo {} --request-id <new-request-id>",
+                quoted(root)
+            )],
+            format!("{POLL_NOTE} Then prepare again."),
+        ));
+    }
     if blockers == [ContextMissing] {
         let kind = if command == "document promote" {
             ItemDtoKind::Document
@@ -278,9 +314,58 @@ fn way_out(
     })
 }
 
+/// A prepare refused because an unfinished request, or an operation no request
+/// holds, has the item (decision 33): the command that goes on with it, in
+/// place of the action's own line.
+fn held(envelope: &Envelope<PrepareDataDto>) -> Option<Output> {
+    let (ResultCode::RecoveryRequired, None, Some(root), Some(item), [action]) = (
+        envelope.code,
+        &envelope.data,
+        envelope.scope.repository.as_deref(),
+        envelope.scope.item_id.as_deref(),
+        envelope.recovery.as_slice(),
+    ) else {
+        return None;
+    };
+    let (line, note) = match action.action {
+        RecoveryActionKind::RequestRetry => {
+            let request = action.arguments.get("request_id")?.as_str()?;
+            (
+                format!(
+                    "manyhands-cli {} --repo {} --id {} --request-id {}",
+                    field(&envelope.command),
+                    quoted(root),
+                    field(item),
+                    field(request)
+                ),
+                HELD_NOTE,
+            )
+        }
+        RecoveryActionKind::OperationResume => (
+            format!(
+                "manyhands-cli operation resume --repo {} --operation-id {}",
+                quoted(root),
+                field(action.operation_id.as_deref()?)
+            ),
+            HELD_RESUME_NOTE,
+        ),
+        _ => return None,
+    };
+    let refusal = refusal_of(envelope, Vec::new());
+    let mut output = render::failure_output(false, &refusal, Some(format!("next: {line}\n")));
+    output
+        .stderr
+        .extend(note_lines(&[note.to_owned()]).into_bytes());
+    Some(output)
+}
+
 /// The human output of a prepare of these verbs: C2's, with a blocked prepare's
 /// way out.
 pub fn prepare(envelope: &Envelope<PrepareDataDto>) -> Output {
+    if let Some(output) = held(envelope) {
+        return output;
+    }
+
     let (Some(PrepareDataDto::LifecycleBlocked(data)), Some(root), Some(item)) = (
         &envelope.data,
         envelope.scope.repository.as_deref(),
@@ -289,9 +374,10 @@ pub fn prepare(envelope: &Envelope<PrepareDataDto>) -> Output {
         return render::prepare_output(false, envelope);
     };
     let Some((next, note)) = way_out(&envelope.command, &data.blockers, root, item) else {
-        return render::prepare_output(false, envelope);
+        let refusal = refusal_of(envelope, envelope.recovery.clone());
+        return render::failure_output(false, &refusal, Some(blockers_line(&data.blockers)));
     };
-    let mut extra = human_admin::fields(data);
+    let mut extra = blockers_line(&data.blockers);
     for line in next {
         extra.push_str(&format!("next: {line}\n"));
     }

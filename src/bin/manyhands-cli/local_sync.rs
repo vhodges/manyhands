@@ -47,7 +47,10 @@ const TOKEN_NEEDS_JSON: &str =
     "--token reads a conflict's sides, and only --json prints them: add --json.";
 const INPUT_NOTE: &str = "context sync-local's --input takes this as {\"observation\": \"...\"}.";
 const SIDES_NOTE: &str = "context show-local --token <token> --json reads a path's sides.";
-const DIRTY_NOTE: &str = "commit or save what the context holds, then observe it again.";
+const DIRTY_NOTE: &str =
+    "commit or save what the context holds, then observe again, and use a new request.";
+const MALFORMED_NOTE: &str =
+    "this observation can't be used: observe again, and use a new request.";
 const OBSERVE_NOTE: &str =
     "sending this observation again gets the same answer: observe again, and use a new request.";
 const RESOLVE_NOTE: &str = "<new-request-id> is a placeholder to fill in, and --input - takes the observation and a source for each token that context show-local prints.";
@@ -55,6 +58,16 @@ const IDENTITY_NOTE: &str =
     "once an identity is set, send this same request again: a merge commit needs one.";
 const ORIGINAL_NOTE: &str = "this resolution is the original request's to finish: send that request again, with the same input.";
 const EXTERNAL_NOTE: &str = "Manyhands can't resolve this: it takes a repair outside it, with Git.";
+/// What follows the repair of a refusal that kept nothing to go on with.
+const EXTERNAL_REFUSED_NOTE: &str = "Manyhands can't resolve this: it takes a repair outside it, with Git. After the repair, observe again, and use a new request.";
+
+/// What follows the repair of a conflict a request holds: that request again.
+fn external_then(holder: &str, request: &str) -> String {
+    format!(
+        "{EXTERNAL_NOTE} After the repair, send {holder} again ({}).",
+        field(request)
+    )
+}
 
 fn observe_line(root: &str, item: &str) -> String {
     format!(
@@ -423,16 +436,13 @@ pub fn resolve(
         // An external-only conflict: no resolution here can pass, so none is
         // offered, and no `show-local` line loops back to it.
         if view.eligibility == Some(LocalContextSyncEligibility::ExternalResolutionRequired) {
+            let note = external_then("the synchronization's request", &view.starting_request_id);
             return mutate::refusal(
                 session,
                 &name,
                 flags.request_id,
                 ResultCode::RecoveryRequired,
-                Some(
-                    note_lines(&[EXTERNAL_NOTE.to_owned()])
-                        .trim_end()
-                        .to_owned(),
-                ),
+                Some(note_lines(&[note]).trim_end().to_owned()),
             );
         }
         // A token that names no path of the live conflict, which
@@ -617,7 +627,9 @@ fn data_of(envelope: &Envelope<MutationDataDto>) -> Option<&LocalContextSyncMuta
 fn way_on(envelope: &Envelope<MutationDataDto>, root: &str, item: &str) -> String {
     let notes = |note: &str| note_lines(&[note.to_owned()]);
     match envelope.code {
-        ResultCode::InvalidInput => return observe_line(root, item),
+        ResultCode::InvalidInput => {
+            return format!("{}{}", observe_line(root, item), notes(MALFORMED_NOTE));
+        }
         ResultCode::ExternalChange => {
             return format!("{}{}", observe_line(root, item), notes(OBSERVE_NOTE));
         }
@@ -652,7 +664,10 @@ fn way_on(envelope: &Envelope<MutationDataDto>, root: &str, item: &str) -> Strin
                 | LocalContextSyncReason::UnsupportedConflict
         ) =>
         {
-            notes(EXTERNAL_NOTE)
+            match (&data.operation_id, envelope.request_id.as_deref()) {
+                (Some(_), Some(request)) => notes(&external_then("this same request", request)),
+                _ => notes(EXTERNAL_REFUSED_NOTE),
+            }
         }
         _ => String::new(),
     }

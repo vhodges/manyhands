@@ -423,6 +423,9 @@ pub(in super::super) fn save_record(
 
 impl ParentRecord for PromotionRecord {
     const KIND: LifecycleKind = KIND;
+    fn supersedable(&self) -> bool {
+        self.cleanup.is_some_and(CleanupCategory::supersedable)
+    }
     fn decode(row: &rusqlite::Row<'_>) -> Result<Self, RepositoryError> {
         decode(row)
     }

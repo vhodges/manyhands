@@ -1,7 +1,6 @@
 Preview of document promote
 Branch: manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FDN
-Changes change: added
-Changes path: docs/notes/new.md
+Changes: added docs/notes/new.md
 Cleanup local branch: true
 Cleanup remote branch: false
 Cleanup worktree: true

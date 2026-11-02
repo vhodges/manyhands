@@ -430,6 +430,7 @@ pub const CLI_CASES: &[&str] = &[
     "document_promote_request_mismatch",
     "ticket_close_request_mismatch",
     "ticket_close_checkpoint_merge_refused",
+    "ticket_close_prepare_held",
 ];
 pub const CLI_TEXT_CASES: &[&str] = &[
     "context_observe_local_text",
@@ -520,6 +521,8 @@ pub const CLI_TEXT_CASES: &[&str] = &[
     "document_promote_noop_text",
     "ticket_close_prepare_context_missing_text",
     "document_promote_prepare_context_missing_text",
+    "ticket_close_prepare_held_text",
+    "ticket_close_prepare_primary_missing_text",
 ];
 pub const CLI_REPOSITORY_VALUES: &[&str] = &["required", "refused"];
 

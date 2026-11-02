@@ -2,5 +2,5 @@
 error: Recovery is required before this can continue.
 code: recovery_required
 request: 01ARZ3NDEKTSV4RRFFQ69G5FX3
-note: Manyhands can't resolve this: it takes a repair outside it, with Git.
+note: Manyhands can't resolve this: it takes a repair outside it, with Git. After the repair, send the synchronization's request again (01ARZ3NDEKTSV4RRFFQ69G5FX2).
 --- exit 3

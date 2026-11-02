@@ -35,6 +35,7 @@ const RESUMES: &[ssh_harness::Case] = both_verbs!["c5_resume_";
     "walk_remote_branch_deleted" => resume_walk_remote_branch_deleted,
     "kept_child_stays" => resume_kept_child_stays,
     "concurrent_same_id" => resume_concurrent_same_id,
+    "prepare_names_the_resume" => prepare_names_the_resume,
 ];
 
 const RESUMES_ONE: &[ssh_harness::Case] = &[
@@ -233,6 +234,39 @@ fn resume_no_record_past_integration(verb: Verb) -> Result<(), FixtureError> {
         "the context's deletion and nothing else"
     );
     assert!(w.repo()?.refname_to_id(verb.branch()).is_err());
+    Ok(())
+}
+
+/// Decision 33: a parent no request record holds refuses a new prepare, and the
+/// way on it names is a resume of that operation. Once resumed, nothing is
+/// left for a new prepare to do.
+fn prepare_names_the_resume(verb: Verb) -> Result<(), FixtureError> {
+    let (w, operation) = outside_remote(verb, FailurePoint::AfterPublication)?;
+    let refused = w.service.prepare(&verb.mutation(&w.root, verb.id()));
+    assert_eq!(
+        refused.code,
+        ResultCode::RecoveryRequired,
+        "{:?}",
+        refused.data
+    );
+    assert_eq!(refused.data, None);
+    assert_eq!(
+        refused
+            .recovery
+            .iter()
+            .map(|a| a.action)
+            .collect::<Vec<_>>(),
+        [RecoveryActionKind::OperationResume]
+    );
+    assert_eq!(
+        refused.recovery[0].operation_id.as_deref(),
+        Some(operation.as_str())
+    );
+    let done = resumed_under(&w.service, RESUME, &w.root, &operation);
+    assert_finished_resume(&w.service, &w.root, &operation, &done, state_of(&w, RESUME))?;
+    assert_eq!(merges_on_primary(&w.repo()?)?, 1);
+    let again = w.service.prepare(&verb.mutation(&w.root, verb.id()));
+    assert_ne!(again.code, ResultCode::Ok, "{:?}", again.data);
     Ok(())
 }
 

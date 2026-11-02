@@ -1,0 +1,8 @@
+--- stderr
+error: Recovery is required before this can continue.
+code: recovery_required
+Blockers: primary_missing
+next: manyhands-cli poll once --repo '<repository>' --request-id <new-request-id>
+next: repo.inspect root=<repository>
+note: this repository's record of the remote's primary is behind or missing, and a poll reads it; <new-request-id> is a placeholder to fill in. Then prepare again.
+--- exit 3

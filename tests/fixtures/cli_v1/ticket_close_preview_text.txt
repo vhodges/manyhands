@@ -1,7 +1,6 @@
 Preview of ticket close
 Branch: manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0
-Changes change: modified
-Changes path: .manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC0/ticket.md
+Changes: modified .manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC0/ticket.md
 Cleanup local branch: true
 Cleanup remote branch: false
 Cleanup worktree: true

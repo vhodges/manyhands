@@ -1095,6 +1095,30 @@ fn a_refused_checkpoint_merge_says_how_to_repair_it_after_retrying() {
     assert_eq!(case.merges(), 0);
 }
 
+/// Decision 33: while the stopped closure's request holds the ticket, a new
+/// prepare is refused and names that request, in JSON and in text.
+#[test]
+fn a_prepare_while_a_request_holds_the_item_names_the_request() {
+    let refused = Refused::new();
+    let case = &refused.case;
+    let held = case.json(&["--prepare"], 3, "recovery_required", None);
+    assert_eq!(held["data"], Value::Null);
+    assert_eq!(held["recovery"][0]["action"], "request.retry");
+    assert_eq!(held["recovery"][0]["arguments"]["request_id"], REQUEST_1);
+    assert_eq!(held["recovery"].as_array().unwrap().len(), 1, "{held}");
+    golden("ticket_close_prepare_held", &held, &case.world.root);
+    let human = case.text(&["--prepare"]);
+    assert_eq!(human.status, 3);
+    assert!(human.stdout.is_empty());
+    let text = stderr(&human);
+    assert!(
+        text.contains(&format!("--request-id {REQUEST_1}\n")),
+        "{text}"
+    );
+    text_golden("ticket_close_prepare_held_text", &human, &case.world.root);
+    assert_eq!(case.merges(), 0);
+}
+
 /// `operation resume` of a parent a request holds: the conflict read
 /// `collaboration::seen` makes for a resume finds no conflict under a parent's
 /// ID, and adds nothing, in place of failing.

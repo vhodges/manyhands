@@ -204,6 +204,14 @@ impl LifecycleVerb for Fixed {
     ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError> {
         Ok(PARENT.with(|parent| parent.borrow_mut().take()))
     }
+
+    fn holder(
+        _service: &RepositoryService,
+        _root: &Path,
+        _id: &ItemId,
+    ) -> Result<Option<OperationId>, RepositoryError> {
+        Ok(None)
+    }
 }
 
 const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";

@@ -105,7 +105,7 @@ pub fn preview(preview: &PreviewDto) -> String {
         PreviewDetailsDto::Host(d) => fields(d),
         PreviewDetailsDto::Repair(d) => fields(d),
         PreviewDetailsDto::Republish(d) => fields(d),
-        PreviewDetailsDto::Lifecycle(d) => fields(d),
+        PreviewDetailsDto::Lifecycle(d) => lifecycle_details(d),
     };
     let mut out = format!("Preview of {}\n{details}", field(&preview.command));
     for effect in &preview.effects {
@@ -118,6 +118,38 @@ pub fn preview(preview: &PreviewDto) -> String {
     ));
     out
 }
+/// A preview's details: its fields, with each change on one line, its kind
+/// beside its path, where `Changes` sorts.
+fn lifecycle_details(details: &manyhands::repository::LifecyclePreviewDto) -> String {
+    let fields = fields_without(details, &["changes"]);
+    let changes: String = if details.changes.is_empty() {
+        "Changes: none\n".into()
+    } else {
+        details
+            .changes
+            .iter()
+            .map(|change| {
+                format!(
+                    "Changes: {} {}\n",
+                    change.change.as_str(),
+                    field(&change.path)
+                )
+            })
+            .collect()
+    };
+    let at = fields
+        .lines()
+        .position(|line| {
+            line.split(':')
+                .next()
+                .is_some_and(|label| label > "Changes")
+        })
+        .map_or(fields.len(), |line| {
+            fields.lines().take(line).map(|text| text.len() + 1).sum()
+        });
+    format!("{}{changes}{}", &fields[..at], &fields[at..])
+}
+
 pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
     match effect {
         PreviewEffect::DirectoryCreated => "create the directory",

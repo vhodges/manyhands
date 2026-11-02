@@ -8,5 +8,5 @@ Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
 Kind: ticket
 Reason: unrelated_histories
 State: refused
-note: Manyhands can't resolve this: it takes a repair outside it, with Git.
+note: Manyhands can't resolve this: it takes a repair outside it, with Git. After the repair, observe again, and use a new request.
 --- exit 3

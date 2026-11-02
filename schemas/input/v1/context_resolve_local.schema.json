@@ -9,7 +9,7 @@
     },
     "resolutions": {
       "type": "array",
-      "description": "One resolution for every conflicted path context show-local lists, and at least one.",
+      "description": "One resolution for every conflicted path context show-local lists, and at least one: an empty list is invalid_input. That is stated here, not as minItems, which this schema's checker does not take.",
       "items": {
         "type": "object",
         "properties": {

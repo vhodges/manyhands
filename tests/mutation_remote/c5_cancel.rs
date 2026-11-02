@@ -484,14 +484,15 @@ fn cleanup_pending_by_request(verb: Verb) -> Result<(), FixtureError> {
 
 // Cancelled, then the same request, then a new ID.
 
-/// Before integration: the parent stands, so a new ID answers `busy`, and is
-/// not the way on. The same request is.
+/// Before integration: the parent stands, so a new ID's prepare is refused,
+/// naming the request (decision 33), and the same request is the way on.
 fn new_id_before_integration(verb: Verb) -> Result<(), FixtureError> {
     let mut w = remote(verb)?;
     stopped_at(&mut w, verb, FailurePoint::AfterContextSync)?;
     asked(&w.service, FIRST)?;
     assert_cancelled(&w, FIRST, &resent(&w, FIRST, verb))?;
-    assert_new_id_is_refused(&w, verb)?;
+    assert_prepare_held_by_first(&w, verb);
+    assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     assert_finishes(&w, FIRST, verb)?;
     // Once it has finished nothing is left for a new ID to do.
     let again = w.service.prepare(&verb.mutation(&w.root, verb.id()));
@@ -499,28 +500,15 @@ fn new_id_before_integration(verb: Verb) -> Result<(), FixtureError> {
     Ok(())
 }
 
-/// Past integration a new ID has no preview to confirm: until a poll has read
-/// what the request published, the state is the parent's to finish. The same
-/// request is the way on.
+/// Past integration the same holds. Decision 29 keeps tracking at what the
+/// request published, so no blocker refuses the prepare; the unfinished
+/// parent does (decision 33).
 fn new_id_after_integration(verb: Verb) -> Result<(), FixtureError> {
     let mut w = remote(verb)?;
     stopped_at(&mut w, verb, FailurePoint::AfterPublication)?;
     asked(&w.service, FIRST)?;
     assert_cancelled(&w, FIRST, &resent(&w, FIRST, verb))?;
-    let refused = w.service.prepare(&verb.mutation(&w.root, verb.id()));
-    assert_eq!(refused.code, ResultCode::RecoveryRequired);
-    // What refuses it is that the remote is ahead of what was last fetched.
-    // `remote_context_deleted`, named beside it, reads a missing tracking ref
-    // and isn't so: the branch stands, so its value isn't pinned.
-    match refused.data.as_ref() {
-        Some(PrepareDataDto::LifecycleBlocked(data)) => {
-            assert!(
-                data.blockers
-                    .contains(&LifecycleBlocker::PrimaryAheadOfRemote)
-            );
-        }
-        other => panic!("blockers: {other:?}"),
-    }
+    assert_prepare_held_by_first(&w, verb);
     assert!(fixed(w.bare())?.find_reference(verb.branch()).is_ok());
     assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     assert_finishes(&w, FIRST, verb)?;
@@ -529,18 +517,29 @@ fn new_id_after_integration(verb: Verb) -> Result<(), FixtureError> {
     Ok(())
 }
 
-fn assert_new_id_is_refused(w: &World, verb: Verb) -> Result<(), FixtureError> {
-    let confirmation = confirmation_of(&w.service, verb, &w.root);
-    let refused = called(&w.service, SECOND, Some(&confirmation), verb, &w.root);
-    assert_eq!(refused.code, ResultCode::Busy, "{:?}", refused.data);
+/// Decision 33's refusal: `recovery_required`, no preview and no blockers, and
+/// the one action is the holding request, `FIRST`.
+fn assert_prepare_held_by_first(w: &World, verb: Verb) {
+    let refused = w.service.prepare(&verb.mutation(&w.root, verb.id()));
     assert_eq!(
-        actions(&refused),
-        [RecoveryActionKind::RequestPrepare],
-        "a new ID's own record is gone"
+        refused.code,
+        ResultCode::RecoveryRequired,
+        "{:?}",
+        refused.data
     );
-    assert_eq!(state_of(w, SECOND), None);
-    assert_eq!(state_of(w, FIRST), Some(RequestState::Accepted));
-    Ok(())
+    assert_eq!(refused.data, None);
+    assert_eq!(
+        refused
+            .recovery
+            .iter()
+            .map(|a| a.action)
+            .collect::<Vec<_>>(),
+        [RecoveryActionKind::RequestRetry]
+    );
+    assert_eq!(
+        refused.recovery[0].arguments.get("request_id"),
+        Some(&serde_json::Value::from(FIRST))
+    );
 }
 
 // Automatic retries, and a killed process.
@@ -1381,15 +1380,17 @@ fn new_id_answer(
     ))
 }
 
-/// A `cancelled` answer overwrites the supersedable reason, so a new ID is `busy`
-/// until one more resend of the same request finds the reason again.
+/// A `cancelled` answer overwrites the supersedable reason, so a new ID's
+/// prepare is refused, naming the request (decision 33), until one more resend
+/// of the same request finds the reason again.
 fn supersede_after_a_cancelled_answer(verb: Verb) -> Result<(), FixtureError> {
     let mut w = remote(verb)?;
     let untracked = stopped_on_context_changed(&mut w, verb)?;
     asked(&w.service, FIRST)?;
     assert_cancelled(&w, FIRST, &resent(&w, FIRST, verb))?;
-    let refused = new_id_answer(&w, verb, &untracked)?;
-    assert_eq!(refused.code, ResultCode::Busy, "{:?}", refused.data);
+    fixed(std::fs::remove_file(&untracked))?;
+    fixed(w.sync(w.primary()))?;
+    assert_prepare_held_by_first(&w, verb);
     assert_eq!(state_of(&w, SECOND), None);
     fixed(std::fs::write(&untracked, b"the owner's\n"))?;
     assert_context_changed(&resent(&w, FIRST, verb));

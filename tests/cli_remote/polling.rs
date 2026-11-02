@@ -72,6 +72,14 @@ pub const CASES: &[ssh_harness::Case] = &[
         "c5_polling_a_second_poll_overlaps",
         c5_polling_a_second_poll_overlaps,
     ),
+    (
+        "c5_polling_promote_then_close_needs_no_poll",
+        c5_polling_promote_then_close_needs_no_poll,
+    ),
+    (
+        "c5_polling_a_missing_tracking_ref_names_the_poll",
+        c5_polling_a_missing_tracking_ref_names_the_poll,
+    ),
 ];
 
 const R1: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR1";
@@ -1153,5 +1161,122 @@ fn c5_polling_a_second_poll_overlaps() -> Result<(), FixtureError> {
 
     let value = polled(a, R2);
     assert_eq!(disposition(&value, PRIMARY), "current");
+    Ok(())
+}
+
+/// A document of clone A's own, made by `document create`, local only.
+const DOCUMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FDN";
+
+/// Decision 29 through the binary: a published promotion, then a close that
+/// prepares with no poll between them, and a re-prepare of the closed ticket
+/// that reads it as closed.
+fn c5_polling_promote_then_close_needs_no_poll() -> Result<(), FixtureError> {
+    let p = CliPair::new()?;
+    let a = &p.a;
+    let created = serde_json::json!({
+        "item_id": DOCUMENT,
+        "path": "docs/new.md",
+        "title": "New document",
+        "body": "A new document body.\n",
+    });
+    a.json(
+        &[
+            "document",
+            "create",
+            "--repo",
+            a.root(),
+            "--request-id",
+            R1,
+            "--input",
+            "-",
+        ],
+        &fixed(serde_json::to_vec(&created))?,
+        "ok",
+        0,
+    );
+    save(a, R2, "Saved in clone A.\n");
+    let confirmed = |resource: &str, verb: &str, id: &str, request: &str| {
+        let args = [resource, verb, "--repo", a.root(), "--id", id];
+        let mut prepare = args.to_vec();
+        prepare.push("--prepare");
+        let preview = a.json(&prepare, &[], "ok", 0);
+        let mut confirm = args.to_vec();
+        confirm.extend([
+            "--request-id",
+            request,
+            "--confirm",
+            preview["data"]["confirmation_id"].as_str().unwrap(),
+        ]);
+        a.json(&confirm, &[], "ok", 0)
+    };
+    let promoted = confirmed("document", "promote", DOCUMENT, R3);
+    assert_eq!(
+        promoted["effects"]["publication"], "published",
+        "{promoted}"
+    );
+    let closed = confirmed("ticket", "close", ITEM, R4);
+    assert_eq!(closed["effects"]["publication"], "published", "{closed}");
+    assert_eq!(p.served(CONTEXT)?, None, "the closure deleted it");
+    let again = a.json(
+        &[
+            "ticket",
+            "close",
+            "--repo",
+            a.root(),
+            "--id",
+            ITEM,
+            "--prepare",
+        ],
+        &[],
+        "ticket_closed",
+        3,
+    );
+    assert_eq!(
+        again["data"]["blockers"],
+        serde_json::json!(["already_closed"])
+    );
+    Ok(())
+}
+
+/// Spec review item 2: primary's tracking ref gone, as before a first fetch.
+/// The blocked prepare names the poll that reads it, and once that has run
+/// the same prepare is ready.
+fn c5_polling_a_missing_tracking_ref_names_the_poll() -> Result<(), FixtureError> {
+    let p = CliPair::new()?;
+    let port = p.server.address().port();
+    let a = &p.a;
+    save(a, R1, "Saved in clone A.\n");
+    fixed(fixed(a.repo()?.find_reference("refs/remotes/origin/main"))?.delete())?;
+    let args = [
+        "ticket",
+        "close",
+        "--repo",
+        a.root(),
+        "--id",
+        ITEM,
+        "--prepare",
+    ];
+    let blocked = a.json(&args, &[], "recovery_required", 3);
+    assert_eq!(
+        blocked["data"]["blockers"],
+        serde_json::json!(["primary_missing"])
+    );
+    let out = run(&a.env, &args, &[]);
+    assert_eq!(out.status, 3);
+    let text = stderr(&out);
+    let poll = format!(
+        "next: manyhands-cli poll once --repo '{}' --request-id <new-request-id>\n",
+        a.root.canonicalize().unwrap().display()
+    );
+    assert!(text.contains(&poll), "{text}");
+    assert!(text.contains("Then prepare again.\n"), "{text}");
+    text_golden(
+        "ticket_close_prepare_primary_missing_text",
+        &out,
+        &a.root,
+        port,
+    );
+    polled(a, R2);
+    a.json(&args, &[], "ok", 0);
     Ok(())
 }

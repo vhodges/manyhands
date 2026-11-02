@@ -13,5 +13,5 @@ Operation id: <id>
 Reason: unsupported_conflict
 State: conflict_pending
 next: repo.inspect root=<repository>
-note: Manyhands can't resolve this: it takes a repair outside it, with Git.
+note: Manyhands can't resolve this: it takes a repair outside it, with Git. After the repair, send this same request again (01ARZ3NDEKTSV4RRFFQ69G5FX1).
 --- exit 4

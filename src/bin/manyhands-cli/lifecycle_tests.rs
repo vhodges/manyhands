@@ -266,7 +266,7 @@ fn a_refused_checkpoint_merge_names_the_four_context_verbs_then_its_actions() {
     );
     assert!(
         stderr(&out).contains(
-            "note: primary refused this closure's checkpoint. The commands above are the local repair: the <...> values are placeholders to fill in, --input - takes the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict. Then send this request again; the closure's fields are kept.\n"
+            "note: primary refused this closure's checkpoint. The commands above are the local repair: the <...> values are placeholders to fill in, context sync-local's --input - takes {\"observation\": \"...\"} with the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict. Then send this request again; the closure's fields are kept.\n"
         ),
         "{}",
         stderr(&out)
@@ -385,7 +385,7 @@ fn a_blocked_prepare_on_an_integration_conflict_offers_the_repair_then_a_new_pre
         assert!(text.contains("Blockers: integration_conflict\n"), "{text}");
         assert!(
             text.contains(
-                "note: this context can't merge into primary. The commands above are the local repair: the <...> values are placeholders to fill in, --input - takes the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict. Then prepare again.\n"
+                "note: this context can't merge into primary. The commands above are the local repair: the <...> values are placeholders to fill in, context sync-local's --input - takes {\"observation\": \"...\"} with the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict. Then prepare again.\n"
             ),
             "{text}"
         );
@@ -439,7 +439,7 @@ fn a_missing_context_names_the_save_verb_by_kind() {
         );
         assert!(
             text.contains(
-                "note: this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in. Then prepare again.\n"
+                "note: this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in, and the save's --input - takes {\"observation\": \"...\"}, with the observation ticket show or document show prints, and the fields it changes, such as \"body\". Then prepare again.\n"
             ),
             "{text}"
         );
@@ -544,9 +544,93 @@ fn other_blockers_are_named_with_no_repair_lines() {
         false,
     );
     let text = stderr(&out);
-    assert!(text.contains("Blockers: primary_dirty\n"), "{text}");
-    assert!(text.contains("Blockers: context_dirty\n"), "{text}");
+    assert!(
+        text.contains("Blockers: primary_dirty, context_dirty\n"),
+        "{text}"
+    );
+    assert_eq!(text.matches("Blockers:").count(), 1, "{text}");
     assert!(!text.contains("context observe-local"), "{text}");
+}
+
+/// Primary's tracking ref behind or missing, with or without a missing
+/// context, and nothing else: the poll that reads it, then a new prepare.
+#[test]
+fn a_tracking_ref_behind_or_missing_names_the_poll() {
+    use LifecycleBlocker::{ContextMissing, PrimaryAheadOfRemote, PrimaryMissing};
+    for blockers in [
+        vec![PrimaryAheadOfRemote],
+        vec![PrimaryMissing],
+        vec![ContextMissing, PrimaryMissing],
+        vec![ContextMissing, PrimaryAheadOfRemote],
+    ] {
+        let out = prepare(&blocked(
+            "ticket close",
+            ResultCode::RecoveryRequired,
+            blockers.clone(),
+            vec![inspect()],
+        ));
+        assert_eq!(out.status, 3);
+        let names: Vec<&str> = blockers.iter().map(|blocker| blocker.as_str()).collect();
+        assert_eq!(
+            stderr(&out),
+            format!(
+                "error: Recovery is required before this can continue.\ncode: recovery_required\n\
+                 Blockers: {}\n\
+                 next: manyhands-cli poll once --repo '{ROOT}' --request-id <new-request-id>\n\
+                 next: repo.inspect root={ROOT}\n\
+                 note: this repository's record of the remote's primary is behind or missing, and a poll reads it; \
+                 <new-request-id> is a placeholder to fill in. Then prepare again.\n",
+                names.join(", ")
+            )
+        );
+    }
+    // With anything else in the way, the poll alone is no way out.
+    let out = prepare(&blocked(
+        "ticket close",
+        ResultCode::RecoveryRequired,
+        vec![PrimaryMissing, LifecycleBlocker::PrimaryDirty],
+        vec![inspect()],
+    ));
+    assert!(!stderr(&out).contains("poll once"), "{}", stderr(&out));
+}
+
+/// Decision 33: a prepare an unfinished request holds names it as a command,
+/// and one no request holds names the resume.
+#[test]
+fn a_held_prepare_names_the_request_or_the_resume() {
+    let held = |recovery| {
+        let mut envelope = Envelope::<PrepareDataDto>::failure(
+            "ticket close",
+            scope(true),
+            ResultCode::RecoveryRequired,
+            vec![recovery],
+        );
+        envelope.data = None;
+        envelope
+    };
+    let out = prepare(&held(retry()));
+    assert_eq!(out.status, 3);
+    assert_eq!(
+        stderr(&out),
+        format!(
+            "error: Recovery is required before this can continue.\ncode: recovery_required\n\
+             next: manyhands-cli ticket close --repo '{ROOT}' --id {ITEM} --request-id {REQUEST}\n\
+             note: an unfinished request holds this item; send it again to finish it, and prepare again only once it has.\n"
+        )
+    );
+    let resume = RecoveryAction::for_operation(RecoveryActionKind::OperationResume, OPERATION, []);
+    let out = prepare(&held(resume));
+    assert_eq!(
+        next_lines(stderr(&out)),
+        [format!(
+            "next: manyhands-cli operation resume --repo '{ROOT}' --operation-id {OPERATION}"
+        )]
+    );
+    assert!(
+        stderr(&out).contains("resume it (add --request-id"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 /// Decision 18's route: cancel, the same request (`cancelled`), republish, the
