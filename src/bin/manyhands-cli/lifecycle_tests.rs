@@ -4,13 +4,17 @@
 //! pin: `context observe-local` and its three siblings arrive in Task 10, and
 //! these rows hold what the refused merge says of them until then.
 
-use crate::{human_lifecycle::output, render::test_support::stderr, render::test_support::stdout};
+use crate::{
+    human_lifecycle::{output, prepare},
+    mutate::should_retry,
+    render::test_support::{no_raw_control, stderr, stdout},
+};
 use manyhands::{
     repository::{
-        ItemDtoKind, LifecycleBlocker, LifecycleCleanupState, LifecycleIntegrationKind,
-        LifecycleMadeReadyDto, LifecycleMadeReadyState, LifecycleMutationDto,
-        LifecycleMutationType, LifecyclePublicationPendingReason, LifecyclePublicationState,
-        LifecycleRecording, MutationDataDto,
+        ItemDtoKind, LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupState,
+        LifecycleIntegrationKind, LifecycleMadeReadyDto, LifecycleMadeReadyState,
+        LifecycleMutationDto, LifecycleMutationType, LifecyclePublicationPendingReason,
+        LifecyclePublicationState, LifecycleRecording, MutationDataDto, PrepareDataDto, RequestId,
     },
     results::{Effects, Envelope, RecoveryAction, RecoveryActionKind, ResultCode, Scope},
 };
@@ -262,11 +266,265 @@ fn a_refused_checkpoint_merge_names_the_four_context_verbs_then_its_actions() {
     );
     assert!(
         stderr(&out).contains(
-            "note: primary refused this closure's checkpoint: bring primary into the ticket's context with the context commands, then send this request again; the closure's fields are kept.\n"
+            "note: primary refused this closure's checkpoint. The commands above are the local repair to try: the <...> values are placeholders to fill in, --input - takes the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict. Then send this request again; the closure's fields are kept.\n"
         ),
         "{}",
         stderr(&out)
     );
+}
+
+fn refused_merge(kind: ItemDtoKind, recording: Option<LifecycleRecording>) -> LifecycleMutationDto {
+    let mut refused = data(kind);
+    refused.blockers = vec![LifecycleBlocker::IntegrationConflict];
+    refused.recording = recording;
+    refused
+}
+
+fn resume_action() -> RecoveryAction {
+    RecoveryAction::for_operation(RecoveryActionKind::OperationResume, OPERATION, [])
+}
+
+#[test]
+fn a_refused_merge_under_a_resume_says_to_resume_it_again() {
+    let out = output(
+        &answer(
+            "operation resume",
+            ResultCode::RecoveryRequired,
+            Some(refused_merge(
+                ItemDtoKind::Ticket,
+                Some(LifecycleRecording::Record),
+            )),
+            vec![resume_action(), inspect()],
+        ),
+        false,
+    );
+    let text = stderr(&out);
+    let lines = next_lines(text);
+    assert_eq!(lines.len(), 6, "{text}");
+    assert!(lines[0].contains("context observe-local"), "{text}");
+    assert_eq!(
+        lines[4],
+        format!("next: manyhands-cli operation resume --repo '{ROOT}' --operation-id {OPERATION}")
+    );
+    assert_eq!(lines[5], format!("next: repo.inspect root={ROOT}"));
+    assert!(
+        text.contains("Then resume it again (add --request-id unless you run it at a terminal); the closure's fields are kept.\n"),
+        "{text}"
+    );
+    assert!(!text.contains("send this request"), "{text}");
+}
+
+/// Only a closure's own checkpoint, recorded by it, with a way to go on, has this
+/// route: `sync-local` refuses an existing closure (`local_sync/record.rs`).
+#[test]
+fn other_forms_of_the_blocker_print_no_route_and_rely_on_their_actions() {
+    for (command, dto, actions) in [
+        (
+            "document promote",
+            refused_merge(ItemDtoKind::Document, None),
+            vec![retry(), inspect()],
+        ),
+        (
+            "ticket close",
+            refused_merge(ItemDtoKind::Ticket, Some(LifecycleRecording::Record)),
+            vec![inspect()],
+        ),
+        (
+            "ticket close",
+            refused_merge(ItemDtoKind::Ticket, Some(LifecycleRecording::Existing)),
+            vec![retry(), inspect()],
+        ),
+        (
+            "ticket close",
+            refused_merge(ItemDtoKind::Ticket, None),
+            vec![retry(), inspect()],
+        ),
+    ] {
+        let count = actions.len();
+        let out = output(
+            &answer(command, ResultCode::RecoveryRequired, Some(dto), actions),
+            false,
+        );
+        let text = stderr(&out);
+        assert!(!text.contains("context observe-local"), "{text}");
+        assert!(!text.contains("primary refused"), "{text}");
+        assert_eq!(next_lines(text).len(), count, "{text}");
+    }
+}
+
+fn blocked(
+    command: &str,
+    code: ResultCode,
+    blockers: Vec<LifecycleBlocker>,
+    recovery: Vec<RecoveryAction>,
+) -> Envelope<PrepareDataDto> {
+    let mut envelope = Envelope::<PrepareDataDto>::failure(command, scope(true), code, recovery);
+    envelope.data = Some(PrepareDataDto::LifecycleBlocked(LifecycleBlockedDto {
+        blockers,
+    }));
+    envelope
+}
+
+#[test]
+fn a_blocked_prepare_on_an_integration_conflict_offers_the_repair_then_a_new_prepare() {
+    for command in ["ticket close", "document promote"] {
+        let out = prepare(&blocked(
+            command,
+            ResultCode::RecoveryRequired,
+            vec![LifecycleBlocker::IntegrationConflict],
+            vec![inspect()],
+        ));
+        assert_eq!(out.status, 3);
+        assert!(out.stdout.is_empty());
+        let text = stderr(&out);
+        let lines = next_lines(text);
+        assert_eq!(lines.len(), 5, "{text}");
+        assert!(lines[0].contains("context observe-local"), "{text}");
+        assert!(lines[3].contains("context resolve-local"), "{text}");
+        assert_eq!(lines[4], format!("next: repo.inspect root={ROOT}"));
+        assert!(text.contains("Blockers: integration_conflict\n"), "{text}");
+        assert!(
+            text.contains(
+                "note: this context can't merge into primary. The commands above are the local repair to try: the <...> values are placeholders to fill in, --input - takes the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict. Then prepare again.\n"
+            ),
+            "{text}"
+        );
+    }
+}
+
+/// `sync-local` refuses a dirty or conflicted context, and a pending conflict or
+/// local operation is another route's.
+#[test]
+fn a_blocked_prepare_the_repair_cannot_reach_prints_no_route() {
+    for other in [
+        LifecycleBlocker::ContextDirty,
+        LifecycleBlocker::ContextConflicted,
+        LifecycleBlocker::ConflictPending,
+        LifecycleBlocker::LocalOperationPending,
+    ] {
+        let out = prepare(&blocked(
+            "ticket close",
+            ResultCode::RecoveryRequired,
+            vec![LifecycleBlocker::IntegrationConflict, other],
+            vec![inspect()],
+        ));
+        let text = stderr(&out);
+        assert!(!text.contains("context observe-local"), "{text}");
+        assert_eq!(next_lines(text).len(), 1, "{text}");
+    }
+}
+
+#[test]
+fn a_missing_context_names_the_save_verb_by_kind() {
+    for (command, save) in [
+        ("ticket close", "ticket save"),
+        ("document promote", "document save"),
+    ] {
+        let out = prepare(&blocked(
+            command,
+            ResultCode::RecoveryRequired,
+            vec![LifecycleBlocker::ContextMissing],
+            vec![inspect()],
+        ));
+        let text = stderr(&out);
+        assert_eq!(
+            next_lines(text),
+            [
+                format!(
+                    "next: manyhands-cli {save} --repo '{ROOT}' --id {ITEM} --input - --request-id <new-request-id>"
+                ),
+                format!("next: repo.inspect root={ROOT}"),
+            ],
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "note: this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in. Then prepare again.\n"
+            ),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn a_prepare_blocked_otherwise_is_c2_s() {
+    let envelope = blocked(
+        "ticket close",
+        ResultCode::IdentityRequired,
+        vec![LifecycleBlocker::IdentityRequired],
+        vec![],
+    );
+    let out = prepare(&envelope);
+    let plain = crate::render::prepare_output(false, &envelope);
+    assert_eq!(stderr(&out), stderr(&plain));
+    assert_eq!(out.status, plain.status);
+}
+
+#[test]
+fn a_lifecycle_answer_naming_blockers_is_not_retried_automatically() {
+    let id = RequestId::parse(REQUEST).unwrap();
+    let mut refused = answer(
+        "ticket close",
+        ResultCode::RecoveryRequired,
+        Some(refused_merge(
+            ItemDtoKind::Ticket,
+            Some(LifecycleRecording::Record),
+        )),
+        vec![retry(), inspect()],
+    );
+    refused.outcome = manyhands::results::Outcome::Partial;
+    assert!(!should_retry(&refused, id));
+    // The same stop naming no blockers still repeats, as the design accepts.
+    refused.data = Some(MutationDataDto::Lifecycle(Box::new(data(
+        ItemDtoKind::Ticket,
+    ))));
+    assert!(should_retry(&refused, id));
+}
+
+#[test]
+fn a_root_and_a_slug_with_controls_are_escaped() {
+    const HOSTILE: &str = "/re\npo\x1b[2J";
+    let mut closed = refused_merge(ItemDtoKind::Ticket, Some(LifecycleRecording::Record));
+    closed.made_ready = Some(vec![LifecycleMadeReadyDto {
+        id: DEPENDENT.into(),
+        slug: Some("mh\n\x1b[2Jfake".into()),
+    }]);
+    let mut refused = answer(
+        "ticket close",
+        ResultCode::RecoveryRequired,
+        Some(closed.clone()),
+        vec![retry(), inspect()],
+    );
+    refused.scope.repository = Some(HOSTILE.into());
+    let out = output(&refused, false);
+    no_raw_control(stderr(&out));
+    assert!(
+        stderr(&out).contains("--repo '/re\\npo\\u{1b}[2J'"),
+        "{}",
+        stderr(&out)
+    );
+    closed.blockers.clear();
+    let out = output(
+        &answer("ticket close", ResultCode::Ok, Some(closed), vec![]),
+        false,
+    );
+    no_raw_control(stdout(&out));
+    let mut deleted = answer(
+        "ticket close",
+        ResultCode::RemoteBranchDeleted,
+        Some(data(ItemDtoKind::Ticket)),
+        vec![cancel(), inspect()],
+    );
+    deleted.scope.repository = Some(HOSTILE.into());
+    no_raw_control(stderr(&output(&deleted, false)));
+    let mut missing = blocked(
+        "ticket close",
+        ResultCode::RecoveryRequired,
+        vec![LifecycleBlocker::ContextMissing],
+        vec![],
+    );
+    missing.scope.repository = Some(HOSTILE.into());
+    no_raw_control(stderr(&prepare(&missing)));
 }
 
 #[test]
@@ -360,7 +618,7 @@ fn a_resume_s_deleted_branch_prints_republish_then_resume() {
     );
     assert!(
         stderr(&out).contains(
-            "note: this resume released the operation's context synchronization if nothing it holds could be lost. If repo inspect still shows its reservation, it was kept, and the republish answers busy.\n"
+            "note: this resume released the operation's context synchronization if nothing it holds could be lost. If repo inspect still shows its reservation, it was kept, and the republish answers busy. Add --request-id to the resume unless you run it at a terminal.\n"
         ),
         "{}",
         stderr(&out)

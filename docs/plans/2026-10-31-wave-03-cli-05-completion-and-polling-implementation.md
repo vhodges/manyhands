@@ -194,7 +194,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 
 ## Task 7: CLI Lifecycle Verbs
 
-**Files:** Create `src/bin/manyhands-cli/lifecycle.rs`, `lifecycle_tests.rs`, `human_lifecycle.rs`, `tests/cli/lifecycle.rs`. Modify `src/bin/manyhands-cli.rs`, `catalog.rs`, `dispatch.rs`, `mutate.rs`, `collaboration.rs` (one arm, approved), `render.rs`, `human.rs`, `tests/cli.rs`, `tests/cli/help.rs`, `collaboration_tests.rs`, and the E-1 to E-7 and E-14 tests.
+**Files:** Create `src/bin/manyhands-cli/lifecycle.rs`, `lifecycle_tests.rs`, `human_lifecycle.rs`, `tests/cli/lifecycle.rs`. Modify `src/bin/manyhands-cli.rs`, `catalog.rs`, `dispatch.rs`, `mutate.rs`, `collaboration.rs` (one arm, approved), `human_collaboration.rs` (one helper `pub(crate)`), `render.rs`, `human.rs`, `tests/cli.rs`, `tests/cli/help.rs`, `collaboration_tests.rs`, and the E-1 to E-7 and E-14 tests.
 
 - [ ] **Step 1:** Catalog and grammar for both verbs. Move the planned-state tests one verb at a time. Gating `planned()` waits for Task 9 (R-8).
 - [ ] **Step 2:** Implement through `mutate::run`, inside the Ctrl-C window, with unlock handling. The human preview shows every effect and the slug. The result prints `made ready:` lines with slugs.
@@ -232,8 +232,18 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 **Files:** Create `schemas/input/v1/context_resolve_local.schema.json`, its example. Modify `local_sync.rs`, `human_collaboration.rs`, `catalog.rs`, `dispatch.rs`, `tests/cli/local_sync.rs`.
 
 - [ ] **Step 1:** Write the design's required outcomes for `context resolve-local` first. Implement with goldens, replay, mismatch and `operation abandon`'s guarded answer. A source sentinel is absent from application data and diagnostics.
-- [ ] **Step 2: Verify.** `--bin manyhands-cli`, `--test cli -- local_sync`, `--test cli -- input_schemas`.
-- [ ] **Step 3:** Commit `feat: add context resolve-local to the CLI`. Ticket comment. Push.
+- [ ] **Step 2:** Walk the route Task 7's human lines print, through the binary, a test first: a refused closure checkpoint merge, the four verbs, the same request, `ok`, one merge. Task 7 prints it as a route "to try", and nothing has walked it. The walk must use these exact strings, pinned at `human_lifecycle.rs`'s `merge_refused` and by the `ticket_close_checkpoint_merge_refused_text` golden; a change to one changes the other:
+
+  ```text
+  manyhands-cli context observe-local --repo <root> --id <item>
+  manyhands-cli context sync-local --repo <root> --id <item> --input - --request-id <new-request-id>
+  manyhands-cli context show-local --repo <root> --operation-id <sync-operation-id>
+  manyhands-cli context resolve-local --repo <root> --operation-id <sync-operation-id> --input - --request-id <new-request-id>
+  ```
+
+  `sync-local`'s input takes `observe-local`'s observation, and `sync-local` returns `operation_id` on a conflict stop, or `<sync-operation-id>` has no source. A failure stops for the owner. If the route holds, drop "to try" from `REPAIR` with a golden update.
+- [ ] **Step 3: Verify.** `--bin manyhands-cli`, `--test cli -- local_sync`, `--test cli -- input_schemas`.
+- [ ] **Step 4:** Commit `feat: add context resolve-local to the CLI`. Ticket comment. Push.
 
 ## Task 11: Real Content And Part B Checkpoint
 
@@ -283,7 +293,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 **Files:** Create `tests/cli/inventory.rs`, `tests/cli/recovery_tables.rs`. Modify `tests/cli.rs`, `docs/RFC/cli-contract.md`.
 
 - [ ] **Step 1:** Write the RFC taxonomy rows, grammar and recovery tables.
-- [ ] **Step 2:** Write the tests. Fill gaps by added goldens. A gap in an earlier Cycle's verb gets a golden with no behaviour change. A behaviour gap stops for the owner.
+- [ ] **Step 2:** Write the tests. The generated help assertion covers `document promote` and `ticket close`, whose goldens (`help_document_promote`, `help_ticket_close`) Task 7 added. Fill gaps by added goldens. A gap in an earlier Cycle's verb gets a golden with no behaviour change. A behaviour gap stops for the owner.
 - [ ] **Step 3: Verify.** `--test cli -- inventory`, `--test cli -- recovery_tables`.
 - [ ] **Step 4:** Commit `test: account for every approved command and recovery path`. Ticket comment. Push.
 

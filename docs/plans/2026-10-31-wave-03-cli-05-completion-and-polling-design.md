@@ -268,6 +268,8 @@ On the execute path and in a stored refusal, the same blockers are in the lifecy
 `MutationDataDto`, since `Reply::envelope` discards the prepare-only field (`reply.rs:130-131`), and
 `from_stored` restores them.
 
+In human mode a blocked prepare also offers its way out, through `Driven::Prepared`, not `render::prepare_output`, which `tests/cli_remote.rs` mounts without `human_lifecycle`: for `integration_conflict`, with no dirty or conflicted context and no pending conflict or local operation, the four context verbs and then a new prepare; for `context_missing` alone, the save verb by kind and then a new prepare.
+
 An unknown ID, wrong kind or unregistered repository answers as `item republish` does:
 `item_not_found`, `repository_not_registered` and `repository_not_enabled`.
 
@@ -338,7 +340,7 @@ durable effect.
 | `PrimaryAdvanced` | `external_change` | 3, or 4 if durable | `request.retry`, `repo.inspect`: the parent stays unfinished (fact 41) |
 | `IdentityRequired` | `identity_required` | 3, or 4 if durable | `request.retry` when `Owed`, `repo.identity_set`; see Identity |
 | `ContextSynchronization(error)` | the child's code | by class | As `item sync`, and `request.retry` first when the parent stands. A child's `remote_branch_deleted` or `merge_required` offers `request.cancel`, then `repo.inspect`, and not `request.retry`, which cannot get past it (R-24, decision 18) |
-| Refused closure checkpoint merge (a child's conflict, or the checkpoint's own) | `recovery_required` | 4 if durable, else 3 | `request.retry`, `repo.inspect`, with human lines naming `context observe-local`, `context sync-local`, `context show-local` and `context resolve-local`, and data naming the state. A recovery row and golden back it. |
+| Refused closure checkpoint merge (a child's conflict, or the checkpoint's own) | `recovery_required` | 4 if durable, else 3 | `request.retry`, `repo.inspect`, with human lines naming `context observe-local`, `context sync-local`, `context show-local` and `context resolve-local`, and data naming the state. The lines print only for a ticket whose `recording` is `record` with `request.retry` or `operation.resume` offered, since `sync-local` refuses an existing closure (`local_sync/record.rs`); under a resume they say to resume it again. A promotion or a stop with no parent relies on its offered actions. A recovery row and golden back it. |
 | `Transport(error)` | the error's code, as `item sync` | by class, or 4 if durable | As `item sync` |
 | `Busy` | `busy` | 5, or 4 if durable | `request.retry` |
 | `PollYielding` | `poll_yielding` | 5, or 4 if durable | `request.retry` |
@@ -365,7 +367,7 @@ is `repo.inspect`, followed by `host observe` and `host approve`.
 A repository error of kind `ExternalChange` stays a repository error (fact 11). Task 2b's
 test is written first. C5 adds no `ResultCode` or `RecoveryActionKind`. Automatic bounded
 retries (fact 33) apply to `Busy` or `Partial` with `request.retry` first, so count-based
-assertions allow for them. For the host stop the binding suggests `request.retry`, then
+assertions allow for them. A lifecycle answer whose `blockers` is non-empty is not retried, since what it names won't pass by itself (Task 7's review). Other bounded repeats stay: a `Pending{Synchronization(Rejected)}` may push up to four times. For the host stop the binding suggests `request.retry`, then
 `repo.inspect`, since a suggestion replaces the code's list (fact 38).
 
 **Cache loss** (RFC:1031, Cycle 10 item 9). Request records and lifecycle records are both in the
@@ -900,6 +902,7 @@ review. This list is not yet proven complete.
 - **What a stop reports of its children (decision 25) reads the current attempt's child only.** An earlier attempt's push is under-claimed. A kill between `push_verified` and its authority over-claims `published` for an already-current child, matching the domain's own reading.
 - A live call can lose its stop when the flag is cleared on a kept child. `release_promotion_child` clears the row's flag once the cancellation has been answered, so a second live process running that child doesn't read it at its next safe point. The request's own flag and the parent's are separate, and no liveness is checked.
 - A `cancelled` answer can follow a guarded deletion that went through. The reservation's boundary refuses a run asked to stop around the transport call and with no word of it, so the branch may be gone with the step not yet `remote_deleted`. The same request's next delete finds no branch and answers `deleted` (`transport/remote.rs:240`), which reconciles it.
+- **For the owner's attention:** a result's `Item id:` carries no slug, because `LifecycleMutationDto` holds none. A preview shows `Slug:`, and `made ready:` lines show theirs. The preview's `Item id:` and `Slug:` aren't adjacent, since the field list is sorted.
 - A promotion blocked by a pending local sync issues a confirmation before refusing.
 - After an external `git pull`, with the index not marked behind, an item on primary with no context answers `item_not_found` until `index refresh`. An index marked behind keeps the `recovery_required` answer naming `context_missing`.
 

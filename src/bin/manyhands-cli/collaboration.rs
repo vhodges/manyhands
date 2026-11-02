@@ -204,6 +204,7 @@ pub(crate) fn run(
         &mut std::thread::sleep,
     ) {
         Driven::Answered(output) => output,
+        Driven::Prepared(envelope) => render::prepare_output(session.json, &envelope),
         Driven::Executed { envelope, supplied } if session.json => {
             render::mutation_output(true, &envelope, supplied)
         }

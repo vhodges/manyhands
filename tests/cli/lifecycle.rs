@@ -127,6 +127,13 @@ impl Case {
         value
     }
 
+    fn json_of(&self, resource: &str, verb: &str, extra: &[&str]) -> Value {
+        let mut args = vec![resource, verb, "--repo", self.root()];
+        args.extend_from_slice(extra);
+        args.push("--json");
+        mutation::checked(&args, &self.env, &[], 0, "ok", None)
+    }
+
     fn text(&self, extra: &[&str]) -> CliRun {
         mutation::run(&self.args(self.verb.id, extra), &self.env, &[])
     }
@@ -782,6 +789,88 @@ fn a_primary_moved_after_the_preview_is_external_change() {
     }
 }
 
+#[test]
+fn a_blocked_prepare_offers_its_way_out() {
+    for verb in BOTH {
+        let case = Case::new(verb);
+        let conflicting = if verb.resource == "document" {
+            items::document_source(verb.id, "Moved on primary", "")
+        } else {
+            items::ticket_source(verb.id, "Moved on primary", "")
+        };
+        case.primary_moved(&conflicting);
+        let blocked = case.json(&["--prepare"], 3, "recovery_required", Some(BLOCKED));
+        assert_eq!(
+            blocked["data"]["blockers"],
+            serde_json::json!(["integration_conflict"]),
+            "{blocked}"
+        );
+        let human = case.text(&["--prepare"]);
+        assert_eq!(human.status, 3);
+        let text = stderr(&human);
+        assert!(
+            text.contains("next: manyhands-cli context observe-local "),
+            "{text}"
+        );
+        assert!(text.contains("Then prepare again.\n"), "{text}");
+        text_golden(
+            &format!("{}_prepare_conflict_text", verb.golden),
+            &human,
+            &case.world.root,
+        );
+    }
+}
+
+#[test]
+fn a_missing_context_names_the_save_that_makes_one() {
+    for (verb, save) in [(PROMOTE, "document save"), (CLOSE, "ticket save")] {
+        let case = Case::new(verb);
+        case.primary_holds_the_branch();
+        let worktree = case.world.worktree(verb.id);
+        case.git(&["worktree", "remove", "--force", worktree.to_str().unwrap()]);
+        case.git(&[
+            "branch",
+            "-D",
+            "--quiet",
+            verb.branch().trim_start_matches("refs/heads/"),
+        ]);
+        case.json_of("index", "refresh", &["--request-id", REQUEST_2]);
+        let blocked = case.json(&["--prepare"], 3, "recovery_required", Some(BLOCKED));
+        assert_eq!(
+            blocked["data"]["blockers"],
+            serde_json::json!(["context_missing"])
+        );
+        let human = case.text(&["--prepare"]);
+        assert_eq!(human.status, 3);
+        let text = stderr(&human);
+        assert!(
+            text.contains(&format!("next: manyhands-cli {save} ")),
+            "{text}"
+        );
+        assert!(text.contains("Then prepare again.\n"), "{text}");
+        text_golden(
+            &format!("{}_prepare_context_missing_text", verb.golden),
+            &human,
+            &case.world.root,
+        );
+    }
+}
+
+#[test]
+fn a_no_op_in_text_says_what_it_found() {
+    let case = Case::new(PROMOTE);
+    case.primary_holds_the_branch();
+    let confirmation = case.confirmation();
+    let human = case.text(&["--request-id", REQUEST_1, "--confirm", &confirmation]);
+    assert_eq!(human.status, 0, "{}", stderr(&human));
+    assert!(
+        stdout(&human).contains("Integration: already_contained\n"),
+        "{}",
+        stdout(&human)
+    );
+    text_golden("document_promote_noop_text", &human, &case.world.root);
+}
+
 /// Every cell of application data that holds `sentinels`, as `table.column`.
 fn cells_holding(data: &Path, sentinels: &[&str]) -> Vec<String> {
     let connection = items::index(data);
@@ -828,7 +917,25 @@ fn cells_holding(data: &Path, sentinels: &[&str]) -> Vec<String> {
 }
 
 /// Cycle 10: `closed_by` is in the preview, canonical content, the index and
-/// Git, and a title in content and the index. Nothing else keeps either.
+/// Git, and a title in content and the index. Nothing else keeps either. Each
+/// `expected` sentinel must be in the index, or the scan is reading nothing.
+fn assert_only_the_index_holds(data: &Path, expected: &[&str]) {
+    let all = [CLOSED_BY_NAME, CLOSED_BY_EMAIL, SENTINELS[0]];
+    let beyond: Vec<_> = cells_holding(data, &all)
+        .into_iter()
+        .filter(|cell| !cell.starts_with("discovered_items."))
+        .collect();
+    assert!(beyond.is_empty(), "{beyond:?}");
+    for sentinel in expected {
+        assert!(
+            cells_holding(data, &[sentinel])
+                .iter()
+                .any(|cell| cell.starts_with("discovered_items.")),
+            "the index holds no {sentinel}"
+        );
+    }
+}
+
 #[test]
 fn application_data_holds_no_closed_by_or_title_beyond_the_index() {
     for verb in BOTH {
@@ -837,6 +944,7 @@ fn application_data_holds_no_closed_by_or_title_beyond_the_index() {
         case.world.set_local_config("user.email", CLOSED_BY_EMAIL);
         let title = SENTINELS[0];
         assert!(TITLE.contains(title));
+        let data = case.world.data.path();
         let preview = case.prepared();
         let shown = serde_json::to_string(&preview).unwrap();
         assert_eq!(
@@ -845,6 +953,7 @@ fn application_data_holds_no_closed_by_or_title_beyond_the_index() {
             "{shown}"
         );
         assert!(!shown.contains(title), "{shown}");
+        assert_only_the_index_holds(data, &[title]);
         let confirmation = preview["data"]["confirmation_id"].as_str().unwrap();
         let done = case.json(
             &["--request-id", REQUEST_1, "--confirm", confirmation],
@@ -856,19 +965,11 @@ fn application_data_holds_no_closed_by_or_title_beyond_the_index() {
         assert!(!answered.contains(CLOSED_BY_NAME), "{answered}");
         assert!(!answered.contains(CLOSED_BY_EMAIL), "{answered}");
         assert!(!answered.contains(title), "{answered}");
-        let cells = cells_holding(
-            case.world.data.path(),
-            &[CLOSED_BY_NAME, CLOSED_BY_EMAIL, title],
-        );
-        let beyond: Vec<_> = cells
-            .iter()
-            .filter(|cell| !cell.starts_with("discovered_items."))
-            .collect();
-        assert!(
-            beyond.is_empty(),
-            "{verb:?}: {beyond:?}",
-            verb = verb.golden
-        );
+        if verb.name == "close" {
+            assert_only_the_index_holds(data, &[title, CLOSED_BY_NAME, CLOSED_BY_EMAIL]);
+        } else {
+            assert_only_the_index_holds(data, &[title]);
+        }
     }
 }
 
@@ -880,10 +981,18 @@ struct Refused {
 
 impl Refused {
     fn new() -> Self {
+        Self::with_identity(None)
+    }
+
+    fn with_identity(identity: Option<(&str, &str)>) -> Self {
         let mut world = World::with_service(|data| {
             FailOnce::at(FailurePoint::AfterClosureCheckpoint).open_service(data)
         });
         saved(&world, CLOSE);
+        if let Some((name, email)) = identity {
+            world.set_local_config("user.name", name);
+            world.set_local_config("user.email", email);
+        }
         let mutation = || {
             Mutation::TicketClose(TicketCloseInput {
                 root: world.root.clone(),
@@ -918,6 +1027,19 @@ impl Refused {
 }
 
 #[test]
+fn a_stop_past_the_checkpoint_keeps_closed_by_and_title_to_the_index() {
+    let refused = Refused::with_identity(Some((CLOSED_BY_NAME, CLOSED_BY_EMAIL)));
+    let case = &refused.case;
+    case.json(
+        &["--request-id", REQUEST_1],
+        4,
+        "recovery_required",
+        Some(MUTATION),
+    );
+    assert_only_the_index_holds(case.world.data.path(), &[SENTINELS[0]]);
+}
+
+#[test]
 fn a_refused_checkpoint_merge_says_how_to_repair_it_after_retrying() {
     let refused = Refused::new();
     let case = &refused.case;
@@ -947,9 +1069,8 @@ fn a_refused_checkpoint_merge_says_how_to_repair_it_after_retrying() {
     assert_eq!(human.status, 4);
     assert!(human.stdout.is_empty());
     let text = stderr(&human);
-    // The automatic bounded retries take a partial answer whose first action
-    // is the same request (`mutate::should_retry`), and say so.
-    assert_eq!(text.matches("progress: retrying\n").count(), 3, "{text}");
+    // Named blockers won't change by themselves, so the driver doesn't repeat it.
+    assert_eq!(text.matches("progress: retrying\n").count(), 0, "{text}");
     for verb in [
         "context observe-local",
         "context sync-local",

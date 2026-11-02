@@ -317,6 +317,7 @@ pub const CLI_CASES: &[&str] = &[
     "help_resource_ticket",
     "help_root",
     "help_ticket_close",
+    "help_document_promote",
     "help_ticket_list",
     "cli_ticket_ready",
     "cli_ticket_blocked",
@@ -408,6 +409,11 @@ pub const CLI_TEXT_CASES: &[&str] = &[
     "document_promote_request_mismatch_text",
     "ticket_close_request_mismatch_text",
     "ticket_close_checkpoint_merge_refused_text",
+    "ticket_close_prepare_conflict_text",
+    "document_promote_prepare_conflict_text",
+    "document_promote_noop_text",
+    "ticket_close_prepare_context_missing_text",
+    "document_promote_prepare_context_missing_text",
 ];
 pub const CLI_REPOSITORY_VALUES: &[&str] = &["required", "refused"];
 

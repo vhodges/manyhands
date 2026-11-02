@@ -1117,3 +1117,19 @@ Goldens were written with `MANYHANDS_UPDATE_GOLDEN=1` and read. Help's four move
 - **`REPORTS_MADE_READY`** also gates the slug in `preview`, and its comment now says so.
 - **`World::plain_key`** no longer encrypts a key it won't write.
 - **`Command` stays over the old `Verb`** in resume's `lifecycle`. Its `_ => InternalError` arm is unreachable, since `lifecycle_standing` names only the two commands, and its comment says so.
+
+### Task 7 review's fixes (controller's rulings)
+
+**Seen first.** Against stubs that kept the old renderer and driver: 7 unit rows and 3 binary rows failed by assertion. Passing at once: the mixed-blocker and other-blocked prepare rows, which pin that nothing is added, the control-character row, and the sentinel rows, whose positive control held. `a_missing_context_names_the_save_that_makes_one` was written with the fix, so it wasn't seen to fail. No row answered otherwise.
+
+1. **The refused merge's route** prints only for a ticket with `recording: record` and `request.retry` or `operation.resume` offered. Under a resume it says to resume it again, and prints the resume's command. This supersedes Task 7's "any integration conflict".
+2. **A blocked prepare offers its way out,** through a new `Driven::Prepared`, so `render.rs` is untouched. This supersedes Task 7's risk about prepares. **My reading of "where that route applies":** `integration_conflict` for either verb, since with no closure row `sync-local` isn't limited to tickets, and not beside a dirty or conflicted context, a pending conflict or a local operation. That is from reading `local_sync/record.rs`; Task 10b's walk covers only the closure's route.
+3. **Honest wording:** "the local repair to try". Task 10b gains the walk and the exact strings, and drops "to try" if it holds.
+4. **Sentinel scan:** positive controls for each expected sentinel, after prepare, after completion and after the `Refused` stop. At that stop the control is the title only, since no index copy of `closed_by` is promised before integration.
+5. **Driver:** a lifecycle answer naming blockers isn't retried, which supersedes Task 7's finding. Other bounded repeats stay, and `Pending{Synchronization(Rejected)}` may push up to four times, as the design now says.
+6. **Note:** placeholders, `--input -` and when show and resolve apply. A `next:` line stays a command that can be pasted, so "add --request-id unless you run it at a terminal" is in the note beside it, not on the resume line.
+7. **Smaller items.** A control-character row for the root and slug. `human_collaboration::republish` is `pub(crate)` and reused. The closure in `lifecycle.rs` is named. A human no-op row, `document_promote_noop_text`. `Item id:` and `Slug:` stay apart, because the field list is sorted. The missing slug on a result's `Item id:` is in Known Limits for the owner. Task 14a's step now names `document promote`, and `help_document_promote` is added.
+
+**Follow-up candidate:** `progress: connecting` in a local-only run comes from `command.rs:490`, whose `stage` gives `Connecting` for both verbs whatever the repository has.
+
+**Part A's corrections, at `2a9bc6f3`, went beyond the brief in one place:** a second wrapped rule number, "(decision 11)" at `remote/state.rs:6410`, was also removed.

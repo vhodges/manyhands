@@ -4,35 +4,43 @@
 //!
 //! - `made ready:` lines, with slugs, in place of the field list's;
 //! - a note when publication waits for a remote, or no made-ready set is held;
-//! - for a refused checkpoint merge, the local repair: four `next:` lines naming
-//!   `context observe-local`, `sync-local`, `show-local` and `resolve-local`,
-//!   before C2's lines for the same request and `repo inspect`. No recovery
-//!   action names them, and none may be added (design, Answers). Those verbs
-//!   arrive in Task 10, whose grammar answers to this text, which
-//!   `lifecycle_tests.rs` pins;
+//! - for a refused checkpoint merge of a closure this operation recorded, with
+//!   a way to go on, the local repair: four `next:` lines naming `context
+//!   observe-local`, `sync-local`, `show-local` and `resolve-local`, before C2's
+//!   lines for the same request and `repo inspect`. No recovery action names
+//!   them, and none may be added (design, Answers). Those verbs arrive in Task
+//!   10, whose grammar answers to this text, which `lifecycle_tests.rs` pins.
+//!   Any other form of that blocker relies on its offered actions;
+//! - for a blocked prepare, its way out: the same repair, or the save that
+//!   makes a missing context, and then a new prepare;
 //! - for a child's `remote_branch_deleted`, the route out of decision 18:
 //!   cancel, the same request, the republish, the same request. Under a
 //!   resume, decision 19's: the republish, then the resume, since the resume
 //!   has already asked for the cancellation that lets the child go.
 
 use crate::{
-    human_admin::{self, REPUBLISH},
+    human_admin,
+    human_collaboration::republish,
     render::{self, Output, field, note_lines, quoted},
 };
 use manyhands::{
     repository::{
-        LifecycleBlocker, LifecycleMadeReadyState, LifecycleMutationDto,
-        LifecyclePublicationPendingReason, MutationDataDto,
+        ItemDtoKind, LifecycleBlocker, LifecycleMadeReadyState, LifecycleMutationDto,
+        LifecyclePublicationPendingReason, LifecycleRecording, MutationDataDto, PrepareDataDto,
     },
-    results::{Envelope, RecoveryActionKind, ResultCode},
+    results::{Envelope, RecoveryAction, RecoveryActionKind, ResultCode},
 };
 
-const MERGE_REFUSED_NOTE: &str = "primary refused this closure's checkpoint: bring primary into the ticket's context with the context commands, then send this request again; the closure's fields are kept.";
+/// What the repair's lines leave to the reader. It says "to try": the route's
+/// walk through the binary is Task 10b's, and until it lands these verbs answer
+/// `usage_error`.
+const REPAIR: &str = "The commands above are the local repair to try: the <...> values are placeholders to fill in, --input - takes the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict.";
+const MISSING_NOTE: &str = "this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in. Then prepare again.";
 const NO_REMOTE_NOTE: &str = "primary is not published, because this repository has no publication remote; once one is selected, repo sync publishes it.";
 const NO_SET_NOTE: &str = "this answer holds no made-ready set; ticket ready is the live view.";
 const DELETED_NOTE: &str = "the refused request's context synchronization keeps its reservation until the request is cancelled; sending the request again then answers cancelled and releases it. After the republish, sending it once more finishes the work.";
 /// The answer doesn't tell a released child from a kept one (decision 19).
-const RESUME_DELETED_NOTE: &str = "this resume released the operation's context synchronization if nothing it holds could be lost. If repo inspect still shows its reservation, it was kept, and the republish answers busy.";
+const RESUME_DELETED_NOTE: &str = "this resume released the operation's context synchronization if nothing it holds could be lost. If repo inspect still shows its reservation, it was kept, and the republish answers busy. Add --request-id to the resume unless you run it at a terminal.";
 
 /// The data's fields, without its tag, its made-ready set (`made_ready`) and,
 /// for a promotion, a state that says nothing.
@@ -104,14 +112,6 @@ fn merge_refused(root: &str, item: &str) -> Vec<String> {
     ]
 }
 
-fn republish(root: &str, item: &str) -> String {
-    format!(
-        "manyhands-cli {REPUBLISH} --repo {} --id {} --prepare",
-        quoted(root),
-        field(item)
-    )
-}
-
 /// What a result adds, and the recovery actions its `next:` lines render.
 #[derive(Default)]
 struct Route {
@@ -129,18 +129,10 @@ fn action_index(envelope: &Envelope<MutationDataDto>, kind: RecoveryActionKind) 
 
 fn branch_deleted(envelope: &Envelope<MutationDataDto>, root: &str, item: &str, route: &mut Route) {
     if let Some(index) = action_index(envelope, RecoveryActionKind::OperationResume) {
-        let operation = envelope.recovery[index]
-            .operation_id
-            .as_deref()
-            .or(envelope.operation_id.as_deref());
         route.next.push(republish(root, item));
-        if let Some(operation) = operation {
+        if let Some(line) = resume_line(envelope, index, root) {
             route.rendered.push(index);
-            route.next.push(format!(
-                "manyhands-cli operation resume --repo {} --operation-id {}",
-                quoted(root),
-                field(operation)
-            ));
+            route.next.push(line);
         }
         route.notes.push(RESUME_DELETED_NOTE.to_owned());
         return;
@@ -169,6 +161,45 @@ fn branch_deleted(envelope: &Envelope<MutationDataDto>, root: &str, item: &str, 
     route.next.extend([republish(root, item), again]);
 }
 
+/// The repair, when the same request or a resume can then go on: `sync-local`
+/// admits a closure only while it is recording its own (`local_sync/record.rs`).
+fn merge_refused_route(
+    envelope: &Envelope<MutationDataDto>,
+    root: &str,
+    item: &str,
+    route: &mut Route,
+) {
+    const REFUSED: &str = "primary refused this closure's checkpoint.";
+    if action_index(envelope, RecoveryActionKind::RequestRetry).is_some() {
+        route.next = merge_refused(root, item);
+        route.notes.push(format!(
+            "{REFUSED} {REPAIR} Then send this request again; the closure's fields are kept."
+        ));
+    } else if let Some(index) = action_index(envelope, RecoveryActionKind::OperationResume) {
+        route.next = merge_refused(root, item);
+        if let Some(line) = resume_line(envelope, index, root) {
+            route.rendered.push(index);
+            route.next.push(line);
+        }
+        route.notes.push(format!(
+            "{REFUSED} {REPAIR} Then resume it again (add --request-id unless you run it at a terminal); the closure's fields are kept."
+        ));
+    }
+}
+
+/// The `operation resume` a recovery action names.
+fn resume_line(envelope: &Envelope<MutationDataDto>, index: usize, root: &str) -> Option<String> {
+    let operation = envelope.recovery[index]
+        .operation_id
+        .as_deref()
+        .or(envelope.operation_id.as_deref())?;
+    Some(format!(
+        "manyhands-cli operation resume --repo {} --operation-id {}",
+        quoted(root),
+        field(operation)
+    ))
+}
+
 fn route_of(envelope: &Envelope<MutationDataDto>, data: &LifecycleMutationDto) -> Route {
     let mut route = Route::default();
     let Some(root) = envelope.scope.repository.as_deref() else {
@@ -178,10 +209,11 @@ fn route_of(envelope: &Envelope<MutationDataDto>, data: &LifecycleMutationDto) -
         ResultCode::RecoveryRequired
             if data
                 .blockers
-                .contains(&LifecycleBlocker::IntegrationConflict) =>
+                .contains(&LifecycleBlocker::IntegrationConflict)
+                && data.kind == ItemDtoKind::Ticket
+                && data.recording == Some(LifecycleRecording::Record) =>
         {
-            route.next = merge_refused(root, &data.item_id);
-            route.notes.push(MERGE_REFUSED_NOTE.to_owned());
+            merge_refused_route(envelope, root, &data.item_id, &mut route);
         }
         ResultCode::RemoteBranchDeleted => {
             branch_deleted(envelope, root, &data.item_id, &mut route);
@@ -189,6 +221,94 @@ fn route_of(envelope: &Envelope<MutationDataDto>, data: &LifecycleMutationDto) -
         _ => {}
     }
     route
+}
+
+/// A refusal's lines without its data, which the caller has shown.
+fn refusal_of<T>(
+    envelope: &Envelope<T>,
+    recovery: Vec<RecoveryAction>,
+) -> Envelope<serde_json::Value> {
+    Envelope {
+        schema_version: envelope.schema_version,
+        command: envelope.command.clone(),
+        request_id: envelope.request_id.clone(),
+        operation_id: envelope.operation_id.clone(),
+        outcome: envelope.outcome,
+        code: envelope.code,
+        message: envelope.message.clone(),
+        scope: envelope.scope.clone(),
+        effects: envelope.effects.clone(),
+        data: None,
+        recovery,
+    }
+}
+
+/// The way out of a blocked prepare: what to run, and what it says of that.
+fn way_out(
+    command: &str,
+    blockers: &[LifecycleBlocker],
+    root: &str,
+    item: &str,
+) -> Option<(Vec<String>, String)> {
+    use LifecycleBlocker::{
+        ConflictPending, ContextConflicted, ContextDirty, ContextMissing, IntegrationConflict,
+        LocalOperationPending,
+    };
+    if blockers == [ContextMissing] {
+        let save = if command == "document promote" {
+            "document save"
+        } else {
+            "ticket save"
+        };
+        return Some((
+            vec![format!(
+                "manyhands-cli {save} --repo {} --id {} --input - --request-id <new-request-id>",
+                quoted(root),
+                field(item)
+            )],
+            MISSING_NOTE.to_owned(),
+        ));
+    }
+    // `sync-local` refuses a dirty or conflicted context, and a pending conflict
+    // or local operation has its own way on.
+    let reachable = blockers.contains(&IntegrationConflict)
+        && ![
+            ContextDirty,
+            ContextConflicted,
+            ConflictPending,
+            LocalOperationPending,
+        ]
+        .iter()
+        .any(|other| blockers.contains(other));
+    reachable.then(|| {
+        (
+            merge_refused(root, item),
+            format!("this context can't merge into primary. {REPAIR} Then prepare again."),
+        )
+    })
+}
+
+/// The human output of a prepare of these verbs: C2's, with a blocked prepare's
+/// way out.
+pub fn prepare(envelope: &Envelope<PrepareDataDto>) -> Output {
+    let (Some(PrepareDataDto::LifecycleBlocked(data)), Some(root), Some(item)) = (
+        &envelope.data,
+        envelope.scope.repository.as_deref(),
+        envelope.scope.item_id.as_deref(),
+    ) else {
+        return render::prepare_output(false, envelope);
+    };
+    let Some((next, note)) = way_out(&envelope.command, &data.blockers, root, item) else {
+        return render::prepare_output(false, envelope);
+    };
+    let mut extra = human_admin::fields(data);
+    for line in next {
+        extra.push_str(&format!("next: {line}\n"));
+    }
+    let refusal = refusal_of(envelope, envelope.recovery.clone());
+    let mut output = render::failure_output(false, &refusal, Some(extra));
+    output.stderr.extend(note_lines(&[note]).into_bytes());
+    output
 }
 
 /// The human output of a result of these verbs.
@@ -217,25 +337,14 @@ pub fn output(envelope: &Envelope<MutationDataDto>, supplied: bool) -> Output {
     }
     let mut extra = human_admin::failure_extra(&shown, supplied);
     extra.push_str(&body);
-    let refusal = Envelope::<serde_json::Value> {
-        schema_version: envelope.schema_version,
-        command: envelope.command.clone(),
-        request_id: envelope.request_id.clone(),
-        operation_id: envelope.operation_id.clone(),
-        outcome: envelope.outcome,
-        code: envelope.code,
-        message: envelope.message.clone(),
-        scope: envelope.scope.clone(),
-        effects: envelope.effects.clone(),
-        data: None,
-        recovery: envelope
-            .recovery
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !route.rendered.contains(index))
-            .map(|(_, action)| action.clone())
-            .collect(),
-    };
+    let recovery = envelope
+        .recovery
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !route.rendered.contains(index))
+        .map(|(_, action)| action.clone())
+        .collect();
+    let refusal = refusal_of(envelope, recovery);
     let mut output = render::failure_output(false, &refusal, Some(extra));
     output.stderr.extend(note_lines(&notes).into_bytes());
     output

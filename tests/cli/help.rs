@@ -274,6 +274,22 @@ fn mutation_only_options_on_reads_are_usage_errors_in_both_modes() {
 }
 
 #[test]
+fn document_promote_help_is_its_own_golden() {
+    let temp = tempfile::tempdir().unwrap();
+    let env = CliEnv::new(temp.path().join("absent-data"));
+    let output = run(&["document", "promote", "--help", "--json"], &env);
+    assert_eq!(output.status, 0);
+    let value = checked(
+        &output,
+        "cli help",
+        ResultCode::Ok,
+        Some("cli_help.schema.json"),
+    );
+    assert_cli_golden("help_document_promote", &value, &[]);
+    assert!(!env.data.exists());
+}
+
+#[test]
 fn ticket_close_reaches_its_handler_in_both_modes() {
     let temp = tempfile::tempdir().unwrap();
     let env = CliEnv::new(temp.path().join("data"));

@@ -94,6 +94,12 @@ impl Boundary for RepositoryService {
 }
 pub const RETRY_DELAYS_MS: [u64; 3] = [100, 200, 400];
 pub fn should_retry(envelope: &Envelope<MutationDataDto>, request_id: RequestId) -> bool {
+    // What a lifecycle answer names as blocking won't pass by itself.
+    if let Some(MutationDataDto::Lifecycle(data)) = &envelope.data
+        && !data.blockers.is_empty()
+    {
+        return false;
+    }
     (envelope.code == ResultCode::Busy || envelope.outcome == Outcome::Partial)
         && envelope.recovery.first().is_some_and(|action| {
             action.action == RecoveryActionKind::RequestRetry
@@ -150,6 +156,7 @@ pub fn run(
 ) -> Output {
     match drive(boundary, session, spec, flags, plan, build, sleep) {
         Driven::Answered(output) => output,
+        Driven::Prepared(envelope) => render::prepare_output(session.json, &envelope),
         Driven::Executed { envelope, supplied } => {
             render::mutation_output(session.json, &envelope, supplied)
         }
@@ -160,6 +167,8 @@ pub fn run(
 /// envelope of the last `execute`, for the verb to render.
 pub enum Driven {
     Answered(Output),
+    /// The answer of a prepare, for the verb to render.
+    Prepared(Box<Envelope<PrepareDataDto>>),
     Executed {
         envelope: Box<Envelope<MutationDataDto>>,
         /// Whether a passphrase was supplied during the run.
@@ -189,10 +198,7 @@ pub fn drive(
     );
     let mut extras = Extras::default();
     if flags.prepare {
-        return Driven::Answered(render::prepare_output(
-            session.json,
-            &boundary.prepare(&build(&extras)),
-        ));
+        return Driven::Prepared(Box::new(boundary.prepare(&build(&extras))));
     }
     flags.allocate(session);
     let request_id = match flags.request_id {
@@ -261,7 +267,7 @@ pub fn drive(
                 envelope = boundary.prepare(&build(&extras));
             }
             let Some(preview) = envelope.data.as_ref().and_then(PrepareDataDto::preview) else {
-                return Driven::Answered(render::prepare_output(session.json, &envelope));
+                return Driven::Prepared(Box::new(envelope));
             };
             let consent = session
                 .terminal

@@ -1,0 +1,8 @@
+--- stderr
+error: Recovery is required before this can continue.
+code: recovery_required
+Blockers: context_missing
+next: manyhands-cli ticket save --repo '<repository>' --id 01ARZ3NDEKTSV4RRFFQ69G5FC0 --input - --request-id <new-request-id>
+next: repo.inspect root=<repository>
+note: this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in. Then prepare again.
+--- exit 3

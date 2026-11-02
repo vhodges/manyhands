@@ -135,7 +135,7 @@ pub fn branch_deleted(
 }
 
 /// The `item republish` preview of `item` in the repository at `root`.
-fn republish(root: &str, item: &str) -> String {
+pub(crate) fn republish(root: &str, item: &str) -> String {
     format!(
         "manyhands-cli item republish --repo {} --id {} --prepare",
         quoted(root),

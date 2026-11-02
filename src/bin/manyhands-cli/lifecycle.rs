@@ -49,12 +49,13 @@ fn run(
     args: &ArgMatches,
     build: fn(PathBuf, ItemId) -> Mutation,
 ) -> Output {
-    let (flags, root, id) = match (|| {
+    let selected = || -> Result<_, Output> {
         let flags = admin::flags(session, spec, args)?;
         let root = admin::mutation_root(session, spec, args, flags.request_id)?;
         let id = authoring::item_id(session, spec, args, flags.request_id)?;
         Ok((flags, root, id))
-    })() {
+    };
+    let (flags, root, id) = match selected() {
         Ok(values) => values,
         Err(out) => return out,
     };
@@ -72,6 +73,8 @@ fn run(
         &mut std::thread::sleep,
     ) {
         Driven::Answered(output) => output,
+        Driven::Prepared(envelope) if session.json => render::prepare_output(true, &envelope),
+        Driven::Prepared(envelope) => human_lifecycle::prepare(&envelope),
         Driven::Executed { envelope, supplied } if session.json => {
             render::mutation_output(true, &envelope, supplied)
         }
