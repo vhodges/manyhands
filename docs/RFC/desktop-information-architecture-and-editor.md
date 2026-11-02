@@ -170,7 +170,9 @@ records the detail and the evidence, and its decision numbers are the
 - **Keyboard** (D3 ruling R-59). In the editor, Escape first closes the
   editor's own menu after a pointer press, and otherwise moves focus out of
   the editor to the item header. In the read-only view, Tab and Shift-Tab
-  move focus on.
+  move focus on. Amended 2026-11-02 by D4: this Escape rule applies to the
+  item body editor; in a comment composer Escape cancels the composer
+  (`docs/design/item_view/04-comments.md`).
 
 The CLI and the headless library do not load bodies through the editor; the
 canonical RFC's preservation contract applies to them unchanged.
@@ -251,6 +253,14 @@ not included implicitly.
 The composer allocates one comment ID per submission and retains it through
 retry. After a checkpoint succeeds and publication fails, it shows the saved
 comment once with Retry publication; it does not resubmit a new comment.
+
+Amended 2026-11-02 by D4 (decisions 7 and 14). The desktop uses the item
+view design's words: a reply composer offers **Reply and sync** or **Save
+reply locally**; Sync item is **Share**, Sync primary is **Share main**, and
+Retry publication is **Retry sharing**. The publication-pending marker
+("not shared yet") is session-only until a library read reports
+unpublished work; after a restart a pending publication shows as an
+operation with Resume.
 
 | Action | Required presentation |
 | --- | --- |

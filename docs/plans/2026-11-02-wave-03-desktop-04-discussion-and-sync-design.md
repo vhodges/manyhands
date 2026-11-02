@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D4 Desktop Discussion And Deliberate Synchronization Design"
 date: 2026-11-02
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -20,6 +20,10 @@ no library file (Cycle, Dependency boundary).
 Approving this design approves its rulings (R-n), named test edits (E-n)
 and the lane plan. It does not authorize implementation, pushing beyond
 the ticket branch, merging, or closing the ticket.
+
+**Approved 2026-11-02** (revision 5), with rulings R-n, named edits
+E-1 to E-11 and the lane plan. Implementation was authorized separately the
+same day, by subagent-driven development.
 
 "Fact n" refers to Baseline Facts. Paths are relative to the repository
 root; `desktop/` means `src/desktop/`. Revision 2 (after review round 1)

@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D4: Desktop Discussion And Deliberate Synchronization"
 date: 2026-11-02
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -15,8 +15,12 @@ Ticket `01M4CC0VN1KTQFSVR99378TDHV`. Design:
 Plan:
 [2026-11-02-wave-03-desktop-04-discussion-and-sync-implementation.md](../plans/2026-11-02-wave-03-desktop-04-discussion-and-sync-implementation.md).
 
-Status: **draft, revision 5**, planned at `00bef3da` (origin/main
-`15a23125` merged into the ticket branch). Nothing has been built or run.
+Status: **approved 2026-11-02** (revision 5), planned at `00bef3da`
+(origin/main `15a23125` merged into the ticket branch). The owner approved
+the Cycle, design and plan, confirmed decisions 5–15, and authorized
+implementation by subagent-driven development on 2026-11-02. Pushing
+beyond the ticket branch, merging and closing the ticket still need their
+own go-ahead.
 
 ## Purpose And Authority
 
@@ -182,8 +186,8 @@ Answered by the owner during planning:
 4. **Library defects are Known Limits** (`01M669FJR27FRHCNPWAMD6VH4V`,
    `01M66HFV44YXNQ7ANJVA16TQ1H`, `01M67BN4C1SY2HQBGNE9NBYMW8`).
 
-Proposed by the planner; the documents are written to these answers and
-await confirmation:
+Proposed by the planner and confirmed by the owner with the documents'
+approval on 2026-11-02:
 
 5. **Replies answer the root** (`04-comments.md`); deeper replies on disk
    keep D3's single indent (R-53).
@@ -216,9 +220,13 @@ await confirmation:
     nothing marks the comment and Share publishes it (K-10). D6 owns
     shutdown.
 
+16. **Execution is subagent-driven** (2026-11-02, with the authorization
+    to implement): the orchestrator dispatches one implementer per task,
+    with an independent review after each, following the lane plan.
+
 ## Open Questions
 
-Decisions 5–15 await confirmation.
+None. U-1 to U-5 (design) are settled in Task 0 by reading the source.
 
 ## Review Record
 
@@ -227,10 +235,11 @@ Decisions 5–15 await confirmation.
 | Planning research | D4 ticket `deps` omits C4 | Settled | Document Amendment 6. | Ticket lines 4–5; Wave line 336. |
 | Planning research | The desktop worker cannot stop an accepted request | Ruling R-1 | Part 0. | `services/worker.rs:437-454`. |
 | Planning research | No read reports unpublished work | Decisions 2, 14 | Session-only chip. | Design fact 15. |
-| Planning research | No Share dialog is designed | Decision 9 | Pending. | `05-sheets-and-dialogs.md`. |
-| Planning research | Design vocabulary differs from the RFC | Decision 7 | Pending. | RFC desktop IA 257–262. |
+| Planning research | No Share dialog is designed | Decision 9 | Confirmed; API audit D25 amended. | `05-sheets-and-dialogs.md`. |
+| Planning research | Design vocabulary differs from the RFC | Decision 7 | Confirmed; desktop RFC amended. | RFC desktop IA 257–262. |
 | Review round 1, source and feasibility (`eec96a4c`) | 5 Blocking, 10 Important, 7 Minor | — | Revision 2. | Design Review Record. |
 | Review round 1, contract and consistency (`eec96a4c`) | 3 Blocking, 18 Important, 1 Minor group | — | Revision 2; rulings that changed behaviour became decisions 8–14. | Design Review Record. |
 | Review round 2, scoped with adversarial brief (`6ed12ae6`) | 2 Blocking, 7 Important, 9 Minor | — | Revision 3: required outcomes P1–P10; decision 8 widened; decision 15. | Design Review Record. |
-| Review round 4, narrow review of revision 4 (`2fdd1809`) | 2 Blocking, 6 Important, 3 Minor | — | Recorded as required outcomes P11–P18; not re-reviewed; Task 13's design checkpoint owns the mechanism. | Design Review Record. |
 | Review round 3, scoped with adversarial brief (`0fa796dd`) | 1 Blocking, 5 Important, 6 Minor | — | Revision 4: durable request ID (R-16), record state in outcomes. Not independently re-reviewed; Task 13's design checkpoint guards the mechanism. | Design Review Record. |
+| Review round 4, narrow review of revision 4 (`2fdd1809`) | 2 Blocking, 6 Important, 3 Minor | — | Recorded as required outcomes P11–P18; not re-reviewed; Task 13's design checkpoint owns the mechanism. | Design Review Record. |
+| Owner approval (2026-11-02) | Documents, decisions 5–15, E-1 to E-11, execution method | Owner decision | Approved at revision 5; implementation authorized, subagent-driven (decision 16). Document Amendments 1–6 applied in the approval commit. | Ticket approval comment. |

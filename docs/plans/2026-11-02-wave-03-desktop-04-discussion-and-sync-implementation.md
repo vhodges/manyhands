@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D4 Desktop Discussion And Deliberate Synchronization Implementation Plan"
 date: 2026-11-02
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -10,9 +10,9 @@ id: "01M6E696JQ4NAKG1RT7103FQJ3"
 
 # Desktop Discussion And Deliberate Synchronization Implementation Plan
 
-> **For agentic workers:** Draft, revision 5, not approved. Implementation
-> starts only once the owner has approved the documents and authorized it.
-> Then use `implementing-a-cycle` task by task, re-read the design, repeat
+> **For agentic workers:** Approved 2026-11-02 (revision 5); the owner
+> authorized implementation by subagent-driven development the same day.
+> Use `implementing-a-cycle` task by task, re-read the design, repeat
 > the ticket preflight, and record every checkpoint on ticket
 > `01M4CC0VN1KTQFSVR99378TDHV`. Steps use checkbox (`- [ ]`) syntax.
 
