@@ -1186,7 +1186,7 @@ Base `1343462b`; `origin/main` at `15a23125` is contained. `poll once` is availa
 - **A rule for which stops say "new request".** `final_note` is an explicit code list, excluding any answer that offers `request.retry`, so an `Owed` stop doesn't say it. No note says "final" or that the same request only repeats, since a no-remote answer has no record, so its ID would run again. A replay of a stored stop prints the note too.
 - **C2's passphrase hint is replaced for this verb.** "run the command again" would imply the same request under `--request-id`. The hint says a new request. Its row is a unit row: the PTY route with a wrong passphrase isn't run for `poll once`.
 - **Options, as Task 8 records.** `--prepare` is `not_confirmable`, by `mode_rules`.
-- **The no-remote stage.** `remote select` with a null name commits, so the row removes the line from the configuration file, which the pre-check reads. It shows nothing is written; a `remote select` route is not exercised.
+- **The no-remote stage.** `c5_polling_no_remote` removes the `publication_remote` line from the root's `.manyhands/config.toml` on disk, uncommitted, and shows `publication_remote_required`, exit 3, in both modes: no request record, no new connection and the same refs. It doesn't run `remote select`, so what that verb does with a null name is not shown here.
 - **The lease row holds the lock in the test's own process,** and the CLI child is the second process, as the library's row does. `c5_polling_a_second_poll_overlaps` has two real CLI processes.
 - **`poll_once_host_stop_text`'s port and fingerprint** are replaced in the golden, since the fixture makes them per run.
 
@@ -1218,3 +1218,40 @@ Base `1343462b`; `origin/main` at `15a23125` is contained. `poll once` is availa
 No library file changed, so the `remote`, `local_sync` and `integration` filters were not run. merge-tree isn't needed: `origin/main` is contained.
 
 **Left.** Task 13a's Ctrl-C and lost stdout for `poll once`; Task 14a's inventory, which should read `--prepare` and `--confirm` as listed; `tests/cli/inventory.rs`.
+
+## Task 10a: context reads and `context sync-local`
+
+Base `0efc7dfb`; `origin/main` is contained. `context observe-local`, `context show-local` and `context sync-local` are available, the last inside the Ctrl-C window. `resolve-local` is 10b's: until then the conflict stop's `next:` line for it answers `usage_error`.
+
+**Seen first.** `--test cli -- local_sync input_schemas` against no verb: 37 of 38 rows failed, by assertion on the code (`usage_error`), or for the help row on a missing golden. `a_verb_without_its_options_is_a_usage_error` passed: it pins what parsing gives, so it says nothing of these verbs. The remote-operation row first failed on a fixture fault of mine, a phase the table's `CHECK` refuses, and was corrected; it then failed by assertion before the verb's reading was enabled, in the control below.
+
+**Rows the library's reads answer otherwise, and the binary answers as the table.** A control run, with the bin's two readings disabled, shows each:
+
+| Row | Library's read | Binary |
+| --- | --- | --- |
+| `show-local`, unknown operation | `recovery_required` | `operation_not_found`, by `show_operation` first |
+| `show-local`, remote or other operation | `recovery_required` | `invalid_input`, by `show_operation`'s action and family |
+| `show-local --token`, tampered, foreign or stale | `external_change` | `invalid_input`, by the inspection's path list, before any side read |
+
+No library file changed. A genuine `recovery_required` or `external_change` of a real local sync still passes through. This is my reading of "the table is the contract", not a ruling: the table's codes are met by the verb, and the library's own answer is unchanged.
+
+**`observe-local` with no context (Task 0's open row).** `item_not_found`, exit 2, as the read reports. `show_item` finds the item first, so only this case prints `next: manyhands-cli ticket save ...` (or `document save`); an unknown ID prints nothing. No recovery kind names a save and none may be added, so JSON's `recovery` is empty and JSON alone can't tell the two apart.
+
+**Stages that aren't the binary's.** `discovery_pending` and a closure past `Closing` (`AfterIntegrationRef`) are stopped in the test's own process, as C3's rows record of the same seam, because a CLI child has no failure point. So `discovery_pending`'s exit 4 is shown by the library's `FailureClass::Incomplete`, not read from a child, and the binary's same request then finishes with no second merge.
+
+**Other decisions.**
+
+- **Human notes.** `identity_required` says the same request follows, because the data has no `required_request_id` to offer it. The repair-outside note prints only for unrelated histories, a closure disagreement or an unsupported conflict, not a closure's or a lost authority's `external_repair`.
+- **Input.** `{observation}`, closed. The schema has no `minLength` (the checked keywords refuse it), and an empty string is the library's `invalid_input`.
+- **`--prepare`** is `not_confirmable`, by `mode_rules`, as the poll verbs.
+- **`busy`** from a held `CacheWrite` carries no `request_id` or scope, and offers no retry. That is the library's answer before acceptance, and differs from `poll_once_busy`, whose lease is met later. The golden pins it as given.
+- **Help goldens** live in `tests/cli/local_sync.rs`, so `tests/cli/help.rs` is untouched. `help_root` and `help_root_text` gain the three verbs and the `context` resource, and those diffs were read.
+
+**Files beyond the plan's list.** `tests/support/cli.rs` (golden registration, as the Global Constraints say) and `tests/cli/input_schemas.rs` (the schema's own row, as Task 8 added). `tests/cli/help.rs` and library files are untouched. No existing test's meaning changed; E-1 and E-14 are the named rows.
+
+**Risks.**
+
+- The kind is read before the library looks up the request, so a replay after the item has gone from the index answers `item_not_found`, not the stored answer. Not staged.
+- `human_lifecycle.rs`'s comment on `REPAIR` says these verbs answer `usage_error`, which is now true of `resolve-local` only. 10b changes that text with the walk.
+
+**Verification.** A compare run after every golden diff was read: `--bin manyhands-cli` 293, `--test cli -- local_sync` 38 in 13 s, `--test cli -- input_schemas` 9, plus `help` 13, `boundaries` 4 and `exits` 31, since the catalog changed. `fmt --check`, whole-tree clippy with `-D warnings`, `cargo check --bin manyhands-cli` and the no-GPUI script pass. The checkpoint gate's other targets are not run here.

@@ -62,6 +62,7 @@ pub fn stops_on_ctrl_c(mutation: &Mutation) -> bool {
             | Mutation::DocumentPromote(_)
             | Mutation::TicketClose(_)
             | Mutation::PollOnce(_)
+            | Mutation::LocalContextSync(_)
     )
 }
 impl Boundary for RepositoryService {

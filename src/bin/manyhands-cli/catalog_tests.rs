@@ -100,6 +100,9 @@ const DESIGN: &[(&str, &[&str])] = &[
             "poll configure",
             "poll pause",
             "poll resume",
+            "context observe-local",
+            "context show-local",
+            "context sync-local",
         ],
     ),
 ];

@@ -41,6 +41,8 @@ mod input;
 mod interrupt;
 #[path = "manyhands-cli/lifecycle.rs"]
 mod lifecycle;
+#[path = "manyhands-cli/local_sync.rs"]
+mod local_sync;
 #[path = "manyhands-cli/mutate.rs"]
 mod mutate;
 #[path = "manyhands-cli/parse.rs"]

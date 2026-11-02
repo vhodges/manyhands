@@ -589,6 +589,11 @@ pub fn dispatch(
         "poll configure" => return crate::polling::configure(service, session, command, args),
         "poll pause" => return crate::polling::pause(service, session, command, args),
         "poll resume" => return crate::polling::resume(service, session, command, args),
+        "context observe-local" => {
+            return crate::local_sync::observe(service, session, command, args);
+        }
+        "context show-local" => return crate::local_sync::show(service, session, command, args),
+        "context sync-local" => return crate::local_sync::sync(service, session, command, args),
         "conflict show" => return crate::conflict::show(service, session, command, args),
         "conflict resolve" => return crate::conflict::resolve(service, session, command, args),
         "operation resume" => {

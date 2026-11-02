@@ -1,0 +1,5 @@
+--- stderr
+error: The command line is not valid; see --help.
+code: usage_error
+--token reads a conflict's sides, and only --json prints them: add --json.
+--- exit 2

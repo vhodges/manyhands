@@ -636,7 +636,7 @@ written" below means the policy row: a finished request's record is still stored
 The poll's own completion writes are field-scoped (`record_poll_attempt`, `state.rs:2389`); Task 0 confirms
 `state::configure` is.
 
-**No worker.** No thread, no child, no service. Transport starts only for `poll once`.
+**No worker.** No thread, no child, no service. Transport starts for every dispatched verb, as `startup.rs` does; only `poll once` contacts a remote.
 
 ## Identity
 
@@ -817,6 +817,7 @@ and request records hold neither (Task 0 confirms). The index's `closed_by` colu
 | E-17 | `tests/mutation_remote/c5_lifecycle.rs` `child_remote_branch_deleted`; `bind/lifecycle.rs` `a_stop_the_request_cannot_get_past_offers_its_cancellation` (rewritten from `a_childs_way_past_needs_the_request_and_a_look_at_the_repository`) | The offered actions become `request.cancel`, `repo.inspect`, and the stale comment is fixed (decision 18) |
 | E-18 | `tests/repository_enablement.rs:3816` | Asserts the index now matches the commit (decision 22) |
 | E-19 | `promotion::run_tests::identity_and_mismatch_do_not_strand_the_item` | Its mismatch call has a real record, from a stop before the identity is removed; it still asserts the item isn't stranded (decision 22) |
+| E-20 | `tests/cli/help.rs` `root_help_and_bare_call_match_in_both_modes_without_data` | Drops `.chain([None])`: only a planned verb has no repository rule, and nothing stays planned (R-8) |
 
 `tests/read_relationships.rs:1183,1190,1254` hold `"C5"` as Wave-graph data, and are not pins. Task 0
 greps for other pins (`NotResumable`, `"C5"`, `arrives with`, `Planned`). An unlisted hit stops for owner
@@ -904,6 +905,7 @@ review. This list is not yet proven complete.
 - A `cancelled` answer can follow a guarded deletion that went through. The reservation's boundary refuses a run asked to stop around the transport call and with no word of it, so the branch may be gone with the step not yet `remote_deleted`. The same request's next delete finds no branch and answers `deleted` (`transport/remote.rs:240`), which reconciles it.
 - **For the owner's attention:** a result's `Item id:` carries no slug, because `LifecycleMutationDto` holds none. A preview shows `Slug:`, and `made ready:` lines show theirs. The preview's `Item id:` and `Slug:` aren't adjacent, since the field list is sorted.
 - A promotion blocked by a pending local sync issues a confirmation before refusing.
+- A closed ticket's stale remote branch answers `materialized`, so a local branch and worktree reappear until that remote branch is deleted (decision 14 removes C5's own two).
 - After an external `git pull`, with the index not marked behind, an item on primary with no context answers `item_not_found` until `index refresh`. An index marked behind keeps the `recovery_required` answer naming `context_missing`.
 
 ## Alternatives Rejected

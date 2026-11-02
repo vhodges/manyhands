@@ -2173,6 +2173,99 @@
         ],
         "repository": "required",
         "summary": "Resume polling."
+      },
+      {
+        "available": true,
+        "command": "context observe-local",
+        "delivered_by": "C5",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "Observe an item's context for a local synchronization."
+      },
+      {
+        "available": true,
+        "command": "context show-local",
+        "delivered_by": "C5",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--operation-id",
+            "required": true,
+            "summary": "Canonical operation ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--token",
+            "required": false,
+            "summary": "A conflict path's token, to read its sides. Needs --json.",
+            "value": "token"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show a local synchronization, or a conflict's sides with --token and --json."
+      },
+      {
+        "available": true,
+        "command": "context sync-local",
+        "delivered_by": "C5",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "Bring primary into an item's context, locally."
       }
     ]
   },

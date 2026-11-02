@@ -102,6 +102,12 @@ pub const REQUEST_ID: OptionSpec = option(
     false,
     "Canonical request ULID.",
 );
+const TOKEN: OptionSpec = option(
+    "--token",
+    Some("token"),
+    false,
+    "A conflict path's token, to read its sides. Needs --json.",
+);
 pub const PREPARE: OptionSpec = option(
     "--prepare",
     None,
@@ -1063,6 +1069,46 @@ pub const COMMANDS: &[CommandSpec] = &[
         kind: Kind::Mutation {
             confirmed: false,
             input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "context",
+        verb: "observe-local",
+        summary: "Observe an item's context for a local synchronization.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO, ID],
+        kind: Kind::Read,
+    },
+    CommandSpec {
+        resource: "context",
+        verb: "show-local",
+        summary: "Show a local synchronization, or a conflict's sides with --token and --json.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO, OPERATION_ID, TOKEN],
+        kind: Kind::Read,
+    },
+    CommandSpec {
+        resource: "context",
+        verb: "sync-local",
+        summary: "Bring primary into an item's context, locally.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            ID,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
         },
     },
 ];

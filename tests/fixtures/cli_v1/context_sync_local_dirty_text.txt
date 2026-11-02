@@ -1,0 +1,7 @@
+--- stderr
+error: The working tree has uncommitted changes in the way.
+code: worktree_not_clean
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX2
+next: manyhands-cli context observe-local --repo '<repository>' --id 01ARZ3NDEKTSV4RRFFQ69G5FC0
+note: commit or save what the context holds, then observe it again.
+--- exit 3

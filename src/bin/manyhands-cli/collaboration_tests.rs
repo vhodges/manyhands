@@ -2,9 +2,9 @@ use super::*;
 use crate::mutate::stops_on_ctrl_c;
 use manyhands::canonical::ItemId;
 use manyhands::repository::{
-    CommentAddInput, ConflictResolveInput, DocumentPromoteInput, IndexRefreshInput,
-    ItemRepublishInput, PollConfigureInput, PollOnceInput, PollPauseInput, PollResumeInput,
-    TicketCloseInput,
+    AuthoringKind, CommentAddInput, ConflictResolveInput, DocumentPromoteInput, IndexRefreshInput,
+    ItemRepublishInput, LocalContextSyncInput, PollConfigureInput, PollOnceInput, PollPauseInput,
+    PollResumeInput, TicketCloseInput,
 };
 
 const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -95,6 +95,15 @@ fn the_window_covers_exactly_the_stoppable_verbs() {
         ),
         (
             Mutation::PollOnce(PollOnceInput { root: root.clone() }),
+            true,
+        ),
+        (
+            Mutation::LocalContextSync(LocalContextSyncInput {
+                root: root.clone(),
+                kind: AuthoringKind::Ticket,
+                id: item(),
+                observation: String::new(),
+            }),
             true,
         ),
         (

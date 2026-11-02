@@ -63,6 +63,8 @@ mod input_schemas;
 mod keys;
 #[path = "cli/lifecycle.rs"]
 mod lifecycle;
+#[path = "cli/local_sync.rs"]
+mod local_sync;
 #[path = "cli/mutation.rs"]
 mod mutation;
 #[path = "cli/polling.rs"]

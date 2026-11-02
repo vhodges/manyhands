@@ -1,0 +1,24 @@
+--- stderr
+progress: observing
+error: Recovery is required before this can continue.
+code: recovery_required
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX1
+operation: <id>
+effects: write=written checkpoint=pending discovery=pending integration=pending
+Cancel acknowledged: false
+Eligibility: eligible_canonical
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
+Kind: ticket
+Next action: resolve
+Operation id: <id>
+Reason: canonical_conflict
+Required request id: none
+Resolution request id: none
+Result oid: none
+State: conflict_pending
+Type: local_context_sync
+next: repo.inspect root=<repository>
+next: manyhands-cli context show-local --repo '<repository>' --operation-id <id>
+next: manyhands-cli context resolve-local --repo '<repository>' --operation-id <id> --input - --request-id <new-request-id>
+note: <new-request-id> is a placeholder to fill in, and --input - takes the observation and a source for each token that context show-local prints.
+--- exit 4
