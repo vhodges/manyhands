@@ -104,12 +104,6 @@ gpui_kit::actions!(
         CancelComposer,
         /// Switch a comment composer between Rich text and Markdown.
         ComposerToggleMode,
-        /// Tab in a comment composer: leave it for the next control, since
-        /// its editor would otherwise take Tab.
-        FocusNext,
-        /// Shift-Tab in a comment composer: leave it for the previous
-        /// control.
-        FocusPrevious,
     ]
 );
 
@@ -179,9 +173,17 @@ pub(crate) const TOOLBAR_MENU_CONTEXT: &str = "EditToolbarMenu";
 pub(crate) const TOOLBAR_LINK_CONTEXT: &str = "EditToolbarLink";
 
 /// The key context of a comment composer (`view::item::composer`):
-/// `secondary-enter` posts, Escape cancels, the mode key switches Rich
-/// text and Markdown, and Tab and Shift-Tab leave it.
+/// `secondary-enter` posts, Escape cancels, and the mode key switches Rich
+/// text and Markdown. Tab and Shift-Tab indent and outdent in its editor,
+/// as the editor binds them; F6 and Shift-F6 (`NextRegion`,
+/// `PreviousRegion`) leave it.
 pub(crate) const COMMENT_COMPOSER_CONTEXT: &str = "CommentComposer";
+
+/// A comment composer's editor, inside the composer: the editor binds
+/// Escape itself (dismiss) in its deeper `Editor` context, so the
+/// composer's cancel is bound here too, as `EDIT_HOST_EDITOR` binds the
+/// edit editor's Escape.
+const COMMENT_COMPOSER_EDITOR: &str = "CommentComposer > Editor";
 
 /// Binds the desktop's keys. Quit now has no key: it is the focused
 /// Quit now button while quitting waits.
@@ -250,7 +252,8 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("tab", CycleLinkPopover, Some(TOOLBAR_LINK_CONTEXT)),
         KeyBinding::new("shift-tab", CycleLinkPopover, Some(TOOLBAR_LINK_CONTEXT)),
         // A comment composer, inside the item tab: its keys come before the
-        // tab's, and Tab leaves it rather than reaching its editor.
+        // tab's. Tab stays the editor's (indent); F6 leaves the composer.
+        // Escape is bound in its editor too, over the editor's own.
         KeyBinding::new(
             "secondary-enter",
             PostComment,
@@ -262,8 +265,7 @@ pub(crate) fn bind(cx: &mut App) {
             ComposerToggleMode,
             Some(COMMENT_COMPOSER_CONTEXT),
         ),
-        KeyBinding::new("tab", FocusNext, Some(COMMENT_COMPOSER_CONTEXT)),
-        KeyBinding::new("shift-tab", FocusPrevious, Some(COMMENT_COMPOSER_CONTEXT)),
+        KeyBinding::new("escape", CancelComposer, Some(COMMENT_COMPOSER_EDITOR)),
     ]);
 }
 

@@ -148,11 +148,14 @@ pub(crate) struct ItemPane {
     /// header's Comments {n}.
     discussion: discussion::Discussion,
     /// The header's Share and what it last sent (`share`).
+    #[allow(dead_code)] // Read from Task 8.
     share: share::ShareState,
     /// The discussion's new-comment and reply composers (`composer`).
+    #[allow(dead_code)] // Read from Task 12.
     composers: composer::Composers,
     /// The comments being posted, drawn pending in their threads
     /// (`posting`).
+    #[allow(dead_code)] // Read from Task 13.
     posting: posting::Posting,
     /// Set by the workspace when it opens the tab.
     region_end: Option<RegionEnd>,
@@ -436,8 +439,8 @@ impl Render for ItemPane {
                     cx.propagate();
                 }
             }))
-            .on_action(cx.listener(|pane, _: &ShareItem, _, cx| {
-                if !pane.share.share_requested() {
+            .on_action(cx.listener(|pane, _: &ShareItem, window, cx| {
+                if !pane.share_item(window, cx) {
                     cx.propagate();
                 }
             }))

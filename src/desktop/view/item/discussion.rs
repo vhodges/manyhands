@@ -256,8 +256,8 @@ impl ItemPane {
                         .child(status)
                         .children(cards)
                         .children(empty)
-                        .children(self.posting.render(cx))
-                        .children(self.composers.render(cx)),
+                        .children(self.posting_rows(window, cx))
+                        .children(self.composers_view(window, cx)),
                 ),
         )
     }

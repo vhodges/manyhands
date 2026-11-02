@@ -182,7 +182,7 @@ impl ItemPane {
             .children(pill)
             .children(self.comments_button(window, cx))
             .children(self.edit_action(read, window, cx))
-            .children(self.share.render(cx))
+            .children(self.share_button(window, cx))
             .children(
                 later
                     .iter()
