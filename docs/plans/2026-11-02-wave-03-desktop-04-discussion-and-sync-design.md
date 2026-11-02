@@ -256,12 +256,13 @@ pub(crate) struct Submission {
 ### Outcomes (Task 3, `model/publication.rs`)
 
 `comment_outcome(&Envelope<MutationDataDto>, Attempt) -> CommentOutcome`,
-where `Attempt { adopted_first_post: bool, record_accepted: bool }`. Rows
+where `Attempt { resend: bool, record: RecordState }`, where `RecordState` is `Accepted | Finished | Unknown` (`show_request` can fail; Unknown offers Retry and Check again only, never Edit text or Post as new — P17). Give up is offered on exactly the rows that name it. Rows
 in precedence order (first match wins). "Saved" means `checkpoint:
 committed`.
 
 | # | Condition | `CommentOutcome` | Offered |
 | --- | --- | --- | --- |
+| 0 | `code: request_mismatch` (any checkpoint state; no data) | `Mismatched { saved }` | Discard, Copy text; never Retry or Give up (P12) |
 | 1 | `Comment` data, `publication: published` or `current` | `Shared` | — |
 | 2 | saved, `pending_reason: no_publication_remote` | `SavedHere` | — |
 | 3 | saved, `outcome: cancelled`, publication `pending` | `SavedStopped` | **Share** the item (new `ItemSync`, fact 12) |
@@ -270,13 +271,13 @@ committed`.
 | 6 | saved, `code: unlock_required` or `unlock_failed` | `SavedNeedsUnlock` | Unlock…, Give up |
 | 7 | saved, `code: no_selected_key`, `key_unavailable`, `key_rejected` | `SavedNeedsKey` | Open Sharing & keys, Retry sharing, Give up |
 | 8 | saved, `code: host_approval_required`, `host_replacement_required` | `SavedNeedsHost` | Check host, Retry sharing, Give up |
+| 9c | saved, `code: identity_required` (the child's merge) | `SavedNeedsIdentity` | Set identity, Retry sharing, Give up |
 | 9a | saved, other pending, `record_accepted` | `SavedNotShared { code }` | Retry sharing, Give up |
 | 9b | saved, other pending, record finished | `SavedNotSharedFinal { code }` | Share (a new `item sync`) |
-| 9c | saved, `code: identity_required` (the child's merge) | `SavedNeedsIdentity` | Set identity, Retry sharing |
 | 10 | not saved, `outcome: cancelled` | `NotSavedStopped` | Post again (R-12) |
 | 11 | not saved, `code: identity_required` | `NotSavedIdentity` | Set identity, then Retry; Discard, Copy text |
 | 12 | not saved, `code: occupied_path` | `NotSavedConflicting` | Discard; text kept |
-| 13 | not saved, `code: request_mismatch`, or `internal_error` with `adopted_first_post` | `MaybeSaved` | Check again (R-8) |
+| 13 | not saved, `code: internal_error` on any re-send of a comment ID (adopted first post or a Retry) | `MaybeSaved` | Check again (R-8, P15) |
 | 14 | not saved, `effects.write: written` or `record_accepted` | `NotSavedOwed { code }` | Retry; Discard, Copy text (R-12) |
 | 15 | otherwise | `NotSaved { code }` | Edit text, which posts under a new comment ID (R-12) |
 
@@ -477,7 +478,7 @@ and posting.
 
 ### Required outcomes of posting recovery
 
-This table is the contract for Task 13, which is test-first with a design
+This table (P1–P18) is the contract for Task 13, which is test-first with a design
 checkpoint: the implementer writes one test per row, then proposes the
 state machine to the orchestrator before writing code.
 
@@ -486,13 +487,21 @@ state machine to the orchestrator before writing code.
 | P1 | A post's checkpoint commits and its publication succeeds | One file, one checkpoint; row shown once; draft retired; composer cleared. |
 | P2 | The checkpoint commits, publication fails, the user presses Retry sharing any number of times | No further file or checkpoint; the same request each time; chip until shared. |
 | P3 | The checkpoint commits, the user stops the publication, or quits while it runs | Saved, publication cancelled (final); Share (a new `item sync`) publishes it; no same-ID retry is offered. |
-| P4 | The process dies at any point after Submit (before the write, after the write, after the checkpoint, during publication) | On relaunch the adopted draft is first checked against the listing (after an `IndexRefresh`): if listed, the draft is retired. Otherwise its post is **the same request** (R-16): a finished record replays its result, an accepted one checkpoints a written file once and publishes once. Never a second comment. |
-| P5 | A post answers `MaybeSaved` (`request_mismatch`, or `internal_error` on an adopted draft's first post) | "This comment may already be saved." with **Check again** (`IndexRefresh`, listing, `show_request`). **Post as a new comment** (new comment ID, same text) is offered only when `show_request` answers that no record exists and the listing lacks the comment. Operation rows cannot be matched to a comment (fact 14e). |
+| P4 | The process dies at any point after Submit (before the write, after the write, after the checkpoint, during publication) | On relaunch the adopted draft's post is **the same request** (R-16), re-sent first (P11); the listing is consulted only when no record exists (P16): a finished record replays its result, an accepted one checkpoints a written file once and publishes once. Never a second comment. |
+| P5 | A post answers `MaybeSaved` (`internal_error` on a re-send, P15) | "This comment may already be saved." with **Check again** (`IndexRefresh`, listing, `show_request`). **Post as a new comment** (new comment ID, same text) only under P16. Operation rows cannot be matched to a comment (fact 14e). |
 | P6 | A post fails before writing anything, and the record is finished | Edit text is allowed; the edited text posts under a new comment ID and request (R-16). |
 | P7 | A post fails after writing, or its record is accepted (`identity_required`, transient codes) | Retry (and Set identity for `identity_required`); no Edit text. Discard (with "This comment may still be saved later if it was written") and Copy text keep the user from being trapped; after Discard the comment ID stays reserved and later posts use new IDs. |
 | P8 | `occupied_path` | Text kept; Discard offered; never retired silently. |
 | P9 | The tab is closed while posting | The outcome lands in `Submissions` from the drain; the draft is retired there on a committed checkpoint; reopening shows the comment and any chip. |
 | P10 | A second Submit while posting | Refused, with "Already posting". |
+| P11 | Relaunch with an adopted draft whose post has a record (accepted or finished) | The same request is re-sent **before** any listing check, and its answer is rendered; the draft is retired only on a committed checkpoint. A written-but-uncommitted file that the listing shows (it reads the working copy, `read/comments.rs:210-216`) never retires the draft by itself. |
+| P12 | `request_mismatch` (the posted text, parent or repository path differs from the record, `bind/comment.rs:775-805`) | Never Retry or Give up, which would loop. The text is kept with Copy text and Discard; if the record's checkpoint is committed the comment is shown as saved. Submit stores the exact posted body with the draft, and an adopted draft that was submitted stays read-only until its same request has been re-sent (load normalization, `model/editor_text.rs:24-34`, must not change it). |
+| P13 | Edit text after a finished failure (P6), then a crash | The draft is re-targeted to the new comment ID (retired and begun again, flush awaited) before the new Submit, so relaunch adopts the new ID, never the old. |
+| P14 | Give up whose re-send still answers with the record accepted (unlock, key, transport) | Offers the step that lets it finish (Unlock…, Open Sharing & keys, Retry), not Give up again. |
+| P15 | `internal_error` on any re-send of a comment ID, including a Retry after `operation abandon` left the binding and file (`bridges/abandon.rs:563`) | `MaybeSaved`; never Edit text under a new ID while the file may exist. |
+| P16 | Post as a new comment | Offered only after a successful `IndexRefresh`, a listing with `complete: true` and a current index, `show_request` answering no record, and the comment not listed. |
+| P17 | `show_request` fails after an attempt | Record state Unknown: Retry and Check again only. |
+| P18 | Discard after a written, uncommitted file (P7) | The copy says the file stays on this computer and may still appear in the thread; no chip. |
 
 ### Posting
 
@@ -588,9 +597,9 @@ only. Labels are fixed (fact 21).
 | Target | What |
 | --- | --- |
 | `services/requests_tests.rs` | Intents build their mutations; labels fixed; `stops_at_safe_points`. |
-| `services/worker_tests.rs` | An accepted `RepoSync` (with `publish_over_ssh`, held by `set_request_hook_for_testing`, fact 16) is `Signalled` and its token cancelled; a local job stays `TooLate`; `give_up` sends `cancel_request` then the same request. |
+| `services/worker_tests.rs` | An accepted `RepoSync` (with `publish_over_ssh`, held by `set_request_hook_for_testing`, fact 16) is `Signalled` and its token cancelled; a local job stays `TooLate`; `give_up` sends `cancel_request` then the same request and reports its answer; `submit_with_request_id`; each finished attempt carries its record state (Accepted, Finished, Unknown). |
 | `services/prompts_tests.rs` | A declined key answers `Cancelled` without a prompt; clearing it prompts again. |
-| `services/submissions_tests.rs` | Refuses while posting; retry keeps the request ID; restart makes a new one; survives a tab's drop. |
+| `services/submissions_tests.rs` | Refuses while posting; a post's request ID is its comment ID; retry keeps it; restart moves to a new comment ID and re-targets the draft (P13); a `Finished` event with no tab open updates the submission (services harness). |
 | `model/publication_tests.rs` | Every row of both tables, in precedence order, from constructed envelopes. |
 | `services/drafts/comments_tests.rs` | Caller's comment ID kept; per-thread drafts; a flush happens after the idle delay (advancing the test clock); adopt after a dropped registry; retire. |
 | `view/item/share_tests.rs` | Share states and guard; stage text from `Operations::apply` of constructed `ProgressEvent`s; each `SyncOutcome` row from constructed envelopes; routes; the conflict banner; the repository detail's Share main. |
@@ -743,3 +752,4 @@ R-2, R-5, R-6, R-7 and R-11 of revision 1 became owner decisions 8, 10,
 | Round 3 I2, I5 | Outcomes need record state; Give up too wide | Settled | `record_accepted`; rows 9a/9b. | Fact 10. |
 | Round 3 I3 | Holder lookup named non-holders | Settled | Narrowed; "may be waiting". | Fact 14. |
 | Round 3 I4 | Owed unsaved post trapped text | Ruling R-12 | Discard and Copy text. | — |
+| Round 4, narrow review of revision 4 (`2fdd1809`) | 2 Blocking, 6 Important, 3 Minor | — | Recorded as required outcomes P11–P18 and row-order fixes (rows 0, 9c, 13); the mechanism is left to Task 13's design checkpoint. Not re-reviewed. | Planning comment. |

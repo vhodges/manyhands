@@ -10,7 +10,7 @@ id: "01M6E696JQ4NAKG1RT7103FQJ3"
 
 # Desktop Discussion And Deliberate Synchronization Implementation Plan
 
-> **For agentic workers:** Draft, revision 4, not approved. Implementation
+> **For agentic workers:** Draft, revision 5, not approved. Implementation
 > starts only once the owner has approved the documents and authorized it.
 > Then use `implementing-a-cycle` task by task, re-read the design, repeat
 > the ticket preflight, and record every checkpoint on ticket
@@ -367,7 +367,8 @@ done
 
 - [ ] **Tests first:** `give_up_is_offered_exactly_when_the_record_is_accepted`
   (including `unlock_required` after Not now);
-  `give_up_is_not_offered_for_busy_or_a_finished_failure`;
+  `give_up_is_offered_on_exactly_the_rows_that_name_it`;
+  `a_give_up_left_waiting_on_unlock_offers_unlock_not_give_up` (P14);
   `stop_is_not_offered_without_a_remote` (R-15); E-10;
   `resume_is_offered_for_a_comment_publication_row`;
   `resume_is_not_offered_for_a_local_context_sync`;
@@ -447,7 +448,14 @@ owner. Only then Step 3 writes the code.
   `p7_an_owed_failure_offers_retry_discard_and_copy`,
   `p8_occupied_path_keeps_the_text_and_offers_discard`,
   `p9_closing_the_tab_while_posting_still_retires_the_draft`,
-  `p10_a_second_submit_while_posting_is_refused`;
+  `p10_a_second_submit_while_posting_is_refused`,
+  `p11_a_relaunch_resends_the_same_request_before_listing`,
+  `p12_a_mismatch_keeps_the_text_and_offers_no_retry`,
+  `p13_edited_text_retargets_the_draft_before_posting`,
+  `p15_internal_error_on_any_resend_is_maybe_saved`,
+  `p16_post_as_new_needs_a_complete_current_listing`,
+  `p17_an_unknown_record_offers_retry_and_check_only`,
+  `p18_discard_after_a_written_file_says_it_stays`;
   and:
   `saving_locally_without_a_remote_shows_saved_here` (real library);
   `a_failed_checkpoint_keeps_the_text_and_adds_no_row`;
@@ -563,7 +571,7 @@ devenv shell -- cargo run --locked --features desktop --bin manyhands
 | R-16 | 2, 13 |
 | R-14 | 2 |
 | R-15 | 10b |
-| P1–P10 | 13 |
+| P1–P18 | 13 (P14 also 10b) |
 | E-1 – E-7 | 4 (E-6 also 8) |
 | E-8, E-9 | 7 |
 | E-10 | 10b |

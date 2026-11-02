@@ -15,7 +15,7 @@ Ticket `01M4CC0VN1KTQFSVR99378TDHV`. Design:
 Plan:
 [2026-11-02-wave-03-desktop-04-discussion-and-sync-implementation.md](../plans/2026-11-02-wave-03-desktop-04-discussion-and-sync-implementation.md).
 
-Status: **draft, revision 4**, planned at `00bef3da` (origin/main
+Status: **draft, revision 5**, planned at `00bef3da` (origin/main
 `15a23125` merged into the ticket branch). Nothing has been built or run.
 
 ## Purpose And Authority
@@ -232,4 +232,5 @@ Decisions 5–15 await confirmation.
 | Review round 1, source and feasibility (`eec96a4c`) | 5 Blocking, 10 Important, 7 Minor | — | Revision 2. | Design Review Record. |
 | Review round 1, contract and consistency (`eec96a4c`) | 3 Blocking, 18 Important, 1 Minor group | — | Revision 2; rulings that changed behaviour became decisions 8–14. | Design Review Record. |
 | Review round 2, scoped with adversarial brief (`6ed12ae6`) | 2 Blocking, 7 Important, 9 Minor | — | Revision 3: required outcomes P1–P10; decision 8 widened; decision 15. | Design Review Record. |
+| Review round 4, narrow review of revision 4 (`2fdd1809`) | 2 Blocking, 6 Important, 3 Minor | — | Recorded as required outcomes P11–P18; not re-reviewed; Task 13's design checkpoint owns the mechanism. | Design Review Record. |
 | Review round 3, scoped with adversarial brief (`0fa796dd`) | 1 Blocking, 5 Important, 6 Minor | — | Revision 4: durable request ID (R-16), record state in outcomes. Not independently re-reviewed; Task 13's design checkpoint guards the mechanism. | Design Review Record. |
