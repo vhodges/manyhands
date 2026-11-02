@@ -17,6 +17,7 @@ Approved 2026-11-02 (`5c26a5cd`); execution is subagent-driven
 | Task | State | Base | Commits | Tests | Review | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | 0 | done | `605ff289` | `dba94593`, `38b3c18f` (main), `2394b88e` | Full suite at `605ff289`: 32 result lines, 4901 passed, 0 failed, 1 ignored | Orchestrator spot-check of U-items | Decisions 17, 18; main's tiered gate adopted. |
+| 1 | done | `45028fc9` | `71f8eefe` | `requests`: 11 passed; fmt, check, both clippy lines clean | APPROVE, 0 Blocking, 0 Important, 2 Minor (optional, not applied) | E-12 applied; `DelayingBackend` needed no change. |
 
 ### Task 0 record
 
