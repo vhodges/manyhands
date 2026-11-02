@@ -12,7 +12,7 @@ created_by: "Claude Opus 5.5 <noreply@anthropic.com>"
 **Base.** This ticket branch merged `origin/main` at `15a23125` as
 `00bef3da` (from `e4b48dd3`), with no conflicts and no rebase.
 
-**Drafts (revision 4, `2fdd1809`, pushed).**
+**Drafts (revision 5, `0ceee25a`, pushed).**
 - `docs/Cycles/wave-03-desktop-04-discussion-and-sync.md`
 - `docs/plans/2026-11-02-wave-03-desktop-04-discussion-and-sync-design.md`
 - `docs/plans/2026-11-02-wave-03-desktop-04-discussion-and-sync-implementation.md`
@@ -36,6 +36,9 @@ Limits. Decisions 5–15 are proposed and await confirmation.
   6 Minor. Revision 4 applies it and has not been independently
   re-reviewed; posting recovery is stated as required outcomes P1–P10 and
   Task 13 is test-first with a design checkpoint.
+- Round 4 at `2fdd1809` (narrow, at the owner's request): 2 Blocking,
+  6 Important, 3 Minor. Recorded at `0ceee25a` as required outcomes
+  P11–P18 and outcome-row order fixes; not re-reviewed.
 
 **Open.** Decisions 5–15; U-1 to U-5, settled in Task 0 by reading.
 
