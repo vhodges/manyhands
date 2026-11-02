@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$Staging,
-    [ValidateSet('Sign', 'Verify')][string]$Mode = 'Sign'
+    [ValidateSet('Sign', 'Verify', 'BuildInstaller')][string]$Mode = 'Sign',
+    [string]$Compiler,
+    [string]$Archive,
+    [string]$OutputDirectory
 )
 
 Set-StrictMode -Version Latest
@@ -15,23 +18,6 @@ function Confirm-CodeSigningUsage($Certificate) {
         throw 'Certificate does not permit code signing'
     }
     if ($Certificate.Subject -cne $Certificate.Issuer) { throw 'Expected one self-signed publisher certificate' }
-}
-
-function Confirm-Signatures([string[]]$Files, $Certificate, [string]$SignTool) {
-    foreach ($file in $Files) {
-        $name = [IO.Path]::GetFileName($file)
-        Write-ReleaseProgress "Starting SignTool verification: $name"
-        Invoke-ReleaseTool $SignTool @('verify', '/pa', '/all', '/tw', $file) | Out-Null
-        Write-ReleaseProgress "Completed SignTool verification: $name"
-        Write-ReleaseProgress "Starting Windows Authenticode verification: $name"
-        $signature = Get-AuthenticodeSignature -LiteralPath $file
-        if ($signature.Status -ne 'Valid' -or $null -eq $signature.SignerCertificate -or
-            $signature.SignerCertificate.Thumbprint -ne $Certificate.Thumbprint -or
-            $null -eq $signature.TimeStamperCertificate) {
-            throw "Invalid, untimestamped, or unexpected Authenticode identity: $file"
-        }
-        Write-ReleaseProgress "Completed Windows Authenticode verification: $name"
-    }
 }
 
 Write-ReleaseProgress "Starting Windows signing/verification (mode $Mode)"
@@ -56,7 +42,7 @@ $certificate = $null
 
 try {
     New-Item -ItemType Directory -Path $temporary | Out-Null
-    if ($Mode -eq 'Sign') {
+    if ($Mode -ne 'Verify') {
         if (-not $env:WINDOWS_SIGNING_PFX_BASE64 -or -not $env:WINDOWS_SIGNING_PFX_PASSWORD) {
             throw 'WINDOWS_SIGNING_PFX_BASE64 and WINDOWS_SIGNING_PFX_PASSWORD are required'
         }
@@ -86,10 +72,16 @@ try {
         if ($storedCertificate.Thumbprint -ne $identity.Thumbprint) { throw 'Imported signing identity changed' }
         $certificate = $storedCertificate
         Write-ReleaseProgress 'Completed signing identity import into CurrentUser/My'
-        Write-ReleaseProgress 'Starting public certificate export'
-        New-Item -ItemType Directory -Path (Join-Path $root 'signing') -Force | Out-Null
-        Export-Certificate -Cert $certificate -FilePath (Join-Path $root 'signing/manyhands.cer') -Type CERT | Out-Null
-        Write-ReleaseProgress 'Completed public certificate export'
+        if ($Mode -eq 'Sign') {
+            Write-ReleaseProgress 'Starting public certificate export'
+            New-Item -ItemType Directory -Path (Join-Path $root 'signing') -Force | Out-Null
+            Export-Certificate -Cert $certificate -FilePath (Join-Path $root 'signing/manyhands.cer') -Type CERT | Out-Null
+            Write-ReleaseProgress 'Completed public certificate export'
+        } else {
+            # Never rewrite the public identity or finalized payload to make a
+            # mismatching installer key appear to match its portable ZIP.
+            Invoke-ReleaseTool $python @('-B', $helper, 'verify', '--staging', $root) | Out-Null
+        }
     } else {
         Write-ReleaseProgress 'Starting packaged public identity validation'
         Invoke-ReleaseTool $python @('-B', $helper, 'verify', '--staging', $root) | Out-Null
@@ -106,13 +98,7 @@ try {
     if ($Mode -eq 'Sign') {
         $configuration = Get-Content -Raw -LiteralPath (Join-Path $PSScriptRoot '../../packaging/windows/signing.json') | ConvertFrom-Json
         $timestamp = Get-SignToolTimestampUrl -Url $configuration.timestamp_url
-        foreach ($file in $files) {
-            $name = [IO.Path]::GetFileName($file)
-            Write-ReleaseProgress "Starting signing and RFC 3161 timestamping: $name"
-            Invoke-ReleaseTool $signTool @('sign', '/s', 'My', '/sha1', $certificate.Thumbprint,
-                '/fd', 'SHA256', '/tr', $timestamp, '/td', 'SHA256', $file) | Out-Null
-            Write-ReleaseProgress "Completed signing and RFC 3161 timestamping: $name"
-        }
+        Set-ReleaseSignatures $files $certificate $signTool -TimestampUrl $timestamp
     }
 
     Add-VerificationTrust -CertificatePath (Join-Path $root 'signing/manyhands.cer') `
@@ -133,7 +119,7 @@ try {
         $signer | ConvertTo-Json | Set-Content -LiteralPath $signerPath -Encoding utf8NoBOM
         Invoke-ReleaseTool $python @('-B', $helper, 'finalize', '--staging', $root, '--runtime', $runtimePath, '--signer', $signerPath) | Out-Null
         Write-ReleaseProgress 'Completed verified signing metadata finalization'
-    } else {
+    } elseif ($Mode -eq 'Verify') {
         Write-ReleaseProgress 'Starting packaged runtime inventory comparison'
         $manifest = Get-Content -LiteralPath (Join-Path $root 'release.json') -Raw | ConvertFrom-Json
         foreach ($name in @('manyhands.exe', 'manyhands-cli.exe')) {
@@ -141,6 +127,23 @@ try {
             if (Compare-Object $runtime.binaries[$name] $recorded) { throw "Packaged PE imports changed: $name" }
         }
         Write-ReleaseProgress 'Completed packaged runtime inventory comparison'
+    }
+    if ($Mode -eq 'BuildInstaller') {
+        if (-not $Compiler -or -not $Archive -or -not $OutputDirectory) {
+            throw 'BuildInstaller requires Compiler, Archive, and OutputDirectory'
+        }
+        Write-ReleaseProgress 'Starting Inno installer compilation with mandatory component signing'
+        $installer = & (Join-Path $PSScriptRoot 'windows-installer.ps1') -Mode Build -Staging $root `
+            -Archive $Archive -Compiler $Compiler -OutputDirectory (Join-Path $temporary 'installer') `
+            -Thumbprint $certificate.Thumbprint -SignTool $signTool
+        Confirm-Signatures @($installer) $certificate $signTool
+        $null = New-Item -ItemType Directory -Path $OutputDirectory -Force
+        $destination = Join-Path (Resolve-Path -LiteralPath $OutputDirectory).Path ([IO.Path]::GetFileName($installer))
+        if (Test-Path -LiteralPath $destination) { throw 'Refusing an existing installer output' }
+        Copy-Item -LiteralPath $installer -Destination $destination
+        Invoke-ReleaseTool $python @('-B', (Join-Path $PSScriptRoot 'installer.py'), 'inventory',
+            '--staging', $root, '--archive', $Archive, '--installer', $destination, '--output', ($destination + '.json')) | Out-Null
+        Write-ReleaseProgress 'Completed signed installer and source-bound handoff inventory'
     }
     # Python clears the build-tool PATH and isolates HOME/current directory.
     Write-ReleaseProgress 'Starting packaged CLI smoke test'

@@ -13,6 +13,8 @@ from urllib.parse import quote
 import zipfile
 
 from common import IDENTITY_KEYS, TARGETS, hash_file, payload_name, read_release, target_info, validate_release, write_json
+from homebrew import render_cask
+from installer import installer_name, validate_installer
 from verify import verify_archive
 
 
@@ -154,10 +156,12 @@ def preflight(release: dict, github, *, expected_id=None):
     return existing
 
 
-def candidates(release: dict, assets: Path) -> list[tuple[Path, dict]]:
+def candidates(release: dict, assets: Path) -> tuple[list[tuple[Path, dict]], Path]:
     validate_release(release)
     expected = {payload_name(release, target) + platform.extension: target for target, platform in TARGETS.items()}
     required = set(expected) | {name + ".json" for name in expected}
+    setup_name = installer_name(release)
+    required |= {setup_name, setup_name + '.json'}
     found = {}
     for path in assets.rglob("*"):
         if path.is_symlink():
@@ -194,7 +198,10 @@ def candidates(release: dict, assets: Path) -> list[tuple[Path, dict]]:
         if manifest != {key: value for key, value in inventory.items() if key != "archive"}:
             raise ValueError(f"candidate inventory differs from the archived manifest: {name}")
         result.append((path, inventory))
-    return result
+    windows_archive, windows_package = next((path, package) for path, package in result if package['target'] == 'x86_64-pc-windows-msvc')
+    validate_installer(release, found[setup_name], json.loads(found[setup_name + '.json'].read_text(encoding='utf-8')),
+                       windows_archive, windows_package)
+    return result, found[setup_name]
 
 
 def source_manifest(release: dict) -> dict:
@@ -204,6 +211,9 @@ def source_manifest(release: dict) -> dict:
     return {**release, "kind": "manyhands-release-source", "packages": [
         {"target": target, "archive": payload_name(release, target) + platform.extension,
          "signing_mode": platform.signing_mode} for target, platform in sorted(TARGETS.items())
+    ], "channels": [
+        {"kind": "homebrew-cask", "asset": "manyhands.rb", "target": "aarch64-apple-darwin"},
+        {"kind": "windows-inno-setup", "asset": installer_name(release), "target": "x86_64-pc-windows-msvc"},
     ]}
 
 
@@ -223,14 +233,24 @@ licence, complete third-party/font notices, and relevant original source.
 Linux downloads target Ubuntu 24.04-compatible GNU/Linux and require
 Wayland/working graphics drivers for the desktop. macOS downloads target
 Apple Silicon; the archive README records the actual minimum OS version.
-Windows downloads use a statically linked MSVC CRT. Install Git for operations
-that invoke Git helpers.
+Windows downloads use a statically linked MSVC CRT. Local Git operations use
+the linked libgit2 library; a Git executable on the client PATH is not required.
 
 macOS ad-hoc signatures do not provide Developer ID trust or notarization.
 Windows self-signing does not provide public publisher trust or remove
 SmartScreen warnings. See the packaged README and public certificate details.
 
-`SHA256SUMS` covers the four archives and release-level `release.json`.
+`manyhands.rb` is a personal Homebrew cask for the macOS ZIP. Update the tap
+manually only after publication; draft-only downloads are not installable.
+The cask retains the CLI's sibling libraries in the Caskroom and does not
+disable quarantine or Gatekeeper. Uninstall preserves user data.
+
+`{installer_name(release)}` is the signed per-user Windows installer, alongside
+the portable ZIP. It offers a Start menu entry and opt-in user PATH integration,
+rejects version downgrades, and preserves user data on uninstall. It does not
+install a trust certificate; Windows self-signing warnings still apply.
+
+`SHA256SUMS` covers the four archives, installer, `manyhands.rb`, and release-level `release.json`.
 The release-level source manifest is immutable across reruns; each archive
 contains its own detailed build/runtime manifest. Leave the source asset intact.
 Publish this draft manually only after the Release workflow finishes
@@ -239,14 +259,18 @@ successfully and the downloads are reviewed. Do not publish while a run is activ
 
 
 def assemble(release: dict, assets: Path, github) -> str:
-    packages = candidates(release, assets)  # Complete verification before any mutation.
+    packages, installer = candidates(release, assets)  # Complete verification before any mutation.
     existing = preflight(release, github)
     with tempfile.TemporaryDirectory(prefix="manyhands-assembly-") as temp:
         work = Path(temp)
         aggregate = work / "release.json"
         identity = source_manifest(release)
         write_json(aggregate, identity)
-        files = [path for path, _ in packages] + [aggregate]
+        cask = work / "manyhands.rb"
+        macos_archive = next(path for path, item in packages if item["target"] == "aarch64-apple-darwin")
+        cask.write_text(render_cask(release, macos_archive, github.repo), encoding="utf-8")
+        payloads = [path for path, _ in packages] + [cask, installer]
+        files = payloads + [aggregate]
         checksums = work / "SHA256SUMS"
         checksums.write_text("".join(f"{hash_file(path)}  {path.name}\n" for path in sorted(files, key=lambda p: p.name)), encoding="utf-8")
         if existing is None:
@@ -281,7 +305,7 @@ def assemble(release: dict, assets: Path, github) -> str:
                 preflight(release, github, expected_id=release_id)
                 github.delete(asset)
         uploads = [*files, checksums]
-        for path in [*(path for path, _ in packages), checksums]:
+        for path in [*payloads, checksums]:
             preflight(release, github, expected_id=release_id)
             github.upload(release["tag"], path)
         current = preflight(release, github, expected_id=release_id)
@@ -319,7 +343,7 @@ def main() -> int:
                     summary.write(f"## Draft Release\n\n[{release['tag']}]({url})\n\nSource: `{release['commit']}`\n\n")
                     for target, platform in TARGETS.items():
                         summary.write(f"- `{payload_name(release, target)}{platform.extension}`\n")
-                    summary.write("- `release.json`\n- `SHA256SUMS`\n\nReview downloads before publishing manually.\n")
+                    summary.write(f"- `{installer_name(release)}`\n- `manyhands.rb` (manual tap update after publication)\n- `release.json`\n- `SHA256SUMS`\n\nReview downloads before publishing manually.\n")
     except (ApiError, OSError, ValueError, KeyError, subprocess.SubprocessError, tarfile.TarError, zipfile.BadZipFile) as error:
         print(f"release: {error}", file=sys.stderr)
         return 1

@@ -106,10 +106,11 @@ temporary public trust in **`Cert:\LocalMachine\Root`** only for runner
 verification. The private identity remains in `Cert:\CurrentUser\My`.
 Current-user root imports can require Windows security UI; the v0.1.5 trial
 stalled at that import even though both signing/timestamp calls succeeded.
-The machine-root path avoids that user-root confirmation requirement; its
-actual behavior must still be confirmed by native acceptance.
+The machine-root path passed the `v0.1.6` hosted Windows native trial,
+including signing and extracted verification. Installer signing is new
+Stage 2 work and still needs its own native trial.
 
-Both Sign and Verify modes fail their preflight before private-key handling
+Sign, Verify, and BuildInstaller modes fail preflight before private-key handling
 unless the process is Windows, `GITHUB_ACTIONS=true`,
 `RUNNER_ENVIRONMENT=github-hosted`, and running with an elevated administrator
 token. There is no fallback to current-user roots, other providers, or skipped
@@ -145,8 +146,10 @@ Messages do not print private material, passwords, environment contents, or
 complete argument lists. The last operation with a start but no completion
 message identifies the boundary to investigate; it is not proof of a cause.
 
-Each native tool has a **180-second deadline**, including stdout/stderr
-collection. Both pipes drain concurrently. Expiry fails the operation, kills
+Ordinary native tools have a **180-second deadline**, including stdout/stderr
+collection. ISCC has an explicit **1,800-second deadline** for compression and
+its mandatory signing/verification callbacks. Both pipes drain concurrently.
+Expiry fails the operation, kills
 the live process tree, allows up to five seconds for process exit, and throws
 through the existing signing cleanup. Nonzero exit codes still fail with
 captured tool output. If a tool has already exited but a detached child keeps
@@ -154,9 +157,11 @@ its output pipes open, the output-drain deadline still fails promptly; the old
 parent handle cannot guarantee termination of that detached child. Such jobs
 must continue to use disposable runners, not persistent signing machines.
 
-The Windows helper-test, signing, and extracted-verification workflow steps
-also have a **ten-minute limit**. This is a backstop for in-process certificate cmdlets
-and cumulative work, not permission to wait ten minutes for each native tool.
+The Windows helper-test, application signing, and extracted-verification steps
+also have a **ten-minute limit**. The installer step has a **45-minute limit**:
+30 minutes for ISCC, leaving 15 minutes for surrounding verification, the CLI
+smoke test, and cleanup. These are backstops for in-process certificate cmdlets
+and cumulative work, not extensions of individual native-tool deadlines.
 A workflow hard cancellation can interrupt `finally`; only the ordinary
 native-tool timeout is designed to return through normal cleanup. Hosted
 runner teardown remains the isolation backstop for hard cancellation. No
@@ -174,3 +179,35 @@ does not need signing secrets. It repeats import/signature/timestamp
 checks and runs the packaged CLI from an isolated directory with only
 Windows system directories on its PATH. Linux-hosted parser/metadata
 tests do not establish that these native signing operations succeeded.
+
+## Inno Setup component signing
+
+After the ZIP's extracted verification, `windows-sign.ps1 -Mode BuildInstaller`
+uses that retained extraction, the exact ZIP, and the pinned Inno compiler.
+It repeats the existing publisher import/trust/cleanup lifecycle, validates
+the packaged public identity, and does **not** re-sign or rewrite the payload.
+`installer.py` compares all extracted source files against the ZIP before and
+after compilation, then records the final installer hash and its source ZIP
+hash in an internal inventory for assembly.
+
+Inno's `SignTool=manyhands` and `SignedUninstaller=yes` are mandatory. Its
+callback invokes `windows-sign-file.ps1` with the exact public store thumbprint
+and SignTool path, never a PFX or password. The callback selects the already
+imported `CurrentUser\My` key, signs with SHA-256/RFC 3161, and requires both
+the shared SignTool and Authenticode verifiers before returning. This covers
+the embedded uninstaller and temporary setup self-copies as well as the outer
+installer; signing only the final EXE after compilation would miss those.
+The parent verifies the completed installer independently before handoff.
+Inno permits **two signing retries with a 2,000 ms delay** (three attempts in
+total), still inside the compiler deadline. Every successful attempt must
+pass the same mandatory signature, exact-identity and RFC 3161 timestamp
+checks; exhausted retries fail rather than producing unsigned output.
+
+The callback borrows the parent's temporary hosted-runner trust. It neither
+imports a certificate nor deletes the parent's key/trust. The parent removes
+only its owned material in `finally`, even after compiler/callback failure.
+Callback native tools retain their 180-second deadlines; the compiler has
+1,800 seconds and the installer workflow step has a 45-minute backstop.
+A timeout, missing timestamp, wrong identity,
+verification failure, or cleanup failure fails the job. No `/NS`, public trust
+installation on consumers, new publisher identity, or unsigned fallback is added.

@@ -42,6 +42,22 @@ Release with checksums. Publication is manual. See the
 [release guide](packaging/README.md) for tag/version requirements, signing
 setup, runtime support, and recovery.
 
+### Linux Nix packages
+
+The root flake builds from source for Linux x86_64 and ARM64. From a checkout
+containing the flake:
+
+```sh
+nix run .#manyhands-cli -- --help # featureless, headless CLI
+nix build .#default             # desktop plus a separately built CLI
+nix run .                      # desktop; needs Wayland and host graphics drivers
+```
+
+See the [Nix guide](packaging/nix/README.md) for tag-pinned installation, NixOS/Home
+Manager selection, installed licences/source disclosures, and runtime checks.
+`v0.1.6` predates the flake; remote installation needs a later published tag
+containing it. Devenv remains the development environment.
+
 ## Repository Layout
 
 - `src/lib.rs`: domain logic shared by the desktop and CLI front ends.
