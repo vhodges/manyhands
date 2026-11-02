@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Local context resolution input",
+  "type": "object",
+  "properties": {
+    "observation": {
+      "description": "The observation context show-local printed for this operation.",
+      "type": "string"
+    },
+    "resolutions": {
+      "type": "array",
+      "description": "One resolution for every conflicted path context show-local lists, and at least one.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string" },
+          "source": { "type": "string" }
+        },
+        "required": ["token", "source"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["observation", "resolutions"],
+  "additionalProperties": false
+}

@@ -25,7 +25,8 @@ use crate::support::{
     cli::{self, CliEnv, CliRun},
     items,
     mutation::{
-        DOCUMENT, REQUEST_1, REQUEST_2, REQUEST_3, TICKET_CLOSED, World, execute_confirmed,
+        DOCUMENT, DOCUMENT_PATH, REQUEST_1, REQUEST_2, REQUEST_3, TICKET_CLOSED, World,
+        execute_confirmed,
     },
     operations,
 };
@@ -43,6 +44,10 @@ const MUTATION_SCHEMA: &str = "local_context_sync_mutation.schema.json";
 const OTHER_OBSERVATION: &str =
     "local-sync-v1:0000000000000000000000000000000000000000000000000000000000000000";
 const INCOMING_TITLE: &str = "Incoming conflict sentinel";
+const REQUEST_4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX5";
+/// Planted in a submitted source: the index may hold it, as the resolved
+/// item's title, and nothing else in application data or any output may.
+const SOURCE_SENTINEL: &str = "SENTINEL-SOURCE-4b7e";
 
 struct Case {
     world: World,
@@ -334,6 +339,7 @@ fn scrubbed_word(word: &str) -> String {
         REQUEST_1,
         REQUEST_2,
         REQUEST_3,
+        REQUEST_4,
     ];
     if word.starts_with("local-sync-v1:") {
         "<observation>".into()
@@ -1098,7 +1104,8 @@ fn a_prepare_is_not_confirmable() {
 
 /// `human_lifecycle::merge_refused`'s first three commands, in its argument
 /// order with its placeholders filled: each parses and reaches its verb. The
-/// walk from a refused closure to its finish is Task 10b's.
+/// walk from a refused closure to its finish is
+/// `the_refused_merges_route_finishes_the_close`.
 #[test]
 fn the_refused_merges_strings_work_exactly() {
     let (case, operation) = Case::conflicted("");
@@ -1366,4 +1373,709 @@ fn the_verbs_help_is_available_and_is_its_own_golden() {
         cli::assert_cli_golden(golden, &value, &[]);
     }
     assert!(!env.data.exists());
+}
+
+// --------------------------------------------------------- `resolve-local`
+
+impl Case {
+    /// A conflict on the ticket and on the guide: two paths.
+    fn two_paths_conflicted() -> (Self, String) {
+        let case = Self::saved();
+        let context = case.context();
+        items::write(
+            &context,
+            DOCUMENT_PATH,
+            &items::document_source(DOCUMENT, "Local guide", ""),
+        );
+        case.git(&context, &["add", "--", DOCUMENT_PATH]);
+        case.git(&context, &["commit", "--quiet", "-m", "local guide"]);
+        let path = items::ticket_path(TICKET);
+        items::write(
+            &case.world.root,
+            &path,
+            &items::ticket_source(TICKET, INCOMING_TITLE, ""),
+        );
+        items::write(
+            &case.world.root,
+            DOCUMENT_PATH,
+            &items::document_source(DOCUMENT, "Incoming guide", ""),
+        );
+        items::commit(
+            &case.world.fixture,
+            &[&path, DOCUMENT_PATH],
+            items::COMMITTED_AT + 60,
+        );
+        let observation = case.observation();
+        let value = case.sync_json(REQUEST_2, &observation, 4, "recovery_required");
+        let operation = value["operation_id"].as_str().unwrap().to_owned();
+        (case, operation)
+    }
+
+    fn resolve_args<'a>(&'a self, operation: &'a str, request: &'a str) -> Vec<&'a str> {
+        vec![
+            "context",
+            "resolve-local",
+            "--repo",
+            self.root(),
+            "--operation-id",
+            operation,
+            "--input",
+            "-",
+            "--request-id",
+            request,
+        ]
+    }
+
+    fn resolve_json(
+        &self,
+        operation: &str,
+        request: &str,
+        input: &Value,
+        status: i32,
+        code: &str,
+    ) -> Value {
+        let before = self.primary_refs();
+        let args = self.resolve_args(operation, request);
+        let value = self.json(&args, input.to_string().as_bytes(), status, code, None);
+        assert_eq!(value["command"], "context resolve-local");
+        if !value["data"].is_null() {
+            crate::support::schema::check_published(MUTATION_SCHEMA, &value["data"]).unwrap();
+        }
+        assert!(!value.to_string().contains(SOURCE_SENTINEL), "{value}");
+        assert_eq!(self.primary_refs(), before, "primary or a remote ref moved");
+        value
+    }
+
+    fn resolve_text(&self, operation: &str, request: &str, input: &Value) -> CliRun {
+        let run = self.run(
+            &self.resolve_args(operation, request),
+            input.to_string().as_bytes(),
+        );
+        assert!(!stdout(&run).contains(SOURCE_SENTINEL));
+        assert!(!stderr(&run).contains(SOURCE_SENTINEL));
+        run
+    }
+
+    /// The live observation, and a source for each path: the ticket's carries
+    /// the sentinel, and the guide's is its local side.
+    fn resolution(&self, operation: &str) -> Value {
+        let view = self.show(operation, 0, "ok");
+        let resolutions: Vec<Value> = view["data"]["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                let token = entry["token"].as_str().unwrap();
+                let source = if entry["display_path"] == DOCUMENT_PATH {
+                    items::document_source(DOCUMENT, "Resolved guide", "")
+                } else {
+                    items::ticket_source(TICKET, &format!("Resolved {SOURCE_SENTINEL}"), "")
+                };
+                json!({ "token": token, "source": source })
+            })
+            .collect();
+        json!({ "observation": view["data"]["observation"], "resolutions": resolutions })
+    }
+
+    fn state(&self, operation: &str) -> Value {
+        self.show(operation, 0, "ok")["data"]["state"].clone()
+    }
+
+    fn context_files(&self) -> (String, String) {
+        let context = self.context();
+        (
+            fs::read_to_string(context.join(items::ticket_path(TICKET))).unwrap(),
+            fs::read_to_string(context.join(DOCUMENT_PATH)).unwrap(),
+        )
+    }
+}
+
+/// Every cell of application data holding a sentinel, but the index's items.
+fn cells_beyond_the_index(data: &Path, sentinel: &str) -> Vec<String> {
+    let connection = items::index(data);
+    let tables: Vec<String> = connection
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        tables
+            .iter()
+            .any(|table| table == "local_context_sync_resolutions")
+    );
+    let mut found = Vec::new();
+    for table in tables.iter().filter(|table| *table != "discovered_items") {
+        let mut statement = connection
+            .prepare(&format!("SELECT * FROM \"{table}\""))
+            .unwrap();
+        let columns = statement.column_count();
+        let mut rows = statement.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            for index in 0..columns {
+                let bytes = match row.get_ref(index).unwrap() {
+                    rusqlite::types::ValueRef::Text(bytes)
+                    | rusqlite::types::ValueRef::Blob(bytes) => bytes.to_vec(),
+                    _ => continue,
+                };
+                if String::from_utf8_lossy(&bytes).contains(sentinel) {
+                    found.push(table.clone());
+                }
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn a_complete_valid_set_is_ok_and_keeps_its_source_out_of_application_data() {
+    let (case, operation) = Case::two_paths_conflicted();
+    let input = case.resolution(&operation);
+    let value = case.resolve_json(&operation, REQUEST_3, &input, 0, "ok");
+    assert_eq!(value["data"]["state"], "complete", "{value}");
+    assert_eq!(value["data"]["operation_id"], *operation);
+    case.golden("context_resolve_local", &value);
+    let (ticket, guide) = case.context_files();
+    assert!(ticket.contains(SOURCE_SENTINEL), "{ticket}");
+    assert!(guide.contains("Resolved guide"), "{guide}");
+    assert_eq!(case.state(&operation), "complete");
+    assert_eq!(
+        cells_beyond_the_index(case.world.data.path(), SOURCE_SENTINEL),
+        Vec::<String>::new()
+    );
+
+    // Replay: the stored answer, and nothing more is written.
+    let tip = case.world.branch_tip(TICKET);
+    let again = case.resolve_json(&operation, REQUEST_3, &input, 0, "ok");
+    assert_eq!(again, value);
+    assert_eq!(case.world.branch_tip(TICKET), tip);
+    let run = case.resolve_text(&operation, REQUEST_3, &input);
+    assert_eq!(run.status, 0, "{}", stderr(&run));
+    case.text_golden("context_resolve_local_text", &run);
+
+    // Mismatch: another source under the same request.
+    let mut other = input.clone();
+    other["resolutions"][0]["source"] = json!(items::ticket_source(TICKET, "Another", ""));
+    let value = case.resolve_json(&operation, REQUEST_3, &other, 2, "request_mismatch");
+    case.golden("context_resolve_local_request_mismatch", &value);
+    assert_eq!(case.world.branch_tip(TICKET), tip);
+    assert_eq!(
+        cells_beyond_the_index(case.world.data.path(), SOURCE_SENTINEL),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_incomplete_duplicate_unknown_or_invalid_set_is_invalid_input_before_any_write() {
+    let (case, operation) = Case::two_paths_conflicted();
+    let input = case.resolution(&operation);
+    let files = case.context_files();
+    let tip = case.world.branch_tip(TICKET);
+    let first = input["resolutions"][0].clone();
+    let mut incomplete = input.clone();
+    incomplete["resolutions"] = json!([first]);
+    let mut duplicate = input.clone();
+    duplicate["resolutions"] = json!([first.clone(), first.clone()]);
+    let mut invalid = input.clone();
+    invalid["resolutions"][0]["source"] =
+        json!(format!("not a canonical item {SOURCE_SENTINEL}\n"));
+    let mut empty = input.clone();
+    empty["resolutions"] = json!([]);
+    for (index, (name, bad)) in [
+        ("incomplete", &incomplete),
+        ("duplicate", &duplicate),
+        ("invalid", &invalid),
+        ("empty", &empty),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request = [REQUEST_3, REQUEST_4][index % 2];
+        let value = case.resolve_json(&operation, request, bad, 2, "invalid_input");
+        assert_eq!(case.context_files(), files, "{name}");
+        assert_eq!(case.world.branch_tip(TICKET), tip, "{name}");
+        assert_eq!(case.state(&operation), "conflict_pending", "{name}");
+        if name == "incomplete" {
+            case.golden("context_resolve_local_incomplete", &value);
+            let run = case.resolve_text(&operation, REQUEST_3, bad);
+            assert_eq!(run.status, 2);
+            assert!(
+                stderr(&run).contains(&format!(
+                    "next: manyhands-cli context show-local --repo '{}' --operation-id {operation}\n",
+                    case.root()
+                )),
+                "{}",
+                stderr(&run)
+            );
+            case.text_golden("context_resolve_local_incomplete_text", &run);
+        }
+    }
+    assert_eq!(
+        cells_beyond_the_index(case.world.data.path(), SOURCE_SENTINEL),
+        Vec::<String>::new()
+    );
+    // The complete set still resolves.
+    case.resolve_json(&operation, REQUEST_1, &input, 0, "ok");
+}
+
+/// The design's row: an unknown token, well formed, is `invalid_input` before
+/// any write. It answers `external_change`, exit 3, so it waits for a ruling
+/// (ledger, Task 10b). Nothing is written either way.
+#[test]
+#[ignore = "answers external_change, exit 3; awaiting the owner's ruling"]
+fn an_unknown_token_is_invalid_input_before_any_write() {
+    let (case, operation) = Case::two_paths_conflicted();
+    let input = case.resolution(&operation);
+    let files = case.context_files();
+    let mut unknown = input.clone();
+    let token = input["resolutions"][0]["token"].as_str().unwrap();
+    unknown["resolutions"][0]["token"] = json!(tampered(token));
+    case.resolve_json(&operation, REQUEST_3, &unknown, 2, "invalid_input");
+    assert_eq!(case.context_files(), files);
+    assert_eq!(case.state(&operation), "conflict_pending");
+}
+
+#[test]
+fn a_stale_observation_is_external_change_and_points_to_show_local() {
+    let (case, operation) = Case::two_paths_conflicted();
+    let input = case.resolution(&operation);
+    // The guide is edited in the context after the inspection.
+    let guide = case.context().join(DOCUMENT_PATH);
+    let mut text = fs::read_to_string(&guide).unwrap();
+    text.push_str("edited after the inspection\n");
+    fs::write(&guide, &text).unwrap();
+    let value = case.resolve_json(&operation, REQUEST_3, &input, 3, "external_change");
+    assert_eq!(fs::read_to_string(&guide).unwrap(), text);
+    case.golden("context_resolve_local_stale", &value);
+    let run = case.resolve_text(&operation, REQUEST_4, &input);
+    assert_eq!(run.status, 3);
+    assert!(
+        stderr(&run).contains("context show-local"),
+        "{}",
+        stderr(&run)
+    );
+    case.text_golden("context_resolve_local_stale_text", &run);
+}
+
+/// A resolution stopped after it wrote a path, in this process (see the file's
+/// comment), and its operation, observation and sources.
+fn partially_resolved() -> (Case, String, Value) {
+    let case = Case::over(World::with_service(|data| {
+        FailOnce::at(FailurePoint::LocalSyncAfterResolutionPath).open_service(data)
+    }));
+    case.save();
+    case.primary_moved_the_ticket("");
+    let observation = case.observation();
+    let value = case.sync_json(REQUEST_2, &observation, 4, "recovery_required");
+    let operation = value["operation_id"].as_str().unwrap().to_owned();
+    let view = case.show(&operation, 0, "ok");
+    let token = view["data"]["paths"][0]["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let source = items::ticket_source(TICKET, &format!("Resolved {SOURCE_SENTINEL}"), "");
+    let input = json!({
+        "observation": view["data"]["observation"],
+        "resolutions": [{ "token": token, "source": source }],
+    });
+    let stopped = case.world.execute(
+        REQUEST_3,
+        Mutation::LocalContextResolve(LocalContextResolveInput {
+            root: case.world.root.clone(),
+            operation_id: OperationId::parse(&operation).unwrap(),
+            observation: input["observation"].as_str().unwrap().to_owned(),
+            resolutions: vec![LocalConflictResolutionInput { token, source }],
+        }),
+    );
+    assert_ne!(stopped.code, ResultCode::Ok, "{:?}", stopped.data);
+    (case, operation, input)
+}
+
+/// The inspection and a resume name the original request, and that request,
+/// with the same sources, finishes.
+#[test]
+fn a_partial_accepted_resolution_is_finished_by_the_same_request_and_source() {
+    let (case, operation, input) = partially_resolved();
+    let view = case.show(&operation, 0, "ok");
+    assert_eq!(
+        view["data"]["reason"], "original_resolution_required",
+        "{view}"
+    );
+    assert_eq!(view["data"]["required_request_id"], REQUEST_3, "{view}");
+    let resume = [
+        "operation",
+        "resume",
+        "--repo",
+        case.root(),
+        "--operation-id",
+        &operation,
+        "--request-id",
+        REQUEST_4,
+    ];
+    // A resume's own answer, `blocked`; the table has no row for it.
+    let resumed = case.json(&resume, &[], 3, "original_request_required", None);
+    assert_eq!(
+        resumed["data"]["required_request_id"], REQUEST_3,
+        "{resumed}"
+    );
+    assert_eq!(
+        resumed["recovery"][0]["action"], "request.retry",
+        "{resumed}"
+    );
+    assert_eq!(
+        resumed["recovery"][0]["arguments"]["request_id"], REQUEST_3,
+        "{resumed}"
+    );
+    case.golden(
+        "context_operation_resume_original_request_required",
+        &resumed,
+    );
+
+    let done = case.resolve_json(&operation, REQUEST_3, &input, 0, "ok");
+    assert_eq!(done["data"]["state"], "complete", "{done}");
+    assert_eq!(
+        cells_beyond_the_index(case.world.data.path(), SOURCE_SENTINEL),
+        Vec::<String>::new()
+    );
+}
+
+/// The design's row: a new `resolve-local` request after a partial accepted
+/// resolution answers `original_request_required`, exit 4. It answers
+/// `external_change`, exit 3, even with the observation read again, so it
+/// waits for a ruling (ledger, Task 10b).
+#[test]
+#[ignore = "answers external_change, exit 3; awaiting the owner's ruling"]
+fn a_new_request_after_a_partial_resolution_is_original_request_required() {
+    let (case, operation, input) = partially_resolved();
+    let refused = case.resolve_json(
+        &operation,
+        REQUEST_4,
+        &input,
+        4,
+        "original_request_required",
+    );
+    assert_eq!(
+        refused["data"]["required_request_id"], REQUEST_3,
+        "{refused}"
+    );
+    let view = case.show(&operation, 0, "ok");
+    let mut fresh = input.clone();
+    fresh["observation"] = view["data"]["observation"].clone();
+    let refused = case.resolve_json(
+        &operation,
+        REQUEST_4,
+        &fresh,
+        4,
+        "original_request_required",
+    );
+    assert_eq!(
+        refused["data"]["required_request_id"], REQUEST_3,
+        "{refused}"
+    );
+}
+
+/// The gate's guarded abandonment: refused while the conflict's files remain.
+#[test]
+fn operation_abandon_of_a_pending_conflict_is_refused_and_keeps_its_files() {
+    let (case, operation) = Case::conflicted("");
+    let ticket = fs::read_to_string(case.context().join(items::ticket_path(TICKET))).unwrap();
+    let prepare = [
+        "operation",
+        "abandon",
+        "--repo",
+        case.root(),
+        "--operation-id",
+        &operation,
+        "--prepare",
+        "--json",
+    ];
+    let prepared = cli::json(&case.run(&prepare, &[]));
+    let answer = match prepared["data"]["confirmation_id"].as_str() {
+        Some(confirmation) => {
+            let confirm = [
+                "operation",
+                "abandon",
+                "--repo",
+                case.root(),
+                "--operation-id",
+                &operation,
+                "--request-id",
+                REQUEST_3,
+                "--confirm",
+                confirmation,
+                "--json",
+            ];
+            cli::json(&case.run(&confirm, &[]))
+        }
+        None => prepared,
+    };
+    assert_eq!(answer["code"], "recovery_required", "{answer}");
+    case.golden("context_operation_abandon_refused", &answer);
+    assert_eq!(case.state(&operation), "conflict_pending");
+    assert_eq!(
+        fs::read_to_string(case.context().join(items::ticket_path(TICKET))).unwrap(),
+        ticket
+    );
+}
+
+#[test]
+fn resolve_input_failures_are_invalid_input_with_nothing_done() {
+    let (case, operation) = Case::conflicted("");
+    let tip = case.world.branch_tip(TICKET);
+    for (index, bad) in [
+        json!({}),
+        json!({"observation": "x"}),
+        json!({"observation": "x", "resolutions": [{"token": "t"}]}),
+        json!({"observation": "x", "resolutions": [{"token": "t", "source": "s", "path": "p"}]}),
+        json!({"observation": "x", "resolutions": [], "extra": 1}),
+        json!({"observation": 7, "resolutions": []}),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let value = case.json(
+            &case.resolve_args(&operation, REQUEST_3),
+            bad.to_string().as_bytes(),
+            2,
+            "invalid_input",
+            None,
+        );
+        if index == 0 {
+            case.golden("context_resolve_local_input_failure", &value);
+        }
+    }
+    case.request_absent(REQUEST_3);
+    assert_eq!(case.world.branch_tip(TICKET), tip);
+    assert_eq!(case.state(&operation), "conflict_pending");
+}
+
+#[test]
+fn resolve_local_has_its_help_golden() {
+    let temp = tempfile::tempdir().unwrap();
+    let env = CliEnv::new(temp.path().join("absent-data"));
+    let args = ["context", "resolve-local", "--help", "--json"];
+    let output = cli::run_cli(&args.map(OsStr::new), &env);
+    assert_eq!(output.status, 0);
+    let value = cli::json(&output);
+    crate::support::schema::check_published("cli_help.schema.json", &value["data"]).unwrap();
+    cli::assert_cli_golden("help_context_resolve_local", &value, &[]);
+}
+
+/// The resolve verb's closed input: what its example says, the binary takes,
+/// and hands to the library, which finds no such operation's conflict.
+pub fn the_resolve_example_input_is_accepted(example: &Value) {
+    let (case, operation) = Case::conflicted("");
+    let args = case.resolve_args(&operation, REQUEST_3);
+    let value = case.json(
+        &args,
+        example.to_string().as_bytes(),
+        3,
+        "external_change",
+        None,
+    );
+    assert!(!value["data"].is_null(), "{value}");
+}
+
+/// Splits a `next:` line as a POSIX shell would, for the quoting `quoted` uses.
+fn words(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quoted = false;
+    let mut any = false;
+    let mut chars = line.chars().peekable();
+    while let Some(character) = chars.next() {
+        match character {
+            '\'' => {
+                quoted = !quoted;
+                any = true;
+            }
+            '\\' if !quoted => {
+                if let Some(next) = chars.next() {
+                    word.push(next);
+                }
+            }
+            ' ' if !quoted => {
+                if any || !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+                any = false;
+            }
+            _ => word.push(character),
+        }
+    }
+    if any || !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// What a human result names after `<label>: `.
+fn value_after<'a>(text: &'a str, label: &str) -> &'a str {
+    text.lines()
+        .find_map(|line| line.strip_prefix(&format!("{label}: ")))
+        .unwrap_or_else(|| panic!("no {label}: {text}"))
+}
+
+/// The route Task 7 prints for a refused closure checkpoint merge, run from its
+/// own lines with only the placeholders filled, ends with the same close request
+/// finishing with one merge and the closure's fields kept.
+#[test]
+fn the_refused_merges_route_finishes_the_close() {
+    let case = Case::over(World::with_service(|data| {
+        FailOnce::at(FailurePoint::AfterClosureCheckpoint).open_service(data)
+    }));
+    case.save();
+    let close = || {
+        Mutation::TicketClose(TicketCloseInput {
+            root: case.world.root.clone(),
+            id: items::item_id(TICKET),
+        })
+    };
+    let preview = case.world.service.prepare(&close());
+    let confirmation = preview
+        .data
+        .as_ref()
+        .and_then(|data| data.preview())
+        .unwrap()
+        .confirmation_id
+        .clone();
+    let stopped = execute_confirmed(&case.world.service, REQUEST_1, &confirmation, close());
+    assert_ne!(stopped.code, ResultCode::Ok, "{:?}", stopped.data);
+    let path = items::ticket_path(TICKET);
+    let checkpoint = fs::read_to_string(case.context().join(&path)).unwrap();
+    let closure: Vec<&str> = checkpoint
+        .lines()
+        .filter(|line| line.starts_with("closed_at:") || line.starts_with("closed_by:"))
+        .collect();
+    assert_eq!(closure.len(), 2, "{checkpoint}");
+    items::write(
+        &case.world.root,
+        &path,
+        &items::ticket_source(TICKET, "Moved on primary", ""),
+    );
+    items::commit(&case.world.fixture, &[&path], items::COMMITTED_AT + 60);
+    let merges = || {
+        case.git(&case.world.root, &["rev-list", "--merges", "main"])
+            .lines()
+            .count()
+    };
+    assert_eq!(merges(), 0);
+
+    // The refused merge, and its lines.
+    let close_args = [
+        "ticket",
+        "close",
+        "--repo",
+        case.root(),
+        "--id",
+        TICKET,
+        "--request-id",
+        REQUEST_1,
+    ];
+    let refused = case.run(&close_args, &[]);
+    assert_eq!(refused.status, 4, "{}", stderr(&refused));
+    let lines: Vec<Vec<String>> = stderr(&refused)
+        .lines()
+        .filter_map(|line| line.strip_prefix("next: manyhands-cli context "))
+        .map(|line| {
+            let mut words = words(line);
+            words.insert(0, "context".into());
+            words
+        })
+        .collect();
+    assert_eq!(lines.len(), 4, "{}", stderr(&refused));
+    let fill = |words: &[String], values: &[(&str, &str)]| -> Vec<String> {
+        words
+            .iter()
+            .map(|word| {
+                values
+                    .iter()
+                    .find(|(placeholder, _)| word == placeholder)
+                    .map_or_else(|| word.clone(), |(_, value)| (*value).to_owned())
+            })
+            .collect()
+    };
+    let run = |words: Vec<String>, input: &[u8]| {
+        let args: Vec<&str> = words.iter().map(String::as_str).collect();
+        case.run(&args, input)
+    };
+
+    // 1. Observe.
+    let observed = run(lines[0].clone(), &[]);
+    assert_eq!(observed.status, 0, "{}", stderr(&observed));
+    let observation = value_after(stdout(&observed), "Observation").to_owned();
+    // 2. Synchronize, with the observation as the input: a conflict.
+    let synced = run(
+        fill(&lines[1], &[("<new-request-id>", REQUEST_2)]),
+        &input(&observation),
+    );
+    assert_eq!(synced.status, 4, "{}", stderr(&synced));
+    let operation = value_after(stderr(&synced), "Operation id").to_owned();
+    // 3. Inspect it.
+    let shown = run(fill(&lines[2], &[("<sync-operation-id>", &operation)]), &[]);
+    assert_eq!(shown.status, 0, "{}", stderr(&shown));
+    let resolution_observation = value_after(stdout(&shown), "Observation").to_owned();
+    let token = stdout(&shown)
+        .lines()
+        .find_map(|line| {
+            line.split_whitespace()
+                .find_map(|word| word.strip_prefix("token="))
+        })
+        .unwrap()
+        .to_owned();
+    // The sides, through --json: the local side is the closure's checkpoint.
+    let sides = case.json(
+        &case.show_args(&operation, Some(&token)),
+        &[],
+        0,
+        "ok",
+        Some(CONTENT_SCHEMA),
+    );
+    let local = sides["data"]["local"].as_str().unwrap().to_owned();
+    for line in &closure {
+        assert!(local.contains(line), "{local}");
+    }
+    // 4. Resolve, keeping the closure.
+    let body = json!({
+        "observation": resolution_observation,
+        "resolutions": [{ "token": token, "source": local }],
+    });
+    let resolved = run(
+        fill(
+            &lines[3],
+            &[
+                ("<sync-operation-id>", &operation),
+                ("<new-request-id>", REQUEST_3),
+            ],
+        ),
+        body.to_string().as_bytes(),
+    );
+    assert_eq!(resolved.status, 0, "{}", stderr(&resolved));
+
+    // The same close request finishes. Primary gains the resolution's merge,
+    // which checkpoints `[context, primary]` in the context, and the closure's
+    // one integration.
+    let mut json_args = close_args.to_vec();
+    json_args.push("--json");
+    let done = cli::json(&case.run(&json_args, &[]));
+    assert_eq!(done["code"], "ok", "{done}");
+    assert_eq!(done["data"]["integration"], "merged", "{done}");
+    let subjects = case.git(
+        &case.world.root,
+        &["log", "--merges", "--format=%s", "main"],
+    );
+    assert_eq!(
+        subjects.lines().collect::<Vec<_>>(),
+        [
+            format!("Integrate closed ticket {TICKET}").as_str(),
+            "Resolve local context conflicts",
+        ],
+        "{subjects}"
+    );
+    assert_eq!(merges(), 2);
+    let on_primary = case.git(&case.world.root, &["show", &format!("main:{path}")]);
+    for line in &closure {
+        assert!(on_primary.contains(line), "{on_primary}");
+    }
 }

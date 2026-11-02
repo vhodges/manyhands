@@ -1369,3 +1369,51 @@ The verb-side answers for an unknown operation, another operation and a bad toke
 - **C6.** `5c318b51` also carried E-20, the transport sentence and the closed-ticket Known Limit. "No transport start" for 10a means no remote contact, shown by the listener test, and not that `startup.rs` skips the transport's start.
 - **Design.** Known Limits gains the replay after the item leaves the index and the `busy` with no request ID. Named edits gain E-21.
 
+## Task 10b: `context resolve-local`
+
+Base `76c746fc`, the follow-ups' commit; `origin/main` is contained. `context resolve-local` is available, with `--input {observation, resolutions: [{token, source}]}` (closed schema, with an example), inside the Ctrl-C window.
+
+**Seen first.** Against no verb: 8 resolve rows failed by assertion on `usage_error`. The help row and the abandon row failed on a missing golden; abandon is an existing verb, and its code assertion held before the golden. The schema's row failed on `usage_error` too. The walk failed at its fourth step, `resolve-local` (`unrecognized subcommand`, exit 2), after observe, sync and show had answered.
+
+**The walk holds.** `the_refused_merges_route_finishes_the_close` runs the route through the binary:
+- **The refusal.** A closure stops past its checkpoint (`AfterClosureCheckpoint`, in this process) and primary moves the ticket. The binary's `ticket close` resend refuses the checkpoint's merge (exit 4).
+- **The four steps.** They are run from the four `next:` lines it prints, split as a shell would, with only `<new-request-id>` and `<sync-operation-id>` filled:
+  - observe-local, exit 0;
+  - sync-local, with the printed observation as `{observation}`: a conflict, exit 4, whose `Operation id:` fills the placeholder;
+  - show-local, exit 0, giving the token and the resolution observation;
+  - resolve-local, with the local side (the checkpoint, read by `--token --json`) as the source: `ok`.
+- **The finish.** The same `ticket close` request then answers `ok`, `integration: merged`. Primary's ticket keeps the checkpoint's `closed_at` and `closed_by`.
+- **"One merge", my reading.** Primary has two merge commits: the local resolution's checkpoint `[context, primary]` ("Resolve local context conflicts"), and the closure's one integration ("Integrate closed ticket ..."). The close itself merges once. The row asserts both subjects in that order. If "one merge" meant one merge commit on primary in all, this route can't give it, since the conflict's resolution is itself a merge.
+- **The note.** `REPAIR` drops "to try", and its comment and the module comment now name the walk. That changes three text goldens (both prepare-conflict notes share `REPAIR`) and two `lifecycle_tests.rs` pins of the same string, as Step 2 says. The walk covers the closure's route only; the prepare route uses the same four verbs.
+
+**Two rows answer otherwise, and wait for a ruling.** Each is an `#[ignore]` row that asserts the table and fails by assertion when run with `--ignored`. Neither is fitted, and no library file changed.
+
+| Row | Table | Binary |
+| --- | --- | --- |
+| `resolve-local`, an unknown token (well formed, tampered) | `invalid_input`, 2 | `external_change`, 3 (`reason: foreign_change`), nothing written |
+| `resolve-local`, a new request after a partial accepted resolution | `original_request_required`, 4 | `external_change`, 3, with the original observation or a fresh one from `show-local` |
+
+In the partial case, `original_request_required` comes from `operation resume`. Its outcome is `blocked`, so it exits 3, and it offers `request.retry` naming the original request. `show-local` also names that request (`reason: original_resolution_required`, `required_request_id`). The original request with its sources then finishes, which `a_partial_accepted_resolution_is_finished_by_the_same_request_and_source` pins. The table has no row for the resume. A verb-side token check like `show-local`'s would meet the first row; I didn't add one, since the accepted ruling named `show-local` only.
+
+**Other rows.**
+- **Complete set:** `ok`, exit 0. The replay gives the stored answer and no write. Another source under the same request is `request_mismatch`.
+- **Before any write:** an incomplete set, a duplicate token, an invalid source and an empty list are each `invalid_input`, exit 2, with `next: ... context show-local`, and the files and state are unchanged.
+- **Stale:** a guide edited after the inspection is `external_change`, exit 3, with the show-local line.
+- **CLI input failures:** `invalid_input`, with no request recorded.
+- **`operation abandon`** of a pending conflict prepares, and its confirm is `recovery_required`. The conflict's files and state are kept: the gate's guarded abandonment.
+- **Source sentinel:** absent from every table but `discovered_items` (the resolved title) and from every output, in the complete, partial and invalid rows. The resolved file holds it.
+
+**Files beyond the plan's list.** `tests/support/cli.rs` (registration), `tests/cli/input_schemas.rs` (the schema's row), `src/bin/manyhands-cli/mutate.rs`, `collaboration_tests.rs`, `catalog_tests.rs` (`stops_on_ctrl_c`, E-14, E-1), `lifecycle_tests.rs` (the `REPAIR` pin), `tests/cli/lifecycle.rs` untouched.
+
+**Verification.**
+
+| Command | Count | Time |
+| --- | --- | --- |
+| `--bin manyhands-cli` | 295 | 2.6 s |
+| `--test cli`, whole | 446 pass, 2 ignored | 104 s |
+| `--test mutation_contract` | 44 | 9.5 s |
+| `--test mutation_replay -- local_sync` | 75 | 124 s |
+| `--test cli -- input_schemas` | 10 | 1 s |
+
+`fmt --check`, whole-tree clippy with `-D warnings` and the no-GPUI script pass. `merge-tree` against `origin/main` is clean.
+

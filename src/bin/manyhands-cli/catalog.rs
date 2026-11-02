@@ -1111,6 +1111,28 @@ pub const COMMANDS: &[CommandSpec] = &[
             input: InputRule::Required,
         },
     },
+    CommandSpec {
+        resource: "context",
+        verb: "resolve-local",
+        summary: "Resolve a local synchronization's conflict with a source for each path.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[
+            REPO,
+            OPERATION_ID,
+            OptionSpec {
+                required: true,
+                ..INPUT
+            },
+            REQUEST_ID,
+            PREPARE,
+            CONFIRM,
+        ],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Required,
+        },
+    },
 ];
 
 pub fn find(resource: &str, verb: &str) -> Option<&'static CommandSpec> {

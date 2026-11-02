@@ -149,3 +149,31 @@ fn identity_required_says_the_same_request_follows() {
     );
     assert!(lines.contains("same request"), "{lines}");
 }
+
+#[test]
+fn a_refused_resolution_goes_back_to_show_local() {
+    for code in [ResultCode::InvalidInput, ResultCode::ExternalChange] {
+        let lines = resolve_way_on(
+            &stopped(code, LocalContextSyncNextAction::Resolve),
+            ROOT,
+            OPERATION,
+        );
+        assert_eq!(
+            lines,
+            format!(
+                "next: manyhands-cli context show-local --repo {} --operation-id {OPERATION}\n",
+                quoted(ROOT)
+            ),
+            "{code:?}"
+        );
+    }
+    let lines = resolve_way_on(
+        &stopped(
+            ResultCode::OriginalRequestRequired,
+            LocalContextSyncNextAction::RetryResolution,
+        ),
+        ROOT,
+        OPERATION,
+    );
+    assert!(lines.contains("same input"), "{lines}");
+}

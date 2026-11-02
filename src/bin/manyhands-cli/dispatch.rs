@@ -594,6 +594,9 @@ pub fn dispatch(
         }
         "context show-local" => return crate::local_sync::show(service, session, command, args),
         "context sync-local" => return crate::local_sync::sync(service, session, command, args),
+        "context resolve-local" => {
+            return crate::local_sync::resolve(service, session, command, args);
+        }
         "conflict show" => return crate::conflict::show(service, session, command, args),
         "conflict resolve" => return crate::conflict::resolve(service, session, command, args),
         "operation resume" => {

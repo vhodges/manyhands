@@ -8,8 +8,8 @@
 //!   a way to go on, the local repair: four `next:` lines naming `context
 //!   observe-local`, `sync-local`, `show-local` and `resolve-local`, before C2's
 //!   lines for the same request and `repo inspect`. No recovery action names
-//!   them, and none may be added (design, Answers). Those verbs arrive in Task
-//!   10, whose grammar answers to this text, which `lifecycle_tests.rs` pins.
+//!   them, and none may be added (design, Answers). The context verbs'
+//!   grammar answers to this text, which `lifecycle_tests.rs` pins.
 //!   Any other form of that blocker relies on its offered actions;
 //! - for a blocked prepare, its way out: the same repair, or the save that
 //!   makes a missing context, and then a new prepare;
@@ -31,10 +31,10 @@ use manyhands::{
     results::{Envelope, RecoveryActionKind, ResultCode},
 };
 
-/// What the repair's lines leave to the reader. It says "to try": the route's
-/// walk through the binary is Task 10b's, and until it lands these verbs answer
-/// `usage_error`.
-const REPAIR: &str = "The commands above are the local repair to try: the <...> values are placeholders to fill in, --input - takes the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict.";
+/// What the repair's lines leave to the reader. The route these lines print is
+/// walked through the binary, from a refused closure to its finish, by
+/// `tests/cli/local_sync.rs` `the_refused_merges_route_finishes_the_close`.
+const REPAIR: &str = "The commands above are the local repair: the <...> values are placeholders to fill in, --input - takes the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict.";
 /// What a missing context's note says, here and in `context observe-local`.
 pub(crate) const NO_CONTEXT_NOTE: &str = "this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in.";
 const NO_REMOTE_NOTE: &str = "primary is not published, because this repository has no publication remote; once one is selected, repo sync publishes it.";

@@ -83,6 +83,26 @@ fn context_sync_local_schema_is_closed_and_its_example_is_accepted() {
 }
 
 #[test]
+fn context_resolve_local_schema_is_closed_and_its_example_is_accepted() {
+    let file = "context_resolve_local.schema.json";
+    let example = read_json(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/cli_input_v1/context_resolve_local.json"),
+    );
+    schema::check(&directory(), file, &example).unwrap();
+    for bad in [
+        serde_json::json!({}),
+        serde_json::json!({"observation": "x"}),
+        serde_json::json!({"observation": "x", "resolutions": [{"token": "t"}]}),
+        serde_json::json!({"observation": "x", "resolutions": [{"token": "t", "source": 1}]}),
+        serde_json::json!({"observation": "x", "resolutions": [], "kind": "ticket"}),
+    ] {
+        assert!(schema::check(&directory(), file, &bad).is_err(), "{bad}");
+    }
+    super::local_sync::the_resolve_example_input_is_accepted(&example);
+}
+
+#[test]
 fn protection_accepts_passphrase_and_none_only() {
     let f = super::keys::Fixture::new();
     for protection in ["passphrase", "none", "secret"] {

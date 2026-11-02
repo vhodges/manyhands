@@ -1,4 +1,5 @@
-//! `context observe-local`, `context show-local` and `context sync-local`.
+//! `context observe-local`, `context show-local`, `context sync-local` and
+//! `context resolve-local`.
 //!
 //! All three are local: none touches a remote, primary or a remote ref. The item's
 //! kind comes from the item, and the bin holds no merge logic: what it adds to
@@ -13,17 +14,21 @@
 //!   refuse it too, such a token is `invalid_input` with no side read; any other
 //!   token is the library's to judge (`refused_unread`).
 //!
-//! A conflict's sides are content: only `--json` carries them (R-15).
+//! A conflict's sides are content: only `--json` carries them (R-15). A
+//! resolution's sources are read from `--input` and handed to the library,
+//! which validates the whole set before any write. Nothing here derives
+//! `Debug` or prints them.
 
 use clap::ArgMatches;
 use manyhands::{
     canonical::ItemId,
     repository::{
-        ClosureState, ItemContextKind, ItemDto, LocalContextConflictContentDto,
-        LocalContextSyncInput, LocalContextSyncInspectionDto, LocalContextSyncMutationDto,
-        LocalContextSyncNextAction, LocalContextSyncObservationDto, LocalContextSyncReason,
-        LocalContextSyncState, Mutation, MutationDataDto, OperationAction, OperationId, ReadError,
-        RepositoryService, ResolvedRepository,
+        ClosureState, ItemContextKind, ItemDto, LocalConflictResolutionInput,
+        LocalContextConflictContentDto, LocalContextResolveInput, LocalContextSyncInput,
+        LocalContextSyncInspectionDto, LocalContextSyncMutationDto, LocalContextSyncNextAction,
+        LocalContextSyncObservationDto, LocalContextSyncReason, LocalContextSyncState, Mutation,
+        MutationDataDto, OperationAction, OperationId, ReadError, RepositoryService,
+        ResolvedRepository,
     },
     results::{Envelope, ResultCode},
 };
@@ -32,6 +37,7 @@ use crate::{
     admin, authoring,
     catalog::CommandSpec,
     collaboration, dispatch, fill, human_admin, human_lifecycle,
+    input::{InputError, InputObject},
     mutate::{self, Driven, Plan, Session},
     render::{self, Human, Output, field, note_lines, quoted},
 };
@@ -46,6 +52,7 @@ const OBSERVE_NOTE: &str =
 const RESOLVE_NOTE: &str = "<new-request-id> is a placeholder to fill in, and --input - takes the observation and a source for each token that context show-local prints.";
 const IDENTITY_NOTE: &str =
     "once an identity is set, send this same request again: a merge commit needs one.";
+const ORIGINAL_NOTE: &str = "this resolution is the original request's to finish: send that request again, with the same input.";
 const EXTERNAL_NOTE: &str = "Manyhands can't resolve this: it takes a repair outside it, with Git.";
 
 fn observe_line(root: &str, item: &str) -> String {
@@ -326,6 +333,111 @@ pub fn sync(
                 .extend(way_on(&envelope, &root.to_string_lossy(), &id.to_string()).into_bytes());
             output
         }
+    }
+}
+
+/// The input of `context resolve-local`. It holds the sources, so it derives
+/// nothing that could print them.
+struct Resolution {
+    observation: String,
+    resolutions: Vec<LocalConflictResolutionInput>,
+}
+
+/// Reads the observation and the `{token, source}` pairs. The library judges
+/// each token's form, the set's completeness and each source.
+fn resolution(object: &InputObject) -> Result<Resolution, InputError> {
+    object.only(&["observation", "resolutions"])?;
+    let observation = object.string("observation")?;
+    let resolutions = object
+        .object_list("resolutions")?
+        .iter()
+        .map(|pair| {
+            pair.only(&["token", "source"])?;
+            Ok(LocalConflictResolutionInput {
+                token: pair.string("token")?,
+                source: pair.string("source")?,
+            })
+        })
+        .collect::<Result<Vec<_>, InputError>>()?;
+    Ok(Resolution {
+        observation,
+        resolutions,
+    })
+}
+
+pub fn resolve(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    let selected = || -> Result<_, Output> {
+        let flags = admin::flags(session, spec, args)?;
+        let object = admin::input_object(session, spec, args, flags.request_id)?;
+        let input = resolution(&object)
+            .map_err(|error| admin::input_failure(session, spec, flags.request_id, error))?;
+        let root = admin::mutation_root(session, spec, args, flags.request_id)?;
+        let operation = collaboration::operation_id(session, spec, args, flags.request_id)?;
+        Ok((flags, input, root, operation))
+    };
+    let (flags, input, root, operation) = match selected() {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    let plan = Plan {
+        identity_prompt: false,
+        retry: true,
+    };
+    match mutate::drive(
+        service,
+        session,
+        spec,
+        flags,
+        plan,
+        &mut |_| {
+            Mutation::LocalContextResolve(LocalContextResolveInput {
+                root: root.clone(),
+                operation_id: operation,
+                observation: input.observation.clone(),
+                resolutions: input
+                    .resolutions
+                    .iter()
+                    .map(|pair| LocalConflictResolutionInput {
+                        token: pair.token.clone(),
+                        source: pair.source.clone(),
+                    })
+                    .collect(),
+            })
+        },
+        &mut std::thread::sleep,
+    ) {
+        Driven::Answered(output) => output,
+        Driven::Prepared(envelope) => render::prepare_output(session.json, &envelope),
+        Driven::Executed { envelope, supplied } if session.json => {
+            render::mutation_output(true, &envelope, supplied)
+        }
+        Driven::Executed { envelope, supplied } => {
+            let mut output = render::mutation_output(false, &envelope, supplied);
+            output.stderr.extend(
+                resolve_way_on(&envelope, &root.to_string_lossy(), &operation.to_string())
+                    .into_bytes(),
+            );
+            output
+        }
+    }
+}
+
+/// What a resolution's stop adds, by the required outcomes' last column.
+fn resolve_way_on(envelope: &Envelope<MutationDataDto>, root: &str, operation: &str) -> String {
+    let show = format!(
+        "next: manyhands-cli context show-local --repo {} --operation-id {}\n",
+        quoted(root),
+        field(operation)
+    );
+    match envelope.code {
+        ResultCode::InvalidInput | ResultCode::ExternalChange => show,
+        ResultCode::OriginalRequestRequired => note_lines(&[ORIGINAL_NOTE.to_owned()]),
+        _ => String::new(),
     }
 }
 

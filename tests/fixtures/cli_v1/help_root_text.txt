@@ -102,5 +102,6 @@ Command catalog:
   context observe-local  Observe an item's context for a local synchronization. Available now.
   context show-local  Show a local synchronization, or a conflict's sides with --token and --json. Available now.
   context sync-local  Bring primary into an item's context, locally. Available now.
+  context resolve-local  Resolve a local synchronization's conflict with a source for each path. Available now.
 
 MANYHANDS_DATA_DIR: advanced/testing data-directory override; relative paths use the invocation directory.

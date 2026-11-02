@@ -266,7 +266,7 @@ fn a_refused_checkpoint_merge_names_the_four_context_verbs_then_its_actions() {
     );
     assert!(
         stderr(&out).contains(
-            "note: primary refused this closure's checkpoint. The commands above are the local repair to try: the <...> values are placeholders to fill in, --input - takes the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict. Then send this request again; the closure's fields are kept.\n"
+            "note: primary refused this closure's checkpoint. The commands above are the local repair: the <...> values are placeholders to fill in, --input - takes the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict. Then send this request again; the closure's fields are kept.\n"
         ),
         "{}",
         stderr(&out)
@@ -385,7 +385,7 @@ fn a_blocked_prepare_on_an_integration_conflict_offers_the_repair_then_a_new_pre
         assert!(text.contains("Blockers: integration_conflict\n"), "{text}");
         assert!(
             text.contains(
-                "note: this context can't merge into primary. The commands above are the local repair to try: the <...> values are placeholders to fill in, --input - takes the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict. Then prepare again.\n"
+                "note: this context can't merge into primary. The commands above are the local repair: the <...> values are placeholders to fill in, --input - takes the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict. Then prepare again.\n"
             ),
             "{text}"
         );
