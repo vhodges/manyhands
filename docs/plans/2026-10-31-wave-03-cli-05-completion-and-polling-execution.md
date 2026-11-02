@@ -1683,3 +1683,40 @@ So one helper there covers all of them. It runs after the `AfterPushVerification
 | `--test ticket_closure` | 78 | 684 s |
 | `--test cli_remote` | 82 | 389 s |
 | `cargo fmt --check`, clippy `-D warnings` | ok | |
+
+## Part B checkpoint
+
+**The gate, at `2b98365d`.** `origin/main` is `15a23125`, unmoved; `git merge-tree --write-tree HEAD origin/main` is clean.
+
+| Command | Result | Time |
+| --- | --- | --- |
+| `check`, `fmt --check`, `clippy -D warnings` (all features) | exit 0 | |
+| desktop `check` and `clippy`, CLI `check`, `check-cli-no-gpui.sh` | exit 0 | |
+| `--lib` | 1507 passed | 756 s |
+| `--bin manyhands-cli`, `--test cli`, the contract line | exit 0 | 512 s |
+| `read_status`, `read_relationships`, `repository_enablement`, `remote_merge_recovery`, `comment_publication` | exit 0 | 455 s |
+| `--test mutation_remote` | exit 1: 2 SSH cases failed, `c5_cancel_new_id_after_integration_promote` and `_close` | 5763 s |
+
+### Item 0: the gate failure (stopped for a ruling)
+
+`new_id_after_integration` (`tests/mutation_remote/c5_cancel.rs:505-530`) pins
+`LifecycleBlocker::PrimaryAheadOfRemote` as why a new ID's prepare is refused once the first request has
+published and been cancelled at `AfterPublication`. Decision 29 now advances primary's tracking ref on the
+verified push, so that blocker is gone. A temporary probe in the row (reverted, not committed) read, for
+both verbs:
+
+- the new ID's `prepare` answers **`ok`**, a preview: `integration: already_contained`,
+  `publication: publish`, `cleanup.remote_branch: false`, `worktree: true`, `local_branch: true`
+  (closure: `recording: existing`). The context branch still stands on the remote;
+- confirming that preview under a second request answers `busy`, `error`, recovery `[request.prepare]`;
+  the first request stays `accepted`, and the second has no record.
+
+So nothing starts beside the unfinished parent (the confirm is refused, as in
+`new_id_before_integration`), but the prepare is `Ready`, and its preview also says no remote deletion
+while the remote branch stands. That is the brief's stop condition, so the expectation was not changed
+and items 1 onwards were not begun.
+
+**Other rows naming the blocker.** None asserts it after a push. Run at `2b98365d`, each passes:
+`document_promotion -- blocker_primary_ahead` and `ticket_closure -- blocker_primary_ahead_of_remote`
+(a local unpushed commit), and `ticket_closure -- true_race_distinct_identities_needs_external_recovery`
+(B's primary diverged by a refused push).
