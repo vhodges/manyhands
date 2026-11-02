@@ -45,7 +45,7 @@ id: "01M69C6SHD04G8PT6D1Y36CDN7"
 - **Content and secrets.** No type holding source or a token derives `Debug`, `Display` or `Serialize`, except the content read's DTO. `closed_by` appears only in the preview, canonical content, the index and Git, as Cycle 10 lists. Previews aren't persisted, and request records hold no `closed_by` or title. No input value, source, token or backend text reaches a diagnostic.
 - **Test placement.** Library tables are modules of `tests/mutation_remote.rs`, on the new `tests/support/lifecycle_world.rs`. Cases in `harness = false` targets are `ssh_harness` cases named `c5_<module>_<case>`, registered in `CASES`, split per row under the 100-second watchdog. `#[test]` functions do not run there. `tests/cli_remote.rs` reaches public items only.
 - **Test isolation.** Every CLI child goes through `tests/support/cli.rs`, `tests/support/pty.rs` or the SSH harness. Tests never touch developer keys, global Git configuration, the real terminal or real application data.
-- **Pre-existing tests.** Only named edits E-1 to E-19. Any other semantic edit stops for owner review.
+- **Pre-existing tests.** Only named edits E-1 to E-22. Any other semantic edit stops for owner review.
 - **Outcome tables.** Each table's test is written first and seen to fail. It is committed together with the code that passes it. A row that answers otherwise stops for a ruling.
 - **Test runs.**
   - Each task runs only the targets and filters it names. Check that more than zero tests ran. Cargo takes one positional filter per command.
@@ -347,7 +347,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 
 **Decisions 21-24:** all Task 6. Decision 21 narrows the Step 1 row for synchronization only: closure stays R-21, and promotion's journal stays unchanged. `--lib promotion` found E-19, which Task 6's own list would have missed until the gate.
 
-**Named edits:** E-1 to E-7, E-14 and E-16 in 7–10b; E-8 in 13b; E-9, E-12, E-13 in 2a, 5a, 5b; E-10 in 3; E-11 in 2a, 4, 5a, 5b; E-15 in 2b; E-17 in 2c; E-18 and E-19 in 6.
+**Named edits:** E-1 to E-7, E-14 and E-16 in 7–10b; E-8 in 13b; E-9, E-12, E-13 in 2a, 5a, 5b; E-10 in 3; E-11 in 2a, 4, 5a, 5b; E-15 in 2b; E-17 in 2c; E-18 and E-19 in 6; E-20 and E-21 as the design records them; E-22 with decision 29.
 
 **Stops built in:** Task 0: identity, a changed fact, an unlisted pin, a reproduction surprise. Outcome-table rows in 2a–5b. Task 11: a refusal on real content. Task 14a: a behaviour gap. Task 15: a suite failure, closure.
 

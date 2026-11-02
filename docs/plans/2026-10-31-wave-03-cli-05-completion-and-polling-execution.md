@@ -1568,7 +1568,8 @@ the local sync commits with, not `closed_by`.
    A `poll once` (or `repo sync`) clears it. The next prepare was `ok`. Nothing tells a CLI user that
    a poll is the way out: the only offered action is `repo.inspect`. The 2b and 2c entries above record that "a push
    does not advance tracking". The design's Known Limits do not, and this is the plain sequence of
-   promote, then close. Not fixed here.
+   promote, then close. Not fixed here. **Closed by decision 29**, see "Decision 29: tracking after a
+   push" below.
 2. **`context resolve-local` on an external-only conflict answers `external_change`,
    `reason: foreign_change`**, exit 3, and nothing is written. Nothing foreign changed, and `show-local` had said
    `can_start_resolution: false`. The human answer's `next:` line is `context show-local`, which gives the same
@@ -1640,3 +1641,45 @@ the local sync commits with, not `closed_by`.
 
 **Verification.** `--test cli` whole 453 (117 s), `--bin manyhands-cli` 297, `--test mutation_replay -- local_sync` 75 (121 s). `fmt --check`, whole-tree clippy with `-D warnings` and the no-GPUI script pass.
 
+## Decision 29: tracking after a push
+
+Task 11's Blocker 1. The owner chose "Update after a push", and after my stop "Advance existing refs only (Recommended)", with E-22. Decision 31's release measurement is recorded in the Cycle.
+
+**The push paths.** Every push goes through `push_exact`, called only by `push_and_verify` and `publish_synchronization_attempt` in `remote/sync.rs`. Every verified outcome reaches `finish_synchronization_publication`:
+- synchronization's primary and context pushes: `repo sync`, `item sync`, and a lifecycle's primary publication and context child (`synchronize_promotion_child_observed`);
+- republish;
+- comment publication, which calls `synchronize_remote`;
+- the reconciliation of a `PushVerified` row, or of a verified publication attempt.
+
+So one helper there covers all of them. It runs after the `AfterPushVerification` safe point, the configuration check and the owner boundary, and before the row is completed, under the repository's lease. It moves an existing tracking ref forward to the verified OID when Fetch and Push are one endpoint. It doesn't create a ref, move one backwards or beside, or fail the publication. Ambiguous, refused and fenced pushes never reach it. A stop after it leaves a verified row that comes back to it, and a `restart` re-fetches anyway. The guarded remote delete already removes a context's tracking ref in cleanup. Polls, fetches and the evidence tables are unchanged.
+
+**The first stop.** My first version also created a missing tracking ref. A context's first publication then made one, and after a stop at `AfterRemoteDeletion` and a cache loss, no fetch prunes it. The next preview planned a remote branch that is gone, and closure answered `recovery_required`. Four existing cache-loss rows failed on it. The owner then ruled existing refs only, and all four pass unchanged.
+
+**Rows, seen failing.** Eight `c5_lifecycle_tracking_` rows. With the helper disabled, four fail: promotion then a close prepare (`recovery_required` where it should be `ok`), a just-closed re-prepare (should be `ticket_closed`), `repo sync`, and `item sync` advancing a fetched ref. The rest pass either way, and they pin that tracking stays put:
+- `item sync` with no tracking ref stays without one;
+- a refused push;
+- an ambiguous stop at `AfterPushReturn`;
+- a stop at `AfterPushVerification` then `restart`. Its re-fetch moves tracking whatever this helper does, so it isn't evidence for the fix. A resend without `restart` answers `recovery_required` both before and after.
+
+**E-22.** Four `scope_after` assertions in `remote_merge_recovery` (lines 1397, 1458, 1525 and 1574) now expect the pushed ref's tracking at the pushed commit. Primary's tracking at line 1575 is unpushed there, so it is unchanged. Their comments say so.
+
+**Documents.** The design's section "Tracking After A Push (decision 29)" states the chosen rule, and E-22 is in its named edits. The plan's constraint now reads E-1 to E-22. Task 11's Blocker 1 above is marked closed. The design had no Known Limits entry for it.
+
+**Verified on the final tree, all exit 0.**
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--lib remote` | 479 | 186 s |
+| `--lib local_sync` | 165 | 298 s |
+| `--lib integration` | 26 | 16 s |
+| `--lib promotion` | 205 | 136 s |
+| `--lib closure` | 200 | 78 s |
+| `--test remote_synchronization` | 69 | 583 s |
+| `--test comment_publication` | 41 | 196 s |
+| `--test remote_merge_recovery` | 29 | 236 s |
+| `--test mutation_remote -- c5_poll` | 90 | 238 s |
+| `--test mutation_remote -- c5_lifecycle` | 146 | 539 s |
+| `--test document_promotion` | 79 | 760 s |
+| `--test ticket_closure` | 78 | 684 s |
+| `--test cli_remote` | 82 | 389 s |
+| `cargo fmt --check`, clippy `-D warnings` | ok | |

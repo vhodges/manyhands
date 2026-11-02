@@ -640,6 +640,29 @@ The poll's own completion writes are field-scoped (`record_poll_attempt`, `state
 
 **No worker.** No thread, no child, no service. Transport starts for every dispatched verb, as `startup.rs` does; only `poll once` contacts a remote.
 
+## Tracking After A Push (decision 29)
+
+Every push the library makes reaches `finish_synchronization_publication` (`remote/sync.rs`), once the Push
+endpoint's fresh advertisement is verified to hold the pushed commit: synchronization's primary and
+context pushes, so `repo sync`, `item sync` and a lifecycle's primary publication and context child;
+republish; and comment publication, which calls `synchronize_remote`. There, after the
+`AfterPushVerification` safe point and before the row is completed, the pushed ref's tracking ref moves to
+that commit under the repository's lease, if Fetch and Push are one endpoint, the tracking ref already
+exists, and the move is a fast-forward. A tracking ref is never created by a push: a context's would outlive
+a remote deletion whose cleanup a cache loss forgot, and no fetch prunes it. So a context first published
+has none until a fetch makes one. A push that returned unverified, a refused push and a fenced pass never
+reach this point. A tracking ref already past or beside the commit is left alone.
+
+**A stop between the move and the row.** The row stays verified, and its next pass reaches the same point
+again. A same-request `restart` re-fetches first, so it moves tracking anyway. A failed move is not the
+publication's failure: tracking is then as stale as before this rule, and the next fetch corrects it.
+
+**Deletion already matches.** A lifecycle's guarded remote context delete removes the context's tracking ref
+in cleanup, against the expected OID, once the remote is seen without the branch (`promotion/run.rs`,
+`cleanup.rs`, `PromotionAfterTrackingDeletion`).
+
+Polls and fetches are unchanged. So is every push evidence record.
+
 ## Identity
 
 Decision 6 and `01M5MK57`. Both verbs pass `confirmed_identity: None`.
@@ -821,6 +844,7 @@ and request records hold neither (Task 0 confirms). The index's `closed_by` colu
 | E-19 | `promotion::run_tests::identity_and_mismatch_do_not_strand_the_item` | Its mismatch call has a real record, from a stop before the identity is removed; it still asserts the item isn't stranded (decision 22) |
 | E-20 | `tests/cli/help.rs` `root_help_and_bare_call_match_in_both_modes_without_data` | Drops `.chain([None])`: only a planned verb has no repository rule, and nothing stays planned (R-8) |
 | E-21 | `tests/mutation_contract.rs` `CODES_NO_FIXTURE_CAN_PRODUCE` | Gains `command_unavailable`, with R-8's reason: no verb stays planned, and `startup_tests.rs` pins its answer on a test-only planned spec |
+| E-22 | `tests/remote_merge_recovery.rs:1397,1458,1525,1574-1575` | The pushed ref's tracking assertion becomes the pushed commit, and nothing else (decision 29) |
 
 `tests/read_relationships.rs:1183,1190,1254` hold `"C5"` as Wave-graph data, and are not pins. Task 0
 greps for other pins (`NotResumable`, `"C5"`, `arrives with`, `Planned`). An unlisted hit stops for owner

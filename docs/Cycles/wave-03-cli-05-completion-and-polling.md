@@ -313,8 +313,17 @@ Also required:
 30. **Add/add of a ticket file stays external-only (2026-11-02).** A ticket file that reached primary by another
     commit, added on both sides, is `unsupported_conflict`, `external_resolution_required`. That is a known limit:
     `context resolve-local` refuses it up front, and the way on is a repair with Git in the context, then the
-    synchronization's request again. Making a canonical add/add resolvable is a follow-up candidate. (Decision 29
-    is not recorded in this Cycle.)
+    synchronization's request again. Making a canonical add/add resolvable is a follow-up candidate.
+29. **Tracking follows a confirmed push (2026-11-02).** "Update after a push", then "Advance existing refs
+    only (Recommended)": a confirmed push moves a tracking ref forward only if one already exists, never
+    creating one. Never on an ambiguous or fenced push, never backwards, and never past what the remote holds.
+    E-22 moves four `remote_merge_recovery` assertions to the pushed commit.
+31. **Release timing (2026-11-02).** "Measure release, then decide". Measured on a release build:
+    promote and close about 35 s, prepares about 2 s. The profile's hot spots are local sync's image-proof
+    audits, which re-decode every stored proof at each safe point and at registry open
+    (`local_sync/image_proof.rs:237`, growing with stored syncs), and discovery's per-item history walk
+    (`discovery.rs:698-743`, up to 1024 commits for each of about 175 items). Both predate C5. A follow-up
+    ticket carries this profile, opened only with the owner's go-ahead.
 
 **Owner questions, approved at these recommendations on 2026-10-31.**
 

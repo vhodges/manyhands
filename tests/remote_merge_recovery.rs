@@ -1389,12 +1389,12 @@ fn two_clone_clean_ticket_divergence() -> Result<(), FixtureError> {
             (TICKET_REF.to_owned(), Some(merged))
         ]
     );
-    // Exact local ref scope: the context branch moved to the merge and its
-    // tracking ref records what Fetch observed, never this clone's own push.
+    // Exact local ref scope: the context branch moved to the merge, and its
+    // tracking ref to the push the remote was verified to hold (E-22).
     scope_after(
         &b_repo,
         &refs_before,
-        &[(TICKET_REF, merged), (TICKET_TRACKING, a_tip)],
+        &[(TICKET_REF, merged), (TICKET_TRACKING, merged)],
         Some(&linked),
     )?;
     assert_eq!(fixed(b_repo.refname_to_id(MAIN))?, base);
@@ -1455,7 +1455,7 @@ fn two_clone_clean_document_divergence() -> Result<(), FixtureError> {
     scope_after(
         &b_repo,
         &refs_before,
-        &[(DOCUMENT_REF, merged), (DOCUMENT_TRACKING, a_tip)],
+        &[(DOCUMENT_REF, merged), (DOCUMENT_TRACKING, merged)],
         Some(&p.b.linked(DOCUMENT)?),
     )?;
     let expected = document_source("Alpha title", BETA);
@@ -1518,11 +1518,12 @@ fn two_clone_primary_divergence() -> Result<(), FixtureError> {
         assert_eq!(fixed(std::fs::read(p.b.root.join(name)))?, bytes);
     }
     assert!(fixed(b_repo.statuses(None))?.is_empty());
-    // The primary branch moved to the merge; its tracking ref is A's tip.
+    // The primary branch moved to the merge, and so did its tracking ref
+    // once the push was verified (E-22).
     scope_after(
         &b_repo,
         &refs_before,
-        &[(MAIN, merged), (MAIN_TRACKING, a_tip)],
+        &[(MAIN, merged), (MAIN_TRACKING, merged)],
         None,
     )?;
     let n = p.server.receive_updates().len();
@@ -1564,14 +1565,15 @@ fn two_clone_context_then_primary_ordered_merges() -> Result<(), FixtureError> {
     assert_eq!(merge_commits(&b_repo)?, 2);
     one_update(&p.server, n, TICKET_REF, a_context, merged);
     // The context target never moves the local primary branch: the context
-    // branch moved, and both tracking refs record what Fetch observed.
+    // branch and its tracking ref moved to the verified push (E-22), and
+    // primary's tracking ref records what Fetch observed.
     assert_eq!(fixed(b_repo.refname_to_id(MAIN))?, base);
     scope_after(
         &b_repo,
         &refs_before,
         &[
             (TICKET_REF, merged),
-            (TICKET_TRACKING, a_context),
+            (TICKET_TRACKING, merged),
             (MAIN_TRACKING, a_primary),
         ],
         Some(&p.b.linked(TICKET)?),

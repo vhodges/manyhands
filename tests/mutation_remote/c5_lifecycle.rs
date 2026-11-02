@@ -112,6 +112,29 @@ const ONE_VERB: &[ssh_harness::Case] = &[
 ];
 
 const ONE: &[ssh_harness::Case] = &[
+    (
+        "c5_lifecycle_tracking_a_promotion_then_a_close_is_ready",
+        tracking_promotion_then_close,
+    ),
+    (
+        "c5_lifecycle_tracking_a_just_closed_ticket_is_closed",
+        tracking_just_closed,
+    ),
+    ("c5_lifecycle_tracking_item_sync", tracking_item_sync),
+    (
+        "c5_lifecycle_tracking_item_sync_advances_a_fetched_ref",
+        tracking_item_sync_advances,
+    ),
+    ("c5_lifecycle_tracking_repo_sync", tracking_repo_sync),
+    ("c5_lifecycle_tracking_refused_push", tracking_refused_push),
+    (
+        "c5_lifecycle_tracking_ambiguous_push",
+        tracking_ambiguous_push,
+    ),
+    (
+        "c5_lifecycle_tracking_stop_before_the_update",
+        tracking_stop_before_the_update,
+    ),
     ("c5_lifecycle_identity_prepare_missing_promote", || {
         identity_prepare_promote(None)
     }),
@@ -3075,5 +3098,176 @@ fn remote_select_then_sync_finds_no_key() -> Result<(), FixtureError> {
         &CancellationToken::new(),
     );
     assert_eq!(synchronized.code, ResultCode::NoSelectedKey);
+    Ok(())
+}
+
+// Decision 29: once the library has confirmed the remote took a push, the
+// tracking ref of what it pushed is moved to it, as plain Git moves it.
+
+const TRACKING_MAIN: &str = "refs/remotes/origin/main";
+
+fn tracking_of(w: &World, reference: &str) -> Result<Option<git2::Oid>, FixtureError> {
+    Ok(w.repo()?.refname_to_id(reference).ok())
+}
+
+fn context_tracking(verb: Verb) -> String {
+    verb.branch()
+        .replacen("refs/heads/", "refs/remotes/origin/", 1)
+}
+
+fn confirmed_call(w: &World, verb: Verb, id: &str) -> Envelope<MutationDataDto> {
+    let confirmation = confirmation_of(&prepared(&w.service, verb, &w.root, verb.id()));
+    called(
+        &w.service,
+        id,
+        Some(&confirmation),
+        verb.mutation(&w.root, verb.id()),
+    )
+}
+
+/// Task 11's sequence: a published promotion, then a close prepares with no
+/// poll between them.
+fn tracking_promotion_then_close() -> Result<(), FixtureError> {
+    let w = remote(Verb::Promote)?;
+    Verb::Close.save(&w.service, &w.root)?;
+    let done = confirmed_call(&w, Verb::Promote, FIRST);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    assert_eq!(done.effects.publication, PublicationEffect::Published);
+    let main = fixed(w.repo()?.refname_to_id(MAIN))?;
+    assert_eq!(tracking_of(&w, TRACKING_MAIN)?, Some(main));
+    let envelope = prepared(&w.service, Verb::Close, &w.root, Verb::Close.id());
+    assert_eq!(envelope.code, ResultCode::Ok, "{:?}", envelope.data);
+    Ok(())
+}
+
+/// A ticket just closed and published reads as closed, from current tracking.
+fn tracking_just_closed() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let w = remote(verb)?;
+    let done = confirmed_call(&w, verb, FIRST);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    let envelope = prepared(&w.service, verb, &w.root, verb.id());
+    assert_eq!(
+        envelope.code,
+        ResultCode::TicketClosed,
+        "{:?}",
+        envelope.data
+    );
+    assert_eq!(blockers_of(&envelope), [LifecycleBlocker::AlreadyClosed]);
+    Ok(())
+}
+
+/// A context never fetched has no tracking ref, and a push doesn't make one.
+fn tracking_item_sync() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let w = remote(verb)?;
+    let pushes = accepted(&w.server);
+    let synced = execute(&w, FIRST, item_sync(&w));
+    assert_eq!(synced.code, ResultCode::Ok, "{:?}", synced.data);
+    assert_eq!(accepted(&w.server), pushes + 1);
+    assert_eq!(tracking_of(&w, &context_tracking(verb))?, None);
+    Ok(())
+}
+
+/// One fetched since moves forward to what `item sync` pushed.
+fn tracking_item_sync_advances() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let w = remote(verb)?;
+    let synced = execute(&w, FIRST, item_sync(&w));
+    assert_eq!(synced.code, ResultCode::Ok, "{:?}", synced.data);
+    fixed(w.sync(w.request(context_target(verb)?)))?;
+    let published = fixed(w.repo()?.refname_to_id(verb.branch()))?;
+    assert_eq!(tracking_of(&w, &context_tracking(verb))?, Some(published));
+    commit_in(
+        &verb.worktree(&w.root),
+        verb.branch(),
+        "more.txt",
+        b"more\n",
+    )?;
+    let tip = fixed(w.repo()?.refname_to_id(verb.branch()))?;
+    let synced = execute(&w, SECOND, item_sync(&w));
+    assert_eq!(synced.code, ResultCode::Ok, "{:?}", synced.data);
+    assert_eq!(tracking_of(&w, &context_tracking(verb))?, Some(tip));
+    Ok(())
+}
+
+fn tracking_repo_sync() -> Result<(), FixtureError> {
+    let w = remote(Verb::Close)?;
+    let tip = advance(&w.repo()?, MAIN, "published.txt")?;
+    let synced = execute(&w, FIRST, repo_sync(&w));
+    assert_eq!(synced.code, ResultCode::Ok, "{:?}", synced.data);
+    assert_eq!(tracking_of(&w, TRACKING_MAIN)?, Some(tip));
+    Ok(())
+}
+
+/// A push the remote refused moves nothing.
+fn tracking_refused_push() -> Result<(), FixtureError> {
+    let w = remote(Verb::Close)?;
+    let before = tracking_of(&w, TRACKING_MAIN)?;
+    advance(&w.repo()?, MAIN, "refused.txt")?;
+    w.server.reject_primary_updates(true)?;
+    let synced = execute(&w, FIRST, repo_sync(&w));
+    assert_eq!(synced.code, ResultCode::PushRejected, "{:?}", synced.data);
+    assert_eq!(tracking_of(&w, TRACKING_MAIN)?, before);
+    Ok(())
+}
+
+/// Stops the synchronization at `point`.
+struct StopAt(RemoteOperationSafePoint);
+impl SynchronizationObserver for StopAt {
+    fn safe_point(&mut self, point: RemoteOperationSafePoint) -> SafePointRequest {
+        if point == self.0 {
+            SafePointRequest::Stop
+        } else {
+            SafePointRequest::Continue
+        }
+    }
+}
+
+fn stopped_sync(
+    w: &World,
+    point: RemoteOperationSafePoint,
+) -> Result<(SynchronizeRemoteRequest, git2::Oid), FixtureError> {
+    let tip = advance(&w.repo()?, MAIN, "stopped.txt")?;
+    let request = w.primary();
+    let stopped = w.service.synchronize_remote_observed(
+        request.clone(),
+        &mut SessionCredentials::new(Provider),
+        SynchronizationSettings::default(),
+        &mut StopAt(point),
+    );
+    assert!(stopped.is_err(), "the stop holds");
+    Ok((request, tip))
+}
+
+/// A push that returned and wasn't verified is no confirmed acceptance.
+fn tracking_ambiguous_push() -> Result<(), FixtureError> {
+    let w = remote(Verb::Close)?;
+    let before = tracking_of(&w, TRACKING_MAIN)?;
+    stopped_sync(&w, RemoteOperationSafePoint::AfterPushReturn)?;
+    assert_eq!(tracking_of(&w, TRACKING_MAIN)?, before);
+    Ok(())
+}
+
+/// Verified, and stopped before tracking moved: the same operation's restart
+/// reconciles the verified push and moves it.
+fn tracking_stop_before_the_update() -> Result<(), FixtureError> {
+    let w = remote(Verb::Close)?;
+    let before = tracking_of(&w, TRACKING_MAIN)?;
+    let (request, tip) = stopped_sync(&w, RemoteOperationSafePoint::AfterPushVerification)?;
+    assert_eq!(tracking_of(&w, TRACKING_MAIN)?, before);
+    let mut again = request.clone();
+    again.restart = true;
+    let done = fixed(w.sync(again))?;
+    assert!(
+        matches!(
+            done,
+            SynchronizationResult::Complete(SynchronizationOutcome::Published { oid, .. })
+                | SynchronizationResult::IndexPending(IndexPending { authoritative: SynchronizationOutcome::Published { oid, .. }, .. })
+                if oid == tip
+        ),
+        "{done:?}"
+    );
+    assert_eq!(tracking_of(&w, TRACKING_MAIN)?, Some(tip));
     Ok(())
 }
