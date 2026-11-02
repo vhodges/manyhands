@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import plistlib
 import shutil
 import sys
 import tempfile
@@ -14,14 +15,16 @@ import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from assemble import ApiError, GitHub, assemble, parse_api_response, preflight, source_marker
+from assemble import ApiError, GitHub, assemble, parse_api_response, preflight, release_notes, source_marker
 from common import TARGETS, archive_inventory, payload_name
+from installer import installer_inventory, installer_name
 from package import archive_payload, refresh_documents
 from payload_fixture import MACOS, PayloadFixture
 
 
 class FakeGitHub:
     def __init__(self, release):
+        self.repo = "example/repo"
         self.input = release
         self.remote_commit = release["commit"]
         self.release = None
@@ -69,6 +72,11 @@ class FakeGitHub:
 
 
 class AssemblyTests(unittest.TestCase):
+    def test_release_notes_do_not_require_a_local_git_executable(self):
+        notes = release_notes(self.release, [])
+        self.assertNotIn('Install Git', notes)
+        self.assertIn('libgit2', notes)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="release assembly ")
         self.addCleanup(self.temp.cleanup)
@@ -92,8 +100,13 @@ class AssemblyTests(unittest.TestCase):
                 signing.mkdir()
                 (signing / "manyhands.cer").write_bytes(b"public certificate fixture")
                 (signing / "README.md").write_text("self-signed fixture")
+                certificate = (signing / "manyhands.cer").read_bytes()
+                manifest["signer"] = {"thumbprint_sha1": hashlib.sha1(certificate, usedforsecurity=False).hexdigest().upper(),
+                                      "fingerprint_sha256": hashlib.sha256(certificate).hexdigest().upper()}
             if target == MACOS:
-                (fixture.staging / "Manyhands.app/Contents/Info.plist").write_text("<plist>fixture</plist>")
+                manifest["runtime_audit"].update(architecture="arm64", minimum_macos="14.0.0")
+                (fixture.staging / "Manyhands.app/Contents/Info.plist").write_bytes(
+                    plistlib.dumps({"LSMinimumSystemVersion": "14.0.0"}))
             refresh_documents(fixture.staging, manifest)
             artifact = self.assets / f"manyhands-release-{target}"
             artifact.mkdir()
@@ -110,6 +123,12 @@ class AssemblyTests(unittest.TestCase):
             archive.with_name(archive.name + ".json").write_text(json.dumps(inventory))
             self.archives[target] = archive
             self.release = fixture.release
+        windows_archive = self.archives['x86_64-pc-windows-msvc']
+        self.installer = windows_archive.parent / installer_name(self.release)
+        self.installer.write_bytes(b'signed Inno installer boundary fixture')
+        windows_manifest = json.loads((self.fixtures['x86_64-pc-windows-msvc'].staging / 'release.json').read_text())
+        self.installer.with_name(self.installer.name + '.json').write_text(json.dumps(
+            installer_inventory(self.release, windows_archive, windows_manifest, self.installer)))
         self.github = FakeGitHub(self.release)
 
     def run_assembly(self):
@@ -125,7 +144,7 @@ class AssemblyTests(unittest.TestCase):
         self.assertEqual(self.github.creates, 1)
         self.assertEqual(result, self.github.release["html_url"])
         checksums = self.github.files["SHA256SUMS"].decode().splitlines()
-        self.assertEqual(len(checksums), 5)
+        self.assertEqual(len(checksums), 7)
         self.assertEqual(checksums, sorted(checksums, key=lambda line: line.split("  ")[1]))
         for line in checksums:
             digest, name = line.split("  ")
@@ -133,6 +152,123 @@ class AssemblyTests(unittest.TestCase):
         aggregate = json.loads(self.github.files["release.json"])
         self.assertEqual(aggregate["commit"], self.release["commit"])
         self.assertEqual({package["target"] for package in aggregate["packages"]}, set(TARGETS))
+        self.assertEqual(aggregate["channels"], [
+            {"kind": "homebrew-cask", "asset": "manyhands.rb", "target": MACOS},
+            {"kind": "windows-inno-setup", "asset": installer_name(self.release), "target": "x86_64-pc-windows-msvc"},
+        ])
+
+    def test_installer_is_required_checksummed_and_repairable(self):
+        self.run_assembly()
+        self.assertEqual(self.github.files[self.installer.name], self.installer.read_bytes())
+        self.assertIn(self.installer.name, self.github.files['SHA256SUMS'].decode())
+        self.github.fail_on = self.installer.name
+        with self.assertRaises(ApiError):
+            self.run_assembly()
+        self.assertNotIn('SHA256SUMS', self.github.files)
+        self.github.fail_on = None
+        self.run_assembly()
+        self.assertEqual(self.github.uploads.count('release.json'), 1)
+
+    def test_missing_changed_or_wrong_payload_installer_is_rejected_before_mutation(self):
+        path = self.installer.with_name(self.installer.name + '.json')
+        original = json.loads(path.read_text())
+        for field, value in [('source_archive', {}), ('signer', {}), ('commit', 'b' * 40), ('compiler', {})]:
+            bad = copy.deepcopy(original)
+            bad[field] = value
+            path.write_text(json.dumps(bad))
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'installer'):
+                self.run_assembly()
+        path.write_text(json.dumps(original))
+        self.installer.write_bytes(b'changed installer')
+        with self.assertRaisesRegex(ValueError, 'installer'):
+            self.run_assembly()
+        self.installer.unlink()
+        with self.assertRaisesRegex(ValueError, 'candidate'):
+            self.run_assembly()
+        self.assertEqual(self.github.uploads, [])
+        self.assertEqual(self.github.creates, 0)
+
+    def test_cask_is_generated_from_the_verified_mac_zip_and_checksummed(self):
+        self.run_assembly()
+        archive = self.archives[MACOS]
+        cask = self.github.files["manyhands.rb"].decode()
+        self.assertIn(hashlib.sha256(archive.read_bytes()).hexdigest(), cask)
+        self.assertIn("https://github.com/example/repo/releases/download/", cask)
+        self.assertIn("manyhands.rb", self.github.files["SHA256SUMS"].decode())
+        self.assertEqual(self.github.uploads[0], "release.json")
+        self.assertEqual(self.github.uploads[-1], "SHA256SUMS")
+
+    def test_invalid_cask_metadata_prevents_draft_mutation(self):
+        target = MACOS
+        archive, fixture = self.archives[target], self.fixtures[target]
+        manifest = json.loads((fixture.staging / "release.json").read_text())
+        manifest["runtime_audit"].pop("minimum_macos")
+        refresh_documents(fixture.staging, manifest)
+        with zipfile.ZipFile(archive, "w") as packed:
+            for path in fixture.staging.rglob("*"):
+                if path.is_file():
+                    packed.write(path, f"{payload_name(fixture.release, target)}/{path.relative_to(fixture.staging).as_posix()}")
+        archive.with_name(archive.name + ".json").write_text(json.dumps(archive_inventory(archive, manifest)))
+        with self.assertRaisesRegex(ValueError, "minimum macOS"):
+            self.run_assembly()
+        self.assertEqual(self.github.creates, 0)
+        self.assertEqual(self.github.uploads, [])
+
+    def test_interrupted_cask_replacement_is_repairable_without_losing_source_anchor(self):
+        self.run_assembly()
+        identity = self.github.files["release.json"]
+        self.github.release["body"] = "Owner notes without a marker"
+        self.github.files["unrelated.txt"] = b"keep"
+        self.github.fail_on = "manyhands.rb"
+        with self.assertRaises(ApiError):
+            self.run_assembly()
+        self.assertNotIn("manyhands.rb", self.github.files)
+        self.assertNotIn("SHA256SUMS", self.github.files)
+        self.assertEqual(self.github.files["release.json"], identity)
+        self.github.fail_on = None
+        self.run_assembly()
+        self.assertIn("manyhands.rb", self.github.files)
+        self.assertIn("SHA256SUMS", self.github.files)
+        self.assertEqual(self.github.files["release.json"], identity)
+        self.assertEqual(self.github.files["unrelated.txt"], b"keep")
+        self.assertEqual(self.github.release["body"], "Owner notes without a marker")
+
+    def test_mac_rebuild_refreshes_the_cask_hash_but_not_the_source_manifest(self):
+        self.run_assembly()
+        identity = self.github.files["release.json"]
+        previous_cask = self.github.files["manyhands.rb"]
+        archive, fixture = self.archives[MACOS], self.fixtures[MACOS]
+        (fixture.staging / "bin/manyhands-cli").write_bytes(b"rebuilt native CLI fixture")
+        manifest = json.loads((fixture.staging / "release.json").read_text())
+        with zipfile.ZipFile(archive, "w") as packed:
+            for path in fixture.staging.rglob("*"):
+                if path.is_file():
+                    packed.write(path, f"{payload_name(fixture.release, MACOS)}/{path.relative_to(fixture.staging).as_posix()}")
+        archive.with_name(archive.name + ".json").write_text(json.dumps(archive_inventory(archive, manifest)))
+        self.run_assembly()
+        self.assertNotEqual(self.github.files["manyhands.rb"], previous_cask)
+        self.assertIn(hashlib.sha256(archive.read_bytes()).hexdigest().encode(), self.github.files["manyhands.rb"])
+        self.assertEqual(self.github.files["release.json"], identity)
+        self.assertEqual(self.github.uploads.count("release.json"), 1)
+
+    def test_unverified_prebuilt_cask_is_not_accepted_as_a_native_candidate(self):
+        (self.assets / "manyhands.rb").write_text('system("false")')
+        with self.assertRaisesRegex(ValueError, "unexpected"):
+            self.run_assembly()
+        self.assertEqual(self.github.creates, 0)
+        self.assertEqual(self.github.uploads, [])
+
+    def test_channel_upgrade_cannot_replace_an_existing_legacy_source_manifest(self):
+        self.run_assembly()
+        original = json.loads(self.github.files["release.json"])
+        original.pop("channels")
+        legacy = json.dumps(original).encode()
+        self.github.files["release.json"] = legacy
+        self.github.uploads.clear()
+        with self.assertRaisesRegex(ValueError, "immutable source identity"):
+            self.run_assembly()
+        self.assertEqual(self.github.files["release.json"], legacy)
+        self.assertEqual(self.github.uploads, [])
 
     def test_missing_target_prevents_any_mutation(self):
         archive = next(iter(self.archives.values()))

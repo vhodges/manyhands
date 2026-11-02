@@ -12,7 +12,7 @@ from common import target_info
 REPO = Path(__file__).resolve().parents[2]
 STAGES = ("prepare", "tools", "build-cli", "build-desktop", "install-about", "notices", "stage",
           "linux-audit", "macos-package", "windows-sign", "archive", "verify",
-          "macos-verify", "windows-verify", "linux-smoke")
+          "macos-verify", "windows-verify", "linux-smoke", "windows-compiler", "windows-installer")
 
 
 def tool_versions(repo: Path) -> dict:
@@ -90,6 +90,12 @@ def command_for_stage(stage: str, env: dict, repo: Path) -> list[str]:
         mode, variable = ("Sign", "STAGING") if stage == "windows-sign" else ("Verify", "EXTRACTED")
         return ["pwsh", "-NoLogo", "-NoProfile", "-File", str(repo / "scripts/release/windows-sign.ps1"),
                 "-Mode", mode, "-Staging", value(variable)]
+    if stage == 'windows-compiler':
+        return ['pwsh', '-NoLogo', '-NoProfile', '-File', str(repo / 'scripts/release/windows-installer.ps1'), '-Mode', 'Provision']
+    if stage == 'windows-installer':
+        return ['pwsh', '-NoLogo', '-NoProfile', '-File', str(repo / 'scripts/release/windows-sign.ps1'),
+                '-Mode', 'BuildInstaller', '-Staging', value('EXTRACTED'), '-Archive', value('ARCHIVE'),
+                '-Compiler', value('INNO_COMPILER'), '-OutputDirectory', 'release-dist']
     raise ValueError(f"unknown executable workflow stage: {stage}")
 
 

@@ -22,6 +22,11 @@ $dependencies = @(ConvertFrom-DumpbinDependencies $output)
 if ($dependencies.Count -ne 3 -or $dependencies -notcontains 'KERNEL32.dll' -or $dependencies -notcontains 'WINSPOOL.DRV') { throw 'Dependency parsing failed' }
 Assert-PeArchitecture '8664 machine (x64)'
 Assert-Throws { Assert-PeArchitecture '14C machine (x86)' }
+Assert-PeSubsystem -Headers '2 subsystem (Windows GUI)' -Expected Windows
+Assert-PeSubsystem -Headers '3 subsystem (Windows CUI)' -Expected Console
+Assert-Throws { Assert-PeSubsystem -Headers '3 subsystem (Windows CUI)' -Expected Windows }
+Assert-Throws { Assert-PeSubsystem -Headers '2 subsystem (Windows GUI)' -Expected Console }
+Assert-Throws { Assert-PeSubsystem -Headers 'unknown subsystem' -Expected Windows }
 
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('manyhands-windows-policy-' + [Guid]::NewGuid())
 New-Item -ItemType Directory -Path $temporary | Out-Null

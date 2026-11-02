@@ -40,6 +40,7 @@ class WindowsMetadataTests(unittest.TestCase):
         self.assertEqual(manifest["signing_mode"], "self-signed-authenticode")
         self.assertEqual(manifest["runtime_audit"]["crt"], "static")
         self.assertEqual(manifest["signer"]["timestamp_url"], self.signer["timestamp_url"])
+        self.assertNotIn('Git available on PATH', manifest['runtime_requirements'])
         readme = (self.fixture.staging / "signing/README.md").read_text()
         self.assertIn(self.signer["fingerprint_sha256"], readme)
         self.assertIn(f"RFC 3161 timestamp service: {self.signer['timestamp_url']}", readme)
