@@ -14,27 +14,55 @@ use manyhands::{
 };
 
 use super::{
-    Attempt, CommentOffer as C, CommentOutcome, NOTHING_TO_SHARE, ShareTarget, SyncOffer as S,
-    SyncOutcome, comment_outcome, sync_outcome,
+    Attempt, CommentOffer as C, CommentOutcome, NOTHING_TO_SHARE, ShareAttempt, ShareTarget,
+    SyncOffer as S, SyncOutcome, comment_outcome, sync_outcome,
 };
 use crate::desktop::services::worker::RecordState;
 
-const ACCEPTED: Attempt = Attempt {
-    resend: false,
-    record: RecordState::Accepted,
-};
-const FINISHED: Attempt = Attempt {
-    resend: false,
-    record: RecordState::Finished,
-};
-const UNKNOWN: Attempt = Attempt {
-    resend: false,
-    record: RecordState::Unknown,
-};
-const RESENT: Attempt = Attempt {
-    resend: true,
-    record: RecordState::Finished,
-};
+const fn attempt(resend: bool, record: RecordState) -> Attempt {
+    Attempt {
+        resend,
+        record,
+        after_give_up: false,
+    }
+}
+
+const ACCEPTED: Attempt = attempt(false, RecordState::Accepted);
+const FINISHED: Attempt = attempt(false, RecordState::Finished);
+const UNKNOWN: Attempt = attempt(false, RecordState::Unknown);
+const RESENT: Attempt = attempt(true, RecordState::Finished);
+
+fn outcome(envelope: &Envelope<MutationDataDto>, attempt: Attempt) -> CommentOutcome {
+    comment_outcome(envelope, attempt).outcome
+}
+
+fn offers(envelope: &Envelope<MutationDataDto>, attempt: Attempt) -> Vec<C> {
+    comment_outcome(envelope, attempt).offers()
+}
+
+const fn share_attempt(target: ShareTarget, record: RecordState) -> ShareAttempt {
+    ShareAttempt {
+        target,
+        record,
+        after_give_up: false,
+    }
+}
+
+fn sync(
+    envelope: &Envelope<MutationDataDto>,
+    target: ShareTarget,
+    record: RecordState,
+) -> SyncOutcome {
+    sync_outcome(envelope, share_attempt(target, record)).outcome
+}
+
+fn sync_offers(
+    envelope: &Envelope<MutationDataDto>,
+    target: ShareTarget,
+    record: RecordState,
+) -> Vec<S> {
+    sync_outcome(envelope, share_attempt(target, record)).offers()
+}
 
 fn effects(
     write: WriteEffect,
@@ -56,6 +84,10 @@ fn saved(publication: PublicationEffect) -> Effects {
         CheckpointEffect::Committed,
         publication,
     )
+}
+
+fn pending() -> Effects {
+    saved(PublicationEffect::Pending)
 }
 
 /// Nothing written or committed.
@@ -131,8 +163,19 @@ fn share(code: ResultCode, effects: Effects) -> Envelope<MutationDataDto> {
     )
 }
 
-fn pending() -> Effects {
-    saved(PublicationEffect::Pending)
+fn conflict_data() -> MutationDataDto {
+    MutationDataDto::SynchronizationConflict(SynchronizationConflictMutationDto {
+        r#type: SynchronizationConflictType::SynchronizationConflict,
+        conflict: next(),
+    })
+}
+
+fn synced(publication: PublicationEffect) -> Effects {
+    effects(
+        WriteEffect::NotRequested,
+        CheckpointEffect::NotRequested,
+        publication,
+    )
 }
 
 // --- comment_outcome, row by row ---
@@ -140,12 +183,11 @@ fn pending() -> Effects {
 #[test]
 fn row_0_request_mismatch_is_mismatched() {
     let unsaved = post(ResultCode::RequestMismatch, nothing());
-    let outcome = comment_outcome(&unsaved, ACCEPTED);
-    assert_eq!(outcome, CommentOutcome::Mismatched { saved: false });
     assert_eq!(
-        outcome.offers(RecordState::Accepted),
-        [C::Discard, C::CopyText]
+        outcome(&unsaved, ACCEPTED),
+        CommentOutcome::Mismatched { saved: false }
     );
+    assert_eq!(offers(&unsaved, ACCEPTED), [C::Discard, C::CopyText]);
 }
 
 /// The planned `request_mismatch_is_maybe_saved` predates row 0: a
@@ -162,14 +204,10 @@ fn request_mismatch_is_mismatched() {
         false,
     );
     for attempt in [ACCEPTED, FINISHED, UNKNOWN, RESENT] {
-        let outcome = comment_outcome(&committed, attempt);
-        assert_eq!(outcome, CommentOutcome::Mismatched { saved: true });
-        assert!(outcome.is_saved());
-        let offers = outcome.offers(attempt.record);
-        assert!(!offers.contains(&C::Retry));
-        assert!(!offers.contains(&C::RetrySharing));
-        assert!(!offers.contains(&C::GiveUp));
-        assert_eq!(offers, [C::Discard, C::CopyText]);
+        let result = comment_outcome(&committed, attempt);
+        assert_eq!(result.outcome, CommentOutcome::Mismatched { saved: true });
+        assert!(result.outcome.is_saved());
+        assert_eq!(result.offers(), [C::Discard, C::CopyText]);
     }
 }
 
@@ -177,9 +215,8 @@ fn request_mismatch_is_mismatched() {
 fn row_1_a_published_or_current_comment_is_shared() {
     for publication in [PublicationEffect::Published, PublicationEffect::Current] {
         let envelope = post(ResultCode::Ok, saved(publication));
-        let outcome = comment_outcome(&envelope, ACCEPTED);
-        assert_eq!(outcome, CommentOutcome::Shared);
-        assert!(outcome.offers(RecordState::Finished).is_empty());
+        assert_eq!(outcome(&envelope, ACCEPTED), CommentOutcome::Shared);
+        assert!(offers(&envelope, FINISHED).is_empty());
     }
 }
 
@@ -194,17 +231,15 @@ fn row_2_no_publication_remote_is_saved_here() {
             None,
         ),
     );
-    let outcome = comment_outcome(&envelope, FINISHED);
-    assert_eq!(outcome, CommentOutcome::SavedHere);
-    assert!(outcome.offers(RecordState::Finished).is_empty());
+    assert_eq!(outcome(&envelope, FINISHED), CommentOutcome::SavedHere);
+    assert!(offers(&envelope, FINISHED).is_empty());
 }
 
 #[test]
 fn row_3_a_saved_stopped_post_offers_share() {
     let envelope = post(ResultCode::Cancelled, pending());
-    let outcome = comment_outcome(&envelope, FINISHED);
-    assert_eq!(outcome, CommentOutcome::SavedStopped);
-    assert_eq!(outcome.offers(RecordState::Finished), [C::Share]);
+    assert_eq!(outcome(&envelope, FINISHED), CommentOutcome::SavedStopped);
+    assert_eq!(offers(&envelope, FINISHED), [C::Share]);
 }
 
 #[test]
@@ -218,29 +253,33 @@ fn row_4_a_saved_conflict_offers_nothing() {
             Some(next()),
         ),
     );
-    let outcome = comment_outcome(&envelope, ACCEPTED);
-    assert_eq!(outcome, CommentOutcome::SavedConflict { next: next() });
-    assert!(outcome.offers(RecordState::Accepted).is_empty());
+    assert_eq!(
+        outcome(&envelope, ACCEPTED),
+        CommentOutcome::SavedConflict { next: next() }
+    );
+    assert!(offers(&envelope, ACCEPTED).is_empty());
 }
 
 #[test]
 fn row_5_a_deleted_branch_offers_give_up_and_no_share() {
     let envelope = post(ResultCode::RemoteBranchDeleted, pending());
-    let outcome = comment_outcome(&envelope, ACCEPTED);
-    assert_eq!(outcome, CommentOutcome::SavedBranchDeleted);
-    assert_eq!(outcome.offers(RecordState::Accepted), [C::GiveUp]);
-    assert!(outcome.offers(RecordState::Finished).is_empty());
+    assert_eq!(
+        outcome(&envelope, ACCEPTED),
+        CommentOutcome::SavedBranchDeleted
+    );
+    assert_eq!(offers(&envelope, ACCEPTED), [C::GiveUp]);
+    assert!(offers(&envelope, FINISHED).is_empty());
 }
 
 #[test]
 fn row_6_a_locked_key_offers_unlock_and_give_up() {
     for code in [ResultCode::UnlockRequired, ResultCode::UnlockFailed] {
-        let outcome = comment_outcome(&post(code, pending()), ACCEPTED);
-        assert_eq!(outcome, CommentOutcome::SavedNeedsUnlock);
+        let envelope = post(code, pending());
         assert_eq!(
-            outcome.offers(RecordState::Accepted),
-            [C::Unlock, C::GiveUp]
+            outcome(&envelope, ACCEPTED),
+            CommentOutcome::SavedNeedsUnlock
         );
+        assert_eq!(offers(&envelope, ACCEPTED), [C::Unlock, C::GiveUp]);
     }
 }
 
@@ -251,10 +290,10 @@ fn row_7_a_key_problem_offers_sharing_and_keys() {
         ResultCode::KeyUnavailable,
         ResultCode::KeyRejected,
     ] {
-        let outcome = comment_outcome(&post(code, pending()), ACCEPTED);
-        assert_eq!(outcome, CommentOutcome::SavedNeedsKey);
+        let envelope = post(code, pending());
+        assert_eq!(outcome(&envelope, ACCEPTED), CommentOutcome::SavedNeedsKey);
         assert_eq!(
-            outcome.offers(RecordState::Accepted),
+            offers(&envelope, ACCEPTED),
             [C::OpenSharingAndKeys, C::RetrySharing, C::GiveUp]
         );
     }
@@ -266,10 +305,10 @@ fn row_8_a_host_problem_offers_check_host() {
         ResultCode::HostApprovalRequired,
         ResultCode::HostReplacementRequired,
     ] {
-        let outcome = comment_outcome(&post(code, pending()), ACCEPTED);
-        assert_eq!(outcome, CommentOutcome::SavedNeedsHost);
+        let envelope = post(code, pending());
+        assert_eq!(outcome(&envelope, ACCEPTED), CommentOutcome::SavedNeedsHost);
         assert_eq!(
-            outcome.offers(RecordState::Accepted),
+            offers(&envelope, ACCEPTED),
             [C::CheckHost, C::RetrySharing, C::GiveUp]
         );
     }
@@ -278,10 +317,13 @@ fn row_8_a_host_problem_offers_check_host() {
 /// Row 9c: a saved comment whose child merge stopped on the identity.
 #[test]
 fn identity_required_routes_to_set_identity() {
-    let outcome = comment_outcome(&post(ResultCode::IdentityRequired, pending()), ACCEPTED);
-    assert_eq!(outcome, CommentOutcome::SavedNeedsIdentity);
+    let envelope = post(ResultCode::IdentityRequired, pending());
     assert_eq!(
-        outcome.offers(RecordState::Accepted),
+        outcome(&envelope, ACCEPTED),
+        CommentOutcome::SavedNeedsIdentity
+    );
+    assert_eq!(
+        offers(&envelope, ACCEPTED),
         [C::SetIdentity, C::RetrySharing, C::GiveUp]
     );
 }
@@ -290,42 +332,41 @@ fn identity_required_routes_to_set_identity() {
 #[test]
 fn an_owed_unshared_comment_offers_retry_and_a_final_one_offers_share() {
     let envelope = post(ResultCode::TransportUnavailable, pending());
-    let owed = comment_outcome(&envelope, ACCEPTED);
     assert_eq!(
-        owed,
+        outcome(&envelope, ACCEPTED),
         CommentOutcome::SavedNotShared {
             code: ResultCode::TransportUnavailable
         }
     );
+    assert_eq!(offers(&envelope, ACCEPTED), [C::RetrySharing, C::GiveUp]);
     assert_eq!(
-        owed.offers(RecordState::Accepted),
-        [C::RetrySharing, C::GiveUp]
-    );
-    let finished = comment_outcome(&envelope, FINISHED);
-    assert_eq!(
-        finished,
+        outcome(&envelope, FINISHED),
         CommentOutcome::SavedNotSharedFinal {
             code: ResultCode::TransportUnavailable
         }
     );
-    assert_eq!(finished.offers(RecordState::Finished), [C::Share]);
+    assert_eq!(offers(&envelope, FINISHED), [C::Share]);
 }
 
 #[test]
 fn row_10_a_post_stopped_before_its_checkpoint_offers_edit_text() {
     let envelope = post(ResultCode::Cancelled, nothing());
-    let outcome = comment_outcome(&envelope, FINISHED);
-    assert_eq!(outcome, CommentOutcome::NotSavedStopped);
-    assert_eq!(outcome.offers(RecordState::Finished), [C::EditText]);
+    assert_eq!(
+        outcome(&envelope, FINISHED),
+        CommentOutcome::NotSavedStopped
+    );
+    assert_eq!(offers(&envelope, FINISHED), [C::EditText]);
 }
 
 #[test]
 fn row_11_an_unsaved_post_needing_an_identity_offers_set_identity() {
     let envelope = post(ResultCode::IdentityRequired, nothing());
-    let outcome = comment_outcome(&envelope, ACCEPTED);
-    assert_eq!(outcome, CommentOutcome::NotSavedIdentity);
     assert_eq!(
-        outcome.offers(RecordState::Accepted),
+        outcome(&envelope, ACCEPTED),
+        CommentOutcome::NotSavedIdentity
+    );
+    assert_eq!(
+        offers(&envelope, ACCEPTED),
         [C::SetIdentity, C::Retry, C::Discard, C::CopyText]
     );
 }
@@ -333,9 +374,11 @@ fn row_11_an_unsaved_post_needing_an_identity_offers_set_identity() {
 #[test]
 fn row_12_an_occupied_path_keeps_the_text_and_offers_discard() {
     let envelope = post(ResultCode::OccupiedPath, nothing());
-    let outcome = comment_outcome(&envelope, FINISHED);
-    assert_eq!(outcome, CommentOutcome::NotSavedConflicting);
-    assert_eq!(outcome.offers(RecordState::Finished), [C::Discard]);
+    assert_eq!(
+        outcome(&envelope, FINISHED),
+        CommentOutcome::NotSavedConflicting
+    );
+    assert_eq!(offers(&envelope, FINISHED), [C::Discard]);
 }
 
 /// Row 13. The planned name `internal_error_is_maybe_saved_only_for_an_adopted_first_post`
@@ -350,19 +393,12 @@ fn internal_error_is_maybe_saved_only_on_a_resend() {
         RecordState::Finished,
         RecordState::Unknown,
     ] {
-        let outcome = comment_outcome(
-            &envelope,
-            Attempt {
-                resend: true,
-                record,
-            },
-        );
-        assert_eq!(outcome, CommentOutcome::MaybeSaved);
-        assert_eq!(outcome.offers(record), [C::CheckAgain]);
-        assert!(!outcome.offers(record).contains(&C::EditText));
+        let resent = attempt(true, record);
+        assert_eq!(outcome(&envelope, resent), CommentOutcome::MaybeSaved);
+        assert_eq!(offers(&envelope, resent), [C::CheckAgain]);
     }
     assert_eq!(
-        comment_outcome(&envelope, FINISHED),
+        outcome(&envelope, FINISHED),
         CommentOutcome::NotSaved {
             code: ResultCode::InternalError
         }
@@ -381,63 +417,53 @@ fn row_14_a_written_or_accepted_post_is_owed_and_offers_retry() {
     );
     let accepted = post(ResultCode::TransportUnavailable, nothing());
     for (envelope, attempt) in [(&written, FINISHED), (&accepted, ACCEPTED)] {
-        let outcome = comment_outcome(envelope, attempt);
         assert_eq!(
-            outcome,
+            outcome(envelope, attempt),
             CommentOutcome::NotSavedOwed {
                 code: ResultCode::TransportUnavailable
             }
         );
-        let offers = outcome.offers(attempt.record);
-        assert_eq!(offers, [C::Retry, C::Discard, C::CopyText]);
-        assert!(!offers.contains(&C::EditText));
+        assert_eq!(
+            offers(envelope, attempt),
+            [C::Retry, C::Discard, C::CopyText]
+        );
     }
 }
 
 #[test]
 fn row_15_an_unwritten_finished_failure_offers_edit_text() {
     let envelope = post(ResultCode::TransportUnavailable, nothing());
-    let outcome = comment_outcome(&envelope, FINISHED);
     assert_eq!(
-        outcome,
+        outcome(&envelope, FINISHED),
         CommentOutcome::NotSaved {
             code: ResultCode::TransportUnavailable
         }
     );
-    assert_eq!(outcome.offers(RecordState::Finished), [C::EditText]);
+    assert_eq!(offers(&envelope, FINISHED), [C::EditText]);
 }
 
 /// P17: where the record stands is unknown, a post offers Retry and
 /// Check again, never Edit text or Give up.
 #[test]
 fn an_unknown_record_offers_retry_and_check_again_only() {
-    let unsaved = comment_outcome(&post(ResultCode::TransportUnavailable, nothing()), UNKNOWN);
+    let unsaved = post(ResultCode::TransportUnavailable, nothing());
     assert_eq!(
-        unsaved,
+        outcome(&unsaved, UNKNOWN),
         CommentOutcome::NotSavedOwed {
             code: ResultCode::TransportUnavailable
         }
     );
+    assert_eq!(offers(&unsaved, UNKNOWN), [C::Retry, C::CheckAgain]);
+    let saved = post(ResultCode::TransportUnavailable, pending());
     assert_eq!(
-        unsaved.offers(RecordState::Unknown),
-        [C::Retry, C::CheckAgain]
-    );
-    let saved = comment_outcome(&post(ResultCode::TransportUnavailable, pending()), UNKNOWN);
-    assert_eq!(
-        saved,
+        outcome(&saved, UNKNOWN),
         CommentOutcome::SavedNotShared {
             code: ResultCode::TransportUnavailable
         }
     );
-    assert_eq!(
-        saved.offers(RecordState::Unknown),
-        [C::RetrySharing, C::CheckAgain]
-    );
-    let locked = comment_outcome(&post(ResultCode::UnlockRequired, pending()), UNKNOWN);
-    assert_eq!(
-        locked.offers(RecordState::Unknown),
-        [C::Unlock, C::CheckAgain]
-    );
+    assert_eq!(offers(&saved, UNKNOWN), [C::RetrySharing, C::CheckAgain]);
+    let locked = post(ResultCode::UnlockRequired, pending());
+    assert_eq!(offers(&locked, UNKNOWN), [C::Unlock, C::CheckAgain]);
 }
 
 /// Give up is offered only while the record is accepted (decision 8).
@@ -450,9 +476,110 @@ fn give_up_needs_an_accepted_record() {
         ResultCode::IdentityRequired,
         ResultCode::RemoteBranchDeleted,
     ] {
-        let outcome = comment_outcome(&post(code, pending()), FINISHED);
-        assert!(!outcome.offers(RecordState::Finished).contains(&C::GiveUp));
-        assert!(outcome.offers(RecordState::Accepted).contains(&C::GiveUp));
+        let envelope = post(code, pending());
+        assert!(!offers(&envelope, FINISHED).contains(&C::GiveUp));
+        assert!(!offers(&envelope, UNKNOWN).contains(&C::GiveUp));
+        assert!(offers(&envelope, ACCEPTED).contains(&C::GiveUp));
+    }
+}
+
+/// Orchestrator ruling: a finished record only replays, so no row
+/// offers the same request on it (Retry sharing, Unlock…, Retry); a new
+/// share takes its place. Only the transient codes keep Retry (fact 14).
+#[test]
+fn a_finished_record_never_offers_a_same_request_resend() {
+    let comment_rows = [
+        (ResultCode::UnlockRequired, vec![C::Share]),
+        (
+            ResultCode::NoSelectedKey,
+            vec![C::OpenSharingAndKeys, C::Share],
+        ),
+        (
+            ResultCode::HostApprovalRequired,
+            vec![C::CheckHost, C::Share],
+        ),
+        (ResultCode::IdentityRequired, vec![C::SetIdentity, C::Share]),
+    ];
+    for (code, expected) in comment_rows {
+        assert_eq!(
+            offers(&post(code, pending()), FINISHED),
+            expected,
+            "{code:?}"
+        );
+    }
+    let sync_rows = [
+        (ResultCode::UnlockRequired, vec![S::Share]),
+        (ResultCode::IdentityRequired, vec![S::SetIdentity, S::Share]),
+        (
+            ResultCode::KeyRejected,
+            vec![S::OpenSharingAndKeys, S::Share],
+        ),
+        (
+            ResultCode::HostReplacementRequired,
+            vec![S::CheckHost, S::Share],
+        ),
+        (ResultCode::PushRejected, vec![S::Share]),
+    ];
+    for (code, expected) in sync_rows {
+        let envelope = share(code, nothing());
+        assert_eq!(
+            sync_offers(&envelope, ShareTarget::Item, RecordState::Finished),
+            expected,
+            "{code:?}"
+        );
+    }
+    for code in [
+        ResultCode::Busy,
+        ResultCode::PollYielding,
+        ResultCode::RemoteUnavailable,
+        ResultCode::TransportUnavailable,
+        ResultCode::RegistrationPending,
+    ] {
+        let offered = sync_offers(
+            &share(code, nothing()),
+            ShareTarget::Main,
+            RecordState::Finished,
+        );
+        assert!(offered.contains(&S::Retry), "{code:?}");
+    }
+}
+
+/// P14: the answer of a Give up never offers Give up again; the row's
+/// own way to finish stays.
+#[test]
+fn after_a_give_up_give_up_is_not_offered_again() {
+    let given_up = Attempt {
+        after_give_up: true,
+        ..ACCEPTED
+    };
+    let locked = post(ResultCode::UnlockRequired, pending());
+    assert_eq!(offers(&locked, given_up), [C::Unlock]);
+    let key = post(ResultCode::NoSelectedKey, pending());
+    assert_eq!(
+        offers(&key, given_up),
+        [C::OpenSharingAndKeys, C::RetrySharing]
+    );
+    let transient = post(ResultCode::TransportUnavailable, pending());
+    assert_eq!(offers(&transient, given_up), [C::RetrySharing]);
+    let unknown = Attempt {
+        after_give_up: true,
+        ..UNKNOWN
+    };
+    assert_eq!(offers(&locked, unknown), [C::Unlock, C::CheckAgain]);
+
+    let share_given_up = ShareAttempt {
+        after_give_up: true,
+        ..share_attempt(ShareTarget::Item, RecordState::Accepted)
+    };
+    let cases = [
+        (ResultCode::UnlockRequired, vec![S::Unlock]),
+        (ResultCode::KeyRejected, vec![S::OpenSharingAndKeys]),
+        (ResultCode::TransportUnavailable, vec![S::Retry]),
+        (ResultCode::RemoteBranchDeleted, vec![]),
+    ];
+    for (code, expected) in cases {
+        let result = sync_outcome(&share(code, nothing()), share_given_up);
+        assert_eq!(result.offers(), expected, "{code:?}");
     }
 }
 
@@ -465,7 +592,7 @@ fn rows_match_in_precedence_order() {
         comment(PublicationEffect::Published, None, None),
     );
     assert_eq!(
-        comment_outcome(&mismatch, ACCEPTED),
+        outcome(&mismatch, ACCEPTED),
         CommentOutcome::Mismatched { saved: false }
     );
     // Row 2 before row 3: stopped with no remote is saved here.
@@ -478,10 +605,7 @@ fn rows_match_in_precedence_order() {
             None,
         ),
     );
-    assert_eq!(
-        comment_outcome(&no_remote, FINISHED),
-        CommentOutcome::SavedHere
-    );
+    assert_eq!(outcome(&no_remote, FINISHED), CommentOutcome::SavedHere);
     // Row 3 before row 4: stopped with conflict data.
     let stopped = post_with(
         ResultCode::Cancelled,
@@ -492,10 +616,7 @@ fn rows_match_in_precedence_order() {
             Some(next()),
         ),
     );
-    assert_eq!(
-        comment_outcome(&stopped, FINISHED),
-        CommentOutcome::SavedStopped
-    );
+    assert_eq!(outcome(&stopped, FINISHED), CommentOutcome::SavedStopped);
     // Row 4 before row 6: a conflict answered with a locked key's code.
     let conflict = post_with(
         ResultCode::UnlockRequired,
@@ -507,16 +628,16 @@ fn rows_match_in_precedence_order() {
         ),
     );
     assert_eq!(
-        comment_outcome(&conflict, ACCEPTED),
+        outcome(&conflict, ACCEPTED),
         CommentOutcome::SavedConflict { next: next() }
     );
     // Row 9c before row 9a; row 11 before row 14.
     assert_eq!(
-        comment_outcome(&post(ResultCode::IdentityRequired, pending()), ACCEPTED),
+        outcome(&post(ResultCode::IdentityRequired, pending()), ACCEPTED),
         CommentOutcome::SavedNeedsIdentity
     );
     assert_eq!(
-        comment_outcome(&post(ResultCode::IdentityRequired, nothing()), ACCEPTED),
+        outcome(&post(ResultCode::IdentityRequired, nothing()), ACCEPTED),
         CommentOutcome::NotSavedIdentity
     );
     // Row 10 before row 14: stopped after writing, before committing.
@@ -526,29 +647,29 @@ fn rows_match_in_precedence_order() {
         PublicationEffect::NotRequested,
     );
     assert_eq!(
-        comment_outcome(&post(ResultCode::Cancelled, written.clone()), ACCEPTED),
+        outcome(&post(ResultCode::Cancelled, written.clone()), ACCEPTED),
         CommentOutcome::NotSavedStopped
     );
     // Row 12 before row 13: an occupied path on a re-send.
     assert_eq!(
-        comment_outcome(&post(ResultCode::OccupiedPath, nothing()), RESENT),
+        outcome(&post(ResultCode::OccupiedPath, nothing()), RESENT),
         CommentOutcome::NotSavedConflicting
     );
     // Row 13 before row 14: an internal error on a re-send after writing.
     assert_eq!(
-        comment_outcome(&post(ResultCode::InternalError, written), RESENT),
+        outcome(&post(ResultCode::InternalError, written), RESENT),
         CommentOutcome::MaybeSaved
     );
-    // Sync: published before cancelled, cancelled before conflict data.
+    // Sync: cancelled before conflict data, conflict data before codes.
     let mut cancelled = share(ResultCode::Cancelled, pending());
     cancelled.data = Some(conflict_data());
     assert_eq!(
-        sync_outcome(&cancelled, ShareTarget::Item, RecordState::Finished),
+        sync(&cancelled, ShareTarget::Item, RecordState::Finished),
         SyncOutcome::Stopped { completed: true }
     );
     let conflicted = share(ResultCode::UnlockRequired, pending()).with_data(conflict_data());
     assert_eq!(
-        sync_outcome(&conflicted, ShareTarget::Item, RecordState::Accepted),
+        sync(&conflicted, ShareTarget::Item, RecordState::Accepted),
         SyncOutcome::Conflict { next: next() }
     );
 }
@@ -556,60 +677,51 @@ fn rows_match_in_precedence_order() {
 /// A stop that came after the push still reports the work shared.
 #[test]
 fn a_stop_after_the_push_is_shared() {
-    let comment_envelope = post(ResultCode::Cancelled, saved(PublicationEffect::Published));
+    let posted = post(ResultCode::Cancelled, saved(PublicationEffect::Published));
+    assert_eq!(outcome(&posted, FINISHED), CommentOutcome::Shared);
+    let synced = share(ResultCode::Cancelled, saved(PublicationEffect::Published));
     assert_eq!(
-        comment_outcome(&comment_envelope, FINISHED),
-        CommentOutcome::Shared
-    );
-    let sync = share(ResultCode::Cancelled, saved(PublicationEffect::Published));
-    assert_eq!(
-        sync_outcome(&sync, ShareTarget::Item, RecordState::Finished),
+        sync(&synced, ShareTarget::Item, RecordState::Finished),
         SyncOutcome::Published
     );
 }
 
 // --- sync_outcome, row by row ---
 
-fn conflict_data() -> MutationDataDto {
-    MutationDataDto::SynchronizationConflict(SynchronizationConflictMutationDto {
-        r#type: SynchronizationConflictType::SynchronizationConflict,
-        conflict: next(),
-    })
-}
-
-fn synced(publication: PublicationEffect) -> Effects {
-    effects(
-        WriteEffect::NotRequested,
-        CheckpointEffect::NotRequested,
-        publication,
-    )
-}
-
 #[test]
 fn sync_published_is_published() {
     let envelope = share(ResultCode::Ok, synced(PublicationEffect::Published));
-    let outcome = sync_outcome(&envelope, ShareTarget::Main, RecordState::Finished);
-    assert_eq!(outcome, SyncOutcome::Published);
-    assert!(outcome.offers(RecordState::Finished).is_empty());
+    assert_eq!(
+        sync(&envelope, ShareTarget::Main, RecordState::Finished),
+        SyncOutcome::Published
+    );
+    assert!(sync_offers(&envelope, ShareTarget::Main, RecordState::Finished).is_empty());
 }
 
 #[test]
 fn sync_current_is_current() {
     let envelope = share(ResultCode::Ok, synced(PublicationEffect::Current));
-    let outcome = sync_outcome(&envelope, ShareTarget::Item, RecordState::Finished);
-    assert_eq!(outcome, SyncOutcome::Current);
-    assert!(outcome.offers(RecordState::Finished).is_empty());
+    assert_eq!(
+        sync(&envelope, ShareTarget::Item, RecordState::Finished),
+        SyncOutcome::Current
+    );
+    assert!(sync_offers(&envelope, ShareTarget::Item, RecordState::Finished).is_empty());
 }
 
 #[test]
 fn sync_cancelled_is_stopped_and_says_what_completed() {
     let before = share(ResultCode::Cancelled, synced(PublicationEffect::Pending));
-    let outcome = sync_outcome(&before, ShareTarget::Item, RecordState::Finished);
-    assert_eq!(outcome, SyncOutcome::Stopped { completed: false });
-    assert_eq!(outcome.offers(RecordState::Finished), [S::Share]);
+    assert_eq!(
+        sync(&before, ShareTarget::Item, RecordState::Finished),
+        SyncOutcome::Stopped { completed: false }
+    );
+    assert_eq!(
+        sync_offers(&before, ShareTarget::Item, RecordState::Finished),
+        [S::Share]
+    );
     let after = share(ResultCode::Cancelled, pending());
     assert_eq!(
-        sync_outcome(&after, ShareTarget::Item, RecordState::Finished),
+        sync(&after, ShareTarget::Item, RecordState::Finished),
         SyncOutcome::Stopped { completed: true }
     );
 }
@@ -621,34 +733,39 @@ fn sync_conflict_data_is_a_conflict_with_no_action() {
         synced(PublicationEffect::Pending),
     )
     .with_data(conflict_data());
-    let outcome = sync_outcome(&envelope, ShareTarget::Item, RecordState::Finished);
-    assert_eq!(outcome, SyncOutcome::Conflict { next: next() });
-    assert!(outcome.offers(RecordState::Finished).is_empty());
+    assert_eq!(
+        sync(&envelope, ShareTarget::Item, RecordState::Finished),
+        SyncOutcome::Conflict { next: next() }
+    );
+    assert!(sync_offers(&envelope, ShareTarget::Item, RecordState::Finished).is_empty());
 }
 
 #[test]
 fn sync_a_deleted_branch_offers_give_up_and_no_share() {
     let envelope = share(ResultCode::RemoteBranchDeleted, nothing());
-    let outcome = sync_outcome(&envelope, ShareTarget::Item, RecordState::Accepted);
-    assert_eq!(outcome, SyncOutcome::BranchDeleted);
-    assert_eq!(outcome.offers(RecordState::Accepted), [S::GiveUp]);
-    assert!(outcome.offers(RecordState::Finished).is_empty());
+    assert_eq!(
+        sync(&envelope, ShareTarget::Item, RecordState::Accepted),
+        SyncOutcome::BranchDeleted
+    );
+    assert_eq!(
+        sync_offers(&envelope, ShareTarget::Item, RecordState::Accepted),
+        [S::GiveUp]
+    );
+    assert!(sync_offers(&envelope, ShareTarget::Item, RecordState::Finished).is_empty());
 }
 
 #[test]
 fn sync_a_locked_key_needs_unlock() {
     for code in [ResultCode::UnlockRequired, ResultCode::UnlockFailed] {
-        let outcome = sync_outcome(
-            &share(code, nothing()),
-            ShareTarget::Main,
-            RecordState::Accepted,
-        );
-        assert_eq!(outcome, SyncOutcome::NeedsUnlock);
+        let envelope = share(code, nothing());
         assert_eq!(
-            outcome.offers(RecordState::Accepted),
+            sync(&envelope, ShareTarget::Main, RecordState::Accepted),
+            SyncOutcome::NeedsUnlock
+        );
+        assert_eq!(
+            sync_offers(&envelope, ShareTarget::Main, RecordState::Accepted),
             [S::Unlock, S::GiveUp]
         );
-        assert_eq!(outcome.offers(RecordState::Finished), [S::Unlock]);
     }
 }
 
@@ -659,15 +776,14 @@ fn sync_a_key_problem_needs_a_key() {
         ResultCode::KeyUnavailable,
         ResultCode::KeyRejected,
     ] {
-        let outcome = sync_outcome(
-            &share(code, nothing()),
-            ShareTarget::Item,
-            RecordState::Finished,
-        );
-        assert_eq!(outcome, SyncOutcome::NeedsKey);
+        let envelope = share(code, nothing());
         assert_eq!(
-            outcome.offers(RecordState::Finished),
-            [S::OpenSharingAndKeys]
+            sync(&envelope, ShareTarget::Item, RecordState::Accepted),
+            SyncOutcome::NeedsKey
+        );
+        assert_eq!(
+            sync_offers(&envelope, ShareTarget::Item, RecordState::Accepted),
+            [S::OpenSharingAndKeys, S::GiveUp]
         );
     }
 }
@@ -691,9 +807,8 @@ fn sync_a_host_problem_needs_the_host_it_names() {
                 ("root", "/fixture/repo".into()),
             ],
         )]);
-        let outcome = sync_outcome(&envelope, ShareTarget::Item, RecordState::Finished);
         assert_eq!(
-            outcome,
+            sync(&envelope, ShareTarget::Item, RecordState::Accepted),
             SyncOutcome::NeedsHost {
                 authority: Some(SshAuthority {
                     host: "git.example.com".to_owned(),
@@ -701,10 +816,13 @@ fn sync_a_host_problem_needs_the_host_it_names() {
                 })
             }
         );
-        assert_eq!(outcome.offers(RecordState::Finished), [S::CheckHost]);
+        assert_eq!(
+            sync_offers(&envelope, ShareTarget::Item, RecordState::Accepted),
+            [S::CheckHost, S::GiveUp]
+        );
         // With no host data it names none.
         assert_eq!(
-            sync_outcome(
+            sync(
                 &share(code, nothing()),
                 ShareTarget::Item,
                 RecordState::Finished
@@ -717,10 +835,12 @@ fn sync_a_host_problem_needs_the_host_it_names() {
 #[test]
 fn sync_identity_required_needs_an_identity() {
     let envelope = share(ResultCode::IdentityRequired, nothing());
-    let outcome = sync_outcome(&envelope, ShareTarget::Main, RecordState::Accepted);
-    assert_eq!(outcome, SyncOutcome::NeedsIdentity);
     assert_eq!(
-        outcome.offers(RecordState::Accepted),
+        sync(&envelope, ShareTarget::Main, RecordState::Accepted),
+        SyncOutcome::NeedsIdentity
+    );
+    assert_eq!(
+        sync_offers(&envelope, ShareTarget::Main, RecordState::Accepted),
         [S::SetIdentity, S::Retry, S::GiveUp]
     );
 }
@@ -728,10 +848,12 @@ fn sync_identity_required_needs_an_identity() {
 #[test]
 fn sync_busy_offers_its_holder_and_retry() {
     let envelope = share(ResultCode::Busy, nothing());
-    let outcome = sync_outcome(&envelope, ShareTarget::Item, RecordState::Finished);
-    assert_eq!(outcome, SyncOutcome::Busy);
     assert_eq!(
-        outcome.offers(RecordState::Finished),
+        sync(&envelope, ShareTarget::Item, RecordState::Finished),
+        SyncOutcome::Busy
+    );
+    assert_eq!(
+        sync_offers(&envelope, ShareTarget::Item, RecordState::Finished),
         [S::ShowHolder, S::Retry]
     );
 }
@@ -739,24 +861,31 @@ fn sync_busy_offers_its_holder_and_retry() {
 #[test]
 fn sync_without_a_publication_remote_has_no_remote() {
     let envelope = share(ResultCode::PublicationRemoteRequired, nothing());
-    let outcome = sync_outcome(&envelope, ShareTarget::Main, RecordState::Finished);
-    assert_eq!(outcome, SyncOutcome::NoRemote);
-    assert_eq!(outcome.offers(RecordState::Finished), [S::SetUpSharing]);
+    assert_eq!(
+        sync(&envelope, ShareTarget::Main, RecordState::Finished),
+        SyncOutcome::NoRemote
+    );
+    assert_eq!(
+        sync_offers(&envelope, ShareTarget::Main, RecordState::Finished),
+        [S::SetUpSharing]
+    );
 }
 
 #[test]
 fn item_not_found_on_share_item_is_nothing_to_share() {
     let envelope = share(ResultCode::ItemNotFound, nothing());
-    let outcome = sync_outcome(&envelope, ShareTarget::Item, RecordState::Finished);
-    assert_eq!(outcome, SyncOutcome::NothingToShare);
+    assert_eq!(
+        sync(&envelope, ShareTarget::Item, RecordState::Finished),
+        SyncOutcome::NothingToShare
+    );
     assert_eq!(
         NOTHING_TO_SHARE,
         "Nothing to share yet: this item has no saved changes."
     );
-    assert!(outcome.offers(RecordState::Finished).is_empty());
+    assert!(sync_offers(&envelope, ShareTarget::Item, RecordState::Finished).is_empty());
     // Share main has no item to miss: it is an ordinary failure.
     assert_eq!(
-        sync_outcome(&envelope, ShareTarget::Main, RecordState::Finished),
+        sync(&envelope, ShareTarget::Main, RecordState::Finished),
         SyncOutcome::Failed {
             code: ResultCode::ItemNotFound,
             retry: false
@@ -767,36 +896,39 @@ fn item_not_found_on_share_item_is_nothing_to_share() {
 #[test]
 fn sync_otherwise_failed_retries_while_owed_and_shares_when_final() {
     let envelope = share(ResultCode::PushRejected, nothing());
-    let owed = sync_outcome(&envelope, ShareTarget::Item, RecordState::Accepted);
     assert_eq!(
-        owed,
+        sync(&envelope, ShareTarget::Item, RecordState::Accepted),
         SyncOutcome::Failed {
             code: ResultCode::PushRejected,
             retry: true
         }
     );
-    assert_eq!(owed.offers(RecordState::Accepted), [S::Retry, S::GiveUp]);
-    let finished = sync_outcome(&envelope, ShareTarget::Item, RecordState::Finished);
     assert_eq!(
-        finished,
+        sync_offers(&envelope, ShareTarget::Item, RecordState::Accepted),
+        [S::Retry, S::GiveUp]
+    );
+    assert_eq!(
+        sync(&envelope, ShareTarget::Item, RecordState::Finished),
         SyncOutcome::Failed {
             code: ResultCode::PushRejected,
             retry: false
         }
     );
-    assert_eq!(finished.offers(RecordState::Finished), [S::Share]);
-    // A transient code is retried whatever the record (fact 14).
-    let transient = sync_outcome(
-        &share(ResultCode::RemoteUnavailable, nothing()),
-        ShareTarget::Main,
-        RecordState::Finished,
-    );
     assert_eq!(
-        transient,
+        sync_offers(&envelope, ShareTarget::Item, RecordState::Finished),
+        [S::Share]
+    );
+    // A transient code is retried whatever the record (fact 14).
+    let transient = share(ResultCode::RemoteUnavailable, nothing());
+    assert_eq!(
+        sync(&transient, ShareTarget::Main, RecordState::Finished),
         SyncOutcome::Failed {
             code: ResultCode::RemoteUnavailable,
             retry: true
         }
     );
-    assert_eq!(transient.offers(RecordState::Finished), [S::Retry]);
+    assert_eq!(
+        sync_offers(&transient, ShareTarget::Main, RecordState::Finished),
+        [S::Retry]
+    );
 }
