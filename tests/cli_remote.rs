@@ -35,6 +35,8 @@ mod human_admin;
 #[allow(dead_code, unused_imports)]
 #[path = "../src/bin/manyhands-cli/parse.rs"]
 mod parse;
+#[path = "cli_remote/polling.rs"]
+mod polling;
 #[allow(dead_code, unused_imports)]
 #[path = "../src/bin/manyhands-cli/render.rs"]
 mod render;
@@ -101,6 +103,7 @@ fn main() {
         .chain(interruption::CASES)
         .chain(collaboration::CASES)
         .chain(conflicts::CASES)
+        .chain(polling::CASES)
         .copied()
         .collect();
     ssh_harness::run(&cases);

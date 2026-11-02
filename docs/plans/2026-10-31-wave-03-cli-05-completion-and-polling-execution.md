@@ -1165,3 +1165,56 @@ Base `08ac45ca`; `origin/main` at `15a23125` is contained. `poll configure`, `po
 | `cargo fmt --check`, clippy `-D warnings` | ok | under 10 s each |
 
 **Left.** `poll once` is Task 9, with `stops_on_ctrl_c`'s rows for all four verbs.
+
+## Task 9: `poll once` verb
+
+Base `1343462b`; `origin/main` at `15a23125` is contained. `poll once` is available: through `mutate::drive`, inside the Ctrl-C window (`stops_on_ctrl_c`), with C2's unlock prompt and bounded retry. Nothing in the catalog is planned now. `planned()` is `#[cfg(test)]`, `Availability::Planned` has `cfg_attr(not(test), allow(dead_code))`, and `catalog::PLANNED` is the test-only spec (R-8).
+
+**Human output.** The report's fields, then a line per target with `PollTargetDisposition::guidance`: `target: <name> kind= item= disposition= before= after=`. Null fields print `none`, and every value goes through `render::field`. Final stops add a note that names a new request, for the code's correction. A `busy` adds `next:` lines for `operation list` and then `operation resume`, after C2's `request.retry`, with a note on what they answer.
+
+**Seen first.** Against the planned verb, 13 of the 14 `c5_polling_` cases failed by assertion: the harness printed `json_once`'s code assertion (line 93) for 12, and `c5_polling_usage_failure`'s (line 700) for the other. The 14th, `c5_polling_a_second_poll_overlaps`, failed with no line, since its first process exited at once and the server's hold was never reached. So it failed, but not by an assertion. A stub of the renderer with no target lines, final notes or busy route, and C2's passphrase hint, failed 10 of the 14 `polling` unit rows. The four it passed pin the policy note or an absence: `a_suspension_is_named_from_the_answer_s_own_data`, `a_stop_the_same_request_continues_has_no_final_note`, `json_mode_holds_one_envelope_and_no_note` and `no_suspension_has_no_note`. With `PollOnce` out of `stops_on_ctrl_c`, `the_window_covers_exactly_the_stoppable_verbs` failed. Each mutation is reverted.
+
+**No design row answered otherwise. Two of my own expectations did, and I corrected them, each on a reading.**
+
+- `c5_polling_a_second_poll_overlaps` expected `poll_yielding` from a real second process while the first is inside its transfer. It answers `busy`, exit 5, with `request.retry` and its own operation ID, and the first process finishes `ok`. Decision 24 says "poll overlap answers `busy`", so my row was wrong. `poll_yielding` stays with the library's staged reservation (`c5_poll_once_poll_yielding`), and I did not establish whether a real overlap can reach it.
+- `c5_polling_fast_forward_and_materialize_once` expected only `progress: connecting`. A poll has an accepted record, so `progress: accepted` comes first. Task 5b's "reports its `Connecting` event only" speaks of a poll's own stages. A golden pins both lines.
+
+**The closed ticket's disposition, read before the row ran.** `materialized`, in the closing clone and in the other. The only closure check in materialization is `written_closure_unfinished` (`remote/poll.rs:325`), which a finished closure doesn't meet. So a stale peer's branch of a closed ticket gets a local branch and a worktree again, while primary keeps its closure and nothing else moves. **For the owner:** this is what the design said to pin, but a person may find it surprising, and it leaves a worktree that nothing retires.
+
+**Decisions, for review.**
+
+- **A rule for which stops say "new request".** `final_note` is an explicit code list, excluding any answer that offers `request.retry`, so an `Owed` stop doesn't say it. No note says "final" or that the same request only repeats, since a no-remote answer has no record, so its ID would run again. A replay of a stored stop prints the note too.
+- **C2's passphrase hint is replaced for this verb.** "run the command again" would imply the same request under `--request-id`. The hint says a new request. Its row is a unit row: the PTY route with a wrong passphrase isn't run for `poll once`.
+- **Options, as Task 8 records.** `--prepare` is `not_confirmable`, by `mode_rules`.
+- **The no-remote stage.** `remote select` with a null name commits, so the row removes the line from the configuration file, which the pre-check reads. It shows nothing is written; a `remote select` route is not exercised.
+- **The lease row holds the lock in the test's own process,** and the CLI child is the second process, as the library's row does. `c5_polling_a_second_poll_overlaps` has two real CLI processes.
+- **`poll_once_host_stop_text`'s port and fingerprint** are replaced in the golden, since the fixture makes them per run.
+
+**A pin not in the named edits, in a file the brief names: for a ruling.** `tests/cli/help.rs` `root_help_and_bare_call_match_in_both_modes_without_data` asserted that help's `repository` values include null, which only a planned verb gives. With R-8 none does, so `.chain([None])` is removed. No code changed for it, and the schema still allows null, for a later planned verb.
+
+**Named edits.** E-3, E-4, E-6 and E-16 are moved, including `parse_tests.rs:563`'s planned half and `startup_tests.rs:171`'s row; `exits.rs` loses the `unavailable` row, and `command_unavailable` joins `REASONS`. E-14: four `stops_on_ctrl_c` rows. E-7: help goldens, read.
+
+**Files beyond the plan's list.**
+
+- `src/bin/manyhands-cli/parse.rs`: `verb_command` is extracted from `command()`, with no change in behaviour, so a planned spec's arguments can be tested without a catalog entry. `parse()`'s `Availability::Planned => Action::Unavailable` arm therefore has no row: nothing in the catalog reaches it.
+- `src/bin/manyhands-cli/human_lifecycle.rs`: `refusal_of` is `pub(crate)`, one word.
+- `src/bin/manyhands-cli/dispatch.rs`: the arm.
+- `tests/cli/help.rs`, `tests/cli/exits.rs`: as the brief names. `tests/support/cli.rs`: registration.
+
+**Evidence that isn't through the binary.** The text of `cancelled`, a stored transport stop, a wrong passphrase and a stop with a report is on built envelopes. `transport_unavailable` and `remote_unavailable` over SSH aren't run through the binary. Replay and mismatch are pinned on a completed poll only. The matrix's Ctrl-C, `request cancel`, same-request continuation and lost stdout for `poll once` are Task 13a's, though `busy` then the same request is here.
+
+**Transport.** `startup.rs` starts the Git transport for every `Run` of a verb past its mode rules, so the three policy verbs start it too, as C2's do. The design says transport starts only for `poll once`. It spawns no thread, and changing it is beyond these Files. **Risk to rule on.**
+
+**Verified, compare mode, no golden variable.** All exit 0.
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--test cli_remote -- c5_polling` | 14 | 58 s |
+| `--bin manyhands-cli` | 288 | 2 s |
+| `--test cli` | 392 | 92 s |
+| `--test cli_remote`, whole | 80 SSH cases and the target's other rows | 369 s |
+| fmt, clippy `-D warnings`, CLI check, no-GPUI | ok | under 10 s each |
+
+No library file changed, so the `remote`, `local_sync` and `integration` filters were not run. merge-tree isn't needed: `origin/main` is contained.
+
+**Left.** Task 13a's Ctrl-C and lost stdout for `poll once`; Task 14a's inventory, which should read `--prepare` and `--confirm` as listed; `tests/cli/inventory.rs`.

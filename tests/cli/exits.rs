@@ -20,6 +20,10 @@ const CLI_ONLY: &[&str] = &["usage_error", "command_unavailable", "invalid_id"];
 // No host_approval_required: the audit explicitly excludes it from C2.
 const REASONS: &[(&str, &str)] = &[
     (
+        "command_unavailable",
+        "No verb is planned once poll once is bound (R-8). A test-only planned spec pins the answer in startup_tests.rs.",
+    ),
+    (
         "confirmation_expired",
         "Needs ten minutes; F2 covers expiry with an injected clock, unavailable to the CLI child.",
     ),
@@ -136,13 +140,6 @@ const ROWS: &[Row] = &[
     row!("success", ADD, REMOTE, "ok", 0),
     row!("selected_noop", SELECT_ARGS, SELECT, "already_applied", 0),
     row!("usage", &["remote", "add"], b"", "usage_error", 2),
-    row!(
-        "unavailable",
-        &["poll", "once"],
-        b"",
-        "command_unavailable",
-        2
-    ),
     row!("input", ADD, b"{}", "invalid_input", 2),
     row!("prefix", CREATE, br#"{"primary_branch":"main","identity":{"name":"Person","email":"person@example.invalid"},"ticket_slug_prefix":"invalid prefix!"}"#, "invalid_input", 2),
     row!("initials", &["repo", "identity-set", "--repo", "{root}", "--input", "-", "--prepare"], br#"{"name":"Person","email":"person@example.invalid","initials":"invalid initials!"}"#, "invalid_input", 2),

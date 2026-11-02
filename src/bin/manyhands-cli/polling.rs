@@ -1,29 +1,201 @@
-//! `poll configure`, `poll pause` and `poll resume`. Each writes one field of
-//! the repository's polling policy in its request's own transaction, so it has
-//! no safe point and takes no Ctrl-C window, and no verb here sets `enabled`.
-//! A policy answer holds the policy as it left it, which is all that the note
-//! about a recovery suspension reads.
+//! The polling verbs.
+//!
+//! `poll configure`, `poll pause` and `poll resume` each write one field of the
+//! repository's polling policy in the request's own transaction, so they have no
+//! safe point and take no Ctrl-C window, and no verb here sets `enabled`. A
+//! policy answer holds the policy as it left it, which is all that the note about
+//! a recovery suspension reads.
+//!
+//! `poll once` is one explicit pass, in the Ctrl-C window (`mutate.rs`) and with
+//! C2's unlock prompt at a terminal. A poll's stop after its reservation is final
+//! (R-18), so its human lines say a new request follows and never that this one
+//! continues. What a target is named by comes from the data, whose fields are all
+//! null for a malformed ref; each is escaped when printed.
 
 use clap::ArgMatches;
 use manyhands::{
     repository::{
-        Mutation, MutationDataDto, PollConfigureInput, PollPauseInput, PollResumeInput,
-        RepositoryService,
+        Mutation, MutationDataDto, PollConfigureInput, PollMutationDto, PollOnceInput,
+        PollPauseInput, PollResumeInput, RepositoryService,
     },
-    results::Envelope,
+    results::{Envelope, RecoveryActionKind, ResultCode},
 };
 use std::path::PathBuf;
 
 use crate::{
     admin,
     catalog::CommandSpec,
+    human_admin,
+    human_lifecycle::refusal_of,
     mutate::{self, Driven, MutationFlags, Plan, Session},
-    render::{self, Output, note_lines},
+    render::{self, Output, field, note_lines, quoted},
 };
 
 /// Decision 5: `poll resume` does not lift the suspension, and clearing it is
 /// not a CLI verb.
 const SUSPENDED_NOTE: &str = "automatic polls are suspended for recovery, and poll resume does not lift that; poll once still runs.";
+
+/// What follows a stop no resend gets past. Each says "new request" because
+/// sending the same one gets this answer back, or is no help.
+const NEW_REQUEST: &str = "polling again takes a new request.";
+const HOST_NOTE: &str = "once the host is approved, polling again takes a new request.";
+const UNLOCK_NOTE: &str =
+    "polling again takes a new request, made at a terminal, where it can ask for the passphrase.";
+const KEY_NOTE: &str = "once a usable key is selected, polling again takes a new request.";
+const REMOTE_NOTE: &str =
+    "once a publication remote is selected, polling again takes a new request.";
+const PASSPHRASE_HINT: &str = "hint: if the passphrase was wrong, poll again with a new request\n";
+const BUSY_NOTE: &str = "something else holds this repository: operation list names it, and operation resume, with its operation ID for the <operation-id> placeholder, names the request that holds it.";
+
+pub fn once(
+    service: &RepositoryService,
+    session: &mut Session,
+    spec: &'static CommandSpec,
+    args: &ArgMatches,
+) -> Output {
+    let selected = || -> Result<_, Output> {
+        let flags = admin::flags(session, spec, args)?;
+        let root = admin::mutation_root(session, spec, args, flags.request_id)?;
+        Ok((flags, root))
+    };
+    let (flags, root) = match selected() {
+        Ok(values) => values,
+        Err(out) => return out,
+    };
+    let plan = Plan {
+        identity_prompt: false,
+        retry: true,
+    };
+    match mutate::drive(
+        service,
+        session,
+        spec,
+        flags,
+        plan,
+        &mut |_| Mutation::PollOnce(PollOnceInput { root: root.clone() }),
+        &mut std::thread::sleep,
+    ) {
+        Driven::Answered(output) => output,
+        Driven::Prepared(envelope) => render::prepare_output(session.json, &envelope),
+        Driven::Executed { envelope, supplied } if session.json => {
+            render::mutation_output(true, &envelope, supplied)
+        }
+        Driven::Executed { envelope, supplied } => {
+            once_output(&envelope, supplied, root.to_string_lossy().as_ref())
+        }
+    }
+}
+
+/// A value of a target's line. A malformed ref's fields are all null.
+fn shown(value: Option<&str>) -> String {
+    value.map_or_else(|| "none".to_owned(), field)
+}
+
+/// The report's fields, then a line per target with the domain's guidance. A
+/// slug isn't added: a poll names refs and items as the domain reports them.
+fn report(data: &PollMutationDto) -> String {
+    let mut out = String::new();
+    if let Ok(mut value) = serde_json::to_value(data) {
+        if let Some(fields) = value.as_object_mut() {
+            fields.remove("targets");
+        }
+        out.push_str(&human_admin::fields(&value));
+    }
+    if data.targets.is_empty() {
+        out.push_str("targets: none\n");
+    }
+    for target in &data.targets {
+        out.push_str(&format!(
+            "target: {} kind={} item={} disposition={} before={} after={}\n  {}\n",
+            shown(target.target.as_deref()),
+            shown(target.kind.map(|kind| kind.as_str())),
+            shown(target.item_id.as_deref()),
+            target.disposition.as_str(),
+            shown(target.before_oid.as_deref()),
+            shown(target.after_oid.as_deref()),
+            target.disposition.guidance(),
+        ));
+    }
+    out
+}
+
+/// The note of a stop that takes a new request, by the design's table. A code
+/// offering the same request again has none: that request goes on.
+fn final_note(envelope: &Envelope<MutationDataDto>) -> Option<&'static str> {
+    if envelope
+        .recovery
+        .iter()
+        .any(|action| action.action == RecoveryActionKind::RequestRetry)
+    {
+        return None;
+    }
+    match envelope.code {
+        ResultCode::HostApprovalRequired => Some(HOST_NOTE),
+        ResultCode::UnlockRequired | ResultCode::UnlockFailed => Some(UNLOCK_NOTE),
+        ResultCode::NoSelectedKey | ResultCode::KeyRejected | ResultCode::KeyUnavailable => {
+            Some(KEY_NOTE)
+        }
+        ResultCode::PublicationRemoteRequired => Some(REMOTE_NOTE),
+        ResultCode::TransportUnavailable
+        | ResultCode::RemoteUnavailable
+        | ResultCode::RepositoryInaccessible
+        | ResultCode::InvalidRemote
+        | ResultCode::ExternalChange
+        | ResultCode::Cancelled => Some(NEW_REQUEST),
+        _ => None,
+    }
+}
+
+/// How to find what a `busy` waits for, after C2's line for the same request.
+fn busy_route(root: &str) -> String {
+    let root = quoted(root);
+    format!(
+        "next: manyhands-cli operation list --repo {root}\nnext: manyhands-cli operation resume --repo {root} --operation-id <operation-id>\n"
+    )
+}
+
+/// The human output of a `poll once` answer. `root` is the one the command
+/// named, for an answer whose scope holds none.
+fn once_output(envelope: &Envelope<MutationDataDto>, supplied: bool, root: &str) -> Output {
+    let mut plain = envelope.clone();
+    let body = match &envelope.data {
+        Some(MutationDataDto::Poll(data)) => {
+            plain.data = None;
+            report(data)
+        }
+        _ => String::new(),
+    };
+    if envelope.failure_class().is_none() {
+        let mut stdout = human_admin::mutation_success(&plain).stdout;
+        stdout.push_str(&body);
+        return Output {
+            stdout: stdout.into_bytes(),
+            stderr: Vec::new(),
+            status: render::exit_status(None),
+        };
+    }
+    // C2's hint says to run the command again, which a request ID only replays.
+    let mut extra = human_admin::failure_extra(&plain, false);
+    extra.push_str(&body);
+    if supplied && envelope.code == ResultCode::TransportUnavailable {
+        extra.push_str(PASSPHRASE_HINT);
+    }
+    let refusal = refusal_of(envelope, envelope.recovery.clone());
+    let mut output = render::failure_output(false, &refusal, Some(extra));
+    if envelope.code == ResultCode::Busy {
+        let root = envelope.scope.repository.as_deref().unwrap_or(root);
+        output.stderr.extend(busy_route(root).into_bytes());
+        output
+            .stderr
+            .extend(note_lines(&[BUSY_NOTE.to_owned()]).into_bytes());
+    }
+    if let Some(note) = final_note(envelope) {
+        output
+            .stderr
+            .extend(note_lines(&[note.to_owned()]).into_bytes());
+    }
+    output
+}
 
 pub fn configure(
     service: &RepositoryService,

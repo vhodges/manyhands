@@ -209,33 +209,45 @@ fn version_precedes_bare_resource_planned_and_validation_but_not_clap_errors() {
     usage(&["--version", "frobnicate"], None);
 }
 
+/// E-3: no catalog verb is planned, so the test-only spec holds what a planned
+/// verb accepts.
 #[test]
-fn planned_verbs_accept_future_options_and_raw_json_and_help() {
-    for command in catalog::COMMANDS
-        .iter()
-        .filter(|command| matches!(command.availability, Availability::Planned(_)))
-    {
-        let invocation = invoke(&[
-            command.resource,
-            command.verb,
-            "--id",
-            "X",
-            "--prepare",
-            "--json",
-        ]);
-        assert!(invocation.json);
-        match invocation.action {
-            Action::Unavailable { command: actual } => assert_eq!(
-                (actual.resource, actual.verb),
-                (command.resource, command.verb)
-            ),
-            other => panic!("expected Unavailable, got {other:?}"),
-        }
+fn planned_verbs_accept_future_options_and_trailing_words() {
+    for args in [
+        vec!["future", "--id", "X", "--prepare"],
+        vec!["future", "--id", "X", "--", "--json", "--help"],
+        vec!["future"],
+    ] {
+        assert!(
+            verb_command(&catalog::PLANNED)
+                .try_get_matches_from(&args)
+                .is_ok(),
+            "{args:?}"
+        );
     }
+    assert!(
+        !catalog::COMMANDS
+            .iter()
+            .any(|command| matches!(command.availability, Availability::Planned(_))),
+        "nothing stays planned"
+    );
+}
+
+#[test]
+fn the_poll_verbs_take_only_their_own_options() {
+    usage(&["poll", "once", "--id", "X"], Some(("poll", "once")));
+    usage(&["poll", "once", "--input", "-"], Some(("poll", "once")));
+    usage(&["poll", "pause", "--id", "X"], Some(("poll", "pause")));
+    usage(
+        &["poll", "resume", "--input", "-"],
+        Some(("poll", "resume")),
+    );
+    usage(&["poll", "once"], Some(("poll", "once")));
+    usage(
+        &["poll", "configure", "--repo", "r"],
+        Some(("poll", "configure")),
+    );
     help(&["poll", "once", "--id", "X", "--help"], "poll once");
-    let invocation = invoke(&["poll", "once", "--id", "X", "--", "--json", "--help"]);
-    assert!(!invocation.json);
-    assert!(matches!(invocation.action, Action::Unavailable { .. }));
 }
 
 #[test]
@@ -578,6 +590,17 @@ fn non_utf8_values_are_usage_errors_including_planned_arguments() {
             }
         ));
     }
+    // E-16: a planned verb's own arguments, on the test-only spec.
+    let argv = [
+        OsString::from("future"),
+        OsString::from("--id"),
+        OsString::from_vec(vec![0xff]),
+    ];
+    assert!(
+        verb_command(&catalog::PLANNED)
+            .try_get_matches_from(argv)
+            .is_err()
+    );
 }
 
 fn local_matches(spec: &CommandSpec, args: &[&str]) -> ArgMatches {

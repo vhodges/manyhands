@@ -224,7 +224,7 @@ fn route_of(envelope: &Envelope<MutationDataDto>, data: &LifecycleMutationDto) -
 }
 
 /// A refusal's lines without its data, which the caller has shown.
-fn refusal_of<T>(
+pub(crate) fn refusal_of<T>(
     envelope: &Envelope<T>,
     recovery: Vec<RecoveryAction>,
 ) -> Envelope<serde_json::Value> {

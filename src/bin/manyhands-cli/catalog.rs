@@ -2,6 +2,7 @@
 pub enum Availability {
     /// Available, with the Cycle that delivered it.
     Available(&'static str),
+    #[cfg_attr(not(test), allow(dead_code))]
     Planned(&'static str),
 }
 
@@ -212,6 +213,9 @@ const fn available(
     }
 }
 
+/// No verb is planned once C5 is bound (R-8), and this mechanism stays for a
+/// later Cycle's. Tests read it through `PLANNED`.
+#[cfg(test)]
 const fn planned(
     resource: &'static str,
     verb: &'static str,
@@ -228,6 +232,11 @@ const fn planned(
         kind: Kind::Read,
     }
 }
+
+/// The one planned verb there is: no command, only what tests pin of the
+/// mechanism. It is in no catalog.
+#[cfg(test)]
+pub const PLANNED: CommandSpec = planned("poll", "future", "A planned verb.", "C9");
 
 use RepoRule::{Refused, Required};
 const MUTATION_INPUT: &[OptionSpec] = &[
@@ -1008,7 +1017,18 @@ pub const COMMANDS: &[CommandSpec] = &[
             input: InputRule::Refused,
         },
     },
-    planned("poll", "once", "Poll a repository once.", "C5"),
+    CommandSpec {
+        resource: "poll",
+        verb: "once",
+        summary: "Poll a repository once.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: false,
+            input: InputRule::Refused,
+        },
+    },
     CommandSpec {
         resource: "poll",
         verb: "configure",

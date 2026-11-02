@@ -1,0 +1,14 @@
+--- stderr
+progress: connecting
+progress: retrying
+progress: retrying
+progress: retrying
+error: The repository is busy; try again.
+code: busy
+request: 01ARZ3NDEKTSV4RRFFQ69G5FR1
+operation: <id>
+next: request.retry request_id=01ARZ3NDEKTSV4RRFFQ69G5FR1
+next: manyhands-cli operation list --repo '<repository>'
+next: manyhands-cli operation resume --repo '<repository>' --operation-id <operation-id>
+note: something else holds this repository: operation list names it, and operation resume, with its operation ID for the <operation-id> placeholder, names the request that holds it.
+--- exit 5

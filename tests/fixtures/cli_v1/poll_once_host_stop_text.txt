@@ -1,0 +1,16 @@
+--- stderr
+progress: accepted
+progress: connecting
+error: The host must be approved before connecting.
+code: host_approval_required
+request: 01ARZ3NDEKTSV4RRFFQ69G5FR2
+operation: <id>
+Host: 127.0.0.1
+Pinned algorithm: none
+Pinned fingerprint: none
+Port: 0
+Presented algorithm: ssh-ed25519
+Presented fingerprint: <fingerprint>
+next: host.approve authority=127.0.0.1:0 root=<repository>
+note: once the host is approved, polling again takes a new request.
+--- exit 3

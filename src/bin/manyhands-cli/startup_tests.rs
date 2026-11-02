@@ -48,6 +48,16 @@ fn invocation(args: &[&str], json: bool) -> Invocation {
     parse::parse(argv)
 }
 
+/// What a planned verb's run parses to. Nothing in the catalog does (R-8).
+fn unavailable(json: bool) -> Invocation {
+    Invocation {
+        json,
+        action: Action::Unavailable {
+            command: &catalog::PLANNED,
+        },
+    }
+}
+
 fn output_json(output: &Output) -> Value {
     assert!(output.stderr.is_empty());
     assert_eq!(output.stdout.last(), Some(&b'\n'));
@@ -168,13 +178,18 @@ fn service_free_actions_never_call_startup_in_either_mode() {
         vec!["--version"],
         vec!["frobnicate"],
         vec!["ticket", "list", "--bogus"],
-        vec!["poll", "once", "--id", "X", "--prepare"],
     ] {
         for json in [false, true] {
             let mut startup = FakeStartup::default();
             run(invocation(&args, json), &mut startup);
             assert!(startup.calls.is_empty(), "{args:?}");
         }
+    }
+    // E-16: a planned verb, on the test-only spec.
+    for json in [false, true] {
+        let mut startup = FakeStartup::default();
+        run(unavailable(json), &mut startup);
+        assert!(startup.calls.is_empty());
     }
 }
 
@@ -329,13 +344,24 @@ fn root_text_lists_every_command_and_planned_cycle_and_data_override() {
             .find(|line| line.trim_start().starts_with(&format!("{name} ")))
             .unwrap_or_else(|| panic!("missing {name}"));
         assert!(line.contains(spec.summary));
-        if let Availability::Planned(cycle) = spec.availability {
-            assert!(line.contains(&format!("Arrives with {cycle}.")));
-        }
+        assert!(
+            line.contains("Available now."),
+            "nothing stays planned: {line}"
+        );
     }
     assert_eq!(
         text.as_bytes(),
+        run(invocation(&[], false), &mut FakeStartup::default()).stdout
+    );
+    assert_eq!(
+        text.as_bytes(),
         run(invocation(&["--help"], false), &mut FakeStartup::default()).stdout
+    );
+    // E-4: a planned verb's line, on the test-only spec.
+    let text = text_help(&HelpTarget::Root, &[&catalog::PLANNED]);
+    assert!(
+        text.contains("poll future  A planned verb. Arrives with C9.\n"),
+        "{text}"
     );
 }
 
@@ -359,32 +385,21 @@ fn resource_and_available_command_help_are_clap_rendered_with_options() {
                 assert!(text.contains(option.name));
             }
         } else {
-            assert!(text.contains("Arrives with C5."));
+            assert!(text.contains("poll once  Poll a repository once. Available now."));
+            assert!(!text.contains("Arrives with"));
             assert!(!text.contains("repo create"));
         }
     }
 }
 
+/// E-4: on the test-only spec.
 #[test]
 fn planned_help_has_only_name_summary_and_delivery_cycle() {
-    for spec in catalog::COMMANDS {
-        if let Availability::Planned(cycle) = spec.availability {
-            let output = run(
-                invocation(&[spec.resource, spec.verb, "--help"], false),
-                &mut FakeStartup::default(),
-            );
-            assert_eq!(output.status, 0);
-            assert!(output.stderr.is_empty());
-            assert_eq!(
-                output.stdout,
-                format!(
-                    "{} {}\n{}\nArrives with {cycle}.\n",
-                    spec.resource, spec.verb, spec.summary
-                )
-                .as_bytes()
-            );
-        }
-    }
+    let spec = &catalog::PLANNED;
+    assert_eq!(
+        text_help(&HelpTarget::Command(spec), &[spec]),
+        "poll future\nA planned verb.\nArrives with C9.\n"
+    );
 }
 
 #[test]
@@ -435,15 +450,22 @@ fn usage_and_unavailable_have_canonical_names_empty_recovery_and_human_only_extr
             render::USAGE_CODE,
             "--bogus",
         ),
-        (
-            vec!["poll", "once"],
-            "poll once",
-            render::UNAVAILABLE_CODE,
-            "poll once arrives with C5.",
-        ),
-    ] {
+    ]
+    .map(|(args, command, code, extra)| (Some(args), command, code, extra))
+    .into_iter()
+    // E-4: a planned verb's answer, on the test-only spec.
+    .chain([(
+        None,
+        "poll future",
+        render::UNAVAILABLE_CODE,
+        "poll future arrives with C9.",
+    )]) {
         for json in [false, true] {
-            let output = run(invocation(&args, json), &mut FakeStartup::default());
+            let parsed = match &args {
+                Some(args) => invocation(args, json),
+                None => unavailable(json),
+            };
+            let output = run(parsed, &mut FakeStartup::default());
             assert_eq!(output.status, 2);
             if json {
                 let value = output_json(&output);

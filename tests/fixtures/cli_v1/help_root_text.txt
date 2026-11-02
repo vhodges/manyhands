@@ -94,7 +94,7 @@ Command catalog:
   operation abandon  Abandon an operation. Available now.
   document promote  Promote a document. Available now.
   ticket close  Close a ticket. Available now.
-  poll once  Poll a repository once. Arrives with C5.
+  poll once  Poll a repository once. Available now.
   poll configure  Configure polling. Available now.
   poll pause  Pause polling. Available now.
   poll resume  Resume polling. Available now.

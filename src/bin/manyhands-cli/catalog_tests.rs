@@ -247,6 +247,21 @@ fn catalog_publishes_only_the_available_verbs_options_and_requirements() {
     }
 }
 
+/// R-8: nothing stays planned, and the test-only spec has what a planned verb
+/// has.
+#[test]
+fn nothing_is_planned_and_the_test_only_spec_is_in_no_catalog() {
+    assert!(
+        !COMMANDS
+            .iter()
+            .any(|command| matches!(command.availability, Availability::Planned(_)))
+    );
+    assert_eq!(PLANNED.availability, Availability::Planned("C9"));
+    assert_eq!(PLANNED.repo, None);
+    assert!(PLANNED.options.is_empty());
+    assert!(find(PLANNED.resource, PLANNED.verb).is_none());
+}
+
 #[test]
 fn delivered_by_reads_the_cycle_from_either_availability() {
     for (cycle, commands) in &DESIGN[..2] {
