@@ -253,6 +253,14 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         "c5_poll_once_fences_a_lifecycle_child",
         once_fences_a_lifecycle_child,
     ),
+    (
+        "c5_poll_once_a_closed_ticket_s_older_branch_is_current",
+        once_a_closed_ticket_s_older_branch_is_current,
+    ),
+    (
+        "c5_poll_once_a_branch_primary_lacks_still_materializes",
+        once_a_branch_primary_lacks_still_materializes,
+    ),
 ];
 
 const FIRST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FP1";
@@ -2817,5 +2825,122 @@ fn once_fences_a_lifecycle_child() -> Result<(), FixtureError> {
         before_close,
         "and only that one"
     );
+    Ok(())
+}
+
+/// Another clone of the world's server, registered with the world's service,
+/// as a person's second checkout would be.
+fn another_clone(w: &World) -> Result<std::path::PathBuf, FixtureError> {
+    let root = w.directory.path().join("clone-c");
+    let repo = clone_owned(&w.server, &root)?;
+    fixed(fixed(repo.config())?.set_str("user.name", "Another"))?;
+    fixed(fixed(repo.config())?.set_str("user.email", "another@example.invalid"))?;
+    fixed(w.service.enable(EnableRepositoryRequest {
+        root: root.clone(),
+        primary_branch: "main".into(),
+        identity: None,
+        operation_id: OperationId::new(),
+    }))?;
+    fixed(root.canonicalize())
+}
+
+fn context_disposition(envelope: &Envelope<MutationDataDto>) -> Option<PollTargetDisposition> {
+    report(envelope)
+        .targets
+        .iter()
+        .find(|target| target.target.as_deref() == Some(TICKET_BRANCH))
+        .map(|target| target.disposition)
+}
+
+/// Decision 28: the latest copy is authoritative. A close whose remote deletion
+/// was refused leaves the branch it published, which primary now contains. A
+/// clone that never had the context gets no branch or worktree of it, and its
+/// primary keeps the closure.
+fn once_a_closed_ticket_s_older_branch_is_current() -> Result<(), FixtureError> {
+    let w = remote(Verb::Close)?;
+    fixed(w.sync(w.request(context_target(Verb::Close)?)))?;
+    let prepared = w.service.prepare(&Verb::Close.mutation(&w.root, ITEM));
+    let confirmation = prepared
+        .data
+        .as_ref()
+        .and_then(PrepareDataDto::preview)
+        .ok_or(FixtureError)?
+        .confirmation_id
+        .clone();
+    w.server.reject_context_deletion(true)?;
+    // The fixture's native refusal applies to the receiver's current branch.
+    fixed(fixed(w.bare())?.set_head(TICKET_BRANCH))?;
+    let closed = w.service.execute(
+        MutationCall {
+            request_id: request(FIRST),
+            confirmation: Some(fixed(ConfirmationId::parse(&confirmation))?),
+            mutation: Verb::Close.mutation(&w.root, ITEM),
+        },
+        &mut SessionCredentials::new(Provider),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(closed.code, ResultCode::PushRejected, "{:?}", closed.data);
+    assert_eq!(closed.effects.cleanup, results::CleanupEffect::Pending);
+    let bare = w.bare()?;
+    let main = fixed(bare.refname_to_id(MAIN))?;
+    let stale = fixed(bare.refname_to_id(TICKET_BRANCH))?;
+    assert!(
+        stale == main || fixed(bare.graph_descendant_of(main, stale))?,
+        "primary holds the branch's tip"
+    );
+    fixed(bare.set_head(MAIN))?;
+    let other = another_clone(&w)?;
+    let pushes = accepted(&w.server);
+
+    let envelope = execute(&w, SECOND, once(&other));
+    assert_eq!(envelope.code, ResultCode::Ok, "{:?}", envelope.data);
+    assert_eq!(
+        context_disposition(&envelope),
+        Some(PollTargetDisposition::Current)
+    );
+    let repo = fixed(git2::Repository::open(&other))?;
+    assert!(repo.refname_to_id(TICKET_BRANCH).is_err(), "no branch");
+    assert!(!other.join(".manyhands/worktrees").join(ITEM).exists());
+    assert_eq!(fixed(repo.refname_to_id(MAIN))?, main);
+    let source = fixed(std::fs::read_to_string(
+        other.join(format!(".manyhands/tickets/{ITEM}/ticket.md")),
+    ))?;
+    assert!(
+        source.contains("\nclosed_at: "),
+        "primary keeps the closure"
+    );
+    assert_eq!(accepted(&w.server), pushes, "a poll never pushes");
+    assert_eq!(fixed(w.bare()?.refname_to_id(TICKET_BRANCH))?, stale);
+
+    // And again: still current, still nothing.
+    let again = execute(&w, THIRD, once(&other));
+    assert_eq!(
+        context_disposition(&again),
+        Some(PollTargetDisposition::Current)
+    );
+    assert!(repo.refname_to_id(TICKET_BRANCH).is_err());
+    Ok(())
+}
+
+/// The control: a published branch with a commit primary doesn't hold
+/// materializes in another clone, as before.
+fn once_a_branch_primary_lacks_still_materializes() -> Result<(), FixtureError> {
+    let w = remote(Verb::Close)?;
+    fixed(w.sync(w.request(context_target(Verb::Close)?)))?;
+    let bare = w.bare()?;
+    let tip = fixed(bare.refname_to_id(TICKET_BRANCH))?;
+    let main = fixed(bare.refname_to_id(MAIN))?;
+    assert!(!fixed(bare.graph_descendant_of(main, tip))?);
+    let other = another_clone(&w)?;
+    let envelope = execute(&w, FIRST, once(&other));
+    assert_eq!(envelope.code, ResultCode::Ok, "{:?}", envelope.data);
+    assert_eq!(
+        context_disposition(&envelope),
+        Some(PollTargetDisposition::Materialized)
+    );
+    let repo = fixed(git2::Repository::open(&other))?;
+    assert_eq!(fixed(repo.refname_to_id(TICKET_BRANCH))?, tip);
+    assert!(other.join(".manyhands/worktrees").join(ITEM).is_dir());
     Ok(())
 }

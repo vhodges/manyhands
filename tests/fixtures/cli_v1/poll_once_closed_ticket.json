@@ -16,9 +16,9 @@
         "target": "refs/heads/main"
       },
       {
-        "after_oid": "<oid>",
+        "after_oid": null,
         "before_oid": null,
-        "disposition": "materialized",
+        "disposition": "current",
         "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FAW",
         "kind": "ticket",
         "target": "refs/heads/manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAW"

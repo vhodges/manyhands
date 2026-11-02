@@ -1255,3 +1255,57 @@ No library file changed. A genuine `recovery_required` or `external_change` of a
 - `human_lifecycle.rs`'s comment on `REPAIR` says these verbs answer `usage_error`, which is now true of `resolve-local` only. 10b changes that text with the walk.
 
 **Verification.** A compare run after every golden diff was read: `--bin manyhands-cli` 293, `--test cli -- local_sync` 38 in 13 s, `--test cli -- input_schemas` 9, plus `help` 13, `boundaries` 4 and `exits` 31, since the catalog changed. `fmt --check`, whole-tree clippy with `-D warnings`, `cargo check --bin manyhands-cli` and the no-GPUI script pass. The checkpoint gate's other targets are not run here.
+
+## Decision 28: the latest copy is authoritative
+
+Base `5c318b51`; `origin/main` at `15a23125` is contained. The owner's "Go with A" (2026-11-02), now decision 28 in the Cycle.
+
+**What landed.** In `materialize_context_unlocked` (`remote/poll.rs`), a fresh materialization (`MaterializationAction::Start`, no intent) of a branch whose tip primary already holds, as the local branch or its tracking ref, is refused as `PollDisposition::Current`. Nothing is written for it: no intent row, no branch, no worktree. The check follows the closure and conformance refusals, so a nonconforming tree still says so, and it comes before every effect. A started materialization goes on. A branch with a commit primary lacks, diverged or not, materializes as before.
+
+**The disposition: `current`, reused.** Its guidance, "Local state is current.", is true: nothing that branch holds is missing here. A new disposition would change the `remote_poll_targets` CHECK constraint (`state.rs:320`), an audited column, which the Global Constraints forbid. So no schema, `read_contract` row or enum golden changed.
+
+**Seen first.**
+- `c5_poll_once_a_closed_ticket_s_older_branch_is_current` failed at its disposition assertion before the change.
+- The control `c5_poll_once_a_branch_primary_lacks_still_materializes` passed before and after, as a control should.
+- The CLI's closed-ticket case was rewritten after the change. Its old golden (`materialized`) failed against the new answer, and was regenerated and read: `current`, `after_oid` null.
+
+**A row answered otherwise, and I resolved it without an edit.** With the check first placed before the conformance check, `--lib remote`'s `poll_materialization_nonconforming_tree_or_unrelated_operation_creates_nothing` answered `Refused(Current)` for a nonconforming tree at an older primary commit. Rather than edit a pre-existing test, I moved the check after the conformance refusal. The row then passes unchanged, and the new rows still hold.
+
+**Rows.**
+- `c5_poll_once_a_closed_ticket_s_older_branch_is_current` (library): a close whose remote deletion is refused leaves its pushed branch, which primary contains. A second clone, registered with the same service, polls: `current`, no branch, no worktree, primary keeps the closure, no push. A second poll is the same.
+- `c5_poll_once_a_branch_primary_lacks_still_materializes`: the control.
+- `c5_polling_remote_context_of_a_closed_ticket` (CLI): a dependent ticket is put on primary first. After the close and a stale branch at the pre-closure tip, both clones poll `current` with no branch or worktree. `ticket show` reads `closed`, and `ticket ready` lists the dependent and not the ticket. `ticket save` of the closed ticket answers `ticket_closed`, exit 3, writing nothing. Pushes are counted before and after, and are unchanged.
+
+**S2: `item sync` of a closed ticket's copy, pinned in two forms.**
+- `c5_polling_item_sync_of_a_closed_ticket_s_old_copy`: B materialized before A's close deleted the branch. `item sync` answers `remote_branch_deleted`, exit 3, publication pending, offering `request.cancel`. Nothing is pushed, and B's copy stays. `item republish` was not tried, and would push the old copy back.
+- `c5_polling_item_sync_of_a_copy_the_remote_still_holds`: the re-materialized form. B holds the context, and A's close had its deletion refused, so the remote holds B's tip. `item sync` answers `ok`, with publication `published`. It does **not** publish the stale copy: it takes B's context up to primary, which holds the closure, and pushes that, once. The remote branch then holds the closure, and stays. B's own primary isn't moved.
+
+**Documents.** Decision 28 is in the Cycle, quoting "Go with A". The design's `poll once` paragraph names it. Its Known Limit now says a clone that materialized such a branch before isn't repaired, with what `item sync` then does, and that a branch with a commit primary lacks isn't covered.
+
+**Follow-up candidates, not to be opened without the owner's go-ahead.**
+- **B:** reads take the latest copy by Git history across the copies of an item, primary and every context, so that a stale context can't be what a read shows.
+- **C:** ticket reopening. It needs an RFC change, since the MVP RFC excludes reopening and closure immutability is enforced (`ticket save` of a closed ticket answers `ticket_closed`).
+
+**Limits.**
+- A context whose tip equals a primary commit and holds no commit of its own isn't materialized. A save always commits, so no Manyhands route publishes one, but a branch pushed by hand at a primary commit is now `current`.
+- An unreadable ancestry reads as "not held", so the branch materializes as before.
+
+**Verified, compare mode.** All exit 0 but one, and that one predates this change.
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--test mutation_remote -- c5_poll` | 90 | 232 s |
+| `--test remote_polling` | 84 | 179 s |
+| `--test read_contract` | 72 | 7 s |
+| `--test mutation_contract` | 43 of 44 | 11 s |
+| `--test cli_remote -- c5_polling` | 16 | 80 s |
+| `--test cli` | 431 | 107 s |
+| `--bin manyhands-cli` | 293 | 3 s |
+| `--lib remote` | 479 | 172 s |
+| `--lib local_sync` | 165 | 287 s |
+| `--lib integration` | 26 | 16 s |
+| fmt, clippy `-D warnings`, no-GPUI | ok | |
+
+**`mutation_contract`'s failure predates this change.** `every_result_code_has_a_golden_or_a_reason_no_fixture_can_produce_it` says `command_unavailable` has neither a golden nor a reason. Its only golden, `unavailable_ticket_close.json`, went in Task 7 (E-2, `56477a7f`), and no verify list since has run this target. The review-fix commit adds the reason, as E-6 did for the exit table.
+
+After the clippy fix, which changed one test line, `c5_poll_once_a_` was rerun.

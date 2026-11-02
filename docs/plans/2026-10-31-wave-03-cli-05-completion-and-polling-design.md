@@ -599,7 +599,8 @@ A restart reports what its own pass saw. A target an interrupted first pass mate
 A killed poll keeps its reservation, and the same request continues it. If the ID is lost,
 `operation list` names the operation and `operation resume` names the request. Ctrl-C reaches it
 through a probe, as for the lifecycle, added with its caller in Task 5b. A stale remote context for a
-closed ticket gets its disposition from the domain, and a case pins it.
+closed ticket gets its disposition from the domain, and a case pins it: by decision 28, a branch whose tip
+primary already holds is an older copy, reported `current`, with no branch or worktree made.
 
 **Policy verbs.**
 
@@ -905,7 +906,7 @@ review. This list is not yet proven complete.
 - A `cancelled` answer can follow a guarded deletion that went through. The reservation's boundary refuses a run asked to stop around the transport call and with no word of it, so the branch may be gone with the step not yet `remote_deleted`. The same request's next delete finds no branch and answers `deleted` (`transport/remote.rs:240`), which reconciles it.
 - **For the owner's attention:** a result's `Item id:` carries no slug, because `LifecycleMutationDto` holds none. A preview shows `Slug:`, and `made ready:` lines show theirs. The preview's `Item id:` and `Slug:` aren't adjacent, since the field list is sorted.
 - A promotion blocked by a pending local sync issues a confirmation before refusing.
-- A closed ticket's stale remote branch answers `materialized`, so a local branch and worktree reappear until that remote branch is deleted (decision 14 removes C5's own two).
+- Decision 28 covers only a clone that has no copy yet: a remote branch whose tip primary holds is reported `current` and not materialized. A clone that materialized such a branch before then isn't repaired. Its copy stays until it is cleaned up, and `item sync` of it takes it up to primary and publishes that, so the remote branch then holds the closure. A remote branch with a commit primary lacks, diverged or not, isn't covered: it materializes as before.
 - After an external `git pull`, with the index not marked behind, an item on primary with no context answers `item_not_found` until `index refresh`. An index marked behind keeps the `recovery_required` answer naming `context_missing`.
 
 ## Alternatives Rejected

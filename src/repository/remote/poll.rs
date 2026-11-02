@@ -397,6 +397,19 @@ impl RepositoryService {
         )? {
             return Ok(refused(PollDisposition::Nonconforming));
         }
+        // Decision 28: the latest copy is authoritative. A branch whose tip
+        // primary already holds, locally or as last fetched, is an older copy,
+        // as when a closure's remote deletion was refused. Nothing it holds is
+        // missing here, so it is current, and no branch or worktree is made.
+        // A started materialization goes on, and a branch with a commit primary
+        // lacks still materializes. It follows every refusal before it, so a
+        // nonconforming tree still says so, and it precedes every effect.
+        if action == MaterializationAction::Start
+            && intent.is_none()
+            && primary_holds(repository, plan, request.oid)
+        {
+            return Ok(refused(PollDisposition::Current));
+        }
         if intent.is_none() {
             state::with_transaction(self, root, |tx, id| {
                 state::insert_materialization(
@@ -709,6 +722,23 @@ pub(super) enum PollMaterializationOutcome {
     // The caller classifies an existing context against its own tracking OID.
     Present,
     Refused(PollDisposition),
+}
+
+/// Whether primary's local branch or its tracking ref is `oid` or descends
+/// from it. A read that fails says no, so the branch materializes as before.
+fn primary_holds(repository: &git2::Repository, plan: &RemoteRefPlan, oid: git2::Oid) -> bool {
+    [
+        format!("refs/heads/{}", plan.primary_branch()),
+        plan.primary().tracking_ref().to_owned(),
+    ]
+    .iter()
+    .filter_map(|reference| repository.refname_to_id(reference).ok())
+    .any(|primary| {
+        primary == oid
+            || repository
+                .graph_descendant_of(primary, oid)
+                .unwrap_or(false)
+    })
 }
 
 fn poll_entry_present(path: &Path) -> bool {

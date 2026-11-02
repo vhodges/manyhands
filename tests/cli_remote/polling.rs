@@ -8,7 +8,7 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use super::*;
-use cli_pair::{CONTEXT, CliClone, CliPair, ITEM, PRIMARY};
+use cli_pair::{CONTEXT, CliClone, CliPair, ITEM, OTHER_ITEM, PRIMARY};
 use collaboration::save;
 use ssh_remote::{FixtureError, fixed};
 
@@ -42,6 +42,14 @@ pub const CASES: &[ssh_harness::Case] = &[
         c5_polling_remote_context_of_a_closed_ticket,
     ),
     (
+        "c5_polling_item_sync_of_a_closed_ticket_s_old_copy",
+        c5_polling_item_sync_of_a_closed_ticket_s_old_copy,
+    ),
+    (
+        "c5_polling_item_sync_of_a_copy_the_remote_still_holds",
+        c5_polling_item_sync_of_a_copy_the_remote_still_holds,
+    ),
+    (
         "c5_polling_host_stop_is_final_then_a_new_request",
         c5_polling_host_stop_is_final_then_a_new_request,
     ),
@@ -70,6 +78,9 @@ const R1: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR1";
 const R2: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR2";
 const R3: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR3";
 const R4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR4";
+const R5: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR5";
+const R6: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR6";
+const R9: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR9";
 const SCHEMA: &str = "poll_mutation.schema.json";
 const MALFORMED: &str = "c5-polling-malformed-ref-sentinel";
 const INCOMING: &str = "incoming.txt";
@@ -206,7 +217,7 @@ fn scrub_token(token: &str) -> String {
             .all(|c| c.is_ascii_digit() || c.is_ascii_uppercase());
     if token.len() == 40 && token.chars().all(|c| c.is_ascii_hexdigit()) {
         "<oid>".into()
-    } else if ulid && ![R1, R2, R3, R4, ITEM].contains(&token) {
+    } else if ulid && ![R1, R2, R3, R4, R5, R6, R9, ITEM, OTHER_ITEM].contains(&token) {
         "<id>".into()
     } else if token.len() >= 20 && token.contains('T') && token.contains(':') {
         "<time>".into()
@@ -511,16 +522,225 @@ fn c5_polling_deleted_context_preserved() -> Result<(), FixtureError> {
     Ok(())
 }
 
-/// A ticket closed through the binary, whose branch then reappears on the
-/// remote, as a peer that never saw the closure would push it. The poll has no
-/// lifecycle rule about a retired closure, so the domain materializes it, in
-/// the closing clone and in the other, and primary keeps its closure.
+/// A commit on the remote's primary that writes `path` as `bytes`.
+fn commit_on_primary(p: &CliPair, path: &str, bytes: &[u8]) -> Result<git2::Oid, FixtureError> {
+    let bare = p.bare()?;
+    let parent = fixed(bare.find_commit(fixed(bare.refname_to_id(PRIMARY))?))?;
+    let mut index = fixed(git2::Index::new())?;
+    fixed(index.read_tree(&fixed(parent.tree())?))?;
+    fixed(index.add(&git2::IndexEntry {
+        ctime: git2::IndexTime::new(0, 0),
+        mtime: git2::IndexTime::new(0, 0),
+        dev: 0,
+        ino: 0,
+        mode: 0o100644,
+        uid: 0,
+        gid: 0,
+        file_size: 0,
+        id: fixed(bare.blob(bytes))?,
+        flags: 0,
+        flags_extended: 0,
+        path: path.as_bytes().to_vec(),
+    }))?;
+    let tree = fixed(bare.find_tree(fixed(index.write_tree_to(&bare))?))?;
+    let signature = fixed(git2::Signature::now("Peer", "peer@example.invalid"))?;
+    fixed(bare.commit(
+        Some(PRIMARY),
+        &signature,
+        &signature,
+        "A peer's commit",
+        &tree,
+        &[&parent],
+    ))
+}
+
+/// `OTHER_ITEM` depends on `ITEM`, on primary, in both clones.
+fn a_dependent(p: &CliPair) -> Result<(), FixtureError> {
+    let source = format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {OTHER_ITEM}\ntitle: Other\n\
+         type: task\nstatus: open\ndeps: [{ITEM}]\n---\nBody of Other.\n"
+    );
+    commit_on_primary(
+        p,
+        &format!(".manyhands/tickets/{OTHER_ITEM}/ticket.md"),
+        source.as_bytes(),
+    )?;
+    for clone in [&p.a, &p.b] {
+        let value = polled(clone, R9);
+        assert_eq!(disposition(&value, PRIMARY), "fast_forwarded");
+    }
+    Ok(())
+}
+
+/// `ITEM` closed by clone A through the binary.
+fn close_in_a(p: &CliPair, request: &str) -> Result<(), FixtureError> {
+    let a = &p.a;
+    let args = ["ticket", "close", "--repo", a.root(), "--id", ITEM];
+    let mut prepare = args.to_vec();
+    prepare.push("--prepare");
+    let preview = a.json(&prepare, &[], "ok", 0);
+    let mut confirm = args.to_vec();
+    confirm.extend([
+        "--request-id",
+        request,
+        "--confirm",
+        preview["data"]["confirmation_id"].as_str().unwrap(),
+    ]);
+    a.json(&confirm, &[], "ok", 0);
+    assert_eq!(p.served(CONTEXT)?, None, "the closure deleted it");
+    assert_eq!(a.tip(CONTEXT)?, None);
+    Ok(())
+}
+
+/// `ITEM`'s source at `reference` in `clone` holds its closure.
+fn holds_the_closure(clone: &CliClone, reference: &str) -> Result<(), FixtureError> {
+    let repo = clone.repo()?;
+    let tip = fixed(repo.find_commit(fixed(repo.refname_to_id(reference))?))?;
+    let entry = fixed(
+        fixed(tip.tree())?.get_path(Path::new(&format!(".manyhands/tickets/{ITEM}/ticket.md"))),
+    )?;
+    let blob = fixed(repo.find_blob(entry.id()))?;
+    assert!(String::from_utf8_lossy(blob.content()).contains("\nclosed_at: "));
+    Ok(())
+}
+
+/// What each read of `clone` says of `ITEM`: closed, and its dependent ready.
+fn reads_closed(clone: &CliClone) {
+    let shown = clone.json(
+        &["ticket", "show", "--repo", clone.root(), "--id", ITEM],
+        &[],
+        "ok",
+        0,
+    );
+    assert_eq!(shown["data"]["closure"]["state"], "closed", "{shown}");
+    let ready = clone.json(&["ticket", "ready", "--repo", clone.root()], &[], "ok", 0);
+    let ids: Vec<_> = ready["data"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["id"].as_str().unwrap().to_owned())
+        .collect();
+    assert!(ids.contains(&OTHER_ITEM.to_owned()), "{ready}");
+    assert!(!ids.contains(&ITEM.to_owned()), "{ready}");
+}
+
+/// Decision 28: a ticket closed through the binary, whose branch then
+/// reappears on the remote at its pre-closure tip, as a refused deletion or a
+/// stale peer leaves it. Primary holds that tip, so the latest copy is
+/// primary's: the poll reports the branch current, in the closing clone and in
+/// the other, and makes no branch or worktree. Every read agrees the ticket is
+/// closed, a save is refused, and nothing is pushed.
 fn c5_polling_remote_context_of_a_closed_ticket() -> Result<(), FixtureError> {
     let p = CliPair::new()?;
     let port = p.server.address().port();
     let (a, b) = (&p.a, &p.b);
+    a_dependent(&p)?;
     published(a, R1, R2, "Saved in clone A.\n");
     let stale = a.tip(CONTEXT)?.ok_or(FixtureError)?;
+    close_in_a(&p, R3)?;
+    let closed = p.served(PRIMARY)?;
+    fixed(p.bare()?.reference(CONTEXT, stale, false, "a stale peer"))?;
+    let pushes = remote_world::accepted(&p.server);
+
+    let value = polled(a, R4);
+    assert_eq!(disposition(&value, CONTEXT), "current");
+    json_golden("poll_once_closed_ticket", &value, &a.root, port);
+    let in_b = polled(b, R1);
+    assert_eq!(disposition(&in_b, CONTEXT), "current");
+    for clone in [a, b] {
+        assert_eq!(clone.tip(CONTEXT)?, None, "no branch");
+        assert!(!clone.context().exists(), "no worktree");
+        assert_eq!(clone.tip(PRIMARY)?, closed);
+        reads_closed(clone);
+    }
+    let out = text_once(&b.env, b.root(), R5);
+    assert_eq!(out.status, 0);
+    assert!(stdout(&out).contains(&format!(
+        "target: {CONTEXT} kind=ticket item={ITEM} disposition=current"
+    )));
+    assert!(stdout(&out).contains("  Local state is current.\n"));
+
+    let shown = b.json(
+        &["ticket", "show", "--repo", b.root(), "--id", ITEM],
+        &[],
+        "ok",
+        0,
+    );
+    let input = serde_json::json!({
+        "observation": shown["data"]["observation"],
+        "body": "Saved after the closure.\n",
+    });
+    let mut args = vec!["ticket", "save", "--repo", b.root(), "--id", ITEM];
+    args.extend(["--request-id", R6, "--input", "-", "--json"]);
+    let out = run(&b.env, &args, &fixed(serde_json::to_vec(&input))?);
+    let saved = cli::json(&out);
+    assert_eq!(saved["code"], "ticket_closed", "{saved}");
+    assert_eq!(out.status, 3);
+    assert_eq!(saved["effects"]["write"], "not_requested");
+    for clone in [a, b] {
+        assert_eq!(clone.tip(CONTEXT)?, None);
+        reads_closed(clone);
+    }
+    assert_eq!(remote_world::accepted(&p.server), pushes, "nothing pushed");
+    assert_eq!(p.served(CONTEXT)?, Some(stale));
+    assert_eq!(p.served(PRIMARY)?, closed);
+    Ok(())
+}
+
+/// S2: a clone that materialized the context before another clone closed the
+/// ticket keeps its old copy, which decision 28 doesn't repair. What `item
+/// sync` of it does, pinned.
+fn c5_polling_item_sync_of_a_closed_ticket_s_old_copy() -> Result<(), FixtureError> {
+    let p = CliPair::new()?;
+    let (a, b) = (&p.a, &p.b);
+    published(a, R1, R2, "Saved in clone A.\n");
+    let value = polled(b, R1);
+    assert_eq!(disposition(&value, CONTEXT), "materialized");
+    let old = b.tip(CONTEXT)?.ok_or(FixtureError)?;
+    close_in_a(&p, R3)?;
+    let closed = p.served(PRIMARY)?;
+    let pushes = remote_world::accepted(&p.server);
+
+    let args = [
+        "item",
+        "sync",
+        "--repo",
+        b.root(),
+        "--id",
+        ITEM,
+        "--request-id",
+        R4,
+        "--json",
+    ];
+    let out = run(&b.env, &args, &[]);
+    let synced = cli::json(&out);
+    // The closure's deletion is what B's fetch sees: the branch was published
+    // and is gone, so the old copy is not pushed back.
+    assert_eq!(synced["code"], "remote_branch_deleted", "{synced}");
+    assert_eq!(out.status, 3);
+    assert_eq!(synced["effects"]["publication"], "pending");
+    assert_eq!(synced["recovery"][0]["action"], "request.cancel");
+    assert_eq!(p.served(CONTEXT)?, None, "not published");
+    assert_eq!(remote_world::accepted(&p.server), pushes, "nothing pushed");
+    assert_eq!(p.served(PRIMARY)?, closed);
+    assert_eq!(b.tip(CONTEXT)?, Some(old), "and kept");
+    assert!(b.context().is_dir());
+    Ok(())
+}
+
+/// S2, as a re-materialized copy stands: B holds the context, and A's close had
+/// its remote deletion refused, so the remote still holds the branch at B's tip.
+/// What `item sync` in B does, pinned.
+fn c5_polling_item_sync_of_a_copy_the_remote_still_holds() -> Result<(), FixtureError> {
+    let p = CliPair::new()?;
+    let (a, b) = (&p.a, &p.b);
+    published(a, R1, R2, "Saved in clone A.\n");
+    let value = polled(b, R1);
+    assert_eq!(disposition(&value, CONTEXT), "materialized");
+    let old = b.tip(CONTEXT)?.ok_or(FixtureError)?;
+    p.server.reject_context_deletion(true)?;
+    // The fixture's native refusal applies to the receiver's current branch.
+    fixed(p.bare()?.set_head(CONTEXT))?;
     let args = ["ticket", "close", "--repo", a.root(), "--id", ITEM];
     let mut prepare = args.to_vec();
     prepare.push("--prepare");
@@ -532,23 +752,37 @@ fn c5_polling_remote_context_of_a_closed_ticket() -> Result<(), FixtureError> {
         "--confirm",
         preview["data"]["confirmation_id"].as_str().unwrap(),
     ]);
-    a.json(&confirm, &[], "ok", 0);
-    assert_eq!(p.served(CONTEXT)?, None, "the closure deleted it");
-    assert_eq!(a.tip(CONTEXT)?, None);
+    let refused = a.json(&confirm, &[], "push_rejected", 4);
+    assert_eq!(refused["effects"]["cleanup"], "pending");
+    fixed(p.bare()?.set_head(PRIMARY))?;
+    let served = p.served(CONTEXT)?;
     let closed = p.served(PRIMARY)?;
-    fixed(p.bare()?.reference(CONTEXT, stale, false, "a stale peer"))?;
+    let pushes = remote_world::accepted(&p.server);
 
-    let value = polled(a, R4);
-    assert_eq!(disposition(&value, CONTEXT), "materialized");
-    json_golden("poll_once_closed_ticket", &value, &a.root, port);
-    assert_eq!(a.tip(CONTEXT)?, Some(stale));
-    assert_eq!(p.served(PRIMARY)?, closed);
-    assert_eq!(a.tip(PRIMARY)?, closed);
-
-    let in_b = polled(b, R1);
-    assert_eq!(disposition(&in_b, CONTEXT), "materialized");
-    assert_eq!(b.tip(PRIMARY)?, closed);
-    assert_eq!(p.served(CONTEXT)?, Some(stale));
+    let args = [
+        "item",
+        "sync",
+        "--repo",
+        b.root(),
+        "--id",
+        ITEM,
+        "--request-id",
+        R4,
+        "--json",
+    ];
+    let out = run(&b.env, &args, &[]);
+    let synced = cli::json(&out);
+    // Not the old copy: the sync takes B's context up to primary, which holds
+    // the closure, and publishes that, in one push. The branch stays.
+    assert_eq!(synced["code"], "ok", "{synced}");
+    assert_eq!(out.status, 0);
+    assert_eq!(synced["effects"]["publication"], "published");
+    assert_eq!(served, Some(old), "the remote held B's copy");
+    assert_eq!(b.tip(CONTEXT)?, closed);
+    assert_eq!(p.served(CONTEXT)?, closed);
+    assert_eq!(remote_world::accepted(&p.server), pushes + 1);
+    assert_eq!(p.served(PRIMARY)?, closed, "primary keeps the closure");
+    holds_the_closure(b, CONTEXT)?;
     Ok(())
 }
 

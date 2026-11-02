@@ -307,6 +307,9 @@ Also required:
     establishes whether a trimmed or bracketed identity is altered there.
 27. **One verb for rows of shared code (2026-11-01).** "One verb for those rows": rows reaching only shared
     `LifecycleBinding` code run for one verb, each noting why. A row with a verb's own branch keeps both.
+28. **The latest copy is authoritative (2026-11-02).** "Go with A": `poll once` doesn't materialize a remote
+    context branch whose tip primary already holds, as a refused deletion after `ticket close` leaves it, and
+    reports that target `current`. A branch with a commit primary lacks, diverged or not, is unchanged.
 
 **Owner questions, approved at these recommendations on 2026-10-31.**
 
