@@ -272,8 +272,8 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   `NoteAt::BelowOnPage` (design, Removing the placeholders).
 - [ ] **Step 3:** Stub `view/item/{share,composer,posting}.rs`; the three
   `ItemPane` fields and render calls.
-- [ ] **Step 4:** `keys.rs`: the `CommentComposer` context and its four
-  bindings, `ShareItem`, stub handlers.
+- [ ] **Step 4:** `keys.rs`: the `CommentComposer` context and its three
+  bindings (no Tab binding, decision 19), `ShareItem`, stub handlers.
 - [ ] **Verify:** `… item`, `… keyboard`, then the four lines.
 - [ ] **Commit.**
 
@@ -414,7 +414,7 @@ done
   `posting_is_read_only_and_submits_nothing`,
   `failed_offers_exactly_the_actions_its_owner_sets`,
   `esc_with_text_asks_to_discard_and_keep_editing_keeps_it`,
-  `esc_when_empty_cancels_silently`, `tab_leaves_the_composer`.
+  `esc_when_empty_cancels_silently`, `tab_indents_inside_the_composer`, `f6_leaves_the_composer` (decision 19).
 - [ ] **Code:** `view/item/composer.rs`.
 - [ ] **Verify:** `… composer`, then the four lines.
 - [ ] **Commit; review. Lane C checkpoint.**

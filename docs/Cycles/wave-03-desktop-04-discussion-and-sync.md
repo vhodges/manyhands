@@ -231,6 +231,11 @@ approval on 2026-11-02:
     item has no saved changes." instead of a generic failure (2026-11-02,
     U-1).
 
+19. **Tab indents in a comment composer** (2026-11-02, Task 4 review),
+    as in the body editor; F6 and Shift-F6 leave the composer. This
+    replaces the planner's "Tab leaves the composer" (design, Slots and
+    keys), which the owner had not chosen.
+
 ## Open Questions
 
 None. U-1 to U-5 (design) are settled in Task 0 by reading the source.

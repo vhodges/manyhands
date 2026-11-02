@@ -312,9 +312,10 @@ its own stub file, rendered once in the design's order.
 
 `keys.rs`, `CommentComposer` context: `PostComment` (`secondary-enter`),
 `CancelComposer` (`escape`), `ComposerToggleMode` (`secondary-shift-m`,
-the page's binding, `01-item-frame.md` Keyboard), and `FocusNext`/
-`FocusPrevious` on `tab`/`shift-tab` that leave the composer (the editor
-otherwise takes Tab). Escape in a composer cancels; in the body editor it
+the page's binding, `01-item-frame.md` Keyboard). Tab and Shift-Tab
+indent and outdent in the composer's editor, as in the body editor; F6 and
+Shift-F6 (the global region keys) leave the composer (owner, 2026-11-02,
+decision 19). Escape in a composer cancels; in the body editor it
 still moves focus to the header (R-59 scoped by Document Amendment 3).
 
 ## Lane A: Comment Drafts
@@ -556,8 +557,8 @@ unsaved body text is never committed or shared (contract 2, A12).
 
 - **Tab order:** tab strip → header actions (…, Edit, Share) → chips →
   toolbar → page → discussion heading, Back to top, then each comment and
-  its Reply → open reply composer → new composer. Tab leaves a composer
-  (Part 0 keys).
+  its Reply → open reply composer → new composer. Inside a composer Tab
+  indents; F6 leaves it (decision 19).
 - **Privacy:** comment sentinels never reach operation entries, the quit
   dialog, notifications, dialog messages or logs.
 
