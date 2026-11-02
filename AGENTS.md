@@ -17,17 +17,59 @@
 - Run local and agent Rust commands through Devenv: `devenv shell -- cargo <command>`.
   Existing GitHub Actions native runners may run Cargo directly for builds and
   tests (user-approved exception, 2026-10-05).
-- Before submitting Rust changes, run:
+- Before submitting Rust changes, run the static gates across the whole tree:
   ```sh
   devenv shell -- cargo check --all-features --locked
   devenv shell -- cargo fmt --check
   devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
-  devenv shell -- cargo test --all-features --locked
   ```
-  There is one exception, decided by the owner on 2026-10-24. A ticket worked
-  with the `working-on-a-ticket` skill runs `fmt`, `check` and `clippy` above
-  across the whole tree, but runs only the tests relevant to its change. The
-  full `cargo test` suite and native CI run after merge.
+- Then run the local test gate (owner decision, 2026-11-02). The full suite
+  takes over two hours, and about 1 h 36 min of that is the SSH-harness
+  targets, so a change runs the fast tier always and the SSH tier only where
+  it touches that code. The full `cargo test` suite and native CI run after
+  merge. This is a stopgap until a coverage-selected subset (70-80% of the
+  full suite's coverage in 20 minutes or less) replaces it.
+  1. **Fast tier, every change.** Every target except the SSH-harness ones,
+     with the slow `repository::local_sync` unit tests skipped:
+     ```sh
+     devenv shell -- cargo test --all-features --locked --lib --bins \
+       --test canonical_foundation --test cli --test discovery_rebuild \
+       --test drafts --test journal_rejection --test key_material \
+       --test key_storage --test local_authoring --test mutation_bridges \
+       --test mutation_confirmation --test mutation_contract \
+       --test mutation_relationships --test mutation_replay \
+       --test read_boundary --test read_characterization --test read_comments \
+       --test read_contract --test read_credentials --test read_items \
+       --test read_relationships --test read_repository --test read_status \
+       --test recovery_foundation_gate --test remote_reservation \
+       --test repository_enablement --test session_credentials \
+       --test shared_key_registry -- --skip repository::local_sync::
+     ```
+     Add a new integration test target to this list, or to the SSH tier
+     below if it uses `tests/support/ssh_harness.rs`.
+  2. **SSH tier, by changed path.** Run each target whose path the change
+     touches, through Devenv as `cargo test --all-features --locked --test
+     <target>`:
+
+     | Changed path | Also run |
+     | --- | --- |
+     | `src/repository/transport/`, `src/repository/keys/`, `tests/support/ssh_*` | every SSH-harness target |
+     | `src/repository/remote/` | `ssh_transport`, `remote_observation`, `remote_synchronization`, `remote_merge_recovery`, `remote_polling`, `cli_remote` |
+     | `src/repository/local_sync/` | `--lib repository::local_sync::`, `remote_synchronization`, `remote_merge_recovery` |
+     | `src/repository/mutation/` | `mutation_remote` |
+     | `src/repository/promotion/` | `document_promotion` |
+     | `src/repository/closure/` | `ticket_closure` |
+     | `src/repository/comment_publication*` | `comment_publication` |
+     | CLI remote commands in `src/bin/manyhands-cli/` | `cli_remote` |
+     | a target's own files under `tests/` | that target |
+
+     When unsure whether a change reaches an SSH target, run it.
+  3. **Desktop-only and drafts changes** (`src/desktop/`, `src/drafts/`,
+     `src/main.rs`) need only the fast tier.
+
+  A ticket worked with the `working-on-a-ticket` skill may narrow the fast
+  tier further to the tests relevant to its change (owner decision,
+  2026-10-24); the static gates still run across the whole tree.
 - Smoke-test the CLI skeleton with `devenv shell -- cargo run --locked --bin manyhands-cli`; it opens no window.
 - Smoke-test the desktop app with `devenv shell -- cargo run --locked --features desktop --bin manyhands`; it requires an active desktop display.
 
