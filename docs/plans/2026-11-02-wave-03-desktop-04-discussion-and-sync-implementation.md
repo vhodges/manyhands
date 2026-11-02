@@ -330,9 +330,10 @@ done
   `a_second_press_while_sharing_queues_nothing`,
   `share_main_in_the_repository_detail_submits_repo_sync`; E-6, second
   half.
-- [ ] **Code:** `view/item/share.rs`, `view/item/header.rs` (removes
-  `SHARE`'s allowance), `view/sidebar.rs`, the Remotes route in
-  `view/workspace/requests.rs`.
+- [ ] **Code:** `view/item/share.rs`, `view/item/header.rs`,
+  `model/item.rs` (removes `SHARE`'s allowance), `view/sidebar.rs`, the
+  Remotes route in `view/workspace/requests.rs` (filling Task 5a's
+  `ItemRoute` stub).
 - [ ] **Verify:** `… share`, `… header`, then the four lines.
 - [ ] **Commit; review.**
 
