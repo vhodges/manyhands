@@ -310,20 +310,28 @@ Also required:
 28. **The latest copy is authoritative (2026-11-02).** "Go with A": `poll once` doesn't materialize a remote
     context branch whose tip primary already holds, as a refused deletion after `ticket close` leaves it, and
     reports that target `current`. A branch with a commit primary lacks, diverged or not, is unchanged.
-30. **Add/add of a ticket file stays external-only (2026-11-02).** A ticket file that reached primary by another
-    commit, added on both sides, is `unsupported_conflict`, `external_resolution_required`. That is a known limit:
-    `context resolve-local` refuses it up front, and the way on is a repair with Git in the context, then the
-    synchronization's request again. Making a canonical add/add resolvable is a follow-up candidate.
 29. **Tracking follows a confirmed push (2026-11-02).** "Update after a push", then "Advance existing refs
     only (Recommended)": a confirmed push moves a tracking ref forward only if one already exists, never
     creating one. Never on an ambiguous or fenced push, never backwards, and never past what the remote holds.
     E-22 moves four `remote_merge_recovery` assertions to the pushed commit.
+30. **Add/add of a ticket file stays external-only (2026-11-02).** A ticket file that reached primary by another
+    commit, added on both sides, is `unsupported_conflict`, `external_resolution_required`. That is a known limit:
+    `context resolve-local` refuses it up front, and the way on is a repair with Git in the context, then the
+    synchronization's request again. Making a canonical add/add resolvable is a follow-up candidate.
 31. **Release timing (2026-11-02).** "Measure release, then decide". Measured on a release build:
     promote and close about 35 s, prepares about 2 s. The profile's hot spots are local sync's image-proof
     audits, which re-decode every stored proof at each safe point and at registry open
     (`local_sync/image_proof.rs:237`, growing with stored syncs), and discovery's per-item history walk
     (`discovery.rs:698-743`, up to 1024 commits for each of about 175 items). Both predate C5. A follow-up
     ticket carries this profile, opened only with the owner's go-ahead.
+32. **Remote deletion only of a published branch (2026-11-02).** "Fix it in C5": the preview plans
+    remote-branch deletion only when the context's stored push evidence shows it published. Stopped for a
+    ruling: a context never pushed is published by the run's own context child, which cleanup then deletes,
+    so such a preview's deletion is what happens.
+33. **A held item refuses a new prepare (2026-11-02).** "Refuse, name the holder": while an unfinished
+    parent that a new request can't supersede holds the item, a prepare is `recovery_required`, naming
+    the holding request's `request.retry`, or `operation.resume` when no record holds it. Supersedable
+    cleanup stops still prepare.
 
 **Owner questions, approved at these recommendations on 2026-10-31.**
 

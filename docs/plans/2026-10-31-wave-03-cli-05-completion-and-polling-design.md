@@ -264,11 +264,19 @@ through an `Answer` field modelled on `host_replacement`. Its code:
   with `repo.inspect` as its action. `ContextMissing` is one: `ticket save` or
   `document save` makes a context (Task 0 confirms the verb).
 
+**Held (decision 33).** Before any of that, the binding reads the item's parent records. While an
+unfinished parent that a new request couldn't supersede holds the item, the prepare is refused:
+`recovery_required`, exit 3, no data, and one action: `request.retry` naming the request whose accepted
+record holds the operation, or `operation.resume` with the operation when no record does. A cleanup stop
+of `context_changed`, `ignored_files` or `remote_context_changed` can be superseded, so it still prepares,
+as before. Human output prints the command that goes on: the verb with `--request-id <holder>`, or the
+resume. A held item's preview would offer a confirmation that `busy` refuses at once.
+
 On the execute path and in a stored refusal, the same blockers are in the lifecycle's
 `MutationDataDto`, since `Reply::envelope` discards the prepare-only field (`reply.rs:130-131`), and
 `from_stored` restores them.
 
-In human mode a blocked prepare also offers its way out, through `Driven::Prepared`, not `render::prepare_output`, which `tests/cli_remote.rs` mounts without `human_lifecycle`: for `integration_conflict`, with no dirty or conflicted context and no pending conflict or local operation, the four context verbs and then a new prepare; for `context_missing` alone, the save verb by kind and then a new prepare.
+In human mode a blocked prepare also offers its way out, through `Driven::Prepared`, not `render::prepare_output`, which `tests/cli_remote.rs` mounts without `human_lifecycle`: for `integration_conflict`, with no dirty or conflicted context and no pending conflict or local operation, the four context verbs and then a new prepare; for `context_missing` alone, the save verb by kind and then a new prepare; for `primary_ahead_of_remote` or `primary_missing`, with nothing else but perhaps `context_missing`, `poll once` and then a new prepare. Blockers print as one `Blockers:` line, and a preview prints each change with its path on one line.
 
 An unknown ID, wrong kind or unregistered repository answers as `item republish` does:
 `item_not_found`, `repository_not_registered` and `repository_not_enabled`.
@@ -330,7 +338,8 @@ durable effect.
 | `AlreadyContained`/`AlreadyCurrent`, nothing left | `ok` | 0 | None |
 | Publication `Pending{Synchronization(c)}` | `c` below | 4 | `request.retry`, then `c`'s |
 | Publication or cleanup `Pending{Cancelled}` | `cancelled` | 130 | `request.retry` (decision 8) |
-| Cleanup `Pending{ContextChanged, IgnoredFiles, RemoteContextChanged}` | `recovery_required` | 4 | `request.retry`, `repo.inspect`; a new prepare supersedes. A `cancelled` answer replaces this reason, so a new ID is `busy` until one more resend finds it again; `request cancel` alone leaves it, and a new ID supersedes at once |
+| Cleanup `Pending{ContextChanged, IgnoredFiles, RemoteContextChanged}` | `recovery_required` | 4 | `request.retry`, `repo.inspect`; a new prepare supersedes. A `cancelled` answer replaces this reason, so a new ID's prepare is held (decision 33) until one more resend finds it again; `request cancel` alone leaves it, and a new ID supersedes at once |
+| A new ID's prepare while any other unfinished parent holds the item (decision 33) | `recovery_required` | 3 | `request.retry` for the holding request, or `operation.resume` when no record holds it |
 | Cleanup `Pending{AwaitingPublication}` | the publication's code | 4 | `request.retry` |
 | Cleanup `Pending{RemoteDeletionFailed(c)}` | `c` below | 4 | `request.retry`, then `c`'s |
 | Cleanup `Pending{RecoveryRequired}` | `recovery_required` | 4 | `request.retry`, `repo.inspect` |
@@ -663,6 +672,11 @@ in cleanup, against the expected OID, once the remote is seen without the branch
 
 Polls and fetches are unchanged. So is every push evidence record.
 
+**Callers that hold the lease.** The move takes the repository's lease for up to 250 ms and skips if it
+can't. Neither comment publication (`synchronize_comment_receipt`) nor republish (`republish_reserved`)
+holds that lease when it reaches the move, so neither skips it. With split Fetch and Push endpoints, before
+a first fetch, or with the lease held past 250 ms, tracking isn't advanced (Known Limits).
+
 ## Identity
 
 Decision 6 and `01M5MK57`. Both verbs pass `confirmed_identity: None`.
@@ -938,6 +952,8 @@ review. This list is not yet proven complete.
 - After a partial resolution, a new `resolve-local` request's JSON names no original request; the human text does, from the inspection.
 - `resolve-local`'s verb-side refusals (an unknown token, an external-only conflict) carry no scope, data or `repo.inspect`, unlike the library's own `invalid_input`.
 - An add/add of a ticket file that reached primary by another commit is `unsupported_conflict`, external-only (decision 30): `resolve-local` refuses it, and the repair is outside, with Git, then the synchronization's request again.
+- **Tracking that isn't advanced (decision 29).** With split fetch and push endpoints, before the first fetch, or with the repository's lease held more than 250 ms, a push doesn't move tracking, and promote-then-close is refused as before, `primary_ahead_of_remote` or `primary_missing`. Human output names `poll once` and a new prepare. Follow-up candidate: advance from a verified fetch-side read.
+- **Human placeholders and lines.** `poll status` prints `-` for a null field where the policy verbs print `none`. `poll configure` answering `already_applied` still prints `progress: writing`. The policy verbs report `write: not_requested` while writing the policy row.
 - After an external `git pull`, with the index not marked behind, an item on primary with no context answers `item_not_found` until `index refresh`. An index marked behind keeps the `recovery_required` answer naming `context_missing`.
 
 ## Alternatives Rejected
