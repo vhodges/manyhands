@@ -36,6 +36,18 @@ pub(crate) enum Lane {
     Background,
 }
 
+/// A comment's text, as the user wrote it. It derives neither `Debug` nor
+/// `Display`, and only `build` reads it.
+#[derive(Clone)]
+pub(crate) struct CommentBody(String);
+
+impl CommentBody {
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
+    pub(crate) fn new(body: String) -> Self {
+        Self(body)
+    }
+}
+
 /// One command the desktop can ask the library for, with the values it
 /// was asked with. One variant per command D1 offers, and the two saves
 /// of a draft.
@@ -221,6 +233,30 @@ pub(crate) enum Intent {
         observation: String,
         source: String,
     },
+    /// A comment on an item, or a reply to `parent_id`. It holds the text.
+    /// The comment ID is fixed by the caller; the library takes the Git
+    /// identity as the author.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
+    CommentAdd {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+        comment_id: ItemId,
+        parent_id: Option<ItemId>,
+        body: CommentBody,
+    },
+    /// An item's work shared with the publication remote.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
+    ItemSync {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+    },
+    /// The primary branch shared with the publication remote.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
+    RepoSync {
+        root: PathBuf,
+    },
 }
 
 impl Intent {
@@ -257,7 +293,10 @@ impl Intent {
             | Self::DocumentCreate { .. }
             | Self::TicketCreate { .. }
             | Self::DocumentMove { .. }
-            | Self::FolderCreate { .. } => false,
+            | Self::FolderCreate { .. }
+            | Self::CommentAdd { .. }
+            | Self::ItemSync { .. }
+            | Self::RepoSync { .. } => false,
         }
     }
 
@@ -294,6 +333,9 @@ impl Intent {
             Self::FolderCreate { .. } => "Create folder",
             Self::DocumentRepair { .. } => "Repair document",
             Self::TicketRepair { .. } => "Repair ticket",
+            Self::CommentAdd { .. } => "Post comment",
+            Self::ItemSync { .. } => "Share item",
+            Self::RepoSync { .. } => "Share main",
         }
     }
 
@@ -322,7 +364,10 @@ impl Intent {
             | Self::DocumentMove { root, .. }
             | Self::FolderCreate { root, .. }
             | Self::DocumentRepair { root, .. }
-            | Self::TicketRepair { root, .. } => Some(root),
+            | Self::TicketRepair { root, .. }
+            | Self::CommentAdd { root, .. }
+            | Self::ItemSync { root, .. }
+            | Self::RepoSync { root } => Some(root),
             Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -362,7 +407,10 @@ impl Intent {
             | Self::DocumentMove { .. }
             | Self::FolderCreate { .. }
             | Self::DocumentRepair { .. }
-            | Self::TicketRepair { .. } => true,
+            | Self::TicketRepair { .. }
+            | Self::CommentAdd { .. }
+            | Self::ItemSync { .. }
+            | Self::RepoSync { .. } => true,
             Self::RepoRemove { .. }
             | Self::RepoIdentitySet { .. }
             | Self::RemoteAdd { .. }
@@ -376,6 +424,48 @@ impl Intent {
             | Self::KeyDelete { .. }
             | Self::HostApprove { .. }
             | Self::HostReplace { .. } => false,
+        }
+    }
+
+    /// Whether the library honours a cancellation after accepting the
+    /// command, at a synchronization's safe points (fact 9): the comment,
+    /// the two syncs and `operation resume`. Every other command, the saves
+    /// among them, cannot be stopped once accepted.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 2.
+    pub(crate) fn stops_at_safe_points(&self) -> bool {
+        match self {
+            Self::OperationResume { .. }
+            | Self::CommentAdd { .. }
+            | Self::ItemSync { .. }
+            | Self::RepoSync { .. } => true,
+            Self::RepoCreate { .. }
+            | Self::RepoEnable { .. }
+            | Self::RepoRemove { .. }
+            | Self::RepoIdentitySet { .. }
+            | Self::RemoteAdd { .. }
+            | Self::RemoteRemove { .. }
+            | Self::RemoteSelect { .. }
+            | Self::IndexRefresh { .. }
+            | Self::IndexRebuild { .. }
+            | Self::KeyGenerate { .. }
+            | Self::KeyImport { .. }
+            | Self::KeySelect { .. }
+            | Self::KeyClear
+            | Self::KeyRemove { .. }
+            | Self::KeyDelete { .. }
+            | Self::HostApprove { .. }
+            | Self::HostReplace { .. }
+            | Self::OperationAbandon { .. }
+            | Self::DocumentSave { .. }
+            | Self::TicketSave { .. }
+            | Self::ContextPrepare { .. }
+            | Self::ContextRelease { .. }
+            | Self::DocumentCreate { .. }
+            | Self::TicketCreate { .. }
+            | Self::DocumentMove { .. }
+            | Self::FolderCreate { .. }
+            | Self::DocumentRepair { .. }
+            | Self::TicketRepair { .. } => false,
         }
     }
 
@@ -475,6 +565,9 @@ impl Intent {
             Self::FolderCreate { .. } => JobKind::FolderCreate,
             Self::DocumentRepair { .. } => JobKind::DocumentRepair,
             Self::TicketRepair { .. } => JobKind::TicketRepair,
+            Self::CommentAdd { .. } => JobKind::Comment,
+            Self::ItemSync { .. } => JobKind::SynchronizeItem,
+            Self::RepoSync { .. } => JobKind::SynchronizeRepo,
         }
     }
 }

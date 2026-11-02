@@ -5,18 +5,20 @@ use std::{
 
 use manyhands::{
     repository::{
-        AuthoringKind, ContextPrepareIntent, InitialsChange, OperationId, RelationshipWrite,
-        SharedKeyId,
+        AuthoringKind, ContextPrepareIntent, InitialsChange, Mutation, OperationId,
+        RelationshipWrite, SharedKeyId,
         keys::{KeyStore, SecretPassphrase},
         transport::SshAuthority,
     },
     results::ResultCode,
 };
 
-use super::{Intent, NotBuilt};
+use super::{CommentBody, Intent, NotBuilt};
 use crate::desktop::{services::KeyStoreUnavailable, test_support::fixtures::Fixture};
 
 const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
+const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG1";
+const PARENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG2";
 
 fn authority() -> SshAuthority {
     SshAuthority {
@@ -172,14 +174,28 @@ fn every_intent(root: &Path) -> Vec<Intent> {
             source: "source".to_owned(),
         },
         Intent::TicketRepair {
-            root,
+            root: root.clone(),
             path: PathBuf::from(".manyhands/tickets/x/ticket.md"),
             observation: "observation".to_owned(),
             source: "source".to_owned(),
         },
+        Intent::CommentAdd {
+            root: root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: ITEM.parse().unwrap(),
+            comment_id: COMMENT.parse().unwrap(),
+            parent_id: None,
+            body: CommentBody::new("Body".to_owned()),
+        },
+        Intent::ItemSync {
+            root: root.clone(),
+            kind: AuthoringKind::Document,
+            id: ITEM.parse().unwrap(),
+        },
+        Intent::RepoSync { root },
     ];
     let listed: HashSet<usize> = intents.iter().map(variant).collect();
-    assert_eq!(listed.len(), 29, "one intent of every variant");
+    assert_eq!(listed.len(), 32, "one intent of every variant");
     intents
 }
 
@@ -214,6 +230,9 @@ fn variant(intent: &Intent) -> usize {
         Intent::FolderCreate { .. } => 26,
         Intent::DocumentRepair { .. } => 27,
         Intent::TicketRepair { .. } => 28,
+        Intent::CommentAdd { .. } => 29,
+        Intent::ItemSync { .. } => 30,
+        Intent::RepoSync { .. } => 31,
     }
 }
 
@@ -274,6 +293,9 @@ fn every_intent_builds_its_own_command() {
         "folder create",
         "document repair",
         "ticket repair",
+        "comment add",
+        "item sync",
+        "repo sync",
     ];
     let intents = every_intent(fixture.home());
     let mut kinds = HashSet::new();
@@ -327,13 +349,101 @@ fn changes_items_names_the_intents_that_can_change_items() {
         let expected = match variant(&intent) {
             // RepoCreate, RepoEnable, IndexRefresh, IndexRebuild,
             // OperationResume, OperationAbandon, DocumentSave, TicketSave,
-            // and the eight Part C commands.
-            0 | 1 | 7 | 8 | 17..=28 => true,
+            // the eight Part C commands, and the comment and the two syncs.
+            0 | 1 | 7 | 8 | 17..=31 => true,
             // RepoRemove closes the tabs instead; the rest change
             // settings, keys or hosts, never an item.
             2..=6 | 9..=16 => false,
             other => unreachable!("variant {other}"),
         };
         assert_eq!(intent.changes_items(), expected, "{}", intent.label());
+    }
+}
+
+/// A comment is built with the IDs and text it was asked with, and no
+/// author: the library takes the Git identity.
+#[test]
+fn comment_add_builds_its_mutation_with_no_author() {
+    let root = PathBuf::from("/repo");
+    let intent = Intent::CommentAdd {
+        root: root.clone(),
+        kind: AuthoringKind::Ticket,
+        id: ITEM.parse().unwrap(),
+        comment_id: COMMENT.parse().unwrap(),
+        parent_id: Some(PARENT.parse().unwrap()),
+        body: CommentBody::new("A reply.".to_owned()),
+    };
+    let Ok(Mutation::CommentAdd(input)) = intent.build(None, || panic!("no store")) else {
+        panic!("a comment builds `comment add`");
+    };
+    assert_eq!(input.root, root);
+    assert_eq!(input.kind, AuthoringKind::Ticket);
+    assert_eq!(input.id.to_string(), ITEM);
+    assert_eq!(input.comment_id.to_string(), COMMENT);
+    assert_eq!(
+        input.parent_id.map(|id| id.to_string()).as_deref(),
+        Some(PARENT)
+    );
+    assert_eq!(input.body, "A reply.");
+    assert_eq!(input.created_by, None);
+}
+
+#[test]
+fn item_and_repo_sync_build_their_mutations() {
+    let root = PathBuf::from("/repo");
+    let intent = Intent::ItemSync {
+        root: root.clone(),
+        kind: AuthoringKind::Document,
+        id: ITEM.parse().unwrap(),
+    };
+    let Ok(Mutation::ItemSync(input)) = intent.build(None, || panic!("no store")) else {
+        panic!("an item sync builds `item sync`");
+    };
+    assert_eq!(input.root, root);
+    assert_eq!(input.kind, AuthoringKind::Document);
+    assert_eq!(input.id.to_string(), ITEM);
+
+    let intent = Intent::RepoSync { root: root.clone() };
+    let Ok(Mutation::RepoSync(input)) = intent.build(None, || panic!("no store")) else {
+        panic!("a repository sync builds `repo sync`");
+    };
+    assert_eq!(input.root, root);
+}
+
+/// The three new labels are fixed text: no title or comment text is put
+/// in them.
+#[test]
+fn labels_are_fixed_text() {
+    let intents = every_intent(Path::new("/repo"));
+    let label = |index: usize| {
+        intents
+            .iter()
+            .find(|intent| variant(intent) == index)
+            .map(Intent::label)
+            .unwrap()
+    };
+    assert_eq!(label(29), "Post comment");
+    assert_eq!(label(30), "Share item");
+    assert_eq!(label(31), "Share main");
+}
+
+/// Only the commands the library stops at a synchronization's safe points
+/// can be stopped after acceptance (fact 9). Every variant is named.
+#[test]
+fn syncs_comments_and_resume_stop_at_safe_points_and_saves_do_not() {
+    for intent in every_intent(Path::new("/repo")) {
+        let expected = match variant(&intent) {
+            // OperationResume, CommentAdd, ItemSync, RepoSync.
+            17 | 29..=31 => true,
+            // Every local command, the saves among them.
+            0..=16 | 18..=28 => false,
+            other => unreachable!("variant {other}"),
+        };
+        assert_eq!(
+            intent.stops_at_safe_points(),
+            expected,
+            "{}",
+            intent.label()
+        );
     }
 }

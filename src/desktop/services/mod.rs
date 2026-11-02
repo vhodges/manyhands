@@ -124,6 +124,9 @@ pub(crate) enum JobKind {
     FolderCreate,
     DocumentRepair,
     TicketRepair,
+    Comment,
+    SynchronizeItem,
+    SynchronizeRepo,
     ObserveHost,
 }
 
