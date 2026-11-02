@@ -1014,3 +1014,44 @@ The three blockers above are settled. Each is in the Cycle's decisions, with the
 | `cargo fmt --check`, `cargo check --all-features --locked`, clippy `-D warnings` | ok | |
 
 `--test ssh_transport -- poll` passed 9 after the transport edit. `--test mutation_remote -- c5_lifecycle` as a whole was last run before this round's library changes, with 145 passing. The Part A gate is the controller's.
+
+### Part A checkpoint
+
+**Gate at `d2fe86e3`.** All gate commands exit 0: check, fmt, clippy, desktop check and clippy, CLI check, no-GPUI. `--lib` 1506 passed in 722 s; the `--bin`, cli, contract, replay, confirmation and bridges line in 469 s; read_status, read_relationships, repository_enablement in 26 s; mutation_remote, document_promotion, ticket_closure, remote_polling, remote_synchronization and cli_remote in 8691 s. merge-tree clean.
+
+**Decision 25.** `parent_effects` reads the child's durable state, and `recorded_effects` reads it through that. Two named rows failed by assertion first: `c5_cancel_child_merged_then_refused_push` (at `outcome == partial`) and `c5_cancel_child_push_landed_then_cancelled` (at `publication == published`). Made-ready now reads the parent's step, since a context's merge reports `integration: complete`.
+
+- **`cancelled` stays exit 130, not 4.** The decision says "it exits 4", and the second row it names is `cancelled`. RFC:982 gives a cancellation 130 "even after a durable effect", `failure_class` puts it first, and `Outcome::Cancelled` pins it past integration. The row reports the push and answers 130. **For the owner to confirm.**
+- One golden moved, `ticket_close_checkpoint_merge_refused`, read in its diff: `publication: published`, `commit_oid` set, `discovery: pending`, from the context's push. The Cycle's other goldens did not.
+- `unfinished_continues` said "nothing durable yet" of a stop after the context's push. It is C5's own row and the decision overrides it; it now asserts `partial`.
+
+**Decision 26: the row passed on the unchanged code.** Names `Example Person,`, `<Example Person>` and ` Example Person` all answer `identity_required`, reason `identity_required`, with no owner, no durable effect, tip and repository image unchanged, and the same operation then merges under a usable identity. So nothing is altered: `validate_identity` already applies `commits_unchanged` (`src/repository.rs:10837`). **No library change was needed**, and the review's premise doesn't hold. The scope is widened as ruled, and `run.rs` is unchanged. `resolve.rs:346` calls the same `identity`, by reading; no row. The named filters ran as part of the whole targets below.
+
+**Decision 27.** One verb, each noting why: `prepare_not_enabled`, `prepare_not_registered`, `busy_with_no_parent`, `busy_lease_on_reentry`, `busy_with_a_standing_parent`, the three `parent_unreadable_*`. `busy_with_no_parent` reaches each verb's own `begin_record`, whose `busy` for both is `c5_cancel_new_id_before_integration`. **Kept both:** `poll_yielding_past_integration`, which branches on `made_ready`.
+
+**Timing.** `World::new` measured, twice alike: server start 25 ms, key encryption 222 ms, first clone 285 ms, service 37 ms, enable 71 ms, configuration commit and push 330 ms, second clone 284 ms, key registration 19 ms, privacy 71 ms: 1.34 s. `remote()` adds trust 290 ms, primary sync 2.85 s and save 115 ms. So `World::new` is not the cost: unlocking is, about 2.6 s a connection. A plain-key world (`World::plain_key`), for rows that don't test unlock or stop a child from inside its credentials: `c5_cancel_stage_after_publication` 31.4 s to 13.7 s for two rows, `c5_lifecycle_published` 30.8 s to 13.2 s, `c5_cancel_new_id_before` 31.4 s to 13.8 s. All C5 rows of `mutation_remote`, 406 at that run: 1899 s. Gate line 4: 8691 s to 7143 s. `--lib` 722 s to 799 s and the second line 469 s to 496 s are load: neither changed.
+
+**Spec review's fixes, as ruled.**
+
+- `once_fences_a_lifecycle_child` resends the close: `ok`, one merge, once the URL and the deleted branch are back. A branch left deleted answers its own stop, unrelated to the fence.
+- Stuck cases pinned: `c5_cancel_fenced_released_resolution_close`, whose unfenced twin publishes, and `c5_cancel_fenced_past_publication_close`, by `run.rs:1188`.
+- **The ruling's retained case answered otherwise, and needs confirming.** A poll doesn't fence a retained conflict: it checks `has_pending_conflict` before `configure_poll_endpoints` (`remote/poll.rs`), answers `recovery_required`, and the generation stays. `c5_cancel_poll_leaves_a_retained_conflict_close` pins that, and the design's limit says so instead of the ruling's wording. No other route that raises the generation over a retained child was traced.
+- Supersede after cancel: `c5_cancel_supersede_after_a_cancelled_answer` and `_straight_after_the_cancel`, both as ruled, with the design's sentence.
+- Known limits added: a live call losing its stop when the flag is cleared on a kept child; `cancelled` after a guarded deletion that went through, read and confirmed, `transport/remote.rs:240` answering `deleted` for a branch already gone.
+- The primary `Err` arm's row (`promotion/run.rs:1139-1145`) is owed to Task 13a, whose step names it. Task 13b gains a released resolution with its branch deleted, which stops for the owner if no route frees it.
+- **Follow-up candidates, left out of C5:** synchronization's lease as `internal_error` is a ticket candidate, not filed. Decision 24's `interrupted` row for automatic polls is a D6 note: nothing restarts one.
+- Plan's scope gains `remote/reservation.rs` (decision 18) and `local_sync/run.rs` (decision 26); `transport/remote.rs` was there. Resume's row and the Cycle's status corrected.
+
+**Quality review's fixes, no behaviour change.** All of items 1-4, 6 and 7 and the minors. Rule numbers are dropped from new `src` comments; test comments keep theirs. `lifecycle_parent` is generic on `ParentRecord`, with a `written_checkpoint` method. Duplicate helpers matched but for one comment and `golden_at`, whose general form made-ready now calls with its schema. `poll once`'s test sleep names `POLL_PROGRESS_THROTTLE` in its comment, since the constant isn't reachable from a test target.
+
+**Verified on the final code, compare mode, before merging main.** All exit 0.
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| check, fmt, clippy, desktop check, desktop clippy, CLI check, no-GPUI | ok | under 25 s each |
+| `--lib` | 1507 | 799 s |
+| `--bin`, cli, contract, replay, confirmation, bridges | 252, 350, 44, 384, 183, 166, with read_contract 72 | 496 s |
+| read_status, read_relationships, repository_enablement | 17, 24, 103 | 27 s |
+| mutation_remote, document_promotion, ticket_closure, remote_polling, remote_synchronization, cli_remote | 664, 79, 78, 84, 69, 66 | 7143 s |
+
+**After that, `origin/main` moved** to `15a23125` (packaging, release scripts, `src/main.rs`, `src/startup_reporting.rs`), and was merged without conflict. Rerun after the merge: the seven static commands and `--test mutation_contract` (44). **The test lines were not rerun on the merge.**
