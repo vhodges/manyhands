@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use super::{c4_support::environment, mutation};
 use crate::support::{
     self,
-    cli::{self, CliEnv, CliRun},
+    cli::{self, CliEnv, CliRun, stderr, stdout},
     mutation::{REQUEST_1, REQUEST_2, REQUEST_3, World},
 };
 
@@ -127,23 +127,14 @@ impl Case {
     }
 
     fn text_golden(&self, name: &str, run: &CliRun) {
-        let text = format!(
-            "{}--- stderr\n{}--- exit {}\n",
-            String::from_utf8_lossy(&run.stdout),
-            String::from_utf8_lossy(&run.stderr),
-            run.status
+        cli::text_golden_scrubbed(
+            name,
+            run,
+            &[(self.root(), "<repository>")],
+            &[],
+            str::to_owned,
         );
-        let text = text.replace(self.root(), "<repository>");
-        cli::assert_cli_text_golden(name, &text, &[]);
     }
-}
-
-fn stdout(run: &CliRun) -> &str {
-    std::str::from_utf8(&run.stdout).unwrap()
-}
-
-fn stderr(run: &CliRun) -> &str {
-    std::str::from_utf8(&run.stderr).unwrap()
 }
 
 fn interval(seconds: u64) -> Vec<u8> {
@@ -158,7 +149,6 @@ fn pause_answers_writes_and_keeps_the_rest() {
     assert_eq!(value["data"]["paused"], true);
     assert_eq!(value["outcome"], "success");
     assert!(value["recovery"].as_array().unwrap().is_empty());
-    mutation::golden("poll_pause", &value, &case.world.root);
     let after = case.policy();
     assert_eq!(after.0, true);
     assert_eq!(
@@ -184,7 +174,6 @@ fn pause_already_so_is_a_noop_in_both_modes() {
     case.written("pause", REQUEST_1, &[], "ok");
     let value = case.written("pause", REQUEST_2, &[], "already_applied");
     assert_eq!(value["outcome"], "noop");
-    mutation::golden("poll_pause_noop", &value, &case.world.root);
     let run = case.text("pause", &["--request-id", REQUEST_3], &[]);
     assert_eq!(run.status, 0);
     assert!(stdout(&run).starts_with("Already applied; nothing changed.\n"));
@@ -201,7 +190,6 @@ fn resume_clears_the_pause_and_the_deadline_and_leaves_the_backoff() {
     assert_eq!(value["data"]["next_eligible_at"], Value::Null);
     assert_eq!(value["data"]["backoff_seconds"], 120);
     assert_eq!(value["data"]["recovery_suspended"], false);
-    mutation::golden("poll_resume", &value, &case.world.root);
     let after = case.policy();
     assert_eq!(after.0, false);
     assert_eq!(after.2, 120);
@@ -216,7 +204,6 @@ fn resume_not_paused_writes_nothing_and_keeps_a_future_deadline() {
     let value = case.written("resume", REQUEST_1, &[], "already_applied");
     assert_eq!(value["outcome"], "noop");
     assert_eq!(case.policy(), before);
-    mutation::golden("poll_resume_noop", &value, &case.world.root);
     let run = case.text("resume", &["--request-id", REQUEST_2], &[]);
     assert_eq!(run.status, 0);
     assert_eq!(stderr(&run), WRITING, "and no note");
@@ -270,7 +257,6 @@ fn configure_sets_the_interval_and_leaves_the_due_time() {
     let before = case.policy();
     let value = case.written("configure", REQUEST_1, &interval(600), "ok");
     assert_eq!(value["data"]["interval_seconds"], 600);
-    mutation::golden("poll_configure", &value, &case.world.root);
     let after = case.policy();
     assert_eq!(after.1, 600);
     assert_eq!(after.4, before.4, "the stored due time stays");
@@ -287,7 +273,6 @@ fn configure_in_text_and_the_same_value() {
     case.text_golden("poll_configure_text", &run);
     let value = case.written("configure", REQUEST_2, &interval(600), "already_applied");
     assert_eq!(value["outcome"], "noop");
-    mutation::golden("poll_configure_noop", &value, &case.world.root);
 }
 
 #[test]
@@ -516,16 +501,21 @@ fn a_request_id_sent_with_another_intent_is_a_mismatch() {
 }
 
 /// A request refused before its transaction was never sent, as far as anything
-/// can tell, so the same ID is a new write.
+/// can tell, so the same ID is a new write: here, refused for its input.
 #[test]
-fn a_request_that_never_committed_runs_when_it_is_sent_again() {
+fn a_request_refused_for_its_input_runs_when_it_is_sent_again() {
     let case = Case::new();
     let args = ["--request-id", REQUEST_1];
     case.json("configure", &args, &interval(59), 2, "invalid_input", None);
     let value = case.written("configure", REQUEST_1, &interval(600), "ok");
     assert_eq!(value["data"]["interval_seconds"], 600);
+}
 
-    // Held in a second process through every bounded retry, and then free.
+/// The same for a request answered `busy`: held in a second process through
+/// every bounded retry, and then free.
+#[test]
+fn a_request_refused_busy_runs_when_it_is_sent_again() {
+    let case = Case::new();
     let holder = support::hold_lease_in_child_for_test(
         &case.world.root,
         case.world.data.path(),

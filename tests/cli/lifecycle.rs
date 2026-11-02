@@ -1,6 +1,6 @@
 //! `document promote` and `ticket close` through the binary, in a repository
-//! with no publication remote. What needs one is Task 12a's: a publication,
-//! a refused push or deletion, and a child's deleted branch. Their human lines
+//! with no publication remote. What needs one is `tests/cli_remote.rs`'s: a
+//! publication, a refused push or deletion, and a child's deleted branch. Their human lines
 //! are pinned by `src/bin/manyhands-cli/lifecycle_tests.rs`, and the library's
 //! own tables pin the answers (`tests/mutation_remote/c5_lifecycle.rs`).
 
@@ -16,7 +16,7 @@ use serde_json::Value;
 use super::{c4_support::environment, mutation};
 use crate::support::{
     self, FailOnce,
-    cli::{self, CliEnv, CliRun},
+    cli::{self, CliEnv, CliRun, stderr, stdout},
     items,
     mutation::{
         DOCUMENT_NEW, DOCUMENT_NEW_PATH, REQUEST_1, REQUEST_2, REQUEST_3, SENTINELS, TITLE, World,
@@ -273,40 +273,15 @@ fn scrubbed_token(token: &str) -> String {
 
 /// Human output with what a run makes up replaced: commits, the IDs no
 /// fixture fixes, the times, and the root.
-fn scrubbed(text: &str, root: &Path) -> String {
-    let root = root.canonicalize().unwrap();
-    let text = text.replace(root.to_str().unwrap(), "<repository>");
-    let mut out = String::new();
-    let mut token = String::new();
-    for character in text.chars() {
-        if character.is_alphanumeric() || matches!(character, '-' | ':' | '.' | '+') {
-            token.push(character);
-        } else {
-            out.push_str(&scrubbed_token(&token));
-            token.clear();
-            out.push(character);
-        }
-    }
-    out.push_str(&scrubbed_token(&token));
-    out
-}
-
 fn text_golden(name: &str, run: &CliRun, root: &Path) {
-    let text = format!(
-        "{}--- stderr\n{}--- exit {}\n",
-        String::from_utf8_lossy(&run.stdout),
-        String::from_utf8_lossy(&run.stderr),
-        run.status
+    let root = root.canonicalize().unwrap();
+    cli::text_golden_scrubbed(
+        name,
+        run,
+        &[(root.to_str().unwrap(), "<repository>")],
+        &['-', ':', '.', '+'],
+        scrubbed_token,
     );
-    cli::assert_cli_text_golden(name, &scrubbed(&text, root), &[]);
-}
-
-fn stdout(run: &CliRun) -> &str {
-    std::str::from_utf8(&run.stdout).unwrap()
-}
-
-fn stderr(run: &CliRun) -> &str {
-    std::str::from_utf8(&run.stderr).unwrap()
 }
 
 #[test]
@@ -704,7 +679,11 @@ fn a_context_primary_already_holds_is_only_cleaned_up() {
         );
         assert_eq!(done["recovery"], serde_json::json!([]));
         assert_eq!(done["data"]["integration"], "already_contained");
-        golden(&format!("{}_noop", verb.golden), &done, &case.world.root);
+        golden(
+            &format!("{}_already_contained", verb.golden),
+            &done,
+            &case.world.root,
+        );
         assert_eq!(case.git(&["rev-parse", "main"]), main, "no new commit");
         assert_eq!(case.merges(), 0);
         assert!(!case.refs().contains(&verb.branch()));

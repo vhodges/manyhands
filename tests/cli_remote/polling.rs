@@ -3,11 +3,12 @@
 //! (`tests/mutation_remote/c5_poll.rs`) pins every code; these pin what a person
 //! meets, and what Git holds afterwards: a poll never pushes, checkpoints, merges
 //! or cleans up, and `Sides` compares both ends by their refs to show it.
-//! Ctrl-C and a killed poll are Task 13a's.
+//! Ctrl-C and a killed poll are `tests/cli_remote/interruption.rs`'s.
 
 use std::{collections::BTreeMap, path::PathBuf};
 
 use super::*;
+use cli::{stderr, stdout};
 use cli_pair::{CONTEXT, CliClone, CliPair, ITEM, OTHER_ITEM, PRIMARY};
 use collaboration::save;
 use ssh_remote::{FixtureError, fixed};
@@ -127,14 +128,6 @@ fn text_once(env: &CliEnv, root: &str, request: &str) -> CliRun {
     run(env, &once(root, request), &[])
 }
 
-fn stdout(run: &CliRun) -> &str {
-    std::str::from_utf8(&run.stdout).unwrap()
-}
-
-fn stderr(run: &CliRun) -> &str {
-    std::str::from_utf8(&run.stderr).unwrap()
-}
-
 fn target<'a>(value: &'a Value, reference: &str) -> &'a Value {
     value["data"]["targets"]
         .as_array()
@@ -178,13 +171,7 @@ fn json_golden(name: &str, value: &Value, root: &Path, port: u16) {
 /// Human output with what a run makes up replaced: commits, the IDs no case
 /// fixes, the times, the root and the server's port.
 fn text_golden(name: &str, out: &CliRun, root: &Path, port: u16) {
-    let text = format!(
-        "{}--- stderr\n{}--- exit {}\n",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr),
-        out.status
-    );
-    let text = text
+    let text = cli::run_text(out)
         .replace(
             root.canonicalize().unwrap().to_str().unwrap(),
             "<repository>",
@@ -200,21 +187,7 @@ fn text_golden(name: &str, out: &CliRun, root: &Path, port: u16) {
             _ => format!("{line}\n"),
         })
         .collect();
-    let mut scrubbed = String::new();
-    let mut token = String::new();
-    let flush = |token: &mut String, scrubbed: &mut String| {
-        scrubbed.push_str(&scrub_token(token));
-        token.clear();
-    };
-    for character in text.chars() {
-        if character.is_alphanumeric() || matches!(character, '-' | ':' | '.' | '+') {
-            token.push(character);
-        } else {
-            flush(&mut token, &mut scrubbed);
-            scrubbed.push(character);
-        }
-    }
-    flush(&mut token, &mut scrubbed);
+    let scrubbed = cli::scrub_text(&text, &['-', ':', '.', '+'], scrub_token);
     cli::assert_cli_text_golden(name, &scrubbed, &[]);
 }
 
@@ -965,7 +938,6 @@ fn c5_polling_no_remote() -> Result<(), FixtureError> {
 /// both modes.
 fn c5_polling_usage_failure() -> Result<(), FixtureError> {
     let p = CliPair::new()?;
-    let port = p.server.address().port();
     let a = &p.a;
     let opened = collaboration::connections(&p);
     let root = a.root();
@@ -1015,6 +987,7 @@ fn c5_polling_usage_failure() -> Result<(), FixtureError> {
         assert_eq!(out.status, status);
         assert!(value["data"].is_null());
     }
+    // `poll_pause_usage` is the policy verbs' and this one's golden.
     let value = checked(
         &a.env,
         &["poll", "once", "--repo", root],
@@ -1023,7 +996,7 @@ fn c5_polling_usage_failure() -> Result<(), FixtureError> {
         2,
         None,
     );
-    golden("poll_once_usage", &value, &a.root, port);
+    assert!(value["data"].is_null(), "{value}");
     assert_eq!(collaboration::connections(&p), opened);
     Ok(())
 }

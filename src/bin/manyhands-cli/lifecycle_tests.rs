@@ -1,8 +1,9 @@
 //! The human lines of `document promote`, `ticket close` and an `operation
 //! resume` that continued one, on envelopes the binary tests can't reach
 //! without a remote (`tests/cli/lifecycle.rs` runs the rest). The text is the
-//! pin: `context observe-local` and its three siblings arrive in Task 10, and
-//! these rows hold what the refused merge says of them until then.
+//! pin of what the refused merge says of `context observe-local` and its three
+//! siblings, whose route `tests/cli/local_sync.rs`
+//! `the_refused_merges_route_finishes_the_close` follows.
 
 use crate::{
     human_lifecycle::{self, output},
@@ -236,8 +237,8 @@ fn a_pending_publication_with_no_remote_names_the_later_sync() {
     );
 }
 
-/// The refused merge's lines. The four verbs arrive in Task 10, and Task 10's
-/// grammar has to answer to this text.
+/// The refused merge's lines, whose grammar the four context verbs answer to
+/// (`tests/cli/local_sync.rs` `the_refused_merges_route_finishes_the_close`).
 #[test]
 fn a_refused_checkpoint_merge_names_the_four_context_verbs_then_its_actions() {
     let mut refused = data(ItemDtoKind::Ticket);

@@ -22,7 +22,7 @@ use serde_json::{Value, json};
 use super::c4_support::environment;
 use crate::support::{
     self, FailOnce,
-    cli::{self, CliEnv, CliRun},
+    cli::{self, CliEnv, CliRun, stderr, stdout},
     items,
     mutation::{
         DOCUMENT, DOCUMENT_PATH, REQUEST_1, REQUEST_2, REQUEST_3, TICKET_CLOSED, World,
@@ -263,31 +263,14 @@ impl Case {
         self.json(&args, &[], 2, "request_not_found", None);
     }
 
-    fn scrub(&self, text: &str) -> String {
-        let text = text.replace(self.root(), "<repository>");
-        let mut out = String::new();
-        let mut word = String::new();
-        for character in text.chars() {
-            if character.is_alphanumeric() || matches!(character, '-' | ':' | '_') {
-                word.push(character);
-            } else {
-                out.push_str(&scrubbed_word(&word));
-                word.clear();
-                out.push(character);
-            }
-        }
-        out.push_str(&scrubbed_word(&word));
-        out
-    }
-
     fn text_golden(&self, name: &str, run: &CliRun) {
-        let text = format!(
-            "{}--- stderr\n{}--- exit {}\n",
-            String::from_utf8_lossy(&run.stdout),
-            String::from_utf8_lossy(&run.stderr),
-            run.status
+        cli::text_golden_scrubbed(
+            name,
+            run,
+            &[(self.root(), "<repository>")],
+            &['-', ':', '_'],
+            scrubbed_word,
         );
-        cli::assert_cli_text_golden(name, &self.scrub(&text), &[]);
     }
 
     fn golden(&self, name: &str, value: &Value) {
@@ -357,14 +340,6 @@ fn scrubbed_word(word: &str) -> String {
     } else {
         word.to_owned()
     }
-}
-
-fn stdout(run: &CliRun) -> &str {
-    std::str::from_utf8(&run.stdout).unwrap()
-}
-
-fn stderr(run: &CliRun) -> &str {
-    std::str::from_utf8(&run.stderr).unwrap()
 }
 
 fn tampered(token: &str) -> String {
@@ -1115,7 +1090,7 @@ fn a_prepare_is_not_confirmable() {
 /// walk from a refused closure to its finish is
 /// `the_refused_merges_route_finishes_the_close`.
 #[test]
-fn the_refused_merges_strings_work_exactly() {
+fn the_refused_merges_first_three_commands_parse_and_reach_their_verbs() {
     let (case, operation) = Case::conflicted("");
     let root = case.root();
     let observe = ["context", "observe-local", "--repo", root, "--id", TICKET];
@@ -1974,7 +1949,7 @@ fn value_after<'a>(text: &'a str, label: &str) -> &'a str {
         .unwrap_or_else(|| panic!("no {label}: {text}"))
 }
 
-/// The route Task 7 prints for a refused closure checkpoint merge, run from its
+/// The route `human_lifecycle.rs` prints for a refused closure checkpoint merge, run from its
 /// own lines with only the placeholders filled, ends with the same close request
 /// finishing with one merge and the closure's fields kept.
 #[test]

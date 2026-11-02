@@ -344,22 +344,15 @@ pub const CLI_CASES: &[&str] = &[
     "poll_once_host_stop",
     "poll_once_unlock_stop",
     "poll_once_no_remote",
-    "poll_once_usage",
     "poll_once_request_mismatch",
     "poll_once_busy",
     "help_poll_once",
     "help_poll_configure",
     "help_poll_pause",
     "help_poll_resume",
-    "poll_pause",
-    "poll_pause_noop",
     "poll_pause_usage",
     "poll_pause_request_mismatch",
-    "poll_resume",
-    "poll_resume_noop",
     "poll_resume_suspended",
-    "poll_configure",
-    "poll_configure_noop",
     "poll_configure_out_of_range",
     "cli_operation_list",
     "cli_operation_show",
@@ -425,8 +418,8 @@ pub const CLI_CASES: &[&str] = &[
     "ticket_close_identity_required",
     "document_promote_invalid_id",
     "ticket_close_invalid_id",
-    "document_promote_noop",
-    "ticket_close_noop",
+    "document_promote_already_contained",
+    "ticket_close_already_contained",
     "document_promote_request_mismatch",
     "ticket_close_request_mismatch",
     "ticket_close_checkpoint_merge_refused",
@@ -528,6 +521,60 @@ pub const CLI_REPOSITORY_VALUES: &[&str] = &["required", "refused"];
 
 pub fn cli_fixture_directory() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_v1")
+}
+
+/// A run's stdout, as text.
+pub fn stdout(run: &CliRun) -> &str {
+    std::str::from_utf8(&run.stdout).unwrap()
+}
+
+/// A run's stderr, as text.
+pub fn stderr(run: &CliRun) -> &str {
+    std::str::from_utf8(&run.stderr).unwrap()
+}
+
+/// A run as a text golden holds it: stdout, stderr, then the exit status.
+pub fn run_text(run: &CliRun) -> String {
+    format!(
+        "{}--- stderr\n{}--- exit {}\n",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr),
+        run.status
+    )
+}
+
+/// `text` with each word replaced by what `word` makes of it. A word is a run
+/// of alphanumerics and `joining` characters.
+pub fn scrub_text(text: &str, joining: &[char], word: impl Fn(&str) -> String) -> String {
+    let mut out = String::new();
+    let mut current = String::new();
+    for character in text.chars() {
+        if character.is_alphanumeric() || joining.contains(&character) {
+            current.push(character);
+        } else {
+            out.push_str(&word(&current));
+            current.clear();
+            out.push(character);
+        }
+    }
+    out.push_str(&word(&current));
+    out
+}
+
+/// The text golden `name` of `run`: its text with each `(value, label)` of
+/// `replaced` put in, then its words scrubbed as `scrub_text` does.
+pub fn text_golden_scrubbed(
+    name: &str,
+    run: &CliRun,
+    replaced: &[(&str, &str)],
+    joining: &[char],
+    word: impl Fn(&str) -> String,
+) {
+    let mut text = run_text(run);
+    for (value, label) in replaced {
+        text = text.replace(value, label);
+    }
+    assert_cli_text_golden(name, &scrub_text(&text, joining, word), &[]);
 }
 
 pub fn assert_cli_golden(name: &str, value: &Value, placeholders: &[(&str, &str)]) {
