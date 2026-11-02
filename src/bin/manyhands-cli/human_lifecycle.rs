@@ -402,17 +402,6 @@ pub fn output(envelope: &Envelope<MutationDataDto>, supplied: bool) -> Output {
     for line in &route.next {
         body.push_str(&format!("next: {line}\n"));
     }
-    if envelope.failure_class().is_none() {
-        let mut stdout = human_admin::mutation_success(&shown).stdout;
-        stdout.push_str(&body);
-        return Output {
-            stdout: stdout.into_bytes(),
-            stderr: note_lines(&notes).into_bytes(),
-            status: render::exit_status(None),
-        };
-    }
-    let mut extra = human_admin::failure_extra(&shown, supplied);
-    extra.push_str(&body);
     let recovery = envelope
         .recovery
         .iter()
@@ -420,8 +409,5 @@ pub fn output(envelope: &Envelope<MutationDataDto>, supplied: bool) -> Output {
         .filter(|(index, _)| !route.rendered.contains(index))
         .map(|(_, action)| action.clone())
         .collect();
-    let refusal = refusal_of(envelope, recovery);
-    let mut output = render::failure_output(false, &refusal, Some(extra));
-    output.stderr.extend(note_lines(&notes).into_bytes());
-    output
+    render::compact(&shown, supplied, &body, "", recovery, &note_lines(&notes))
 }

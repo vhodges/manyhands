@@ -598,22 +598,7 @@ fn local_output(envelope: &Envelope<MutationDataDto>, supplied: bool, reobserve:
             body = human_admin::fields(&serde_json::Value::Object(fields));
         }
     }
-    if envelope.failure_class().is_none() {
-        let mut stdout = human_admin::mutation_success(&plain).stdout;
-        stdout.push_str(&body);
-        return Output {
-            stdout: stdout.into_bytes(),
-            stderr: Vec::new(),
-            status: render::exit_status(None),
-        };
-    }
-    let mut extra = human_admin::failure_extra(&plain, supplied);
-    extra.push_str(&body);
-    render::failure_output(
-        false,
-        &render::refusal_of(&plain, plain.recovery.clone()),
-        Some(extra),
-    )
+    render::compact(&plain, supplied, &body, "", plain.recovery.clone(), "")
 }
 
 fn data_of(envelope: &Envelope<MutationDataDto>) -> Option<&LocalContextSyncMutationDto> {

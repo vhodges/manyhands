@@ -183,23 +183,13 @@ fn once_output(envelope: &Envelope<MutationDataDto>, supplied: bool, root: &str)
         }
         _ => String::new(),
     };
-    if envelope.failure_class().is_none() {
-        let mut stdout = human_admin::mutation_success(&plain).stdout;
-        stdout.push_str(&body);
-        return Output {
-            stdout: stdout.into_bytes(),
-            stderr: Vec::new(),
-            status: render::exit_status(None),
-        };
-    }
     // C2's hint says to run the command again, which a request ID only replays.
-    let mut extra = human_admin::failure_extra(&plain, false);
-    extra.push_str(&body);
-    if supplied && envelope.code == ResultCode::TransportUnavailable {
-        extra.push_str(PASSPHRASE_HINT);
-    }
-    let refusal = refusal_of(envelope, envelope.recovery.clone());
-    let mut output = render::failure_output(false, &refusal, Some(extra));
+    let after = if supplied && envelope.code == ResultCode::TransportUnavailable {
+        PASSPHRASE_HINT
+    } else {
+        ""
+    };
+    let mut output = render::compact(&plain, false, &body, after, envelope.recovery.clone(), "");
     if envelope.code == ResultCode::Busy {
         let root = envelope.scope.repository.as_deref().unwrap_or(root);
         output.stderr.extend(busy_route(root).into_bytes());

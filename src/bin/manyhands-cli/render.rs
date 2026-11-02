@@ -157,6 +157,36 @@ fn json_output<T: Serialize>(envelope: &Envelope<T>) -> Output {
     }
 }
 
+/// A result's human output in the compact form C4's and C5's verbs share:
+/// C2's lines of `shown`, the envelope with any data `body` shows left out,
+/// then `body`. A success prints both on stdout. A failure prints them on
+/// stderr, then `after`, then the `next:` lines of `recovery`, the actions no
+/// line of `body` or `after` renders. `notes` follow on stderr either way.
+pub fn compact(
+    shown: &Envelope<MutationDataDto>,
+    supplied: bool,
+    body: &str,
+    after: &str,
+    recovery: Vec<RecoveryAction>,
+    notes: &str,
+) -> Output {
+    if shown.failure_class().is_none() {
+        let mut stdout = human_admin::mutation_success(shown).stdout;
+        stdout.push_str(body);
+        return Output {
+            stdout: stdout.into_bytes(),
+            stderr: notes.as_bytes().to_vec(),
+            status: exit_status(None),
+        };
+    }
+    let mut extra = human_admin::failure_extra(shown, supplied);
+    extra.push_str(body);
+    extra.push_str(after);
+    let mut output = failure_output(false, &refusal_of(shown, recovery), Some(extra));
+    output.stderr.extend(notes.as_bytes());
+    output
+}
+
 /// A refusal's lines without its data, which the caller has shown.
 pub fn refusal_of<T>(
     envelope: &Envelope<T>,
