@@ -101,7 +101,7 @@ removes it.
 
 **Test-first.** Each behaviour's test is written before its code.
 
-**Existing tests** change only as E-1 to E-11; anything else stops for the
+**Existing tests** change only as E-1 to E-12 (E-12 added by the owner in Task 0); anything else stops for the
 owner.
 
 **Commits.** One per task, conventional message, ending
@@ -204,9 +204,11 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   `comment_add_builds_its_mutation_with_no_author`,
   `item_and_repo_sync_build_their_mutations`,
   `labels_are_fixed_text`,
-  `syncs_comments_and_resume_stop_at_safe_points_and_saves_do_not`.
+  `syncs_comments_and_resume_stop_at_safe_points_and_saves_do_not`;
+  E-12 in the same file.
 - [ ] **Code:** `CommentBody`; the three intents and `build` arms;
-  `JobKind::Comment`, `JobKind::Synchronize` (`services/mod.rs`) and
+  `JobKind::Comment`, `JobKind::SynchronizeItem`, `JobKind::SynchronizeRepo`
+  (`services/mod.rs`; E-12) and
   `DelayingBackend` support; `changes_items`; `stops_at_safe_points`
   (design, Intents).
 - [ ] **Verify:** `… requests`, then the four lines.
@@ -252,7 +254,8 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   `request_mismatch_is_maybe_saved`,
   `an_owed_unshared_comment_offers_retry_and_a_final_one_offers_share`
   (rows 9a/9b), and `identity_required_routes_to_set_identity` (row 9c,
-  `NeedsIdentity`). Build envelopes as
+  `NeedsIdentity`), and `item_not_found_on_share_item_is_nothing_to_share`
+  (U-1, owner 2026-11-02). Build envelopes as
   `model/operations_tests.rs` does.
 - [ ] **Code:** `model/publication.rs`; one `mod` line in `model/mod.rs`.
 - [ ] **Verify:** `… publication`, then the four lines.
@@ -372,6 +375,12 @@ done
   `stop_is_not_offered_without_a_remote` (R-15); E-10;
   `resume_is_offered_for_a_comment_publication_row`;
   `resume_is_not_offered_for_a_local_context_sync`;
+  `a_stopped_resume_over_an_unsettled_push_reads_not_confirmed`
+  (`recovery_required`, U-5);
+  `a_stopped_resume_that_then_fails_the_transport_reports_the_reservation`
+  (U-5: hold the resume after acceptance, cancel, fail the transport,
+  assert what the reservation is; a held reservation becomes a Known Limit
+  for the owner);
   `an_accepted_resume_offers_stop`.
 - [ ] **Code:** `model/operations.rs`, `view/operations.rs`,
   `view/workspace/requests.rs`.

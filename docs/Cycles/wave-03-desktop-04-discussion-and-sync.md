@@ -224,6 +224,13 @@ approval on 2026-11-02:
     to implement): the orchestrator dispatches one implementer per task,
     with an independent review after each, following the lane plan.
 
+17. **Share item and Share main have their own job kinds** (2026-11-02,
+    Task 0): the existing "kind of its own" test assertion is kept; its
+    lists grow as named edit E-12.
+18. **Share on a never-edited item** says "Nothing to share yet: this
+    item has no saved changes." instead of a generic failure (2026-11-02,
+    U-1).
+
 ## Open Questions
 
 None. U-1 to U-5 (design) are settled in Task 0 by reading the source.

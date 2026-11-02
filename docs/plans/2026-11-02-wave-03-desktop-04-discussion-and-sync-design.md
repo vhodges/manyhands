@@ -167,8 +167,8 @@ Files named in two rows pass between owners in sequence: `view/item/header.rs`, 
 | Intent | Mutation | `job_kind` | `changes_items` | `stops_at_safe_points` | `label()` |
 | --- | --- | --- | --- | --- | --- |
 | `CommentAdd { root, kind, id, comment_id: ItemId, parent_id: Option<ItemId>, body: CommentBody }` | `CommentAdd(… created_by: None)` | `JobKind::Comment` | yes | yes | "Post comment" |
-| `ItemSync { root, kind, id }` | `ItemSync` | `JobKind::Synchronize` | yes | yes | "Share item" |
-| `RepoSync { root }` | `RepoSync` | `JobKind::Synchronize` | yes | yes | "Share main" |
+| `ItemSync { root, kind, id }` | `ItemSync` | `JobKind::SynchronizeItem` | yes | yes | "Share item" |
+| `RepoSync { root }` | `RepoSync` | `JobKind::SynchronizeRepo` | yes | yes | "Share main" |
 | `OperationResume` (existing) | unchanged | unchanged | unchanged | **yes** (fact 9) | unchanged |
 
 All on `Lane::User`. `CommentBody` wraps `String`, derives neither `Debug`
@@ -292,7 +292,7 @@ committed`.
 `remote_branch_deleted` → `BranchDeleted`; `unlock_*` → `NeedsUnlock`; key
 codes → `NeedsKey`; host codes → `NeedsHost { data }`; `identity_required` → `NeedsIdentity` (Set identity, Retry); `busy` → `Busy`
 (holder found as in Busy repositories); `publication_remote_required` →
-`NoRemote`; otherwise `Failed { code, retry }`. `sync_outcome` also takes `record_accepted`.
+`NoRemote`; `item_not_found` on Share item → `NothingToShare` ("Nothing to share yet: this item has no saved changes."; owner, 2026-11-02, U-1); otherwise `Failed { code, retry }`. `sync_outcome` also takes `record_accepted`.
 
 Lanes B and D render these and never read envelope fields themselves.
 
@@ -625,13 +625,14 @@ prompts, and native §5 proves the journey.
 | E-2 | `view/item_tests.rs::a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_offered` | The filter no longer removes "Comment". | Part 0 |
 | E-3 | `view/item/header_tests.rs::share_and_the_primary_action_are_disabled_with_their_note` | Only the primary action; renamed `the_primary_action_is_disabled_with_its_note`. | Part 0 |
 | E-4 | `view/item/header_tests.rs::a_nonconforming_item_shows_needs_fixing_with_repair_offered` | `later-action` indices shift by one. | Part 0 |
-| E-5 | `view/item/header_tests.rs::an_inspect_tab_of_a_conforming_item_needs_no_fixing` | `("later-action", 1)` becomes `0`. | Part 0 |
+| E-5 | `view/item/header_tests.rs::an_inspect_tab_of_a_conforming_item_needs_no_fixing` | The later rows `[SHARE, CLOSE_TICKET]` become `[CLOSE_TICKET]` (wording corrected in Task 0). | Part 0 |
 | E-6 | `view/item/header_tests.rs::tab_order_runs_strip_header_chips_page` | One later action; Lane B adds Share after Edit. | Part 0, Lane B |
 | E-7 | `view/item/discussion_tests.rs::comment_is_disabled_with_its_note` | Deleted; Lane D adds `the_new_comment_composer_follows_the_threads`. | Part 0 |
 | E-8 | `view/drafts_tests.rs::each_row_reads_its_state_and_offers_what_its_policy_allows` | A comment row offers Open. | Lane A |
 | E-9 | `model/drafts/rows_tests.rs::a_comment_draft_is_never_restored_in_d2` | Body-path restore still refused; Open offered. | Lane A |
 | E-10 | `model/operations_tests.rs::resume_is_offered_for_a_local_operation_and_not_for_a_synchronization` | Resume offered for a remote sync row; still not for a local-context sync. | Lane B |
 | E-11 | `view/item/discussion_tests.rs::tab_runs_through_each_comment_and_reveals_its_caret` | Tab reaches each comment's Reply after the comment. | Lane D |
+| E-12 | `services/requests_tests.rs`: `every_intent`, `variant`, `changes_items_names_the_intents_that_can_change_items`, `every_intent_builds_its_own_command` | The intent lists grow from 29 to 32 with the three new intents; the "kind of its own" assertion is kept, which is why Share item and Share main have separate `JobKind`s (owner, 2026-11-02, found by Task 0's sweep). | Part 0 |
 
 The round-1 source review swept `src/desktop` for these terms and found
 no other breakage; Task 0 sweeps again after merging main.
