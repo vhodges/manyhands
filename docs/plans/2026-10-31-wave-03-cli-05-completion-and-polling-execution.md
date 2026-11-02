@@ -1897,4 +1897,5 @@ each; `fmt --check` and whole-tree clippy `-D warnings` ok. The fast tier, verba
 failed, `closure::checkpoint::tests::changed_identity_at_the_hook_is_external_change`, whose two records print
 the same and differ in a field `Debug` leaves out. It passes alone, three runs of three, and touches no code
 this round changed. It passed in the gate's `--lib` above, so it is recorded as a timing flake, not fixed.
-Every other target of the tier is part of the `--test cli` run and the gate's own counts above.
+That run stopped at `--lib`, so the tier was run again whole, with `--no-fail-fast`: exit 0, 79 test results,
+4908 passed, none failed (`--lib` 1347).
