@@ -1426,3 +1426,197 @@ In the partial case, `original_request_required` comes from `operation resume`. 
 The resolve schema's example row expected `external_change`. Its made-up token now meets the verb's check, so the row expects `invalid_input`, and asserts the refusal is the check's (the `show-local` line) and not the input reading's.
 
 No `#[ignore]` remains. Verification: `--test cli` whole 448 (112 s), `--bin manyhands-cli` 297 (2.4 s), `--test mutation_replay -- local_sync` 75 (124 s), `fmt --check` and whole-tree clippy with `-D warnings` pass.
+
+## Task 11: real content
+
+Step 1 only, run 2026-11-02 UTC. The binary is `target/debug/manyhands-cli`, built once at `bcdb609a`
+(`cargo build --locked --bin manyhands-cli`, already current). No source, test or other document
+changed. No subagent was dispatched.
+
+### Isolation
+
+- **Temp root.** `mktemp -d` under `/tmp`. Its `HOME`, `GIT_CONFIG_GLOBAL` (a new, empty file),
+  `GIT_CONFIG_NOSYSTEM=1`, `MANYHANDS_DATA_DIR`, and `XDG_CONFIG_HOME`, `XDG_DATA_HOME` and
+  `XDG_STATE_HOME` were all inside it. `SSH_AUTH_SOCK`, `SSH_AGENT_PID`, `GIT_SSH` and
+  `GIT_SSH_COMMAND` were unset. The root was removed at the end, after the fixture `sshd` was stopped.
+- **The clone.** `git clone --no-local` of the main checkout, then a read-only `git fetch` of that
+  checkout's `refs/remotes/origin/main` (`15a23125`), so that the clone is current main and not the
+  checkout's older local `main` (`a52273ff`). Its `origin` was removed at once. The main checkout, its
+  registration, the real application data and the real `origin` were not written; afterwards the
+  checkout's `main` is still `a52273ff`, and its status shows only the untracked worktrees directory it had before.
+- **Identity.** Repository-local `user.name "Manyhands Dogfood"`,
+  `user.email dogfood@example.invalid`. Nothing global.
+- **The remote: real SSH, no real key.** A bare repository in the temp root, seeded with the clone's
+  `main`, served by an unprivileged OpenSSH `sshd` on `127.0.0.1:22422`. It had a host key made for the run, an
+  `AuthorizedKeysFile` in the temp root holding only the key `key generate` made (protection `none`),
+  no password or agent, and a `ForceCommand` that runs `git-shell` under `env -i`. The clone's
+  `origin` was `ssh://<user>@127.0.0.1:22422<temp>/remote.git`. The key and host were taken through
+  the CLI's own verbs: `key generate`, `key public`, `key select`, `host observe`, `host approve`. A
+  throwaway probe key checked the fixture once before the CLI key existed, and was then deleted.
+  `sshd` logged 87 accepted logins. **So `poll once` and every publication ran networked.** Tasks 12a
+  and 12b are still needed for the harness's refusal and fault rows.
+- **A peer.** A plain-Git clone of the bare repository (by path), with its own local identity
+  (`Dogfood Peer`), pushed the remote changes the poll and divergence cases need. It ran no Manyhands
+  command.
+
+### Real content
+
+Current main holds 174 `docs/` Markdown files, and 38 of them have no front matter (`docs/design/`,
+plus three plans). `document list` lists all 174, and gives those 38 `missing_front_matter` problems
+with `id: null`. `index status` reports `problem_count` 40, and is `current` throughout. All 32
+tickets on main are lifecycle-closed. No verb refused because of a nonconforming file, including a
+`poll once` that fast-forwarded over a peer's edit to `docs/design/README.md`. No merge (promote,
+close, both `sync-local` merges, the resolution) refused or reported a problem because of them. Their
+bytes after each merge weren't compared.
+C4's `comment add` failure is not repeated by any C5 verb.
+
+### Setup (not C5 verbs)
+
+| Step | Exit | Code |
+| --- | --- | --- |
+| `repo enable --prepare` with no `origin` (main's `config.toml` names `publication_remote = "origin"`) | 2 | `invalid_remote` |
+| The same, after `git remote add origin ssh://…` | 0 | `ok` |
+| `repo enable --confirm` | 0 | `ok` |
+| `key generate` (`protection: none`) | 0 | `ok` |
+| `key select --repo <root> --prepare` / `--confirm` | 2 | `usage_error`: `key select` takes no `--repo`, and its help lists none. Run from inside the clone instead |
+| `key select --prepare`, from inside the clone | 2 | `not_confirmable` |
+| `key select`, from inside the clone | 0 | `ok` |
+| `host observe`, before the key was selected / after | 3 / 0 | `no_selected_key` / `ok` |
+| `host approve --prepare` / `--confirm` | 0 / 0 | `ok` / `ok` |
+| `repo sync`, to create `refs/remotes/origin/main` | 0 | `already_applied` |
+| `document create` (one), `ticket create` (two: T, and D depending on T) | 0 | `ok`, local only |
+| `ticket show` / `ticket save`, used to make local edits | 0 | `ok` |
+
+### C5 verbs
+
+Exit and code are what the binary printed: JSON `code`, or for human runs the `code:` line on stderr.
+"Real" means an item from main's own content; "throwaway" means one made in the clone.
+
+| Verb | Case | Exit | Code |
+| --- | --- | --- | --- |
+| `poll status` | fresh registration, JSON and human | 0 | `ok` |
+| `document promote --prepare` | real document, before any fetch (no `origin/main` tracking ref) | 3 | `recovery_required`, blockers `context_missing`, `primary_missing` |
+| `ticket close --prepare` | real closed ticket (C4's), before any fetch | 3 | `recovery_required`, blockers `context_missing`, `primary_missing` |
+| `document promote --prepare` | real document, after `repo sync` | 3 | `recovery_required`, `[context_missing]`; human prints the `document save` line, then `repo.inspect` |
+| `ticket close --prepare` | real closed ticket, after `repo sync` | 3 | `ticket_closed`, `[already_closed]` |
+| `document promote --prepare` | a ticket's ID (wrong kind) | 2 | `item_not_found` |
+| `ticket close --prepare` | a document's ID (wrong kind) | 2 | `item_not_found` |
+| `context observe-local` | real document with no context | 2 | `item_not_found`, with the `document save` hint |
+| `context observe-local` | real closed ticket with no context | 2 | `item_not_found`, no hint (closed) |
+| `context observe-local` | unknown ID | 2 | `item_not_found` |
+| `context show-local` | unknown operation ID | 2 | `operation_not_found` |
+| `document promote --prepare` | throwaway, JSON and human | 0 | `ok` |
+| `ticket close --prepare` | throwaway T, JSON and human | 0 | `ok`, `closure.recording: record`, `closed_by` the local identity, slug shown |
+| `document promote --confirm` | throwaway | 0 | `ok`: merged (`d54e9d48`, two parents), published to the bare remote, cleanup `complete` |
+| `document promote` | the same request again (replay), JSON and human | 0 | `ok`, JSON byte-identical |
+| `document promote --prepare` | the promoted document | 3 | `recovery_required`, `[context_missing, primary_ahead_of_remote]` |
+| `ticket close --prepare` | throwaway T, right after the promotion | 3 | `recovery_required`, `[primary_ahead_of_remote]` (see Blockers 1) |
+| `poll configure` | `600` / the same request again / a new request, same value / the same request, `30` | 0 / 0 / 0 / 2 | `ok` / `ok` (replay) / `already_applied` / `request_mismatch` |
+| `poll configure` | `30`, new request, human | 2 | `invalid_input`, "Input field interval_seconds must be from 60 to 3600." |
+| `poll pause` | first / again | 0 / 0 | `ok` / `already_applied` |
+| `poll pause --prepare` | | 2 | `not_confirmable` |
+| `poll resume` | paused, human / not paused | 0 / 0 | `ok` / `already_applied` |
+| `poll once` | **while paused**; a peer had pushed `main` and a ticket branch | 0 | `ok`: `main` `fast_forwarded`, the peer ticket `materialized` (one branch, one worktree), the two local unpublished tickets `history_unknown` |
+| `poll once` | the same request again, JSON and human | 0 | `ok`, JSON byte-identical |
+| `poll resume` | after that poll | 0 | `ok`, `next_eligible_at` cleared |
+| `ticket close --prepare` | throwaway T, after the poll | 0 | `ok` |
+| `ticket close --confirm` | throwaway T | 0 | `ok`: context synchronized with primary (a merge), checkpoint `b9d45a71`, integrated `b8bed005`, published, remote and local cleanup `complete`; `made_ready: [{D, md-sg0wv}]`, `made_ready_state: current` |
+| `ticket close` | the same request again, JSON and human | 0 | `ok`, JSON byte-identical; human prints `made ready: <id> md-sg0wv` |
+| `ticket close --prepare` | the closed ticket T, no fetch since its push | 3 | `recovery_required`, `[context_missing, primary_ahead_of_remote]`, not `ticket_closed` (see Blockers 1) |
+| `ticket ready` | after the close | 0 | `ok`; D is listed, matching the report |
+| `context observe-local` | the materialized peer ticket, behind primary | 0 | `ok` |
+| `context sync-local` | that ticket, clean merge, human | 0 | `ok`, merge `61eaf139` |
+| `context sync-local` | the same request again | 0 | `ok` (replay) |
+| `context sync-local` | the old observation, new request, JSON and human | 3 | `external_change`, `reason: foreign_change`; human adds the `observe-local` line |
+| `context sync-local` | a fresh observation, now contained | 0 | `already_applied` |
+| `context sync-local` | D: the same file added on both sides, then edited differently on each | 4 | `recovery_required`, `conflict_pending`, `unsupported_conflict`, `external_resolution_required`: the conflict is installed in the worktree (`AA`). This matches the `context_sync_local_external_only` golden |
+| `context show-local` | that operation, JSON and human | 0 | `ok`, `can_start_resolution: false`, one token |
+| `context show-local --token` | JSON / human | 0 / 2 | `ok` (`base: null`) / `usage_error`, pointing to `--json` |
+| `context resolve-local` | that external-only conflict, with an empty source / with the local side | 3 / 3 | `external_change`, `reason: foreign_change`, nothing written (see Blockers 2) |
+| `poll once` | with that local sync pending | 3 | `recovery_required` (the pinned domain answer) |
+| `poll pause`, `poll resume` | with that local sync pending | 0 | `ok` (not fenced, as designed) |
+| `operation abandon` | that local sync: `--prepare` / `--confirm` | 0 / 3 | `ok` / `recovery_required`, files kept (the guarded abandonment) |
+| `context sync-local` | the original request again, after a Git merge commit in the worktree | 0 | `ok`: the external repair was adopted |
+| `context sync-local` | ticket E: on primary from the peer, edited by `ticket save` locally (which made its context) and by the peer on primary | 4 | `recovery_required`, `canonical_conflict`, `eligible_canonical`; human prints the `show-local` and `resolve-local` lines |
+| `context show-local` (+ `--token`) | that operation | 0 | `ok`, `can_start_resolution: true`, sides `base`, `local`, `incoming` |
+| `context show-local --token` | the token with its last character changed | 2 | `invalid_input` |
+| `context resolve-local` | `resolutions: []` | 2 | `invalid_input` |
+| `context resolve-local` | a complete set, `--input -`, human | 0 | `ok`: `5f36cbd1`, parents context and primary, "Resolve local context conflicts" |
+| `context resolve-local` | the same request again | 0 | `ok` (replay) |
+| `context sync-local` | E, after the resolution | 0 | `already_applied` |
+| `index status`, `document list` | at the end | 0 | `ok`; 175 documents, 38 with problems |
+
+**Application data.** A scan of every table of `manyhands.sqlite3` found the resolution's source
+sentinel and the local edit's text in no table, and in no output. The throwaway ticket's title and
+`closed_by` are only in `discovered_items`, the index, as the Global Constraints allow. The local
+identity's email is also in `local_context_sync_execution.commit_email` (three rows): that's the identity
+the local sync commits with, not `closed_by`.
+
+### Blockers (for the owner)
+
+1. **After a published promotion or closure, the next lifecycle prepare is refused until a fetch,
+   and a closed ticket isn't reported as closed.** Neither push advances `refs/remotes/origin/main`
+   (it stayed at `15a23125` after the promotion's push to `d54e9d48`). So:
+   - `ticket close --prepare` on another, ready ticket answered `recovery_required`,
+     `[primary_ahead_of_remote]`, exit 3, offering only `repo.inspect`;
+   - after the close, `ticket close --prepare` of the ticket it had just closed answered
+     `recovery_required`, `[context_missing, primary_ahead_of_remote]`. The design's `[AlreadyClosed]: ticket_closed`
+     row isn't reached, because the observation reads the closure from the stale tracking ref
+     (`closure/observe.rs`, `base = tracking_primary`). Before any fetch, a real closed ticket
+     answered `[context_missing, primary_missing]` in the same way.
+
+   A `poll once` (or `repo sync`) clears it. The next prepare was `ok`. Nothing tells a CLI user that
+   a poll is the way out: the only offered action is `repo.inspect`. The 2b and 2c entries above record that "a push
+   does not advance tracking". The design's Known Limits do not, and this is the plain sequence of
+   promote, then close. Not fixed here.
+2. **`context resolve-local` on an external-only conflict answers `external_change`,
+   `reason: foreign_change`**, exit 3, and nothing is written. Nothing foreign changed, and `show-local` had said
+   `can_start_resolution: false`. The human answer's `next:` line is `context show-local`, which gives the same
+   inspection again, so it leads back to the same place. The design's required-outcomes table has no row for this case.
+3. **An add/add conflict is external-only.** Here a ticket's file had reached primary by another
+   commit (the peer landed the same bytes), and both sides then edited one line. The merge base has no copy of the file, so
+   the conflict is `unsupported_conflict`. That is the documented `external_only` answer, but in real use it is the
+   ordinary case for a ticket that lands on primary twice. The way out was a merge commit made by hand in Git, then the same
+   `sync-local` request, which adopted it (`ok`). Recorded for a ruling on whether it stays external.
+
+### Surprises in human output (not blockers)
+
+- **Misleading messages.**
+  - `context observe-local` of an existing item with no context prints "error: No item has that
+    ID." above its save hint.
+  - A stale `sync-local` prints `Next action: external_repair` beside a `next:` line for `observe-local`.
+  - Its `Operation id: none` follows a header line `operation: <ULID>`.
+- **Lifecycle prepare preview.**
+  - `changes` is flattened as `Changes change: added` and `Changes path: …`, one field per line, so
+    several changes would print unpaired.
+  - Fields are sorted, which puts `Item id:` far from `Slug:` (a known limit already).
+  - For a context never pushed, it says "Will delete the editing branch on the remote" and "Will
+    synchronize the editing branch with the remote", and shows `Cleanup remote branch: true`.
+- **Blockers label.** A blocked prepare prints `Blockers:` once per blocker (`Blockers:
+  context_missing`, then `Blockers: primary_missing`).
+- **Placeholders.** `poll status` prints `-` for null fields, while the policy verbs print `none`.
+- **Progress lines.**
+  - `poll configure` that answers `already_applied` still prints `progress: writing`.
+  - Local-sync results print every null field (`Eligibility: none`, `Reason: none`,
+    `Required request id: none`, `Resolution request id: none`).
+- **`history_unknown` for local tickets.** `poll once` reports the two local, never-published tickets
+  as `history_unknown`, "Publication history is unknown; inspect remote state before proceeding". The
+  remote was configured at enable and the key selected later, which is the order Task 0's control
+  shows setting the `01M66HFV44` mark.
+- **Closed status text.** A closed ticket's file keeps `status: open` beside `closed_at` and
+  `closed_by`. That is by design (status text plays no part), but a reader won't expect it.
+- **`effects.write`.** The policy verbs report `write: not_requested` while writing the policy row.
+- **Slow on real content.** These are times from the unoptimized debug build. Each prepare took about
+  5 s, even for `item_not_found`. `promote --confirm` took 72 s and `close --confirm` 76 s. `poll once` took
+  11–18 s. `sync-local` took 14 s at first, then grew: 23 s, 34 s, 42 s (the resolution) and 41–47 s for
+  an `already_applied` answer. The last clean merge took 85 s. All of it was CPU-bound in the CLI
+  process (`user` time about equal to `real`). A release build wasn't measured.
+
+### Not run, and why
+
+- `operation resume` of a lifecycle, Ctrl-C, `request cancel`, refused pushes and deletions, host
+  and unlock stops: Tasks 12a and 13a own them, and they need the harness's faults. The fixture here
+  refuses nothing.
+- `document promote` and `ticket close` with a dirty primary, a missing identity or a pending local
+  sync weren't staged, since the plan's tables hold them.
+- A `resolve-local` partial resolution was not staged: it needs a failure point that a CLI child can't take.
