@@ -698,7 +698,7 @@ R-2, R-5, R-6, R-7 and R-11 of revision 1 became owner decisions 8, 10,
 | Contract B1, source I7 | Cancellation is final | Settled | `SavedStopped` → Share. | Fact 12. |
 | Contract B2, source I10 | Finished failure replays | Ruling R-12 | Retry only when offered. | Fact 12. |
 | Contract B3 | CLI as second actor | Settled | Plain `git`; desktop Rebuild index. | Wave track rules 2, 4. |
-| Source I8 | Give up could cancel another request | Decision 8 | Own request only; `WaitingFor`. | Fact 14. |
+| Source I8 | Give up could cancel another request | Decision 8 | Own request only; `WaitingFor` (superseded by round 2 B1). | Fact 14. |
 | Source I9 | Request ID lost with the composer | Settled | `Submissions` registry. | Fact 18. |
 | Source I11, I12 | Lane A/B files outside rows | Settled | Rows extended. | Facts 22, 25. |
 | Contract I8, I9 | Lane mechanics | Settled | One merge rule; orchestrator-only bookkeeping. | AGENTS.md. |
