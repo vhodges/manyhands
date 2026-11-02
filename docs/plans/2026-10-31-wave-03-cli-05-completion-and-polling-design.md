@@ -539,6 +539,7 @@ observation does (RFC), not as a flag.
 | `sync-local` | Another owner: busy, or a closure at `Integrating` or later | `busy` or `recovery_required` | 5 or 3 | As the code |
 | `resolve-local` | Complete, valid set | `ok` | 0 | None |
 | `resolve-local` | Incomplete, duplicate, unknown or invalid before any write | `invalid_input` | 2 | `context show-local` |
+| `resolve-local` | An external-only conflict (`can_start_resolution: false`, `external_resolution_required`) | `recovery_required`, refused by the verb before anything is written (decision 30) | 3 | External repair; no `show-local` line |
 | `resolve-local` | Stale observation | `external_change` | 3 | `context show-local` |
 | `resolve-local` | A new request after a partial accepted resolution | `external_change`: the original request is the one to resend (gate, Local operation 5–6; owner decision 4) | 3 | `request.retry` of the original request, with the same source; human output names it from `required_request_id` or the inspection |
 | Both mutations | Cancelled at a safe point | `cancelled` | 130 | As the gate: effects kept, retry or abandon |
@@ -910,6 +911,9 @@ review. This list is not yet proven complete.
 - Decision 28 covers only a clone that has no copy yet: a remote branch whose tip primary holds is reported `current` and not materialized. A clone that materialized such a branch before then isn't repaired. Its copy stays until it is cleaned up, and `item sync` of it takes it up to primary and publishes that, so the remote branch then holds the closure. A remote branch with a commit primary lacks, diverged or not, isn't covered: it materializes as before.
 - A `sync-local` replay after the item has left the index answers `item_not_found`, since the verb reads the item's kind first; the stored answer stays available through `request show`, as the RFC says for a save.
 - `busy` from a cache lock held before acceptance carries no `request_id` and offers no retry.
+- After a partial resolution, a new `resolve-local` request's JSON names no original request; the human text does, from the inspection.
+- `resolve-local`'s verb-side refusals (an unknown token, an external-only conflict) carry no scope, data or `repo.inspect`, unlike the library's own `invalid_input`.
+- An add/add of a ticket file that reached primary by another commit is `unsupported_conflict`, external-only (decision 30): `resolve-local` refuses it, and the repair is outside, with Git, then the synchronization's request again.
 - After an external `git pull`, with the index not marked behind, an item on primary with no context answers `item_not_found` until `index refresh`. An index marked behind keeps the `recovery_required` answer naming `context_missing`.
 
 ## Alternatives Rejected

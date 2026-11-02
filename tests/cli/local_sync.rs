@@ -445,6 +445,12 @@ fn an_item_with_no_context_is_refused_and_none_is_made() {
         let run = case.run(&case.observe_args(id), &[]);
         assert_eq!(run.status, 2);
         assert!(stderr(&run).contains(save), "{}", stderr(&run));
+        assert!(
+            stderr(&run)
+                .starts_with("error: This item has no editing context.\ncode: item_not_found\n"),
+            "{}",
+            stderr(&run)
+        );
         if id == TICKET {
             case.golden("context_observe_local_no_context", &value);
             case.text_golden("context_observe_local_no_context_text", &run);
@@ -476,13 +482,6 @@ fn a_remote_operation_is_invalid_input_pointing_to_conflict_show() {
         Some("before_fetch"),
         None,
     );
-    // The window a synchronization's record is read with.
-    items::index(case.world.data.path())
-        .execute(
-            "INSERT INTO remote_integration_windows(operation_record_id,number,configuration_generation,owner_epoch,kind) SELECT id,0,configuration_generation,0,'legacy' FROM remote_operation_records WHERE operation_ulid=?1",
-            [REMOTE_OPERATION],
-        )
-        .unwrap();
     let value = case.show(REMOTE_OPERATION, 2, "invalid_input");
     assert_eq!(value["data"], Value::Null);
     case.golden("context_show_local_remote_operation", &value);
@@ -789,6 +788,15 @@ fn a_stale_observation_is_external_change_and_points_to_observe() {
         "{}",
         stderr(&run)
     );
+    // Observing again is the way on: no repair outside is claimed, and no
+    // operation is named when the refusal keeps none.
+    assert!(
+        !stderr(&run).contains("external_repair"),
+        "{}",
+        stderr(&run)
+    );
+    assert!(!stderr(&run).contains("operation:"), "{}", stderr(&run));
+    assert!(!stderr(&run).contains(": none\n"), "{}", stderr(&run));
     case.text_golden("context_sync_local_stale_text", &run);
     assert_eq!(case.world.branch_tip(TICKET), tip);
 }
@@ -1469,7 +1477,7 @@ impl Case {
                 let source = if entry["display_path"] == DOCUMENT_PATH {
                     items::document_source(DOCUMENT, "Resolved guide", "")
                 } else {
-                    items::ticket_source(TICKET, &format!("Resolved {SOURCE_SENTINEL}"), "")
+                    sentinel_ticket()
                 };
                 json!({ "token": token, "source": source })
             })
@@ -1488,6 +1496,49 @@ impl Case {
             fs::read_to_string(context.join(DOCUMENT_PATH)).unwrap(),
         )
     }
+}
+
+/// The ticket as a resolution submits it: the sentinel is in its body only,
+/// which no table of the index keeps.
+fn sentinel_ticket() -> String {
+    format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {TICKET}\ntitle: Resolved\n\
+         type: task\nstatus: open\n---\nThe resolved body, {SOURCE_SENTINEL}.\n"
+    )
+}
+
+/// Every file of the data directory holding the sentinel, read as raw bytes:
+/// the store, its WAL and anything beside them.
+fn files_holding(data: &Path, sentinel: &str) -> Vec<std::path::PathBuf> {
+    fn walk(directory: &Path, sentinel: &[u8], found: &mut Vec<std::path::PathBuf>) {
+        for entry in fs::read_dir(directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, sentinel, found);
+            } else if let Ok(bytes) = fs::read(&path)
+                && bytes
+                    .windows(sentinel.len())
+                    .any(|window| window == sentinel)
+            {
+                found.push(path);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(data, sentinel.as_bytes(), &mut found);
+    found
+}
+
+fn assert_data_excludes_the_source(case: &Case) {
+    let data = case.world.data.path();
+    assert_eq!(
+        cells_beyond_the_index(data, SOURCE_SENTINEL),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        files_holding(data, SOURCE_SENTINEL),
+        Vec::<std::path::PathBuf>::new()
+    );
 }
 
 /// Every cell of application data holding a sentinel, but the index's items.
@@ -1540,10 +1591,7 @@ fn a_complete_valid_set_is_ok_and_keeps_its_source_out_of_application_data() {
     assert!(ticket.contains(SOURCE_SENTINEL), "{ticket}");
     assert!(guide.contains("Resolved guide"), "{guide}");
     assert_eq!(case.state(&operation), "complete");
-    assert_eq!(
-        cells_beyond_the_index(case.world.data.path(), SOURCE_SENTINEL),
-        Vec::<String>::new()
-    );
+    assert_data_excludes_the_source(&case);
 
     // Replay: the stored answer, and nothing more is written.
     let tip = case.world.branch_tip(TICKET);
@@ -1560,10 +1608,7 @@ fn a_complete_valid_set_is_ok_and_keeps_its_source_out_of_application_data() {
     let value = case.resolve_json(&operation, REQUEST_3, &other, 2, "request_mismatch");
     case.golden("context_resolve_local_request_mismatch", &value);
     assert_eq!(case.world.branch_tip(TICKET), tip);
-    assert_eq!(
-        cells_beyond_the_index(case.world.data.path(), SOURCE_SENTINEL),
-        Vec::<String>::new()
-    );
+    assert_data_excludes_the_source(&case);
 }
 
 #[test]
@@ -1611,10 +1656,7 @@ fn an_incomplete_duplicate_unknown_or_invalid_set_is_invalid_input_before_any_wr
             case.text_golden("context_resolve_local_incomplete_text", &run);
         }
     }
-    assert_eq!(
-        cells_beyond_the_index(case.world.data.path(), SOURCE_SENTINEL),
-        Vec::<String>::new()
-    );
+    assert_data_excludes_the_source(&case);
     // The complete set still resolves.
     case.resolve_json(&operation, REQUEST_1, &input, 0, "ok");
 }
@@ -1631,6 +1673,7 @@ fn an_unknown_token_is_invalid_input_before_any_write() {
     unknown["resolutions"][0]["token"] = json!(tampered(token));
     let value = case.resolve_json(&operation, REQUEST_3, &unknown, 2, "invalid_input");
     assert!(value["data"].is_null(), "{value}");
+    case.golden("context_resolve_local_unknown_token", &value);
     case.request_absent(REQUEST_3);
     let run = case.resolve_text(&operation, REQUEST_3, &unknown);
     assert_eq!(run.status, 2);
@@ -1642,6 +1685,7 @@ fn an_unknown_token_is_invalid_input_before_any_write() {
     case.text_golden("context_resolve_local_unknown_token_text", &run);
     assert_eq!(case.context_files(), files);
     assert_eq!(case.state(&operation), "conflict_pending");
+    assert_data_excludes_the_source(&case);
     // The same request with the live tokens then resolves.
     case.resolve_json(&operation, REQUEST_3, &input, 0, "ok");
 }
@@ -1684,7 +1728,7 @@ fn partially_resolved() -> (Case, String, Value) {
         .as_str()
         .unwrap()
         .to_owned();
-    let source = items::ticket_source(TICKET, &format!("Resolved {SOURCE_SENTINEL}"), "");
+    let source = sentinel_ticket();
     let input = json!({
         "observation": view["data"]["observation"],
         "resolutions": [{ "token": token, "source": source }],
@@ -1744,10 +1788,7 @@ fn a_partial_accepted_resolution_is_finished_by_the_same_request_and_source() {
 
     let done = case.resolve_json(&operation, REQUEST_3, &input, 0, "ok");
     assert_eq!(done["data"]["state"], "complete", "{done}");
-    assert_eq!(
-        cells_beyond_the_index(case.world.data.path(), SOURCE_SENTINEL),
-        Vec::<String>::new()
-    );
+    assert_data_excludes_the_source(&case);
 }
 
 /// A new `resolve-local` request after a partial accepted resolution is
@@ -1775,6 +1816,7 @@ fn a_new_request_after_a_partial_resolution_is_external_change_naming_the_origin
         stderr(&run)
     );
     case.text_golden("context_resolve_local_after_partial_text", &run);
+    assert_data_excludes_the_source(&case);
     let done = case.resolve_json(&operation, REQUEST_3, &input, 0, "ok");
     assert_eq!(done["data"]["state"], "complete", "{done}");
 }
@@ -1879,15 +1921,17 @@ pub fn the_resolve_example_input_is_accepted(example: &Value) {
         "invalid_input",
         None,
     );
+    // The verb's check refused it, and nothing else: its line is the only one
+    // past C2's.
     let run = case.run(&args, example.to_string().as_bytes());
     assert_eq!(run.status, 2);
-    assert!(
-        stderr(&run).contains("context show-local"),
-        "{}",
-        stderr(&run)
+    assert_eq!(
+        stderr(&run),
+        format!(
+            "error: The request input is not valid.\ncode: invalid_input\nrequest: {REQUEST_3}\nnext: manyhands-cli context show-local --repo '{}' --operation-id {operation}\n",
+            case.root()
+        )
     );
-    assert!(!stderr(&run).contains("Input field"), "{}", stderr(&run));
-    assert!(!stderr(&run).contains("Required input"), "{}", stderr(&run));
 }
 
 /// Splits a `next:` line as a POSIX shell would, for the quoting `quoted` uses.
@@ -2091,4 +2135,165 @@ fn the_refused_merges_route_finishes_the_close() {
     for line in &closure {
         assert!(on_primary.contains(line), "{on_primary}");
     }
+}
+
+// ------------------------------------------- `resolve-local`, its refusals
+
+/// A conflict two paths resolved, by `REQUEST_3`.
+fn resolved() -> (Case, String, Value) {
+    let (case, operation) = Case::two_paths_conflicted();
+    let input = case.resolution(&operation);
+    case.resolve_json(&operation, REQUEST_3, &input, 0, "ok");
+    (case, operation, input)
+}
+
+/// A finished operation lists no paths, so a new request goes to the library,
+/// which answers a finished resolution as `external_change`.
+#[test]
+fn a_new_request_after_complete_is_external_change() {
+    let (case, operation, input) = resolved();
+    let tip = case.world.branch_tip(TICKET);
+    let value = case.resolve_json(&operation, REQUEST_4, &input, 3, "external_change");
+    assert_eq!(value["data"]["state"], "complete", "{value}");
+    assert_eq!(case.world.branch_tip(TICKET), tip);
+}
+
+/// ... and an abandoned one as `cancelled`. The abandonment is artifact-free:
+/// a resolution stopped once integrated, before its index hand-off.
+#[test]
+fn a_new_request_after_abandoned_is_cancelled() {
+    let case = Case::over(World::with_service(|data| {
+        FailOnce::at(FailurePoint::LocalSyncBeforeIndex).open_service(data)
+    }));
+    case.save();
+    case.primary_moved_the_ticket("");
+    let observation = case.observation();
+    let value = case.sync_json(REQUEST_2, &observation, 4, "recovery_required");
+    let operation = value["operation_id"].as_str().unwrap().to_owned();
+    let view = case.show(&operation, 0, "ok");
+    let token = view["data"]["paths"][0]["token"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let source = sentinel_ticket();
+    let input = json!({
+        "observation": view["data"]["observation"],
+        "resolutions": [{ "token": token, "source": source }],
+    });
+    let stopped = case.world.execute(
+        REQUEST_3,
+        Mutation::LocalContextResolve(LocalContextResolveInput {
+            root: case.world.root.clone(),
+            operation_id: OperationId::parse(&operation).unwrap(),
+            observation: input["observation"].as_str().unwrap().to_owned(),
+            resolutions: vec![LocalConflictResolutionInput { token, source }],
+        }),
+    );
+    assert_eq!(
+        stopped.code,
+        ResultCode::DiscoveryPending,
+        "{:?}",
+        stopped.data
+    );
+    let prepare = [
+        "operation",
+        "abandon",
+        "--repo",
+        case.root(),
+        "--operation-id",
+        &operation,
+        "--prepare",
+    ];
+    let prepared = case.json(&prepare, &[], 0, "ok", None);
+    let confirmation = prepared["data"]["confirmation_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let confirm = [
+        "operation",
+        "abandon",
+        "--repo",
+        case.root(),
+        "--operation-id",
+        &operation,
+        "--request-id",
+        "01ARZ3NDEKTSV4RRFFQ69G5FX7",
+        "--confirm",
+        &confirmation,
+    ];
+    case.json(&confirm, &[], 0, "ok", None);
+    assert_eq!(case.state(&operation), "abandoned");
+    let value = case.resolve_json(&operation, REQUEST_4, &input, 130, "cancelled");
+    assert_eq!(value["data"]["state"], "abandoned", "{value}");
+}
+
+/// A request the library holds a record of is its own to judge, whatever the
+/// token: the finished resolution's request, and the synchronization's.
+#[test]
+fn a_recorded_request_with_a_tampered_token_is_a_mismatch() {
+    let (case, operation, input) = resolved();
+    let mut other = input.clone();
+    let token = input["resolutions"][0]["token"].as_str().unwrap();
+    other["resolutions"][0]["token"] = json!(tampered(token));
+    case.resolve_json(&operation, REQUEST_3, &other, 2, "request_mismatch");
+    // The synchronization's request is the library's mismatch too; its class
+    // is `partial`, from that request's own effects, so it exits 4.
+    let value = case.resolve_json(&operation, REQUEST_2, &other, 4, "request_mismatch");
+    assert_eq!(value["outcome"], "partial", "{value}");
+}
+
+#[test]
+fn a_resolution_prepare_is_not_confirmable() {
+    let (case, operation) = Case::two_paths_conflicted();
+    let input = case.resolution(&operation);
+    let args = [
+        "context",
+        "resolve-local",
+        "--repo",
+        case.root(),
+        "--operation-id",
+        &operation,
+        "--input",
+        "-",
+        "--prepare",
+    ];
+    let value = case.json(
+        &args,
+        input.to_string().as_bytes(),
+        2,
+        "not_confirmable",
+        None,
+    );
+    assert!(value["data"].is_null(), "{value}");
+    assert_eq!(case.state(&operation), "conflict_pending");
+}
+
+/// An external-only conflict has no resolution here: refused before anything is
+/// written, with the repair outside, and no line back to `show-local`.
+#[test]
+fn an_external_only_conflict_is_refused_with_the_repair_outside() {
+    let (case, operation) = Case::conflicted("invalid yaml line\n");
+    let view = case.show(&operation, 0, "ok");
+    assert_eq!(view["data"]["can_start_resolution"], false);
+    let ticket = fs::read_to_string(case.context().join(items::ticket_path(TICKET))).unwrap();
+    let token = view["data"]["paths"][0]["token"].as_str().unwrap();
+    let input = json!({
+        "observation": view["data"]["observation"],
+        "resolutions": [{ "token": token, "source": sentinel_ticket() }],
+    });
+    let value = case.resolve_json(&operation, REQUEST_3, &input, 3, "recovery_required");
+    assert!(value["data"].is_null(), "{value}");
+    case.golden("context_resolve_local_external_only", &value);
+    case.request_absent(REQUEST_3);
+    let run = case.resolve_text(&operation, REQUEST_3, &input);
+    assert_eq!(run.status, 3);
+    assert!(stderr(&run).contains("repair outside"), "{}", stderr(&run));
+    assert!(!stderr(&run).contains("show-local"), "{}", stderr(&run));
+    case.text_golden("context_resolve_local_external_only_text", &run);
+    assert_eq!(
+        fs::read_to_string(case.context().join(items::ticket_path(TICKET))).unwrap(),
+        ticket
+    );
+    assert_eq!(case.state(&operation), "conflict_pending");
+    assert_data_excludes_the_source(&case);
 }

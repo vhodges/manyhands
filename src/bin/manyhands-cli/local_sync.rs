@@ -24,11 +24,11 @@ use manyhands::{
     canonical::ItemId,
     repository::{
         ClosureState, ItemContextKind, ItemDto, LocalConflictResolutionInput,
-        LocalContextConflictContentDto, LocalContextResolveInput, LocalContextSyncInput,
-        LocalContextSyncInspectionDto, LocalContextSyncMutationDto, LocalContextSyncNextAction,
-        LocalContextSyncObservationDto, LocalContextSyncReason, LocalContextSyncState, Mutation,
-        MutationDataDto, OperationAction, OperationId, ReadError, RepositoryService,
-        ResolvedRepository,
+        LocalContextConflictContentDto, LocalContextResolveInput, LocalContextSyncEligibility,
+        LocalContextSyncInput, LocalContextSyncInspectionDto, LocalContextSyncMutationDto,
+        LocalContextSyncNextAction, LocalContextSyncObservationDto, LocalContextSyncReason,
+        LocalContextSyncState, Mutation, MutationDataDto, OperationAction, OperationId, ReadError,
+        RepositoryService, ResolvedRepository,
     },
     results::{Envelope, RecoveryActionKind, ResultCode},
 };
@@ -42,6 +42,7 @@ use crate::{
     render::{self, Human, Output, field, note_lines, quoted},
 };
 
+const NO_CONTEXT_MESSAGE: &str = "This item has no editing context.";
 const TOKEN_NEEDS_JSON: &str =
     "--token reads a conflict's sides, and only --json prints them: add --json.";
 const INPUT_NOTE: &str = "context sync-local's --input takes this as {\"observation\": \"...\"}.";
@@ -110,7 +111,12 @@ pub fn observe(
         Err(error) if error.code() == ResultCode::ItemNotFound => {
             let root = repo.root().to_string_lossy();
             let extra = no_context(&item, &root, &id.to_string());
-            failed(error, extra)
+            let mut envelope = error.to_envelope(&name);
+            // The item exists: the read found no editing context of it.
+            if !session.json {
+                envelope.message = NO_CONTEXT_MESSAGE.to_owned();
+            }
+            render::failure_output(session.json, &envelope, extra)
         }
         Err(error) => failed(error, None),
     }
@@ -206,6 +212,13 @@ fn refused_unread(view: &LocalContextSyncInspectionDto, token: &str) -> bool {
                 | LocalContextSyncState::Cancelled
                 | LocalContextSyncState::Abandoned
         )
+}
+
+/// Whether the live conflict's paths are listed and this token isn't among
+/// them: `resolve-local`'s refusal, which leaves a finished operation, with no
+/// paths listed, to the library.
+fn unlisted(view: &LocalContextSyncInspectionDto, token: &str) -> bool {
+    !view.paths.is_empty() && !view.paths.iter().any(|path| path.token == token)
 }
 
 /// A token's sides print with `--json` only, which `show` holds to; in human
@@ -327,7 +340,13 @@ pub fn sync(
             render::mutation_output(true, &envelope, supplied)
         }
         Driven::Executed { envelope, supplied } => {
-            let mut output = render::mutation_output(false, &envelope, supplied);
+            let reobserve = matches!(
+                envelope.code,
+                ResultCode::InvalidInput
+                    | ResultCode::ExternalChange
+                    | ResultCode::WorktreeNotClean
+            );
+            let mut output = local_output(&envelope, supplied, reobserve);
             output
                 .stderr
                 .extend(way_on(&envelope, &root.to_string_lossy(), &id.to_string()).into_bytes());
@@ -389,32 +408,54 @@ pub fn resolve(
         repo.as_ref()
             .and_then(|repo| service.inspect_local_context_sync(repo, operation).ok())
     };
-    // As `show-local`'s: a token `conflict::read` would refuse too is
-    // `invalid_input` before anything is accepted or written. Without an
-    // inspection, the library judges every token, and a request it holds a
-    // record of is its to replay or mismatch.
+    // Two refusals before anything is accepted or written, read from the
+    // inspection. A prepare is the library's (`not_confirmable`), and so is a
+    // request it may hold a record of, to replay or mismatch; without an
+    // inspection the library judges the whole input.
     let recorded = flags
         .request_id
-        .is_some_and(|id| service.show_request(id).failure_class().is_none());
-    if !recorded
+        .is_some_and(|id| service.show_request(id).code != ResultCode::RequestNotFound);
+    if !flags.prepare
+        && !recorded
         && let Some(view) = inspect()
-        && input
+    {
+        let name = admin::name(spec);
+        // An external-only conflict: no resolution here can pass, so none is
+        // offered, and no `show-local` line loops back to it.
+        if view.eligibility == Some(LocalContextSyncEligibility::ExternalResolutionRequired) {
+            return mutate::refusal(
+                session,
+                &name,
+                flags.request_id,
+                ResultCode::RecoveryRequired,
+                Some(
+                    note_lines(&[EXTERNAL_NOTE.to_owned()])
+                        .trim_end()
+                        .to_owned(),
+                ),
+            );
+        }
+        // A token that names no path of the live conflict, which
+        // `conflict::read` refuses too. A finished operation lists none, and
+        // the library answers it (`terminal_unlinked`).
+        if input
             .resolutions
             .iter()
-            .any(|pair| refused_unread(&view, &pair.token))
-    {
-        let root = root.to_string_lossy();
-        return mutate::refusal(
-            session,
-            &admin::name(spec),
-            flags.request_id,
-            ResultCode::InvalidInput,
-            Some(
-                show_line(&root, &operation.to_string())
-                    .trim_end()
-                    .to_owned(),
-            ),
-        );
+            .any(|pair| unlisted(&view, &pair.token))
+        {
+            let root = root.to_string_lossy();
+            return mutate::refusal(
+                session,
+                &name,
+                flags.request_id,
+                ResultCode::InvalidInput,
+                Some(
+                    show_line(&root, &operation.to_string())
+                        .trim_end()
+                        .to_owned(),
+                ),
+            );
+        }
     }
     let plan = Plan {
         identity_prompt: false,
@@ -449,7 +490,11 @@ pub fn resolve(
             render::mutation_output(true, &envelope, supplied)
         }
         Driven::Executed { envelope, supplied } => {
-            let mut output = render::mutation_output(false, &envelope, supplied);
+            let reobserve = matches!(
+                envelope.code,
+                ResultCode::InvalidInput | ResultCode::ExternalChange
+            );
+            let mut output = local_output(&envelope, supplied, reobserve);
             // The original request, as the data names it, or the inspection
             // does after a stop that names none (the gate: it is resent).
             let original = data_of(&envelope)
@@ -514,6 +559,51 @@ fn resolve_way_on(
         ResultCode::OriginalRequestRequired => note_lines(&[ORIGINAL_NOTE.to_owned()]),
         _ => String::new(),
     }
+}
+
+/// A local synchronization's result in human mode: C2's lines, with the
+/// data's non-empty fields only, as `human_collaboration`'s compact lines do,
+/// and no `operation:` line when the data names no operation (a refusal with
+/// no owner). `reobserve` drops a `next action` that the verb's own line
+/// replaces: there, looking again is the way on, not a repair outside.
+fn local_output(envelope: &Envelope<MutationDataDto>, supplied: bool, reobserve: bool) -> Output {
+    let mut plain = envelope.clone();
+    plain.data = None;
+    let mut body = String::new();
+    if let Some(data) = data_of(envelope) {
+        if data.operation_id.is_none() {
+            plain.operation_id = None;
+        }
+        if let Ok(serde_json::Value::Object(mut fields)) = serde_json::to_value(data) {
+            fields.remove("type");
+            if reobserve {
+                fields.remove("next_action");
+            }
+            fields.retain(|_, value| {
+                !matches!(
+                    value,
+                    serde_json::Value::Null | serde_json::Value::Bool(false)
+                ) && value.as_str() != Some("none")
+            });
+            body = human_admin::fields(&serde_json::Value::Object(fields));
+        }
+    }
+    if envelope.failure_class().is_none() {
+        let mut stdout = human_admin::mutation_success(&plain).stdout;
+        stdout.push_str(&body);
+        return Output {
+            stdout: stdout.into_bytes(),
+            stderr: Vec::new(),
+            status: render::exit_status(None),
+        };
+    }
+    let mut extra = human_admin::failure_extra(&plain, supplied);
+    extra.push_str(&body);
+    render::failure_output(
+        false,
+        &render::refusal_of(&plain, plain.recovery.clone()),
+        Some(extra),
+    )
 }
 
 fn data_of(envelope: &Envelope<MutationDataDto>) -> Option<&LocalContextSyncMutationDto> {

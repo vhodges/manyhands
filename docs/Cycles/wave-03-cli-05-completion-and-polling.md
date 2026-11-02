@@ -310,6 +310,11 @@ Also required:
 28. **The latest copy is authoritative (2026-11-02).** "Go with A": `poll once` doesn't materialize a remote
     context branch whose tip primary already holds, as a refused deletion after `ticket close` leaves it, and
     reports that target `current`. A branch with a commit primary lacks, diverged or not, is unchanged.
+30. **Add/add of a ticket file stays external-only (2026-11-02).** A ticket file that reached primary by another
+    commit, added on both sides, is `unsupported_conflict`, `external_resolution_required`. That is a known limit:
+    `context resolve-local` refuses it up front, and the way on is a repair with Git in the context, then the
+    synchronization's request again. Making a canonical add/add resolvable is a follow-up candidate. (Decision 29
+    is not recorded in this Cycle.)
 
 **Owner questions, approved at these recommendations on 2026-10-31.**
 

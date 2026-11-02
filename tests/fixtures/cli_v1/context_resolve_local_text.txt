@@ -1,17 +1,11 @@
 The request completed.
 request: 01ARZ3NDEKTSV4RRFFQ69G5FX3
 effects: write=written checkpoint=committed discovery=current integration=complete commit=<oid>
-Cancel acknowledged: false
-Eligibility: none
 Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
 Kind: ticket
-Next action: none
 Operation id: <id>
-Reason: none
-Required request id: none
 Resolution request id: 01ARZ3NDEKTSV4RRFFQ69G5FX3
 Result oid: <oid>
 State: complete
-Type: local_context_sync
 --- stderr
 --- exit 0

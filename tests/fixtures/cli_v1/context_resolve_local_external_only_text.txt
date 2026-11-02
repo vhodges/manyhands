@@ -1,0 +1,6 @@
+--- stderr
+error: Recovery is required before this can continue.
+code: recovery_required
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX3
+note: Manyhands can't resolve this: it takes a repair outside it, with Git.
+--- exit 3

@@ -4,19 +4,12 @@ progress: observing
 error: Recovery is required before this can continue.
 code: recovery_required
 request: 01ARZ3NDEKTSV4RRFFQ69G5FX2
-operation: <id>
-Cancel acknowledged: false
 Eligibility: external_resolution_required
 Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
 Kind: ticket
 Next action: external_repair
-Operation id: none
 Reason: unsupported_conflict
-Required request id: none
-Resolution request id: none
-Result oid: none
 State: refused
-Type: local_context_sync
 next: repo.inspect root=<repository>
 note: Manyhands can't resolve this: it takes a repair outside it, with Git.
 --- exit 3

@@ -1,5 +1,5 @@
 --- stderr
-error: No item has that ID.
+error: This item has no editing context.
 code: item_not_found
 next: manyhands-cli ticket save --repo '<repository>' --id 01ARZ3NDEKTSV4RRFFQ69G5FC0 --input - --request-id <new-request-id>
 note: this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in.

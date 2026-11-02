@@ -2,18 +2,10 @@ Already applied; nothing changed.
 request: 01ARZ3NDEKTSV4RRFFQ69G5FX2
 operation: <id>
 effects: write=unchanged checkpoint=unchanged discovery=current
-Cancel acknowledged: false
-Eligibility: none
 Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
 Kind: ticket
-Next action: none
 Operation id: <id>
-Reason: none
-Required request id: none
-Resolution request id: none
-Result oid: none
 State: complete
-Type: local_context_sync
 --- stderr
 progress: accepted
 progress: observing

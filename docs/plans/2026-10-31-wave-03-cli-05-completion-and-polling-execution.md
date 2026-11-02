@@ -1620,3 +1620,23 @@ the local sync commits with, not `closed_by`.
 - `document promote` and `ticket close` with a dirty primary, a missing identity or a pending local
   sync weren't staged, since the plan's tables hold them.
 - A `resolve-local` partial resolution was not staged: it needs a failure point that a CLI child can't take.
+
+### Task 10b review and Task 11's findings (controller's rulings)
+
+**Seen first.** Against HEAD's verb code (`c01db51c`): 7 of the new or changed rows failed by assertion. The `--prepare` row and the second `request_mismatch` row's code passed already. That second row's exit (4) was an expectation of mine; see item 2.
+
+- **1. The token check** in `resolve-local` refuses only when the inspection lists paths and the token isn't among them (`unlisted`). A finished operation goes to the library (`terminal_unlinked`). Rows: a new request after `complete` answers `external_change`, state `complete`. After an artifact-free `abandoned` it answers `cancelled`, exit 130. That abandonment comes from a resolution stopped at `LocalSyncBeforeIndex`, then `operation abandon` through the binary, as the library's `artifact_free_abandon_settles_all_associated_requests_atomically` does. The library's own cancelled-resolution row is `cancelled_partial_resolution_remains_accepted_and_resendable` (`tests/mutation_replay/local_sync.rs:970`).
+- **2. Recorded requests.** `REQUEST_3`, completed and resent with a tampered token, is `request_mismatch`, exit 2. The synchronization's own request (`REQUEST_2`) sent to `resolve-local` with a tampered token is `request_mismatch` with outcome `partial`, from that request's own effects, so it exits 4. The ruling named the code, and I took the exit as the library gives it.
+- **3.** A JSON golden for the verb's unknown-token refusal (`context_resolve_local_unknown_token`). Known Limits gains: a new request's JSON after a partial resolution names no original request (the text does), and the verb's refusals carry no scope, data or `repo.inspect`.
+- **4.** The two "this formatter" comment lines are back above `fields`. A `--prepare` row answers `not_confirmable`: both checks now run only when the request isn't a prepare.
+- **6.** The example row's negatives are one exact comparison of stderr.
+- **7. Raw byte scan.** `files_holding` reads every file of the data directory, WAL included, as raw bytes for the source sentinel. It runs in the complete-set, unknown-token, after-partial and external-only rows, with the table scan. The sentinel now sits in the submitted source's body only (`sentinel_ticket`), which no index table keeps.
+- **8.** The integration-window seed is in `operations::insert_remote_synchronization`. Its callers' targets pass: `read_status` 20, `read_contract` 72, `read_boundary` 24, and `mutation_replay -- resume journal_lookup` 53.
+- **9.** A request counts as unrecorded only when `request show` answers `request_not_found`.
+- **External-only conflict (Task 11).** `resolve-local` refuses it up front, from the inspection (`eligibility: external_resolution_required`): `recovery_required`, exit 3, the repair-outside note, no `show-local` line, nothing written and no request. Design row and goldens added.
+- **`observe-local` with no context (Task 11).** The code stays `item_not_found`. The human message is "This item has no editing context.", beside the save hint. JSON keeps the read's message.
+- **Consistent lines (Task 11).** Local-sync results in human mode list the data's non-empty fields only, dropping nulls, `false`, `none` and the tag. This is `human_collaboration`'s compact pattern for this data, not C2's full field list. An answer whose data names no operation prints no `operation:` line. Where the verb prints a line to observe or show again, `Next action:` isn't printed, so no repair outside is claimed beside it. 14 text goldens changed, and each diff was read.
+- **Decision 30** is in the Cycle and the design's Known Limits. **Follow-up candidate:** make a canonical add/add of a ticket file resolvable through `resolve-local`.
+
+**Verification.** `--test cli` whole 453 (117 s), `--bin manyhands-cli` 297, `--test mutation_replay -- local_sync` 75 (121 s). `fmt --check`, whole-tree clippy with `-D warnings` and the no-GPUI script pass.
+
