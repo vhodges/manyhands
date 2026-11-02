@@ -61,6 +61,8 @@ mod human;
 mod input_schemas;
 #[path = "cli/keys.rs"]
 mod keys;
+#[path = "cli/lifecycle.rs"]
+mod lifecycle;
 #[path = "cli/mutation.rs"]
 mod mutation;
 #[path = "cli/privacy.rs"]

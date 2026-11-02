@@ -2,7 +2,8 @@ use super::*;
 use crate::mutate::stops_on_ctrl_c;
 use manyhands::canonical::ItemId;
 use manyhands::repository::{
-    CommentAddInput, ConflictResolveInput, IndexRefreshInput, ItemRepublishInput,
+    CommentAddInput, ConflictResolveInput, DocumentPromoteInput, IndexRefreshInput,
+    ItemRepublishInput, TicketCloseInput,
 };
 
 const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
@@ -13,7 +14,7 @@ fn item() -> ItemId {
 }
 
 #[test]
-fn the_window_covers_exactly_the_six_stoppable_verbs() {
+fn the_window_covers_exactly_the_stoppable_verbs() {
     let root = PathBuf::from("/r");
     let operation_id = OperationId::new();
     let kind = AuthoringKind::Ticket;
@@ -72,6 +73,20 @@ fn the_window_covers_exactly_the_six_stoppable_verbs() {
                 operation_id,
             }),
             false,
+        ),
+        (
+            Mutation::DocumentPromote(DocumentPromoteInput {
+                root: root.clone(),
+                id: item(),
+            }),
+            true,
+        ),
+        (
+            Mutation::TicketClose(TicketCloseInput {
+                root: root.clone(),
+                id: item(),
+            }),
+            true,
         ),
         (
             Mutation::IndexRefresh(IndexRefreshInput { root: root.clone() }),

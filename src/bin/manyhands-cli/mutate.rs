@@ -48,7 +48,7 @@ pub trait Boundary {
     fn request_exists(&self, id: RequestId) -> Result<bool, Envelope<RequestDto>>;
 }
 /// Whether a Ctrl-C stops the mutation at its next safe point (R-21): the
-/// six verbs that stop at safe points or take a synchronization up. Their
+/// verbs that stop at safe points or take a synchronization up. Their
 /// `execute` runs inside the Ctrl-C window.
 pub fn stops_on_ctrl_c(mutation: &Mutation) -> bool {
     matches!(
@@ -59,6 +59,8 @@ pub fn stops_on_ctrl_c(mutation: &Mutation) -> bool {
             | Mutation::CommentAdd(_)
             | Mutation::ConflictResolve(_)
             | Mutation::OperationResume(_)
+            | Mutation::DocumentPromote(_)
+            | Mutation::TicketClose(_)
     )
 }
 impl Boundary for RepositoryService {

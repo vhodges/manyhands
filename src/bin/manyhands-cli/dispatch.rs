@@ -581,6 +581,10 @@ pub fn dispatch(
             return crate::collaboration::item_republish(service, session, command, args);
         }
         "repo sync" => return crate::collaboration::repo_sync(service, session, command, args),
+        "document promote" => {
+            return crate::lifecycle::document_promote(service, session, command, args);
+        }
+        "ticket close" => return crate::lifecycle::ticket_close(service, session, command, args),
         "conflict show" => return crate::conflict::show(service, session, command, args),
         "conflict resolve" => return crate::conflict::resolve(service, session, command, args),
         "operation resume" => {

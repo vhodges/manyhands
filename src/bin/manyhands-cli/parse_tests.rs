@@ -232,8 +232,8 @@ fn planned_verbs_accept_future_options_and_raw_json_and_help() {
             other => panic!("expected Unavailable, got {other:?}"),
         }
     }
-    help(&["ticket", "close", "--id", "X", "--help"], "ticket close");
-    let invocation = invoke(&["ticket", "close", "--id", "X", "--", "--json", "--help"]);
+    help(&["poll", "once", "--id", "X", "--help"], "poll once");
+    let invocation = invoke(&["poll", "once", "--id", "X", "--", "--json", "--help"]);
     assert!(!invocation.json);
     assert!(matches!(invocation.action, Action::Unavailable { .. }));
 }

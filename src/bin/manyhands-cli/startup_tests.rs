@@ -168,7 +168,7 @@ fn service_free_actions_never_call_startup_in_either_mode() {
         vec!["--version"],
         vec!["frobnicate"],
         vec!["ticket", "list", "--bogus"],
-        vec!["ticket", "close", "--id", "X", "--prepare"],
+        vec!["poll", "once", "--id", "X", "--prepare"],
     ] {
         for json in [false, true] {
             let mut startup = FakeStartup::default();
@@ -342,7 +342,7 @@ fn root_text_lists_every_command_and_planned_cycle_and_data_override() {
 #[test]
 fn resource_and_available_command_help_are_clap_rendered_with_options() {
     for (args, usage) in [
-        (vec!["ticket", "--help"], "Usage: manyhands-cli ticket"),
+        (vec!["poll", "--help"], "Usage: manyhands-cli poll"),
         (
             vec!["ticket", "deps", "--help"],
             "Usage: manyhands-cli ticket deps",
@@ -436,10 +436,10 @@ fn usage_and_unavailable_have_canonical_names_empty_recovery_and_human_only_extr
             "--bogus",
         ),
         (
-            vec!["ticket", "close"],
-            "ticket close",
+            vec!["poll", "once"],
+            "poll once",
             render::UNAVAILABLE_CODE,
-            "ticket close arrives with C5.",
+            "poll once arrives with C5.",
         ),
     ] {
         for json in [false, true] {

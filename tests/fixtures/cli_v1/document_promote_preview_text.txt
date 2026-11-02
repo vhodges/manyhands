@@ -1,0 +1,25 @@
+Preview of document promote
+Branch: manyhands/document/01ARZ3NDEKTSV4RRFFQ69G5FDN
+Changes change: added
+Changes path: docs/notes/new.md
+Cleanup local branch: true
+Cleanup remote branch: false
+Cleanup worktree: true
+Closure: none
+Context oid: <oid>
+Integration: merge_commit
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FDN
+Kind: document
+Primary branch: main
+Primary oid: <oid>
+Publication: pending_no_remote
+Remote: none
+Root: <repository>
+Slug: none
+Will merge the editing branch into primary.
+Will remove the editing worktree.
+Will delete the local editing branch.
+Confirmation: <id> (expires <time>)
+Apply with the same command and --confirm <id>; add --request-id unless you run it at a terminal.
+--- stderr
+--- exit 0

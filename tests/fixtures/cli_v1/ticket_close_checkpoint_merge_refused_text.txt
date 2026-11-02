@@ -1,0 +1,31 @@
+--- stderr
+progress: connecting
+progress: retrying
+progress: retrying
+progress: retrying
+error: Recovery is required before this can continue.
+code: recovery_required
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX1
+operation: <id>
+effects: checkpoint=committed
+Blockers: integration_conflict
+Checkpoint oid: <oid>
+Cleanup: none
+Cleanup pending: none
+Integration: none
+Integration oid: none
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
+Kind: ticket
+Made ready state: not_computed
+Publication: none
+Publication oid: none
+Publication pending: none
+Recording: record
+next: manyhands-cli context observe-local --repo '<repository>' --id 01ARZ3NDEKTSV4RRFFQ69G5FC0
+next: manyhands-cli context sync-local --repo '<repository>' --id 01ARZ3NDEKTSV4RRFFQ69G5FC0 --input - --request-id <new-request-id>
+next: manyhands-cli context show-local --repo '<repository>' --operation-id <sync-operation-id>
+next: manyhands-cli context resolve-local --repo '<repository>' --operation-id <sync-operation-id> --input - --request-id <new-request-id>
+next: request.retry request_id=01ARZ3NDEKTSV4RRFFQ69G5FX1
+next: repo.inspect root=<repository>
+note: primary refused this closure's checkpoint: bring primary into the ticket's context with the context commands, then send this request again; the closure's fields are kept.
+--- exit 4

@@ -1,0 +1,80 @@
+{
+  "code": "ok",
+  "command": "ticket close",
+  "data": {
+    "command": "ticket close",
+    "confirmation_id": "<confirmation-id>",
+    "details": {
+      "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0",
+      "changes": [
+        {
+          "change": "modified",
+          "path": ".manyhands/tickets/01ARZ3NDEKTSV4RRFFQ69G5FC0/ticket.md"
+        }
+      ],
+      "cleanup": {
+        "local_branch": true,
+        "remote_branch": false,
+        "worktree": true
+      },
+      "closure": {
+        "closed_by": "Manyhands Test <manyhands-test@example.invalid>",
+        "recording": "record"
+      },
+      "context_oid": "<context-oid>",
+      "integration": "merge_commit",
+      "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+      "kind": "ticket",
+      "primary_branch": "main",
+      "primary_oid": "<primary-oid>",
+      "publication": "pending_no_remote",
+      "remote": null,
+      "root": "<repository>",
+      "slug": null
+    },
+    "effects": [
+      {
+        "effect": "closure_recorded"
+      },
+      {
+        "effect": "primary_integrated"
+      },
+      {
+        "effect": "worktree_removed"
+      },
+      {
+        "effect": "branch_deleted"
+      }
+    ],
+    "expires_at": "<expires-at>",
+    "scope": {
+      "branch": null,
+      "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+      "remote": null,
+      "repository": "<repository>",
+      "worktree": null
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

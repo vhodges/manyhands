@@ -92,8 +92,8 @@ Command catalog:
   conflict resolve  Resolve a conflict. Available now.
   operation resume  Resume an operation. Available now.
   operation abandon  Abandon an operation. Available now.
-  document promote  Promote a document. Arrives with C5.
-  ticket close  Close a ticket. Arrives with C5.
+  document promote  Promote a document. Available now.
+  ticket close  Close a ticket. Available now.
   poll once  Poll a repository once. Arrives with C5.
   poll configure  Configure polling. Arrives with C5.
   poll pause  Pause polling. Arrives with C5.

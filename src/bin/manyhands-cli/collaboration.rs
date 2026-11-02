@@ -22,6 +22,7 @@ use crate::{
     catalog::CommandSpec,
     fill,
     human_collaboration::{self, Seen},
+    human_lifecycle,
     mutate::{self, Driven, Extras, MutationFlags, Plan, Session},
     render::{self, Output},
 };
@@ -205,6 +206,12 @@ pub(crate) fn run(
         Driven::Answered(output) => output,
         Driven::Executed { envelope, supplied } if session.json => {
             render::mutation_output(true, &envelope, supplied)
+        }
+        // An `operation resume` that continued a promotion or a closure.
+        Driven::Executed { envelope, supplied }
+            if matches!(envelope.data, Some(MutationDataDto::Lifecycle(_))) =>
+        {
+            human_lifecycle::output(&envelope, supplied)
         }
         Driven::Executed { envelope, supplied } => {
             let seen = seen(service, &envelope, named);

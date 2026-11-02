@@ -1,7 +1,11 @@
 {
-  "code": "command_unavailable",
+  "code": "recovery_required",
   "command": "ticket close",
-  "data": null,
+  "data": {
+    "blockers": [
+      "primary_dirty"
+    ]
+  },
   "effects": {
     "checkpoint": "not_requested",
     "cleanup": "not_requested",
@@ -11,17 +15,25 @@
     "publication": "not_requested",
     "write": "not_requested"
   },
-  "message": "That command is not available in this version of the CLI.",
+  "message": "Recovery is required before this can continue.",
   "operation_id": null,
-  "outcome": "error",
-  "recovery": [],
+  "outcome": "blocked",
+  "recovery": [
+    {
+      "action": "repo.inspect",
+      "arguments": {
+        "root": "<repository>"
+      },
+      "operation_id": null
+    }
+  ],
   "request_id": null,
   "schema_version": 1,
   "scope": {
     "branch": null,
-    "item_id": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
     "remote": null,
-    "repository": null,
+    "repository": "<repository>",
     "worktree": null
   }
 }

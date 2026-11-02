@@ -1055,3 +1055,50 @@ The three blockers above are settled. Each is in the Cycle's decisions, with the
 | mutation_remote, document_promotion, ticket_closure, remote_polling, remote_synchronization, cli_remote | 664, 79, 78, 84, 69, 66 | 7143 s |
 
 **After that, `origin/main` moved** to `15a23125` (packaging, release scripts, `src/main.rs`, `src/startup_reporting.rs`), and was merged without conflict. Rerun after the merge: the seven static commands and `--test mutation_contract` (44). **The test lines were not rerun on the merge.**
+
+## Task 7: CLI lifecycle verbs
+
+Base `9832423f`. `document promote` and `ticket close` are available: `lifecycle.rs` through `mutate::drive`, inside the Ctrl-C window, with `human_lifecycle.rs` for text. Neither reads the item first, since the library answers an unknown ID and a wrong kind.
+
+**Seen first.** Against the unchanged binary, 16 of the 17 rows of `tests/cli/lifecycle.rs` failed by assertion on `command_unavailable`, and `the_window_covers...` on `false != true`. The 17th, the resume row below, passed, since it pins existing code. With a stub renderer, 8 of the 12 `lifecycle_tests` rows failed by assertion. The other four pin C2's fallback, its passphrase hint and blockers named by the field list.
+
+**Corrected rows: three of my expectations, none a row of the design.**
+
+- A never-enabled repository is `repository_not_enabled`, exit 2. I had written `repository_not_registered`, 3. `prepare_not_enabled` and `results.rs:550` pin the answer.
+- `confirmation_mismatch` is exit 2, not 3 (`results.rs:588`).
+- The made-ready fixture used `depends_on:`. The key is `deps:`.
+
+**Deviations, for a ruling.**
+
+- **`collaboration.rs` is beyond the plan's Files.** It gains one arm in `run`, so that an `operation resume` with lifecycle data renders through `human_lifecycle`. The task's scope names this rendering and no listed file can hold it: `render.rs` is mounted by `tests/cli_remote.rs` without `human_lifecycle`. Dropping the arm leaves the C4 lines, whose `remote_branch_deleted` note is wrong for a lifecycle.
+- **E-16 in part, earlier than its task.** `startup_tests.rs:171` fails once `ticket close` has a handler, so it moved now, as E-4's rows did. `parse_tests.rs:563` still passes and is left.
+- **The planned rows moved to `poll once`,** still planned, for E-3, E-4 and E-6. Task 9 moves them to the test-only spec. E-1 needed no edit: `DESIGN` already holds both under C5, and its context verbs are Task 10's.
+- `human.rs` and `render.rs` needed no change. The preview's effects and slug and a prepare's blockers already render through `human_admin`, and rows pin them.
+
+**Evidence that isn't through the binary.** A published `ok`, a child's deleted branch and its resume route need SSH, and `tests/cli_remote.rs` is not this task's. Their text is pinned literally in `lifecycle_tests.rs`, on built envelopes, and the JSON by the library's goldens. Tasks 12a and 13b owe the binary walk. No `cli_v1` golden is a published `ok`: `*_local_only` is this task's `ok` and publication-pending golden in one.
+
+**The four context verbs arrive in Task 10.** The refused merge prints them now, and they answer `usage_error` until then. The text is pinned by `ticket_close_checkpoint_merge_refused_text` and a unit row, and Task 10's grammar answers to it: `<new-request-id>` and `<sync-operation-id>` are placeholders for the caller to fill.
+
+**Findings.**
+
+- **`should_retry` takes the refused merge.** It is `partial` with `request.retry` first, so a run makes four attempts and prints `progress: retrying` three times before the answer, about 0.7 s, and JSON mode prints nothing. The golden pins it. Any stop of that shape is the same, and a retry can't change this one's answer.
+- **`collaboration.rs:259` degrades quietly.** An `operation resume` naming a parent a request holds answers `original_request_required`, exit 3, naming the request. The conflict read finds nothing under a parent's ID and adds nothing: no note and no failure. This passed on unchanged code.
+- **The sentinel scan reads every table,** wider than the design's list. `closed_by` and the title are only in `discovered_items`, in both verbs. The preview's JSON holds `closed_by` for a closure and no title.
+- **A blocked prepare naming `integration_conflict` has no repair lines.** It goes through `render::prepare_output`, as all prepares do. Only a run's answer prints them, which is the row the design names. The same goes for `context_missing`'s save hint.
+- **`progress: connecting` prints in a local-only run.** That is the library's event, left alone.
+
+**Verified, compare mode, no golden variable.** All exit 0.
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--bin manyhands-cli` | 263 | 2 s |
+| `--test cli -- lifecycle` | 17 | 6 s |
+| `--test cli -- help` | 9 | under 1 s |
+| `--test cli -- boundaries` | 4 | 3 s |
+| `--test cli -- exits` | 31 | 16 s |
+| `--test cli`, whole | 366 | 79 s |
+| fmt, clippy `-D warnings`, `cargo check --all-features`, CLI check, no-GPUI | ok | under 10 s each |
+
+Goldens were written with `MANYHANDS_UPDATE_GOLDEN=1` and read. Help's four moved only for the two verbs. `unavailable_ticket_close.json` and its registration are gone (E-2). merge-tree against `origin/main` at `15a23125` is clean.
+
+**Left.** PTY consent, Ctrl-C through the binary and lost stdout: Task 13a. Replay and same-request continuation over SSH: Task 12a. The recovery table's row for the refused merge: Task 14a.

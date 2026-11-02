@@ -33,10 +33,14 @@ mod human_admin;
 mod human_authoring;
 #[path = "manyhands-cli/human_collaboration.rs"]
 mod human_collaboration;
+#[path = "manyhands-cli/human_lifecycle.rs"]
+mod human_lifecycle;
 #[path = "manyhands-cli/input.rs"]
 mod input;
 #[path = "manyhands-cli/interrupt.rs"]
 mod interrupt;
+#[path = "manyhands-cli/lifecycle.rs"]
+mod lifecycle;
 #[path = "manyhands-cli/mutate.rs"]
 mod mutate;
 #[path = "manyhands-cli/parse.rs"]

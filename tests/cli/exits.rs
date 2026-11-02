@@ -138,7 +138,7 @@ const ROWS: &[Row] = &[
     row!("usage", &["remote", "add"], b"", "usage_error", 2),
     row!(
         "unavailable",
-        &["ticket", "close"],
+        &["poll", "once"],
         b"",
         "command_unavailable",
         2
