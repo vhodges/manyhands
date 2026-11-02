@@ -6407,8 +6407,7 @@ pub(crate) enum PollingChange {
     Interval(PollingInterval),
     /// The pause.
     Pause,
-    /// The pause and the stored deadline, so an eligible poll is due (decision
-    /// 11). The suspension, `enabled` and the backoff value stay.
+    /// The pause and the stored deadline, so an eligible poll is due. The suspension, `enabled` and the backoff value stay.
     Resume,
 }
 

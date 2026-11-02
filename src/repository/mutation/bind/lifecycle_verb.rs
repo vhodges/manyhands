@@ -101,7 +101,8 @@ pub(in super::super::super) trait LifecycleVerb {
     const COMMAND: Command;
     const KIND: AuthoringKind;
     const DTO_KIND: ItemDtoKind;
-    /// Whether its answers hold a made-ready report: a closure's do.
+    /// Whether its answers hold a made-ready report: a closure's do. A ticket is
+    /// also what has a slug, so `preview` reads this to look one up.
     const REPORTS_MADE_READY: bool;
 
     fn observe(

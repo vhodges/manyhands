@@ -790,8 +790,8 @@ fn child_id<R: LifecycleRecord>(r: &R, role: ChildRole) -> Option<OperationId> {
         ChildRole::Primary => r.primary_sync_id(),
     }
 }
-/// A cancellation that stops the parent lets its stopped child go (decision
-/// 18), or the child's reservation would refuse what the caller does next. The
+/// A cancellation that stops the parent lets its stopped child go, or the
+/// child's reservation would refuse what the caller does next. The
 /// guards and the end of its row are one transaction, in
 /// `release_promotion_child`. Nothing proves that no other process still runs
 /// the child: one that does is fenced at its next safe point, as `child()`'s

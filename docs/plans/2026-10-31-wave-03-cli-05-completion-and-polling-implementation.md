@@ -194,7 +194,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 
 ## Task 7: CLI Lifecycle Verbs
 
-**Files:** Create `src/bin/manyhands-cli/lifecycle.rs`, `lifecycle_tests.rs`, `human_lifecycle.rs`, `tests/cli/lifecycle.rs`. Modify `src/bin/manyhands-cli.rs`, `catalog.rs`, `dispatch.rs`, `mutate.rs`, `render.rs`, `human.rs`, `tests/cli.rs`, `tests/cli/help.rs`, `collaboration_tests.rs`, and the E-1 to E-7 and E-14 tests.
+**Files:** Create `src/bin/manyhands-cli/lifecycle.rs`, `lifecycle_tests.rs`, `human_lifecycle.rs`, `tests/cli/lifecycle.rs`. Modify `src/bin/manyhands-cli.rs`, `catalog.rs`, `dispatch.rs`, `mutate.rs`, `collaboration.rs` (one arm, approved), `render.rs`, `human.rs`, `tests/cli.rs`, `tests/cli/help.rs`, `collaboration_tests.rs`, and the E-1 to E-7 and E-14 tests.
 
 - [ ] **Step 1:** Catalog and grammar for both verbs. Move the planned-state tests one verb at a time. Gating `planned()` waits for Task 9 (R-8).
 - [ ] **Step 2:** Implement through `mutate::run`, inside the Ctrl-C window, with unlock handling. The human preview shows every effect and the slug. The result prints `made ready:` lines with slugs.
@@ -273,7 +273,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 
 **Files:** Modify `tests/cli/collaboration_exits.rs` (E-8), `tests/cli/exits.rs`, `tests/cli_remote/lifecycle.rs`.
 
-- [ ] **Step 1:** Walk every `next:` line through the binary until the reservation is free, for each stop the lifecycle, poll and context verbs can print. Include decision 19's route: an `operation resume` with no request record stopped at `remote_branch_deleted`, then `item republish`, then `operation resume`, one merge. Also a released resolution whose branch is deleted: if no route frees it, stop for the owner. Record each in the ledger.
+- [ ] **Step 1:** Walk every `next:` line through the binary until the reservation is free, for each stop the lifecycle, poll and context verbs can print. Include decision 19's route: an `operation resume` with no request record stopped at `remote_branch_deleted`, then `item republish`, then `operation resume`, one merge. Also a released resolution whose branch is deleted: if no route frees it, stop for the owner. The same check for a retained conflict fenced by `key select` and by a poll's plan failure (`c5_cancel_key_select_fences_a_retained_conflict_close`, `c5_cancel_poll_plan_failure_fences_a_retained_conflict_close`): if no route frees them, this walk stops for the owner. Record each in the ledger.
 - [ ] **Step 2:** Extend the exit table's set equality, with a reason for each unreachable code.
 - [ ] **Step 3: Verify.** `--test cli_remote -- c5_lifecycle_walk`, `--test cli -- exits`.
 - [ ] **Step 4:** Commit `test: walk C5 recovery paths and account for exit codes`. Ticket comment. Push.

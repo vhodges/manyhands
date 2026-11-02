@@ -1035,14 +1035,14 @@ The three blockers above are settled. Each is in the Cycle's decisions, with the
 
 - `once_fences_a_lifecycle_child` resends the close: `ok`, one merge, once the URL and the deleted branch are back. A branch left deleted answers its own stop, unrelated to the fence.
 - Stuck cases pinned: `c5_cancel_fenced_released_resolution_close`, whose unfenced twin publishes, and `c5_cancel_fenced_past_publication_close`, by `run.rs:1188`.
-- **The ruling's retained case answered otherwise, and needs confirming.** A poll doesn't fence a retained conflict: it checks `has_pending_conflict` before `configure_poll_endpoints` (`remote/poll.rs`), answers `recovery_required`, and the generation stays. `c5_cancel_poll_leaves_a_retained_conflict_close` pins that, and the design's limit says so instead of the ruling's wording. No other route that raises the generation over a retained child was traced.
+- **The ruling's retained case answered otherwise, and needs confirming.** A poll doesn't fence a retained conflict: it checks `has_pending_conflict` before `configure_poll_endpoints` (`remote/poll.rs`), answers `recovery_required`, and the generation stays. `c5_cancel_poll_leaves_a_retained_conflict_close` pins that, and the design's limit says so instead of the ruling's wording. **Corrected by the Part A re-review, below:** other routes do raise the generation over a retained child.
 - Supersede after cancel: `c5_cancel_supersede_after_a_cancelled_answer` and `_straight_after_the_cancel`, both as ruled, with the design's sentence.
 - Known limits added: a live call losing its stop when the flag is cleared on a kept child; `cancelled` after a guarded deletion that went through, read and confirmed, `transport/remote.rs:240` answering `deleted` for a branch already gone.
 - The primary `Err` arm's row (`promotion/run.rs:1139-1145`) is owed to Task 13a, whose step names it. Task 13b gains a released resolution with its branch deleted, which stops for the owner if no route frees it.
 - **Follow-up candidates, left out of C5:** synchronization's lease as `internal_error` is a ticket candidate, not filed. Decision 24's `interrupted` row for automatic polls is a D6 note: nothing restarts one.
 - Plan's scope gains `remote/reservation.rs` (decision 18) and `local_sync/run.rs` (decision 26); `transport/remote.rs` was there. Resume's row and the Cycle's status corrected.
 
-**Quality review's fixes, no behaviour change.** All of items 1-4, 6 and 7 and the minors. Rule numbers are dropped from new `src` comments; test comments keep theirs. `lifecycle_parent` is generic on `ParentRecord`, with a `written_checkpoint` method. Duplicate helpers matched but for one comment and `golden_at`, whose general form made-ready now calls with its schema. `poll once`'s test sleep names `POLL_PROGRESS_THROTTLE` in its comment, since the constant isn't reachable from a test target.
+**Quality review's fixes, no behaviour change.** All of items 1-4, 6 and 7 and the minors. Rule numbers are dropped from new `src` comments, except two wrapped ones this missed, "(decision 18)" at `promotion/run.rs:793-794` and "(decision 11)" at `remote/state.rs:6410`, removed in the re-review's corrections below; test comments keep theirs. `lifecycle_parent` is generic on `ParentRecord`, with a `written_checkpoint` method. Duplicate helpers matched but for one comment and `golden_at`, whose general form made-ready now calls with its schema. `poll once`'s test sleep names `POLL_PROGRESS_THROTTLE` in its comment, since the constant isn't reachable from a test target.
 
 **Verified on the final code, compare mode, before merging main.** All exit 0.
 
@@ -1102,3 +1102,18 @@ Base `9832423f`. `document promote` and `ticket close` are available: `lifecycle
 Goldens were written with `MANYHANDS_UPDATE_GOLDEN=1` and read. Help's four moved only for the two verbs. `unavailable_ticket_close.json` and its registration are gone (E-2). merge-tree against `origin/main` at `15a23125` is clean.
 
 **Left.** PTY consent, Ctrl-C through the binary and lost stdout: Task 13a. Replay and same-request continuation over SSH: Task 12a. The recovery table's row for the refused merge: Task 14a.
+
+**Rulings on Task 7's two points.** The coordinator approved both: the `collaboration.rs` arm, now in the plan's Files, and the early move of `startup_tests.rs:171`.
+
+### Part A re-review's corrections
+
+- **Generation raises over a retained child.** The design's limit is corrected, with the routes it names. `key clear` is added beside `key select`, since the row's fence goes through both and `keys/registry.rs:557` is the clear.
+- **Two rows, and where they answered otherwise than the review's text.**
+  - `c5_cancel_key_select_fences_a_retained_conflict_close`: the generation goes from 1 to 3, and the resend answers `recovery_required`, offering `request.retry`, `repo.inspect`, with its record accepted, on every send.
+  - `c5_cancel_poll_plan_failure_fences_a_retained_conflict_close`: **`poll once` doesn't reach `remote/poll.rs:1293`.** Its binding answers `invalid_configuration`, and the generation stays. Called directly, `poll_publication_remote` errs and raises it from 1 to 2, and the resend is as above. So this route is the domain's, and automatic polls', and not the CLI's.
+  - **A new ID is not `busy` in either row.** A new prepare answers `recovery_required`, blocked, with no confirmation, so the design doesn't say `busy`. A confirmation issued before the conflict, presented under a new ID, was not tried.
+  - **These rows don't show what the fence costs.** An unfenced retained conflict answers the same (`c5_cancel_poll_leaves_a_retained_conflict_close`). The difference would be in `conflict resolve`, which neither row runs. Task 13b's stop-for-owner check now names both.
+- **Decision 25's limits** are in the design: the current attempt's child only, and the over-claim after a kill between `push_verified` and its authority.
+- **`REPORTS_MADE_READY`** also gates the slug in `preview`, and its comment now says so.
+- **`World::plain_key`** no longer encrypts a key it won't write.
+- **`Command` stays over the old `Verb`** in resume's `lifecycle`. Its `_ => InternalError` arm is unreachable, since `lifecycle_standing` names only the two commands, and its comment says so.

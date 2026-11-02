@@ -160,16 +160,20 @@ impl World {
         let key = fixed(ssh_key::PrivateKey::read_openssh_file(
             server.client_key_path(),
         ))?;
-        let encrypted = fixed(
-            fixed(key.encrypt(&mut ssh_key::rand_core::OsRng, PASSWORD))?
-                .to_openssh(ssh_key::LineEnding::LF),
-        )?;
-        if protection == KeyProtection::Passphrase {
+        // Encrypting is slow, and a plain key's world has no use for the result.
+        let encrypted = if protection == KeyProtection::Passphrase {
+            let encrypted = fixed(
+                fixed(key.encrypt(&mut ssh_key::rand_core::OsRng, PASSWORD))?
+                    .to_openssh(ssh_key::LineEnding::LF),
+            )?;
             fixed(std::fs::write(
                 server.client_key_path(),
                 encrypted.as_bytes(),
             ))?;
-        }
+            Some(encrypted.as_bytes().to_vec())
+        } else {
+            None
+        };
         let directory = fixed(tempfile::tempdir())?;
         let root = directory.path().join("clone-a");
         let repo = clone_owned(&server, &root)?;
@@ -220,12 +224,12 @@ impl World {
             .collect::<Vec<_>>();
         let mut probes = vec![
             plain,
-            encrypted.as_bytes().to_vec(),
             PASSWORD.as_bytes().to_vec(),
             server.url().into_bytes(),
             HOSTILE.as_bytes().to_vec(),
             BODY.as_bytes().to_vec(),
         ];
+        probes.extend(encrypted);
         probes.extend(private_fragments);
         ssh_privacy::save(&probes)?;
         let world = Self {

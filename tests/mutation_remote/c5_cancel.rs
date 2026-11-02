@@ -75,6 +75,14 @@ const ONE: &[ssh_harness::Case] = &[
     ("c5_cancel_poll_leaves_a_retained_conflict_close", || {
         poll_leaves_a_retained_conflict(Verb::Close)
     }),
+    (
+        "c5_cancel_key_select_fences_a_retained_conflict_close",
+        || key_select_fences_a_retained_conflict(Verb::Close),
+    ),
+    (
+        "c5_cancel_poll_plan_failure_fences_a_retained_conflict_close",
+        || poll_plan_failure_fences_a_retained_conflict(Verb::Close),
+    ),
     ("c5_cancel_fenced_released_resolution_close", || {
         fenced_released_resolution(Verb::Close)
     }),
@@ -1458,9 +1466,10 @@ fn assert_stuck(w: &World, verb: Verb) -> Result<(), FixtureError> {
     Ok(())
 }
 
-/// A poll never fences a retained conflict: it refuses on the pending conflict
-/// before it configures its endpoints, so the generation stays, and the conflict
-/// stands as it was.
+/// A poll doesn't fence a retained `conflict_pending` child through an endpoint
+/// change: it refuses on the pending conflict before it configures its
+/// endpoints, so the generation stays, and the conflict stands as it was. A plan
+/// failure is the exception, below.
 fn poll_leaves_a_retained_conflict(verb: Verb) -> Result<(), FixtureError> {
     let w = remote(verb)?;
     conflicted(&w, verb)?;
@@ -1471,6 +1480,83 @@ fn poll_leaves_a_retained_conflict(verb: Verb) -> Result<(), FixtureError> {
     );
     assert_eq!(generation(&w)?, before, "not fenced");
     assert_stuck(&w, verb)
+}
+
+/// A retained conflict once a generation has been raised over it: the resend
+/// stays `recovery_required`, with its record, however often it is sent, and a
+/// new prepare is refused the same way, so no new ID has a confirmation to run
+/// with. These answers are also a retained conflict's unfenced, so what the
+/// fence costs is the way out, which Task 13b's walk owes.
+fn assert_stuck_under_a_new_generation(w: &World, verb: Verb) -> Result<(), FixtureError> {
+    assert_stuck(w, verb)?;
+    assert_stuck(w, verb)?;
+    let preview = w.service.prepare(&verb.mutation(&w.root, verb.id()));
+    assert_eq!(preview.code, ResultCode::RecoveryRequired);
+    assert!(
+        preview
+            .data
+            .as_ref()
+            .and_then(PrepareDataDto::preview)
+            .is_none()
+    );
+    assert_stuck(w, verb)
+}
+
+/// `key select` fences every remote: it raises the generation with no look at
+/// what a retained child holds.
+fn key_select_fences_a_retained_conflict(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    conflicted(&w, verb)?;
+    let before = generation(&w)?;
+    let key = fixed(w.service.list_shared_keys())?
+        .into_iter()
+        .next()
+        .ok_or(FixtureError)?;
+    fixed(w.service.clear_shared_key_selection())?;
+    fixed(w.service.select_shared_key(key.id))?;
+    assert!(generation(&w)? > before, "fenced");
+    assert_stuck_under_a_new_generation(&w, verb)
+}
+
+/// A plan failure configures with no plan before any look at a pending conflict
+/// (`remote/poll.rs`). `poll once` doesn't reach it: its binding refuses an
+/// invalid configuration first, and the generation stays. The domain's own entry
+/// point, which an automatic poll takes, does, and is fenced.
+fn poll_plan_failure_fences_a_retained_conflict(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    conflicted(&w, verb)?;
+    let before = generation(&w)?;
+    let path = w.root.join(".manyhands/config.toml");
+    let configuration = fixed(std::fs::read(&path))?;
+    fixed(std::fs::write(&path, b"not = [valid\n"))?;
+    let verb_answer = w.service.execute(
+        MutationCall {
+            request_id: request(POLL),
+            confirmation: None,
+            mutation: Mutation::PollOnce(PollOnceInput {
+                root: w.root.clone(),
+            }),
+        },
+        &mut SessionCredentials::new(Provider),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(verb_answer.code, ResultCode::InvalidConfiguration);
+    assert_eq!(generation(&w)?, before, "the verb doesn't reach the domain");
+    let domain = w.service.poll_publication_remote(
+        PollPublicationRemoteRequest {
+            root: w.root.clone(),
+            operation_id: OperationId::new(),
+            invocation: RemotePollInvocation::Explicit,
+            approval: None,
+            restart: false,
+        },
+        &mut SessionCredentials::new(Provider),
+    );
+    fixed(std::fs::write(&path, configuration))?;
+    assert!(domain.is_err());
+    assert!(generation(&w)? > before, "fenced");
+    assert_stuck_under_a_new_generation(&w, verb)
 }
 
 /// A released resolution is restarted, not replaced, and a restart under another

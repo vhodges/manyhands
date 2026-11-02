@@ -1223,7 +1223,8 @@ impl OperationResumeBinding {
                 call,
                 &operation,
             ),
-            // `lifecycle_standing` names only those two.
+            // Unreachable: `lifecycle_standing` names only those two. `Command`
+            // is kept here over a type of its own, for this one arm.
             _ => {
                 return Ran {
                     answer: Answer::stopped(ResultCode::InternalError),
