@@ -39,8 +39,9 @@ use manyhands::{
 /// `tests/cli/local_sync.rs` `the_refused_merges_route_finishes_the_close`.
 const REPAIR_NOTE: &str = "The commands above are the local repair: the <...> values are placeholders to fill in, context sync-local's --input - takes {\"observation\": \"...\"} with the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict.";
 const REFUSED_NOTE: &str = "primary refused this closure's checkpoint.";
-const POLL_NOTE: &str = "this repository's record of the remote's primary is behind or missing, and a poll reads it; <new-request-id> is a placeholder to fill in.";
-const HELD_NOTE: &str = "an unfinished request holds this item; send it again to finish it, and prepare again only once it has.";
+const POLL_NOTE: &str = "this repository has no record of the remote's primary, and a poll reads it; <new-request-id> is a placeholder to fill in.";
+const AHEAD_NOTE: &str = "primary holds commits the remote's primary, as this repository last read it, lacks: a poll reads the remote again, and if primary is still ahead, repo sync publishes it; each <new-request-id> is a placeholder for a request of its own.";
+const HELD_NOTE: &str = "an unfinished request holds this item; send it again to finish it, and prepare again once it has finished, or has stopped on a cleanup a new request can replace.";
 const HELD_RESUME_NOTE: &str = "an unfinished operation that no request holds has this item; resume it (add --request-id unless you run it at a terminal), and prepare again only once it has finished.";
 const NO_REMOTE_NOTE: &str = "primary is not published, because this repository has no publication remote; once one is selected, repo sync publishes it.";
 const NO_SET_NOTE: &str = "this answer holds no made-ready set; ticket ready is the live view.";
@@ -247,19 +248,26 @@ fn way_out(
         ConflictPending, ContextConflicted, ContextDirty, ContextMissing, IntegrationConflict,
         LocalOperationPending, PrimaryAheadOfRemote, PrimaryMissing,
     };
-    let behind =
+    let tracking =
         |blocker: &LifecycleBlocker| matches!(blocker, PrimaryAheadOfRemote | PrimaryMissing);
-    if blockers.iter().any(behind)
+    if blockers.iter().any(tracking)
         && blockers
             .iter()
-            .all(|blocker| behind(blocker) || *blocker == ContextMissing)
+            .all(|blocker| tracking(blocker) || *blocker == ContextMissing)
     {
+        let root = quoted(root);
+        let poll = format!("manyhands-cli poll once --repo {root} --request-id <new-request-id>");
+        // Missing, a poll makes it. Ahead, primary may hold work never
+        // published, which a poll doesn't push.
+        if !blockers.contains(&PrimaryAheadOfRemote) {
+            return Some((vec![poll], format!("{POLL_NOTE} Then prepare again.")));
+        }
         return Some((
-            vec![format!(
-                "manyhands-cli poll once --repo {} --request-id <new-request-id>",
-                quoted(root)
-            )],
-            format!("{POLL_NOTE} Then prepare again."),
+            vec![
+                poll,
+                format!("manyhands-cli repo sync --repo {root} --request-id <new-request-id>"),
+            ],
+            format!("{AHEAD_NOTE} Then prepare again."),
         ));
     }
     if blockers == [ContextMissing] {

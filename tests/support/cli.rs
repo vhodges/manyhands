@@ -511,11 +511,12 @@ pub const CLI_TEXT_CASES: &[&str] = &[
     "ticket_close_checkpoint_merge_refused_text",
     "ticket_close_prepare_conflict_text",
     "document_promote_prepare_conflict_text",
-    "document_promote_noop_text",
+    "document_promote_already_contained_text",
     "ticket_close_prepare_context_missing_text",
     "document_promote_prepare_context_missing_text",
     "ticket_close_prepare_held_text",
     "ticket_close_prepare_primary_missing_text",
+    "ticket_close_prepare_primary_ahead_text",
 ];
 pub const CLI_REPOSITORY_VALUES: &[&str] = &["required", "refused"];
 

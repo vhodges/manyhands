@@ -2,5 +2,5 @@
 error: Recovery is required before this can continue.
 code: recovery_required
 next: manyhands-cli ticket close --repo '<repository>' --id 01ARZ3NDEKTSV4RRFFQ69G5FC0 --request-id 01ARZ3NDEKTSV4RRFFQ69G5FX1
-note: an unfinished request holds this item; send it again to finish it, and prepare again only once it has.
+note: an unfinished request holds this item; send it again to finish it, and prepare again once it has finished, or has stopped on a cleanup a new request can replace.
 --- exit 3

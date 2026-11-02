@@ -124,8 +124,8 @@ fn resolve_line(root: &str, operation: &str) -> String {
 }
 
 /// The lines a verb adds to a result's, and whether one of them, a line to
-/// look again, replaces the data's `next action`: there, looking again is the
-/// way on, not a repair outside.
+/// look again or the original request to send, replaces the data's `next
+/// action`: there, that line is the way on, not a repair outside.
 pub(crate) struct WayOn {
     pub(crate) lines: String,
     pub(crate) replaces_next_action: bool,
@@ -166,7 +166,8 @@ pub(crate) fn resolve_way_on(
         } else {
             format!("next: request.retry request_id={}\n", field(original))
         };
-        return WayOn::adds(format!("{retry}{}", render::note_line(ORIGINAL_NOTE)));
+        // The original request is the way on, in place of `next action`.
+        return WayOn::looks_again(format!("{retry}{}", render::note_line(ORIGINAL_NOTE)));
     }
     match envelope.code {
         ResultCode::InvalidInput | ResultCode::ExternalChange => {

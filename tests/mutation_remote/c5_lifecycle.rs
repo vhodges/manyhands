@@ -3297,6 +3297,10 @@ fn tracking_stop_before_the_update() -> Result<(), FixtureError> {
 fn tracking_split_endpoints() -> Result<(), FixtureError> {
     let w = remote(Verb::Close)?;
     let before = tracking_of(&w, TRACKING_MAIN)?;
+    assert!(
+        before.is_some(),
+        "a fetched tracking ref, which the push could move"
+    );
     let push = SshRemoteFixture::start()?;
     push.allow_client_public_key(fixed(russh::keys::PublicKey::from_bytes(
         &w.server.allowed_client_public_key(),

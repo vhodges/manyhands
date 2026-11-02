@@ -209,7 +209,7 @@ impl LifecycleVerb for Fixed {
         _service: &RepositoryService,
         _root: &Path,
         _id: &ItemId,
-    ) -> Result<Option<OperationId>, RepositoryError> {
+    ) -> Result<Option<OperationId>, crate::repository::ReadError> {
         Ok(None)
     }
 }

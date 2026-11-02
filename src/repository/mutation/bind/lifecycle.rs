@@ -325,7 +325,9 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
     /// parent's: the request whose accepted record holds its operation, or a
     /// resume of the operation when no record does.
     fn held(&self, service: &RepositoryService, root: &Path) -> Result<(), Answer> {
-        let Some(operation) = V::holder(service, root, &self.id).map_err(refused)? else {
+        let Some(operation) =
+            V::holder(service, root, &self.id).map_err(|error| Answer::of_read(&error))?
+        else {
             return Ok(());
         };
         let key = ScopeKey::for_repository(&self.root)

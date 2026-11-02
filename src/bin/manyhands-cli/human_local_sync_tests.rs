@@ -223,8 +223,8 @@ fn the_original_request_is_named_once() {
     assert!(lines.contains("same input"), "{lines}");
 }
 
-/// The data's `next action` is left out only where a line to look again takes
-/// its place: an original request named in its place keeps it.
+/// The data's `next action` is left out only where a line takes its place: one
+/// to look again, or the original request to send.
 #[test]
 fn only_a_line_to_look_again_replaces_next_action() {
     let stale = stopped(
@@ -232,7 +232,12 @@ fn only_a_line_to_look_again_replaces_next_action() {
         LocalContextSyncNextAction::RetryResolution,
     );
     assert!(resolve_way_on(&stale, ROOT, OPERATION, None).replaces_next_action);
-    assert!(!resolve_way_on(&stale, ROOT, OPERATION, Some(ORIGINAL)).replaces_next_action);
+    assert!(resolve_way_on(&stale, ROOT, OPERATION, Some(ORIGINAL)).replaces_next_action);
+    let no_line = stopped(
+        ResultCode::RecoveryRequired,
+        LocalContextSyncNextAction::RetryResolution,
+    );
+    assert!(!resolve_way_on(&no_line, ROOT, OPERATION, None).replaces_next_action);
     assert!(way_on(&stale, ROOT, ITEM).replaces_next_action);
     let refused = stopped(
         ResultCode::RecoveryRequired,

@@ -322,11 +322,11 @@ fn bindings<R: ParentRecord>(db: &Connection, op: OperationId) -> Result<Vec<R>,
     .collect()
 }
 pub(in super::super) fn unfinished_record<R: ParentRecord>(
-    tx: &Transaction<'_>,
+    db: &Connection,
     id: i64,
     item: &ItemId,
 ) -> Result<Option<R>, RepositoryError> {
-    tx
+    db
         .query_row(
             &format!("SELECT * FROM {} WHERE repository_id=?1 AND item_id=?2 AND step NOT IN ('complete','abandoned','superseded')",R::KIND.table()),
             params![id, item.to_string()],

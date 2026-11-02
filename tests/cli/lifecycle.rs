@@ -847,7 +847,11 @@ fn a_no_op_in_text_says_what_it_found() {
         "{}",
         stdout(&human)
     );
-    text_golden("document_promote_noop_text", &human, &case.world.root);
+    text_golden(
+        "document_promote_already_contained_text",
+        &human,
+        &case.world.root,
+    );
 }
 
 /// Every cell of application data that holds `sentinels`, as `table.column`.

@@ -15,9 +15,10 @@ use super::super::super::{
         PromotionBlocker, PromotionCleanup, PromotionCleanupPending, PromotionExpectation,
         PromotionIntegration, PromotionPathChange, PromotionPublication,
         PromotionPublicationPending, PromotionRemoteDeletionCategory,
-        PromotionSynchronizationCategory, RepositoryError, RepositoryOperation, RepositoryService,
-        SynchronizationError, SynchronizationTarget, TicketClosureError, TicketClosureOutcome,
-        TicketClosurePreflight, TicketClosurePreview, TicketClosureResult, closure, promotion,
+        PromotionSynchronizationCategory, ReadError, RepositoryError, RepositoryOperation,
+        RepositoryService, SynchronizationError, SynchronizationTarget, TicketClosureError,
+        TicketClosureOutcome, TicketClosurePreflight, TicketClosurePreview, TicketClosureResult,
+        closure, promotion,
         promotion::{ParentView, lifecycle::LifecyclePreview},
         remote::{state, sync},
         transport::SshTransportError,
@@ -133,7 +134,7 @@ pub(in super::super::super) trait LifecycleVerb {
         service: &RepositoryService,
         root: &Path,
         id: &ItemId,
-    ) -> Result<Option<OperationId>, RepositoryError>;
+    ) -> Result<Option<OperationId>, ReadError>;
 }
 
 pub(in super::super::super) struct Promote;
@@ -361,7 +362,7 @@ impl LifecycleVerb for Promote {
         service: &RepositoryService,
         root: &Path,
         id: &ItemId,
-    ) -> Result<Option<OperationId>, RepositoryError> {
+    ) -> Result<Option<OperationId>, ReadError> {
         promotion::unfinished_holder::<promotion::record::PromotionRecord>(service, root, id)
     }
 }
@@ -461,7 +462,7 @@ impl LifecycleVerb for Close {
         service: &RepositoryService,
         root: &Path,
         id: &ItemId,
-    ) -> Result<Option<OperationId>, RepositoryError> {
+    ) -> Result<Option<OperationId>, ReadError> {
         promotion::unfinished_holder::<closure::record::ClosureRecord>(service, root, id)
     }
 }

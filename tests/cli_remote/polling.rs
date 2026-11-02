@@ -81,6 +81,10 @@ pub const CASES: &[ssh_harness::Case] = &[
         "c5_polling_a_missing_tracking_ref_names_the_poll",
         c5_polling_a_missing_tracking_ref_names_the_poll,
     ),
+    (
+        "c5_polling_an_unpushed_primary_commit_names_poll_then_sync",
+        c5_polling_an_unpushed_primary_commit_names_poll_then_sync,
+    ),
 ];
 
 const R1: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR1";
@@ -1250,6 +1254,62 @@ fn c5_polling_a_missing_tracking_ref_names_the_poll() -> Result<(), FixtureError
         port,
     );
     polled(a, R2);
+    a.json(&args, &[], "ok", 0);
+    Ok(())
+}
+
+/// A commit on primary that was never pushed: the blocked prepare names the
+/// poll and then `repo sync`. The poll pushes nothing, so the prepare stays
+/// blocked until the sync publishes primary, and is then ready.
+fn c5_polling_an_unpushed_primary_commit_names_poll_then_sync() -> Result<(), FixtureError> {
+    let p = CliPair::new()?;
+    let port = p.server.address().port();
+    let a = &p.a;
+    save(a, R1, "Saved in clone A.\n");
+    let local = remote_world::advance(&a.repo()?, PRIMARY, "unpushed.txt")?;
+    let args = [
+        "ticket",
+        "close",
+        "--repo",
+        a.root(),
+        "--id",
+        ITEM,
+        "--prepare",
+    ];
+    let blocked = a.json(&args, &[], "recovery_required", 3);
+    assert_eq!(
+        blocked["data"]["blockers"],
+        serde_json::json!(["primary_ahead_of_remote"])
+    );
+    let out = run(&a.env, &args, &[]);
+    assert_eq!(out.status, 3);
+    let text = stderr(&out);
+    let root = a.root.canonicalize().unwrap();
+    let poll = format!(
+        "next: manyhands-cli poll once --repo '{}' --request-id <new-request-id>\n",
+        root.display()
+    );
+    let sync = format!(
+        "next: manyhands-cli repo sync --repo '{}' --request-id <new-request-id>\n",
+        root.display()
+    );
+    assert!(text.contains(&format!("{poll}{sync}")), "{text}");
+    text_golden(
+        "ticket_close_prepare_primary_ahead_text",
+        &out,
+        &a.root,
+        port,
+    );
+    polled(a, R2);
+    assert_ne!(p.served(PRIMARY)?, Some(local), "a poll pushes nothing");
+    a.json(&args, &[], "recovery_required", 3);
+    a.json(
+        &["repo", "sync", "--repo", a.root(), "--request-id", R3],
+        &[],
+        "ok",
+        0,
+    );
+    assert_eq!(p.served(PRIMARY)?, Some(local));
     a.json(&args, &[], "ok", 0);
     Ok(())
 }

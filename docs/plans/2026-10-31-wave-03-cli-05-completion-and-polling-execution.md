@@ -1724,7 +1724,8 @@ and items 1 onwards were not begun.
 ### The rulings on item 0, and the round
 
 The controller's rulings: owner decision 33, "Refuse, name the holder", and decision 32's "published" test
-from stored push evidence, not the tracking ref.
+from stored push evidence, not the tracking ref. Decision 32 was then withdrawn ("Decision 32 withdrawn",
+below).
 
 **Decision 33.** `LifecycleBinding::preview` (the prepare) first reads the item's unfinished parent through a
 new `ParentRecord::supersedable` and `promotion::unfinished_holder`, and `LifecycleVerb::holder`. A parent a
@@ -1753,7 +1754,7 @@ failing with the check removed:
 All 419 other `c5_` cases of `mutation_remote` passed against decision 33's binary before the busy row's fix
 (`c5_` 420 cases, run detached, 1 failed, the busy row, since passing).
 
-**Decision 32: stopped for a ruling. Nothing of it was changed.** The ruling's row "a never-pushed context's
+**Decision 32: nothing of it was changed, and it is withdrawn (below).** The ruling's row "a never-pushed context's
 preview has `remote_branch: false` ... and the run deletes nothing remote" answers otherwise:
 
 - the run publishes a never-pushed context itself. Its context child (`runs_context_child`,
@@ -1796,7 +1797,7 @@ preview has `remote_branch: false` ... and the run deletes nothing remote" answe
    `write: not_requested` on the policy verbs.
 8. The repair note names `{"observation": "..."}` for `sync-local`, and the save note what `ticket save` and
    `document save` take.
-9. The Cycle's decisions are in number order, with 32 (stopped) and 33 added.
+9. The Cycle's decisions are in number order, with 32 (withdrawn) and 33 added.
 
 **S2.** Neither comment publication (`synchronize_comment_receipt`) nor republish (`republish_reserved`) holds
 the repository lease when it reaches the advance; read in the source, and recorded in the design.
@@ -1859,3 +1860,41 @@ opened without the owner's go-ahead.
   the table across the branch's full diff.
 - Each remaining task's Verify keeps its filters, and adds the fast tier and its tier rows at checkpoints.
 - The full `cargo test` and native CI run after merge.
+
+### The scoped re-review of `79f08d10` (controller's rulings)
+
+1. **`poll once` alone only for `primary_missing`.** For `primary_ahead_of_remote` primary may hold work never
+   published, which a poll doesn't push: the way out is `poll once`, then `repo sync`, then a new prepare,
+   with a note that says primary holds commits the remote's primary lacks as last read. `primary_missing` keeps
+   the poll alone, with a note that the repository has no record of the remote's primary. Rows: the bin row
+   `a_tracking_ref_behind_or_missing_names_the_poll`, rewritten first and seen failing; and
+   `c5_polling_an_unpushed_primary_commit_names_poll_then_sync`, a real unpushed local commit: the prepare
+   names both lines (golden `ticket_close_prepare_primary_ahead_text`), a poll pushes nothing and the prepare
+   stays blocked, `repo sync` publishes primary, and the prepare is `ok`. The missing-ref golden's note changed.
+2. No stale "stopped for a ruling" text remains for decision 32: the ledger's passages say it is withdrawn,
+   and ticket comment `01M6F6D8DRGHFC8HJJSC7R5JHX` corrects comment `01M6F50Y…`, which stays as written.
+3. `HELD_NOTE`: "prepare again once it has finished, or has stopped on a cleanup a new request can replace."
+   The design's Known Limit says a new prepare is held after a generation raise over a retained child, and
+   the request it names loops on `recovery_required`.
+4. `resolve_way_on`'s original-request branch replaces `next action` again (`replaces_next_action: true`):
+   the request line is the way on. `context_resolve_local_after_partial_text` is back as it was.
+5. `document_promote_noop_text` is `document_promote_already_contained_text`.
+6. `tracking_split_endpoints` asserts that a tracking ref exists before the push.
+7. `promotion::unfinished_holder` reads through `read_session`, so a held registry answers as a read does,
+   `busy`, and not `recovery_required`; `unfinished_record` takes a `Connection`. No row: the prepare's
+   observation reads the registry first and meets the same contention, so no seam reaches the holder's read
+   alone.
+8. `offering_abandon` can't add `operation.abandon` to a held prepare. It offers one only where the answer is
+   `recovery_required` or `external_change` and offers `repo.inspect`, or where the envelope names its own
+   operation and request. A held prepare offers `request.retry` or `operation.resume` alone and names neither,
+   so it returns the envelope unchanged. No change.
+
+**Verified.** `--test cli` 455 (after the two goldens the rulings change, the held note and the partial
+resolution's text, were updated and read); `--bin manyhands-cli` 300; `--lib promotion` 205;
+`mutation_remote -- c5_cancel_` 99, `-- c5_resume` 58, `-- c5_lifecycle` 152 SSH cases;
+`c5_polling_an_unpushed_primary_commit_names_poll_then_sync` and `_a_missing_tracking_ref_names_the_poll` 1
+each; `fmt --check` and whole-tree clippy `-D warnings` ok. The fast tier, verbatim: `--lib` 1346 passed and 1
+failed, `closure::checkpoint::tests::changed_identity_at_the_hook_is_external_change`, whose two records print
+the same and differ in a field `Debug` leaves out. It passes alone, three runs of three, and touches no code
+this round changed. It passed in the gate's `--lib` above, so it is recorded as a timing flake, not fixed.
+Every other target of the tier is part of the `--test cli` run and the gate's own counts above.

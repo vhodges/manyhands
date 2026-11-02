@@ -563,16 +563,18 @@ fn other_blockers_are_named_with_no_repair_lines() {
     assert!(!text.contains("context observe-local"), "{text}");
 }
 
-/// Primary's tracking ref behind or missing, with or without a missing
-/// context, and nothing else: the poll that reads it, then a new prepare.
+/// Primary's tracking ref missing, with or without a missing context, and
+/// nothing else: the poll that reads it, then a new prepare. Primary ahead of
+/// it: the poll, then `repo sync`, which publishes primary if it is still
+/// ahead, then a new prepare.
 #[test]
 fn a_tracking_ref_behind_or_missing_names_the_poll() {
     use LifecycleBlocker::{ContextMissing, PrimaryAheadOfRemote, PrimaryMissing};
-    for blockers in [
-        vec![PrimaryAheadOfRemote],
-        vec![PrimaryMissing],
-        vec![ContextMissing, PrimaryMissing],
-        vec![ContextMissing, PrimaryAheadOfRemote],
+    for (blockers, sync) in [
+        (vec![PrimaryAheadOfRemote], true),
+        (vec![PrimaryMissing], false),
+        (vec![ContextMissing, PrimaryMissing], false),
+        (vec![ContextMissing, PrimaryAheadOfRemote], true),
     ] {
         let out = prepare(&blocked(
             "ticket close",
@@ -582,15 +584,27 @@ fn a_tracking_ref_behind_or_missing_names_the_poll() {
         ));
         assert_eq!(out.status, 3);
         let names: Vec<&str> = blockers.iter().map(|blocker| blocker.as_str()).collect();
+        let (lines, note) = if sync {
+            (
+                format!(
+                    "next: manyhands-cli poll once --repo '{ROOT}' --request-id <new-request-id>\n\
+                     next: manyhands-cli repo sync --repo '{ROOT}' --request-id <new-request-id>\n"
+                ),
+                "primary holds commits the remote's primary, as this repository last read it, lacks: a poll reads the remote again, and if primary is still ahead, repo sync publishes it; each <new-request-id> is a placeholder for a request of its own. Then prepare again.",
+            )
+        } else {
+            (
+                format!(
+                    "next: manyhands-cli poll once --repo '{ROOT}' --request-id <new-request-id>\n"
+                ),
+                "this repository has no record of the remote's primary, and a poll reads it; <new-request-id> is a placeholder to fill in. Then prepare again.",
+            )
+        };
         assert_eq!(
             stderr(&out),
             format!(
                 "error: Recovery is required before this can continue.\ncode: recovery_required\n\
-                 Blockers: {}\n\
-                 next: manyhands-cli poll once --repo '{ROOT}' --request-id <new-request-id>\n\
-                 next: repo.inspect root={ROOT}\n\
-                 note: this repository's record of the remote's primary is behind or missing, and a poll reads it; \
-                 <new-request-id> is a placeholder to fill in. Then prepare again.\n",
+                 Blockers: {}\n{lines}next: repo.inspect root={ROOT}\nnote: {note}\n",
                 names.join(", ")
             )
         );
@@ -626,7 +640,7 @@ fn a_held_prepare_names_the_request_or_the_resume() {
         format!(
             "error: Recovery is required before this can continue.\ncode: recovery_required\n\
              next: manyhands-cli ticket close --repo '{ROOT}' --id {ITEM} --request-id {REQUEST}\n\
-             note: an unfinished request holds this item; send it again to finish it, and prepare again only once it has.\n"
+             note: an unfinished request holds this item; send it again to finish it, and prepare again once it has finished, or has stopped on a cleanup a new request can replace.\n"
         )
     );
     let resume = RecoveryAction::for_operation(RecoveryActionKind::OperationResume, OPERATION, []);

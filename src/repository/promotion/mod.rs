@@ -441,14 +441,30 @@ where
 
 /// The operation of the item's unfinished parent record of the lifecycle `R`
 /// is the record of, when a new request could not supersede it (decision 33).
+/// It is a read: a registry another call holds answers as reads do, `busy`.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
 pub(super) fn unfinished_holder<R: lifecycle_record::ParentRecord>(
     service: &RepositoryService,
     root: &Path,
     item: &ItemId,
-) -> Result<Option<OperationId>, RepositoryError> {
-    crate::repository::remote::state::with_transaction(service, root, |tx, repository_id| {
+) -> Result<Option<OperationId>, crate::repository::ReadError> {
+    use rusqlite::OptionalExtension;
+    let operation = crate::repository::RepositoryOperation::Read;
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+    let key = crate::repository::registry_root_key(&root, operation)?.to_owned();
+    service.read_session(operation, |db| {
+        let Some(repository_id) = db
+            .query_row(
+                "SELECT id FROM repositories WHERE root_path=?1",
+                [&key],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+        else {
+            return Ok(None);
+        };
         Ok(
-            lifecycle_record::unfinished_record::<R>(tx, repository_id, item)?
+            lifecycle_record::unfinished_record::<R>(db, repository_id, item)?
                 .filter(|parent| !parent.supersedable())
                 .map(|parent| parent.operation_id()),
         )
