@@ -38,6 +38,7 @@ use manyhands::{
     results::ResultCode,
 };
 
+pub(crate) mod comments;
 mod create;
 mod flush;
 mod restore;
