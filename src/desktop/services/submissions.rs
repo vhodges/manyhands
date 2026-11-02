@@ -30,6 +30,22 @@ pub(crate) struct Submission {
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
     pub draft: Option<DraftId>,
     pub state: SubmissionState,
+    /// The answer of the last attempt that finished, kept while a re-send
+    /// of the same request (a retry, a Give up, a submit again) is
+    /// posting: a re-send removed before it ran brings it back, so the
+    /// post is never forgotten once an attempt answered (P2, P7, P15).
+    previous: Option<SubmissionState>,
+}
+
+impl Submission {
+    /// Marks the post posting again under the same request, keeping the
+    /// last finished answer.
+    fn resend(&mut self) {
+        let previous = std::mem::replace(&mut self.state, SubmissionState::Posting);
+        if matches!(previous, SubmissionState::Finished { .. }) {
+            self.previous = Some(previous);
+        }
+    }
 }
 
 /// Where a post stands.
@@ -87,34 +103,57 @@ impl Submissions {
         let request = self
             .worker
             .submit_with_request_id(intent, Lane::User, request_id);
+        // The same comment ID is the same request (R-16): an answer it
+        // already had is kept until this one lands.
+        let previous = self
+            .posts
+            .remove(&key)
+            .map(|submission| submission.state)
+            .filter(|state| matches!(state, SubmissionState::Finished { .. }));
         self.posts.insert(
             key,
             Submission {
                 request,
                 draft,
                 state: SubmissionState::Posting,
+                previous,
             },
         );
         Some(request)
     }
 
-    /// Sends the post of `comment_id` again as the same request. False,
-    /// and nothing sent, when this session has no such post, or the worker
-    /// leaves the request alone (queued or running, its Give up among
-    /// them, or quitting).
+    /// Sends the post of `comment_id` in `repository` again as the same
+    /// request. False, and nothing sent, when this session has no such
+    /// post, or the worker leaves the request alone (queued or running,
+    /// its Give up among them, or quitting).
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
-    pub(crate) fn retry(&mut self, comment_id: &ItemId) -> bool {
-        let Some(submission) = self
-            .posts
-            .iter_mut()
-            .find_map(|((_, id), submission)| (id == comment_id).then_some(submission))
-        else {
+    pub(crate) fn retry(&mut self, repository: &Path, comment_id: &ItemId) -> bool {
+        let key = (repository.to_owned(), comment_id.clone());
+        let Some(submission) = self.posts.get_mut(&key) else {
             return false;
         };
         if !self.worker.retry(submission.request, None) {
             return false;
         }
-        submission.state = SubmissionState::Posting;
+        submission.resend();
+        true
+    }
+
+    /// Gives up sharing the post of `comment_id` in `repository` (decision
+    /// 8): the worker's Give up of its request. The post is posting while
+    /// it runs, so a Submit of the comment is refused (P10). False, and
+    /// nothing sent, when this session has no such post or the worker
+    /// refuses it (queued or running, or quitting).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
+    pub(crate) fn give_up(&mut self, repository: &Path, comment_id: &ItemId) -> bool {
+        let key = (repository.to_owned(), comment_id.clone());
+        let Some(submission) = self.posts.get_mut(&key) else {
+            return false;
+        };
+        if !self.worker.give_up(submission.request) {
+            return false;
+        }
+        submission.resend();
         true
     }
 
@@ -161,16 +200,31 @@ impl Submissions {
             return false;
         };
         submission.state = SubmissionState::Finished { envelope, record };
+        submission.previous = None;
         true
     }
 
-    /// The worker request `id` was removed from the queue, or not sent: it
-    /// never ran, so its post is forgotten and the comment may be posted
-    /// again. True when a post of this session was its request.
+    /// The worker request `id` was removed from the queue, or not sent:
+    /// that attempt never ran. A post whose earlier attempt answered goes
+    /// back to that answer; one that never answered is forgotten, and the
+    /// comment may be posted again. True when a post of this session was
+    /// its request.
     pub(crate) fn ended(&mut self, id: DesktopRequestId) -> bool {
-        let before = self.posts.len();
-        self.posts.retain(|_, submission| submission.request != id);
-        self.posts.len() != before
+        let Some((key, submission)) = self
+            .posts
+            .iter_mut()
+            .find(|(_, submission)| submission.request == id)
+        else {
+            return false;
+        };
+        match submission.previous.take() {
+            Some(previous) => submission.state = previous,
+            None => {
+                let key = key.clone();
+                self.posts.remove(&key);
+            }
+        }
+        true
     }
 
     fn by_request(&mut self, id: DesktopRequestId) -> Option<&mut Submission> {

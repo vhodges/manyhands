@@ -101,8 +101,10 @@ pub(crate) enum RecordState {
     /// The request is still open: the same request takes it up again.
     Accepted,
     /// Its result is stored, and every retry replays it. A request with
-    /// no record, refused before it was accepted, stands here too:
-    /// nothing of it is open.
+    /// no record (`show_request` answered `request_not_found`), refused
+    /// before it was accepted, stands here too: nothing of it is open. So
+    /// this state never tells "no record" apart: P16's check that no
+    /// record exists (Task 13) calls `show_request` itself.
     Finished,
     /// `show_request` failed: where the record stands is not known (P17).
     Unknown,
@@ -961,7 +963,9 @@ fn record_state(service: &RepositoryService, request_id: RequestId) -> RecordSta
 /// What a Give up asks of the record before the same request is sent
 /// again (decision 8). An accepted record is asked to stop through
 /// `cancel_request`, and the re-sent request ends it at its first safe
-/// point, or answers otherwise (fact 14d). A finished one is not touched:
+/// point, or answers otherwise (fact 14d); when that ask fails, the
+/// re-send's token is cancelled too, so a Give up never completes the
+/// share. A finished one is not touched:
 /// the re-send, with its token cancelled, only replays its stored answer,
 /// and one with no record stops before it could be accepted. One whose
 /// record cannot be read is asked to stop and re-sent with its token
@@ -975,7 +979,9 @@ fn give_up_first(
 ) {
     let gave_up = match record_state(service, request_id) {
         RecordState::Accepted => {
-            let _ = service.cancel_request(request_id);
+            if service.cancel_request(request_id).code != ResultCode::Ok {
+                cancel.cancel();
+            }
             GaveUp::Resent
         }
         RecordState::Finished => {

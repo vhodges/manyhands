@@ -21,8 +21,8 @@ use super::{SubmissionState, Submissions};
 use crate::desktop::{
     services::{
         JobKind, Services,
-        requests::{CommentBody, DesktopRequest, DesktopRequestId, Intent},
-        worker::{RecordState, WorkerEvent, WorkerHandle},
+        requests::{CommentBody, DesktopRequest, DesktopRequestId, Intent, Lane},
+        worker::{CancelResult, RecordState, WorkerEvent, WorkerHandle},
     },
     test_support::{delaying::DelayingBackend, fixtures::Fixture},
     view::harness::wait_until,
@@ -168,7 +168,13 @@ fn retry_keeps_the_request_id() {
         .unwrap();
     harness.until_end_of(id);
 
-    assert!(harness.submissions.retry(&item_id(COMMENT)));
+    assert!(harness.submissions.retry(&harness.root, &item_id(COMMENT)));
+    // Another repository's comment of the same ID is not this post.
+    assert!(
+        !harness
+            .submissions
+            .retry(Path::new("/elsewhere"), &item_id(COMMENT))
+    );
     assert!(matches!(
         harness.state(COMMENT),
         Some(SubmissionState::Posting)
@@ -277,4 +283,108 @@ async fn a_finished_event_with_no_tab_open_updates_the_submission(cx: &mut TestA
             .is_some_and(|submission| matches!(submission.state, SubmissionState::Finished { .. }))
     })
     .await;
+}
+
+/// A retry removed before it ran (Stop while queued, or quitting) brings
+/// back the answer the post already had: the post is not forgotten, so no
+/// second comment is offered (P2, P7, P15).
+#[test]
+fn a_removed_retry_restores_the_previous_finished_state() {
+    let mut harness = Harness::new();
+    let id = harness
+        .submissions
+        .submit(comment(&harness.root, COMMENT), None)
+        .unwrap();
+    harness.until_end_of(id);
+
+    let held = harness.backend.hold_job(JobKind::IndexRefresh);
+    let worker = harness.submissions.worker.clone();
+    worker.submit(
+        Intent::IndexRefresh {
+            root: harness.root.clone(),
+        },
+        Lane::User,
+        None,
+        None,
+    );
+    held.wait_reached();
+    assert!(harness.submissions.retry(&harness.root, &item_id(COMMENT)));
+    assert!(matches!(
+        harness.state(COMMENT),
+        Some(SubmissionState::Posting)
+    ));
+    assert_eq!(worker.cancel(id), CancelResult::Removed);
+    held.release();
+    // The drain hands the registry the removal.
+    assert!(harness.submissions.ended(id));
+    let Some(SubmissionState::Finished { envelope, record }) = harness.state(COMMENT) else {
+        panic!("the earlier answer is back");
+    };
+    assert_eq!(envelope.request_id.as_deref(), Some(COMMENT));
+    assert_eq!(*record, RecordState::Finished);
+
+    // A post that never answered is forgotten.
+    let held = harness.backend.hold_job(JobKind::IndexRefresh);
+    worker.submit(
+        Intent::IndexRefresh {
+            root: harness.root.clone(),
+        },
+        Lane::User,
+        None,
+        None,
+    );
+    held.wait_reached();
+    let other = harness
+        .submissions
+        .submit(comment(&harness.root, OTHER), None)
+        .unwrap();
+    assert_eq!(worker.cancel(other), CancelResult::Removed);
+    held.release();
+    assert!(harness.submissions.ended(other));
+    assert!(harness.state(OTHER).is_none());
+}
+
+/// Give up of a post runs as posting: a Submit of the comment meanwhile is
+/// refused (P10), and the post is posting again until it answers.
+#[test]
+fn a_second_submit_while_giving_up_is_refused() {
+    let mut harness = Harness::new();
+    let id = harness
+        .submissions
+        .submit(comment(&harness.root, COMMENT), None)
+        .unwrap();
+    harness.until_end_of(id);
+
+    let held = harness.backend.hold_job(JobKind::Comment);
+    assert!(
+        harness
+            .submissions
+            .give_up(&harness.root, &item_id(COMMENT))
+    );
+    held.wait_reached();
+    assert!(matches!(
+        harness.state(COMMENT),
+        Some(SubmissionState::Posting)
+    ));
+    assert!(
+        harness
+            .submissions
+            .submit(comment(&harness.root, COMMENT), None)
+            .is_none()
+    );
+    // A second Give up, or a retry, is refused while it runs.
+    assert!(
+        !harness
+            .submissions
+            .give_up(&harness.root, &item_id(COMMENT))
+    );
+    assert!(!harness.submissions.retry(&harness.root, &item_id(COMMENT)));
+    held.release();
+    let (queued, code) = harness.until_end_of(id);
+    assert_eq!(queued.len(), 1);
+    assert_eq!(code, ResultCode::Ok);
+    assert!(matches!(
+        harness.state(COMMENT),
+        Some(SubmissionState::Finished { .. })
+    ));
 }

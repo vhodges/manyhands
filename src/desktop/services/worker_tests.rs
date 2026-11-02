@@ -1166,6 +1166,10 @@ fn a_finished_attempt_carries_its_record_state() {
     assert_eq!(harness.worker.record_state(refresh), None);
 
     let sync = harness.accepted_sync();
+    assert_eq!(
+        harness.worker.record_state(sync),
+        Some(RecordState::Accepted)
+    );
     let request_id = harness.operations.request(sync).unwrap().request_id;
     let shown = harness.fixture.service().show_request(request_id);
     assert_eq!(
@@ -1209,4 +1213,31 @@ fn submit_with_request_id_uses_the_given_id() {
     assert!(harness.worker.retry(id, None));
     let seen = harness.until_end_of(id);
     assert_eq!(finished(&seen, id).request_id.as_deref(), Some(COMMENT));
+}
+
+/// A Give up that cannot read the record asks it to stop and re-sends the
+/// same request with its token cancelled, so it cannot complete the share.
+#[test]
+fn giving_up_an_unreadable_record_resends_with_its_token_cancelled() {
+    let mut harness = Harness::new();
+    let id = harness.accepted_sync();
+    let held = harness.backend.hold_job(JobKind::SynchronizeRepo);
+    let returned = harness.backend.hold_job_return(JobKind::SynchronizeRepo);
+    assert!(harness.worker.give_up(id));
+    held.wait_reached();
+    std::fs::write(
+        harness.fixture.data_dir().join(REGISTRY_FILE),
+        b"not a database",
+    )
+    .unwrap();
+    held.release();
+    returned.wait_reached();
+    let running = harness.worker.running_job().expect("the re-send runs");
+    assert_eq!(running.id, id);
+    assert!(running.cancelled);
+    returned.release();
+    let seen = harness.until_end_of(id);
+    assert_ne!(finished(&seen, id).code, ResultCode::Ok);
+    assert_eq!(harness.worker.gave_up(id), Some(GaveUp::Resent));
+    assert_eq!(harness.worker.record_state(id), Some(RecordState::Unknown));
 }
