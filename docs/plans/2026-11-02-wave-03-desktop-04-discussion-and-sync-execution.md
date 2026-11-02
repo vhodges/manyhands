@@ -70,4 +70,10 @@ Not started.
 
 ## Decisions during execution
 
-None yet.
+- 2026-11-02, Task 0: decisions 17 (separate sync job kinds, E-12) and 18
+  ("Nothing to share yet" copy).
+- 2026-11-02, Task 0: main moved to `0dfd5a68` (`AGENTS.md` tiered test
+  gate); merged as `38b3c18f`, no conflict, no code change. The running
+  Task 0 full suite is allowed to finish (owner). From then on the full
+  suite is replaced by `AGENTS.md`'s fast tier; D4 touches only
+  `src/desktop/`, so no SSH-tier target applies. Plan Task 16 updated.

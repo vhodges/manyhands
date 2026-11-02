@@ -85,7 +85,9 @@ worker).
   (written `… <filter>` below). One filter per run; each run must report
   more than zero tests.
 - Targeted tests between tasks; the whole desktop bin suite (no filter) at
-  each checkpoint and lane merge; the full suite in Tasks 0 and 16.
+  each checkpoint and lane merge; the full suite in Task 0; in Task 16,
+  `AGENTS.md`'s fast tier (owner, 2026-11-02: D4 changes only
+  `src/desktop/`, so no SSH-tier target applies).
 
 **Each task's last Verify lines.**
 ```sh
@@ -527,7 +529,7 @@ devenv shell -- cargo fmt --check
 devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
 devenv shell -- cargo check --locked --features desktop
 devenv shell -- cargo clippy --locked --features desktop --bin manyhands -- -D warnings
-devenv shell -- cargo test --all-features --locked
+# AGENTS.md fast tier, exactly as main's AGENTS.md lists it at Task 16
 devenv shell -- sh scripts/check-cli-no-gpui.sh
 devenv shell -- cargo run --locked --bin manyhands-cli
 devenv shell -- cargo run --locked --features desktop --bin manyhands
