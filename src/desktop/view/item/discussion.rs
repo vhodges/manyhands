@@ -11,8 +11,8 @@
 //! - **Comment rows.** An avatar coloured from the author (R-56), the name
 //!   without its email, the time in local time, and the body in a read
 //!   editor (R-63). A file that is no comment shows its path and reason.
-//! - **The end.** "No comments yet" when there are none, then Comment,
-//!   not available yet.
+//! - **The end.** "No comments yet" when there are none, then the posts
+//!   being sent (`posting`) and the composers (`composer`).
 //!
 //! Each body's `ReadOnly` is made when the comment list lands and kept by
 //! the comment's ID across reloads: a changed body is loaded into it in
@@ -44,17 +44,11 @@ use gpui_kit::{
 use manyhands::repository::CommentListDto;
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
-use super::{
-    BACK_TO_TOP, ItemPane,
-    header::{NoteAt, Weight, later_action},
-    text,
-    tokens::item_colors,
-};
+use super::{BACK_TO_TOP, ItemPane, text, tokens::item_colors};
 use crate::desktop::{
     assets::icon_path,
     model::{
         discussion::{comment_time, threads},
-        item::COMMENT,
         links::LinkTarget,
         list_state::ListState,
     },
@@ -74,7 +68,7 @@ pub(crate) const COMMENTS: &str = "Comments";
 const COLUMN: f32 = 664.;
 /// The section's padding: top, sides and bottom.
 const PADDING: (f32, f32, f32) = (28., 48., 48.);
-/// Between the header row, the cards and Comment.
+/// Between the header row, the cards and the composers.
 const GAP: f32 = 18.;
 const HEADING_SIZE: f32 = 16.;
 const SMALL_SIZE: f32 = 12.;
@@ -212,10 +206,9 @@ impl ItemPane {
         }
     }
 
-    /// The discussion, ending with Comment, the `later`th later action.
+    /// The discussion, ending with the posts being sent and the composers.
     pub(super) fn discussion_section(
         &self,
-        later: usize,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<impl IntoElement + use<>> {
@@ -263,14 +256,8 @@ impl ItemPane {
                         .child(status)
                         .children(cards)
                         .children(empty)
-                        .child(later_action(
-                            later,
-                            COMMENT,
-                            None,
-                            Weight::Plain,
-                            NoteAt::BelowOnPage,
-                            cx,
-                        )),
+                        .children(self.posting.render(cx))
+                        .children(self.composers.render(cx)),
                 ),
         )
     }

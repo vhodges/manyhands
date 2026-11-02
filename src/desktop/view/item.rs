@@ -35,9 +35,13 @@
 //! document's Adopt…, opens a plain text area over the whole file in the
 //! page's place of its text; Preview prepares the repair in the one
 //! confirmation dialog; a repair made, the tab follows the item by its ID.
+//!
+//! D4's slots: `share` the header's Share, `composer` the discussion's
+//! comment composers and `posting` the comments being posted.
 
 mod banners;
 mod chips;
+mod composer;
 mod details;
 mod discussion;
 mod draft;
@@ -46,9 +50,11 @@ mod edit;
 mod header;
 mod page;
 mod pill;
+mod posting;
 mod reads;
 mod relations_edit;
 mod repair;
+mod share;
 mod sheet;
 mod source;
 mod status;
@@ -64,7 +70,7 @@ use gpui_kit::{
 
 use super::{relationships::RowKey, scroll::ContentScroll};
 use crate::desktop::{
-    keys::{Edit, ITEM_TAB_CONTEXT, Save, ToggleRich},
+    keys::{Edit, ITEM_TAB_CONTEXT, Save, ShareItem, ToggleRich},
     model::{
         edit::Phase, item::ItemView, names::TicketName, navigation::OpenTarget, stamp::ViewScope,
     },
@@ -141,6 +147,13 @@ pub(crate) struct ItemPane {
     /// The comments' read editors, the discussion's heading and the
     /// header's Comments {n}.
     discussion: discussion::Discussion,
+    /// The header's Share and what it last sent (`share`).
+    share: share::ShareState,
+    /// The discussion's new-comment and reply composers (`composer`).
+    composers: composer::Composers,
+    /// The comments being posted, drawn pending in their threads
+    /// (`posting`).
+    posting: posting::Posting,
     /// Set by the workspace when it opens the tab.
     region_end: Option<RegionEnd>,
     draft: draft::TabDraft,
@@ -218,6 +231,9 @@ impl ItemPane {
             page: page::Page::new(cx),
             back_to_top: cx.focus_handle().tab_stop(true),
             discussion: discussion::Discussion::new(cx),
+            share: share::ShareState::default(),
+            composers: composer::Composers::default(),
+            posting: posting::Posting::default(),
             region_end: None,
             draft: draft::TabDraft::default(),
             link_note: None,
@@ -336,7 +352,7 @@ impl Render for ItemPane {
         self.sync_discussion(window, cx);
         self.sync_changed(cx);
         let item = self.model.item().rows().cloned();
-        let (header, later) = self.header(item.as_ref(), window, cx);
+        let header = self.header(item.as_ref(), window, cx);
         // An item tab's details are in its sheet. A file read by its path
         // has no sheet, so its page keeps D1's; a nonconforming file shows
         // its problems in "Needs fixing".
@@ -391,7 +407,7 @@ impl Render for ItemPane {
         // The repair view's text takes every key typed into it, `e` too.
         let viewing = !inspect && self.edit.phase() == Phase::Viewing && self.repair.is_none();
         let page = self.page.render(content, &self.scroll, viewing, window, cx);
-        let discussion = self.discussion_section(later, window, cx);
+        let discussion = self.discussion_section(window, cx);
         let end = self
             .region_end
             .clone()
@@ -417,6 +433,11 @@ impl Render for ItemPane {
             }))
             .on_action(cx.listener(|pane, _: &Save, window, cx| {
                 if !pane.save_requested(window, cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|pane, _: &ShareItem, _, cx| {
+                if !pane.share.share_requested() {
                     cx.propagate();
                 }
             }))

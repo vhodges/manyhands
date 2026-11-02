@@ -26,11 +26,7 @@ use super::{
     discussion::{NO_COMMENTS, comments_phrase, shown_time},
 };
 use crate::desktop::{
-    model::{
-        editor_text::load,
-        item::{COMMENT, LATER_NOTE},
-        navigation::OpenTarget,
-    },
+    model::{editor_text::load, navigation::OpenTarget},
     test_support::fixtures::{Fixture, item_id, ticket_path, ticket_source},
     view::{
         editor::read_only::ReadOnly,
@@ -504,38 +500,6 @@ fn no_comments_says_so_and_hides_the_floating_button(cx: &mut TestAppContext) {
     shell.keys("secondary-3 end", cx);
     assert!(offset(&shell, cx) < px(0.));
     assert!(!shell.present("discussion-jump", cx));
-}
-
-/// The discussion ends with Comment, disabled, with "Available in a later
-/// release" written below it. Pressing it does nothing.
-#[gpui_kit::test]
-fn comment_is_disabled_with_its_note(cx: &mut TestAppContext) {
-    let (shell, _root) = shell(1400., cx, |fixture, root| {
-        fixture.commit_ticket(root, TICKET, "Discussed", "");
-        commit_comment(fixture, root, A, None, 1, Some(ADA), "First.\n");
-    });
-    // After the header's Share and Close ticket….
-    let comment = 2usize;
-    assert_eq!(
-        shell.label(("later-action", comment), cx).as_deref(),
-        Some(COMMENT)
-    );
-    assert!(inside(&shell, ("later-action", comment), "discussion", cx));
-    assert_eq!(
-        shell.label(("later-note", comment), cx).as_deref(),
-        Some(LATER_NOTE)
-    );
-    assert!(inside(&shell, ("later-note", comment), "discussion", cx));
-    assert!(shell.inert_button(("later-button", comment), cx));
-    assert!(!shell.present(("later-action", comment + 1), cx));
-
-    // Below the fold: brought into view, then pressed.
-    shell.keys("secondary-3 end", cx);
-    let before = shell.rows("comment-author", cx);
-    shell.click(("later-button", comment), cx);
-    assert_eq!(shell.rows("comment-author", cx), before);
-    assert!(shell.fixture.draft_store().list().unwrap().is_empty());
-    assert!(comment_view(&shell, A, cx).is_some());
 }
 
 /// R-67 and the Tab order: from the page, Tab reaches Back to top, then

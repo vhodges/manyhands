@@ -452,12 +452,11 @@ fn a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_offered(
     assert!(!present(&shell, "comments-state", cx));
 
     // The header's later actions are shown, and each says it is not
-    // available yet. An Inspect tab has no discussion, so Comment is not
-    // among them, and the header's primary action is the ticket's, Close
+    // available yet. The header's primary action is the ticket's, Close
     // ticket…. Repair is not one of them.
     let later: Vec<&str> = LATER
         .into_iter()
-        .filter(|action| !["Comment", "Approve and merge…"].contains(action))
+        .filter(|action| !["Approve and merge…"].contains(action))
         .collect();
     assert_eq!(shell.rows("later-action", cx), later);
     let notes = shell.rows("later-note", cx);

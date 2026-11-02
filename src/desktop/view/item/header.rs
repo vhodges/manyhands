@@ -8,9 +8,9 @@
 //! pane, and still come first in the tab order (strip, header actions,
 //! chips, page). After the pill, Comments {n} jumps to the discussion
 //! (`discussion`), then Edit while viewing, or Done while editing
-//! (`edit`). Share and the primary action are not available yet (decision
-//! 16): each is disabled, with "Available in a later release" as its
-//! tooltip and its accessible description.
+//! (`edit`), then Share (`share`). The primary action is not available yet
+//! (decision 16): it is disabled, with "Available in a later release" as
+//! its tooltip and its accessible description.
 
 use std::path::Path;
 
@@ -32,7 +32,7 @@ use crate::desktop::{
     assets::icon_path,
     model::{
         edit::Phase,
-        item::{APPROVE_AND_MERGE, CLOSE_TICKET, LATER, LATER_NOTE, SHARE},
+        item::{APPROVE_AND_MERGE, CLOSE_TICKET, LATER, LATER_NOTE},
         navigation::OpenTarget,
         tabs::TabKey,
     },
@@ -93,90 +93,47 @@ pub(crate) fn crumbs(target: &OpenTarget, item: Option<&ItemDto>) -> (Option<Str
     }
 }
 
-/// How a later action's button is drawn: the header's primary action is
-/// the warning (amber) button.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Weight {
-    Plain,
-    Primary,
-}
-
-/// Where a later action shows its note, "Available in a later release",
-/// besides its accessible description: as the button's tooltip in the
-/// header, or written below it, in `page-muted` on the discussion's light
-/// ground.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum NoteAt {
-    Tooltip,
-    BelowOnPage,
-}
-
-/// A later action: `label`, one of `LATER`, disabled, the `ix`th of the
-/// tab's later actions.
+/// A later action: `label`, one of `LATER`, disabled, drawn as the
+/// warning (amber) button, the `ix`th of the tab's later actions, with
+/// "Available in a later release" as its tooltip.
 ///
 /// Its `("later-action", ix)` group carries the role, so assistive tech
 /// reaches the label and the note as its description; the Kit's button
 /// takes no description of its own. The `("later-note", ix)` element holds
 /// the note for the tab's rows of notes.
-pub(super) fn later_action(
-    ix: usize,
-    label: &'static str,
-    icon: Option<&'static str>,
-    weight: Weight,
-    note: NoteAt,
-    cx: &App,
-) -> AnyElement {
+fn later_action(ix: usize, label: &'static str) -> AnyElement {
     debug_assert!(LATER.contains(&label), "{label} is not a later action");
-    let mut button = Button::new(("later-button", ix))
+    let button = Button::new(("later-button", ix))
         .label(label)
         .small()
-        .disabled(true);
-    if let Some(icon) = icon {
-        button = button.icon(Icon::default().path(icon_path(icon)));
-    }
-    if weight == Weight::Primary {
-        button = button.warning();
-    }
-    let action = div()
+        .disabled(true)
+        .warning();
+    div()
         .id(("later-action", ix))
         .test_support()
         .role(Role::Group)
         .aria_label(label)
-        .aria_description(LATER_NOTE);
-    match note {
-        NoteAt::BelowOnPage => v_flex()
-            .gap_1()
-            .child(action.child(button))
-            .child(
-                text(("later-note", ix), LATER_NOTE)
-                    .text_xs()
-                    .text_color(item_colors(cx).page_muted),
-            )
-            .into_any_element(),
-        NoteAt::Tooltip => action
-            .flex_none()
-            .child(
-                div()
-                    .id(("later-note", ix))
-                    .test_support()
-                    .aria_label(LATER_NOTE)
-                    .child(button.tooltip(LATER_NOTE)),
-            )
-            .into_any_element(),
-    }
+        .aria_description(LATER_NOTE)
+        .flex_none()
+        .child(
+            div()
+                .id(("later-note", ix))
+                .test_support()
+                .aria_label(LATER_NOTE)
+                .child(button.tooltip(LATER_NOTE)),
+        )
+        .into_any_element()
 }
 
-/// The header's later actions for an item of `kind`: Share, and the
-/// primary action of its kind, when the kind is known. Edit is available
-/// (E-6).
+/// The header's later actions for an item of `kind`: the primary action
+/// of its kind, when the kind is known. Edit is available (E-6), and Share
+/// is the share slot's (`share`).
 pub(crate) fn header_later(kind: Option<ItemDtoKind>) -> Vec<&'static str> {
-    let mut actions = vec![SHARE];
     match kind {
-        Some(ItemDtoKind::Ticket) => actions.push(CLOSE_TICKET),
-        Some(ItemDtoKind::Document) => actions.push(APPROVE_AND_MERGE),
-        None => {}
+        Some(ItemDtoKind::Ticket) => vec![CLOSE_TICKET],
+        Some(ItemDtoKind::Document) => vec![APPROVE_AND_MERGE],
+        None => Vec::new(),
     }
-    actions
 }
 
 impl ItemPane {
@@ -189,8 +146,7 @@ impl ItemPane {
         }
     }
 
-    /// The header block, and how many later actions it drew: the
-    /// discussion's Comment comes after them. A new item not
+    /// The header block. A new item not
     /// created yet shows its draft's fields as its title, pill, chips and
     /// breadcrumb (`new_item_shown`); its actions and banners are the tab's
     /// own, as with no item read.
@@ -199,7 +155,7 @@ impl ItemPane {
         read: Option<&ItemDto>,
         window: &Window,
         cx: &mut Context<Self>,
-    ) -> (AnyElement, usize) {
+    ) -> AnyElement {
         let colors = item_colors(cx);
         let later = header_later(self.shown_kind(read));
         // What is unsaved is what the strip marks (`unsaved`): edited repair
@@ -226,21 +182,12 @@ impl ItemPane {
             .children(pill)
             .children(self.comments_button(window, cx))
             .children(self.edit_action(read, window, cx))
+            .children(self.share.render(cx))
             .children(
                 later
                     .iter()
                     .enumerate()
-                    .map(|(ix, label)| {
-                        let icon = match *label {
-                            SHARE => Some("cloud-upload"),
-                            _ => None,
-                        };
-                        let weight = match *label {
-                            CLOSE_TICKET | APPROVE_AND_MERGE => Weight::Primary,
-                            _ => Weight::Plain,
-                        };
-                        later_action(ix, label, icon, weight, NoteAt::Tooltip, cx)
-                    })
+                    .map(|(ix, label)| later_action(ix, label))
                     .collect::<Vec<_>>(),
             );
         let title = item.and_then(|item| item.title.clone()).map(|title| {
@@ -289,7 +236,7 @@ impl ItemPane {
         let slot = (!banners.is_empty())
             .then(|| v_flex().id("item-banners").gap(px(6.)).children(banners));
         let (vertical, horizontal) = PADDING;
-        let header = v_flex()
+        v_flex()
             .id("item-header")
             .test_support()
             .flex_none()
@@ -303,8 +250,7 @@ impl ItemPane {
             .child(self.breadcrumb(item, cx))
             .child(row)
             .children(slot)
-            .into_any_element();
-        (header, later.len())
+            .into_any_element()
     }
 
     /// `folder-git-2`, then repository › section › file, at 12 px, with no
