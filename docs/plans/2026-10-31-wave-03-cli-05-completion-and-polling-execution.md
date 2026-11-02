@@ -1839,3 +1839,23 @@ the repository lease when it reaches the advance; read in the source, and record
 
 `origin/main` then moved to `0dfd5a68`, an `AGENTS.md` change only, and was merged (`0b04fd0c`) with no
 conflict; `git merge-tree --write-tree HEAD origin/main` is clean.
+
+### Decision 32 withdrawn, and main's AGENTS.md
+
+**Decision 32.** The owner withdrew it, "Withdraw it, note the gap", on the facts above. Its premise came from
+the controller's reading, not the owner's. Nothing implementing it was ever made, so the design had none to
+remove. The Cycle keeps the entry, marked withdrawn. The design's Known Limits gains the contained context
+whose remote branch has no tracking ref, which keeps that branch. Polls ignore it (decision 28).
+Row: `c5_lifecycle_never_pushed_context_is_published_then_deleted`, both verbs. A never-pushed context's preview
+says `remote_branch: true`, and the run's accepted updates of the context branch on the remote are exactly a
+create, then a delete. **Follow-up candidate:** delete such a branch, guarded by the stored push evidence. Not
+opened without the owner's go-ahead.
+
+**Main's AGENTS.md (`0dfd5a68`, merged as `0b04fd0c`).** The plan is amended, caused by main:
+- Global Constraints' test runs and checkpoint gate are the static gates across the whole tree, `AGENTS.md`'s
+  fast tier verbatim with `--skip repository::local_sync::`, and the SSH tier selected by changed path.
+- Task 15 Step 1 runs no full suite. It runs the static gates, the fast tier and every SSH-harness target, since
+  the branch's diff touches `src/repository/transport/`. The owner confirmed on 2026-11-02 that Task 15 follows
+  the table across the branch's full diff.
+- Each remaining task's Verify keeps its filters, and adds the fast tier and its tier rows at checkpoints.
+- The full `cargo test` and native CI run after merge.

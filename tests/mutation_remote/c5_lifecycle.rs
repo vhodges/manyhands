@@ -21,6 +21,7 @@ use time::OffsetDateTime;
 
 const BOTH: &[ssh_harness::Case] = both_verbs!["c5_lifecycle_";
     "prepare_ready" => prepare_ready,
+    "never_pushed_context_is_published_then_deleted" => never_pushed_context_is_published_then_deleted,
     "prepare_primary_dirty" => prepare_primary_dirty,
     "prepare_mixed_blockers" => prepare_mixed_blockers,
     "prepare_context_missing" => prepare_context_missing,
@@ -3428,5 +3429,43 @@ fn tracking_fenced_at_verification() -> Result<(), FixtureError> {
         "the push landed"
     );
     assert_eq!(tracking_of(&w, TRACKING_MAIN)?, before);
+    Ok(())
+}
+
+/// Decision 32, withdrawn: a context never pushed is published by the run's
+/// context child, and cleanup deletes that branch, so the preview's
+/// `remote_branch: true` is what happens.
+fn never_pushed_context_is_published_then_deleted(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    assert!(
+        fixed(w.bare())?.find_reference(verb.branch()).is_err(),
+        "never pushed"
+    );
+    let preview = prepared(&w.service, verb, &w.root, verb.id());
+    assert!(
+        preview_details(&preview)?.cleanup.remote_branch,
+        "{:?}",
+        preview.data
+    );
+    let before = w.server.receive_updates().len();
+    let done = called(
+        &w.service,
+        FIRST,
+        Some(&confirmation_of(&preview)),
+        verb.mutation(&w.root, verb.id()),
+    );
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    let updates: Vec<_> = w.server.receive_updates()[before..]
+        .iter()
+        .filter(|update| update.accepted && update.reference == verb.branch())
+        .cloned()
+        .collect();
+    assert_eq!(updates.len(), 2, "published, then deleted");
+    assert!(updates[0].old_oid.is_zero() && !updates[0].new_oid.is_zero());
+    assert!(updates[1].new_oid.is_zero());
+    assert!(
+        fixed(w.bare())?.find_reference(verb.branch()).is_err(),
+        "deleted"
+    );
     Ok(())
 }

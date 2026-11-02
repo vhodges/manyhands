@@ -47,11 +47,11 @@ id: "01M69C6SHD04G8PT6D1Y36CDN7"
 - **Test isolation.** Every CLI child goes through `tests/support/cli.rs`, `tests/support/pty.rs` or the SSH harness. Tests never touch developer keys, global Git configuration, the real terminal or real application data.
 - **Pre-existing tests.** Only named edits E-1 to E-22. Any other semantic edit stops for owner review.
 - **Outcome tables.** Each table's test is written first and seen to fail. It is committed together with the code that passes it. A row that answers otherwise stops for a ruling.
-- **Test runs.**
-  - Each task runs only the targets and filters it names. Check that more than zero tests ran. Cargo takes one positional filter per command.
+- **Test runs** (amended 2026-11-02, caused by main: `AGENTS.md` at `0dfd5a68`, merged as `0b04fd0c`).
+  - Each task runs the targets and filters it names. Check that more than zero tests ran. Cargo takes one positional filter per command.
   - A task editing `src/repository/remote/` also runs `--lib remote`, `--lib local_sync` and `--lib integration`, each as its own command.
-  - The full suite runs once, in Task 15, detached. C4's took 3 h 34 min on a loaded machine. Use a 600-second tool timeout for gate commands.
-- **Checkpoint gate.**
+  - No task runs the full suite. The full `cargo test` and native CI run after merge. Use a 600-second tool timeout for gate commands, and run a long tier detached.
+- **Checkpoint gate** (amended 2026-11-02, caused by main). The static gates across the whole tree, then `AGENTS.md`'s fast tier verbatim, then the SSH tier selected by changed path per `AGENTS.md`'s table:
 
   ```sh
   devenv shell -- cargo check --all-features --locked
@@ -61,10 +61,20 @@ id: "01M69C6SHD04G8PT6D1Y36CDN7"
   devenv shell -- cargo clippy --all-targets --locked --features desktop -- -D warnings
   devenv shell -- cargo check --locked --bin manyhands-cli
   devenv shell -- sh scripts/check-cli-no-gpui.sh
-  devenv shell -- cargo test --all-features --locked --lib
-  devenv shell -- cargo test --all-features --locked --bin manyhands-cli --test cli --test read_contract --test mutation_contract --test mutation_replay --test mutation_confirmation --test mutation_bridges
-  devenv shell -- cargo test --all-features --locked --test read_status --test read_relationships --test repository_enablement
-  devenv shell -- cargo test --all-features --locked --test mutation_remote --test document_promotion --test ticket_closure --test remote_polling --test remote_synchronization --test cli_remote
+  devenv shell -- cargo test --all-features --locked --lib --bins \
+    --test canonical_foundation --test cli --test discovery_rebuild \
+    --test drafts --test journal_rejection --test key_material \
+    --test key_storage --test local_authoring --test mutation_bridges \
+    --test mutation_confirmation --test mutation_contract \
+    --test mutation_relationships --test mutation_replay \
+    --test read_boundary --test read_characterization --test read_comments \
+    --test read_contract --test read_credentials --test read_items \
+    --test read_relationships --test read_repository --test read_status \
+    --test recovery_foundation_gate --test remote_reservation \
+    --test repository_enablement --test session_credentials \
+    --test shared_key_registry -- --skip repository::local_sync::
+  # Then each SSH-tier target the changed paths select, per AGENTS.md's table,
+  # as `devenv shell -- cargo test --all-features --locked --test <target>`.
   ```
 
 - **Goldens.** Update with `MANYHANDS_UPDATE_GOLDEN=1`, never under `CI`. Read every regenerated golden's diff before committing. Register new cases in `tests/support/mutation_golden.rs`, `tests/support/golden.rs` or `tests/support/cli.rs`.
@@ -72,6 +82,8 @@ id: "01M69C6SHD04G8PT6D1Y36CDN7"
 - **Execution ledger.** Task 0 creates `docs/plans/2026-10-31-wave-03-cli-05-completion-and-polling-execution.md`, and every task commits it.
 - **Ticket comments.** One at Task 0, at each task's completion, at each Part checkpoint and at review-ready, under `.manyhands/comments/01M4CC0VMXTNXNH78C11DYXS8H/<ULID>.md`, since the comment switch is deferred. ULIDs come from `id new`, `created_at` from the UTC clock.
 - **Authorization.** Pushing the ticket branch is the standing habit. Never push another branch, open a PR, merge, close the ticket, create a ticket, run `ticket save` or clean up without separate authorization. Native CI runs after merge with the owner's approval of that run.
+
+- **Remaining tasks' Verify** (amended 2026-11-02, caused by main). Each keeps its targeted filters. At a checkpoint it adds the fast tier and the SSH-tier rows its changed paths select.
 
 ## Review Focus
 
@@ -305,7 +317,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 
 ## Task 15: Full Verification, Review And Handoff
 
-- [ ] **Step 1:** Merge `origin/main`, run the gate and the full suite once, detached. Record per-target counts. A failure stops for the owner.
+- [ ] **Step 1:** Merge `origin/main` and run, detached, the static gates, the fast tier and every SSH-harness target: the branch's diff touches `src/repository/transport/`, and Task 15 follows `AGENTS.md`'s table across the branch's full diff (owner, 2026-11-02). No full suite (amended 2026-11-02, caused by main). Record per-target counts. A failure stops for the owner.
 - [ ] **Step 2:** Independent whole-branch spec and quality reviews. Fix or rule every finding. Rerun the gate and the affected targets, and say what ran after the fixes.
 - [ ] **Step 3:** Mark the Cycle and design `review-ready`, run `git merge-tree --write-tree HEAD origin/main`, add the review-ready comment and push. The ticket stays **open**.
 - [ ] **Step 4: Closure,** only after the owner approves the review, in the final push before merge. Close this ticket by the canonical file edit (decision 9). Copy `01M5MK57` and `01M669FJR2`'s ticket files byte for byte from their branches, add the closure fields and a comment each, on the same go-ahead. Merging needs its own go-ahead, which also covers deleting those two remote branches, after confirming that they hold only their ticket files (decision 14).

@@ -324,10 +324,12 @@ Also required:
     (`local_sync/image_proof.rs:237`, growing with stored syncs), and discovery's per-item history walk
     (`discovery.rs:698-743`, up to 1024 commits for each of about 175 items). Both predate C5. A follow-up
     ticket carries this profile, opened only with the owner's go-ahead.
-32. **Remote deletion only of a published branch (2026-11-02).** "Fix it in C5": the preview plans
-    remote-branch deletion only when the context's stored push evidence shows it published. Stopped for a
-    ruling: a context never pushed is published by the run's own context child, which cleanup then deletes,
-    so such a preview's deletion is what happens.
+32. **Withdrawn, 2026-11-02.** The owner first ruled "Fix it in C5": the preview would plan remote-branch
+    deletion only for a published branch. Its premise, that a never-pushed context is never published,
+    came from the controller's reading of Task 11, not the owner's. The run's context child publishes such a
+    context and cleanup deletes it, so the preview's `remote_branch: true` is accurate. The owner withdrew it
+    on those facts, "Withdraw it, note the gap": a contained context whose remote branch has no tracking ref
+    keeps its remote branch (a Known Limit).
 33. **A held item refuses a new prepare (2026-11-02).** "Refuse, name the holder": while an unfinished
     parent that a new request can't supersede holds the item, a prepare is `recovery_required`, naming
     the holding request's `request.retry`, or `operation.resume` when no record holds it. Supersedable
