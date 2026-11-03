@@ -69,8 +69,7 @@ use crate::desktop::{
         list_state::ListState,
         operations::{
             NOT_AVAILABLE_YET, NOT_SENT_AGAIN, Progressing, ResumeOffer, StopOffer,
-            abandon_offered, draft_flush_failed, drafts_unavailable, progress_words,
-            recovery_label, resume_offer,
+            abandon_offered, draft_flush_failed, drafts_unavailable, progress_words, resume_offer,
         },
         stamp::RepoKey,
     },
@@ -353,6 +352,15 @@ impl Workspace {
                     }
                 } else {
                     for (n, action) in recovery.iter().enumerate() {
+                        // Decision 26: no re-send of an unsaved post here.
+                        if self
+                            .services()
+                            .operations()
+                            .read(cx)
+                            .hides_recovery(id, action)
+                        {
+                            continue;
+                        }
                         controls = controls.child(self.recovery(id, n, action, cx));
                     }
                 }
@@ -423,8 +431,8 @@ impl Workspace {
         action: &RecoveryAction,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let label = recovery_label(action.action);
         let operations = self.services().operations().read(cx);
+        let label = operations.recovery_words(id, action);
         let runnable = operations.recovery_step(id, action).is_some();
         let why = if operations.retry_not_sent_again(id, action) {
             NOT_SENT_AGAIN

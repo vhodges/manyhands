@@ -54,7 +54,19 @@ impl ItemPane {
         match action {
             FailedAction::Retry => self.retry_post(composer, window, cx),
             FailedAction::EditText => self.retarget(composer, After::Edit, window, cx),
-            FailedAction::PostAsNew => self.retarget(composer, After::Post, window, cx),
+            FailedAction::PostAsNew => {
+                // After decision 27's "posted meanwhile", the text is
+                // already under a new ID of its own: it is sent as it is.
+                let as_is = self
+                    .composers
+                    .find(composer)
+                    .is_some_and(|(_, slot)| std::mem::take(&mut slot.post.send_as_is));
+                if as_is {
+                    self.start_post(composer, false, window, cx);
+                } else {
+                    self.retarget(composer, After::Post, window, cx);
+                }
+            }
             FailedAction::CheckAgain => self.check_again(composer, window, cx),
             FailedAction::SetIdentity => cx.emit(ItemRoute::SetIdentity(self.post_root())),
         }

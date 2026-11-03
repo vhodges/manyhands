@@ -84,6 +84,12 @@ pub(in crate::desktop::view::item) struct SlotPost {
     /// The old comment's last attempt as the re-target was pressed: any
     /// attempt since overtakes the re-target (`overtaken`).
     pub(super) from_mark: Option<crate::desktop::services::worker::SendMark>,
+    /// The composer said once that the old comment was sent again and
+    /// not saved: the next Submit sends the new one (decision 27).
+    pub(super) noted: bool,
+    /// The old comment was posted meanwhile with other text: Post as a
+    /// new comment sends this one, as it is (decision 27).
+    pub(super) send_as_is: bool,
     /// The actions its last failed state offered: a refused re-target
     /// keeps them.
     pub(super) actions: Option<FailedActions>,
@@ -273,12 +279,12 @@ impl ItemPane {
         let from = slot.post.from.clone();
         let mark = slot.post.from_mark;
         let entity = slot.composer.clone();
-        // The old comment was sent again since it was re-targeted: the new
-        // one is never sent; the old one's answer stands (R-19).
+        // The old comment was sent again since it was re-targeted, from
+        // outside this app: the new one waits, or is never sent
+        // (decision 27).
         if let Some(old) = &from
-            && self.overtaken(old, mark, cx)
+            && self.overtaken(composer, old, mark, &body, window, cx)
         {
-            self.undo_retarget(composer, old.clone(), window, cx);
             return;
         }
         let intent = Intent::CommentAdd {

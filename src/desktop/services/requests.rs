@@ -37,13 +37,19 @@ pub(crate) enum Lane {
 }
 
 /// A comment's text, as the user wrote it. It derives neither `Debug` nor
-/// `Display`, and only `build` reads it.
+/// `Display`; `build` reads it, and a composer compares its own text with
+/// a post's (decision 27).
 #[derive(Clone)]
 pub(crate) struct CommentBody(String);
 
 impl CommentBody {
     pub(crate) fn new(body: String) -> Self {
         Self(body)
+    }
+
+    /// The text, for a comparison in this process only.
+    pub(crate) fn text(&self) -> &str {
+        &self.0
     }
 }
 

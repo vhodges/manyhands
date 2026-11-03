@@ -24,7 +24,9 @@ use manyhands::{
         HostObservationDto, MutationDataDto, OperationAction, OperationDto, OperationFamily,
         OperationId, OperationListDto, OperationNextAction, ProgressStage, transport::SshAuthority,
     },
-    results::{Envelope, Outcome, RecoveryAction, RecoveryActionKind, ResultCode},
+    results::{
+        CheckpointEffect, Envelope, Outcome, RecoveryAction, RecoveryActionKind, ResultCode,
+    },
 };
 
 mod outcomes;
@@ -748,6 +750,46 @@ impl Operations {
             })
     }
 
+    /// For a comment's post, whether its last answer saved it; `None` for
+    /// any other request, or a post that has not answered.
+    pub(crate) fn post_saved(&self, id: DesktopRequestId) -> Option<bool> {
+        let request = self.request(id)?;
+        if !matches!(request.intent, Intent::CommentAdd { .. }) {
+            return None;
+        }
+        match &request.state {
+            RequestState::Finished(_, _, effects, ..) => {
+                Some(effects.checkpoint == CheckpointEffect::Committed)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether the recovery action `action` of the request `id` is a
+    /// re-send of a comment post that is not saved: the operation area
+    /// never offers it; the post's composer is where it is sent again
+    /// (decision 26).
+    pub(crate) fn hides_recovery(&self, id: DesktopRequestId, action: &RecoveryAction) -> bool {
+        recovery_control(action.action) == RecoveryControl::Retry
+            && self.post_saved(id) == Some(false)
+    }
+
+    /// A recovery action's words on the request `id`: a saved comment's
+    /// Retry only shares it, so it reads Retry sharing (decision 26).
+    pub(crate) fn recovery_words(
+        &self,
+        id: DesktopRequestId,
+        action: &RecoveryAction,
+    ) -> &'static str {
+        if recovery_control(action.action) == RecoveryControl::Retry
+            && self.post_saved(id) == Some(true)
+        {
+            RETRY_SHARING
+        } else {
+            recovery_label(action.action)
+        }
+    }
+
     /// Whether `action`, offered on the request `id`, is a Retry that R-78
     /// forbids: the operation area says so.
     pub(crate) fn retry_not_sent_again(
@@ -793,6 +835,11 @@ impl Operations {
                 RecoveryStep::Submit(Intent::IndexRebuild { root: root()? })
             }
             RecoveryControl::Retry => {
+                // Decision 26: an unsaved post is sent again from its
+                // composer only.
+                if self.post_saved(id) == Some(false) {
+                    return None;
+                }
                 let named = named()?;
                 if self.not_sent_again(named) {
                     return None;
@@ -933,6 +980,9 @@ pub(crate) fn recovery_control(kind: RecoveryActionKind) -> RecoveryControl {
         }
     }
 }
+
+/// A saved comment's Retry, which only shares it (decision 26).
+pub(crate) const RETRY_SHARING: &str = "Retry sharing";
 
 /// A recovery action's control, in fixed text.
 pub(crate) fn recovery_label(kind: RecoveryActionKind) -> &'static str {

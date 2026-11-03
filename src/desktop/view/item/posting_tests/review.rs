@@ -179,10 +179,11 @@ async fn a_reply_that_may_be_saved_can_be_discarded(cx: &mut TestAppContext) {
     assert!(reply_composer(&shell, cx).is_none(), "the reply closed");
 }
 
-/// R-19, sequence A: Edit text moves the composer from X to a new ID;
-/// then X is retried from the operation area and saves. Submit then sends
-/// nothing new: X's saved answer stands, the new draft goes and the
-/// composer clears. One comment.
+/// R-19 sequence A, decision 27: Edit text moves the composer from X to a
+/// new ID; then X is sent again from outside the app (here the worker's
+/// retry: the panel offers none, decision 26) and saves. The text is
+/// unchanged, X's own, byte for byte: Submit sends nothing new, the new
+/// draft retires and the composer clears. One comment.
 #[gpui_kit::test]
 async fn a_retarget_overtaken_by_its_old_comment_sends_nothing_new(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -228,9 +229,10 @@ async fn a_retarget_overtaken_by_its_old_comment_sends_nothing_new(cx: &mut Test
     assert_eq!(comment_files(&root).len(), 2, "A and X: one comment");
 }
 
-/// R-19, sequence B: Post as a new comment from "may already be saved";
-/// while the old draft's retirement is awaited, X is retried and saves.
-/// The new comment is never sent. One comment.
+/// R-19 sequence B, decision 27: Post as a new comment from "may already
+/// be saved"; while the old draft's retirement is awaited, X is sent again
+/// from outside and saves with the same text. The new comment is never
+/// sent, and the composer clears. One comment.
 #[gpui_kit::test]
 async fn post_as_new_overtaken_during_retirement_sends_nothing_new(cx: &mut TestAppContext) {
     cx.executor().allow_parking();

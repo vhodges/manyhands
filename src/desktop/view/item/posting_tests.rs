@@ -280,3 +280,6 @@ mod recovery_later;
 
 #[path = "posting_tests/review.rs"]
 mod review;
+
+#[path = "posting_tests/outside.rs"]
+mod outside;
