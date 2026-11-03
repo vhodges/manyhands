@@ -15,6 +15,8 @@ pub(crate) const CASES: &[ssh_harness::Case] = both_verbs!["c5_lifecycle_child_c
     "external_only_stays_external" => external_only_stays_external,
     "resolved_under_a_cancelled_parent" => resolved_under_a_cancelled_parent,
     "replay" => replay,
+    "unconsented_resolution" => unconsented_resolution,
+    "deleted_branch_after_a_resolution_loops" => deleted_branch_after_a_resolution_loops,
 ];
 
 /// The lifecycle request, and the resolutions'.
@@ -290,6 +292,49 @@ fn external_only_stays_external(verb: Verb) -> Result<(), FixtureError> {
     assert_eq!(again.code, ResultCode::RecoveryRequired);
     assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     assert_untouched(&w, verb, child, served);
+    // The repair outside: A's side, committed as the merge with both parents.
+    // The read then says `repaired`, and the same request finishes once.
+    repaired_outside(&worktree, path, b"the local notes\n")?;
+    let repo = fixed(
+        w.service
+            .resolve_repository(&w.root)
+            .map_err(|_| FixtureError),
+    )?;
+    let read = fixed(
+        w.service
+            .show_conflict(&repo, parent)
+            .map_err(|_| FixtureError),
+    )?;
+    assert_eq!(read.state, ConflictState::Repaired);
+    assert_eq!(read.next_action, ConflictReadNextAction::Resume);
+    assert_lifecycle_finishes(&w, verb)?;
+    Ok(())
+}
+
+/// A repair with Git in `worktree`: `path` written as `bytes`, and the merge
+/// committed with HEAD and `MERGE_HEAD` as its parents.
+fn repaired_outside(worktree: &Path, path: &str, bytes: &[u8]) -> Result<(), FixtureError> {
+    let repo = fixed(git2::Repository::open(worktree))?;
+    fixed(std::fs::write(worktree.join(path), bytes))?;
+    let mut index = fixed(repo.index())?;
+    fixed(index.add_path(Path::new(path)))?;
+    fixed(index.write())?;
+    let tree = fixed(repo.find_tree(fixed(index.write_tree())?))?;
+    let head = fixed(fixed(repo.head())?.peel_to_commit())?;
+    let incoming = fixed(
+        repo.find_reference("MERGE_HEAD")
+            .and_then(|merge_head| merge_head.peel_to_commit()),
+    )?;
+    let signature = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
+    fixed(repo.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "Repaired outside",
+        &tree,
+        &[&head, &incoming],
+    ))?;
+    fixed(repo.cleanup_state())?;
     Ok(())
 }
 
@@ -353,5 +398,126 @@ fn replay(verb: Verb) -> Result<(), FixtureError> {
     assert_eq!(resent(&w, FIRST, verb), done);
     assert_eq!(connections(&w), before, "no connection");
     assert_eq!(merges_on_primary(&w.repo()?)?, 1);
+    Ok(())
+}
+
+/// A resolution to the peer's side changes the change set the request
+/// consented to. The resolution itself is `ok` and published; the same
+/// lifecycle request then answers `external_change`, offering a new prepare,
+/// with no merge on primary. Its record is finished, and a new prepare is free.
+fn unconsented_resolution(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    conflicted(&w, verb)?;
+    let parent = parent_operation(&w, FIRST)?;
+    let shown = fixed(shown(&w, parent).map_err(|_| FixtureError))?;
+    let incoming = shown
+        .paths
+        .iter()
+        .map(|path| (path.token.clone(), path.incoming.clone().expect("a side")))
+        .collect();
+    let answer = resolved(
+        &w,
+        RESOLVE,
+        parent,
+        shown.observation.as_deref().ok_or(FixtureError)?,
+        incoming,
+    );
+    assert_eq!(answer.code, ResultCode::Ok, "{:?}", answer.data);
+    assert_eq!(
+        resolution_of(&answer).publication,
+        PublicationEffect::Published
+    );
+    let refused = resent(&w, FIRST, verb);
+    assert_eq!(
+        refused.code,
+        ResultCode::ExternalChange,
+        "{:?}",
+        refused.data
+    );
+    assert_eq!(actions(&refused), [RecoveryActionKind::RequestPrepare]);
+    assert_eq!(merges_on_primary(&w.repo()?)?, 0);
+    assert_eq!(state_of(&w, FIRST), Some(RequestState::Finished));
+    let preview = w.service.prepare(&verb.mutation(&w.root, verb.id()));
+    assert_eq!(preview.code, ResultCode::Ok, "a new prepare is free");
+    Ok(())
+}
+
+/// The context's branch deleted at the remote before a resolution: the
+/// resolution is committed and its publication answers
+/// `remote_branch_deleted`, offering `request cancel` of the lifecycle
+/// request that holds the child. Followed, the route loops: the cancellation
+/// is answered `cancelled`, but the child holds a resolution, so the release
+/// guards keep it and its reservation; `item republish` is then `busy`, and
+/// the same request answers `remote_branch_deleted` again, twice over here. A Known Limit,
+/// beside the released-resolution one.
+fn deleted_branch_after_a_resolution_loops(verb: Verb) -> Result<(), FixtureError> {
+    let w = remote(verb)?;
+    conflicted(&w, verb)?;
+    let parent = parent_operation(&w, FIRST)?;
+    let shown = fixed(shown(&w, parent).map_err(|_| FixtureError))?;
+    fixed(fixed(w.bare()?.find_reference(verb.branch()))?.delete())?;
+    let answer = resolved(
+        &w,
+        RESOLVE,
+        parent,
+        shown.observation.as_deref().ok_or(FixtureError)?,
+        local_sides(&shown),
+    );
+    assert_eq!(
+        answer.code,
+        ResultCode::RemoteBranchDeleted,
+        "{:?}",
+        answer.data
+    );
+    assert_eq!(answer.effects.checkpoint, CheckpointEffect::Committed);
+    assert_eq!(actions(&answer), [RecoveryActionKind::RequestCancel]);
+    assert_eq!(
+        answer.recovery[0].arguments.get("request_id"),
+        Some(&serde_json::json!(FIRST))
+    );
+    for _ in 0..2 {
+        let stopped = resent(&w, FIRST, verb);
+        assert_eq!(stopped.code, ResultCode::RemoteBranchDeleted);
+        assert_eq!(
+            actions(&stopped),
+            [
+                RecoveryActionKind::RequestCancel,
+                RecoveryActionKind::RepoInspect
+            ]
+        );
+        asked(&w.service, FIRST)?;
+        assert_cancelled(&w, FIRST, &resent(&w, FIRST, verb))?;
+        assert!(reserved(&w), "the child holding a resolution is kept");
+        let republish = Mutation::ItemRepublish(ItemRepublishInput {
+            root: w.root.clone(),
+            kind: match verb {
+                Verb::Promote => AuthoringKind::Document,
+                Verb::Close => AuthoringKind::Ticket,
+            },
+            id: fixed(verb.id().parse())?,
+        });
+        let preview = w.service.prepare(&republish);
+        let consent = preview
+            .data
+            .as_ref()
+            .and_then(PrepareDataDto::preview)
+            .ok_or(FixtureError)?
+            .confirmation_id
+            .clone();
+        let done = w.service.execute(
+            MutationCall {
+                request_id: request(AGAIN),
+                confirmation: Some(ConfirmationId::parse(&consent).unwrap()),
+                mutation: republish,
+            },
+            &mut SessionCredentials::new(Provider),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        );
+        assert_eq!(done.code, ResultCode::Busy, "{:?}", done.data);
+        assert!(fixed(w.bare())?.find_reference(verb.branch()).is_err());
+    }
+    assert_eq!(merges_on_primary(&w.repo()?)?, 0);
+    assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     Ok(())
 }

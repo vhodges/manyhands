@@ -999,9 +999,17 @@ child holds now, and a request is the same by either ID; the data's
 `operation_id` is the child's. A parent with no context child yet is
 `invalid_input`, as a synchronization that recorded no conflict is. The
 lifecycle's human answer names both verbs by the parent's ID before its own
-`next:` lines. Once the child is published, sending the same promote or close
-request again finishes it. `request cancel` of that request stops a
-resolution's publication, as the holder's does for a synchronization.
+`next:` lines, when its blockers name the item's context conflicted as well as
+`conflict_pending`. Once the child is published, sending the same promote or
+close request again finishes it when the resolved context holds what was
+confirmed; a resolution or an outside repair that changes the confirmed change
+set makes that request answer `external_change`, ending it, and a new prepare
+is needed. An external-only conflict is repaired with Git in the context and
+the merge committed, then the same request finishes. `request cancel` of that
+request stops a resolution's publication, as the holder's does for a
+synchronization. After `key select` or `key clear` raises the generation over
+the conflict, `conflict resolve` is refused and the request has no CLI way on
+(a Known Limit).
 
 Resolution is set-wide (decision 12): a conflict with any noncanonical or
 structural path, or any `incompatible_closures` path, is repaired outside as
@@ -1564,6 +1572,10 @@ list them all):
   or the domain's own poll plan failure) leaves the promote or close request
   answering `recovery_required` with no CLI way out (decision 34 frees the
   unfenced case);
+- a context child that holds a resolution and then meets its remote branch
+  deleted loops: `request cancel` and the same request answer `cancelled`,
+  the child is kept with its reservation, `item republish` is `busy`, and the
+  request answers `remote_branch_deleted` again;
 - a retried or superseding close reports its own pass: a close stopped on
   `remote_context_changed` answers `index_pending`, and `ticket ready` is
   the live view (decision 20);

@@ -18,7 +18,10 @@
 //!   the item (decision 33), that request sent again, or the resume;
 //! - for a context synchronization stopped on a conflict, decision 34's route:
 //!   `conflict show` and `conflict resolve` of this operation, which name its
-//!   context child, before C2's lines for the same request, or the resume;
+//!   context child, and their note, before C2's lines for the same request, or
+//!   the resume. Only when the blockers name the item's own context conflicted
+//!   as well as `conflict_pending`, which alone is repository-wide: the answer
+//!   holds no field that says the conflict is this operation's child's;
 //! - for a child's `remote_branch_deleted`, the route out of decision 18:
 //!   cancel, the same request, the republish, the same request. Under a
 //!   resume, decision 19's: the republish, then the resume, since the resume
@@ -50,7 +53,10 @@ const NO_REMOTE_NOTE: &str = "primary is not published, because this repository 
 const NO_SET_NOTE: &str = "this answer holds no made-ready set; ticket ready is the live view.";
 const DELETED_NOTE: &str = "the refused request's context synchronization keeps its reservation until the request is cancelled; sending the request again then answers cancelled and releases it. After the republish, sending it once more finishes the work.";
 /// Decision 34's route out of a context synchronization's conflict.
-const CONFLICT_NOTE: &str = "this operation's context synchronization stopped on a conflict. conflict show reads it, and --json gives each path's sides and token; when its next action is resolve, conflict resolve with the observation and a source for every token resolves and publishes it, and <new-request-id> is a placeholder to fill in. When it is external_repair, repair it with Git in the context.";
+const CONFLICT_NOTE: &str = "this operation's context synchronization stopped on a conflict. conflict show reads it, and --json gives each path's sides and token; when its next action is resolve, conflict resolve with the observation and a source for every token resolves and publishes it, and <new-request-id> is a placeholder to fill in. When it is external_repair, repair it with Git in the context and commit the merge.";
+/// What decides the way on once the conflict is resolved (decision 34's
+/// review): consent, and a raised generation.
+const CONFLICT_CONSENT_NOTE: &str = "The request finishes only if the resolved context holds what was confirmed; otherwise it answers external_change, and a new prepare is needed. After key select or key clear, the resolution is refused and there is no way on (a known limit).";
 /// The answer doesn't tell a released child from a kept one (decision 19).
 const RESUME_DELETED_NOTE: &str = "this resume released the operation's context synchronization if nothing it holds could be lost. If repo inspect still shows its reservation, it was kept, and the republish answers busy. Add --request-id to the resume unless you run it at a terminal.";
 
@@ -220,19 +226,21 @@ fn child_conflict_route(envelope: &Envelope<MutationDataDto>, root: &str, route:
             "manyhands-cli conflict resolve --repo {root_text} --operation-id {operation} --input - --request-id <new-request-id>"
         ),
     ];
-    if action_index(envelope, RecoveryActionKind::RequestRetry).is_some() {
-        route
-            .notes
-            .push(format!("{CONFLICT_NOTE} Then send this request again."));
+    let then = if action_index(envelope, RecoveryActionKind::RequestRetry).is_some() {
+        " Then send this request again."
     } else if let Some(index) = action_index(envelope, RecoveryActionKind::OperationResume) {
         if let Some(line) = resume_line(envelope, index, root) {
             route.rendered.push(index);
             route.next.push(line);
         }
-        route.notes.push(format!(
-            "{CONFLICT_NOTE} Then resume it again (add --request-id unless you run it at a terminal)."
-        ));
-    }
+        " Then resume it again (add --request-id unless you run it at a terminal)."
+    } else {
+        ""
+    };
+    // The note goes with the lines, whatever follows them.
+    route
+        .notes
+        .push(format!("{CONFLICT_NOTE}{then} {CONFLICT_CONSENT_NOTE}"));
 }
 
 /// The `operation resume` a recovery action names.
@@ -264,7 +272,8 @@ fn route_of(envelope: &Envelope<MutationDataDto>, data: &LifecycleMutationDto) -
             merge_refused_route(envelope, root, &data.item_id, &mut route);
         }
         ResultCode::RecoveryRequired
-            if data.blockers.contains(&LifecycleBlocker::ConflictPending) =>
+            if data.blockers.contains(&LifecycleBlocker::ConflictPending)
+                && data.blockers.contains(&LifecycleBlocker::ContextConflicted) =>
         {
             child_conflict_route(envelope, root, &mut route);
         }

@@ -343,6 +343,12 @@ Also required:
     that holds the parent holds the child, so its `request cancel` stops the resolution's publication.
     A retained conflict under a raised generation (`key select`, the domain's poll plan failure) stays
     stuck, a Known Limit.
+    *Review (2026-11-03), within this decision:* the request finishes only when the resolved context
+    holds what was confirmed; a resolution or repair that changes the confirmed change set answers
+    `external_change` under consent, ending the request, and a new prepare is needed. An external-only
+    conflict's way on is a Git repair in the context, then the same request. A child holding a
+    resolution whose remote branch is then deleted loops on cancel and republish (`busy`), a Known
+    Limit.
 
 **Owner questions, approved at these recommendations on 2026-10-31.**
 

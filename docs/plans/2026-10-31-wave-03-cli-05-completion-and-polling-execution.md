@@ -2769,3 +2769,61 @@ tickets' files come with Task 15's closure.
 | `--test cli -- inventory`, `--test cli -- recovery_tables`, after the amendments (the RFC tables they parse changed) | 8 and 4, 0 failed | <1 s each |
 | AGENTS.md's fast tier, verbatim | 79 results, 4929 passed, 0 failed | 1552 s |
 | `cargo fmt --check`; whole-tree clippy `--all-targets --all-features -D warnings` (after Task 14a; 14b changed no code) | ok | |
+
+### Decision 34's review: the controller's rulings
+
+Base `d4174053` (Task 14's RFC note and recovery tables are kept; the wording above is merged into Task 14's
+paragraph). The review's key question passed: adoption re-checks consent. Seven items:
+
+1. **The human route is gated on the item's own conflict.** `conflict_pending` alone is repository-wide. The
+   binding has no field that names the parent's own child as conflicted short of a DTO change, so the route
+   takes the fallback the ruling allows: `ConflictPending` **and** `ContextConflicted`. Bin test
+   `a_repository_s_pending_conflict_alone_prints_no_conflict_lines` (`[conflict_pending]` alone: no conflict
+   lines, C2's two). Module doc says so.
+2. **A resolution that changes the confirmed change set.** `c5_lifecycle_child_conflict_unconsented_resolution`
+   (both verbs): the resolution to the peer's side answers `ok`, published; the same request answers
+   `external_change`, `[request.prepare]`, with no merge on primary; its record is finished, and a new prepare is
+   `ok`. Correct under consent. The RFC paragraph, the Cycle's decision 34 (appended), the design and the note
+   say the request finishes only when the resolved context holds what was confirmed, and otherwise answers
+   `external_change`, with a new prepare needed.
+3. **External-only: the outside repair is the working path.** `external_only_stays_external` now goes on: A's
+   side written and the merge committed in the context with HEAD and `MERGE_HEAD` as parents; `conflict show`
+   then reads `repaired`, `resume`, and the **same request** answers `ok`, cleanup complete, one merge, and for
+   close the closure fields once. No `operation resume` of the child is needed. The note says "repair it with Git
+   in the context and commit the merge", and the documents say a repair that changes the change set ends the
+   request as in item 2.
+4. **Key-select Known Limit**, one sentence in the RFC paragraph and in the note.
+5. **`lifecycle_context_child` and `lifecycle_parent_of`** answer a stored ID that doesn't parse as
+   `recovery_required`, not as "no child".
+6. **The note prints whenever the conflict lines print**, with the "then" sentence only when a retry or a resume
+   follows (`a_child_s_conflict_with_no_action_still_prints_its_note`).
+7. **A resolution, then the child's `remote_branch_deleted`: it loops.** `c5_lifecycle_child_conflict_deleted_branch_after_a_resolution_loops`
+   (both verbs). The remote branch is deleted, then the resolution: committed, its publication
+   `remote_branch_deleted`. The same request: `remote_branch_deleted`, `[request.cancel, repo.inspect]`;
+   `request cancel` and the request again: `cancelled`, the reservation **still held** (the guards keep a child
+   holding a resolution); `item republish`, confirmed: `busy`; and round again, twice in the row. No merge, the
+   record accepted. Recorded as a Known Limit beside the released-resolution one (design, RFC); not fixed.
+   - **Found on the way, and fixed:** the resolution's own answer offered **nothing**, although `published()`
+     names `request cancel` of the holder. `offering_cancel` keeps a `conflict resolve` request's cancel only when
+     the named request holds the active operation, and no record holds a child. `holds_the_reservation` now also
+     accepts the request holding the active child's parent (`outcome.rs`), so the answer offers `request.cancel`
+     of the lifecycle request, as decision 34's design said. Without it the row fails at that assertion (seen).
+
+**Seen to fail first.** The four bin route tests failed on the unchanged `human_lifecycle.rs` (the gate, the
+note's new text, and the note with no action). The loop row failed without the `outcome.rs` change. Items 2 and 3
+pin what the code already does (the review established it), so they passed on their first run.
+
+**Verified (on the commit below).**
+
+| Command | Ran |
+| --- | --- |
+| `--test mutation_remote -- c5_lifecycle_child_conflict` | 17 (16 new and extended, and the existing close row) |
+| `--test cli_remote -- c5_lifecycle_walk` | 9 |
+| `--test cli` (recovery tables and inventory) | 474 |
+| `--bin manyhands-cli -- lifecycle::` | 25 |
+| `cargo check`, `cargo fmt --check`, whole-tree clippy `-D warnings` | ok |
+
+| AGENTS.md's fast tier, verbatim | 79 results, 4931 passed, 0 failed (1484 s) |
+| `--test cli_remote`, whole | 160 SSH cases, 0 failed (936 s) |
+| `--test mutation_remote`, whole | 700 SSH cases, 0 failed (4817 s) |
+| `ssh_transport`, `remote_observation`, `remote_synchronization`, `remote_merge_recovery`, `remote_polling` | 123, 15, 69, 29, 84, 0 failed |

@@ -3078,12 +3078,14 @@ pub(in super::super) fn lookup_fenced(
 /// repository `repository_id` holds now (decision 34): the outer `None` when
 /// `operation_id` is no lifecycle parent of it, the inner one when the parent
 /// has no context child yet. A plain read of the parent's own row, as
-/// `conflict show` and `conflict resolve` map a parent's ID to its child.
+/// `conflict show` and `conflict resolve` map a parent's ID to its child. A
+/// stored ID that isn't one is `recovery_required`, never "no child".
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
 pub(in super::super) fn lifecycle_context_child(
     connection: &Connection,
     repository_id: i64,
     operation_id: crate::repository::OperationId,
-) -> rusqlite::Result<Option<Option<crate::repository::OperationId>>> {
+) -> Result<Option<Option<crate::repository::OperationId>>, ReadError> {
     let row: Option<Option<String>> = connection
         .query_row(
             "SELECT context_sync_id FROM document_promotions
@@ -3096,16 +3098,26 @@ pub(in super::super) fn lifecycle_context_child(
             |row| row.get(0),
         )
         .optional()?;
-    Ok(row.map(|child| child.and_then(|child| crate::repository::OperationId::parse(&child).ok())))
+    row.map(|child| child.as_deref().map(stored_operation_id).transpose())
+        .transpose()
+}
+
+/// An operation ID a parent's row stores: one that isn't is
+/// `recovery_required`.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+fn stored_operation_id(text: &str) -> Result<crate::repository::OperationId, ReadError> {
+    crate::repository::OperationId::parse(text).map_err(|_| recovery_required().into())
 }
 
 /// The promotion or closure of the repository `repository_id` whose context
-/// child is `child` now, if one is (decision 34).
+/// child is `child` now, if one is (decision 34). A stored ID that isn't one
+/// is `recovery_required`.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
 pub(in super::super) fn lifecycle_parent_of(
     connection: &Connection,
     repository_id: i64,
     child: crate::repository::OperationId,
-) -> rusqlite::Result<Option<crate::repository::OperationId>> {
+) -> Result<Option<crate::repository::OperationId>, ReadError> {
     let row: Option<String> = connection
         .query_row(
             "SELECT operation_id FROM document_promotions
@@ -3118,7 +3130,7 @@ pub(in super::super) fn lifecycle_parent_of(
             |row| row.get(0),
         )
         .optional()?;
-    Ok(row.and_then(|parent| crate::repository::OperationId::parse(&parent).ok()))
+    row.as_deref().map(stored_operation_id).transpose()
 }
 
 /// What the remote operation `operation_id` of the registration at

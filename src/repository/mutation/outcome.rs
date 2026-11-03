@@ -1349,11 +1349,33 @@ impl RepositoryService {
         else {
             return false;
         };
+        let repository_id = self
+            .resolve_repository(Path::new(root))
+            .ok()
+            .map(|repository| repository.registration_id());
         self.read_session(RepositoryOperation::Read, |connection| {
             if records::operation_holder(connection, OperationFamily::Remote, root, active, None)?
                 .is_some_and(|holder| holder == named)
             {
                 return Ok(true);
+            }
+            // A lifecycle's context child is held by the request that holds
+            // its parent (decision 34).
+            if let Some(repository_id) = repository_id
+                && let Some(parent) = crate::repository::remote::state::lifecycle_parent_of(
+                    connection,
+                    repository_id,
+                    active,
+                )?
+            {
+                return Ok(records::operation_holder(
+                    connection,
+                    OperationFamily::Remote,
+                    root,
+                    parent,
+                    None,
+                )?
+                .is_some_and(|holder| holder == named));
             }
             let Some((comment, _)) =
                 comment::comment_synchronization(connection, Path::new(root), active)?

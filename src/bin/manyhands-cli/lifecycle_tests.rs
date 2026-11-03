@@ -584,7 +584,7 @@ fn a_child_s_conflict_names_the_conflict_verbs_then_the_same_request() {
         );
         assert!(
             text.contains(
-                "note: this operation's context synchronization stopped on a conflict. conflict show reads it, and --json gives each path's sides and token; when its next action is resolve, conflict resolve with the observation and a source for every token resolves and publishes it, and <new-request-id> is a placeholder to fill in. When it is external_repair, repair it with Git in the context. Then send this request again.\n"
+                "note: this operation's context synchronization stopped on a conflict. conflict show reads it, and --json gives each path's sides and token; when its next action is resolve, conflict resolve with the observation and a source for every token resolves and publishes it, and <new-request-id> is a placeholder to fill in. When it is external_repair, repair it with Git in the context and commit the merge. Then send this request again. The request finishes only if the resolved context holds what was confirmed; otherwise it answers external_change, and a new prepare is needed. After key select or key clear, the resolution is refused and there is no way on (a known limit).\n"
             ),
             "{text}"
         );
@@ -615,10 +615,53 @@ fn a_child_s_conflict_under_a_resume_says_to_resume_it_again() {
     );
     assert_eq!(lines[3], format!("next: repo.inspect root={ROOT}"));
     assert!(
-        text.contains("Then resume it again (add --request-id unless you run it at a terminal).\n"),
+        text.contains("Then resume it again (add --request-id unless you run it at a terminal). The request finishes only if"),
         "{text}"
     );
     assert!(!text.contains("send this request"), "{text}");
+}
+
+/// `conflict_pending` alone is any conflict of the repository's, not this
+/// operation's child's: no conflict lines, and C2's actions alone.
+#[test]
+fn a_repository_s_pending_conflict_alone_prints_no_conflict_lines() {
+    let mut stopped = data(ItemDtoKind::Ticket);
+    stopped.blockers = vec![LifecycleBlocker::ConflictPending];
+    let out = output(
+        &answer(
+            "ticket close",
+            ResultCode::RecoveryRequired,
+            Some(stopped),
+            vec![retry(), inspect()],
+        ),
+        false,
+    );
+    let text = stderr(&out);
+    assert!(!text.contains("conflict show"), "{text}");
+    assert!(!text.contains("conflict resolve"), "{text}");
+    assert!(!text.contains("context synchronization stopped"), "{text}");
+    assert_eq!(next_lines(text).len(), 2, "{text}");
+}
+
+/// The note goes with the conflict lines even when no action follows them.
+#[test]
+fn a_child_s_conflict_with_no_action_still_prints_its_note() {
+    let out = output(
+        &answer(
+            "ticket close",
+            ResultCode::RecoveryRequired,
+            Some(child_conflict(ItemDtoKind::Ticket)),
+            vec![inspect()],
+        ),
+        false,
+    );
+    let text = stderr(&out);
+    assert_eq!(next_lines(text).len(), 3, "{text}");
+    assert!(
+        text.contains("note: this operation's context synchronization stopped on a conflict."),
+        "{text}"
+    );
+    assert!(text.contains("a new prepare is needed"), "{text}");
 }
 
 #[test]
