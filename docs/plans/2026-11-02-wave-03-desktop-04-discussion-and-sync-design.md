@@ -556,9 +556,11 @@ unsaved body text is never committed or shared (contract 2, A12).
 ## Part E: Keyboard, Privacy And Native Evidence
 
 - **Tab order:** tab strip → header actions (…, Edit, Share) → chips →
-  toolbar → page → discussion heading, Back to top, then each comment and
+  toolbar → page → discussion (its heading is the Ctrl Shift C jump target,
+  not a Tab stop, as in D3), Back to top, then each comment and
   its Reply → open reply composer → new composer. Inside a composer Tab
-  indents; F6 leaves it (decision 19).
+  indents; F6 leaves it (decision 19), and each composer's hint says so
+  ("F6: next region", Task 15 review).
 - **Privacy:** comment sentinels never reach operation entries, the quit
   dialog, notifications, dialog messages or logs.
 
@@ -578,7 +580,8 @@ external change, not a second front end. Every journey is keyboard-only.
    from the second clone merged.
 4. Offline: remote unreachable; post (saved, not shared); Retry sharing
    once reachable; post again offline, quit after it has failed (owed),
-   relaunch, Resume; post once more and quit **while** it is sending
+   relaunch: no Resume row for a comment (K-15); its composer's Retry or
+  Share publishes it; post once more and quit **while** it is sending
    (K-10): after relaunch Share publishes it; one comment file and one
    checkpoint per comment throughout.
 5. Credentials: first share prompts; Not now; a second request does not
