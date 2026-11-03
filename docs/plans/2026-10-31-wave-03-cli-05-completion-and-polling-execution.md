@@ -2555,3 +2555,68 @@ the resume's line closes the route.
 
 **C4's contract for synchronizations** is unchanged: every C4 row keeps its answer, since only an ID that
 named a lifecycle parent (until now `invalid_input`) reads differently, and a child's ID already read.
+
+### Rows, walks and what they answered
+
+**Library rows** (`tests/mutation_remote/c5_child_conflict.rs`, a child module of `c5_cancel` that uses its
+`conflicted` staging; both verbs, 12 cases):
+
+| Case | Answer |
+| --- | --- |
+| `shown_by_either_id` | The stop names the parent as its `operation_id` and `conflict_pending` among its blockers. `show_conflict` by the child and by the parent are equal: `conflict_pending`, `resolve`, stage `context`, the verb's target and item, `eligible_canonical`, one path, `operation_id` the child's. |
+| `resolved_then_the_same_request` | `conflict resolve` by the parent's ID: `ok`, the child's ID in its data, `published`, the remote's context branch at the resolution commit, the child `completed`, the lifecycle record still accepted. The same lifecycle request: `ok`, cleanup complete, finished, **one** merge, primary descends from the resolution. For close: no closure field before, two after, `closed_by` the configured identity, the same on the remote's primary. |
+| `stale_token` | Another observation, then a token of no path: each `external_change`, nothing written, the conflict and the child's row as they were, nothing pushed. The lifecycle stays `recovery_required`. The matching input then resolves, and the lifecycle finishes as above. |
+| `external_only_stays_external` | A conflict on `notes/outside.txt` on the context's branch: the read `external_repair`, `external_resolution_required`; the resolution `recovery_required`, `next_action: external_repair`, nothing written; the lifecycle `recovery_required`, its record accepted. |
+| `resolved_under_a_cancelled_parent` | `request cancel` of the lifecycle request, then the resolution: `cancelled`, 130, the resolution committed, nothing pushed. The lifecycle request then answers `cancelled` once, and the next call finishes with one merge, primary descending from the resolution. |
+| `replay` | The finished resolution resent under its ID, named this time by the **child's** ID: the identical envelope, no connection. The finished lifecycle request's replay: identical. One merge. |
+
+**Seen to fail first.** On the unchanged library all 12 failed: ten when `show_conflict` of the parent answered
+`invalid_input`, and `stale_token` by assertion (`invalid_input` for `external_change`, since the parent's ID was
+no synchronization to the binding). With the change all pass. With only the holder change taken back,
+`resolved_under_a_cancelled_parent` fails by assertion for both verbs (`ok`, published, for `cancelled`): the
+parent's flag is what stops the publication. The bin's two route tests (`lifecycle_tests.rs`,
+`a_child_s_conflict_*`) failed on the unchanged `human_lifecycle.rs` and pass with it.
+
+**The binary walk over SSH** (`tests/cli_remote/lifecycle.rs`, close, one verb as Task 13b's, decision 27):
+
+- `c5_lifecycle_walk_retained_conflict_close` **replaces Task 13b's stop for the owner.** Task 13b's
+  sequence; the confirm is `recovery_required`, 3, blockers `[context_conflicted, conflict_pending,
+  context_behind_remote]`, `[request.retry, repo.inspect]`. The same request in human mode prints `next:
+  manyhands-cli conflict show … --operation-id <parent>` and `conflict resolve … --request-id
+  <new-request-id>`, then C2's `request.retry` and `repo.inspect`, and the note. `operation list`'s
+  `synchronize_context` child reads the same through `conflict show` as the parent's ID. The route's lines
+  followed: the read, then the resolution with A's side, `ok`, published, the remote's context branch at its
+  commit; then the same `ticket close`: `ok`, finished, one merge, one closure checkpoint, its fields equal on
+  primary and the remote, A's body on primary, the remote and local branch and the worktree gone.
+- **Task 13b's `conflict show` of the child answering `invalid_input` is not reproduced** on this tree or on
+  the unchanged one: the child's ID reads `conflict_pending` through the library on `9aa3308a`, and through
+  the binary here. The parent's ID was `invalid_input`, as recorded.
+- `…_after_a_poll_plan_failure_close`, rerun: `poll once` over an invalid configuration is
+  `invalid_configuration`, **3** (my first expectation of 2 was a staging error, fixed), and fences nothing; the
+  route then finishes the close as above. **Freed through the binary.** The domain's own poll, which does
+  fence, stays a Known Limit (`c5_cancel_poll_plan_failure_fences_a_retained_conflict_close`).
+- `…_under_key_select_close`, rerun: after `key clear` and `key select` the read still says `resolve`, the
+  resolution is `recovery_required`, 3, `write: not_requested`, nothing pushed, and the same close stays
+  `recovery_required`, 3, accepted, no merge. **Still no way out:** kept as a Known Limit (design, Known
+  Limits, amended). The read's `resolve` under a raised generation is C4's, for any synchronization.
+- All three failed on the unchanged tree (no conflict lines to follow).
+
+**Documents.** The RFC's `conflict show`/`conflict resolve` row and its conflict paragraph name a lifecycle and
+its child; the Cycle gains decision 34; the design's Known Limit on a raised generation says what decision 34
+frees and what it doesn't.
+
+### Verified (on `a25f2ab6`)
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--test mutation_remote -- c5_lifecycle_child_conflict_` | 13 (12 new, and the existing close row) | ~2 min |
+| `--test cli_remote -- c5_lifecycle_walk_retained` | 3 | ~1 min |
+| `--bin manyhands-cli -- lifecycle::` | 23 | <1 s |
+| AGENTS.md's fast tier, verbatim | 79 results, 4919 passed, 0 failed | 1460 s |
+| `--test cli_remote`, whole | 160 SSH cases, 0 failed | 964 s |
+| `--test mutation_remote`, whole | 696 SSH cases, 0 failed | 5378 s |
+| `ssh_transport`, `remote_observation`, `remote_synchronization`, `remote_merge_recovery`, `remote_polling` | 123, 15, 69, 29, 84, 0 failed | 230, 8, 585, 251, 203 s |
+| `cargo check --all-features --locked`, `cargo fmt --check`, whole-tree clippy `-D warnings` | ok | |
+
+No `src/repository/promotion/` or `closure/` file changed, so `document_promotion` and `ticket_closure` weren't
+run.
