@@ -7,7 +7,12 @@
 //! request stays expanded, with its message, code, effects and recovery
 //! actions, until it is dismissed. A queued request, or a running one the
 //! library has not accepted, offers Cancel; an accepted one reads
-//! "Finishing". A draft store that did not open keeps an entry with its
+//! "Finishing", except that an accepted command that stops at safe points,
+//! in a repository with a publication remote, offers Stop at a safe point
+//! (R-1, R-15), which reads Stopping… once pressed. A running share or
+//! post reads its stage in words ("Sharing · …", "Posting · …"), and a
+//! stopped share says whether part of its work finished and offers Share,
+//! a new request. A draft store that did not open keeps an entry with its
 //! fixed reason at the top, with no Dismiss; so does each session whose
 //! recovery copy could not be written, named by its item's title as read,
 //! with Retry, until a write lands. The launch's "Recovered drafts" entry
@@ -46,16 +51,20 @@ mod recovered;
 use super::workspace::Workspace;
 use crate::desktop::{
     model::{
+        item::SHARE,
         list_state::ListState,
         operations::{
-            NOT_AVAILABLE_YET, NOT_SENT_AGAIN, ResumeOffer, abandon_offered, draft_flush_failed,
-            drafts_unavailable, recovery_label, resume_offer,
+            NOT_AVAILABLE_YET, NOT_SENT_AGAIN, Progressing, ResumeOffer, StopOffer,
+            abandon_offered, draft_flush_failed, drafts_unavailable, progress_words,
+            recovery_label, resume_offer, stopped_text,
         },
+        publication::SyncOutcome,
         stamp::RepoKey,
     },
     services::{
         KEY_STORE_UNAVAILABLE,
         requests::{DesktopRequest, DesktopRequestId, NotSent, RequestState},
+        worker::RecordState,
     },
 };
 
@@ -69,6 +78,10 @@ pub(crate) const FINISHING: &str = "Finishing";
 pub(crate) const CANCELLED: &str = "Cancelled";
 pub(crate) const NOT_SENT: &str = "Not sent";
 pub(crate) const CANCEL: &str = "Cancel";
+/// An accepted share's Stop (R-1).
+pub(crate) const STOP: &str = "Stop at a safe point";
+/// Stop, once pressed.
+pub(crate) const STOPPING: &str = "Stopping…";
 pub(crate) const DISMISS: &str = "Dismiss";
 pub(crate) const DISMISSED: &str = "Dismissed";
 pub(crate) const RESUME: &str = "Resume";
@@ -112,7 +125,7 @@ pub(crate) fn state_label(state: &RequestState) -> String {
 
 /// What a request or operation is about: its repository's directory
 /// name, or the application for a key command.
-fn scope_name(root: Option<&Path>) -> String {
+pub(crate) fn scope_name(root: Option<&Path>) -> String {
     match root {
         Some(root) => root
             .file_name()
@@ -206,6 +219,29 @@ fn unavailable(id: impl Into<ElementId>, label: &str, why: &str, cx: &App) -> Te
 }
 
 impl Workspace {
+    /// The publication remote navigation lists for the repository of
+    /// `request`, if it lists one.
+    fn publication_remote_of(&self, request: &DesktopRequest) -> Option<String> {
+        let root = request.intent.root()?.to_str()?;
+        self.navigation()
+            .entry(root)?
+            .summary
+            .configuration
+            .publication_remote
+            .clone()
+    }
+
+    /// A request's state in words: a running share or post by its stage,
+    /// naming the publication remote `remote`; any other as `state_label`.
+    fn entry_state(request: &DesktopRequest, remote: Option<&str>) -> String {
+        match (&request.state, Progressing::of(&request.intent)) {
+            (RequestState::Running { stage, .. }, Some(kind)) => {
+                progress_words(kind, *stage, remote)
+            }
+            (state, _) => state_label(state),
+        }
+    }
+
     /// One request of this session.
     fn session_entry(
         &mut self,
@@ -214,6 +250,7 @@ impl Workspace {
     ) -> impl IntoElement + use<> {
         let id = request.id;
         let muted = cx.theme().muted_foreground;
+        let remote = self.publication_remote_of(request);
         let line = h_flex()
             .gap_2()
             .child(text(request_id(id, "command"), request.intent.label()).text_sm())
@@ -222,7 +259,13 @@ impl Workspace {
                     .text_xs()
                     .text_color(muted),
             )
-            .child(text(request_id(id, "state"), state_label(&request.state)).text_xs());
+            .child(
+                text(
+                    request_id(id, "state"),
+                    Self::entry_state(request, remote.as_deref()),
+                )
+                .text_xs(),
+            );
         let mut entry = v_flex()
             .id(request_id(id, "entry"))
             .test_support()
@@ -243,13 +286,12 @@ impl Workspace {
                 ));
             }
             RequestState::Running { accepted: true, .. } => {
-                controls = controls.child(
-                    div().child(
-                        Button::new(ElementId::Name(request_id(id, "finishing").into()))
-                            .label(FINISHING)
-                            .disabled(true),
-                    ),
-                );
+                let offer = self
+                    .services()
+                    .operations()
+                    .read(cx)
+                    .stop_offer(id, remote.is_some());
+                controls = controls.child(self.accepted_control(id, offer, cx));
             }
             RequestState::Finished(Outcome::Success | Outcome::Noop, _, _, _, _) => {
                 controls = controls.child(self.dismiss(id, cx));
@@ -271,6 +313,11 @@ impl Workspace {
                                 .text_color(muted),
                         ),
                 );
+                if let Some(completed) = self.stopped_share(id, cx) {
+                    entry = entry
+                        .child(text(request_id(id, "outcome"), stopped_text(completed)).text_sm());
+                    controls = controls.child(self.share_again(id, cx));
+                }
                 for (n, action) in recovery.iter().enumerate() {
                     controls = controls.child(self.recovery(id, n, action, cx));
                 }
@@ -282,6 +329,72 @@ impl Workspace {
             RequestState::Dismissed => {}
         }
         entry.child(controls)
+    }
+
+    /// What an accepted request shows: Stop at a safe point, Stopping…
+    /// once pressed, or Finishing, disabled, when it cannot be stopped.
+    fn accepted_control(
+        &mut self,
+        id: DesktopRequestId,
+        offer: StopOffer,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match offer {
+            StopOffer::Offered => {
+                let focus = self.control_focus_for(request_id(id, "stop"), cx);
+                button(
+                    request_id(id, "stop"),
+                    STOP,
+                    Some(&focus),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.stop_request(id, cx)),
+                )
+            }
+            StopOffer::Stopping => div()
+                .id(request_id(id, "stop"))
+                .test_support()
+                .aria_label(STOPPING)
+                .child(
+                    Button::new(ElementId::Name(request_id(id, "stopping").into()))
+                        .label(STOPPING)
+                        .disabled(true),
+                )
+                .into_any_element(),
+            StopOffer::NotOffered => div()
+                .child(
+                    Button::new(ElementId::Name(request_id(id, "finishing").into()))
+                        .label(FINISHING)
+                        .disabled(true),
+                )
+                .into_any_element(),
+        }
+    }
+
+    /// Whether the finished request `id` is a share stopped at a safe
+    /// point, and if so whether part of its work finished.
+    fn stopped_share(&self, id: DesktopRequestId, cx: &App) -> Option<bool> {
+        let worker = self.services().worker();
+        let record = worker.record_state(id).unwrap_or(RecordState::Unknown);
+        let after_give_up = worker.gave_up(id).is_some();
+        let result =
+            self.services()
+                .operations()
+                .read(cx)
+                .share_result(id, record, after_give_up)?;
+        match result.outcome {
+            SyncOutcome::Stopped { completed } => Some(completed),
+            _ => None,
+        }
+    }
+
+    /// A stopped share's Share: a new request of the same share.
+    fn share_again(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) -> AnyElement {
+        let focus = self.control_focus_for(request_id(id, "share"), cx);
+        button(
+            request_id(id, "share"),
+            SHARE,
+            Some(&focus),
+            cx.listener(move |this, _: &ClickEvent, _, cx| this.share_request_again(id, cx)),
+        )
     }
 
     fn dismiss(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) -> AnyElement {

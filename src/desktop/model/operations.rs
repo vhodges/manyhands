@@ -14,7 +14,7 @@
 //! shown as text, unavailable.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::{Path, PathBuf},
 };
 
@@ -30,13 +30,14 @@ use manyhands::{
 use super::{
     list_state::{ListState, Rows},
     navigation::UNAVAILABLE_CODES,
+    publication::{ShareAttempt, ShareTarget, SyncResult, sync_outcome},
     stamp::{Generations, RepoKey, Stamp, ViewScope},
 };
 use crate::desktop::services::{
     DraftStoreUnavailable, ReadResult,
     prompts::PromptRequest,
     requests::{DesktopRequest, DesktopRequestId, Intent, Refusals, RequestState},
-    worker::WorkerEvent,
+    worker::{RecordState, WorkerEvent},
 };
 
 /// Why a synchronization's Resume is unavailable.
@@ -47,6 +48,11 @@ pub(crate) const NOT_AVAILABLE_YET: &str = "Not available yet";
 /// Why the Retry of a context request is unavailable once a later request
 /// of its item was sent (R-78).
 pub(crate) const NOT_SENT_AGAIN: &str = "Not sent again after a later Edit or release";
+/// A share stopped at a safe point before anything was sent.
+pub(crate) const STOPPED_BEFORE_SENDING: &str =
+    "Stopped before anything was sent. Your saved work is still on this computer.";
+/// A share stopped at a safe point after part of its work finished.
+pub(crate) const STOPPED_AFTER_PART: &str = "Stopped after part of the work finished. Your saved work is on this computer; Share sends the rest.";
 /// The persistent entry of a draft store that did not open.
 pub(crate) const DRAFTS_UNAVAILABLE: &str = "Recovery copies are unavailable";
 
@@ -105,6 +111,12 @@ pub(crate) struct Operations {
     /// page that asked reads. One worker observes one host at a time, and
     /// the page waits only for its latest.
     observed: Option<(DesktopRequestId, Envelope<HostObservationDto>)>,
+    /// The running requests whose Stop was pressed and signalled their
+    /// token, until they end.
+    stopping: HashSet<DesktopRequestId>,
+    /// Each finished share's last answer, which its outcome is classified
+    /// from (`share_result`).
+    shares: HashMap<DesktopRequestId, Envelope<MutationDataDto>>,
 }
 
 /// What finished requests may have changed since the views last read.
@@ -167,6 +179,8 @@ impl Operations {
     pub(crate) fn apply(&mut self, event: WorkerEvent) {
         match event {
             WorkerEvent::Queued(request) => {
+                self.stopping.remove(&request.id);
+                self.shares.remove(&request.id);
                 self.sends += 1;
                 self.sent.insert(request.id, self.sends);
                 self.answers.entry(request.id).or_default().queued();
@@ -188,11 +202,21 @@ impl Operations {
                     && let RequestState::Running { stage, accepted } = &mut request.state
                 {
                     *stage = Some(progress.stage);
-                    *accepted |= progress.stage == ProgressStage::Accepted;
+                    // Every stage comes after acceptance, and a same-ID
+                    // re-entry never reports `Accepted` (fact 10): any
+                    // stage marks it accepted, as the worker does (R-14).
+                    *accepted = true;
                 }
             }
             WorkerEvent::Finished(id, envelope) => {
                 let envelope = *envelope;
+                self.stopping.remove(&id);
+                if self
+                    .request(id)
+                    .is_some_and(|request| ShareTarget::of(&request.intent).is_some())
+                {
+                    self.shares.insert(id, envelope.clone());
+                }
                 match &envelope.data {
                     Some(MutationDataDto::Ticket(ticket)) if !ticket.rejected.is_empty() => {
                         self.rejected.insert(id, ticket.rejected.clone());
@@ -239,8 +263,14 @@ impl Operations {
                     self.changed.insert(root, items);
                 }
             }
-            WorkerEvent::Removed(id) => self.set(id, RequestState::Removed),
-            WorkerEvent::NotSent(id, why) => self.set(id, RequestState::NotSent(why)),
+            WorkerEvent::Removed(id) => {
+                self.stopping.remove(&id);
+                self.set(id, RequestState::Removed);
+            }
+            WorkerEvent::NotSent(id, why) => {
+                self.stopping.remove(&id);
+                self.set(id, RequestState::NotSent(why));
+            }
             // The Hosts page reads it. An observation pins nothing, so no
             // view has anything to read again.
             WorkerEvent::HostObserved(id, envelope) => self.observed = Some((id, envelope)),
@@ -248,6 +278,72 @@ impl Operations {
             // when the next comes is one its job no longer waits on.
             WorkerEvent::Prompt(prompt) => self.prompt = Some(prompt),
         }
+    }
+
+    /// The request running now, if the model has heard it start: one
+    /// worker runs one at a time.
+    pub(crate) fn running(&self) -> Option<&DesktopRequest> {
+        self.requests
+            .iter()
+            .find(|request| matches!(request.state, RequestState::Running { .. }))
+    }
+
+    /// Stop was pressed on the running request `id` and signalled its
+    /// token: it reads Stopping… until it ends.
+    pub(crate) fn stopping(&mut self, id: DesktopRequestId) {
+        if self
+            .request(id)
+            .is_some_and(|request| matches!(request.state, RequestState::Running { .. }))
+        {
+            self.stopping.insert(id);
+        }
+    }
+
+    /// What the request `id` offers to stop it once accepted (R-1, R-15):
+    /// Stop at a safe point while an accepted command that stops at safe
+    /// points runs in a repository with a publication remote (`remote`),
+    /// Stopping… once pressed, and nothing otherwise.
+    pub(crate) fn stop_offer(&self, id: DesktopRequestId, remote: bool) -> StopOffer {
+        let Some(request) = self.request(id) else {
+            return StopOffer::NotOffered;
+        };
+        if !matches!(request.state, RequestState::Running { accepted: true, .. })
+            || !request.intent.stops_at_safe_points()
+            || !remote
+        {
+            return StopOffer::NotOffered;
+        }
+        if self.stopping.contains(&id) {
+            StopOffer::Stopping
+        } else {
+            StopOffer::Offered
+        }
+    }
+
+    /// The outcome of the finished share `id`, classified from its last
+    /// answer under where its record stood (`record`) and whether that
+    /// answer was a Give up's. `None` for any other request, or a share
+    /// not finished.
+    pub(crate) fn share_result(
+        &self,
+        id: DesktopRequestId,
+        record: RecordState,
+        after_give_up: bool,
+    ) -> Option<SyncResult> {
+        let request = self.request(id)?;
+        if !matches!(request.state, RequestState::Finished(..)) {
+            return None;
+        }
+        let target = ShareTarget::of(&request.intent)?;
+        let envelope = self.shares.get(&id)?;
+        Some(sync_outcome(
+            envelope,
+            ShareAttempt {
+                target,
+                record,
+                after_give_up,
+            },
+        ))
     }
 
     /// The answer of the host observation `id`, once it has one.
@@ -402,6 +498,107 @@ impl Operations {
             self.pending.remove(&root);
             self.generations.next(ViewScope::Operations(root));
         }
+    }
+}
+
+/// What an accepted request offers to stop it (R-1, R-15).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum StopOffer {
+    /// Stop at a safe point.
+    Offered,
+    /// Stop was pressed; the request has not ended yet.
+    Stopping,
+    NotOffered,
+}
+
+/// What a share or a post is, for the words of its stages.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Progressing {
+    Share,
+    Post,
+}
+
+impl Progressing {
+    /// A share (`item sync`, `repo sync`) or a post (`comment add`).
+    pub(crate) fn of(intent: &Intent) -> Option<Self> {
+        match intent {
+            Intent::ItemSync { .. } | Intent::RepoSync { .. } => Some(Self::Share),
+            Intent::CommentAdd { .. } => Some(Self::Post),
+            _ => None,
+        }
+    }
+}
+
+impl ShareTarget {
+    /// Which share `intent` is, if it is one.
+    pub(crate) fn of(intent: &Intent) -> Option<Self> {
+        match intent {
+            Intent::ItemSync { .. } => Some(Self::Item),
+            Intent::RepoSync { .. } => Some(Self::Main),
+            _ => None,
+        }
+    }
+}
+
+/// A stage's words for a share or a post (design, Stage text), naming the
+/// publication remote `remote` while connecting. `None` for a stage the
+/// design gives no words: a share does not write.
+pub(crate) fn stage_text(
+    kind: Progressing,
+    stage: ProgressStage,
+    remote: Option<&str>,
+) -> Option<String> {
+    let words = match (stage, kind) {
+        (ProgressStage::Accepted | ProgressStage::Observing, Progressing::Share) => {
+            "Getting ready…"
+        }
+        (ProgressStage::Accepted | ProgressStage::Observing, Progressing::Post) => {
+            "Getting a private copy ready…"
+        }
+        (ProgressStage::Writing, Progressing::Share) => return None,
+        (ProgressStage::Writing, Progressing::Post) => "Saving…",
+        (ProgressStage::Connecting, _) => {
+            return Some(match remote {
+                Some(remote) => format!("Connecting to {remote}…"),
+                None => "Connecting…".to_owned(),
+            });
+        }
+        (ProgressStage::Fetching, _) => "Bringing in changes…",
+        (ProgressStage::UpdatingLocal, _) => "Merging changes…",
+        (ProgressStage::Pushing, _) => "Sending your saved changes…",
+        (ProgressStage::Verifying, _) => "Checking it arrived…",
+        (ProgressStage::Indexing, _) => "Updating the list…",
+        (ProgressStage::Stopping, _) => "Stopping at a safe point…",
+    };
+    Some(words.to_owned())
+}
+
+/// What a running share or post says: "Sharing · {stage}" or
+/// "Posting · {stage}". Before its first stage, or at one with no words,
+/// it says it is getting ready.
+pub(crate) fn progress_words(
+    kind: Progressing,
+    stage: Option<ProgressStage>,
+    remote: Option<&str>,
+) -> String {
+    let prefix = match kind {
+        Progressing::Share => "Sharing",
+        Progressing::Post => "Posting",
+    };
+    let words = stage
+        .and_then(|stage| stage_text(kind, stage, remote))
+        .or_else(|| stage_text(kind, ProgressStage::Accepted, remote))
+        .unwrap_or_default();
+    format!("{prefix} · {words}")
+}
+
+/// A stopped share's words (design, Stop at a safe point): whether part
+/// of its work finished.
+pub(crate) fn stopped_text(completed: bool) -> &'static str {
+    if completed {
+        STOPPED_AFTER_PART
+    } else {
+        STOPPED_BEFORE_SENDING
     }
 }
 

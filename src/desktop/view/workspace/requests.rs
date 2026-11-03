@@ -9,6 +9,7 @@ use crate::desktop::{
     services::{
         ReadKind,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
+        worker::CancelResult,
     },
     view::{
         confirm::{confirm, prepare_again},
@@ -247,6 +248,63 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.services.worker().cancel(id);
+        cx.notify();
+    }
+
+    /// Stop at a safe point (R-1): cancels the accepted request's token,
+    /// so it stops at its next safe point. Once signalled it reads
+    /// Stopping… until it ends.
+    pub(in crate::desktop::view) fn stop_request(
+        &mut self,
+        id: DesktopRequestId,
+        cx: &mut Context<Self>,
+    ) {
+        if self.services.worker().cancel(id) == CancelResult::Signalled {
+            self.services.operations().update(cx, |operations, cx| {
+                operations.stopping(id);
+                cx.notify();
+            });
+        }
+        cx.notify();
+    }
+
+    /// A stopped share's Share: a new request of the same share, under a
+    /// new request ID, since a stop is final (fact 12). Nothing is sent
+    /// while a share of the same target is queued or running.
+    pub(in crate::desktop::view) fn share_request_again(
+        &mut self,
+        id: DesktopRequestId,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(intent) = self
+            .services
+            .operations()
+            .read(cx)
+            .request(id)
+            .map(|request| request.intent.clone())
+        else {
+            return;
+        };
+        let same = |asked: &Intent| match (asked, &intent) {
+            (Intent::RepoSync { root: asked }, Intent::RepoSync { root }) => asked == root,
+            (
+                Intent::ItemSync {
+                    root: asked,
+                    kind: asked_kind,
+                    id: asked_id,
+                },
+                Intent::ItemSync { root, kind, id },
+            ) => asked == root && asked_kind == kind && asked_id == id,
+            _ => false,
+        };
+        if !matches!(intent, Intent::RepoSync { .. } | Intent::ItemSync { .. })
+            || self.services.worker().in_flight(same)
+        {
+            return;
+        }
+        self.services
+            .worker()
+            .submit(intent, Lane::User, None, None);
         cx.notify();
     }
 

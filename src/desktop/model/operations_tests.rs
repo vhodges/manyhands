@@ -113,6 +113,29 @@ fn a_request_runs_is_accepted_and_finishes() {
     assert_eq!(*shown, message);
 }
 
+/// R-14: a same-ID re-entry never reports `Accepted` (fact 10), so any
+/// stage marks the request accepted, as the worker does.
+#[test]
+fn any_stage_after_acceptance_marks_the_request_accepted() {
+    let mut operations = Operations::default();
+    let queued = request(1);
+    let request_id = queued.request_id;
+    let id = queued.id;
+    operations.apply(WorkerEvent::Queued(queued));
+    operations.apply(WorkerEvent::Started(id));
+    operations.apply(WorkerEvent::Progress(
+        id,
+        progress(request_id, ProgressStage::Fetching),
+    ));
+    assert!(matches!(
+        operations.request(id).unwrap().state,
+        RequestState::Running {
+            stage: Some(ProgressStage::Fetching),
+            accepted: true
+        }
+    ));
+}
+
 #[test]
 fn a_retry_keeps_the_request_and_its_place() {
     let mut operations = Operations::default();

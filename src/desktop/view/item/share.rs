@@ -9,6 +9,9 @@
 //! While a share of the item is queued or running it reads Sharing… and is
 //! disabled, so a second press queues nothing.
 //!
+//! While a share or a post of the item runs, the pill says its stage
+//! (`share_progress`, design, Stage text), from the request model.
+//!
 //! The remote is the workspace's navigation's (`publication_remote`,
 //! decision 20): the tab reads no remotes itself (D3's fact 41). Until
 //! navigation has listed the repository, Share is not drawn.
@@ -16,7 +19,7 @@
 use std::path::PathBuf;
 
 use gpui_kit::{
-    AnyElement, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
+    AnyElement, App, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{Disableable, Icon, Sizable, button::Button},
     div,
@@ -26,8 +29,12 @@ use manyhands::repository::{AuthoringKind, ItemDtoKind};
 use super::{ItemPane, ItemRoute, PublicationRemote};
 use crate::desktop::{
     assets::icon_path,
-    model::{item::SHARE, navigation::OpenTarget},
-    services::requests::{Intent, Lane},
+    model::{
+        item::SHARE,
+        navigation::OpenTarget,
+        operations::{Progressing, progress_words},
+    },
+    services::requests::{Intent, Lane, RequestState},
     view::sidebar::SHARING,
 };
 
@@ -47,11 +54,13 @@ pub(crate) fn share_tooltip(remote: &str) -> String {
     )
 }
 
-/// The tab's Share. It holds nothing of its own yet: the remote is the
-/// pane's (`publication_remote`), and whether a share runs is the
-/// worker's. Tasks 9 to 10b keep its stage and outcome here.
+/// The tab's Share: what its pill last said of a running share or post.
+/// The remote is the pane's (`publication_remote`), and whether a share
+/// runs is the worker's.
 #[derive(Default)]
-pub(super) struct ShareState {}
+pub(super) struct ShareState {
+    progress: Option<String>,
+}
 
 impl ItemPane {
     /// The item this tab shares: its repository, kind and ID, for an item
@@ -91,11 +100,58 @@ impl ItemPane {
     /// (`share_remote_changed`) once its navigation lists the repository.
     pub(super) fn share_opened(&mut self, _cx: &mut Context<Self>) {}
 
-    /// The request model changed. Whether a share runs is read from the
-    /// worker as the header is drawn, and a finished remote request
-    /// reloads navigation, which gives the remote again; nothing to follow
-    /// yet (Tasks 9 to 10b follow the stage and the outcome).
-    pub(super) fn share_progressed(&mut self, _cx: &mut Context<Self>) {}
+    /// The request model changed: a share or post of the item may have
+    /// reached another stage, so the pill is drawn again. Whether a share
+    /// runs is read from the worker as the header is drawn, and a finished
+    /// remote request reloads navigation, which gives the remote again.
+    pub(super) fn share_progressed(&mut self, cx: &mut Context<Self>) {
+        let progress = self.share_progress(cx);
+        if self.share.progress != progress {
+            self.share.progress = progress;
+            cx.notify();
+        }
+    }
+
+    /// What the pill says while a share (`item sync`) or a post
+    /// (`comment add`) of this item runs, newest first: "Sharing · …" or
+    /// "Posting · …", naming the publication remote while connecting.
+    pub(super) fn share_progress(&self, cx: &App) -> Option<String> {
+        let OpenTarget::Item { repo, kind, id } = self.model.target() else {
+            return None;
+        };
+        let root = PathBuf::from(repo);
+        let kind = match kind {
+            ItemDtoKind::Document => AuthoringKind::Document,
+            ItemDtoKind::Ticket => AuthoringKind::Ticket,
+        };
+        let operations = self.services.operations().read(cx);
+        let (progressing, stage) = operations.requests().iter().find_map(|request| {
+            let RequestState::Running { stage, .. } = request.state else {
+                return None;
+            };
+            let ours = match &request.intent {
+                Intent::ItemSync {
+                    root: asked,
+                    kind: asked_kind,
+                    id: asked_id,
+                }
+                | Intent::CommentAdd {
+                    root: asked,
+                    kind: asked_kind,
+                    id: asked_id,
+                    ..
+                } => *asked == root && *asked_kind == kind && asked_id == id,
+                _ => false,
+            };
+            ours.then(|| Progressing::of(&request.intent).map(|kind| (kind, stage)))
+                .flatten()
+        })?;
+        let remote = match self.publication_remote() {
+            PublicationRemote::Named(name) => Some(name.as_str()),
+            PublicationRemote::Unknown | PublicationRemote::Unset => None,
+        };
+        Some(progress_words(progressing, stage, remote))
+    }
 
     /// The repository's publication remote, as navigation gives it,
     /// changed: Share is drawn again with it.

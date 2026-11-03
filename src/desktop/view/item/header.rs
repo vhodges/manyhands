@@ -168,10 +168,15 @@ impl ItemPane {
         // The read is borrowed; only a new item's stand-in is built.
         let built = read.is_none().then(|| self.new_item_shown(cx)).flatten();
         let item = read.or(built.as_ref());
+        let progress = self.share_progress(cx);
         let pill = item.map(|item| {
+            // A running share or post of the item says its stage.
+            if let Some(words) = progress {
+                return pill::progress_pill(words, read, cx).into_any_element();
+            }
             let state = state.unwrap_or_else(|| pill::viewing_state(item, self.unsaved(cx)));
             // A stand-in was read from nowhere: no provenance (M2).
-            pill::pill(state, read, cx)
+            pill::pill(state, read, cx).into_any_element()
         });
         let actions = h_flex()
             .id("item-actions")

@@ -5,21 +5,35 @@
 //! the same target is queued or running it reads Sharing… and queues
 //! nothing more; Share main sends `repo sync`.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::mpsc,
+};
 
 use gpui_kit::{TestAppContext, test::TestWindowExt};
-use manyhands::repository::{AuthoringKind, ItemDtoKind};
+use manyhands::{
+    canonical::{CONFIG_PATH, ItemId},
+    repository::{AuthoringKind, ItemDtoKind, ProgressEvent, ProgressStage, RequestId},
+    results::{Effects, Envelope, IntegrationEffect, ResultCode, Scope},
+};
 
 use super::{SHARE_BUTTON, SHARE_NOTE, SHARE_SET_UP, share_tooltip};
 use crate::desktop::{
-    model::{item::SHARE, navigation::OpenTarget, stamp::SettingsPage},
+    model::{
+        item::SHARE,
+        navigation::OpenTarget,
+        operations::{STOPPED_AFTER_PART, STOPPED_BEFORE_SENDING},
+        stamp::SettingsPage,
+    },
     services::{
         JobKind,
-        requests::{DesktopRequest, Intent, Lane},
+        requests::{CommentBody, DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
+        worker::WorkerEvent,
     },
     test_support::fixtures::{Fixture, item_id},
     view::{
-        harness::{Shell, key},
+        harness::{Shell, WAIT, key},
+        operations::{STOP, STOPPING, request_id},
         settings::Shown,
         sidebar::{SHARE_MAIN, SHARE_MAIN_BUTTON, SHARE_MAIN_SET_UP, SHARING},
     },
@@ -308,4 +322,315 @@ async fn share_main_at_the_end_of_an_item_tab_submits_repo_sync(cx: &mut TestApp
     });
     held.release();
     shell.until_ended(sent[0], cx).await;
+}
+
+// Task 9: stages and Stop (design, Lane B, Stage text and Stop at a safe
+// point).
+
+/// Fabricated requests stand far above the worker's own numbering.
+const FABRICATED: u64 = 1_000_000;
+
+fn ticket_id() -> ItemId {
+    item_id(TICKET)
+}
+
+fn item_sync(root: &Path) -> Intent {
+    Intent::ItemSync {
+        root: root.to_owned(),
+        kind: AuthoringKind::Ticket,
+        id: ticket_id(),
+    }
+}
+
+fn comment_add(root: &Path) -> Intent {
+    Intent::CommentAdd {
+        root: root.to_owned(),
+        kind: AuthoringKind::Ticket,
+        id: ticket_id(),
+        comment_id: item_id("01ARZ3NDEKTSV4RRFFQ69G5FS1"),
+        parent_id: None,
+        body: CommentBody::new("A comment.".to_owned()),
+    }
+}
+
+/// Puts a request of `intent`, numbered `n` above the worker's, in the
+/// request model as running, through `Operations::apply`.
+fn running(shell: &Shell, n: u64, intent: Intent, cx: &mut TestAppContext) -> DesktopRequest {
+    let request = DesktopRequest {
+        id: DesktopRequestId(FABRICATED + n),
+        request_id: RequestId::new(),
+        intent,
+        confirmation: None,
+        lane: Lane::User,
+        attempt: 1,
+        state: RequestState::Queued,
+    };
+    let operations = shell.operations(cx);
+    let queued = request.clone();
+    operations.update(cx, |operations, cx| {
+        operations.apply(WorkerEvent::Queued(queued));
+        operations.apply(WorkerEvent::Started(request.id));
+        cx.notify();
+    });
+    shell.run(cx);
+    request
+}
+
+/// Applies a constructed progress event of `stage` to `request`.
+fn reach(shell: &Shell, request: &DesktopRequest, stage: ProgressStage, cx: &mut TestAppContext) {
+    let event = ProgressEvent {
+        request_id: request.request_id.to_string(),
+        operation_id: None,
+        command: "item sync".to_owned(),
+        scope: Scope::default(),
+        stage,
+        effects: Effects::not_requested(),
+    };
+    let operations = shell.operations(cx);
+    let id = request.id;
+    operations.update(cx, |operations, cx| {
+        operations.apply(WorkerEvent::Progress(id, event));
+        cx.notify();
+    });
+    shell.run(cx);
+}
+
+/// Each stage's text, after the pill's "Sharing · " or "Posting · ".
+const SHARE_STAGES: [(ProgressStage, &str); 9] = [
+    (ProgressStage::Accepted, "Getting ready…"),
+    (ProgressStage::Observing, "Getting ready…"),
+    (ProgressStage::Connecting, "Connecting to origin…"),
+    (ProgressStage::Fetching, "Bringing in changes…"),
+    (ProgressStage::UpdatingLocal, "Merging changes…"),
+    (ProgressStage::Pushing, "Sending your saved changes…"),
+    (ProgressStage::Verifying, "Checking it arrived…"),
+    (ProgressStage::Indexing, "Updating the list…"),
+    (ProgressStage::Stopping, "Stopping at a safe point…"),
+];
+
+const POST_STAGES: [(ProgressStage, &str); 10] = [
+    (ProgressStage::Accepted, "Getting a private copy ready…"),
+    (ProgressStage::Observing, "Getting a private copy ready…"),
+    (ProgressStage::Writing, "Saving…"),
+    (ProgressStage::Connecting, "Connecting to origin…"),
+    (ProgressStage::Fetching, "Bringing in changes…"),
+    (ProgressStage::UpdatingLocal, "Merging changes…"),
+    (ProgressStage::Pushing, "Sending your saved changes…"),
+    (ProgressStage::Verifying, "Checking it arrived…"),
+    (ProgressStage::Indexing, "Updating the list…"),
+    (ProgressStage::Stopping, "Stopping at a safe point…"),
+];
+
+/// Each stage a share or a post reports reads as the design's text, in
+/// the item's pill and in its operation area entry.
+#[gpui_kit::test]
+fn each_stage_shows_its_text_for_share_and_post(cx: &mut TestAppContext) {
+    let (shell, root) = shell(true, cx);
+    open_ticket(&shell, &root, cx);
+
+    let share = running(&shell, 1, item_sync(&root), cx);
+    for (stage, text) in SHARE_STAGES {
+        reach(&shell, &share, stage, cx);
+        let words = format!("Sharing · {text}");
+        assert_eq!(
+            shell.label("item-pill", cx).as_deref(),
+            Some(words.as_str()),
+            "{stage:?}"
+        );
+        assert_eq!(
+            shell.label(request_id(share.id, "state"), cx).as_deref(),
+            Some(words.as_str()),
+            "{stage:?}"
+        );
+    }
+    finish(&shell, share.id, cx);
+
+    let post = running(&shell, 2, comment_add(&root), cx);
+    for (stage, text) in POST_STAGES {
+        reach(&shell, &post, stage, cx);
+        let words = format!("Posting · {text}");
+        assert_eq!(
+            shell.label("item-pill", cx).as_deref(),
+            Some(words.as_str()),
+            "{stage:?}"
+        );
+        assert_eq!(
+            shell.label(request_id(post.id, "state"), cx).as_deref(),
+            Some(words.as_str()),
+            "{stage:?}"
+        );
+    }
+}
+
+/// Ends the fabricated request `id` with a success.
+fn finish(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) {
+    let operations = shell.operations(cx);
+    let envelope = Envelope::classified_mutation(
+        "item sync",
+        Scope::default(),
+        false,
+        ResultCode::Ok,
+        Effects::not_requested(),
+        false,
+    );
+    operations.update(cx, |operations, cx| {
+        operations.apply(WorkerEvent::Finished(id, Box::new(envelope)));
+        cx.notify();
+    });
+    shell.run(cx);
+}
+
+/// With no publication remote, a post reads "Posting · …" at every stage
+/// it can reach, never "Sharing", and offers no Stop (R-15): it has no
+/// safe point.
+#[gpui_kit::test]
+fn a_post_without_a_remote_never_says_sharing(cx: &mut TestAppContext) {
+    let (shell, root) = shell(false, cx);
+    open_ticket(&shell, &root, cx);
+    let post = running(&shell, 1, comment_add(&root), cx);
+    for stage in [
+        ProgressStage::Accepted,
+        ProgressStage::Observing,
+        ProgressStage::Writing,
+        ProgressStage::Indexing,
+    ] {
+        reach(&shell, &post, stage, cx);
+        for shown in [
+            shell.label("item-pill", cx),
+            shell.label(request_id(post.id, "state"), cx),
+        ] {
+            let shown = shown.expect("the post's progress is shown");
+            assert!(shown.starts_with("Posting · "), "{stage:?}: {shown}");
+            assert!(!shown.contains("Sharing"), "{stage:?}: {shown}");
+        }
+        assert!(!shell.present(request_id(post.id, "stop"), cx), "{stage:?}");
+    }
+}
+
+/// Repository `a` holding the ticket, published over SSH with the
+/// selection committed, indexed, in an open window.
+fn shared_shell(cx: &mut TestAppContext) -> (Shell, PathBuf) {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.commit_ticket(&root, TICKET, "Shared", "");
+    fixture.publish_over_ssh(&root);
+    let config = std::fs::read(root.join(CONFIG_PATH)).unwrap();
+    fixture.commit_file(&root, CONFIG_PATH, &config);
+    fixture.refresh(&root);
+    (Shell::open(fixture, cx), root)
+}
+
+/// R-1: an accepted share offers Stop at a safe point in place of
+/// Finishing; pressed, it cancels the running job's token and reads
+/// Stopping…, and the share then stops at a safe point and says so.
+#[gpui_kit::test]
+async fn an_accepted_share_offers_stop_and_stopping_signals_it(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shared_shell(cx);
+    // Held after its acceptance, before its domain call (fact 16).
+    let (reached_tx, reached) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    shell
+        .fixture
+        .service()
+        .set_request_hook_for_testing(move || {
+            let _ = reached_tx.send(());
+            let _ = released.recv_timeout(WAIT);
+        });
+    shell.select(&root, cx);
+    shell.click(SHARE_MAIN_BUTTON, cx);
+    reached.recv_timeout(WAIT).expect("the share was accepted");
+    shell
+        .until(cx, |operations| {
+            operations.requests().iter().any(|request| {
+                matches!(request.intent, Intent::RepoSync { .. })
+                    && matches!(request.state, RequestState::Running { accepted: true, .. })
+            })
+        })
+        .await;
+    let id = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::RepoSync { .. })
+    })[0];
+    assert_eq!(
+        shell.label(request_id(id, "stop"), cx).as_deref(),
+        Some(STOP)
+    );
+    assert!(!shell.present(request_id(id, "cancel"), cx));
+
+    shell.click(request_id(id, "stop"), cx);
+    let worker = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().worker().clone());
+    let job = worker.running_job().expect("the share still runs");
+    assert_eq!(job.id, id);
+    assert!(job.cancelled, "Stop cancelled its token");
+    assert_eq!(
+        shell.label(request_id(id, "stop"), cx).as_deref(),
+        Some(STOPPING)
+    );
+
+    drop(release);
+    shell.until_ended(id, cx).await;
+    assert!(!shell.present(request_id(id, "stop"), cx));
+    // It stopped at its first safe point, before anything was sent.
+    assert_eq!(
+        shell.label(request_id(id, "code"), cx).as_deref(),
+        Some("cancelled")
+    );
+    assert_eq!(
+        shell.label(request_id(id, "outcome"), cx).as_deref(),
+        Some(STOPPED_BEFORE_SENDING)
+    );
+}
+
+/// A stopped share says whether part of the work finished, and offers
+/// Share, which sends a new request.
+#[gpui_kit::test]
+async fn a_stopped_share_says_what_completed_and_offers_share(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(true, cx);
+    shell.select(&root, cx);
+    let completed = Effects {
+        integration: IntegrationEffect::Complete,
+        ..Effects::not_requested()
+    };
+    let mut seen = Vec::new();
+    for (effects, text) in [
+        (Effects::not_requested(), STOPPED_BEFORE_SENDING),
+        (completed, STOPPED_AFTER_PART),
+    ] {
+        let stopped = Envelope::classified_mutation(
+            "repo sync",
+            Scope::default(),
+            true,
+            ResultCode::Cancelled,
+            effects,
+            false,
+        );
+        let held = shell
+            .backend
+            .hold_job_return_answering(JobKind::SynchronizeRepo, stopped);
+        match seen.last() {
+            None => shell.click(SHARE_MAIN_BUTTON, cx),
+            Some(&previous) => shell.click(request_id(previous, "share"), cx),
+        }
+        held.wait_reached();
+        let sent = shell.requests(cx, |request| {
+            matches!(request.intent, Intent::RepoSync { .. })
+        });
+        assert_eq!(sent.len(), seen.len() + 1, "Share sent a new request");
+        let id = sent[0];
+        assert!(!seen.contains(&id));
+        held.release();
+        shell.until_ended(id, cx).await;
+        assert_eq!(
+            shell.label(request_id(id, "outcome"), cx).as_deref(),
+            Some(text)
+        );
+        assert_eq!(
+            shell.label(request_id(id, "share"), cx).as_deref(),
+            Some(SHARE)
+        );
+        seen.push(id);
+    }
 }
