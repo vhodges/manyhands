@@ -10,7 +10,7 @@ id: "01M6HPQ3PV69Z8FA294YW507N3"
 
 # Desktop Conflict Recovery, Promotion And Closure Implementation Plan
 
-> **For agentic workers:** Draft, 2026-11-03. Not approved; implementation
+> **For agentic workers:** Draft (revision 2), 2026-11-03. Not approved; implementation
 > is not authorized. Once approved, use `implementing-a-cycle` task by
 > task, re-read the design, repeat the ticket preflight, and record every
 > checkpoint on ticket `01M4CC0VN2K8DBHNMZ46NTX5JJ`. Steps use checkbox
@@ -52,7 +52,8 @@ on `manyhands/ticket/01M4CC0VN2K8DBHNMZ46NTX5JJ`. No lane branches
 `--locked`.
 
 **Library boundary.** Only Tasks 1–3 change library files, and only those
-the design's Part 0 lists. No other task changes `src/repository.rs`,
+the design's Part 0 lists (Task 3 also adds `stage_text` arms in
+`src/desktop/model/operations.rs` so the tree stays green). No other task changes `src/repository.rs`,
 `src/repository/`, `src/results.rs`, `src/canonical.rs`, `src/drafts/`,
 `src/runtime.rs`, `src/lib.rs`, `Cargo.toml` or `Cargo.lock`. A gap stops
 the task for the owner.
@@ -66,8 +67,9 @@ whenever main moves; never rebase.
 derives `Debug` or `Display`.
 
 **Test isolation.** Own temporary repositories, data directory and Git
-home per test; no network beyond the SSH fixture; no desktop test
-initializes the transport.
+home per test; no network; no desktop test initializes the transport.
+Remote outcomes in desktop tests are canned answers built from library
+types (decision 9); each names the library test that produces the real one.
 
 **Editor tests** follow D3's rules (cursor, focus and a drawn frame before
 typing; window-level `simulate_input`/`simulate_keystrokes`;
@@ -77,13 +79,16 @@ typing; window-level `simulate_input`/`simulate_keystrokes`;
 - Desktop: `devenv shell -- cargo test --locked --features desktop-test-support --bin manyhands <filter>`
   (written `… <filter>`). One filter per run; each run must report more
   than zero tests.
-- Library (Tasks 1–3): `devenv shell -- cargo test --all-features --locked --test <target> <filter>`.
+- Library (Tasks 1–3): `devenv shell -- cargo test --all-features --locked --test <target> <filter>`,
+  `--lib <filter>` or `--bin manyhands-cli <filter>`.
 - Targeted tests between tasks; the whole desktop bin suite at each Part
   checkpoint; the full suite in Task 0.
 - Part 0 changes `src/repository/mutation/`, `promotion/`, `closure/` and
   CLI lifecycle output, so AGENTS.md's SSH tier applies to it:
   `mutation_remote`, `document_promotion`, `ticket_closure` and
-  `cli_remote`, at Task 4 and again in Task 16.
+  `cli_remote`, at Task 4 and again in Task 16. If U-4 needs a file under
+  `src/repository/remote/` or `local_sync/`, the task stops for the owner
+  (design K-11).
 
 **Each task's last Verify lines.**
 ```sh
@@ -118,15 +123,17 @@ created in Task 0.
 
 ## Review Focus
 
-1. **No repeat.** A retry and a resume after a partial result add no
-   checkpoint, merge or publication commit (Tasks 7, 15).
-2. **Exact confirmation.** A change after prepare never runs under the
-   old consent (Task 6).
-3. **Save first.** A failed save prepares nothing (Task 6).
+1. **No repeat.** A Retry and a Resume after a partial result add no
+   checkpoint, merge or publication commit (Tasks 7, 15b).
+2. **Exact confirmation.** A refused consent never runs; Prepare again
+   shows the new summary (Task 6b).
+3. **Save first.** A failed save prepares nothing (Task 6a).
 4. **No automatic winner.** Save resolution stays disabled until every
    part is chosen; external sets have no Save (Tasks 11, 12).
-5. **L1 parity.** CLI goldens unchanged by the move (Task 1).
-6. **L3 order.** A cleanup-only replay reports `cleaning_up` alone (Task 3).
+5. **L1 parity.** C5's CLI renderer tests and goldens unchanged (Task 1).
+6. **L3 order.** A cleanup-only replay reports `cleaning_up` alone; a
+   local-only run no `publishing` (Task 3).
+7. **Resume after restart** resends the named request (Task 14).
 
 ## File Map And Dependency Order
 
@@ -137,20 +144,23 @@ created in Task 0.
 | 2 | 0 | L2 resume for lifecycle parents. |
 | 3 | 0 | L3 lifecycle progress (test-first, design checkpoint). |
 | 4 | 0 | Part 0 checkpoint. |
-| 5 | A | Intents; header actions live. |
-| 6 | A | Lifecycle dialog: save first, prepare, confirm, stale. |
-| 7 | A | Running, failed, done; outcomes; way out; operation area. |
+| 5 | A | Intents; header live; test seams. |
+| 6a | A | Dialog: save first, prepare, blocked, held. |
+| 6b | A | Dialog: confirm summary, stale, read-only tabs. |
+| 7 | A | Running, failed, done; outcomes; way out; credentials. |
 | 8 | A | Made-ready on Done. |
 | 9 | A | After a lifecycle; Part A checkpoint. |
 | 10 | B | Conflict reads and model. |
 | 11 | B | Resolve sheet and submission. |
 | 12 | B | External guidance. |
 | 13 | B | Entry points; local sync and Resume; Part B checkpoint. |
-| 14 | C | Republish; lifecycle Resume. |
-| 15 | D | Journeys, interruption, privacy, consent. |
+| 14 | C | Republish; lifecycle Resume and resend. |
+| 15a | D | Keyboard journeys. |
+| 15b | D | Interruption and commit counts. |
+| 15c | D | Privacy and consent. |
 | 16 | D | Checklist, gates, review-ready. |
 
-Order: 0 → 1 → 2 → 3 → 4 → 5 → … → 16, one at a time.
+Order: 0 → 1 → 2 → 3 → 4 → 5 → 6a → 6b → 7 → … → 16, one at a time.
 
 ---
 
@@ -171,18 +181,20 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   Run the test line detached with a three-hour budget. A failure is
   resolved or accepted by the owner before Task 1.
 - [ ] **Step 2: Re-check facts and amendments.**
-  `git diff --stat e39bb004 HEAD -- src/repository src/results.rs src/desktop src/bin docs/RFC docs/Waves`.
+  `git diff --stat e39bb004 HEAD -- src/repository src/results.rs src/desktop src/bin schemas docs/RFC docs/Waves`.
   Re-read each fact whose file changed, especially Facts 2–9 (C5), and
-  correct the design first. Confirm Document Amendments 1–4 are applied.
+  correct the design first. Refresh the Wave line citations. Confirm
+  Document Amendments 1–6 are applied.
 - [ ] **Step 3: Settle U-1 to U-4** by reading the source; record each in
   the ledger. An answer that differs stops for the owner.
 - [ ] **Step 4: Sweep.** `src/desktop` for `LATER`, `LATER_NOTE`,
   `header_later`, `later_action`, `CONFLICT_BANNER`, `BRANCH_DELETED`,
-  `SYNCHRONIZATION_UNAVAILABLE`, `resume_offer`, `JobKind::`,
-  `PreviewDetailsDto::`, `MutationDataDto::`, `PrepareDataDto::`; `tests/`
-  for `"connecting"`, `next_action`, `ProgressStage` near lifecycle
-  commands. Compare each hit with E-1–E-7; an unlisted breakage stops for
-  the owner.
+  `RemoteBranchDeleted`, `SYNCHRONIZATION_UNAVAILABLE`, `resume_offer`,
+  `is_synchronization`, `stage_text`, `JobKind::`, `PreviewDetailsDto::`,
+  `MutationDataDto::`, `PrepareDataDto::`; `tests/` and
+  `src/bin/manyhands-cli/` for `"connecting"`, `next_action` and
+  `ProgressStage` near lifecycle commands. Compare each hit with E-1–E-7;
+  an unlisted breakage stops for the owner.
 - [ ] **Step 5: Ledger, commit, ticket comment.**
 
 ---
@@ -191,41 +203,50 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
 
 ## Task 1: L1 Way Out
 
-- [ ] **Tests first** (`tests/mutation_remote/d5_way_out.rs`, added to
-  the `mutation_remote` target): one test per `LifecycleWayOut` variant
-  from a constructed envelope; `held_prepare_names_the_holding_request`;
-  `mixed_blockers_give_inspect`.
-- [ ] **Code:** `src/repository/mutation/way_out.rs`, `mutation/mod.rs`
-  export; `src/bin/manyhands-cli/human_lifecycle.rs` renders the
-  returned values (design, L1).
-- [ ] **Verify:** `--test mutation_remote d5_way_out`; `--test cli`;
-  `--test cli_remote lifecycle` with no golden change; the four lines.
+- [ ] **Tests first** (`src/repository/mutation/way_out_tests.rs`, lib
+  unit tests): one per `LifecycleWayOut` variant from a constructed
+  envelope; `a_held_prepare_names_the_holding_request`;
+  `a_deleted_branch_cancels_then_sends_again`;
+  `mixed_blockers_keep_the_cli_order`.
+- [ ] **Code:** `mutation/way_out.rs`, `mutation/mod.rs` export;
+  `src/bin/manyhands-cli/human_lifecycle.rs` renders the returned values
+  (design, L1).
+- [ ] **Verify:** `--lib way_out`; `--bin manyhands-cli lifecycle` (C5's
+  `lifecycle_tests.rs`, unchanged); `--test cli`; `--test cli_remote
+  lifecycle`; no golden changes; the four lines.
 - [ ] **Commit; review.**
 
 ## Task 2: L2 Resume For Lifecycle Parents
 
 - [ ] **Tests first** (`tests/read_status.rs`):
-  `unfinished_promotion_lists_resume`, `unfinished_closure_lists_resume`,
-  `a_held_parent_lists_no_resume`.
-- [ ] **Code:** `src/repository/read/status.rs` (design, L2). E-1, E-2.
-- [ ] **Verify:** `--test read_status`; `--test cli`; the four lines.
+  `an_unfinished_promotion_lists_resume`,
+  `an_unfinished_closure_lists_resume`,
+  `a_held_parent_still_lists_resume`,
+  `a_refused_parent_lists_no_resume`.
+- [ ] **Code:** `read/status.rs`, `mutation/bind/resume.rs` (share
+  `lifecycle_standing`) (design, L2). E-1, E-2.
+- [ ] **Verify:** `--test read_status`; `--test cli`; `--test cli_remote
+  operation`; the four lines.
 - [ ] **Commit; review.**
 
 ## Task 3: L3 Lifecycle Progress (test-first, design checkpoint)
 
-- [ ] **Design checkpoint:** before code, the implementer writes the sink
-  threading for `promote_document_observed` and `close_ticket_observed`
-  into the ledger; the orchestrator reviews it against the design's L3.
-- [ ] **Tests first** (`tests/mutation_remote/d5_progress.rs`):
+- [ ] **Design checkpoint:** before code, the implementer writes the
+  observer threading for `run_lifecycle` and U-4's mapping into the ledger;
+  the orchestrator reviews it against the design's L3.
+- [ ] **Tests first** (`tests/mutation_remote/d5_progress.rs`, a module of
+  `tests/mutation_remote.rs`):
   `a_promotion_reports_its_stages_in_order`,
   `a_closure_reports_recording_before_integrating`,
+  `publishing_follows_integrating`,
   `a_cleanup_only_replay_reports_cleaning_up_alone`,
-  `a_local_only_run_reports_no_pushing`.
-- [ ] **Code:** `mutation/progress.rs`, `promotion/lifecycle.rs`,
-  `promotion/mod.rs`, `closure/mod.rs`, `mutation/bind/lifecycle.rs`. E-3.
-  CLI RFC stage list (Document Amendment 3) if not applied at approval.
+  `a_local_only_run_reports_no_publishing`.
+- [ ] **Code:** `mutation/progress.rs`, `schemas/v1/progress_event.schema.json`,
+  `promotion/run.rs`, `closure/lifecycle.rs`, `mutation/bind/lifecycle.rs`;
+  `stage_text` arms in `src/desktop/model/operations.rs`. E-3.
 - [ ] **Verify:** `--test mutation_remote d5_progress`; `--test
-  document_promotion`; `--test ticket_closure`; the four lines.
+  read_contract`; `--test document_promotion`; `--test ticket_closure`;
+  `--test cli_remote lifecycle`; the four lines.
 - [ ] **Commit; review.**
 
 ## Task 4: Part 0 Checkpoint
@@ -238,65 +259,86 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
 
 # Part A: Close Ticket… And Approve And Merge…
 
-## Task 5: Intents And Header
+## Task 5: Intents, Header, Test Seams
 
-- [ ] **Tests first** (`services/requests_tests.rs`, `view/item/header_tests.rs`):
+- [ ] **Tests first** (`services/requests_tests.rs`,
+  `view/item/header_tests.rs`, `model/operations_tests.rs`):
   `document_promote_builds_its_mutation`, `ticket_close_builds_its_mutation`,
   `close_ticket_is_live_on_a_ticket`, `approve_and_merge_is_live_on_a_document`,
-  `a_closed_ticket_offers_no_close`.
+  `a_closed_ticket_offers_no_close`,
+  `a_lifecycle_row_is_not_a_synchronization`.
 - [ ] **Code:** `Intent`, `JobKind`, build arms, labels; `header.rs`,
-  `model/item.rs` (design, A1). E-4. Exhaustive matches take C5's new
-  variants.
-- [ ] **Verify:** `… header`; `… requests`; the four lines.
+  `model/item.rs`; `resume_offer` lifecycle arm; canned prepare and
+  conflict-read seams in `test_support/` (design, A1). E-4.
+- [ ] **Verify:** `… header`; `… requests`; `… operations`; the four lines.
 - [ ] **Commit; review.**
 
-## Task 6: Lifecycle Dialog, Confirm
+## Task 6a: Dialog — Save First, Prepare, Blocked
 
 - [ ] **Tests first** (`view/lifecycle_tests.rs`):
-  `unsaved_edits_are_saved_before_prepare`, `a_failed_save_prepares_nothing` (P1),
-  `the_summary_lists_every_changed_path_with_its_tag`,
-  `code_on_the_branch_adds_the_code_note`,
-  `local_only_reads_keep_on_this_computer`,
-  `closure_shows_closed_by_from_the_preview`,
-  `a_change_after_prepare_offers_prepare_again` (P2),
-  `expired_consent_offers_prepare_again` (P3),
-  `a_blocked_prepare_lists_blockers_and_way_out` (A5),
+  `unsaved_edits_are_saved_before_prepare`,
+  `a_failed_save_prepares_nothing` (P1),
+  `a_dirty_primary_blocks_at_prepare` (P19, real repository),
+  `a_blocked_prepare_lists_blockers_and_way_out`,
   `a_held_item_names_its_request` (P12),
   `already_closed_runs_nothing` (P14),
+  `the_header_names_item_repository_and_context` (A22).
+- [ ] **Code:** `view/lifecycle.rs`, `lifecycle/prepare.rs` (design, A2).
+- [ ] **Verify:** `… lifecycle`; the four lines.
+- [ ] **Commit; review.**
+
+## Task 6b: Dialog — Confirm, Stale, Read-Only
+
+- [ ] **Tests first** (`view/lifecycle/confirm_tests.rs`):
+  `the_summary_lists_every_changed_path_with_its_tag` (A19),
+  `code_on_the_branch_adds_the_code_note`,
+  `closure_steps_mark_closed_before_merge`,
+  `local_only_reads_keep_on_this_computer`,
+  `closure_shows_closed_by_from_the_preview`,
+  `a_new_path_after_prepare_offers_prepare_again` (P2, A4),
+  `expired_consent_offers_prepare_again` (P3),
   `status_text_closed_still_closes` (P13),
-  `enter_confirms_and_esc_cancels`.
-- [ ] **Code:** `view/lifecycle.rs` and `lifecycle/` (design, A2).
+  `tabs_are_read_only_while_running` (P20, A23),
+  `enter_confirms_esc_cancels_and_focus_returns` (A21).
+- [ ] **Code:** `lifecycle/confirm.rs`, read-only hook in the item tab
+  (design, A2).
 - [ ] **Verify:** `… lifecycle`; the four lines.
 - [ ] **Commit; review.**
 
 ## Task 7: Running, Failed, Done
 
 - [ ] **Tests first** (`view/lifecycle/outcome_tests.rs`):
-  `running_shows_stages_as_they_arrive`, `stop_at_a_safe_point_stops` (P4),
-  `merge_publication_and_cleanup_are_reported_apart`,
-  `cleanup_refused_keeps_failed_with_retry` (P6),
+  `running_lights_each_step_from_its_stage`,
+  `stop_at_a_safe_point_names_completed_steps` (P4, A22),
+  `local_only_with_cleanup_complete_is_done`,
+  `cleanup_refused_is_failed_with_retry` (P6, canned),
   `retry_sends_the_same_request_id` (P7),
+  `a_stopped_run_with_no_record_offers_prepare` (P18),
+  `a_dirty_primary_stop_at_execute_merges_nothing` (P19, canned),
   `each_way_out_offers_its_button`,
+  `a_refused_key_offers_unlock_and_sharing_and_keys`,
   `the_operation_entry_reopens_the_dialog`.
-- [ ] **Code:** `view/lifecycle/outcome.rs`, operation area entry (design,
-  A3).
+- [ ] **Code:** `lifecycle/outcome.rs`, operation area entry (design, A3).
 - [ ] **Verify:** `… lifecycle`; `… operations`; the four lines.
 - [ ] **Commit; review.**
 
 ## Task 8: Made Ready On Done
 
-- [ ] **Tests first:** `done_lists_made_ready_with_slug_and_title`,
+- [ ] **Tests first** (`view/lifecycle/made_ready_tests.rs`):
+  `done_lists_made_ready_with_slug_and_title`,
+  `a_ticket_without_a_slug_shows_its_short_id`,
   `index_pending_says_the_list_may_be_incomplete`,
   `not_computed_offers_open_ready_tickets`,
   `a_promotion_shows_no_made_ready`.
-- [ ] **Code:** `view/lifecycle/made_ready.rs` (design, A3).
+- [ ] **Code:** `lifecycle/made_ready.rs` (design, A3).
 - [ ] **Verify:** `… made_ready`; the four lines.
 - [ ] **Commit; review.**
 
 ## Task 9: After A Lifecycle; Part A Checkpoint
 
-- [ ] **Tests first:** `tabs_reopen_from_primary_after_cleanup`,
-  `a_closed_ticket_shows_closed_by_apart_from_status`,
+- [ ] **Tests first** (`view/lifecycle/after_tests.rs`):
+  `tabs_reopen_from_primary_after_cleanup`,
+  `the_closure_display_stays_apart_from_status` (characterization, A20),
   `comment_drafts_stay_on_the_drafts_page` (A10),
   `a_failed_close_keeps_its_context_and_drafts` (A10),
   `editing_a_promoted_document_starts_a_fresh_context`.
@@ -314,12 +356,13 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   `a_field_changed_by_both_needs_a_choice`,
   `a_field_changed_by_one_side_is_taken`,
   `the_body_offers_keep_both`,
-  `keep_mine_everywhere_submits_mine_unchanged` (U-4),
+  `all_mine_submits_mines_bytes`,
+  `a_chosen_merge_submits_a_normalized_file`,
   `a_noncanonical_path_makes_the_set_external`,
   `incompatible_closures_are_external`,
+  `a_local_unsupported_reason_is_external`,
   `a_local_entry_is_classified_by_its_path` (U-2).
-- [ ] **Code:** `model/conflict.rs`; reads in `services/reads.rs` callers
-  (design, B1–B2).
+- [ ] **Code:** `model/conflict.rs`; reads (design, B1–B2).
 - [ ] **Verify:** `… conflict`; the four lines.
 - [ ] **Commit; review.**
 
@@ -327,17 +370,22 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
 
 - [ ] **Tests first** (`view/conflict_tests.rs`):
   `save_is_disabled_until_every_part_is_chosen`,
+  `ctrl_enter_saves_and_enter_is_a_newline`,
   `save_submits_every_path_with_the_observation`,
-  `a_stale_observation_refreshes_the_comparison` (P11, A3),
-  `original_request_required_offers_retry`,
-  `a_lifecycle_child_conflict_finishes_the_same_request` (P8).
+  `a_local_resolution_uses_the_inspections_observation`,
+  `a_stale_observation_refreshes_the_comparison` (P11, A3, real local),
+  `the_note_follows_the_source`,
+  `original_request_required_retries_with_the_kept_set`,
+  `a_lifecycle_child_resolution_sends_the_lifecycle_again` (P8, canned),
+  `an_interrupted_remote_resolution_resumes` (P15, canned).
 - [ ] **Code:** `view/conflict.rs`, `conflict/` (design, B3).
 - [ ] **Verify:** `… conflict`; the four lines.
 - [ ] **Commit; review.**
 
 ## Task 12: External Guidance
 
-- [ ] **Tests first:** `an_external_set_has_no_save`,
+- [ ] **Tests first** (`view/conflict/external_tests.rs`):
+  `an_external_set_has_no_save`,
   `check_again_offers_resume_only_when_the_library_does`,
   `incompatible_closures_offer_no_winner` (P10, A12).
 - [ ] **Code:** `view/conflict/external.rs` (design, B4).
@@ -346,9 +394,11 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
 
 ## Task 13: Entry Points, Local Sync; Part B Checkpoint
 
-- [ ] **Tests first:** `the_banner_offers_review_changes`,
+- [ ] **Tests first** (`view/conflict/entry_tests.rs`):
+  `the_banner_offers_review_changes`,
   `a_pending_resolve_row_offers_review_changes_after_restart`,
-  `repair_locally_syncs_and_opens_the_sheet_on_conflict` (P9, A13),
+  `repair_locally_syncs_and_opens_the_sheet_on_conflict` (P9, A13, real),
+  `a_refused_local_sync_shows_its_answer_and_resume` (P16),
   `a_local_synchronization_offers_resume`.
 - [ ] **Code:** banners, operation area, `resume_offer` (design, B5–B6).
   E-5, E-7.
@@ -362,28 +412,45 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
 
 ## Task 14: Republish; Lifecycle Resume
 
-- [ ] **Tests first:** `a_deleted_branch_offers_republish`,
-  `republish_confirms_then_shares`,
-  `a_lifecycle_row_offers_resume_after_restart` (P5, A15),
-  `resume_opens_the_dialog_running`.
+- [ ] **Tests first** (`view/operations/resume_tests.rs`,
+  `view/operations/republish_tests.rs`):
+  `a_deleted_branch_offers_republish`,
+  `republish_confirms_then_shares` (canned),
+  `a_stopped_republish_sends_the_same_request` (P17),
+  `a_lifecycle_row_offers_resume_after_restart` (A15),
+  `resume_resends_the_named_request_and_opens_running` (P5).
 - [ ] **Code:** design, Part C. E-6.
-- [ ] **Verify:** `… republish`; `… operations`; the four lines.
+- [ ] **Verify:** `… operations`; the four lines.
 - [ ] **Commit; review.**
 
 ---
 
 # Part D: Evidence
 
-## Task 15: Journeys
+## Task 15a: Keyboard Journeys
 
-- [ ] **Tests:** `view/keyboard_tests/lifecycle.rs` (A2: close and
-  promote by keyboard, local-only included, A6) and
-  `view/keyboard_tests/conflict.rs` (A1: remote and local); SSH-fixture
-  tests for remote cleanup rejection (A7) and republish (A14); a stop and
-  a second-process interruption, then Retry and Resume, counting commits
-  on primary and context (A8, A9); sentinel privacy (A16); no lifecycle
-  from navigation, Save, Done, close or quit (A17).
-- [ ] **Verify:** each filter; whole desktop bin suite; the four lines.
+- [ ] **Tests:** `view/keyboard_tests/lifecycle.rs` (A2, A6: close and
+  promote by keyboard, local-only, real) and
+  `view/keyboard_tests/conflict.rs` (A1: local real, remote canned).
+- [ ] **Verify:** `… keyboard_tests`; the four lines.
+- [ ] **Commit; review.**
+
+## Task 15b: Interruption And Commit Counts
+
+- [ ] **Tests** (`view/lifecycle/interruption_tests.rs`): a local-only
+  close stopped at a safe point (held by `DelayingBackend`), then Retry;
+  a canned `original_request_required` after a simulated relaunch, then
+  Resume and resend; commits on primary and context counted before and
+  after each (A8, A9).
+- [ ] **Verify:** `… interruption`; the four lines.
+- [ ] **Commit; review.**
+
+## Task 15c: Privacy And Consent
+
+- [ ] **Tests** (`view/lifecycle/privacy_tests.rs`): sentinel title, body,
+  comment and side text never in an operation entry or message (A16);
+  navigation, Save, Done, close and quit start no lifecycle (A17).
+- [ ] **Verify:** `… privacy`; whole desktop bin suite; the four lines.
 - [ ] **Commit; review.**
 
 ## Task 16: Checklist, Gates, Review-Ready
@@ -407,8 +474,11 @@ git merge-tree --write-tree HEAD origin/main
 ```
 - [ ] Whole-branch SPEC and QUALITY reviews; fill the Acceptance Status
   column; the owner runs the checklist.
-- [ ] Ticket comment: review-ready; `ticket save`; close the ticket only
-  after approval, in the final push before merge.
+- [ ] Ticket comment: review-ready; `ticket save`.
+- [ ] After code-review approval, close the ticket by a canonical
+  ticket-file edit (AGENTS.md; `ticket close` is not used on D5's own
+  ticket) in the final push before merge. Native CI runs after merge, on
+  main, only when the owner dispatches it.
 
 ---
 
@@ -416,31 +486,39 @@ git merge-tree --write-tree HEAD origin/main
 
 | Acceptance / ruling / decision | Task |
 | --- | --- |
-| A1 | 13, 15 |
-| A2, A6 | 6–9, 15 |
+| A1 | 13, 15a |
+| A2, A6 | 6a–9, 15a |
 | A3 | 11 |
-| A4 | 6 |
-| A5 | 6 |
-| A7 | 7, 15 |
-| A8, A9 | 7, 14, 15 |
+| A4, A19 | 6b |
+| A5 | 6a, 7 |
+| A7 | 7 |
+| A8, A9 | 7, 14, 15b |
 | A10 | 9 |
 | A11 | 8 |
 | A12 | 12 |
 | A13 | 13 |
-| A14 | 14, 15 |
+| A14 | 14 |
 | A15 | 2, 13, 14 |
-| A16, A17 | 15 |
+| A16, A17 | 15c |
 | A18 | 1–4 |
-| P1–P3, P12–P14 | 6 |
-| P4, P6, P7 | 7 |
-| P5 | 14 |
-| P8, P11 | 11 |
-| P9 | 13 |
+| A20 | 9 |
+| A21 | 6b, 15a |
+| A22 | 6a, 7 |
+| A23 | 6b |
+| P1, P12, P14, P19 | 6a, 7 |
+| P2, P3, P13, P20 | 6b |
+| P4, P6, P7, P18 | 7 |
+| P5, P17 | 14 |
+| P8, P11, P15 | 11 |
+| P9, P16 | 13 |
 | P10 | 12 |
-| R-1–R-3, R-7 | 6, 7 |
-| R-4–R-6 | 10, 12 |
-| Decisions 2, 3, 9, 10 | 1–3 |
+| R-1–R-3, R-7, R-8 | 6a, 6b, 7 |
+| R-4–R-6, R-9 | 10, 12 |
+| R-10–R-12 | 11 |
+| Decisions 2, 3, 10, 11 | 1–3, 14 |
 | Decision 6 | 8 |
-| Decision 11 | 6 |
-| Decision 12 | 9 |
-| Decisions 13, 14 | 11, 13 |
+| Decision 9 | 5, 7, 11, 14 |
+| Decision 12 | 6b |
+| Decision 13 | 6a |
+| Decision 14 | 9 |
+| Decisions 15, 16 | 11, 13 |

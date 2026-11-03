@@ -15,7 +15,7 @@ Ticket `01M4CC0VN2K8DBHNMZ46NTX5JJ`. Design:
 Plan:
 [2026-11-03-wave-03-desktop-05-recovery-and-completion-implementation.md](../plans/2026-11-03-wave-03-desktop-05-recovery-and-completion-implementation.md).
 
-Status: **draft**, planned at `e39bb004` (origin/main `c2a34494` merged into
+Status: **draft** (revision 2), planned at `e39bb004` (origin/main `c2a34494` merged into
 the ticket branch) and against C5's branch tip `f59aceb6`, which is not yet
 merged (decision 1). Nothing has been built or run. Approval and
 implementation wait for C5's merge; Task 0 then merges main and re-checks
@@ -43,7 +43,7 @@ Authorities, in order:
    (made-ready), [application runtime and polling](../RFC/application-runtime-and-polling.md),
    [test and compatibility strategy](../RFC/test-and-compatibility-strategy.md),
    and the [CLI contract](../RFC/cli-contract.md) for the bindings' meaning.
-4. PRD [`docs/PRD/mvp.md`](../PRD/mvp.md): `MH-COLLAB-003/004/005/007`,
+4. PRD [`docs/PRD/mvp.md`](../PRD/mvp.md): `MH-COLLAB-003/004/005/006/007`,
    `MH-SCOPE-001`, `MH-CONTENT-005/006`, `MH-UX-001`, `MH-NFR-002/003/004/005`,
    and the journeys "Concurrent Collaboration Conflict Recovery", "Confirmed
    Managed-Document Promotion" and "Confirmed Close with Retryable Failure".
@@ -89,15 +89,21 @@ D5.
      repair locally, resolve the child's conflict, republish, inspect, or
      none. The CLI's `human_lifecycle.rs` calls it in place of its own
      rules, with no change to CLI output (decision 3).
-   - **L2, resume for lifecycle parents.** An unfinished promotion or
-     closure is listed with `next_action: resume` (decision 9).
-   - **L3, lifecycle progress.** A promotion or closure reports its stages
-     as it reaches them (decision 10).
+   - **L2, resume for lifecycle parents.** An unfinished, non-refused
+     promotion or closure is listed with `next_action: resume`
+     (decision 10).
+   - **L3, lifecycle progress.** A promotion or closure reports
+     `recording`, `integrating`, `publishing` and `cleaning_up` as it
+     reaches them (decision 11).
 2. **Close ticket… and Approve and merge….** The header actions become
    live and open the lifecycle dialog: confirm, running, failed, done
-   (design handoff 2c–2e), in the existing confirmation boundary.
+   (design handoff 2c–2e), over the existing confirmation services. The
+   dialog names the item, repository and context (MH-COLLAB-006) and
+   reuses D4's credential recovery.
 3. **Final draft-save boundary.** The dialog saves the item's unsaved edits
-   before it prepares; a failed save stops before any prepare (decision 11).
+   before it prepares; a failed save stops before any prepare (decision
+   13). The item's tabs are read-only until the run is tidied, failed or
+   stopped (decision 12).
 4. **Effect summary and exact confirmation.** Every path the branch changes,
    tagged ticket, document, comment or code, with the code note; the steps
    in order; local-only wording; lifecycle closure (`closed_by` as the
@@ -123,7 +129,10 @@ D5.
    text with a confirmed Republish.
 10. **After a lifecycle.** The item's editing context is gone: its tabs
     show the item from primary; any other draft of it stays on the Drafts
-    page (decision 12).
+    page (decision 14).
+11. **Resume after restart.** Lifecycle rows (L2) and local
+    synchronizations offer Resume; `original_request_required` sends the
+    named request again (decision 10).
 
 ## Explicit Exclusions And Downstream Obligations
 
@@ -137,7 +146,7 @@ D5.
 - Scheduled polling, launch polls and shutdown: D6.
 - CLI-against-desktop scenarios: G1 (track rule 4).
 - Windows and macOS native evidence: G1 (decision 7).
-- Known limits K-1 to K-9 (design Known Limits).
+- Known limits K-1 to K-12 (design Known Limits).
 
 ## Required Contract
 
@@ -147,8 +156,9 @@ D5.
    Done, closing a tab and quitting never do.
 2. **The whole branch is shown.** The summary lists every changed path the
    preview names, code included, and nothing the preview does not.
-3. **Exact confirmation.** What is confirmed is what runs: a new path,
-   target or remote observation needs a fresh summary.
+3. **Exact confirmation.** What is confirmed is what runs: when the
+   library refuses the consent (a new path, target or relation), a fresh
+   summary is needed.
 4. **No repeat.** No retry, resume or reopen repeats a closure checkpoint, a
    merge or a publication; a cleanup-only replay only tidies up.
 5. **Shared is not tidied.** Merge, publication and cleanup are reported
@@ -168,28 +178,33 @@ D5.
 
 | # | Wave exit evidence / contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | Native keyboard conflict journey | Desktop keyboard test (remote and local conflicts); native §3 | Planned |
-| A2 | Native keyboard completion journeys | Desktop keyboard tests for close and promote; native §2 | Planned |
-| A3 | Stale resolution | Desktop test: a second actor changes a side; refreshed comparison | Planned |
-| A4 | Stale confirmation | Desktop test: a change after prepare gives Prepare again and a new summary | Planned |
-| A5 | Dirty primary | Desktop test: blocked prepare lists the blocker and its way out | Planned |
-| A6 | Local-only close and promotion | Desktop tests; native §2 | Planned |
-| A7 | Remote cleanup rejection | SSH-backed test: shared and merged, tidy-up pending; retry tidies only | Planned |
-| A8 | Interruption | Stop at a safe point; a process exit mid-run; the same request continues | Planned |
-| A9 | Cleanup-only replay; no repeated merge or checkpoint | Commit counts on primary and context before and after retry and resume | Planned |
+| A1 | Native keyboard conflict journey | Desktop keyboard test (local conflict real; remote canned); native §3 | Planned |
+| A2 | Native keyboard completion journeys | Desktop keyboard tests for close and promote (local-only real); native §2 | Planned |
+| A3 | Stale resolution | Desktop test: a second actor changes a local side; refreshed comparison | Planned |
+| A4 | Stale confirmation | Desktop test: a new path after prepare; the library refuses; Prepare again shows it | Planned |
+| A5 | Dirty primary | Desktop tests: blocked at prepare (real) and stopped at execute (canned) (P19) | Planned |
+| A6 | Local-only close and promotion | Desktop tests (real); native §2 | Planned |
+| A7 | Remote cleanup rejection | Canned desktop test (P6); C5 library SSH tests; native §4 | Planned |
+| A8 | Interruption | Stop at a safe point (P4); relaunch, Resume, resend (P5, canned); C5 library tests; native §4 | Planned |
+| A9 | Cleanup-only replay; no repeated merge or checkpoint | Commit counts after Retry and Resume (local-only, real); L3 cleanup-only stages; C5 library tests | Planned |
 | A10 | Preserved drafts and contexts inspectable | Desktop tests: failed close keeps context and drafts; other drafts on the Drafts page | Planned |
 | A11 | Made-ready list | Desktop test: Done lists dependents with slug and title; index pending says so | Planned |
-| A12 | External guidance for unsupported conflicts | Desktop tests: noncanonical path, incompatible closures | Planned |
-| A13 | Refused closure checkpoint merge repaired in the app | Desktop test through Repair locally… | Planned |
-| A14 | Republish after a deleted shared branch | SSH-backed desktop test | Planned |
-| A15 | Resume after restart | Lifecycle parents (L2) and local synchronizations offer Resume | Planned |
+| A12 | External guidance for unsupported conflicts | Desktop tests: noncanonical path, incompatible closures (P10) | Planned |
+| A13 | Refused closure checkpoint merge repaired in the app | Desktop test through Repair locally… (P9, P16) | Planned |
+| A14 | Republish after a deleted shared branch | Canned desktop test (P17); library tests on main; native §5 | Planned |
+| A15 | Resume after restart | Lifecycle rows (L2) and local synchronizations offer Resume (P5, P15) | Planned |
 | A16 | Privacy (contract 10) | Sentinel tests | Planned |
 | A17 | Nothing lifecycle without consent (contract 1) | Desktop test over navigation, Save, Done, close and quit | Planned |
-| A18 | Library part | L1: CLI goldens unchanged; L2 and L3: library tests and named edits | Planned |
+| A18 | Library part | L1: CLI renderer tests and goldens unchanged; L2 and L3: library tests and named edits | Planned |
+| A19 | Whole branch and exact confirmation (contracts 2, 3) | Desktop tests: every path, code note, refused consent | Planned |
+| A20 | Closure apart from status (contract 8) | Characterization test of the closure display; P13 | Planned |
+| A21 | Keyboard and focus (contract 9) | Keyboard tests; focus returns to the header action | Planned |
+| A22 | Item, repository and context named; cancellation reported (MH-COLLAB-006) | Desktop tests of the dialog header and the stopped outcome | Planned |
+| A23 | Read-only until tidied (decision 12) | Desktop test (P20) | Planned |
 
-Native evidence: Linux (Wayland), release build, run by the product owner
-from the checklist written in the final task (decision 7). The agent
-records only what the owner reports.
+Native evidence: Linux (Wayland), release build, against a real SSH
+remote, run by the product owner from the checklist written in the final
+task (decision 7). The agent records only what the owner reports.
 
 ## Product-Owner Decisions (2026-11-03)
 
@@ -218,34 +233,49 @@ Answered by the owner during planning:
 8. **Serial execution.** No parallel lanes and no `AGENTS.md` exception
    (owner, 2026-11-03).
 
+Answered by the owner after review round 1:
+
+9. **Remote evidence: canned answers, library tests and native.** Desktop
+   tests drive the UI from canned envelopes and a canned conflict read;
+   the library and CLI SSH targets (C5's lifecycle tests and Part 0's)
+   prove remote behaviour; the native checklist runs against a real SSH
+   remote. Local conflicts and local-only runs use real repositories.
+10. **Resume, then resend.** L2 lists `next_action: resume` for every
+    unfinished, non-refused promotion or closure parent, held or not; CLI
+    `operation list` and `repo status` show it (named edits). When Resume
+    answers `original_request_required`, the desktop sends that request
+    again with a rebuilt Close or Merge intent.
+11. **Four new progress stages:** `recording`, `integrating`, `publishing`
+    (main to origin, distinct from the share's `pushing`) and
+    `cleaning_up`, in the progress-event schema; the CLI's progress output
+    shows them.
+12. **Read-only until tidied.** From Confirm until cleanup completes, or
+    until the run ends failed or stopped, the item's tabs are read-only
+    with "Closing…" or "Merging…".
+
 Proposed by the planner, for the owner to confirm with the documents'
 approval:
 
-9. **L2 changes CLI output.** `operation list` and `repo status` show
-   `next_action: resume` for an unfinished promotion or closure; their
-   goldens change as named edits.
-10. **L3 adds progress stages** `recording`, `integrating` and `cleaning_up`
-    to the contract enum; the CLI's progress lines show them. The CLI RFC's
-    stage list is amended.
-11. **Save first, inside the dialog.** Opening Close ticket… or Approve and
+13. **Save first, inside the dialog.** Opening Close ticket… or Approve and
     merge… on an item with unsaved edits saves them as the dialog's first
     step; a failed or conflicting save shows its own answer and no prepare.
-    The dialog is modal, so no edit lands between save and confirm.
-12. **After a lifecycle,** the item's tabs reopen it from primary;
-    unsent comment drafts of it stay on the Drafts page. A closed ticket
-    shows Closed with closed-by and date in its header and front-matter
-    sheet; a later edit of a promoted document starts a fresh context.
-13. **The sheet's words.** "Save resolution" continues the stopped share
-    or synchronization, so the handoff's note "Saving keeps the result on
-    this computer" is replaced with "Saving finishes the share that
-    stopped." (U-1).
-14. **Entry points.** The conflict banner's Review changes, the operation
+14. **After a lifecycle,** the item's tabs reopen it from primary; unsent
+    comment drafts of it stay on the Drafts page; the existing closure
+    display shows Closed, Closed at and Closed by apart from Status; a
+    later edit of a promoted document starts a fresh context.
+15. **The sheet's words follow the source,** replacing the handoff's
+    "Saving keeps the result on this computer": "Saving finishes the share
+    that stopped." / "Saving finishes bringing main into this item." /
+    "Saving lets the close continue." / "Saving lets the merge continue."
+16. **Entry points.** The conflict banner's Review changes, the operation
     area's entry for a stopped share, post, synchronization or lifecycle,
     and its pending rows after a restart.
+17. **Entry-gate item 3 departure.** The API audit is drafted against
+    unmerged C5 and re-checked in Task 0, as C4 and C5 recorded theirs.
 
 ## Open Questions
 
-None beyond decisions 9–14. U-1 to U-4 (design) are settled in Task 0 by
+None beyond decisions 13–17. U-1 to U-4 (design) are settled in Task 0 by
 reading the source; an answer that differs stops for the owner.
 
 ## Review Record
@@ -254,11 +284,13 @@ reading the source; an answer that differs stops for the owner.
 | --- | --- | --- | --- | --- |
 | Planning research | C5's bindings are not on main | Owner decision | Decision 1. | C5 Cycle decision 1; Wave D5 amendment on C5's branch. |
 | Planning research | Way-out routing lives only in the CLI binary | Owner decision | Decisions 2, 3. | C5 `human_lifecycle.rs:192,218,259,289`. |
-| Planning research | Unfinished lifecycle parents list no resume | Owner decision | Decisions 2, 9. | C5 `read/status.rs:299,411`. |
-| Planning research | Lifecycle progress stays at `connecting` | Owner decision | Decisions 2, 10. | C5 `command.rs` `stage()`; `progress.rs:83-94`. |
+| Planning research | Unfinished lifecycle parents list no resume | Owner decision | Decisions 2, 10. | C5 `read/status.rs:299,411`. |
+| Planning research | Lifecycle progress stays at `connecting` | Owner decision | Decisions 2, 11. | C5 `command.rs` `stage()`; `progress.rs:83-94`. |
 | Planning research | Handoff's per-part sheet against per-path binding | Owner decision | Decision 4. | `05-sheets-and-dialogs.md:113-117`; `bind/conflict.rs:99`. |
 | Planning research | `item republish` handed to D5 by D4 but not named in the Wave | Owner decision | Decision 5. | D4 Cycle 111–112. |
 | Planning research | Handoff shows made-ready at confirm; preview has none | Owner decision | Decision 6. | `05-sheets-and-dialogs.md:87`; C5 `dto.rs:310`. |
 | Planning research | Native evidence and testers | Owner decision | Decision 7. | Wave entry item 6. |
 | Planning research | Handoff's "Closed by Vince Hodges" against no caller-chosen `closed_by` | Settled | The preview's `closed_by` is shown. | C5 decision 6. |
 | Planning research | Handoff's Reopen… against no reopening | Settled | Not built. | Wave 1007–1008. |
+| Review round 1, source and feasibility (`8e9dc65e`) | 3 Blocking, 10 Important, 7 Minor | — | Revision 2; S2 and S3 became decisions 9 and 10. | Design Review Record. |
+| Review round 1, contract and consistency (`8e9dc65e`) | 1 Blocking, 15 Important, 8 Minor | — | Revision 2; questions became decisions 11 and 12; proposals 15 and 17 added. | Design Review Record. |
