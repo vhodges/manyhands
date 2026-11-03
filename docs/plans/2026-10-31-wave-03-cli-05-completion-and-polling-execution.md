@@ -2827,3 +2827,30 @@ pin what the code already does (the review established it), so they passed on th
 | `--test cli_remote`, whole | 160 SSH cases, 0 failed (936 s) |
 | `--test mutation_remote`, whole | 700 SSH cases, 0 failed (4817 s) |
 | `ssh_transport`, `remote_observation`, `remote_synchronization`, `remote_merge_recovery`, `remote_polling` | 123, 15, 69, 29, 84, 0 failed |
+
+## Task 15: final gate
+
+### The gate at `f59aceb6`
+
+All exit 0.
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `cargo check --all-features --locked`, `cargo fmt --check`, whole-tree clippy `-D warnings` | ok | |
+| Desktop `cargo check --locked --features desktop` and desktop clippy | ok | |
+| CLI check, and the no-GPUI script | ok | |
+| AGENTS.md's fast tier, verbatim | ok | 1520 s |
+| `--lib repository::local_sync::` | 160 passed | 356 s |
+| `--test ssh_fixture` | 35 | 224 s |
+| `--test ssh_transport` | 123 | 214 s |
+| `--test remote_observation` | 15 | 8 s |
+| `--test remote_synchronization` | 69 | 594 s |
+| `--test remote_merge_recovery` | 29 | 236 s |
+| `--test comment_publication` | 41 | 196 s |
+| `--test remote_polling` | 84 | 178 s |
+| `--test document_promotion` | 79 | 761 s |
+| `--test ticket_closure` | 78 | 683 s |
+| `--test cli_remote` | 160 | 934 s |
+| `--test mutation_remote` | 700 | 4799 s |
+
+Then `origin/main` moved to `c2a34494` (Wave 03 D4 merged; it changes only `src/desktop` and `docs`).
