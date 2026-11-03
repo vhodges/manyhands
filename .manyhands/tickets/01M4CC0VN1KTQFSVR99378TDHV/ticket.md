@@ -7,9 +7,11 @@ deps:
 id: 01M4CC0VN1KTQFSVR99378TDHV
 title: 'Wave 03 D4: Desktop Discussion And Deliberate Synchronization'
 type: cycle
-status: open
+status: closed
 project: manyhands
 team: core
+closed_at: '2026-11-03T20:07:16Z'
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---
