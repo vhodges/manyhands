@@ -271,6 +271,17 @@ approval on 2026-11-02:
     into the composer when that slot is untouched and empty, with the
     failed state and its actions.
 
+26. **One place to re-send an unsaved comment** (2026-11-03, Task 13
+    review): the operation area offers no Retry or other re-send for a
+    comment post whose answer is not saved; its composer (reopened and
+    re-adopted per decision 25) is the only place. A saved post that is not
+    shared keeps Retry sharing in the operation area and the chip.
+27. **Rewritten text after the earlier text was posted meanwhile** (an
+    outside actor, such as the CLI, re-sent it): the composer does not send,
+    keeps the rewritten text and its draft, says "Your earlier text was
+    posted meanwhile", and offers Post as a new comment, Copy text and
+    Discard. Identical text simply clears the composer.
+
 ## Open Questions
 
 None. U-1 to U-5 (design) are settled in Task 0 by reading the source.
