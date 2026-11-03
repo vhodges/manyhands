@@ -538,6 +538,89 @@ fn a_root_and_a_slug_with_controls_are_escaped() {
     no_raw_control(stderr(&prepare(&missing)));
 }
 
+/// A context child's conflict (decision 34): the blockers a stop on it names.
+fn child_conflict(kind: ItemDtoKind) -> LifecycleMutationDto {
+    let mut stopped = data(kind);
+    stopped.blockers = vec![
+        LifecycleBlocker::ContextConflicted,
+        LifecycleBlocker::ConflictPending,
+        LifecycleBlocker::ContextBehindRemote,
+    ];
+    stopped
+}
+
+/// The conflict verbs, named by this operation's ID, which they take for its
+/// context child (decision 34), then C2's lines for the same request. Both
+/// verbs.
+#[test]
+fn a_child_s_conflict_names_the_conflict_verbs_then_the_same_request() {
+    for (command, kind) in [
+        ("ticket close", ItemDtoKind::Ticket),
+        ("document promote", ItemDtoKind::Document),
+    ] {
+        let out = output(
+            &answer(
+                command,
+                ResultCode::RecoveryRequired,
+                Some(child_conflict(kind)),
+                vec![retry(), inspect()],
+            ),
+            false,
+        );
+        let text = stderr(&out);
+        assert_eq!(
+            next_lines(text),
+            [
+                format!(
+                    "next: manyhands-cli conflict show --repo '{ROOT}' --operation-id {OPERATION}"
+                ),
+                format!(
+                    "next: manyhands-cli conflict resolve --repo '{ROOT}' --operation-id {OPERATION} --input - --request-id <new-request-id>"
+                ),
+                format!("next: request.retry request_id={REQUEST}"),
+                format!("next: repo.inspect root={ROOT}"),
+            ],
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "note: this operation's context synchronization stopped on a conflict. conflict show reads it, and --json gives each path's sides and token; when its next action is resolve, conflict resolve with the observation and a source for every token resolves and publishes it, and <new-request-id> is a placeholder to fill in. When it is external_repair, repair it with Git in the context. Then send this request again.\n"
+            ),
+            "{text}"
+        );
+        assert!(!text.contains("context observe-local"), "{text}");
+    }
+}
+
+/// Under a resume, the resume closes the route.
+#[test]
+fn a_child_s_conflict_under_a_resume_says_to_resume_it_again() {
+    let out = output(
+        &answer(
+            "operation resume",
+            ResultCode::RecoveryRequired,
+            Some(child_conflict(ItemDtoKind::Ticket)),
+            vec![resume_action(), inspect()],
+        ),
+        false,
+    );
+    let text = stderr(&out);
+    let lines = next_lines(text);
+    assert_eq!(lines.len(), 4, "{text}");
+    assert!(lines[0].contains("conflict show"), "{text}");
+    assert!(lines[1].contains("conflict resolve"), "{text}");
+    assert_eq!(
+        lines[2],
+        format!("next: manyhands-cli operation resume --repo '{ROOT}' --operation-id {OPERATION}")
+    );
+    assert_eq!(lines[3], format!("next: repo.inspect root={ROOT}"));
+    assert!(
+        text.contains("Then resume it again (add --request-id unless you run it at a terminal).\n"),
+        "{text}"
+    );
+    assert!(!text.contains("send this request"), "{text}");
+}
+
 #[test]
 fn other_blockers_are_named_with_no_repair_lines() {
     let mut blocked = data(ItemDtoKind::Document);

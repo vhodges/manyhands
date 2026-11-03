@@ -336,6 +336,14 @@ Also required:
     the holding request's `request.retry`, or `operation.resume` when no record holds it. Supersedable
     cleanup stops still prepare.
 
+34. **The conflict verbs reach a lifecycle's child (2026-11-03).** "Conflict verbs reach the child":
+    `conflict show` and `conflict resolve` accept a promotion's or closure's context child, by the
+    child's ID or the parent's, through C4's read and resolution unchanged, and the lifecycle's human
+    answer names both by the parent's ID. Then the same promote or close request finishes. The request
+    that holds the parent holds the child, so its `request cancel` stops the resolution's publication.
+    A retained conflict under a raised generation (`key select`, the domain's poll plan failure) stays
+    stuck, a Known Limit.
+
 **Owner questions, approved at these recommendations on 2026-10-31.**
 
 1. `effective_identity`'s per-key cascade: keep it for C5, with a follow-up ticket (R-6).

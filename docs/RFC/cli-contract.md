@@ -162,7 +162,7 @@ a usage error. No C4 verb accepts `--context`.
 | `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. List returns every stored operation that resume could act on or that still has work outstanding; show finds any stored operation, finished or not. Resume never infers permission for a different target/action. Resume takes no input. It publishes a comment's pending publication, by the comment's operation ID or its synchronization's, without writing it again. Amended 2026-10-30 by C4 (Task 4b's ruling): a fenced comment publication, such as one held for a key whose selection then changed, answers `external_change` by either ID, as a fenced synchronization does, and the `comment add` request's own next call settles it. Resume publishes a resolution or an accepted outside repair, and passes a local-context sync to the gate's routing. `request cancel` does not reach it; Ctrl-C does. |
 | `operation abandon` | F2's confirmed abandonment of a pending local operation; closes its journal record without changing files. No input. A remote operation's ID is `invalid_input`, and a pending remote conflict cannot be abandoned (`01M4H33R34Z7C7EEKTY1ZCT950`). A local-context sync goes to the gate's guarded abandonment. |
 | `request show`, `request cancel` | Required `--request-id`, refuse `--repo`; inspect the request's state/result or request safe-point cancellation. Accepted local C2 requests report `requested: false`; this does not interrupt their process. |
-| `conflict show`, `conflict resolve` | Select a remote synchronization's operation ID, or a comment's operation; a local-context sync's is `invalid_input`. Show is a read: no request ID, `--prepare` refused. It reports the state, next step, observation and each path's token, kind, structure and, for an item's path the library reads as UTF-8 text, base/local/incoming sides, as `content_available` says. Resolve takes input `observation` and `resolutions`, one `{token, source}` per conflicted path, then publishes under the same request. See [Conflict and cancellation behavior](#conflict-and-cancellation-behavior). |
+| `conflict show`, `conflict resolve` | Select a remote synchronization's operation ID, a comment's operation, or a `document promote` or `ticket close` operation, which names its context child (amended 2026-11-03 by C5, decision 34); a local-context sync's is `invalid_input`. Show is a read: no request ID, `--prepare` refused. It reports the state, next step, observation and each path's token, kind, structure and, for an item's path the library reads as UTF-8 text, base/local/incoming sides, as `content_available` says. Resolve takes input `observation` and `resolutions`, one `{token, source}` per conflicted path, then publishes under the same request. See [Conflict and cancellation behavior](#conflict-and-cancellation-behavior). |
 | `id new` | Generate and return a canonical ULID for caller-owned requests/items/comments; no repository mutation. |
 
 ### Authoring reads
@@ -928,6 +928,17 @@ and `noncanonical`, and the structures `regular`, `binary`, `executable`,
 classifier's reading of the index stages, not a claim about the file's
 type: a text code file edited on both sides reads `binary`, and an add/add
 reads `delete`.
+
+Amended 2026-11-03 by C5 (decision 34): `--operation-id` may also name a
+`document promote` or `ticket close` operation, or its context child's own
+synchronization. The parent's ID reads and resolves the conflict its context
+child holds now, and a request is the same by either ID; the data's
+`operation_id` is the child's. A parent with no context child yet is
+`invalid_input`, as a synchronization that recorded no conflict is. The
+lifecycle's human answer names both verbs by the parent's ID before its own
+`next:` lines. Once the child is published, sending the same promote or close
+request again finishes it. `request cancel` of that request stops a
+resolution's publication, as the holder's does for a synchronization.
 
 Resolution is set-wide (decision 12): a conflict with any noncanonical or
 structural path, or any `incompatible_closures` path, is repaired outside as

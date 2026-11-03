@@ -102,6 +102,18 @@ pub const ONE: &[ssh_harness::Case] = &[
         "c5_lifecycle_walk_poll_busy_route",
         c5_lifecycle_walk_poll_busy_route,
     ),
+    (
+        "c5_lifecycle_walk_retained_conflict_close",
+        c5_lifecycle_walk_retained_conflict_close,
+    ),
+    (
+        "c5_lifecycle_walk_retained_conflict_after_a_poll_plan_failure_close",
+        c5_lifecycle_walk_retained_conflict_after_a_poll_plan_failure_close,
+    ),
+    (
+        "c5_lifecycle_walk_retained_conflict_under_key_select_close",
+        c5_lifecycle_walk_retained_conflict_under_key_select_close,
+    ),
 ];
 
 const R1: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR1";
@@ -531,8 +543,18 @@ pub(super) fn peer_commit(
     path: &str,
     bytes: &[u8],
 ) -> Result<git2::Oid, FixtureError> {
+    peer_commit_on(p, PRIMARY, path, bytes)
+}
+
+/// A peer's commit on the remote's `reference` that writes `path` as `bytes`.
+fn peer_commit_on(
+    p: &CliPair,
+    reference: &str,
+    path: &str,
+    bytes: &[u8],
+) -> Result<git2::Oid, FixtureError> {
     let bare = p.bare()?;
-    let parent = fixed(bare.find_commit(fixed(bare.refname_to_id(PRIMARY))?))?;
+    let parent = fixed(bare.find_commit(fixed(bare.refname_to_id(reference))?))?;
     let mut index = fixed(git2::Index::new())?;
     fixed(index.read_tree(&fixed(parent.tree())?))?;
     fixed(index.add(&git2::IndexEntry {
@@ -552,7 +574,7 @@ pub(super) fn peer_commit(
     let tree = fixed(bare.find_tree(fixed(index.write_tree_to(&bare))?))?;
     let signature = fixed(git2::Signature::now("Peer", "peer@example.invalid"))?;
     fixed(bare.commit(
-        Some(PRIMARY),
+        Some(reference),
         &signature,
         &signature,
         "A peer's commit",
@@ -2018,5 +2040,287 @@ fn c5_lifecycle_walk_poll_busy_route() -> Result<(), FixtureError> {
     );
     assert_eq!(polled["operation_id"], operation.as_str());
     assert_eq!(a.tip(PRIMARY)?, Some(incoming));
+    Ok(())
+}
+
+// ------------------------------------------------- a retained conflict (decision 34)
+
+/// Task 13b's sequence: the context published, a peer's edit of the ticket's
+/// body on the remote's context branch, then A's own, other edit. The confirm
+/// stops `recovery_required`, 3, on the context child's conflict. Returns the
+/// human answer of the same request, which is the route out, and the close's
+/// own operation ID, which the JSON answer gives.
+fn retained_conflict(p: &CliPair, verb: Verb) -> Result<(cli::CliRun, String), FixtureError> {
+    let a = &p.a;
+    verb.begin_published(p, R1, R2);
+    let path = verb.path();
+    let source = fixed(std::fs::read_to_string(verb.worktree(a).join(&path)))?;
+    peer_commit_on(
+        p,
+        verb.branch(),
+        &path,
+        source
+            .replace("Saved for its lifecycle.", "The peer's body.")
+            .as_bytes(),
+    )?;
+    verb.resave(a, R3, "A's own body.\n");
+    let preview = verb.prepare(a, "ok", 0);
+    let stopped = verb.confirm(a, R4, &preview, "recovery_required", 3);
+    assert_eq!(
+        stopped["data"]["blockers"],
+        serde_json::json!([
+            "context_conflicted",
+            "conflict_pending",
+            "context_behind_remote"
+        ]),
+        "{stopped}"
+    );
+    assert_eq!(actions(&stopped), ["request.retry", "repo.inspect"]);
+    let parent = stopped["operation_id"].as_str().unwrap().to_owned();
+    no_closure_yet(&a.repo()?, verb)?;
+    let mut args = verb.args(a);
+    args.extend(["--request-id", R4]);
+    let out = run(&a.env, &args, &[]);
+    assert_eq!(out.status, 3, "{}", stderr(&out));
+    Ok((out, parent))
+}
+
+/// The route's two conflict lines, named by the parent's ID, then C2's lines.
+fn conflict_route(a: &CliClone, (out, parent): &(cli::CliRun, String)) -> Vec<Vec<String>> {
+    let text = stderr(out);
+    let lines = commands(text);
+    assert_eq!(lines.len(), 2, "{text}");
+    let root = a.root.canonicalize().unwrap();
+    let root = root.to_str().unwrap();
+    let parent = parent.as_str();
+    assert_eq!(
+        lines[0],
+        ["conflict", "show", "--repo", root, "--operation-id", parent].map(str::to_owned)
+    );
+    assert_eq!(
+        lines[1],
+        [
+            "conflict",
+            "resolve",
+            "--repo",
+            root,
+            "--operation-id",
+            parent,
+            "--input",
+            "-",
+            "--request-id",
+            "<new-request-id>",
+        ]
+        .map(str::to_owned)
+    );
+    assert!(
+        text.contains(&format!("next: request.retry request_id={R4}\n")),
+        "{text}"
+    );
+    assert!(text.contains("next: repo.inspect root="), "{text}");
+    assert!(
+        text.contains("note: this operation's context synchronization stopped on a conflict."),
+        "{text}"
+    );
+    lines
+}
+
+/// `conflict show` by the route's line in JSON, and `conflict resolve` by the
+/// other, with A's own side for every path. Returns the resolution's answer.
+fn resolved_by_the_route(a: &CliClone, lines: &[Vec<String>], request: &str) -> Value {
+    let shown = json_of(a, &lines[0], &[], "ok", 0);
+    assert_eq!(shown["data"]["state"], "conflict_pending", "{shown}");
+    assert_eq!(shown["data"]["next_action"], "resolve", "{shown}");
+    assert_eq!(shown["data"]["target"], "ticket", "{shown}");
+    assert_eq!(shown["data"]["stage"], "context", "{shown}");
+    let resolutions: Vec<(String, String)> = shown["data"]["paths"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|path| {
+            (
+                path["token"].as_str().unwrap().to_owned(),
+                path["local"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(resolutions.len(), 1, "{shown}");
+    assert!(resolutions[0].1.contains("A's own body."), "{shown}");
+    let input = super::conflicts::resolve_input(
+        shown["data"]["observation"].as_str().unwrap(),
+        &resolutions,
+    );
+    let args: Vec<String> = lines[1]
+        .iter()
+        .map(|word| {
+            if word == "<new-request-id>" {
+                request.to_owned()
+            } else {
+                word.clone()
+            }
+        })
+        .collect();
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    a.json(&args, &input, "ok", 0)
+}
+
+/// Decision 34's walk, which replaces Task 13b's stop for the owner. The
+/// human answer of the stopped close names `conflict show` and `conflict
+/// resolve` by the close's own operation ID. Followed through the binary
+/// over SSH: the read gives the child's conflict, the resolution publishes
+/// it, and the same `ticket close` request then answers `ok` with one merge,
+/// one closure checkpoint and its fields on primary and the remote. One verb,
+/// as Task 13b's walk: the route is shared code (decision 27), and the
+/// library rows cover both.
+fn c5_lifecycle_walk_retained_conflict_close() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let p = CliPair::new()?;
+    let a = &p.a;
+    let out = retained_conflict(&p, verb)?;
+    let lines = conflict_route(a, &out);
+    // The child's own ID, as `operation list` names it, reads the same.
+    let listed = a.json(&["operation", "list", "--repo", a.root()], &[], "ok", 0);
+    let child = listed["data"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["action"] == "synchronize_context")
+        .and_then(|item| item["operation_id"].as_str())
+        .unwrap_or_else(|| panic!("the context child: {listed}"))
+        .to_owned();
+    let by_parent = json_of(a, &lines[0], &[], "ok", 0);
+    let by_child = super::conflicts::show(a, &child);
+    assert_eq!(by_child["data"], by_parent["data"]);
+    assert_eq!(by_parent["data"]["operation_id"], child.as_str());
+    finished_by_the_route(&p, verb, &lines)
+}
+
+/// The route's resolution, then the same request: `ok`, one merge.
+fn finished_by_the_route(
+    p: &CliPair,
+    verb: Verb,
+    lines: &[Vec<String>],
+) -> Result<(), FixtureError> {
+    let a = &p.a;
+    let resolution = resolved_by_the_route(a, lines, R5);
+    assert_eq!(
+        resolution["data"]["publication"], "published",
+        "{resolution}"
+    );
+    let commit = resolution["data"]["commit_oid"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        p.served(verb.branch())?.map(|oid| oid.to_string()),
+        Some(commit.clone()),
+        "the resolution is published"
+    );
+    no_closure_yet(&a.repo()?, verb)?;
+    let done = verb.send(a, R4, "ok", 0);
+    assert_eq!(done["effects"]["publication"], "published", "{done}");
+    assert_eq!(request_show(a, R4)["state"], "finished");
+    finished_once(p, verb, None)?;
+    let repository = a.repo()?;
+    let primary = fixed(repository.refname_to_id(PRIMARY))?;
+    assert!(fixed(repository.graph_descendant_of(
+        primary,
+        fixed(git2::Oid::from_str(&commit))?
+    ))?);
+    let closed = closure_at(&repository, PRIMARY)?;
+    assert_eq!(closure_at(&p.bare()?, PRIMARY)?, closed, "the remote's too");
+    let source = source_at(&repository, primary, &verb.path())?.ok_or(FixtureError)?;
+    assert!(source.contains("A's own body."), "{source}");
+    Ok(())
+}
+
+/// Task 13b's poll-plan variant, rerun: `poll once` over an invalid
+/// configuration answers `invalid_configuration` and fences nothing, so the
+/// binary's route still finishes the close. The domain's own poll, which
+/// does fence, is `c5_cancel_poll_plan_failure_fences_a_retained_conflict_close`,
+/// a Known Limit.
+fn c5_lifecycle_walk_retained_conflict_after_a_poll_plan_failure_close() -> Result<(), FixtureError>
+{
+    let verb = Verb::Close;
+    let p = CliPair::new()?;
+    let a = &p.a;
+    let out = retained_conflict(&p, verb)?;
+    let lines = conflict_route(a, &out);
+    let path = a.root.join(".manyhands/config.toml");
+    let configuration = fixed(std::fs::read(&path))?;
+    fixed(std::fs::write(&path, b"not = [valid\n"))?;
+    a.json(
+        &["poll", "once", "--repo", a.root(), "--request-id", R6],
+        &[],
+        "invalid_configuration",
+        3,
+    );
+    fixed(std::fs::write(&path, configuration))?;
+    finished_by_the_route(&p, verb, &lines)
+}
+
+/// Task 13b's key variant, rerun: `key clear` then `key select` raise the
+/// generation over the retained conflict, and there is still no way out. The
+/// read says `resolve`, but the resolution is refused, `recovery_required`
+/// with nothing written, since the conflict can only be taken up again under
+/// the generation it was met in; the same close stays `recovery_required`.
+/// A Known Limit, kept (design, Known Limits).
+fn c5_lifecycle_walk_retained_conflict_under_key_select_close() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let p = CliPair::new()?;
+    let a = &p.a;
+    let out = retained_conflict(&p, verb)?;
+    let lines = conflict_route(a, &out);
+    let keys = a.json(&["key", "list"], &[], "ok", 0);
+    let key = keys["data"]["items"][0]["id"].as_str().unwrap().to_owned();
+    a.json(&["key", "clear", "--request-id", R5], &[], "ok", 0);
+    a.json(
+        &["key", "select", "--key-id", &key, "--request-id", R6],
+        &[],
+        "ok",
+        0,
+    );
+    let served = p.served(verb.branch())?;
+    let shown = json_of(a, &lines[0], &[], "ok", 0);
+    assert_eq!(shown["data"]["next_action"], "resolve", "{shown}");
+    let refused = {
+        let resolutions: Vec<(String, String)> = shown["data"]["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|path| {
+                (
+                    path["token"].as_str().unwrap().to_owned(),
+                    path["local"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        let input = super::conflicts::resolve_input(
+            shown["data"]["observation"].as_str().unwrap(),
+            &resolutions,
+        );
+        a.json(
+            &[
+                "conflict",
+                "resolve",
+                "--repo",
+                a.root(),
+                "--operation-id",
+                lines[0][5].as_str(),
+                "--input",
+                "-",
+                "--request-id",
+                "01ARZ3NDEKTSV4RRFFQ69G5FR7",
+            ],
+            &input,
+            "recovery_required",
+            3,
+        )
+    };
+    assert_eq!(refused["effects"]["write"], "not_requested", "{refused}");
+    assert_eq!(p.served(verb.branch())?, served, "nothing pushed");
+    verb.send(a, R4, "recovery_required", 3);
+    assert_eq!(request_show(a, R4)["state"], "accepted");
+    assert_eq!(merges(&a.repo()?)?, 0);
     Ok(())
 }

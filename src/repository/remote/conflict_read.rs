@@ -8,6 +8,9 @@
 //! lease, by the rule a restart applies to it (fact 35). Nothing is
 //! retired, recorded or reserved.
 //!
+//! A promotion's or a closure's ID reads its context child's conflict
+//! (decision 34), as a comment's reads its synchronization's.
+//!
 //! It sits in `remote` because the library's observation and path tokens
 //! keep their fields to this module (fact 31).
 
@@ -180,8 +183,9 @@ pub struct ConflictPathDto {
 
 impl RepositoryService {
     /// The conflict of the synchronization `operation_id` names: the
-    /// synchronization's own ID, or the operation of a comment it
-    /// publishes (R-5).
+    /// synchronization's own ID, the operation of a comment it publishes
+    /// (R-5), or a promotion's or a closure's, for its context child
+    /// (decision 34).
     ///
     /// A local-context sync's ID is `invalid_input` (decision 19), as is an
     /// operation that is no synchronization, or a synchronization that met
@@ -436,7 +440,14 @@ fn lookup(
     let (comment_operation_id, synchronization) =
         match mutation::comment_synchronization(db, repo.root(), operation_id)? {
             Some((comment, synchronization)) => (Some(comment), synchronization),
-            None => (None, operation_id),
+            // A promotion's or a closure's ID names its context child
+            // (decision 34); one with no child yet recorded no conflict.
+            None => match state::lifecycle_context_child(db, repo.registration_id(), operation_id)?
+            {
+                Some(Some(child)) => (None, child),
+                Some(None) => return Ok(Lookup::NoConflict),
+                None => (None, operation_id),
+            },
         };
     let Some(record) = state::read_operation(db, repo.registration_id(), synchronization)? else {
         return Ok(Lookup::Missing);

@@ -2453,3 +2453,105 @@ premise was probed at each stop before `no_closure_yet` was written. The rest pi
 | `--test mutation_remote -- c5_lifecycle` | 152 SSH cases | 566 s |
 | AGENTS.md's fast tier, verbatim | 79 results, 4917 passed, 0 failed | 1437 s |
 | `cargo fmt --check`, whole-tree clippy `-D warnings` | ok | |
+
+## Decision 34: the conflict verbs reach a lifecycle's child
+
+Owner's decision 34 (2026-11-03), "Conflict verbs reach the child": `conflict show` and `conflict resolve`
+accept a promotion's or closure's context child, using C4's remote-conflict read and resolution, and the
+lifecycle's answer names them; then the same promote or close request finishes. Base `9aa3308a`;
+`origin/main` at `0dfd5a68` is contained, so nothing was merged.
+
+### What the library already did (probed before the design)
+
+A probe row (not kept), on Task 13b's sequence in-process (`conflicted`, close):
+
+- `show_conflict` of the **child's** ID: `conflict_pending`, `resolve`, one path. Of the **parent's**:
+  `invalid_input` (its row's action is `close`, "no synchronization").
+- `conflict resolve` of the child's ID, through the binding, a new request: `ok`, the resolution
+  committed and the child published (row `completed`, with authority). Then the parent's same request:
+  `ok`, cleanup complete, **one** merge on primary.
+- Under `key clear` then `key select` (a raised generation): the read still says `resolve`, and the
+  resolution answers `recovery_required`, `[repo.inspect]`, nothing written, because
+  `reacquire_synchronization_conflict_in_window` requires the current generation. The parent stays
+  `recovery_required`.
+
+So the child's route works in the library through C4's code unchanged. What the binary met in Task 13b
+(`invalid_input` for the child too) is examined by the walk below.
+
+### Design
+
+**How the read and the resolution identify a lifecycle's child.** As R-5 maps a comment's operation to its
+synchronization, a lifecycle parent's operation ID maps to its **context child**: the `context_sync_id` its
+own row (`document_promotions` or `ticket_closures`, same repository) holds now. The child's own ID keeps
+working as before, since the child is a remote synchronization. One state helper reads the mapping
+(`state::lifecycle_context_child`) and one the reverse (`state::lifecycle_parent_of`); both are plain reads
+of the parent tables, with no new column.
+
+- `conflict show` (`conflict_read::lookup`): after the local-sync check and the comment mapping, a parent's
+  ID is looked up as its context child. A parent with no context child yet is a synchronization that
+  recorded no conflict: `invalid_input`, as C4's row for that has it. A primary child is not mapped: the
+  decision names the context child, and the primary child publishes without merging. The DTO is
+  unchanged: `operation_id` is the child's ("the synchronization's ID, whichever ID was asked for"), and
+  `comment_operation_id` stays a comment's only.
+- `conflict resolve` (`ConflictResolveBinding::synchronization` and `settle_target`): the same mapping, so
+  the request's identity and digest are of the child whichever ID names it, as for a comment. A request sent
+  by the parent's ID and resent by the child's is the same request.
+
+**Ownership, reservation and fencing.** The resolution takes nothing of the parent's:
+
+- It runs C4's steps 1-7 on the child's row. `resolve_synchronization` reacquires the conflict under its
+  reservation (`reacquire_synchronization_conflict_in_window`: the row interrupted or reconciling, the
+  current generation, no flag on the row, the step's conflict digest, no other active operation, else
+  `busy`). Its continuation is `sync::continued`, a restart with no `ChildExecution`, which bumps the
+  owner epoch and so fences any older owner of the row, exactly as C4's continuation fences the
+  synchronization's own request. Only one of the parent's runner and the resolution holds the reservation
+  at a time; the other answers `busy`.
+- **The parent's re-entry.** A published child has authority. `child_state` answers `Complete` for it, the
+  runner adopts it through `stored_child_outcome`, and `ChildExecution::validate` accepts "an exact,
+  current authoritative handoff" after any parent progress. A resolution checkpointed but not published
+  (its continuation stopped) leaves a child with a resolution: `Retained` or, once released, `Unowned` with
+  `promotion_child_has_resolution`, and the runner restarts it, as `c5_cancel_released_resolution_publishes`
+  shows. A continuation cancelled at a safe point ends the row `cancelled` (C4's fact 56): the runner
+  replaces it (`next_attempt` takes an unowned `cancelled` child), and the new attempt publishes the
+  resolution commit the context branch holds.
+- **Can a resolution finish a child the parent then can't adopt?** Not on any route found. While the
+  conflict is retained the parent can't move off that child: `next_attempt` and
+  `reset_context_after_primary_advance` refuse a retained child; release keeps it (below); a new prepare is
+  held (decision 33); `operation abandon` doesn't name a parent. A parent that ended (abandoned or
+  superseded) before its child conflicted has no child row to retain. So no STOP.
+- **C4's R-38.** Unchanged: with a local-context sync unfinished anywhere in the repository, the
+  resolution's reacquire refuses, `recovery_required`, `[repo.inspect]`, nothing written, and the attempt is
+  kept for the same request. The parent's own call answers its own `recovery_required` meanwhile. No new
+  check.
+- **Decision 18's release guards.** Unchanged: a cancellation of the parent keeps a child with a retained
+  conflict or a resolution, so a parent's `request cancel` never drops a resolution that is in hand.
+- **Who stops the continuation (C4's holder rule).** C4 has the continuation read the flag of the request
+  that holds the operation (`holder`). No request record holds a lifecycle's child, so the holder is the
+  request whose record holds its **parent** (`records::operation_holder` of the parent, `Remote` family). So
+  `request cancel` of the promote or close request stops a resolution's continuation at its next safe point,
+  the flag left for that request's own next call, as C4 does for `comment add`. With no record holding the
+  parent (a resume's), there is no holder, as before. A continuation that meets a stop the request can't get
+  past offers `request cancel` of that holder (C4's `published`), which is decision 18's route.
+- **Decision 25's effects.** Unchanged: a parent's stop reads its current context child's durable state. A
+  resolution's merge on the context branch and its landed push are the child's, so a later stop of the
+  parent reports them as its child's effects, and the finish counts one merge on primary.
+
+**Which ID the user passes, and what the lifecycle's answer prints.** Either. The answer names the
+**parent's**, which is the envelope's `operation_id`: it is stable while the parent mints child attempts, and
+it is already in the answer, so neither the lifecycle DTO nor the recovery vocabulary changes (no
+`RecoveryActionKind` may be added, as for the local repair). For a promote or close answer
+`recovery_required` whose blockers include `conflict_pending`, the human output prints, before C2's lines:
+
+```text
+next: manyhands-cli conflict show --repo '<root>' --operation-id <parent>
+next: manyhands-cli conflict resolve --repo '<root>' --operation-id <parent> --input - --request-id <new-request-id>
+```
+
+and a note: the context's synchronization stopped on a conflict; `conflict show` reads it (with `--json`
+for the sides and tokens); when its next action is `resolve`, `conflict resolve` publishes it; when it is
+`external_repair`, the repair is with Git in the context; then send this request again (or, under a resume,
+resume again). C2's `request.retry` and `repo.inspect` lines follow, unchanged. Under `operation resume`
+the resume's line closes the route.
+
+**C4's contract for synchronizations** is unchanged: every C4 row keeps its answer, since only an ID that
+named a lifecycle parent (until now `invalid_input`) reads differently, and a child's ID already read.

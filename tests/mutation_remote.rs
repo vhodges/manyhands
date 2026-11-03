@@ -79,6 +79,7 @@ fn main() {
         .chain(c5_lifecycle::CASES)
         .chain(c5_resume::CASES)
         .chain(c5_cancel::CASES)
+        .chain(c5_cancel::CHILD_CONFLICT)
         .chain(c5_made_ready::CASES)
         .chain(c5_poll::CASES)
         .copied()

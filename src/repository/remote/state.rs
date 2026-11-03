@@ -3074,6 +3074,53 @@ pub(in super::super) fn lookup_fenced(
         .unwrap_or(false))
 }
 
+/// The context child that the promotion or closure `operation_id` of the
+/// repository `repository_id` holds now (decision 34): the outer `None` when
+/// `operation_id` is no lifecycle parent of it, the inner one when the parent
+/// has no context child yet. A plain read of the parent's own row, as
+/// `conflict show` and `conflict resolve` map a parent's ID to its child.
+pub(in super::super) fn lifecycle_context_child(
+    connection: &Connection,
+    repository_id: i64,
+    operation_id: crate::repository::OperationId,
+) -> rusqlite::Result<Option<Option<crate::repository::OperationId>>> {
+    let row: Option<Option<String>> = connection
+        .query_row(
+            "SELECT context_sync_id FROM document_promotions
+              WHERE repository_id = ?1 AND operation_id = ?2
+             UNION ALL
+             SELECT context_sync_id FROM ticket_closures
+              WHERE repository_id = ?1 AND operation_id = ?2
+             LIMIT 1",
+            params![repository_id, operation_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(row.map(|child| child.and_then(|child| crate::repository::OperationId::parse(&child).ok())))
+}
+
+/// The promotion or closure of the repository `repository_id` whose context
+/// child is `child` now, if one is (decision 34).
+pub(in super::super) fn lifecycle_parent_of(
+    connection: &Connection,
+    repository_id: i64,
+    child: crate::repository::OperationId,
+) -> rusqlite::Result<Option<crate::repository::OperationId>> {
+    let row: Option<String> = connection
+        .query_row(
+            "SELECT operation_id FROM document_promotions
+              WHERE repository_id = ?1 AND context_sync_id = ?2
+             UNION ALL
+             SELECT operation_id FROM ticket_closures
+              WHERE repository_id = ?1 AND context_sync_id = ?2
+             LIMIT 1",
+            params![repository_id, child.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(row.and_then(|parent| crate::repository::OperationId::parse(&parent).ok()))
+}
+
 /// What the remote operation `operation_id` of the registration at
 /// `root_path` synchronizes: the target a call that takes it up again
 /// is made with. The outer `None` is no row; the inner one a row that

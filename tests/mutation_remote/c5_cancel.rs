@@ -10,6 +10,10 @@ use super::*;
 use lifecycle_world::*;
 use results::{CleanupEffect, FailureClass, IntegrationEffect};
 
+#[path = "c5_child_conflict.rs"]
+mod child_conflict;
+pub(crate) use child_conflict::CASES as CHILD_CONFLICT;
+
 const BOTH: &[ssh_harness::Case] = both_verbs!["c5_cancel_";
     "stage_after_confirmed" => |verb| stage(verb, FailurePoint::AfterConfirmed, false),
     "stage_after_context_sync" => |verb| stage(verb, FailurePoint::AfterContextSync, false),
