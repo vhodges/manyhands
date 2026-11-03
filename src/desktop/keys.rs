@@ -93,6 +93,17 @@ gpui_kit::actions!(
         /// Close the details sheet's ticket picker, and give focus back to
         /// the Add… or Change… that opened it.
         ClosePicker,
+        /// Share the shown item: `item sync` (design, Lane B, Share
+        /// controls).
+        ShareItem,
+        /// Post the comment composer's text.
+        PostComment,
+        /// Escape in a comment composer: cancel it, asking first when it
+        /// has text (R-59 as amended: the body editor's Escape still
+        /// focuses the header).
+        CancelComposer,
+        /// Switch a comment composer between Rich text and Markdown.
+        ComposerToggleMode,
     ]
 );
 
@@ -161,6 +172,19 @@ pub(crate) const TOOLBAR_MENU_CONTEXT: &str = "EditToolbarMenu";
 /// and Shift-Tab stay in it, between its address and Insert.
 pub(crate) const TOOLBAR_LINK_CONTEXT: &str = "EditToolbarLink";
 
+/// The key context of a comment composer (`view::item::composer`):
+/// `secondary-enter` posts, Escape cancels, and the mode key switches Rich
+/// text and Markdown. Tab and Shift-Tab indent and outdent in its editor,
+/// as the editor binds them; F6 and Shift-F6 (`NextRegion`,
+/// `PreviousRegion`) leave it.
+pub(crate) const COMMENT_COMPOSER_CONTEXT: &str = "CommentComposer";
+
+/// A comment composer's editor, inside the composer: the editor binds
+/// Escape itself (dismiss) in its deeper `Editor` context, so the
+/// composer's cancel is bound here too, as `EDIT_HOST_EDITOR` binds the
+/// edit editor's Escape.
+const COMMENT_COMPOSER_EDITOR: &str = "CommentComposer > Editor";
+
 /// Binds the desktop's keys. Quit now has no key: it is the focused
 /// Quit now button while quitting waits.
 pub(crate) fn bind(cx: &mut App) {
@@ -227,6 +251,22 @@ pub(crate) fn bind(cx: &mut App) {
         KeyBinding::new("escape", ClosePopover, Some(TOOLBAR_LINK_CONTEXT)),
         KeyBinding::new("tab", CycleLinkPopover, Some(TOOLBAR_LINK_CONTEXT)),
         KeyBinding::new("shift-tab", CycleLinkPopover, Some(TOOLBAR_LINK_CONTEXT)),
+        // A comment composer, inside the item tab: its keys come before the
+        // tab's. Tab stays the editor's (indent); F6 leaves the composer.
+        // Escape is bound in its editor too, over the editor's own.
+        KeyBinding::new(
+            "secondary-enter",
+            PostComment,
+            Some(COMMENT_COMPOSER_CONTEXT),
+        ),
+        KeyBinding::new("escape", CancelComposer, Some(COMMENT_COMPOSER_CONTEXT)),
+        KeyBinding::new(
+            "secondary-shift-m",
+            ComposerToggleMode,
+            Some(COMMENT_COMPOSER_CONTEXT),
+        ),
+        KeyBinding::new("escape", CancelComposer, Some(COMMENT_COMPOSER_EDITOR)),
+        KeyBinding::new("secondary-k", InsertLink, Some(COMMENT_COMPOSER_EDITOR)),
     ]);
 }
 

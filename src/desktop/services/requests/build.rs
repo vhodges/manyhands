@@ -1,13 +1,14 @@
 //! How an intent becomes a library command, one attempt at a time.
 
 use manyhands::repository::{
-    CommitIdentity, ContextPrepareInput, ContextReleaseInput, DocumentCreateInput, DocumentDraft,
-    DocumentMoveInput, DocumentRepairInput, DocumentSaveInput, FolderCreateInput, HostApproveInput,
-    HostReplaceInput, IndexRebuildInput, IndexRefreshInput, KeyClearInput, KeyDeleteInput,
-    KeyGenerateInput, KeyImportInput, KeyRemoveInput, KeySelectInput, Mutation,
-    OperationAbandonInput, OperationResumeInput, RemoteAddInput, RemoteRemoveInput,
-    RemoteSelectInput, RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput,
-    TicketCreateInput, TicketDraft, TicketRepairInput, TicketSaveInput,
+    CommentAddInput, CommitIdentity, ContextPrepareInput, ContextReleaseInput, DocumentCreateInput,
+    DocumentDraft, DocumentMoveInput, DocumentRepairInput, DocumentSaveInput, FolderCreateInput,
+    HostApproveInput, HostReplaceInput, IndexRebuildInput, IndexRefreshInput, ItemSyncInput,
+    KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
+    KeySelectInput, Mutation, OperationAbandonInput, OperationResumeInput, RemoteAddInput,
+    RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput, RepoIdentitySetInput,
+    RepoRemoveInput, RepoSyncInput, TicketCreateInput, TicketDraft, TicketRepairInput,
+    TicketSaveInput,
     keys::{KeyProtection, KeyStore, SecretPassphrase},
 };
 
@@ -307,6 +308,28 @@ impl Intent {
                 observation: observation.clone(),
                 source: source.clone(),
             }),
+            Self::CommentAdd {
+                root,
+                kind,
+                id,
+                comment_id,
+                parent_id,
+                body,
+            } => Mutation::CommentAdd(CommentAddInput {
+                root: root.clone(),
+                kind: *kind,
+                id: id.clone(),
+                comment_id: comment_id.clone(),
+                parent_id: parent_id.clone(),
+                body: body.0.clone(),
+                created_by: None,
+            }),
+            Self::ItemSync { root, kind, id } => Mutation::ItemSync(ItemSyncInput {
+                root: root.clone(),
+                kind: *kind,
+                id: id.clone(),
+            }),
+            Self::RepoSync { root } => Mutation::RepoSync(RepoSyncInput { root: root.clone() }),
         })
     }
 }

@@ -991,6 +991,23 @@ its stops at safe points and its retry that publishes without writing again,
 the merging `item sync` and `repo sync`, and the conflict data their results
 carry. See track rule 2.
 
+**Amended 2026-11-02 by D4.** The Cycle, design and plan were approved on
+2026-11-02 with these owner decisions: Lanes A, B and C run in parallel on
+local lane branches merged back into the ticket branch (an `AGENTS.md`
+exception for D4 only); D1's operation area carries progress and outcomes,
+with no Activity panel, Needs attention popover or footer counts; composers
+are small `zorite-editor` instances; library defects
+`01M669FJR27FRHCNPWAMD6VH4V`, `01M66HFV44YXNQ7ANJVA16TQ1H` and
+`01M67BN4C1SY2HQBGNE9NBYMW8` are Known Limits. Replies answer the root;
+native evidence is Linux only; the UI uses the design's words (Share, Share
+main, Retry sharing, Reply and sync, Save reply locally); Give up cancels
+this session's still-accepted share or post; there is no Share dialog;
+Share is enabled whenever a publication remote exists; Resume covers
+comment publications and remote synchronizations only; saves may queue
+behind a share until D6; the conflict banner has no action until D5; the
+"not shared yet" chip is session-only; quitting while sending stops at a
+safe point. See the Cycle's Product-Owner Decisions.
+
 **Purpose:** Make discussion and explicit publication understandable and usable.
 
 **In scope:** Ordered threaded comments/replies with rich/source composers and
