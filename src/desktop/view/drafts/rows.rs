@@ -3,8 +3,8 @@
 //!
 //! A row is a focusable stop of its own, then its actions, each a Kit
 //! button in a focus-tracking wrapper with the content region's scroll
-//! marker. Show and Retry act here; Restore, Export…, Export raw… and
-//! Discard… are the page's `row_actions`, and Inspect opens its panel under
+//! marker. Show and Retry act here; Restore, Open, Export…, Export raw…
+//! and Discard… are the page's `row_actions`, and Inspect opens its panel under
 //! the row. What the last of them came to is said on the row. Discard… is
 //! disabled while a save of its draft is in flight (R-71), and Restore,
 //! with why, while a tab of this window edits its item (Part C fix 2, D).
@@ -20,8 +20,8 @@ use gpui_kit::{
 use manyhands::drafts::{DraftError, DraftId, Held, TargetState};
 
 use super::{
-    ACTIONS, CANNOT_READ, CHECKING, COMMENT_LATER, CONTINUE_IN_TAB, DraftsPage, LOADING_DRAFTS,
-    NO_DRAFTS, OPEN_ELSEWHERE, RESTORED_HERE, SAVED_AT, Slot, row_id,
+    ACTIONS, CANNOT_READ, CHECKING, CONTINUE_IN_TAB, DraftsPage, LOADING_DRAFTS, NO_DRAFTS,
+    OPEN_ELSEWHERE, RESTORED_HERE, SAVED_AT, Slot, row_id,
 };
 use crate::desktop::{
     model::{
@@ -62,6 +62,7 @@ fn offered(row: &DraftRow, part: &str) -> bool {
     let readable = matches!(row.state, RowState::Readable { .. });
     match part {
         "restore" => actions.restore,
+        "open" => actions.open,
         "show" => actions.show,
         "inspect" => actions.inspect,
         "export" => readable,
@@ -141,16 +142,6 @@ impl DraftsPage {
                 .text_color(muted),
             );
         }
-        let comment = slot
-            .draft
-            .as_ref()
-            .is_some_and(|draft| draft.target.comment.is_some());
-        let note = (comment && matches!(row.state, RowState::Readable { held: Held::No, .. }))
-            .then(|| {
-                text(row_id(id, "note"), COMMENT_LATER)
-                    .text_xs()
-                    .text_color(muted)
-            });
         // Show only where there is a tab to show: a draft held here whose
         // session has no tab (one begun by the editor) offers none.
         let tab = self.services.drafts().read(cx).tab_of(id).is_some();
@@ -192,7 +183,6 @@ impl DraftsPage {
             .border_color(border)
             .child(details)
             .child(text(row_id(id, "state"), state_label(row)).text_sm())
-            .children(note)
             .child(h_flex().gap_2().flex_wrap().children(actions))
             .children(notice)
             .children(inspect)
@@ -221,6 +211,7 @@ impl DraftsPage {
             "show" => Rc::new(move |this, _, cx| this.show_tab_of(id, cx)),
             "retry" => Rc::new(move |this, _, cx| this.retry(id, cx)),
             "restore" => Rc::new(move |this, _, cx| this.restore(id, cx)),
+            "open" => Rc::new(move |this, _, cx| this.open_item_of(id, cx)),
             "inspect" => Rc::new(move |this, window, cx| this.inspect(id, window, cx)),
             "export" | "export-raw" => Rc::new(move |this, window, cx| this.export(id, window, cx)),
             "discard" => Rc::new(move |this, window, cx| this.discard(id, window, cx)),
