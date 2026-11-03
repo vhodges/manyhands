@@ -20,6 +20,11 @@ impl ItemPane {
     /// to 10b follow it.
     pub(super) fn share_progressed(&mut self, _cx: &mut Context<Self>) {}
 
+    /// The repository's publication remote, as the workspace's navigation
+    /// gives it (`publication_remote`), changed. Nothing yet: Task 8
+    /// follows it.
+    pub(super) fn share_remote_changed(&mut self, _cx: &mut Context<Self>) {}
+
     /// Share, after Edit or Save/Done in the header. Nothing yet.
     pub(super) fn share_button(
         &self,
