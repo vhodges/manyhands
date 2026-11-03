@@ -11,13 +11,22 @@
 //! landed: until then `comment_drafts` lists none, stored or live, and a
 //! caller begins a draft only after it has (source finding 17f). A draft
 //! a process that is gone left stored is adopted: claimed, with its
-//! comment ID, parent and newest text.
+//! comment ID, parent and newest text. A draft with a comment's target
+//! whose fields are not a comment's is never listed here nor adopted: that
+//! answer is final.
 //!
 //! A comment its post saved retires its draft through
-//! `DraftClaim::retire`, at the revision the session held when asked, once
-//! any write in flight lands; a store that holds another revision keeps the
-//! draft, let go of, for the Drafts page. Re-targeting a draft to a new
-//! comment ID (P13) is a retirement and a new `begin_comment`.
+//! `DraftClaim::retire`. A live session is first flushed to completion, as
+//! a release is, so the revision retired is the newest and the draft is
+//! deleted; only then does the session end. A write that fails keeps the
+//! session, its text and its draft. A draft only stored is claimed and
+//! retires the revision the claim reads, never a listing's. Retirement
+//! emits no `SessionDiscarded`, and a later `edit` under the retired ID
+//! does nothing: the caller begins a new draft on the next keystroke.
+//!
+//! Re-targeting a draft to a new comment ID (P13) is: `begin_comment` under
+//! the new ID, awaited, then `retire_comment` of the old, awaited, then
+//! Submit. A crash between the two leaves both drafts; never neither.
 //!
 //! `AdoptedComment` holds comment text and derives no `Debug`.
 
@@ -26,7 +35,7 @@ use manyhands::{
     canonical::ItemId,
     drafts::{
         CommentTarget, DraftClaim, DraftError, DraftErrorKind, DraftFields, DraftId, DraftTarget,
-        Entry,
+        Entry, Retired,
     },
     repository::ItemDtoKind,
 };
@@ -107,7 +116,8 @@ impl DraftRegistry {
     /// The comment drafts of `item`, every thread's, live and stored, in
     /// ID order. None until the first listing has landed, nor while the
     /// store is unavailable. A draft another process holds is listed, not
-    /// live; adopting it answers `OpenElsewhere`.
+    /// live; adopting it answers `OpenElsewhere`. A stored draft with a
+    /// comment's target whose fields are not a comment's is not listed.
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
     pub(crate) fn comment_drafts(&self, item: &ItemKey) -> Vec<CommentDraft> {
         if self.unavailable.is_some() || self.listed == 0 {
@@ -133,7 +143,10 @@ impl DraftRegistry {
             let Entry::Draft(draft) = &listing.entry else {
                 continue;
             };
-            if self.current_id(listing.id).is_some() || !item.holds(&draft.target) {
+            if self.current_id(listing.id).is_some()
+                || !item.holds(&draft.target)
+                || comment_body(&draft.current).is_none()
+            {
                 continue;
             }
             if let Some(target) = draft.target.comment.clone() {
@@ -149,9 +162,13 @@ impl DraftRegistry {
     }
 
     /// The comment draft `id` with its session: the live one, or the
-    /// stored draft claimed and made a session. A draft that is not a
-    /// comment's answers `NotFound`, and its claim is let go of; one gone
-    /// since the listing answers `NotFound` and the store is listed again.
+    /// stored draft claimed and made a session. One gone since the listing
+    /// answers `NotFound`, and one another process holds `OpenElsewhere`;
+    /// either lists the store again. A draft that is not a comment's, its
+    /// target or its fields, answers `NotFound` and its claim is let go of:
+    /// that answer is final, and `comment_drafts` never lists it. An
+    /// adoption of `id` that landed meanwhile in this process answers its
+    /// session.
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
     pub(crate) fn adopt_comment(
         &mut self,
@@ -171,7 +188,7 @@ impl DraftRegistry {
         cx.spawn(async move |registry, cx| {
             let claimed = claim.await;
             registry
-                .update(cx, |registry, cx| registry.adopted(claimed, cx))
+                .update(cx, |registry, cx| registry.adopted(id, claimed, cx))
                 // Gone with the services: the claim is let go of.
                 .unwrap_or(Err(DraftErrorKind::Io))
         })
@@ -179,12 +196,17 @@ impl DraftRegistry {
 
     fn adopted(
         &mut self,
+        id: DraftId,
         claimed: Result<DraftClaim, DraftError>,
         cx: &mut Context<Self>,
     ) -> Result<AdoptedComment, DraftErrorKind> {
         let claim = match claimed {
             Ok(claim) => claim,
             Err(error) => {
+                // Two adoptions raced: the first holds the claim here.
+                if let Some(current) = self.current_id(id) {
+                    return self.adopted_live(current);
+                }
                 if matches!(
                     error.kind,
                     DraftErrorKind::NotFound | DraftErrorKind::OpenElsewhere
@@ -194,7 +216,8 @@ impl DraftRegistry {
                 return Err(error.kind);
             }
         };
-        // A claim refused here is dropped, which lets it go.
+        // A claim refused here is dropped, which lets it go; the store is
+        // not listed again, since nothing about the draft changed.
         let draft = claim.draft();
         if draft.target.comment.is_none() || comment_body(&draft.current).is_none() {
             return Err(DraftErrorKind::NotFound);
@@ -236,63 +259,112 @@ impl DraftRegistry {
         })
     }
 
-    /// The comment of the draft `id` is saved: its draft retires. A live
-    /// session ends now and, once any write in flight lands, its claim
-    /// retires the revision the session held; a draft only stored is
-    /// claimed and retires the revision it was listed at. A store holding
-    /// another revision keeps the draft, let go of. The store is listed
-    /// again once it lands, whatever it answered.
+    /// The comment of the draft `id` is saved: its draft retires, and the
+    /// task answers once the retirement has landed (ruling R-18).
+    ///
+    /// A live session is flushed to completion first, edits that come
+    /// meanwhile included; then the session ends and its claim retires
+    /// the revision just written, which deletes the draft. A flush that
+    /// fails answers its kind and keeps the session, its text and its
+    /// draft. A session that ended meanwhile answers `Ok`. A draft only
+    /// stored is claimed and retires the revision the claim reads. The
+    /// store is listed again once a retirement lands, whatever it
+    /// answered.
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
-    pub(crate) fn retire_comment(&mut self, id: DraftId, cx: &mut Context<Self>) {
-        let live = self
-            .current_id(id)
-            .and_then(|current| self.sessions.remove(&current));
-        let (id, slot, write, saved) = match live {
-            Some(Live { session, write, .. }) => (
-                session.id(),
-                Some(session.claim_slot()),
-                write,
-                Some(session.revision()),
-            ),
-            None => (
-                id,
-                None,
-                None,
-                self.listed(id).map(|(draft, _)| draft.revision),
-            ),
+    pub(crate) fn retire_comment(
+        &mut self,
+        id: DraftId,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), DraftErrorKind>> {
+        if self.current_id(id).is_none() {
+            return self.retire_stored(id, cx);
+        }
+        cx.spawn(async move |registry, cx| {
+            loop {
+                let flush = registry
+                    .update(cx, |registry, cx| registry.flush_now(id, cx))
+                    .map_err(|_| DraftErrorKind::Io)?;
+                let flushed = flush.await;
+                let step = registry
+                    .update(cx, |registry, cx| registry.retire_flushed(id, flushed, cx))
+                    .map_err(|_| DraftErrorKind::Io)?;
+                if let Some(retired) = step {
+                    return retired.await;
+                }
+            }
+        })
+    }
+
+    /// Ends the session `id` and retires its draft once its newest text is
+    /// stored. `None` when it is not yet: flush again.
+    fn retire_flushed(
+        &mut self,
+        id: DraftId,
+        flushed: Result<(), DraftErrorKind>,
+        cx: &mut Context<Self>,
+    ) -> Option<Task<Result<(), DraftErrorKind>>> {
+        // Retired or discarded meanwhile: nothing is left to retire.
+        let Some(current) = self.current_id(id) else {
+            return Some(Task::ready(Ok(())));
         };
+        if let Err(kind) = flushed {
+            return Some(Task::ready(Err(kind)));
+        }
+        let live = self.sessions.get(&current)?;
+        if live.session.busy() || !matches!(live.session.recovery_state(), RecoveryState::Saved(_))
+        {
+            return None;
+        }
+        // No store call holds the claim's slot: the session ends now, and
+        // takes no more edits.
+        let live = self.sessions.remove(&current)?;
         self.detach_ended();
         cx.notify();
+        let saved = live.session.flushed();
+        let slot = live.session.claim_slot();
+        let retire = off_thread(
+            &self.backend,
+            ReadKind::DraftWrite,
+            move |_| retired(take(&slot)?.retire(saved)),
+            cx,
+        );
+        Some(self.listed_after(retire, cx))
+    }
+
+    /// Claims the stored draft `id` and retires the revision the claim
+    /// reads, which deletes it.
+    fn retire_stored(
+        &mut self,
+        id: DraftId,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), DraftErrorKind>> {
+        let retire = off_thread(
+            &self.backend,
+            ReadKind::DraftWrite,
+            move |store| {
+                let claim = store.claim(id)?;
+                let saved = claim.draft().revision;
+                retired(claim.retire(saved))
+            },
+            cx,
+        );
+        self.listed_after(retire, cx)
+    }
+
+    /// Waits for `retire`, then lists the store again as it now is.
+    fn listed_after(
+        &mut self,
+        retire: Task<Result<(), DraftError>>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), DraftErrorKind>> {
         cx.spawn(async move |registry, cx| {
-            if let Some(write) = write {
-                write.await;
-            }
-            let Ok(retire) = registry.update(cx, |registry, cx| {
-                off_thread(
-                    &registry.backend,
-                    ReadKind::DraftWrite,
-                    move |store| {
-                        let claim = match &slot {
-                            Some(slot) => take(slot)?,
-                            None => store.claim(id)?,
-                        };
-                        let saved = saved.unwrap_or(claim.draft().revision);
-                        // A kept claim is dropped here, which lets it go.
-                        claim.retire(saved).map(|_| ())
-                    },
-                    cx,
-                )
-            }) else {
-                return;
-            };
-            // Retired, kept or refused, the draft is listed as it now is.
-            let _ = retire.await;
+            let result = retire.await.map_err(|error| error.kind);
             let _ = registry.update(cx, |registry, cx| {
                 registry.reload_listing(cx);
                 cx.notify();
             });
+            result
         })
-        .detach();
     }
 
     /// Discards the comment draft `id`, whatever its text: through its
@@ -304,6 +376,18 @@ impl DraftRegistry {
         } else {
             self.discard_stored(id, true, cx).detach();
         }
+    }
+}
+
+/// A retirement's answer. A kept claim, the store holding another
+/// revision than the one retired, is dropped, which lets the draft go
+/// still stored: it was not retired.
+fn retired(result: Result<Retired, DraftError>) -> Result<(), DraftError> {
+    match result? {
+        Retired::Deleted => Ok(()),
+        Retired::Kept(_) => Err(DraftError {
+            kind: DraftErrorKind::Io,
+        }),
     }
 }
 

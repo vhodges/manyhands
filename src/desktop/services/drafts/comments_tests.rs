@@ -1,7 +1,9 @@
 //! Comment drafts in the registry: begun under the caller's comment ID, one
 //! per thread, flushed on the idle delay, adopted again after the process
 //! that began them is gone, listed only once the store is, retired and
-//! discarded, and never an item's stored draft.
+//! discarded, and never an item's stored draft. A retirement writes the
+//! newest text first, and a stored draft retires the revision its claim
+//! reads.
 //!
 //! Draft types derive no `Debug`, so stored drafts are read through
 //! `match`.
@@ -12,8 +14,8 @@ use gpui_kit::{AppContext as _, Entity, TestAppContext};
 use manyhands::{
     canonical::ItemId,
     drafts::{
-        CommentTarget, Draft, DraftFields, DraftId, DraftStore, DraftTarget, Entry, Held, ItemKind,
-        Listing,
+        CommentTarget, Draft, DraftErrorKind, DraftFields, DraftId, DraftStore, DraftTarget, Entry,
+        Held, ItemKind, Listing,
     },
     repository::ItemDtoKind,
 };
@@ -132,6 +134,17 @@ fn stored(store: &DraftStore, id: DraftId) -> Option<(u64, CommentTarget, String
             } if listed == id => Some((revision, comment, body, held)),
             _ => None,
         })
+}
+
+/// Retires the comment draft `id` through the registry and waits for it.
+async fn retire(
+    drafts: &Entity<DraftRegistry>,
+    id: DraftId,
+    cx: &mut TestAppContext,
+) -> Result<(), DraftErrorKind> {
+    let retired = drafts.update(cx, |registry, cx| registry.retire_comment(id, cx));
+    cx.run_until_parked();
+    retired.await
 }
 
 fn comment_drafts(drafts: &Entity<DraftRegistry>, cx: &TestAppContext) -> Vec<CommentDraft> {
@@ -365,8 +378,7 @@ async fn retiring_removes_the_draft(cx: &mut TestAppContext) {
     let drafts = services.drafts().clone();
     let id = begin(&drafts, target(COMMENT, None), "Posted", cx).await;
 
-    drafts.update(cx, |registry, cx| registry.retire_comment(id, cx));
-    cx.run_until_parked();
+    assert_eq!(retire(&drafts, id, cx).await, Ok(()));
     assert!(stored(&fixture.draft_store(), id).is_none(), "retired");
     drafts.read_with(cx, |registry, _| {
         assert_eq!(registry.recovery_state(id), None, "the session ended");
@@ -381,10 +393,156 @@ async fn retiring_removes_the_draft(cx: &mut TestAppContext) {
         }]
     );
 
-    drafts.update(cx, |registry, cx| registry.retire_comment(left, cx));
-    cx.run_until_parked();
+    assert_eq!(retire(&drafts, left, cx).await, Ok(()));
     assert!(stored(&fixture.draft_store(), left).is_none(), "retired");
     assert!(comment_drafts(&drafts, cx).is_empty());
+}
+
+/// An edit still waiting for its write when the draft retires is written
+/// first; the newest revision then retires, and nothing is left stored.
+#[gpui_kit::test]
+async fn retiring_with_an_edit_pending_retires_the_draft(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let (_backend, services) = start(&fixture, cx);
+    cx.run_until_parked();
+    let drafts = services.drafts().clone();
+    let id = begin(&drafts, target(COMMENT, None), "Posted", cx).await;
+    drafts.update(cx, |registry, cx| registry.edit(id, body("Newer"), cx));
+    assert_eq!(
+        drafts.read_with(cx, |registry, _| registry.recovery_state(id)),
+        Some(RecoveryState::Pending)
+    );
+
+    assert_eq!(retire(&drafts, id, cx).await, Ok(()));
+    assert!(stored(&fixture.draft_store(), id).is_none(), "retired");
+    assert!(drafts.read_with(cx, |registry, _| registry.current_id(id).is_none()));
+    assert!(comment_drafts(&drafts, cx).is_empty());
+}
+
+/// A write in flight when the draft retires lands first, and the edit that
+/// came after it is written too; the newest revision then retires.
+#[gpui_kit::test]
+async fn retiring_with_a_write_in_flight_retires_the_draft(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let (backend, services) = start(&fixture, cx);
+    cx.run_until_parked();
+    let drafts = services.drafts().clone();
+    let id = begin(&drafts, target(COMMENT, None), "Posted", cx).await;
+    let release = backend.hold_read(ReadKind::DraftWrite);
+    drafts.update(cx, |registry, cx| registry.edit(id, body("Held"), cx));
+    cx.executor().advance_clock(IDLE);
+    cx.run_until_parked();
+    assert_eq!(backend.reads_seen(ReadKind::DraftWrite), 1, "in flight");
+    drafts.update(cx, |registry, cx| registry.edit(id, body("After"), cx));
+
+    let retired = drafts.update(cx, |registry, cx| registry.retire_comment(id, cx));
+    cx.run_until_parked();
+    assert!(
+        drafts.read_with(cx, |registry, _| registry.current_id(id).is_some()),
+        "the session lasts until its text is written"
+    );
+    assert!(stored(&fixture.draft_store(), id).is_some());
+
+    release.send(()).unwrap();
+    cx.run_until_parked();
+    assert_eq!(retired.await, Ok(()));
+    assert!(stored(&fixture.draft_store(), id).is_none(), "retired");
+    assert!(drafts.read_with(cx, |registry, _| registry.current_id(id).is_none()));
+}
+
+/// A stored draft written again since the listing read it retires the
+/// revision its claim reads, not the listing's: it is deleted, not kept.
+#[gpui_kit::test]
+async fn a_stored_draft_retires_at_the_revision_its_claim_reads(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let id = store_comment(&fixture.draft_store(), target(COMMENT, None), "First");
+    let (_backend, services) = start(&fixture, cx);
+    cx.run_until_parked();
+    let drafts = services.drafts().clone();
+    assert_eq!(
+        drafts.read_with(cx, |registry, _| registry
+            .listed(id)
+            .map(|(draft, _)| draft.revision)),
+        Some(1)
+    );
+
+    // Another process writes revision 2 and goes; the listing still reads 1.
+    match fixture.draft_store().claim(id) {
+        Ok(mut claim) => {
+            if let Err(error) = claim.write(2, body("Second"), None) {
+                panic!("the revision must be written: {error}");
+            }
+        }
+        Err(error) => panic!("the draft must be claimed: {error}"),
+    }
+    assert_eq!(stored(&fixture.draft_store(), id).unwrap().0, 2);
+
+    assert_eq!(retire(&drafts, id, cx).await, Ok(()));
+    assert!(stored(&fixture.draft_store(), id).is_none(), "retired");
+    assert!(comment_drafts(&drafts, cx).is_empty());
+}
+
+/// A draft another process holds is listed, not live, and adopting it
+/// answers that it is open elsewhere.
+#[gpui_kit::test]
+async fn adopting_a_draft_held_elsewhere_answers_open_elsewhere(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let id = store_comment(&fixture.draft_store(), target(COMMENT, None), "Elsewhere");
+    // Another process's store over the same folder holds its claim.
+    let elsewhere = match DraftStore::open_in(fixture.data_dir()) {
+        Ok(store) => store,
+        Err(error) => panic!("the other store must open: {error}"),
+    };
+    let held = match elsewhere.claim(id) {
+        Ok(claim) => claim,
+        Err(error) => panic!("the draft must be claimed: {error}"),
+    };
+    let (_backend, services) = start(&fixture, cx);
+    cx.run_until_parked();
+    let drafts = services.drafts().clone();
+    assert_eq!(
+        comment_drafts(&drafts, cx),
+        vec![CommentDraft {
+            id,
+            target: target(COMMENT, None),
+            live: false,
+        }]
+    );
+
+    let adopted = drafts.update(cx, |registry, cx| registry.adopt_comment(id, cx));
+    cx.run_until_parked();
+    assert!(matches!(adopted.await, Err(DraftErrorKind::OpenElsewhere)));
+    assert!(drafts.read_with(cx, |registry, _| registry.current_id(id).is_none()));
+    drop(held);
+}
+
+/// Two adoptions of one draft asked together: the second answers the
+/// session the first made, not its own claim's refusal.
+#[gpui_kit::test]
+async fn two_adoptions_at_once_answer_one_session(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let id = store_comment(&fixture.draft_store(), target(COMMENT, None), "Once");
+    let (_backend, services) = start(&fixture, cx);
+    cx.run_until_parked();
+    let drafts = services.drafts().clone();
+
+    let (first, second) = drafts.update(cx, |registry, cx| {
+        (
+            registry.adopt_comment(id, cx),
+            registry.adopt_comment(id, cx),
+        )
+    });
+    cx.run_until_parked();
+    let (first, second) = match (first.await, second.await) {
+        (Ok(first), Ok(second)) => (first, second),
+        _ => panic!("both adoptions must answer the session"),
+    };
+    assert_eq!((first.id, first.body.as_str()), (id, "Once"));
+    assert_eq!((second.id, second.body.as_str()), (id, "Once"));
+    assert_eq!(
+        drafts.read_with(cx, |registry, _| registry.session_ids()),
+        vec![id]
+    );
 }
 
 /// The composer's Discard: a live comment draft ends and leaves the store,
