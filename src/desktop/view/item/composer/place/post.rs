@@ -41,6 +41,8 @@ use crate::desktop::{
     },
 };
 
+/// A post `Submissions` refused with nothing of it in flight.
+const NOT_SENT: &str = "This comment could not be sent. Try again.";
 /// What `MaybeSaved` says (P5).
 pub(crate) const MAYBE_SAVED: &str = "This comment may already be saved.";
 /// Discard's note when the post's record is open (P7).
@@ -79,6 +81,9 @@ pub(in crate::desktop::view::item) struct SlotPost {
     pub(super) resend_pending: bool,
     /// Re-targeted from this comment ID (P13): its post restarts.
     pub(super) from: Option<ItemId>,
+    /// The old comment's last attempt as the re-target was pressed: any
+    /// attempt since overtakes the re-target (`overtaken`).
+    pub(super) from_mark: Option<crate::desktop::services::worker::SendMark>,
     /// The actions its last failed state offered: a refused re-target
     /// keeps them.
     pub(super) actions: Option<FailedActions>,
@@ -266,7 +271,16 @@ impl ItemPane {
         };
         let resend = slot.post.sent || slot.post.unchecked || slot.post.resend_pending;
         let from = slot.post.from.clone();
+        let mark = slot.post.from_mark;
         let entity = slot.composer.clone();
+        // The old comment was sent again since it was re-targeted: the new
+        // one is never sent; the old one's answer stands (R-19).
+        if let Some(old) = &from
+            && self.overtaken(old, mark, cx)
+        {
+            self.undo_retarget(composer, old.clone(), window, cx);
+            return;
+        }
         let intent = Intent::CommentAdd {
             root,
             kind: authoring(item.kind),
@@ -290,14 +304,14 @@ impl ItemPane {
             let following = submissions
                 .read(cx)
                 .in_flight(&self.post_root(), &target.comment_id);
-            let state = if following {
-                ComposerState::Posting
-            } else {
-                ComposerState::Idle
-            };
             entity.update(cx, |composer, cx| {
-                composer.set_state(state, window, cx);
-                composer.refuse_while_posting(cx);
+                if following {
+                    composer.set_state(ComposerState::Posting, window, cx);
+                    composer.refuse_while_posting(cx);
+                } else {
+                    composer.set_state(ComposerState::Idle, window, cx);
+                    composer.say_refused(NOT_SENT, cx);
+                }
             });
             cx.notify();
             return;

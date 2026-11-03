@@ -375,3 +375,12 @@ pub(super) fn hold_after_acceptance(shell: &Shell) -> (mpsc::Receiver<()>, mpsc:
         });
     (reached, release)
 }
+
+/// The comment `composer` writes, read from a closure's `&Shell`.
+pub(super) fn composer_target_of(
+    shell: &Shell,
+    composer: &Entity<Composer>,
+    cx: &mut TestAppContext,
+) -> Option<manyhands::drafts::CommentTarget> {
+    composer_target(shell, composer, cx)
+}

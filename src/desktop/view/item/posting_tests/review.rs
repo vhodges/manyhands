@@ -178,3 +178,96 @@ async fn a_reply_that_may_be_saved_can_be_discarded(cx: &mut TestAppContext) {
     shell.click("composer-discard-confirm", cx);
     assert!(reply_composer(&shell, cx).is_none(), "the reply closed");
 }
+
+/// R-19, sequence A: Edit text moves the composer from X to a new ID;
+/// then X is retried from the operation area and saves. Submit then sends
+/// nothing new: X's saved answer stands, the new draft goes and the
+/// composer clears. One comment.
+#[gpui_kit::test]
+async fn a_retarget_overtaken_by_its_old_comment_sends_nothing_new(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = posting_shell(false, cx, |_, _| {});
+    let (composer, first) = super::support::write_new(&shell, "First.", cx);
+    // Saved by the real call; the desktop hears it was not.
+    let returned = shell.backend.hold_job_return_answering(
+        JobKind::Comment,
+        super::support::not_saved(ResultCode::ItemNotFound),
+    );
+    returned.release();
+    submit(&shell, cx);
+    until_answered(&shell, &root, &first, cx).await;
+    press(&shell, "composer-edit-text", cx);
+    shell
+        .until_drawn(cx, "re-targeted", |shell, cx| {
+            super::support::composer_target_of(shell, &composer, cx)
+                .is_some_and(|target| target.comment_id != first)
+                && !composer.read_with(cx, |composer, _| composer.is_read_only())
+        })
+        .await;
+
+    let id = post_request(&shell, &first, cx).unwrap();
+    let worker = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().worker().clone());
+    assert!(worker.retry(id, None), "the operation area's Retry of X");
+    until_attempt(&shell, &root, &first, 2, cx).await;
+    assert_eq!(
+        outcome(&shell, &root, &first, cx).map(|(outcome, ..)| outcome),
+        Some(CommentOutcome::SavedHere)
+    );
+
+    focus_end(&shell, &composer, cx);
+    submit(&shell, cx);
+    shell
+        .until_drawn(cx, "the composer cleared", |shell, cx| {
+            stored_comments(&shell.fixture).is_empty()
+                && composer_state(&new_composer(shell, cx), cx) == (String::new(), false)
+        })
+        .await;
+    assert_eq!(comment_posts(&shell, cx).len(), 1, "only X was ever sent");
+    assert_eq!(comment_files(&root).len(), 2, "A and X: one comment");
+}
+
+/// R-19, sequence B: Post as a new comment from "may already be saved";
+/// while the old draft's retirement is awaited, X is retried and saves.
+/// The new comment is never sent. One comment.
+#[gpui_kit::test]
+async fn post_as_new_overtaken_during_retirement_sends_nothing_new(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = posting_shell(false, cx, |fixture, root| {
+        store_comment(fixture, root, KEPT, None, "Fresh.");
+    });
+    let comment = item_id(KEPT);
+    maybe_saved_without_record(&shell, &root, "Fresh.", cx).await;
+    press(&shell, "composer-check-again", cx);
+    shell
+        .until_drawn(cx, "Post as a new comment offered", |shell, cx| {
+            shell.present("composer-post-as-new", cx)
+        })
+        .await;
+
+    // The old draft's retirement waits at its store write.
+    let write = shell
+        .backend
+        .hold_read(crate::desktop::services::ReadKind::DraftWrite);
+    press(&shell, "composer-post-as-new", cx);
+    let id = post_request(&shell, &comment, cx).unwrap();
+    let worker = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().worker().clone());
+    assert!(worker.retry(id, None), "the operation area's Retry of X");
+    until_attempt(&shell, &root, &comment, 2, cx).await;
+    assert_eq!(
+        outcome(&shell, &root, &comment, cx).map(|(outcome, ..)| outcome),
+        Some(CommentOutcome::SavedHere)
+    );
+    drop(write);
+    shell
+        .until_drawn(cx, "the composer cleared", |shell, cx| {
+            stored_comments(&shell.fixture).is_empty()
+                && composer_state(&new_composer(shell, cx), cx) == (String::new(), false)
+        })
+        .await;
+    assert_eq!(comment_posts(&shell, cx).len(), 1, "only X was ever sent");
+    assert_eq!(comment_files(&root).len(), 2, "A and X: one comment");
+}

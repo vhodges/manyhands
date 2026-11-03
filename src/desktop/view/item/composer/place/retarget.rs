@@ -63,6 +63,10 @@ impl ItemPane {
             return;
         }
         slot.post.busy = true;
+        let mark = self.attempt_mark(&old.comment_id, cx);
+        let Some((_, slot)) = self.composers.find(composer) else {
+            return;
+        };
         let old_draft = match slot.draft {
             SlotDraft::Begun(id) => Some(id),
             _ => None,
@@ -132,6 +136,7 @@ impl ItemPane {
                 slot.post.unchecked = false;
                 slot.post.resend_pending = false;
                 slot.post.from = Some(old.comment_id);
+                slot.post.from_mark = mark;
                 let entity = slot.composer.clone();
                 match after {
                     After::Edit => {

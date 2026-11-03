@@ -222,6 +222,12 @@ impl Composer {
         cx.notify();
     }
 
+    /// Says why a Submit was refused.
+    pub(crate) fn say_refused(&mut self, words: &'static str, cx: &mut Context<Self>) {
+        self.refused = Some(words);
+        cx.notify();
+    }
+
     /// Whether the owner offers a failed post's actions.
     pub(crate) fn is_failed(&self) -> bool {
         matches!(self.state, ComposerState::Failed { .. })
