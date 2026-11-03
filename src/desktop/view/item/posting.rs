@@ -21,3 +21,7 @@ impl ItemPane {
         None
     }
 }
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "posting_tests.rs"]
+mod tests;

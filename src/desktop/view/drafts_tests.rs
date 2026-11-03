@@ -355,8 +355,8 @@ fn each_row_reads_its_state_and_offers_what_its_policy_allows(cx: &mut TestAppCo
 }
 
 /// A comment draft's row offers Open, which opens and focuses its item's
-/// tab, leaving the page; the draft is not claimed, still listed for the
-/// item's composer to adopt.
+/// tab, leaving the page. Open itself claims nothing: the tab's composer
+/// adopts the draft, which is then held here (E-14).
 #[gpui_kit::test]
 fn a_comment_rows_open_opens_its_item(cx: &mut TestAppContext) {
     const COMMENT_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FEC";
@@ -387,6 +387,9 @@ fn a_comment_rows_open_opens_its_item(cx: &mut TestAppContext) {
     assert_eq!(state(&shell, id, cx).as_deref(), Some(CURRENT));
     assert_eq!(actions(&shell, id, cx), [&["open"][..], &REFUSED].concat());
 
+    // The tab's claim waits at the gate: until it lands, nothing holds
+    // the draft.
+    let claim = shell.backend.hold_read(ReadKind::Drafts);
     shell.click(row_id(id, "open"), cx);
     assert!(!drafts_shown(&shell, cx));
     let opened = shell
@@ -407,9 +410,24 @@ fn a_comment_rows_open_opens_its_item(cx: &mut TestAppContext) {
         (listed, held)
     });
     assert!(listed && !held, "Open claims nothing");
-    shell.keys("secondary-shift-d", cx);
-    assert_eq!(state(&shell, id, cx).as_deref(), Some(CURRENT));
-    assert_eq!(actions(&shell, id, cx), [&["open"][..], &REFUSED].concat());
+
+    // The opened tab adopts the draft into its new comment's composer.
+    claim.send(()).unwrap();
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    shell.run(cx);
+    assert!(
+        registry(&shell, cx).read_with(cx, |registry, _| registry.session(id).is_some()),
+        "the tab holds the draft"
+    );
+    let pane = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.item_pane())
+        .expect("the item's tab is shown");
+    let composer = pane
+        .read_with(cx, |pane, _| pane.new_composer())
+        .expect("the new comment's composer");
+    assert!(composer.read_with(cx, |composer, cx| composer.text(cx)) == "A comment");
 }
 
 /// While its item is read, a row says so and offers Inspect, Export, Discard.

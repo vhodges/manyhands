@@ -11,8 +11,12 @@
 //! - **Comment rows.** An avatar coloured from the author (R-56), the name
 //!   without its email, the time in local time, and the body in a read
 //!   editor (R-63). A file that is no comment shows its path and reason.
+//! - **Reply** after each comment's body, a tab stop after the comment
+//!   (E-11), opens the reply composer in its thread (`composer`), which is
+//!   drawn after the thread's last reply. While that composer is posting,
+//!   Reply does nothing and says why.
 //! - **The end.** "No comments yet" when there are none, then the posts
-//!   being sent (`posting`) and the composers (`composer`).
+//!   being sent (`posting`) and the new comment's composer (`composer`).
 //!
 //! Each body's `ReadOnly` is made when the comment list lands and kept by
 //! the comment's ID across reloads: a changed body is loaded into it in
@@ -63,6 +67,10 @@ pub(crate) const NO_COMMENTS: &str = "No comments yet";
 pub(crate) const OLDEST_FIRST: &str = "oldest first";
 pub(crate) const REPLY_TO: &str = "Reply to";
 pub(crate) const COMMENTS: &str = "Comments";
+/// Each comment's Reply.
+pub(crate) const REPLY: &str = "Reply";
+/// Why Reply does nothing while the reply composer is posting.
+pub(crate) const REPLY_POSTING: &str = "Finish or cancel the reply being posted";
 
 /// The discussion's column at its widest, under the page's text.
 const COLUMN: f32 = 664.;
@@ -123,6 +131,8 @@ pub(super) struct Discussion {
     heading: FocusHandle,
     /// The header's Comments {n}, a tab stop.
     button: FocusHandle,
+    /// Each comment's Reply, a tab stop, by the comment's ID.
+    replies: HashMap<String, FocusHandle>,
 }
 
 /// A comment's body in its read editor. It derives nothing: it holds the
@@ -143,7 +153,13 @@ impl Discussion {
             bodies: HashMap::new(),
             heading: cx.focus_handle(),
             button: cx.focus_handle().tab_stop(true),
+            replies: HashMap::new(),
         }
+    }
+
+    /// The Reply of the comment `id`.
+    pub(super) fn reply_focus(&self, id: &str) -> Option<FocusHandle> {
+        self.replies.get(id).cloned()
     }
 
     /// The read view of the comment `id`'s body.
@@ -171,6 +187,18 @@ impl ItemPane {
             .filter(|comment| comment.body.is_some())
             .filter_map(|comment| comment.id.as_deref())
             .collect();
+        let ids: HashSet<&str> = list
+            .items
+            .iter()
+            .filter_map(|comment| comment.id.as_deref())
+            .collect();
+        let replies = &mut self.discussion.replies;
+        replies.retain(|id, _| ids.contains(id.as_str()));
+        for id in ids {
+            if !replies.contains_key(id) {
+                replies.insert(id.to_owned(), cx.focus_handle().tab_stop(true));
+            }
+        }
         let bodies = &mut self.discussion.bodies;
         bodies.retain(|id, _| listed.contains(id.as_str()));
         for comment in &list.items {
@@ -223,7 +251,7 @@ impl ItemPane {
                 threads(list)
                     .iter()
                     .enumerate()
-                    .map(|(ix, thread)| self.thread(list, ix, thread, now, cx))
+                    .map(|(ix, thread)| self.thread(list, ix, thread, now, window, cx))
                     .collect()
             })
             .unwrap_or_default();

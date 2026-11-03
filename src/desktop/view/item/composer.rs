@@ -1,5 +1,5 @@
 //! The discussion's comment composers (design, Lane C): the new-comment
-//! composer after the threads and the one reply composer. Task 12 places
+//! composer after the threads and the one reply composer. `place` places
 //! them; this builds the `Composer` entity, which knows nothing of drafts
 //! or posting and tells its owner what happens through its events.
 //!
@@ -33,37 +33,26 @@
 //! - **Pointer** (R-66). A press on the editor lands the caret after a
 //!   math or property block, as the edit host's does.
 //!
-//! The caret is not kept in view in the discussion's region here: no
-//! `CaretInView` yet. Task 12, which places the composers in the region,
-//! gives them one.
+//! Where the composers are, what their text is kept as and their caret
+//! kept in view in the discussion's region are `place`'s (Task 12).
 //!
 //! The composer holds the user's text, so nothing here derives `Debug`.
 
-// Every item in these is first called from Task 12, which places the
-// composers.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 mod discard;
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 mod failed;
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 mod guard;
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 mod link;
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
+mod place;
 mod render;
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 pub(crate) mod toolbar;
 
 use std::mem;
 
-use gpui_kit::{
-    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Window,
-};
+use gpui_kit::{App, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Window};
 use manyhands::drafts::ItemKind;
 use zorite_editor::{EditorEvent, EditorState};
 
 use self::{link::LinkField, toolbar::COUNT};
-use super::ItemPane;
 use crate::desktop::{
     model::drafts::RecoveryState,
     view::editor::{
@@ -72,30 +61,14 @@ use crate::desktop::{
 };
 
 pub(crate) use self::failed::{FailedAction, FailedActions};
+pub(super) use self::place::Composers;
 
 /// A new comment's placeholder.
 const NEW_PLACEHOLDER: &str = "Add a comment. Markdown works here.";
 /// A reply's placeholder.
 const REPLY_PLACEHOLDER: &str = "Write a reply. Markdown works here.";
 
-/// The tab's composers.
-#[derive(Default)]
-pub(super) struct Composers {}
-
-impl ItemPane {
-    /// The composers, at the discussion's end, after the threads and the
-    /// posts being sent. Nothing yet.
-    pub(super) fn composers_view(
-        &self,
-        _window: &Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
-        None
-    }
-}
-
 /// Which composer this is.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 pub(crate) enum ComposerKind {
     /// The new-comment composer, after the threads.
     New,
@@ -106,7 +79,6 @@ pub(crate) enum ComposerKind {
 
 /// What the composer tells its owner. It holds the user's text, so it
 /// derives nothing.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 pub(crate) enum ComposerEvent {
     /// The text changed, by any means the user has; this is the new text.
     Changed(String),
@@ -118,7 +90,7 @@ pub(crate) enum ComposerEvent {
     /// The user chose Discard in the discard prompt: drop the text.
     Discard,
     /// One of the actions the owner offered in `Failed`.
-    Failed(FailedAction),
+    Failed(#[cfg_attr(not(test), allow(dead_code))] /* Read from Task 13. */ FailedAction),
 }
 
 /// Where the composer stands; its owner sets it (`set_state`).
@@ -148,7 +120,6 @@ impl ComposerState {
 const ALREADY_POSTING: &str = "Already posting";
 
 /// One comment composer.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 pub(crate) struct Composer {
     kind: ComposerKind,
     item: ItemKind,
@@ -180,7 +151,6 @@ pub(crate) struct Composer {
     _subscriptions: [Subscription; 2],
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 impl Composer {
     /// A composer of `kind` on an item of kind `item`, holding `restored`,
     /// a restored draft's text, exactly, with the caret at its end; an
@@ -225,6 +195,22 @@ impl Composer {
             pressed: false,
             settling: false,
             _subscriptions: subscriptions,
+        }
+    }
+
+    /// Whether the text is being posted: it cannot move (design, Lane D,
+    /// Placement).
+    pub(crate) fn is_posting(&self) -> bool {
+        matches!(self.state, ComposerState::Posting)
+    }
+
+    /// A reply's "Replying to {name}": the comment Reply was pressed on.
+    pub(crate) fn set_replying_to(&mut self, name: String, cx: &mut Context<Self>) {
+        if let ComposerKind::Reply { to, .. } = &mut self.kind
+            && *to != name
+        {
+            *to = name;
+            cx.notify();
         }
     }
 
@@ -296,6 +282,7 @@ impl Composer {
         placeholder(&self.kind)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))] // Read by the tests.
     pub(crate) fn is_rich(&self) -> bool {
         self.rich
     }
