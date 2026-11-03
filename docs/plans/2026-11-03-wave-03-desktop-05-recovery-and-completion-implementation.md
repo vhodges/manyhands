@@ -10,7 +10,7 @@ id: "01M6HPQ3PV69Z8FA294YW507N3"
 
 # Desktop Conflict Recovery, Promotion And Closure Implementation Plan
 
-> **For agentic workers:** Draft (revision 3), 2026-11-03. Not approved; implementation
+> **For agentic workers:** Draft (revision 4), 2026-11-03. Not approved; implementation
 > is not authorized. Once approved, use `implementing-a-cycle` task by
 > task, re-read the design, repeat the ticket preflight, and record every
 > checkpoint on ticket `01M4CC0VN2K8DBHNMZ46NTX5JJ`. Steps use checkbox
@@ -131,7 +131,7 @@ created in Task 0.
 4. **No automatic winner.** Save resolution stays disabled until every
    part is chosen; external sets have no Save (Tasks 11b, 12).
 5. **L1 parity.** C5's CLI renderer tests and goldens unchanged (Task 1).
-6. **L3 order.** A cleanup-only replay reports `cleaning_up` alone; a
+6. **L3 order.** A cleanup-only replay reports `accepted, observing, cleaning_up`; a
    local-only run no `publishing` (Task 3).
 7. **Resume after restart** resends the named request (Task 14).
 8. **The lock** never strands a close: read-only after integration until
@@ -144,14 +144,14 @@ created in Task 0.
 
 | Task | Part | Summary |
 | --- | --- | --- |
-| 0 | Orchestrator | Merge main with C5, baseline, U-1–U-4, sweep, ledger. |
+| 0 | Orchestrator | Merge main with C5, baseline, U-1–U-5, sweep, ledger. |
 | 1 | 0 | L1 way out; CLI renders it. |
 | 2 | 0 | L2 resume for lifecycle parents. |
 | 3 | 0 | L3 lifecycle progress (test-first, design checkpoint). |
 | 4 | 0 | Part 0 checkpoint. |
 | 5 | A | Intents; header live; test seams. |
 | 6a | A | Dialog: save first, prepare, blocked, held. |
-| 6b | A | Dialog: confirm summary, stale, read-only tabs. |
+| 6b | A | Dialog: confirm summary, stale. |
 | 7 | A | Running, failed, done; outcomes; way out; credentials. |
 | 8 | A | Made-ready on Done. |
 | 9 | A | After a lifecycle; the lock; Part A checkpoint. |
@@ -213,7 +213,8 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   unit tests): one per `LifecycleWayOut` variant from a constructed
   envelope; `a_held_prepare_names_the_holding_request`;
   `a_deleted_branch_cancels_then_sends_again`;
-  `a_documents_integration_conflict_is_repair_outside`;
+  `an_execute_result_for_a_documents_integration_conflict_is_repair_outside`;
+  `a_blocked_prepares_integration_conflict_is_repair_locally_for_either_kind`;
   `prepare_routing_takes_the_items_kind`;
   `mixed_blockers_keep_the_cli_order`.
 - [ ] **Code:** `mutation/way_out.rs`, `mutation/mod.rs` export;
@@ -256,7 +257,7 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   `promotion/run.rs`, `closure/lifecycle.rs`, `mutation/bind/lifecycle.rs`;
   `stage_text` arms in `src/desktop/model/operations.rs`. E-3.
 - [ ] **Verify:** `--test mutation_remote d5_progress`; `--test
-  read_contract`; `--test document_promotion`; `--test ticket_closure`;
+  read_contract`; `--test cli lifecycle` (the five E-3 goldens); `--test document_promotion`; `--test ticket_closure`;
   `--test cli_remote lifecycle`; the four lines.
 - [ ] **Commit; review.**
 
@@ -281,7 +282,9 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
 - [ ] **Code:** `Intent`, `JobKind`, build arms, labels; `header.rs`,
   `model/item.rs`; `resume_offer` lifecycle arm; canned prepare and
   conflict-read seams, and a worker progress-sink seam that holds at a
-  named stage, in `test_support/` (design, A1, Testing). E-4.
+  named stage, in `test_support/` (design, A1, Testing);
+  `Intent::stops_at_safe_points` true for `TicketClose` and
+  `DocumentPromote`. E-4.
 - [ ] **Verify:** `… header`; `… requests`; `… operations`; the four lines.
 - [ ] **Commit; review.**
 
@@ -300,7 +303,7 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
 - [ ] **Verify:** `… lifecycle`; the four lines.
 - [ ] **Commit; review.**
 
-## Task 6b: Dialog — Confirm, Stale, Read-Only
+## Task 6b: Dialog — Confirm, Stale
 
 - [ ] **Tests first** (`view/lifecycle/confirm_tests.rs`):
   `the_summary_lists_every_changed_path_with_its_tag` (A19),
@@ -312,8 +315,7 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   `expired_consent_offers_prepare_again` (P3),
   `status_text_closed_still_closes` (P13),
   `enter_confirms_esc_cancels_and_focus_returns` (A21).
-- [ ] **Code:** `lifecycle/confirm.rs`, read-only hook in the item tab
-  (design, A2).
+- [ ] **Code:** `lifecycle/confirm.rs` (design, A2).
 - [ ] **Verify:** `… lifecycle`; the four lines.
 - [ ] **Commit; review.**
 
@@ -355,10 +357,20 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   `comment_drafts_stay_on_the_drafts_page` (A10),
   `a_failed_close_keeps_its_context_and_drafts` (A10),
   `editing_a_promoted_document_starts_a_fresh_context`;
-  (`view/lifecycle/lock_tests.rs`) `every_tab_of_the_item_is_read_only_from_saving` (P20),
-  `the_lock_survives_a_restart_from_the_l2_row` (P20),
-  `after_integration_a_refused_cleanup_stays_locked` (P23, real local-only with a failure point),
-  `each_pre_acceptance_answer_unlocks` (P25).
+  (`view/lifecycle/lock_tests.rs`, test-first with a **design
+  checkpoint**: before code, the implementer writes into the ledger how
+  each lock source and each of L-1–L-6 is derived; the orchestrator
+  reviews it against the design's table):
+  `the_dialog_locks_from_saving_and_releases_when_dropped`,
+  `every_tab_and_window_of_the_item_is_read_only`,
+  `a_stop_before_closing_unlocks` (L-1),
+  `a_closure_at_closing_stays_locked_after_restart` (L-2),
+  `after_integration_a_refused_remote_deletion_stays_locked` (L-3, P23),
+  `a_changed_context_cleanup_unlocks_with_check_again` (L-4),
+  `a_finished_or_missing_row_unlocks` (L-5),
+  `each_pre_acceptance_answer_unlocks` (L-6, P25),
+  `a_cli_finish_unlocks_on_refresh_or_focus` (P26),
+  `an_unreadable_repository_gives_no_record_lock`.
 - [ ] **Code:** design, A2 (lock) and A4.
 - [ ] **Verify:** `… lifecycle`; whole desktop bin suite; the four lines.
 - [ ] **Commit; review;** merge main; ledger; ticket comment; push.
@@ -395,7 +407,9 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   `a_set_is_read_back_after_reopening_the_store` (P24),
   `a_set_is_deleted_when_its_request_finishes`,
   `sets_are_kept_per_request_id`,
-  `a_set_has_no_debug_and_never_reaches_a_message`.
+  `a_set_has_no_debug_and_never_reaches_a_message`,
+  `the_launch_sweep_deletes_finished_and_unknown_sets`,
+  `a_set_records_root_operation_item_and_kind`.
 - [ ] **Code:** `services/resolutions.rs` beside the D2 store (U-5;
   design, B3).
 - [ ] **Verify:** `… resolutions`; the four lines.
@@ -412,6 +426,7 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   `the_note_follows_the_source`,
   `original_request_required_retries_with_that_requests_kept_set`,
   `reopening_after_a_partial_local_resolution_offers_retry_not_new`,
+  `another_windows_choices_yield_to_the_kept_set_with_a_notice`,
   `a_lifecycle_child_resolution_sends_the_lifecycle_again` (P8, canned),
   `after_a_restart_a_child_resolution_resumes_the_parent_row`,
   `an_interrupted_remote_resolution_resumes` (P15, canned).
@@ -456,10 +471,13 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   `republish_confirms_then_shares` (canned),
   `a_stopped_republish_sends_the_same_request` (P17),
   `stop_and_republish_cancels_republishes_then_resends` (P21, A24, canned),
+  `stop_and_republish_stops_unless_give_up_resent_and_cancelled`,
   `a_lifecycle_row_offers_resume_after_restart` (A15),
   `resume_resends_the_named_request_and_opens_running` (P5),
-  `resume_is_not_offered_while_in_flight_and_busy_reads_still_running` (P22).
-- [ ] **Code:** `Intent::ItemRepublish` with `JobKind` and build arm;
+  `resume_is_not_offered_while_in_flight_and_busy_reads_still_running` (P22),
+  `a_running_resume_counts_as_in_flight`.
+- [ ] **Code:** `Intent::ItemRepublish` with `JobKind`, build arm and
+  `stops_at_safe_points`;
   design, A3 (deleted branch) and Part C. E-6.
 - [ ] **Verify:** `… operations`; the four lines.
 - [ ] **Commit; review.**
@@ -479,12 +497,13 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
 ## Task 15b: Interruption And Commit Counts
 
 - [ ] **Tests** (`view/lifecycle/interruption_tests.rs`, real local-only
-  repositories): a close held at `integrating` by the progress-sink seam,
-  stopped at a safe point, then Retry (P4); a close broken by a library
-  failure point after `replace_service`, the services reopened as after a
-  relaunch, then Resume → `original_request_required` → resend (P5); a
-  cleanup-only replay. Commits on primary and context are counted before
-  and after each (A8, A9).
+  repositories; design, Testing): a close held at `integrating` by the
+  progress-sink seam, stopped before the merge, then Retry (P4); a close
+  broken at `BeforeRequestSettlement`, `request_show` asserted `accepted`,
+  a fresh shell opened over the same data directory (as
+  `posting_tests/relaunch.rs`), then Resume → `original_request_required`
+  → resend (P5); a cleanup-only replay. Commits on primary and context are
+  counted before and after each (A8, A9).
 - [ ] **Verify:** `… interruption`; the four lines.
 - [ ] **Commit; review.**
 
@@ -565,7 +584,14 @@ git merge-tree --write-tree HEAD origin/main
 | R-12 | 11a |
 | Decisions 2, 3, 10, 11 | 1–3, 14 |
 | Decision 6 | 8 |
-| Decision 9 | 5, 7, 11, 14 |
+| Decision 9 | 5, 7, 11b, 14 |
+| Decisions 20, 21 | 9 |
+| L-1–L-6, P26 | 9 |
+| E-1–E-3 | 2, 3 |
+| E-4 | 5 |
+| E-5, E-7 | 13 |
+| E-6 | 14 |
+| U-1–U-5 | 0 |
 | Decisions 12, 18 | 9 |
 | Decision 19 | 11a, 11b |
 | Decisions 1, 17 | 0 |

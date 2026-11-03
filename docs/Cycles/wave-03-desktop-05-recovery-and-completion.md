@@ -15,7 +15,7 @@ Ticket `01M4CC0VN2K8DBHNMZ46NTX5JJ`. Design:
 Plan:
 [2026-11-03-wave-03-desktop-05-recovery-and-completion-implementation.md](../plans/2026-11-03-wave-03-desktop-05-recovery-and-completion-implementation.md).
 
-Status: **draft** (revision 3), planned at `e39bb004` (origin/main `c2a34494` merged into
+Status: **draft** (revision 4; its edits after review round 3 had no independent review), planned at `e39bb004` (origin/main `c2a34494` merged into
 the ticket branch) and against C5's branch tip `f59aceb6`, which is not yet
 merged (decision 1). Nothing has been built or run. Approval and
 implementation wait for C5's merge; Task 0 then merges main and re-checks
@@ -147,7 +147,7 @@ D5.
 - Scheduled polling, launch polls and shutdown: D6.
 - CLI-against-desktop scenarios: G1 (track rule 4).
 - Windows and macOS native evidence: G1 (decision 7).
-- Known limits K-1 to K-12 (design Known Limits).
+- Known limits K-1 to K-13 (design Known Limits).
 
 ## Required Contract
 
@@ -187,7 +187,7 @@ D5.
 | A5 | Dirty primary | Desktop tests: blocked at prepare (real) and stopped at execute (canned) (P19) | Planned |
 | A6 | Local-only close and promotion | Desktop tests (real); native §2 | Planned |
 | A7 | Remote cleanup rejection | Canned desktop test (P6); C5 library SSH tests; native §4 | Planned |
-| A8 | Interruption | Stop at a safe point (P4); relaunch, Resume, resend (P5, canned); C5 library tests; native §4 | Planned |
+| A8 | Interruption | Stop at a safe point (P4); relaunch, Resume, resend (P5, real, fresh shell over the data directory); C5 library tests; native §4 | Planned |
 | A9 | Cleanup-only replay; no repeated merge or checkpoint | Commit counts after Retry and Resume (local-only, real); L3 cleanup-only stages; C5 library tests | Planned |
 | A10 | Preserved drafts and contexts inspectable | Desktop tests: failed close keeps context and drafts; other drafts on the Drafts page | Planned |
 | A11 | Made-ready list | Desktop test: Done lists dependents with slug and title; index pending says so | Planned |
@@ -202,7 +202,7 @@ D5.
 | A20 | Closure apart from status (contract 8) | Characterization test of the closure display; P13 | Planned |
 | A21 | Keyboard and focus (contract 9) | Keyboard tests; focus returns to the header action | Planned |
 | A22 | Item, repository and context named; cancellation reported (MH-COLLAB-006) | Desktop tests of the dialog header and the stopped outcome | Planned |
-| A23 | Read-only while unfinished (decisions 12, 18) | Desktop tests (P20, P23, P25) | Planned |
+| A23 | Read-only while unfinished (decisions 12, 18, 20, 21) | Desktop tests of L-1–L-6 (P20, P23, P25, P26) | Planned |
 | A24 | Deleted branch mid-lifecycle | Desktop test of Stop and republish… (P21) | Planned |
 
 Native evidence: Linux (Wayland), release build, against a real SSH
@@ -269,6 +269,18 @@ Answered by the owner after review round 2:
     request finishes; Resume works after a restart. A remote resolution
     with no kept set is superseded by a new one (GRFC).
 
+Answered by the owner after review round 3:
+
+20. **The lock starts at the closure checkpoint or the merge.** It follows
+    the library's recorded step: `confirmed` and `context_synchronized`
+    leave the tabs unlocked, so a stop then unlocks; from `closing` (the
+    closure checkpoint, which cannot be superseded) or `integrating` on,
+    the tabs stay read-only.
+21. **A stuck tidy-up unlocks with a way out.** When tidy-up after the merge
+    is refused because the working copy, its ignored files or the remote
+    branch changed, the tabs unlock and the item shows "Merged, but not
+    tidied up: {reason}" with Open folder and Check again (K-13).
+
 Proposed by the planner, for the owner to confirm with the documents'
 approval:
 
@@ -311,3 +323,4 @@ reading the source; an answer that differs stops for the owner.
 | Review round 1, source and feasibility (`8e9dc65e`) | 3 Blocking, 10 Important, 7 Minor | — | Revision 2; S3 became decision 9 and S2 decision 10. | Design Review Record. |
 | Review round 1, contract and consistency (`8e9dc65e`) | 1 Blocking, 15 Important, 8 Minor | — | Revision 2; questions became decisions 11 and 12; proposals 15 and 17 added. | Design Review Record. |
 | Review round 2, scoped with adversarial brief (`0d7a851c`) | 1 Blocking, 11 Important, 8 Minor | — | Revision 3; R2-5 and R2-7 became decisions 18 and 19. | Design Review Record. |
+| Review round 3, scoped with adversarial brief (`97f966f6`) | 1 Blocking, 6 Important, 5 Minor | — | Revision 4; R3-1 and R3-2 became decisions 20 and 21. The lock, in its third round, is stated as required outcomes L-1–L-6 with Task 9 test-first and a design checkpoint. Not independently re-reviewed. | Design Review Record. |
