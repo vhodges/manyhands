@@ -1,18 +1,18 @@
 //! The composer's discard prompt (design, Lane C; `04-comments.md`): Cancel
 //! with text asks "Discard this reply?" in a reply composer and "Discard
 //! this comment?" in the new-comment composer, with Discard and Keep
-//! editing. Keep editing is the default (Enter) and Escape's: the text
-//! stays and focus goes back to the editor. Discard emits `Discard`. A
-//! failed composer's prompt also says the owner's note (P7, P18). The
+//! editing, in that order. Keep editing has focus as it opens, so Enter
+//! keeps the text, as Escape does, and focus goes back to the editor.
+//! Discard emits `Discard`. A failed composer's prompt also says the owner's note (P7, P18). The
 //! dialog closes at once, as D3's do, and holds none of the user's text.
 
 use std::rc::Rc;
 
 use gpui_kit::{
-    App, ClickEvent, Context, Focusable, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, TestSupportExt, WeakEntity, Window,
+    App, ClickEvent, Context, FocusHandle, Focusable, Hsla, InteractiveElement, IntoElement,
+    ParentElement, StatefulInteractiveElement, Styled, TestSupportExt, WeakEntity, Window,
     component::{
-        WindowExt,
+        ActiveTheme, WindowExt,
         button::{Button, ButtonVariants},
         dialog::Confirm as DialogConfirm,
         h_flex, v_flex,
@@ -42,6 +42,8 @@ impl Composer {
         };
         let editor = self.editor.read(cx).focus_handle(cx);
         let me: WeakEntity<Self> = cx.entity().downgrade();
+        // Keep editing's own stop, focused as the prompt opens.
+        let first = cx.focus_handle().tab_stop(true);
         let keep: Press = Rc::new(move |window, cx| {
             window.close_dialog(cx);
             window.focus(&editor, cx);
@@ -51,12 +53,19 @@ impl Composer {
             // The owner may drop the composer; nothing of it is used after.
             let _ = me.update(cx, |_, cx| cx.emit(ComposerEvent::Discard));
         });
-        window.open_dialog(cx, move |base, _, _| {
+        let focused = first.clone();
+        window.open_dialog(cx, move |base, window, cx| {
             let (ok, cancel) = (keep.clone(), keep.clone());
+            let buttons = Buttons {
+                keep: keep.clone(),
+                discard: discard.clone(),
+                first: first.clone(),
+                ring: first.is_focused(window).then(|| cx.theme().ring),
+            };
             base.title(title)
                 .close_button(false)
                 .overlay_closable(false)
-                .child(body(title, note.clone(), &keep, &discard))
+                .child(body(title, note.clone(), buttons))
                 // Enter and Escape keep editing, closing at once.
                 .on_ok(move |_, window, cx| {
                     ok(window, cx);
@@ -67,15 +76,33 @@ impl Composer {
                     false
                 })
         });
+        window.focus(&focused, cx);
     }
+}
+
+/// The prompt's buttons, and Keep editing's stop.
+struct Buttons {
+    keep: Press,
+    discard: Press,
+    first: FocusHandle,
+    /// The ring around Keep editing while its stop has focus.
+    ring: Option<Hsla>,
 }
 
 /// A prompt button. Enter on it presses it: its wrapper takes the dialog's
 /// Enter (`Confirm`) before the dialog, whose default it would otherwise
 /// give.
-fn button(id: &'static str, label: &'static str, press: &Press) -> impl IntoElement + use<> {
+/// `stop` says whether the Kit's button is a Tab stop of its own.
+fn button(
+    id: &'static str,
+    label: &'static str,
+    press: &Press,
+    stop: bool,
+) -> impl IntoElement + use<> {
     let (enter, click) = (press.clone(), press.clone());
-    let mut button = Button::new(format!("{id}-button")).label(label);
+    let mut button = Button::new(format!("{id}-button"))
+        .label(label)
+        .tab_stop(stop);
     if id == "composer-discard-confirm" {
         button = button.danger();
     }
@@ -88,12 +115,23 @@ fn button(id: &'static str, label: &'static str, press: &Press) -> impl IntoElem
 }
 
 /// The prompt's body, named by its question.
-fn body(
-    title: &'static str,
-    note: Option<String>,
-    keep: &Press,
-    discard: &Press,
-) -> impl IntoElement + use<> {
+fn body(title: &'static str, note: Option<String>, buttons: Buttons) -> impl IntoElement + use<> {
+    // Keep editing is a stop of the prompt's own, so that it can be
+    // focused as the prompt opens; its button is no stop, and the ring is
+    // drawn around it.
+    let keep = div()
+        .id("composer-discard-keep-stop")
+        .test_support()
+        .rounded_md()
+        .border_2()
+        .border_color(buttons.ring.unwrap_or_else(Hsla::transparent_black))
+        .track_focus(&buttons.first)
+        .child(button(
+            "composer-discard-keep",
+            KEEP_EDITING,
+            &buttons.keep,
+            false,
+        ));
     v_flex()
         .id("composer-discard-dialog")
         .test_support()
@@ -108,13 +146,16 @@ fn body(
                 .child(note)
         }))
         .child(
-            // Drawn "Discard · Keep editing" (the design's order), but Keep
-            // editing comes first in the tree, so it is the first Tab stop:
-            // one stray Tab and Enter keeps the text.
+            // The design's order, "Discard · Keep editing"; focus starts on
+            // Keep editing, so a stray Enter keeps the text.
             h_flex()
-                .flex_row_reverse()
                 .gap_2()
-                .child(button("composer-discard-keep", KEEP_EDITING, keep))
-                .child(button("composer-discard-confirm", DISCARD, discard)),
+                .child(button(
+                    "composer-discard-confirm",
+                    DISCARD,
+                    &buttons.discard,
+                    true,
+                ))
+                .child(keep),
         )
 }

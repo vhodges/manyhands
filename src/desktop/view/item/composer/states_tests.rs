@@ -310,7 +310,8 @@ fn esc_with_text_asks_to_discard_and_keep_editing_keeps_it(cx: &mut TestAppConte
         Some("Discard this comment?")
     );
     assert_eq!(bench.events(), [], "nothing yet");
-    // Drawn "Discard · Keep editing"; Keep editing is the first Tab stop.
+    // Drawn "Discard · Keep editing", in that order in the tree too; Keep
+    // editing has focus as it opens, and Tab goes on to Discard.
     let left = |id: &'static str, cx: &mut TestAppContext| {
         bench.shell.frame(cx, move |window, _| {
             window.try_find(id).expect("drawn").bounds().origin.x
@@ -321,15 +322,27 @@ fn esc_with_text_asks_to_discard_and_keep_editing_keeps_it(cx: &mut TestAppConte
         "Discard is drawn first"
     );
     assert!(
-        bench
-            .shell
-            .tab_reaches("composer-discard-keep-button", 1, cx),
-        "Keep editing is the first stop"
+        bench.focused_id("composer-discard-keep-stop", cx),
+        "Keep editing has focus as the prompt opens"
+    );
+    bench.keys("tab", cx);
+    assert!(
+        bench.focused_id("composer-discard-confirm-button", cx),
+        "Tab reaches Discard"
     );
     bench.click("composer-discard-keep", cx);
     assert!(!bench.present("composer-discard-dialog", cx), "closed");
     assert!(bench.text(cx) == BODY, "the text is kept");
     assert!(bench.editor_focused(cx), "focus is back in the editor");
+    assert_eq!(bench.events(), []);
+
+    // Enter as the prompt opens keeps the text.
+    bench.keys("escape", cx);
+    assert!(bench.present("composer-discard-dialog", cx));
+    bench.press("enter", cx);
+    assert!(!bench.present("composer-discard-dialog", cx), "Enter keeps");
+    assert!(bench.text(cx) == BODY);
+    assert!(bench.editor_focused(cx));
     assert_eq!(bench.events(), []);
 
     bench.keys("escape", cx);
