@@ -2822,7 +2822,6 @@ pin what the code already does (the review established it), so they passed on th
 | `--test cli` (recovery tables and inventory) | 474 |
 | `--bin manyhands-cli -- lifecycle::` | 25 |
 | `cargo check`, `cargo fmt --check`, whole-tree clippy `-D warnings` | ok |
-
 | AGENTS.md's fast tier, verbatim | 79 results, 4931 passed, 0 failed (1484 s) |
 | `--test cli_remote`, whole | 160 SSH cases, 0 failed (936 s) |
 | `--test mutation_remote`, whole | 700 SSH cases, 0 failed (4817 s) |
