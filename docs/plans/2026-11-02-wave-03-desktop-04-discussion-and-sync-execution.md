@@ -83,6 +83,9 @@ Worktree `<main>/.worktrees/d4-lane-b`, from `a1faca4a`.
 | Task | State | Base | Commits | Tests | Review | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | 8 | done | `a1faca4a` | WIP `0c966cbd`, merge `e69b3535` (seam `7a1c2466`, `9dd49e38`), `153ab866` | `share` 17, `header` 21, `keyboard` 41; desktop bin 1158; four lines clean | APPROVE for Lane B's scope (1 Important deferred to O-1, 3 Minor) | First stop: a remotes read on open broke fact 41's tests → decision 20 and E-13 (applied in both walks of the frame test). Share main with no remote reads "Share main…" and opens Remotes. O-1: the Remotes page keeps its previous repository (`settings/remotes.rs:283`); orchestrator seam, then Task 9 switches the call site and adds a two-repository test. Stale markers in `view/item.rs` (`ItemRoute`, `share` field) for Lane D. |
+| 8 fix | done | `153ab866` | `1a20329d` | `share` 19, `sidebar` 2 | Orchestrator check | Tests for Share main… and the RegionEnd path. |
+| 9 | done | `1a20329d` | `4680e638` | `share` 23, `operations` 33, `passphrase` 24; desktop bin 1166; four lines clean | APPROVE; 2 Important carried | R-14 in `model/operations.rs`. Carried to 10b: Stop is offered for a local-operation resume, which ignores the token; restrict Stop for `OperationResume` to remote sync and comment publication rows, and test a local resume reads Finishing. Ruling: `view/operations.rs` and `model/operations.rs` may split into child modules in Lane B's row. Stale `// Called from Task 9.` markers in `model/publication.rs` and Task 8 markers in `services/requests.rs`: orchestrator cleanup at Task 16. |
+| 10a | in progress | `4680e638` | — | — | — | Takes the ticket branch (Lanes A, C, O-1); carries O-1/I-1, R-17's declined-key clear, decision 18. |
 
 ## Lane C (`d4/lane-c`)
 
@@ -91,7 +94,8 @@ Worktree `<main>/.worktrees/d4-lane-c`, from `a1faca4a`.
 | Task | State | Base | Commits | Tests | Review | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | 11a | done | `a1faca4a` | `9f014c56` | `composer` 7 (four runs), `editor` 90 (twice); four lines clean | APPROVE; 1 Important (math click lands before the block) carried into 11b; 4 Minor | Decision 21 (toolbar always shown; Ctrl K for Link, bound on the ticket branch). Hint copy "Ctrl Enter to post · Esc to cancel" per design. No `CaretInView` yet (Task 12). Task 12 removes the composer's dead-code markers. |
-| 11b | in progress | `9f014c56` | — | — | — | Carries 11a's I1 and M2. |
+| 11b | done | `9f014c56` | `d0608ce4`, fixes `a0d03350`, `afa4ac3d` | `composer` 16 (twice), `editor` 90; desktop bin 1167; four lines clean | Round 1 CHANGES REQUIRED (Post as a new comment missing); round 2 CHANGES REQUIRED (discard prompt focus order); APPROVE after `afa4ac3d` (orchestrator check) | Rulings: discard prompt "Discard · Keep editing" with Keep editing focused on open; a Failed reply offering only Edit text closes via Edit text then Cancel, or F6; Cancel/Escape while Posting do nothing. Test-first order not evidenced for 11b. Helpers in `composer/guard.rs` mirror `view/editor/read_only.rs` (share after D4). Lane D sets Posting on Submit. |
+| checkpoint | merged | `afa4ac3d` | lane merge `8c425e83`; `--no-ff` into the ticket branch `e66dda58` | Lane: `composer` 16, desktop bin 1184. Ticket branch after merge: desktop bin 1184, clippy clean | — | Lane worktree and branch removed. |
 
 ## Decisions during execution
 
