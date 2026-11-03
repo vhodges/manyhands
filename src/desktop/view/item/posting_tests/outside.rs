@@ -149,3 +149,114 @@ async fn edited_text_survives_when_its_old_comment_saved_meanwhile(cx: &mut Test
     until_answered(&shell, &root, &second, cx).await;
     assert_eq!(comment_files(&root).len(), 3, "A, X and, by choice, Y");
 }
+
+/// Decision 26: no control that could complete an unsaved post is
+/// offered in the operations panel: neither Retry, Resume nor Prepare
+/// again, even when its answer carries them.
+#[gpui_kit::test]
+async fn an_unsaved_posts_operation_entry_offers_no_resume_or_prepare(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = posting_shell(false, cx, |_, _| {});
+    let (_, comment) = write_new(&shell, "Not saved.", cx);
+    let action = |action, operation_id: Option<&str>| RecoveryAction {
+        action,
+        operation_id: operation_id.map(str::to_owned),
+        arguments: serde_json::Map::new(),
+    };
+    let answer = not_saved(ResultCode::TransportUnavailable).with_recovery(vec![
+        action(
+            RecoveryActionKind::OperationResume,
+            Some("01M4CC0VN1KTQFSVR99378TDHV"),
+        ),
+        action(RecoveryActionKind::RequestPrepare, None),
+        action(RecoveryActionKind::RequestRetry, None),
+    ]);
+    let returned = shell
+        .backend
+        .hold_job_return_answering(JobKind::Comment, answer);
+    returned.release();
+    submit(&shell, cx);
+    until_answered(&shell, &root, &comment, cx).await;
+    let id = post_request(&shell, &comment, cx).unwrap();
+    shell.frame(cx, |_, _| ());
+    let labels = recovery_labels(&shell, id, cx);
+    assert!(
+        !labels.iter().any(|label| label.contains("Retry")
+            || label.contains("Resume")
+            || label.contains("Prepare")),
+        "{labels:?}"
+    );
+}
+
+/// Decision 27 with P7/P18: Edit text moves the composer from X to Y; X,
+/// sent again from outside, answers with its file written and not
+/// committed, which may still come to be saved. Y is held, not sent:
+/// "Your earlier text may still be saved", with Check again, Copy text and
+/// Discard. Check again finds X's record saved it, with Y's very text:
+/// the composer clears. One comment.
+#[gpui_kit::test]
+async fn new_text_is_held_while_its_old_comment_may_still_be_saved(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = posting_shell(false, cx, |_, _| {});
+    let (composer, first) = write_new(&shell, "First.", cx);
+    // Saved by the real call; the desktop hears it was not.
+    let returned = shell
+        .backend
+        .hold_job_return_answering(JobKind::Comment, not_saved(ResultCode::ItemNotFound));
+    returned.release();
+    submit(&shell, cx);
+    until_answered(&shell, &root, &first, cx).await;
+    press(&shell, "composer-edit-text", cx);
+    shell
+        .until_drawn(cx, "re-targeted", |_, cx| {
+            !composer.read_with(cx, |composer, _| composer.is_read_only())
+        })
+        .await;
+
+    // X sent again from outside; its answer: written, not committed.
+    let returned = shell.backend.hold_job_return_answering(
+        JobKind::Comment,
+        super::support::written(ResultCode::TransportUnavailable),
+    );
+    returned.release();
+    let id = post_request(&shell, &first, cx).unwrap();
+    let worker = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().worker().clone());
+    assert!(worker.retry(id, None));
+    until_attempt(&shell, &root, &first, 2, cx).await;
+
+    focus_end(&shell, &composer, cx);
+    submit(&shell, cx);
+    shell
+        .until_drawn(cx, "held", |shell, cx| {
+            shell.label("composer-failed", cx).as_deref()
+                == Some("Your earlier text may still be saved.")
+        })
+        .await;
+    assert_eq!(
+        failed_actions(&shell, cx),
+        vec![
+            "composer-check-again",
+            "composer-copy-text",
+            "composer-discard"
+        ]
+    );
+    assert_eq!(comment_posts(&shell, cx).len(), 1, "Y was not sent");
+
+    press(&shell, "composer-check-again", cx);
+    shell
+        .until_drawn(cx, "settled: X is this text", |shell, _| {
+            stored_comments(&shell.fixture).is_empty()
+        })
+        .await;
+    assert_eq!(
+        super::support::composer_state(
+            &super::super::super::discussion_tests::new_composer(&shell, cx),
+            cx
+        ),
+        (String::new(), false)
+    );
+    assert_eq!(comment_posts(&shell, cx).len(), 1);
+    assert_eq!(comment_files(&root).len(), 2, "A and X: one comment");
+}

@@ -765,13 +765,18 @@ impl Operations {
         }
     }
 
-    /// Whether the recovery action `action` of the request `id` is a
-    /// re-send of a comment post that is not saved: the operation area
-    /// never offers it; the post's composer is where it is sent again
-    /// (decision 26).
+    /// Whether the recovery action `action` of the request `id` could
+    /// complete a comment post that is not saved: Retry, Resume or Prepare
+    /// again. The operation area never offers one; the post's composer is
+    /// where it is sent again (decision 26). Abandon stays. The library
+    /// does attach Resume to a pending operation's answer
+    /// (`mutation/outcome.rs`, `DiscoveryPending` and the resumable
+    /// operations it lists), so this is no mere defence.
     pub(crate) fn hides_recovery(&self, id: DesktopRequestId, action: &RecoveryAction) -> bool {
-        recovery_control(action.action) == RecoveryControl::Retry
-            && self.post_saved(id) == Some(false)
+        matches!(
+            recovery_control(action.action),
+            RecoveryControl::Retry | RecoveryControl::Resume | RecoveryControl::Prepare
+        ) && self.post_saved(id) == Some(false)
     }
 
     /// A recovery action's words on the request `id`: a saved comment's
@@ -827,6 +832,10 @@ impl Operations {
         // A request this session holds, by the request ID the action
         // names; this one when it names none.
         let named = || self.named(id, action);
+        // Decision 26: nothing here completes an unsaved post.
+        if self.hides_recovery(id, action) {
+            return None;
+        }
         Some(match recovery_control(action.action) {
             RecoveryControl::IndexRefresh => {
                 RecoveryStep::Submit(Intent::IndexRefresh { root: root()? })
@@ -835,11 +844,6 @@ impl Operations {
                 RecoveryStep::Submit(Intent::IndexRebuild { root: root()? })
             }
             RecoveryControl::Retry => {
-                // Decision 26: an unsaved post is sent again from its
-                // composer only.
-                if self.post_saved(id) == Some(false) {
-                    return None;
-                }
                 let named = named()?;
                 if self.not_sent_again(named) {
                     return None;

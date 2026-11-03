@@ -63,6 +63,7 @@ impl ItemPane {
             return;
         }
         slot.post.busy = true;
+        slot.post.send_as_is = false;
         let mark = self.attempt_mark(&old.comment_id, cx);
         let Some((_, slot)) = self.composers.find(composer) else {
             return;

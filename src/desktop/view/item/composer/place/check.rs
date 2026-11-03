@@ -273,6 +273,15 @@ impl ItemPane {
         cx: &mut Context<Self>,
     ) {
         let root = self.post_root();
+        // A new comment held for its old one checks the old one.
+        let held = self
+            .composers
+            .find(composer)
+            .and_then(|(_, slot)| slot.post.held.then(|| slot.post.from.clone()).flatten());
+        if let Some(old) = held {
+            self.check_overtaken(composer, old, window, cx);
+            return;
+        }
         if self.refused_in_flight(composer, window, cx) {
             return;
         }

@@ -90,6 +90,9 @@ pub(in crate::desktop::view::item) struct SlotPost {
     /// The old comment was posted meanwhile with other text: Post as a
     /// new comment sends this one, as it is (decision 27).
     pub(super) send_as_is: bool,
+    /// Held: its old comment may still be saved, and Check again settles
+    /// it (decision 27).
+    pub(super) held: bool,
     /// The actions its last failed state offered: a refused re-target
     /// keeps them.
     pub(super) actions: Option<FailedActions>,
@@ -278,6 +281,7 @@ impl ItemPane {
         let resend = slot.post.sent || slot.post.unchecked || slot.post.resend_pending;
         let from = slot.post.from.clone();
         let mark = slot.post.from_mark;
+        slot.post.send_as_is = false;
         let entity = slot.composer.clone();
         // The old comment was sent again since it was re-targeted, from
         // outside this app: the new one waits, or is never sent
