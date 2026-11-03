@@ -198,6 +198,7 @@ fn the_strip_header_chips_and_page_run_in_tab_order(cx: &mut TestAppContext) {
         ("tab-close-button", 1usize).into(),
         "item-comments".into(),
         "item-edit".into(),
+        "item-share".into(),
         "chip-type".into(),
         "chip-status".into(),
         "chip-project".into(),
@@ -230,6 +231,7 @@ fn the_strip_header_chips_and_page_run_in_tab_order(cx: &mut TestAppContext) {
     walk.on(("tab", shown), Region::Content, cx);
     walk.tab_to("tab", "item-edit", cx);
     for id in [
+        "item-share",
         "chip-status",
         "chip-author",
         "chip-date",
@@ -245,6 +247,7 @@ fn the_strip_header_chips_and_page_run_in_tab_order(cx: &mut TestAppContext) {
         "chip-date",
         "chip-author",
         "chip-status",
+        "item-share",
         "item-edit",
     ] {
         walk.step("shift-tab", id, Region::Content, cx);
@@ -380,13 +383,15 @@ fn the_discussion_is_reached_by_its_key_walked_and_left(cx: &mut TestAppContext)
     walk.on("discussion-heading", Region::Content, cx);
 
     walk.step("tab", "back-to-top", Region::Content, cx);
-    for id in [FIRST_COMMENT, REPLY, LAST_COMMENT] {
+    for (ix, id) in [FIRST_COMMENT, REPLY, LAST_COMMENT].into_iter().enumerate() {
         walk.keys("tab", cx);
         let editor = comment_editor(&walk, id, cx);
         assert!(walk.editor_focused(&editor, cx), "Tab reached {id}");
         walk.region(Region::Content, cx);
+        // E-15: each comment's Reply follows it.
+        walk.step("tab", ("comment-reply", ix), Region::Content, cx);
     }
-    walk.keys("shift-tab", cx);
+    walk.keys("shift-tab shift-tab shift-tab", cx);
     let reply = comment_editor(&walk, REPLY, cx);
     assert!(walk.editor_focused(&reply, cx), "Shift-Tab went back");
     walk.region(Region::Content, cx);

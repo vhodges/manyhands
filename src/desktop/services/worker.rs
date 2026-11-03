@@ -16,8 +16,19 @@
 //!
 //! Cancellation follows the library: a queued job is removed and never
 //! runs; a running job's token is cancelled, which every command honors
-//! until it is accepted; after acceptance a local command cannot be
-//! stopped, and a host observation has no token at all.
+//! until it is accepted. After acceptance a command that stops at safe
+//! points (a comment, a share, `operation resume`) still has its token
+//! cancelled and stops at the next one (R-1); a local command cannot be
+//! stopped, and a host observation has no token at all. Any progress
+//! stage marks a job accepted, since a same-ID re-entry never reports
+//! `Accepted` (R-14).
+//!
+//! After each finished attempt of a command that stops at safe points,
+//! the worker asks `show_request` where its record stands and keeps the
+//! answer (`record_state`) before the UI hears of the attempt. Give up
+//! (decision 8) is a job of its own over the same request: an accepted
+//! record is cancelled through `cancel_request` and the same request sent
+//! again, whose answer is the attempt's.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -31,7 +42,7 @@ use futures::channel::mpsc;
 use manyhands::{
     repository::{
         CancellationToken, ConfirmationId, HostObservationDto, MutationCall, MutationDataDto,
-        ProgressEvent, ProgressSink, ProgressStage, RequestId,
+        ProgressEvent, ProgressSink, RepositoryService, RequestId, RequestState as RecordDtoState,
         keys::{SecretPassphrase, SessionCredentials},
         transport::SshAuthority,
     },
@@ -40,7 +51,7 @@ use manyhands::{
 
 use super::{
     BUSY_RETRY_DELAYS, Backend, JobKind,
-    prompts::{DesktopProvider, PromptRequest},
+    prompts::{DeclinedKeys, DesktopProvider, PromptRequest},
     requests::{DesktopRequest, DesktopRequestId, Intent, Lane, Refusals, RequestState},
 };
 
@@ -74,11 +85,51 @@ pub(crate) enum WorkerEvent {
 pub(crate) enum CancelResult {
     /// It was queued, and was removed: it never runs.
     Removed,
-    /// It is running and not yet accepted: its token is cancelled.
+    /// It is running, and not yet accepted or accepted by a command that
+    /// stops at safe points: its token is cancelled (R-1).
     Signalled,
-    /// It is accepted, has no token, or is no longer queued or running:
-    /// nothing can stop it now.
+    /// It is an accepted local command, has no token, or is no longer
+    /// queued or running: nothing can stop it now.
     TooLate,
+}
+
+/// Where a request's library record stood when its last attempt
+/// finished, as `show_request` answered (Give up, decision 8).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum RecordState {
+    /// The request is still open: the same request takes it up again.
+    Accepted,
+    /// Its result is stored, and every retry replays it. A request with
+    /// no record (`show_request` answered `request_not_found`), refused
+    /// before it was accepted, stands here too: nothing of it is open. So
+    /// this state never tells "no record" apart: P16's check that no
+    /// record exists calls `show_request` itself (the composer's Check
+    /// again, `composer/place/check.rs`, through
+    /// `publication::record::check_again`).
+    Finished,
+    /// `show_request` failed: where the record stands is not known (P17).
+    Unknown,
+}
+
+/// What a Give up found.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum GaveUp {
+    /// The record was accepted, or could not be read: the library was
+    /// asked to cancel it, and the same request was sent again. Its answer
+    /// is the attempt's, whatever it is (fact 14d).
+    Resent,
+    /// The record was already finished: nothing was cancelled, and the
+    /// attempt replays its stored answer.
+    AlreadyFinished,
+}
+
+/// The running job, as a test reads it.
+#[cfg(test)]
+pub(crate) struct RunningJob {
+    pub id: DesktopRequestId,
+    pub accepted: bool,
+    /// Whether its token is cancelled.
+    pub cancelled: bool,
 }
 
 /// Whether quitting can go ahead.
@@ -97,6 +148,14 @@ enum Work {
         intent: Box<Intent>,
         confirmation: Option<ConfirmationId>,
         secret: Option<SecretPassphrase>,
+        cancel: CancellationToken,
+    },
+    /// Give up (decision 8): where the request's record stands decides
+    /// what is asked before the same request is sent again.
+    GiveUp {
+        request_id: RequestId,
+        intent: Box<Intent>,
+        confirmation: Option<ConfirmationId>,
         cancel: CancellationToken,
     },
     ObserveHost {
@@ -139,6 +198,11 @@ struct Submitted {
     sent: SendMark,
     /// What its attempts were answered, for R-78's exemption.
     answers: Refusals,
+    /// Where its record stood after its last finished attempt, for a
+    /// command that stops at safe points.
+    record: Option<RecordState>,
+    /// What its last Give up found, until a retry.
+    gave_up: Option<GaveUp>,
 }
 
 /// Where an attempt stands in the order every attempt was queued in: a
@@ -152,6 +216,8 @@ struct Running {
     /// `None` for a host observation, which cannot be cancelled.
     cancel: Option<CancellationToken>,
     accepted: bool,
+    /// Whether its command honours the token after acceptance (R-1).
+    stops_at_safe_points: bool,
 }
 
 #[derive(Default)]
@@ -199,6 +265,8 @@ struct Shared {
     state: Mutex<State>,
     changed: Condvar,
     events: mpsc::UnboundedSender<WorkerEvent>,
+    /// The keys declined with Not now, shared with the provider (R-13).
+    declined: DeclinedKeys,
 }
 
 impl Shared {
@@ -243,6 +311,7 @@ impl WorkerHandle {
             state: Mutex::default(),
             changed: Condvar::new(),
             events,
+            declined: DeclinedKeys::default(),
         });
         let worker = shared.clone();
         thread::Builder::new()
@@ -268,7 +337,26 @@ impl WorkerHandle {
         confirmation: Option<ConfirmationId>,
         secret: Option<SecretPassphrase>,
     ) -> DesktopRequestId {
-        submit(self.shared(), intent, lane, confirmation, secret)
+        submit(
+            self.shared(),
+            intent,
+            lane,
+            confirmation,
+            secret,
+            RequestId::new(),
+        )
+    }
+
+    /// Queues `intent` under the caller's library request ID: a post's is
+    /// its comment ID, so the first post after a relaunch is the same
+    /// request (R-16).
+    pub(crate) fn submit_with_request_id(
+        &self,
+        intent: Intent,
+        lane: Lane,
+        request_id: RequestId,
+    ) -> DesktopRequestId {
+        submit(self.shared(), intent, lane, None, None, request_id)
     }
 
     /// Queues the request `id` again, under its own request ID, so the
@@ -282,7 +370,49 @@ impl WorkerHandle {
     /// nothing (owner, 2026-10-28). "After" is the order attempts were
     /// queued in. True when it was queued again.
     pub(crate) fn retry(&self, id: DesktopRequestId, secret: Option<SecretPassphrase>) -> bool {
-        self.requeue(id, None, secret).is_some()
+        self.requeue(id, None, secret, false).is_some()
+    }
+
+    /// Gives up the request `id` (decision 8): queues a job, on its lane
+    /// and under its own request ID, that asks where its record stands; an
+    /// accepted one is cancelled through `cancel_request` and the same
+    /// request is sent again, and the `Finished` it ends with is that
+    /// request's answer. A finished one is only replayed, and `gave_up`
+    /// says it was already finished. Refused, as a retry is, while the
+    /// request is queued or running, its Give up or its retry, and for a
+    /// command that does not stop at safe points. True when queued.
+    pub(crate) fn give_up(&self, id: DesktopRequestId) -> bool {
+        self.requeue(id, None, None, true).is_some()
+    }
+
+    /// Where the request `id`'s record stood after its last finished
+    /// attempt; `None` for a command that does not stop at safe points,
+    /// or before its first attempt finished. Kept before the UI hears of
+    /// the attempt, so a `Finished` event's reader finds it.
+    pub(crate) fn record_state(&self, id: DesktopRequestId) -> Option<RecordState> {
+        self.shared().lock().submitted.get(&id)?.record
+    }
+
+    /// What the request `id`'s last Give up found, until a retry.
+    pub(crate) fn gave_up(&self, id: DesktopRequestId) -> Option<GaveUp> {
+        self.shared().lock().submitted.get(&id)?.gave_up
+    }
+
+    /// Unlock…: clears the Not now mark of `key_id`, so its next request
+    /// prompts again (R-3, R-13). True when it was declined. Unlock… uses
+    /// `clear_declined_for`; this per-key form serves the tests.
+    #[cfg(test)]
+    pub(crate) fn clear_declined(&self, key_id: manyhands::repository::SharedKeyId) -> bool {
+        self.shared().declined.clear(key_id)
+    }
+
+    /// Unlock… on the outcome of the request `id`, before it is retried,
+    /// and Share after a finished `NeedsUnlock`, before the new request:
+    /// clears the Not now marks of the keys `id`'s last attempt was
+    /// answered `Cancelled` for, so the next request prompts for them
+    /// again (R-3, R-13, R-17). True when any was still declined.
+    pub(crate) fn clear_declined_for(&self, id: DesktopRequestId) -> bool {
+        self.shared().declined.clear_for(id)
     }
 
     /// Queues the request `id` again, under its own request ID, with the
@@ -296,7 +426,7 @@ impl WorkerHandle {
         id: DesktopRequestId,
         confirmation: ConfirmationId,
     ) -> Option<u32> {
-        self.requeue(id, Some(confirmation), None)
+        self.requeue(id, Some(confirmation), None, false)
     }
 
     fn requeue(
@@ -304,6 +434,7 @@ impl WorkerHandle {
         id: DesktopRequestId,
         confirmation: Option<ConfirmationId>,
         secret: Option<SecretPassphrase>,
+        give_up: bool,
     ) -> Option<u32> {
         let shared = self.shared();
         let mut state = shared.lock();
@@ -321,6 +452,9 @@ impl WorkerHandle {
         // unless that later attempt was a release refused with nothing
         // touched (`Intent::kept_from_again_by`).
         let asked = state.submitted.get(&id)?;
+        if give_up && !asked.intent.stops_at_safe_points() {
+            return None;
+        }
         if state.submitted.values().any(|later| {
             later.sent > asked.sent
                 && asked
@@ -334,6 +468,7 @@ impl WorkerHandle {
         submitted.attempt += 1;
         submitted.sent = sent;
         submitted.answers.queued();
+        submitted.gave_up = None;
         if confirmation.is_some() {
             submitted.confirmation = confirmation;
         }
@@ -353,12 +488,22 @@ impl WorkerHandle {
             attempt,
             state: RequestState::Queued,
         }));
-        let work = Work::Execute {
-            request_id,
-            intent: Box::new(intent),
-            confirmation,
-            secret,
-            cancel: CancellationToken::new(),
+        let (intent, cancel) = (Box::new(intent), CancellationToken::new());
+        let work = if give_up {
+            Work::GiveUp {
+                request_id,
+                intent,
+                confirmation,
+                cancel,
+            }
+        } else {
+            Work::Execute {
+                request_id,
+                intent,
+                confirmation,
+                secret,
+                cancel,
+            }
         };
         admit(shared, &mut state, Job::new(id, work, lane));
         Some(attempt)
@@ -406,11 +551,36 @@ impl WorkerHandle {
                 .any(|job| picked(&job.id))
     }
 
-    /// A provider that asks this worker's UI, as the worker's own does:
-    /// for a test that raises a prompt from a plain thread.
+    /// A provider that asks this worker's UI, as the worker's own does,
+    /// and shares its declined keys: for a test that raises a prompt from
+    /// a plain thread.
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn provider(&self) -> DesktopProvider {
-        DesktopProvider::new(self.shared().events.clone())
+        let shared = self.shared();
+        DesktopProvider::with_declined(shared.events.clone(), shared.declined.clone())
+    }
+
+    /// Marks the request `id`'s attempt running for the declined keys, as
+    /// the worker does before it runs one: for a test that raises a prompt
+    /// from a plain thread through `provider`.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn attempting_for_testing(&self, id: Option<DesktopRequestId>) {
+        self.shared().declined.attempting(id);
+    }
+
+    /// The running job, if any.
+    #[cfg(test)]
+    pub(crate) fn running_job(&self) -> Option<RunningJob> {
+        let state = self.shared().lock();
+        let running = state.running.as_ref()?;
+        Some(RunningJob {
+            id: running.id,
+            accepted: running.accepted,
+            cancelled: running
+                .cancel
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled),
+        })
     }
 
     /// Sends `prompt` to the UI over the worker's event channel, as the
@@ -445,8 +615,9 @@ impl WorkerHandle {
             Some(Running {
                 id: running,
                 cancel: Some(cancel),
-                accepted: false,
-            }) if *running == id => {
+                accepted,
+                stops_at_safe_points,
+            }) if *running == id && (!accepted || *stops_at_safe_points) => {
                 cancel.cancel();
                 CancelResult::Signalled
             }
@@ -504,18 +675,19 @@ impl WorkerHandle {
     }
 }
 
-/// Queues `intent` under a new request ID: `WorkerHandle::submit`, and the
-/// worker's own refresh after a repository is created or enabled.
+/// Queues `intent` under `request_id`: `WorkerHandle::submit` and
+/// `submit_with_request_id`, and the worker's own refresh after a
+/// repository is created or enabled.
 fn submit(
     shared: &Shared,
     intent: Intent,
     lane: Lane,
     confirmation: Option<ConfirmationId>,
     secret: Option<SecretPassphrase>,
+    request_id: RequestId,
 ) -> DesktopRequestId {
     let mut state = shared.lock();
     let id = next_id(&mut state);
-    let request_id = RequestId::new();
     let sent = state.next_send();
     state.submitted.insert(
         id,
@@ -527,6 +699,8 @@ fn submit(
             attempt: 1,
             sent,
             answers: Refusals::default(),
+            record: None,
+            gave_up: None,
         },
     );
     shared.send(WorkerEvent::Queued(DesktopRequest {
@@ -587,8 +761,10 @@ fn readmit(shared: &Shared, state: &mut State, job: Job) {
 /// The worker thread: takes the next job, user lane first, until the last
 /// handle is dropped.
 fn run(shared: &Shared, backend: &dyn Backend) {
-    // Its provider asks the UI over the channel every other event takes.
-    let mut session = SessionCredentials::new(DesktopProvider::new(shared.events.clone()));
+    // Its provider asks the UI over the channel every other event takes,
+    // and shares the declined keys with the handle (R-13).
+    let provider = DesktopProvider::with_declined(shared.events.clone(), shared.declined.clone());
+    let mut session = SessionCredentials::new(provider);
     while let Some(job) = take(shared) {
         let Job {
             id,
@@ -597,6 +773,10 @@ fn run(shared: &Shared, backend: &dyn Backend) {
             busy_retries,
             ..
         } = job;
+        // A key the provider answers `Cancelled` is recorded against the
+        // request whose attempt asked for it (R-13).
+        let attempt = matches!(work, Work::Execute { .. } | Work::GiveUp { .. }).then_some(id);
+        shared.declined.attempting(attempt);
         match work {
             Work::Execute {
                 request_id,
@@ -605,100 +785,33 @@ fn run(shared: &Shared, backend: &dyn Backend) {
                 secret,
                 cancel,
             } => {
-                // The secret goes into this attempt's `Mutation` and is
-                // gone with it: an attempt that had one is never retried.
-                let had_secret = secret.is_some();
-                let mutation = match intent.build(secret, || backend.key_store()) {
-                    Ok(mutation) => mutation,
-                    Err(not_built) => {
-                        finish(shared);
-                        shared.send(WorkerEvent::NotSent(id, not_built.into()));
-                        continue;
-                    }
+                let call = Call {
+                    id,
+                    lane,
+                    busy_retries,
+                    request_id,
+                    intent,
+                    confirmation,
+                    cancel,
                 };
-                shared.send(WorkerEvent::Started(id));
-                backend.before_job(intent.job_kind());
-                let mut progress = Forward { id, shared };
-                let envelope = backend.service().execute(
-                    MutationCall {
-                        request_id,
-                        confirmation,
-                        mutation,
-                    },
-                    &mut session,
-                    &mut progress,
-                    &cancel,
-                );
-                backend.after_job(intent.job_kind());
-                // A job answered `busy` waits and is taken again in its own
-                // lane, with no event: the UI sees one request that finishes
-                // once. A background job waits behind every user job (ruling
-                // R-T7a); a user job keeps the head of the user lane, ahead
-                // of every background job (ruling R-B3). One whose token was
-                // cancelled meanwhile, by Cancel or by quitting, is not
-                // taken again: it ends with its answer, as a cancelled job
-                // ends.
-                if envelope.code == ResultCode::Busy
-                    && !had_secret
-                    && !cancel.is_cancelled()
-                    && let Some(delay) = BUSY_RETRY_DELAYS.get(busy_retries)
-                {
-                    let mut state = shared.lock();
-                    state.running = None;
-                    let work = Work::Execute {
-                        request_id,
-                        intent,
-                        confirmation,
-                        secret: None,
-                        cancel,
-                    };
-                    readmit(
-                        shared,
-                        &mut state,
-                        Job {
-                            id,
-                            work,
-                            lane,
-                            busy_retries: busy_retries + 1,
-                            not_before: Some(Instant::now() + *delay),
-                        },
-                    );
-                    continue;
-                }
-                // Whether it was refused, touching nothing, is kept before the
-                // UI hears of the answer (R-78, as narrowed).
-                let refused =
-                    Intent::refused_answer(envelope.outcome, envelope.code, &envelope.recovery);
-                if let Some(submitted) = shared.lock().submitted.get_mut(&id) {
-                    submitted.answers.finished(refused);
-                }
-                // The job is over before the UI hears so, so a quit that
-                // hears it finds the worker idle.
-                finish(shared);
-                // The root as the library registered it, else as asked.
-                let onboarded = (envelope.code == ResultCode::Ok)
-                    .then(|| intent.onboarded_root())
-                    .flatten()
-                    .map(|asked| {
-                        envelope
-                            .scope
-                            .repository
-                            .clone()
-                            .map_or(asked, PathBuf::from)
-                    });
-                shared.send(WorkerEvent::Finished(id, Box::new(envelope)));
-                // A repository just created or enabled is refreshed once,
-                // in the background (design, Index Maintenance, decision
-                // 4). Quitting refuses it as it refuses every job.
-                if let Some(root) = onboarded {
-                    submit(
-                        shared,
-                        Intent::IndexRefresh { root },
-                        Lane::Background,
-                        None,
-                        None,
-                    );
-                }
+                execute(shared, backend, &mut session, call, secret, false);
+            }
+            Work::GiveUp {
+                request_id,
+                intent,
+                confirmation,
+                cancel,
+            } => {
+                let call = Call {
+                    id,
+                    lane,
+                    busy_retries,
+                    request_id,
+                    intent,
+                    confirmation,
+                    cancel,
+                };
+                execute(shared, backend, &mut session, call, None, true);
             }
             Work::ObserveHost { root, authority } => {
                 shared.send(WorkerEvent::Started(id));
@@ -711,6 +824,198 @@ fn run(shared: &Shared, backend: &dyn Backend) {
                 shared.send(WorkerEvent::HostObserved(id, envelope));
             }
         }
+    }
+}
+
+/// One attempt of a request, as the worker runs it.
+struct Call {
+    id: DesktopRequestId,
+    lane: Lane,
+    busy_retries: usize,
+    request_id: RequestId,
+    intent: Box<Intent>,
+    confirmation: Option<ConfirmationId>,
+    cancel: CancellationToken,
+}
+
+/// Runs one attempt of a request and tells the UI what came of it. A Give
+/// up first settles what it asks of the record (`give_up_first`).
+fn execute(
+    shared: &Shared,
+    backend: &dyn Backend,
+    session: &mut SessionCredentials<DesktopProvider>,
+    call: Call,
+    secret: Option<SecretPassphrase>,
+    give_up: bool,
+) {
+    let Call {
+        id,
+        lane,
+        busy_retries,
+        request_id,
+        intent,
+        confirmation,
+        cancel,
+    } = call;
+    // The secret goes into this attempt's `Mutation` and is gone with it:
+    // an attempt that had one is never retried.
+    let had_secret = secret.is_some();
+    let mutation = match intent.build(secret, || backend.key_store()) {
+        Ok(mutation) => mutation,
+        Err(not_built) => {
+            finish(shared);
+            shared.send(WorkerEvent::NotSent(id, not_built.into()));
+            return;
+        }
+    };
+    shared.send(WorkerEvent::Started(id));
+    backend.before_job(intent.job_kind());
+    if give_up {
+        give_up_first(shared, backend.service(), id, request_id, &cancel);
+    }
+    let mut progress = Forward { id, shared };
+    let envelope = backend.service().execute(
+        MutationCall {
+            request_id,
+            confirmation,
+            mutation,
+        },
+        session,
+        &mut progress,
+        &cancel,
+    );
+    // A test may put a constructed answer in place of the library's.
+    let envelope = backend.after_job(intent.job_kind()).unwrap_or(envelope);
+    // A job answered `busy` waits and is taken again in its own lane, with
+    // no event: the UI sees one request that finishes once. A background
+    // job waits behind every user job (ruling R-T7a); a user job keeps the
+    // head of the user lane, ahead of every background job (ruling R-B3).
+    // One whose token was cancelled meanwhile, by Cancel or by quitting, is
+    // not taken again: it ends with its answer, as a cancelled job ends. A
+    // Give up's re-send is taken again as a plain one: what it asked of the
+    // record is done.
+    if envelope.code == ResultCode::Busy
+        && !had_secret
+        && !cancel.is_cancelled()
+        && let Some(delay) = BUSY_RETRY_DELAYS.get(busy_retries)
+    {
+        let mut state = shared.lock();
+        state.running = None;
+        let work = Work::Execute {
+            request_id,
+            intent,
+            confirmation,
+            secret: None,
+            cancel,
+        };
+        readmit(
+            shared,
+            &mut state,
+            Job {
+                id,
+                work,
+                lane,
+                busy_retries: busy_retries + 1,
+                not_before: Some(Instant::now() + *delay),
+            },
+        );
+        return;
+    }
+    // Where the record now stands, for an attempt of a command that stops
+    // at safe points (decision 8), and whether it was refused, touching
+    // nothing (R-78, as narrowed), are kept before the UI hears of the
+    // answer.
+    let record = intent
+        .stops_at_safe_points()
+        .then(|| record_state(backend.service(), request_id));
+    let refused = Intent::refused_answer(envelope.outcome, envelope.code, &envelope.recovery);
+    if let Some(submitted) = shared.lock().submitted.get_mut(&id) {
+        submitted.answers.finished(refused);
+        if record.is_some() {
+            submitted.record = record;
+        }
+    }
+    // The job is over before the UI hears so, so a quit that hears it
+    // finds the worker idle.
+    finish(shared);
+    // The root as the library registered it, else as asked.
+    let onboarded = (envelope.code == ResultCode::Ok)
+        .then(|| intent.onboarded_root())
+        .flatten()
+        .map(|asked| {
+            envelope
+                .scope
+                .repository
+                .clone()
+                .map_or(asked, PathBuf::from)
+        });
+    shared.send(WorkerEvent::Finished(id, Box::new(envelope)));
+    // A repository just created or enabled is refreshed once, in the
+    // background (design, Index Maintenance, decision 4). Quitting refuses
+    // it as it refuses every job.
+    if let Some(root) = onboarded {
+        submit(
+            shared,
+            Intent::IndexRefresh { root },
+            Lane::Background,
+            None,
+            None,
+            RequestId::new(),
+        );
+    }
+}
+
+/// Where the record of `request_id` stands. A request with no record was
+/// refused before acceptance: nothing of it is open, so it stands as a
+/// finished one.
+fn record_state(service: &RepositoryService, request_id: RequestId) -> RecordState {
+    let shown = service.show_request(request_id);
+    match shown.data {
+        Some(request) => match request.state {
+            RecordDtoState::Accepted => RecordState::Accepted,
+            RecordDtoState::Finished => RecordState::Finished,
+        },
+        None if shown.code == ResultCode::RequestNotFound => RecordState::Finished,
+        None => RecordState::Unknown,
+    }
+}
+
+/// What a Give up asks of the record before the same request is sent
+/// again (decision 8). An accepted record is asked to stop through
+/// `cancel_request`, and the re-sent request ends it at its first safe
+/// point, or answers otherwise (fact 14d); when that ask fails, the
+/// re-send's token is cancelled too, so a Give up never completes the
+/// share. A finished one is not touched:
+/// the re-send, with its token cancelled, only replays its stored answer,
+/// and one with no record stops before it could be accepted. One whose
+/// record cannot be read is asked to stop and re-sent with its token
+/// cancelled, which ends it whichever it is.
+fn give_up_first(
+    shared: &Shared,
+    service: &RepositoryService,
+    id: DesktopRequestId,
+    request_id: RequestId,
+    cancel: &CancellationToken,
+) {
+    let gave_up = match record_state(service, request_id) {
+        RecordState::Accepted => {
+            if service.cancel_request(request_id).code != ResultCode::Ok {
+                cancel.cancel();
+            }
+            GaveUp::Resent
+        }
+        RecordState::Finished => {
+            cancel.cancel();
+            GaveUp::AlreadyFinished
+        }
+        RecordState::Unknown => {
+            let _ = service.cancel_request(request_id);
+            cancel.cancel();
+            GaveUp::Resent
+        }
+    };
+    if let Some(submitted) = shared.lock().submitted.get_mut(&id) {
+        submitted.gave_up = Some(gave_up);
     }
 }
 
@@ -737,14 +1042,17 @@ fn take(shared: &Shared) -> Option<Job> {
                 .and_then(|at| state.background.remove(at)),
         };
         if let Some(job) = next {
-            let cancel = match &job.work {
-                Work::Execute { cancel, .. } => Some(cancel.clone()),
-                Work::ObserveHost { .. } => None,
+            let (cancel, stops_at_safe_points) = match &job.work {
+                Work::Execute { cancel, intent, .. } | Work::GiveUp { cancel, intent, .. } => {
+                    (Some(cancel.clone()), intent.stops_at_safe_points())
+                }
+                Work::ObserveHost { .. } => (None, false),
             };
             state.running = Some(Running {
                 id: job.id,
                 cancel,
                 accepted: false,
+                stops_at_safe_points,
             });
             return Some(job);
         }
@@ -780,6 +1088,10 @@ fn finish(shared: &Shared) {
 
 /// The running job's progress sink. It only records acceptance and
 /// forwards a copy: it never calls back into the library.
+///
+/// Every stage is reported after acceptance, and a same-ID re-entry
+/// reports later stages only (fact 10), so any stage marks the job
+/// accepted (R-14).
 struct Forward<'a> {
     id: DesktopRequestId,
     shared: &'a Shared,
@@ -787,9 +1099,7 @@ struct Forward<'a> {
 
 impl ProgressSink for Forward<'_> {
     fn event(&mut self, event: &ProgressEvent) {
-        if event.stage == ProgressStage::Accepted
-            && let Some(running) = self.shared.lock().running.as_mut()
-        {
+        if let Some(running) = self.shared.lock().running.as_mut() {
             running.accepted = true;
         }
         self.shared

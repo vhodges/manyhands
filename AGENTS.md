@@ -119,7 +119,9 @@
   own procedure until it is revised. Its loop runs in sandbox clones without
   the main checkout's registration; C3 does not change that skill.
 - Perform all implementation work for a Cycle in the ticket's worktree and on
-  its branch.
+  its branch. Exception (owner decision, 2026-11-02, D4 only): D4's Lanes A,
+  B and C may run in local lane worktrees branched from the ticket branch and
+  merged back into it, never rebased, before review-ready.
 - Add Manyhands comments to the ticket at implementation-plan checkpoints to
   record progress, decisions, blockers, verification results, and review-ready
   status.

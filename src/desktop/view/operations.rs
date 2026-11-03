@@ -7,7 +7,19 @@
 //! request stays expanded, with its message, code, effects and recovery
 //! actions, until it is dismissed. A queued request, or a running one the
 //! library has not accepted, offers Cancel; an accepted one reads
-//! "Finishing". A draft store that did not open keeps an entry with its
+//! "Finishing", except that an accepted command that stops at safe points,
+//! in a repository with a publication remote, offers Stop at a safe point
+//! (R-1, R-15), which reads Stopping… once pressed; a resume stops at safe
+//! points only when it takes up a remote synchronization listed pending,
+//! so any other resume reads Finishing. A running share or post reads its
+//! stage in words ("Sharing · …", "Posting · …"), and a finished share
+//! says its outcome in fixed words and offers the controls that outcome
+//! names in place of the envelope's recovery actions (`outcomes`): a
+//! stopped one says whether part of its work finished and offers Share, a
+//! new request. Stop trying to share gives a request up (decision 8); one
+//! whose record had already finished says "Already finished" above the
+//! stored answer it replayed, and the answer of a Give up never offers it
+//! again (P14). A draft store that did not open keeps an entry with its
 //! fixed reason at the top, with no Dismiss; so does each session whose
 //! recovery copy could not be written, named by its item's title as read,
 //! with Retry, until a write lands. The launch's "Recovered drafts" entry
@@ -15,8 +27,12 @@
 //!
 //! **Pending in repositories** lists the operations each listed
 //! repository reports with work outstanding: command, scope, operation ID
-//! and what it waits for. A local operation waiting to be resumed offers
-//! Resume; a synchronization shows Resume unavailable. A pending local
+//! and what it waits for. A local operation, or a remote item or
+//! repository synchronization, waiting to be resumed offers Resume
+//! (decision 11); a local-context synchronization shows Resume
+//! unavailable (D5). The library lists a comment's publication with
+//! nothing to resume, and its `submit_comment` row only while its local
+//! work waits, so no publication is offered Resume. A pending local
 //! operation offers Abandon, which is confirmed.
 //!
 //! Every recovery action an envelope offers is a control: the ones D1
@@ -41,15 +57,19 @@ use manyhands::{
     results::{Effects, Outcome, RecoveryAction},
 };
 
+mod outcomes;
 mod recovered;
+
+use outcomes::{ALREADY_FINISHED, already_finished};
+pub(crate) use outcomes::{share_result, share_words};
 
 use super::workspace::Workspace;
 use crate::desktop::{
     model::{
         list_state::ListState,
         operations::{
-            NOT_AVAILABLE_YET, NOT_SENT_AGAIN, ResumeOffer, abandon_offered, draft_flush_failed,
-            drafts_unavailable, recovery_label, resume_offer,
+            NOT_AVAILABLE_YET, NOT_SENT_AGAIN, Progressing, ResumeOffer, StopOffer,
+            abandon_offered, draft_flush_failed, drafts_unavailable, progress_words, resume_offer,
         },
         stamp::RepoKey,
     },
@@ -69,6 +89,10 @@ pub(crate) const FINISHING: &str = "Finishing";
 pub(crate) const CANCELLED: &str = "Cancelled";
 pub(crate) const NOT_SENT: &str = "Not sent";
 pub(crate) const CANCEL: &str = "Cancel";
+/// An accepted share's Stop (R-1).
+pub(crate) const STOP: &str = "Stop at a safe point";
+/// Stop, once pressed.
+pub(crate) const STOPPING: &str = "Stopping…";
 pub(crate) const DISMISS: &str = "Dismiss";
 pub(crate) const DISMISSED: &str = "Dismissed";
 pub(crate) const RESUME: &str = "Resume";
@@ -112,7 +136,7 @@ pub(crate) fn state_label(state: &RequestState) -> String {
 
 /// What a request or operation is about: its repository's directory
 /// name, or the application for a key command.
-fn scope_name(root: Option<&Path>) -> String {
+pub(crate) fn scope_name(root: Option<&Path>) -> String {
     match root {
         Some(root) => root
             .file_name()
@@ -206,6 +230,29 @@ fn unavailable(id: impl Into<ElementId>, label: &str, why: &str, cx: &App) -> Te
 }
 
 impl Workspace {
+    /// The publication remote navigation lists for the repository of
+    /// `request`, if it lists one.
+    fn publication_remote_of(&self, request: &DesktopRequest) -> Option<String> {
+        let root = request.intent.root()?.to_str()?;
+        self.navigation()
+            .entry(root)?
+            .summary
+            .configuration
+            .publication_remote
+            .clone()
+    }
+
+    /// A request's state in words: a running share or post by its stage,
+    /// naming the publication remote `remote`; any other as `state_label`.
+    fn entry_state(request: &DesktopRequest, remote: Option<&str>) -> String {
+        match (&request.state, Progressing::of(&request.intent)) {
+            (RequestState::Running { stage, .. }, Some(kind)) => {
+                progress_words(kind, *stage, remote)
+            }
+            (state, _) => state_label(state),
+        }
+    }
+
     /// One request of this session.
     fn session_entry(
         &mut self,
@@ -214,6 +261,7 @@ impl Workspace {
     ) -> impl IntoElement + use<> {
         let id = request.id;
         let muted = cx.theme().muted_foreground;
+        let remote = self.publication_remote_of(request);
         let line = h_flex()
             .gap_2()
             .child(text(request_id(id, "command"), request.intent.label()).text_sm())
@@ -222,12 +270,29 @@ impl Workspace {
                     .text_xs()
                     .text_color(muted),
             )
-            .child(text(request_id(id, "state"), state_label(&request.state)).text_xs());
+            .child(
+                text(
+                    request_id(id, "state"),
+                    Self::entry_state(request, remote.as_deref()),
+                )
+                .text_xs(),
+            );
+        // Show it, on a share answered `busy`, gives the entry of the
+        // request that may hold the repository the focus.
+        let shown = self.control_focus_for(request_id(id, "entry"), cx);
         let mut entry = v_flex()
             .id(request_id(id, "entry"))
             .test_support()
+            .track_focus(&shown)
             .gap_1()
             .child(line);
+        // A Give up that found the record already finished says so above
+        // the stored answer it replayed.
+        if matches!(request.state, RequestState::Finished(..))
+            && already_finished(self.services(), id)
+        {
+            entry = entry.child(text(request_id(id, "gave-up"), ALREADY_FINISHED).text_sm());
+        }
         let mut controls = h_flex().gap_2().flex_wrap();
         match &request.state {
             RequestState::Queued
@@ -243,15 +308,20 @@ impl Workspace {
                 ));
             }
             RequestState::Running { accepted: true, .. } => {
-                controls = controls.child(
-                    div().child(
-                        Button::new(ElementId::Name(request_id(id, "finishing").into()))
-                            .label(FINISHING)
-                            .disabled(true),
-                    ),
-                );
+                let offer = self
+                    .services()
+                    .operations()
+                    .read(cx)
+                    .stop_offer(id, remote.is_some());
+                controls = controls.child(self.accepted_control(id, offer, cx));
             }
             RequestState::Finished(Outcome::Success | Outcome::Noop, _, _, _, _) => {
+                // A share says its outcome on its one line.
+                if let Some(result) = self.finished_share(id, cx)
+                    && let Some(words) = share_words(self.services(), id, &result, cx)
+                {
+                    entry = entry.child(text(request_id(id, "outcome"), words).text_sm());
+                }
                 controls = controls.child(self.dismiss(id, cx));
             }
             RequestState::Finished(_, code, effects, recovery, message) => {
@@ -271,8 +341,28 @@ impl Workspace {
                                 .text_color(muted),
                         ),
                 );
-                for (n, action) in recovery.iter().enumerate() {
-                    controls = controls.child(self.recovery(id, n, action, cx));
+                // A share's outcome offers its own controls in place of
+                // the envelope's recovery actions.
+                if let Some(result) = self.finished_share(id, cx) {
+                    if let Some(words) = share_words(self.services(), id, &result, cx) {
+                        entry = entry.child(text(request_id(id, "outcome"), words).text_sm());
+                    }
+                    for offer in result.offers() {
+                        controls = controls.child(self.share_offer(id, offer, cx));
+                    }
+                } else {
+                    for (n, action) in recovery.iter().enumerate() {
+                        // Decision 26: no re-send of an unsaved post here.
+                        if self
+                            .services()
+                            .operations()
+                            .read(cx)
+                            .hides_recovery(id, action)
+                        {
+                            continue;
+                        }
+                        controls = controls.child(self.recovery(id, n, action, cx));
+                    }
                 }
                 controls = controls.child(self.dismiss(id, cx));
             }
@@ -282,6 +372,44 @@ impl Workspace {
             RequestState::Dismissed => {}
         }
         entry.child(controls)
+    }
+
+    /// What an accepted request shows: Stop at a safe point, Stopping…
+    /// once pressed, or Finishing, disabled, when it cannot be stopped.
+    fn accepted_control(
+        &mut self,
+        id: DesktopRequestId,
+        offer: StopOffer,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        match offer {
+            StopOffer::Offered => {
+                let focus = self.control_focus_for(request_id(id, "stop"), cx);
+                button(
+                    request_id(id, "stop"),
+                    STOP,
+                    Some(&focus),
+                    cx.listener(move |this, _: &ClickEvent, _, cx| this.stop_request(id, cx)),
+                )
+            }
+            StopOffer::Stopping => div()
+                .id(request_id(id, "stop"))
+                .test_support()
+                .aria_label(STOPPING)
+                .child(
+                    Button::new(ElementId::Name(request_id(id, "stopping").into()))
+                        .label(STOPPING)
+                        .disabled(true),
+                )
+                .into_any_element(),
+            StopOffer::NotOffered => div()
+                .child(
+                    Button::new(ElementId::Name(request_id(id, "finishing").into()))
+                        .label(FINISHING)
+                        .disabled(true),
+                )
+                .into_any_element(),
+        }
     }
 
     fn dismiss(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) -> AnyElement {
@@ -303,8 +431,8 @@ impl Workspace {
         action: &RecoveryAction,
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
-        let label = recovery_label(action.action);
         let operations = self.services().operations().read(cx);
+        let label = operations.recovery_words(id, action);
         let runnable = operations.recovery_step(id, action).is_some();
         let why = if operations.retry_not_sent_again(id, action) {
             NOT_SENT_AGAIN

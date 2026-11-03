@@ -9,9 +9,10 @@
 
 use gpui_kit::{
     App, AppContext, ClickEvent, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    ParentElement, RenderOnce, StatefulInteractiveElement, Styled, TestSupportExt, ViewElement,
+    WeakEntity, Window,
     component::{
-        ActiveTheme, IndexPath,
+        ActiveTheme, Disableable, Icon, IndexPath, Sizable,
         button::{Button, ButtonVariants},
         h_flex,
         list::{List, ListDelegate, ListItem, ListState as KitListState},
@@ -22,10 +23,13 @@ use gpui_kit::{
 use manyhands::repository::{ConfigurationDto, ConfigurationState};
 
 use super::{scroll::ContentScroll, workspace::Workspace};
-use crate::desktop::model::{
-    list_state::{ListState, index_label},
-    navigation::{Navigation, NotReloaded, RepositoryEntry, Resolution},
-    stamp::{RepoKey, SettingsPage},
+use crate::desktop::{
+    assets::icon_path,
+    model::{
+        list_state::{ListState, index_label},
+        navigation::{Navigation, NotReloaded, RepositoryEntry, Resolution},
+        stamp::{RepoKey, SettingsPage},
+    },
 };
 
 pub(crate) const REPOSITORIES_HEADING: &str = "Repositories";
@@ -41,6 +45,16 @@ pub(crate) const SELECTED: &str = "Selected";
 /// The rows shown are those of an earlier read: the last one failed or
 /// stayed busy.
 pub(crate) const SHOWING_LAST_READ: &str = "Showing the last list read";
+/// The repository detail's Share main: `repo sync` (design, Lane B, Share
+/// controls).
+pub(crate) const SHARE_MAIN: &str = "Share main";
+/// Share main with no publication remote: it opens Settings › Remotes, as
+/// the item header's Share… does.
+pub(crate) const SHARE_MAIN_SET_UP: &str = "Share main…";
+pub(crate) const SHARE_MAIN_BUTTON: &str = "selection-share-main";
+/// Share or Share main while a share of the same target is queued or
+/// running: disabled, so a second press queues nothing.
+pub(crate) const SHARING: &str = "Sharing…";
 
 /// A configuration state in fixed text.
 pub(crate) fn configuration_label(state: ConfigurationState) -> &'static str {
@@ -501,4 +515,62 @@ fn resolved(entry: &RepositoryEntry, cx: &mut Context<Workspace>) -> gpui_kit::D
                 .aria_label(index)
                 .child(index),
         )
+        .child(div().flex().pt_2().child(ShareMain {
+            workspace: cx.entity().downgrade(),
+            root: entry.key().clone(),
+            remote: entry.summary.configuration.publication_remote.is_some(),
+        }))
+}
+
+/// Share main on a resolved repository: `repo sync` of `root` when it has
+/// a publication remote (`remote`), Share main… opening Settings › Remotes
+/// when it has none, and Sharing…, disabled, while a share of the
+/// repository is queued or running.
+///
+/// It is drawn as the frame lays it out, after the workspace has drawn
+/// itself, so it reads from the workspace's worker whether a share is
+/// running; `selection` is drawn while the workspace is being updated,
+/// when it cannot be read.
+struct ShareMain {
+    workspace: WeakEntity<Workspace>,
+    root: RepoKey,
+    remote: bool,
+}
+
+impl RenderOnce for ShareMain {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let sharing = self
+            .workspace
+            .upgrade()
+            .is_some_and(|workspace| workspace.read(cx).sharing_main(&self.root));
+        let label = match (sharing, self.remote) {
+            (true, _) => SHARING,
+            (false, true) => SHARE_MAIN,
+            (false, false) => SHARE_MAIN_SET_UP,
+        };
+        let Self {
+            workspace,
+            root,
+            remote,
+        } = self;
+        Button::new(SHARE_MAIN_BUTTON)
+            .label(label)
+            .small()
+            .icon(Icon::default().path(icon_path("cloud-upload")))
+            .disabled(sharing)
+            .on_click(move |_: &ClickEvent, window, cx| {
+                let root = root.clone();
+                let _ = workspace.update(cx, |workspace, cx| {
+                    workspace.share_main(root, remote, window, cx)
+                });
+            })
+    }
+}
+
+impl IntoElement for ShareMain {
+    type Element = ViewElement<Self>;
+
+    fn into_element(self) -> Self::Element {
+        ViewElement::new(self)
+    }
 }

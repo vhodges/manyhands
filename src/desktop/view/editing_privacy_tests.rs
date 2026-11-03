@@ -668,3 +668,259 @@ async fn sentinels_reach_no_surface_through_create_move_and_repair(cx: &mut Test
         );
     }
 }
+
+/// D4's comment sentinels (Cycle contract 10, A15; design, Privacy): a
+/// comment's text and a reply's.
+const COMMENT_TEXT: &str = "SENTINEL-D4-COMMENT-5e9a";
+const REPLY_TEXT: &str = "SENTINEL-D4-REPLY-71c0";
+const COMMENT_SENTINELS: [&str; 2] = [COMMENT_TEXT, REPLY_TEXT];
+const DISCUSSED: &str = "01ARZ3NDEKTSV4RRFFQ69G5FY5";
+
+/// Where the design puts a comment's text (Privacy: the composer, the
+/// comment's body): a composer's editor and a listed comment's read
+/// editor. A post's pending row, drawn from its text until its outcome,
+/// is the other, inside the discussion only.
+const COMMENT_ALLOWED: [&str; 2] = ["composer-editor", "comment-body"];
+const PENDING_ROW: &str = "pending-comment-";
+
+/// Every label and value drawn now: whether it is inside a place the
+/// design puts comment text, and the text. Each pending row is inside the
+/// item tab's discussion.
+fn comment_drawn(shell: &Shell, cx: &mut TestAppContext) -> Vec<(bool, String)> {
+    shell.frame(cx, |window, _| {
+        let snapshots = gpui_kit::base::test_support::snapshots(window);
+        let discussion = ElementId::from("discussion");
+        snapshots
+            .iter()
+            .flat_map(|snapshot| {
+                let names: Vec<&str> = snapshot.path().iter().filter_map(name).collect();
+                let pending = names.iter().any(|name| name.starts_with(PENDING_ROW));
+                if pending {
+                    assert!(
+                        snapshot.path().contains(&discussion),
+                        "a pending row is drawn in the discussion only"
+                    );
+                }
+                let at = pending || names.iter().any(|name| COMMENT_ALLOWED.contains(name));
+                [snapshot.label(), snapshot.value()]
+                    .into_iter()
+                    .flatten()
+                    .map(move |text| (at, text.to_owned()))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    })
+}
+
+/// Reads every surface into `seen`: the operation entries, every label
+/// and value drawn outside `COMMENT_ALLOWED` (inside it, the sentinels'
+/// appearances go to `seen.allowed`), and no notification.
+fn comment_surfaces(seen: &mut Seen, shell: &Shell, cx: &mut TestAppContext) {
+    seen.add("operation entry", operation_entries(shell, cx));
+    for (at, text) in comment_drawn(shell, cx) {
+        if !at {
+            seen.read.push(("drawn", text));
+        } else if COMMENT_SENTINELS
+            .iter()
+            .any(|sentinel| text.contains(sentinel))
+        {
+            seen.allowed.push(("comment", text));
+        }
+    }
+    let notifications = shell.frame(cx, |window, cx| window.notifications(cx).len());
+    assert_eq!(notifications, 0, "the desktop shows no notification");
+}
+
+/// The labels and values drawn inside the open dialog `dialog`: its
+/// message, read into `seen`; then the window's other surfaces.
+fn comment_dialog(seen: &mut Seen, shell: &Shell, dialog: &'static str, cx: &mut TestAppContext) {
+    let within = ElementId::from(dialog);
+    let texts: Vec<String> = shell.frame(cx, |window, _| {
+        gpui_kit::base::test_support::snapshots(window)
+            .iter()
+            .filter(|snapshot| snapshot.path().contains(&within))
+            .flat_map(|snapshot| {
+                [snapshot.label(), snapshot.value()]
+                    .into_iter()
+                    .flatten()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    });
+    assert!(!texts.is_empty(), "{dialog} is drawn");
+    seen.add("dialog message", texts);
+    comment_surfaces(seen, shell, cx);
+}
+
+/// Comment text (A15): written in the new comment's composer, its draft
+/// stored; asked about by Escape (the discard prompt); posted and refused
+/// (`item_not_found`, a constructed answer), the failed composer's message;
+/// Edit text and posted again, saved with no remote; a reply posted and
+/// held, its pending row drawn; and quitting while it is sent, "Finishing".
+/// Neither sentinel reaches an operation entry, the quit surface, a
+/// notification, a dialog's message, the failed message, a label drawn
+/// outside the composer, the comment's body and the pending row, or any
+/// answer's rendering. The pending row is drawn in the discussion only.
+#[gpui_kit::test]
+async fn comment_text_never_reaches_an_entry_quit_dialog_or_message(cx: &mut TestAppContext) {
+    use gpui_kit::{px, size};
+    use manyhands::results::{CheckpointEffect, Effects, Envelope, Scope, WriteEffect};
+
+    use super::quit::QuitPhase;
+    use crate::desktop::{model::drafts::IDLE, services::JobKind, view::harness::wait_until};
+
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    fixture.commit_ticket(&a, DISCUSSED, "Discussed", "");
+    fixture.refresh(&a);
+    let shell = Shell::open(fixture, cx);
+    shell.visual(cx).simulate_resize(size(px(1440.), px(1400.)));
+    shell.run(cx);
+    open(&shell, ticket(&a, DISCUSSED), cx);
+    let mut seen = Seen::default();
+    let new_composer = |shell: &Shell, cx: &mut TestAppContext| {
+        shell.frame(cx, |_, _| ());
+        pane(shell, cx)
+            .read_with(cx, |pane, _| pane.new_composer())
+            .expect("the new comment's composer")
+    };
+    let flushed = |shell: &Shell, cx: &mut TestAppContext| {
+        shell.run(cx);
+        cx.executor().advance_clock(IDLE * 2);
+        shell.run(cx);
+    };
+
+    // Written, its draft stored.
+    shell.click("item-comments", cx);
+    shell.click("new-comment-start", cx);
+    shell.frame(cx, |_, _| ());
+    shell.visual(cx).simulate_input(COMMENT_TEXT);
+    flushed(&shell, cx);
+    let composer = new_composer(&shell, cx);
+    assert_eq!(
+        composer.read_with(cx, |composer, cx| composer.text(cx)),
+        COMMENT_TEXT
+    );
+    comment_surfaces(&mut seen, &shell, cx);
+
+    // Escape asks first: the discard prompt's message. Enter keeps it.
+    shell.keys("escape", cx);
+    comment_dialog(&mut seen, &shell, "composer-discard-dialog", cx);
+    shell.press("enter", cx);
+    assert!(!shell.present("composer-discard-dialog", cx));
+
+    // Posted and refused: the failed composer's message.
+    let refused = Envelope::classified_mutation(
+        "comment add",
+        Scope::default(),
+        false,
+        ResultCode::ItemNotFound,
+        Effects {
+            write: WriteEffect::NotRequested,
+            checkpoint: CheckpointEffect::NotRequested,
+            ..Effects::not_requested()
+        },
+        false,
+    );
+    shell
+        .backend
+        .hold_job_return_answering(JobKind::Comment, refused)
+        .release();
+    shell.keys("secondary-enter", cx);
+    shell
+        .until_drawn(cx, "the post refused", |shell, cx| {
+            shell.present("composer-failed", cx)
+        })
+        .await;
+    let failed = shell.label("composer-failed", cx).expect("its message");
+    seen.add("failed message", [failed]);
+    comment_surfaces(&mut seen, &shell, cx);
+
+    // Edit text, then posted again: saved, with no remote.
+    shell.click("item-comments", cx);
+    shell.click("composer-edit-text", cx);
+    shell
+        .until_drawn(cx, "editable again", |_, cx| {
+            !composer.read_with(cx, |composer, _| composer.is_read_only())
+        })
+        .await;
+    let editor = composer.read_with(cx, |composer, _| composer.editor().clone());
+    shell.frame(cx, |window, cx| {
+        editor.update(cx, |editor, cx| editor.focus(window, cx))
+    });
+    shell.frame(cx, |_, _| ());
+    shell.keys("secondary-enter", cx);
+    shell
+        .until_drawn(cx, "the comment saved", |shell, cx| {
+            let composer = new_composer(shell, cx);
+            composer.read_with(cx, |composer, cx| {
+                composer.text(cx).is_empty() && !composer.is_read_only()
+            }) && shell.present(("comment", 0usize), cx)
+        })
+        .await;
+    comment_surfaces(&mut seen, &shell, cx);
+
+    // A reply, held as it is sent: its pending row.
+    shell.click("item-comments", cx);
+    shell.click(("comment-reply", 0usize), cx);
+    shell.frame(cx, |_, _| ());
+    shell.visual(cx).simulate_input(REPLY_TEXT);
+    flushed(&shell, cx);
+    let held = shell.backend.hold_job(JobKind::Comment);
+    shell.keys("secondary-enter", cx);
+    held.wait_reached();
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    let row = shell.frame(cx, |window, _| {
+        gpui_kit::base::test_support::snapshots(window)
+            .iter()
+            .any(|snapshot| {
+                snapshot
+                    .path()
+                    .last()
+                    .and_then(name)
+                    .is_some_and(|name| name.starts_with(PENDING_ROW))
+            })
+    });
+    assert!(row, "the reply's pending row is drawn");
+    comment_surfaces(&mut seen, &shell, cx);
+
+    // Quitting while it is sent: "Finishing" and Quit now.
+    shell.keys("secondary-q", cx);
+    let phase = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.quit_phase());
+    assert!(matches!(phase, QuitPhase::Finishing(_)), "{phase:?}");
+    let finishing = shell.label("quit-finishing", cx).expect("Finishing");
+    seen.add("quit", [finishing]);
+    comment_surfaces(&mut seen, &shell, cx);
+    held.release();
+    wait_until(cx, &shell.workspace, |workspace, _| {
+        workspace.quit_phase() == QuitPhase::Quit
+    })
+    .await;
+
+    seen.answers(&shell, cx);
+    for surface in [
+        "operation entry",
+        "dialog message",
+        "failed message",
+        "quit",
+        "drawn",
+    ] {
+        assert!(seen.surfaces(surface) > 0, "{surface} was read");
+    }
+    for (surface, text) in &seen.read {
+        for sentinel in COMMENT_SENTINELS {
+            assert!(!text.contains(sentinel), "{surface}: {text}");
+        }
+    }
+    assert!(!seen.answers.is_empty(), "answers were read");
+    for answer in &seen.answers {
+        for sentinel in COMMENT_SENTINELS {
+            assert!(!answer.contains(sentinel), "an answer: {answer}");
+        }
+    }
+}

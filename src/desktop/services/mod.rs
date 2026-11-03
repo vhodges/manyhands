@@ -15,6 +15,7 @@ pub(crate) mod prompts;
 mod reads;
 pub(crate) mod release;
 pub(crate) mod requests;
+pub(crate) mod submissions;
 pub(crate) mod worker;
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -24,7 +25,7 @@ use gpui_kit::{App, AppContext, Entity};
 use manyhands::{
     drafts::{DraftError, DraftStore},
     repository::{ContextPrepareIntent, MutationDataDto, RepositoryService, keys::KeyStore},
-    results::{Envelope, Outcome, ResultCode},
+    results::{Envelope, Outcome, PublicationEffect, ResultCode},
 };
 
 use crate::desktop::model::operations::Operations;
@@ -32,6 +33,7 @@ use created_contexts::{ContextKey, CreatedContexts};
 use drafts::DraftRegistry;
 use edit_tabs::EditTabs;
 use release::Releases;
+use submissions::Submissions;
 use worker::{WorkerEvent, WorkerHandle};
 
 pub(crate) use drafts::DraftStoreUnavailable;
@@ -124,6 +126,9 @@ pub(crate) enum JobKind {
     FolderCreate,
     DocumentRepair,
     TicketRepair,
+    Comment,
+    SynchronizeItem,
+    SynchronizeRepo,
     ObserveHost,
 }
 
@@ -156,8 +161,11 @@ pub(crate) trait Backend: Send + Sync + 'static {
     fn before_job(&self, _kind: JobKind) {}
 
     /// Called on the worker thread after a job's library call returns,
-    /// before the worker decides what follows it.
-    fn after_job(&self, _kind: JobKind) {}
+    /// before the worker decides what follows it. An answer it gives
+    /// stands in place of the library's: a test's constructed answer.
+    fn after_job(&self, _kind: JobKind) -> Option<Envelope<MutationDataDto>> {
+        None
+    }
 }
 
 /// The production backend: the library, with no delays.
@@ -209,6 +217,8 @@ pub(crate) struct Services {
     /// What each item tab says of its edit session (Part C fixes 1 and 2):
     /// a repository's removal and the Drafts page read it.
     edit_tabs: Entity<EditTabs>,
+    /// The comments this session posted, shared by every item tab.
+    submissions: Entity<Submissions>,
     /// Whether the workspace refreshes every listed repository once its
     /// list first loads. Tests that do not wait for the worker turn it
     /// off.
@@ -237,6 +247,13 @@ impl Services {
     /// Once the request model has it, release on leave hears of it too, as
     /// of a prepare removed from the queue or not sent: a tab that closed
     /// while it prepared releases the context it made.
+    ///
+    /// A comment's end is passed to `Submissions` after the request model
+    /// has it, so a post's answer lands whether or not a tab is open (P9),
+    /// and so is a comment's request queued again, a retry or a Give up
+    /// sent from anywhere, the operation area among them, so the post is
+    /// posting again and the attempt is a re-send (P10). Each in the order
+    /// the worker sent them.
     pub(crate) fn start(backend: Arc<dyn Backend>, cx: &mut App) -> Self {
         let (worker, mut events) = WorkerHandle::spawn(backend.clone());
         let operations = cx.new(|_| Operations::default());
@@ -247,6 +264,8 @@ impl Services {
         let made = created.downgrade();
         let releases = cx.new(|cx| Releases::new(worker.clone(), created.clone(), &drafts, cx));
         let releasing = releases.downgrade();
+        let submissions = cx.new(|_| Submissions::new(worker.clone()));
+        let posts = submissions.downgrade();
         cx.spawn(async move |cx| {
             while let Some(event) = events.next().await {
                 let mut batch = vec![event];
@@ -256,6 +275,7 @@ impl Services {
                 let applied = model.update(cx, |operations, cx| {
                     let mut finished = Vec::new();
                     let mut prepared = Vec::new();
+                    let mut posted = Vec::new();
                     for event in batch {
                         let ended = match &event {
                             WorkerEvent::Finished(id, _)
@@ -263,6 +283,38 @@ impl Services {
                             | WorkerEvent::NotSent(id, _) => operations.request(*id),
                             _ => None,
                         };
+                        // A comment's end, for `Submissions`: its answer, or
+                        // that it never ran.
+                        if let Some(request) = ended
+                            && matches!(request.intent, requests::Intent::CommentAdd { .. })
+                        {
+                            posted.push(match &event {
+                                WorkerEvent::Finished(_, envelope) => {
+                                    PostEvent::Finished(request.id, envelope.clone())
+                                }
+                                _ => PostEvent::Ended(request.id),
+                            });
+                        }
+                        // A share of an item that published it: its saved
+                        // comments' chips clear (decision 14).
+                        if let WorkerEvent::Finished(id, envelope) = &event
+                            && let Some(request) = operations.request(*id)
+                            && let requests::Intent::ItemSync { root, id: item, .. } =
+                                &request.intent
+                            && matches!(
+                                envelope.effects.publication,
+                                PublicationEffect::Published | PublicationEffect::Current
+                            )
+                        {
+                            posted.push(PostEvent::ItemShared(root.clone(), item.clone()));
+                        }
+                        // A comment queued again under its own request.
+                        if let WorkerEvent::Queued(request) = &event
+                            && request.attempt > 1
+                            && matches!(request.intent, requests::Intent::CommentAdd { .. })
+                        {
+                            posted.push(PostEvent::Resent(request.id));
+                        }
                         // A prepare's end, for release on leave: what it
                         // made, if anything. One removed from the queue, or
                         // not sent, made nothing.
@@ -289,11 +341,46 @@ impl Services {
                         operations.apply(event);
                     }
                     cx.notify();
-                    (finished, prepared)
+                    (finished, prepared, posted)
                 });
-                let Ok((finished, prepared)) = applied else {
+                let Ok((finished, prepared, posted)) = applied else {
                     break;
                 };
+                if !posted.is_empty() {
+                    let retire = posts
+                        .update(cx, |submissions, cx| {
+                            let mut retire = Vec::new();
+                            for event in posted {
+                                match event {
+                                    PostEvent::Resent(id) => {
+                                        submissions.resent(id);
+                                    }
+                                    // A saved comment's draft retires here,
+                                    // whether or not a tab is open (P9).
+                                    PostEvent::Finished(id, envelope) => {
+                                        let left = submissions.finished(id, envelope);
+                                        if left
+                                            .is_some_and(|left| left.saved && left.draft.is_some())
+                                        {
+                                            retire.extend(submissions.to_retire(id));
+                                        }
+                                    }
+                                    PostEvent::Ended(id) => {
+                                        submissions.ended(id);
+                                    }
+                                    PostEvent::ItemShared(root, item) => {
+                                        submissions.item_shared(&root, &item);
+                                    }
+                                }
+                            }
+                            cx.notify();
+                            retire
+                        })
+                        .unwrap_or_default();
+                    for (root, comment, draft) in retire {
+                        submissions::retire_posted(&registry, &posts, root, comment, draft, cx);
+                    }
+                }
                 if !prepared.is_empty() {
                     let _ = releasing.update(cx, |releases, cx| {
                         for (id, item, made) in prepared {
@@ -330,6 +417,7 @@ impl Services {
             created,
             releases,
             edit_tabs: cx.new(|_| EditTabs::default()),
+            submissions,
             launch_refresh: true,
         };
         drafts.update(cx, |registry, cx| {
@@ -386,10 +474,27 @@ impl Services {
         &self.edit_tabs
     }
 
+    /// The comments this session posted.
+    pub(crate) fn submissions(&self) -> &Entity<Submissions> {
+        &self.submissions
+    }
+
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn backend(&self) -> &Arc<dyn Backend> {
         &self.backend
     }
+}
+
+/// What the drain hands `Submissions` of a comment's request.
+enum PostEvent {
+    /// Queued again under its own request: a retry or a Give up.
+    Resent(requests::DesktopRequestId),
+    Finished(requests::DesktopRequestId, worker::FinishedEnvelope),
+    /// Removed from the queue, or not sent: that attempt never ran.
+    Ended(requests::DesktopRequestId),
+    /// A share of the item, by its repository and ID, published it or
+    /// found it current.
+    ItemShared(PathBuf, manyhands::canonical::ItemId),
 }
 
 /// What a finished request means to the draft registry.

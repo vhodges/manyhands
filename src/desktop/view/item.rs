@@ -35,9 +35,13 @@
 //! document's Adopt…, opens a plain text area over the whole file in the
 //! page's place of its text; Preview prepares the repair in the one
 //! confirmation dialog; a repair made, the tab follows the item by its ID.
+//!
+//! D4's slots: `share` the header's Share, `composer` the discussion's
+//! comment composers and `posting` the comments being posted.
 
 mod banners;
 mod chips;
+mod composer;
 mod details;
 mod discussion;
 mod draft;
@@ -46,31 +50,34 @@ mod edit;
 mod header;
 mod page;
 mod pill;
+mod posting;
 mod reads;
 mod relations_edit;
 mod repair;
+mod share;
 mod sheet;
 mod source;
 mod status;
 pub(crate) mod tokens;
 
-use std::{collections::HashMap, rc::Rc};
+use std::{collections::HashMap, path::PathBuf, rc::Rc};
 
 use gpui_kit::{
-    AnyElement, App, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
-    Render, Styled, Subscription, Task, TestSupportExt, Window,
+    AnyElement, App, Context, Entity, EventEmitter, FocusHandle, InteractiveElement, IntoElement,
+    ParentElement, Render, Styled, Subscription, Task, TestSupportExt, Window,
     component::{input::TextareaState, v_flex},
 };
+use manyhands::repository::transport::SshAuthority;
 
 use super::{relationships::RowKey, scroll::ContentScroll};
 use crate::desktop::{
-    keys::{Edit, ITEM_TAB_CONTEXT, Save, ToggleRich},
+    keys::{Edit, ITEM_TAB_CONTEXT, Save, ShareItem, ToggleRich},
     model::{
         edit::Phase, item::ItemView, names::TicketName, navigation::OpenTarget, stamp::ViewScope,
     },
     services::{
         Services,
-        drafts::{DraftSaved, SessionDiscarded},
+        drafts::{CommentDiscarded, DraftSaved, SessionDiscarded},
         images::TabImages,
         requests::DesktopRequestId,
     },
@@ -105,6 +112,57 @@ pub(crate) const BACK_TO_TOP: &str = "Back to top";
 /// it is given. It is built as the pane is drawn, so it is always the
 /// frame's own.
 pub(crate) type RegionEnd = Rc<dyn Fn(&ContentScroll, &mut Window, &mut App) -> Option<AnyElement>>;
+
+/// A place in the workspace a share's or a post's control opens (design,
+/// Lane B, Outcomes and routes): the item tab asks, and the workspace,
+/// which subscribes to every tab, opens it.
+pub(crate) enum ItemRoute {
+    /// Share… with no publication remote, or Set up sharing: Settings ›
+    /// Remotes for the repository.
+    Remotes(PathBuf),
+    /// Open Sharing & keys: the Keys page.
+    SharingAndKeys,
+    /// Check host: the host the outcome names, or, with none, the
+    /// repository's Hosts page (K-3).
+    CheckHost {
+        root: PathBuf,
+        authority: Option<SshAuthority>,
+    },
+    /// Set identity: the repository's identity form.
+    SetIdentity(PathBuf),
+    /// Show it, on `busy`: the request of this session that may hold the
+    /// repository, or, with none, its pending operations list.
+    Holder {
+        root: PathBuf,
+        request: Option<DesktopRequestId>,
+    },
+}
+
+impl EventEmitter<ItemRoute> for ItemPane {}
+
+/// The repository's publication remote as the workspace's navigation knows
+/// it, from the repository list's summary (design, Share controls): the tab
+/// reads no remote itself (D3's fact 41).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PublicationRemote {
+    /// Navigation has not listed the repository yet.
+    #[default]
+    Unknown,
+    /// The repository has no publication remote selected.
+    Unset,
+    /// The publication remote selected, by its name.
+    Named(String),
+}
+
+impl PublicationRemote {
+    /// From a listed summary's `publication_remote`.
+    pub(crate) fn from_summary(remote: Option<&str>) -> Self {
+        match remote {
+            Some(name) => Self::Named(name.to_owned()),
+            None => Self::Unset,
+        }
+    }
+}
 
 pub(crate) struct ItemPane {
     pub(super) model: ItemView,
@@ -141,6 +199,16 @@ pub(crate) struct ItemPane {
     /// The comments' read editors, the discussion's heading and the
     /// header's Comments {n}.
     discussion: discussion::Discussion,
+    /// The header's Share and what it last sent (`share`).
+    share: share::ShareState,
+    /// The repository's publication remote, which the workspace sets from
+    /// its navigation as the tab opens and as the list changes.
+    publication_remote: PublicationRemote,
+    /// The discussion's new-comment and reply composers (`composer`).
+    composers: composer::Composers,
+    /// The comments being posted, drawn pending in their threads
+    /// (`posting`).
+    posting: posting::Posting,
     /// Set by the workspace when it opens the tab.
     region_end: Option<RegionEnd>,
     draft: draft::TabDraft,
@@ -165,6 +233,8 @@ pub(crate) struct ItemPane {
     _saved: Subscription,
     /// A discard elsewhere ended this tab's session (R-71).
     _discarded: Subscription,
+    /// The Drafts page discarded a comment draft a composer holds.
+    _comment_discarded: Subscription,
 }
 
 impl ItemPane {
@@ -195,10 +265,23 @@ impl ItemPane {
             services.drafts(),
             |pane, _, event: &SessionDiscarded, cx| pane.session_discarded(event, cx),
         );
+        let comment_discarded = cx.subscribe(
+            services.drafts(),
+            |pane, _, event: &CommentDiscarded, cx| pane.comment_discarded(event, cx),
+        );
         let images = TabImages::new(&services);
-        // The tab's images leave the windows' atlases with it.
-        cx.on_release(|pane, cx| pane.images.close(cx)).detach();
+        // The tab's images leave the windows' atlases with it, and its
+        // composers let go of the comment drafts they held.
+        cx.on_release(|pane, cx| {
+            pane.images.close(cx);
+            let tab = pane.tab_key();
+            pane.services
+                .drafts()
+                .update(cx, |registry, cx| registry.let_go_comments(&tab, cx));
+        })
+        .detach();
         let edit = edit::TabEdit::new(scope.clone(), cx);
+        let posting = posting::Posting::new(&services, cx);
         let relations = relations_edit::RelationsEdit::new(scope.clone(), cx);
         let mut pane = Self {
             model: ItemView::new(target, scope),
@@ -218,6 +301,10 @@ impl ItemPane {
             page: page::Page::new(cx),
             back_to_top: cx.focus_handle().tab_stop(true),
             discussion: discussion::Discussion::new(cx),
+            share: share::ShareState::default(),
+            publication_remote: PublicationRemote::Unknown,
+            composers: composer::Composers::default(),
+            posting,
             region_end: None,
             draft: draft::TabDraft::default(),
             link_note: None,
@@ -230,11 +317,13 @@ impl ItemPane {
             _drafts: drafts,
             _saved: saved,
             _discarded: discarded,
+            _comment_discarded: comment_discarded,
         };
         pane.watch_editing(cx);
         pane.watch_edit_tab(cx);
         let stamp = pane.model.load();
         pane.read(stamp, cx);
+        pane.share_opened(cx);
         pane
     }
 
@@ -305,6 +394,27 @@ impl ItemPane {
         self.services.drafts()
     }
 
+    /// The repository's publication remote, as navigation last gave it.
+    pub(crate) fn publication_remote(&self) -> &PublicationRemote {
+        &self.publication_remote
+    }
+
+    /// The workspace's navigation gives the repository's publication
+    /// remote: Share follows it (`share_remote_changed`). Nothing changes
+    /// when it is the one the tab holds.
+    pub(crate) fn set_publication_remote(
+        &mut self,
+        remote: PublicationRemote,
+        cx: &mut Context<Self>,
+    ) {
+        if self.publication_remote == remote {
+            return;
+        }
+        self.publication_remote = remote;
+        self.share_remote_changed(cx);
+        cx.notify();
+    }
+
     /// Keep the last successful title after a failed refresh (ruling R-B5).
     pub(crate) fn tab_title(&self) -> String {
         let fallback = match self.model.target() {
@@ -334,9 +444,10 @@ impl Render for ItemPane {
         self.sync_review(window, cx);
         self.sync_read(window, cx);
         self.sync_discussion(window, cx);
+        self.sync_composers(window, cx);
         self.sync_changed(cx);
         let item = self.model.item().rows().cloned();
-        let (header, later) = self.header(item.as_ref(), window, cx);
+        let header = self.header(item.as_ref(), window, cx);
         // An item tab's details are in its sheet. A file read by its path
         // has no sheet, so its page keeps D1's; a nonconforming file shows
         // its problems in "Needs fixing".
@@ -391,7 +502,7 @@ impl Render for ItemPane {
         // The repair view's text takes every key typed into it, `e` too.
         let viewing = !inspect && self.edit.phase() == Phase::Viewing && self.repair.is_none();
         let page = self.page.render(content, &self.scroll, viewing, window, cx);
-        let discussion = self.discussion_section(later, window, cx);
+        let discussion = self.discussion_section(window, cx);
         let end = self
             .region_end
             .clone()
@@ -417,6 +528,11 @@ impl Render for ItemPane {
             }))
             .on_action(cx.listener(|pane, _: &Save, window, cx| {
                 if !pane.save_requested(window, cx) {
+                    cx.propagate();
+                }
+            }))
+            .on_action(cx.listener(|pane, _: &ShareItem, window, cx| {
+                if !pane.share_item(window, cx) {
                     cx.propagate();
                 }
             }))
