@@ -11,9 +11,12 @@
 //!   them, and none may be added (design, Answers). The context verbs'
 //!   grammar answers to this text, which `lifecycle_tests.rs` pins.
 //!   Any other form of that blocker relies on its offered actions;
-//! - for a blocked prepare, its way out: the same repair, the save that
-//!   makes a missing context, or the poll that reads a primary tracking ref
-//!   left behind or missing, and then a new prepare;
+//! - for a blocked prepare, its way out: the same repair (for a ticket; a
+//!   promotion's `integration_conflict` is an add/add, which only a repair
+//!   outside Manyhands resolves, decision 30, so it gets that note and no
+//!   context lines), the save that makes a missing context, or the poll that
+//!   reads a primary tracking ref left behind or missing, and then a new
+//!   prepare;
 //! - for a prepare refused because an unfinished request or operation holds
 //!   the item (decision 33), that request sent again, or the resume;
 //! - for a context synchronization stopped on a conflict, decision 34's route:
@@ -30,6 +33,7 @@
 use crate::{
     human_admin,
     human_collaboration::republish,
+    human_local_sync::EXTERNAL_NOTE,
     render::{self, Output, field, note_lines, quoted, refusal_of},
 };
 use manyhands::{
@@ -335,12 +339,23 @@ fn way_out(
         ]
         .iter()
         .any(|other| blockers.contains(other));
-    reachable.then(|| {
-        (
-            merge_refused(root, item),
-            format!("this context can't merge into primary. {REPAIR_NOTE} Then prepare again."),
-        )
-    })
+    if !reachable {
+        return None;
+    }
+    // A document's file is new on the context, so primary holding one is an
+    // add/add, which `resolve-local` refuses (decision 30).
+    if kind == ItemDtoKind::Document {
+        return Some((
+            Vec::new(),
+            format!(
+                "this context can't merge into primary. {EXTERNAL_NOTE} Repair it in the context and commit the merge, then prepare again."
+            ),
+        ));
+    }
+    Some((
+        merge_refused(root, item),
+        format!("this context can't merge into primary. {REPAIR_NOTE} Then prepare again."),
+    ))
 }
 
 /// A prepare refused because an unfinished request, or an operation no request

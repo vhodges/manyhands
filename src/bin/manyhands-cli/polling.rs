@@ -44,7 +44,7 @@ const KEY_NOTE: &str = "once a usable key is selected, polling again takes a new
 const REMOTE_NOTE: &str =
     "once a publication remote is selected, polling again takes a new request.";
 const PASSPHRASE_HINT: &str = "hint: if the passphrase was wrong, poll again with a new request\n";
-const BUSY_NOTE: &str = "something else holds this repository: operation list names it, and operation resume, with its operation ID for the <operation-id> placeholder, names the request that holds it. If it names only this request, wait and send this request again (add --request-id unless you run it at a terminal).";
+const BUSY_NOTE: &str = "something else holds this repository, and it may be no operation: operation list names the unfinished operations, and operation resume, with an operation's ID for the <operation-id> placeholder, names the request that holds it. If none is another request's, wait and send this request again (add --request-id unless you run it at a terminal).";
 /// The library refuses an interval out of range with no detail of its own.
 const RANGE_DETAIL: &str = "Input field interval_seconds must be from 60 to 3600.\n";
 

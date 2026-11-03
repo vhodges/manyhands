@@ -13,9 +13,9 @@ id: "01M69C6S8DV9EJ7NMWKEWCQS0D"
 ## Intent And Approval Boundary
 
 This design turns the [Cycle](../Cycles/wave-03-cli-05-completion-and-polling.md)
-into modules, bindings, verbs and tests. The Cycle governs it. It is a draft;
-approving it does not authorize implementation, a merge, closure, native CI or
-a `ticket save`. Decisions are the Cycle's, and the owner questions it lists are written to their recommended answers. Rulings R-n are planning's, each
+into modules, bindings, verbs and tests. The Cycle governs it. The owner
+approved it on 2026-10-31 with the Cycle, authorizing implementation; that
+approval does not authorize a merge, closure, native CI or a `ticket save`. Decisions are the Cycle's, and the owner questions it lists are written to their recommended answers. Rulings R-n are planning's, each
 with its cost if wrong.
 
 ## Baseline Facts
@@ -283,7 +283,7 @@ On the execute path and in a stored refusal, the same blockers are in the lifecy
 `MutationDataDto`, since `Reply::envelope` discards the prepare-only field (`reply.rs:130-131`), and
 `from_stored` restores them.
 
-In human mode a blocked prepare also offers its way out, through `Driven::Prepared`, not `render::prepare_output`, which `tests/cli_remote.rs` mounts without `human_lifecycle`: for `integration_conflict`, with no dirty or conflicted context and no pending conflict or local operation, the four context verbs and then a new prepare; for `context_missing` alone, the save verb by kind and then a new prepare; for `primary_ahead_of_remote` or `primary_missing`, with nothing else but perhaps `context_missing`, `poll once` and then a new prepare. Blockers print as one `Blockers:` line, and a preview prints each change with its path on one line.
+In human mode a blocked prepare also offers its way out, through `Driven::Prepared`, not `render::prepare_output`, which `tests/cli_remote.rs` mounts without `human_lifecycle`: for `integration_conflict`, with no dirty or conflicted context and no pending conflict or local operation, the four context verbs and then a new prepare for a ticket, and for a promotion, whose conflict is an add/add that only a repair outside resolves (decision 30), the external-repair note and no context line (Task 15's spec review, F2); for `context_missing` alone, the save verb by kind and then a new prepare; for `primary_ahead_of_remote` or `primary_missing`, with nothing else but perhaps `context_missing`, `poll once` and then a new prepare. Blockers print as one `Blockers:` line, and a preview prints each change with its path on one line.
 
 An unknown ID, wrong kind or unregistered repository answers as `item republish` does:
 `item_not_found`, `repository_not_registered` and `repository_not_enabled`.
@@ -819,8 +819,10 @@ no open copy lingers. A case pins what `poll once` and reads show for such a con
 ## Exit Statuses
 
 Follow the RFC table. Local-only completion is 0. Partial after any durable effect
-is 4. Blocked before any is 3. `busy` is 5. Ctrl-C is 130, or the domain's answer after
-the last safe point. `tests/cli/collaboration_exits.rs`'s set equality is extended with
+is 4. Blocked before any is 3. `busy` is 5. Ctrl-C is 130. A press after the last safe
+point keeps the domain's answer, with one exception: when the primary child's push is then
+refused, the answer is `cancelled`, 130 (`stops_on_ctrl_c` above,
+`c5_interruption_press_after_the_last_safe_point`). `tests/cli/collaboration_exits.rs`'s set equality is extended with
 C5's codes in Task 13b.
 
 ## Testing
@@ -967,6 +969,9 @@ review. This list is not yet proven complete.
 - **Tracking that isn't advanced (decision 29).** With split fetch and push endpoints, before the first fetch, or with the repository's lease held more than 250 ms, a push doesn't move tracking, and promote-then-close is refused as before, `primary_ahead_of_remote` or `primary_missing`. Human output names `poll once` and a new prepare. Follow-up candidate: advance from a verified fetch-side read.
 - **A contained context whose remote branch has no tracking ref keeps that branch** (decision 32, withdrawn). The run plans no remote deletion there and has no OID to guard one with (no context child runs, and there is no tracking context), so the preview says `remote_branch: false` and the branch stays on the remote. Polls ignore it, since primary holds its tip (decision 28). A never-pushed context is not this case: its run publishes it and deletes it (`c5_lifecycle_never_pushed_context_is_published_then_deleted`). Follow-up candidate: delete it guarded by stored push evidence.
 - **Human placeholders and lines.** `poll status` prints `-` for a null field where the policy verbs print `none`. `poll configure` answering `already_applied` still prints `progress: writing`. The policy verbs report `write: not_requested` while writing the policy row.
+- **A `conflict resolve` resend should name the child's ID (decision 34).** A resolution's request resolves the context child its parent holds when it is sent, whichever ID names it, and its digest covers that child's ID. If the parent then mints a new child attempt (a cancelled continuation, for instance), the same request resent by the parent's ID maps to the new child, so its input no longer matches its record and it answers `request_mismatch` instead of replaying. Resent by the child's ID, from its answer's data, it replays.
+- **Synchronization meeting a held lease answers `internal_error`.** A synchronization's fetch that meets the repository's lease held by another call reports a transport failure, as a poll's did before decision 24, so it answers `internal_error`, not the `busy` that `poll once` now answers. Found by reading; no row pins it. Follow-up candidate.
+- **`progress: connecting` in a local-only run.** A promotion or closure with no publication remote prints `progress: connecting` though no connection is made: the stage comes from the CLI's `stage` (`command.rs`), which gives `Connecting` for both verbs whatever the repository has. Human output only. Follow-up candidate.
 - After an external `git pull`, with the index not marked behind, an item on primary with no context answers `item_not_found` until `index refresh`. An index marked behind keeps the `recovery_required` answer naming `context_missing`.
 
 ## Alternatives Rejected
@@ -985,6 +990,6 @@ review. This list is not yet proven complete.
 | --- | --- |
 | Re-entry mechanism meets a state the table lacks | Task 2b's table test comes first, and a failed row stops for a ruling. |
 | Counted-list conflicts with D-track merges | Additive; merge main at each Part. |
-| `mutation_remote` already runs near an hour | Filters in tasks; full suite once. |
+| `mutation_remote` already runs near an hour | Filters in tasks; the final gate by `AGENTS.md`'s tiers (owner decision, 2026-11-02): the fast tier, and the SSH targets of the changed paths. The full suite runs after merge. |
 | Unfinished local syncs fence C4 verbs more often | Row in each outcome table, and the local-recovery journey. |
 | Full suite exceeds its budget | Detached run with no tool timeout; C4 took 3 h 34 min. |

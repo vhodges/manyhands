@@ -1248,7 +1248,7 @@ for one of the Cycle's verbs, or a reason below.
 | `document promote`, `ticket close` | `recovery_required` | `request.retry` | 3 | `cli_v1/ticket_close_prepare_held.json` |
 | `ticket close` | `recovery_required` | `manyhands-cli ticket close` | 3 | `cli_v1/ticket_close_prepare_held_text.txt` |
 | `ticket close` | `recovery_required` | `manyhands-cli context observe-local` | 3 | `cli_v1/ticket_close_prepare_conflict_text.txt` |
-| `document promote` | `recovery_required` | `manyhands-cli context observe-local` | 3 | `cli_v1/document_promote_prepare_conflict_text.txt` |
+| `document promote` | `recovery_required` | `repo.inspect` | 3 | `cli_v1/document_promote_prepare_conflict_text.txt` |
 | `ticket close` | `recovery_required` | `manyhands-cli ticket save` | 3 | `cli_v1/ticket_close_prepare_context_missing_text.txt` |
 | `document promote` | `recovery_required` | `manyhands-cli document save` | 3 | `cli_v1/document_promote_prepare_context_missing_text.txt` |
 | `ticket close` | `recovery_required` | `manyhands-cli poll once` | 3 | `cli_v1/ticket_close_prepare_primary_ahead_text.txt` |
@@ -1592,10 +1592,36 @@ list them all):
   request ID is lost is found through `operation list`;
 - a result's `Item id:` carries no slug, while a preview shows `Slug:` and
   `made ready:` lines show theirs.
+- a `conflict resolve` request resent by the lifecycle parent's ID after the
+  parent minted a new child attempt answers `request_mismatch`; resend it by
+  the child's ID, which its answer's data names (decision 34);
+- a synchronization whose fetch meets the repository's lease held answers
+  `internal_error`, not `busy`;
+- `document promote` and `ticket close` print `progress: connecting` in a
+  local-only run.
 
-Follow-up candidates, none opened without the owner's go-ahead: advance
-tracking from a verified fetch-side read; delete a contained context's
-remote branch guarded by stored push evidence; a resolvable canonical
-add/add of a ticket file; `effective_identity`'s per-key cascade (owner
-question 1); release timing of local sync's image-proof audits and
-discovery's history walk (decision 31).
+Follow-up candidates. This is the one list of them; none is opened without
+the owner's go-ahead, and each is recorded in the C5 execution ledger:
+1. **Performance profile** (decision 31): local sync's image-proof audit,
+   which grows with stored syncs, and discovery's per-item history walk.
+2. **Reads by the latest copy** (decision 28's candidate B): reads take the
+   latest copy of an item by Git history across primary and every context.
+3. **Ticket reopening** (decision 28's candidate C), which needs an RFC
+   change: the MVP excludes reopening.
+4. **A resolvable canonical add/add** of a ticket file through
+   `context resolve-local` (decision 30).
+5. **Split-endpoint tracking** (decision 29): advance tracking from a
+   verified fetch-side read.
+6. **A contained context's stale remote branch** (decision 32, withdrawn):
+   delete it, guarded by stored push evidence.
+7. **C4's refused first publication:** a context's refused first push, then
+   the same `item sync` request, answers `recovery_required` and publishes
+   nothing (Task 12's C4 finding).
+8. **Synchronization meeting a held lease** answers `internal_error`, not
+   `busy` (decision 24's reading).
+9. **`progress: connecting` in a local-only run** of `document promote` and
+   `ticket close`.
+10. **`closure::checkpoint` timing flakes:** two unit tests whose
+    `ClosureRecord`s print alike failed once each under load and passed
+    alone.
+11. **`effective_identity`'s per-key cascade** (R-6, owner question 1).

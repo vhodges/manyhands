@@ -338,7 +338,8 @@ Also required:
 
 34. **The conflict verbs reach a lifecycle's child (2026-11-03).** "Conflict verbs reach the child":
     `conflict show` and `conflict resolve` accept a promotion's or closure's context child, by the
-    child's ID or the parent's, through C4's read and resolution unchanged, and the lifecycle's human
+    child's ID or the parent's, through C4's read and resolution with C4's contract unchanged (the
+    library's change maps a parent's ID to its child), and the lifecycle's human
     answer names both by the parent's ID. Then the same promote or close request finishes. The request
     that holds the parent holds the child, so its `request cancel` stops the resolution's publication.
     A retained conflict under a raised generation (`key select`, the domain's poll plan failure) stays

@@ -26,8 +26,9 @@ id: "01M69C6SHD04G8PT6D1Y36CDN7"
 - **Branch.** Work only in `.manyhands/worktrees/01M4CC0VMXTNXNH78C11DYXS8H`, on `manyhands/ticket/01M4CC0VMXTNXNH78C11DYXS8H`. If `origin/main` moves, `git merge origin/main`. Never rebase. Before each checkpoint, `git fetch origin` and `git merge-tree --write-tree HEAD origin/main`.
 - **Git identity.** This machine has no configured Git identity. Task 0 stops and asks the owner how commits are identified, rather than writing configuration.
 - **Library scope (decision 1).** Library changes are Part A's only, and only in:
-  - `src/repository/mutation/`;
+  - `src/repository/mutation/`, with `mutation/bind/conflict.rs` for decision 34's child mapping and holder (amended 2026-11-03 by C5, decision 34);
   - `src/repository/remote/{state,sync,poll}.rs`;
+  - `src/repository/remote/conflict_read.rs`, for decision 34's parent-to-child lookup only (amended 2026-11-03 by C5);
   - `src/repository/remote/reservation.rs`, for `release_promotion_child` only (decision 18);
   - `src/repository/local_sync/run.rs`, for the identity check only (decision 26);
   - `src/repository/transport/remote.rs`, for telling a poll's held lease from a protocol failure only (decision 24);
@@ -321,7 +322,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 - [ ] **Step 2:** Independent whole-branch spec and quality reviews. Fix or rule every finding. Rerun the gate and the affected targets, and say what ran after the fixes.
 - [ ] **Step 3:** Mark the Cycle and design `review-ready`, run `git merge-tree --write-tree HEAD origin/main`, add the review-ready comment and push. The ticket stays **open**.
 - [ ] **Step 4: Closure,** only after the owner approves the review, in the final push before merge. Close this ticket by the canonical file edit (decision 9). Copy `01M5MK57` and `01M669FJR2`'s ticket files byte for byte from their branches, add the closure fields and a comment each, on the same go-ahead. Merging needs its own go-ahead, which also covers deleting those two remote branches, after confirming that they hold only their ticket files (decision 14).
-- [ ] **Step 5:** Record the post-merge follow-up for the owner: a real `ticket close` and the AGENTS.md switch in a separate session, a follow-up ticket for `effective_identity`'s cascade, and native CI with its own approval.
+- [ ] **Step 5:** Record the post-merge follow-up for the owner: a real `ticket close` and the AGENTS.md switch in a separate session, native CI with its own approval, and the follow-up candidates, which are one list in the CLI contract RFC's [C5 evidence and known limits](../RFC/cli-contract.md#c5-evidence-and-known-limits) (`effective_identity`'s cascade among them). None is opened without the owner's go-ahead.
 
 ## Plan Self-Review
 

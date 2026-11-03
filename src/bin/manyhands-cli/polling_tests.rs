@@ -290,9 +290,13 @@ fn busy_hints_operation_list_and_then_operation_resume() {
     assert!(!said.contains("new request"), "{said}");
     assert!(said.contains(BUSY_NOTE));
     assert!(
-        said.contains("If it names only this request, wait and send this request again (add --request-id unless you run it at a terminal)."),
+        said.contains("If none is another request's, wait and send this request again (add --request-id unless you run it at a terminal)."),
         "{said}"
     );
+    // The holder may be a lease outside any operation, which the list
+    // doesn't show (Task 13b's walk).
+    assert!(said.contains("it may be no operation"), "{said}");
+    assert!(!said.contains("operation list names it"), "{said}");
 }
 
 #[test]
