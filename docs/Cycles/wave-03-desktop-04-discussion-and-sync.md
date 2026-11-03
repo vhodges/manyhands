@@ -150,23 +150,23 @@ D4 merges main whenever it moves (design, Lane mechanics).
 
 | # | Wave exit evidence / contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | Keyboard discussion journey | Desktop keyboard test (no remote); native §2 against SSH | Planned |
-| A2 | Keyboard explicit-sync journeys against real SSH | Native §3 | Planned |
-| A3 | Offline / local pending | Desktop tests (no remote; `publish_over_ssh`); native §4 | Planned |
-| A4 | Failed publication; saved once; retry without resubmission | Desktop tests: one file and one checkpoint after two Retry sharing; native §4 | Planned |
-| A5 | Repeated-submit guard | `Submissions` and composer tests; Share guard test | Planned |
-| A6 | Rebuild / thread ordering | Desktop test: out-of-order posts, Rebuild index, reopen; native §2 | Planned |
-| A7 | Unlock cancellation | Provider and dialog tests; constructed `unlock_required` routing; native §5 (prompt once) | Planned |
-| A8 | Continued UI responsiveness | Desktop tests typing while a post is held; native §6 | Planned |
-| A9 | Safe-point stop | Worker test (token cancelled after acceptance); stop control tests; native §6 | Planned |
-| A10 | Conflict as preserved state | Constructed-envelope tests for banner and entry; native §7 | Planned |
-| A11 | Comment drafts recover | Draft and adoption tests; native §2 | Planned |
-| A12 | Post never includes unsaved body edits | Desktop test | Planned |
-| A13 | Key and host recovery | Constructed-envelope routing tests; native §5 | Planned |
-| A14 | Publication resume after restart | Resume-offer tests; native §4 | Planned |
-| A15 | Privacy | Sentinel tests | Planned |
-| A16 | No implicit publication (contract 1) | Desktop test over navigation, Save, Done, close, quit | Planned |
-| A17 | Stale results lose (contract 8) | Desktop test: outcome after new typing or a tab switch | Planned |
+| A1 | Keyboard discussion journey | Desktop keyboard test (no remote); native §2 against SSH | Tests pass (`a_keyboard_only_user_comments_replies_and_posts`, Tab-order test); native §2 pending |
+| A2 | Keyboard explicit-sync journeys against real SSH | Native §3 | Native §3 pending (owner) |
+| A3 | Offline / local pending | Desktop tests (no remote; `publish_over_ssh`); native §4 | Tests pass (`saving_locally_without_a_remote_shows_saved_here`, P2); native §4 pending |
+| A4 | Failed publication; saved once; retry without resubmission | Desktop tests: one file and one checkpoint after two Retry sharing; native §4 | Tests pass (`p2_retry_sharing_writes_nothing_more`); native §4 pending |
+| A5 | Repeated-submit guard | `Submissions` and composer tests; Share guard test | Tests pass (P10, submissions and Share guards); native 2.10a pending |
+| A6 | Rebuild / thread ordering | Desktop test: out-of-order posts, Rebuild index, reopen; native §2 | Test passes (`order_and_parents_hold_after_rebuild_and_reopen`); native §2 pending |
+| A7 | Unlock cancellation | Provider and dialog tests; constructed `unlock_required` routing; native §5 (prompt once) | Tests pass (declined keys, Not now dialog, Unlock routing); native §5 pending |
+| A8 | Continued UI responsiveness | Desktop tests typing while a post is held; native §6 | Tests pass (`the_body_stays_editable_while_a_post_is_held`, composer typing during a held post); native §6 pending |
+| A9 | Safe-point stop | Worker test (token cancelled after acceptance); stop control tests; native §6 | Tests pass (token signalled after acceptance; Stop and stopped outcome); native §6 pending |
+| A10 | Conflict as preserved state | Constructed-envelope tests for banner and entry; native §7 | Tests pass for shares and posts (`a_post_stopped_on_a_conflict_raises_the_items_banner`); native §7 pending |
+| A11 | Comment drafts recover | Draft and adoption tests; native §2 | Tests pass (comment draft API, adoption, Drafts page); native §2 pending |
+| A12 | Post never includes unsaved body edits | Desktop test | Test passes (`posting_never_commits_the_dirty_body`); native 3.5a pending |
+| A13 | Key and host recovery | Constructed-envelope routing tests; native §5 | Tests pass (key, host and hostless-comment routes); native §5 pending |
+| A14 | Publication resume after restart | Resume-offer tests; native §4 | Tests pass for shares (Resume rows, E-10); comments have no Resume row (K-15); native 4.9a-4.9c pending |
+| A15 | Privacy | Sentinel tests | Test passes (`comment_text_never_reaches_an_entry_quit_dialog_or_message`); scan reads labels and values only (ledger) |
+| A16 | No implicit publication (contract 1) | Desktop test over navigation, Save, Done, close, quit | Test passes (`navigation_save_done_close_and_quit_submit_no_publication`) |
+| A17 | Stale results lose (contract 8) | Desktop test: outcome after new typing or a tab switch | Tests pass (`an_outcome_after_a_tab_switch_or_reopen_never_replaces_newer_text`, `an_outcome_applies_only_to_its_comments_composer`) |
 
 Native evidence: Linux (Wayland), release build, run by the product owner
 from the checklist written in Task 15. The agent records only what the
