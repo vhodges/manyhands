@@ -291,7 +291,7 @@ approval:
 
 ## Open Questions
 
-None beyond decisions 13–17. U-1 to U-4 (design) are settled in Task 0 by
+None beyond decisions 13–17. U-1 to U-5 (design) are settled in Task 0 by
 reading the source; an answer that differs stops for the owner.
 
 ## Review Record
