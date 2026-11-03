@@ -107,13 +107,22 @@ impl ItemPane {
 
     pub(super) fn read(&mut self, stamp: Stamp, cx: &mut Context<Self>) {
         let target = self.model.target().clone();
+        // A read begun once the item's share has finished speaks for its
+        // outcome (`share`).
+        let after_share = self.share_before_read(cx);
         self.read = Some(self.services.read_job(
             stamp,
             move |reader| read_tab(reader, target),
             cx,
-            |this: &mut Self, stamp, reads, cx| {
+            move |this: &mut Self, stamp, reads, cx| {
                 let landed = stamp.clone();
                 if this.model.apply_reads(stamp, reads) {
+                    let observation = this
+                        .model
+                        .item()
+                        .rows()
+                        .map(|item| item.observation.clone());
+                    this.read_after_share(after_share, observation);
                     // An attached draft is classified against the new read;
                     // its text and base stay as they are.
                     this.draft.reads_landed();

@@ -318,9 +318,10 @@ impl DraftsPage {
             .is_some_and(|session| session.saving().is_some())
     }
 
-    /// Show: the host shows and focuses the tab the draft is restored in.
+    /// Show: the host shows and focuses the tab the draft is restored in,
+    /// or, a comment's, the tab whose composer holds it.
     fn show_tab_of(&mut self, id: DraftId, cx: &mut Context<Self>) {
-        if let Some(tab) = self.services.drafts().read(cx).tab_of(id) {
+        if let Some(tab) = self.services.drafts().read(cx).tab_holding(id) {
             cx.emit(DraftsEvent::Show(tab));
         }
     }

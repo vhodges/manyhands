@@ -33,6 +33,11 @@ pub(crate) struct Submission {
     /// The comment's draft, retired by Lane D's drain hook.
     pub draft: Option<DraftId>,
     pub state: SubmissionState,
+    /// The item the comment is on: a share of it publishes the comment.
+    item: ItemId,
+    /// A share of the item published since this post's last answer: its
+    /// "not shared yet" chip is cleared for the session (decision 14).
+    shared: bool,
     /// Whether the attempt posting now re-sends a comment ID already
     /// sent: an adopted draft's first post after a relaunch, a submit of
     /// a comment this session already posted, a retry or a Give up (P4,
@@ -46,6 +51,12 @@ pub(crate) struct Submission {
 }
 
 impl Submission {
+    /// Whether a share of the item published this saved comment since its
+    /// last answer: its chip is cleared (decision 14).
+    pub(crate) fn shared_since(&self) -> bool {
+        self.shared
+    }
+
     /// Marks the post posting again under the same request, a re-send,
     /// keeping the last finished answer. Marking it twice, as a retry of
     /// this registry and then its `Queued` do, is marking it once.
@@ -113,6 +124,10 @@ impl Submissions {
         resend: bool,
     ) -> Option<DesktopRequestId> {
         let key = key_of(&intent)?;
+        let Intent::CommentAdd { id: item, .. } = &intent else {
+            return None;
+        };
+        let item = item.clone();
         if self.posting(&key) {
             return None;
         }
@@ -133,6 +148,8 @@ impl Submissions {
                 request,
                 draft,
                 state: SubmissionState::Posting,
+                item,
+                shared: false,
                 resend,
                 previous,
             },
@@ -233,10 +250,27 @@ impl Submissions {
         let saved = result.outcome.is_saved();
         submission.state = SubmissionState::Finished { envelope, result };
         submission.previous = None;
+        submission.shared = false;
         Some(Posted {
             draft: submission.draft,
             saved,
         })
+    }
+
+    /// A share of the item `item` in `repository` answered `Published` or
+    /// `Current` (design, Posting): each saved post of a comment on it
+    /// that has answered is shared now, and its chip clears for the
+    /// session. A post being sent is left to its own answer.
+    pub(crate) fn item_shared(&mut self, repository: &Path, item: &ItemId) {
+        for ((root, _), submission) in &mut self.posts {
+            if root == repository
+                && submission.item == *item
+                && matches!(&submission.state, SubmissionState::Finished { result, .. }
+                    if result.outcome.is_saved())
+            {
+                submission.shared = true;
+            }
+        }
     }
 
     /// The comment ID of the post the worker request `id` sends, and the

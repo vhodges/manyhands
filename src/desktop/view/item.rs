@@ -77,7 +77,7 @@ use crate::desktop::{
     },
     services::{
         Services,
-        drafts::{DraftSaved, SessionDiscarded},
+        drafts::{CommentDiscarded, DraftSaved, SessionDiscarded},
         images::TabImages,
         requests::DesktopRequestId,
     },
@@ -116,7 +116,6 @@ pub(crate) type RegionEnd = Rc<dyn Fn(&ContentScroll, &mut Window, &mut App) -> 
 /// A place in the workspace a share's or a post's control opens (design,
 /// Lane B, Outcomes and routes): the item tab asks, and the workspace,
 /// which subscribes to every tab, opens it.
-#[allow(dead_code)] // Constructed from Task 8.
 pub(crate) enum ItemRoute {
     /// Share… with no publication remote, or Set up sharing: Settings ›
     /// Remotes for the repository.
@@ -201,7 +200,6 @@ pub(crate) struct ItemPane {
     /// header's Comments {n}.
     discussion: discussion::Discussion,
     /// The header's Share and what it last sent (`share`).
-    #[allow(dead_code)] // Read from Task 8.
     share: share::ShareState,
     /// The repository's publication remote, which the workspace sets from
     /// its navigation as the tab opens and as the list changes.
@@ -235,6 +233,8 @@ pub(crate) struct ItemPane {
     _saved: Subscription,
     /// A discard elsewhere ended this tab's session (R-71).
     _discarded: Subscription,
+    /// The Drafts page discarded a comment draft a composer holds.
+    _comment_discarded: Subscription,
 }
 
 impl ItemPane {
@@ -265,9 +265,21 @@ impl ItemPane {
             services.drafts(),
             |pane, _, event: &SessionDiscarded, cx| pane.session_discarded(event, cx),
         );
+        let comment_discarded = cx.subscribe(
+            services.drafts(),
+            |pane, _, event: &CommentDiscarded, cx| pane.comment_discarded(event, cx),
+        );
         let images = TabImages::new(&services);
-        // The tab's images leave the windows' atlases with it.
-        cx.on_release(|pane, cx| pane.images.close(cx)).detach();
+        // The tab's images leave the windows' atlases with it, and its
+        // composers let go of the comment drafts they held.
+        cx.on_release(|pane, cx| {
+            pane.images.close(cx);
+            let tab = pane.tab_key();
+            pane.services
+                .drafts()
+                .update(cx, |registry, _| registry.let_go_comments(&tab));
+        })
+        .detach();
         let edit = edit::TabEdit::new(scope.clone(), cx);
         let posting = posting::Posting::new(&services, cx);
         let relations = relations_edit::RelationsEdit::new(scope.clone(), cx);
@@ -305,6 +317,7 @@ impl ItemPane {
             _drafts: drafts,
             _saved: saved,
             _discarded: discarded,
+            _comment_discarded: comment_discarded,
         };
         pane.watch_editing(cx);
         pane.watch_edit_tab(cx);

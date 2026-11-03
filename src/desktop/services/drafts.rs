@@ -108,6 +108,12 @@ pub(crate) enum SessionDiscarded {
 
 impl gpui_kit::EventEmitter<SessionDiscarded> for DraftRegistry {}
 
+/// The Drafts page discards the comment draft of this ID, which an item
+/// tab's composer holds: that composer starts again. It holds no text.
+pub(crate) struct CommentDiscarded(pub DraftId);
+
+impl gpui_kit::EventEmitter<CommentDiscarded> for DraftRegistry {}
+
 /// A draft was discarded, the store having deleted it: from a tab, its
 /// banners or the Drafts page, with or without a tab (design, Release on
 /// leave, condition 2). Its target names the item; it holds no text.
@@ -158,6 +164,9 @@ pub(crate) struct DraftRegistry {
     /// The session each item tab holds, by the ID it was restored under;
     /// `attached` follows it to the ID it goes on under.
     attached: HashMap<TabKey, DraftId>,
+    /// The comment drafts each item tab's composers hold, beside the
+    /// tab's own draft (`comments`): where the Drafts page's Show goes.
+    comment_tabs: HashMap<DraftId, TabKey>,
     /// Sessions whose tab is gone and whose release waits for their text
     /// to be stored, by the ID they were released under.
     releasing: BTreeSet<DraftId>,
@@ -200,6 +209,7 @@ impl DraftRegistry {
             saves: BTreeMap::new(),
             moved: BTreeMap::new(),
             attached: HashMap::new(),
+            comment_tabs: HashMap::new(),
             releasing: BTreeSet::new(),
             contexts: HashMap::new(),
             path_unread: BTreeSet::new(),

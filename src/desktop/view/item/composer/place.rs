@@ -32,6 +32,7 @@
 mod actions;
 mod check;
 mod drafts;
+mod held;
 mod overtaken;
 mod post;
 mod retarget;
@@ -114,6 +115,9 @@ pub(in crate::desktop::view::item) struct Composers {
     /// A composer that took the place of a focused one: focus goes into
     /// its editor as it is drawn.
     focus: Option<Entity<Composer>>,
+    /// Drafts the Drafts page discarded: their composers start again
+    /// (`held`).
+    discarded: Vec<DraftId>,
 }
 
 /// One composer and what its text is kept as.
@@ -314,8 +318,10 @@ impl ItemPane {
                 composer.set_recovery(state, cx);
             });
         }
+        self.reset_discarded(window, cx);
         self.adopt_comment_drafts(window, cx);
         self.apply_posts(window, cx);
+        self.hold_comment_drafts(cx);
         let composers = &mut self.composers;
         for slot in composers
             .new

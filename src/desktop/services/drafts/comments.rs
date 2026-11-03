@@ -28,7 +28,14 @@
 //! the new ID, awaited, then `retire_comment` of the old, awaited, then
 //! Submit. A crash between the two leaves both drafts; never neither.
 //!
+//! An item tab says which comment drafts its composers hold
+//! (`hold_comments`), so the Drafts page's Show reaches it, beside any
+//! draft of the item's own the tab holds (`tab_holding`); and the page's
+//! Discard of one tells that composer (`CommentDiscarded`).
+//!
 //! `AdoptedComment` holds comment text and derives no `Debug`.
+
+use std::collections::BTreeSet;
 
 use gpui_kit::{Context, Task};
 use manyhands::{
@@ -40,11 +47,12 @@ use manyhands::{
     repository::ItemDtoKind,
 };
 
-use super::{DraftRegistry, Live, item_kind, off_thread, retire::take};
+use super::{CommentDiscarded, DraftRegistry, Live, item_kind, off_thread, retire::take};
 use crate::desktop::{
     model::{
         drafts::{DraftSession, RecoveryState},
         stamp::RepoKey,
+        tabs::TabKey,
     },
     services::ReadKind,
 };
@@ -364,6 +372,68 @@ impl DraftRegistry {
             });
             result
         })
+    }
+
+    /// The comment drafts `held`, live here, are the ones the composers of
+    /// the item tab `tab` hold now: Show goes to that tab. Nothing changes,
+    /// nor is anyone told, when it is what the registry already has.
+    pub(crate) fn hold_comments(
+        &mut self,
+        tab: &TabKey,
+        held: BTreeSet<DraftId>,
+        cx: &mut Context<Self>,
+    ) {
+        let now: BTreeSet<DraftId> = self
+            .comment_tabs
+            .iter()
+            .filter(|(_, holder)| *holder == tab)
+            .map(|(id, _)| *id)
+            .collect();
+        if now == held {
+            return;
+        }
+        self.comment_tabs.retain(|_, holder| holder != tab);
+        for id in held {
+            self.comment_tabs.insert(id, tab.clone());
+        }
+        cx.notify();
+    }
+
+    /// The item tab `tab` closed: its composers hold no draft any more.
+    /// Their sessions live on, for the item's next tab to adopt.
+    pub(crate) fn let_go_comments(&mut self, tab: &TabKey) {
+        self.comment_tabs.retain(|_, holder| holder != tab);
+    }
+
+    /// The tab holding the draft `id` live: the one its session is
+    /// attached to, or the one whose composer holds it, a comment's. Where
+    /// the Drafts page's Show goes.
+    pub(crate) fn tab_holding(&self, id: DraftId) -> Option<TabKey> {
+        if let Some(tab) = self.tab_of(id) {
+            return Some(tab);
+        }
+        let current = self.current_id(id)?;
+        self.comment_tabs
+            .iter()
+            .find(|(held, _)| self.current_id(**held) == Some(current))
+            .map(|(_, tab)| tab.clone())
+    }
+
+    /// The Drafts page's Discard of the draft `id` held here: as `discard`
+    /// does, and a comment's composer holding it hears it
+    /// (`CommentDiscarded`), so it starts again.
+    pub(crate) fn discard_held(
+        &mut self,
+        id: DraftId,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), DraftErrorKind>> {
+        let comment = self
+            .session(id)
+            .is_some_and(|session| session.target().comment.is_some());
+        if comment && let Some(current) = self.current_id(id) {
+            cx.emit(CommentDiscarded(current));
+        }
+        self.discard(id, cx)
     }
 
     /// Discards the comment draft `id`, whatever its text: through its

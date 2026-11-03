@@ -7,10 +7,14 @@
 //! `composer::place::post`'s.
 //!
 //! The tab hears `Submissions` change, and waits here on the requests its
-//! checks queue (an index refresh before a listing, P4, P5). Nothing here
-//! derives `Debug`: a pending row holds the comment's text.
+//! checks queue (an index refresh before a listing, P4, P5). A post of the
+//! item whose checkpoint committed reloads the tab (fact 28); one that
+//! left discovery `pending` queues a background index refresh first, the
+//! header saying "Updating the list…" until it ends, and its end reloads
+//! the tab (design, Posting). Nothing here derives `Debug`: a pending row
+//! holds the comment's text.
 
-use std::path::PathBuf;
+use std::{collections::HashSet, path::PathBuf};
 
 use futures::channel::oneshot;
 use gpui_kit::{
@@ -19,14 +23,21 @@ use gpui_kit::{
     component::{Sizable, button::Button, h_flex},
     div, px,
 };
-use manyhands::{canonical::ItemId, results::Outcome};
+use manyhands::{
+    canonical::ItemId,
+    results::{CheckpointEffect, DiscoveryEffect, Outcome},
+};
 
-use super::{ItemPane, ItemRoute, text, tokens::item_colors};
+use super::{ItemPane, ItemRoute, pill::UPDATING_LIST, text, tokens::item_colors};
 use crate::desktop::{
-    model::publication::{CommentOffer, CommentOutcome},
+    model::{
+        navigation::OpenTarget,
+        operations::Operations,
+        publication::{CommentOffer, CommentOutcome},
+    },
     services::{
         Services,
-        requests::{DesktopRequestId, RequestState},
+        requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
         submissions::SubmissionState,
         worker::RecordState,
     },
@@ -42,16 +53,49 @@ pub(crate) const SAVED_HERE: &str = "Saved on this computer";
 pub(super) struct Posting {
     /// Each request a check waits on, and who hears whether it succeeded.
     waiters: Vec<(DesktopRequestId, oneshot::Sender<bool>)>,
+    /// The posts' attempts whose answers this tab has met, by request and
+    /// attempt: each that left discovery pending refreshes the index once.
+    met: HashSet<(DesktopRequestId, u32)>,
+    /// The index refresh a post's pending discovery queued, while it runs.
+    updating: Option<DesktopRequestId>,
     _submissions: Subscription,
 }
 
 impl Posting {
     pub(super) fn new(services: &Services, cx: &mut Context<ItemPane>) -> Self {
+        // Answers that landed before the tab opened are not this tab's to
+        // follow: its own first read comes after them.
+        let met = services
+            .operations()
+            .read(cx)
+            .requests()
+            .iter()
+            .filter(|request| matches!(request.intent, Intent::CommentAdd { .. }))
+            .map(|request| (request.id, request.attempt))
+            .collect();
         Self {
             waiters: Vec::new(),
+            met,
+            updating: None,
             _submissions: cx.observe(services.submissions(), |_, _, cx| cx.notify()),
         }
     }
+}
+
+/// Whether `request` posts a comment on `target`'s item and its answer
+/// left the comment committed with discovery pending.
+fn left_discovery_pending(request: &DesktopRequest, target: &OpenTarget) -> bool {
+    let OpenTarget::Item { repo, id, .. } = target else {
+        return false;
+    };
+    let Intent::CommentAdd { root, id: item, .. } = &request.intent else {
+        return false;
+    };
+    root.to_str() == Some(repo.as_str())
+        && item == id
+        && matches!(&request.state, RequestState::Finished(_, _, effects, ..)
+            if effects.checkpoint == CheckpointEffect::Committed
+                && effects.discovery == DiscoveryEffect::Pending)
 }
 
 impl ItemPane {
@@ -67,8 +111,78 @@ impl ItemPane {
         receiver
     }
 
-    /// The requests a check waits on that have ended are answered.
+    /// The requests a check waits on that have ended are answered; a post
+    /// of the item that left discovery pending refreshes the index, and
+    /// that refresh's end is followed (`index_updated`).
     pub(super) fn posts_progressed(&mut self, cx: &mut Context<Self>) {
+        self.waiters_progressed(cx);
+        let operations = self.services.operations().read(cx);
+        let pending = self.newly_pending(operations);
+        if pending && self.posting.updating.is_none() {
+            let root = self.post_root();
+            let id = self.services.worker().submit(
+                Intent::IndexRefresh { root },
+                Lane::Background,
+                None,
+                None,
+            );
+            self.posting.updating = Some(id);
+            cx.notify();
+        }
+        self.index_updated(cx);
+    }
+
+    /// Whether a post of the item answered since the tab last looked, its
+    /// checkpoint committed and its discovery pending. Each attempt's
+    /// answer is met once.
+    fn newly_pending(&mut self, operations: &Operations) -> bool {
+        let target = self.model.target();
+        let mut pending = false;
+        for request in operations.requests() {
+            if !matches!(request.state, RequestState::Finished(..))
+                || !matches!(request.intent, Intent::CommentAdd { .. })
+                || !self.posting.met.insert((request.id, request.attempt))
+            {
+                continue;
+            }
+            pending |= left_discovery_pending(request, target);
+        }
+        pending
+    }
+
+    /// The post's index refresh has ended: the header stops saying so. A
+    /// finished one reloads every tab of the repository (`changes_items`);
+    /// one removed or not sent reloads this tab here.
+    fn index_updated(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.posting.updating else {
+            return;
+        };
+        let state = self
+            .services
+            .operations()
+            .read(cx)
+            .request(id)
+            .map(|request| request.state.clone());
+        match state {
+            None | Some(RequestState::Queued | RequestState::Running { .. }) => {}
+            Some(RequestState::Finished(..)) => {
+                self.posting.updating = None;
+                cx.notify();
+            }
+            Some(_) => {
+                self.posting.updating = None;
+                self.reload(cx);
+            }
+        }
+    }
+
+    /// "Updating the list…" while a post's index refresh runs.
+    pub(super) fn updating_list(&self) -> Option<String> {
+        self.posting.updating.map(|_| UPDATING_LIST.to_owned())
+    }
+
+    /// The requests a check waits on that have ended are answered.
+    fn waiters_progressed(&mut self, cx: &mut Context<Self>) {
         let operations = self.services.operations().read(cx);
         let mut waiting = Vec::new();
         for (id, sender) in self.posting.waiters.drain(..) {
@@ -120,6 +234,11 @@ impl ItemPane {
         let SubmissionState::Finished { result, .. } = &post.state else {
             return None;
         };
+        // A share of the item published it since: the chip is cleared for
+        // the session (decision 14).
+        if post.shared_since() && result.outcome != CommentOutcome::SavedHere {
+            return None;
+        }
         let colors = item_colors(cx);
         match &result.outcome {
             CommentOutcome::SavedHere => Some(

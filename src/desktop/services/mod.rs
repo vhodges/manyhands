@@ -25,7 +25,7 @@ use gpui_kit::{App, AppContext, Entity};
 use manyhands::{
     drafts::{DraftError, DraftStore},
     repository::{ContextPrepareIntent, MutationDataDto, RepositoryService, keys::KeyStore},
-    results::{Envelope, Outcome, ResultCode},
+    results::{Envelope, Outcome, PublicationEffect, ResultCode},
 };
 
 use crate::desktop::model::operations::Operations;
@@ -295,6 +295,19 @@ impl Services {
                                 _ => PostEvent::Ended(request.id),
                             });
                         }
+                        // A share of an item that published it: its saved
+                        // comments' chips clear (decision 14).
+                        if let WorkerEvent::Finished(id, envelope) = &event
+                            && let Some(request) = operations.request(*id)
+                            && let requests::Intent::ItemSync { root, id: item, .. } =
+                                &request.intent
+                            && matches!(
+                                envelope.effects.publication,
+                                PublicationEffect::Published | PublicationEffect::Current
+                            )
+                        {
+                            posted.push(PostEvent::ItemShared(root.clone(), item.clone()));
+                        }
                         // A comment queued again under its own request.
                         if let WorkerEvent::Queued(request) = &event
                             && request.attempt > 1
@@ -354,6 +367,9 @@ impl Services {
                                     }
                                     PostEvent::Ended(id) => {
                                         submissions.ended(id);
+                                    }
+                                    PostEvent::ItemShared(root, item) => {
+                                        submissions.item_shared(&root, &item);
                                     }
                                 }
                             }
@@ -476,6 +492,9 @@ enum PostEvent {
     Finished(requests::DesktopRequestId, worker::FinishedEnvelope),
     /// Removed from the queue, or not sent: that attempt never ran.
     Ended(requests::DesktopRequestId),
+    /// A share of the item, by its repository and ID, published it or
+    /// found it current.
+    ItemShared(PathBuf, manyhands::canonical::ItemId),
 }
 
 /// What a finished request means to the draft registry.

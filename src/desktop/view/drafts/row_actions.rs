@@ -201,7 +201,7 @@ impl DraftsPage {
         let drafts = self.services.drafts().clone();
         let held_here = drafts.read(cx).session(id).is_some();
         let discard = drafts.update(cx, |registry, cx| match held_here {
-            true => registry.discard(id, cx),
+            true => registry.discard_held(id, cx),
             false => registry.discard_stored(id, readable, cx),
         });
         self.notices.remove(&id);

@@ -144,7 +144,7 @@ impl DraftsPage {
         }
         // Show only where there is a tab to show: a draft held here whose
         // session has no tab (one begun by the editor) offers none.
-        let tab = self.services.drafts().read(cx).tab_of(id).is_some();
+        let tab = self.services.drafts().read(cx).tab_holding(id).is_some();
         // Nothing would be lost: Discard comes first.
         let mut order: Vec<usize> = (0..ACTIONS.len()).collect();
         if matches!(row.target(), Some(TargetState::AlreadySaved)) {
