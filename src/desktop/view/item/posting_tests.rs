@@ -251,3 +251,17 @@ fn a_draft_adopted_into_a_busy_thread_is_shown_once_it_is_free(cx: &mut TestAppC
         Some(target(KEPT_NEW, None))
     );
 }
+
+// Task 13: the required outcomes of posting recovery (design, P1-P18) and
+// the posting tests the plan lists beside them.
+#[path = "posting_tests/support.rs"]
+mod support;
+
+#[path = "posting_tests/recovery.rs"]
+mod recovery;
+
+#[path = "posting_tests/relaunch.rs"]
+mod relaunch;
+
+#[path = "posting_tests/extras.rs"]
+mod extras;
