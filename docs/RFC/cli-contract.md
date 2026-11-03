@@ -117,6 +117,16 @@ the conflict and operation verbs take `--operation-id`. Only `comment add`
 and `conflict resolve` take `--input`; the other C4 mutations refuse it as
 a usage error. No C4 verb accepts `--context`.
 
+Amended 2026-11-03 by C5 (decision 3; R-2, R-8 and R-15; the C5 design's
+Local-Sync Verbs): the four `context` rows below are new, and select and
+take input as [C5 completion options and input schemas](#c5-completion-options-and-input-schemas)
+says. Every C5 verb requires `--repo`. `document promote`, `ticket close`
+and the two local reads take `--id` or `--operation-id`; only
+`poll configure`, `context sync-local` and `context resolve-local` take
+`--input`. No C5 verb accepts `--context`. The library's `context prepare`
+and `context release` are the desktop's and stay out of the CLI catalog
+(owner question 5).
+
 | Commands | Inputs and behavior |
 | --- | --- |
 | `repo list` | Registered repositories and their latest discovery/recovery state; no network. |
@@ -163,6 +173,10 @@ a usage error. No C4 verb accepts `--context`.
 | `operation abandon` | F2's confirmed abandonment of a pending local operation; closes its journal record without changing files. No input. A remote operation's ID is `invalid_input`, and a pending remote conflict cannot be abandoned (`01M4H33R34Z7C7EEKTY1ZCT950`). A local-context sync goes to the gate's guarded abandonment. |
 | `request show`, `request cancel` | Required `--request-id`, refuse `--repo`; inspect the request's state/result or request safe-point cancellation. Accepted local C2 requests report `requested: false`; this does not interrupt their process. |
 | `conflict show`, `conflict resolve` | Select a remote synchronization's operation ID, a comment's operation, or a `document promote` or `ticket close` operation, which names its context child (amended 2026-11-03 by C5, decision 34); a local-context sync's is `invalid_input`. Show is a read: no request ID, `--prepare` refused. It reports the state, next step, observation and each path's token, kind, structure and, for an item's path the library reads as UTF-8 text, base/local/incoming sides, as `content_available` says. Resolve takes input `observation` and `resolutions`, one `{token, source}` per conflicted path, then publishes under the same request. See [Conflict and cancellation behavior](#conflict-and-cancellation-behavior). |
+| `context observe-local` | Required `--id`. Read the observation a local synchronization of the item's existing context takes: the context and committed **local** primary, with no fetch. It creates no context: an item with none is refused, and human output names `ticket save` or `document save`. No mutation options. Amended 2026-11-03 by C5 (decision 3). |
+| `context sync-local` | Required `--id`, `--input` with `observation` from `context observe-local`. Unconfirmed. Brings committed local primary into the item's context through the closure-recovery gate's operation: no network, no primary change, no implicit context, frozen parents. A conflict stops `recovery_required` and names its operation, which `context show-local` and `context resolve-local` take. Amended 2026-11-03 by C5 (decision 3). |
+| `context show-local` | Required `--operation-id`, optional `--token`. Read a local-context synchronization: state, next step, observation and each conflicted path's token. With `--token` and `--json` only, return that path's `base`, `local`, `incoming` and `historical` (R-15); human mode refuses `--token` as a usage error. A remote synchronization's ID is `invalid_input`, naming `conflict show`. No mutation options. Amended 2026-11-03 by C5 (decision 3). |
+| `context resolve-local` | Required `--operation-id`, `--input` with `observation` and `resolutions`, one `{token, source}` per conflicted path, from `context show-local`. Unconfirmed. Writes complete sources against issued tokens and finishes the synchronization under the same request; a partial accepted resolution is finished by resending its original request with the same sources. An external-only conflict is refused before anything is written. Amended 2026-11-03 by C5 (decision 3, decision 30). |
 | `id new` | Generate and return a canonical ULID for caller-owned requests/items/comments; no repository mutation. |
 
 ### Authoring reads
@@ -409,6 +423,42 @@ valid only while that conflict is unchanged. A duplicate token or an empty
 set is `invalid_input`. The `comment add` example runs through the binary;
 the `conflict resolve` example is checked against its schema and read as
 far as the library's syntax check, since a live token cannot be stored.
+
+## C5 completion options and input schemas
+
+Amended 2026-11-03 by C5 (decision 3; R-2 and R-15; the C5 design's verb
+sections; the execution ledger's Tasks 8 and 9 findings). Selectors are
+flags and every other mutation value arrives in `--input`, as for C2–C4:
+
+| Verbs | Required | Optional | Refused |
+| --- | --- | --- | --- |
+| `document promote`, `ticket close` | `--repo`, `--id` | `--request-id`, `--prepare`, `--confirm` | `--input` |
+| `poll once`, `poll pause`, `poll resume` | `--repo` | `--request-id`, `--prepare`, `--confirm` | `--input` |
+| `poll configure` | `--repo`, `--input` | `--request-id`, `--prepare`, `--confirm` | — |
+| `context observe-local` | `--repo`, `--id` | — | `--input`, `--request-id`, `--prepare`, `--confirm` |
+| `context show-local` | `--repo`, `--operation-id` | `--token` (with `--json` only) | `--input`, `--request-id`, `--prepare`, `--confirm` |
+| `context sync-local` | `--repo`, `--id`, `--input` | `--request-id`, `--prepare`, `--confirm` | — |
+| `context resolve-local` | `--repo`, `--operation-id`, `--input` | `--request-id`, `--prepare`, `--confirm` | — |
+
+Only `document promote` and `ticket close` are confirmed. The seven other C5
+mutations declare `--prepare` and `--confirm`, as every C2–C4 mutation does,
+and answer `not_confirmable`, exit 2, to either. The C5 design's option list
+for `poll once` (`--repo`, `--request-id`, `--json`) departs from this: the
+shared mode rules read `--prepare` for every mutation, so the catalog lists
+both options, and `tests/cli/inventory.rs` reads the catalog as it is.
+Execution needs `--request-id` in JSON/noninteractive mode, and prepare takes
+none. The two local reads take no request ID and refuse mutation options.
+
+| Verb | Required input | Optional input and semantics | Schema / example |
+| --- | --- | --- | --- |
+| `poll configure` | `interval_seconds`, an integer from 60 to 3600 | None. Out of range is `invalid_input`, and nothing is written. | [schema](../../schemas/input/v1/poll_configure.schema.json) / [example](../../tests/fixtures/cli_input_v1/poll_configure.json) |
+| `context sync-local` | `observation`, the string `context observe-local` returned | None. | [schema](../../schemas/input/v1/context_sync_local.schema.json) / [example](../../tests/fixtures/cli_input_v1/context_sync_local.json) |
+| `context resolve-local` | `observation`, the string `context show-local` returned; `resolutions`, a non-empty array of objects, each with exactly the strings `token` and `source`, one for every conflicted path | None. | [schema](../../schemas/input/v1/context_resolve_local.schema.json) / [example](../../tests/fixtures/cli_input_v1/context_resolve_local.json) |
+
+The tokens are the library's, tamper-checked and never stored; no diagnostic
+holds a source or a token. Every other verb takes no input: the inventory
+test lists them, and holds each input-taking verb to exactly one closed
+schema and one example that it accepts.
 
 ## Observations, request identity and retries
 
@@ -1022,6 +1072,269 @@ configuration for create/enable, or restore its committed content for remote
 select, then retry the same request. C4 owns later operation abandonment.
 Amended 2026-10-30 by C4 (R-1 and R-30): `operation abandon` is available,
 as its taxonomy row says.
+
+## Recovery tables
+
+Amended 2026-11-03 by C5 (decision 4; R-10; the C5 design's Recovery
+Tables). These tables say, for each family of verbs, what to run next after
+a recoverable answer. Help and its schema do not change (decision 4).
+
+A **recoverable** code is one whose answer has a way on: its class is
+blocked (exit 3), transient (5), incomplete (4) or cancelled (130), or the
+answer is partial, exit 4, after a durable effect. Input failures (exit 2)
+and unexpected failures (exit 1) are not rows; each verb's own tests pin
+their answers and any `next:` line.
+
+Each row names:
+
+- **Verb**: one verb, or verbs that share one binding, whose golden stands
+  for each of them (decision 27; for the lifecycle verbs, `ticket close`'s,
+  while the promotion's run asserts the same answer).
+- **Code**: the result code.
+- **Next**: a recovery action the JSON envelope offers, such as
+  `request.retry`; or a `manyhands-cli <resource> <verb>` line that human
+  output prints, with its placeholders; or `none` when the answer offers
+  nothing, and its message, note or data say the way on (a selection to
+  make, a repair outside, a new request). When an answer offers several, the
+  golden holds them all, in order; the row names the one it is about.
+- **Exit**: the process exit.
+- **Golden**: under `tests/fixtures/`: a JSON envelope (`cli_v1/` from the
+  binary, or `mutation_v1/` from the mutation boundary, whose envelope the
+  binary prints unchanged), or a human transcript (`cli_v1/*.txt`).
+
+`tests/cli/recovery_tables.rs` parses these tables. Each golden must exist,
+be an answer of the row's verb, and hold the row's code, next action and
+exit. For C5's verbs every recoverable code of the C5 design's outcome
+tables has a row, or a reason below. An earlier verb's row holds a code of
+its Cycle's audit union, and every recoverable code of that union has a row
+for one of the Cycle's verbs, or a reason below.
+
+### Authoring
+
+| Verb | Code | Next | Exit | Golden |
+| --- | --- | --- | --- | --- |
+| `document save`, `ticket save` | `identity_required` | `repo.identity_set` | 3 | `mutation_v1/ticket_save_identity_required.json` |
+| `document save`, `ticket save` | `discovery_pending` | `operation.resume` | 4 | `mutation_v1/ticket_save_discovery_pending.json` |
+| `folder create` | `discovery_pending` | `index.refresh` | 4 | `mutation_v1/folder_create_discovery_pending.json` |
+| `document repair`, `ticket repair` | `discovery_pending` | `operation.resume` | 4 | `mutation_v1/document_repair_discovery_pending.json` |
+| `document repair`, `ticket repair` | `external_change` | `request.prepare` | 3 | `mutation_v1/document_repair_external_change.json` |
+| `document move` | `external_change` | `none` | 3 | `mutation_v1/document_move_external_change.json` |
+| `document save`, `ticket save` | `external_change` | `repo.inspect` | 3 | `mutation_v1/ticket_save_reentered_external_change.json` |
+| `document save`, `ticket save` | `busy` | `request.retry` | 5 | `mutation_v1/ticket_save_busy.json` |
+| `document save`, `ticket save` | `cancelled` | `none` | 130 | `mutation_v1/ticket_save_cancelled.json` |
+| `document save`, `ticket save` | `internal_error` | `request.retry` | 4 | `mutation_v1/ticket_save_partial.json` |
+| `document save`, `ticket save` | `index_unavailable` | `index.rebuild` | 3 | `mutation_v1/ticket_save_index_unavailable.json` |
+| `index refresh` | `index_unavailable` | `index.rebuild` | 3 | `mutation_v1/index_refresh_index_unavailable.json` |
+| `index refresh` | `repository_not_registered` | `index.rebuild` | 3 | `mutation_v1/index_refresh_repository_not_registered.json` |
+| `document save` | `repository_not_registered` | `none` | 3 | `cli_v1/document_save_repository_not_registered.json` |
+| `index rebuild` | `repository_inaccessible` | `none` | 3 | `mutation_v1/index_rebuild_repository_inaccessible.json` |
+| `ticket save` | `ticket_closed` | `none` | 3 | `cli_v1/ticket_save_ticket_closed.json` |
+| `document save`, `ticket save` | `worktree_not_clean` | `none` | 3 | `mutation_v1/ticket_save_worktree_not_clean.json` |
+| `ticket create` | `initials_required` | `repo.identity_set` | 3 | `mutation_v1/ticket_create_initials_required.json` |
+| `ticket create` | `invalid_slug_configuration` | `repo.inspect` | 3 | `mutation_v1/ticket_create_invalid_slug_configuration.json` |
+| `document repair`, `ticket repair` | `identity_ambiguous` | `none` | 3 | `cli_v1/document_repair_identity_ambiguous.json` |
+
+### Repository and credentials
+
+| Verb | Code | Next | Exit | Golden |
+| --- | --- | --- | --- | --- |
+| `repo enable` | `identity_required` | `repo.identity_set` | 3 | `cli_v1/repo_enable_identity_required.json` |
+| `repo create` | `identity_required` | `none` | 3 | `cli_v1/repo_create_identity_required.json` |
+| `remote select` | `identity_required` | `repo.identity_set` | 3 | `cli_v1/remote_select_identity_required_text.txt` |
+| `repo create`, `repo enable` | `confirmation_required` | `request.prepare` | 3 | `mutation_v1/repo_enable_confirmation_required.json` |
+| `repo create`, `repo enable` | `confirmation_not_found` | `request.prepare` | 3 | `mutation_v1/repo_enable_confirmation_not_found.json` |
+| `repo create`, `repo enable` | `confirmation_expired` | `request.prepare` | 3 | `mutation_v1/repo_enable_confirmation_expired.json` |
+| `repo create`, `repo enable` | `confirmation_used` | `none` | 3 | `mutation_v1/repo_enable_confirmation_used.json` |
+| `repo create`, `repo enable` | `external_change` | `request.prepare` | 3 | `mutation_v1/repo_enable_external_change.json` |
+| `repo identity-set` | `external_change` | `request.prepare` | 3 | `mutation_v1/repo_identity_set_external_change.json` |
+| `host approve`, `host replace` | `external_change` | `request.prepare` | 3 | `mutation_v1/host_approve_external_change.json` |
+| `repo create`, `repo enable` | `invalid_configuration` | `repo.inspect` | 3 | `mutation_v1/repo_enable_invalid_configuration.json` |
+| `repo create`, `repo enable` | `registration_pending` | `request.retry` | 4 | `mutation_v1/repo_enable_registration_pending.json` |
+| `repo create`, `repo enable` | `internal_error` | `request.retry` | 4 | `mutation_v1/repo_create_partial.json` |
+| `repo create`, `repo enable` | `worktree_conflicted` | `none` | 3 | `mutation_v1/repo_enable_worktree_conflicted.json` |
+| `repo create`, `repo enable` | `wrong_branch` | `none` | 3 | `mutation_v1/repo_enable_wrong_branch.json` |
+| `remote add` | `discovery_pending` | `operation.resume` | 4 | `mutation_v1/remote_add_discovery_pending.json` |
+| `remote select` | `discovery_pending` | `operation.resume` | 4 | `mutation_v1/remote_select_discovery_pending.json` |
+| `remote remove` | `publication_remote_in_use` | `none` | 3 | `mutation_v1/remote_remove_publication_remote_in_use.json` |
+| `host approve` | `host_mismatch` | `none` | 3 | `cli_v1/host_approve_host_mismatch.json` |
+| `host approve` | `host_replacement_required` | `host.replace` | 3 | `cli_v1/host_approve_host_replacement_required.json` |
+| `host observe` | `repository_not_registered` | `index.rebuild` | 3 | `mutation_v1/host_observe_repository_not_registered.json` |
+| `key generate` | `unlock_required` | `none` | 3 | `cli_v1/key_generate_unlock_required.json` |
+| `key generate` | `recovery_required` | `request.retry` | 4 | `mutation_v1/key_generate_interrupted.json` |
+| `key delete` | `recovery_required` | `request.retry` | 4 | `mutation_v1/key_delete_interrupted.json` |
+| `key remove` | `selected_key_in_use` | `none` | 3 | `mutation_v1/key_remove_selected.json` |
+
+### Collaboration
+
+| Verb | Code | Next | Exit | Golden |
+| --- | --- | --- | --- | --- |
+| `comment add` | `push_rejected` | `request.retry` | 4 | `mutation_v1/comment_add_push_rejected.json` |
+| `comment add` | `ticket_closed` | `none` | 3 | `cli_v1/comment_add_ticket_closed.json` |
+| `item republish` | `ticket_closed` | `none` | 3 | `mutation_v1/item_republish_ticket_closed.json` |
+| `item republish` | `external_change` | `request.prepare` | 3 | `mutation_v1/item_republish_external_change.json` |
+| `item republish` | `publication_remote_required` | `none` | 3 | `cli_v1/item_republish_publication_remote_required.json` |
+| `item sync` | `publication_remote_required` | `none` | 3 | `mutation_v1/item_sync_publication_remote_required.json` |
+| `repo sync` | `publication_remote_required` | `none` | 3 | `cli_v1/repo_sync_publication_remote_required.json` |
+| `item sync` | `remote_branch_deleted` | `request.cancel` | 3 | `mutation_v1/item_sync_remote_branch_deleted.json` |
+| `item sync`, `repo sync` | `host_approval_required` | `host.approve` | 3 | `mutation_v1/repo_sync_host_approval_required.json` |
+| `item sync`, `repo sync` | `host_replacement_required` | `host.replace` | 3 | `mutation_v1/repo_sync_host_replacement_required.json` |
+| `item sync`, `repo sync` | `no_selected_key` | `request.retry` | 3 | `mutation_v1/repo_sync_no_selected_key.json` |
+| `item sync`, `repo sync` | `key_unavailable` | `request.retry` | 3 | `mutation_v1/repo_sync_key_unavailable.json` |
+| `item sync`, `repo sync` | `key_rejected` | `request.retry` | 3 | `mutation_v1/repo_sync_key_rejected.json` |
+| `item sync`, `repo sync` | `unlock_required` | `request.retry` | 3 | `mutation_v1/repo_sync_unlock_required.json` |
+| `item sync`, `repo sync` | `unlock_failed` | `request.retry` | 3 | `mutation_v1/repo_sync_unlock_failed.json` |
+| `item sync`, `repo sync` | `push_rejected` | `request.retry` | 3 | `mutation_v1/repo_sync_push_rejected.json` |
+| `item sync`, `repo sync` | `recovery_required` | `repo.inspect` | 3 | `mutation_v1/repo_sync_recovery_required.json` |
+| `item sync`, `repo sync` | `poll_yielding` | `request.retry` | 5 | `mutation_v1/repo_sync_poll_yielding.json` |
+| `item sync`, `repo sync` | `transport_unavailable` | `request.retry` | 5 | `mutation_v1/repo_sync_transport_unavailable.json` |
+| `conflict resolve` | `external_change` | `none` | 3 | `mutation_v1/conflict_resolve_external_change.json` |
+| `conflict resolve` | `original_request_required` | `request.retry` | 3 | `mutation_v1/conflict_resolve_original_request_required.json` |
+| `operation resume` | `original_request_required` | `request.retry` | 3 | `mutation_v1/operation_resume_original_request_required.json` |
+| `operation abandon` | `recovery_required` | `repo.inspect` | 3 | `cli_v1/context_operation_abandon_refused.json` |
+
+### Lifecycle
+
+| Verb | Code | Next | Exit | Golden |
+| --- | --- | --- | --- | --- |
+| `ticket close` | `recovery_required` | `repo.inspect` | 3 | `cli_v1/ticket_close_blocked.json` |
+| `document promote` | `recovery_required` | `repo.inspect` | 3 | `cli_v1/document_promote_blocked.json` |
+| `document promote`, `ticket close` | `recovery_required` | `request.retry` | 3 | `cli_v1/ticket_close_prepare_held.json` |
+| `ticket close` | `recovery_required` | `manyhands-cli ticket close` | 3 | `cli_v1/ticket_close_prepare_held_text.txt` |
+| `ticket close` | `recovery_required` | `manyhands-cli context observe-local` | 3 | `cli_v1/ticket_close_prepare_conflict_text.txt` |
+| `document promote` | `recovery_required` | `manyhands-cli context observe-local` | 3 | `cli_v1/document_promote_prepare_conflict_text.txt` |
+| `ticket close` | `recovery_required` | `manyhands-cli ticket save` | 3 | `cli_v1/ticket_close_prepare_context_missing_text.txt` |
+| `document promote` | `recovery_required` | `manyhands-cli document save` | 3 | `cli_v1/document_promote_prepare_context_missing_text.txt` |
+| `ticket close` | `recovery_required` | `manyhands-cli poll once` | 3 | `cli_v1/ticket_close_prepare_primary_ahead_text.txt` |
+| `ticket close` | `recovery_required` | `manyhands-cli poll once` | 3 | `cli_v1/ticket_close_prepare_primary_missing_text.txt` |
+| `ticket close` | `recovery_required` | `request.retry` | 4 | `mutation_v1/ticket_close_checkpoint_merge_refused.json` |
+| `ticket close` | `recovery_required` | `manyhands-cli context observe-local` | 4 | `cli_v1/ticket_close_checkpoint_merge_refused_text.txt` |
+| `document promote` | `identity_required` | `repo.identity_set` | 3 | `cli_v1/document_promote_identity_required.json` |
+| `ticket close` | `identity_required` | `repo.identity_set` | 3 | `cli_v1/ticket_close_identity_required.json` |
+| `ticket close` | `ticket_closed` | `none` | 3 | `mutation_v1/ticket_close_ticket_closed.json` |
+| `document promote` | `push_rejected` | `request.retry` | 4 | `mutation_v1/document_promote_push_rejected.json` |
+| `ticket close` | `push_rejected` | `request.retry` | 4 | `mutation_v1/ticket_close_push_rejected.json` |
+| `document promote` | `push_rejected` | `request.retry` | 4 | `mutation_v1/document_promote_deletion_rejected.json` |
+| `ticket close` | `push_rejected` | `request.retry` | 4 | `mutation_v1/ticket_close_deletion_rejected.json` |
+| `document promote` | `discovery_pending` | `request.retry` | 4 | `mutation_v1/document_promote_discovery_pending.json` |
+| `ticket close` | `discovery_pending` | `request.retry` | 4 | `mutation_v1/ticket_close_discovery_pending.json` |
+| `document promote`, `ticket close` | `cancelled` | `request.retry` | 130 | `mutation_v1/ticket_close_cancelled.json` |
+| `document promote`, `ticket close` | `external_change` | `request.prepare` | 3 | `mutation_v1/ticket_close_external_change.json` |
+| `document promote`, `ticket close` | `external_change` | `request.retry` | 3 | `mutation_v1/ticket_close_primary_advanced.json` |
+| `document promote`, `ticket close` | `confirmation_not_found` | `request.prepare` | 3 | `mutation_v1/ticket_close_confirmation_not_found.json` |
+| `document promote`, `ticket close` | `confirmation_expired` | `request.prepare` | 3 | `mutation_v1/ticket_close_confirmation_expired.json` |
+| `document promote`, `ticket close` | `busy` | `request.retry` | 5 | `mutation_v1/ticket_close_busy.json` |
+| `document promote`, `ticket close` | `poll_yielding` | `request.retry` | 4 | `mutation_v1/ticket_close_poll_yielding.json` |
+| `document promote`, `ticket close` | `remote_branch_deleted` | `request.cancel` | 3 | `mutation_v1/ticket_close_remote_branch_deleted.json` |
+| `document promote`, `ticket close` | `host_approval_required` | `request.retry` | 4 | `mutation_v1/ticket_close_host_approval_required.json` |
+| `document promote`, `ticket close` | `host_replacement_required` | `request.retry` | 3 | `mutation_v1/ticket_close_host_replacement_required.json` |
+| `document promote`, `ticket close` | `unlock_required` | `request.retry` | 3 | `mutation_v1/ticket_close_unlock_required.json` |
+| `document promote`, `ticket close` | `transport_unavailable` | `request.retry` | 5 | `mutation_v1/ticket_close_transport_unavailable.json` |
+
+The refused closure checkpoint merge prints the four `context` lines, in
+order, before `request.retry` and `repo.inspect`; the walk through them,
+then the same `ticket close`, is `the_refused_merges_route_finishes_the_close`
+and `c5_lifecycle_refused_checkpoint_merge_repaired_close`. A child's
+retained conflict also prints `conflict show` and `conflict resolve` of the
+parent's operation (decision 34; `c5_lifecycle_walk_retained_conflict_close`),
+under the same `recovery_required` and `request.retry` as the row above.
+
+### Local sync
+
+| Verb | Code | Next | Exit | Golden |
+| --- | --- | --- | --- | --- |
+| `context sync-local` | `discovery_pending` | `request.retry` | 4 | `cli_v1/context_sync_local_discovery_pending.json` |
+| `context sync-local` | `external_change` | `repo.inspect` | 3 | `cli_v1/context_sync_local_stale.json` |
+| `context sync-local` | `external_change` | `manyhands-cli context observe-local` | 3 | `cli_v1/context_sync_local_stale_text.txt` |
+| `context sync-local` | `worktree_not_clean` | `manyhands-cli context observe-local` | 3 | `cli_v1/context_sync_local_dirty_text.txt` |
+| `context sync-local` | `identity_required` | `repo.identity_set` | 3 | `cli_v1/context_sync_local_identity_required.json` |
+| `context sync-local` | `recovery_required` | `manyhands-cli context show-local` | 4 | `cli_v1/context_sync_local_conflict_text.txt` |
+| `context sync-local` | `recovery_required` | `repo.inspect` | 4 | `cli_v1/context_sync_local_external_only.json` |
+| `context sync-local` | `recovery_required` | `none` | 3 | `cli_v1/context_sync_local_unrelated.json` |
+| `context sync-local` | `recovery_required` | `none` | 3 | `cli_v1/context_sync_local_closures.json` |
+| `context sync-local` | `recovery_required` | `repo.inspect` | 3 | `cli_v1/context_sync_local_unsupported.json` |
+| `context sync-local` | `recovery_required` | `repo.inspect` | 3 | `cli_v1/context_sync_local_closure_past_closing.json` |
+| `context sync-local` | `busy` | `none` | 5 | `cli_v1/context_sync_local_busy.json` |
+| `context sync-local` | `cancelled` | `none` | 130 | `cli_v1/context_sync_local_cancelled.json` |
+| `context resolve-local` | `external_change` | `manyhands-cli context show-local` | 3 | `cli_v1/context_resolve_local_stale_text.txt` |
+| `context resolve-local` | `external_change` | `request.retry` | 3 | `cli_v1/context_resolve_local_after_partial_text.txt` |
+| `context resolve-local` | `recovery_required` | `none` | 3 | `cli_v1/context_resolve_local_external_only.json` |
+| `context resolve-local` | `cancelled` | `none` | 130 | `cli_v1/context_resolve_local_cancelled.json` |
+
+A synchronization cancelled at a safe point is final, and a new request,
+with a fresh observation, merges; a resolution cancelled keeps its request
+accepted, and the same request with the same sources finishes it (the
+gate's contract). An unrelated history, incompatible closures and an
+external-only conflict are repaired outside, with Git, and then the
+synchronization's request is sent again. `busy` from a cache lock held
+before acceptance names no request (C5 design, Known Limits).
+
+### Polling
+
+| Verb | Code | Next | Exit | Golden |
+| --- | --- | --- | --- | --- |
+| `poll once` | `publication_remote_required` | `none` | 3 | `cli_v1/poll_once_no_remote.json` |
+| `poll once` | `busy` | `request.retry` | 5 | `cli_v1/poll_once_busy.json` |
+| `poll once` | `busy` | `manyhands-cli operation resume` | 5 | `cli_v1/poll_once_busy_text.txt` |
+| `poll once` | `host_approval_required` | `host.approve` | 3 | `cli_v1/poll_once_host_stop.json` |
+| `poll once` | `unlock_required` | `none` | 3 | `cli_v1/poll_once_unlock_stop.json` |
+| `poll once` | `no_selected_key` | `none` | 3 | `mutation_v1/poll_once_key_rejected_reentered.json` |
+| `poll once` | `key_rejected` | `none` | 3 | `mutation_v1/poll_once_key_rejected.json` |
+| `poll once` | `transport_unavailable` | `none` | 5 | `mutation_v1/poll_once_transport_unavailable.json` |
+| `poll once` | `repository_inaccessible` | `none` | 3 | `mutation_v1/poll_once_repository_inaccessible.json` |
+| `poll once` | `cancelled` | `none` | 130 | `mutation_v1/poll_once_cancelled.json` |
+| `poll once` | `recovery_required` | `request.retry` | 3 | `mutation_v1/poll_once_interrupted.json` |
+| `poll once` | `poll_yielding` | `request.retry` | 5 | `mutation_v1/poll_once_poll_yielding.json` |
+| `poll once` | `discovery_pending` | `index.refresh` | 4 | `mutation_v1/poll_once_discovery_pending.json` |
+| `poll configure`, `poll pause`, `poll resume` | `repository_not_registered` | `index.rebuild` | 3 | `mutation_v1/poll_pause_not_registered.json` |
+| `poll configure`, `poll pause`, `poll resume` | `index_unavailable` | `index.rebuild` | 3 | `mutation_v1/poll_pause_index_unavailable.json` |
+
+A poll's stop is final (R-18): `none` here means a **new request** polls
+again once the cause is corrected, by `key select`, a terminal for the
+passphrase, `host approve`, or a selected publication remote. `busy` keeps
+the request accepted, and the same request polls once the holder lets go.
+
+### Codes with no golden
+
+| Scope | Code | Reason |
+| --- | --- | --- |
+| C2 | `busy` | C2's exit table (`tests/cli/exits.rs`) reaches it through the binary (`remote add` with the lease held, row `busy`, exit 5) and pins code and exit; it records no golden. `request.retry` follows, as for every `busy`. |
+| C2 | `cancelled` | C2's exit table (`tests/cli/exits.rs`) reaches it at a consent prompt (`ctrl_c_at_consent_is_cancelled_and_restores_the_terminal`, exit 130); a prompt's cancellation is CLI-built, with no stored answer to hold, and only the unused confirmation remains. |
+| C2 | `index_unavailable` | C2's exit table (`tests/cli/exits.rs`) reaches it (`remote add` over a corrupt registry, row `index`, exit 3); no golden. The authoring row's `index.rebuild` is the same answer. |
+| C2 | `key_rejected` | C2's exit table (`tests/cli/exits.rs`) reaches it over SSH (`a_server_accepting_without_the_selected_key_is_key_rejected`, exit 3); no golden. The collaboration row's golden holds the same transport mapping. |
+| C2 | `key_unavailable` | C2's exit table (`tests/cli/exits.rs`) reaches it (`observe_with_a_missing_selected_source_is_key_unavailable`, and `key delete` under an unsafe key-store lock); no golden. |
+| C2 | `no_selected_key` | C2's exit table (`tests/cli/exits.rs`) reaches it over SSH (`observe_a_pinned_host_without_a_selected_key_is_no_selected_key`); no golden; `key select` follows. |
+| C2 | `publication_remote_required` | C2's exit table (`tests/cli/exits.rs`) reaches it over SSH (`observe_without_a_publication_remote_is_publication_remote_required`); no golden; `remote select` follows. |
+| C2 | `push_rejected` | C2's exit table (`tests/cli/exits.rs`) gives the reason: a defensive host error mapping, since C2's host verification never pushes. No fixture reaches it. |
+| C2 | `remote_unavailable` | C2's exit table (`tests/cli/exits.rs`) gives the reason: libgit2's NotFound has no deterministic fixture, as F2 records. |
+| C2 | `repository_inaccessible` | C2's exit table (`tests/cli/exits.rs`) reaches it (`repo remove --prepare` of an inaccessible root, row `inaccessible`, exit 3); no golden. |
+| C2 | `transport_unavailable` | C2's exit table (`tests/cli/exits.rs`) reaches it over SSH (`a_wrong_passphrase_is_today_transport_unavailable_with_the_hint`, exit 5, defect `01M5E6DYJ6GN7DMW4424TH3V78`); no golden. |
+| C2 | `unlock_failed` | C2's exit table (`tests/cli/exits.rs`) reaches it over SSH (`a_rejected_key_after_the_right_passphrase_is_unlock_failed`, exit 3); no golden. |
+| C2 | `worktree_not_clean` | C2's exit table (`tests/cli/exits.rs`) reaches it (`remote select` over a dirty worktree, row `dirty`, exit 3); no golden. The authoring row's golden holds the same refusal. |
+| C3 | `confirmation_required` | C3's exit table (`tests/cli/authoring_exits.rs`) reaches it through the binary (`without_a_terminal_a_repair_needs_a_confirmation`, exit 3); no golden. `request.prepare` follows, as the repository row's golden shows. |
+| C3 | `confirmation_not_found` | C3's exit table (`tests/cli/authoring_exits.rs`) reaches it (`a_confirmation_presented_after_cache_loss_is_confirmation_not_found`); no golden. |
+| C3 | `confirmation_used` | C3's exit table (`tests/cli/authoring_exits.rs`) reaches it (`repair_confirmations_refuse_changed_input_and_another_request`); no golden. |
+| C3 | `confirmation_expired` | C3's exit table (`tests/cli/authoring_exits.rs`) gives the reason: repair consent expires after ten minutes on the library's clock, which an isolated CLI child cannot advance. |
+| C3 | `invalid_configuration` | C3's exit table (`tests/cli/authoring_exits.rs`) reaches it (`document_create_authoring_refusals_reach_the_binary`); no golden. `repo.inspect` follows, as the repository row's golden shows. |
+| C3 | `wrong_branch` | C3's exit table (`tests/cli/authoring_exits.rs`) reaches it (`document_create_authoring_refusals_reach_the_binary`); no golden. |
+| C3 | `recovery_required` | C3's exit table (`tests/cli/authoring_exits.rs`) reaches it (`interrupted_saves_follow_the_required_outcomes`, exit 3); no golden. |
+| C3 | `registration_pending` | C3's exit table (`tests/cli/authoring_exits.rs`) gives the reason: folder creation's pre-directory stale mark needs an injected registration failure, unavailable in the CLI child. |
+| C4 | `busy` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it over SSH (`c4_conflicts_republish_busy_then_confirmed`, exit 5); no golden. `request.retry` follows. |
+| C4 | `cancelled` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it over SSH (`c4_interruption_request_cancel_of_item_sync`, exit 130); no golden. A remote cancellation is final, and a new request completes the work. |
+| C4 | `confirmation_required` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`an_abandon_of_a_remote_operation_is_refused_and_changes_nothing`); no golden. |
+| C4 | `confirmation_not_found` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`an_unknown_confirmation_is_confirmation_not_found`); no golden. |
+| C4 | `confirmation_used` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it over SSH (`c4_interruption_request_cancel_of_item_republish`); no golden. |
+| C4 | `confirmation_expired` | C4's exit table (`tests/cli/collaboration_exits.rs`) gives the reason: a republish or abandon confirmation expires after ten minutes on the library's clock, which an isolated CLI child cannot advance. |
+| C4 | `discovery_pending` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it over SSH, partial (`c4_interruption_index_hand_off_refused`, exit 4); no golden. |
+| C4 | `identity_required` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`comment_add_without_an_identity_is_identity_required`, exit 3); no golden. `repo.identity_set` follows. |
+| C4 | `index_unavailable` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`repo_sync_on_a_corrupt_registry_is_index_unavailable`); no golden. |
+| C4 | `invalid_configuration` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`comment_add_refuses_what_authoring_refuses`); no golden. |
+| C4 | `remote_unavailable` | C4's exit table (`tests/cli/collaboration_exits.rs`) gives the reason: libgit2's NotFound has no deterministic fixture. |
+| C4 | `repository_inaccessible` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`c4_verbs_refuse_each_root`); no golden. |
+| C4 | `repository_not_registered` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`c4_verbs_refuse_each_root`); no golden. `index.rebuild` follows, as the authoring row's golden shows. |
+| C4 | `worktree_conflicted` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`repo_sync_of_a_conflicted_worktree_is_worktree_conflicted`); no golden. |
+| C4 | `worktree_not_clean` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`comment_add_refuses_what_authoring_refuses`); no golden. |
+| C4 | `wrong_branch` | C4's exit table (`tests/cli/collaboration_exits.rs`) reaches it (`comment_add_refuses_what_authoring_refuses`); no golden. |
+| `poll once` | `remote_unavailable` | The stored `protocol_rejected` category's answer, pinned without a golden by `c5_poll_once_stored_protocol_rejected`: libgit2's NotFound, its only live source, has no deterministic fixture, and `tests/mutation_contract.rs` records the code under `CODES_NO_MUTATION_GOLDEN_HAS` and `CODES_NO_FIXTURE_CAN_PRODUCE`, which a golden would contradict without a named edit. A new request polls again. |
 
 ## Alternatives, risks and required evidence
 

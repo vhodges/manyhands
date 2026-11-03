@@ -3067,8 +3067,43 @@ mod blocked {
         assert_eq!(shown["result"]["code"], "cancelled");
         let replay = a.json(&sync_local_args(a, R3), &input, "cancelled", 130);
         assert_eq!(replay["effects"], shown["result"]["effects"]);
+        cancelled_golden("context_sync_local_cancelled", a, &replay);
         a.json(&sync_local_args(a, R4), &observed(a), "ok", 0);
         assert_locally_merged(&p, context, primary)
+    }
+
+    /// The golden behind the recovery tables' row of a local synchronization
+    /// cancelled at a safe point (decision 4): the stored answer's replay, with
+    /// what a run makes replaced.
+    fn cancelled_golden(name: &str, clone: &CliClone, value: &Value) {
+        let root = clone.root.canonicalize().unwrap();
+        let root = root.to_str().unwrap().to_owned();
+        let mut replacements = vec![(root, "<repository>")];
+        for (pointer, label) in [
+            ("/operation_id", "<operation-id>"),
+            ("/data/operation_id", "<operation-id>"),
+            ("/data/observation", "<observation>"),
+            ("/data/context_head", "<context-head>"),
+            ("/data/primary_head", "<primary-head>"),
+            ("/data/context_parent", "<context-parent>"),
+            ("/data/primary_parent", "<primary-parent>"),
+            ("/data/result_oid", "<result-oid>"),
+            ("/effects/commit_oid", "<commit-oid>"),
+        ] {
+            if let Some(found) = value.pointer(pointer).and_then(Value::as_str)
+                && !replacements.iter().any(|(known, _)| known == found)
+            {
+                replacements.push((found.to_owned(), label));
+            }
+        }
+        support::cli::assert_cli_golden(
+            name,
+            value,
+            &replacements
+                .iter()
+                .map(|(found, label)| (found.as_str(), *label))
+                .collect::<Vec<_>>(),
+        );
     }
 
     /// `context resolve-local`, pressed at its first safe point: `cancelled`,

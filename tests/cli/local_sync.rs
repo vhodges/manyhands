@@ -2200,6 +2200,8 @@ fn a_new_request_after_abandoned_is_cancelled() {
     assert_eq!(case.state(&operation), "abandoned");
     let value = case.resolve_json(&operation, REQUEST_4, &input, 130, "cancelled");
     assert_eq!(value["data"]["state"], "abandoned", "{value}");
+    // The recovery tables' row for a cancelled resolution (decision 4).
+    case.golden("context_resolve_local_cancelled", &value);
 }
 
 /// A request the library holds a record of is its own to judge, whatever the

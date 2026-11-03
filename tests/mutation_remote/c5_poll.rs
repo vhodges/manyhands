@@ -589,6 +589,10 @@ fn unavailable_index() -> Result<(), FixtureError> {
             b"not sqlite",
             "a policy verb doesn't replace the index"
         );
+        if id == FIRST {
+            // The recovery tables' row for the three, which share a binding.
+            golden(&local.root, "poll_pause_index_unavailable", &refused);
+        }
     }
     Ok(())
 }
@@ -1875,7 +1879,11 @@ fn once_stored_protocol_rejected() -> Result<(), FixtureError> {
 }
 
 fn once_stored_repository_unavailable() -> Result<(), FixtureError> {
-    stored("repository_unavailable", ResultCode::RepositoryInaccessible).map(|_| ())
+    let w = stored("repository_unavailable", ResultCode::RepositoryInaccessible)?;
+    // The recovery tables' row: the stored answer, read again with no transport.
+    let replayed = execute_once(&w, FIRST);
+    golden_once(&w, "poll_once_repository_inaccessible", &replayed);
+    Ok(())
 }
 
 /// The first call's `Err(Transport)` over the row the domain ended: `Final`, on a

@@ -2620,3 +2620,110 @@ frees and what it doesn't.
 
 No `src/repository/promotion/` or `closure/` file changed, so `document_promotion` and `ticket_closure` weren't
 run.
+
+## Task 14a: inventory and recovery tables
+
+Base `a26b72dc` (decision 34's documents); `origin/main` at `0dfd5a68` is contained, so nothing was merged.
+No subagent was dispatched. No `src/`, schema or bin file changed, and no existing golden was rewritten: the
+changes are two new test modules, golden assertions added to existing cases, sixteen new goldens and the RFC.
+
+### The inventory (`tests/cli/inventory.rs`)
+
+The catalog is the binary's own `--help --json`, so the test reads what a caller reads:
+
+- `bound_commands()`, less the exempt `context prepare` and `context release` (owner question 5), equals the
+  catalogued verbs that declare `--prepare`: 41. Neither exempt verb is catalogued.
+- The 77 catalogued verbs equal the CLI contract RFC's taxonomy table with the relationships RFC's CLI table,
+  both ways. The four `context` rows were added to the RFC's taxonomy for this.
+- No verb is `Planned`, and each names its Cycle, C1 to C5.
+- `<verb> --help --json` answers, with no data directory, for each of the 77, and its one command equals the
+  root's entry, options included. This is the generated help assertion; `help_document_promote` and
+  `help_ticket_close` are its goldens for the lifecycle verbs (Task 7).
+- The 24 verbs that take `--input` have exactly one schema under `schemas/input/v1/` and one example under
+  `tests/fixtures/cli_input_v1/`, which the schema accepts (`commit_identity` is shared by `$ref`). The other 53
+  are listed in `NO_INPUT`, and the two lists are the catalog with no overlap.
+- Every verb has a `DATA` entry naming its output schemas (an empty list for `folder create`, `index refresh`
+  and `index rebuild`, whose data is always null). Each named schema exists, and every golden of `cli_v1/` and
+  `mutation_v1/` with non-null data matches one of its verb's schemas (more than 200 checked). The map was
+  found by probing which schema each golden matches, not written from memory; each golden matched exactly
+  one schema.
+
+**`--prepare` and `--confirm` on the seven unconfirmed C5 mutations (owed from Tasks 8 and 9).** The inventory
+reads the catalog as it is: all of them declare both, as C2-C4's do, and answer `not_confirmable`. The RFC's new
+"C5 completion options and input schemas" section records this departure from the design's `poll once` option
+list.
+
+### The recovery tables (RFC "Recovery tables"; `tests/cli/recovery_tables.rs`)
+
+Six family tables (authoring, repository and credentials, collaboration, lifecycle, local sync, polling) of
+`| Verb | Code | Next | Exit | Golden |`, and "Codes with no golden" (`| Scope | Code | Reason |`). Next is a
+recovery action, a `manyhands-cli <resource> <verb>` line that human output prints, or `none`. A row may name
+verbs sharing one binding with one golden (decision 27); the lifecycle's shared rows use `ticket close`'s.
+
+The test holds each row to its golden: the file exists; a JSON golden is the row's verb's, holds the code, offers
+the action (none for `none`) and exits as the row says (130 if cancelled, 4 if partial, else by class); a text
+golden belongs to one of the verbs by name, holds `code:`, prints the `next:` line (none for `none`) and its
+`--- exit` line. Each code is recoverable (class blocked, transient, incomplete or cancelled, or exit 4), and in
+its verb's audit code list: the C2, C3 and C4 exit-coverage unions, and C5's per-verb rows expanded with the C4
+groups. Completeness: every recoverable code of the C5 design's outcome tables (`C5_REQUIRED`, per verb) has a
+row or a reason, at most two C5 reasons; every recoverable code of the C2, C3 and C4 unions has a row for one of
+the Cycle's verbs, or a reason.
+
+**The rows.** 20 authoring, 25 repository, 23 collaboration, 33 lifecycle, 17 local sync and 15 polling, with
+37 reasons for C2-C4 (13, 8 and 16) and one for C5.
+
+- **The refused merge's row (owed from Task 7).** `ticket close`, `recovery_required`, `manyhands-cli context
+  observe-local`, exit 4, `ticket_close_checkpoint_merge_refused_text.txt`, beside the JSON row's
+  `request.retry`. The table's note names the walks (`the_refused_merges_route_finishes_the_close`,
+  `c5_lifecycle_refused_checkpoint_merge_repaired_close`) and decision 34's conflict lines.
+- **C5's one reason.** `poll once`'s `remote_unavailable`: the stored `protocol_rejected` category answers it
+  (`c5_poll_once_stored_protocol_rejected`), but `tests/mutation_contract.rs` lists the code under
+  `CODES_NO_MUTATION_GOLDEN_HAS` and `CODES_NO_FIXTURE_CAN_PRODUCE`, and a golden would contradict both, a
+  semantic edit no named edit covers. So it has a reason, not a golden.
+- **Earlier Cycles' reasons.** Each cites the Cycle's exit table, which reaches the code through the binary and
+  pins its exit with no golden, or that table's own reason (the ten-minute clock, libgit2's NotFound, an
+  injected registration failure, C2's never-pushing host check). No golden was added for an earlier verb: the
+  exit tables already prove each code through the binary, and the design allows the reason.
+
+**Goldens added (gaps filled; no behaviour changed).** Each is an assertion added to a case that already
+reached the answer, with the answer it already asserted:
+
+| Golden | Case |
+| --- | --- |
+| `mutation_v1/ticket_close_cancelled` | `c5_cancel_no_parent_yet_close` |
+| `ticket_close_external_change` | `c5_lifecycle_stale_at_confirm_close` |
+| `ticket_close_primary_advanced` | `c5_lifecycle_primary_advanced_close` |
+| `ticket_close_confirmation_not_found` | `c5_lifecycle_cache_loss_request_close` |
+| `ticket_close_confirmation_expired` | `c5_lifecycle_expired_confirmation_close` |
+| `ticket_close_busy` | `c5_lifecycle_busy_with_a_standing_parent_close` |
+| `ticket_close_poll_yielding` | `c5_lifecycle_poll_yielding_past_integration_close` |
+| `ticket_close_remote_branch_deleted` | `c5_lifecycle_child_remote_branch_deleted_close` |
+| `ticket_close_host_approval_required` | `c5_lifecycle_deletion_host_close` |
+| `ticket_close_host_replacement_required` | `c5_lifecycle_child_host_stop_close` |
+| `ticket_close_unlock_required` | `c5_lifecycle_unlock_stop_close` |
+| `ticket_close_transport_unavailable` | `c5_lifecycle_child_transport_stop_close` |
+| `mutation_v1/poll_pause_index_unavailable` | `c5_poll_unavailable_index` (the pause, of the three) |
+| `mutation_v1/poll_once_repository_inaccessible` | `c5_poll_once_stored_repository_unavailable` (the replay) |
+| `cli_v1/context_resolve_local_cancelled` | `tests/cli/local_sync.rs` `a_new_request_after_abandoned_is_cancelled` |
+| `cli_v1/context_sync_local_cancelled` | `c5_interruption_press_at_a_safe_point_of_sync_local` (the replay; Unix PTY) |
+
+The lifecycle goldens go through a new `lifecycle_world::recovery_golden`, close only (decision 27). Every one
+was read after generation: fixed request IDs, `<root>` and `<operation>` placeholders, no time or port. Each case
+was then run again without `MANYHANDS_UPDATE_GOLDEN` and passed.
+
+**What the tests found.** No behaviour gap. Every row answered as written on its first complete run. Two faults
+were mine: `ticket_close_poll_yielding` wasn't registered in `mutation_golden::CASES` (the harness reports only a
+fixture failure; found by its golden not being written), and `.gitkeep` in the examples directory. **Seen to
+fail:** with a row's next action changed, a C5 row removed, a text row's line and exit changed, and an earlier
+Cycle's reason renamed, the matching test failed each time, and passed once restored.
+
+### Verified (Task 14a)
+
+| Command | Ran |
+| --- | --- |
+| `--test cli -- inventory` | 6 inventory tests (8 with two `*_noop_inventory_*` that the filter matches), 0 failed |
+| `--test cli -- recovery_tables` | 4, 0 failed |
+| `--test mutation_remote --` each of the 14 changed library cases, with and then without the update | 14 SSH cases, twice |
+| `--test cli_remote -- c5_interruption_press_at_a_safe_point_of_sync_local`, twice | 1 SSH case |
+| `--test cli`, whole, and `--test mutation_contract` (the new goldens' registration and schemas) | 474 and 44, 0 failed |
+| `cargo fmt`, whole-tree clippy `--all-targets --all-features -D warnings` | ok |

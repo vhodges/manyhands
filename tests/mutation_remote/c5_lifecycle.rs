@@ -686,6 +686,7 @@ fn stale_at_confirm(verb: Verb) -> Result<(), FixtureError> {
     );
     assert_eq!(envelope.code, ResultCode::ExternalChange);
     assert_eq!(actions(&envelope), [RecoveryActionKind::RequestPrepare]);
+    recovery_golden(verb, &local.root, "external_change", &envelope);
     assert!(
         local
             .service
@@ -1298,6 +1299,7 @@ fn expired_confirmation(verb: Verb) -> Result<(), FixtureError> {
         verb.mutation(&local.root, verb.id()),
     );
     assert_eq!(expired.code, ResultCode::ConfirmationExpired);
+    recovery_golden(verb, &local.root, "confirmation_expired", &expired);
     assert_eq!(local_state(&local, FIRST), None);
     assert_eq!(fixed(local.repo()?.refname_to_id(MAIN))?, main);
     Ok(())
@@ -1551,6 +1553,7 @@ fn primary_advanced(verb: Verb) -> Result<(), FixtureError> {
         ]
     );
     assert_eq!(moved.operation_id, stopped.operation_id);
+    recovery_golden(verb, &w.root, "primary_advanced", &moved);
     assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     let done = resent(&w.service, FIRST, verb, &w.root);
     assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
@@ -1777,6 +1780,7 @@ fn unlock_stop(verb: Verb) -> Result<(), FixtureError> {
     );
     assert_eq!(stopped.outcome, Outcome::Blocked);
     assert_eq!(actions(&stopped)[0], RecoveryActionKind::RequestRetry);
+    recovery_golden(verb, &w.root, "unlock_required", &stopped);
     assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     let done = resent(&w.service, FIRST, verb, &w.root);
     assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
@@ -1828,6 +1832,7 @@ fn child_host_stop(verb: Verb) -> Result<(), FixtureError> {
             RecoveryActionKind::RepoInspect
         ]
     );
+    recovery_golden(verb, &w.root, "host_replacement_required", &stopped);
     assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     fixed(w.service.approve_host_pin_for_testing(
         &SshAuthority {
@@ -1860,6 +1865,7 @@ fn child_transport_stop(verb: Verb) -> Result<(), FixtureError> {
     );
     assert_ne!(stopped.outcome, Outcome::Partial);
     assert_eq!(actions(&stopped), [RecoveryActionKind::RequestRetry]);
+    recovery_golden(verb, &w.root, "transport_unavailable", &stopped);
     assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     let done = resent(&w.service, FIRST, verb, &w.root);
     assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
@@ -1892,6 +1898,7 @@ fn child_remote_branch_deleted(verb: Verb) -> Result<(), FixtureError> {
         RecoveryActionKind::RepoInspect,
     ];
     assert_eq!(actions(&stopped), offered);
+    recovery_golden(verb, &w.root, "remote_branch_deleted", &stopped);
     // Both verbs name the item, which the CLI's route reads; a promotion has
     // no made-ready report.
     let data = lifecycle_of(&stopped).ok_or(FixtureError)?;
@@ -2008,6 +2015,7 @@ fn deletion_host(verb: Verb) -> Result<(), FixtureError> {
         lifecycle_of(&stopped).ok_or(FixtureError)?.cleanup_pending,
         Some(LifecycleCleanupPendingReason::RemoteDeletionHost)
     );
+    recovery_golden(verb, &w.root, "host_approval_required", &stopped);
     fixed(w.service.approve_host_pin_for_testing(
         &SshAuthority {
             host: "127.0.0.1".into(),
@@ -2035,6 +2043,7 @@ fn cache_loss_request(verb: Verb) -> Result<(), FixtureError> {
     );
     assert_eq!(answer.code, ResultCode::ConfirmationNotFound);
     assert_eq!(actions(&answer), [RecoveryActionKind::RequestPrepare]);
+    recovery_golden(verb, &w.root, "confirmation_not_found", &answer);
     Ok(())
 }
 
@@ -2520,6 +2529,7 @@ fn busy_with_a_standing_parent(verb: Verb) -> Result<(), FixtureError> {
     assert_eq!(busy.code, ResultCode::Busy, "{:?}", busy.data);
     assert_ne!(busy.outcome, Outcome::Partial);
     assert_eq!(actions(&busy), [RecoveryActionKind::RequestRetry]);
+    recovery_golden(verb, &local.root, "busy", &busy);
     assert_eq!(local_state(&local, FIRST), Some(RequestState::Accepted));
     let done = resent(&local.service, FIRST, verb, &local.root);
     assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
@@ -2593,6 +2603,7 @@ fn poll_yielding_past_integration(verb: Verb) -> Result<(), FixtureError> {
         }
     }
     assert_eq!(actions(&yielded), [RecoveryActionKind::RequestRetry]);
+    recovery_golden(verb, &w.root, "poll_yielding", &yielded);
     assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     let done = resent(&w.service, FIRST, verb, &w.root);
     assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);

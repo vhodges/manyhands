@@ -59,6 +59,8 @@ mod exits;
 mod human;
 #[path = "cli/input_schemas.rs"]
 mod input_schemas;
+#[path = "cli/inventory.rs"]
+mod inventory;
 #[path = "cli/keys.rs"]
 mod keys;
 #[path = "cli/lifecycle.rs"]
@@ -74,6 +76,8 @@ mod privacy;
 #[cfg(unix)]
 #[path = "cli/prompts.rs"]
 mod prompts;
+#[path = "cli/recovery_tables.rs"]
+mod recovery_tables;
 #[path = "cli/remotes.rs"]
 mod remotes;
 #[path = "cli/repair.rs"]

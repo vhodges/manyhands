@@ -320,6 +320,7 @@ fn no_parent_yet(verb: Verb) -> Result<(), FixtureError> {
     assert_eq!(parent_count(&w, verb)?, 0);
     let stopped = resent(&w, FIRST, verb);
     assert_cancelled(&w, FIRST, &stopped)?;
+    recovery_golden(verb, &w.root, "cancelled", &stopped);
     assert_eq!(parent_count(&w, verb)?, 1);
     assert_eq!(merges_on_primary(&w.repo()?)?, 0);
     assert_finishes(&w, FIRST, verb)

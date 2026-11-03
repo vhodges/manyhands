@@ -403,3 +403,26 @@ pub fn golden_at(
         &value,
     );
 }
+
+/// The golden behind a lifecycle row of the CLI contract RFC's recovery tables
+/// (decision 4), `ticket_close_<row>`. The rows reach `LifecycleBinding`'s
+/// shared code, so the close's golden stands for both verbs (decision 27),
+/// and a promotion's run asserts the same answer without one.
+pub fn recovery_golden(
+    verb: Verb,
+    root: &Path,
+    row: &str,
+    envelope: &crate::Envelope<MutationDataDto>,
+) {
+    if verb == Verb::Close {
+        golden_at(
+            root,
+            &format!("{}_{row}", verb.golden()),
+            envelope
+                .data
+                .as_ref()
+                .map(|_| "lifecycle_mutation.schema.json"),
+            envelope,
+        );
+    }
+}
