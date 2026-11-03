@@ -71,6 +71,8 @@ Worktree `<main>/.worktrees/d4-lane-a`, from `a1faca4a`.
 | Task | State | Base | Commits | Tests | Review | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | 6 | done | `a1faca4a` | `e9528d4a`, fixes `fd0368c8` | `drafts` 179 (twice); `drafts::comments` 13; four lines clean | Round 1 CHANGES REQUIRED (3 Important: retirement lost pending text, returned nothing, trusted a stale listing); fixed; re-review APPROVE | Ruling R-18. `ItemKey` defined in `services/drafts/comments.rs`. For Task 13's checkpoint: never adopt a draft whose submission is posting, and retry `retire_comment` on `HeldHere` once an adoption lands; R-18's open items. |
+| 7 | done | `fd0368c8` | `3f10c120`, test fix `77ac73f2` | `drafts` 180; desktop bin 1165; four lines clean | APPROVE (1 Minor applied) | E-8, E-9 (two struct literals gained `open: false`, accepted as part of E-9). Open carries only the item; Lane D finds the draft through `comment_drafts`, including when the tab is already open. Known limit: a comment draft whose item is gone offers Open; the tab shows its error (Discard and Export still work). Library doc `src/drafts/compare.rs:342` is stale (follow-up ticket). |
+| checkpoint | merged | `77ac73f2` | lane merge of the ticket branch `2d9bcbfe`; `--no-ff` into the ticket branch `c6f00ce7` | Lane: `drafts` 180, desktop bin 1167. Ticket branch after merge: desktop bin 1167, clippy clean | — | Lane worktree and branch removed. |
 
 ## Lane B (`d4/lane-b`)
 
@@ -78,7 +80,7 @@ Worktree `<main>/.worktrees/d4-lane-b`, from `a1faca4a`.
 
 | Task | State | Base | Commits | Tests | Review | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
-| 8 | paused | `a1faca4a` | uncommitted | `share` 16; desktop bin 1152 passed, 3 failed (unnamed tests) | — | Stopped correctly: a remotes read on tab open broke fact 41's two tests, and Share broke the frame tab-order test. Owner: decision 20 (remote from navigation via a ticket-branch seam) and E-13. Resumes after merging the seam. |
+| 8 | done | `a1faca4a` | WIP `0c966cbd`, merge `e69b3535` (seam `7a1c2466`, `9dd49e38`), `153ab866` | `share` 17, `header` 21, `keyboard` 41; desktop bin 1158; four lines clean | APPROVE for Lane B's scope (1 Important deferred to O-1, 3 Minor) | First stop: a remotes read on open broke fact 41's tests → decision 20 and E-13 (applied in both walks of the frame test). Share main with no remote reads "Share main…" and opens Remotes. O-1: the Remotes page keeps its previous repository (`settings/remotes.rs:283`); orchestrator seam, then Task 9 switches the call site and adds a two-repository test. Stale markers in `view/item.rs` (`ItemRoute`, `share` field) for Lane D. |
 
 ## Lane C (`d4/lane-c`)
 
