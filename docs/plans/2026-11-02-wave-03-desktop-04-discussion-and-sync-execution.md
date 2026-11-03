@@ -66,17 +66,33 @@ Approved 2026-11-02 (`5c26a5cd`); execution is subagent-driven
 
 ## Lane A (`d4/lane-a`)
 
-Not started.
+Worktree `<main>/.worktrees/d4-lane-a`, from `a1faca4a`.
+
+| Task | State | Base | Commits | Tests | Review | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 6 | done | `a1faca4a` | `e9528d4a`, fixes `fd0368c8` | `drafts` 179 (twice); `drafts::comments` 13; four lines clean | Round 1 CHANGES REQUIRED (3 Important: retirement lost pending text, returned nothing, trusted a stale listing); fixed; re-review APPROVE | Ruling R-18. `ItemKey` defined in `services/drafts/comments.rs`. For Task 13's checkpoint: never adopt a draft whose submission is posting, and retry `retire_comment` on `HeldHere` once an adoption lands; R-18's open items. |
 
 ## Lane B (`d4/lane-b`)
 
-Not started.
+Worktree `<main>/.worktrees/d4-lane-b`, from `a1faca4a`.
+
+| Task | State | Base | Commits | Tests | Review | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 8 | paused | `a1faca4a` | uncommitted | `share` 16; desktop bin 1152 passed, 3 failed (unnamed tests) | — | Stopped correctly: a remotes read on tab open broke fact 41's two tests, and Share broke the frame tab-order test. Owner: decision 20 (remote from navigation via a ticket-branch seam) and E-13. Resumes after merging the seam. |
 
 ## Lane C (`d4/lane-c`)
 
-Not started.
+Worktree `<main>/.worktrees/d4-lane-c`, from `a1faca4a`.
+
+| Task | State | Base | Commits | Tests | Review | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 11a | done | `a1faca4a` | `9f014c56` | `composer` 7 (four runs), `editor` 90 (twice); four lines clean | APPROVE; 1 Important (math click lands before the block) carried into 11b; 4 Minor | Decision 21 (toolbar always shown; Ctrl K for Link, bound on the ticket branch). Hint copy "Ctrl Enter to post · Esc to cancel" per design. No `CaretInView` yet (Task 12). Task 12 removes the composer's dead-code markers. |
+| 11b | in progress | `9f014c56` | — | — | — | Carries 11a's I1 and M2. |
 
 ## Decisions during execution
+
+- Lane task ticket comments are batched into each lane's checkpoint
+  comment rather than one per task; the ledger carries each task's record.
 
 - 2026-11-02, Task 0: decisions 17 (separate sync job kinds, E-12) and 18
   ("Nothing to share yet" copy).

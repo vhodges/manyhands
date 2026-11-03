@@ -8,8 +8,12 @@
 //! opens Settings › Remotes for the repository (`ItemRoute::Remotes`).
 //! While a share of the item is queued or running it reads Sharing… and is
 //! disabled, so a second press queues nothing.
+//!
+//! The remote is the workspace's navigation's (`publication_remote`,
+//! decision 20): the tab reads no remotes itself (D3's fact 41). Until
+//! navigation has listed the repository, Share is not drawn.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use gpui_kit::{
     AnyElement, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
@@ -19,18 +23,11 @@ use gpui_kit::{
 };
 use manyhands::repository::{AuthoringKind, ItemDtoKind};
 
-use super::{ItemPane, ItemRoute};
+use super::{ItemPane, ItemRoute, PublicationRemote};
 use crate::desktop::{
     assets::icon_path,
-    model::{
-        item::SHARE,
-        navigation::OpenTarget,
-        stamp::{Generations, SettingsPage, ViewScope},
-    },
-    services::{
-        ReadKind, ReadResult,
-        requests::{Intent, Lane, RequestState},
-    },
+    model::{item::SHARE, navigation::OpenTarget},
+    services::requests::{Intent, Lane},
     view::sidebar::SHARING,
 };
 
@@ -50,34 +47,11 @@ pub(crate) fn share_tooltip(remote: &str) -> String {
     )
 }
 
-/// The tab's Share: what it last read of the repository's publication
-/// remote.
+/// The tab's Share. It holds nothing of its own yet: the remote is the
+/// pane's (`publication_remote`), and whether a share runs is the
+/// worker's. Tasks 9 to 10b keep its stage and outcome here.
 #[derive(Default)]
-pub(super) struct ShareState {
-    /// The publication remote's name, once read; `None` before the first
-    /// read lands or when no remote is selected for publication.
-    remote: Option<String>,
-    /// Whether a read of the remotes has landed: until then Share is not
-    /// drawn, so it never reads Share… for a repository that has a remote.
-    known: bool,
-    /// The last remotes read; a newer one drops it.
-    read: Option<gpui_kit::Task<()>>,
-    generations: Generations,
-    /// How many remote requests of the repository had finished when the
-    /// remotes were last read: one more finishing reads them again.
-    remote_changes: usize,
-}
-
-/// Whether `intent` changes which remote the repository at `root`
-/// publishes to.
-fn changes_remotes(intent: &Intent, root: &Path) -> bool {
-    match intent {
-        Intent::RemoteAdd { root: asked, .. }
-        | Intent::RemoteRemove { root: asked, .. }
-        | Intent::RemoteSelect { root: asked, .. } => asked == root,
-        _ => false,
-    }
-}
+pub(super) struct ShareState {}
 
 impl ItemPane {
     /// The item this tab shares: its repository, kind and ID, for an item
@@ -113,89 +87,39 @@ impl ItemPane {
         })
     }
 
-    /// The tab opened: the repository's publication remote is read into
-    /// `ShareState`, so the header reads it from there.
-    pub(super) fn share_opened(&mut self, cx: &mut Context<Self>) {
-        if self.share_target().is_some() {
-            self.read_share_remote(cx);
-        }
-    }
+    /// The tab opened. Nothing to read: the workspace gives the remote
+    /// (`share_remote_changed`) once its navigation lists the repository.
+    pub(super) fn share_opened(&mut self, _cx: &mut Context<Self>) {}
 
-    /// Reads which remote, if any, the repository publishes to.
-    #[allow(clippy::result_large_err)] // The library's read error, as every read gives it.
-    fn read_share_remote(&mut self, cx: &mut Context<Self>) {
-        let root = PathBuf::from(self.repo());
-        // The read is the one the Remotes page makes, of the same rows.
-        let stamp = self
-            .share
-            .generations
-            .next(ViewScope::Settings(SettingsPage::Remotes));
-        self.share.read = Some(self.services.read(
-            ReadKind::Remotes,
-            stamp,
-            move |service| {
-                let repo = service.resolve_repository(&root)?;
-                service.list_remotes_redacted(&repo)
-            },
-            cx,
-            |pane: &mut Self, stamp, read, cx| {
-                if !pane.share.generations.is_current(&stamp) {
-                    return;
-                }
-                pane.share.read = None;
-                // A failed read keeps what was known; Share stays as it was.
-                if let ReadResult::Ok(list) = read {
-                    pane.share.remote = list
-                        .items
-                        .into_iter()
-                        .find(|remote| remote.selected_for_publication)
-                        .map(|remote| remote.name);
-                    pane.share.known = true;
-                    cx.notify();
-                }
-            },
-        ));
-    }
+    /// The request model changed. Whether a share runs is read from the
+    /// worker as the header is drawn, and a finished remote request
+    /// reloads navigation, which gives the remote again; nothing to follow
+    /// yet (Tasks 9 to 10b follow the stage and the outcome).
+    pub(super) fn share_progressed(&mut self, _cx: &mut Context<Self>) {}
 
-    /// The request model changed: a remote of the repository added,
-    /// removed or selected reads the publication remote again. Whether a
-    /// share is running is the worker's, read as the header is drawn.
-    pub(super) fn share_progressed(&mut self, cx: &mut Context<Self>) {
-        if self.share_target().is_none() {
-            return;
-        }
-        let root = PathBuf::from(self.repo());
-        let finished = self
-            .services
-            .operations()
-            .read(cx)
-            .requests()
-            .iter()
-            .filter(|request| {
-                changes_remotes(&request.intent, &root)
-                    && matches!(request.state, RequestState::Finished(..))
-            })
-            .count();
-        if finished != self.share.remote_changes {
-            self.share.remote_changes = finished;
-            self.read_share_remote(cx);
-        }
+    /// The repository's publication remote, as navigation gives it,
+    /// changed: Share is drawn again with it.
+    pub(super) fn share_remote_changed(&mut self, cx: &mut Context<Self>) {
+        cx.notify();
     }
 
     /// Share, after Edit or Save/Done in the header: for an item tab whose
-    /// item has been read, once the remotes are. With a remote, its
-    /// tooltip names it, carried by `SHARE_NOTE`'s label.
+    /// item has been read, once navigation has given the remote. With a
+    /// remote, its tooltip names it, carried by `SHARE_NOTE`'s label.
     pub(super) fn share_button(
         &self,
         _window: &Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         self.share_target()?;
-        if !self.share.known || self.model.item().rows().is_none() {
-            return None;
-        }
+        self.model.item().rows()?;
+        let remote = match self.publication_remote() {
+            PublicationRemote::Unknown => return None,
+            PublicationRemote::Unset => None,
+            PublicationRemote::Named(name) => Some(name),
+        };
         let sharing = self.sharing();
-        let label = match (&self.share.remote, sharing) {
+        let label = match (remote, sharing) {
             (_, true) => SHARING,
             (Some(_), false) => SHARE,
             (None, false) => SHARE_SET_UP,
@@ -208,7 +132,7 @@ impl ItemPane {
             .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
                 pane.share_item(window, cx);
             }));
-        let Some(remote) = &self.share.remote else {
+        let Some(remote) = remote else {
             return Some(button.into_any_element());
         };
         let tooltip = share_tooltip(remote);
@@ -232,12 +156,16 @@ impl ItemPane {
         let Some(intent) = self.share_target() else {
             return false;
         };
-        if !self.share.known || self.model.item().rows().is_none() {
+        if self.model.item().rows().is_none() {
             return false;
         }
-        if self.share.remote.is_none() {
-            cx.emit(ItemRoute::Remotes(PathBuf::from(self.repo())));
-            return true;
+        match self.publication_remote() {
+            PublicationRemote::Unknown => return false,
+            PublicationRemote::Unset => {
+                cx.emit(ItemRoute::Remotes(PathBuf::from(self.repo())));
+                return true;
+            }
+            PublicationRemote::Named(_) => {}
         }
         if !self.sharing() {
             self.services
