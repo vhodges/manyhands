@@ -237,9 +237,11 @@ impl ItemPane {
                     Checked::Final {
                         post_as_new: true, ..
                     }
-                    | Checked::Maybe { post_as_new: true } => {
-                        // Nothing of the old comment exists: the new text
-                        // may be sent.
+                    | Checked::Maybe { post_as_new: true }
+                        if !pane.services.submissions().read(cx).in_flight(&root, &old) =>
+                    {
+                        // Nothing of the old comment exists, and none of
+                        // it is on its way: the new text may be sent.
                         let mark = pane.attempt_mark(&old, cx);
                         if let Some((_, slot)) = pane.composers.find(composer) {
                             slot.post.held = false;
