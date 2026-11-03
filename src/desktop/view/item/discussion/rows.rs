@@ -1,10 +1,11 @@
 //! The discussion's cards and rows: one white card per thread, a row per
-//! comment, with its avatar, name, time, whom a deeper reply answers, and
-//! its body's read editor, and a row for a file that is no comment.
+//! comment, with its avatar, name, time, whom a deeper reply answers, its
+//! body's read editor and its Reply, and a row for a file that is no
+//! comment. The reply composer, when it is in the thread, ends the card.
 
 use gpui_kit::{
-    AnyElement, App, FontWeight, InteractiveElement, IntoElement, ParentElement, Styled,
-    TestSupportExt,
+    AnyElement, App, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Role, StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{ActiveTheme, Icon, h_flex, v_flex},
     div, px, white,
 };
@@ -12,7 +13,8 @@ use manyhands::repository::{CommentDto, CommentListDto, ProblemDto};
 use time::OffsetDateTime;
 
 use super::{
-    BODY_SIZE, ICON_SIZE, LINK_SIZE, REPLY_INDENT, REPLY_TO, SMALL_SIZE, offset_at, shown_time,
+    BODY_SIZE, ICON_SIZE, LINK_SIZE, REPLY, REPLY_INDENT, REPLY_POSTING, REPLY_TO, SMALL_SIZE,
+    offset_at, ring, shown_time,
 };
 use crate::desktop::{
     assets::icon_path,
@@ -31,16 +33,22 @@ const AVATAR_TEXT: f32 = 10.5;
 const NAME_SIZE: f32 = 13.;
 
 impl ItemPane {
-    /// One white card: the root's row, then each reply's.
+    /// One white card: the root's row, then each reply's, then the reply
+    /// composer when it is in this thread.
     pub(super) fn thread(
         &self,
         list: &CommentListDto,
         ix: usize,
         thread: &Thread,
         now: OffsetDateTime,
-        cx: &App,
+        window: &Window,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         let colors = item_colors(cx);
+        let composer = list.items[thread.root]
+            .id
+            .as_deref()
+            .and_then(|root| self.reply_composer_in(root, cx));
         v_flex()
             .id(("thread", ix))
             .test_support()
@@ -49,13 +57,15 @@ impl ItemPane {
             .border_1()
             .border_color(colors.page_border)
             .rounded(px(CARD_RADIUS))
-            .child(self.comment_row(list, thread.root, None, now, cx))
+            .child(self.comment_row(list, thread.root, None, now, window, cx))
             .children(
                 thread
                     .replies
                     .iter()
-                    .map(|reply| self.comment_row(list, reply.ix, Some(reply), now, cx)),
+                    .map(|reply| self.comment_row(list, reply.ix, Some(reply), now, window, cx))
+                    .collect::<Vec<_>>(),
             )
+            .children(composer)
             .into_any_element()
     }
 
@@ -67,7 +77,8 @@ impl ItemPane {
         ix: usize,
         reply: Option<&Reply>,
         now: OffsetDateTime,
-        cx: &App,
+        window: &Window,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         let colors = item_colors(cx);
         let comment = &list.items[ix];
@@ -82,7 +93,7 @@ impl ItemPane {
             row = row.border_t_1().border_color(colors.page_border_soft);
         }
         let content = match &comment.id {
-            Some(id) => self.comment(ix, id, comment, reply, now, cx),
+            Some(id) => self.comment(ix, id, comment, reply, now, window, cx),
             None => malformed(ix, comment, cx),
         };
         row.child(content).into_any_element()
@@ -92,7 +103,9 @@ impl ItemPane {
     /// whom it answers, above its body's read editor. The avatar's colour
     /// comes from the whole `created_by` value (R-56), so two people who
     /// share a name, but not an address, differ; its initials are the
-    /// name's, or "?" with no author or a blank one.
+    /// name's, or "?" with no author or a blank one. Its Reply follows the
+    /// body.
+    #[allow(clippy::too_many_arguments)]
     fn comment(
         &self,
         ix: usize,
@@ -100,7 +113,8 @@ impl ItemPane {
         comment: &CommentDto,
         reply: Option<&Reply>,
         now: OffsetDateTime,
-        cx: &App,
+        window: &Window,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
         let colors = item_colors(cx);
         let name = display_name(comment.author.as_deref());
@@ -161,9 +175,53 @@ impl ItemPane {
                     .min_w_0()
                     .gap(px(3.))
                     .child(line)
-                    .children(body),
+                    .children(body)
+                    .children(self.reply_control(ix, id, window, cx)),
             )
             .into_any_element()
+    }
+
+    /// The comment `id`'s Reply: a tab stop in the actions row's grey,
+    /// pressed by click, Enter or Space, ringed while focused and revealed
+    /// when focus reaches it. While the reply composer is posting it does
+    /// nothing and says why.
+    fn reply_control(
+        &self,
+        ix: usize,
+        id: &str,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let focus = self.discussion.replies.get(id)?;
+        let colors = item_colors(cx);
+        let posting = self.composers.reply_posting(cx);
+        let ring = focus.is_focused(window).then(|| ring(cx));
+        let mut control = div()
+            .id(("comment-reply", ix))
+            .test_support()
+            .role(Role::Button)
+            .aria_label(REPLY)
+            .track_focus(focus)
+            .relative()
+            .self_start()
+            .mt(px(4.))
+            .px_1()
+            .text_size(px(SMALL_SIZE))
+            .text_color(colors.page_text_secondary)
+            .child(REPLY)
+            .children(ring)
+            .child(self.scroll.marker(focus));
+        if posting {
+            control = control
+                .aria_description(REPLY_POSTING)
+                .text_color(colors.page_muted);
+        } else {
+            let id = id.to_owned();
+            control = control.cursor_pointer().on_click(cx.listener(
+                move |pane, _: &ClickEvent, window, cx| pane.reply_pressed(&id, window, cx),
+            ));
+        }
+        Some(control.into_any_element())
     }
 }
 

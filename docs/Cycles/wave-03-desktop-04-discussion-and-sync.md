@@ -248,6 +248,17 @@ approval on 2026-11-02:
     revealed-on-focus toolbar could not be reached by keyboard. Ctrl K
     opens Link in the composer.
 
+22. **The new-comment composer starts collapsed** (2026-11-02, Task 12)
+    as one "Write a comment…" tab stop; Enter, Space or a click opens it
+    and focuses its editor, and it stays open while it holds text or a
+    draft. An empty composer at the foot of every item had trapped a
+    keyboard walk, since Tab indents inside it (decision 19). Once open,
+    Tab indents and F6 leaves, like the body editor. An open composer
+    with no text and no draft collapses again when focus leaves it; an
+    empty Cancel, or focus leaving a composer emptied of a draft it began
+    this session and never submitted, discards that draft and collapses it
+    (orchestrator, Task 12 review, within this decision).
+
 ## Open Questions
 
 None. U-1 to U-5 (design) are settled in Task 0 by reading the source.

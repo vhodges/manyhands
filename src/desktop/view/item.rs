@@ -207,7 +207,6 @@ pub(crate) struct ItemPane {
     /// its navigation as the tab opens and as the list changes.
     publication_remote: PublicationRemote,
     /// The discussion's new-comment and reply composers (`composer`).
-    #[allow(dead_code)] // Read from Task 12.
     composers: composer::Composers,
     /// The comments being posted, drawn pending in their threads
     /// (`posting`).
@@ -432,6 +431,7 @@ impl Render for ItemPane {
         self.sync_review(window, cx);
         self.sync_read(window, cx);
         self.sync_discussion(window, cx);
+        self.sync_composers(window, cx);
         self.sync_changed(cx);
         let item = self.model.item().rows().cloned();
         let header = self.header(item.as_ref(), window, cx);

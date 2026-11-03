@@ -66,6 +66,12 @@ Approved 2026-11-02 (`5c26a5cd`); execution is subagent-driven
   E-12 (decision 17). E-5's wording corrected: the test asserts later rows
   `[SHARE, CLOSE_TICKET]`.
 
+## Lane D (ticket branch)
+
+| Task | State | Base | Commits | Tests | Review | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 12 | done | `6e8b6e2e` | `56d3b36e`, fixes `69b03d8c`, `f4f1933a` | `discussion` 29, `posting` 5, `composer` 20, `drafts` 181; desktop bin 1197 at the decision-22 docs commit; fmt and clippy clean | First stop: four unnamed failures → owner decision 22 (collapsed start; the open composer had trapped Tab walks) and E-14, E-15. Round 1 CHANGES REQUIRED (adopted draft hidden; emptied draft kept the composer open); fixed; re-review APPROVE | Started beside Lane B (scheduling decision). Known limits K-11 to K-14. Routed to Task 14: Drafts page Show/Discard for held comment rows. Test-first evidence partial for the review-fix tests. |
+
 ## Lane A (`d4/lane-a`)
 
 Worktree `<main>/.worktrees/d4-lane-a`, from `a1faca4a`.
@@ -83,6 +89,10 @@ Worktree `<main>/.worktrees/d4-lane-b`, from `a1faca4a`.
 | Task | State | Base | Commits | Tests | Review | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | 8 | done | `a1faca4a` | WIP `0c966cbd`, merge `e69b3535` (seam `7a1c2466`, `9dd49e38`), `153ab866` | `share` 17, `header` 21, `keyboard` 41; desktop bin 1158; four lines clean | APPROVE for Lane B's scope (1 Important deferred to O-1, 3 Minor) | First stop: a remotes read on open broke fact 41's tests → decision 20 and E-13 (applied in both walks of the frame test). Share main with no remote reads "Share main…" and opens Remotes. O-1: the Remotes page keeps its previous repository (`settings/remotes.rs:283`); orchestrator seam, then Task 9 switches the call site and adds a two-repository test. Stale markers in `view/item.rs` (`ItemRoute`, `share` field) for Lane D. |
+| 8 fix | done | `153ab866` | `1a20329d` | `share` 19, `sidebar` 2 | Orchestrator check | Tests for Share main… and the RegionEnd path. |
+| 9 | done | `1a20329d` | `4680e638` | `share` 23, `operations` 33, `passphrase` 24; desktop bin 1166; four lines clean | APPROVE; 2 Important carried | R-14 in `model/operations.rs`. Carried to 10b: Stop is offered for a local-operation resume, which ignores the token; restrict Stop for `OperationResume` to remote sync and comment publication rows, and test a local resume reads Finishing. Ruling: `view/operations.rs` and `model/operations.rs` may split into child modules in Lane B's row. Stale `// Called from Task 9.` markers in `model/publication.rs` and Task 8 markers in `services/requests.rs`: orchestrator cleanup at Task 16. |
+| 10a | done | `4680e638` | merge `0c247a65`, `a2f9b09d`, fixes `c21ade14` | `share` 38, `operations` 56, `settings` 102; desktop bin 1225; four lines clean | Round 1 CHANGES REQUIRED (pill outranked the item's own state; healthy look on failures); fixed; re-review APPROVE | O-1 wired with a two-repository test; R-17 declined-key clear; decision 18. Owner confirmed "Set your identity before sharing" (NeedsIdentity). Busy copy follows Part 0 "Busy repositories" (design Outcomes table to be aligned). Orchestrator ruling carried to 10b: the pill records the observation of the first read after the share. Known limit: a dismissed holder is not named. Lane D: a post's Unlock… must clear declined keys. |
+| 10b | in progress | `c21ade14` | — | — | — | Carries Stop only for remote resumes, the post-share pill read, P14, U-5 tests. |
 
 ## Lane C (`d4/lane-c`)
 
@@ -91,9 +101,17 @@ Worktree `<main>/.worktrees/d4-lane-c`, from `a1faca4a`.
 | Task | State | Base | Commits | Tests | Review | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | 11a | done | `a1faca4a` | `9f014c56` | `composer` 7 (four runs), `editor` 90 (twice); four lines clean | APPROVE; 1 Important (math click lands before the block) carried into 11b; 4 Minor | Decision 21 (toolbar always shown; Ctrl K for Link, bound on the ticket branch). Hint copy "Ctrl Enter to post · Esc to cancel" per design. No `CaretInView` yet (Task 12). Task 12 removes the composer's dead-code markers. |
-| 11b | in progress | `9f014c56` | — | — | — | Carries 11a's I1 and M2. |
+| 11b | done | `9f014c56` | `d0608ce4`, fixes `a0d03350`, `afa4ac3d` | `composer` 16 (twice), `editor` 90; desktop bin 1167; four lines clean | Round 1 CHANGES REQUIRED (Post as a new comment missing); round 2 CHANGES REQUIRED (discard prompt focus order); APPROVE after `afa4ac3d` (orchestrator check) | Rulings: discard prompt "Discard · Keep editing" with Keep editing focused on open; a Failed reply offering only Edit text closes via Edit text then Cancel, or F6; Cancel/Escape while Posting do nothing. Test-first order not evidenced for 11b. Helpers in `composer/guard.rs` mirror `view/editor/read_only.rs` (share after D4). Lane D sets Posting on Submit. |
+| checkpoint | merged | `afa4ac3d` | lane merge `8c425e83`; `--no-ff` into the ticket branch `e66dda58` | Lane: `composer` 16, desktop bin 1184. Ticket branch after merge: desktop bin 1184, clippy clean | — | Lane worktree and branch removed. |
 
 ## Decisions during execution
+
+- 2026-11-02, orchestrator: Lane D Task 12 starts on the ticket branch
+  while Lane B runs Tasks 10a and 10b, rather than after Lane B merges.
+  Task 12 needs only Lanes A and C (merged), and its files are disjoint
+  from Lane B's remaining ones. Tasks 13 and 14 still wait for Lane B's
+  merge (they use its outcomes, routes and `pill.rs`). `origin/main` had
+  not moved (checked at the Lane C merge).
 
 - Lane task ticket comments are batched into each lane's checkpoint
   comment rather than one per task; the ledger carries each task's record.

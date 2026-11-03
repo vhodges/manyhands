@@ -135,6 +135,7 @@ impl MiniControl {
 
 impl Composer {
     /// The focus handle of `control`.
+    #[cfg_attr(not(test), allow(dead_code))] // Read by the tests.
     pub(crate) fn control_handle(&self, control: MiniControl) -> FocusHandle {
         self.controls[control.index()].clone()
     }
