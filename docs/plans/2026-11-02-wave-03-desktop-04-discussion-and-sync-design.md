@@ -734,6 +734,10 @@ R-2, R-5, R-6, R-7 and R-11 of revision 1 became owner decisions 8, 10,
   that repository answers busy. Recovery: `manyhands-cli operation resume
   <operation-id>` once the remote is reachable. Library ticket
   `01M6GHWZS03WCADS1A1JXV4PMP`.
+- **K-17.** A re-send of an earlier comment made outside this app (the
+  CLI or another process, with the same request ID) is invisible to this
+  session's worker and `Submissions`, so a rewritten comment can still be
+  posted beside it (decision 27's boundary, as P17's).
 
 ## Alternatives Rejected
 
