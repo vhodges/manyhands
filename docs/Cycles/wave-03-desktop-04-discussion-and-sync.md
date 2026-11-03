@@ -101,8 +101,10 @@ D4 merges main whenever it moves (design, Lane mechanics).
 8. **Conflicts as preserved states.** A share or post that stops on a
    conflict shows the item banner and a needs-attention entry, with no
    resolution (decision 13).
-9. **Publication after restart.** A pending comment publication or remote
-   synchronization shows Resume in the operation area.
+9. **Publication after restart.** A pending remote synchronization shows
+   Resume in the operation area. A pending comment publication shows none
+   (K-15, owner 2026-11-03): its composer, re-adopted on reopen, offers
+   Retry, and Share on its item publishes it.
 
 ## Explicit Exclusions And Downstream Obligations
 
@@ -117,7 +119,8 @@ D4 merges main whenever it moves (design, Lane mechanics).
 - The PRD journey's worktree-switch step: G1 (Wave line 72).
 - The dockable Comments panel and the design's "Later" items; scrolling to
   a comment from Activity (`04-comments.md` Navigation needs Activity).
-- Known library limits K-1 to K-9 (decision 4, design Known Limits).
+- Known limits K-1 to K-19 (decision 4 and the owner's decisions during
+  execution; design Known Limits).
 
 ## Required Contract
 
@@ -212,9 +215,11 @@ approval on 2026-11-02:
 12. **Saves can queue behind a share** waiting on the network or a prompt
     (one worker); accepted for D4, revisited in D6.
 13. **The conflict banner has no action** until D5.
-14. **The "not shared yet" chip is session-only.** After a restart the
-    pending publication shows as an operation row with Resume; a library
-    read for a persistent marker becomes its own ticket.
+14. **The "not shared yet" chip is session-only.** After a restart a
+    pending share shows as an operation row with Resume; a pending comment
+    publication shows none (K-15, library ticket
+    `01M6GHWZ5CXXFC7YB3EVJ6Q4A7`). A library read for a persistent marker
+    becomes its own ticket.
 15. **Quitting while sending stops at a safe point.** D1's quit cancels
     the running request; a stopped publication is final, so after relaunch
     nothing marks the comment and Share publishes it (K-10). D6 owns
