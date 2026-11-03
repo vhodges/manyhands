@@ -32,6 +32,7 @@ use conflicts::{
     assert_effects, assert_republished, confirm, confirm_args, confirmation, no_record, prepare,
     published_then_deleted, release, sync_refused,
 };
+use lifecycle::Verb;
 use ssh_remote::{FixtureError, fixed};
 use std::io::{Read, Write};
 
@@ -109,6 +110,134 @@ pub const CASES: &[ssh_harness::Case] = &[
     (
         "c4_interruption_poll_holds_the_reservation",
         c4_interruption_poll_holds_the_reservation,
+    ),
+    // C5 (Task 13a).
+    #[cfg(unix)]
+    ("c5_interruption_press_before_integration_promote", || {
+        pressed::press_before_integration(Verb::Promote)
+    }),
+    #[cfg(unix)]
+    ("c5_interruption_press_before_integration_close", || {
+        pressed::press_before_integration(Verb::Close)
+    }),
+    #[cfg(unix)]
+    ("c5_interruption_press_after_integration_promote", || {
+        pressed::press_after_integration(Verb::Promote)
+    }),
+    #[cfg(unix)]
+    ("c5_interruption_press_after_integration_close", || {
+        pressed::press_after_integration(Verb::Close)
+    }),
+    #[cfg(unix)]
+    (
+        "c5_interruption_second_press_close",
+        pressed::c5_interruption_second_press_close,
+    ),
+    #[cfg(unix)]
+    ("c5_interruption_consent_prompt_promote", || {
+        pressed::consent_prompt(Verb::Promote)
+    }),
+    #[cfg(unix)]
+    ("c5_interruption_consent_prompt_close", || {
+        pressed::consent_prompt(Verb::Close)
+    }),
+    #[cfg(unix)]
+    (
+        "c5_interruption_press_at_the_consent_prompt_promote",
+        || pressed::press_at_the_consent_prompt(Verb::Promote),
+    ),
+    #[cfg(unix)]
+    ("c5_interruption_press_at_the_consent_prompt_close", || {
+        pressed::press_at_the_consent_prompt(Verb::Close)
+    }),
+    #[cfg(unix)]
+    ("c5_interruption_press_during_resume_promote", || {
+        pressed::press_during_resume(Verb::Promote)
+    }),
+    #[cfg(unix)]
+    ("c5_interruption_press_during_resume_close", || {
+        pressed::press_during_resume(Verb::Close)
+    }),
+    #[cfg(unix)]
+    (
+        "c5_interruption_press_during_poll_once",
+        pressed::c5_interruption_press_during_poll_once,
+    ),
+    #[cfg(unix)]
+    (
+        "c5_interruption_primary_child_fails_with_cancellation_asked_close",
+        pressed::c5_interruption_primary_child_fails_with_cancellation_asked_close,
+    ),
+    #[cfg(target_os = "linux")]
+    (
+        "c5_interruption_press_at_a_safe_point_of_sync_local",
+        blocked::c5_interruption_press_at_a_safe_point_of_sync_local,
+    ),
+    #[cfg(target_os = "linux")]
+    (
+        "c5_interruption_press_at_a_safe_point_of_resolve_local",
+        blocked::c5_interruption_press_at_a_safe_point_of_resolve_local,
+    ),
+    #[cfg(target_os = "linux")]
+    (
+        "c5_interruption_request_cancel_of_sync_local",
+        blocked::c5_interruption_request_cancel_of_sync_local,
+    ),
+    #[cfg(target_os = "linux")]
+    (
+        "c5_interruption_request_cancel_of_resolve_local",
+        blocked::c5_interruption_request_cancel_of_resolve_local,
+    ),
+    #[cfg(target_os = "linux")]
+    (
+        "c5_interruption_press_at_the_result_of_poll_once",
+        blocked::c5_interruption_press_at_the_result_of_poll_once,
+    ),
+    #[cfg(target_os = "linux")]
+    (
+        "c5_interruption_press_at_the_result_of_sync_local",
+        blocked::c5_interruption_press_at_the_result_of_sync_local,
+    ),
+    #[cfg(target_os = "linux")]
+    (
+        "c5_interruption_press_at_the_result_of_resolve_local",
+        blocked::c5_interruption_press_at_the_result_of_resolve_local,
+    ),
+    ("c5_interruption_request_cancel_promote", || {
+        c5::request_cancel(Verb::Promote)
+    }),
+    ("c5_interruption_request_cancel_close", || {
+        c5::request_cancel(Verb::Close)
+    }),
+    (
+        "c5_interruption_request_cancel_of_poll_once",
+        c5::c5_interruption_request_cancel_of_poll_once,
+    ),
+    (
+        "c5_interruption_killed_poll_once_resent",
+        c5::c5_interruption_killed_poll_once_resent,
+    ),
+    ("c5_interruption_lost_stdout_promote", || {
+        c5::lost_stdout(Verb::Promote)
+    }),
+    ("c5_interruption_lost_stdout_close", || {
+        c5::lost_stdout(Verb::Close)
+    }),
+    (
+        "c5_interruption_lost_stdout_of_poll_once",
+        c5::c5_interruption_lost_stdout_of_poll_once,
+    ),
+    (
+        "c5_interruption_lost_stdout_of_sync_local",
+        c5::c5_interruption_lost_stdout_of_sync_local,
+    ),
+    (
+        "c5_interruption_lost_stdout_of_resolve_local",
+        c5::c5_interruption_lost_stdout_of_resolve_local,
+    ),
+    (
+        "c5_interruption_no_resident_worker",
+        c5::c5_interruption_no_resident_worker,
     ),
 ];
 
@@ -1604,6 +1733,1397 @@ mod pressed {
         assert_eq!(published["effects"]["publication"], "published");
         assert_eq!(oid(&published["effects"]["commit_oid"]), remerged);
         assert_eq!(p.served(CONTEXT)?, Some(remerged));
+        Ok(())
+    }
+
+    // ------------------------------------------------------------------ C5
+
+    use super::c5::{
+        args as lifecycle_args, begun_outside, behind, confirmed, held_by, nothing_left, poll_args,
+        polled, record, reserved,
+    };
+    use lifecycle::{finished_once, merges};
+
+    /// A cancelled lifecycle answer at a terminal: exit 130, nothing on
+    /// stdout, `code: cancelled` and the request's own retry. Returns stderr.
+    fn lifecycle_cancelled(pty: PtyCli, request: &str) -> String {
+        let stderr = cancelled(pty);
+        assert!(stderr.contains(CANCELLED), "{stderr}");
+        assert!(
+            stderr.contains(&format!("next: request.retry request_id={request}\n")),
+            "{stderr}"
+        );
+        assert!(
+            !stderr.contains("progress: retrying"),
+            "no retry follows a press"
+        );
+        stderr
+    }
+
+    /// Decision 8 at a terminal: the verb's confirmed request, pressed while
+    /// the server holds the context child's fetch, before integration. It
+    /// answers `cancelled`, exit 130, and the record stays accepted: nothing
+    /// is merged or pushed, and the child is let go. A new ID's prepare is
+    /// held by the request (decision 33); the same request then finishes,
+    /// once; and once it has, a new prepare has nothing to do.
+    pub fn press_before_integration(verb: Verb) -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        verb.begin(a, R1);
+        let preview = verb.prepare(a, "ok", 0);
+        let pushes = remote_world::accepted(&p.server);
+        let hold = p.server.hold_advertisement()?;
+        let mut pty = at_a_terminal(&a.env, &confirmed(verb, a, R2, &preview), &[]);
+        pressed_while_held(&mut pty, hold)?;
+        lifecycle_cancelled(pty, R2);
+        let shown = record(a, R2);
+        assert_eq!(shown["state"], "accepted", "{shown}");
+        assert!(shown["result"].is_null(), "{shown}");
+        assert_eq!(merges(&a.repo()?)?, 0);
+        assert_eq!(remote_world::accepted(&p.server), pushes, "nothing pushed");
+        assert!(!reserved(a), "the cancellation let the child go");
+
+        held_by(a, verb, R2);
+        let done = verb.send(a, R2, "ok", 0);
+        assert_eq!(done["effects"]["cleanup"], "complete", "{done}");
+        assert_eq!(record(a, R2)["state"], "finished");
+        finished_once(&p, verb, None)?;
+        nothing_left(a, verb);
+        Ok(())
+    }
+
+    /// The same past integration: each connection is held in turn until
+    /// primary holds the merge, and the press lands at the publication's
+    /// fetch. `cancelled`, exit 130, integration complete and publication
+    /// pending, the record accepted; a new ID's prepare is held by the
+    /// request; the same request publishes and cleans up, with one merge.
+    pub fn press_after_integration(verb: Verb) -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        verb.begin(a, R1);
+        let preview = verb.prepare(a, "ok", 0);
+        let served = p.served(PRIMARY)?;
+        let mut hold = p.server.hold_advertisement()?;
+        let mut pty = at_a_terminal(&a.env, &confirmed(verb, a, R2, &preview), &[]);
+        loop {
+            hold.wait_until_held()?;
+            if merges(&a.repo()?)? == 1 {
+                break;
+            }
+            let next = p.server.hold_advertisement()?;
+            hold.release()?;
+            hold = next;
+        }
+        pty.send(&[3]);
+        std::thread::sleep(LANDING);
+        hold.release()?;
+        let stderr = lifecycle_cancelled(pty, R2);
+        assert!(stderr.contains("integration=complete"), "{stderr}");
+        let shown = record(a, R2);
+        assert_eq!(shown["state"], "accepted", "{shown}");
+        assert_eq!(merges(&a.repo()?)?, 1);
+        assert_eq!(p.served(PRIMARY)?, served, "primary is not published");
+
+        held_by(a, verb, R2);
+        let done = verb.send(a, R2, "ok", 0);
+        assert_eq!(done["effects"]["publication"], "published", "{done}");
+        finished_once(&p, verb, None)?;
+        nothing_left(a, verb);
+        Ok(())
+    }
+
+    /// A second press ends the process by `SIGINT` (R-21, design: "a second
+    /// press or a kill leaves the record"): nothing more is printed, nothing
+    /// is merged or pushed, the record stays accepted with no result, and the
+    /// same request then finishes, once. One verb: the window is the CLI's,
+    /// shared by both (decision 27).
+    pub fn c5_interruption_second_press_close() -> Result<(), FixtureError> {
+        let verb = Verb::Close;
+        let p = CliPair::new()?;
+        let a = &p.a;
+        verb.begin(a, R1);
+        let preview = verb.prepare(a, "ok", 0);
+        let pushes = remote_world::accepted(&p.server);
+        let hold = p.server.hold_advertisement()?;
+        let pty = {
+            let mut pty = at_a_terminal(&a.env, &confirmed(verb, a, R2, &preview), &[]);
+            hold.wait_until_held()?;
+            pty.send(&[3]);
+            std::thread::sleep(LANDING);
+            pty.send(&[3]);
+            pty
+        };
+        let (code, signal, stdout, stderr) = pty.finish_any();
+        drop(hold);
+        scan_output(&CliRun {
+            stdout: stdout.clone().into_bytes(),
+            stderr: stderr.clone().into_bytes(),
+            status: 0,
+        });
+        assert_eq!((code, signal), (None, Some(libc::SIGINT)));
+        assert!(stdout.is_empty(), "{stdout}");
+        assert!(!stderr.contains("code: "), "no result: {stderr}");
+        assert_eq!(merges(&a.repo()?)?, 0);
+        assert_eq!(remote_world::accepted(&p.server), pushes);
+        let shown = record(a, R2);
+        assert_eq!(shown["state"], "accepted", "{shown}");
+        assert!(shown["result"].is_null());
+
+        let done = verb.send(a, R2, "ok", 0);
+        assert_eq!(done["effects"]["cleanup"], "complete", "{done}");
+        finished_once(&p, verb, None)
+    }
+
+    /// The verb at a terminal with neither a request ID nor a confirmation:
+    /// the interactive flow. A request ID is allocated and noted first.
+    fn interactive(env: &CliEnv, verb: Verb, clone: &CliClone) -> PtyCli {
+        let args = lifecycle_args(verb, clone);
+        PtyCli::spawn(&args.iter().map(OsStr::new).collect::<Vec<_>>(), env, &[])
+    }
+
+    /// The request ID the interactive flow allocated, from its note.
+    fn allocated(pty: &PtyCli) -> String {
+        let line = pty.first_stderr_line();
+        line.strip_prefix("request: ")
+            .unwrap_or_else(|| panic!("no request note: {line}"))
+            .to_owned()
+    }
+
+    /// The interactive consent of both verbs (design matrix, 13a): the
+    /// preview is shown at the terminal, `y` consents, and the run completes
+    /// under the allocated request, once.
+    pub fn consent_prompt(verb: Verb) -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        verb.begin(a, R1);
+        let mut pty = interactive(&a.env, verb, a);
+        let request = allocated(&pty);
+        pty.expect("Proceed? [y/N] ");
+        pty.send(b"y\n");
+        let (out, transcript) = pty.finish();
+        scan_output(&out);
+        assert_eq!(out.status, 0, "{}", text(&out.stderr));
+        assert!(
+            text(&out.stdout).starts_with(&format!("The request completed.\nrequest: {request}\n")),
+            "{}",
+            text(&out.stdout)
+        );
+        assert_eq!(transcript.matches("Proceed? [y/N] ").count(), 1);
+        assert_eq!(record(a, &request)["state"], "finished");
+        finished_once(&p, verb, None)
+    }
+
+    /// A press at the consent prompt: the prompt reads in raw mode, so the
+    /// byte is its own refusal, not a press the window sees. `cancelled`, exit
+    /// 130, the terminal's modes restored, no request recorded, nothing moved
+    /// at either end, and a new prepare is ready: nothing holds the item.
+    pub fn press_at_the_consent_prompt(verb: Verb) -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        verb.begin(a, R1);
+        let (local, served) = (lifecycle::refs(&a.repo()?)?, lifecycle::refs(&p.bare()?)?);
+        let opened = connections(&p);
+        let mut pty = interactive(&a.env, verb, a);
+        let request = allocated(&pty);
+        pty.expect("Proceed? [y/N] ");
+        pty.send(&[3]);
+        let (before, after) = pty.lflag_before_and_after();
+        assert_eq!(before, after, "the terminal's modes are restored");
+        let (out, _) = pty.finish();
+        scan_output(&out);
+        assert_eq!(out.status, 130, "{}", text(&out.stderr));
+        assert!(out.stdout.is_empty());
+        assert!(
+            text(&out.stderr).contains(CANCELLED),
+            "{}",
+            text(&out.stderr)
+        );
+        checked(
+            &a.env,
+            &["request", "show", "--request-id", &request],
+            &[],
+            "request_not_found",
+            2,
+            None,
+        );
+        assert_eq!(lifecycle::refs(&a.repo()?)?, local);
+        assert_eq!(lifecycle::refs(&p.bare()?)?, served);
+        assert_eq!(connections(&p), opened, "the prompt connected to nothing");
+        verb.prepare(a, "ok", 0);
+        Ok(())
+    }
+
+    /// Ctrl-C during `operation resume` of a lifecycle no request holds
+    /// (design, Resume: "Ctrl-C is as the verb's"; R-34): pressed while the
+    /// server holds the context child's fetch, it answers `cancelled`, exit
+    /// 130, nothing merged or pushed. A resume keeps no record of its own, and
+    /// a later resume finishes the work, once.
+    pub fn press_during_resume(verb: Verb) -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        verb.begin(a, R1);
+        let operation = begun_outside(a, verb)?;
+        let pushes = remote_world::accepted(&p.server);
+        let hold = p.server.hold_advertisement()?;
+        let mut pty = at_a_terminal(&a.env, &resume_args(a, &operation, R2), &[]);
+        pressed_while_held(&mut pty, hold)?;
+        let stderr = cancelled(pty);
+        assert!(stderr.contains(CANCELLED), "{stderr}");
+        assert_eq!(merges(&a.repo()?)?, 0);
+        assert_eq!(remote_world::accepted(&p.server), pushes, "nothing pushed");
+        checked(
+            &a.env,
+            &["request", "show", "--request-id", R2],
+            &[],
+            "request_not_found",
+            2,
+            None,
+        );
+        let done = resume(a, &operation, R3, "ok", 0);
+        assert_eq!(done["effects"]["publication"], "published", "{done}");
+        finished_once(&p, verb, None)
+    }
+
+    /// `poll once` pressed while the server holds its fetch: `cancelled`,
+    /// exit 130, nothing fast-forwarded. Its stop after the reservation is
+    /// final (R-18): the record is finished with that answer, the same request
+    /// replays it with no connection, and a new request polls.
+    pub fn c5_interruption_press_during_poll_once() -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        let before = a.tip(PRIMARY)?;
+        let incoming = behind(&p)?;
+        let hold = p.server.hold_advertisement()?;
+        let mut pty = at_a_terminal(&a.env, &poll_args(a, R1), &[]);
+        pressed_while_held(&mut pty, hold)?;
+        let stderr = cancelled(pty);
+        assert!(stderr.contains(CANCELLED), "{stderr}");
+        assert_eq!(a.tip(PRIMARY)?, before, "nothing fast-forwarded");
+        let result = stored(a, R1);
+        let opened = connections(&p);
+        let replay = polled(a, R1, "cancelled", 130);
+        assert_eq!(replay["effects"], result["effects"]);
+        assert_eq!(connections(&p), opened);
+        polled(a, R2, "ok", 0);
+        assert_eq!(a.tip(PRIMARY)?, Some(incoming));
+        Ok(())
+    }
+
+    /// The row the library tables owe: a primary child that fails while
+    /// cancellation is asked (`publish`'s `Err` arm, `promotion/run.rs`).
+    /// The closure is integrated; the press lands while the server holds the
+    /// primary publication's fetch, and the server then drops that
+    /// connection, so the child fails rather than stopping. The runner lets
+    /// the child go (decision 18): `cancelled`, exit 130, integration
+    /// complete, no reservation held, the record accepted. The same request
+    /// then publishes and cleans up, with one merge. One verb: both reach the
+    /// same `publish` (decision 27).
+    pub fn c5_interruption_primary_child_fails_with_cancellation_asked_close()
+    -> Result<(), FixtureError> {
+        let verb = Verb::Close;
+        let p = CliPair::new()?;
+        let a = &p.a;
+        verb.begin(a, R1);
+        let preview = verb.prepare(a, "ok", 0);
+        let served = p.served(PRIMARY)?;
+        let mut hold = p.server.hold_advertisement()?;
+        let mut pty = at_a_terminal(&a.env, &confirmed(verb, a, R2, &preview), &[]);
+        loop {
+            hold.wait_until_held()?;
+            if merges(&a.repo()?)? == 1 {
+                break;
+            }
+            let next = p.server.hold_advertisement()?;
+            hold.release()?;
+            hold = next;
+        }
+        pty.send(&[3]);
+        std::thread::sleep(LANDING);
+        p.server.disconnect_at(FixtureBoundary::Advertisement);
+        hold.release()?;
+        let stderr = lifecycle_cancelled(pty, R2);
+        p.server.clear_fault();
+        assert!(stderr.contains("integration=complete"), "{stderr}");
+        assert!(!reserved(a), "the failed child was let go");
+        assert_eq!(record(a, R2)["state"], "accepted");
+        assert_eq!(p.served(PRIMARY)?, served);
+        assert_eq!(merges(&a.repo()?)?, 1);
+
+        let done = verb.send(a, R2, "ok", 0);
+        assert_eq!(done["effects"]["publication"], "published", "{done}");
+        finished_once(&p, verb, None)
+    }
+}
+
+/// C5's interruption evidence (Task 13a), with what every platform runs:
+/// `request cancel` from a second invocation, a killed `poll once` resent,
+/// lost stdout and the no-resident-worker check. The Ctrl-C presses are in
+/// `pressed` and `blocked`.
+mod c5 {
+    use super::*;
+    use collaboration::connections;
+    use lifecycle::{finished_once, merges, peer_commit};
+
+    /// The verb's words, `--repo` and `--id`.
+    pub(super) fn args(verb: Verb, clone: &CliClone) -> Vec<&str> {
+        let [resource, name] = verb.words();
+        vec![resource, name, "--repo", clone.root(), "--id", verb.id()]
+    }
+
+    /// The verb's confirmed request, as the binary takes it.
+    pub(super) fn confirmed<'a>(
+        verb: Verb,
+        clone: &'a CliClone,
+        request: &'a str,
+        preview: &'a Value,
+    ) -> Vec<&'a str> {
+        let mut args = args(verb, clone);
+        args.extend([
+            "--request-id",
+            request,
+            "--confirm",
+            preview["data"]["confirmation_id"].as_str().unwrap(),
+        ]);
+        args
+    }
+
+    pub(super) fn actions(value: &Value) -> Vec<&str> {
+        value["recovery"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|action| action["action"].as_str().unwrap())
+            .collect()
+    }
+
+    /// Decision 33: while `request` holds the item, a new ID's prepare is
+    /// refused, `recovery_required` with no data, and its one action is
+    /// `request` sent again.
+    pub(super) fn held_by(clone: &CliClone, verb: Verb, request: &str) {
+        let held = verb.prepare(clone, "recovery_required", 3);
+        assert!(held["data"].is_null(), "{held}");
+        assert_eq!(actions(&held), ["request.retry"], "{held}");
+        assert_eq!(held["recovery"][0]["arguments"]["request_id"], request);
+    }
+
+    /// Once the work is done, a new prepare has nothing to do: it is not
+    /// `ok`. Returns its code.
+    pub(super) fn nothing_left(clone: &CliClone, verb: Verb) -> String {
+        let mut args = args(verb, clone);
+        args.extend(["--prepare", "--json"]);
+        let out = run(&clone.env, &args, &[]);
+        let value = cli::json(&out);
+        assert_ne!(value["code"], "ok", "{value}");
+        value["code"].as_str().unwrap().to_owned()
+    }
+
+    /// Whether a remote operation holds the repository's reservation, as
+    /// `poll status` reads it.
+    pub(super) fn reserved(clone: &CliClone) -> bool {
+        let status = clone.json(&["poll", "status", "--repo", clone.root()], &[], "ok", 0);
+        !status["data"]["active_operation_id"].is_null()
+    }
+
+    /// The request's stored state and result, through `request show`.
+    pub(super) fn record(clone: &CliClone, request: &str) -> Value {
+        request_show(clone, request)
+    }
+
+    /// A parent begun through the domain's own entry point and stopped at
+    /// its first safe point, as `tests/cli_remote/lifecycle.rs` begins one:
+    /// no request record holds it.
+    pub(super) fn begun_outside(clone: &CliClone, verb: Verb) -> Result<String, FixtureError> {
+        use repository::{
+            CloseTicketRequest, DocumentPromotionPreflight, FailurePoint, OperationId,
+            PreviewDocumentPromotionRequest, PreviewTicketClosureRequest, PromoteDocumentRequest,
+            RepositoryService, TicketClosurePreflight, keys::SessionCredentials,
+        };
+        let service: RepositoryService =
+            support::FailOnce::at(FailurePoint::AfterConfirmed).open_service(&clone.env.data);
+        let operation_id = OperationId::new();
+        let item_id: manyhands::canonical::ItemId = fixed(verb.id().parse())?;
+        let mut session = SessionCredentials::new(remote_world::Provider);
+        match verb {
+            Verb::Promote => {
+                let DocumentPromotionPreflight::Ready(preview) = fixed(
+                    service.preview_document_promotion(PreviewDocumentPromotionRequest {
+                        root: clone.root.clone(),
+                        item_id: item_id.clone(),
+                    }),
+                )?
+                else {
+                    return Err(FixtureError);
+                };
+                let _stopped = service.promote_document(
+                    PromoteDocumentRequest {
+                        root: clone.root.clone(),
+                        operation_id,
+                        item_id,
+                        expected: preview.expectation(),
+                        approval: None,
+                        confirmed_identity: None,
+                    },
+                    &mut session,
+                );
+            }
+            Verb::Close => {
+                let TicketClosurePreflight::Ready(preview) =
+                    fixed(service.preview_ticket_closure(PreviewTicketClosureRequest {
+                        root: clone.root.clone(),
+                        item_id: item_id.clone(),
+                        confirmed_identity: None,
+                    }))?
+                else {
+                    return Err(FixtureError);
+                };
+                let _stopped = service.close_ticket(
+                    CloseTicketRequest {
+                        root: clone.root.clone(),
+                        operation_id,
+                        item_id,
+                        expected: preview.expectation(),
+                        approval: None,
+                        confirmed_identity: None,
+                    },
+                    &mut session,
+                );
+            }
+        }
+        Ok(operation_id.to_string())
+    }
+
+    pub(super) fn poll_args<'a>(clone: &'a CliClone, request: &'a str) -> Vec<&'a str> {
+        vec![
+            "poll",
+            "once",
+            "--repo",
+            clone.root(),
+            "--request-id",
+            request,
+        ]
+    }
+
+    /// A peer's commit on the remote's primary, which A's poll brings in.
+    pub(super) fn behind(p: &CliPair) -> Result<git2::Oid, FixtureError> {
+        peer_commit(p, "incoming.txt", b"incoming\n")
+    }
+
+    /// One `poll once` in JSON mode.
+    pub(super) fn polled(clone: &CliClone, request: &str, code: &str, status: i32) -> Value {
+        clone.json(&poll_args(clone, request), &[], code, status)
+    }
+
+    pub(super) fn sync_local_args<'a>(clone: &'a CliClone, request: &'a str) -> Vec<&'a str> {
+        vec![
+            "context",
+            "sync-local",
+            "--repo",
+            clone.root(),
+            "--id",
+            ITEM,
+            "--input",
+            "-",
+            "--request-id",
+            request,
+        ]
+    }
+
+    pub(super) fn resolve_local_args<'a>(
+        clone: &'a CliClone,
+        operation: &'a str,
+        request: &'a str,
+    ) -> Vec<&'a str> {
+        vec![
+            "context",
+            "resolve-local",
+            "--repo",
+            clone.root(),
+            "--operation-id",
+            operation,
+            "--input",
+            "-",
+            "--request-id",
+            request,
+        ]
+    }
+
+    /// `context sync-local`'s input: the observation `observe-local` reads now.
+    pub(super) fn observed(clone: &CliClone) -> Vec<u8> {
+        let shown = clone.json(
+            &[
+                "context",
+                "observe-local",
+                "--repo",
+                clone.root(),
+                "--id",
+                ITEM,
+            ],
+            &[],
+            "ok",
+            0,
+        );
+        serde_json::json!({ "observation": shown["data"]["observation"] })
+            .to_string()
+            .into_bytes()
+    }
+
+    /// A's context of `ITEM`, saved, and A's primary moved on by a peer's
+    /// commit of another file, polled in: `context sync-local` merges.
+    /// Returns the context's tip and primary's.
+    pub(super) fn local_merge(p: &CliPair) -> Result<(git2::Oid, git2::Oid), FixtureError> {
+        let a = &p.a;
+        save(a, R1, "Saved in clone A.\n");
+        let incoming = behind(p)?;
+        lifecycle::poll(a, R2);
+        assert_eq!(a.tip(PRIMARY)?, Some(incoming));
+        Ok((a.tip(CONTEXT)?.ok_or(FixtureError)?, incoming))
+    }
+
+    /// A merged `context sync-local`: the context's tip has both parents.
+    pub(super) fn assert_locally_merged(
+        p: &CliPair,
+        context: git2::Oid,
+        primary: git2::Oid,
+    ) -> Result<(), FixtureError> {
+        let merge = p.a.tip(CONTEXT)?.ok_or(FixtureError)?;
+        assert_merge(&p.a, merge, context, primary);
+        Ok(())
+    }
+
+    /// A's saved ticket, and a peer's edit of the same ticket on primary,
+    /// polled in: `context sync-local` stops on the conflict, exit 4. Returns
+    /// the synchronization's operation and a complete resolution input, A's
+    /// side kept.
+    pub(super) fn local_conflict(p: &CliPair) -> Result<(String, Vec<u8>), FixtureError> {
+        let a = &p.a;
+        save(a, R1, "Saved in clone A.\n");
+        let moved = format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {ITEM}\ntitle: Moved on primary\n\
+             type: task\nstatus: open\n---\nBody moved on primary too.\n"
+        );
+        let incoming = peer_commit(p, &Verb::Close.path(), moved.as_bytes())?;
+        lifecycle::poll(a, R2);
+        assert_eq!(a.tip(PRIMARY)?, Some(incoming));
+        let stopped = a.json(
+            &sync_local_args(a, R3),
+            &observed(a),
+            "recovery_required",
+            4,
+        );
+        assert_eq!(stopped["data"]["state"], "conflict_pending", "{stopped}");
+        let operation = stopped["data"]["operation_id"].as_str().unwrap().to_owned();
+        let show = |extra: &[&str]| {
+            let mut args = vec![
+                "context",
+                "show-local",
+                "--repo",
+                a.root(),
+                "--operation-id",
+                operation.as_str(),
+            ];
+            args.extend_from_slice(extra);
+            a.json(&args, &[], "ok", 0)
+        };
+        let view = show(&[]);
+        let resolutions: Vec<Value> = view["data"]["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|entry| {
+                let token = entry["token"].as_str().unwrap();
+                let sides = show(&["--token", token]);
+                serde_json::json!({ "token": token, "source": sides["data"]["local"] })
+            })
+            .collect();
+        let input = serde_json::json!({
+            "observation": view["data"]["observation"],
+            "resolutions": resolutions,
+        });
+        Ok((operation, input.to_string().into_bytes()))
+    }
+
+    /// The stored state of the local synchronization `operation`.
+    pub(super) fn local_state(clone: &CliClone, operation: &str) -> String {
+        let shown = clone.json(
+            &[
+                "context",
+                "show-local",
+                "--repo",
+                clone.root(),
+                "--operation-id",
+                operation,
+            ],
+            &[],
+            "ok",
+            0,
+        );
+        shown["data"]["state"].as_str().unwrap().to_owned()
+    }
+
+    /// `request cancel` of `request` from a second invocation, with an
+    /// environment of its own over the same data: asked, and not stopped.
+    pub(super) fn asked(clone: &CliClone, request: &str) {
+        let second = CliEnv::new(clone.env.data.clone());
+        let asked = checked(
+            &second,
+            &["request", "cancel", "--request-id", request],
+            &[],
+            "ok",
+            0,
+            Some("cancel.schema.json"),
+        );
+        assert_eq!(
+            asked["data"],
+            cancel_data(request, "accepted", true, false),
+            "{asked}"
+        );
+    }
+
+    /// A JSON-mode run's `cancelled` answer: exit 130, nothing on stderr.
+    pub(super) fn cancelled_json(out: &CliRun, request: &str) -> Value {
+        scan_output(out);
+        assert_eq!(out.status, 130, "{}", String::from_utf8_lossy(&out.stdout));
+        assert!(out.stderr.is_empty(), "JSON mode writes nothing on stderr");
+        let value = cli::json(out);
+        schema::check_published("envelope.schema.json", &value).unwrap();
+        assert_eq!(value["outcome"], "cancelled");
+        assert_eq!(value["code"], "cancelled");
+        assert_eq!(value["request_id"], request);
+        value
+    }
+
+    /// The verb's confirmed request, cancelled by `request cancel` while the
+    /// server holds the context child's fetch (decision 8): `cancelled`, exit
+    /// 130, offering the same request; the record stays accepted and nothing
+    /// is merged or pushed. A new ID's prepare is held by the request
+    /// (decision 33); the same request then finishes, once; and a new prepare
+    /// finds nothing left to do.
+    pub(super) fn request_cancel(verb: Verb) -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        verb.begin(a, R1);
+        let preview = verb.prepare(a, "ok", 0);
+        let pushes = remote_world::accepted(&p.server);
+        let hold = p.server.hold_advertisement()?;
+        let child = started(&a.env, &confirmed(verb, a, R2, &preview), &[]);
+        hold.wait_until_held()?;
+        asked(a, R2);
+        hold.release()?;
+        let value = cancelled_json(&child.collected(), R2);
+        assert_eq!(actions(&value), ["request.retry"], "{value}");
+        let shown = record(a, R2);
+        assert_eq!(shown["state"], "accepted", "{shown}");
+        assert!(shown["result"].is_null());
+        assert_eq!(merges(&a.repo()?)?, 0);
+        assert_eq!(remote_world::accepted(&p.server), pushes, "nothing pushed");
+        assert!(!reserved(a), "the cancellation let the child go");
+
+        held_by(a, verb, R2);
+        let done = verb.send(a, R2, "ok", 0);
+        assert_eq!(done["operation_id"], value["operation_id"]);
+        assert_eq!(record(a, R2)["state"], "finished");
+        finished_once(&p, verb, None)?;
+        nothing_left(a, verb);
+        Ok(())
+    }
+
+    /// `poll once`, cancelled by `request cancel` while the server holds its
+    /// fetch: `cancelled`, exit 130, nothing fast-forwarded. A poll's stop
+    /// after its reservation is final (R-18): the record is finished, the same
+    /// request replays the answer with no connection, and a new request polls.
+    pub(super) fn c5_interruption_request_cancel_of_poll_once() -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        let before = a.tip(PRIMARY)?;
+        let incoming = behind(&p)?;
+        let value = cancelled_while_held(&p, a, &poll_args(a, R1), &[], R1)?;
+        assert_eq!(value["command"], "poll once");
+        assert_eq!(a.tip(PRIMARY)?, before, "nothing fast-forwarded");
+        let opened = connections(&p);
+        let replay = polled(a, R1, "cancelled", 130);
+        assert_eq!(replay["effects"], value["effects"]);
+        assert_eq!(connections(&p), opened);
+        polled(a, R2, "ok", 0);
+        assert_eq!(a.tip(PRIMARY)?, Some(incoming));
+        Ok(())
+    }
+
+    /// A `poll once` killed while the server holds its fetch, then sent again
+    /// under its ID: the record is still accepted, holding one operation; the
+    /// resend takes that operation up and polls, `ok`, and the request is
+    /// finished. The library stages the kill with a failure point
+    /// (`c5_poll_once_killed_resent_restarts`); this is a real kill.
+    pub(super) fn c5_interruption_killed_poll_once_resent() -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        let before = a.tip(PRIMARY)?;
+        let incoming = behind(&p)?;
+        let hold = p.server.hold_advertisement()?;
+        let child = started(&a.env, &poll_args(a, R1), &[]);
+        hold.wait_until_held()?;
+        // Dropping the run kills the process it started, by its handle, and
+        // reaps it.
+        drop(child);
+        drop(hold);
+        assert_eq!(a.tip(PRIMARY)?, before);
+        let shown = record(a, R1);
+        assert_eq!(shown["state"], "accepted", "{shown}");
+        let operations = shown["operations"].as_array().unwrap();
+        assert_eq!(operations.len(), 1, "{shown}");
+        let operation = operations[0]["operation_id"].clone();
+
+        let resent = polled(a, R1, "ok", 0);
+        assert_eq!(resent["operation_id"], operation, "{resent}");
+        assert_eq!(a.tip(PRIMARY)?, Some(incoming));
+        assert_eq!(record(a, R1)["state"], "finished");
+        Ok(())
+    }
+
+    /// R-25 for the lifecycle verbs: the confirmed request with its stdout
+    /// closed exits 1, with nothing on stderr, and its work is done. `request
+    /// show` holds the result, and the same request replays it: no second
+    /// connection, merge or checkpoint.
+    pub(super) fn lost_stdout(verb: Verb) -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        verb.begin(a, R1);
+        let preview = verb.prepare(a, "ok", 0);
+        let lost = with_stdout_closed(&a.env, &confirmed(verb, a, R2, &preview), &[]);
+        assert_eq!(lost.status, 1);
+        assert!(lost.stderr.is_empty(), "no second diagnostic");
+        finished_once(&p, verb, None)?;
+        let stored = record(a, R2);
+        assert_eq!(stored["state"], "finished");
+        let result = &stored["result"];
+        assert_eq!(result["code"], "ok", "{stored}");
+        let (pushes, opened) = (remote_world::accepted(&p.server), connections(&p));
+        let primary = a.tip(PRIMARY)?;
+        let replay = verb.send(a, R2, "ok", 0);
+        for key in ["outcome", "code", "effects", "data"] {
+            assert_eq!(replay[key], result[key], "{key}");
+        }
+        assert_eq!(connections(&p), opened);
+        assert_eq!(remote_world::accepted(&p.server), pushes);
+        assert_eq!(a.tip(PRIMARY)?, primary);
+        finished_once(&p, verb, None)
+    }
+
+    /// R-25 for `poll once`: its fast-forward is done, `request show` holds
+    /// the answer, and the replay makes no connection.
+    pub(super) fn c5_interruption_lost_stdout_of_poll_once() -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        let incoming = behind(&p)?;
+        let lost = with_stdout_closed(&a.env, &poll_args(a, R1), &[]);
+        assert_eq!(lost.status, 1);
+        assert!(lost.stderr.is_empty(), "no second diagnostic");
+        assert_eq!(a.tip(PRIMARY)?, Some(incoming));
+        let stored = record(a, R1);
+        assert_eq!(stored["state"], "finished");
+        let result = &stored["result"];
+        assert_eq!(result["code"], "ok", "{stored}");
+        let opened = connections(&p);
+        let replay = polled(a, R1, "ok", 0);
+        for key in ["outcome", "code", "effects", "data"] {
+            assert_eq!(replay[key], result[key], "{key}");
+        }
+        assert_eq!(connections(&p), opened);
+        Ok(())
+    }
+
+    /// R-25 for `context sync-local`: the merge is made once; the replay
+    /// makes no second commit.
+    pub(super) fn c5_interruption_lost_stdout_of_sync_local() -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        let (context, primary) = local_merge(&p)?;
+        let input = observed(a);
+        let lost = with_stdout_closed(&a.env, &sync_local_args(a, R3), &input);
+        assert_eq!(lost.status, 1);
+        assert!(lost.stderr.is_empty(), "no second diagnostic");
+        assert_locally_merged(&p, context, primary)?;
+        let merge = a.tip(CONTEXT)?;
+        let stored = record(a, R3);
+        assert_eq!(stored["state"], "finished");
+        let result = &stored["result"];
+        assert_eq!(result["code"], "ok", "{stored}");
+        let replay = a.json(&sync_local_args(a, R3), &input, "ok", 0);
+        for key in ["outcome", "code", "effects", "data"] {
+            assert_eq!(replay[key], result[key], "{key}");
+        }
+        assert_eq!(a.tip(CONTEXT)?, merge, "no second commit");
+        Ok(())
+    }
+
+    /// R-25 for `context resolve-local`: the resolution is committed once; the
+    /// replay makes no second commit.
+    pub(super) fn c5_interruption_lost_stdout_of_resolve_local() -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        let (operation, input) = local_conflict(&p)?;
+        let lost = with_stdout_closed(&a.env, &resolve_local_args(a, &operation, R4), &input);
+        assert_eq!(lost.status, 1);
+        assert!(lost.stderr.is_empty(), "no second diagnostic");
+        assert_eq!(local_state(a, &operation), "complete");
+        let resolved = a.tip(CONTEXT)?;
+        let stored = record(a, R4);
+        assert_eq!(stored["state"], "finished");
+        let result = &stored["result"];
+        assert_eq!(result["code"], "ok", "{stored}");
+        let replay = a.json(&resolve_local_args(a, &operation, R4), &input, "ok", 0);
+        for key in ["outcome", "code", "effects", "data"] {
+            assert_eq!(replay[key], result[key], "{key}");
+        }
+        assert_eq!(a.tip(CONTEXT)?, resolved, "no second commit");
+        Ok(())
+    }
+
+    /// The processes still in the session `session`, which `setsid` made the
+    /// child lead (`tests/support/cli.rs`): every process whose session ID is
+    /// that child's PID.
+    #[cfg(target_os = "linux")]
+    pub(super) fn in_session(session: u32) -> Vec<u32> {
+        let mut found = Vec::new();
+        for entry in std::fs::read_dir("/proc").unwrap() {
+            let Some(pid) = entry
+                .ok()
+                .and_then(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+            else {
+                continue;
+            };
+            let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+                continue;
+            };
+            // After the command's closing parenthesis: state, ppid, pgrp,
+            // session.
+            let Some(end) = stat.rfind(')') else { continue };
+            let fields: Vec<&str> = stat[end + 1..].split_whitespace().collect();
+            if fields.get(3).and_then(|field| field.parse::<u32>().ok()) == Some(session) {
+                found.push(pid);
+            }
+        }
+        found
+    }
+
+    /// Elsewhere on Unix, the session's process group, which `setsid` also
+    /// made the child lead: a process left in it answers a null signal.
+    #[cfg(all(unix, not(target_os = "linux")))]
+    pub(super) fn in_session(session: u32) -> Vec<u32> {
+        // SAFETY: a null signal to a process group sends nothing.
+        if unsafe { libc::kill(-(session as libc::pid_t), 0) } == 0 {
+            vec![session]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// `args` in JSON mode, run to its end: the process exited, and both its
+    /// pipes reached EOF within a second of its exit (`collect_cli`); on Unix
+    /// no process remains in its session. Returns its envelope.
+    fn exited_alone(env: &CliEnv, args: &[&str], code: &str) -> Value {
+        let mut args = args.to_vec();
+        args.push("--json");
+        let child = cli::cli_command(&args.iter().map(OsStr::new).collect::<Vec<_>>(), env)
+            .spawn()
+            .unwrap();
+        #[cfg(unix)]
+        let session = child.id();
+        let out = cli::collect_cli(child);
+        scan_output(&out);
+        let value = cli::json(&out);
+        assert_eq!(value["code"], code, "{value}");
+        #[cfg(unix)]
+        assert_eq!(in_session(session), Vec::<u32>::new(), "a process lingers");
+        value
+    }
+
+    /// The positive control: a child that leaves a sleeping process behind,
+    /// its own pipes closed, exits and its pipes reach EOF, and the session
+    /// check finds the process it left. The process is then ended by its PID.
+    #[cfg(unix)]
+    fn the_check_sees_a_lingering_process() {
+        use std::os::unix::process::CommandExt;
+        let mut command = std::process::Command::new("sh");
+        command
+            .args(["-c", "sleep 60 </dev/null >/dev/null 2>&1 & exit 0"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // SAFETY: as `tests/support/cli.rs`: setsid only, after fork.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    Err(std::io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+        let child = command.spawn().unwrap();
+        let session = child.id();
+        let out = cli::collect_cli(child);
+        assert_eq!(out.status, 0);
+        let lingering = in_session(session);
+        assert!(
+            !lingering.is_empty(),
+            "the check must see the sleeping child"
+        );
+        #[cfg(target_os = "linux")]
+        for pid in &lingering {
+            // SAFETY: a signal to the one process this control started.
+            unsafe { libc::kill(*pid as libc::pid_t, libc::SIGKILL) };
+        }
+        #[cfg(not(target_os = "linux"))]
+        // SAFETY: the group this control's child made and leads.
+        unsafe {
+            libc::kill(-(session as libc::pid_t), libc::SIGKILL)
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !in_session(session).is_empty() {
+            assert!(std::time::Instant::now() < deadline, "the control lingers");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// No resident worker (the Cycle's acceptance row): after `poll once`,
+    /// `ticket close` and `document promote`, each run to completion over
+    /// SSH, the process exited, both pipes reached EOF and, on Unix, nothing
+    /// remains in the child's session. The positive control comes first.
+    pub(super) fn c5_interruption_no_resident_worker() -> Result<(), FixtureError> {
+        #[cfg(unix)]
+        the_check_sees_a_lingering_process();
+        let p = CliPair::new()?;
+        let a = &p.a;
+        let incoming = behind(&p)?;
+        exited_alone(&a.env, &poll_args(a, R1), "ok");
+        assert_eq!(a.tip(PRIMARY)?, Some(incoming));
+        for (verb, save, request) in [(Verb::Close, R2, R3), (Verb::Promote, R4, R5)] {
+            verb.begin(a, save);
+            let preview = verb.prepare(a, "ok", 0);
+            let done = exited_alone(&a.env, &confirmed(verb, a, request, &preview), "ok");
+            assert_eq!(done["effects"]["cleanup"], "complete", "{done}");
+            assert_eq!(p.served(verb.branch())?, None);
+        }
+        Ok(())
+    }
+}
+
+/// Ctrl-C for the verbs with no server to hold: the two context mutations,
+/// which run locally, and any verb's press after its last safe point.
+///
+/// One of the run's own pipes is made one page long and filled first, so the
+/// run's next write to it waits: its stderr, after the lines given, or its
+/// stdout, at the result's first write. A progress line is written before
+/// the safe point that reads the cancellation (`local_sync/control.rs`,
+/// `request_safe_point`), so a press made while the run waits on a progress
+/// line lands before that read. The result is written after the Ctrl-C
+/// window has closed, so a press there ends the process, as Ctrl-C does
+/// outside a window. The press is `SIGINT` to the run's PID, as a terminal's
+/// line discipline sends it on Ctrl-C. Linux only: the pipe's length is set
+/// with `F_SETPIPE_SZ`, and the wait is read from `/proc`.
+#[cfg(target_os = "linux")]
+mod blocked {
+    use super::*;
+    use c5::{
+        asked, assert_locally_merged, behind, local_conflict, local_merge, local_state, observed,
+        poll_args, polled, record, resolve_local_args, sync_local_args,
+    };
+    use std::{
+        fs::File,
+        os::fd::{AsRawFd, FromRawFd, OwnedFd},
+        process::{Child, Stdio},
+        time::{Duration, Instant},
+    };
+
+    /// How long a press is given to land.
+    const LANDING: Duration = Duration::from_millis(500);
+    /// How long the run may take, under load, to reach its wait.
+    const REACH: Duration = Duration::from_secs(30);
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Stream {
+        Stdout,
+        Stderr,
+    }
+
+    /// A human-mode run with one pipe held.
+    struct Held {
+        child: Option<Child>,
+        held: File,
+        stream: Stream,
+        filler: usize,
+        capacity: usize,
+        other: Option<std::thread::JoinHandle<Vec<u8>>>,
+    }
+
+    /// What a held run came to.
+    struct Ended {
+        code: Option<i32>,
+        signal: Option<i32>,
+        stdout: String,
+        stderr: String,
+    }
+
+    impl Held {
+        /// `args` in human mode, with `input` on stdin, and `stream` held
+        /// after the `before` lines.
+        fn spawn(
+            env: &CliEnv,
+            args: &[&str],
+            input: &[u8],
+            stream: Stream,
+            before: &[&str],
+        ) -> Self {
+            let mut fds = [0; 2];
+            // SAFETY: two writable descriptor slots.
+            assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
+            // SAFETY: the OS call just opened both, and nothing else owns them.
+            let (read, write) =
+                unsafe { (File::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) };
+            // SAFETY: a live pipe descriptor; the size is a page.
+            let capacity = unsafe { libc::fcntl(write.as_raw_fd(), libc::F_SETPIPE_SZ, 4096) };
+            assert!(capacity > 0, "{}", std::io::Error::last_os_error());
+            let capacity = capacity as usize;
+            let prior: usize = before.iter().map(|line| line.len()).sum();
+            let filler = capacity - prior;
+            let mut write = File::from(write);
+            write.write_all(&vec![b'#'; filler]).unwrap();
+            let mut command =
+                cli::cli_command(&args.iter().map(OsStr::new).collect::<Vec<_>>(), env);
+            command.stdin(Stdio::piped());
+            match stream {
+                Stream::Stdout => command.stdout(Stdio::from(write)),
+                Stream::Stderr => command.stderr(Stdio::from(write)),
+            };
+            let mut child = command.spawn().unwrap();
+            drop(command);
+            child.stdin.take().unwrap().write_all(input).unwrap();
+            let mut pipe: Box<dyn Read + Send> = match stream {
+                Stream::Stdout => Box::new(child.stderr.take().unwrap()),
+                Stream::Stderr => Box::new(child.stdout.take().unwrap()),
+            };
+            let other = std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                let _ = pipe.read_to_end(&mut bytes);
+                bytes
+            });
+            Self {
+                child: Some(child),
+                held: read,
+                stream,
+                filler,
+                capacity,
+                other: Some(other),
+            }
+        }
+
+        fn pid(&self) -> u32 {
+            self.child.as_ref().unwrap().id()
+        }
+
+        /// Waits until the held pipe is full, with every `before` line in it,
+        /// and the run waits to write more.
+        fn wait_until_held(&mut self) {
+            let deadline = Instant::now() + REACH;
+            loop {
+                let mut queued: libc::c_int = 0;
+                // SAFETY: a live pipe descriptor and an int to write to.
+                assert_eq!(
+                    unsafe { libc::ioctl(self.held.as_raw_fd(), libc::FIONREAD, &mut queued) },
+                    0
+                );
+                let waiting = std::fs::read_to_string(format!("/proc/{}/wchan", self.pid()))
+                    .is_ok_and(|wchan| wchan.contains("pipe_write"));
+                if queued as usize == self.capacity && waiting {
+                    return;
+                }
+                if let Some(status) = self.child.as_mut().unwrap().try_wait().unwrap() {
+                    panic!("the run ended before its wait: {status}");
+                }
+                assert!(Instant::now() < deadline, "the run did not reach its wait");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+
+        /// Ctrl-C, as the terminal sends it: `SIGINT` to the run.
+        fn press(&self) {
+            // SAFETY: a signal to the one process this case started.
+            assert_eq!(
+                unsafe { libc::kill(self.pid() as libc::pid_t, libc::SIGINT) },
+                0
+            );
+            std::thread::sleep(LANDING);
+        }
+
+        /// Lets the held pipe go, and waits for the run's end.
+        fn finish(mut self) -> Ended {
+            use std::os::unix::process::ExitStatusExt;
+            let mut held = self.held.try_clone().unwrap();
+            let reader = std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                held.read_to_end(&mut bytes).unwrap();
+                bytes
+            });
+            let mut child = self.child.take().unwrap();
+            let deadline = Instant::now() + REACH;
+            let status = loop {
+                if let Some(status) = child.try_wait().unwrap() {
+                    break status;
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("the run did not end");
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            };
+            let held = reader.join().unwrap();
+            assert!(held[..self.filler].iter().all(|byte| *byte == b'#'));
+            let held = String::from_utf8(held[self.filler..].to_vec()).unwrap();
+            let other = String::from_utf8(self.other.take().unwrap().join().unwrap()).unwrap();
+            let (stdout, stderr) = match self.stream {
+                Stream::Stdout => (held, other),
+                Stream::Stderr => (other, held),
+            };
+            let out = CliRun {
+                stdout: stdout.clone().into_bytes(),
+                stderr: stderr.clone().into_bytes(),
+                status: 0,
+            };
+            scan_output(&out);
+            Ended {
+                code: status.code(),
+                signal: status.signal(),
+                stdout,
+                stderr,
+            }
+        }
+    }
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            if let Some(mut child) = self.child.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+
+    const ACCEPTED: &str = "progress: accepted\n";
+
+    /// A run stopped at its first safe point: `cancelled`, exit 130, after
+    /// `progress: stopping`.
+    fn assert_cancelled(ended: &Ended, request: &str) {
+        assert_eq!(
+            (ended.code, ended.signal),
+            (Some(130), None),
+            "{}",
+            ended.stderr
+        );
+        assert!(ended.stdout.is_empty(), "{}", ended.stdout);
+        assert!(ended.stderr.starts_with(ACCEPTED), "{}", ended.stderr);
+        assert!(
+            ended.stderr.contains("progress: stopping\n"),
+            "{}",
+            ended.stderr
+        );
+        assert!(
+            ended
+                .stderr
+                .contains(&format!("code: cancelled\nrequest: {request}\n")),
+            "{}",
+            ended.stderr
+        );
+    }
+
+    /// `context sync-local`, pressed while it waits on its first safe point's
+    /// progress line (the gate's "cancelled at a safe point"): `cancelled`,
+    /// exit 130, nothing written, the context and primary as they were. Its
+    /// operation stopped before any effect, so it ends `cancelled` and the
+    /// request is final: the same request replays the answer, and a new
+    /// request, with a fresh observation, merges.
+    pub(super) fn c5_interruption_press_at_a_safe_point_of_sync_local() -> Result<(), FixtureError>
+    {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        let (context, primary) = local_merge(&p)?;
+        let input = observed(a);
+        let mut run = Held::spawn(
+            &a.env,
+            &sync_local_args(a, R3),
+            &input,
+            Stream::Stderr,
+            &[ACCEPTED],
+        );
+        run.wait_until_held();
+        run.press();
+        let ended = run.finish();
+        assert_cancelled(&ended, R3);
+        assert_eq!(a.tip(CONTEXT)?, Some(context), "nothing merged");
+        assert_eq!(a.tip(PRIMARY)?, Some(primary));
+        let shown = record(a, R3);
+        assert_eq!(shown["state"], "finished", "{shown}");
+        assert_eq!(shown["result"]["code"], "cancelled");
+        let replay = a.json(&sync_local_args(a, R3), &input, "cancelled", 130);
+        assert_eq!(replay["effects"], shown["result"]["effects"]);
+        a.json(&sync_local_args(a, R4), &observed(a), "ok", 0);
+        assert_locally_merged(&p, context, primary)
+    }
+
+    /// `context resolve-local`, pressed at its first safe point: `cancelled`,
+    /// exit 130. A resolution cancelled keeps its request accepted, for the
+    /// same request to finish (the gate: "effects kept, retry or abandon";
+    /// `cancelled_partial_resolution_remains_accepted_and_resendable`): sent
+    /// again with the same sources, it completes.
+    pub(super) fn c5_interruption_press_at_a_safe_point_of_resolve_local()
+    -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        let (operation, input) = local_conflict(&p)?;
+        let mut run = Held::spawn(
+            &a.env,
+            &resolve_local_args(a, &operation, R4),
+            &input,
+            Stream::Stderr,
+            &[ACCEPTED],
+        );
+        run.wait_until_held();
+        run.press();
+        let ended = run.finish();
+        assert_cancelled(&ended, R4);
+        assert_ne!(local_state(a, &operation), "complete");
+        let shown = record(a, R4);
+        assert_eq!(shown["state"], "accepted", "{shown}");
+        let done = a.json(&resolve_local_args(a, &operation, R4), &input, "ok", 0);
+        assert_eq!(done["data"]["state"], "complete", "{done}");
+        assert_eq!(local_state(a, &operation), "complete");
+        Ok(())
+    }
+
+    /// `context sync-local`, cancelled by `request cancel` from a second
+    /// invocation while it waits at its first safe point's progress line: it
+    /// stops there, `cancelled`, exit 130, nothing written; a new request
+    /// merges.
+    pub(super) fn c5_interruption_request_cancel_of_sync_local() -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        let (context, primary) = local_merge(&p)?;
+        let mut run = Held::spawn(
+            &a.env,
+            &sync_local_args(a, R3),
+            &observed(a),
+            Stream::Stderr,
+            &[ACCEPTED],
+        );
+        run.wait_until_held();
+        asked(a, R3);
+        let ended = run.finish();
+        assert_cancelled(&ended, R3);
+        assert_eq!(a.tip(CONTEXT)?, Some(context), "nothing merged");
+        assert_eq!(record(a, R3)["state"], "finished");
+        a.json(&sync_local_args(a, R4), &observed(a), "ok", 0);
+        assert_locally_merged(&p, context, primary)
+    }
+
+    /// `context resolve-local`, cancelled by `request cancel` from a second
+    /// invocation at its first safe point: `cancelled`, exit 130, and the same
+    /// request then completes.
+    pub(super) fn c5_interruption_request_cancel_of_resolve_local() -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        let (operation, input) = local_conflict(&p)?;
+        let mut run = Held::spawn(
+            &a.env,
+            &resolve_local_args(a, &operation, R4),
+            &input,
+            Stream::Stderr,
+            &[ACCEPTED],
+        );
+        run.wait_until_held();
+        asked(a, R4);
+        let ended = run.finish();
+        assert_cancelled(&ended, R4);
+        assert_eq!(record(a, R4)["state"], "accepted");
+        a.json(&resolve_local_args(a, &operation, R4), &input, "ok", 0);
+        assert_eq!(local_state(a, &operation), "complete");
+        Ok(())
+    }
+
+    /// A press after the last safe point: the run waits on its result's
+    /// first write, after the window has closed, and Ctrl-C ends it there by
+    /// `SIGINT`, as outside a window it does. The work stands: the record is
+    /// finished `ok`, and the same request replays that answer.
+    fn pressed_at_the_result(env: &CliEnv, args: &[&str], input: &[u8]) -> Ended {
+        let mut run = Held::spawn(env, args, input, Stream::Stdout, &[]);
+        run.wait_until_held();
+        run.press();
+        let ended = run.finish();
+        assert_eq!(
+            (ended.code, ended.signal),
+            (None, Some(libc::SIGINT)),
+            "{}",
+            ended.stderr
+        );
+        assert!(ended.stdout.is_empty(), "{}", ended.stdout);
+        assert!(
+            !ended.stderr.contains("progress: stopping"),
+            "{}",
+            ended.stderr
+        );
+        ended
+    }
+
+    /// The stored `ok` of a request whose result was not written, and the
+    /// same request's replay of it.
+    fn stored_ok(clone: &CliClone, request: &str, replay: Value) {
+        let shown = record(clone, request);
+        assert_eq!(shown["state"], "finished", "{shown}");
+        let result = &shown["result"];
+        assert_eq!(result["code"], "ok", "{shown}");
+        for key in ["outcome", "code", "effects", "data"] {
+            assert_eq!(replay[key], result[key], "{key}");
+        }
+    }
+
+    pub(super) fn c5_interruption_press_at_the_result_of_poll_once() -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        let incoming = behind(&p)?;
+        pressed_at_the_result(&a.env, &poll_args(a, R1), &[]);
+        assert_eq!(a.tip(PRIMARY)?, Some(incoming));
+        let opened = collaboration::connections(&p);
+        stored_ok(a, R1, polled(a, R1, "ok", 0));
+        assert_eq!(collaboration::connections(&p), opened);
+        Ok(())
+    }
+
+    pub(super) fn c5_interruption_press_at_the_result_of_sync_local() -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        let (context, primary) = local_merge(&p)?;
+        let input = observed(a);
+        pressed_at_the_result(&a.env, &sync_local_args(a, R3), &input);
+        assert_locally_merged(&p, context, primary)?;
+        let merge = a.tip(CONTEXT)?;
+        stored_ok(a, R3, a.json(&sync_local_args(a, R3), &input, "ok", 0));
+        assert_eq!(a.tip(CONTEXT)?, merge, "no second commit");
+        Ok(())
+    }
+
+    pub(super) fn c5_interruption_press_at_the_result_of_resolve_local() -> Result<(), FixtureError>
+    {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        let (operation, input) = local_conflict(&p)?;
+        pressed_at_the_result(&a.env, &resolve_local_args(a, &operation, R4), &input);
+        assert_eq!(local_state(a, &operation), "complete");
+        let resolved = a.tip(CONTEXT)?;
+        stored_ok(
+            a,
+            R4,
+            a.json(&resolve_local_args(a, &operation, R4), &input, "ok", 0),
+        );
+        assert_eq!(a.tip(CONTEXT)?, resolved, "no second commit");
         Ok(())
     }
 }

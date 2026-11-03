@@ -2098,3 +2098,120 @@ The whole `mutation_remote` target was not run again on the narrowed version: th
 data from non-child promotion stops, which is the state every row but the one passed on before this change,
 and every `c5_` row ran on it. A fast-tier run on the wider version was stopped part way, and a `pkill` of it
 by command line may have matched another session's process of the same command line; nothing showed one.
+
+## Task 13a: interruption and no worker
+
+Base `c94dd8e2`; `origin/main` at `0dfd5a68` is contained, so nothing was merged. Only
+`tests/cli_remote/interruption.rs` changed: 30 `c5_interruption_` cases, registered in its `CASES`, each a
+fresh `CliPair` under the watchdog. No library, bin, support or golden file changed.
+
+**Staging.**
+
+- **Lifecycle verbs and `poll once`: a PTY press while the server holds an advertisement,** as C4's
+  cases do. Before integration, the first held connection is the context child's fetch. After
+  integration, each connection is held in turn until primary holds the merge, which lands the press
+  at the primary publication's fetch.
+- **The two context mutations have no server to hold.** One of the run's own pipes is made one page
+  long (`F_SETPIPE_SZ`) and pre-filled, so the run waits writing its next line:
+  - **stderr, after `progress: accepted`.** Local sync writes a safe point's progress line before it
+    reads the cancellation (`local_sync/control.rs`, `request_safe_point`), so the press lands before
+    the first safe point's read.
+  - **stdout, at the result's first write.** That write comes after the Ctrl-C window has closed, so it
+    is a press after the last safe point.
+  - The wait is read from `/proc/<pid>/wchan` (`pipe_write`) with `FIONREAD`. The press is `SIGINT` to
+    the run's PID, which is what a terminal's line discipline sends on Ctrl-C. These rows are
+    **Linux-only**, for the pipe size and `/proc`.
+- **No resident worker.** A CLI child from `cli_command` (`setsid`) is collected by `collect_cli`,
+  which proves the exit and both pipes' EOF within a second. Then no process may remain whose session
+  is the child's PID: `/proc/*/stat` on Linux, and a null signal to the process group elsewhere on Unix.
+  The positive control runs first: `sh -c 'sleep 60 … & exit 0'`, its pipes closed, exits and reaches
+  EOF, and the check finds the sleeping process. That process is then killed by its PID.
+
+**Rows (both verbs unless named).**
+
+| Case | Answer through the binary |
+| --- | --- |
+| `press_before_integration` | `cancelled`, 130, `next: request.retry`, record accepted with no result, no merge, nothing pushed, no reservation held. A new ID's prepare is held, `recovery_required`, 3, naming the request (decision 33). The same request finishes once, and then a new prepare is not `ok`. |
+| `press_after_integration` | `cancelled`, 130, `integration=complete`, primary not published, record accepted. Then the new ID is held, the same request publishes with one merge, and a new prepare is not `ok`. |
+| `second_press_close` | Ended by `SIGINT`, no result printed, nothing merged or pushed, record accepted. The same request finishes once. One verb, since the window is the CLI's (decision 27). |
+| `consent_prompt` | Interactive at the PTY, with no request ID or confirmation. The request is noted first, the preview shown, `Proceed? [y/N]` once, and `y` completes it once. |
+| `press_at_the_consent_prompt` | The raw-mode byte is the prompt's refusal: `cancelled`, 130, terminal modes restored, `request_not_found` for the allocated ID, no ref moves at either end, no connection, and a fresh prepare `ok`. |
+| `press_during_resume` | `operation resume` of a parent no request holds, pressed at the child's fetch: `cancelled`, 130, nothing merged or pushed, no record (`request_not_found`). A later resume finishes once. |
+| `press_during_poll_once` | `cancelled`, 130, nothing fast-forwarded. The record is finished (R-18), the replay is the same with no connection, and a new request polls. |
+| `primary_child_fails_with_cancellation_asked_close` | **The primary `Err` arm's row** (`promotion/run.rs`, `publish`). Pressed at the publication's fetch, the server then drops that connection, so the child fails rather than stops. The answer is `cancelled`, 130, `integration=complete`, with **no reservation held** (`poll status`'s `active_operation_id` is null) and the record accepted. The same request publishes once. Compare `c5_cancel_publication_child_released`, where the same failure without a cancellation keeps the reservation. One verb (decision 27). |
+| `press_at_a_safe_point_of_sync_local` (Linux) | `cancelled`, 130, `progress: stopping`, nothing merged. The record is finished (the operation ends `cancelled`, `control.rs`'s `terminal`), and the replay with the same observation is the same. A new request merges. |
+| `press_at_a_safe_point_of_resolve_local` (Linux) | `cancelled`, 130, not `complete`, record **accepted**. The same request with the same sources completes. This matches the gate's "effects kept, retry or abandon". |
+| `request_cancel_of_sync_local`, `_of_resolve_local` (Linux) | `request cancel` from a second invocation while the run waits at its first safe point's line. The answers are as the two rows above. |
+| `press_at_the_result_of_poll_once`, `_of_sync_local`, `_of_resolve_local` (Linux) | **After the last safe point:** ended by `SIGINT` at the result's write, outside the window. The work stands: the record is finished `ok`, the replay is identical, and there is no second commit or connection. |
+| `request_cancel` | Lifecycle verbs, while the context child's fetch is held: the second invocation answers `requested: true`, then `cancelled`, 130, `request.retry`, record accepted, no merge, no push, no reservation. Then the held prepare, the finish, and a new prepare that is not `ok`. |
+| `request_cancel_of_poll_once` | C4's `cancelled_while_held`: `cancelled`, then `finished` with the flag acknowledged. The replay makes no connection, and a new request polls. |
+| `killed_poll_once_resent` | Killed by its handle while the fetch is held. The record stays accepted with one operation, and the resend under its ID takes up **that operation**, `ok`, and fast-forwards. |
+| `lost_stdout` (both verbs), `_of_poll_once`, `_of_sync_local`, `_of_resolve_local` | Exit 1 with nothing on stderr, and the work is done. `request show` holds `ok`, and the replay matches it with no connection, push or second commit. |
+| `no_resident_worker` | The control first. Then `poll once`, `ticket close` and `document promote`, each run to completion through `exited_alone`. |
+
+**Seen first.** Every row pins behaviour that Parts A and B built, so none was expected to fail, and
+all passed once their fixtures were right. The positive control is the no-worker check's failing case.
+Fixture faults, none an answer:
+
+- I expected `progress: stopping` from a lifecycle verb's cancellation. Lifecycle progress has no
+  such stage (`accepted`, `connecting`), and nothing in the design names it.
+- A sync-local replay sent a freshly read observation. That is another request, so it answered
+  `request_mismatch`. The rows now resend the original input.
+- My first receive race was armed before the context child's push, so it cut that push. It is now
+  armed at the primary push only.
+- Five rows failed by the watchdog with no assertion line while I compiled `--test cli` beside the run.
+  Rerun alone, they passed: 22 s for the five lost-stdout rows, 11 s for no-worker.
+
+**Blocker (for the owner): Review Focus 4 answers otherwise, and its row is not committed.** The
+staging is C4's `c4_interruption_press_after_the_last_safe_point`, for both verbs:
+
+1. Each connection is held until the integrated primary's push (`git-receive-pack`, with the merge on
+   primary), and `reject_primary_updates(true)` is set.
+2. A receive race is armed on primary, the server's answer is stalled 5 s, and the press is made once
+   the push command has arrived.
+3. The push is refused: one refused update of primary.
+
+The design's rule is "A press after the last safe point keeps the domain's answer", which is
+`push_rejected`, 4. **The binary answers `cancelled`, exit 130**, with `integration=complete`,
+`Publication pending: cancelled`, `Cleanup pending: awaiting_publication`, `next: request.retry`, no
+`retrying`, and the record accepted. Run once with 130 in place of 4 (not committed), the rest held for
+both verbs: the record is accepted, primary is put back at the remote, and the same request then
+publishes with one merge.
+
+The reading: `publish`'s `Err` arm reads the cancellation after a failed primary child and releases it
+(decision 18's "because its … primary child has just failed with cancellation asked"). That read is a
+safe point after the push. So for these verbs no press after the push command is after the last safe
+point, and the domain's `push_rejected` is never what such a press keeps. The owner must rule on which
+holds:
+
+- the row expects `cancelled`, and the design's sentence is narrowed to say that a refused push is
+  followed by a safe point; or
+- the `Err` arm's answer changes.
+
+The probe is kept outside the tree. Its function and the two registrations are left out.
+
+**Matrix cells.** `document promote`, `ticket close`:
+
+- **PTY consent and a press at it:** above.
+- **Ctrl-C:** above, except RF4.
+- **`request cancel`:** above.
+- **Lost stdout:** above.
+
+`operation resume` of a lifecycle: Ctrl-C (`press_during_resume`). `poll once`:
+
+- **Ctrl-C:** `press_during_poll_once`, and after the last safe point at its result.
+- **`request cancel`:** `request_cancel_of_poll_once`.
+- **Same-request continuation:** `killed_poll_once_resent`.
+- **Lost stdout:** `lost_stdout_of_poll_once`.
+
+`context sync-local`, `resolve-local`: Ctrl-C, `request cancel` and lost stdout, the first two
+Linux-only.
+
+**Not reached, and why.** A press after the last safe point of a context mutation or a poll, but still
+inside the window, isn't reached: no line or wait comes between the last safe point's read and the end
+of `execute`. On Unix outside Linux, the context mutations' presses and `request cancel` have no row,
+since no portable way holds their pipes. The library rows pin them (`tests/mutation_replay/local_sync.rs`).
+
+**Verified.** `--test cli_remote -- c5_interruption`: 30 SSH cases passed in 159 s, run alone.
+`cargo fmt --check` and whole-tree `clippy --all-targets --all-features -D warnings` pass. The whole
+`cli_remote` target and the fast tier run with Task 13b, below.
