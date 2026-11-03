@@ -1,0 +1,27 @@
+{
+  "code": "worktree_not_clean",
+  "command": "ticket save",
+  "data": null,
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The working tree has uncommitted changes in the way.",
+  "operation_id": null,
+  "outcome": "blocked",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

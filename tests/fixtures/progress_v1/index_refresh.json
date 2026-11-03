@@ -1,0 +1,46 @@
+[
+  {
+    "command": "index refresh",
+    "effects": {
+      "checkpoint": "not_requested",
+      "cleanup": "not_requested",
+      "commit_oid": null,
+      "discovery": "not_requested",
+      "integration": "not_requested",
+      "publication": "not_requested",
+      "write": "not_requested"
+    },
+    "operation_id": "<operation>",
+    "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX2",
+    "scope": {
+      "branch": null,
+      "item_id": null,
+      "remote": null,
+      "repository": "<repository>",
+      "worktree": null
+    },
+    "stage": "accepted"
+  },
+  {
+    "command": "index refresh",
+    "effects": {
+      "checkpoint": "not_requested",
+      "cleanup": "not_requested",
+      "commit_oid": null,
+      "discovery": "not_requested",
+      "integration": "not_requested",
+      "publication": "not_requested",
+      "write": "not_requested"
+    },
+    "operation_id": "<operation>",
+    "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX2",
+    "scope": {
+      "branch": null,
+      "item_id": null,
+      "remote": null,
+      "repository": "<repository>",
+      "worktree": null
+    },
+    "stage": "indexing"
+  }
+]

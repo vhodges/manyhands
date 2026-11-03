@@ -1,0 +1,27 @@
+{
+  "code": "request_mismatch",
+  "command": "ticket save",
+  "data": null,
+  "effects": {
+    "checkpoint": "pending",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "pending",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "written"
+  },
+  "message": "That request ID was already used for a different request.",
+  "operation_id": null,
+  "outcome": "partial",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

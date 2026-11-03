@@ -1,9 +1,10 @@
 ---
+id: 01M4779ANC9VQ5H30DHZAH5CZJ
+item_id: 01K7F6H9J2N4Q6S8V0X2Z4B6DB
+created_at: 2026-10-05T23:44:49Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4779ANC9VQ5H30DHZAH5CZJ"
-item_id: "01K7F6H9J2N4Q6S8V0X2Z4B6DB"
-created_at: "2026-10-05T23:44:49Z"
 ---
 
 Run 37387522542 passed both Linux and both Windows targets. macOS probe6 confirmed an interrupted TCP connect (512 1 1), before SSH callbacks. Controlled real libgit2 SIGCHLD reproduction and in-process helper cleanup establish the fixture signal-coupling mechanism addressed here; native logs do not themselves record the signal number.

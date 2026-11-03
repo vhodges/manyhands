@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 ticket cycles",
+  "description": "Dependency cycles and then parent cycles, each kind ordered by its cycles' lowest IDs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items", "complete", "index"],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "cycle.schema.json"
+      }
+    },
+    "complete": {
+      "type": "boolean",
+      "description": "False when the last refresh could not read, or stopped part of the way through, .manyhands/tickets, .manyhands or .manyhands/worktrees. Tickets may then be missing from what this was made from while index.state is current."
+    },
+    "index": {
+      "$ref": "repository_index.schema.json"
+    }
+  }
+}

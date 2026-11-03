@@ -1,0 +1,37 @@
+{
+  "code": "ok",
+  "command": "comment add",
+  "data": {
+    "comment_id": "01ARZ3NDEKTSV4RRFFQ69G5FM0",
+    "conflict": null,
+    "created_by": "Manyhands Test <manyhands-test@example.invalid>",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "parent_id": null,
+    "pending_reason": "no_publication_remote",
+    "publication": "pending",
+    "synchronization_id": "<synchronization-id>",
+    "type": "comment"
+  },
+  "effects": {
+    "checkpoint": "committed",
+    "cleanup": "not_requested",
+    "commit_oid": "<commit-oid>",
+    "discovery": "current",
+    "integration": "not_requested",
+    "publication": "pending",
+    "write": "written"
+  },
+  "message": "The request completed.",
+  "operation_id": "<operation-id>",
+  "outcome": "success",
+  "recovery": [],
+  "request_id": "<request-id>",
+  "schema_version": 1,
+  "scope": {
+    "branch": "manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": "<repository>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FC0"
+  }
+}

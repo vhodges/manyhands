@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 documents or tickets",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items", "complete", "index"],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "item.schema.json"
+      }
+    },
+    "complete": {
+      "type": "boolean",
+      "description": "False when the last refresh could not read, or stopped part of the way through, a directory that holds items of this kind: docs or a directory under it for documents, .manyhands/tickets or .manyhands for tickets and for every relationship read, and .manyhands/worktrees, where item worktrees are, for all of them. Items may then be missing while index.state is current."
+    },
+    "index": {
+      "$ref": "repository_index.schema.json"
+    }
+  }
+}

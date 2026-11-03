@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 local synchronization mutation",
+  "description": "Content-free local synchronization result. Source and historical sides are available only through the explicit content read.",
+  "type": "object", "additionalProperties": false,
+  "required": ["type","item_id","kind","operation_id","resolution_request_id","required_request_id","result_oid","state","reason","next_action","eligibility","cancel_acknowledged"],
+  "properties": {
+    "type": {"type":"string","enum":["local_context_sync"]},
+    "item_id": {"type":"string"},
+    "kind": {"type":"string","enum":["document","ticket"]},
+    "operation_id": {"type":["string","null"]},
+    "resolution_request_id": {"type":["string","null"]},
+    "required_request_id": {"type":["string","null"]},
+    "result_oid": {"type":["string","null"]},
+    "state": {"type":"string","enum":["prepared","applying","conflict_pending","resolution_prepared","commit_prepared","integrated","index_pending","complete","recovery_required","cancelled","abandoned","refused"]},
+    "reason": {"type":"string","enum":["none","canonical_conflict","unsupported_conflict","immutable_closure_disagreement","original_resolution_required","foreign_change","ambiguous_backend","unrelated_histories","index_pending","identity_required","cancelled","abandoned","authority_missing"]},
+    "next_action": {"type":"string","enum":["none","resolve","retry_resolution","resume","external_repair","set_identity"]},
+    "eligibility": {"type":["string","null"],"enum":["eligible_canonical","external_resolution_required",null]},
+    "cancel_acknowledged": {"type":"boolean"}
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands v1 host replace input",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["authority", "algorithm", "fingerprint", "old_fingerprint"],
+  "properties": {
+    "authority": {"type": "string"},
+    "algorithm": {"type": "string"},
+    "fingerprint": {"type": "string"},
+    "old_fingerprint": {"type": "string"}
+  }
+}

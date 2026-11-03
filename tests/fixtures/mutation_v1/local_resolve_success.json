@@ -1,0 +1,40 @@
+{
+  "code": "ok",
+  "command": "context resolve-local",
+  "data": {
+    "cancel_acknowledged": false,
+    "eligibility": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "kind": "ticket",
+    "next_action": "none",
+    "operation_id": "<operation>",
+    "reason": "none",
+    "required_request_id": null,
+    "resolution_request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX3",
+    "result_oid": "<commit>",
+    "state": "complete",
+    "type": "local_context_sync"
+  },
+  "effects": {
+    "checkpoint": "committed",
+    "cleanup": "not_requested",
+    "commit_oid": "<commit>",
+    "discovery": "current",
+    "integration": "complete",
+    "publication": "not_requested",
+    "write": "written"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX3",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

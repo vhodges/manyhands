@@ -3,7 +3,7 @@ use std::{fmt, path::PathBuf};
 use super::{HostKeyIdentity, SshAuthority, SshDirection};
 use crate::repository::SharedKeyId;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct SshTransportError {
     pub root: PathBuf,
     pub remote_name: String,
@@ -11,6 +11,16 @@ pub struct SshTransportError {
     pub selected_key_id: Option<SharedKeyId>,
     pub authority: Option<SshAuthority>,
     pub kind: SshTransportErrorKind,
+}
+
+impl fmt::Debug for SshTransportError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SshTransportError")
+            .field("direction", &self.direction)
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,6 +173,28 @@ mod tests {
     use std::{error::Error, path::PathBuf};
 
     use super::*;
+    #[test]
+    fn transport_delete_error_debug_omits_endpoint_and_request_paths() {
+        let error = SshTransportError {
+            root: PathBuf::from("/private/request/path"),
+            remote_name: "private-remote".into(),
+            direction: SshDirection::Delete,
+            selected_key_id: None,
+            authority: Some(SshAuthority {
+                host: "private-host.invalid".into(),
+                port: 32123,
+            }),
+            kind: SshTransportErrorKind::ProtocolFailure,
+        };
+        for sentinel in [
+            "private-host.invalid",
+            "32123",
+            "/private/request/path",
+            "private-remote",
+        ] {
+            assert!(!format!("{error:?} {error}").contains(sentinel));
+        }
+    }
     use crate::repository::transport::SshDirection;
 
     #[test]

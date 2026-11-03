@@ -1,0 +1,13 @@
+The request completed.
+request: <request-id>
+operation: <operation-id>
+effects: write=written checkpoint=committed discovery=current publication=pending commit=<commit-oid>
+Comment id: 01ARZ3NDEKTSV4RRFFQ69G5FM0
+Conflict: none
+Created by: Manyhands Test <manyhands-test@example.invalid>
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FC0
+Parent id: none
+Pending reason: no_publication_remote
+Publication: pending
+Synchronization id: <synchronization-id>
+Type: comment

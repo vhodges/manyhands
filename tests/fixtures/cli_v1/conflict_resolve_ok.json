@@ -1,0 +1,33 @@
+{
+  "code": "ok",
+  "command": "conflict resolve",
+  "data": {
+    "commit_oid": "<commit-oid>",
+    "conflict": null,
+    "operation_id": "<operation-id>",
+    "publication": "published",
+    "type": "conflict_resolution"
+  },
+  "effects": {
+    "checkpoint": "committed",
+    "cleanup": "not_requested",
+    "commit_oid": "<commit-oid>",
+    "discovery": "current",
+    "integration": "complete",
+    "publication": "published",
+    "write": "written"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": "<request-id>",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

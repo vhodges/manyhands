@@ -8,6 +8,7 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
+static SHORT_PATHS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Call only from the real main before creating threads, including test workers.
 ///
@@ -55,6 +56,13 @@ pub fn run_with_output_privacy(cases: &[Case], controls: &[Case]) {
     run_mode(cases, controls, true);
 }
 
+/// Context worktrees contain another full canonical path beneath a ULID.
+/// Select short runner-owned paths for this target and its isolated controls.
+pub fn run_with_short_output_privacy(cases: &[Case], controls: &[Case]) {
+    SHORT_PATHS.store(true, std::sync::atomic::Ordering::SeqCst);
+    run_mode(cases, controls, true);
+}
+
 fn run_mode(cases: &[Case], controls: &[Case], output_privacy: bool) {
     std::panic::set_hook(Box::new(|info| {
         eprintln!("SSH fixture assertion failed");
@@ -88,6 +96,7 @@ fn run_mode(cases: &[Case], controls: &[Case], output_privacy: bool) {
     };
     let filter = options.filter.as_ref();
     let mut count = 0;
+    let mut failed = 0;
     for (name, _) in cases {
         if filter.is_some_and(|filter| {
             !(if options.exact {
@@ -107,14 +116,21 @@ fn run_mode(cases: &[Case], controls: &[Case], output_privacy: bool) {
         } else {
             run_isolated(name)
         };
+        // Each case runs in its own child and temporary root, so one failure
+        // cannot contaminate later cases; run them all, then fail the target.
         if result.is_err() {
             eprintln!("test {name} ... FAILED (isolated child or watchdog failure)");
-            std::process::exit(1);
+            failed += 1;
+            continue;
         }
         println!("test {name} ... ok");
         count += 1;
     }
     println!("{count} SSH cases passed");
+    if failed > 0 {
+        eprintln!("{failed} SSH cases failed");
+        std::process::exit(1);
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,14 +152,21 @@ pub fn run_isolated_with_output_privacy(case: &str) -> Result<(), IsolationFailu
     capture_isolated(case, true)
 }
 fn capture_isolated(case: &str, output_privacy: bool) -> Result<(), IsolationFailure> {
+    let short = SHORT_PATHS.load(std::sync::atomic::Ordering::SeqCst);
     let isolation = fixed(
         tempfile::Builder::new()
-            .prefix("manyhands isolated SSH ")
+            .prefix(if short {
+                "i"
+            } else {
+                "manyhands isolated SSH "
+            })
             .tempdir(),
     )?;
-    let home = isolation.path().join("home");
-    let data = isolation.path().join("application data");
-    let temporary = isolation.path().join("fixtures");
+    let home = isolation.path().join(if short { "h" } else { "home" });
+    let data = isolation
+        .path()
+        .join(if short { "d" } else { "application data" });
+    let temporary = isolation.path().join(if short { "t" } else { "fixtures" });
     for directory in [&home, &data, &temporary] {
         fixed(std::fs::create_dir(directory))?;
     }
@@ -162,7 +185,9 @@ fn capture_isolated(case: &str, output_privacy: bool) -> Result<(), IsolationFai
         home.join(".ssh/id_ed25519"),
         fixed(default_key.to_openssh(russh::keys::ssh_key::LineEnding::LF))?.as_bytes(),
     ))?;
-    let probes = isolation.path().join("private probes");
+    let probes = isolation
+        .path()
+        .join(if short { "p" } else { "private probes" });
     fixed(std::fs::create_dir(&probes))?;
     let mut command = Command::new(fixed(std::env::current_exe())?);
     command.env(super::ssh_privacy::PROBES, &probes);

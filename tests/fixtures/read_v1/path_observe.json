@@ -1,0 +1,37 @@
+{
+  "code": "ok",
+  "command": "path observe",
+  "data": {
+    "context": {
+      "branch": "main",
+      "head_oid": "<head-oid>",
+      "kind": "primary",
+      "worktree": "<repository>"
+    },
+    "exists": true,
+    "observation": "v1:b97979596442d7b114749e98e56274fe7c014d36b8c77878a216289a631a36f0",
+    "path": "docs/guide.md"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

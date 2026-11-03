@@ -1,45 +1,16 @@
-use gpui_kit::component::button::*;
-use gpui_kit::component::*;
-use gpui_kit::*;
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-struct HelloWorld;
-
-impl Render for HelloWorld {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .v_flex()
-            .gap_2()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .child("Hello, World!")
-            .child(
-                Button::new("hello")
-                    .primary()
-                    .label("Say hello")
-                    .on_click(|_, _, _| println!("Hello from Manyhands!")),
-            )
-    }
-}
+mod desktop;
+mod startup_reporting;
 
 fn main() {
-    // SAFETY: this is the first action, before GPUI creates background threads.
+    // Hook registration creates no threads and must cover Git startup panics.
+    startup_reporting::install_panic_hook();
+    // SAFETY: this is the first runtime initialization, before GPUI or any
+    // other startup code can create background threads or use Git concurrently.
     if unsafe { manyhands::runtime::initialize_git_transport_before_threads() }.is_err() {
-        eprintln!("Git transport initialization failed");
+        startup_reporting::report_startup_failure();
         std::process::exit(1);
     }
-    let app = gpui_kit::application().with_assets(gpui_kit::assets::Assets);
-
-    app.run(move |cx| {
-        gpui_kit::init(cx);
-
-        cx.spawn(async move |cx| {
-            cx.open_window(WindowOptions::default(), |window, cx| {
-                let view = cx.new(|_| HelloWorld);
-                cx.new(|cx| Root::new(view, window, cx))
-            })
-            .expect("failed to open Manyhands window");
-        })
-        .detach();
-    });
+    desktop::run();
 }

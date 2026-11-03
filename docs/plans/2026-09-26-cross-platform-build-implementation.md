@@ -1,3 +1,12 @@
+---
+title: "Cross-Platform Build Implementation Plan"
+date: 2026-09-28
+author: "Vince Hodges <vince@imbas.ca>"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M5MHD4J6KZ7Y7CTG1ZQKXYZS"
+---
+
 # Cross-Platform Build Implementation Plan
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.

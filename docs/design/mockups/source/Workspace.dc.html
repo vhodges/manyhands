@@ -1,0 +1,1135 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;display=swap">
+<link rel="stylesheet" href="https://unpkg.com/lucide-static@0.469.0/font/lucide.css">
+<style>[class^="icon-"],[class*=" icon-"]{font-family:lucide!important;font-style:normal;font-weight:normal;line-height:1;display:inline-block;-webkit-font-smoothing:antialiased}.mh-scroll::-webkit-scrollbar{width:8px;height:8px}.mh-scroll::-webkit-scrollbar-thumb{background:var(--mh-3a3f46,#3a3f46);border-radius:4px}.mh-scroll::-webkit-scrollbar-track{background:transparent}@keyframes mhspin{to{transform:rotate(360deg)}}button{font:inherit;color:inherit}a{color:var(--mh-5fb4c3,#5fb4c3)}a:hover{color:var(--mh-8fd0db,#8fd0db)}</style>
+</helmet>
+<div ref="{{rootRef}}" style="width:100%;height:100%;display:flex;flex-direction:column;background:var(--mh-1a1c20,#1a1c20);color:var(--mh-d5d8dd,#d5d8dd);font-family:'IBM Plex Sans',system-ui,sans-serif;font-size:13px;position:relative;overflow:hidden;border-radius:10px;border:1px solid var(--mh-3a3f46,#3a3f46);box-sizing:border-box">
+
+  <div style="height:38px;flex:none;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:0 8px 0 12px;background:var(--mh-1f2226,#1f2226);border-bottom:1px solid var(--mh-2e3238,#2e3238)">
+    <div style="display:flex;align-items:center;gap:10px;min-width:0">
+      <img src="assets/manyhands-icon.svg" alt="" style="width:18px;height:18px;flex:none">
+      <div style="display:flex;align-items:center;gap:0">
+        <button style="border:none;background:transparent;color:var(--mh-8d949e,#8d949e);padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px" style-hover="background:var(--mh-2a2e34,#2a2e34);color:var(--mh-d5d8dd,#d5d8dd)">File</button>
+        <button style="border:none;background:transparent;color:var(--mh-8d949e,#8d949e);padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px" style-hover="background:var(--mh-2a2e34,#2a2e34);color:var(--mh-d5d8dd,#d5d8dd)">Edit</button>
+        <button style="border:none;background:transparent;color:var(--mh-8d949e,#8d949e);padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px" style-hover="background:var(--mh-2a2e34,#2a2e34);color:var(--mh-d5d8dd,#d5d8dd)">View</button>
+        <button style="border:none;background:transparent;color:var(--mh-8d949e,#8d949e);padding:4px 8px;border-radius:4px;cursor:pointer;font-size:12px" style-hover="background:var(--mh-2a2e34,#2a2e34);color:var(--mh-d5d8dd,#d5d8dd)">Help</button>
+      </div>
+      <div style="width:1px;height:16px;background:var(--mh-2e3238,#2e3238)"></div>
+      <button title="Everything in the Tickets and Documents panels comes from this one selection" style="display:flex;align-items:center;gap:6px;border:1px solid var(--mh-2e3238,#2e3238);background:var(--mh-23272d,#23272d);padding:3px 8px;border-radius:5px;cursor:pointer;font-size:12px;white-space:nowrap" style-hover="border-color:#3f6f78">
+        <i class="icon-{{scopeIcon}}" style="font-size:13px;color:var(--mh-e9ad36,#E9AD36)"></i>
+        <span style="color:var(--mh-8d949e,#8d949e)">{{scopeKind}}</span>
+        <span style="font-weight:500">{{scopeName}}</span>
+        <i class="icon-chevron-down" style="font-size:12px;color:var(--mh-646b75,#646b75)"></i>
+      </button>
+    </div>
+    <div style="width:380px;height:26px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--mh-1a1c20,#1a1c20);border:1px solid var(--mh-2e3238,#2e3238);border-radius:6px;color:var(--mh-646b75,#646b75);font-size:12px;cursor:text">
+      <i class="icon-search" style="font-size:13px"></i>
+      <span style="flex:1;white-space:nowrap;overflow:hidden">Search tickets, documents and short codes</span>
+      <span style="white-space:nowrap;font-family:'IBM Plex Mono',monospace;font-size:10.5px;padding:1px 5px;border:1px solid var(--mh-2e3238,#2e3238);border-radius:3px">Ctrl K</span>
+    </div>
+    <div style="display:flex;align-items:center;justify-content:flex-end;gap:6px">
+      <div title="Vince Hodges · vince@imbas.ca (Git identity)" style="width:22px;height:22px;border-radius:50%;background:#07596A;color:#e9f3f5;font-size:10px;font-weight:600;display:flex;align-items:center;justify-content:center;margin-right:8px">VH</div>
+      <button title="Minimize" style="width:24px;height:24px;border-radius:50%;border:none;background:var(--mh-2a2e34,#2a2e34);color:var(--mh-a9afb8,#a9afb8);display:flex;align-items:center;justify-content:center;cursor:pointer" style-hover="background:var(--mh-353a41,#353a41)"><i class="icon-minus" style="font-size:13px"></i></button>
+      <button title="Maximize" style="width:24px;height:24px;border-radius:50%;border:none;background:var(--mh-2a2e34,#2a2e34);color:var(--mh-a9afb8,#a9afb8);display:flex;align-items:center;justify-content:center;cursor:pointer" style-hover="background:var(--mh-353a41,#353a41)"><i class="icon-square" style="font-size:11px"></i></button>
+      <button title="Close" style="width:24px;height:24px;border-radius:50%;border:none;background:var(--mh-2a2e34,#2a2e34);color:var(--mh-a9afb8,#a9afb8);display:flex;align-items:center;justify-content:center;cursor:pointer" style-hover="background:#c95b5d;color:#fff"><i class="icon-x" style="font-size:13px"></i></button>
+    </div>
+  </div>
+
+  <div style="flex:1;min-height:0;display:grid;grid-template-columns:{{gridCols}};grid-template-rows:{{gridRows}};grid-template-areas:{{gridAreas}}">
+    <sc-for list="{{docks}}" as="d" hint-placeholder-count="2">
+      <div style="grid-area:{{d.area}};display:flex;flex-direction:{{d.dir}};min-width:0;min-height:0;background:var(--mh-212429,#212429);border-right:{{d.br}};border-left:{{d.bl}};border-top:{{d.bt}}">
+        <sc-for list="{{d.groups}}" as="g">
+          <div style="flex:{{g.grow}} 1 0px;min-width:0;min-height:0;display:flex;flex-direction:column;border-top:{{g.sepTop}};border-left:{{g.sepLeft}}">
+            <div style="height:32px;flex:none;display:flex;align-items:stretch;overflow:hidden;background:var(--mh-1f2226,#1f2226);border-bottom:1px solid var(--mh-2e3238,#2e3238);padding-right:4px">
+              <sc-for list="{{g.tabs}}" as="t">
+                <button onClick="{{t.onClick}}" title="{{t.title}}" style="display:flex;align-items:center;gap:6px;padding:0 10px;border:none;background:{{t.bg}};color:{{t.color}};box-shadow:{{t.line}};cursor:pointer;font-size:12px;font-weight:500;white-space:nowrap">
+                  <i class="icon-{{t.icon}}" style="font-size:13px"></i>
+                  <span>{{t.label}}</span>
+                  <span style="font-size:11px;color:var(--mh-646b75,#646b75);font-weight:400">{{t.count}}</span>
+                </button>
+              </sc-for>
+              <div style="flex:1"></div>
+              <sc-for list="{{g.actions}}" as="a">
+                <button onClick="{{a.onClick}}" title="{{a.title}}" style="width:26px;align-self:center;height:24px;border:none;background:transparent;color:var(--mh-8d949e,#8d949e);border-radius:4px;display:flex;align-items:center;justify-content:center;cursor:pointer" style-hover="background:var(--mh-2a2e34,#2a2e34);color:var(--mh-d5d8dd,#d5d8dd)"><i class="icon-{{a.icon}}" style="font-size:14px"></i></button>
+              </sc-for>
+            </div>
+
+            <sc-if value="{{g.isRepos}}">
+              <div class="mh-scroll" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:4px 0">
+                <sc-for list="{{repoRows}}" as="r">
+                  <div onClick="{{r.onClick}}" title="{{r.git}}" style="height:{{rowH}}px;display:flex;align-items:center;gap:8px;padding:0 10px 0 12px;cursor:pointer;background:{{r.bg}};box-shadow:{{r.edge}}" style-hover="background:var(--mh-2a2e34,#2a2e34)">
+                    <i class="icon-folder-git-2" style="font-size:14px;color:var(--mh-8d949e,#8d949e)"></i>
+                    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:{{r.weight}}">{{r.name}}</span>
+                    <span style="display:flex;align-items:center;gap:4px;font-size:11.5px;color:{{r.color}};white-space:nowrap"><i class="icon-{{r.icon}}" style="font-size:12px"></i>{{r.label}}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{g.isProjects}}">
+              <div class="mh-scroll" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:4px 0">
+                <sc-for list="{{projectRows}}" as="p">
+                  <div onClick="{{p.onClick}}" title="{{p.tip}}" style="height:{{rowH}}px;display:flex;align-items:center;gap:8px;padding:0 10px 0 12px;cursor:pointer;background:{{p.bg}};box-shadow:{{p.edge}}" style-hover="background:var(--mh-2a2e34,#2a2e34)">
+                    <i class="icon-folder-kanban" style="font-size:14px;color:var(--mh-8d949e,#8d949e)"></i>
+                    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:{{p.weight}}">{{p.name}}</span>
+                    <span style="font-size:11.5px;color:var(--mh-646b75,#646b75);white-space:nowrap">{{p.meta}}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{g.isTeams}}">
+              <div class="mh-scroll" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:4px 0">
+                <sc-for list="{{teamRows}}" as="p">
+                  <div onClick="{{p.onClick}}" title="{{p.tip}}" style="height:{{rowH}}px;display:flex;align-items:center;gap:8px;padding:0 10px 0 12px;cursor:pointer;background:{{p.bg}};box-shadow:{{p.edge}}" style-hover="background:var(--mh-2a2e34,#2a2e34)">
+                    <i class="icon-users" style="font-size:14px;color:var(--mh-8d949e,#8d949e)"></i>
+                    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:{{p.weight}}">{{p.name}}</span>
+                    <span style="font-size:11.5px;color:var(--mh-646b75,#646b75);white-space:nowrap">{{p.meta}}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{g.isTickets}}">
+              <div style="flex:none;display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--mh-2e3238,#2e3238)">
+                <div style="display:flex;background:var(--mh-1a1c20,#1a1c20);border:1px solid var(--mh-2e3238,#2e3238);border-radius:5px;padding:1px">
+                  <sc-for list="{{ticketFilters}}" as="f">
+                    <button onClick="{{f.onClick}}" style="border:none;padding:2px 8px;border-radius:4px;font-size:11.5px;cursor:pointer;background:{{f.bg}};color:{{f.color}};white-space:nowrap">{{f.label}} <span style="color:var(--mh-646b75,#646b75)">{{f.count}}</span></button>
+                  </sc-for>
+                </div>
+                <div style="flex:1;min-width:0;height:24px;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--mh-1a1c20,#1a1c20);border:1px solid var(--mh-2e3238,#2e3238);border-radius:5px;color:var(--mh-646b75,#646b75);font-size:11.5px;overflow:hidden;white-space:nowrap">
+                  <i class="icon-list-filter" style="font-size:12px"></i>Filter by title or code
+                </div>
+              </div>
+              <div style="flex:none;height:24px;display:flex;align-items:center;gap:8px;padding:0 10px 0 12px;border-bottom:1px solid var(--mh-2e3238,#2e3238);font-size:11px;color:var(--mh-646b75,#646b75);text-transform:uppercase;letter-spacing:.04em">
+                <span style="width:14px;flex:none"></span>
+                <sc-for list="{{ticketCols}}" as="c">
+                  <button onClick="{{c.onClick}}" title="Sort by {{c.label}}" style="border:none;background:transparent;padding:0;display:flex;align-items:center;gap:3px;cursor:pointer;width:{{c.w}};flex:{{c.flex}};min-width:0;justify-content:{{c.justify}};color:{{c.color}};font-size:11px;text-transform:uppercase;letter-spacing:.04em">{{c.label}}<i class="icon-{{c.arrow}}" style="font-size:11px;opacity:{{c.arrowOp}}"></i></button>
+                </sc-for>
+              </div>
+              <div class="mh-scroll" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:2px 0">
+                <sc-for list="{{ticketRows}}" as="tk">
+                  <div onClick="{{tk.onClick}}" title="{{tk.tip}}" style="height:{{rowH}}px;display:flex;align-items:center;gap:8px;padding:0 10px 0 12px;cursor:pointer;background:{{tk.bg}};box-shadow:{{tk.edge}}" style-hover="background:var(--mh-2a2e34,#2a2e34)">
+                    <i class="icon-{{tk.typeIcon}}" style="font-size:13px;width:14px;flex:none;color:{{tk.typeColor}}"></i>
+                    <span style="width:78px;flex:none;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mh-8d949e,#8d949e);white-space:nowrap;overflow:hidden">{{tk.code}}</span>
+                    <span style="flex:1;min-width:0;display:flex;align-items:center;gap:6px">
+                      <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:{{tk.titleColor}}">{{tk.title}}</span>
+                      <sc-if value="{{tk.editing}}"><i class="icon-pencil" title="You're editing this. Saved on this computer, not shared yet." style="font-size:11px;color:var(--mh-e9ad36,#E9AD36);flex:none"></i></sc-if>
+                      <sc-if value="{{tk.conflict}}"><i class="icon-circle-alert" title="You and Jo Smith both changed this. Review to choose what to keep." style="font-size:12px;color:var(--mh-e3787a,#e3787a);flex:none"></i></sc-if>
+                    </span>
+                    <span style="width:92px;flex:none;display:flex;justify-content:flex-start"><span style="font-size:11px;padding:1px 7px;border-radius:9px;white-space:nowrap;background:{{tk.pillBg}};color:{{tk.pillFg}}">{{tk.status}}</span></span>
+                    <span style="width:30px;flex:none;text-align:right;font-size:11px;color:var(--mh-646b75,#646b75)">{{tk.age}}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div style="flex:none;padding:5px 12px;border-top:1px solid var(--mh-2e3238,#2e3238);font-size:11px;color:var(--mh-646b75,#646b75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ticketFootnote}}</div>
+            </sc-if>
+
+            <sc-if value="{{g.isDocs}}">
+              <div class="mh-scroll" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:4px 0">
+                <sc-for list="{{docRows}}" as="dr">
+                  <div onClick="{{dr.onClick}}" title="{{dr.tip}}" style="height:{{rowH}}px;display:flex;align-items:center;gap:5px;padding-right:10px;padding-left:{{dr.indent}}px;cursor:pointer;background:{{dr.bg}};box-shadow:{{dr.edge}}" style-hover="background:var(--mh-2a2e34,#2a2e34)">
+                    <i class="icon-{{dr.chev}}" style="font-size:12px;width:12px;flex:none;color:{{dr.chevColor}}"></i>
+                    <i class="icon-{{dr.icon}}" style="font-size:14px;flex:none;color:{{dr.iconColor}}"></i>
+                    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-left:3px;color:{{dr.color}};font-weight:{{dr.weight}}">{{dr.name}}</span>
+                    <sc-if value="{{dr.editing}}"><i class="icon-pencil" title="Being edited. Saved on this computer, not shared yet." style="font-size:11px;color:var(--mh-e9ad36,#E9AD36)"></i></sc-if>
+                    <sc-if value="{{dr.bad}}"><i class="icon-triangle-alert" style="font-size:12px;color:var(--mh-e9ad36,#E9AD36)"></i></sc-if>
+                    <span style="font-size:11px;color:var(--mh-646b75,#646b75)">{{dr.count}}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <sc-if value="{{g.isLog}}">
+              <div class="mh-scroll" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:4px 0;font-size:12.5px">
+                <sc-for list="{{logRows}}" as="l">
+                  <div title="{{l.git}}" style="min-height:24px;display:flex;align-items:center;gap:10px;padding:2px 12px" style-hover="background:var(--mh-2a2e34,#2a2e34)">
+                    <span style="width:40px;flex:none;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mh-646b75,#646b75)">{{l.time}}</span>
+                    <i class="icon-{{l.icon}}" style="font-size:13px;flex:none;color:{{l.color}}"></i>
+                    <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{l.msg}}</span>
+                    <span style="flex:none;font-size:11px;color:var(--mh-8d949e,#8d949e);padding:1px 6px;border:1px solid var(--mh-2e3238,#2e3238);border-radius:4px">{{l.repo}}</span>
+                    <sc-if value="{{l.hasAction}}"><button onClick="{{l.onAction}}" style="white-space:nowrap;flex:none;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);border-radius:4px;padding:1px 8px;font-size:11.5px;cursor:pointer" style-hover="border-color:var(--mh-5fb4c3,#5fb4c3)">{{l.action}}</button></sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+    </sc-for>
+
+    <div style="grid-area:center;display:flex;min-width:0;min-height:0;background:var(--mh-1a1c20,#1a1c20)">
+      <sc-for list="{{panes}}" as="pn" hint-placeholder-count="1">
+        <div onClick="{{pn.focus}}" style="flex:1 1 0px;min-width:0;display:flex;flex-direction:column;border-left:{{pn.sep}}">
+          <div style="height:34px;flex:none;display:flex;align-items:stretch;background:var(--mh-1f2226,#1f2226);border-bottom:1px solid var(--mh-2e3238,#2e3238);overflow:hidden">
+            <sc-for list="{{pn.tabs}}" as="tb">
+              <div onClick="{{tb.onClick}}" title="{{tb.tip}}" style="display:flex;align-items:center;gap:7px;padding:0 6px 0 12px;max-width:260px;min-width:0;background:{{tb.bg}};color:{{tb.color}};border-right:1px solid var(--mh-2e3238,#2e3238);box-shadow:{{tb.line}};cursor:pointer">
+                <i class="icon-{{tb.icon}}" style="font-size:13px;flex:none;color:{{tb.iconColor}}"></i>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mh-8d949e,#8d949e);flex:none;white-space:nowrap">{{tb.code}}</span>
+                <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{tb.title}}</span>
+                <sc-if value="{{tb.dirty}}"><span title="Unsaved changes" style="width:7px;height:7px;border-radius:50%;background:var(--mh-e9ad36,#E9AD36);flex:none"></span></sc-if>
+                <button onClick="{{tb.onClose}}" title="Close tab" style="width:20px;height:20px;flex:none;border:none;background:transparent;color:var(--mh-646b75,#646b75);border-radius:4px;display:flex;align-items:center;justify-content:center;cursor:pointer" style-hover="background:var(--mh-353a41,#353a41);color:var(--mh-d5d8dd,#d5d8dd)"><i class="icon-x" style="font-size:12px"></i></button>
+              </div>
+            </sc-for>
+            <div style="flex:1"></div>
+            <button onClick="{{pn.split}}" title="Split right" style="width:28px;align-self:center;height:24px;border:none;background:transparent;color:var(--mh-8d949e,#8d949e);border-radius:4px;display:flex;align-items:center;justify-content:center;cursor:pointer;margin-right:4px" style-hover="background:var(--mh-2a2e34,#2a2e34);color:var(--mh-d5d8dd,#d5d8dd)"><i class="icon-columns-2" style="font-size:14px"></i></button>
+          </div>
+
+          <sc-if value="{{pn.hasItem}}">
+            <div class="mh-scroll" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:22px 32px 28px;display:grid;align-content:start;grid-template-columns:minmax(0,1fr);gap:16px">
+              <div style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--mh-8d949e,#8d949e)">
+                <i class="icon-folder-git-2" style="font-size:12px"></i><span>{{pn.item.repo}}</span>
+                <i class="icon-chevron-right" style="font-size:11px;color:var(--mh-646b75,#646b75)"></i><span>{{pn.item.section}}</span>
+                <i class="icon-chevron-right" style="font-size:11px;color:var(--mh-646b75,#646b75)"></i><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;white-space:nowrap">{{pn.item.file}}</span>
+              </div>
+              <div style="display:flex;align-items:flex-start;gap:20px;flex-wrap:wrap">
+                <div style="flex:1 1 320px;min-width:0;display:flex;flex-direction:column;gap:10px">
+                  <div style="font-size:22px;font-weight:600;line-height:1.25;text-wrap:pretty">{{pn.item.title}}</div>
+                  <div style="display:flex;flex-wrap:wrap;gap:6px">
+                    <sc-for list="{{pn.item.chips}}" as="ch">
+                      <span style="white-space:nowrap;display:flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border-radius:4px;background:{{ch.bg}};color:{{ch.fg}};border:1px solid var(--mh-2e3238,#2e3238)"><span style="color:var(--mh-646b75,#646b75)">{{ch.k}}</span>{{ch.v}}</span>
+                    </sc-for>
+                  </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;flex:none">
+                  <span title="{{pn.item.git}}" style="white-space:nowrap;display:flex;align-items:center;gap:6px;font-size:12px;color:{{pn.item.stateColor}};padding:4px 10px;border-radius:5px;background:var(--mh-212429,#212429);border:1px solid var(--mh-2e3238,#2e3238);cursor:help"><i class="icon-{{pn.item.stateIcon}}" style="font-size:13px"></i>{{pn.item.stateLabel}}</span>
+                  <button title="Save a checkpoint on this computer (Ctrl S)" style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:5px;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);cursor:pointer;font-size:12px;white-space:nowrap" style-hover="border-color:var(--mh-5fb4c3,#5fb4c3)"><i class="icon-save" style="font-size:13px"></i>Save</button>
+                  <button title="Bring in others' changes and share yours through origin" style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:5px;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);cursor:pointer;font-size:12px;white-space:nowrap" style-hover="border-color:var(--mh-5fb4c3,#5fb4c3)"><i class="icon-cloud-upload" style="font-size:13px"></i>Share</button>
+                  <button onClick="{{pn.item.onFinish}}" title="{{pn.item.finishTip}}" style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:5px;border:none;background:var(--mh-e9ad36,#E9AD36);color:var(--mh-1a1c20,#1a1c20);font-weight:600;cursor:pointer;font-size:12px;white-space:nowrap" style-hover="background:var(--mh-f2bd4f,#f2bd4f)">{{pn.item.finish}}</button>
+                </div>
+              </div>
+              <sc-if value="{{pn.item.hasBanner}}">
+                <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:6px;background:{{pn.item.bannerBg}};border:1px solid {{pn.item.bannerBorder}}">
+                  <i class="icon-{{pn.item.bannerIcon}}" style="font-size:15px;color:{{pn.item.bannerColor}};flex:none"></i>
+                  <span style="flex:1;font-size:12.5px;text-wrap:pretty">{{pn.item.bannerText}}</span>
+                  <button onClick="{{pn.item.onBanner}}" style="white-space:nowrap;flex:none;padding:4px 10px;border-radius:5px;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);cursor:pointer;font-size:12px" style-hover="border-color:var(--mh-5fb4c3,#5fb4c3)">{{pn.item.bannerAction}}</button>
+                </div>
+              </sc-if>
+              <div style="flex:1;min-height:360px;border:1px dashed var(--mh-3a3f46,#3a3f46);border-radius:6px;background:repeating-linear-gradient(135deg,var(--mh-1c1f23,#1c1f23) 0 10px,var(--mh-202328,#202328) 10px 20px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--mh-8d949e,#8d949e);text-align:center;padding:20px">
+                <span style="color:var(--mh-d5d8dd,#d5d8dd);white-space:nowrap">{{pn.item.placeholder}}</span>
+                <span style="white-space:nowrap">zorite-editor · rich text + Markdown source · comments</span>
+                <span style="color:var(--mh-646b75,#646b75);white-space:nowrap">needs its own discussion and mockup round</span>
+              </div>
+            </div>
+          </sc-if>
+          <sc-if value="{{pn.isEmpty}}">
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--mh-646b75,#646b75)">
+              <img src="assets/manyhands-icon.svg" alt="" style="width:56px;height:56px;opacity:.35;filter:grayscale(1)">
+              <span>Open a ticket or document from the lists</span>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:11px">Ctrl K to search</span>
+            </div>
+          </sc-if>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <div style="height:28px;flex:none;display:flex;align-items:center;gap:2px;padding:0 6px;background:var(--mh-1f2226,#1f2226);border-top:1px solid var(--mh-2e3238,#2e3238);font-size:12px;color:var(--mh-8d949e,#8d949e)">
+    <sc-for list="{{footLeft}}" as="fb">
+      <sc-if value="{{fb.isSep}}"><div style="width:1px;height:14px;background:var(--mh-2e3238,#2e3238);margin:0 4px"></div></sc-if>
+      <sc-if value="{{fb.isBtn}}">
+        <button onClick="{{fb.onClick}}" title="{{fb.title}}" style="width:26px;height:22px;border:none;border-radius:4px;display:flex;align-items:center;justify-content:center;cursor:pointer;background:{{fb.bg}};color:{{fb.color}}" style-hover="background:var(--mh-2a2e34,#2a2e34);color:var(--mh-d5d8dd,#d5d8dd)"><i class="icon-{{fb.icon}}" style="font-size:14px"></i></button>
+      </sc-if>
+    </sc-for>
+    <div style="flex:1"></div>
+    <button title="Background check: fetch and fast-forward only. Never shares your changes." style="white-space:nowrap;display:flex;align-items:center;gap:5px;border:none;background:transparent;padding:2px 6px;border-radius:4px;cursor:pointer;color:var(--mh-8d949e,#8d949e);font-size:12px" style-hover="background:var(--mh-2a2e34,#2a2e34)"><i class="icon-refresh-cw" style="font-size:12px;color:var(--mh-5fb4c3,#5fb4c3)"></i>Checked for updates 2 min ago</button>
+    <button onClick="{{showUnshared}}" title="manyhands has 2 saved changes that only exist on this computer" style="white-space:nowrap;display:flex;align-items:center;gap:5px;border:none;background:transparent;padding:2px 6px;border-radius:4px;cursor:pointer;color:var(--mh-e9ad36,#E9AD36);font-size:12px" style-hover="background:var(--mh-2a2e34,#2a2e34)"><i class="icon-cloud-upload" style="font-size:12px"></i>2 to share</button>
+    <button onClick="{{toggleAttn}}" title="Things that need you. Your work is safe until you act." style="white-space:nowrap;display:flex;align-items:center;gap:5px;border:none;background:transparent;padding:2px 6px;border-radius:4px;cursor:pointer;color:var(--mh-e3787a,#e3787a);font-size:12px" style-hover="background:var(--mh-2a2e34,#2a2e34)"><i class="icon-circle-alert" style="font-size:12px"></i>{{attnLabel}}</button>
+    <div style="width:1px;height:14px;background:var(--mh-2e3238,#2e3238);margin:0 4px"></div>
+    <sc-for list="{{footRight}}" as="fb">
+      <sc-if value="{{fb.isSep}}"><div style="width:1px;height:14px;background:var(--mh-2e3238,#2e3238);margin:0 4px"></div></sc-if>
+      <sc-if value="{{fb.isBtn}}">
+        <button onClick="{{fb.onClick}}" title="{{fb.title}}" style="width:26px;height:22px;border:none;border-radius:4px;display:flex;align-items:center;justify-content:center;cursor:pointer;background:{{fb.bg}};color:{{fb.color}}" style-hover="background:var(--mh-2a2e34,#2a2e34);color:var(--mh-d5d8dd,#d5d8dd)"><i class="icon-{{fb.icon}}" style="font-size:14px"></i></button>
+      </sc-if>
+    </sc-for>
+  </div>
+
+  <sc-if value="{{sheetOpen}}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{closeSheet}}" style="position:absolute;left:0;right:0;top:38px;bottom:0;background:rgba(10,11,13,.55);display:flex;justify-content:flex-end">
+      <div onClick="{{stop}}" style="width:{{sheetW}}px;height:100%;background:var(--mh-23272d,#23272d);border-left:1px solid var(--mh-3a3f46,#3a3f46);box-shadow:-24px 0 48px rgba(0,0,0,.45);display:flex;flex-direction:column">
+        <div style="flex:none;display:flex;align-items:flex-start;gap:12px;padding:18px 20px 14px;border-bottom:1px solid var(--mh-2e3238,#2e3238)">
+          <div style="flex:1;display:flex;flex-direction:column;gap:4px">
+            <div style="font-size:15px;font-weight:600">{{sheetTitle}}</div>
+            <div style="font-size:12.5px;color:var(--mh-8d949e,#8d949e);text-wrap:pretty">{{sheetDesc}}</div>
+          </div>
+          <button onClick="{{closeSheet}}" title="Close (Esc)" style="width:26px;height:26px;border:none;background:transparent;color:var(--mh-8d949e,#8d949e);border-radius:4px;display:flex;align-items:center;justify-content:center;cursor:pointer" style-hover="background:var(--mh-2e3238,#2e3238);color:var(--mh-d5d8dd,#d5d8dd)"><i class="icon-x" style="font-size:15px"></i></button>
+        </div>
+
+        <sc-if value="{{isAddRepo}}">
+          <div class="mh-scroll" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:18px 20px;display:grid;align-content:start;grid-template-columns:minmax(0,1fr);gap:18px">
+            <div style="display:flex;background:var(--mh-1a1c20,#1a1c20);border:1px solid var(--mh-2e3238,#2e3238);border-radius:6px;padding:2px">
+              <sc-for list="{{addModes}}" as="m">
+                <button onClick="{{m.onClick}}" style="flex:1;border:none;padding:6px 8px;border-radius:5px;font-size:12.5px;cursor:pointer;background:{{m.bg}};color:{{m.color}};display:flex;align-items:center;justify-content:center;gap:6px"><i class="icon-{{m.icon}}" style="font-size:13px"></i>{{m.label}}</button>
+              </sc-for>
+            </div>
+
+            <sc-if value="{{addExisting}}">
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <label style="font-size:12px;font-weight:500">Folder</label>
+                <div style="display:flex;gap:6px">
+                  <div style="flex:1;height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--mh-1a1c20,#1a1c20);border:1px solid var(--mh-5fb4c3,#5fb4c3);border-radius:6px;box-shadow:0 0 0 2px rgba(95,180,195,.18);font-family:'IBM Plex Mono',monospace;font-size:12px"><i class="icon-folder" style="font-size:13px;color:var(--mh-8d949e,#8d949e)"></i>~/Documents/design-research</div>
+                  <button style="height:32px;padding:0 12px;border-radius:6px;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);cursor:pointer;font-size:12.5px" style-hover="border-color:var(--mh-5fb4c3,#5fb4c3)">Browse…</button>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:5px;margin-top:4px;font-size:12px">
+                  <span style="display:flex;align-items:center;gap:6px;color:var(--mh-7cc28f,#7cc28f)"><i class="icon-circle-check" style="font-size:13px"></i>This folder is a Git repository</span>
+                  <span style="display:flex;align-items:center;gap:6px;color:var(--mh-7cc28f,#7cc28f)"><i class="icon-circle-check" style="font-size:13px"></i>You can save changes here</span>
+                  <span style="display:flex;align-items:flex-start;gap:6px;color:var(--mh-8d949e,#8d949e);text-wrap:pretty"><i class="icon-info" style="font-size:13px;margin-top:1px"></i><span>Manyhands isn't set up here yet. Adding it creates a small settings file and saves it as the first change.</span></span>
+                </div>
+              </div>
+            </sc-if>
+            <sc-if value="{{addCreate}}">
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <label style="font-size:12px;font-weight:500">Name</label>
+                <div style="height:32px;display:flex;align-items:center;padding:0 10px;background:var(--mh-1a1c20,#1a1c20);border:1px solid var(--mh-5fb4c3,#5fb4c3);border-radius:6px;box-shadow:0 0 0 2px rgba(95,180,195,.18);font-size:12.5px">design-research</div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <label style="font-size:12px;font-weight:500">Location</label>
+                <div style="display:flex;gap:6px">
+                  <div style="flex:1;height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--mh-1a1c20,#1a1c20);border:1px solid var(--mh-3a3f46,#3a3f46);border-radius:6px;font-family:'IBM Plex Mono',monospace;font-size:12px"><i class="icon-folder" style="font-size:13px;color:var(--mh-8d949e,#8d949e)"></i>~/Documents/</div>
+                  <button style="height:32px;padding:0 12px;border-radius:6px;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);cursor:pointer;font-size:12.5px">Browse…</button>
+                </div>
+                <span style="display:flex;align-items:center;gap:6px;color:var(--mh-7cc28f,#7cc28f);font-size:12px"><i class="icon-circle-check" style="font-size:13px"></i>Empty folder will be created at ~/Documents/design-research</span>
+              </div>
+            </sc-if>
+
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <label style="font-size:12px;font-weight:500">Main branch</label>
+              <div title="Git: the primary branch used for promotion and ticket closure" style="height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--mh-1a1c20,#1a1c20);border:1px solid var(--mh-3a3f46,#3a3f46);border-radius:6px;font-size:12.5px;cursor:pointer"><i class="icon-git-branch" style="font-size:13px;color:var(--mh-8d949e,#8d949e)"></i><span style="flex:1">main</span><span style="font-size:11px;color:var(--mh-5fb4c3,#5fb4c3);padding:1px 6px;border-radius:3px;background:rgba(95,180,195,.12)">Suggested</span><i class="icon-chevron-down" style="font-size:13px;color:var(--mh-646b75,#646b75)"></i></div>
+              <span style="font-size:12px;color:var(--mh-8d949e,#8d949e);text-wrap:pretty">The version everyone shares. Finished tickets and approved documents are merged here.</span>
+            </div>
+
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <label style="font-size:12px;font-weight:500">Share changes through</label>
+              <div style="height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;background:var(--mh-1a1c20,#1a1c20);border:1px solid var(--mh-3a3f46,#3a3f46);border-radius:6px;font-size:12.5px;cursor:pointer"><i class="icon-cloud" style="font-size:13px;color:var(--mh-8d949e,#8d949e)"></i><span>origin</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mh-8d949e,#8d949e)">git@github.com:imbas/design-research.git</span><i class="icon-chevron-down" style="font-size:13px;color:var(--mh-646b75,#646b75)"></i></div>
+              <span style="font-size:12px;color:var(--mh-8d949e,#8d949e);text-wrap:pretty">You can also choose "Keep on this computer" and set this up later. Only SSH addresses can be used for sharing.</span>
+            </div>
+
+            <div style="display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-radius:6px;background:var(--mh-1f2226,#1f2226);border:1px solid var(--mh-2e3238,#2e3238);font-size:12px;color:var(--mh-8d949e,#8d949e);text-wrap:pretty">
+              <i class="icon-shield-check" style="font-size:14px;color:var(--mh-5fb4c3,#5fb4c3);margin-top:1px"></i>
+              <span>Removing a repository from Manyhands later never deletes, moves or changes its files.</span>
+            </div>
+          </div>
+          <div style="flex:none;display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--mh-2e3238,#2e3238)">
+            <button onClick="{{closeSheet}}" style="padding:6px 14px;border-radius:6px;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);cursor:pointer;font-size:12.5px">Cancel</button>
+            <button style="padding:6px 14px;border-radius:6px;border:none;background:var(--mh-e9ad36,#E9AD36);color:var(--mh-1a1c20,#1a1c20);font-weight:600;cursor:pointer;font-size:12.5px" style-hover="background:var(--mh-f2bd4f,#f2bd4f)">{{addCta}}</button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{isConflict}}">
+          <div class="mh-scroll" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:16px 20px;display:grid;align-content:start;grid-template-columns:minmax(0,1fr);gap:16px">
+            <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--mh-8d949e,#8d949e)">
+              <i class="icon-list-checks" style="font-size:13px"></i>
+              <span style="font-family:'IBM Plex Mono',monospace;font-size:11px">MH-VH-6PJ</span>
+              <span>manyhands</span>
+              <span style="flex:1"></span>
+              <span style="color:{{conflictProgColor}}">{{conflictProgress}}</span>
+            </div>
+            <sc-for list="{{conflicts}}" as="cf">
+              <div style="border:1px solid var(--mh-2e3238,#2e3238);border-radius:8px;overflow:hidden">
+                <div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--mh-1f2226,#1f2226);border-bottom:1px solid var(--mh-2e3238,#2e3238);flex-wrap:wrap">
+                  <span style="font-weight:600">{{cf.label}}</span>
+                  <span style="font-size:11.5px;color:var(--mh-646b75,#646b75)">{{cf.kind}}</span>
+                  <span style="font-size:11px;color:{{cf.stateColor}}">{{cf.stateLabel}}</span>
+                  <span style="flex:1"></span>
+                  <div style="display:flex;gap:6px">
+                    <sc-for list="{{cf.choices}}" as="ch">
+                      <button onClick="{{ch.onClick}}" style="white-space:nowrap;padding:3px 10px;border-radius:5px;border:{{ch.border}};background:{{ch.bg}};color:{{ch.color}};cursor:pointer;font-size:12px">{{ch.label}}</button>
+                    </sc-for>
+                  </div>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr))">
+                  <sc-for list="{{cf.cols}}" as="col">
+                    <div style="display:flex;flex-direction:column;gap:6px;padding:10px 12px;border-left:{{col.sep}};min-width:0">
+                      <div style="display:flex;align-items:baseline;gap:6px;font-size:11.5px"><span style="font-weight:600">{{col.title}}</span><span style="color:var(--mh-646b75,#646b75)">{{col.who}}</span></div>
+                      <div style="display:flex;flex-direction:column;font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.6">
+                        <sc-for list="{{col.lines}}" as="ln">
+                          <div style="display:flex;gap:6px;padding:0 6px;border-radius:3px;background:{{ln.bg}};color:{{ln.fg}}"><span style="width:8px;flex:none;color:var(--mh-646b75,#646b75)">{{ln.mark}}</span><span style="min-width:0">{{ln.t}}</span></div>
+                        </sc-for>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <div style="font-size:12px;font-weight:500">Result</div>
+              <div style="display:flex;flex-direction:column;font-family:'IBM Plex Mono',monospace;font-size:11.5px;line-height:1.6;padding:10px 12px;border:1px solid var(--mh-2e3238,#2e3238);border-radius:8px;background:var(--mh-1a1c20,#1a1c20)">
+                <sc-for list="{{resultLines}}" as="ln">
+                  <div style="display:flex;gap:6px;padding:0 6px;border-radius:3px;background:{{ln.bg}};color:{{ln.fg}}"><span style="width:8px;flex:none;color:var(--mh-646b75,#646b75)">{{ln.mark}}</span><span style="min-width:0">{{ln.t}}</span></div>
+                </sc-for>
+              </div>
+              <span style="font-size:12px;color:var(--mh-8d949e,#8d949e);text-wrap:pretty">Saving keeps the result on this computer. You can still edit it in the ticket afterwards, and Share sends it to everyone.</span>
+            </div>
+          </div>
+          <div style="flex:none;display:flex;align-items:center;gap:8px;padding:12px 20px;border-top:1px solid var(--mh-2e3238,#2e3238)">
+            <span title="Git details" style="flex:1;min-width:0;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mh-646b75,#646b75);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Git: conflict in .manyhands/tickets/01M5QX…6PJ/ticket.md · base 4e1a2c0 · ours a1c9e2f · theirs 7d03b1e</span>
+            <button onClick="{{closeSheet}}" style="padding:6px 14px;border-radius:6px;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);cursor:pointer;font-size:12.5px">Cancel</button>
+            <button onClick="{{saveResolution}}" style="padding:6px 14px;border-radius:6px;border:none;background:{{saveBg}};color:{{saveColor}};font-weight:600;cursor:pointer;font-size:12.5px">Save resolution</button>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{isSettings}}">
+          <div style="flex:1;min-height:0;display:flex">
+            <div style="width:214px;flex:none;border-right:1px solid var(--mh-2e3238,#2e3238);padding:10px 8px;display:flex;flex-direction:column;gap:2px">
+              <sc-for list="{{navItems}}" as="n">
+                <button onClick="{{n.onClick}}" style="display:flex;align-items:center;gap:8px;padding:6px 10px;border:none;border-radius:5px;text-align:left;cursor:pointer;font-size:12.5px;white-space:nowrap;background:{{n.bg}};color:{{n.color}}" style-hover="background:var(--mh-2a2e34,#2a2e34)"><i class="icon-{{n.icon}}" style="font-size:14px"></i>{{n.label}}</button>
+              </sc-for>
+            </div>
+            <div class="mh-scroll" style="flex:1;min-width:0;overflow-y:auto;overflow-x:hidden;padding:18px 22px;display:grid;align-content:start;grid-template-columns:minmax(0,1fr);gap:18px">
+
+              <sc-if value="{{isKeys}}">
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <div style="font-size:13px;font-weight:600">Key used for sharing</div>
+                  <div style="font-size:12px;color:var(--mh-8d949e,#8d949e);text-wrap:pretty">Manyhands uses one key for every repository it shares through. Your private key stays on this computer.</div>
+                </div>
+                <div style="display:flex;flex-direction:column;border:1px solid var(--mh-2e3238,#2e3238);border-radius:8px;overflow:hidden">
+                  <sc-for list="{{keyRows}}" as="k">
+                    <div style="display:flex;align-items:center;gap:12px;padding:12px 14px;border-top:{{k.sep}};background:{{k.bg}}">
+                      <button onClick="{{k.onClick}}" title="Use this key for all sharing" style="width:16px;height:16px;flex:none;border-radius:50%;border:1.5px solid {{k.radio}};background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0"><span style="width:8px;height:8px;border-radius:50%;background:{{k.dot}}"></span></button>
+                      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+                        <div style="display:flex;align-items:center;gap:8px"><span style="font-weight:500">{{k.label}}</span><span style="font-size:11px;padding:1px 6px;border-radius:3px;background:var(--mh-2e3238,#2e3238);color:var(--mh-8d949e,#8d949e)">{{k.origin}}</span><sc-if value="{{k.inUse}}"><span style="font-size:11px;padding:1px 6px;border-radius:3px;background:rgba(124,194,143,.14);color:var(--mh-7cc28f,#7cc28f)">In use</span></sc-if></div>
+                        <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mh-8d949e,#8d949e);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{k.fp}}</div>
+                        <div style="font-size:11.5px;color:var(--mh-646b75,#646b75)">{{k.note}}</div>
+                      </div>
+                      <button title="Copy public key to paste into GitHub, GitLab or similar" style="display:flex;align-items:center;gap:5px;padding:4px 9px;border-radius:5px;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);cursor:pointer;font-size:12px" style-hover="border-color:var(--mh-5fb4c3,#5fb4c3)"><i class="icon-copy" style="font-size:12px"></i>Copy public key</button>
+                      <button title="{{k.removeTip}}" style="width:28px;height:26px;border-radius:5px;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--mh-8d949e,#8d949e)" style-hover="color:var(--mh-e3787a,#e3787a)"><i class="icon-trash-2" style="font-size:13px"></i></button>
+                    </div>
+                  </sc-for>
+                </div>
+                <div style="display:flex;gap:8px">
+                  <button style="display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:6px;border:none;background:var(--mh-e9ad36,#E9AD36);color:var(--mh-1a1c20,#1a1c20);font-weight:600;cursor:pointer;font-size:12.5px"><i class="icon-key-round" style="font-size:13px"></i>Make a new key</button>
+                  <button style="display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:6px;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);cursor:pointer;font-size:12.5px"><i class="icon-folder-open" style="font-size:13px"></i>Use a key I already have…</button>
+                </div>
+                <div style="display:flex;align-items:flex-start;gap:8px;padding:10px 12px;border-radius:6px;background:var(--mh-1f2226,#1f2226);border:1px solid var(--mh-2e3238,#2e3238);font-size:12px;color:var(--mh-8d949e,#8d949e);text-wrap:pretty">
+                  <i class="icon-lock" style="font-size:14px;color:var(--mh-5fb4c3,#5fb4c3);margin-top:1px"></i>
+                  <span>If your key has a passphrase, Manyhands asks for it once each time you open the app and never stores it.</span>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <div style="font-size:13px;font-weight:600">Trusted servers</div>
+                  <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--mh-2e3238,#2e3238);border-radius:8px">
+                    <i class="icon-server" style="font-size:14px;color:var(--mh-8d949e,#8d949e)"></i>
+                    <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px"><span>github.com</span><span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mh-646b75,#646b75)">SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU</span></div>
+                    <span style="font-size:11.5px;color:var(--mh-7cc28f,#7cc28f);display:flex;align-items:center;gap:4px"><i class="icon-shield-check" style="font-size:12px"></i>Trusted Oct 4</span>
+                  </div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{isPolling}}">
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <div style="font-size:13px;font-weight:600">Checking for updates</div>
+                  <div style="font-size:12px;color:var(--mh-8d949e,#8d949e);text-wrap:pretty">While Manyhands is open it checks each repository's shared copy and brings in other people's changes when it's safe. It never shares your changes, and never touches anything you're still editing.</div>
+                </div>
+                <div style="display:flex;flex-direction:column;border:1px solid var(--mh-2e3238,#2e3238);border-radius:8px;overflow:hidden">
+                  <sc-for list="{{pollRows}}" as="pr">
+                    <div title="{{pr.git}}" style="display:flex;align-items:center;gap:12px;padding:11px 14px;border-top:{{pr.sep}}">
+                      <i class="icon-folder-git-2" style="font-size:14px;color:var(--mh-8d949e,#8d949e)"></i>
+                      <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+                        <span style="font-weight:500">{{pr.name}}</span>
+                        <span style="font-size:11.5px;color:{{pr.lastColor}};display:flex;align-items:center;gap:5px"><i class="icon-{{pr.lastIcon}}" style="font-size:11px"></i>{{pr.last}}</span>
+                      </div>
+                      <sc-if value="{{pr.canPoll}}">
+                        <div style="height:28px;display:flex;align-items:center;gap:6px;padding:0 8px;background:var(--mh-1a1c20,#1a1c20);border:1px solid var(--mh-3a3f46,#3a3f46);border-radius:5px;font-size:12px;color:{{pr.intervalColor}};cursor:pointer">{{pr.interval}}<i class="icon-chevron-down" style="font-size:12px;color:var(--mh-646b75,#646b75)"></i></div>
+                        <button style="padding:4px 9px;border-radius:5px;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);cursor:pointer;font-size:12px" style-hover="border-color:var(--mh-5fb4c3,#5fb4c3)">{{pr.nowLabel}}</button>
+                        <button onClick="{{pr.onToggle}}" title="{{pr.toggleTip}}" style="width:32px;height:18px;flex:none;border-radius:9px;border:none;padding:2px;display:flex;justify-content:{{pr.knob}};background:{{pr.swBg}};cursor:pointer"><span style="width:14px;height:14px;border-radius:50%;background:#f1f3f5"></span></button>
+                      </sc-if>
+                      <sc-if value="{{pr.noRemote}}">
+                        <button style="padding:4px 9px;border-radius:5px;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);cursor:pointer;font-size:12px">Set up sharing…</button>
+                      </sc-if>
+                    </div>
+                  </sc-for>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:6px;background:var(--mh-1f2226,#1f2226);border:1px solid var(--mh-2e3238,#2e3238);font-size:12px;color:var(--mh-8d949e,#8d949e)">
+                  <i class="icon-pause" style="font-size:14px;color:var(--mh-8d949e,#8d949e)"></i>
+                  <span style="flex:1">Pause all checking until I turn it back on</span>
+                  <button onClick="{{togglePauseAll}}" style="width:32px;height:18px;flex:none;border-radius:9px;border:none;padding:2px;display:flex;justify-content:{{pauseKnob}};background:{{pauseBg}};cursor:pointer"><span style="width:14px;height:14px;border-radius:50%;background:#f1f3f5"></span></button>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{isAppearance}}">
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <div style="font-size:13px;font-weight:600">Theme</div>
+                  <div style="font-size:12px;color:var(--mh-8d949e,#8d949e)">Changes apply right away.</div>
+                </div>
+                <div style="display:flex;gap:12px;flex-wrap:wrap">
+                  <sc-for list="{{themeOpts}}" as="th">
+                    <button onClick="{{th.onClick}}" style="width:150px;display:flex;flex-direction:column;gap:8px;padding:8px;border-radius:8px;border:{{th.border}};background:transparent;cursor:pointer;text-align:left">
+                      <div style="height:74px;border-radius:5px;background:{{th.prevBg}};border:1px solid #9a9590;display:flex;gap:4px;padding:6px;box-sizing:border-box">
+                        <div style="width:30%;border-radius:3px;background:{{th.prevPanel}}"></div>
+                        <div style="flex:1;border-radius:3px;background:{{th.prevPanel}};opacity:.55"></div>
+                      </div>
+                      <span style="font-size:12.5px;display:flex;align-items:center;gap:6px"><i class="icon-{{th.icon}}" style="font-size:13px"></i>{{th.label}}</span>
+                    </button>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{isOtherSection}}">
+                <div style="flex:1;min-height:240px;border:1px dashed var(--mh-3a3f46,#3a3f46);border-radius:6px;background:repeating-linear-gradient(135deg,var(--mh-202328,#202328) 0 10px,var(--mh-24282e,#24282e) 10px 20px);display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--mh-8d949e,#8d949e)">{{otherLabel}} · not mocked this round</div>
+              </sc-if>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{attnOpen}}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{closeAttn}}" style="position:absolute;left:0;right:0;top:0;bottom:0;z-index:25">
+      <div onClick="{{stop}}" style="position:absolute;right:96px;bottom:34px;width:440px;background:var(--mh-23272d,#23272d);border:1px solid var(--mh-3a3f46,#3a3f46);border-radius:10px;box-shadow:0 16px 48px rgba(0,0,0,.45);display:flex;flex-direction:column;overflow:hidden">
+        <div style="padding:12px 14px 10px;display:flex;flex-direction:column;gap:3px">
+          <span style="font-weight:600">Needs attention</span>
+          <span style="font-size:12px;color:var(--mh-8d949e,#8d949e)">Your work is safe on this computer. Nothing here happens until you choose.</span>
+        </div>
+        <sc-for list="{{attnItems}}" as="a">
+          <div title="{{a.git}}" style="display:flex;gap:10px;padding:11px 14px;border-top:1px solid var(--mh-2e3238,#2e3238)">
+            <i class="icon-{{a.icon}}" style="font-size:15px;color:{{a.color}};margin-top:1px;flex:none"></i>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+              <span style="font-weight:500;text-wrap:pretty">{{a.title}}</span>
+              <span style="font-size:12px;color:var(--mh-8d949e,#8d949e);text-wrap:pretty">{{a.desc}}</span>
+              <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+                <button onClick="{{a.onClick}}" style="white-space:nowrap;padding:3px 10px;border-radius:5px;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);cursor:pointer;font-size:12px" style-hover="border-color:var(--mh-5fb4c3,#5fb4c3)">{{a.action}}</button>
+                <span style="font-size:11px;color:var(--mh-8d949e,#8d949e);padding:1px 6px;border:1px solid var(--mh-2e3238,#2e3238);border-radius:4px">{{a.repo}}</span>
+              </div>
+            </div>
+          </div>
+        </sc-for>
+        <button onClick="{{openActivity}}" style="border:none;border-top:1px solid var(--mh-2e3238,#2e3238);background:var(--mh-1f2226,#1f2226);padding:8px 14px;text-align:left;font-size:12px;color:var(--mh-5fb4c3,#5fb4c3);cursor:pointer">Show everything in Activity</button>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{dlgOpen}}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{dlgBackdrop}}" style="position:absolute;left:0;right:0;top:0;bottom:0;background:rgba(10,11,13,.6);display:flex;align-items:center;justify-content:center;z-index:30">
+      <div onClick="{{stop}}" role="dialog" aria-modal="true" style="width:{{dlgW}}px;max-width:calc(100% - 48px);max-height:calc(100% - 80px);background:var(--mh-23272d,#23272d);border:1px solid var(--mh-3a3f46,#3a3f46);border-radius:10px;box-shadow:0 24px 64px rgba(0,0,0,.5);display:flex;flex-direction:column;overflow:hidden">
+        <sc-if value="{{isCloseDlg}}">
+          <div style="flex:none;display:flex;gap:12px;padding:18px 20px 14px;border-bottom:1px solid var(--mh-2e3238,#2e3238)">
+            <div style="width:32px;height:32px;flex:none;border-radius:8px;background:var(--mh-2a2e34,#2a2e34);display:flex;align-items:center;justify-content:center;color:{{cd.headColor}}"><i class="icon-{{cd.headIcon}}" style="font-size:16px"></i></div>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+              <div style="font-size:15px;font-weight:600">{{cd.title}}</div>
+              <div style="font-size:12.5px;color:var(--mh-8d949e,#8d949e);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{cd.sub}}</div>
+            </div>
+          </div>
+          <div class="mh-scroll" style="flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:16px 20px;display:grid;align-content:start;grid-template-columns:minmax(0,1fr);gap:14px">
+            <sc-if value="{{cd.hasLead}}"><div style="font-size:12.5px;color:var(--mh-8d949e,#8d949e);text-wrap:pretty">{{cd.lead}}</div></sc-if>
+            <div style="display:flex;flex-direction:column;border:1px solid var(--mh-2e3238,#2e3238);border-radius:8px;overflow:hidden">
+              <sc-for list="{{cd.steps}}" as="st">
+                <div style="display:flex;gap:12px;padding:10px 12px;border-top:{{st.sep}}">
+                  <div style="width:20px;height:20px;flex:none;display:flex;align-items:center;justify-content:center">
+                    <sc-if value="{{st.isNum}}"><span style="width:20px;height:20px;border-radius:50%;border:1px solid {{st.numBorder}};color:{{st.numColor}};font-size:11px;display:flex;align-items:center;justify-content:center;box-sizing:border-box">{{st.n}}</span></sc-if>
+                    <sc-if value="{{st.isDone}}"><i class="icon-circle-check" style="font-size:18px;color:var(--mh-7cc28f,#7cc28f)"></i></sc-if>
+                    <sc-if value="{{st.isFail}}"><i class="icon-circle-x" style="font-size:18px;color:var(--mh-e3787a,#e3787a)"></i></sc-if>
+                    <sc-if value="{{st.isSpin}}">{{spinner}}</sc-if>
+                  </div>
+                  <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+                    <span style="font-weight:500;color:{{st.titleColor}}">{{st.title}}</span>
+                    <span style="font-size:12px;color:{{st.descColor}};text-wrap:pretty">{{st.desc}}</span>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+            <sc-if value="{{cd.showFiles}}">
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <div style="font-size:12px;font-weight:500">Files that will be merged into main <span style="color:var(--mh-646b75,#646b75);font-weight:400">{{cd.fileCount}}</span></div>
+                <div style="display:flex;flex-direction:column;border:1px solid var(--mh-2e3238,#2e3238);border-radius:8px;overflow:hidden">
+                  <sc-for list="{{cd.files}}" as="f">
+                    <div style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-top:{{f.sep}};font-size:12px">
+                      <i class="icon-{{f.icon}}" style="font-size:13px;color:var(--mh-8d949e,#8d949e)"></i>
+                      <span style="flex:1;min-width:0;font-family:'IBM Plex Mono',monospace;font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{f.p}}</span>
+                      <span style="font-size:11px;padding:1px 6px;border-radius:3px;background:{{f.tagBg}};color:{{f.tagFg}}">{{f.tag}}</span>
+                      <span style="width:70px;text-align:right;font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mh-8d949e,#8d949e)">{{f.delta}}</span>
+                    </div>
+                  </sc-for>
+                </div>
+                <sc-if value="{{cd.hasCode}}"><div style="display:flex;gap:6px;font-size:12px;color:var(--mh-8d949e,#8d949e);text-wrap:pretty"><i class="icon-info" style="font-size:13px;margin-top:1px;color:var(--mh-5fb4c3,#5fb4c3)"></i><span>This working copy includes code as well as the ticket. All of it is merged.</span></div></sc-if>
+              </div>
+            </sc-if>
+            <sc-if value="{{cd.showReady}}">
+              <div style="display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:8px;background:rgba(124,194,143,.08);border:1px solid var(--mh-2e3238,#2e3238);font-size:12px">
+                <i class="icon-circle-play" style="font-size:14px;color:var(--mh-7cc28f,#7cc28f);flex:none"></i>
+                <span style="color:var(--mh-8d949e,#8d949e);flex:none">{{cd.readyLabel}}</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mh-8d949e,#8d949e);flex:none">MH-VH-5HC</span>
+                <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">Wave 03 D4: Discussion and comment composer</span>
+              </div>
+            </sc-if>
+            <sc-if value="{{cd.hasOutcome}}">
+              <div style="display:flex;gap:8px;padding:10px 12px;border-radius:8px;background:{{cd.outBg}};font-size:12.5px;color:{{cd.outFg}};text-wrap:pretty"><i class="icon-{{cd.outIcon}}" style="font-size:14px;margin-top:1px;flex:none"></i><span>{{cd.outText}}</span></div>
+            </sc-if>
+            <div title="Git details" style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mh-646b75,#646b75);text-wrap:pretty">{{cd.git}}</div>
+          </div>
+          <div style="flex:none;display:flex;align-items:center;gap:8px;padding:12px 20px;border-top:1px solid var(--mh-2e3238,#2e3238)">
+            <span style="flex:1;font-size:11.5px;color:var(--mh-646b75,#646b75)">{{cd.hint}}</span>
+            <sc-for list="{{cd.buttons}}" as="b">
+              <button onClick="{{b.onClick}}" style="white-space:nowrap;padding:6px 14px;border-radius:6px;border:{{b.border}};background:{{b.bg}};color:{{b.color}};font-weight:{{b.weight}};cursor:pointer;font-size:12.5px">{{b.label}}</button>
+            </sc-for>
+          </div>
+        </sc-if>
+
+        <sc-if value="{{isUnlock}}">
+          <div style="flex:none;display:flex;gap:12px;padding:18px 20px 14px;border-bottom:1px solid var(--mh-2e3238,#2e3238)">
+            <div style="width:32px;height:32px;flex:none;border-radius:8px;background:var(--mh-2a2e34,#2a2e34);display:flex;align-items:center;justify-content:center;color:var(--mh-e9ad36,#E9AD36)"><i class="icon-lock" style="font-size:16px"></i></div>
+            <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:3px">
+              <div style="font-size:15px;font-weight:600">Unlock your key</div>
+              <div style="font-size:12.5px;color:var(--mh-8d949e,#8d949e);text-wrap:pretty">Sharing from manyhands is waiting for your passphrase.</div>
+            </div>
+          </div>
+          <div style="padding:16px 20px;display:flex;flex-direction:column;gap:14px">
+            <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--mh-2e3238,#2e3238);border-radius:8px">
+              <i class="icon-key-round" style="font-size:14px;color:var(--mh-8d949e,#8d949e)"></i>
+              <div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px">
+                <span style="font-weight:500">Vince's laptop</span>
+                <span style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--mh-646b75,#646b75);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">ED25519 · SHA256:3f9cK0yqW1m8tN2bXr4LhVd7eQpZ5sJa6uGc9oFwTiE</span>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <label style="font-size:12px;font-weight:500">Passphrase</label>
+              <div style="height:34px;display:flex;align-items:center;gap:8px;padding:0 6px 0 10px;background:var(--mh-1a1c20,#1a1c20);border:1px solid var(--mh-5fb4c3,#5fb4c3);border-radius:6px;box-shadow:0 0 0 2px rgba(95,180,195,.18)">
+                <span style="flex:1;letter-spacing:2px;font-size:12px">●●●●●●●●●●<span style="display:inline-block;width:1px;height:14px;background:var(--mh-d5d8dd,#d5d8dd);vertical-align:middle;margin-left:2px"></span></span>
+                <button title="Show passphrase" style="width:26px;height:24px;border:none;background:transparent;color:var(--mh-8d949e,#8d949e);border-radius:4px;display:flex;align-items:center;justify-content:center;cursor:pointer"><i class="icon-eye" style="font-size:14px"></i></button>
+              </div>
+            </div>
+            <div style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:var(--mh-8d949e,#8d949e);text-wrap:pretty">
+              <i class="icon-shield-check" style="font-size:14px;color:var(--mh-5fb4c3,#5fb4c3);margin-top:1px"></i>
+              <span>Kept in memory until you quit Manyhands. It's never written to disk. If you choose Not now, you can keep working and unlock later from Needs attention.</span>
+            </div>
+          </div>
+          <div style="flex:none;display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--mh-2e3238,#2e3238)">
+            <button onClick="{{unlockClose}}" style="padding:6px 14px;border-radius:6px;border:1px solid var(--mh-3a3f46,#3a3f46);background:var(--mh-2a2e34,#2a2e34);cursor:pointer;font-size:12.5px">Not now</button>
+            <button onClick="{{unlockClose}}" style="padding:6px 14px;border-radius:6px;border:none;background:var(--mh-e9ad36,#E9AD36);color:var(--mh-1a1c20,#1a1c20);font-weight:600;cursor:pointer;font-size:12.5px">Unlock</button>
+          </div>
+        </sc-if>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1440,&quot;height&quot;:900},&quot;variant&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;a&quot;,&quot;b&quot;,&quot;c&quot;],&quot;default&quot;:&quot;a&quot;,&quot;tsType&quot;:&quot;'a'|'b'|'c'&quot;},&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;'dark'|'light'&quot;},&quot;sheet&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;&quot;,&quot;addRepo&quot;,&quot;settings&quot;,&quot;conflict&quot;],&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;settingsSection&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;keys&quot;,&quot;polling&quot;,&quot;appearance&quot;],&quot;default&quot;:&quot;keys&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;dialog&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;&quot;,&quot;close&quot;,&quot;closeRunning&quot;,&quot;closeFailed&quot;,&quot;unlock&quot;],&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;attention&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;openCode&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+const B = '1px solid var(--mh-2e3238,#2e3238)';
+const P = {
+  repos: { label: 'Repositories', short: 'Repos', icon: 'folder-git-2' },
+  projects: { label: 'Projects', short: 'Projects', icon: 'folder-kanban' },
+  teams: { label: 'Teams', short: 'Teams', icon: 'users' },
+  tickets: { label: 'Tickets', short: 'Tickets', icon: 'ticket' },
+  docs: { label: 'Documents', short: 'Docs', icon: 'file-text' },
+  log: { label: 'Activity', short: 'Activity', icon: 'scroll-text' },
+};
+const LAYOUTS = {
+  a: { rowH: 28, left: { w: 264, groups: [[['repos'], 1.1], [['projects'], 0.9], [['teams'], 0.7]] }, right: { w: 400, groups: [[['tickets'], 1.3], [['docs'], 1]] }, bottom: { h: 170, groups: [[['log'], 1]] }, panes: [['t:MH-VH-7Q3', 'd:d1', 't:MH-VH-8FN']], hidden: [] },
+  b: { rowH: 24, left: { w: 290, groups: [[['repos', 'projects', 'teams'], 0.75], [['docs'], 1.4]] }, right: { w: 440, groups: [[['tickets'], 1]] }, bottom: { h: 150, groups: [[['log'], 1]] }, panes: [['t:MH-VH-7Q3', 'd:d1', 't:MH-VH-8FN']], hidden: [] },
+  c: { rowH: 24, left: { w: 380, groups: [[['repos', 'projects', 'teams'], 0.6], [['tickets', 'docs'], 1.6]] }, right: null, bottom: { h: 150, groups: [[['log'], 1]] }, panes: [['t:MH-VH-7Q3', 't:MH-VH-8FN'], ['d:d1']], hidden: ['log'] },
+};
+const REPOS = [
+  { id: 'manyhands', name: 'manyhands', path: '~/src/manyhands', state: 'unshared', label: '2 to share', git: '~/src/manyhands · main branch: main · shares through origin (git@github.com:vhodges/manyhands.git) · 2 checkpoint commits not pushed' },
+  { id: 'site', name: 'manyhands-site', path: '~/src/manyhands-site', state: 'current', label: 'Up to date', git: '~/src/manyhands-site · main branch: main · origin git@github.com:vhodges/manyhands-site.git · in sync' },
+  { id: 'handbook', name: 'team-handbook', path: '~/Documents/team-handbook', state: 'local', label: 'This computer', git: '~/Documents/team-handbook · main branch: main · no publication remote' },
+  { id: 'zorite', name: 'zorite', path: '~/src/zorite', state: 'attention', label: "Can't reach", git: "~/src/zorite · origin git@github.com:vhodges/zorite.git · last poll failed: connection timed out" },
+];
+const RS = { unshared: ['var(--mh-e9ad36,#E9AD36)', 'cloud-upload'], current: ['var(--mh-7cc28f,#7cc28f)', 'circle-check'], local: ['var(--mh-8d949e,#8d949e)', 'hard-drive'], attention: ['var(--mh-e3787a,#e3787a)', 'circle-alert'] };
+const PROJECTS = [{ id: 'manyhands', name: 'manyhands' }, { id: 'website', name: 'website' }, { id: 'onboarding', name: 'onboarding' }];
+const TEAMS = [{ id: 'core', name: 'core' }, { id: 'design', name: 'design' }, { id: 'docs', name: 'docs' }];
+const T = (code, title, type, status, open, repo, project, team, mins, extra) => Object.assign({ code, title, type, status, open, repo, project, team, mins }, extra || {});
+const TICKETS = [
+  T('MH-VH-7Q3', 'Wave 03 D3: Rich-text editor integration', 'cycle', 'in progress', true, 'manyhands', 'manyhands', 'core', 12, { editing: true, dirty: true }),
+  T('MH-VH-6PJ', 'Footer toggles for dock panels', 'task', 'in progress', true, 'manyhands', 'manyhands', 'core', 38, { editing: true, conflict: true }),
+  T('MH-VH-8FN', 'Dock layout persistence across launches', 'feature', 'ready', true, 'manyhands', 'manyhands', 'core', 64),
+  T('MH-VH-3WA', 'Plain-language sync states in the status bar', 'feature', 'blocked', true, 'manyhands', 'manyhands', 'design', 140, { blockedBy: 'MH-VH-8FN' }),
+  T('MH-VH-1ZR', 'Short-code search in the command palette', 'feature', 'ready', true, 'manyhands', 'manyhands', 'core', 310),
+  T('MH-VH-5HC', 'Wave 03 D4: Discussion and comment composer', 'cycle', 'not started', true, 'manyhands', 'manyhands', 'core', 1500),
+  T('—', 'quick note from standup', '', 'needs fixing', true, 'manyhands', 'manyhands', 'core', 2900, { bad: 'Missing type. Open it to add one.' }),
+  T('ZR-VH-3QM', 'Upstream: expose source offsets for tables', 'feature', 'waiting', true, 'zorite', 'manyhands', 'core', 4300),
+  T('WEB-VH-2LK', 'Landing page: explain local-first in one screen', 'feature', 'in review', true, 'site', 'website', 'design', 95),
+  T('WEB-AM-8RD', 'Screenshots for the download page', 'task', 'ready', true, 'site', 'website', 'design', 2100),
+  T('OB-AM-4CE', "Write the 'Your first day' guide", 'task', 'in progress', true, 'handbook', 'onboarding', 'docs', 50, { editing: true }),
+  T('OB-JS-7NV', 'Review the laptop setup checklist', 'task', 'ready', true, 'handbook', 'onboarding', 'docs', 4000),
+  T('MH-VH-4KD', 'Wave 03 D2: Recoverable Drafts And External-Change Handling', 'cycle', 'closed', false, 'manyhands', 'manyhands', 'core', 1120),
+  T('MH-VH-9M2', "Parsing reorders an item's unknown front-matter keys", 'defect', 'closed', false, 'manyhands', 'manyhands', 'core', 1150),
+  T('MH-VH-2TX', 'Enabling an enabled but unregistered repository must register it', 'defect', 'closed', false, 'manyhands', 'manyhands', 'core', 6200),
+  T('MH-VH-0BX', 'Wave 02 Cycle 10: Confirmed Ticket Closure', 'cycle', 'closed', false, 'manyhands', 'manyhands', 'core', 14000),
+];
+const ST = {
+  'in progress': ['var(--mh-5fb4c3,#5fb4c3)', 'rgba(95,180,195,.13)'], ready: ['var(--mh-7cc28f,#7cc28f)', 'rgba(124,194,143,.13)'], blocked: ['var(--mh-e3787a,#e3787a)', 'rgba(227,120,122,.13)'],
+  'in review': ['var(--mh-e9ad36,#E9AD36)', 'rgba(233,173,54,.13)'], 'not started': ['var(--mh-8d949e,#8d949e)', 'rgba(141,148,158,.12)'], waiting: ['var(--mh-8d949e,#8d949e)', 'rgba(141,148,158,.12)'],
+  closed: ['var(--mh-646b75,#646b75)', 'rgba(100,107,117,.12)'], 'needs fixing': ['var(--mh-e9ad36,#E9AD36)', 'rgba(233,173,54,.15)'],
+};
+const TI = { cycle: 'repeat', defect: 'bug', feature: 'sparkles', task: 'list-checks', '': 'triangle-alert' };
+const DOCS = [
+  { repo: 'manyhands', project: 'manyhands', team: 'core', tree: [
+    { f: 'docs', kids: [
+      { d: 'd_charter', t: 'Project charter', file: 'charter.md' },
+      { d: 'd_future', t: 'Future ideas', file: 'future-ideas.md' },
+      { f: 'PRD', kids: [{ d: 'd_prd', t: 'MVP/Dogfood PRD', file: 'mvp.md' }] },
+      { f: 'RFC', kids: [
+        { d: 'd_rfc', t: 'MVP architecture RFC', file: 'mvp-rfc.md' },
+        { d: 'd_ia', t: 'Desktop information architecture and editor', file: 'desktop-information-architecture-and-editor.md' },
+        { d: 'd_git', t: 'Git workflow and conflict recovery', file: 'git-workflow-and-conflict-recovery.md' },
+        { d: 'd_rel', t: 'Ticket relationships and short codes', file: 'ticket-relationships-and-short-codes.md' },
+        { d: 'd_auth', t: 'Authentication and credential handling', file: 'authentication-and-credential-handling.md' },
+      ] },
+      { f: 'Waves', kids: [
+        { d: 'd_w1', t: 'Wave 01: Foundations', file: 'wave-01-foundations.md' },
+        { d: 'd_w2', t: 'Wave 02: Collaboration', file: 'wave-02-collaboration.md' },
+        { d: 'd1', t: 'Wave 03: Dogfooding', file: 'wave-03-dogfooding.md', editing: true },
+      ] },
+      { f: 'Cycles', kids: [
+        { d: 'd_c1', t: 'Wave 03 D1: Shell and onboarding', file: 'wave-03-desktop-01-shell-and-onboarding.md' },
+        { d: 'd_c2', t: 'Wave 03 D2: Recoverable drafts', file: 'wave-03-desktop-02-recoverable-drafts.md' },
+        { d: 'd_c3', t: 'Wave 02 Cycle 10: Confirmed ticket closure', file: 'wave-02-cycle-10-confirmed-ticket-closure.md' },
+      ] },
+      { f: 'research', kids: [
+        { d: 'd_r1', t: 'Editor feasibility', file: 'wave-03-editor-feasibility.md' },
+        { d: 'd_r2', t: 'notes-ssh.md', file: 'ssh-keys.md', bad: 'Not a managed document yet. Open to adopt it.' },
+      ] },
+    ] },
+  ] },
+  { repo: 'site', project: 'website', team: 'design', tree: [{ f: 'content', kids: [{ d: 'd_dl', t: 'Download page copy', file: 'download.md' }, { d: 'd_press', t: 'Press kit', file: 'press-kit.md' }] }] },
+  { repo: 'handbook', project: 'onboarding', team: 'docs', tree: [{ f: 'Handbook', kids: [
+    { d: 'd_welcome', t: 'Welcome', file: 'welcome.md' },
+    { d: 'd_first', t: 'Your first day', file: 'first-day.md', editing: true },
+    { f: 'Tools', kids: [{ d: 'd_laptop', t: 'laptop-setup.md', file: 'laptop-setup.md', bad: 'Missing title. Open to fix.' }] },
+  ] }] },
+  { repo: 'zorite', project: 'manyhands', team: 'core', tree: [{ f: 'docs', kids: [{ d: 'd_zr', t: 'Source offsets proposal', file: 'source-offsets.md' }] }] },
+];
+const DOCMAP = {};
+(function index() {
+  const walk = (nodes, repo, path) => nodes.forEach(n => n.f ? walk(n.kids, repo, path.concat(n.f)) : (DOCMAP[n.d] = Object.assign({ repo, path: path.join('/') }, n)));
+  DOCS.forEach(e => walk(e.tree, e.repo, []));
+})();
+const LOG = [
+  { time: '15:40', icon: 'circle-alert', color: 'var(--mh-e3787a,#e3787a)', msg: 'You and Jo Smith both changed "Footer toggles for dock panels". Choose what to keep.', repo: 'manyhands', action: 'Review', go: 'conflict', git: 'sync: merge conflict in .manyhands/tickets/…6PJ/ticket.md' },
+  { time: '15:39', icon: 'lock', color: 'var(--mh-e9ad36,#E9AD36)', msg: 'Sharing is waiting for your key passphrase', repo: 'manyhands', action: 'Unlock…', go: 'unlock', git: "key Vince's laptop is passphrase-protected; not unlocked this session" },
+  { time: '15:38', icon: 'refresh-cw', color: 'var(--mh-5fb4c3,#5fb4c3)', msg: 'Checked manyhands for updates. Brought in 2 changes from Jo Smith.', repo: 'manyhands', git: 'fetch origin · fast-forward main 4e1a2c0..e49f978' },
+  { time: '15:36', icon: 'circle-check', color: 'var(--mh-7cc28f,#7cc28f)', msg: 'Saved "Wave 03 D3: Rich-text editor integration" on this computer', repo: 'manyhands', git: 'checkpoint a1c9e2f on manyhands/ticket/01M5QX…' },
+  { time: '15:31', icon: 'circle-alert', color: 'var(--mh-e3787a,#e3787a)', msg: "Couldn't reach zorite's shared copy. Your work is safe; we'll try again in 5 minutes.", repo: 'zorite', action: 'Retry now', attention: true, git: 'ssh: connect to host github.com port 22: Connection timed out' },
+  { time: '15:20', icon: 'info', color: 'var(--mh-8d949e,#8d949e)', msg: 'team-handbook has no shared copy, so changes stay on this computer', repo: 'team-handbook', action: 'Set up sharing', git: 'no publication remote' },
+  { time: '15:12', icon: 'cloud-upload', color: 'var(--mh-5fb4c3,#5fb4c3)', msg: 'Shared "Landing page: explain local-first in one screen"', repo: 'manyhands-site', git: 'push origin manyhands/ticket/01M5…' },
+  { time: '15:02', icon: 'circle-check', color: 'var(--mh-7cc28f,#7cc28f)', msg: 'Closed "Parsing reorders an item\'s unknown front-matter keys". Merged into main and tidied up. MH-VH-8FN is now ready.', repo: 'manyhands', git: 'merge into main · removed branch and worktree' },
+  { time: '14:55', icon: 'database', color: 'var(--mh-8d949e,#8d949e)', msg: 'Rebuilt the search index (4 repositories, 1,455 files)', repo: 'all', git: 'index-only rebuild, no repository changes' },
+];
+const age = m => m < 60 ? m + 'm' : m < 1440 ? Math.round(m / 60) + 'h' : Math.round(m / 1440) + 'd';
+const LIGHT = { '1a1c20': '#ffffff', '1f2226': '#f3f2ef', '212429': '#f8f7f5', '23272d': '#ffffff', '2a2e34': '#ebe9e5', '2e3238': '#dedbd5', '353a41': '#e2dfda', '3a3f46': '#cfcbc4', '4a5059': '#b5b0a8', '646b75': '#767a82', '8d949e': '#575c64', 'a9afb8': '#4a4f56', 'd5d8dd': '#1f2328', '29363a': '#fbefd6', '1c1f23': '#f7f6f3', '202328': '#efede9', '24282e': '#ebe9e5', '5fb4c3': '#07596a', '8fd0db': '#0a7a90', '7cc28f': '#2c7a43', 'e3787a': '#b3393c', 'e9ad36': '#a86f00', 'f2bd4f': '#8f5e00', '3f8f9c': '#07596a' };
+const STEPS = [
+  ['Save your latest edits', 'Anything unsaved in this tab is saved first'],
+  ['Share with origin', "Bring in other people's changes, then send yours"],
+  ['Merge into main', 'The files below become part of the main version everyone shares'],
+  ['Mark as closed', 'Closed by Vince Hodges · today'],
+  ['Tidy up', 'Remove the private working copy, on this computer and on origin'],
+];
+
+class Component extends DCLogic {
+  state = (() => {
+    const L = LAYOUTS[this.props.variant] || LAYOUTS.a;
+    const vis = { repos: true, projects: true, teams: true, tickets: true, docs: true, log: true };
+    L.hidden.forEach(h => vis[h] = false);
+    return {
+      vis, dock: { left: true, right: true, bottom: true }, act: {},
+      scope: { kind: 'project', id: 'manyhands' }, filter: 'open', sort: { k: 'updated', asc: true },
+      exp: { 'manyhands': true, 'site': true, 'handbook': true, 'zorite': true, 'manyhands/docs': true, 'manyhands/docs/Waves': true, 'manyhands/docs/RFC': true, 'handbook/Handbook': true, 'zorite/docs': true },
+      panes: L.panes.map((t, i) => { const tabs = t.slice(); const oc = this.props.openCode; if (i === 0 && oc) { if (!tabs.includes('t:' + oc)) tabs.push('t:' + oc); return { tabs, active: 't:' + oc }; } return { tabs, active: t[0] }; }), ap: 0,
+      sheet: this.props.sheet || null, addMode: 'existing', sec: this.props.settingsSection || 'keys',
+      poll: { manyhands: true, site: true, zorite: true }, pauseAll: false,
+      theme: this.props.theme || 'dark', dlg: this.dlgFromProp(this.props.dialog), dlgItem: 't:MH-VH-7Q3', attn: !!this.props.attention,
+      pick: { status: 'mine', body: null }, resolved: false,
+    };
+  })();
+
+  rootRef = el => { this.rootEl = el; this.applyTheme(); };
+  applyTheme() {
+    if (!this.rootEl) return;
+    const light = this.state.theme === 'light';
+    Object.keys(LIGHT).forEach(k => light ? this.rootEl.style.setProperty('--mh-' + k, LIGHT[k]) : this.rootEl.style.removeProperty('--mh-' + k));
+  }
+  dlgFromProp(v) {
+    return v === 'close' ? { kind: 'close', stage: 'confirm', step: -1 } : v === 'closeRunning' ? { kind: 'close', stage: 'running', step: 1 } : v === 'closeFailed' ? { kind: 'close', stage: 'failed', step: 1 } : v === 'unlock' ? { kind: 'unlock' } : null;
+  }
+  componentWillUnmount() { clearInterval(this.timer); }
+  startClose(from) {
+    clearInterval(this.timer);
+    this.setState({ dlg: { kind: 'close', stage: 'running', step: from } });
+    this.timer = setInterval(() => {
+      const d = this.state.dlg;
+      if (!d || d.kind !== 'close' || d.stage !== 'running') { clearInterval(this.timer); return; }
+      if (d.step >= 4) { clearInterval(this.timer); this.setState({ dlg: { kind: 'close', stage: 'done', step: 5 } }); }
+      else this.setState({ dlg: Object.assign({}, d, { step: d.step + 1 }) });
+    }, 900);
+  }
+  banner(kind) {
+    const B2 = {
+      conflict: ['You and Jo Smith both changed this ticket since it was last shared. Choose what to keep before you share again.', 'Review changes', 'circle-alert', 'var(--mh-e3787a,#e3787a)', 'rgba(227,120,122,.08)', 'rgba(227,120,122,.35)', () => this.setState({ sheet: 'conflict' })],
+      badTicket: ["This ticket has no type, so Manyhands can't save it yet. Pick a type to fix it.", 'Choose type', 'triangle-alert', 'var(--mh-e9ad36,#E9AD36)', 'rgba(233,173,54,.08)', 'rgba(233,173,54,.35)', null],
+      badDoc: ["This file isn't a managed document yet. Adopting it adds a title and an ID at the top; the rest stays exactly as written.", 'Adopt…', 'file-warning', 'var(--mh-e9ad36,#E9AD36)', 'rgba(233,173,54,.08)', 'rgba(233,173,54,.35)', null],
+    }[kind];
+    if (!B2) return { hasBanner: false };
+    return { hasBanner: true, bannerText: B2[0], bannerAction: B2[1], bannerIcon: B2[2], bannerColor: B2[3], bannerBg: B2[4], bannerBorder: B2[5], onBanner: B2[6] || (() => {}) };
+  }
+  componentDidUpdate(prev, prevState) {
+    if (prevState && prevState.theme !== this.state.theme) this.applyTheme();
+    if (prev.theme !== this.props.theme) this.setState({ theme: this.props.theme || 'dark' });
+    if (prev.dialog !== this.props.dialog) this.setState({ dlg: this.dlgFromProp(this.props.dialog) });
+    if (prev.attention !== this.props.attention) this.setState({ attn: !!this.props.attention });
+    if (prev.sheet !== this.props.sheet) this.setState({ sheet: this.props.sheet || null });
+    if (prev.settingsSection !== this.props.settingsSection) this.setState({ sec: this.props.settingsSection || 'keys' });
+  }
+
+  inScope(x) { const s = this.state.scope; return s.kind === 'repo' ? x.repo === s.id : s.kind === 'project' ? x.project === s.id : x.team === s.id; }
+
+  openTab(id) {
+    this.setState(s => {
+      const panes = s.panes.map(p => ({ tabs: p.tabs.slice(), active: p.active }));
+      const found = panes.findIndex(p => p.tabs.includes(id));
+      if (found >= 0) { panes[found].active = id; return { panes, ap: found }; }
+      const p = panes[s.ap] || panes[0];
+      p.tabs.push(id); p.active = id;
+      return { panes };
+    });
+  }
+  closeTab(pi, id) {
+    this.setState(s => {
+      let panes = s.panes.map(p => ({ tabs: p.tabs.slice(), active: p.active }));
+      const p = panes[pi]; const i = p.tabs.indexOf(id);
+      p.tabs.splice(i, 1);
+      if (p.active === id) p.active = p.tabs[Math.max(0, i - 1)] || null;
+      if (!p.tabs.length && panes.length > 1) panes.splice(pi, 1);
+      return { panes, ap: Math.min(s.ap, panes.length - 1) };
+    });
+  }
+  splitPane(pi) {
+    this.setState(s => {
+      const panes = s.panes.map(p => ({ tabs: p.tabs.slice(), active: p.active }));
+      if (panes.length > 2) return null;
+      const src = panes[pi];
+      panes.splice(pi + 1, 0, { tabs: src.active ? [src.active] : [], active: src.active });
+      return { panes, ap: pi + 1 };
+    });
+  }
+  togglePanel(p) {
+    this.setState(s => {
+      const vis = Object.assign({}, s.vis, { [p]: !s.vis[p] });
+      const dock = Object.assign({}, s.dock);
+      if (vis[p]) dock[this.dockOf(p)] = true;
+      return { vis, dock };
+    });
+  }
+  dockOf(p) {
+    const L = LAYOUTS[this.props.variant] || LAYOUTS.a;
+    for (const k of ['left', 'right', 'bottom']) if (L[k] && L[k].groups.some(g => g[0].includes(p))) return k;
+    return 'left';
+  }
+
+  item(id) {
+    const [kind, key] = [id.slice(0, 1), id.slice(2)];
+    if (kind === 't') {
+      const t = TICKETS.find(x => x.code === key); const cf = t.conflict && !this.state.resolved;
+      const repo = REPOS.find(r => r.id === t.repo);
+      const chips = [
+        { k: 'Type', v: t.type || 'missing', fg: t.type ? 'var(--mh-d5d8dd,#d5d8dd)' : 'var(--mh-e9ad36,#E9AD36)', bg: 'var(--mh-212429,#212429)' },
+        { k: 'Status', v: t.status, fg: (ST[t.status] || ST.waiting)[0], bg: (ST[t.status] || ST.waiting)[1] },
+        { k: 'Project', v: t.project, fg: 'var(--mh-d5d8dd,#d5d8dd)', bg: 'var(--mh-212429,#212429)' },
+        { k: 'Team', v: t.team, fg: 'var(--mh-d5d8dd,#d5d8dd)', bg: 'var(--mh-212429,#212429)' },
+      ];
+      if (t.blockedBy) chips.push({ k: 'Waiting on', v: t.blockedBy, fg: 'var(--mh-e3787a,#e3787a)', bg: 'rgba(227,120,122,.1)' });
+      return {
+        kind, icon: TI[t.type] || 'ticket', code: t.code, title: t.title, dirty: !!t.dirty,
+        repo: repo.name, section: 'Tickets', file: t.code, chips,
+        stateLabel: cf ? 'Needs attention' : t.editing ? 'Editing · saved on this computer' : t.open ? 'Same as the shared copy' : 'Closed',
+        stateColor: cf ? 'var(--mh-e3787a,#e3787a)' : t.editing ? 'var(--mh-e9ad36,#E9AD36)' : t.open ? 'var(--mh-7cc28f,#7cc28f)' : 'var(--mh-8d949e,#8d949e)', stateIcon: cf ? 'circle-alert' : t.editing ? 'pencil' : t.open ? 'circle-check' : 'archive',
+        git: t.editing ? `Branch manyhands/ticket/01M5QX${t.code.slice(-3)} · worktree ~/.local/share/manyhands/worktrees/${t.code} · 2 checkpoints not pushed` : 'Viewing the primary copy on main. Editing creates a private working copy.',
+        finish: t.open ? 'Close ticket…' : 'Reopen…', finishTip: 'Confirms, then saves, shares, merges into main and tidies up the working copy',
+        placeholder: 'Ticket viewer / editor',
+        ...this.banner(cf ? 'conflict' : t.bad ? 'badTicket' : null),
+        onFinish: () => this.setState({ dlg: { kind: 'close', stage: 'confirm', step: -1 }, dlgItem: id }),
+      };
+    }
+    const d = DOCMAP[key]; const repo = REPOS.find(r => r.id === d.repo);
+    return {
+      kind, icon: 'file-text', code: '', title: d.t, dirty: false, repo: repo.name, section: d.path, file: d.file,
+      chips: [{ k: 'Status', v: d.editing ? 'draft' : 'approved', fg: d.editing ? 'var(--mh-e9ad36,#E9AD36)' : 'var(--mh-7cc28f,#7cc28f)', bg: 'var(--mh-212429,#212429)' }, { k: 'Updated', v: d.editing ? '25 min ago' : 'Oct 21', fg: 'var(--mh-d5d8dd,#d5d8dd)', bg: 'var(--mh-212429,#212429)' }],
+      stateLabel: d.editing ? 'Editing · saved on this computer' : 'Same as the shared copy', stateColor: d.editing ? 'var(--mh-e9ad36,#E9AD36)' : 'var(--mh-7cc28f,#7cc28f)', stateIcon: d.editing ? 'pencil' : 'circle-check',
+      git: d.editing ? `Branch manyhands/document/${key} · worktree ~/.local/share/manyhands/worktrees/${key}` : 'Primary copy on main',
+      finish: 'Approve and merge…', finishTip: 'Confirms, then merges this document into main and tidies up the working copy',
+      placeholder: 'Document viewer / editor',
+      ...this.banner(d.bad ? 'badDoc' : null),
+      onFinish: () => this.setState({ dlg: { kind: 'close', stage: 'confirm', step: -1 }, dlgItem: id }),
+    };
+  }
+
+  group(panels, grow, key, idx, dockName) {
+    const s = this.state;
+    const vis = panels.filter(p => s.vis[p]);
+    if (!vis.length) return null;
+    const active = vis.includes(s.act[key]) ? s.act[key] : vis[0];
+    const multi = vis.length > 1;
+    const counts = this.counts;
+    const tabs = vis.map(p => ({
+      label: multi && vis.length > 2 ? P[p].short : P[p].label, icon: P[p].icon, title: P[p].label,
+      count: counts[p] == null ? '' : String(counts[p]),
+      onClick: () => this.setState(st => ({ act: Object.assign({}, st.act, { [key]: p }) })),
+      color: p === active ? 'var(--mh-d5d8dd,#d5d8dd)' : 'var(--mh-8d949e,#8d949e)', bg: p === active && multi ? 'var(--mh-212429,#212429)' : 'transparent',
+      line: p === active && multi ? 'inset 0 -2px 0 var(--mh-e9ad36,#E9AD36)' : 'none',
+    }));
+    const A = {
+      repos: [{ icon: 'plus', title: 'Add or create a repository', onClick: () => this.setState({ sheet: 'addRepo' }) }, { icon: 'refresh-cw', title: 'Check all for updates now' }, { icon: 'ellipsis', title: 'More' }],
+      projects: [{ icon: 'list-filter', title: 'Filter' }, { icon: 'ellipsis', title: 'More' }],
+      teams: [{ icon: 'list-filter', title: 'Filter' }, { icon: 'ellipsis', title: 'More' }],
+      tickets: [{ icon: 'plus', title: 'New ticket (Ctrl N)' }, { icon: 'ellipsis', title: 'More' }],
+      docs: [{ icon: 'file-plus', title: 'New document' }, { icon: 'folder-plus', title: 'New folder' }, { icon: 'chevrons-down-up', title: 'Collapse all', onClick: () => this.setState({ exp: {} }) }],
+      log: [{ icon: 'list-filter', title: 'Show only things that need attention' }, { icon: 'ellipsis', title: 'More' }],
+    }[active];
+    const row = dockName === 'bottom';
+    return {
+      key, grow, tabs, actions: A, sepTop: !row && idx > 0 ? B : 'none', sepLeft: row && idx > 0 ? B : 'none',
+      isRepos: active === 'repos', isProjects: active === 'projects', isTeams: active === 'teams',
+      isTickets: active === 'tickets', isDocs: active === 'docs', isLog: active === 'log',
+    };
+  }
+
+  extraVals() {
+    const s = this.state;
+    const out = {};
+    const btn = (label, onClick, primary) => ({ label, onClick, bg: primary ? 'var(--mh-e9ad36,#E9AD36)' : 'var(--mh-2a2e34,#2a2e34)', color: primary ? 'var(--mh-1a1c20,#1a1c20)' : 'var(--mh-d5d8dd,#d5d8dd)', border: primary ? 'none' : '1px solid var(--mh-3a3f46,#3a3f46)', weight: primary ? 600 : 400 });
+    out.spinner = React.createElement('span', { style: { width: 16, height: 16, borderRadius: '50%', border: '2px solid var(--mh-3a3f46,#3a3f46)', borderTopColor: 'var(--mh-5fb4c3,#5fb4c3)', display: 'inline-block', animation: 'mhspin .8s linear infinite', boxSizing: 'border-box' } });
+    const d = s.dlg;
+    out.dlgOpen = !!d; out.isCloseDlg = !!d && d.kind === 'close'; out.isUnlock = !!d && d.kind === 'unlock';
+    out.dlgW = d && d.kind === 'unlock' ? 440 : 580;
+    out.dlgBackdrop = () => { if (!d || d.stage !== 'running') this.setState({ dlg: null }); };
+    out.unlockClose = () => this.setState({ dlg: null });
+    out.cd = {};
+    if (out.isCloseDlg) {
+      const id = s.dlgItem || 't:MH-VH-7Q3'; const isDoc = id[0] === 'd'; const it = this.item(id); const stage = d.stage;
+      const steps = STEPS.map((st, i) => {
+        let title = st[0], desc = st[1];
+        if (i === 3) { title = isDoc ? 'Mark as approved' : title; desc = isDoc ? 'Approved by Vince Hodges · today' : desc; }
+        if (i === 2 && isDoc) desc = 'This document becomes part of the main version everyone shares';
+        const status = stage === 'confirm' ? 'num' : stage === 'done' ? 'done' : i < d.step ? 'done' : i === d.step ? (stage === 'failed' ? 'fail' : 'spin') : 'pending';
+        if (status === 'spin' && i === 1) desc = 'Sending 3 saved changes to origin…';
+        if (status === 'fail') desc = 'origin refused the key "Vince\'s laptop". Nothing after this step ran.';
+        return { n: String(i + 1), title, desc, isNum: status === 'num' || status === 'pending', isDone: status === 'done', isFail: status === 'fail', isSpin: status === 'spin',
+          numColor: status === 'pending' ? 'var(--mh-646b75,#646b75)' : 'var(--mh-d5d8dd,#d5d8dd)', numBorder: status === 'pending' ? 'var(--mh-3a3f46,#3a3f46)' : 'var(--mh-4a5059,#4a5059)',
+          titleColor: status === 'pending' ? 'var(--mh-8d949e,#8d949e)' : status === 'fail' ? 'var(--mh-e3787a,#e3787a)' : 'var(--mh-d5d8dd,#d5d8dd)', descColor: status === 'fail' ? 'var(--mh-e3787a,#e3787a)' : 'var(--mh-8d949e,#8d949e)', sep: i ? '1px solid var(--mh-2e3238,#2e3238)' : 'none' };
+      });
+      const key = id.slice(2);
+      let files;
+      if (isDoc) { const dd = DOCMAP[key]; files = [{ p: dd.path + '/' + dd.file, tag: 'document', delta: '+41 −8', icon: 'file-text' }]; }
+      else {
+        files = [{ p: '.manyhands/tickets/01M5QX…' + key.slice(-3) + '/ticket.md', tag: 'ticket', delta: '+6 −1', icon: 'ticket' }];
+        if (key === 'MH-VH-7Q3') files.push({ p: 'src/desktop/view/item/editor.rs', tag: 'code', delta: '+182 −12', icon: 'file-code' }, { p: 'src/desktop/view/item/mod.rs', tag: 'code', delta: '+9 −2', icon: 'file-code' }, { p: 'Cargo.toml', tag: 'code', delta: '+2', icon: 'file-code' });
+      }
+      files = files.map((x, i) => Object.assign(x, { sep: i ? '1px solid var(--mh-2e3238,#2e3238)' : 'none', tagBg: x.tag === 'code' ? 'rgba(95,180,195,.13)' : 'var(--mh-2e3238,#2e3238)', tagFg: x.tag === 'code' ? 'var(--mh-5fb4c3,#5fb4c3)' : 'var(--mh-8d949e,#8d949e)' }));
+      const noun = isDoc ? 'Merging' : 'Closing';
+      const close = () => { clearInterval(this.timer); this.setState({ dlg: null }); };
+      const buttons = stage === 'confirm' ? [btn('Cancel', close), btn(isDoc ? 'Approve and merge' : 'Close ticket', () => this.startClose(0), true)]
+        : stage === 'running' ? [btn('Stop at a safe point', close)]
+        : stage === 'failed' ? [btn('Not now', close), btn('Open Sharing & keys', () => this.setState({ dlg: null, sheet: 'settings', sec: 'keys' })), btn('Retry', () => this.startClose(1), true)]
+        : [btn('Done', close, true)];
+      out.cd = {
+        title: stage === 'confirm' ? (isDoc ? 'Approve and merge this document?' : 'Close ' + it.code + '?') : stage === 'running' ? noun + '…' : stage === 'failed' ? "Couldn't finish " + noun.toLowerCase() : isDoc ? 'Merged into main' : 'Ticket closed',
+        sub: (it.code ? it.code + ' · ' : '') + it.title + ' · ' + it.repo,
+        headIcon: stage === 'failed' ? 'circle-x' : stage === 'done' ? 'circle-check' : isDoc ? 'file-check' : 'archive',
+        headColor: stage === 'failed' ? 'var(--mh-e3787a,#e3787a)' : stage === 'done' ? 'var(--mh-7cc28f,#7cc28f)' : 'var(--mh-e9ad36,#E9AD36)',
+        hasLead: stage === 'confirm' || stage === 'running',
+        lead: stage === 'confirm' ? noun + ' runs these steps in order. If one fails, it stops there and nothing after it happens.' : 'You can keep working. This continues in the background and shows up in Activity.',
+        steps, files, fileCount: String(files.length), hasCode: files.some(x => x.tag === 'code'), showFiles: stage === 'confirm',
+        showReady: !isDoc && key === 'MH-VH-7Q3' && (stage === 'confirm' || stage === 'done'), readyLabel: stage === 'done' ? 'Now ready to start' : 'Becomes ready to start',
+        hasOutcome: stage === 'failed' || stage === 'done',
+        outText: stage === 'failed' ? 'Nothing was merged or tidied up. Your saved work is still on this computer, and Retry picks up from step 2.' : isDoc ? 'Shared, merged into main and tidied up. Editing again starts a fresh working copy.' : 'Shared, merged into main and tidied up.',
+        outIcon: stage === 'failed' ? 'shield-check' : 'circle-check', outBg: stage === 'failed' ? 'rgba(227,120,122,.08)' : 'rgba(124,194,143,.08)', outFg: 'var(--mh-d5d8dd,#d5d8dd)',
+        git: 'Git: merge manyhands/' + (isDoc ? 'document/' : 'ticket/01M5QX') + key + ' into main · push origin · delete local and remote branch + worktree',
+        hint: stage === 'confirm' ? 'Enter to confirm · Esc to cancel' : stage === 'running' ? 'Esc hides this window' : '',
+        buttons,
+      };
+    }
+    const items = [
+      { id: 'conflict', icon: 'circle-alert', color: 'var(--mh-e3787a,#e3787a)', title: 'You and Jo Smith both changed "Footer toggles for dock panels"', desc: 'Choose what to keep. Nothing is shared until you do.', repo: 'manyhands', action: 'Review changes', onClick: () => { this.openTab('t:MH-VH-6PJ'); this.setState({ attn: false, sheet: 'conflict' }); }, git: 'merge conflict in .manyhands/tickets/…6PJ/ticket.md on branch manyhands/ticket/…6PJ' },
+      { id: 'lock', icon: 'lock', color: 'var(--mh-e9ad36,#E9AD36)', title: 'Your key is locked', desc: 'Sharing from manyhands is waiting for the passphrase.', repo: 'manyhands', action: 'Unlock…', onClick: () => this.setState({ attn: false, dlg: { kind: 'unlock' } }), git: "ssh key Vince's laptop (ED25519) is passphrase-protected and not yet unlocked this session" },
+      { id: 'zorite', icon: 'wifi-off', color: 'var(--mh-e3787a,#e3787a)', title: "Couldn't reach zorite's shared copy", desc: 'Last tried 7 minutes ago. Your work is safe, and Manyhands tries again in 5 minutes.', repo: 'zorite', action: 'Retry now', onClick: () => this.setState({ attn: false }), git: 'ssh: connect to host github.com port 22: Connection timed out' },
+    ].filter(x => !(x.id === 'conflict' && s.resolved));
+    out.attnItems = items; out.attnOpen = !!s.attn;
+    out.attnLabel = items.length + (items.length === 1 ? ' needs attention' : ' need attention');
+    out.toggleAttn = () => this.setState(st => ({ attn: !st.attn }));
+    out.closeAttn = () => this.setState({ attn: false });
+    out.openActivity = () => this.setState(st => ({ attn: false, vis: Object.assign({}, st.vis, { log: true }), dock: Object.assign({}, st.dock, { bottom: true }) }));
+
+    const pk = s.pick;
+    const Ln = (t, k) => ({ t, mark: k === 'add' ? '+' : k === 'chg' ? '~' : '', bg: k === 'add' ? 'rgba(124,194,143,.14)' : k === 'chg' ? 'rgba(233,173,54,.14)' : 'transparent', fg: k === 'same' ? 'var(--mh-8d949e,#8d949e)' : 'var(--mh-d5d8dd,#d5d8dd)' });
+    const choice = (key, id, label) => ({ label, onClick: () => this.setState(st => ({ pick: Object.assign({}, st.pick, { [key]: id }) })), bg: pk[key] === id ? 'var(--mh-3f8f9c,#3f8f9c)' : 'var(--mh-2a2e34,#2a2e34)', color: pk[key] === id ? '#ffffff' : 'var(--mh-d5d8dd,#d5d8dd)', border: pk[key] === id ? '1px solid var(--mh-3f8f9c,#3f8f9c)' : '1px solid var(--mh-3a3f46,#3a3f46)' });
+    const col = (title, who, lines, i) => ({ title, who, lines, sep: i ? '1px solid var(--mh-2e3238,#2e3238)' : 'none' });
+    const H = Ln('## Acceptance', 'same'), ONE = Ln('- One footer button per panel', 'same');
+    const KEEP = Ln('- Hidden panels keep their size', 'same'), REM = Ln('- Hidden panels remember their size and position', 'chg'), TIP = Ln('- Tooltips show the keyboard shortcut', 'add');
+    out.conflicts = [
+      { label: 'Status', kind: 'Ticket detail', resolved: !!pk.status, cols: [col('Before', 'last shared copy', [Ln('in progress', 'same')], 0), col('Yours', 'Vince Hodges · 15:36', [Ln('in review', 'chg')], 1), col("Jo's", 'Jo Smith · 15:21', [Ln('waiting', 'chg')], 2)], choices: [choice('status', 'mine', 'Keep mine'), choice('status', 'theirs', "Keep Jo's")] },
+      { label: 'Acceptance', kind: 'Description', resolved: !!pk.body, cols: [col('Before', 'last shared copy', [H, ONE, KEEP], 0), col('Yours', 'Vince Hodges · 15:36', [H, ONE, KEEP, TIP], 1), col("Jo's", 'Jo Smith · 15:21', [H, ONE, REM], 2)], choices: [choice('body', 'mine', 'Keep mine'), choice('body', 'theirs', "Keep Jo's"), choice('body', 'both', 'Keep both')] },
+    ].map(c => Object.assign(c, { stateLabel: c.resolved ? 'Chosen' : 'Choose one', stateColor: c.resolved ? 'var(--mh-7cc28f,#7cc28f)' : 'var(--mh-e9ad36,#E9AD36)' }));
+    const bodies = { mine: [H, ONE, KEEP, TIP], theirs: [H, ONE, REM], both: [H, ONE, REM, TIP] };
+    out.resultLines = [Ln('status: ' + (pk.status === 'mine' ? 'in review' : pk.status === 'theirs' ? 'waiting' : '(choose above)'), pk.status ? 'chg' : 'same'), Ln('', 'same')].concat(pk.body ? bodies[pk.body] : [H, Ln('(choose what to keep for Acceptance above)', 'same')]);
+    const n = (pk.status ? 1 : 0) + (pk.body ? 1 : 0);
+    out.conflictProgress = n + ' of 2 chosen'; out.conflictProgColor = n === 2 ? 'var(--mh-7cc28f,#7cc28f)' : 'var(--mh-e9ad36,#E9AD36)';
+    out.saveBg = n === 2 ? 'var(--mh-e9ad36,#E9AD36)' : 'var(--mh-2a2e34,#2a2e34)'; out.saveColor = n === 2 ? 'var(--mh-1a1c20,#1a1c20)' : 'var(--mh-646b75,#646b75)';
+    out.saveResolution = () => { if (n === 2) this.setState({ sheet: null, resolved: true }); };
+
+    out.themeOpts = [['dark', 'Dark', 'moon', '#1b1d21', '#2b2e34'], ['light', 'Light', 'sun', '#fbfaf8', '#e3e0da'], ['system', 'Match system', 'monitor', 'linear-gradient(90deg,#1b1d21 50%,#fbfaf8 50%)', 'rgba(128,128,128,.35)']].map(([id, label, icon, prevBg, prevPanel]) => ({
+      label, icon, prevBg, prevPanel, border: (s.theme === id) ? '2px solid var(--mh-e9ad36,#E9AD36)' : '2px solid transparent', onClick: () => this.setState({ theme: id === 'system' ? 'dark' : id }),
+    }));
+    out.rootRef = this.rootRef;
+    return out;
+  }
+
+  renderVals() {
+    const s = this.state;
+    const L = LAYOUTS[this.props.variant] || LAYOUTS.a;
+    const rowH = L.rowH;
+    const sel = (on) => ({ bg: on ? 'var(--mh-29363a,#29363a)' : 'transparent', edge: on ? 'inset 2px 0 0 var(--mh-e9ad36,#E9AD36)' : 'none', weight: on ? 600 : 400 });
+    const scopedTickets = TICKETS.filter(t => this.inScope(t));
+    const openCount = scopedTickets.filter(t => t.open).length;
+    this.counts = { tickets: openCount };
+
+    const setScope = (kind, id) => () => this.setState({ scope: { kind, id } });
+    const repoRows = REPOS.map(r => Object.assign({ name: r.name, label: r.label, color: RS[r.state][0], icon: RS[r.state][1], git: r.git, onClick: setScope('repo', r.id) }, sel(s.scope.kind === 'repo' && s.scope.id === r.id)));
+    const projectRows = PROJECTS.map(p => {
+      const ts = TICKETS.filter(t => t.project === p.id && t.open); const rs = new Set(TICKETS.filter(t => t.project === p.id).map(t => t.repo));
+      return Object.assign({ name: p.name, meta: `${ts.length} open · ${rs.size} repo${rs.size > 1 ? 's' : ''}`, tip: 'Project: everything tagged "' + p.id + '" across all repositories', onClick: setScope('project', p.id) }, sel(s.scope.kind === 'project' && s.scope.id === p.id));
+    });
+    const teamRows = TEAMS.map(p => {
+      const ts = TICKETS.filter(t => t.team === p.id && t.open);
+      return Object.assign({ name: p.name, meta: `${ts.length} open`, tip: 'Team: everything tagged "' + p.id + '" across all repositories', onClick: setScope('team', p.id) }, sel(s.scope.kind === 'team' && s.scope.id === p.id));
+    });
+
+    const activeId = (s.panes[s.ap] || {}).active;
+    const fl = s.filter;
+    const list = scopedTickets.filter(t => fl === 'all' || (fl === 'open' ? t.open : !t.open));
+    const k = s.sort.k, dir = s.sort.asc ? 1 : -1;
+    list.sort((a, b) => {
+      if (k === 'updated') return (a.mins - b.mins) * dir;
+      const va = k === 'code' ? a.code : k === 'title' ? a.title : a.status; const vb = k === 'code' ? b.code : k === 'title' ? b.title : b.status;
+      return va.localeCompare(vb) * dir;
+    });
+    const ticketRows = list.map(t => Object.assign({
+      code: t.code, title: t.title, status: t.status, age: age(t.mins), editing: !!t.editing, conflict: !!t.conflict && !s.resolved,
+      typeIcon: TI[t.type] || 'ticket', typeColor: t.bad ? 'var(--mh-e9ad36,#E9AD36)' : 'var(--mh-8d949e,#8d949e)', titleColor: t.open ? 'var(--mh-d5d8dd,#d5d8dd)' : 'var(--mh-8d949e,#8d949e)',
+      pillFg: (ST[t.status] || ST.waiting)[0], pillBg: (ST[t.status] || ST.waiting)[1],
+      tip: t.bad ? 'Needs fixing: ' + t.bad : t.blockedBy ? `Waiting on ${t.blockedBy}` : `${t.code} · ${REPOS.find(r => r.id === t.repo).name}`,
+      onClick: () => this.openTab('t:' + t.code),
+    }, sel(activeId === 't:' + t.code)));
+    const ticketFilters = [['open', 'Open', openCount], ['closed', 'Closed', scopedTickets.length - openCount], ['all', 'All', scopedTickets.length]].map(([id, label, n]) => ({
+      label, count: n, onClick: () => this.setState({ filter: id }), bg: fl === id ? 'var(--mh-2e3238,#2e3238)' : 'transparent', color: fl === id ? 'var(--mh-d5d8dd,#d5d8dd)' : 'var(--mh-8d949e,#8d949e)',
+    }));
+    const colDefs = [['code', 'Code', '78px', 'none'], ['title', 'Title', 'auto', '1'], ['status', 'Status', '92px', 'none'], ['updated', 'Upd.', '30px', 'none']];
+    const ticketCols = colDefs.map(([id, label, w, flex]) => ({
+      label, w, flex, justify: id === 'updated' ? 'flex-end' : 'flex-start', color: k === id ? 'var(--mh-d5d8dd,#d5d8dd)' : 'var(--mh-646b75,#646b75)',
+      arrow: k === id ? (s.sort.asc ? 'arrow-up' : 'arrow-down') : 'arrow-up-down', arrowOp: k === id ? 1 : 0.35,
+      onClick: () => this.setState(st => ({ sort: { k: id, asc: st.sort.k === id ? !st.sort.asc : true } })),
+    }));
+    const scopeName = s.scope.id === 'site' ? 'manyhands-site' : s.scope.id === 'handbook' ? 'team-handbook' : s.scope.id;
+    const scopeKind = { repo: 'Repository', project: 'Project', team: 'Team' }[s.scope.kind];
+    const nRepos = new Set(scopedTickets.map(t => t.repo)).size;
+    const ticketFootnote = `${list.length} ${fl === 'all' ? '' : fl + ' '}tickets in ${scopeKind.toLowerCase()} ${scopeName} · from ${nRepos} repositor${nRepos === 1 ? 'y' : 'ies'}`;
+
+    const entries = DOCS.filter(e => this.inScope(e));
+    const multi = entries.length > 1;
+    const docRows = [];
+    const cnt = n => n.f ? n.kids.reduce((a, c) => a + cnt(c), 0) : 1;
+    const toggle = key => () => this.setState(st => ({ exp: Object.assign({}, st.exp, { [key]: !st.exp[key] }) }));
+    const walk = (nodes, depth, prefix) => nodes.forEach(n => {
+      if (n.f) {
+        const key = prefix + '/' + n.f; const open = !!s.exp[key];
+        docRows.push({ indent: 8 + depth * 14, chev: open ? 'chevron-down' : 'chevron-right', chevColor: 'var(--mh-646b75,#646b75)', icon: open ? 'folder-open' : 'folder', iconColor: 'var(--mh-8d949e,#8d949e)', name: n.f, color: 'var(--mh-d5d8dd,#d5d8dd)', weight: 400, count: open ? '' : String(cnt(n)), tip: key, onClick: toggle(key), bg: 'transparent', edge: 'none' });
+        if (open) walk(n.kids, depth + 1, key);
+      } else {
+        const on = activeId === 'd:' + n.d;
+        docRows.push(Object.assign({ indent: 8 + depth * 14, chev: 'dot', chevColor: 'transparent', icon: n.bad ? 'file-warning' : 'file-text', iconColor: n.bad ? 'var(--mh-e9ad36,#E9AD36)' : 'var(--mh-8d949e,#8d949e)', name: n.t, color: n.bad ? 'var(--mh-e9ad36,#E9AD36)' : 'var(--mh-d5d8dd,#d5d8dd)', count: '', editing: !!n.editing, bad: !!n.bad, tip: n.bad ? n.bad : prefix.split('/').slice(1).concat(n.file).join('/'), onClick: () => this.openTab('d:' + n.d) }, sel(on)));
+      }
+    });
+    entries.forEach(e => {
+      const repo = REPOS.find(r => r.id === e.repo);
+      if (multi) {
+        const open = !!s.exp[e.repo];
+        docRows.push({ indent: 8, chev: open ? 'chevron-down' : 'chevron-right', chevColor: 'var(--mh-646b75,#646b75)', icon: 'folder-git-2', iconColor: 'var(--mh-e9ad36,#E9AD36)', name: repo.name, color: 'var(--mh-d5d8dd,#d5d8dd)', weight: 600, count: '', tip: repo.path, onClick: toggle(e.repo), bg: 'transparent', edge: 'none' });
+        if (open) walk(e.tree, 1, e.repo);
+      } else walk(e.tree, 0, e.repo);
+    });
+    this.counts.docs = entries.reduce((a, e) => a + e.tree.reduce((b, n) => b + cnt(n), 0), 0);
+
+    const logRows = LOG.filter(l => !(l.go === 'conflict' && s.resolved)).map(l => Object.assign({ hasAction: !!l.action, onAction: () => l.go === 'conflict' ? (this.openTab('t:MH-VH-6PJ'), this.setState({ sheet: 'conflict' })) : l.go === 'unlock' ? this.setState({ dlg: { kind: 'unlock' } }) : null }, l));
+
+    const docks = []; let cols = [], areasTop = [], areasBot = [];
+    const showBottom = s.dock.bottom && L.bottom && L.bottom.groups.some(g => g[0].some(p => s.vis[p]));
+    const mk = (name) => {
+      const D = L[name]; if (!D || !s.dock[name]) return null;
+      const groups = D.groups.map((g, i) => this.group(g[0], g[1], name + i, i, name)).filter(Boolean).map((g, i) => Object.assign(g, { sepTop: name !== 'bottom' && i > 0 ? B : 'none', sepLeft: name === 'bottom' && i > 0 ? B : 'none' }));
+      if (!groups.length) return null;
+      return { area: name, dir: name === 'bottom' ? 'row' : 'column', groups, br: name === 'left' ? B : 'none', bl: name === 'right' ? B : 'none', bt: name === 'bottom' ? B : 'none' };
+    };
+    const left = mk('left'), right = mk('right'), bottom = showBottom ? mk('bottom') : null;
+    if (left) { docks.push(left); cols.push(L.left.w + 'px'); areasTop.push('left'); areasBot.push('left'); }
+    cols.push('minmax(0,1fr)'); areasTop.push('center'); areasBot.push(bottom ? 'bottom' : 'center');
+    if (right) { docks.push(right); cols.push(L.right.w + 'px'); areasTop.push('right'); areasBot.push('right'); }
+    if (bottom) docks.push(bottom);
+    const gridAreas = bottom ? `"${areasTop.join(' ')}" "${areasBot.join(' ')}"` : `"${areasTop.join(' ')}"`;
+    const gridRows = bottom ? `minmax(0,1fr) ${L.bottom.h}px` : 'minmax(0,1fr)';
+
+    const panes = s.panes.map((p, pi) => {
+      const focused = pi === s.ap;
+      const tabs = p.tabs.map(id => {
+        const it = this.item(id); const on = id === p.active;
+        return { icon: it.icon, code: it.code, title: it.title, dirty: it.dirty, tip: `${it.title} · ${it.repo}`,
+          bg: on ? 'var(--mh-1a1c20,#1a1c20)' : 'transparent', color: on ? 'var(--mh-d5d8dd,#d5d8dd)' : 'var(--mh-8d949e,#8d949e)', iconColor: on ? 'var(--mh-e9ad36,#E9AD36)' : 'var(--mh-646b75,#646b75)',
+          line: on && focused ? 'inset 0 2px 0 var(--mh-e9ad36,#E9AD36)' : on ? 'inset 0 2px 0 var(--mh-4a5059,#4a5059)' : 'none',
+          onClick: () => this.setState(st => { const ps = st.panes.slice(); ps[pi] = Object.assign({}, ps[pi], { active: id }); return { panes: ps, ap: pi }; }),
+          onClose: (e) => { e && e.stopPropagation && e.stopPropagation(); this.closeTab(pi, id); } };
+      });
+      return { tabs, sep: pi > 0 ? B : 'none', hasItem: !!p.active, isEmpty: !p.active, item: p.active ? this.item(p.active) : {},
+        focus: () => { if (this.state.ap !== pi) this.setState({ ap: pi }); }, split: (e) => { e && e.stopPropagation && e.stopPropagation(); this.splitPane(pi); } };
+    });
+
+    const fbtn = p => ({ isBtn: true, icon: P[p].icon, title: (s.vis[p] ? 'Hide ' : 'Show ') + P[p].label, onClick: () => this.togglePanel(p), bg: s.vis[p] && s.dock[this.dockOf(p)] ? 'var(--mh-2a2e34,#2a2e34)' : 'transparent', color: s.vis[p] && s.dock[this.dockOf(p)] ? 'var(--mh-d5d8dd,#d5d8dd)' : 'var(--mh-646b75,#646b75)' });
+    const dbtn = (name, icon, label) => ({ isBtn: true, icon, title: (s.dock[name] ? 'Hide ' : 'Show ') + label, onClick: () => this.setState(st => ({ dock: Object.assign({}, st.dock, { [name]: !st.dock[name] }) })), bg: 'transparent', color: s.dock[name] ? 'var(--mh-8d949e,#8d949e)' : 'var(--mh-4a5059,#4a5059)' });
+    const panelsOf = name => L[name] ? L[name].groups.flatMap(g => g[0]) : [];
+    const SEP = { isSep: true };
+    const footLeft = [dbtn('left', 'panel-left', 'left dock')].concat(panelsOf('left').map(fbtn), [SEP, dbtn('bottom', 'panel-bottom', 'bottom dock')], panelsOf('bottom').map(fbtn));
+    const footRight = panelsOf('right').map(fbtn).concat(L.right ? [dbtn('right', 'panel-right', 'right dock')] : [], [SEP, { isBtn: true, icon: 'settings', title: 'Settings (Ctrl ,)', onClick: () => this.setState({ sheet: 'settings' }), bg: 'transparent', color: 'var(--mh-8d949e,#8d949e)' }]);
+
+    const sheet = s.sheet;
+    const navDefs = [['general', 'General', 'sliders-horizontal'], ['repos', 'Repositories', 'folder-git-2'], ['keys', 'Sharing & keys', 'key-round'], ['polling', 'Checking for updates', 'refresh-cw'], ['identity', 'Your name & email', 'user-round'], ['appearance', 'Appearance', 'palette']];
+    const navItems = navDefs.map(([id, label, icon]) => ({ label, icon, onClick: () => this.setState({ sec: id }), bg: s.sec === id ? 'var(--mh-2e3238,#2e3238)' : 'transparent', color: s.sec === id ? 'var(--mh-d5d8dd,#d5d8dd)' : 'var(--mh-8d949e,#8d949e)' }));
+    const keyRows = [
+      { label: "Vince's laptop", origin: 'Made by Manyhands', fp: 'ED25519 · SHA256:3f9cK0yqW1m8tN2bXr4LhVd7eQpZ5sJa6uGc9oFwTiE', note: 'Has a passphrase · created Oct 4', inUse: true, removeTip: 'Remove. Asks before deleting the key file.' },
+      { label: 'id_ed25519', origin: 'From ~/.ssh', fp: 'ED25519 · SHA256:Qm7aR2vYh8LpX0cN5dTgW3kE9uB1sZfJ6oVnHiK4yMw', note: 'No passphrase · added Oct 6', inUse: false, removeTip: 'Remove from Manyhands. The file in ~/.ssh is never deleted.' },
+    ].map((kr, i) => Object.assign(kr, { sep: i ? B : 'none', bg: kr.inUse ? 'rgba(95,180,195,.05)' : 'transparent', radio: kr.inUse ? 'var(--mh-5fb4c3,#5fb4c3)' : 'var(--mh-4a5059,#4a5059)', dot: kr.inUse ? 'var(--mh-5fb4c3,#5fb4c3)' : 'transparent' }));
+    const pollRows = REPOS.map((r, i) => {
+      const on = s.poll[r.id] && !s.pauseAll; const canPoll = r.state !== 'local';
+      const err = r.state === 'attention';
+      return { name: r.name, git: r.git, sep: i ? B : 'none', canPoll, noRemote: !canPoll,
+        last: !canPoll ? 'No shared copy, nothing to check' : !on ? 'Paused' : err ? "Couldn't reach origin 7 min ago. Will retry." : r.state === 'unshared' ? 'Checked 2 min ago · 2 of your changes not shared yet' : 'Checked 2 min ago · up to date',
+        lastColor: !canPoll || !on ? 'var(--mh-646b75,#646b75)' : err ? 'var(--mh-e3787a,#e3787a)' : 'var(--mh-8d949e,#8d949e)', lastIcon: !canPoll ? 'hard-drive' : !on ? 'pause' : err ? 'circle-alert' : 'circle-check',
+        interval: r.id === 'zorite' ? 'Every 15 minutes' : 'Every 5 minutes', intervalColor: on ? 'var(--mh-d5d8dd,#d5d8dd)' : 'var(--mh-646b75,#646b75)', nowLabel: err ? 'Retry now' : 'Check now',
+        onToggle: () => this.setState(st => ({ poll: Object.assign({}, st.poll, { [r.id]: !st.poll[r.id] }) })), toggleTip: on ? 'Turn off checking for this repository' : 'Turn on checking',
+        swBg: on ? 'var(--mh-3f8f9c,#3f8f9c)' : 'var(--mh-3a3f46,#3a3f46)', knob: on ? 'flex-end' : 'flex-start' };
+    });
+    const addModes = [['existing', 'Add an existing folder', 'folder-input'], ['create', 'Create a new repository', 'folder-plus']].map(([id, label, icon]) => ({ label, icon, onClick: () => this.setState({ addMode: id }), bg: s.addMode === id ? 'var(--mh-2e3238,#2e3238)' : 'transparent', color: s.addMode === id ? 'var(--mh-d5d8dd,#d5d8dd)' : 'var(--mh-8d949e,#8d949e)' }));
+
+    return {
+      rowH, repoRows, projectRows, teamRows, ticketRows, ticketFilters, ticketCols, ticketFootnote, docRows, logRows,
+      docks, gridCols: cols.join(' '), gridRows, gridAreas, panes, footLeft, footRight,
+      scopeKind, scopeName, scopeIcon: { repo: 'folder-git-2', project: 'folder-kanban', team: 'users' }[s.scope.kind],
+      showUnshared: () => this.setState({ scope: { kind: 'repo', id: 'manyhands' } }),
+      showAttention: () => this.setState(st => ({ vis: Object.assign({}, st.vis, { log: true }), dock: Object.assign({}, st.dock, { bottom: true }) })),
+      sheetOpen: !!sheet, isAddRepo: sheet === 'addRepo', isSettings: sheet === 'settings', isConflict: sheet === 'conflict', sheetW: sheet === 'settings' ? 720 : sheet === 'conflict' ? 920 : 470,
+      sheetTitle: sheet === 'addRepo' ? 'Add a repository' : sheet === 'conflict' ? 'Choose what to keep · Footer toggles for dock panels' : 'Settings',
+      sheetDesc: sheet === 'addRepo' ? 'Bring a folder you already work in, or start a new one. Manyhands keeps tickets and documents inside it.' : sheet === 'conflict' ? 'You and Jo Smith both changed this ticket since it was last shared. Pick a version for each part, or keep both.' : 'Applies to this computer only.',
+      closeSheet: () => this.setState({ sheet: null }), stop: e => e && e.stopPropagation && e.stopPropagation(),
+      addModes, addExisting: s.addMode === 'existing', addCreate: s.addMode === 'create', addCta: s.addMode === 'existing' ? 'Add repository' : 'Create repository',
+      navItems, keyRows, pollRows, isKeys: s.sec === 'keys', isPolling: s.sec === 'polling', isAppearance: s.sec === 'appearance', isOtherSection: !['keys', 'polling', 'appearance'].includes(s.sec),
+      otherLabel: (navDefs.find(n => n[0] === s.sec) || [])[1],
+      ...this.extraVals(),
+      togglePauseAll: () => this.setState(st => ({ pauseAll: !st.pauseAll })), pauseBg: s.pauseAll ? 'var(--mh-3f8f9c,#3f8f9c)' : 'var(--mh-3a3f46,#3a3f46)', pauseKnob: s.pauseAll ? 'flex-end' : 'flex-start',
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -9,7 +9,7 @@ Turn a proposed Cycle into an approval-ready decision record. A review with no
 questions is valid only after checking for material gaps; do not manufacture
 questions for routine engineering choices.
 
-Use this alongside `starting-a-cycle` after its project grounding step and
+Use this alongside `planning-a-cycle` after its project grounding step and
 before requesting approval. It reviews documents and their evidence; it does not
 replace ticket/worktree preflight, create implementation code, or authorize any
 lifecycle action.

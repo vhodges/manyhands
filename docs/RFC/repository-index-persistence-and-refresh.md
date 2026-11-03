@@ -159,6 +159,33 @@ preserving and replacing the database, then releases it before an explicit-root
 rebuild acquires its repository lease and scans canonical state. This prevents
 database replacement races without globally serializing Git work or scans.
 
+### Unavailable-repository registration removal
+
+Amendment for ticket `01M4R19P943QZKHHKRXV2D2TP2` (2026-10-19): removing an
+exact stored-root registration is a narrow exception to the common-Git lease
+requirement when the root is positively absent, or an exact Git open finds no
+repository and `.git` is positively absent. Permission/I/O errors, damaged Git
+metadata and dangling indirection do not qualify. This changes no other
+repository resolver or mutation's lease requirements.
+
+Removal acquires the root-keyed application-data bootstrap lease, the Git
+lease when a repository is present, and then the exclusive cache guard, in
+that order. It reobserves the root and held lease identity after acquiring the
+guards. If a repository appears or its lease file has been replaced, removal
+returns busy and releases the guards rather than taking a Git lease under the
+cache guard. Existing per-lock wait bounds apply; there is no internal retry
+loop and no claim that their sum is one lock's timeout.
+
+The registration stamp is compared before journal creation and in the deletion
+transaction. Root-keyed local journal rows and the registration's dependent
+rows are removed atomically. Durable request/confirmation records remain for
+matching replay, as do draft files and application-global key and trust state.
+The registry-only route preserves unrelated unfinished recovery evidence and
+accepted requests, even when their original Git lease pathname is gone. Only
+the matching removal's own pending operation can continue this way; removal is
+not implicit abandonment. See the [CLI contract](cli-contract.md#registration-removal-targeting)
+for selection, consent and replay behavior.
+
 ## Remote Polling And Reservation
 
 Wave 2 adds repository-scoped remote-operation reservations for polling, item
@@ -225,6 +252,19 @@ private-key material, passphrases or passphrase-derived digests. Request replay
 must reconcile Git/canonical state; cache loss that prevents safe replay returns
 recovery-required rather than silently repeating an effect. These records do
 not replace the repository lease or make SQLite authoritative.
+
+Item discovery also records each ticket's short code, and the index holds
+relationship edge records and the relationship problems found in each
+ticket's own file, as defined by the
+[ticket relationships and short codes RFC](ticket-relationships-and-short-codes.md#index).
+They are rebuilt from canonical files on refresh and rebuild. Readiness, and
+whether an edge's target resolves, are not stored: they are computed from the
+stored edges when read (amended 2026-10-08).
+
+Reads list what the index holds (product owner, 2026-10-08). A read never
+lists a directory or scans for files. The indexer is what picks up a new
+file, so a document, ticket or comment added since the last refresh is not
+listed, and not reported, until the next one. That short delay is accepted.
 
 ## Wave 1 Acceptance
 

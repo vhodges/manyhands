@@ -1,9 +1,10 @@
 ---
+id: 01M4CBFWQFZX0VWXZH23F14X40
+item_id: 01M4CAQGTMM3JYFMWQJCZXP1KZ
+created_at: 2026-10-07T23:34:25Z
+created_by: Claude Opus 5.5 <noreply@anthropic.com>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M4CBFWQFZX0VWXZH23F14X40"
-item_id: "01M4CAQGTMM3JYFMWQJCZXP1KZ"
-created_at: "2026-10-07T23:34:25Z"
 ---
 
 Approval checkpoint: the product owner approved the revised Wave 03 documents,

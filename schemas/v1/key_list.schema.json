@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 SSH key registrations",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["items", "complete"],
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "key.schema.json"
+      }
+    },
+    "complete": {
+      "type": "boolean"
+    }
+  }
+}

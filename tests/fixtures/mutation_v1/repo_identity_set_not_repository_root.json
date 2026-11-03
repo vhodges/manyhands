@@ -1,0 +1,35 @@
+{
+  "code": "not_repository_root",
+  "command": "repo identity-set",
+  "data": null,
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "That path is inside a repository but is not a root this command takes.",
+  "operation_id": null,
+  "outcome": "error",
+  "recovery": [
+    {
+      "action": "repo.inspect",
+      "arguments": {
+        "root": "<root>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<root>/below",
+    "worktree": null
+  }
+}

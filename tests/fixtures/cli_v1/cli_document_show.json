@@ -1,0 +1,60 @@
+{
+  "code": "ok",
+  "command": "document show",
+  "data": {
+    "body": "# Guide\n",
+    "change_source": "git_commit",
+    "changed_at": "2023-11-14T22:13:20Z",
+    "closure": null,
+    "context": {
+      "branch": "main",
+      "head_oid": "<head-oid>",
+      "kind": "primary",
+      "worktree": "<repository>"
+    },
+    "deps": [],
+    "id": "01ARZ3NDEKTSV4RRFFQ69G5FD0",
+    "index": {
+      "refreshed_at": "<refreshed-at>",
+      "state": "current"
+    },
+    "kind": "document",
+    "observation": "v1:b97979596442d7b114749e98e56274fe7c014d36b8c77878a216289a631a36f0",
+    "parent": null,
+    "path": "docs/guide.md",
+    "problems": [],
+    "project": null,
+    "readiness": null,
+    "slug": null,
+    "source": "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: 01ARZ3NDEKTSV4RRFFQ69G5FD0\ntitle: Guide\naudience: everyone\n---\n# Guide\n",
+    "status": null,
+    "team": null,
+    "title": "Guide",
+    "type": null,
+    "unknown_metadata": {
+      "audience": "everyone"
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FD0",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

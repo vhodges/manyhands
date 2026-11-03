@@ -12,7 +12,7 @@ row only when the Cycle cannot reach it.
 | Time and failure | Per-attempt versus total limits, DNS, cleanup, partial progress, cancellation, retries, and ambiguous mutation outcomes | Documented limit semantics and targeted fault tests |
 | Backend and platform | Locked dependency behavior, native ABI/runtime differences, unavailable capabilities, and CI coverage | Source characterization, native matrix, explicit evidence gap |
 | Fixture and tests | Whether fixtures faithfully model the boundary, readiness/teardown races, privacy of test output, and whether tests can prove claims | Fixture design, fault injection, negative tests, native execution |
-| Verification | Every acceptance statement has a meaningful command/test; planned evidence is not described as complete | Implementation tasks, required local checks, native gates |
+| Verification | Every acceptance statement has a meaningful command/test; planned evidence is not described as complete | Implementation tasks, required local checks, native CI after merge |
 | Lifecycle | Ticket checkpoints, review-ready state, PR evidence, closure before merge, and cleanup authorization | Ticket/comment plan and final handoff |
 
 ## Classifying a concern

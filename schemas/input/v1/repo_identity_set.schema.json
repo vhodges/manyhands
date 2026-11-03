@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Repository identity-set input v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "email"],
+  "properties": {
+    "name": {"type": "string"},
+    "email": {"type": "string"},
+    "initials": {"type": ["string", "null"]}
+  }
+}

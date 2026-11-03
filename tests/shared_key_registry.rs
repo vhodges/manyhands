@@ -245,7 +245,11 @@ fn material_schema_preserves_cycle01_rows_and_selection() {
     }
 
     let connection = rusqlite::Connection::open(registry_path).unwrap();
-    for table in ["owned_generated_keys", "key_material_operations"] {
+    for table in [
+        "owned_generated_keys",
+        "key_material_operations",
+        "key_registry_changes",
+    ] {
         assert!(
             connection
                 .query_row(
@@ -284,13 +288,31 @@ fn material_schema_preserves_cycle01_rows_and_selection() {
             "failure_code",
         ]
     );
-    for table in ["owned_generated_keys", "key_material_operations"] {
+    // What a recorded registry change keeps: no path of a key file.
+    assert_eq!(
+        registry_table_columns(&connection, "key_registry_changes"),
+        [
+            "operation_id",
+            "action",
+            "key_id",
+            "label",
+            "public_key_fingerprint",
+            "changed",
+            "recorded_at",
+        ]
+    );
+    for table in [
+        "owned_generated_keys",
+        "key_material_operations",
+        "key_registry_changes",
+    ] {
         for column in registry_table_columns(&connection, table) {
             assert!(
                 !column.contains("secret")
                     && !column.contains("passphrase")
                     && !column.contains("private_key_hash")
-                    && !column.contains("confirmation"),
+                    && !column.contains("confirmation")
+                    && (table != "key_registry_changes" || !column.contains("path")),
                 "material schema must not persist protected data: {table}.{column}"
             );
         }

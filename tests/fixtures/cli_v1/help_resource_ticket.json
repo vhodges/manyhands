@@ -1,0 +1,533 @@
+{
+  "code": "ok",
+  "command": "cli help",
+  "data": {
+    "commands": [
+      {
+        "available": true,
+        "command": "ticket list",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--status",
+            "required": false,
+            "summary": "Filter by exact status text.",
+            "value": "text"
+          },
+          {
+            "name": "--type",
+            "required": false,
+            "summary": "Filter by exact type text.",
+            "value": "text"
+          },
+          {
+            "name": "--project",
+            "required": false,
+            "summary": "Filter by exact project text.",
+            "value": "text"
+          },
+          {
+            "name": "--closure",
+            "required": false,
+            "summary": "Filter by closure state (default: all).",
+            "value": "open|closed|all"
+          },
+          {
+            "name": "--slug",
+            "required": false,
+            "summary": "Filter by short code, passed through unchanged.",
+            "value": "code"
+          },
+          {
+            "name": "--ready",
+            "required": false,
+            "summary": "Only ready tickets; conflicts with --blocked.",
+            "value": null
+          },
+          {
+            "name": "--blocked",
+            "required": false,
+            "summary": "Only blocked tickets; conflicts with --ready.",
+            "value": null
+          }
+        ],
+        "repository": "required",
+        "summary": "List tickets, open and closed unless filtered."
+      },
+      {
+        "available": true,
+        "command": "ticket show",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": false,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--path",
+            "required": false,
+            "summary": "Repository-relative path; use exactly one of --id or --path.",
+            "value": "path"
+          },
+          {
+            "name": "--context",
+            "required": false,
+            "summary": "Context worktree path; requires --path.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show a ticket by ID or path."
+      },
+      {
+        "available": true,
+        "command": "ticket ready",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--status",
+            "required": false,
+            "summary": "Filter by exact status text.",
+            "value": "text"
+          },
+          {
+            "name": "--type",
+            "required": false,
+            "summary": "Filter by exact type text.",
+            "value": "text"
+          },
+          {
+            "name": "--project",
+            "required": false,
+            "summary": "Filter by exact project text.",
+            "value": "text"
+          }
+        ],
+        "repository": "required",
+        "summary": "List ready tickets."
+      },
+      {
+        "available": true,
+        "command": "ticket blocked",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--status",
+            "required": false,
+            "summary": "Filter by exact status text.",
+            "value": "text"
+          },
+          {
+            "name": "--type",
+            "required": false,
+            "summary": "Filter by exact type text.",
+            "value": "text"
+          },
+          {
+            "name": "--project",
+            "required": false,
+            "summary": "Filter by exact project text.",
+            "value": "text"
+          }
+        ],
+        "repository": "required",
+        "summary": "List blocked tickets and their reasons."
+      },
+      {
+        "available": true,
+        "command": "ticket deps",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--direction",
+            "required": false,
+            "summary": "Dependency traversal direction (default: down).",
+            "value": "down|up|both"
+          },
+          {
+            "name": "--depth",
+            "required": false,
+            "summary": "Maximum traversal depth as an unsigned 32-bit integer.",
+            "value": "n"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show ticket dependencies."
+      },
+      {
+        "available": true,
+        "command": "ticket children",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "List child tickets."
+      },
+      {
+        "available": true,
+        "command": "ticket cycles",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "List ticket relationship cycles."
+      },
+      {
+        "available": true,
+        "command": "ticket plan",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--status",
+            "required": false,
+            "summary": "Filter by exact status text.",
+            "value": "text"
+          },
+          {
+            "name": "--type",
+            "required": false,
+            "summary": "Filter by exact type text.",
+            "value": "text"
+          },
+          {
+            "name": "--project",
+            "required": false,
+            "summary": "Filter by exact project text.",
+            "value": "text"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show ticket execution batches."
+      },
+      {
+        "available": true,
+        "command": "ticket critical-path",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          }
+        ],
+        "repository": "required",
+        "summary": "Show the ticket critical path."
+      },
+      {
+        "available": true,
+        "command": "ticket find",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--slug",
+            "required": true,
+            "summary": "Filter by short code, passed through unchanged.",
+            "value": "code"
+          }
+        ],
+        "repository": "required",
+        "summary": "Find tickets by short code."
+      },
+      {
+        "available": true,
+        "command": "ticket create",
+        "delivered_by": "C3",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "Create a ticket."
+      },
+      {
+        "available": true,
+        "command": "ticket save",
+        "delivered_by": "C3",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "Save a ticket."
+      },
+      {
+        "available": true,
+        "command": "ticket repair",
+        "delivered_by": "C3",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "Repair a ticket."
+      },
+      {
+        "available": true,
+        "command": "ticket slug-assign",
+        "delivered_by": "C3",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--input",
+            "required": true,
+            "summary": "Read one JSON input object from a file or stdin (-).",
+            "value": "file|-"
+          },
+          {
+            "name": "--request-id",
+            "required": false,
+            "summary": "Canonical request ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--prepare",
+            "required": false,
+            "summary": "Prepare a confirmation preview without executing the mutation.",
+            "value": null
+          },
+          {
+            "name": "--confirm",
+            "required": false,
+            "summary": "Execute with a prepared confirmation ULID.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "Assign a ticket short code."
+      },
+      {
+        "available": true,
+        "command": "ticket check",
+        "delivered_by": "C3",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--id",
+            "required": true,
+            "summary": "Canonical item ULID.",
+            "value": "ULID"
+          },
+          {
+            "name": "--deps",
+            "required": false,
+            "summary": "Proposed dependencies, comma-separated; give once.",
+            "value": "ULID,..."
+          },
+          {
+            "name": "--parent",
+            "required": false,
+            "summary": "Proposed parent.",
+            "value": "ULID"
+          }
+        ],
+        "repository": "required",
+        "summary": "Check ticket relationships."
+      },
+      {
+        "available": false,
+        "command": "ticket close",
+        "delivered_by": "C5",
+        "options": [],
+        "repository": null,
+        "summary": "Close a ticket."
+      }
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": null,
+    "worktree": null
+  }
+}

@@ -1,0 +1,385 @@
+---
+title: "Wave 02 Cycle 08: One-Shot Polling And Materialization"
+date: 2026-10-11
+status: approved
+author: "Claude"
+manyhands_managed: true
+manyhands_kind: document
+id: "01M4NM26P51XW21SPJDF6RPYQ9"
+---
+
+# Wave 02 Cycle 08: One-Shot Polling And Materialization
+
+## Purpose And Authority
+
+Add the headless one-shot poll: fetch the poll ref set once, record what the
+remote advertises, fast-forward the local primary and existing item contexts
+only when they are clean and strictly behind, materialize each newly discovered
+conforming shared context exactly once, refresh discovery, and leave every
+exceptional context unchanged, visible and actionable. The poll persists the
+attempt result and the next eligible automatic time so Wave 03 can schedule and
+report it. It never pushes, checkpoints, merges, rebases, stashes, overwrites,
+discards or cleans up.
+
+This is Cycle 08 of [Wave 02](../Waves/wave-02-collaboration.md), tracked by
+ticket `01K7F6H9J2N4Q6S8V0X2Z4B6DG`. Authorities are the
+[Git workflow](../RFC/git-workflow-and-conflict-recovery.md) (Remote Refs,
+Polling, Remote Coordination And Cancellation),
+[index/recovery](../RFC/repository-index-persistence-and-refresh.md) (Remote
+Polling And Reservation), [MVP](../RFC/mvp-rfc.md) (Remote Polling Contract),
+[authentication](../RFC/authentication-and-credential-handling.md),
+[runtime and polling](../RFC/application-runtime-and-polling.md) and
+[test strategy](../RFC/test-and-compatibility-strategy.md) RFCs, plus
+`MH-COLLAB-004/006` and `MH-INDEX-002` in the [PRD](../PRD/mvp.md). Read the
+[design](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-design.md)
+and [implementation plan](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-implementation.md)
+together. The owner approved all three on 2026-10-11, approved the recommended
+answer to each of the four decisions below, and authorized committing this
+planning checkpoint. Implementation remains separately gated.
+
+## Planning Evidence And Implementation Entry Gate
+
+The existing ticket branch and worktree were reused. Fresh `git fetch origin`
+observed `origin/main` at `d1ca88772c5768d55aadb2ca4dcac1c69dab0d17` (the
+Cycle 07 merge, pull request 17). The clean ticket head rebased without
+conflicts from `5539c60eeb4022c71b1dc13716aeb2d2545a7375` to
+`27d5ef54c67a116a590602d86b7086f8602c0c62`; ancestry verification passed. The
+main checkout's unrelated untracked `.superpowers/` was left untouched. Details
+are in the [execution ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md).
+
+At this base Cycles 01–07 are present. What exists and what does not:
+
+- `observe_publication_remote` is an advertisement-only poll: it reserves with
+  poll or manual priority, yields and cancels at safe points, and records a
+  complete observation batch. It transfers no objects and writes no ref.
+- Deliberate synchronization fetches one exact target with guarded tracking-ref
+  writes and fast-forwards a clean checked-out branch. Both are private to the
+  synchronization module and typed on a single target.
+- Nothing creates a local branch or worktree from a remote branch, validates an
+  item from a fetched Git tree, consults the stored pause/interval/backoff
+  policy before an attempt, or stores an attempt time or next eligible time.
+  `PollingStatusDto.next_eligible_at` is always empty.
+- A local authoring action that begins while a poll holds its reservation is
+  refused with `RecoveryRequired`. A pending synchronization conflict makes
+  every synchronization `Busy` but does not stop a poll.
+
+Implementation requires:
+
+- Explicit implementation authority. Approval of this Cycle, design and plan
+  and the answers to the four decisions below were given on 2026-10-11.
+- A repeat fetch/rebase preflight at the implementation boundary.
+- The Task 0 characterizations in the plan (stored tracking-OID meaning,
+  restart of an incomplete synchronization after tracking refs move, what a
+  failed worktree creation leaves behind, and download abort from a progress
+  callback). A result that contradicts the design stops for an amendment.
+- Wave 02 entry-gate authorities remain approved; rerun the required baseline.
+  Planning inspection is not a passing Rust or platform gate.
+
+## Scope
+
+- One public headless operation, `poll_publication_remote`, with a typed
+  request, per-target report, and typed busy/yield/interrupt/transport errors.
+- Automatic-invocation eligibility from stored policy: enabled, explicit pause,
+  recovery suspension, failure backoff and next eligible time. An ineligible
+  automatic attempt does no transport and takes no reservation. An explicit
+  poll bypasses that gating for the one attempt without changing stored policy.
+- Persisted attempt completion time and next eligible automatic time; the
+  existing 60-to-900-second doubling backoff; a persisted clamp for an
+  implausibly distant deadline after clock rollback.
+- A poll-set fetch of the primary and every recognized context branch over the
+  selected-key transport, with tracking refs written under old-value guards.
+- Manual priority: yield and cancellation checked before transport, during
+  transfer progress, after fetch, between targets and before each local change.
+- Clean-only, strictly-behind fast-forward of the checked-out primary and of
+  each existing context worktree.
+- Validation of a new remote context from its fetched tree, then creation of
+  exactly one local branch and deterministic worktree, with a durable intent so
+  an interrupted attempt is finished or reported, never repeated or guessed.
+- A fixed per-target disposition with fixed guidance, stored without content
+  and exposed through the remote snapshot.
+- Index-only refresh after the local stage, with index-pending reported
+  separately from the poll result.
+- Real authenticated-SSH two-clone tests, fault injection, privacy scans and
+  native-test wiring.
+
+## Exclusions And Downstream Obligations
+
+No resident scheduler, timer, sleep, automatic retry or catch-up loop. No push,
+checkpoint, merge, rebase, forced local update, stash, conflict resolution,
+promotion, closure or cleanup. No deletion of a local branch, worktree or
+tracking ref. No republish of a remotely deleted context. No new credential,
+host-trust or key policy. No CLI grammar, JSON schema change, desktop view or
+prompt. No change to the canonical schema or to the versioned read contract
+beyond filling the existing `next_eligible_at` field.
+
+Wave 03 owns: the desktop worker and its launch/interval/fairness behaviour
+(D6); `poll once` and policy commands (C5); session unlock and host-attention
+suspension, which stay distinct from stored pause; a read DTO for per-target
+dispositions; and the rule that a clean worktree does not prove there is no
+unsaved editor draft. A fast-forward changes files in a clean worktree, so
+desktop observation checks before applying a draft remain mandatory.
+Cycles 09 and 10 own removal of local and tracking state after confirmed
+integration.
+
+## Required Contract
+
+1. Resolve the registered repository, valid configuration and publication
+   remote. A missing remote or invalid configuration returns the existing
+   configuration-required outcome with no transport.
+2. For an automatic invocation, evaluate stored policy first. Disabled, paused,
+   recovery-suspended, or not yet due returns `NotEligible` with the reason and
+   the next eligible time. It contacts no server, prompts for nothing, takes no
+   reservation and does not change the latest outcome. An explicit invocation
+   skips this gate and leaves pause, enabled state and backoff as stored.
+3. Reserve with poll priority (automatic) or manual priority (explicit). A
+   manual operation that finds an automatic poll requests yield and receives
+   `PollYielding`; the poll stops at its next safe point, releases its
+   reservation and records `interrupted`. Busy, yield and cancellation are not
+   network failures and do not change backoff or the next eligible time.
+4. Fetch, in one authenticated scope, the primary branch and each advertised
+   branch that parses as `manyhands/<kind>/<ULID>`. Write each tracking ref
+   only if it still holds the value read before the download. A branch under a
+   context family that does not parse is recorded as malformed and is not
+   downloaded. A branch outside the families is not fetched or recorded.
+5. Record the advertisement as one complete batch before any local change, so
+   a context published earlier and now absent becomes `remotely deleted`. A
+   failed, cancelled or partial fetch never implies deletion.
+6. For the primary and each existing context, under the short repository lease
+   and after re-observing configuration, tracking ref and local state:
+   fast-forward only when the branch is checked out in its expected worktree,
+   that worktree is clean and non-conflicted, and the local branch is a strict
+   ancestor of its tracking ref. Every other relation leaves branch, index and
+   worktree byte-for-byte unchanged and records a disposition.
+7. For a recognized remote context with no local branch and no local worktree
+   path, validate the fetched tree: the item named by the branch must be
+   present, valid and of the branch's kind under the same rule discovery uses
+   for an active context, and the tree must not carry entries under
+   `.manyhands/worktrees/`. Only then create the local branch at the fetched
+   commit and the worktree at `.manyhands/worktrees/<ULID>/`. A nonconforming
+   tree creates nothing. **Owner-approved amendment, 2026-10-13:** poll
+   materialization validation may be stricter than local discovery; regular
+   non-executable items are required while discovery behavior is unchanged.
+   Agreement requires accepted trees to be active after checkout, not rejected
+   trees to be inactive in discovery.
+8. Materialization happens once. A second poll, a concurrent poll from another
+   process, or a replay finds the context present and reports it current.
+   Existing local state that is not exactly the poll's own recorded partial
+   result is never adopted, moved or removed.
+9. After the local stage, mark discovery stale durably, complete the poll with
+   its attempt time and next eligible time, then run the index-only refresh
+   outside the lease. A refresh that cannot finish returns the poll result as
+   index pending; a later refresh repairs it without another fetch.
+10. Success sets the next eligible time to completion plus the configured
+    interval and clears backoff. An automatic transport or protocol failure
+    doubles backoff from 60 to at most 900 seconds and sets the next eligible
+    time to completion plus backoff. Key, unlock and host failures store their
+    category and use the interval; they are attention states, not backoff.
+    An explicit failure leaves backoff and the next eligible time unchanged.
+11. A repeated operation ID returns the stored result. An interrupted poll is
+    resumed only with explicit `restart`; it re-observes and re-fetches, and
+    every local step is safe to repeat because each acts only on re-observed
+    state.
+12. No network call, prompt or discovery scan holds the repository lease.
+    **Owner-approved exception, 2026-10-14:** only Task 5 materialization step 5
+    may run unchanged `validate_context_worktree` canonical collection under
+    the same single lease before recording `complete`. Discovery/index-refresh
+    scans, network calls and prompts remain outside; D1–D4 unchanged.
+    Records hold only IDs, ref names, object IDs, timestamps and fixed
+    categories. Cycle 03's per-call transport limits stand; there is no total
+    poll deadline.
+
+### Dispositions
+
+Each target receives exactly one disposition per completed poll. Guidance text
+is fixed per disposition.
+
+| Disposition | Applies to | Local effect |
+| --- | --- | --- |
+| `current` | primary, context | none; local equals tracking |
+| `fast_forwarded` | primary, context | branch, index and worktree advanced |
+| `local_ahead` | primary, context | none; unpublished local commits |
+| `diverged` | primary, context | none; deliberate synchronization required |
+| `dirty` | primary, context | none; uncommitted or untracked changes kept |
+| `conflicted` | primary, context | none; conflict or in-progress merge kept |
+| `inaccessible` | primary, context | none; worktree missing, unreadable, redirected, not registered, or on another branch |
+| `materialized` | new context | one branch and one worktree created |
+| `nonconforming` | new context | none; fetched tree fails validation |
+| `blocked_by_local_state` | new context | none; a branch or path already exists |
+| `materialization_incomplete` | new context | none beyond the recorded partial step |
+| `malformed` | remote ref | none; not downloaded |
+| `remotely_deleted` | context | none; local context preserved |
+| `history_unknown` | context | none; local context preserved |
+| `not_reached` | any | none; the poll stopped first |
+
+A remote rename appears as the old name `remotely_deleted` with its local
+context preserved, and the new name `nonconforming` when its item ID no longer
+matches the branch.
+
+## Owner Decisions
+
+**Decided 2026-10-11:** the owner approved the recommended answer to all four.
+Each is written into the design and plan and marked **(D1)–(D4)** there. The
+original question and the cost accepted are kept below.
+
+1. **Stale tracking refs.** The Git RFC speaks of a poll pruning stale tracking
+   refs. Recommended: this Cycle never deletes a tracking ref. For an
+   unmaterialized context it can be the only local reference to a
+   collaborator's commits. Cost: stale refs accumulate until Cycles 09/10 or a
+   later explicit cleanup.
+2. **A worktree left half-created by an interruption.** Recommended: finish
+   only the case where the branch exists at the recorded commit and no worktree
+   path or registration exists. Any partly present worktree is reported as
+   `materialization_incomplete` and left for explicit repair. Cost: a rare
+   manual repair. The alternative lets a poll remove its own partial directory,
+   which is a deletion a poll is otherwise forbidden to make.
+3. **Polling while a synchronization conflict is pending.** Recommended: refuse
+   before transport with a typed conflict-pending result that is not a network
+   failure, matching how every synchronization is refused. Cost: no background
+   discovery until the conflict is resolved, and there is no abandon path yet.
+   The alternative polls and skips the conflicted context, and needs proof that
+   moving tracking refs cannot invalidate the pending resolution.
+4. **A local save or comment that starts during an automatic poll.** Today it
+   is refused with `RecoveryRequired`, and a full poll holds its reservation
+   far longer than an advertisement did. Recommended: the local action requests
+   yield and returns retryable `RepositoryBusy`; the poll stops at its next
+   safe point. Cost: a narrow change to the Wave 01 journal-begin guard and its
+   tests. The alternative keeps the refusal and leaves callers unable to tell a
+   transient poll from real recovery.
+
+## Acceptance And Exit Evidence
+
+| Acceptance | Proof owner |
+| --- | --- |
+| Automatic poll obeys disabled, paused, recovery-suspended and not-due state with zero transport, prompt and reservation; explicit poll bypasses them without changing policy | Task 1 unit tests; Task 7 transport-counter cases |
+| Attempt time, next eligible time, backoff doubling and cap, attention categories and the rollback clamp are persisted as specified | Tasks 1–2 state tests; Task 7 offline and rejected-key cases |
+| Poll-set fetch transfers primary and recognized contexts only, writes guarded tracking refs, never pushes, and records one complete batch | Task 3 transport tests; Task 7 exact-ref and receive-counter assertions |
+| Manual operation and local action take priority; the poll stops only at a safe point and its retry repeats no completed local change | Task 2 reservation tests; Task 7 held-advertisement and paced-transfer cases |
+| Clean strictly-behind primary and context are fast-forwarded exactly once | Task 4 unit tests; Task 7 two-clone cases |
+| Dirty, untracked, staged, conflicted, ahead, diverged, wrong-branch and unreadable state is byte-for-byte unchanged with the right disposition | Task 4 preservation snapshots; Task 7 exceptional-state matrix |
+| A conforming new document and ticket context is materialized once and indexed with its comments; a second poll and a concurrent poll create nothing | Tasks 5–6; Task 7 materialization and two-service cases |
+| Nonconforming, malformed, out-of-family, renamed and remotely deleted remote state creates and removes nothing and stays visible | Tasks 4–6; Task 7 exceptional-state matrix |
+| Interruption at each boundary (fetch, tracking write, batch, fast-forward, branch creation, worktree creation, completion, refresh) reconciles from Git and repeats only unfinished work | Tasks 2, 5 and 6 fault tests; Task 7 reopen cases |
+| Index failure is reported separately and repaired without a second fetch | Task 6 injected refresh failure; Task 7 transport counters |
+| Recovery rows, database sidecars, diagnostics and fixture output hold no body, title, endpoint or secret | Tasks 1 and 7 privacy scans |
+| Required Devenv checks pass; native evidence is honestly recorded | Task 8; native execution pending authorization |
+
+### Final Local Review-Ready Evidence — 2026-10-14
+
+Implementation Tasks 0–7 have controller-reported SPEC/quality approvals through
+`b0f005531879c5ee2806ed13052bdd157df627d7`. Task 8 local verification and all
+controller-dispatched reviews are **COMPLETE / APPROVED** at source HEAD
+`0cca1f8c33a5136652d92208b1f38a5f3e1b08ed`. The
+[dated execution ledger acceptance map](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#task-8-local-verification-checkpoint--2026-10-14)
+maps every acceptance row and dimension to exact names observed passing in the
+final-tree local gate: **1,779 passed, 0 failed, 1 existing ignored**, including
+**84 polling SSH cases**. Check, fmt, strict Clippy, CLI startup and diff checks
+pass; Cargo/devenv lockfile hashes are unchanged.
+
+Concrete passing journeys include `poll_all_three_fast_forward`,
+`poll_materialize_document_once`, `poll_materialize_ticket_once`,
+`poll_concurrent_materialization_once`, `poll_partial_batch_yield_report_and_restart`,
+`poll_disconnect_partial_download_automatic_backoff`,
+`poll_failed_checkout_retains_partial_d2`, `poll_refresh_failure_index_only_recovery`
+and `poll_recovery_database_wal_backup_privacy`. The ledger adds the named policy,
+reservation, classification, conformity, timestamp, clamp, fault and privacy
+dimension checks rather than inferring coverage from these example names.
+
+Recovery/diagnostic/output scans reject accepted document/ticket titles. Raw
+DB/WAL/backup scans permit those titles only as legitimate canonical discovery
+index content; all body, endpoint, secret, malformed-name and rejected-title
+sentinels remain forbidden. Literal permission-denied unreadability is now proved
+by `poll_unix_permission_denied_worktree_preserves_local_state`: actual directory
+and .git PermissionDenied, Inaccessible/fixed guidance, retained denied permissions,
+and full local snapshot/ref preservation after guarded restoration. **Row 6 is
+fully LOCAL-proved**. This cfg(unix) case executed on Linux as UID 1000; it fails
+if permissions are ineffective rather than silently skipping. Windows ACL
+permission-denied preservation proof remains pending native verification.
+
+Whole-branch reviewer `ses_ec567b276ffe5pzt4rGBeBRgPy` subsequently blocked four
+Important/P1 findings. Meaningful REDs preceded poll-local fixes: locked
+absence-before-new-ref creation; durable stale marker before Git effects;
+automatic gating before invalid live config; pre-fence retry policy retained on
+configuration/endpoint attention. Three library and ten new real-SSH regressions
+pass in the final gate above. The ledger's row supplements explicitly map all
+four findings, including cancelled restart after a failed disposition/intent write
+and all 12 eligibility × invalid-config combinations. Controller reports final
+Task 8 SPEC `ses_ec5708ca9ffe05wyiELtDB2hks` APPROVE of full
+`b0f005531879c5ee2806ed13052bdd157df627d7..0cca1f8c33a5136652d92208b1f38a5f3e1b08ed`,
+quality `ses_ec56c4e36ffe44uv6nZQOvA20P` APPROVE of latest increment and full Task 8
+with zero Critical/Important/Minor findings, and independent whole-branch
+`ses_ec567b276ffe5pzt4rGBeBRgPy` APPROVED full
+`d1ca88772c5768d55aadb2ca4dcac1c69dab0d17..0cca1f8c33a5136652d92208b1f38a5f3e1b08ed`
+for **LOCAL review-ready handoff**, no findings. The whole reviewer independently
+passed all three library/ten SSH regressions; all four Important findings and
+earlier deferred minors are resolved. The map's 135 named tests plus 11 boundary
+checks have no missing PASS names. Final approval details are in the
+[dated ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#task-8-final-local-review-approval--2026-10-14t150920z).
+
+This final update is bookkeeping only; source/build/test tree and lockfiles are
+unchanged from reviewed/gated 0cca1f8. Existing passing Rust evidence is retained
+without rerunning unchanged code. These are controller-conveyed independent
+review approvals, not owner authorization for outward delivery or closure.
+
+The owner subsequently authorized a normal branch push and one five-target native
+run. [Build 38612548902](https://github.com/vhodges/manyhands/actions/runs/38612548902)
+tested published commit `3d8f8a5a054fd74dc83eb2a4a93c260769177ce8` and completed
+with **failure** on 2026-10-14. All five release builds/binary checks passed.
+Both Linux targets passed all configured tests (1,700 each, including 84 polling
+SSH cases) and uploaded artifacts. Both Windows targets stopped on the same
+library worktree-identity fixture assertion (578 passed, 1 failed each), before
+integration execution. macOS stopped at the polling in-transfer yield case with
+an isolated-child/watchdog failure; later cases and targets remain unproved.
+Exact job links and observed failures are in the
+[native-run ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#first-authorized-native-build-run--2026-10-14t185825z).
+Native acceptance is blocked pending correction and verified native reruns.
+Further dispatches require fresh authorization. Ticket remains open; PR, merge,
+closure and worktree removal remain separately authorized lifecycle actions.
+
+Authorized correction runs followed. The Windows library failure was a fixture
+encoding `gitdir` links as native path text (fixed in `24ae070`). The macOS
+in-transfer failure was a fixture deadlock: libgit2's client socket is
+inheritable on macOS and Windows, so the in-process SSH fixture's helper kept the
+abandoned connection open (fixed in `3960926` by ending a stalled relay send).
+[Build 38659928602](https://github.com/vhodges/manyhands/actions/runs/38659928602)
+on `3960926` passed Linux x86_64/aarch64 and macOS aarch64; both Windows targets
+still fail the in-transfer yield case, cause not yet diagnosed. See the
+[correction-run ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#native-failure-correction-runs--2026-10-15t010937z).
+The branch also needs a merge of current `origin/main` (five conflicting files).
+Native acceptance remains blocked.
+
+A keep-going Windows diagnostic run then located the remaining stall (the relay
+wedged in channel teardown after killing its helper) and exposed a masked WAL
+privacy-scan failure caused by a live write lock. Both were corrected in
+`b794460`, and Windows aarch64 was dropped from the matrix by owner decision.
+[Build 38677739080](https://github.com/vhodges/manyhands/actions/runs/38677739080)
+on `b794460` passed all four targets: Linux x86_64/aarch64 (1,700 each), macOS
+aarch64 (1,688) and Windows x86_64 (1,597). See the
+[green-run ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#native-matrix-green--2026-10-15t044743z).
+Current `origin/main` (`56ddf23`) was then merged as `f91bbb9`. One integration
+gap was fixed in `bb526e8`: main's refresh pre-check for `create_folder` now
+answers `RepositoryBusy`, like the refresh itself, while an automatic poll runs.
+[Build 38726617896](https://github.com/vhodges/manyhands/actions/runs/38726617896)
+on `bb526e8` passed all four targets: Linux x86_64/aarch64 (2,716 each), macOS
+aarch64 (2,704) and Windows x86_64 (2,597). See the
+[integration ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md#integrated-with-main--2026-10-15t125337z).
+Native acceptance on the integrated branch is met; PR, merge and closure remain
+owner decisions.
+
+## Self-Review And Lifecycle
+
+The decision audit in the [execution ledger](../plans/2026-10-11-wave-02-cycle-08-one-shot-polling-and-materialization-execution.md)
+covers scope and interfaces, trust and prompts, persistence and recovery, time
+and failure, backend and platform, fixtures, verification and lifecycle. It
+records the four owner decisions (above) and the internal rulings.
+
+Record planning, each task, decisions, blockers, baseline and final
+verification, review findings and review-ready status on the ticket. The ticket
+stays open through implementation and verification. Closure follows
+code-review or pull-request approval, normally in the authorized final
+pre-merge push. Commit, push, pull request, native dispatch, merge, closure and
+worktree cleanup each need their own authorization. The rebase rewrote the
+published ticket checkpoint, so a later push must first reconcile the remote
+ticket branch; no force push is implied. Planning inspection is historical; the
+local evidence above records approved local review-ready status and concrete
+passing tests. Native/platform gates remain pending; the ticket stays open until
+separate outward/lifecycle authorization.
