@@ -155,7 +155,7 @@ C together.
 | Lane A | `services/drafts.rs` (one `mod` line), `services/drafts/comments.rs` (new), `services/drafts/comments_tests.rs` (new), `model/drafts/rows.rs`, `model/drafts/rows_tests.rs`, `view/drafts.rs`, `view/drafts/rows.rs`, `view/drafts/row_actions.rs`, `view/drafts_tests.rs` |
 | Lane B | `view/item/share.rs`, `view/item/share_tests.rs` (new), `view/item/pill.rs`, `view/item/banners.rs`, `view/item/header.rs`, `view/item/header_tests.rs`, `view/sidebar.rs`, `model/operations.rs`, `model/operations_tests.rs`, `view/operations.rs`, `view/operations_tests.rs`, `view/passphrase.rs`, `view/passphrase_tests.rs`, `view/workspace/requests.rs`, `model/item.rs` (only to remove `SHARE`'s dead-code allowance, Task 8), and child modules `view/operations/*.rs` and `model/operations/*.rs` split from those files (orchestrator, Task 9 review) |
 | Lane C | `view/item/composer.rs`, `view/item/composer/*` (new), `view/item/composer_tests.rs` (new), additive changes to `view/editor.rs`. The composer is not wrapped in `EditHost` (its `ToggleRich` and Escape would shadow the composer's keys). |
-| Lane D | `view/item/posting.rs`, `view/item/posting_tests.rs` (new), `view/item/discussion.rs`, `view/item/discussion/rows.rs`, `view/item/discussion_tests.rs`, `model/discussion.rs`, `view/item/reads.rs`, `view/item.rs`, `view/item/pill.rs` (after Lane B merges; "Updating the list…"), `services/mod.rs` (the drain hook that retires comment drafts, P9), `services/created_contexts.rs`, `services/created_contexts_tests.rs`; `view/item/composer.rs` after Lane C merges (placing the composers, Task 12); and removing the `ItemPane` fields' dead-code allowances in `view/item.rs` |
+| Lane D | `view/item/posting.rs`, `view/item/posting_tests.rs` (new), `view/item/discussion.rs`, `view/item/discussion/rows.rs`, `view/item/discussion_tests.rs`, `model/discussion.rs`, `view/item/reads.rs`, `view/item.rs`, `view/item/pill.rs` (after Lane B merges; "Updating the list…"), `services/mod.rs` (the drain hook that retires comment drafts, P9), `services/created_contexts.rs`, `services/created_contexts_tests.rs`; `view/item/composer.rs` and `view/item/composer/*` after Lane C merges (placing the composers, Task 12); for Task 14, the Drafts page's held comment rows (`model/drafts/rows.rs`, `view/drafts/*`, and `services/drafts.rs` or `services/drafts/comments.rs` if needed): Show must reach the tab holding a comment draft, and Discard of a held comment draft must reset that composer (Task 12 review); and removing the `ItemPane` fields' dead-code allowances in `view/item.rs` |
 | Part E | `view/keyboard_tests.rs` (one `mod` line), `view/keyboard_tests/discussion.rs` (new), `view/editing_privacy_tests.rs`, `docs/plans/2026-11-02-wave-03-desktop-04-on-screen-checklist.md` (new) |
 
 Files named in two rows pass between owners in sequence: `view/item/header.rs`, `discussion.rs`, `services/mod.rs` and `view/item.rs` from Part 0 to Lanes B or D; `view/item/pill.rs` from Lane B to Lane D. Part 0 finishes before the lanes start, and Lane D starts only after Lanes A, B and C have merged.
@@ -707,6 +707,17 @@ R-2, R-5, R-6, R-7 and R-11 of revision 1 became owner decisions 8, 10,
   point (fact 14a); a stopped publication is final, so after relaunch no
   Resume row or chip marks the comment, and Share publishes it (decision
   15). D6 owns shutdown.
+- **K-11.** The reply composer's avatar shows a placeholder: the item
+  tab has no source for the user's identity. An adopted reply's
+  "Replying to" names the root's author, since the pressed comment is
+  not stored in the draft.
+- **K-12.** A comment draft whose adoption fails (for example
+  `OpenElsewhere`) is adopted again only when the tab reopens.
+- **K-13.** A share holding the repository is not named once its
+  operation entry is dismissed ("Busy repositories").
+- **K-14.** A comment draft whose item is gone still offers Open on the
+  Drafts page; the tab shows its error and cannot adopt it (Discard and
+  Export still work).
 
 ## Alternatives Rejected
 

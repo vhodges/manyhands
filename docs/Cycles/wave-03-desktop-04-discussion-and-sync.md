@@ -253,7 +253,10 @@ approval on 2026-11-02:
     and focuses its editor, and it stays open while it holds text or a
     draft. An empty composer at the foot of every item had trapped a
     keyboard walk, since Tab indents inside it (decision 19). Once open,
-    Tab indents and F6 leaves, like the body editor.
+    Tab indents and F6 leaves, like the body editor. An open composer
+    with no text and no draft collapses again when focus leaves it, and
+    an empty Cancel discards any draft it began and collapses it
+    (orchestrator, Task 12 review, within this decision).
 
 ## Open Questions
 
