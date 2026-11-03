@@ -287,6 +287,13 @@ impl RemotesPage {
         }
     }
 
+    /// The page is shown on `root`, whatever repository it worked on: it
+    /// reads the registrations again and works on `root` from now on.
+    pub(crate) fn open_on(&mut self, root: PathBuf, cx: &mut Context<Self>) {
+        self.load_registrations(cx);
+        self.choose(Some(root), cx);
+    }
+
     /// Works on `root` from now on, and reads its remotes.
     fn choose(&mut self, root: Option<PathBuf>, cx: &mut Context<Self>) {
         // Another repository's remotes are never left on show, not even

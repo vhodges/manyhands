@@ -1,8 +1,10 @@
-//! The Drafts page's row actions: Restore, Export…, Export raw… and
+//! The Drafts page's row actions: Restore, Open, Export…, Export raw… and
 //! Discard…, the last three through the `actions` the tab shares.
 //!
 //! Restore leaves the page through its host, which opens the item's tab
-//! (ruling R25); the page never hides itself. What an action came to is
+//! (ruling R25); the page never hides itself. A comment draft's Open does
+//! the same at once, claiming nothing: the item's composer adopts the
+//! draft. What an action came to is
 //! said on its row. A row Discard removes gives the focus to the next
 //! row, else the previous one, else the page's first control.
 
@@ -112,6 +114,23 @@ impl DraftsPage {
             }
         })
         .detach();
+    }
+
+    /// Open: the host opens and focuses the tab of a comment draft's item,
+    /// whose composer adopts the draft. Nothing is claimed here.
+    pub(super) fn open_item_of(&mut self, id: DraftId, cx: &mut Context<Self>) {
+        let Some(Slot {
+            row,
+            draft: Some(draft),
+            ..
+        }) = self.slot(id)
+        else {
+            return;
+        };
+        if !row.actions.open {
+            return;
+        }
+        cx.emit(DraftsEvent::Open(open_target(&draft.target)));
     }
 
     /// Export… or Export raw…: a draft restored here exports its newest
