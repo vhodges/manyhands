@@ -1011,3 +1011,28 @@ fn moving_an_emptied_reply_away_discards_its_draft(cx: &mut TestAppContext) {
     assert!(composer_text(&again, cx).is_empty());
     assert_eq!(composer_target(&shell, &again, cx), None, "afresh");
 }
+
+/// A new comment emptied of the text whose draft this tab began collapses
+/// once focus leaves it, its draft discarded, as an empty Cancel does.
+#[gpui_kit::test]
+fn an_emptied_new_comment_collapses_when_focus_leaves(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(1400., cx, two_threads);
+    open_new_composer(&shell, cx);
+    let composer = new_composer(&shell, cx);
+    type_into(&shell, &composer, "Gone.", cx);
+    flushed(&shell, cx);
+    assert_eq!(stored_comments(&shell.fixture).len(), 1);
+    shell.keys("secondary-a backspace", cx);
+    flushed(&shell, cx);
+    assert!(
+        !shell.present("new-comment-start", cx),
+        "open while focused"
+    );
+
+    shell.keys("f6", cx);
+    flushed(&shell, cx);
+    assert!(shell.present("new-comment-start", cx), "collapsed");
+    assert!(stored_comments(&shell.fixture).is_empty(), "the draft went");
+    let fresh = new_composer(&shell, cx);
+    assert_eq!(composer_target(&shell, &fresh, cx), None, "no comment ID");
+}

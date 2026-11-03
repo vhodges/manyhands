@@ -1,7 +1,8 @@
 //! The new comment's composer while it is collapsed (decision 22): one
 //! tab stop, Write a comment…, which opens it with focus in its editor.
 //! It stays open while it holds text or a draft, an adopted one too; an
-//! empty one collapses again once focus has left it. Open, Tab indents in
+//! empty one collapses again once focus has left it, and so does one
+//! emptied of the text whose draft it began, which is discarded. Open, Tab indents in
 //! it and F6 leaves (decision 19), as in the body editor.
 
 use gpui_kit::{
@@ -9,7 +10,7 @@ use gpui_kit::{
     StatefulInteractiveElement, Styled, TestSupportExt, Window, div, px,
 };
 
-use super::{SlotDraft, WRITE_A_COMMENT};
+use super::{ComposerKind, SlotDraft, WRITE_A_COMMENT};
 use crate::desktop::view::item::{ItemPane, tokens::item_colors};
 
 impl ItemPane {
@@ -24,7 +25,8 @@ impl ItemPane {
     }
 
     /// As each frame begins: an opened new-comment composer that holds no
-    /// text and no draft collapses again once focus has left it; one just
+    /// text and no draft collapses again once focus has left it, as does
+    /// one emptied of its text (`emptied_draft`), whose draft goes; one just
     /// opened takes focus in its editor once this frame is drawn, and one
     /// collapsed by an empty Cancel gives it to Write a comment….
     pub(super) fn follow_new_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -34,8 +36,22 @@ impl ItemPane {
         let composer = slot.composer.read(cx);
         let empty = matches!(slot.draft, SlotDraft::None) && composer.text(cx).is_empty();
         let left = !composer.contains_focus(window, cx);
+        let blank = composer.text(cx).trim().is_empty();
         let editor = composer.editor().clone();
-        if self.composers.open && !self.composers.focus_new && empty && left {
+        let leaving = self.composers.open && !self.composers.focus_new && left;
+        if leaving
+            && blank
+            && let Some(id) = self.emptied_draft(cx)
+        {
+            self.services
+                .drafts()
+                .update(cx, |registry, cx| registry.discard_comment(id, cx));
+            let fresh = self.slot(ComposerKind::New, "", None, SlotDraft::None, window, cx);
+            self.composers.new = Some(fresh);
+            self.composers.open = false;
+            return;
+        }
+        if leaving && empty {
             self.composers.open = false;
         }
         if std::mem::take(&mut self.composers.focus_start)
@@ -49,6 +65,28 @@ impl ItemPane {
                 editor.update(cx, |editor, cx| editor.focus(window, cx));
             });
         }
+    }
+
+    /// The new comment's draft, when this tab began it and nothing posted
+    /// its comment: an emptied composer may let it go. Never an adopted
+    /// draft, nor one with a post in `Submissions`.
+    fn emptied_draft(&self, cx: &gpui_kit::App) -> Option<manyhands::drafts::DraftId> {
+        let slot = self.composers.new.as_ref()?;
+        let SlotDraft::Begun(id) = slot.draft else {
+            return None;
+        };
+        let comment = &slot.target.as_ref()?.comment_id;
+        if !self.composers.begun.contains(comment) {
+            return None;
+        }
+        let repo = self.item_key()?.repo;
+        let posted = self
+            .services
+            .submissions()
+            .read(cx)
+            .get(std::path::Path::new(&repo), comment)
+            .is_some();
+        (!posted).then_some(id)
     }
 
     /// Write a comment…: the new comment's composer opens, with focus in
