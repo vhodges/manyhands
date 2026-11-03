@@ -718,6 +718,19 @@ R-2, R-5, R-6, R-7 and R-11 of revision 1 became owner decisions 8, 10,
 - **K-14.** A comment draft whose item is gone still offers Open on the
   Drafts page; the tab shows its error and cannot adopt it (Discard and
   Export still work).
+- **K-15.** After a restart a comment whose publication is still pending
+  shows no Resume: the library lists its synchronization without
+  `next_action: resume` (`read/status.rs:316-331`). Share on its item
+  publishes it. Decisions 11 and 14 hold for shares, not comments, until
+  library ticket `01M6GHWZ5CXXFC7YB3EVJ6Q4A7`.
+- **K-16.** If a resumed share's synchronization is not stopped and its
+  transport then fails, the repository's sharing reservation stays held
+  (listed as reconciling, with no Resume or Give up). In the same session
+  the share's Give up frees it; after a restart nothing in the desktop
+  can, the reservation never expires, and every other share and post in
+  that repository answers busy. Recovery: `manyhands-cli operation resume
+  <operation-id>` once the remote is reachable. Library ticket
+  `01M6GHWZS03WCADS1A1JXV4PMP`.
 
 ## Alternatives Rejected
 
