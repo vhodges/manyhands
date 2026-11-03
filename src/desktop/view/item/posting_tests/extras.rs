@@ -3,7 +3,8 @@
 //! that fails, the pending row, the body draft never committed, the reply
 //! composer held while posting, outcomes applied only to their own
 //! comment's composer and never over newer text, quitting during an
-//! accepted post, and no publication without a Submit.
+//! accepted post, no publication without a Submit, and the body editable
+//! while a post is held (A8).
 
 use std::path::Path;
 
@@ -344,4 +345,42 @@ async fn navigation_save_done_close_and_quit_submit_no_publication(cx: &mut Test
 
     assert!(comment_posts(&shell, cx).is_empty(), "no comment posted");
     assert_eq!(shares(&shell, cx), 0, "nothing shared");
+}
+
+/// A8: while an accepted post is held before its domain call, typing in
+/// the item's body editor lands at once and the window stays responsive;
+/// the post completes once let go.
+#[gpui_kit::test]
+async fn the_body_stays_editable_while_a_post_is_held(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = posting_shell(false, cx, |_, _| {});
+    shell.click("item-edit", cx);
+    let host = shell.until_editing(cx).await;
+    let (_, comment) = write_new(&shell, "Held post.", cx);
+    let (reached, release) = hold_after_acceptance(&shell);
+    submit(&shell, cx);
+    reached.recv_timeout(WAIT).expect("the post was accepted");
+    let id = post_request(&shell, &comment, cx).unwrap();
+    shell
+        .until(cx, move |operations| {
+            matches!(
+                operations.request(id).map(|request| &request.state),
+                Some(RequestState::Running { accepted: true, .. })
+            )
+        })
+        .await;
+
+    shell.type_at_end(&host, " Typed while held.", cx);
+    let text = host.read_with(cx, |host, cx| host.editor().read(cx).text().to_string());
+    assert!(text.ends_with(" Typed while held."), "{text:?}");
+    assert!(
+        outcome(&shell, &root, &comment, cx).is_none(),
+        "the post is still held"
+    );
+
+    drop(release);
+    until_answered(&shell, &root, &comment, cx).await;
+    assert!(outcome(&shell, &root, &comment, cx).is_some_and(|(outcome, ..)| outcome.is_saved()));
+    let text = host.read_with(cx, |host, cx| host.editor().read(cx).text().to_string());
+    assert!(text.ends_with(" Typed while held."), "{text:?}");
 }

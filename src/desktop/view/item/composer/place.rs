@@ -26,8 +26,8 @@
 //!
 //! What a composer posts and how its outcome applies are `post`'s, where
 //! a post stands `check`'s, and moving a comment to a new ID
-//! `retarget`'s (Task 13). Nothing here derives `Debug`: a slot holds
-//! text.
+//! `retarget`'s (design, Posting). Nothing here derives `Debug`: a slot
+//! holds text.
 
 mod actions;
 mod check;

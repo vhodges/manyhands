@@ -103,7 +103,9 @@ pub(crate) enum RecordState {
     /// no record (`show_request` answered `request_not_found`), refused
     /// before it was accepted, stands here too: nothing of it is open. So
     /// this state never tells "no record" apart: P16's check that no
-    /// record exists (Task 13) calls `show_request` itself.
+    /// record exists calls `show_request` itself (the composer's Check
+    /// again, `composer/place/check.rs`, through
+    /// `publication::record::check_again`).
     Finished,
     /// `show_request` failed: where the record stands is not known (P17).
     Unknown,

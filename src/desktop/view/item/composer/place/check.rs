@@ -368,8 +368,8 @@ impl ItemPane {
             Checked::Saved(result) => {
                 if let RecordRead::Finished(stored) = &record {
                     let envelope = Box::new(envelope_of_record(stored));
-                    self.services.submissions().update(cx, |posts, _| {
-                        posts.settle(&root, &comment, envelope, result)
+                    self.services.submissions().update(cx, |posts, cx| {
+                        posts.settle(&root, &comment, envelope, result, cx)
                     });
                 }
                 if let Some(draft) = draft {
@@ -390,7 +390,7 @@ impl ItemPane {
                 // Decision 24: shown in the thread, claiming nothing.
                 self.services
                     .submissions()
-                    .update(cx, |posts, _| posts.forget(&root, &comment));
+                    .update(cx, |posts, cx| posts.forget(&root, &comment, cx));
                 if let Some(draft) = draft {
                     self.services
                         .drafts()

@@ -223,9 +223,9 @@ impl ItemPane {
                     Checked::Saved(result) => {
                         if let RecordRead::Finished(stored) = &record {
                             let envelope = Box::new(envelope_of_record(stored));
-                            pane.services
-                                .submissions()
-                                .update(cx, |posts, _| posts.settle(&root, &old, envelope, result));
+                            pane.services.submissions().update(cx, |posts, cx| {
+                                posts.settle(&root, &old, envelope, result, cx)
+                            });
                         }
                         let same = pane.posted_text_is(&old, &body, cx);
                         pane.old_saved_meanwhile(composer, same, window, cx);

@@ -209,11 +209,13 @@ impl ItemPane {
         if let Some(note) = &self.link_note {
             banners.push((Banner::Link, link_banner(note, cx)));
         }
+        // A share's conflict, or a post's (design, Posting): one banner.
         if self
             .share
             .outcome
             .as_ref()
             .is_some_and(|outcome| outcome.conflict)
+            || self.post_conflict(cx)
         {
             let conflict = text("item-conflict", CONFLICT_BANNER).into_any_element();
             banners.push((Banner::Conflict, conflict));

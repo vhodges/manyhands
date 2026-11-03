@@ -117,8 +117,8 @@ impl ItemPane {
                 let saved = mismatch_saved(result.attempt.record, false, record.as_ref());
                 result.outcome = CommentOutcome::Mismatched { saved };
                 let state = failed_state(&envelope, &result);
-                submissions.update(cx, |posts, _| {
-                    posts.settle(&root, &comment, envelope, result)
+                submissions.update(cx, |posts, cx| {
+                    posts.settle(&root, &comment, envelope, result, cx)
                 });
                 if pane
                     .composers
@@ -174,8 +174,7 @@ impl ItemPane {
                     _ => return,
                 };
                 submissions.update(cx, |posts, cx| {
-                    posts.settle(&root, &comment, envelope, result);
-                    cx.notify();
+                    posts.settle(&root, &comment, envelope, result, cx);
                 });
             });
         })

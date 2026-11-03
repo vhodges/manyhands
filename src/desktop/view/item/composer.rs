@@ -34,7 +34,8 @@
 //!   math or property block, as the edit host's does.
 //!
 //! Where the composers are, what their text is kept as and their caret
-//! kept in view in the discussion's region are `place`'s (Task 12).
+//! kept in view in the discussion's region are `place`'s (design,
+//! Placement).
 //!
 //! The composer holds the user's text, so nothing here derives `Debug`.
 

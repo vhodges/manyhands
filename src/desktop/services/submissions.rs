@@ -30,7 +30,8 @@ pub(crate) struct Submission {
     /// The worker request, for a retry. Its library request ID is the
     /// comment ID (R-16).
     pub request: DesktopRequestId,
-    /// The comment's draft, retired by Lane D's drain hook.
+    /// The comment's draft, retired by the services drain
+    /// (`Services::start`).
     pub draft: Option<DraftId>,
     pub state: SubmissionState,
     /// The item the comment is on: a share of it publishes the comment.
@@ -83,7 +84,8 @@ pub(crate) enum SubmissionState {
 }
 
 /// What a finished attempt of a post leaves for the services drain: the
-/// draft to retire once the comment is saved (P9, Lane D's hook).
+/// draft to retire once the comment is saved (P9, the services drain,
+/// `Services::start`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Posted {
     pub draft: Option<DraftId>,
@@ -303,13 +305,15 @@ impl Submissions {
 
     /// What Check again, or a mismatch's record, found the post of
     /// `comment_id` in `repository` to be: its answer stands for the
-    /// post's last one. Nothing changes while it is posting.
+    /// post's last one. Nothing changes while it is posting. Its
+    /// observers hear of a change.
     pub(crate) fn settle(
         &mut self,
         repository: &Path,
         comment_id: &ItemId,
         envelope: FinishedEnvelope,
         result: CommentResult,
+        cx: &mut gpui_kit::Context<Self>,
     ) {
         if let Some(submission) = self
             .posts
@@ -317,6 +321,7 @@ impl Submissions {
             && !matches!(submission.state, SubmissionState::Posting)
         {
             submission.state = SubmissionState::Finished { envelope, result };
+            cx.notify();
         }
     }
 
@@ -329,10 +334,16 @@ impl Submissions {
 
     /// Forgets the post of `comment_id` in `repository`: Check again
     /// found it listed with no record (decision 24). Not while posting.
-    pub(crate) fn forget(&mut self, repository: &Path, comment_id: &ItemId) {
+    /// Its observers hear of a change.
+    pub(crate) fn forget(
+        &mut self,
+        repository: &Path,
+        comment_id: &ItemId,
+        cx: &mut gpui_kit::Context<Self>,
+    ) {
         let key = (repository.to_owned(), comment_id.clone());
-        if !self.posting(&key) {
-            self.posts.remove(&key);
+        if !self.posting(&key) && self.posts.remove(&key).is_some() {
+            cx.notify();
         }
     }
 

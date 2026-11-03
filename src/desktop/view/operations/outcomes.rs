@@ -65,7 +65,7 @@ pub(crate) fn offer_label(offer: SyncOffer) -> &'static str {
 }
 
 /// The part of an entry's element ids an offer's control takes. Share's
-/// is the stopped share's (Task 9).
+/// is the stopped share's (design, Outcomes and routes).
 pub(crate) fn offer_part(offer: SyncOffer) -> &'static str {
     match offer {
         SyncOffer::Share => "share",

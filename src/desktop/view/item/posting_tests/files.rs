@@ -12,8 +12,8 @@ use manyhands::{
     drafts::{CommentTarget, DraftFields, DraftId, DraftTarget, ItemKind},
     repository::{
         AuthoringKind, CancellationToken, CommentAddInput, CommentMutationDto, CommentMutationType,
-        CommentPendingReason, Mutation, MutationCall, MutationDataDto, NoProgress, RequestId,
-        keys::SessionCredentials,
+        CommentPendingReason, ConflictNextAction, ConflictNextDto, Mutation, MutationCall,
+        MutationDataDto, NoProgress, RequestId, keys::SessionCredentials,
     },
     results::{
         CheckpointEffect, Effects, Envelope, PublicationEffect, ResultCode, Scope, WriteEffect,
@@ -212,6 +212,29 @@ pub(super) fn shared(comment: &ItemId) -> Envelope<MutationDataDto> {
         pending_reason: None::<CommentPendingReason>,
         conflict: None,
     }))
+}
+
+/// Row 4: written and committed, its synchronization stopped on a
+/// conflict.
+pub(super) fn saved_conflict(comment: &ItemId) -> Envelope<MutationDataDto> {
+    let mut effects = effects(WriteEffect::Written, CheckpointEffect::Committed);
+    effects.publication = PublicationEffect::Pending;
+    answer(ResultCode::RecoveryRequired, effects).with_data(MutationDataDto::Comment(
+        CommentMutationDto {
+            r#type: CommentMutationType::Comment,
+            item_id: TICKET.to_owned(),
+            comment_id: comment.to_string(),
+            parent_id: None,
+            created_by: None,
+            synchronization_id: "01M4CC0VN1KTQFSVR99378TDHC".to_owned(),
+            publication: PublicationEffect::Pending,
+            pending_reason: Some(CommentPendingReason::Synchronization),
+            conflict: Some(ConflictNextDto {
+                operation_id: "01M4CC0VN1KTQFSVR99378TDHV".to_owned(),
+                next_action: ConflictNextAction::ALL[0],
+            }),
+        },
+    ))
 }
 
 /// Nothing written or committed, answered `code`.

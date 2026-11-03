@@ -1,9 +1,9 @@
 //! The comment drafts this tab's composers hold, as the Drafts page sees
-//! them (Task 12 review): the registry is told which they are, so the
-//! page's Show reaches this tab, beside the tab's own draft; and a draft
-//! the page discards resets the composer holding it, so its later text
-//! begins a new draft rather than editing one that is gone. Nothing here
-//! derives `Debug`.
+//! them (design, Lane A: Comment Drafts): the registry is told which they
+//! are, so the page's Show reaches this tab, beside the tab's own draft;
+//! and a draft the page discards resets the composer holding it, so its
+//! later text begins a new draft rather than editing one that is gone.
+//! Nothing here derives `Debug`.
 
 use std::collections::BTreeSet;
 

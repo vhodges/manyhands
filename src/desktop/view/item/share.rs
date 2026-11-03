@@ -20,6 +20,9 @@
 //! sharing private work changes what the item reads, so the read before
 //! the share never speaks for its outcome. A conflict raises the item's
 //! conflict banner, which offers nothing (`share_outcome`, decision 13).
+//! So does the item's newest post whose comment was saved but whose
+//! synchronization stopped on a conflict (`post_conflict`, design,
+//! Posting), until its entry is dismissed or a share publishes it.
 //!
 //! The remote is the workspace's navigation's (`publication_remote`,
 //! decision 20): the tab reads no remotes itself (D3's fact 41). Until
@@ -42,9 +45,12 @@ use crate::desktop::{
         item::SHARE,
         navigation::OpenTarget,
         operations::{Progressing, progress_words},
-        publication::SyncOutcome,
+        publication::{CommentOutcome, SyncOutcome},
     },
-    services::requests::{DesktopRequestId, Intent, Lane, RequestState},
+    services::{
+        requests::{DesktopRequestId, Intent, Lane, RequestState},
+        submissions::SubmissionState,
+    },
     view::{
         operations::{share_result, share_words},
         sidebar::SHARING,
@@ -79,6 +85,10 @@ pub(super) struct ShareState {
     /// once that read has landed: a later read that differs ends it in the
     /// pill.
     seen: Option<(DesktopRequestId, Option<Option<String>>)>,
+    /// Whether the item's newest post stood on a conflict when the request
+    /// model last changed: a change, its entry dismissed among others,
+    /// draws the banners again.
+    post_conflict: bool,
 }
 
 /// What the item's newest finished share, while its operation area entry
@@ -146,11 +156,51 @@ impl ItemPane {
         {
             self.share.seen = Some((outcome.request, None));
         }
-        if self.share.progress != progress || self.share.outcome != outcome {
+        let post_conflict = self.post_conflict(cx);
+        if self.share.progress != progress
+            || self.share.outcome != outcome
+            || self.share.post_conflict != post_conflict
+        {
             self.share.progress = progress;
             self.share.outcome = outcome;
+            self.share.post_conflict = post_conflict;
             cx.notify();
         }
+    }
+
+    /// Whether the item's newest post (`comment add`) has finished, its
+    /// operation area entry listed, with its comment saved but its
+    /// synchronization stopped on a conflict (design, Posting,
+    /// `SavedConflict`): the item's conflict banner shows, offering
+    /// nothing, as for a share's (decision 13). Dismissing its entry, a
+    /// newer post of the item, or a share that published the comment
+    /// (decision 14) ends it.
+    pub(super) fn post_conflict(&self, cx: &App) -> bool {
+        let Some(Intent::ItemSync { root, kind, id }) = self.share_target() else {
+            return false;
+        };
+        let operations = self.services.operations().read(cx);
+        let Some(request) = operations.requests().iter().find(|request| {
+            matches!(&request.intent, Intent::CommentAdd { root: asked, kind: asked_kind, id: asked_id, .. }
+                if *asked == root && *asked_kind == kind && *asked_id == id)
+        }) else {
+            return false;
+        };
+        let (RequestState::Finished(..), Intent::CommentAdd { comment_id, .. }) =
+            (&request.state, &request.intent)
+        else {
+            return false;
+        };
+        self.services
+            .submissions()
+            .read(cx)
+            .get(&root, comment_id)
+            .is_some_and(|post| {
+                post.request == request.id
+                    && !post.shared_since()
+                    && matches!(&post.state, SubmissionState::Finished { result, .. }
+                        if matches!(result.outcome, CommentOutcome::SavedConflict { .. }))
+            })
     }
 
     /// What the item's newest share (`item sync`) says once finished,
