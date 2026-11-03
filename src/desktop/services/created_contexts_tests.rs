@@ -200,3 +200,40 @@ fn a_document_move_committed_takes_the_context_out() {
     );
     assert!(!created.contains(&document), "already applied takes it out");
 }
+
+/// R-4: a comment whose checkpoint committed into the item's context
+/// takes that context out, as a save does: it holds the comment's commit
+/// now, so leaving never releases it. A post that committed nothing
+/// leaves it in; while one is in flight, a release waits for it
+/// (`saved_by`).
+#[test]
+fn a_committed_comment_keeps_its_context_from_release() {
+    let post = Intent::CommentAdd {
+        root: PathBuf::from(ROOT),
+        kind: AuthoringKind::Ticket,
+        id: item_id(TICKET),
+        comment_id: item_id("01ARZ3NDEKTSV4RRFFQ69G5FF1"),
+        parent_id: None,
+        body: crate::desktop::services::requests::CommentBody::new("Said.".to_owned()),
+    };
+    assert_eq!(ContextKey::of(&post), Some(key()));
+    assert!(key().saved_by(&post), "a release waits for it");
+    assert!(!key().prepared_by(&post) && !key().released_by(&post));
+
+    let made = answer(Outcome::Success, ResultCode::Ok, Some(true));
+    let mut created = CreatedContexts::default();
+    created.finished(&prepare(), &made);
+    created.finished(
+        &post,
+        &answer(Outcome::Blocked, ResultCode::OccupiedPath, None),
+    );
+    assert!(created.contains(&key()), "nothing committed leaves it in");
+
+    let mut committed = answer(Outcome::Partial, ResultCode::InternalError, None);
+    committed.effects.checkpoint = CheckpointEffect::Committed;
+    assert!(!created.finished(&post, &committed));
+    assert!(
+        !created.contains(&key()),
+        "a committed comment takes it out, shared or not"
+    );
+}

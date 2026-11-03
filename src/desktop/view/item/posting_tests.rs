@@ -283,3 +283,11 @@ mod review;
 
 #[path = "posting_tests/outside.rs"]
 mod outside;
+
+// Task 14: reload, contexts and order; the Drafts page's held comment
+// rows.
+#[path = "posting_tests/reload.rs"]
+mod reload;
+
+#[path = "posting_tests/held.rs"]
+mod held;

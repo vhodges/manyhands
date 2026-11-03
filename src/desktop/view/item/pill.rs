@@ -28,6 +28,10 @@ use crate::desktop::{
     },
 };
 
+/// While a post's index refresh runs, before the thread is read again
+/// (design, Lane D, Posting; RFC desktop IA :204-205).
+pub(crate) const UPDATING_LIST: &str = "Updating the list\u{2026}";
+
 /// The pill's text.
 const TEXT_SIZE: f32 = 12.;
 /// Its icon.
