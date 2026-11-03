@@ -15,7 +15,7 @@ use crate::desktop::{
     model::{item::SHARE, navigation::OpenTarget, stamp::SettingsPage},
     services::{
         JobKind,
-        requests::{DesktopRequest, Intent},
+        requests::{DesktopRequest, Intent, Lane},
     },
     test_support::fixtures::{Fixture, item_id},
     view::{
@@ -135,6 +135,39 @@ fn share_without_a_remote_reads_share_and_opens_remotes(cx: &mut TestAppContext)
         .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
     assert!(matches!(shown, Shown::Settings(SettingsPage::Remotes)));
     assert_eq!(item_syncs(&shell, &root, cx), 0, "nothing was sent");
+}
+
+/// A remote selected for publication through the request path, as the
+/// Remotes page selects one, reaches Share once the request finishes:
+/// navigation reloads and gives the tab the remote, with no read of its
+/// own.
+#[gpui_kit::test]
+async fn a_remote_selected_by_request_reaches_share(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.commit_ticket(&root, TICKET, "Shared", "");
+    fixture.add_remote(&root, "origin", "ssh://git@example.invalid/team/repo.git");
+    fixture.refresh(&root);
+    let shell = Shell::open(fixture, cx);
+    open_ticket(&shell, &root, cx);
+    assert_eq!(shell.label(SHARE_BUTTON, cx).as_deref(), Some(SHARE_SET_UP));
+
+    let id = shell.workspace.update(cx, |workspace, _| {
+        workspace.services().worker().submit(
+            Intent::RemoteSelect {
+                root: root.clone(),
+                name: Some("origin".to_owned()),
+            },
+            Lane::User,
+            None,
+            None,
+        )
+    });
+    shell.until_ended(id, cx).await;
+    shell.run(cx);
+    assert_eq!(shell.label(SHARE_BUTTON, cx).as_deref(), Some(SHARE));
+    assert_eq!(shell.label(SHARE_NOTE, cx), Some(share_tooltip("origin")));
 }
 
 /// While a share of the item is queued or running, Share reads Sharing…
