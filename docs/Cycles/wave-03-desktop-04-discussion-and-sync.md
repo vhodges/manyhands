@@ -259,6 +259,18 @@ approval on 2026-11-02:
     this session and never submitted, discards that draft and collapses it
     (orchestrator, Task 12 review, within this decision).
 
+23. **Post as a new comment after a provably empty attempt** (2026-11-03,
+    Task 13 design checkpoint): when Check again finds a finished request
+    whose stored result shows nothing written and nothing committed, and
+    the comment is not in a complete, current listing, Post as a new
+    comment is offered (extends P16).
+24. **A listed comment with no request record** (records lost): Check
+    again retires the draft and clears the composer, and the thread shows
+    the comment, without claiming "Saved" or showing the not-shared chip.
+25. **Reopening a tab after an unsaved post finished** re-adopts its draft
+    into the composer when that slot is untouched and empty, with the
+    failed state and its actions.
+
 ## Open Questions
 
 None. U-1 to U-5 (design) are settled in Task 0 by reading the source.

@@ -706,7 +706,9 @@ R-2, R-5, R-6, R-7 and R-11 of revision 1 became owner decisions 8, 10,
 - **K-10.** Quitting while a post or share is sending stops it at a safe
   point (fact 14a); a stopped publication is final, so after relaunch no
   Resume row or chip marks the comment, and Share publishes it (decision
-  15). D6 owns shutdown.
+  15). D6 owns shutdown. After such a quit, a relaunch may show the
+  comment as "being posted when Manyhands closed" until Retry replays
+  its saved result (Task 13 checkpoint, Q6).
 - **K-11.** The reply composer's avatar shows a placeholder: the item
   tab has no source for the user's identity. An adopted reply's
   "Replying to" names the root's author, since the pressed comment is
