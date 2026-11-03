@@ -99,6 +99,13 @@ Worktree `<main>/.worktrees/d4-lane-c`, from `a1faca4a`.
 
 ## Decisions during execution
 
+- 2026-11-02, orchestrator: Lane D Task 12 starts on the ticket branch
+  while Lane B runs Tasks 10a and 10b, rather than after Lane B merges.
+  Task 12 needs only Lanes A and C (merged), and its files are disjoint
+  from Lane B's remaining ones. Tasks 13 and 14 still wait for Lane B's
+  merge (they use its outcomes, routes and `pill.rs`). `origin/main` had
+  not moved (checked at the Lane C merge).
+
 - Lane task ticket comments are batched into each lane's checkpoint
   comment rather than one per task; the ledger carries each task's record.
 
