@@ -396,13 +396,20 @@ fn a_comment_rows_open_opens_its_item(cx: &mut TestAppContext) {
     assert!(shell.frame(cx, |window, _| {
         window.find(("tab", 1usize)).focused() == Some(true)
     }));
-    let still_listed = registry(&shell, cx).read_with(cx, |registry, _| {
-        registry
+    // Open claims nothing: no session of the draft is held here, no tab
+    // holds it, and its row offers Open again.
+    let (listed, held) = registry(&shell, cx).read_with(cx, |registry, _| {
+        let listed = registry
             .listing()
             .rows()
-            .is_some_and(|rows| rows.iter().any(|row| row.id == id))
+            .is_some_and(|rows| rows.iter().any(|row| row.id == id));
+        let held = registry.session(id).is_some() || registry.tab_of(id).is_some();
+        (listed, held)
     });
-    assert!(still_listed, "Open claims nothing");
+    assert!(listed && !held, "Open claims nothing");
+    shell.keys("secondary-shift-d", cx);
+    assert_eq!(state(&shell, id, cx).as_deref(), Some(CURRENT));
+    assert_eq!(actions(&shell, id, cx), [&["open"][..], &REFUSED].concat());
 }
 
 /// While its item is read, a row says so and offers Inspect, Export, Discard.
