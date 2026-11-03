@@ -23,6 +23,8 @@ Approved 2026-11-02 (`5c26a5cd`); execution is subagent-driven
 | 4 | done | `acfc7290` | `c1e00eab`, fixes `0aa3387e` (docs `1643a500`) | `item` 380, `keyboard` 41; desktop bin 1146 at `0aa3387e`; four lines clean | Round 1 CHANGES REQUIRED (Blocking: composer Tab binding shadowed by zorite; Important: Share stub had no window/cx); owner decision 19 (Tab indents, F6 leaves); re-review APPROVE | E-1–E-7 and E-6 first half applied. Escape also bound in `CommentComposer > Editor`. `SHARE` and the `ItemPane` slot fields carry plain `allow(dead_code)` (no test reads them); Lane B removes `SHARE`'s, Lane D the fields'. Lane C must not wrap the composer in `EditHost`. |
 | 5a | done | `92296eca` | `8cdf23ee` | `submissions` 11, `worker` 37, `prompts` 9, `item` 380, `tabs` 58, `publication` 40; four lines clean | Part 0 whole review CHANGES REQUIRED (6 Important seams, 4 Minor); fixed; re-review APPROVE | Seams: `Attempt` stored per submission (resend, after_give_up); `Posted { draft, saved }` for the drain; operation-area retries go through `Submissions`; declined keys recorded per request with `clear_declined_for`; `ItemRoute` from the item tab to `Workspace::item_route` (`view/tabs.rs`, `[_; 8]`); `share_opened`/`share_progressed` hooks. Accepted risks: record state and `after_give_up` are read when the drain runs (safe: Operations and Submissions update in one drain step, nothing awaited between); `clear_declined_for` covers a request's last attempt (safe: a declined key ends with `unlock_required`, not `busy`). Ownership handovers in the design (`92296eca`). |
 | 5 | done | `1ee62aa2` | — | Desktop bin 1151 passed at `8cdf23ee`; four lines clean; merge-tree with `origin/main` `0dfd5a68` clean | Fresh whole-Part-0 review (→ Task 5a), re-review APPROVE | Ticket branch pushed; lanes created from the checkpoint HEAD. |
+| 8a seam | done | `f04b8d16` | `7a1c2466`, `9dd49e38` | `tabs` 60, `item` 380, `keys` 29; fact-41 tests pass unchanged; four lines clean | APPROVE (2 Minor, not applied) | Decision 20: `PublicationRemote` from navigation, pushed on every workspace notify (no loop; cheap). Decision 21: Ctrl K → `InsertLink` in `CommentComposer > Editor`. |
+| O-1 seam | done | `c6f00ce7` | `bf2b8338` | `settings` 102; four lines clean | Orchestrator review (23 lines) | `SettingsHost::open_remotes_on(root, window, cx)` and `RemotesPage::open_on`; Lane B Task 10a switches Share…/Share main… to it (its marker says Task 9) and adds a two-repository test. |
 
 ### Task 0 record
 
@@ -66,17 +68,35 @@ Approved 2026-11-02 (`5c26a5cd`); execution is subagent-driven
 
 ## Lane A (`d4/lane-a`)
 
-Not started.
+Worktree `<main>/.worktrees/d4-lane-a`, from `a1faca4a`.
+
+| Task | State | Base | Commits | Tests | Review | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 6 | done | `a1faca4a` | `e9528d4a`, fixes `fd0368c8` | `drafts` 179 (twice); `drafts::comments` 13; four lines clean | Round 1 CHANGES REQUIRED (3 Important: retirement lost pending text, returned nothing, trusted a stale listing); fixed; re-review APPROVE | Ruling R-18. `ItemKey` defined in `services/drafts/comments.rs`. For Task 13's checkpoint: never adopt a draft whose submission is posting, and retry `retire_comment` on `HeldHere` once an adoption lands; R-18's open items. |
+| 7 | done | `fd0368c8` | `3f10c120`, test fix `77ac73f2` | `drafts` 180; desktop bin 1165; four lines clean | APPROVE (1 Minor applied) | E-8, E-9 (two struct literals gained `open: false`, accepted as part of E-9). Open carries only the item; Lane D finds the draft through `comment_drafts`, including when the tab is already open. Known limit: a comment draft whose item is gone offers Open; the tab shows its error (Discard and Export still work). Library doc `src/drafts/compare.rs:342` is stale (follow-up ticket). |
+| checkpoint | merged | `77ac73f2` | lane merge of the ticket branch `2d9bcbfe`; `--no-ff` into the ticket branch `c6f00ce7` | Lane: `drafts` 180, desktop bin 1167. Ticket branch after merge: desktop bin 1167, clippy clean | — | Lane worktree and branch removed. |
 
 ## Lane B (`d4/lane-b`)
 
-Not started.
+Worktree `<main>/.worktrees/d4-lane-b`, from `a1faca4a`.
+
+| Task | State | Base | Commits | Tests | Review | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 8 | done | `a1faca4a` | WIP `0c966cbd`, merge `e69b3535` (seam `7a1c2466`, `9dd49e38`), `153ab866` | `share` 17, `header` 21, `keyboard` 41; desktop bin 1158; four lines clean | APPROVE for Lane B's scope (1 Important deferred to O-1, 3 Minor) | First stop: a remotes read on open broke fact 41's tests → decision 20 and E-13 (applied in both walks of the frame test). Share main with no remote reads "Share main…" and opens Remotes. O-1: the Remotes page keeps its previous repository (`settings/remotes.rs:283`); orchestrator seam, then Task 9 switches the call site and adds a two-repository test. Stale markers in `view/item.rs` (`ItemRoute`, `share` field) for Lane D. |
 
 ## Lane C (`d4/lane-c`)
 
-Not started.
+Worktree `<main>/.worktrees/d4-lane-c`, from `a1faca4a`.
+
+| Task | State | Base | Commits | Tests | Review | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 11a | done | `a1faca4a` | `9f014c56` | `composer` 7 (four runs), `editor` 90 (twice); four lines clean | APPROVE; 1 Important (math click lands before the block) carried into 11b; 4 Minor | Decision 21 (toolbar always shown; Ctrl K for Link, bound on the ticket branch). Hint copy "Ctrl Enter to post · Esc to cancel" per design. No `CaretInView` yet (Task 12). Task 12 removes the composer's dead-code markers. |
+| 11b | in progress | `9f014c56` | — | — | — | Carries 11a's I1 and M2. |
 
 ## Decisions during execution
+
+- Lane task ticket comments are batched into each lane's checkpoint
+  comment rather than one per task; the ledger carries each task's record.
 
 - 2026-11-02, Task 0: decisions 17 (separate sync job kinds, E-12) and 18
   ("Nothing to share yet" copy).

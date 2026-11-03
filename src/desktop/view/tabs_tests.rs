@@ -29,7 +29,7 @@ use crate::desktop::{
         confirm::CANCEL,
         editor::host::EditorHost,
         harness::{Shell, WAIT, key},
-        item::{NOT_REFRESHED, NOT_SAVED, tokens::colors},
+        item::{NOT_REFRESHED, NOT_SAVED, PublicationRemote, tokens::colors},
         workspace::{REGIONS, Region},
     },
 };
@@ -1662,4 +1662,67 @@ fn the_strip_scrolls_the_shown_tab_into_view(cx: &mut TestAppContext) {
     assert!(tab_in_view(&shell, 5, cx), "a sixth tab is in view");
     shell.keys("ctrl-tab", cx);
     assert!(tab_in_view(&shell, 0, cx), "the first tab is in view again");
+}
+
+/// The shown tab's publication remote, as its pane holds it.
+fn shown_remote(shell: &Shell, cx: &mut TestAppContext) -> Option<PublicationRemote> {
+    shell.workspace.read_with(cx, |workspace, cx| {
+        Some(workspace.item_pane()?.read(cx).publication_remote().clone())
+    })
+}
+
+/// Share controls: a tab learns its repository's publication remote from
+/// the workspace's navigation, the listed summary, and reads no remotes
+/// as it opens (D3's fact 41). A repository without one is `Unset`.
+#[gpui_kit::test]
+fn a_tab_learns_its_repositorys_remote_from_navigation(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    let b = fixture.create_repository("b");
+    fixture.commit_ticket(&a, ONE, "One", "");
+    fixture.commit_ticket(&b, ONE, "Other", "");
+    fixture.publish_over_ssh(&a);
+    fixture.refresh(&a);
+    fixture.refresh(&b);
+    let shell = Shell::open(fixture, cx);
+
+    open(&shell, ticket(&a, ONE), cx);
+    assert_eq!(
+        shown_remote(&shell, cx),
+        Some(PublicationRemote::Named("origin".to_owned()))
+    );
+    open(&shell, ticket(&b, ONE), cx);
+    assert_eq!(shown_remote(&shell, cx), Some(PublicationRemote::Unset));
+    assert_eq!(shell.backend.reads_seen(ReadKind::Remotes), 0);
+}
+
+/// A publication remote navigation learns later, from a list read, reaches
+/// every tab of that repository already open, still with no remotes read.
+#[gpui_kit::test]
+fn a_remote_set_later_reaches_open_tabs(cx: &mut TestAppContext) {
+    let Two { shell, a, b } = two(cx);
+    open(&shell, ticket(&a, ONE), cx);
+    open(&shell, ticket(&b, ONE), cx);
+    open(&shell, ticket(&a, TWO), cx);
+    assert_eq!(shown_remote(&shell, cx), Some(PublicationRemote::Unset));
+
+    shell.fixture.publish_over_ssh(&a);
+    shell.fixture.refresh(&a);
+    shell
+        .workspace
+        .update(cx, |workspace, cx| workspace.load_repositories(cx));
+    shell.run(cx);
+    let remotes: Vec<_> = (0..3usize)
+        .map(|ix| {
+            shell.click(("tab", ix), cx);
+            shown_remote(&shell, cx).expect("a tab is shown")
+        })
+        .collect();
+    let origin = PublicationRemote::Named("origin".to_owned());
+    assert_eq!(
+        remotes,
+        [origin.clone(), PublicationRemote::Unset, origin],
+        "a's two tabs, not b's"
+    );
+    assert_eq!(shell.backend.reads_seen(ReadKind::Remotes), 0);
 }
