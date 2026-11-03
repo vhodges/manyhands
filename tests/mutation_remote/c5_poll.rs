@@ -2490,9 +2490,9 @@ fn once_token_stops_a_transfer() -> Result<(), FixtureError> {
     });
     hold.wait_until_held()?;
     token.cancel();
-    // Past `POLL_PROGRESS_THROTTLE`, 250 ms, which the callback's first call may
-    // have begun.
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    // Past `POLL_PROGRESS_THROTTLE`, which the callback's first call may have
+    // begun.
+    std::thread::sleep(repository::POLL_PROGRESS_THROTTLE + std::time::Duration::from_millis(50));
     hold.release()?;
     let envelope = joined(&w, running)?;
     assert_cancelled(&w, &envelope)?;

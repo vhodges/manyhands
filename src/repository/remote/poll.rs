@@ -18,8 +18,9 @@ use crate::{
 };
 
 /// How often a transfer's callback looks at what it has been asked: it runs for
-/// every packet.
-const POLL_PROGRESS_THROTTLE: std::time::Duration = std::time::Duration::from_millis(250);
+/// every packet. Public for a test that waits past it.
+#[doc(hidden)]
+pub const POLL_PROGRESS_THROTTLE: std::time::Duration = std::time::Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PollDisposition {

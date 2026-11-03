@@ -751,6 +751,36 @@ pub(super) fn operation_holder(
         .optional()
 }
 
+/// `operation_holder` of the remote operation `operation_id` of
+/// `scope_key`, or, when no record holds it and it is the context child of
+/// a lifecycle of the repository `repository_id`, of that parent: no
+/// record holds a lifecycle's child, and the request whose record holds its
+/// parent does (decision 34). An operation that is no lifecycle's child
+/// reads as `operation_holder` does.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(super) fn operation_or_parent_holder(
+    connection: &Connection,
+    scope_key: &str,
+    repository_id: i64,
+    operation_id: OperationId,
+) -> Result<Option<String>, ReadError> {
+    let family = OperationFamily::Remote;
+    if let Some(holder) = operation_holder(connection, family, scope_key, operation_id, None)? {
+        return Ok(Some(holder));
+    }
+    let Some(parent) = crate::repository::remote::state::lifecycle_parent_of(
+        connection,
+        repository_id,
+        operation_id,
+    )?
+    else {
+        return Ok(None);
+    };
+    Ok(operation_holder(
+        connection, family, scope_key, parent, None,
+    )?)
+}
+
 /// Deletes the record `operation_owner` finds, and releases the
 /// confirmation it accepted, as settling does for a request that ended
 /// with nothing in flight: the request ID is free, and its next use is a

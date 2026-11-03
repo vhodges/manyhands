@@ -434,36 +434,25 @@ impl Resolving<'_> {
     /// operation and not its synchronization (fact 79). `None` when no
     /// unfinished record holds it.
     fn holder(&self, comment: Option<OperationId>) -> Result<Option<RequestId>, Answer> {
-        let (family, operation_id) = match comment {
-            Some(comment) => (OperationFamily::Local, comment),
-            None => (OperationFamily::Remote, self.synchronization),
-        };
         let scope = self.accepted.scope.as_str();
         let repository_id = self.repository.registration_id();
         let holder = self
             .service()
-            .read_session(RepositoryOperation::Read, |db| {
-                if let Some(holder) =
-                    records::operation_holder(db, family, scope, operation_id, None)?
-                {
-                    return Ok(Some(holder));
-                }
-                // No record holds a lifecycle's child: the request whose
-                // record holds its parent does (decision 34).
-                if comment.is_some() {
-                    return Ok(None);
-                }
-                let Some(parent) = state::lifecycle_parent_of(db, repository_id, operation_id)?
-                else {
-                    return Ok(None);
-                };
-                Ok(records::operation_holder(
+            .read_session(RepositoryOperation::Read, |db| match comment {
+                Some(comment) => Ok(records::operation_holder(
                     db,
-                    OperationFamily::Remote,
+                    OperationFamily::Local,
                     scope,
-                    parent,
+                    comment,
                     None,
-                )?)
+                )?),
+                // A lifecycle's child is held through its parent (decision 34).
+                None => records::operation_or_parent_holder(
+                    db,
+                    scope,
+                    repository_id,
+                    self.synchronization,
+                ),
             })
             .map_err(|error| Answer::of_read(&error))?;
         holder

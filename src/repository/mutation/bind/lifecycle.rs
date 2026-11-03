@@ -190,11 +190,13 @@ thread_local! {
 }
 
 impl RepositoryService {
-    /// Has `hook` run once on this thread, immediately before the next
-    /// made-ready report's read: after the domain has answered, so that a test
-    /// can fail a read which that answer did not depend on.
+    /// Has `hook` run immediately before the next made-ready report's read on
+    /// this thread, whichever service makes it: after the domain has
+    /// answered, so that a test can fail a read which that answer did not
+    /// depend on. The hook is per thread, not per service, and the report
+    /// that runs it consumes it: it runs once.
     #[doc(hidden)]
-    pub fn set_made_ready_hook_for_testing(&self, hook: impl FnOnce() + 'static) {
+    pub fn set_made_ready_hook_for_testing(hook: impl FnOnce() + 'static) {
         MADE_READY_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
     }
 }
@@ -312,37 +314,43 @@ fn reached_effects(reached: &Reached) -> Effects {
 }
 
 impl<V: LifecycleVerb> LifecycleBinding<V> {
-    /// Reads the repository and what the domain's preview says of the item.
-    fn observe(&self, service: &RepositoryService) -> Result<(PathBuf, Observed), Answer> {
+    /// Reads the repository and what the domain's preview says of the item:
+    /// the repository's root, its registration's ID, and the preview.
+    fn observe(&self, service: &RepositoryService) -> Result<(PathBuf, i64, Observed), Answer> {
         let repository = resolve_root(service, &self.root)?;
         let root = repository.root().to_owned();
         let observed = V::observe(service, &root, &self.id).map_err(refused)?;
-        Ok((root, observed))
+        Ok((root, repository.registration_id(), observed))
     }
 
     /// Decision 33: while an unfinished parent that a new request can't
     /// supersede holds the item, a prepare is refused, and the way on is that
     /// parent's: the request whose accepted record holds its operation, or a
     /// resume of the operation when no record does.
-    fn held(&self, service: &RepositoryService, root: &Path) -> Result<(), Answer> {
-        let Some(operation) =
-            V::holder(service, root, &self.id).map_err(|error| Answer::of_read(&error))?
-        else {
-            return Ok(());
-        };
-        let key = ScopeKey::for_repository(&self.root)
-            .ok_or_else(|| Answer::stopped(ResultCode::InvalidPath))?;
-        let holder = service
+    fn held(&self, service: &RepositoryService, repository_id: i64) -> Result<(), Answer> {
+        let key = ScopeKey::for_repository(&self.root);
+        // The parent and the request holding it, in one read.
+        let held = service
             .read_session(RepositoryOperation::Read, |db| {
-                Ok(records::operation_holder(
+                let Some(operation) = V::holder(db, repository_id, &self.id)? else {
+                    return Ok(None);
+                };
+                let Some(key) = &key else {
+                    return Ok(Some((operation, None)));
+                };
+                let holder = records::operation_or_parent_holder(
                     db,
-                    OperationFamily::Remote,
                     key.as_str(),
+                    repository_id,
                     operation,
-                    None,
-                )?)
+                )?;
+                Ok(Some((operation, Some(holder))))
             })
             .map_err(|error| Answer::of_read(&error))?;
+        let Some((operation, holder)) = held else {
+            return Ok(());
+        };
+        let holder = holder.ok_or_else(|| Answer::stopped(ResultCode::InvalidPath))?;
         let action = match holder.and_then(|holder| RequestId::parse(&holder).ok()) {
             Some(request) => outcome::same_request(request),
             None => RecoveryAction::for_operation(
@@ -858,7 +866,7 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
     /// answered as what it is, since a new preview would only say the same.
     /// The request is placed on primary, whose reachability a replay checks.
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
-        let (root, observed) = self.observe(call.service)?;
+        let (root, _, observed) = self.observe(call.service)?;
         if let Observed::Blocked(blockers) = &observed
             && matches!(blockers.as_slice(), [LifecycleBlocker::IdentityRequired])
         {
@@ -902,8 +910,8 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
 
 impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
     fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer> {
-        let (root, observed) = self.observe(call.service)?;
-        self.held(call.service, &root)?;
+        let (root, repository_id, observed) = self.observe(call.service)?;
+        self.held(call.service, repository_id)?;
         let digest = digest_of(V::COMMAND, &observed);
         let ready = match observed {
             Observed::Ready(ready) => ready,
@@ -1041,7 +1049,7 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
         _accepted: &Accepted,
         _journal: &JournalRow,
     ) -> Result<Seen, Ran> {
-        let (root, observed) = self.observe(call.service).map_err(|answer| Ran {
+        let (root, _, observed) = self.observe(call.service).map_err(|answer| Ran {
             answer,
             standing: Standing::Stopped { journal: None },
         })?;

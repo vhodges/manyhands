@@ -206,8 +206,8 @@ impl LifecycleVerb for Fixed {
     }
 
     fn holder(
-        _service: &RepositoryService,
-        _root: &Path,
+        _db: &rusqlite::Connection,
+        _repository_id: i64,
         _id: &ItemId,
     ) -> Result<Option<OperationId>, crate::repository::ReadError> {
         Ok(None)

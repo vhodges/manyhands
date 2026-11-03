@@ -129,10 +129,11 @@ pub(in super::super::super) trait LifecycleVerb {
         operation: OperationId,
     ) -> Result<Option<ParentView<LifecycleBlocker>>, RepositoryError>;
 
-    /// The item's unfinished parent that a new request can't supersede.
+    /// The item's unfinished parent that a new request can't supersede, in
+    /// the repository `repository_id`: a read in the caller's read session.
     fn holder(
-        service: &RepositoryService,
-        root: &Path,
+        db: &rusqlite::Connection,
+        repository_id: i64,
         id: &ItemId,
     ) -> Result<Option<OperationId>, ReadError>;
 }
@@ -359,11 +360,11 @@ impl LifecycleVerb for Promote {
     }
 
     fn holder(
-        service: &RepositoryService,
-        root: &Path,
+        db: &rusqlite::Connection,
+        repository_id: i64,
         id: &ItemId,
     ) -> Result<Option<OperationId>, ReadError> {
-        promotion::unfinished_holder::<promotion::record::PromotionRecord>(service, root, id)
+        promotion::unfinished_holder::<promotion::record::PromotionRecord>(db, repository_id, id)
     }
 }
 
@@ -459,11 +460,11 @@ impl LifecycleVerb for Close {
     }
 
     fn holder(
-        service: &RepositoryService,
-        root: &Path,
+        db: &rusqlite::Connection,
+        repository_id: i64,
         id: &ItemId,
     ) -> Result<Option<OperationId>, ReadError> {
-        promotion::unfinished_holder::<closure::record::ClosureRecord>(service, root, id)
+        promotion::unfinished_holder::<closure::record::ClosureRecord>(db, repository_id, id)
     }
 }
 

@@ -265,7 +265,7 @@ pub fn schema_name(resource: &str, verb: &str) -> String {
 enum Json {
     Null,
     Bool(#[allow(dead_code)] bool),
-    Number(#[allow(dead_code)] serde_json::Number),
+    Number(serde_json::Number),
     String(String),
     Array(Vec<Json>),
     Object(BTreeMap<String, Json>),

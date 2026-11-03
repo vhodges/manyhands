@@ -14,6 +14,8 @@ pub use merge::{
     ResolveSynchronizationRequest,
 };
 pub use observation::{ObservePublicationRemoteRequest, RemoteObservationError};
+#[doc(hidden)]
+pub use poll::POLL_PROGRESS_THROTTLE;
 pub use poll::{
     AutomaticPollEligibility, PollCompletion, PollDisposition, PollIneligibility,
     PollPublicationRemoteRequest, PollTargetReport, RemotePollError, RemotePollOutcome,

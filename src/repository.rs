@@ -94,6 +94,8 @@ use recovery::{
     record_owned_persisted_context, record_persisted_context as record_recovery_context,
     touch_indexing, transition_indexing,
 };
+#[doc(hidden)]
+pub use remote::POLL_PROGRESS_THROTTLE;
 pub use remote::{
     AutomaticBackoff, AutomaticPollEligibility, ConfirmedCommitIdentity, ConflictDto,
     ConflictEligibility, ConflictObservation, ConflictPathDto, ConflictPathKind,

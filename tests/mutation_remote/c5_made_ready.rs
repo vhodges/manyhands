@@ -3,7 +3,8 @@
 //! gets to its answer: retried, stored, replayed and resumed.
 //!
 //! **The failed read and the incomplete read** are staged by
-//! `set_made_ready_hook_for_testing`, which runs immediately before the report's
+//! `RepositoryService::set_made_ready_hook_for_testing`, which runs once, on the
+//! thread that sets it, immediately before the report's
 //! read, once the domain has answered. The failed one makes a stored context's
 //! kind undecodable (`unreadable_index`), so the read answers `invalid_stored_data`
 //! and the refresh before it is untouched. The incomplete one stores a
@@ -545,9 +546,7 @@ fn failed_read_is_final() -> Result<(), FixtureError> {
     let local = local_with_a_dependent()?;
     let data = local_data(&local);
     let staged = data.clone();
-    local
-        .service
-        .set_made_ready_hook_for_testing(move || unreadable_index(&staged));
+    RepositoryService::set_made_ready_hook_for_testing(move || unreadable_index(&staged));
     let done = first_call(&local.service, &local.root, Verb::Close)?;
     assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
     assert_eq!(done.effects.cleanup, CleanupEffect::Complete);
@@ -569,9 +568,7 @@ fn failed_read_is_final() -> Result<(), FixtureError> {
 fn incomplete_read_is_final() -> Result<(), FixtureError> {
     let local = local_with_a_dependent()?;
     let staged = local_data(&local);
-    local
-        .service
-        .set_made_ready_hook_for_testing(move || incomplete_index(&staged));
+    RepositoryService::set_made_ready_hook_for_testing(move || incomplete_index(&staged));
     let done = first_call(&local.service, &local.root, Verb::Close)?;
     assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
     state_is(&done, LifecycleMadeReadyState::IndexUnavailableFinal, &[])?;
@@ -633,8 +630,7 @@ fn stopped_in_cleanup(
 fn failed_read_on_partial_stays_owed() -> Result<(), FixtureError> {
     let (w, partial, untracked) = stopped_in_cleanup(|w| {
         let staged = w.data();
-        w.service
-            .set_made_ready_hook_for_testing(move || unreadable_index(&staged));
+        RepositoryService::set_made_ready_hook_for_testing(move || unreadable_index(&staged));
     })?;
     state_is(&partial, LifecycleMadeReadyState::IndexPending, &[])?;
     readable_index(&w.data());
@@ -856,9 +852,7 @@ fn promotion_reports_none() -> Result<(), FixtureError> {
     let verb = Verb::Promote;
     let local = Local::holding(verb)?;
     let staged = local_data(&local);
-    local
-        .service
-        .set_made_ready_hook_for_testing(move || unreadable_index(&staged));
+    RepositoryService::set_made_ready_hook_for_testing(move || unreadable_index(&staged));
     let done = first_call(&local.service, &local.root, verb)?;
     assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
     assert_eq!(report(&done)?, (None, None));
