@@ -74,11 +74,20 @@ Worktree `<main>/.worktrees/d4-lane-a`, from `a1faca4a`.
 
 ## Lane B (`d4/lane-b`)
 
-Not started.
+Worktree `<main>/.worktrees/d4-lane-b`, from `a1faca4a`.
+
+| Task | State | Base | Commits | Tests | Review | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 8 | paused | `a1faca4a` | uncommitted | `share` 16; desktop bin 1152 passed, 3 failed (unnamed tests) | — | Stopped correctly: a remotes read on tab open broke fact 41's two tests, and Share broke the frame tab-order test. Owner: decision 20 (remote from navigation via a ticket-branch seam) and E-13. Resumes after merging the seam. |
 
 ## Lane C (`d4/lane-c`)
 
-Not started.
+Worktree `<main>/.worktrees/d4-lane-c`, from `a1faca4a`.
+
+| Task | State | Base | Commits | Tests | Review | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 11a | done | `a1faca4a` | `9f014c56` | `composer` 7 (four runs), `editor` 90 (twice); four lines clean | APPROVE; 1 Important (math click lands before the block) carried into 11b; 4 Minor | Decision 21 (toolbar always shown; Ctrl K for Link, bound on the ticket branch). Hint copy "Ctrl Enter to post · Esc to cancel" per design. No `CaretInView` yet (Task 12). Task 12 removes the composer's dead-code markers. |
+| 11b | in progress | `9f014c56` | — | — | — | Carries 11a's I1 and M2. |
 
 ## Decisions during execution
 

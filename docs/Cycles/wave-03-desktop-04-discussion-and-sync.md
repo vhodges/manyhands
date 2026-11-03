@@ -242,6 +242,12 @@ approval on 2026-11-02:
     (D3's fact 41 unchanged); a seam on the ticket branch passes it in.
     Named edit E-13 adds Share to the frame tab-order test.
 
+21. **The new-comment composer's toolbar is always shown** (2026-11-02,
+    Lane C Task 11a review), not revealed on focus as
+    `04-comments.md:43` draws it: with Tab indenting (decision 19) a
+    revealed-on-focus toolbar could not be reached by keyboard. Ctrl K
+    opens Link in the composer.
+
 ## Open Questions
 
 None. U-1 to U-5 (design) are settled in Task 0 by reading the source.
