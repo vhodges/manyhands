@@ -9,22 +9,30 @@
 //! library has not accepted, offers Cancel; an accepted one reads
 //! "Finishing", except that an accepted command that stops at safe points,
 //! in a repository with a publication remote, offers Stop at a safe point
-//! (R-1, R-15), which reads Stopping… once pressed. A running share or
-//! post reads its stage in words ("Sharing · …", "Posting · …"), and a
-//! finished share says its outcome in fixed words and offers the controls
-//! that outcome names in place of the envelope's recovery actions
-//! (`outcomes`): a stopped one says whether part of its work finished and
-//! offers Share, a new request. A draft store that did not open keeps an
-//! entry with its fixed reason at the top, with no Dismiss; so does each
-//! session whose recovery copy could not be written, named by its item's
-//! title as read, with Retry, until a write lands. The launch's "Recovered drafts" entry
+//! (R-1, R-15), which reads Stopping… once pressed; a resume stops at safe
+//! points only when it takes up a remote synchronization listed pending,
+//! so any other resume reads Finishing. A running share or post reads its
+//! stage in words ("Sharing · …", "Posting · …"), and a finished share
+//! says its outcome in fixed words and offers the controls that outcome
+//! names in place of the envelope's recovery actions (`outcomes`): a
+//! stopped one says whether part of its work finished and offers Share, a
+//! new request. Stop trying to share gives a request up (decision 8); one
+//! whose record had already finished says "Already finished" above the
+//! stored answer it replayed, and the answer of a Give up never offers it
+//! again (P14). A draft store that did not open keeps an entry with its
+//! fixed reason at the top, with no Dismiss; so does each session whose
+//! recovery copy could not be written, named by its item's title as read,
+//! with Retry, until a write lands. The launch's "Recovered drafts" entry
 //! (`recovered`) follows the store's, with Review and Dismiss.
 //!
 //! **Pending in repositories** lists the operations each listed
 //! repository reports with work outstanding: command, scope, operation ID
-//! and what it waits for. A local operation waiting to be resumed offers
-//! Resume; a synchronization shows Resume unavailable. A pending local
-//! operation offers Abandon, which is confirmed.
+//! and what it waits for. A local operation, or a remote item or
+//! repository synchronization, waiting to be resumed offers Resume (a
+//! comment's publication is listed as the synchronization that publishes
+//! it, decision 11); a local-context synchronization shows Resume
+//! unavailable (D5). A pending local operation offers Abandon, which is
+//! confirmed.
 //!
 //! Every recovery action an envelope offers is a control: the ones D1
 //! offers run, the rest are text, unavailable. So is the Retry of a context
@@ -51,6 +59,7 @@ use manyhands::{
 mod outcomes;
 mod recovered;
 
+use outcomes::{ALREADY_FINISHED, already_finished};
 pub(crate) use outcomes::{share_result, share_words};
 
 use super::workspace::Workspace;
@@ -277,6 +286,13 @@ impl Workspace {
             .track_focus(&shown)
             .gap_1()
             .child(line);
+        // A Give up that found the record already finished says so above
+        // the stored answer it replayed.
+        if matches!(request.state, RequestState::Finished(..))
+            && already_finished(self.services(), id)
+        {
+            entry = entry.child(text(request_id(id, "gave-up"), ALREADY_FINISHED).text_sm());
+        }
         let mut controls = h_flex().gap_2().flex_wrap();
         match &request.state {
             RequestState::Queued

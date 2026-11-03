@@ -38,7 +38,7 @@ use crate::desktop::{
     },
     test_support::{
         drafts::store_draft,
-        fixtures::{Fixture, item_id},
+        fixtures::{Fixture, item_id, ticket_source},
     },
     view::{
         harness::{Shell, WAIT, key},
@@ -869,6 +869,86 @@ async fn a_shared_outcome_leaves_the_pill_once_the_item_reads_otherwise(cx: &mut
     );
     assert_eq!(
         shell.label(request_id(share.id, "outcome"), cx).as_deref(),
+        Some(SHARED),
+        "the entry still says it"
+    );
+}
+
+/// Orchestrator ruling (Task 10b): sharing private work says Shared in
+/// the pill. The outcome speaks of the item as it is first read after the
+/// share finished, not as it read before: here the item changed before
+/// the share finished and after the tab last read it, as a share that
+/// brings in others' changes leaves it. The
+/// pill says Shared over the private copy until the item reads otherwise,
+/// then reads the item again. The share runs for real; its answer is
+/// constructed, as the test binary publishes nothing.
+#[gpui_kit::test]
+async fn sharing_private_work_shows_shared_until_the_item_reads_differently(
+    cx: &mut TestAppContext,
+) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.commit_ticket(&root, TICKET, "Shared", "");
+    fixture.publish_over_ssh(&root);
+    fixture.refresh(&root);
+    fixture.save_ticket(&root, TICKET, "Private");
+    let shell = Shell::open(fixture, cx);
+    open_ticket(&shell, &root, cx);
+    let private = pill_words(PillState::ViewingPrivate);
+    assert_eq!(shell.label("item-pill", cx).as_deref(), Some(private));
+
+    // Changed where the tab has not read it, as a share's merge leaves it.
+    shell.fixture.save_ticket(&root, TICKET, "Shared since");
+    let held = shell
+        .backend
+        .hold_job_return_answering(JobKind::SynchronizeItem, published());
+    shell.click(SHARE_BUTTON, cx);
+    held.wait_reached();
+    held.release();
+    let share = shell.requests(cx, |request| item_sync_of(request, &root))[0];
+    shell.until_ended(share, cx).await;
+    shell
+        .until_drawn(cx, "the tab read the item after the share", |shell, cx| {
+            shell.label("item-title", cx).as_deref() == Some("Shared since")
+        })
+        .await;
+    shell
+        .until_drawn(cx, "the pill said the outcome", |shell, cx| {
+            shell.label("item-pill", cx).as_deref() == Some(SHARED)
+        })
+        .await;
+    shell.run(cx);
+    assert_eq!(shell.label("item-pill", cx).as_deref(), Some(SHARED));
+
+    // The share left the item's synchronization pending, and a save is
+    // refused (`recovery_required`): the file is changed in its working
+    // copy, which the item reads.
+    let service = shell.fixture.service();
+    let repo = service.resolve_repository(&root).unwrap();
+    let item = service.show_item(&repo, &item_id(TICKET)).unwrap();
+    std::fs::write(
+        Path::new(&item.context.worktree).join(&item.path),
+        ticket_source(TICKET, "Changed since", ""),
+    )
+    .unwrap();
+    let refresh = shell.workspace.update(cx, |workspace, _| {
+        workspace.services().worker().submit(
+            Intent::IndexRefresh { root: root.clone() },
+            Lane::User,
+            None,
+            None,
+        )
+    });
+    shell.until_ended(refresh, cx).await;
+    shell
+        .until_drawn(cx, "the tab read the changed item", |shell, cx| {
+            shell.label("item-title", cx).as_deref() == Some("Changed since")
+        })
+        .await;
+    assert_eq!(shell.label("item-pill", cx).as_deref(), Some(private));
+    assert_eq!(
+        shell.label(request_id(share, "outcome"), cx).as_deref(),
         Some(SHARED),
         "the entry still says it"
     );

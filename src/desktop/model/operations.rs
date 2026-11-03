@@ -49,7 +49,7 @@ use crate::desktop::services::{
     worker::{RecordState, WorkerEvent},
 };
 
-/// Why a synchronization's Resume is unavailable.
+/// Why a local-context synchronization's Resume is unavailable (D5).
 pub(crate) const SYNCHRONIZATION_UNAVAILABLE: &str = "Synchronization is not available yet";
 /// Why a recovery action that names nothing this session can act on is
 /// unavailable.
@@ -311,7 +311,11 @@ impl Operations {
     /// What the request `id` offers to stop it once accepted (R-1, R-15):
     /// Stop at a safe point while an accepted command that stops at safe
     /// points runs in a repository with a publication remote (`remote`),
-    /// Stopping… once pressed, and nothing otherwise.
+    /// Stopping… once pressed, and nothing otherwise. A resume stops at
+    /// safe points only when it takes up a synchronization: the operation
+    /// it names is listed pending in its repository as a remote item or
+    /// repository synchronization, a comment's publication among them
+    /// (`takes_up_remote_work`); any other resume ignores its token.
     pub(crate) fn stop_offer(&self, id: DesktopRequestId, remote: bool) -> StopOffer {
         let Some(request) = self.request(id) else {
             return StopOffer::NotOffered;
@@ -319,6 +323,7 @@ impl Operations {
         if !matches!(request.state, RequestState::Running { accepted: true, .. })
             || !request.intent.stops_at_safe_points()
             || !remote
+            || !self.resumes_remote_work(&request.intent)
         {
             return StopOffer::NotOffered;
         }
@@ -327,6 +332,24 @@ impl Operations {
         } else {
             StopOffer::Offered
         }
+    }
+
+    /// Whether `intent`, if it is a resume, names an operation its
+    /// repository lists pending as remote work a resume takes up at safe
+    /// points (`takes_up_remote_work`). True for any other intent.
+    fn resumes_remote_work(&self, intent: &Intent) -> bool {
+        let Intent::OperationResume { root, operation_id } = intent else {
+            return true;
+        };
+        let named = operation_id.to_string();
+        root.to_str()
+            .and_then(|root| self.pending.get(root))
+            .and_then(ListState::rows)
+            .is_some_and(|list| {
+                list.items.iter().any(|row| {
+                    row.operation_id.as_deref() == Some(named.as_str()) && takes_up_remote_work(row)
+                })
+            })
     }
 
     /// The outcome of the finished share `id`, classified from its last
@@ -797,7 +820,7 @@ impl Operations {
     }
 }
 
-/// Whether a pending row is a synchronization, which D1 cannot run.
+/// Whether a pending row is a synchronization.
 fn is_synchronization(operation: &OperationDto) -> bool {
     operation.family == OperationFamily::Remote
         || matches!(
@@ -806,10 +829,25 @@ fn is_synchronization(operation: &OperationDto) -> bool {
         )
 }
 
+/// Whether a pending row is remote work a resume takes up, stopping at
+/// its safe points (decision 11): a remote item or repository
+/// synchronization. A comment's publication is listed as one, the
+/// synchronization of its item that publishes it; its `submit_comment`
+/// row is the comment's local write and hand-off, which a resume takes up
+/// as any local operation, ignoring its token. A local-context
+/// synchronization, which has no remote, is not remote work.
+fn takes_up_remote_work(operation: &OperationDto) -> bool {
+    operation.family == OperationFamily::Remote
+        && matches!(
+            operation.action,
+            OperationAction::SynchronizeContext | OperationAction::SynchronizePrimary
+        )
+}
+
 /// What a pending row offers for Resume.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ResumeOffer {
-    /// A local operation waiting to be resumed: Resume runs it.
+    /// An operation waiting to be resumed: Resume runs it.
     Offered,
     /// Shown disabled, with why.
     Unavailable(&'static str),
@@ -817,10 +855,19 @@ pub(crate) enum ResumeOffer {
 }
 
 /// Resume is offered when the row waits to be resumed and is a local
-/// command; a synchronization shows it unavailable.
+/// command, a comment's `submit_comment` among them, or a remote item or
+/// repository synchronization, which a comment's publication is listed
+/// as, by its operation ID (decision 11); a local-context synchronization
+/// shows it unavailable (D5).
 pub(crate) fn resume_offer(operation: &OperationDto) -> ResumeOffer {
     if operation.next_action != Some(OperationNextAction::Resume) {
         return ResumeOffer::NotOffered;
+    }
+    if takes_up_remote_work(operation) {
+        return match operation.operation_id {
+            Some(_) => ResumeOffer::Offered,
+            None => ResumeOffer::NotOffered,
+        };
     }
     if is_synchronization(operation) {
         return ResumeOffer::Unavailable(SYNCHRONIZATION_UNAVAILABLE);

@@ -176,12 +176,17 @@ impl ItemPane {
             }
             let viewing = || pill::viewing_state(item, self.unsaved(cx));
             // A finished share of the item says its outcome while no edit
-            // session says more and the item reads as the shared copy it
-            // left, or it stopped on a conflict: a kept draft, a closed
-            // ticket, a private copy and a read changed since say theirs.
+            // session says more and the item reads as the share left it,
+            // its shared or its private copy, or it stopped on a conflict:
+            // a kept draft, a closed ticket, an item that needs attention
+            // and a read changed since say theirs.
             if state.is_none()
                 && let Some(outcome) = self.share_outcome_shown(read)
-                && (outcome.conflict || viewing() == pill::PillState::ViewingShared)
+                && (outcome.conflict
+                    || matches!(
+                        viewing(),
+                        pill::PillState::ViewingShared | pill::PillState::ViewingPrivate
+                    ))
             {
                 return pill::outcome_pill(&outcome.words, outcome.attention, read, cx)
                     .into_any_element();

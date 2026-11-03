@@ -13,10 +13,12 @@
 //! (`share_progress`, design, Stage text), from the request model. Once
 //! the item's newest share has finished, and until its operation area
 //! entry is dismissed, the pill says its outcome while no edit session
-//! says more, the item reads as the shared copy (or the share stopped on
-//! a conflict), and the item's read is still the one the outcome was
-//! first seen with; a conflict raises the item's conflict banner, which
-//! offers nothing (`share_outcome`, decision 13).
+//! says more, the item reads as its shared or its private copy (or the
+//! share stopped on a conflict), and the item still reads as it did when
+//! it was first read after the share finished (`read_after_share`):
+//! sharing private work changes what the item reads, so the read before
+//! the share never speaks for its outcome. A conflict raises the item's
+//! conflict banner, which offers nothing (`share_outcome`, decision 13).
 //!
 //! The remote is the workspace's navigation's (`publication_remote`,
 //! decision 20): the tab reads no remotes itself (D3's fact 41). Until
@@ -26,11 +28,14 @@ use std::path::PathBuf;
 
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    StatefulInteractiveElement, Styled, Task, TestSupportExt, Window,
     component::{Disableable, Icon, Sizable, button::Button},
     div,
 };
-use manyhands::repository::{AuthoringKind, ItemDto, ItemDtoKind};
+use manyhands::{
+    canonical::ItemId,
+    repository::{AuthoringKind, ItemDto, ItemDtoKind},
+};
 
 use super::{ItemPane, ItemRoute, PublicationRemote};
 use crate::desktop::{
@@ -40,13 +45,43 @@ use crate::desktop::{
         navigation::OpenTarget,
         operations::{Progressing, progress_words},
         publication::SyncOutcome,
+        stamp::{Generations, TabId, ViewScope},
     },
-    services::requests::{DesktopRequestId, Intent, Lane, RequestState},
+    services::{
+        ReadKind, ReadResult, Reader,
+        requests::{DesktopRequestId, Intent, Lane, RequestState},
+    },
     view::{
         operations::{share_result, share_words},
         sidebar::SHARING,
     },
 };
+
+/// The scope of the read after a share (`read_after_share`). The tab's
+/// share state keeps its own generations, so it is no tab's but its own.
+const AFTER_SHARE: ViewScope = ViewScope::Tab(TabId(0));
+
+/// The item `id` of the repository at `root`'s observation as it reads
+/// now; `None` when it cannot be read.
+#[allow(clippy::result_large_err)]
+async fn observation_of(reader: Reader, root: PathBuf, id: ItemId) -> Option<Option<String>> {
+    let repo = match reader
+        .call(ReadKind::Resolve, |service| {
+            service.resolve_repository(&root)
+        })
+        .await
+    {
+        ReadResult::Ok(repo) => repo,
+        _ => return None,
+    };
+    match reader
+        .call(ReadKind::Item, |service| service.show_item(&repo, &id))
+        .await
+    {
+        ReadResult::Ok(item) => Some(item.observation),
+        _ => None,
+    }
+}
 
 /// Share's element: the Kit button, which takes the focus.
 pub(crate) const SHARE_BUTTON: &str = "item-share";
@@ -71,10 +106,15 @@ pub(crate) fn share_tooltip(remote: &str) -> String {
 pub(super) struct ShareState {
     progress: Option<String>,
     pub(super) outcome: Option<ShareOutcome>,
-    /// The share whose outcome the pill may say, and the item's read
-    /// (`observation`) when its outcome was first seen: a later read that
-    /// differs ends it in the pill.
-    seen: Option<(DesktopRequestId, Option<String>)>,
+    /// The share whose outcome the pill may say, and the item's
+    /// `observation` as the item was first read after the share finished,
+    /// once that read has landed: a later read that differs ends it in the
+    /// pill.
+    seen: Option<(DesktopRequestId, Option<Option<String>>)>,
+    /// That read, while it runs, and its generations: a read for an older
+    /// share is dropped.
+    after: Option<Task<()>>,
+    generations: Generations,
 }
 
 /// What the item's newest finished share, while its operation area entry
@@ -134,12 +174,14 @@ impl ItemPane {
     pub(super) fn share_progressed(&mut self, cx: &mut Context<Self>) {
         let progress = self.share_progress(cx);
         let outcome = self.share_outcome(cx);
-        // The read the outcome is first seen with is the one it speaks of.
+        // The item as it is first read after the share finished is what
+        // the outcome speaks of: read here when the outcome is first seen,
+        // as the share's own reload of the tab reads it.
         if let Some(outcome) = &outcome
             && self.share.seen.as_ref().map(|(id, _)| *id) != Some(outcome.request)
-            && let Some(item) = self.model.item().rows()
         {
-            self.share.seen = Some((outcome.request, item.observation.clone()));
+            self.share.seen = Some((outcome.request, None));
+            self.read_after_share(outcome.request, cx);
         }
         if self.share.progress != progress || self.share.outcome != outcome {
             self.share.progress = progress;
@@ -174,11 +216,43 @@ impl ItemPane {
         })
     }
 
+    /// Reads the item once the share `request` has finished, for the
+    /// observation its outcome speaks of. A read that fails leaves the
+    /// outcome out of the pill; its entry still says it.
+    fn read_after_share(&mut self, request: DesktopRequestId, cx: &mut Context<Self>) {
+        let OpenTarget::Item { repo, id, .. } = self.model.target() else {
+            return;
+        };
+        let (root, id) = (PathBuf::from(repo), id.clone());
+        let stamp = self.share.generations.next(AFTER_SHARE);
+        self.share.after = Some(self.services.read_job(
+            stamp,
+            move |reader| observation_of(reader, root, id),
+            cx,
+            move |pane: &mut Self, stamp, observation, cx| {
+                // A read for an older share leaves the newer one running.
+                if !pane.share.generations.is_current(&stamp) {
+                    return;
+                }
+                pane.share.after = None;
+                if let (Some((seen, after)), Some(observation)) =
+                    (&mut pane.share.seen, observation)
+                    && *seen == request
+                {
+                    *after = Some(observation);
+                    cx.notify();
+                }
+            },
+        ));
+    }
+
     /// The outcome the pill may say: while `read`, the item as the tab
-    /// read it, is the read it was first seen with.
+    /// read it, reads as the item was first read after the share finished.
     pub(super) fn share_outcome_shown(&self, read: Option<&ItemDto>) -> Option<&ShareOutcome> {
         let outcome = self.share.outcome.as_ref()?;
-        let (id, observation) = self.share.seen.as_ref()?;
+        let (id, Some(observation)) = self.share.seen.as_ref()? else {
+            return None;
+        };
         (*id == outcome.request && read.map(|item| &item.observation) == Some(observation))
             .then_some(outcome)
     }

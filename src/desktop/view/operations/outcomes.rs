@@ -32,7 +32,7 @@ use crate::desktop::{
     services::{
         Services,
         requests::{DesktopRequestId, RequestState},
-        worker::RecordState,
+        worker::{GaveUp, RecordState},
     },
     view::{item::ItemRoute, sidebar::RETRY, workspace::Workspace},
 };
@@ -40,6 +40,9 @@ use crate::desktop::{
 pub(crate) const UNLOCK: &str = "Unlock…";
 /// Give up (decision 8).
 pub(crate) const GIVE_UP: &str = "Stop trying to share";
+/// A Give up that found its request's record already finished: nothing
+/// was cancelled, and the entry shows the stored answer (decision 8).
+pub(crate) const ALREADY_FINISHED: &str = "Already finished";
 pub(crate) const OPEN_SHARING_AND_KEYS: &str = "Open Sharing & keys";
 pub(crate) const CHECK_HOST: &str = "Check host";
 pub(crate) const SET_IDENTITY: &str = "Set identity";
@@ -92,6 +95,12 @@ pub(crate) fn share_result(
         .operations()
         .read(cx)
         .share_result(id, record, after_give_up)
+}
+
+/// Whether the last Give up of the request `id` found its record already
+/// finished, until it is sent again.
+pub(crate) fn already_finished(services: &Services, id: DesktopRequestId) -> bool {
+    services.worker().gave_up(id) == Some(GaveUp::AlreadyFinished)
 }
 
 /// The request of this session that may hold the repository the share
@@ -245,3 +254,7 @@ mod tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "outcomes_route_tests.rs"]
 mod route_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "give_up_tests.rs"]
+mod give_up_tests;
