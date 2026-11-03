@@ -66,7 +66,11 @@ Approved 2026-11-02 (`5c26a5cd`); execution is subagent-driven
 
 ## Lane A (`d4/lane-a`)
 
-Not started.
+Worktree `<main>/.worktrees/d4-lane-a`, from `a1faca4a`.
+
+| Task | State | Base | Commits | Tests | Review | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 6 | done | `a1faca4a` | `e9528d4a`, fixes `fd0368c8` | `drafts` 179 (twice); `drafts::comments` 13; four lines clean | Round 1 CHANGES REQUIRED (3 Important: retirement lost pending text, returned nothing, trusted a stale listing); fixed; re-review APPROVE | Ruling R-18. `ItemKey` defined in `services/drafts/comments.rs`. For Task 13's checkpoint: never adopt a draft whose submission is posting, and retry `retire_comment` on `HeldHere` once an adoption lands; R-18's open items. |
 
 ## Lane B (`d4/lane-b`)
 
@@ -77,6 +81,9 @@ Not started.
 Not started.
 
 ## Decisions during execution
+
+- Lane task ticket comments are batched into each lane's checkpoint
+  comment rather than one per task; the ledger carries each task's record.
 
 - 2026-11-02, Task 0: decisions 17 (separate sync job kinds, E-12) and 18
   ("Nothing to share yet" copy).
