@@ -56,8 +56,9 @@ At `717b664d` (main `a52273ff` merged). Task 0 re-checks each one.
    binds is Wave 02 Cycle 09's D6, which closure follows: with a remote it leaves out the
    context, local-primary and tracking OIDs, and the item's change set and the D2 relation
    stand in; without one it binds both local OIDs. So with a remote a primary advance that
-   leaves the change set unchanged passes the confirm, which integrates onto it, and a moved
-   context, a changed change set, or any primary move without a remote is `external_change`
+   leaves the change set unchanged passes the confirm, which integrates onto it, and a context
+   change that changes the item's change set, any other change to the change set, or any primary
+   move without a remote is `external_change`
    (corrected 2026-11-03, `c5_lifecycle_stale_consent_*`).
 8. Retry semantics (Cycle 09, item 10): "The same ID with the same digest
    reconciles the record against Git and resumes at the first unfinished step.
@@ -467,7 +468,11 @@ at the child's own safe points. A push already under way completes, and effects 
 - **A deletion's refusal.** A deletion refused by the reservation's own boundary with cancellation asked
   is `Pending{Cancelled}`. A rejection, a key failure or a transport failure keeps its own answer, whether or
   not cancellation was asked.
-- **`stops_on_ctrl_c`** gains both verbs. A press after the last safe point keeps the domain's answer.
+- **`stops_on_ctrl_c`** gains both verbs. A press after the last safe point keeps the domain's answer,
+  with one exception (controller's ruling, Task 13a's Review Focus 4): when the primary child's push is
+  then refused, the `Err` arm reads the cancellation after the failed push, so the answer is `cancelled`,
+  130, cancellation coming first in the RFC's classification order
+  (`c5_interruption_press_after_the_last_safe_point`).
   A second press or a kill leaves the record, and the same request continues.
 - **`RecoveryActionKind::RequestCancel`'s doc** is corrected for these verbs.
 
@@ -785,7 +790,7 @@ scanned for secrets.
 | Background update and discovery | Peer publishes primary and a new item; `poll once`; discovery shows one worktree and indexed comments | Dirty, divergent, malformed, remotely deleted |
 | Threaded discussion | Roots and replies, `index rebuild`, a worktree change, `comment list` | None new |
 | Document promotion | Save, `--prepare`, `--confirm`; a fresh `document save` starts a new context | Local-only, then `key select`, `remote select`, `repo sync` |
-| Close with retryable failure | Save, `--prepare`, `--confirm`; `ticket ready` matches the report | Local-only as above; an injected failure at a close prerequisite (dirty primary), naming the failed step, then a retry after correction; refused push; refused deletion |
+| Close with retryable failure | Save, `--prepare`, `--confirm`; `ticket ready` matches the report | Local-only as above; a close prerequisite (dirty primary) refusing the prepare, named in its blockers; an injected failure after acceptance (the context synchronization's connection dropped), named by `transport_unavailable` after `progress: connecting`, then the same request after correction (a refused confirmation names no blocker, so it can't name the step); refused push; refused deletion |
 
 "Final save" differs by design: CLI callers save first (RFC), and the journey says so. The key is
 selected before the remote in the later-publication order, so `01M66HFV44` is not reached; Task 0

@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use super::*;
 use cli::{stderr, stdout};
 use cli_pair::{CONTEXT, CliClone, CliPair, ITEM, PRIMARY};
-use collaboration::{connections, item_sync, request_show, save};
+use collaboration::{connections, item_sync, request_show, resume_args, save};
 use repository::{
     CancellationToken, CloseTicketRequest, ConfirmationId, DocumentPromoteInput,
     DocumentPromotionPreflight, FailurePoint, Mutation, MutationCall, NoProgress, OperationId,
@@ -149,7 +149,7 @@ impl Verb {
     pub(super) fn path(self) -> String {
         match self {
             Self::Promote => DOCUMENT_PATH.into(),
-            Self::Close => format!(".manyhands/tickets/{ITEM}/ticket.md"),
+            Self::Close => ticket_path(ITEM),
         }
     }
 
@@ -336,6 +336,20 @@ impl LocalOnly {
     }
 }
 
+/// A ticket's canonical file.
+pub(super) fn ticket_path(id: &str) -> String {
+    format!(".manyhands/tickets/{id}/ticket.md")
+}
+
+/// A ticket's canonical source, titled `title`, with `extra` front matter and
+/// `body`.
+pub(super) fn ticket_source(id: &str, title: &str, extra: &str, body: &str) -> String {
+    format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {id}\ntitle: {title}\n\
+         type: task\nstatus: open\n{extra}---\n{body}"
+    )
+}
+
 /// An answer whose data is the lifecycle's, checked against its schema.
 fn lifecycle_data(value: Value) -> Value {
     if !value["data"].is_null() {
@@ -416,28 +430,67 @@ pub(super) fn closure_at(
     Ok(closure_fields(&source))
 }
 
-/// The commits in primary's history that write the closure: each holds a
-/// `closed_at` that none of its parents does.
+/// The commits on primary's own line whose closure fields differ from their
+/// first parent's: each is a closure, or a change of one, reaching primary.
+/// One, however many calls: a second close, or a closure rewritten, is
+/// another.
 pub(super) fn closure_checkpoints(repository: &git2::Repository) -> Result<usize, FixtureError> {
     let path = Verb::Close.path();
-    let closed = |oid: git2::Oid| -> Result<bool, FixtureError> {
+    let fields = |oid: git2::Oid| -> Result<Vec<String>, FixtureError> {
         Ok(source_at(repository, oid, &path)?
-            .is_some_and(|source| source.contains("\nclosed_at: ")))
+            .map(|source| closure_fields(&source))
+            .unwrap_or_default())
     };
     let mut walk = fixed(repository.revwalk())?;
     fixed(walk.push(fixed(repository.refname_to_id(PRIMARY))?))?;
+    fixed(walk.simplify_first_parent())?;
     let mut count = 0;
     for oid in walk {
         let oid = fixed(oid)?;
         let commit = fixed(repository.find_commit(oid))?;
-        if closed(oid)? {
-            let mut parents = commit.parent_ids();
-            if !parents.any(|parent| closed(parent).unwrap()) {
-                count += 1;
-            }
+        let before = match commit.parent_id(0) {
+            Ok(parent) => fields(parent)?,
+            Err(_) => Vec::new(),
+        };
+        if fields(oid)? != before {
+            count += 1;
         }
     }
     Ok(count)
+}
+
+/// At a stop before the closure checkpoint: no closure field is written on
+/// the context's branch or on primary yet, so the call that finishes writes
+/// the first and only values, which `finished_once` then counts once.
+fn no_closure_yet(repository: &git2::Repository, verb: Verb) -> Result<(), FixtureError> {
+    if verb == Verb::Close {
+        assert_eq!(
+            context_closure(repository, verb)?,
+            None,
+            "no checkpoint yet"
+        );
+        // A ticket created in a context isn't on primary at all yet.
+        let primary = fixed(repository.refname_to_id(PRIMARY))?;
+        let on_primary = source_at(repository, primary, &verb.path())?.unwrap_or_default();
+        assert!(closure_fields(&on_primary).is_empty(), "none on primary");
+    }
+    Ok(())
+}
+
+/// The closure fields the context's branch holds now, for a close that has
+/// written its checkpoint; `None` before that, and for a promotion.
+fn context_closure(
+    repository: &git2::Repository,
+    verb: Verb,
+) -> Result<Option<Vec<String>>, FixtureError> {
+    if verb != Verb::Close {
+        return Ok(None);
+    }
+    let Ok(tip) = repository.refname_to_id(verb.branch()) else {
+        return Ok(None);
+    };
+    let fields = closure_fields(&source_at(repository, tip, &verb.path())?.unwrap_or_default());
+    Ok((!fields.is_empty()).then_some(fields))
 }
 
 /// After a finished run: one merge, primary published as it stands here, the
@@ -608,10 +661,6 @@ fn begun_outside(clone: &CliClone, verb: Verb) -> Result<String, FixtureError> {
     Ok(operation_id.to_string())
 }
 
-fn resume_args<'a>(clone: &'a CliClone, operation: &'a str, request: &'a str) -> Vec<&'a str> {
-    collaboration::resume_args(clone, operation, request)
-}
-
 /// One `operation resume` in JSON mode, its lifecycle data checked.
 fn resumed(clone: &CliClone, operation: &str, request: &str, code: &str, status: i32) -> Value {
     lifecycle_data(clone.json(&resume_args(clone, operation, request), &[], code, status))
@@ -716,6 +765,7 @@ fn dirty_primary_blocks(verb: Verb) -> Result<(), FixtureError> {
 fn assert_refused_consent(
     clone: &CliClone,
     verb: Verb,
+    request: &str,
     refused: &Value,
 ) -> Result<(), FixtureError> {
     assert_eq!(refused["outcome"], "blocked", "{refused}");
@@ -723,7 +773,7 @@ fn assert_refused_consent(
     assert_eq!(refused["effects"]["integration"], "not_requested");
     checked(
         &clone.env,
-        &["request", "show", "--request-id", R3],
+        &["request", "show", "--request-id", request],
         &[],
         "request_not_found",
         2,
@@ -737,7 +787,7 @@ fn assert_refused_consent(
 /// `assert_refused_consent`, then a fresh consent that finishes once.
 fn assert_stale(p: &CliPair, verb: Verb, refused: &Value) -> Result<(), FixtureError> {
     let a = &p.a;
-    assert_refused_consent(a, verb, refused)?;
+    assert_refused_consent(a, verb, R3, refused)?;
     let preview = verb.prepare(a, "ok", 0);
     let done = verb.confirm(a, R4, &preview, "ok", 0);
     assert_eq!(done["effects"]["publication"], "published", "{done}");
@@ -798,10 +848,7 @@ fn stale_consent_item_path_moved(verb: Verb) -> Result<(), FixtureError> {
     verb.begin(a, R1);
     let preview = verb.prepare(a, "ok", 0);
     let bytes = match verb {
-        Verb::Close => format!(
-            "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {ITEM}\ntitle: Retitled on primary\n\
-             type: task\nstatus: open\n---\nBody of Shared.\n"
-        ),
+        Verb::Close => ticket_source(ITEM, "Retitled on primary", "", "Body of Shared.\n"),
         Verb::Promote => fixed(std::fs::read_to_string(verb.worktree(a).join(verb.path())))?,
     };
     let incoming = peer_commit(&p, &verb.path(), bytes.as_bytes())?;
@@ -809,10 +856,30 @@ fn stale_consent_item_path_moved(verb: Verb) -> Result<(), FixtureError> {
     assert_eq!(a.tip(PRIMARY)?, Some(incoming));
     let pushes = remote_world::accepted(&p.server);
     let refused = verb.confirm(a, R3, &preview, "external_change", 3);
-    assert_refused_consent(a, verb, &refused)?;
+    assert_refused_consent(a, verb, R3, &refused)?;
     assert_eq!(a.tip(PRIMARY)?, Some(incoming));
     assert_eq!(p.served(PRIMARY)?, Some(incoming));
     assert_eq!(remote_world::accepted(&p.server), pushes, "nothing pushed");
+    // A fresh prepare is ready, from the advanced primary. A document's change
+    // set shows the difference (its path was added, and is now unchanged or
+    // modified). A ticket's public change list names path and category only,
+    // `modified` both times: the blob that differs is digest evidence (D6),
+    // with no DTO field.
+    let fresh = verb.prepare(a, "ok", 0);
+    assert_eq!(
+        fresh["data"]["details"]["primary_oid"],
+        incoming.to_string().as_str()
+    );
+    match verb {
+        Verb::Promote => assert_ne!(
+            fresh["data"]["details"]["changes"], preview["data"]["details"]["changes"],
+            "{fresh}"
+        ),
+        Verb::Close => assert_eq!(
+            fresh["data"]["details"]["changes"], preview["data"]["details"]["changes"],
+            "{fresh}"
+        ),
+    }
     Ok(())
 }
 
@@ -829,14 +896,18 @@ fn stale_consent_local_only_primary_moved(verb: Verb) -> Result<(), FixtureError
     assert!(preview["data"]["details"]["remote"].is_null());
     let moved = own_commit(clone, "unrelated.txt", b"unrelated\n")?;
     let refused = verb.confirm(clone, R3, &preview, "external_change", 3);
-    assert_refused_consent(clone, verb, &refused)?;
+    assert_refused_consent(clone, verb, R3, &refused)?;
     assert_eq!(clone.tip(PRIMARY)?, Some(moved));
     Ok(())
 }
 
 /// A person's own commit of `path` on the clone's primary, made with Git and
 /// checked out, which leaves the worktree clean.
-fn own_commit(clone: &CliClone, path: &str, bytes: &[u8]) -> Result<git2::Oid, FixtureError> {
+pub(super) fn own_commit(
+    clone: &CliClone,
+    path: &str,
+    bytes: &[u8],
+) -> Result<git2::Oid, FixtureError> {
     let repository = clone.repo()?;
     let parent = fixed(repository.find_commit(fixed(repository.refname_to_id(PRIMARY))?))?;
     let mut builder = fixed(repository.treebuilder(Some(&fixed(parent.tree())?)))?;
@@ -981,11 +1052,13 @@ fn primary_advanced_continues(verb: Verb) -> Result<(), FixtureError> {
         preview["data"]["confirmation_id"].as_str().unwrap(),
         FailurePoint::AfterContextSync,
     );
+    no_closure_yet(&a.repo()?, verb)?;
     let incoming = peer_commit(&p, "incoming.txt", b"incoming\n")?;
     poll(a, R4);
     assert_eq!(a.tip(PRIMARY)?, Some(incoming));
 
     let moved = verb.send(a, R3, "external_change", 3);
+    no_closure_yet(&a.repo()?, verb)?;
     assert_eq!(moved["outcome"], "blocked", "{moved}");
     assert_eq!(actions(&moved), ["request.retry", "repo.inspect"]);
     assert_eq!(moved["operation_id"], operation.as_str());
@@ -1009,6 +1082,7 @@ fn resume_with_no_record_continues(verb: Verb) -> Result<(), FixtureError> {
     let a = &p.a;
     verb.begin(a, R1);
     let operation = begun_outside(a, verb)?;
+    no_closure_yet(&a.repo()?, verb)?;
     let held = verb.prepare(a, "recovery_required", 3);
     assert!(held["data"].is_null(), "{held}");
     assert_eq!(actions(&held), ["operation.resume"]);
@@ -1127,6 +1201,7 @@ fn deleted_branch_request_route(verb: Verb) -> Result<(), FixtureError> {
     let out = run(&a.env, &args, &[]);
     assert_eq!(out.status, 3, "{}", stderr(&out));
     let text = stderr(&out);
+    no_closure_yet(&a.repo()?, verb)?;
     assert!(text.contains("code: remote_branch_deleted\n"), "{text}");
     let root = a.root.canonicalize().unwrap();
     let [resource, name] = verb.words();
@@ -1166,6 +1241,7 @@ fn deleted_branch_request_route(verb: Verb) -> Result<(), FixtureError> {
     assert_eq!(asked["data"]["requested"], true, "{asked}");
     let cancelled = lifecycle_data(json_of(a, &route[1], &["--json"], "cancelled", 130));
     assert_eq!(cancelled["outcome"], "cancelled");
+    no_closure_yet(&a.repo()?, verb)?;
     assert_eq!(remote_world::accepted(&p.server), pushes, "nothing pushed");
     assert_eq!(merges(&a.repo()?)?, 0);
     republished(&p, verb, &route[2], R4)?;
@@ -1190,6 +1266,7 @@ fn deleted_branch_resume_route(verb: Verb) -> Result<(), FixtureError> {
     let out = run(&a.env, &resume_args(a, &operation, R3), &[]);
     assert_eq!(out.status, 3, "{}", stderr(&out));
     let text = stderr(&out);
+    no_closure_yet(&a.repo()?, verb)?;
     assert!(text.contains("code: remote_branch_deleted\n"), "{text}");
     let root = a.root.canonicalize().unwrap();
     let route = vec![
@@ -1220,6 +1297,7 @@ fn deleted_branch_resume_route(verb: Verb) -> Result<(), FixtureError> {
         None,
     );
     let refused = resumed(a, &operation, R4, "remote_branch_deleted", 3);
+    no_closure_yet(&a.repo()?, verb)?;
     assert_eq!(actions(&refused), ["operation.resume", "repo.inspect"]);
     assert_eq!(refused["recovery"][0]["operation_id"], operation.as_str());
     assert_eq!(merges(&a.repo()?)?, 0);
@@ -1252,6 +1330,7 @@ fn c5_lifecycle_host_stop_then_same_request_close() -> Result<(), FixtureError> 
     let old = p.server.host_identity().sha256;
     p.server.rotate_host_key()?;
     let stopped = verb.confirm(a, R2, &preview, "host_replacement_required", 3);
+    no_closure_yet(&a.repo()?, verb)?;
     assert_eq!(actions(&stopped), ["request.retry", "repo.inspect"]);
     assert_eq!(request_show(a, R2)["state"], "accepted");
     assert_eq!(merges(&a.repo()?)?, 0);
@@ -1266,9 +1345,11 @@ fn c5_lifecycle_host_stop_then_same_request_close() -> Result<(), FixtureError> 
 }
 
 /// With no terminal a protected key stops the request at the context's
-/// synchronization, and the request stands; past its publication, it stops
-/// cleanup's deletion the same way. At a terminal the same request asks for
-/// the passphrase and completes. One verb (decision 27), as above.
+/// synchronization, and the request stands. The same request then publishes
+/// in this process, and, with no terminal again, its cleanup's deletion stops
+/// on the key the same way. At a terminal the same request asks for the
+/// passphrase and completes the cleanup, `closed_at` and `closed_by` kept. One
+/// verb (decision 27), as above.
 #[cfg(unix)]
 fn c5_lifecycle_unlock_stop_then_same_request_close() -> Result<(), FixtureError> {
     use repository::{AuthoringKind, SynchronizationTarget, keys::*, transport::*};
@@ -1323,9 +1404,8 @@ fn c5_lifecycle_unlock_stop_then_same_request_close() -> Result<(), FixtureError
         0,
         None,
     );
-    // Published first, in this process, so the run at the terminal has the
-    // fewest connections: the PTY harness waits ten seconds for its child,
-    // and each connection decrypts the key again.
+    // Published first, in this process, so the run at the terminal has few
+    // connections: each decrypts the key again.
     fixed(w.sync(w.request(SynchronizationTarget::Context {
         kind: AuthoringKind::Ticket,
         item_id: fixed(ITEM.parse())?,
@@ -1353,6 +1433,7 @@ fn c5_lifecycle_unlock_stop_then_same_request_close() -> Result<(), FixtureError
         None,
     ));
     assert_eq!(actions(&stopped)[0], "request.retry");
+    no_closure_yet(&w.repo()?, Verb::Close)?;
     let shown = checked(
         &env,
         &["request", "show", "--request-id", R2],
@@ -1364,11 +1445,10 @@ fn c5_lifecycle_unlock_stop_then_same_request_close() -> Result<(), FixtureError
     assert_eq!(shown["data"]["state"], "accepted");
     let main = fixed(w.repo()?.refname_to_id(PRIMARY))?;
 
-    // The PTY harness waits ten seconds for its child, and each connection
-    // decrypts the key again, so the run at a terminal is left the fewest:
-    // the same request goes on in this process, unlocked, and stops after its
-    // publication. Without a terminal its cleanup's deletion stops on the key
-    // again, past a durable effect.
+    // The same request goes on in this process, unlocked, and stops after its
+    // publication: the publication runs here, not at the terminal. Without a
+    // terminal its cleanup's deletion then stops on the key again, past a
+    // durable effect, and the terminal's run is the cleanup.
     let service = support::FailOnce::at(FailurePoint::AfterPublication).open_service(&w.data());
     let published = service.execute(
         MutationCall {
@@ -1392,11 +1472,21 @@ fn c5_lifecycle_unlock_stop_then_same_request_close() -> Result<(), FixtureError
     let again = [&args[..], &["--request-id", R2][..]].concat();
     let cleanup = lifecycle_data(checked(&env, &again, &[], "unlock_required", 4, None));
     assert_eq!(cleanup["outcome"], "partial");
+    // Past publication, the closure is written: its first values.
+    let first = closure_at(&w.repo()?, PRIMARY)?;
+    assert_eq!(first.len(), 2, "{first:?}");
+    assert_eq!(
+        context_closure(&w.repo()?, Verb::Close)?.as_deref(),
+        Some(&first[..])
+    );
     assert_eq!(actions(&cleanup)[0], "request.retry");
     assert_eq!(cleanup["effects"]["cleanup"], "pending");
     assert!(w.bare()?.refname_to_id(CONTEXT).is_ok(), "the branch stays");
 
-    let mut pty = PtyCli::spawn(&again.iter().map(OsStr::new).collect::<Vec<_>>(), &env, b"");
+    // Each connection decrypts the key again: a longer wait than the PTY
+    // helper's default ten seconds.
+    let mut pty = PtyCli::spawn(&again.iter().map(OsStr::new).collect::<Vec<_>>(), &env, b"")
+        .exit_within(std::time::Duration::from_secs(40));
     pty.expect("Passphrase for key");
     pty.send(format!("{}\n", remote_world::PASSWORD).as_bytes());
     let (out, transcript) = pty.finish();
@@ -1417,6 +1507,12 @@ fn c5_lifecycle_unlock_stop_then_same_request_close() -> Result<(), FixtureError
         fixed(repository.refname_to_id(PRIMARY))?
     );
     assert_eq!(closure_checkpoints(&repository)?, 1);
+    assert_eq!(
+        closure_at(&repository, PRIMARY)?,
+        first,
+        "closed_at and closed_by kept"
+    );
+    assert_eq!(closure_at(&w.bare()?, PRIMARY)?, first);
     let done = lifecycle_data(checked(&env, &again, &[], "ok", 0, None));
     assert_eq!(done["operation_id"], stopped["operation_id"]);
     Ok(())
@@ -1449,14 +1545,20 @@ fn c5_lifecycle_refused_checkpoint_merge_repaired_close() -> Result<(), FixtureE
         verb.worktree(a).join(verb.path()),
     ))?);
     assert_eq!(checkpoint.len(), 2, "{checkpoint:?}");
-    let moved = format!(
-        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {ITEM}\ntitle: Moved on primary\n\
-         type: task\nstatus: open\n---\nBody moved on primary too.\n"
-    );
+    let moved = ticket_source(ITEM, "Moved on primary", "", "Body moved on primary too.\n");
     let incoming = peer_commit(&p, &verb.path(), moved.as_bytes())?;
     poll(a, R3);
     assert_eq!(a.tip(PRIMARY)?, Some(incoming));
 
+    // In JSON: the refusal, its blockers and the recording it keeps.
+    let answer = verb.send(a, R2, "recovery_required", 4);
+    assert_eq!(answer["outcome"], "partial", "{answer}");
+    assert_eq!(
+        answer["data"]["blockers"],
+        serde_json::json!(["integration_conflict"])
+    );
+    assert_eq!(answer["data"]["recording"], "record");
+    assert_eq!(actions(&answer), ["request.retry", "repo.inspect"]);
     let refused = run(
         &a.env,
         &[&verb.args(a)[..], &["--request-id", R2][..]].concat(),
@@ -1467,73 +1569,11 @@ fn c5_lifecycle_refused_checkpoint_merge_repaired_close() -> Result<(), FixtureE
         .into_iter()
         .filter(|words| words[0] == "context")
         .collect();
-    assert_eq!(lines.len(), 4, "{}", stderr(&refused));
-    let fill = |words: &[String], values: &[(&str, &str)]| -> Vec<String> {
-        words
-            .iter()
-            .map(|word| {
-                values
-                    .iter()
-                    .find(|(placeholder, _)| word == placeholder)
-                    .map_or_else(|| word.clone(), |(_, value)| (*value).to_owned())
-            })
-            .collect()
-    };
-    let human = |words: Vec<String>, input: &[u8]| {
-        let args: Vec<&str> = words.iter().map(String::as_str).collect();
-        run(&a.env, &args, input)
-    };
     assert_eq!(merges(&a.repo()?)?, 0);
-
-    // 1. Observe.
-    let observed = human(lines[0].clone(), &[]);
-    assert_eq!(observed.status, 0, "{}", stderr(&observed));
-    let observation = value_after(stdout(&observed), "Observation").to_owned();
-    // 2. Synchronize locally, with the observation: a conflict.
-    let synced = human(
-        fill(&lines[1], &[("<new-request-id>", R4)]),
-        serde_json::json!({ "observation": observation })
-            .to_string()
-            .as_bytes(),
-    );
-    assert_eq!(synced.status, 4, "{}", stderr(&synced));
-    let sync = value_after(stderr(&synced), "Operation id").to_owned();
-    // 3. Inspect it, and read the sides through --json.
-    let shown = human(fill(&lines[2], &[("<sync-operation-id>", &sync)]), &[]);
-    assert_eq!(shown.status, 0, "{}", stderr(&shown));
-    let resolution = value_after(stdout(&shown), "Observation").to_owned();
-    let token = stdout(&shown)
-        .lines()
-        .find_map(|line| {
-            line.split_whitespace()
-                .find_map(|word| word.strip_prefix("token="))
-        })
-        .unwrap()
-        .to_owned();
-    let sides = json_of(
-        a,
-        &fill(&lines[2], &[("<sync-operation-id>", &sync)]),
-        &["--token", &token, "--json"],
-        "ok",
-        0,
-    );
-    let local = sides["data"]["local"].as_str().unwrap().to_owned();
+    let local = repaired(a, &lines, R4, R5);
     for line in &checkpoint {
         assert!(local.contains(line.as_str()), "{local}");
     }
-    // 4. Resolve, keeping the closure.
-    let body = serde_json::json!({
-        "observation": resolution,
-        "resolutions": [{ "token": token, "source": local }],
-    });
-    let resolved = human(
-        fill(
-            &lines[3],
-            &[("<sync-operation-id>", &sync), ("<new-request-id>", R5)],
-        ),
-        body.to_string().as_bytes(),
-    );
-    assert_eq!(resolved.status, 0, "{}", stderr(&resolved));
     let pushes = remote_world::accepted(&p.server);
     assert_eq!(p.served(PRIMARY)?, Some(incoming), "nothing published yet");
 
@@ -1563,6 +1603,10 @@ fn c5_lifecycle_refused_checkpoint_merge_repaired_close() -> Result<(), FixtureE
         "the close merges once; the resolution's merge is the repair"
     );
     assert_eq!(closure_at(&p.bare()?, PRIMARY)?, checkpoint);
+    // The finished request replays its answer, with no connection.
+    let opened = connections(&p);
+    assert_eq!(verb.send(a, R2, "ok", 0), done);
+    assert_eq!(connections(&p), opened);
     Ok(())
 }
 
@@ -1632,10 +1676,7 @@ fn repaired(clone: &CliClone, lines: &[Vec<String>], first: &str, second: &str) 
 /// A peer's retitling of the ticket on the remote's primary, with its body
 /// moved too, polled into A's primary: it conflicts with A's context.
 fn ticket_moved_on_primary(p: &CliPair, request: &str) -> Result<git2::Oid, FixtureError> {
-    let moved = format!(
-        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {ITEM}\ntitle: Moved on primary\n\
-         type: task\nstatus: open\n---\nBody moved on primary too.\n"
-    );
+    let moved = ticket_source(ITEM, "Moved on primary", "", "Body moved on primary too.\n");
     let incoming = peer_commit(p, &Verb::Close.path(), moved.as_bytes())?;
     poll(&p.a, request);
     assert_eq!(p.a.tip(PRIMARY)?, Some(incoming));

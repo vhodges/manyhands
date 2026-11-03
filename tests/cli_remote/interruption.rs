@@ -130,6 +130,16 @@ pub const CASES: &[ssh_harness::Case] = &[
     }),
     #[cfg(unix)]
     (
+        "c5_interruption_press_after_the_last_safe_point_promote",
+        || pressed::press_after_the_last_safe_point(Verb::Promote),
+    ),
+    #[cfg(unix)]
+    (
+        "c5_interruption_press_after_the_last_safe_point_close",
+        || pressed::press_after_the_last_safe_point(Verb::Close),
+    ),
+    #[cfg(unix)]
+    (
         "c5_interruption_second_press_close",
         pressed::c5_interruption_second_press_close,
     ),
@@ -1830,6 +1840,97 @@ mod pressed {
         finished_once(&p, verb, None)?;
         nothing_left(a, verb);
         Ok(())
+    }
+
+    /// Review Focus 4, for both verbs: a press after the last pre-publication
+    /// safe point, whose primary push the server then refuses. Staged as C4's
+    /// `c4_interruption_press_after_the_last_safe_point`: each connection held
+    /// until the push of the integrated primary, the server's answer to it
+    /// stalled, and the press made once the push command has arrived (another
+    /// publication lands on the remote's primary at that moment, so the push
+    /// is refused). Controller's ruling: the answer is `cancelled`, 130, since
+    /// the primary child's `Err` arm reads the cancellation after the failed
+    /// push, which the RFC's classification order puts first. The integration
+    /// stands, publication is pending as cancelled, one push was refused, no
+    /// bounded retry ran, and the record stays accepted; with the remote's
+    /// primary put back, the same request finishes with one merge.
+    pub fn press_after_the_last_safe_point(verb: Verb) -> Result<(), FixtureError> {
+        let p = CliPair::new()?;
+        let a = &p.a;
+        verb.begin(a, R1);
+        let preview = verb.prepare(a, "ok", 0);
+        let served = p.served(PRIMARY)?.ok_or(FixtureError)?;
+        p.server.reject_primary_updates(true)?;
+        let competing = remote_world::commit(&p.bare()?, served, "competing", b"competing")?;
+        let updates = p.server.receive_updates().len();
+        let mut hold = p.server.hold_advertisement()?;
+        let mut pty = at_a_terminal(&a.env, &confirmed(verb, a, R2, &preview), &[]);
+        loop {
+            hold.wait_until_held()?;
+            let pushing = p
+                .server
+                .commands()
+                .last()
+                .is_some_and(|command| command.starts_with(b"git-receive-pack "));
+            if pushing && merges(&a.repo()?)? == 1 {
+                break;
+            }
+            let next = p.server.hold_advertisement()?;
+            hold.release()?;
+            hold = next;
+        }
+        // Armed only now: the race takes the first push it meets, and the
+        // context child's push came before this one.
+        p.server.race_update(PRIMARY, served, competing)?;
+        p.server.stall_at(FixtureBoundary::Transfer, STALL);
+        hold.release()?;
+        let deadline = std::time::Instant::now() + ARRIVAL;
+        while p.served(PRIMARY)? != Some(competing) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the push command did not arrive"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        pty.send(&[3]);
+        std::thread::sleep(LANDING);
+        let (out, _) = pty.finish();
+        p.server.clear_fault();
+        scan_output(&out);
+        let stderr = text(&out.stderr).to_owned();
+        assert_eq!(out.status, 130, "{stderr}");
+        assert!(out.stdout.is_empty());
+        assert!(stderr.contains("code: cancelled\n"), "{stderr}");
+        assert!(stderr.contains("integration=complete"), "{stderr}");
+        assert!(
+            stderr.contains("Publication pending: cancelled\n"),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("Cleanup pending: awaiting_publication\n"),
+            "{stderr}"
+        );
+        assert!(stderr.contains("next: request.retry"), "{stderr}");
+        assert!(!stderr.contains("progress: retrying"), "{stderr}");
+        let refused: Vec<_> = p.server.receive_updates()[updates..]
+            .iter()
+            .filter(|update| update.reference == PRIMARY)
+            .cloned()
+            .collect();
+        assert_eq!(refused.len(), 1, "{refused:?}");
+        assert!(!refused[0].accepted);
+        assert_eq!(merges(&a.repo()?)?, 1);
+        let shown = record(a, R2);
+        assert_eq!(shown["state"], "accepted", "{shown}");
+        assert!(shown["result"].is_null(), "{shown}");
+
+        // The remote's primary put back, and pushes taken: the same request.
+        let bare = p.bare()?;
+        fixed(bare.reference(PRIMARY, served, true, "the race undone"))?;
+        p.server.reject_primary_updates(false)?;
+        let done = verb.send(a, R2, "ok", 0);
+        assert_eq!(done["effects"]["publication"], "published", "{done}");
+        finished_once(&p, verb, None)
     }
 
     /// A second press ends the process by `SIGINT` (R-21, design: "a second

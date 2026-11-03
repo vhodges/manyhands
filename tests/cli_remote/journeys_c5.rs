@@ -26,7 +26,7 @@ use cli_pair::{CONTEXT, CliClone, CliPair, ITEM, OTHER_ITEM, PRIMARY};
 use collaboration::{add, item_sync, repo_sync, request_show, save};
 use lifecycle::{
     DOCUMENT, DOCUMENT_BRANCH, DOCUMENT_PATH, LocalOnly, Verb, closure_at, closure_checkpoints,
-    finished_once, merges, peer_commit, poll, refs, source_at,
+    finished_once, merges, peer_commit, poll, refs, source_at, ticket_path, ticket_source,
 };
 use ssh_remote::{FixtureBoundary, FixtureError, SshRemoteFixture, fixed};
 
@@ -77,17 +77,6 @@ const C4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC4";
 const NEW_TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FNT";
 const AUTHOR_A: &str = "Clone A <clone-a@example.invalid>";
 const AUTHOR_B: &str = "Clone B <clone-b@example.invalid>";
-
-fn ticket_path(id: &str) -> String {
-    format!(".manyhands/tickets/{id}/ticket.md")
-}
-
-fn ticket_source(id: &str, title: &str, extra: &str) -> String {
-    format!(
-        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {id}\ntitle: {title}\n\
-         type: task\nstatus: open\n{extra}---\nBody of {title}.\n"
-    )
-}
 
 /// `path`'s text at `reference` of `repository`.
 fn text_at(
@@ -218,32 +207,61 @@ fn c5_journey_offline_edit_then_sync() -> Result<(), FixtureError> {
 
 // --------------------------------------------------------------- conflict
 
-/// Conflict recovery, thinly: C4's `c4_conflicts_*` hold every answer. Both
-/// clones retitle the tickets, A publishes, and B's sync stops on the
-/// conflict without touching B's commit. B reads it, resolves it with the
-/// tokens it read, and the same sync request then finds nothing left to do.
+/// Concurrent collaboration conflict recovery, on the item: both clones save
+/// `ITEM`, A publishes, and B's `item sync` stops on the conflict, naming the
+/// item, the repository and the editing context, with B's checkpoint kept. B
+/// reads it with the guidance's `conflict show`, resolves it with the tokens
+/// read, and the same sync request then finishes: the resolution, a merge of
+/// both sides, is what the remote's branch holds. C4's `c4_conflicts_*` hold
+/// every other answer, the primary conflicts among them.
 fn c5_journey_conflict_recovery() -> Result<(), FixtureError> {
     let p = CliPair::new()?;
-    let b = &p.b;
-    let (local, incoming) = conflicts::tickets_diverge(&p)?;
-    let operation = conflicts::stopped_on_primary(&p, "resolve");
-    assert_eq!(b.tip(PRIMARY)?, Some(local), "B's work is kept");
-    assert_eq!(p.served(PRIMARY)?, Some(incoming));
+    let (a, b) = (&p.a, &p.b);
+    save(a, R1, "Saved in clone A.\n");
+    item_sync(a, ITEM, R2, "ok", 0);
+    let incoming = p.served(CONTEXT)?.ok_or(FixtureError)?;
+    save(b, R3, "Saved in clone B.\n");
+    let local = b.tip(CONTEXT)?.ok_or(FixtureError)?;
+
+    let stopped = item_sync(b, ITEM, conflicts::SYNC, "recovery_required", 3);
+    assert_eq!(stopped["outcome"], "blocked", "{stopped}");
+    let scope = &stopped["scope"];
+    assert_eq!(scope["item_id"], ITEM, "names the item");
+    assert_eq!(
+        scope["repository"],
+        b.root.canonicalize().unwrap().to_str().unwrap(),
+        "names the repository"
+    );
+    assert_eq!(
+        scope["branch"],
+        CONTEXT.trim_start_matches("refs/heads/"),
+        "names the context"
+    );
+    assert!(
+        scope["worktree"]
+            .as_str()
+            .is_some_and(|worktree| worktree.ends_with(&format!(".manyhands/worktrees/{ITEM}"))),
+        "{stopped}"
+    );
+    let operation = stopped["data"]["conflict"]["operation_id"]
+        .as_str()
+        .ok_or(FixtureError)?
+        .to_owned();
+    assert_eq!(stopped["recovery"][0]["action"], "request.retry");
+    assert_eq!(b.tip(CONTEXT)?, Some(local), "B's work is kept");
+    assert_eq!(p.served(CONTEXT)?, Some(incoming));
 
     let shown = conflicts::show(b, &operation);
-    assert_eq!(shown["data"]["item_id"], Value::Null);
-    assert_eq!(shown["data"]["paths"].as_array().unwrap().len(), 2);
+    assert_eq!(shown["data"]["item_id"], ITEM);
+    assert_eq!(shown["data"]["stage"], "context");
+    assert_eq!(shown["data"]["paths"].as_array().unwrap().len(), 1);
     conflicts::private_source();
     let input = conflicts::resolve_input(
         conflicts::observation(&shown),
         &conflicts::resolutions(&shown, "Resolved"),
     );
-    let resolved = b.json(&conflicts::resolve_args(b, &operation, R2), &input, "ok", 0);
-    let commit = b.tip(PRIMARY)?.ok_or(FixtureError)?;
-    assert_eq!(
-        collaboration::oid(&resolved["effects"]["commit_oid"]),
-        commit
-    );
+    b.json(&conflicts::resolve_args(b, &operation, R4), &input, "ok", 0);
+    let commit = b.tip(CONTEXT)?.ok_or(FixtureError)?;
     let repository = b.repo()?;
     assert_eq!(
         fixed(repository.find_commit(commit))?
@@ -251,23 +269,16 @@ fn c5_journey_conflict_recovery() -> Result<(), FixtureError> {
             .collect::<Vec<_>>(),
         [local, incoming]
     );
-    for id in [ITEM, OTHER_ITEM] {
-        let text = text_at(&repository, PRIMARY, &ticket_path(id))?.ok_or(FixtureError)?;
-        assert!(text.contains("\ntitle: Resolved\n"), "{text}");
-    }
-    assert_eq!(p.served(PRIMARY)?, Some(commit));
+    let text = text_at(&repository, CONTEXT, &ticket_path(ITEM))?.ok_or(FixtureError)?;
+    assert!(text.contains("\ntitle: Resolved\n"), "{text}");
 
-    // The sync, retried under its own request: complete, and nothing more.
-    let pushes = remote_world::accepted(&p.server);
-    let retried = repo_sync(b, "01ARZ3NDEKTSV4RRFFQ69G5FY2", "ok", 0);
-    assert_eq!(retried["outcome"], "success");
+    // The sync, retried under its own request: complete, the resolution
+    // published.
+    let retried = item_sync(b, ITEM, conflicts::SYNC, "ok", 0);
+    assert_eq!(retried["outcome"], "success", "{retried}");
     assert_eq!(retried["effects"]["publication"], "published", "{retried}");
-    assert_eq!(
-        collaboration::oid(&retried["effects"]["commit_oid"]),
-        commit
-    );
-    assert_eq!(b.tip(PRIMARY)?, Some(commit));
-    assert_eq!(remote_world::accepted(&p.server), pushes);
+    assert_eq!(b.tip(CONTEXT)?, Some(commit));
+    assert_eq!(p.served(CONTEXT)?, Some(commit));
     Ok(())
 }
 
@@ -278,13 +289,20 @@ fn c5_journey_conflict_recovery() -> Result<(), FixtureError> {
 /// `poll once` in A fast-forwards A's primary, makes exactly one worktree for
 /// the new context, and indexes its folder and comments. A second poll finds
 /// both current, still with one worktree. The preserved variants are
-/// `polling.rs`'s rows, named in the module's comment.
+/// `polling.rs`'s rows, named in the module's comment. The peer's commit is
+/// written into the bare repository directly, as a collaborator's push would
+/// leave it, with no clone of its own.
 fn c5_journey_background_update_and_discovery() -> Result<(), FixtureError> {
     let p = CliPair::new()?;
     let (a, b) = (&p.a, &p.b);
     add(b, R1, C1, None, "a comment from clone B", "ok", 0);
     let context = p.served(CONTEXT)?.ok_or(FixtureError)?;
-    let new = ticket_source(NEW_TICKET, "Added by a peer", "");
+    let new = ticket_source(
+        NEW_TICKET,
+        "Added by a peer",
+        "",
+        "Body of Added by a peer.\n",
+    );
     let incoming = peer_commit(&p, &ticket_path(NEW_TICKET), new.as_bytes())?;
     let pushes = remote_world::accepted(&p.server);
     assert!(worktrees(a)?.is_empty());
@@ -507,6 +525,14 @@ fn c5_journey_document_promotion() -> Result<(), FixtureError> {
         0,
     );
     assert_eq!(read["data"]["id"], DOCUMENT, "{read}");
+    assert_eq!(
+        read["data"]["body"], BODY,
+        "B reads the promoted body: {read}"
+    );
+    assert_eq!(
+        text_at(&b.repo()?, PRIMARY, DOCUMENT_PATH)?.as_deref(),
+        Some(promoted.as_str())
+    );
 
     // A fresh save of the promoted document starts a new context.
     let shown = a.json(
@@ -607,7 +633,7 @@ impl LocalOnly {
 /// `remote select`, `repo sync` publishes the integrated commit as it stands,
 /// with no fixture seeding.
 fn local_only_then_published(verb: Verb, created: Value) -> Result<(), FixtureError> {
-    let mut server = SshRemoteFixture::start()?;
+    let server = SshRemoteFixture::start()?;
     private_fixture(&server);
     let local = LocalOnly::new(&server)?;
     let clone = &local.clone;
@@ -659,7 +685,12 @@ fn local_only_then_published(verb: Verb, created: Value) -> Result<(), FixtureEr
         primary,
         "primary is published"
     );
-    assert!(text_at(&bare, PRIMARY, &verb.path())?.is_some());
+    // The item's bytes on the remote's primary are local primary's.
+    let here = text_at(&repository, PRIMARY, &verb.path())?.ok_or(FixtureError)?;
+    assert_eq!(
+        text_at(&bare, PRIMARY, &verb.path())?.as_deref(),
+        Some(here.as_str())
+    );
     if verb == Verb::Close {
         assert_eq!(closure_checkpoints(&repository)?, 1);
         assert_eq!(
@@ -669,7 +700,8 @@ fn local_only_then_published(verb: Verb, created: Value) -> Result<(), FixtureEr
         assert_eq!(closure_at(&bare, PRIMARY)?.len(), 2);
     }
     assert_eq!(fixed(bare.refname_to_id(verb.branch())).ok(), None);
-    server.shutdown()
+    // The server shuts down when it drops, as every case's does.
+    Ok(())
 }
 
 fn c5_journey_document_promotion_local_only_then_published() -> Result<(), FixtureError> {
@@ -700,45 +732,75 @@ fn c5_journey_close_local_only_then_published() -> Result<(), FixtureError> {
 // ---------------------------------------------------------------- closure
 
 /// Confirmed close with a retryable failure. A dependent of `ITEM` is on
-/// primary. After the preview a dirty primary, the injected prerequisite
-/// failure, refuses the confirmation and leaves the ticket's work, its
-/// context, branch and worktree, as they were; the new prepare names the
-/// failed step. Corrected, the close completes: published, cleaned up, one
-/// merge and one checkpoint, and `ticket ready` lists what the report made
-/// ready.
+/// primary. A dirty primary, a close prerequisite, refuses the prepare and is
+/// named as its blocker, with the ticket's work as it was. Corrected, the
+/// close is prepared and confirmed, and the injected failure comes after the
+/// request is accepted: the server drops the context synchronization's
+/// connection. The answer names that step (`transport_unavailable`, after
+/// `progress: connecting`), offers the same request, and leaves the ticket's
+/// context, branch and worktree, with no cleanup. The same request then
+/// completes: published, cleaned up, one merge and one checkpoint, and
+/// `ticket ready` lists what the report made ready.
 fn c5_journey_close_with_retryable_failure() -> Result<(), FixtureError> {
     let p = CliPair::new()?;
     let a = &p.a;
     let verb = Verb::Close;
-    let dependent = ticket_source(OTHER_ITEM, "Other", &format!("deps: [{ITEM}]\n"));
+    let dependent = ticket_source(
+        OTHER_ITEM,
+        "Other",
+        &format!("deps: [{ITEM}]\n"),
+        "Body of Other.\n",
+    );
     peer_commit(&p, &ticket_path(OTHER_ITEM), dependent.as_bytes())?;
     poll(a, R1);
     verb.begin(a, R2);
     let (context, served) = (a.tip(CONTEXT)?, refs(&p.bare()?)?);
+    let intact = || -> Result<(), FixtureError> {
+        // Nothing is lost and nothing is cleaned up early.
+        assert_eq!(a.tip(CONTEXT)?, context);
+        assert!(verb.worktree(a).is_dir());
+        assert_eq!(refs(&p.bare()?)?, served);
+        assert_eq!(merges(&a.repo()?)?, 0);
+        Ok(())
+    };
+
+    let dirty = a.root.join("dirty-primary.txt");
+    fixed(std::fs::write(&dirty, b"dirty\n"))?;
+    let blocked = verb.prepare(a, "recovery_required", 3);
+    assert_eq!(
+        blocked["data"]["blockers"],
+        serde_json::json!(["primary_dirty"])
+    );
+    intact()?;
+    fixed(std::fs::remove_file(&dirty))?;
 
     let preview = verb.prepare(a, "ok", 0);
     assert_eq!(
         preview["data"]["details"]["closure"],
         serde_json::json!({"recording": "record", "closed_by": AUTHOR_A})
     );
-    let dirty = a.root.join("dirty-primary.txt");
-    fixed(std::fs::write(&dirty, b"dirty\n"))?;
-    let refused = verb.confirm(a, R3, &preview, "external_change", 3);
-    assert_eq!(refused["recovery"][0]["action"], "request.prepare");
-    let blocked = verb.prepare(a, "recovery_required", 3);
-    assert_eq!(
-        blocked["data"]["blockers"],
-        serde_json::json!(["primary_dirty"])
+    p.server.disconnect_at(FixtureBoundary::Advertisement);
+    let failed = verb.confirm(a, R3, &preview, "transport_unavailable", 5);
+    assert_eq!(failed["effects"]["integration"], "not_requested");
+    assert_eq!(failed["data"]["item_id"], ITEM);
+    assert_eq!(failed["recovery"][0]["action"], "request.retry");
+    assert_eq!(request_show(a, R3)["state"], "accepted");
+    let mut again = vec!["ticket", "close", "--repo", a.root(), "--id", ITEM];
+    again.extend(["--request-id", R3]);
+    let out = run(&a.env, &again, &[]);
+    assert_eq!(out.status, 5, "{}", stderr(&out));
+    let said = stderr(&out);
+    let step = said.find("progress: connecting\n").expect(said);
+    let code = said.find("code: transport_unavailable\n").expect(said);
+    assert!(step < code, "the failed step, then the code: {said}");
+    assert!(
+        said.contains(&format!("next: request.retry request_id={R3}")),
+        "{said}"
     );
-    // Nothing is lost and nothing is cleaned up early.
-    assert_eq!(a.tip(CONTEXT)?, context);
-    assert!(verb.worktree(a).is_dir());
-    assert_eq!(refs(&p.bare()?)?, served);
-    assert_eq!(merges(&a.repo()?)?, 0);
+    intact()?;
+    p.server.clear_fault();
 
-    fixed(std::fs::remove_file(&dirty))?;
-    let preview = verb.prepare(a, "ok", 0);
-    let done = verb.confirm(a, R4, &preview, "ok", 0);
+    let done = verb.send(a, R3, "ok", 0);
     assert_eq!(done["effects"]["publication"], "published", "{done}");
     assert_eq!(done["data"]["made_ready_state"], "current");
     let made_ready: Vec<&str> = done["data"]["made_ready"]

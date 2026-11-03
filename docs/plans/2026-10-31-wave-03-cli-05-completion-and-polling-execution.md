@@ -1910,8 +1910,10 @@ and `lifecycle::ONE` in `tests/cli_remote.rs`. No library or bin file changed.
 process, on the clone's own data and with the confirmation the binary issued, and everything after it through
 the binary: `PrimaryAdvanced` (`AfterContextSync`), the refused checkpoint merge (`AfterClosureCheckpoint`),
 and a parent no request record holds (the domain's entry point stopped at `AfterConfirmed`, as `c5_resume`
-begins one). The unlock row's middle call also runs there (`AfterPublication`), because the PTY harness waits
-ten seconds for its child and each connection decrypts the key again: a whole close at a terminal took longer.
+begins one). The unlock row's middle call also runs there: the publication runs in this process
+(`AfterPublication`), and the terminal's run is only the cleanup, because each connection decrypts the key
+again and a whole close at a terminal outran the PTY helper's ten-second wait. (Corrected by the Task 12
+review, which also gave that row a 40-second wait through an additive `PtyCli::exit_within`.)
 
 **Rows (both verbs unless named).**
 
@@ -1926,7 +1928,7 @@ ten seconds for its child and each connection decrypts the key again: a whole cl
 | `deleted_branch_request_route` | Decision 18: `remote_branch_deleted`, 3, `request.cancel`, `repo.inspect`; `request cancel`, the same request `cancelled` 130 with nothing pushed, `item republish` (one push), the same request `ok`, one merge. For a close, the four `next:` lines printed are exactly the commands run. |
 | `deleted_branch_resume_route` | Decision 19: under `operation resume`, `remote_branch_deleted`, 3, `operation.resume` (naming the operation), `repo.inspect`, no record; `item republish`; the resume again `ok`, one merge. For a close, the two `next:` lines printed are the commands run. |
 | `host_stop_then_same_request_close` | A rotated host key: `host_replacement_required`, 3, `request.retry`, `repo.inspect`, record accepted; `host replace` through the binary; the same request finishes once. One verb: the child's synchronization is shared. |
-| `unlock_stop_then_same_request_close` (Unix) | A protected key with no terminal: `unlock_required`, 3, `request.retry`, record accepted; past publication, the deletion stops the same way, 4, partial; at a PTY the same request asks for the passphrase and completes, one merge, one checkpoint, published; the passphrase is in no output or transcript. One verb, as the host row. |
+| `unlock_stop_then_same_request_close` (Unix) | A protected key with no terminal: `unlock_required`, 3, `request.retry`, record accepted. The same request's publication then runs **in this process** (stopped at `AfterPublication`), not at the terminal; with no terminal again, its cleanup's deletion stops the same way, 4, partial; at a PTY the same request asks for the passphrase and completes the cleanup: one merge, one checkpoint, published, `closed_at`/`closed_by` as the in-process publication wrote them; the passphrase is in no output or transcript. One verb, as the host row. (Wording corrected by the Task 12 review.) |
 | `refused_checkpoint_merge_repaired_close` | The local recovery over SSH: stopped past its checkpoint, a peer's edit of the ticket polled in, the same request refused (4) with the four `context` lines; each run with only its placeholders filled; the same request then `ok`, published, `integration: merged`; primary's merges are the closure's one integration and the resolution's, and the remote's primary holds the checkpoint's `closed_at` and `closed_by`. `tests/cli/local_sync.rs` proves it with no remote. |
 
 **Referenced, not repeated:** `c5_polling_promote_then_close_needs_no_poll` (both verbs published, then
@@ -2031,8 +2033,9 @@ follows it) already says what a consent binds: with a remote the digest leaves o
 and tracking OIDs, and the item's change set and the D2 relation stand in; without one it binds both local
 OIDs. The C5 Cycle's acceptance row overstated it. The controller's Cycle text is corrected to the Wave 02
 rule: with a remote, a primary advance that leaves the item's change set unchanged is accepted, and the
-confirm integrates onto it; a move of the context, a change to the item's change set, or any primary move
-without a remote answers `external_change` at confirm. Corrected in the Cycle (the acceptance row and Required
+confirm integrates onto it; a context change that changes the item's change set, any other change to the
+change set, or any primary move without a remote answers `external_change` at confirm (wording corrected by
+the Task 12 review: "a move of the context" overstated it the same way). Corrected in the Cycle (the acceptance row and Required
 Contract item 1) and in the design's fact 7. Task 12a's Blocker 1 is closed by this.
 
 Rows, all both verbs, since each verb's domain has its own digest encoding:
@@ -2372,3 +2375,81 @@ route, or is this a Known Limit?
 whose two `ClosureRecord`s printed alike. No `src/` file changed in either task. It passed three times run alone,
 and in the whole rerun above, so I read it as load: I was compiling `cli_remote` beside it. Recorded as a flake,
 for whoever sees it again.
+
+## Tasks 12a and 12b: the review's changes (controller's rulings)
+
+Base `4df5be71` (Tasks 13a and 13b committed); `origin/main` at `0dfd5a68` is contained. One commit, with
+Task 13a's Review Focus 4 row.
+
+1. **No duplicate close.** `closure_checkpoints` now counts the commits on primary's first-parent line whose
+   `closed_at`/`closed_by` differ from their first parent's: a second close, or a rewritten closure, is
+   another. Every row that counts still finds one. **The rows listed to take the first stop's fields answered
+   otherwise in their premise:** at the first stop of `primary_advanced_continues` (`AfterContextSync`),
+   `resume_with_no_record_continues` (`AfterConfirmed`), both deleted-branch routes (the child's fetch) and the
+   host and unlock rows (the child's first connection), no checkpoint is written yet, on the context's branch
+   or on primary; their later stops before the finish (`external_change`, `cancelled`, the resume's second
+   stop) don't write one either. So each now asserts, at those stops, that no closure field exists anywhere
+   (`no_closure_yet`), which makes the finishing call's values the first and only ones, counted once. The
+   unlock row's in-process publication is the one stop that writes them: its fields are captured there and
+   the terminal's finish must keep them, on primary and on the remote.
+2. **The conflict journey is the item's.** Both clones save `ITEM`, A publishes, and B's `item sync`
+   (`conflicts::SYNC`, now `pub(super)`) stops `recovery_required`, 3, blocked, naming the item
+   (`scope.item_id`), the repository (`scope.repository`) and the context (`scope.branch`, `scope.worktree`),
+   with B's checkpoint kept. `conflict show` reads it (stage `context`, one path), `conflict resolve` with
+   its tokens writes `[local, incoming]`, and the same sync request then answers `ok`, published. C4's
+   primary conflicts are referenced in the doc.
+3. **The close journey's injected failure.** The refused confirmation after a dirty primary names nothing:
+   `external_change`, data null, human `next: request.prepare` only. So the journey now (a) refuses the
+   prepare on a dirty primary, naming `primary_dirty` in its blockers, and (b) injects the failure after
+   acceptance: the server drops the context synchronization's connection. That answer is
+   `transport_unavailable`, 5, `request.retry` for the request, the lifecycle's data naming the item, and in
+   human mode `progress: connecting` before `code: transport_unavailable`, which is where the step is named.
+   The context, branch, worktree and remote are intact, and the same request then completes. The design's
+   journey row says so.
+4. **Stale-consent wording:** "a context change that changes the item's change set", in the Cycle row, the
+   design's fact 7 and the earlier ledger section.
+5. **Unlock wording:** the row's publication runs in this process (`AfterPublication`); the terminal's run is
+   the cleanup. Corrected in the Task 12a staging paragraph and table row. The plan's text names no staging,
+   so it is unchanged.
+6. **Refused checkpoint merge:** the JSON resend asserts `recovery_required`, 4, partial, blockers
+   `[integration_conflict]`, `recording: record`, `request.retry`, `repo.inspect`; the finished request's
+   replay is identical with no connection. The four context lines now go through the shared `repaired`.
+7. **Bytes:** both local-only journeys compare the item's file on the remote's primary with local primary's,
+   and the promotion journey checks B's `document show` body and B's primary bytes.
+8. **Background journey:** its doc says the peer writes the bare repository directly.
+9. **`server.shutdown()`:** the local-only journey drops the server, as every other case does.
+10. **Item path moved:** the ticket body is `ticket_source`'s. After the refusal a fresh prepare is `ok`,
+    from the advanced primary. **For a ticket its `details.changes` do not differ, answering otherwise than
+    the review's expectation:** the public change list holds path and category only, `modified` both times,
+    and the blob that differs is D6's digest evidence with no DTO field. The row asserts they are equal for a
+    ticket, and differ for a document, and says why; for the controller to confirm.
+11. **PTY wait:** `PtyCli::exit_within` (additive; the default stays ten seconds) gives the unlock row 40 s.
+12. **`c5_lifecycle_child_remote_branch_deleted`** asserts both verbs' data names the item, and a promotion's
+    made-ready fields are null. Seen first: with the binding's child condition removed, the promotion case
+    failed by assertion and the close passed; restored, both pass.
+13. **Quality:** `ticket_path`, `ticket_source` and `own_commit` live once in `lifecycle.rs`;
+    `collaboration::resume_args` is used directly; the moved-ticket source is `ticket_source`'s;
+    `assert_refused_consent` takes the request.
+
+**Review Focus 4, Task 13a's row, ruled.** Controller's ruling: a Ctrl-C after the last pre-publication safe
+point whose push is then refused answers `cancelled`, 130, because the primary child's `Err` arm reads the
+cancellation after the failed push, consistent with the RFC's classification order (cancellation first). The
+design's `stops_on_ctrl_c` sentence is narrowed to say so. `c5_interruption_press_after_the_last_safe_point`
+(both verbs), re-created from Task 13a's probe with the ruled expectation: 130, `integration=complete`,
+`Publication pending: cancelled`, `Cleanup pending: awaiting_publication`, `next: request.retry`, no retry, one
+refused primary push, the record accepted, then the same request publishes with one merge.
+
+**Seen first.** Item 12 above. Items 2 and 3 were run against the code before writing their final
+assertions, with the answers read (the refused confirmation's empty data is why item 3 changed). Item 1's
+premise was probed at each stop before `no_closure_yet` was written. The rest pin what the code does.
+
+**Verified.**
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--test cli_remote -- c5_lifecycle` | 32 SSH cases | 265 s |
+| `--test cli_remote -- c5_journey` | 8 SSH cases | 56 s |
+| `--test cli_remote -- c5_interruption` | 32 SSH cases (30 and RF4's two) | 180 s |
+| `--test mutation_remote -- c5_lifecycle` | 152 SSH cases | 566 s |
+| AGENTS.md's fast tier, verbatim | 79 results, 4917 passed, 0 failed | 1437 s |
+| `cargo fmt --check`, whole-tree clippy `-D warnings` | ok | |

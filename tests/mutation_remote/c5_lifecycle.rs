@@ -1892,6 +1892,14 @@ fn child_remote_branch_deleted(verb: Verb) -> Result<(), FixtureError> {
         RecoveryActionKind::RepoInspect,
     ];
     assert_eq!(actions(&stopped), offered);
+    // Both verbs name the item, which the CLI's route reads; a promotion has
+    // no made-ready report.
+    let data = lifecycle_of(&stopped).ok_or(FixtureError)?;
+    assert_eq!(data.item_id, verb.id());
+    if verb == Verb::Promote {
+        assert_eq!(data.made_ready, None);
+        assert_eq!(data.made_ready_state, None);
+    }
     assert_eq!(state_of(&w, FIRST), Some(RequestState::Accepted));
     assert_eq!(parents(&w.db()?, verb)?, 1);
     // The same request is refused the same way.
