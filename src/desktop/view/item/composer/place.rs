@@ -24,11 +24,22 @@
 //!   `CaretInView` in the item's region, so a composer that grows at the
 //!   foot of the page keeps its caret in view.
 //!
-//! What the composer posts, and its outcome, are Task 13's: Submit only
-//! marks it posting here. Nothing here derives `Debug`: a slot holds text.
+//! What a composer posts and how its outcome applies are `post`'s, where
+//! a post stands `check`'s, and moving a comment to a new ID
+//! `retarget`'s (Task 13). Nothing here derives `Debug`: a slot holds
+//! text.
 
+mod check;
 mod drafts;
+mod post;
+mod retarget;
+mod settle;
 mod start;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use post::{MAYBE_SAVED, NOT_SAVED_FINAL};
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use retarget::NOT_MOVED;
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -53,7 +64,13 @@ use crate::desktop::{
     services::drafts::comments::ItemKey,
     view::{
         editor::CaretInView,
-        item::{ItemPane, PublicationRemote, discussion::REPLY_INDENT, tokens::item_colors},
+        item::{
+            ItemPane, PublicationRemote,
+            discussion::{REPLY_INDENT, REPLY_POSTING},
+            posting::pending_row,
+            text,
+            tokens::item_colors,
+        },
     },
 };
 
@@ -101,6 +118,8 @@ struct Slot {
     /// The comment it writes, once its ID is allocated.
     target: Option<CommentTarget>,
     draft: SlotDraft,
+    /// Where its posting stands (`post`).
+    post: post::SlotPost,
     reveal: CaretInView,
     _events: Subscription,
 }
@@ -241,6 +260,7 @@ impl ItemPane {
             composer,
             target,
             draft,
+            post: post::SlotPost::default(),
             reveal,
             _events: events,
         }
@@ -291,6 +311,7 @@ impl ItemPane {
             });
         }
         self.adopt_comment_drafts(window, cx);
+        self.apply_posts(window, cx);
         let composers = &mut self.composers;
         for slot in composers
             .new
@@ -364,19 +385,12 @@ impl ItemPane {
     ) {
         match event {
             ComposerEvent::Changed(text) => self.composer_changed(composer, text, cx),
-            ComposerEvent::Submit => {
-                // Task 13 posts it.
-                if let Some((_, slot)) = self.composers.find(composer) {
-                    let composer = slot.composer.clone();
-                    composer.update(cx, |composer, cx| {
-                        composer.set_state(ComposerState::Posting, window, cx)
-                    });
-                }
-            }
+            ComposerEvent::Submit => self.composer_submitted(composer, window, cx),
             ComposerEvent::Cancel => self.composer_closed(composer, false, window, cx),
             ComposerEvent::Discard => self.composer_closed(composer, true, window, cx),
-            // Task 13 offers and answers them.
-            ComposerEvent::Failed(_) => {}
+            ComposerEvent::Failed(action) => {
+                self.composer_failed_action(composer, *action, window, cx)
+            }
         }
     }
 
@@ -445,6 +459,16 @@ impl ItemPane {
             return None;
         }
         let colors = item_colors(cx);
+        let pending: Vec<AnyElement> = self
+            .pending_posts(Some(root), cx)
+            .into_iter()
+            .map(|(id, body)| pending_row(&id, body, cx))
+            .collect();
+        let note = slot.composer.read(cx).is_posting().then(|| {
+            text("reply-posting-note", REPLY_POSTING)
+                .text_size(px(12.))
+                .text_color(colors.page_muted)
+        });
         Some(
             div()
                 .id("reply-composer")
@@ -455,6 +479,8 @@ impl ItemPane {
                 .py(px(12.))
                 .pr(px(14.))
                 .pl(px(14. + REPLY_INDENT))
+                .children(pending)
+                .children(note)
                 .child(slot.composer.clone())
                 .into_any_element(),
         )

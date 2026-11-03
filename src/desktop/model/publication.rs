@@ -28,6 +28,8 @@ use manyhands::{
     },
 };
 
+pub(crate) mod record;
+
 use super::operations::parse_authority;
 use crate::desktop::services::worker::RecordState;
 
@@ -96,7 +98,6 @@ pub(crate) struct CommentResult {
 }
 
 /// A control a post's outcome offers.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum CommentOffer {
     /// The same request again, for a saved comment's publication.
@@ -216,7 +217,6 @@ impl CommentOutcome {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
 impl CommentResult {
     /// The controls this outcome offers under its attempt's record.
     pub(crate) fn offers(&self) -> Vec<CommentOffer> {

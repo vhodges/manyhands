@@ -270,7 +270,6 @@ impl DraftRegistry {
     /// stored is claimed and retires the revision the claim reads. The
     /// store is listed again once a retirement lands, whatever it
     /// answered.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
     pub(crate) fn retire_comment(
         &mut self,
         id: DraftId,

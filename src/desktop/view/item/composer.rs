@@ -62,6 +62,8 @@ use crate::desktop::{
 
 pub(crate) use self::failed::{FailedAction, FailedActions};
 pub(super) use self::place::Composers;
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use self::place::{MAYBE_SAVED, NOT_MOVED, NOT_SAVED_FINAL};
 
 /// A new comment's placeholder.
 const NEW_PLACEHOLDER: &str = "Add a comment. Markdown works here.";
@@ -90,16 +92,19 @@ pub(crate) enum ComposerEvent {
     /// The user chose Discard in the discard prompt: drop the text.
     Discard,
     /// One of the actions the owner offered in `Failed`.
-    Failed(#[cfg_attr(not(test), allow(dead_code))] /* Read from Task 13. */ FailedAction),
+    Failed(FailedAction),
 }
 
 /// Where the composer stands; its owner sets it (`set_state`).
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
 pub(crate) enum ComposerState {
     /// The text can be edited and posted.
     Idle,
     /// The text is being posted: read-only, and Submit is refused.
     Posting,
+    /// The owner is checking where the comment stands before it posts or
+    /// offers anything (P4, P5): read-only, "Checking…", and Submit is
+    /// refused as while posting.
+    Checking,
     /// A post failed: read-only, with `message` in red and the `actions`
     /// the owner offers. `discard_note`, if any, is said in the discard
     /// prompt (P7, P18).
@@ -198,10 +203,21 @@ impl Composer {
         }
     }
 
-    /// Whether the text is being posted: it cannot move (design, Lane D,
-    /// Placement).
+    /// Whether the text is being posted, or checked before it is: it
+    /// cannot move (design, Lane D, Placement).
     pub(crate) fn is_posting(&self) -> bool {
-        matches!(self.state, ComposerState::Posting)
+        matches!(self.state, ComposerState::Posting | ComposerState::Checking)
+    }
+
+    /// Whether the owner is checking where the comment stands.
+    #[cfg_attr(not(test), allow(dead_code))] // Read by the tests.
+    pub(crate) fn is_checking(&self) -> bool {
+        matches!(self.state, ComposerState::Checking)
+    }
+
+    /// Whether the owner offers a failed post's actions.
+    pub(crate) fn is_failed(&self) -> bool {
+        matches!(self.state, ComposerState::Failed { .. })
     }
 
     /// A reply's "Replying to {name}": the comment Reply was pressed on.
@@ -245,7 +261,7 @@ impl Composer {
                     cx.emit(ComposerEvent::Submit);
                 }
             }
-            ComposerState::Posting => {
+            ComposerState::Posting | ComposerState::Checking => {
                 self.refused = Some(ALREADY_POSTING);
                 cx.notify();
             }
@@ -265,7 +281,7 @@ impl Composer {
             ComposerState::Failed { actions, .. } if actions.discard => {
                 self.ask_discard(window, cx);
             }
-            ComposerState::Failed { .. } | ComposerState::Posting => {}
+            ComposerState::Failed { .. } | ComposerState::Posting | ComposerState::Checking => {}
         }
     }
 

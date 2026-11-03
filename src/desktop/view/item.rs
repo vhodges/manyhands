@@ -210,7 +210,6 @@ pub(crate) struct ItemPane {
     composers: composer::Composers,
     /// The comments being posted, drawn pending in their threads
     /// (`posting`).
-    #[allow(dead_code)] // Read from Task 13.
     posting: posting::Posting,
     /// Set by the workspace when it opens the tab.
     region_end: Option<RegionEnd>,
@@ -270,6 +269,7 @@ impl ItemPane {
         // The tab's images leave the windows' atlases with it.
         cx.on_release(|pane, cx| pane.images.close(cx)).detach();
         let edit = edit::TabEdit::new(scope.clone(), cx);
+        let posting = posting::Posting::new(&services, cx);
         let relations = relations_edit::RelationsEdit::new(scope.clone(), cx);
         let mut pane = Self {
             model: ItemView::new(target, scope),
@@ -292,7 +292,7 @@ impl ItemPane {
             share: share::ShareState::default(),
             publication_remote: PublicationRemote::Unknown,
             composers: composer::Composers::default(),
-            posting: posting::Posting::default(),
+            posting,
             region_end: None,
             draft: draft::TabDraft::default(),
             link_note: None,

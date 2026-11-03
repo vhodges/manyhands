@@ -176,6 +176,7 @@ impl ItemPane {
                     .gap(px(3.))
                     .child(line)
                     .children(body)
+                    .children(self.comment_marks(id, cx))
                     .children(self.reply_control(ix, id, window, cx)),
             )
             .into_any_element()

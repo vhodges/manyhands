@@ -23,7 +23,7 @@ use super::{
     requests::{DesktopRequestId, Intent, Lane},
     worker::{FinishedEnvelope, RecordState, WorkerHandle},
 };
-use crate::desktop::model::publication::{Attempt, CommentResult, comment_outcome};
+use crate::desktop::model::publication::{Attempt, CommentOutcome, CommentResult, comment_outcome};
 
 /// One comment's post.
 pub(crate) struct Submission {
@@ -65,7 +65,6 @@ pub(crate) enum SubmissionState {
     /// Its last attempt's answer, and that answer classified under the
     /// attempt it answered: whether it re-sent the comment ID, where its
     /// record stood after it, and whether it was a Give up's.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
     Finished {
         envelope: FinishedEnvelope,
         result: CommentResult,
@@ -74,7 +73,6 @@ pub(crate) enum SubmissionState {
 
 /// What a finished attempt of a post leaves for the services drain: the
 /// draft to retire once the comment is saved (P9, Lane D's hook).
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Posted {
     pub draft: Option<DraftId>,
@@ -97,7 +95,6 @@ impl Submissions {
     }
 
     /// The post of `comment_id` in `repository`, if this session made one.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
     pub(crate) fn get(&self, repository: &Path, comment_id: &ItemId) -> Option<&Submission> {
         self.posts.get(&(repository.to_owned(), comment_id.clone()))
     }
@@ -109,7 +106,6 @@ impl Submissions {
     /// session already posted is a re-send whatever it says. `None`, and
     /// nothing sent, while that comment is posting (P10), or for any other
     /// intent.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
     pub(crate) fn submit(
         &mut self,
         intent: Intent,
@@ -148,7 +144,6 @@ impl Submissions {
     /// request. False, and nothing sent, when this session has no such
     /// post, or the worker leaves the request alone (queued or running,
     /// its Give up among them, or quitting).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
     pub(crate) fn retry(&mut self, repository: &Path, comment_id: &ItemId) -> bool {
         let key = (repository.to_owned(), comment_id.clone());
         let Some(submission) = self.posts.get_mut(&key) else {
@@ -166,7 +161,6 @@ impl Submissions {
     /// it runs, so a Submit of the comment is refused (P10). False, and
     /// nothing sent, when this session has no such post or the worker
     /// refuses it (queued or running, or quitting).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
     pub(crate) fn give_up(&mut self, repository: &Path, comment_id: &ItemId) -> bool {
         let key = (repository.to_owned(), comment_id.clone());
         let Some(submission) = self.posts.get_mut(&key) else {
@@ -186,7 +180,6 @@ impl Submissions {
     /// Only where R-12 allows: the caller decides. `None`, and nothing
     /// changed, when `intent` is not a comment with `new_comment_id`, or
     /// either comment is posting.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
     pub(crate) fn restart(
         &mut self,
         old_comment_id: &ItemId,
@@ -246,6 +239,62 @@ impl Submissions {
         })
     }
 
+    /// The comment ID of the post the worker request `id` sends, and the
+    /// draft to retire now that it answered: saved, and not a mismatch,
+    /// whose text differs from the comment saved (P9, P12).
+    pub(crate) fn to_retire(&self, id: DesktopRequestId) -> Option<(PathBuf, ItemId, DraftId)> {
+        let (key, submission) = self
+            .posts
+            .iter()
+            .find(|(_, submission)| submission.request == id)?;
+        let SubmissionState::Finished { result, .. } = &submission.state else {
+            return None;
+        };
+        let retire = result.outcome.is_saved()
+            && !matches!(result.outcome, CommentOutcome::Mismatched { .. });
+        retire.then_some((key.0.clone(), key.1.clone(), submission.draft?))
+    }
+
+    /// The draft of the post of `comment_id` in `repository` is retired:
+    /// nothing is left to retire (change 6).
+    pub(crate) fn retired(&mut self, repository: &Path, comment_id: &ItemId, draft: DraftId) {
+        if let Some(submission) = self
+            .posts
+            .get_mut(&(repository.to_owned(), comment_id.clone()))
+            && submission.draft == Some(draft)
+        {
+            submission.draft = None;
+        }
+    }
+
+    /// What Check again, or a mismatch's record, found the post of
+    /// `comment_id` in `repository` to be: its answer stands for the
+    /// post's last one. Nothing changes while it is posting.
+    pub(crate) fn settle(
+        &mut self,
+        repository: &Path,
+        comment_id: &ItemId,
+        envelope: FinishedEnvelope,
+        result: CommentResult,
+    ) {
+        if let Some(submission) = self
+            .posts
+            .get_mut(&(repository.to_owned(), comment_id.clone()))
+            && !matches!(submission.state, SubmissionState::Posting)
+        {
+            submission.state = SubmissionState::Finished { envelope, result };
+        }
+    }
+
+    /// Forgets the post of `comment_id` in `repository`: Check again
+    /// found it listed with no record (decision 24). Not while posting.
+    pub(crate) fn forget(&mut self, repository: &Path, comment_id: &ItemId) {
+        let key = (repository.to_owned(), comment_id.clone());
+        if !self.posting(&key) {
+            self.posts.remove(&key);
+        }
+    }
+
     /// The worker request `id` was removed from the queue, or not sent:
     /// that attempt never ran. A post whose earlier attempt answered goes
     /// back to that answer; one that never answered is forgotten, and the
@@ -287,6 +336,38 @@ impl Submissions {
             .values_mut()
             .find(|submission| submission.request == id)
     }
+}
+
+/// Retires the draft of a saved post, `comment` in `root`, and tells
+/// `Submissions` once it is gone, so it is retired once (change 6). A
+/// draft already gone counts as retired. One that could not be retired,
+/// held by an adoption meanwhile among others, stays the post's: the tab
+/// that adopts it retires it instead (change 7).
+pub(crate) fn retire_posted(
+    registry: &gpui_kit::WeakEntity<super::drafts::DraftRegistry>,
+    posts: &gpui_kit::WeakEntity<Submissions>,
+    root: PathBuf,
+    comment: ItemId,
+    draft: DraftId,
+    cx: &mut gpui_kit::AsyncApp,
+) {
+    let Ok(retiring) = registry.update(cx, |registry, cx| registry.retire_comment(draft, cx))
+    else {
+        return;
+    };
+    let posts = posts.clone();
+    cx.spawn(async move |cx| {
+        if matches!(
+            retiring.await,
+            Ok(()) | Err(manyhands::drafts::DraftErrorKind::NotFound)
+        ) {
+            let _ = posts.update(cx, |submissions, cx| {
+                submissions.retired(&root, &comment, draft);
+                cx.notify();
+            });
+        }
+    })
+    .detach();
 }
 
 /// The repository and comment ID a comment intent posts to.

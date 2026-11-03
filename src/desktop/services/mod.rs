@@ -334,24 +334,36 @@ impl Services {
                     break;
                 };
                 if !posted.is_empty() {
-                    let _ = posts.update(cx, |submissions, cx| {
-                        for event in posted {
-                            match event {
-                                PostEvent::Resent(id) => {
-                                    submissions.resent(id);
-                                }
-                                // What it leaves, the draft of a saved
-                                // comment, is Task 13's to retire (P9).
-                                PostEvent::Finished(id, envelope) => {
-                                    let _ = submissions.finished(id, envelope);
-                                }
-                                PostEvent::Ended(id) => {
-                                    submissions.ended(id);
+                    let retire = posts
+                        .update(cx, |submissions, cx| {
+                            let mut retire = Vec::new();
+                            for event in posted {
+                                match event {
+                                    PostEvent::Resent(id) => {
+                                        submissions.resent(id);
+                                    }
+                                    // A saved comment's draft retires here,
+                                    // whether or not a tab is open (P9).
+                                    PostEvent::Finished(id, envelope) => {
+                                        let left = submissions.finished(id, envelope);
+                                        if left
+                                            .is_some_and(|left| left.saved && left.draft.is_some())
+                                        {
+                                            retire.extend(submissions.to_retire(id));
+                                        }
+                                    }
+                                    PostEvent::Ended(id) => {
+                                        submissions.ended(id);
+                                    }
                                 }
                             }
-                        }
-                        cx.notify();
-                    });
+                            cx.notify();
+                            retire
+                        })
+                        .unwrap_or_default();
+                    for (root, comment, draft) in retire {
+                        submissions::retire_posted(&registry, &posts, root, comment, draft, cx);
+                    }
                 }
                 if !prepared.is_empty() {
                     let _ = releasing.update(cx, |releases, cx| {
@@ -447,7 +459,6 @@ impl Services {
     }
 
     /// The comments this session posted.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
     pub(crate) fn submissions(&self) -> &Entity<Submissions> {
         &self.submissions
     }

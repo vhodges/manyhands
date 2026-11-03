@@ -42,7 +42,6 @@ pub(crate) enum Lane {
 pub(crate) struct CommentBody(String);
 
 impl CommentBody {
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
     pub(crate) fn new(body: String) -> Self {
         Self(body)
     }
@@ -236,7 +235,6 @@ pub(crate) enum Intent {
     /// A comment on an item, or a reply to `parent_id`. It holds the text.
     /// The comment ID is fixed by the caller; the library takes the Git
     /// identity as the author.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
     CommentAdd {
         root: PathBuf,
         kind: AuthoringKind,

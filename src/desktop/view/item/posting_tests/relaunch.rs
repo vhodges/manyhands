@@ -21,7 +21,7 @@ use super::super::super::discussion_tests::{
 };
 use super::support::{
     KEPT, KEPT_REPLY, comment_posts, composer_state, failed_actions, focus_end, listed, outcome,
-    post_through, posting_shell, store_comment, submit, until_adopted, until_answered,
+    post_through, posting_shell, press, store_comment, submit, until_adopted, until_answered,
     until_attempt,
 };
 use crate::desktop::{
@@ -138,7 +138,7 @@ async fn p11_a_relaunch_resends_the_same_request_before_listing(cx: &mut TestApp
     );
     assert!(failed_actions(&shell, cx).contains(&"composer-retry"));
 
-    shell.click("composer-retry", cx);
+    press(&shell, "composer-retry", cx);
     until_attempt(&shell, &root, &comment, 1, cx).await;
     assert_eq!(
         shell.backend.jobs_seen(),
@@ -180,7 +180,7 @@ async fn p12_a_mismatch_keeps_the_text_and_offers_no_retry(cx: &mut TestAppConte
     let comment = item_id(KEPT);
     let composer = until_adopted(&shell, "Changed.", cx).await;
     assert!(composer.read_with(cx, |composer, _| composer.is_read_only()));
-    shell.click("composer-retry", cx);
+    press(&shell, "composer-retry", cx);
     until_attempt(&shell, &root, &comment, 1, cx).await;
 
     assert_eq!(

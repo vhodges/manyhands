@@ -265,3 +265,15 @@ mod relaunch;
 
 #[path = "posting_tests/extras.rs"]
 mod extras;
+
+#[path = "posting_tests/changes.rs"]
+mod changes;
+
+#[path = "posting_tests/decisions.rs"]
+mod decisions;
+
+#[path = "posting_tests/files.rs"]
+mod files;
+
+#[path = "posting_tests/recovery_later.rs"]
+mod recovery_later;

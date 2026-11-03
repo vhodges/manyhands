@@ -45,13 +45,18 @@ const REPLY_HINT: &str = "Ctrl Enter to post \u{b7} Esc to cancel";
 const CANCEL: &str = "Cancel";
 /// The post button's words while posting.
 const POSTING: &str = "Posting\u{2026}";
+/// The post button's words while the owner checks where the comment
+/// stands.
+const CHECKING: &str = "Checking\u{2026}";
 
 impl Composer {
     /// The post button's words, by kind and remote; "Posting…" while
     /// posting.
     fn post_label(&self) -> &'static str {
-        if matches!(self.state, ComposerState::Posting) {
-            return POSTING;
+        match self.state {
+            ComposerState::Posting => return POSTING,
+            ComposerState::Checking => return CHECKING,
+            _ => {}
         }
         match (&self.kind, self.remote) {
             (ComposerKind::New, true) => "Post and sync",
@@ -109,7 +114,7 @@ impl Composer {
         let colors = item_colors(cx);
         let reply = matches!(self.kind, ComposerKind::Reply { .. });
         let idle = self.state.is_idle();
-        let posting = matches!(self.state, ComposerState::Posting);
+        let posting = self.is_posting();
         let failed = !idle && !posting;
         let words = self.footer_words();
         let post = self.post_label();

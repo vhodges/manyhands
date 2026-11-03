@@ -13,6 +13,7 @@ use manyhands::{
 
 use super::{SlotDraft, Thread, thread_of};
 use crate::desktop::{
+    model::publication::CommentOutcome,
     services::{drafts::comments::AdoptedComment, submissions::SubmissionState},
     view::item::{ItemPane, composer::ComposerKind},
 };
@@ -32,16 +33,29 @@ impl ItemPane {
         let drafts = self.services.drafts().read(cx).comment_drafts(&item);
         let submissions = self.services.submissions().read(cx);
         let mut adopt = Vec::new();
-        for draft in drafts {
+        let mut retire = Vec::new();
+        // The newest of a thread's drafts wins it; the others stay on the
+        // Drafts page (change 5).
+        for draft in drafts.into_iter().rev() {
             if self.composers.known.contains(&draft.id)
                 || self.composers.begun.contains(&draft.target.comment_id)
             {
                 continue;
             }
-            let posting = submissions
-                .get(Path::new(&item.repo), &draft.target.comment_id)
-                .is_some_and(|post| matches!(post.state, SubmissionState::Posting));
-            if posting {
+            let post = submissions.get(Path::new(&item.repo), &draft.target.comment_id);
+            if post.is_some_and(|post| matches!(post.state, SubmissionState::Posting)) {
+                continue;
+            }
+            // Saved, its retirement not landed: retired, never adopted
+            // (change 7).
+            let saved = post.is_some_and(|post| {
+                post.draft == Some(draft.id)
+                    && matches!(&post.state, SubmissionState::Finished { result, .. }
+                        if result.outcome.is_saved()
+                            && !matches!(result.outcome, CommentOutcome::Mismatched { .. }))
+            });
+            if saved {
+                retire.push((draft.target.comment_id.clone(), draft.id));
                 continue;
             }
             let Some(thread) = self.thread_for(&draft.target) else {
@@ -56,6 +70,10 @@ impl ItemPane {
                 self.composers.adopting.insert(thread.clone());
                 adopt.push((draft.id, thread));
             }
+        }
+        for (comment, id) in retire {
+            self.composers.known.insert(id);
+            self.retire_post_draft(comment, id, cx);
         }
         for (id, thread) in adopt {
             self.composers.known.insert(id);
@@ -132,6 +150,7 @@ impl ItemPane {
                 ComposerKind::Reply { to, me: None }
             }
         };
+        let comment = adopted.target.comment_id.clone();
         let slot = self.slot(
             kind,
             &adopted.body,
@@ -140,6 +159,7 @@ impl ItemPane {
             window,
             cx,
         );
+        let entity = slot.composer.entity_id();
         if focused {
             self.composers.focus = Some(slot.composer.clone());
         }
@@ -152,6 +172,7 @@ impl ItemPane {
                 _ => self.composers.reply = Some((root, slot)),
             },
         }
+        self.adopted_post(entity, comment, window, cx);
         cx.notify();
     }
 
