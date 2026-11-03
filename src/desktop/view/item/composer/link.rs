@@ -79,7 +79,7 @@ impl Composer {
     }
 
     /// Closes the address field, and gives focus back to where it was.
-    fn close_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn close_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(link) = self.link.take() {
             if let Some(origin) = link.origin {
                 window.focus(&origin, cx);

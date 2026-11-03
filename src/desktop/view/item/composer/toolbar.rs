@@ -139,8 +139,13 @@ impl Composer {
         self.controls[control.index()].clone()
     }
 
-    /// Does what `control` names.
+    /// Does what `control` names; a formatting control nothing while
+    /// read-only.
     fn activate(&mut self, control: MiniControl, window: &mut Window, cx: &mut Context<Self>) {
+        // A read-only text takes no formatting; the mode switch still works.
+        if control.formatting() && self.is_read_only() {
+            return;
+        }
         match control {
             MiniControl::Bold => self.dispatch(&Bold, window, cx),
             MiniControl::Italic => self.dispatch(&Italic, window, cx),

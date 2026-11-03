@@ -4,8 +4,8 @@
 //! the buttons (design, Lane C, Footer; R-9).
 
 use gpui_kit::{
-    App, BoxShadow, Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement,
-    Render, StatefulInteractiveElement, Styled, TestSupportExt, Window,
+    BoxShadow, ClickEvent, Context, FontWeight, Hsla, InteractiveElement, IntoElement,
+    ParentElement, Render, StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
         ActiveTheme, Sizable,
         button::{Button, ButtonCustomVariant, ButtonVariants},
@@ -15,9 +15,9 @@ use gpui_kit::{
 };
 use manyhands::drafts::ItemKind;
 
-use super::{Composer, ComposerKind};
+use super::{Composer, ComposerKind, ComposerState};
 use crate::desktop::{
-    keys::{COMMENT_COMPOSER_CONTEXT, ComposerToggleMode},
+    keys::{COMMENT_COMPOSER_CONTEXT, CancelComposer, ComposerToggleMode, InsertLink, PostComment},
     model::discussion::{avatar_color, avatar_initials},
     view::item::tokens::item_colors,
 };
@@ -43,10 +43,16 @@ const LOCAL: &str = "Saved on this computer.";
 /// A reply's hint. The dot is U+00B7.
 const REPLY_HINT: &str = "Ctrl Enter to post \u{b7} Esc to cancel";
 const CANCEL: &str = "Cancel";
+/// The post button's words while posting.
+const POSTING: &str = "Posting\u{2026}";
 
 impl Composer {
-    /// The post button's words, by kind and remote.
+    /// The post button's words, by kind and remote; "Posting…" while
+    /// posting.
     fn post_label(&self) -> &'static str {
+        if matches!(self.state, ComposerState::Posting) {
+            return POSTING;
+        }
         match (&self.kind, self.remote) {
             (ComposerKind::New, true) => "Post and sync",
             (ComposerKind::New, false) => "Save comment locally",
@@ -68,8 +74,9 @@ impl Composer {
         }
     }
 
-    /// The text area: the composer's tab stop around its editor.
-    fn area(&self, cx: &App) -> impl IntoElement + use<> {
+    /// The text area: the composer's tab stop around its editor, guarded
+    /// while read-only (`guard`).
+    fn area(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let min = match self.kind {
             ComposerKind::New => NEW_MIN_HEIGHT,
             ComposerKind::Reply { .. } => REPLY_MIN_HEIGHT,
@@ -92,14 +99,18 @@ impl Composer {
                 .text_size(px(MARKDOWN_SIZE))
                 .text_color(item_colors(cx).page_text);
         }
-        area.child(self.editor.clone())
+        self.guarded(area, cx).child(self.editor.clone())
     }
 
-    /// The footer: a reply's hint, the explanation, then Cancel (a reply's)
-    /// and the post button.
-    fn footer(&self, cx: &App) -> impl IntoElement + use<> {
+    /// The footer: a reply's hint, the explanation and a refused Submit's
+    /// words, then Cancel (a reply's, while idle) and the post button (not
+    /// while failed, whose row has the actions).
+    fn footer(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
         let colors = item_colors(cx);
         let reply = matches!(self.kind, ComposerKind::Reply { .. });
+        let idle = self.state.is_idle();
+        let posting = matches!(self.state, ComposerState::Posting);
+        let failed = !idle && !posting;
         let words = self.footer_words();
         let post = self.post_label();
         let amber = ButtonCustomVariant::new(cx)
@@ -124,7 +135,15 @@ impl Composer {
                     .test_support()
                     .aria_label(words.clone())
                     .child(words),
-            );
+            )
+            .children(self.refused.map(|refused| {
+                div()
+                    .id("composer-refused")
+                    .test_support()
+                    .aria_label(refused)
+                    .text_color(colors.page_amber_text)
+                    .child(refused)
+            }));
         h_flex()
             .w_full()
             .items_center()
@@ -134,7 +153,7 @@ impl Composer {
             .text_size(px(FOOTER_SIZE))
             .text_color(colors.page_muted)
             .child(explanation)
-            .children(reply.then(|| {
+            .children((reply && idle).then(|| {
                 div()
                     .id("composer-cancel")
                     .test_support()
@@ -144,10 +163,13 @@ impl Composer {
                         Button::new("composer-cancel-button")
                             .label(CANCEL)
                             .small()
-                            .outline(),
+                            .outline()
+                            .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                                this.cancel(window, cx)
+                            })),
                     )
             }))
-            .child(
+            .children((!failed).then(|| {
                 div()
                     .id("composer-post")
                     .test_support()
@@ -157,9 +179,11 @@ impl Composer {
                         Button::new("composer-post-button")
                             .label(post)
                             .small()
-                            .custom(amber),
-                    ),
-            )
+                            .loading(posting)
+                            .custom(amber)
+                            .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.post(cx))),
+                    )
+            }))
     }
 
     /// A reply's avatar: the user's initials on their colour.
@@ -190,6 +214,7 @@ impl Composer {
 
 impl Render for Composer {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.settling = false;
         self.close_link_if_left(window, cx);
         if self.focus.is_focused(window) {
             // Tab landed on the composer's stop: focus belongs in the
@@ -224,6 +249,7 @@ impl Render for Composer {
             .child(self.toolbar(window, cx))
             .children(self.link_row(cx))
             .child(self.area(cx))
+            .children(self.failed_row(cx))
             .child(self.footer(cx));
         h_flex()
             .id("composer")
@@ -235,6 +261,14 @@ impl Render for Composer {
             .on_action(
                 cx.listener(|this, _: &ComposerToggleMode, _, cx| this.set_rich(!this.rich, cx)),
             )
+            .on_action(cx.listener(|this, _: &PostComment, _, cx| this.post(cx)))
+            .on_action(cx.listener(|this, _: &CancelComposer, window, cx| this.cancel(window, cx)))
+            // Ctrl K (decision 21): the Link control's address field.
+            .on_action(cx.listener(|this, _: &InsertLink, window, cx| {
+                if !this.is_read_only() {
+                    this.toggle_link(window, cx);
+                }
+            }))
             .children(self.avatar())
             .child(card)
     }

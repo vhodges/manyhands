@@ -249,7 +249,7 @@ pub(crate) fn clicked_link(event: &EditorEvent, cx: &mut App) -> Option<LinkTarg
 /// editor's own `at_end` cannot tell a click from a backward move (R-66).
 /// A host that tracks its last input passes this to `step_over_blocks`
 /// after a press.
-fn entered_by_pointer(event: &EditorEvent) -> EditorEvent {
+pub(crate) fn entered_by_pointer(event: &EditorEvent) -> EditorEvent {
     match event.clone() {
         EditorEvent::EditMath {
             range,

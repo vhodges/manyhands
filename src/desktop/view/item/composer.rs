@@ -21,17 +21,40 @@
 //!   says what the owner set (`set_recovery`).
 //! - **Footer** (`render`, R-9): its words and buttons follow the remote,
 //!   the item's kind and the composer's.
+//! - **States** (`ComposerState`), which the owner sets: `Idle`;
+//!   `Posting`, read-only, "Posting…", where Submit is refused with
+//!   "Already posting" (P10); `Failed`, read-only, a red message and the
+//!   actions the owner offers (`failed`), the composer deciding none of
+//!   them. Read-only is a guard around the editor (`guard`).
+//! - **Events.** Post (Ctrl Enter or the button) emits `Submit`, unless
+//!   the text is blank; the owner posts it and sets `Posting`. Cancel
+//!   (Escape or the reply's button) with text asks first (`discard`), and
+//!   emits `Discard` on Discard; with none it emits `Cancel` at once.
+//! - **Pointer** (R-66). A press on the editor lands the caret after a
+//!   math or property block, as the edit host's does.
+//!
+//! The caret is not kept in view in the discussion's region here: no
+//! `CaretInView` yet. Task 12, which places the composers in the region,
+//! gives them one.
 //!
 //! The composer holds the user's text, so nothing here derives `Debug`.
 
 // Every item in these is first called from Task 12, which places the
 // composers.
 #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
+mod discard;
+#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
+mod failed;
+#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
+mod guard;
+#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 mod link;
 #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 mod render;
 #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 pub(crate) mod toolbar;
+
+use std::mem;
 
 use gpui_kit::{
     AnyElement, App, Context, Entity, EventEmitter, FocusHandle, Focusable, Subscription, Window,
@@ -43,8 +66,12 @@ use self::{link::LinkField, toolbar::COUNT};
 use super::ItemPane;
 use crate::desktop::{
     model::drafts::RecoveryState,
-    view::editor::{clicked_link, open_compact_editor, set_exact, step_over_blocks, style},
+    view::editor::{
+        clicked_link, entered_by_pointer, open_compact_editor, set_exact, step_over_blocks, style,
+    },
 };
+
+pub(crate) use self::failed::{FailedAction, FailedActions};
 
 /// A new comment's placeholder.
 const NEW_PLACEHOLDER: &str = "Add a comment. Markdown works here.";
@@ -83,7 +110,42 @@ pub(crate) enum ComposerKind {
 pub(crate) enum ComposerEvent {
     /// The text changed, by any means the user has; this is the new text.
     Changed(String),
+    /// Post the text (`Composer::text`): it is not blank, and the composer
+    /// is `Idle`. The owner sets `Posting`.
+    Submit,
+    /// Cancelled with no text: close, nothing to keep.
+    Cancel,
+    /// The user chose Discard in the discard prompt: drop the text.
+    Discard,
+    /// One of the actions the owner offered in `Failed`.
+    Failed(FailedAction),
 }
+
+/// Where the composer stands; its owner sets it (`set_state`).
+#[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
+pub(crate) enum ComposerState {
+    /// The text can be edited and posted.
+    Idle,
+    /// The text is being posted: read-only, and Submit is refused.
+    Posting,
+    /// A post failed: read-only, with `message` in red and the `actions`
+    /// the owner offers. `discard_note`, if any, is said in the discard
+    /// prompt (P7, P18).
+    Failed {
+        message: String,
+        actions: FailedActions,
+        discard_note: Option<String>,
+    },
+}
+
+impl ComposerState {
+    fn is_idle(&self) -> bool {
+        matches!(self, Self::Idle)
+    }
+}
+
+/// What Submit while posting says (P10).
+const ALREADY_POSTING: &str = "Already posting";
 
 /// One comment composer.
 #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
@@ -104,6 +166,17 @@ pub(crate) struct Composer {
     controls: [FocusHandle; COUNT],
     /// The Link control's address field, while it is open.
     link: Option<LinkField>,
+    state: ComposerState,
+    /// What the composer says of a refused Submit (P10), until the state
+    /// changes.
+    refused: Option<&'static str>,
+    /// The editor's caret while the text was `last`, kept while read-only.
+    cursor: usize,
+    /// The last input was a pointer press on the editor, not a key (R-66).
+    pressed: bool,
+    /// A press's own events are still arriving; they do not clear
+    /// `pressed`. They have all arrived when the next frame is drawn.
+    settling: bool,
     _subscriptions: [Subscription; 2],
 }
 
@@ -126,7 +199,10 @@ impl Composer {
             set_exact(&editor, restored, cx);
             editor.update(cx, |editor, cx| editor.set_cursor(restored.len(), cx));
         }
-        let last = editor.read(cx).text().to_owned();
+        let (last, cursor) = {
+            let editor = editor.read(cx);
+            (editor.text().to_owned(), editor.cursor())
+        };
         let subscriptions = [
             cx.subscribe(&editor, Self::on_editor_event),
             // Undo and Redo emit no `Changed`; a notification shows them.
@@ -143,7 +219,67 @@ impl Composer {
             last,
             controls: [(); COUNT].map(|_| cx.focus_handle()),
             link: None,
+            state: ComposerState::Idle,
+            refused: None,
+            cursor,
+            pressed: false,
+            settling: false,
             _subscriptions: subscriptions,
+        }
+    }
+
+    /// Whether the text cannot be edited: while posting, or failed.
+    pub(crate) fn is_read_only(&self) -> bool {
+        !self.state.is_idle()
+    }
+
+    /// Sets where the composer stands. A read-only state closes the link
+    /// field, whose Enter would edit the text.
+    pub(crate) fn set_state(
+        &mut self,
+        state: ComposerState,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.state = state;
+        self.refused = None;
+        if self.is_read_only() {
+            self.close_link(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Ctrl Enter or the post button: `Submit` for a text that is not
+    /// blank while `Idle`. While posting it is refused, and says so (P10);
+    /// a failed composer posts only through its owner's actions.
+    pub(crate) fn post(&mut self, cx: &mut Context<Self>) {
+        match self.state {
+            ComposerState::Idle => {
+                if !self.text(cx).trim().is_empty() {
+                    cx.emit(ComposerEvent::Submit);
+                }
+            }
+            ComposerState::Posting => {
+                self.refused = Some(ALREADY_POSTING);
+                cx.notify();
+            }
+            ComposerState::Failed { .. } => {}
+        }
+    }
+
+    /// Escape or the reply's Cancel. `Idle`: with text, the discard prompt
+    /// asks first; with none, `Cancel` at once. `Failed`: the discard
+    /// prompt, when the owner offers Discard. `Posting`: nothing.
+    pub(crate) fn cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.state {
+            ComposerState::Idle if self.text(cx).trim().is_empty() => {
+                cx.emit(ComposerEvent::Cancel);
+            }
+            ComposerState::Idle => self.ask_discard(window, cx),
+            ComposerState::Failed { actions, .. } if actions.discard => {
+                self.ask_discard(window, cx);
+            }
+            ComposerState::Failed { .. } | ComposerState::Posting => {}
         }
     }
 
@@ -203,11 +339,20 @@ impl Composer {
         cx: &mut Context<Self>,
     ) {
         match event {
-            EditorEvent::Changed => self.compare(cx),
+            EditorEvent::Changed => {
+                self.input_seen();
+                self.compare(cx);
+            }
+            EditorEvent::SelectionChanged => self.input_seen(),
             EditorEvent::EditMath { .. }
             | EditorEvent::EditProperties { .. }
             | EditorEvent::PreviewImage(_) => {
-                step_over_blocks(&self.editor, event, cx);
+                let event = if mem::take(&mut self.pressed) {
+                    entered_by_pointer(event)
+                } else {
+                    event.clone()
+                };
+                step_over_blocks(&self.editor, &event, cx);
             }
             EditorEvent::OpenLink(_) | EditorEvent::OpenWikiLink(_) => {
                 // A link for the browser opens; the composer follows no
@@ -218,13 +363,29 @@ impl Composer {
         }
     }
 
-    /// R-10: a text that differs from the last one seen is a change.
+    /// R-66: a change of text or caret clears a press, unless it is the
+    /// press's own.
+    fn input_seen(&mut self) {
+        if !self.settling {
+            self.pressed = false;
+        }
+    }
+
+    /// R-10: a text that differs from the last one seen is a change. While
+    /// read-only it is put back instead (`guard`).
     fn compare(&mut self, cx: &mut Context<Self>) {
-        let text = self.editor.read(cx).text();
-        if text == self.last {
+        let editor = self.editor.read(cx);
+        if editor.text() == self.last {
+            self.cursor = editor.cursor();
             return;
         }
-        self.last = text.to_owned();
+        if self.is_read_only() {
+            self.hold(cx);
+            return;
+        }
+        let text = editor.text().to_owned();
+        self.cursor = editor.cursor();
+        self.last = text;
         cx.emit(ComposerEvent::Changed(self.last.clone()));
         cx.notify();
     }
@@ -260,6 +421,10 @@ fn placeholder(kind: &ComposerKind) -> &'static str {
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 mod test_bench;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "composer/states_tests.rs"]
+mod states_tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "composer_tests.rs"]
