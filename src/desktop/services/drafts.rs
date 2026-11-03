@@ -108,9 +108,11 @@ pub(crate) enum SessionDiscarded {
 
 impl gpui_kit::EventEmitter<SessionDiscarded> for DraftRegistry {}
 
-/// The Drafts page discards the comment draft of this ID, which an item
-/// tab's composer holds: that composer starts again. It holds no text.
-pub(crate) struct CommentDiscarded(pub DraftId);
+/// The Drafts page discards a comment draft an item tab's composer holds:
+/// that composer starts again. It names every ID that reached the
+/// discarded session (`current_id`), so a composer holding an earlier one
+/// is found too. It holds no text.
+pub(crate) struct CommentDiscarded(pub Vec<DraftId>);
 
 impl gpui_kit::EventEmitter<CommentDiscarded> for DraftRegistry {}
 

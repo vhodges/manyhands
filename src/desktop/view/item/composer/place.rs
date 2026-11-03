@@ -117,7 +117,7 @@ pub(in crate::desktop::view::item) struct Composers {
     focus: Option<Entity<Composer>>,
     /// Drafts the Drafts page discarded: their composers start again
     /// (`held`).
-    discarded: Vec<DraftId>,
+    discarded: Vec<Vec<DraftId>>,
 }
 
 /// One composer and what its text is kept as.

@@ -277,7 +277,7 @@ impl ItemPane {
             let tab = pane.tab_key();
             pane.services
                 .drafts()
-                .update(cx, |registry, _| registry.let_go_comments(&tab));
+                .update(cx, |registry, cx| registry.let_go_comments(&tab, cx));
         })
         .detach();
         let edit = edit::TabEdit::new(scope.clone(), cx);

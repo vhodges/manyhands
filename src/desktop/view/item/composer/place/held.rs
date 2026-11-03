@@ -41,7 +41,7 @@ impl ItemPane {
         event: &CommentDiscarded,
         cx: &mut Context<Self>,
     ) {
-        self.composers.discarded.push(event.0);
+        self.composers.discarded.push(event.0.clone());
         cx.notify();
     }
 
@@ -50,9 +50,12 @@ impl ItemPane {
     /// holds focus: the new comment's empty and collapsed, a reply's
     /// closed. Its draft is gone already; nothing more is discarded.
     pub(super) fn reset_discarded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for id in std::mem::take(&mut self.composers.discarded) {
+        for ids in std::mem::take(&mut self.composers.discarded) {
             let composers = &mut self.composers;
-            let holds = |draft: &SlotDraft| matches!(draft, SlotDraft::Begun(held) if *held == id);
+            // Any ID that reached the discarded session: a slot keeps the
+            // one it began or adopted.
+            let holds =
+                |draft: &SlotDraft| matches!(draft, SlotDraft::Begun(held) if ids.contains(held));
             if composers
                 .new
                 .as_ref()

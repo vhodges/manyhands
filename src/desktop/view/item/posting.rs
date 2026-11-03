@@ -64,13 +64,17 @@ pub(super) struct Posting {
 impl Posting {
     pub(super) fn new(services: &Services, cx: &mut Context<ItemPane>) -> Self {
         // Answers that landed before the tab opened are not this tab's to
-        // follow: its own first read comes after them.
+        // follow: its own first read comes after them. A post still queued
+        // or running is: its answer lands while the tab is open (P9).
         let met = services
             .operations()
             .read(cx)
             .requests()
             .iter()
-            .filter(|request| matches!(request.intent, Intent::CommentAdd { .. }))
+            .filter(|request| {
+                matches!(request.intent, Intent::CommentAdd { .. })
+                    && matches!(request.state, RequestState::Finished(..))
+            })
             .map(|request| (request.id, request.attempt))
             .collect();
         Self {

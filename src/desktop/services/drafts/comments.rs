@@ -400,9 +400,16 @@ impl DraftRegistry {
     }
 
     /// The item tab `tab` closed: its composers hold no draft any more.
-    /// Their sessions live on, for the item's next tab to adopt.
-    pub(crate) fn let_go_comments(&mut self, tab: &TabKey) {
+    /// Their sessions live on, for the item's next tab to adopt. A newer
+    /// tab of the same item hears the change and says again what it
+    /// holds (`hold_comments`), so an older tab's late release never
+    /// takes its entries for good.
+    pub(crate) fn let_go_comments(&mut self, tab: &TabKey, cx: &mut Context<Self>) {
+        let before = self.comment_tabs.len();
         self.comment_tabs.retain(|_, holder| holder != tab);
+        if self.comment_tabs.len() != before {
+            cx.notify();
+        }
     }
 
     /// The tab holding the draft `id` live: the one its session is
@@ -431,7 +438,14 @@ impl DraftRegistry {
             .session(id)
             .is_some_and(|session| session.target().comment.is_some());
         if comment && let Some(current) = self.current_id(id) {
-            cx.emit(CommentDiscarded(current));
+            let mut ids: Vec<DraftId> = self
+                .moved
+                .keys()
+                .copied()
+                .filter(|earlier| self.current_id(*earlier) == Some(current))
+                .collect();
+            ids.push(current);
+            cx.emit(CommentDiscarded(ids));
         }
         self.discard(id, cx)
     }

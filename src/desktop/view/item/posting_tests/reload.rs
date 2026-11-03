@@ -309,3 +309,44 @@ async fn the_chip_survives_a_reload_and_clears_when_shared(cx: &mut TestAppConte
     );
     assert_eq!(listed(&shell, cx), 2);
 }
+
+/// P9 with pending discovery: the tab closed while its post runs and
+/// opened again before the answer; the answer, with discovery pending,
+/// still queues the refresh from the reopened tab and the header says so.
+#[gpui_kit::test]
+async fn a_tab_reopened_while_posting_refreshes_on_pending_discovery(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = posting_shell(false, cx, |_, _| {});
+    let (_, comment) = write_new(&shell, "Reopened meanwhile.", cx);
+    let held = shell.backend.hold_job(JobKind::Comment);
+    let returned = shell
+        .backend
+        .hold_job_return_answering(JobKind::Comment, index_pending(&comment));
+    returned.release();
+    let refresh = shell.backend.hold_job(JobKind::IndexRefresh);
+    submit(&shell, cx);
+    super::support::until_post_runs(&shell, cx).await;
+    held.wait_reached();
+    shell.click(("tab-close", 0usize), cx);
+    open_ticket(&shell, &root, cx);
+
+    held.release();
+    until_answered(&shell, &root, &comment, cx).await;
+    shell
+        .until_drawn(cx, "an index refresh queued", |shell, cx| {
+            !shell
+                .requests(cx, |request| {
+                    matches!(&request.intent, Intent::IndexRefresh { root: asked } if asked == &root)
+                })
+                .is_empty()
+        })
+        .await;
+    refresh.wait_reached();
+    assert_eq!(shell.label("item-pill", cx).as_deref(), Some(UPDATING_LIST));
+    refresh.release();
+    shell
+        .until_drawn(cx, "the comment listed", |shell, cx| {
+            listed(shell, cx) == 2 && shell.label("item-pill", cx).as_deref() != Some(UPDATING_LIST)
+        })
+        .await;
+}
