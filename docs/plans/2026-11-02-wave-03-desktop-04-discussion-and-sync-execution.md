@@ -66,6 +66,12 @@ Approved 2026-11-02 (`5c26a5cd`); execution is subagent-driven
   E-12 (decision 17). E-5's wording corrected: the test asserts later rows
   `[SHARE, CLOSE_TICKET]`.
 
+## Lane D (ticket branch)
+
+| Task | State | Base | Commits | Tests | Review | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| 12 | done | `6e8b6e2e` | `56d3b36e`, fixes `69b03d8c`, `f4f1933a` | `discussion` 29, `posting` 5, `composer` 20, `drafts` 181; desktop bin 1197 at the decision-22 docs commit; fmt and clippy clean | First stop: four unnamed failures → owner decision 22 (collapsed start; the open composer had trapped Tab walks) and E-14, E-15. Round 1 CHANGES REQUIRED (adopted draft hidden; emptied draft kept the composer open); fixed; re-review APPROVE | Started beside Lane B (scheduling decision). Known limits K-11 to K-14. Routed to Task 14: Drafts page Show/Discard for held comment rows. Test-first evidence partial for the review-fix tests. |
+
 ## Lane A (`d4/lane-a`)
 
 Worktree `<main>/.worktrees/d4-lane-a`, from `a1faca4a`.
