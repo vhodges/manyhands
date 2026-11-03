@@ -14,7 +14,7 @@ use crate::desktop::{
     view::{
         confirm::{confirm, prepare_again},
         item::ItemRoute,
-        operations::recovery_id,
+        operations::{recovery_id, request_id},
     },
 };
 use gpui_kit::{
@@ -23,6 +23,23 @@ use gpui_kit::{
 };
 use manyhands::{drafts::DraftId, repository::OperationId};
 use std::path::PathBuf;
+
+/// `route`, owned, for the window's update that opens it.
+fn owned(route: &ItemRoute) -> ItemRoute {
+    match route {
+        ItemRoute::Remotes(root) => ItemRoute::Remotes(root.clone()),
+        ItemRoute::SharingAndKeys => ItemRoute::SharingAndKeys,
+        ItemRoute::CheckHost { root, authority } => ItemRoute::CheckHost {
+            root: root.clone(),
+            authority: authority.clone(),
+        },
+        ItemRoute::SetIdentity(root) => ItemRoute::SetIdentity(root.clone()),
+        ItemRoute::Holder { root, request } => ItemRoute::Holder {
+            root: root.clone(),
+            request: *request,
+        },
+    }
+}
 
 impl Workspace {
     /// Resolves the root before reading its pending operations.
@@ -100,25 +117,84 @@ impl Workspace {
     /// A tab's share or post control asked for a place in the workspace
     /// (`ItemRoute`). The subscription brings no window, so the place
     /// opens once the update that asked has ended, in this workspace's
-    /// window. Share… and Set up sharing open Settings › Remotes for the
-    /// repository; Lane B's later tasks open the others.
+    /// window (`open_route`).
     pub(in crate::desktop::view) fn item_route(
         &mut self,
         route: &ItemRoute,
         cx: &mut Context<Self>,
     ) {
+        let route = owned(route);
+        self.in_window(cx, move |workspace, window, cx| {
+            workspace.open_route(route, window, cx)
+        });
+    }
+
+    /// Opens the place `route` names (design, Outcomes and routes): Share…
+    /// and Set up sharing, Settings › Remotes on the repository; Open
+    /// Sharing & keys, the Keys page; Check host, the host named, or with
+    /// none the repository's Hosts page (K-3); Set identity, its identity
+    /// form; Show it, the entry of the request that may hold the
+    /// repository, or with none its pending operations.
+    pub(in crate::desktop::view) fn open_route(
+        &mut self,
+        route: ItemRoute,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         match route {
-            ItemRoute::Remotes(root) => {
-                let root = root.clone();
-                self.in_window(cx, move |workspace, window, cx| {
-                    workspace.open_remotes(root, window, cx)
-                });
-            }
-            ItemRoute::SharingAndKeys
-            | ItemRoute::CheckHost { .. }
-            | ItemRoute::SetIdentity(_)
-            | ItemRoute::Holder { .. } => {}
+            ItemRoute::Remotes(root) => self.open_remotes(root, window, cx),
+            ItemRoute::SharingAndKeys => self.open_settings(SettingsPage::Keys, window, cx),
+            ItemRoute::CheckHost {
+                root,
+                authority: Some(authority),
+            } => self.check_host_in_settings(root, authority, window, cx),
+            ItemRoute::CheckHost {
+                root,
+                authority: None,
+            } => self.open_hosts(root, window, cx),
+            ItemRoute::SetIdentity(root) => self.identity_in_settings(root, window, cx),
+            ItemRoute::Holder { root, request } => self.show_holder(root, request, window, cx),
         }
+    }
+
+    /// The Hosts page on the repository at `root`, naming no host to
+    /// check: a comment's host stop has no host data (K-3).
+    fn open_hosts(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.content.drafts.update(cx, |drafts, cx| drafts.hide(cx));
+        self.content.settings.update(cx, |settings, cx| {
+            settings.set_selection(Some(root));
+            settings.open(SettingsPage::Hosts, window, cx)
+        });
+        self.focus_region(Region::Content, window, cx);
+    }
+
+    /// Show it, on `busy` (Busy repositories): the operation area entry
+    /// of `request`, the request of this session that may hold the
+    /// repository; with none, or one no longer listed, the operation area,
+    /// whose pending operations of `root` are read again.
+    fn show_holder(
+        &mut self,
+        root: PathBuf,
+        request: Option<DesktopRequestId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let entry = request
+            .map(|id| request_id(id, "entry"))
+            .and_then(|entry| self.control_focus.get(&entry).cloned());
+        match entry {
+            Some(entry) => {
+                self.last_region = Some(Region::Operations);
+                window.focus(&entry, cx);
+            }
+            None => {
+                if let Some(root) = root.to_str() {
+                    self.load_pending(root.to_owned(), cx);
+                }
+                self.focus_region(Region::Operations, window, cx);
+            }
+        }
+        cx.notify();
     }
 
     /// Runs `f` on this workspace with its window, once the update under
@@ -155,9 +231,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.content.drafts.update(cx, |drafts, cx| drafts.hide(cx));
+        // On `root` even when the page works on another repository (O-1).
         self.content.settings.update(cx, |settings, cx| {
-            settings.set_selection(Some(root));
-            settings.open(SettingsPage::Remotes, window, cx)
+            settings.set_selection(Some(root.clone()));
+            settings.open_remotes_on(root, window, cx)
         });
         self.focus_region(Region::Content, window, cx);
     }

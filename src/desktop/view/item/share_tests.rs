@@ -13,8 +13,12 @@ use std::{
 use gpui_kit::{TestAppContext, test::TestWindowExt};
 use manyhands::{
     canonical::{CONFIG_PATH, ItemId},
-    repository::{AuthoringKind, ItemDtoKind, ProgressEvent, ProgressStage, RequestId},
-    results::{Effects, Envelope, IntegrationEffect, ResultCode, Scope},
+    repository::{
+        AuthoringKind, ConflictNextAction, ConflictNextDto, ItemDtoKind, MutationDataDto,
+        ProgressEvent, ProgressStage, RequestId, SynchronizationConflictMutationDto,
+        SynchronizationConflictType,
+    },
+    results::{Effects, Envelope, IntegrationEffect, PublicationEffect, ResultCode, Scope},
 };
 
 use super::{SHARE_BUTTON, SHARE_NOTE, SHARE_SET_UP, share_tooltip};
@@ -22,7 +26,9 @@ use crate::desktop::{
     model::{
         item::SHARE,
         navigation::OpenTarget,
-        operations::{STOPPED_AFTER_PART, STOPPED_BEFORE_SENDING},
+        operations::{
+            CONFLICT_BANNER, NEEDS_ATTENTION, SHARED, STOPPED_AFTER_PART, STOPPED_BEFORE_SENDING,
+        },
         stamp::SettingsPage,
     },
     services::{
@@ -633,4 +639,154 @@ async fn a_stopped_share_says_what_completed_and_offers_share(cx: &mut TestAppCo
         );
         seen.push(id);
     }
+}
+
+// Task 10a: outcomes in the item tab, and Share… on its own repository.
+
+/// Ends the fabricated request `id` with `envelope`.
+fn finish_with(
+    shell: &Shell,
+    id: DesktopRequestId,
+    envelope: Envelope<MutationDataDto>,
+    cx: &mut TestAppContext,
+) {
+    let operations = shell.operations(cx);
+    operations.update(cx, |operations, cx| {
+        operations.apply(WorkerEvent::Finished(id, Box::new(envelope)));
+        cx.notify();
+    });
+    shell.run(cx);
+}
+
+fn conflict() -> Envelope<MutationDataDto> {
+    Envelope::classified_mutation(
+        "item sync",
+        Scope::default(),
+        false,
+        ResultCode::WorktreeConflicted,
+        Effects::not_requested(),
+        false,
+    )
+    .with_data(MutationDataDto::SynchronizationConflict(
+        SynchronizationConflictMutationDto {
+            r#type: SynchronizationConflictType::SynchronizationConflict,
+            conflict: ConflictNextDto {
+                operation_id: "01M4CC0VN1KTQFSVR99378TDHV".to_owned(),
+                next_action: ConflictNextAction::ALL[0],
+            },
+        },
+    ))
+}
+
+/// A share of the item that stopped on a conflict raises the conflict
+/// banner, which says the work is safe and offers nothing (decision 13),
+/// and the pill needs attention; dismissing its entry ends both.
+#[gpui_kit::test]
+fn the_conflict_banner_says_work_is_safe_and_offers_nothing(cx: &mut TestAppContext) {
+    let (shell, root) = shell(true, cx);
+    open_ticket(&shell, &root, cx);
+    assert!(!shell.present("item-conflict", cx));
+    let share = running(&shell, 1, item_sync(&root), cx);
+    finish_with(&shell, share.id, conflict(), cx);
+
+    assert_eq!(
+        shell.label("item-conflict", cx).as_deref(),
+        Some(CONFLICT_BANNER)
+    );
+    assert_eq!(
+        CONFLICT_BANNER,
+        "You and someone else both changed this since it was last shared. Your work is \
+         safe. Resolving it in Manyhands arrives in a later release."
+    );
+    assert_eq!(
+        shell.label("item-pill", cx).as_deref(),
+        Some(NEEDS_ATTENTION)
+    );
+    // The banner's frame holds its words and no control.
+    let others = shell.frame(cx, |window, _| {
+        let words = window
+            .try_find("item-conflict")
+            .expect("the banner")
+            .path()
+            .to_vec();
+        let frame = &words[..words.len() - 1];
+        gpui_kit::base::test_support::snapshots(window)
+            .iter()
+            .filter(|element| {
+                let path = element.path();
+                path.starts_with(frame) && path != frame && path != words.as_slice()
+            })
+            .count()
+    });
+    assert_eq!(others, 0, "the banner offers no action");
+
+    shell.click(request_id(share.id, "dismiss"), cx);
+    assert!(!shell.present("item-conflict", cx));
+    assert_ne!(
+        shell.label("item-pill", cx).as_deref(),
+        Some(NEEDS_ATTENTION)
+    );
+}
+
+/// A finished share of the item says its outcome in the pill until its
+/// entry is dismissed; then the pill reads the item again.
+#[gpui_kit::test]
+fn a_finished_share_says_its_outcome_in_the_pill(cx: &mut TestAppContext) {
+    let (shell, root) = shell(true, cx);
+    open_ticket(&shell, &root, cx);
+    let viewing = shell.label("item-pill", cx);
+    let share = running(&shell, 1, item_sync(&root), cx);
+    let published = Envelope::classified_mutation(
+        "item sync",
+        Scope::default(),
+        false,
+        ResultCode::Ok,
+        Effects {
+            publication: PublicationEffect::Published,
+            ..Effects::not_requested()
+        },
+        false,
+    );
+    finish_with(&shell, share.id, published, cx);
+    assert_eq!(shell.label("item-pill", cx).as_deref(), Some(SHARED));
+    assert_eq!(
+        shell.label(request_id(share.id, "outcome"), cx).as_deref(),
+        Some(SHARED)
+    );
+
+    shell.click(request_id(share.id, "dismiss"), cx);
+    assert_eq!(shell.label("item-pill", cx), viewing);
+}
+
+/// O-1: Share… opens Settings › Remotes on the item's own repository,
+/// though the page last worked on another; Share main… on the
+/// repository detail does too. The selection is the repository's.
+#[gpui_kit::test]
+fn share_opens_remotes_on_its_own_repository_after_another(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let a = fixture.create_repository("a");
+    let b = fixture.create_repository("b");
+    fixture.commit_ticket(&b, TICKET, "Shared", "");
+    fixture.refresh(&a);
+    fixture.refresh(&b);
+    let shell = Shell::open(fixture, cx);
+
+    shell.select(&a, cx);
+    shell.click(SHARE_MAIN_BUTTON, cx);
+    assert!(shell.present("settings-remotes", cx));
+    assert_eq!(
+        shell.label("remotes-root", cx),
+        Some(format!("Repository: {}", key(&a)))
+    );
+    shell.click("settings-close", cx);
+
+    open_ticket(&shell, &b, cx);
+    assert_eq!(shell.label(SHARE_BUTTON, cx).as_deref(), Some(SHARE_SET_UP));
+    shell.click(SHARE_BUTTON, cx);
+    assert!(shell.present("settings-remotes", cx));
+    assert_eq!(
+        shell.label("remotes-root", cx),
+        Some(format!("Repository: {}", key(&b))),
+        "the Remotes page works on the item's repository"
+    );
 }

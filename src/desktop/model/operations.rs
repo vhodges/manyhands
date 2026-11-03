@@ -27,6 +27,15 @@ use manyhands::{
     results::{Envelope, Outcome, RecoveryAction, RecoveryActionKind, ResultCode},
 };
 
+mod outcomes;
+
+#[cfg(test)]
+pub(crate) use outcomes::{
+    ANOTHER_SHARE_HOLDS, BRANCH_DELETED, CHOOSE_A_KEY, CURRENT, KEY_LOCKED, NEEDS_ATTENTION,
+    NEEDS_IDENTITY, NOWHERE_TO_SHARE, SHARED, check_host_text, may_be_waiting_for,
+};
+pub(crate) use outcomes::{CONFLICT_BANNER, sync_text};
+
 use super::{
     list_state::{ListState, Rows},
     navigation::UNAVAILABLE_CODES,

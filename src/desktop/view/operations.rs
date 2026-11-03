@@ -11,11 +11,13 @@
 //! in a repository with a publication remote, offers Stop at a safe point
 //! (R-1, R-15), which reads Stopping… once pressed. A running share or
 //! post reads its stage in words ("Sharing · …", "Posting · …"), and a
-//! stopped share says whether part of its work finished and offers Share,
-//! a new request. A draft store that did not open keeps an entry with its
-//! fixed reason at the top, with no Dismiss; so does each session whose
-//! recovery copy could not be written, named by its item's title as read,
-//! with Retry, until a write lands. The launch's "Recovered drafts" entry
+//! finished share says its outcome in fixed words and offers the controls
+//! that outcome names in place of the envelope's recovery actions
+//! (`outcomes`): a stopped one says whether part of its work finished and
+//! offers Share, a new request. A draft store that did not open keeps an
+//! entry with its fixed reason at the top, with no Dismiss; so does each
+//! session whose recovery copy could not be written, named by its item's
+//! title as read, with Retry, until a write lands. The launch's "Recovered drafts" entry
 //! (`recovered`) follows the store's, with Review and Dismiss.
 //!
 //! **Pending in repositories** lists the operations each listed
@@ -46,25 +48,25 @@ use manyhands::{
     results::{Effects, Outcome, RecoveryAction},
 };
 
+mod outcomes;
 mod recovered;
+
+pub(crate) use outcomes::{share_result, share_words};
 
 use super::workspace::Workspace;
 use crate::desktop::{
     model::{
-        item::SHARE,
         list_state::ListState,
         operations::{
             NOT_AVAILABLE_YET, NOT_SENT_AGAIN, Progressing, ResumeOffer, StopOffer,
             abandon_offered, draft_flush_failed, drafts_unavailable, progress_words,
-            recovery_label, resume_offer, stopped_text,
+            recovery_label, resume_offer,
         },
-        publication::SyncOutcome,
         stamp::RepoKey,
     },
     services::{
         KEY_STORE_UNAVAILABLE,
         requests::{DesktopRequest, DesktopRequestId, NotSent, RequestState},
-        worker::RecordState,
     },
 };
 
@@ -266,9 +268,13 @@ impl Workspace {
                 )
                 .text_xs(),
             );
+        // Show it, on a share answered `busy`, gives the entry of the
+        // request that may hold the repository the focus.
+        let shown = self.control_focus_for(request_id(id, "entry"), cx);
         let mut entry = v_flex()
             .id(request_id(id, "entry"))
             .test_support()
+            .track_focus(&shown)
             .gap_1()
             .child(line);
         let mut controls = h_flex().gap_2().flex_wrap();
@@ -294,6 +300,12 @@ impl Workspace {
                 controls = controls.child(self.accepted_control(id, offer, cx));
             }
             RequestState::Finished(Outcome::Success | Outcome::Noop, _, _, _, _) => {
+                // A share says its outcome on its one line.
+                if let Some(result) = self.finished_share(id, cx)
+                    && let Some(words) = share_words(self.services(), id, &result, cx)
+                {
+                    controls = controls.child(text(request_id(id, "outcome"), words).text_sm());
+                }
                 controls = controls.child(self.dismiss(id, cx));
             }
             RequestState::Finished(_, code, effects, recovery, message) => {
@@ -313,13 +325,19 @@ impl Workspace {
                                 .text_color(muted),
                         ),
                 );
-                if let Some(completed) = self.stopped_share(id, cx) {
-                    entry = entry
-                        .child(text(request_id(id, "outcome"), stopped_text(completed)).text_sm());
-                    controls = controls.child(self.share_again(id, cx));
-                }
-                for (n, action) in recovery.iter().enumerate() {
-                    controls = controls.child(self.recovery(id, n, action, cx));
+                // A share's outcome offers its own controls in place of
+                // the envelope's recovery actions.
+                if let Some(result) = self.finished_share(id, cx) {
+                    if let Some(words) = share_words(self.services(), id, &result, cx) {
+                        entry = entry.child(text(request_id(id, "outcome"), words).text_sm());
+                    }
+                    for offer in result.offers() {
+                        controls = controls.child(self.share_offer(id, offer, cx));
+                    }
+                } else {
+                    for (n, action) in recovery.iter().enumerate() {
+                        controls = controls.child(self.recovery(id, n, action, cx));
+                    }
                 }
                 controls = controls.child(self.dismiss(id, cx));
             }
@@ -367,34 +385,6 @@ impl Workspace {
                 )
                 .into_any_element(),
         }
-    }
-
-    /// Whether the finished request `id` is a share stopped at a safe
-    /// point, and if so whether part of its work finished.
-    fn stopped_share(&self, id: DesktopRequestId, cx: &App) -> Option<bool> {
-        let worker = self.services().worker();
-        let record = worker.record_state(id).unwrap_or(RecordState::Unknown);
-        let after_give_up = worker.gave_up(id).is_some();
-        let result =
-            self.services()
-                .operations()
-                .read(cx)
-                .share_result(id, record, after_give_up)?;
-        match result.outcome {
-            SyncOutcome::Stopped { completed } => Some(completed),
-            _ => None,
-        }
-    }
-
-    /// A stopped share's Share: a new request of the same share.
-    fn share_again(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) -> AnyElement {
-        let focus = self.control_focus_for(request_id(id, "share"), cx);
-        button(
-            request_id(id, "share"),
-            SHARE,
-            Some(&focus),
-            cx.listener(move |this, _: &ClickEvent, _, cx| this.share_request_again(id, cx)),
-        )
     }
 
     fn dismiss(&mut self, id: DesktopRequestId, cx: &mut Context<Self>) -> AnyElement {

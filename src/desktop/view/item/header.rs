@@ -174,6 +174,14 @@ impl ItemPane {
             if let Some(words) = progress {
                 return pill::progress_pill(words, read, cx).into_any_element();
             }
+            // A finished share of the item says its outcome while no edit
+            // session says more.
+            if state.is_none()
+                && let Some(outcome) = &self.share.outcome
+            {
+                return pill::outcome_pill(&outcome.words, outcome.conflict, read, cx)
+                    .into_any_element();
+            }
             let state = state.unwrap_or_else(|| pill::viewing_state(item, self.unsaved(cx)));
             // A stand-in was read from nowhere: no provenance (M2).
             pill::pill(state, read, cx).into_any_element()

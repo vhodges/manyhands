@@ -10,7 +10,11 @@
 //! disabled, so a second press queues nothing.
 //!
 //! While a share or a post of the item runs, the pill says its stage
-//! (`share_progress`, design, Stage text), from the request model.
+//! (`share_progress`, design, Stage text), from the request model. Once
+//! the item's newest share has finished, and until its operation area
+//! entry is dismissed, the pill says its outcome while no edit session
+//! says more, and a conflict raises the item's conflict banner, which
+//! offers nothing (`share_outcome`, decision 13).
 //!
 //! The remote is the workspace's navigation's (`publication_remote`,
 //! decision 20): the tab reads no remotes itself (D3's fact 41). Until
@@ -33,9 +37,13 @@ use crate::desktop::{
         item::SHARE,
         navigation::OpenTarget,
         operations::{Progressing, progress_words},
+        publication::SyncOutcome,
     },
     services::requests::{Intent, Lane, RequestState},
-    view::sidebar::SHARING,
+    view::{
+        operations::{share_result, share_words},
+        sidebar::SHARING,
+    },
 };
 
 /// Share's element: the Kit button, which takes the focus.
@@ -60,6 +68,15 @@ pub(crate) fn share_tooltip(remote: &str) -> String {
 #[derive(Default)]
 pub(super) struct ShareState {
     progress: Option<String>,
+    pub(super) outcome: Option<ShareOutcome>,
+}
+
+/// What the item's newest finished share, while its operation area entry
+/// is listed, says in the pill, and whether it stopped on a conflict.
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct ShareOutcome {
+    pub(super) words: String,
+    pub(super) conflict: bool,
 }
 
 impl ItemPane {
@@ -106,10 +123,33 @@ impl ItemPane {
     /// remote request reloads navigation, which gives the remote again.
     pub(super) fn share_progressed(&mut self, cx: &mut Context<Self>) {
         let progress = self.share_progress(cx);
-        if self.share.progress != progress {
+        let outcome = self.share_outcome(cx);
+        if self.share.progress != progress || self.share.outcome != outcome {
             self.share.progress = progress;
+            self.share.outcome = outcome;
             cx.notify();
         }
+    }
+
+    /// What the item's newest share (`item sync`) says once finished,
+    /// until its operation area entry is dismissed (design, Outcomes and
+    /// routes): the pill's words, and whether the item's conflict banner
+    /// shows. A failure says nothing here; its entry shows the library's
+    /// message.
+    pub(super) fn share_outcome(&self, cx: &App) -> Option<ShareOutcome> {
+        let Some(Intent::ItemSync { root, kind, id }) = self.share_target() else {
+            return None;
+        };
+        let latest = self
+            .services
+            .operations()
+            .read(cx)
+            .latest_item_share(&root, kind, &id)?;
+        let result = share_result(&self.services, latest, cx)?;
+        Some(ShareOutcome {
+            words: share_words(&self.services, latest, &result, cx)?,
+            conflict: matches!(result.outcome, SyncOutcome::Conflict { .. }),
+        })
     }
 
     /// What the pill says while a share (`item sync`) or a post

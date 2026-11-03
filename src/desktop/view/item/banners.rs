@@ -15,6 +15,8 @@
 //! review, a hand-off owed, a pending checkpoint, the change banner under
 //! the review and a refusal; a kept session raises the kept draft and the
 //! change banner, and a session a discard elsewhere ended says so (`edit`).
+//! A share of the item that stopped on a conflict raises the conflict
+//! banner, which says the work is safe and offers nothing (decision 13).
 //! The other rows of the design's table are named here for the tasks that
 //! raise them.
 //!
@@ -42,6 +44,7 @@ use crate::desktop::{
         item::{CONTEXT_PROBLEMS, context_problems},
         links::LinkTarget,
         list_state::ListState,
+        operations::CONFLICT_BANNER,
     },
     services::links::{self, LinkResolution},
     view::relationships::OpenRelated,
@@ -93,6 +96,9 @@ pub(crate) enum Banner {
     Changed,
     /// A base the save left unverified, with Review… (R-36).
     ReviewBeforeSaving,
+    /// The item's share stopped on a conflict: its work is safe, and it
+    /// offers no action until D5 (decision 13).
+    Conflict,
     /// Another refusal, in the library's message.
     Refused,
     /// A nonconforming file, a ticket with no type included (owner,
@@ -117,6 +123,7 @@ impl Banner {
             | Self::DiscoveryPending
             | Self::Changed
             | Self::ReviewBeforeSaving
+            | Self::Conflict
             | Self::NeedsFixing
             | Self::Unmanaged => Tone::Amber,
         }
@@ -201,6 +208,15 @@ impl ItemPane {
         }
         if let Some(note) = &self.link_note {
             banners.push((Banner::Link, link_banner(note, cx)));
+        }
+        if self
+            .share
+            .outcome
+            .as_ref()
+            .is_some_and(|outcome| outcome.conflict)
+        {
+            let conflict = text("item-conflict", CONFLICT_BANNER).into_any_element();
+            banners.push((Banner::Conflict, conflict));
         }
         banners.extend(self.edit_banners(cx));
         most_severe_first(banners)

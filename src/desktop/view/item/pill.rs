@@ -8,7 +8,9 @@
 //! from. While a session is made ready or lives, the pill reads its phase
 //! (`edit_state`). While a share or a post of the item runs, the pill
 //! reads its stage instead (`progress_pill`): "Sharing · …" or
-//! "Posting · …" (design, Stage text).
+//! "Posting · …" (design, Stage text). Once the item's share has
+//! finished, while no session lives, the pill reads its outcome
+//! (`outcome_pill`, design, Outcomes and routes).
 
 use gpui_kit::{
     App, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString,
@@ -190,6 +192,23 @@ pub(super) fn progress_pill(
     cx: &App,
 ) -> impl IntoElement + use<> {
     drawn(Mark::Spinner, cx.theme().info, words.into(), read, cx)
+}
+
+/// The pill of the item's finished share, in its outcome's `words`: a
+/// conflict needs attention; any other outcome is the shared copy's.
+pub(super) fn outcome_pill(
+    words: &str,
+    conflict: bool,
+    read: Option<&ItemDto>,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let state = if conflict {
+        PillState::NeedsAttention
+    } else {
+        PillState::ViewingShared
+    };
+    let (mark, color) = look(state, cx);
+    drawn(mark, color, words.to_owned().into(), read, cx)
 }
 
 fn drawn(
