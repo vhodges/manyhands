@@ -187,6 +187,9 @@ impl Composer {
                             .small()
                             .loading(posting)
                             .custom(amber)
+                            // The custom variant rests at a fifth of its
+                            // colour; the button stays solid.
+                            .bg(colors.page_amber)
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.post(cx))),
                     )
             }))
