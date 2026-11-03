@@ -155,7 +155,15 @@ async fn p15_internal_error_on_any_resend_is_maybe_saved(cx: &mut TestAppContext
         shell.label("composer-failed", cx).as_deref(),
         Some(MAYBE_SAVED)
     );
-    assert_eq!(failed_actions(&shell, cx), vec!["composer-check-again"]);
+    assert_eq!(
+        failed_actions(&shell, cx),
+        vec![
+            "composer-check-again",
+            "composer-copy-text",
+            "composer-discard"
+        ],
+        "R-19: never trapped"
+    );
 }
 
 /// P16: Post as a new comment is offered only after a successful

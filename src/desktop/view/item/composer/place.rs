@@ -29,12 +29,15 @@
 //! `retarget`'s (Task 13). Nothing here derives `Debug`: a slot holds
 //! text.
 
+mod actions;
 mod check;
 mod drafts;
 mod post;
 mod retarget;
 mod settle;
 mod start;
+#[cfg(all(test, feature = "desktop-test-support"))]
+mod test_access;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use post::{MAYBE_SAVED, NOT_SAVED_FINAL};
@@ -484,28 +487,5 @@ impl ItemPane {
                 .child(slot.composer.clone())
                 .into_any_element(),
         )
-    }
-
-    /// The new comment's composer.
-    #[cfg(all(test, feature = "desktop-test-support"))]
-    pub(crate) fn new_composer(&self) -> Option<Entity<Composer>> {
-        Some(self.composers.new.as_ref()?.composer.clone())
-    }
-
-    /// The reply composer and its thread's root.
-    #[cfg(all(test, feature = "desktop-test-support"))]
-    pub(crate) fn reply_composer(&self) -> Option<(String, Entity<Composer>)> {
-        let (root, slot) = self.composers.reply.as_ref()?;
-        Some((root.clone(), slot.composer.clone()))
-    }
-
-    /// The comment `composer` writes, once its ID is allocated.
-    #[cfg(all(test, feature = "desktop-test-support"))]
-    pub(crate) fn composer_target(&self, composer: &Entity<Composer>) -> Option<CommentTarget> {
-        self.composers
-            .slots()
-            .find(|slot| slot.composer == *composer)?
-            .target
-            .clone()
     }
 }

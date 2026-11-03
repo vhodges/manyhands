@@ -47,6 +47,11 @@ impl ItemPane {
         let Some(item) = self.item_key() else {
             return;
         };
+        // R-19: not while its post is in flight; checked before anything
+        // is begun or retired.
+        if self.refused_in_flight(composer, window, cx) {
+            return;
+        }
         let drafts = self.services.drafts().clone();
         let Some((_, slot)) = self.composers.find(composer) else {
             return;
@@ -79,6 +84,27 @@ impl ItemPane {
                 });
                 return;
             };
+            // Sent from elsewhere meanwhile: the new draft goes, nothing
+            // is retired, and the post is followed (R-19).
+            let in_flight = pane
+                .update(cx, |pane, cx| {
+                    let root = pane.post_root();
+                    pane.services
+                        .submissions()
+                        .read(cx)
+                        .in_flight(&root, &old.comment_id)
+                })
+                .unwrap_or(true);
+            if in_flight {
+                drafts.update(cx, |registry, cx| registry.discard_comment(new_draft, cx));
+                let _ = pane.update_in(cx, |pane, window, cx| {
+                    if let Some((_, slot)) = pane.composers.find(composer) {
+                        slot.post.busy = false;
+                    }
+                    pane.refused_in_flight(composer, window, cx);
+                });
+                return;
+            }
             if let Some(old_draft) = old_draft {
                 let retire =
                     drafts.update(cx, |registry, cx| registry.retire_comment(old_draft, cx));
@@ -154,11 +180,16 @@ impl ItemPane {
             },
             _ => ComposerState::Failed {
                 message: NOT_MOVED.to_owned(),
-                actions: crate::desktop::view::item::composer::FailedActions {
-                    copy_text: true,
-                    discard: true,
-                    ..Default::default()
-                },
+                // The actions it last offered (an adopted draft's, say).
+                actions: self
+                    .composers
+                    .find(composer)
+                    .and_then(|(_, slot)| slot.post.actions)
+                    .unwrap_or(crate::desktop::view::item::composer::FailedActions {
+                        copy_text: true,
+                        discard: true,
+                        ..Default::default()
+                    }),
                 discard_note: None,
             },
         };

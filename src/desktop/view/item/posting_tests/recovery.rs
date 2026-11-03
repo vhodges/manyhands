@@ -211,7 +211,15 @@ async fn p5_post_as_new_needs_no_record_and_no_listed_comment(cx: &mut TestAppCo
         shell.label("composer-failed", cx).as_deref(),
         Some(MAYBE_SAVED)
     );
-    assert_eq!(failed_actions(&shell, cx), vec!["composer-check-again"]);
+    assert_eq!(
+        failed_actions(&shell, cx),
+        vec![
+            "composer-check-again",
+            "composer-copy-text",
+            "composer-discard"
+        ],
+        "R-19: never trapped"
+    );
 
     press(&shell, "composer-check-again", cx);
     shell

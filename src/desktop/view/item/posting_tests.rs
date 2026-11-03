@@ -277,3 +277,6 @@ mod files;
 
 #[path = "posting_tests/recovery_later.rs"]
 mod recovery_later;
+
+#[path = "posting_tests/review.rs"]
+mod review;

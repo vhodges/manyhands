@@ -24,7 +24,7 @@ use manyhands::{
     canonical::ItemId,
     drafts::{CommentTarget, DraftId},
     repository::{AuthoringKind, ItemDtoKind, MutationDataDto},
-    results::{CheckpointEffect, Envelope, ResultCode, WriteEffect},
+    results::{CheckpointEffect, Envelope, WriteEffect},
 };
 
 use super::{SlotDraft, Thread};
@@ -36,8 +36,8 @@ use crate::desktop::{
         worker::RecordState,
     },
     view::item::{
-        ItemPane, ItemRoute,
-        composer::{ComposerState, FailedAction, FailedActions},
+        ItemPane,
+        composer::{ComposerState, FailedActions},
     },
 };
 
@@ -56,7 +56,7 @@ const NEEDS_IDENTITY: &str = "Set your identity, then retry, to save this commen
 const OCCUPIED: &str = "Another file already holds this comment's place.";
 const MISMATCH_SAVED: &str =
     "This comment is saved with the text first posted under it; this text differs.";
-const MISMATCH: &str = "This text differs from the comment first posted under its ID.";
+pub(super) const MISMATCH: &str = "This text differs from the comment first posted under its ID.";
 /// An adopted draft whose post has a record: it was submitted (P11).
 pub(crate) const RESEND: &str =
     "This comment was being posted when Manyhands closed. Retry to finish posting it.";
@@ -79,6 +79,9 @@ pub(in crate::desktop::view::item) struct SlotPost {
     pub(super) resend_pending: bool,
     /// Re-targeted from this comment ID (P13): its post restarts.
     pub(super) from: Option<ItemId>,
+    /// The actions its last failed state offered: a refused re-target
+    /// keeps them.
+    pub(super) actions: Option<FailedActions>,
 }
 
 /// The kind of the item a comment is of, as a command takes it.
@@ -106,6 +109,12 @@ pub(super) fn failed_state(
             _ => {}
         }
     }
+    let maybe = result.outcome == CommentOutcome::MaybeSaved;
+    if maybe {
+        // R-19: never trapped behind Check again.
+        actions.copy_text = true;
+        actions.discard = true;
+    }
     let message = match &result.outcome {
         CommentOutcome::Mismatched { saved: true } => MISMATCH_SAVED,
         CommentOutcome::Mismatched { saved: false } => MISMATCH,
@@ -119,7 +128,11 @@ pub(super) fn failed_state(
     ComposerState::Failed {
         message: message.to_owned(),
         actions,
-        discard_note: discard_note(envelope, result.attempt.record),
+        discard_note: if maybe {
+            Some(MAY_STILL_BE_SAVED.to_owned())
+        } else {
+            discard_note(envelope, result.attempt.record)
+        },
     }
 }
 
@@ -252,11 +265,7 @@ impl ItemPane {
             return;
         };
         let resend = slot.post.sent || slot.post.unchecked || slot.post.resend_pending;
-        let from = slot.post.from.take();
-        slot.post = super::post::SlotPost {
-            sent: true,
-            ..Default::default()
-        };
+        let from = slot.post.from.clone();
         let entity = slot.composer.clone();
         let intent = Intent::CommentAdd {
             root,
@@ -266,10 +275,37 @@ impl ItemPane {
             parent_id: target.parent_id,
             body: CommentBody::new(body),
         };
-        submissions.update(cx, |submissions, _| match from {
-            Some(old) => submissions.restart(&old, &target.comment_id, intent, draft),
+        let sent = submissions.update(cx, |submissions, _| match &from {
+            Some(old) => submissions.restart(old, &target.comment_id, intent, draft),
             None => submissions.submit(intent, draft, resend),
         });
+        let Some((_, slot)) = self.composers.find(composer) else {
+            return;
+        };
+        if sent.is_none() {
+            // Refused: nothing changes, and the old target is kept. A post
+            // of this comment in flight is followed (`apply_posts`); else
+            // the text is editable again.
+            slot.post.busy = false;
+            let following = submissions
+                .read(cx)
+                .in_flight(&self.post_root(), &target.comment_id);
+            let state = if following {
+                ComposerState::Posting
+            } else {
+                ComposerState::Idle
+            };
+            entity.update(cx, |composer, cx| {
+                composer.set_state(state, window, cx);
+                composer.refuse_while_posting(cx);
+            });
+            cx.notify();
+            return;
+        }
+        slot.post = SlotPost {
+            sent: true,
+            ..Default::default()
+        };
         entity.update(cx, |composer, cx| {
             composer.set_state(ComposerState::Posting, window, cx)
         });
@@ -282,15 +318,27 @@ impl ItemPane {
         let root = self.post_root();
         let submissions = self.services.submissions().read(cx);
         let mut landed = Vec::new();
+        let mut follow = Vec::new();
         for slot in self.composers.slots() {
             let composer = slot.composer.read(cx);
-            if slot.post.busy || !matches!(composer.state, ComposerState::Posting) {
-                continue;
-            }
             let Some(target) = &slot.target else {
                 continue;
             };
+            if slot.post.busy {
+                continue;
+            }
             let id = slot.composer.entity_id();
+            let posting = matches!(composer.state, ComposerState::Posting);
+            // R-19: the composer follows its post, sent from anywhere.
+            if submissions.in_flight(&root, &target.comment_id) {
+                if !composer.is_posting() {
+                    follow.push(id);
+                }
+                continue;
+            }
+            if !posting {
+                continue;
+            }
             match submissions
                 .get(&root, &target.comment_id)
                 .map(|post| &post.state)
@@ -301,6 +349,9 @@ impl ItemPane {
                     landed.push((id, Some((envelope.clone(), result.clone()))))
                 }
             }
+        }
+        for composer in follow {
+            self.set_composer(composer, ComposerState::Posting, window, cx);
         }
         for (composer, outcome) in landed {
             match outcome {
@@ -342,6 +393,9 @@ impl ItemPane {
         cx: &mut Context<Self>,
     ) {
         if let Some((_, slot)) = self.composers.find(composer) {
+            if let ComposerState::Failed { actions, .. } = &state {
+                slot.post.actions = Some(*actions);
+            }
             slot.composer
                 .clone()
                 .update(cx, |composer, cx| composer.set_state(state, window, cx));
@@ -383,76 +437,6 @@ impl ItemPane {
             }
         }
         cx.notify();
-    }
-
-    /// An action of a failed composer.
-    pub(super) fn composer_failed_action(
-        &mut self,
-        composer: EntityId,
-        action: FailedAction,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        match action {
-            FailedAction::Retry => self.retry_post(composer, window, cx),
-            FailedAction::EditText => {
-                self.retarget(composer, super::retarget::After::Edit, window, cx)
-            }
-            FailedAction::PostAsNew => {
-                self.retarget(composer, super::retarget::After::Post, window, cx)
-            }
-            FailedAction::CheckAgain => self.check_again(composer, window, cx),
-            FailedAction::SetIdentity => cx.emit(ItemRoute::SetIdentity(self.post_root())),
-        }
-    }
-
-    /// Retry: the same request. An adopted draft that was submitted sends
-    /// its stored body again (P11); a post of this session is sent again
-    /// by `Submissions`, its declined key cleared first after an unlock
-    /// code (R-3).
-    fn retry_post(&mut self, composer: EntityId, window: &mut Window, cx: &mut Context<Self>) {
-        let root = self.post_root();
-        let worker = self.services.worker().clone();
-        let submissions = self.services.submissions().clone();
-        let Some((_, slot)) = self.composers.find(composer) else {
-            return;
-        };
-        if slot.post.busy {
-            return;
-        }
-        let Some(target) = slot.target.clone() else {
-            return;
-        };
-        let post = submissions
-            .read(cx)
-            .get(&root, &target.comment_id)
-            .map(|post| {
-                let unlock = matches!(
-                    &post.state,
-                    SubmissionState::Finished { envelope, .. }
-                        if matches!(envelope.code, ResultCode::UnlockRequired | ResultCode::UnlockFailed)
-                );
-                (post.request, unlock)
-            });
-        let retried = match post {
-            Some((request, unlock)) if !slot.post.resend_pending => {
-                if unlock {
-                    worker.clear_declined_for(request);
-                }
-                submissions.update(cx, |posts, _| posts.retry(&root, &target.comment_id))
-            }
-            _ => false,
-        };
-        if retried {
-            slot.post.sent = true;
-            let entity = slot.composer.clone();
-            entity.update(cx, |composer, cx| {
-                composer.set_state(ComposerState::Posting, window, cx)
-            });
-        } else {
-            slot.post.sent = true;
-            self.start_post(composer, false, window, cx);
-        }
     }
 }
 

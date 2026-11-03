@@ -286,6 +286,13 @@ impl Submissions {
         }
     }
 
+    /// Whether the post of `comment_id` in `repository` is in flight: posting
+    /// here, or a request of it queued or running in the worker, as a
+    /// retry from the operation area is before its `Queued` lands (R-19).
+    pub(crate) fn in_flight(&self, repository: &Path, comment_id: &ItemId) -> bool {
+        self.posting(&(repository.to_owned(), comment_id.clone()))
+    }
+
     /// Forgets the post of `comment_id` in `repository`: Check again
     /// found it listed with no record (decision 24). Not while posting.
     pub(crate) fn forget(&mut self, repository: &Path, comment_id: &ItemId) {

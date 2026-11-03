@@ -25,11 +25,12 @@ use manyhands::{
 use super::{
     SlotDraft,
     post::{
-        MAY_STILL_BE_SAVED, MAYBE_SAVED, NOT_SAVED_FINAL, RECORD_UNKNOWN, RESEND, discard_note,
-        failed_state,
+        MAY_STILL_BE_SAVED, MAYBE_SAVED, MISMATCH, NOT_SAVED_FINAL, RECORD_UNKNOWN, RESEND,
+        discard_note, failed_state, stored_body,
     },
 };
 use crate::desktop::{
+    model::publication::CommentOutcome,
     model::{
         publication::record::{Checked, Listing, RecordRead, check_again, envelope_of_record},
         stamp::{Stamp, ViewScope},
@@ -202,18 +203,23 @@ impl ItemPane {
             .read(cx)
             .get(&root, &comment)
             .and_then(|post| match &post.state {
-                SubmissionState::Finished { envelope, result } => {
-                    Some(failed_state(envelope, result))
-                }
+                SubmissionState::Finished { envelope, result } => Some((
+                    failed_state(envelope, result),
+                    matches!(result.outcome, CommentOutcome::Mismatched { .. })
+                        && result.attempt.record == RecordState::Finished,
+                )),
                 SubmissionState::Posting => None,
             });
         let Some((_, slot)) = self.composers.find(composer) else {
             return;
         };
-        if let Some(state) = known {
+        if let Some((state, mismatched)) = known {
             // Decision 25: a post that finished unsaved shows its state.
             slot.post.sent = true;
             self.set_composer(composer, state, window, cx);
+            if mismatched {
+                self.mismatch_record(composer, window, cx);
+            }
             return;
         }
         slot.post.busy = true;
@@ -267,6 +273,10 @@ impl ItemPane {
         cx: &mut Context<Self>,
     ) {
         let root = self.post_root();
+        if self.refused_in_flight(composer, window, cx) {
+            return;
+        }
+        let drafts = self.services.drafts().clone();
         let Some((_, slot)) = self.composers.find(composer) else {
             return;
         };
@@ -277,6 +287,7 @@ impl ItemPane {
             return;
         }
         slot.post.busy = true;
+        let text = slot.composer.read(cx).text(cx);
         let draft = match slot.draft {
             SlotDraft::Begun(id) => Some(id),
             _ => None,
@@ -299,11 +310,32 @@ impl ItemPane {
             let found = look.await;
             let record = found.record.unwrap_or(RecordRead::Unknown);
             let checked = check_again(&record, found.listing, last_code);
+            // Decision 24 retires only a draft whose text is the listed
+            // comment's, byte for byte (R-19).
+            let same = match checked {
+                Checked::Listed => {
+                    let body = match draft {
+                        Some(id) => stored_body(&drafts, id, cx).await.unwrap_or(text),
+                        None => text,
+                    };
+                    found.listed_body.as_deref() == Some(body.as_str())
+                }
+                _ => false,
+            };
             let _ = pane.update_in(cx, |pane, window, cx| {
                 if let Some((_, slot)) = pane.composers.find(composer) {
                     slot.post.busy = false;
                 }
-                pane.checked(composer, comment, draft, record, checked, note, window, cx);
+                pane.checked(
+                    composer,
+                    comment,
+                    (draft, same),
+                    record,
+                    checked,
+                    note,
+                    window,
+                    cx,
+                );
             });
         })
         .detach();
@@ -315,7 +347,7 @@ impl ItemPane {
         &mut self,
         composer: EntityId,
         comment: ItemId,
-        draft: Option<DraftId>,
+        (draft, same): (Option<DraftId>, bool),
         record: RecordRead,
         checked: Checked,
         note: Option<String>,
@@ -335,6 +367,15 @@ impl ItemPane {
                     self.retire_post_draft(comment, draft, cx);
                 }
                 self.clear_slot(composer, window, cx);
+            }
+            Checked::Listed if !same => {
+                // Listed with other text: a mismatch, the text kept (R-19).
+                let actions = FailedActions {
+                    copy_text: true,
+                    discard: true,
+                    ..Default::default()
+                };
+                self.set_composer(composer, failed(MISMATCH, actions, None), window, cx);
             }
             Checked::Listed => {
                 // Decision 24: shown in the thread, claiming nothing.
@@ -366,12 +407,16 @@ impl ItemPane {
                 self.set_composer(composer, state, window, cx);
             }
             Checked::Maybe { post_as_new } => {
+                // R-19: never trapped behind Check again.
                 let actions = FailedActions {
                     check_again: true,
                     post_as_new,
+                    copy_text: true,
+                    discard: true,
                     ..Default::default()
                 };
-                self.set_composer(composer, failed(MAYBE_SAVED, actions, None), window, cx);
+                let note = Some(MAY_STILL_BE_SAVED.to_owned());
+                self.set_composer(composer, failed(MAYBE_SAVED, actions, note), window, cx);
             }
         }
     }

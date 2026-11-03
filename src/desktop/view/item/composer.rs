@@ -215,6 +215,13 @@ impl Composer {
         matches!(self.state, ComposerState::Checking)
     }
 
+    /// Says that Submit, or an action, was refused while the comment is
+    /// posting (P10, R-19).
+    pub(crate) fn refuse_while_posting(&mut self, cx: &mut Context<Self>) {
+        self.refused = Some(ALREADY_POSTING);
+        cx.notify();
+    }
+
     /// Whether the owner offers a failed post's actions.
     pub(crate) fn is_failed(&self) -> bool {
         matches!(self.state, ComposerState::Failed { .. })
