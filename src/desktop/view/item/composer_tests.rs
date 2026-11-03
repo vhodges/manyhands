@@ -240,15 +240,15 @@ fn labels_and_footer_follow_the_remote_and_the_kind(cx: &mut TestAppContext) {
                     Some(post),
                     "{case}"
                 );
+                assert_eq!(
+                    bench.label("composer-hint", cx).as_deref(),
+                    Some("Ctrl Enter to post \u{b7} Esc to cancel \u{b7} F6: next region"),
+                    "{case}"
+                );
                 if reply {
                     assert_eq!(
                         bench.label("composer-cancel", cx).as_deref(),
                         Some("Cancel"),
-                        "{case}"
-                    );
-                    assert_eq!(
-                        bench.label("composer-hint", cx).as_deref(),
-                        Some("Ctrl Enter to post \u{b7} Esc to cancel"),
                         "{case}"
                     );
                     assert_eq!(
@@ -258,7 +258,6 @@ fn labels_and_footer_follow_the_remote_and_the_kind(cx: &mut TestAppContext) {
                     );
                 } else {
                     assert!(!bench.present("composer-cancel", cx), "{case}");
-                    assert!(!bench.present("composer-hint", cx), "{case}");
                     assert!(!bench.present("composer-replying-to", cx), "{case}");
                 }
             }

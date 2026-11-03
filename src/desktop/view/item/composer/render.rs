@@ -40,8 +40,9 @@ const SHARES: &str = "Posting also shares other saved work in this";
 /// The footer's words after it, and all of them without a remote.
 const UNSAVED: &str = "Unsaved edits above are not included.";
 const LOCAL: &str = "Saved on this computer.";
-/// A reply's hint. The dot is U+00B7.
-const REPLY_HINT: &str = "Ctrl Enter to post \u{b7} Esc to cancel";
+/// Each composer's hint, F6 named since Tab indents in the editor
+/// (decision 19). The dot is U+00B7.
+const HINT: &str = "Ctrl Enter to post \u{b7} Esc to cancel \u{b7} F6: next region";
 const CANCEL: &str = "Cancel";
 /// The post button's words while posting.
 const POSTING: &str = "Posting\u{2026}";
@@ -107,7 +108,7 @@ impl Composer {
         self.guarded(area, cx).child(self.editor.clone())
     }
 
-    /// The footer: a reply's hint, the explanation and a refused Submit's
+    /// The footer: the hint, the explanation and a refused Submit's
     /// words, then Cancel (a reply's, while idle) and the post button (not
     /// while failed, whose row has the actions).
     fn footer(&self, cx: &mut Context<Self>) -> impl IntoElement + use<> {
@@ -127,13 +128,13 @@ impl Composer {
             .flex_1()
             .min_w_0()
             .gap(px(2.))
-            .children(reply.then(|| {
+            .child(
                 div()
                     .id("composer-hint")
                     .test_support()
-                    .aria_label(REPLY_HINT)
-                    .child(REPLY_HINT)
-            }))
+                    .aria_label(HINT)
+                    .child(HINT),
+            )
             .child(
                 div()
                     .id("composer-footer")
