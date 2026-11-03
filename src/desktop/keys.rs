@@ -266,6 +266,7 @@ pub(crate) fn bind(cx: &mut App) {
             Some(COMMENT_COMPOSER_CONTEXT),
         ),
         KeyBinding::new("escape", CancelComposer, Some(COMMENT_COMPOSER_EDITOR)),
+        KeyBinding::new("secondary-k", InsertLink, Some(COMMENT_COMPOSER_EDITOR)),
     ]);
 }
 

@@ -141,6 +141,30 @@ pub(crate) enum ItemRoute {
 
 impl EventEmitter<ItemRoute> for ItemPane {}
 
+/// The repository's publication remote as the workspace's navigation knows
+/// it, from the repository list's summary (design, Share controls): the tab
+/// reads no remote itself (D3's fact 41).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PublicationRemote {
+    /// Navigation has not listed the repository yet.
+    #[default]
+    Unknown,
+    /// The repository has no publication remote selected.
+    Unset,
+    /// The publication remote selected, by its name.
+    Named(String),
+}
+
+impl PublicationRemote {
+    /// From a listed summary's `publication_remote`.
+    pub(crate) fn from_summary(remote: Option<&str>) -> Self {
+        match remote {
+            Some(name) => Self::Named(name.to_owned()),
+            None => Self::Unset,
+        }
+    }
+}
+
 pub(crate) struct ItemPane {
     pub(super) model: ItemView,
     services: Services,
@@ -179,6 +203,9 @@ pub(crate) struct ItemPane {
     /// The header's Share and what it last sent (`share`).
     #[allow(dead_code)] // Read from Task 8.
     share: share::ShareState,
+    /// The repository's publication remote, which the workspace sets from
+    /// its navigation as the tab opens and as the list changes.
+    publication_remote: PublicationRemote,
     /// The discussion's new-comment and reply composers (`composer`).
     #[allow(dead_code)] // Read from Task 12.
     composers: composer::Composers,
@@ -264,6 +291,7 @@ impl ItemPane {
             back_to_top: cx.focus_handle().tab_stop(true),
             discussion: discussion::Discussion::new(cx),
             share: share::ShareState::default(),
+            publication_remote: PublicationRemote::Unknown,
             composers: composer::Composers::default(),
             posting: posting::Posting::default(),
             region_end: None,
@@ -352,6 +380,27 @@ impl ItemPane {
     /// The window's draft registry, for the tab strip.
     pub(super) fn drafts(&self) -> &Entity<crate::desktop::services::drafts::DraftRegistry> {
         self.services.drafts()
+    }
+
+    /// The repository's publication remote, as navigation last gave it.
+    pub(crate) fn publication_remote(&self) -> &PublicationRemote {
+        &self.publication_remote
+    }
+
+    /// The workspace's navigation gives the repository's publication
+    /// remote: Share follows it (`share_remote_changed`). Nothing changes
+    /// when it is the one the tab holds.
+    pub(crate) fn set_publication_remote(
+        &mut self,
+        remote: PublicationRemote,
+        cx: &mut Context<Self>,
+    ) {
+        if self.publication_remote == remote {
+            return;
+        }
+        self.publication_remote = remote;
+        self.share_remote_changed(cx);
+        cx.notify();
     }
 
     /// Keep the last successful title after a failed refresh (ruling R-B5).

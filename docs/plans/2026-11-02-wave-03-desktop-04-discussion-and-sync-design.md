@@ -634,6 +634,7 @@ prompts, and native §5 proves the journey.
 | E-10 | `model/operations_tests.rs::resume_is_offered_for_a_local_operation_and_not_for_a_synchronization` | Resume offered for a remote sync row; still not for a local-context sync. | Lane B |
 | E-11 | `view/item/discussion_tests.rs::tab_runs_through_each_comment_and_reveals_its_caret` | Tab reaches each comment's Reply after the comment. | Lane D |
 | E-12 | `services/requests_tests.rs`: `every_intent`, `variant`, `changes_items_names_the_intents_that_can_change_items`, `every_intent_builds_its_own_command` | The intent lists grow from 29 to 32 with the three new intents; the "kind of its own" assertion is kept, which is why Share item and Share main have separate `JobKind`s (owner, 2026-11-02, found by Task 0's sweep). | Part 0 |
+| E-13 | `view/keyboard_tests/frame.rs::the_strip_header_chips_and_page_run_in_tab_order` | Share is a tab stop after Edit, before the first chip, as E-6 (owner, 2026-11-02, found by Lane B Task 8). Applied by Lane B in Part E's file. | Lane B |
 
 The round-1 source review swept `src/desktop` for these terms and found
 no other breakage; Task 0 sweeps again after merging main.
@@ -673,6 +674,7 @@ Applied in the approval commit:
 | R-15 | Stop is shown only when the repository has a publication remote. | A no-remote post would show a Stop that does nothing. |
 | R-13 | A declined key is not prompted again until Unlock…. | A second request gets `unlock_required` without asking. |
 | R-17 | (Task 3 review, 2026-11-02; the design was silent.) A finished record only replays, so no outcome offers a same-request resend (Retry sharing, Unlock and resend, Retry) when its record is Finished, except a share's transient codes the library still retries (`busy`, `poll_yielding`, `remote_unavailable`, `transport_unavailable`, `registration_pending`). Comment rows 6, 7, 8 and 9c then offer their fix step (if any) and Share; row 14 (written, uncommitted, its journal row final) offers Discard, Copy text and Check again, never Edit text; a share offers its fix step and Share. Outcomes carry the record they were classified under, and after a Give up no outcome offers Give up again (P14). | A dead-end button that replays the same answer forever. |
+| R-18 | (Lane A Task 6 review, 2026-11-02.) `retire_comment` returns `Task<Result<(), DraftErrorKind>>` that resolves after the delete lands, flushing any pending edit first and retiring a stored-only draft at its claimed revision. P13 re-targets as: begin the new draft, await it, retire the old one, await it, then Submit. The P9 drain hook may detach it. Open for Task 13's design checkpoint: whether `Submission` records the posted revision and passes it to retirement (sturdier than relying on flush-before-submit and a read-only composer), and that P12's "submitted" state comes from `show_request` (a record exists), since the draft schema has no such flag. | Relaunch could adopt the old comment ID, or a posted comment's draft could stay listed. |
 
 R-2, R-5, R-6, R-7 and R-11 of revision 1 became owner decisions 8, 10,
 9, 13 and 14 (Cycle).

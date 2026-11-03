@@ -13,7 +13,7 @@ use super::{
     item::text,
     item::{
         CloseThisTab, DraftDiscarded, FollowItem, InitialsInSettings, ItemPane, ItemRoute,
-        OpenDetails, ReviewInDrafts,
+        OpenDetails, PublicationRemote, ReviewInDrafts,
         tokens::{ItemColors, item_colors},
     },
     relationships::OpenRelated,
@@ -23,7 +23,7 @@ use super::{
 use crate::desktop::{
     assets::icon_path,
     model::{
-        navigation::OpenTarget,
+        navigation::{Navigation, OpenTarget},
         stamp::{RepoKey, TabId, ViewScope},
         tabs::{TabKey, Tabs},
     },
@@ -435,6 +435,30 @@ impl TabContent {
                 pane.update(cx, |pane, cx| {
                     pane.reload(cx);
                 });
+            }
+        }
+    }
+
+    /// Gives every open tab its repository's publication remote as
+    /// `navigation` lists it (design, Share controls), so no tab reads
+    /// remotes itself (D3's fact 41). The workspace calls it whenever it
+    /// changes, which covers a tab just opened or followed and a list read
+    /// that gave a new summary. A tab whose repository navigation does not
+    /// list keeps what it was last given, `Unknown` until then; a file read
+    /// by its path is of its repository like an item. A tab given what it
+    /// holds is left alone.
+    pub(super) fn share_remotes(&self, navigation: &Navigation, cx: &mut Context<Workspace>) {
+        for (id, key) in self.tabs.tabs() {
+            let Some(entry) = navigation.entry(key.repo()) else {
+                continue;
+            };
+            let remote = PublicationRemote::from_summary(
+                entry.summary.configuration.publication_remote.as_deref(),
+            );
+            if let Some(pane) = self.panes.get(id)
+                && *pane.read(cx).publication_remote() != remote
+            {
+                pane.update(cx, |pane, cx| pane.set_publication_remote(remote, cx));
             }
         }
     }
