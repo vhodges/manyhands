@@ -108,10 +108,12 @@ fn body(
                 .child(note)
         }))
         .child(
+            // Drawn "Discard · Keep editing" (the design's order), but Keep
+            // editing comes first in the tree, so it is the first Tab stop:
+            // one stray Tab and Enter keeps the text.
             h_flex()
+                .flex_row_reverse()
                 .gap_2()
-                // The safe choice is the first Tab stop: one stray Tab and
-                // Enter keeps the text.
                 .child(button("composer-discard-keep", KEEP_EDITING, keep))
                 .child(button("composer-discard-confirm", DISCARD, discard)),
         )

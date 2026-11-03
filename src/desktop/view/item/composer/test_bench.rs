@@ -368,6 +368,14 @@ impl Bench {
             .frame(cx, move |window, _| handle.is_focused(window))
     }
 
+    /// Whether the element `id` has focus.
+    pub(super) fn focused_id(&self, id: impl Into<ElementId>, cx: &mut TestAppContext) -> bool {
+        let id = id.into();
+        self.shell.frame(cx, move |window, _| {
+            window.try_find(id).and_then(|found| found.focused()) == Some(true)
+        })
+    }
+
     pub(super) fn editor_focused(&self, cx: &mut TestAppContext) -> bool {
         let editor = self.editor(cx);
         let handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));

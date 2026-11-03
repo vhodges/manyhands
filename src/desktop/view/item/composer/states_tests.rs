@@ -6,7 +6,7 @@
 //! draws a frame first, then types through the window (D3's editor-test
 //! rules). Texts are compared with `assert!`, never printed.
 
-use gpui_kit::{ClipboardItem, TestAppContext};
+use gpui_kit::{ClipboardItem, TestAppContext, test::TestWindowExt};
 
 use super::{
     ComposerState, FailedAction, FailedActions,
@@ -20,13 +20,14 @@ const BODY: &str = "One two three";
 /// A failed post's message.
 const MESSAGE: &str = "The comment could not be saved.";
 /// The failed row's controls, with what offers each.
-const FAILED_CONTROLS: [&str; 6] = [
+const FAILED_CONTROLS: [&str; 7] = [
     "composer-retry",
     "composer-edit-text",
     "composer-set-identity",
     "composer-discard",
     "composer-check-again",
     "composer-copy-text",
+    "composer-post-as-new",
 ];
 
 fn with_body() -> Setup {
@@ -53,6 +54,7 @@ fn offers(actions: FailedActions, id: &str) -> bool {
         "composer-discard" => actions.discard,
         "composer-check-again" => actions.check_again,
         "composer-copy-text" => actions.copy_text,
+        "composer-post-as-new" => actions.post_as_new,
         _ => unreachable!(),
     }
 }
@@ -157,11 +159,13 @@ fn posting_is_read_only_and_submits_nothing(cx: &mut TestAppContext) {
 }
 
 /// `Failed` shows the owner's message in red and exactly the actions it
-/// offers, no post button, and is read-only. Retry, Set identity and
-/// Check again are told to the owner, the state unchanged; Copy text puts
+/// offers, no post button, and is read-only. Retry, Set identity, Check
+/// again and Post as a new comment are told to the owner, the state
+/// unchanged; Copy text puts
 /// the text on the clipboard; Discard asks, with the owner's note; Edit
 /// text is `Idle` again, focused and editable. Escape asks to discard
-/// only when Discard is offered.
+/// only when Discard is offered. Tab from the read-only editor reaches the
+/// first action, and Shift-Tab goes back to the toolbar's stop.
 #[gpui_kit::test]
 fn failed_offers_exactly_the_actions_its_owner_sets(cx: &mut TestAppContext) {
     let bench = Bench::open(with_body(), cx);
@@ -183,6 +187,7 @@ fn failed_offers_exactly_the_actions_its_owner_sets(cx: &mut TestAppContext) {
         },
         FailedActions {
             check_again: true,
+            post_as_new: true,
             ..FailedActions::default()
         },
         FailedActions {
@@ -213,18 +218,36 @@ fn failed_offers_exactly_the_actions_its_owner_sets(cx: &mut TestAppContext) {
         discard: true,
         check_again: true,
         copy_text: true,
+        post_as_new: true,
     };
     bench.set_state(failed(all, None), cx);
     for (id, action) in [
         ("composer-retry", FailedAction::Retry),
         ("composer-set-identity", FailedAction::SetIdentity),
         ("composer-check-again", FailedAction::CheckAgain),
+        ("composer-post-as-new", FailedAction::PostAsNew),
     ] {
         bench.forget();
         bench.click(id, cx);
         assert_eq!(bench.events(), [Seen::Failed(action)], "{id}");
         assert!(bench.read_only(cx), "{id}: still failed");
     }
+
+    // Tab and Shift-Tab leave the read-only editor, which they cannot
+    // indent: on to the first action, back to the toolbar's stop.
+    bench.place(3, cx);
+    bench.keys("tab", cx);
+    assert!(
+        bench.focused_id("composer-retry-button", cx),
+        "Tab reached Retry"
+    );
+    bench.place(3, cx);
+    bench.keys("shift-tab", cx);
+    assert!(
+        bench.focused(MiniControl::Bold, cx),
+        "Shift-Tab: the toolbar"
+    );
+    assert!(bench.text(cx) == BODY, "nothing was indented");
 
     bench.forget();
     bench.click("composer-copy-text", cx);
@@ -287,6 +310,22 @@ fn esc_with_text_asks_to_discard_and_keep_editing_keeps_it(cx: &mut TestAppConte
         Some("Discard this comment?")
     );
     assert_eq!(bench.events(), [], "nothing yet");
+    // Drawn "Discard · Keep editing"; Keep editing is the first Tab stop.
+    let left = |id: &'static str, cx: &mut TestAppContext| {
+        bench.shell.frame(cx, move |window, _| {
+            window.try_find(id).expect("drawn").bounds().origin.x
+        })
+    };
+    assert!(
+        left("composer-discard-confirm", cx) < left("composer-discard-keep", cx),
+        "Discard is drawn first"
+    );
+    assert!(
+        bench
+            .shell
+            .tab_reaches("composer-discard-keep-button", 1, cx),
+        "Keep editing is the first stop"
+    );
     bench.click("composer-discard-keep", cx);
     assert!(!bench.present("composer-discard-dialog", cx), "closed");
     assert!(bench.text(cx) == BODY, "the text is kept");

@@ -90,6 +90,8 @@ impl Composer {
     }
 }
 
+// `stop`, `moved` and `inserts_text` mirror view/editor/read_only.rs.
+
 /// Stops an editing action before the editor sees it.
 fn stop<A: Action>(_: &A, _: &mut Window, cx: &mut App) {
     cx.stop_propagation();

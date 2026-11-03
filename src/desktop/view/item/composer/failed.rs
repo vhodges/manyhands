@@ -1,7 +1,8 @@
 //! A failed composer's row (design, Lane C, States): the owner's message
 //! in red, then exactly the actions the owner offers (`FailedActions`).
-//! The composer decides none of them. Retry, Set identity and Check again
-//! go to the owner as `Failed` events; Edit text goes back to `Idle` and
+//! The composer decides none of them. Retry, Set identity, Check again and
+//! Post as a new comment (P5, P16; the owner allocates the new ID) go to
+//! the owner as `Failed` events; Edit text goes back to `Idle` and
 //! tells the owner (P6); Discard asks first (`discard`); Copy text puts
 //! the text on the clipboard (P7, P12) and tells no one.
 
@@ -24,6 +25,7 @@ pub(crate) struct FailedActions {
     pub(crate) discard: bool,
     pub(crate) check_again: bool,
     pub(crate) copy_text: bool,
+    pub(crate) post_as_new: bool,
 }
 
 /// An action a failed composer tells its owner of.
@@ -34,6 +36,9 @@ pub(crate) enum FailedAction {
     EditText,
     SetIdentity,
     CheckAgain,
+    /// Post the same text under a new comment ID, which the owner
+    /// allocates (P5, P16).
+    PostAsNew,
 }
 
 /// One control of the row.
@@ -43,6 +48,7 @@ enum Control {
     EditText,
     SetIdentity,
     CheckAgain,
+    PostAsNew,
     CopyText,
     Discard,
 }
@@ -54,6 +60,7 @@ impl Control {
             Self::EditText => "composer-edit-text",
             Self::SetIdentity => "composer-set-identity",
             Self::CheckAgain => "composer-check-again",
+            Self::PostAsNew => "composer-post-as-new",
             Self::CopyText => "composer-copy-text",
             Self::Discard => "composer-discard",
         }
@@ -65,6 +72,7 @@ impl Control {
             Self::EditText => "Edit text",
             Self::SetIdentity => "Set identity",
             Self::CheckAgain => "Check again",
+            Self::PostAsNew => "Post as a new comment",
             Self::CopyText => "Copy text",
             Self::Discard => "Discard",
         }
@@ -78,6 +86,7 @@ impl FailedActions {
             (self.retry, Control::Retry),
             (self.set_identity, Control::SetIdentity),
             (self.check_again, Control::CheckAgain),
+            (self.post_as_new, Control::PostAsNew),
             (self.edit_text, Control::EditText),
             (self.copy_text, Control::CopyText),
             (self.discard, Control::Discard),
@@ -94,6 +103,7 @@ impl Composer {
             Control::Retry => FailedAction::Retry,
             Control::SetIdentity => FailedAction::SetIdentity,
             Control::CheckAgain => FailedAction::CheckAgain,
+            Control::PostAsNew => FailedAction::PostAsNew,
             Control::EditText => {
                 self.set_state(ComposerState::Idle, window, cx);
                 let editor = self.editor.read(cx).focus_handle(cx);
