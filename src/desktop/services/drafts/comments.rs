@@ -59,7 +59,6 @@ use crate::desktop::{
 
 /// An item, by its repository's registration root, its kind and its ID:
 /// whose discussion a comment draft is of.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct ItemKey {
     pub repo: RepoKey,
@@ -69,7 +68,6 @@ pub(crate) struct ItemKey {
 
 /// A comment draft of an item, stored or live in this process. It holds
 /// no text.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct CommentDraft {
     pub id: DraftId,
@@ -81,11 +79,11 @@ pub(crate) struct CommentDraft {
 
 /// A comment draft whose session this process holds: its newest text and
 /// whether that is safe in the store. It derives no `Debug`.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 pub(crate) struct AdoptedComment {
     pub id: DraftId,
     pub target: CommentTarget,
     pub body: String,
+    #[cfg_attr(not(test), allow(dead_code))] // Read by the tests only.
     pub state: RecoveryState,
 }
 
@@ -104,7 +102,6 @@ impl DraftRegistry {
     /// at revision 1, claimed, and its session. On failure nothing is
     /// stored; the caller keeps the text and the comment ID it chose, and
     /// may post with it.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
     pub(crate) fn begin_comment(
         &mut self,
         item: ItemKey,
@@ -126,7 +123,6 @@ impl DraftRegistry {
     /// store is unavailable. A draft another process holds is listed, not
     /// live; adopting it answers `OpenElsewhere`. A stored draft with a
     /// comment's target whose fields are not a comment's is not listed.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
     pub(crate) fn comment_drafts(&self, item: &ItemKey) -> Vec<CommentDraft> {
         if self.unavailable.is_some() || self.listed == 0 {
             return Vec::new();
@@ -177,7 +173,6 @@ impl DraftRegistry {
     /// that answer is final, and `comment_drafts` never lists it. An
     /// adoption of `id` that landed meanwhile in this process answers its
     /// session.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
     pub(crate) fn adopt_comment(
         &mut self,
         id: DraftId,
@@ -452,7 +447,6 @@ impl DraftRegistry {
 
     /// Discards the comment draft `id`, whatever its text: through its
     /// session when this process holds one, otherwise from the store.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
     pub(crate) fn discard_comment(&mut self, id: DraftId, cx: &mut Context<Self>) {
         if self.current_id(id).is_some() {
             self.discard(id, cx).detach();

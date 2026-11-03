@@ -42,7 +42,6 @@ pub(crate) fn open_editor(body: &str, window: &mut Window, cx: &mut App) -> Enti
 
 /// A new editor as `open_editor` makes one, for a comment composer: it
 /// shows `placeholder` while its text is empty.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
 pub(crate) fn open_compact_editor(
     body: &str,
     placeholder: &'static str,

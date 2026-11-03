@@ -35,7 +35,6 @@ use crate::desktop::services::worker::RecordState;
 
 /// What Share on an item says when the item has nothing saved to share
 /// (decision 18, U-1).
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 9.
 pub(crate) const NOTHING_TO_SHARE: &str = "Nothing to share yet: this item has no saved changes.";
 
 /// One finished attempt of a post: whether it re-sent a comment ID
@@ -270,7 +269,6 @@ impl CommentResult {
 }
 
 /// Which share a sync's answer is of.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 9.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ShareTarget {
     /// Share on an item (`item sync`).
@@ -281,7 +279,6 @@ pub(crate) enum ShareTarget {
 
 /// One finished attempt of a share: its target, where its record stood
 /// afterwards, and whether it was a Give up's re-send.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 9.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct ShareAttempt {
     pub(crate) target: ShareTarget,
@@ -290,7 +287,6 @@ pub(crate) struct ShareAttempt {
 }
 
 /// Where a share stands, by the design's sync outcome rows.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 9.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum SyncOutcome {
     Published,
@@ -329,7 +325,6 @@ pub(crate) enum SyncOutcome {
 }
 
 /// A share's outcome, with the attempt it was classified under.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 9.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct SyncResult {
     pub(crate) outcome: SyncOutcome,
@@ -337,7 +332,6 @@ pub(crate) struct SyncResult {
 }
 
 /// A control a share's outcome offers.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 9.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum SyncOffer {
     /// A new share of the same target.
@@ -358,7 +352,6 @@ pub(crate) enum SyncOffer {
 }
 
 /// The outcome of a share's attempt.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 9.
 pub(crate) fn sync_outcome(
     envelope: &Envelope<MutationDataDto>,
     attempt: ShareAttempt,
@@ -406,7 +399,6 @@ fn classify_sync(envelope: &Envelope<MutationDataDto>, attempt: ShareAttempt) ->
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 9.
 impl SyncResult {
     /// The controls this outcome offers under its attempt's record: a
     /// finished record offers the fix and a new share, never the same

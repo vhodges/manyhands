@@ -250,14 +250,12 @@ pub(crate) enum Intent {
         body: CommentBody,
     },
     /// An item's work shared with the publication remote.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
     ItemSync {
         root: PathBuf,
         kind: AuthoringKind,
         id: ItemId,
     },
     /// The primary branch shared with the publication remote.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 8.
     RepoSync {
         root: PathBuf,
     },

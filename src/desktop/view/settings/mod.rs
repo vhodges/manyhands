@@ -149,7 +149,6 @@ impl SettingsHost {
     /// Share… and Share main…: the Remotes page on `root`, even when it
     /// already works on another repository, so a publication remote is
     /// chosen for the repository shared.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 9.
     pub(crate) fn open_remotes_on(
         &mut self,
         root: PathBuf,

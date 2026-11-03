@@ -43,7 +43,6 @@ use manyhands::{
     repository::{
         CancellationToken, ConfirmationId, HostObservationDto, MutationCall, MutationDataDto,
         ProgressEvent, ProgressSink, RepositoryService, RequestId, RequestState as RecordDtoState,
-        SharedKeyId,
         keys::{SecretPassphrase, SessionCredentials},
         transport::SshAuthority,
     },
@@ -380,7 +379,6 @@ impl WorkerHandle {
     /// says it was already finished. Refused, as a retry is, while the
     /// request is queued or running, its Give up or its retry, and for a
     /// command that does not stop at safe points. True when queued.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10b.
     pub(crate) fn give_up(&self, id: DesktopRequestId) -> bool {
         self.requeue(id, None, None, true).is_some()
     }
@@ -399,9 +397,10 @@ impl WorkerHandle {
     }
 
     /// Unlock…: clears the Not now mark of `key_id`, so its next request
-    /// prompts again (R-3, R-13). True when it was declined.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10a.
-    pub(crate) fn clear_declined(&self, key_id: SharedKeyId) -> bool {
+    /// prompts again (R-3, R-13). True when it was declined. Unlock… uses
+    /// `clear_declined_for`; this per-key form serves the tests.
+    #[cfg(test)]
+    pub(crate) fn clear_declined(&self, key_id: manyhands::repository::SharedKeyId) -> bool {
         self.shared().declined.clear(key_id)
     }
 
@@ -410,7 +409,6 @@ impl WorkerHandle {
     /// clears the Not now marks of the keys `id`'s last attempt was
     /// answered `Cancelled` for, so the next request prompts for them
     /// again (R-3, R-13, R-17). True when any was still declined.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 10a.
     pub(crate) fn clear_declined_for(&self, id: DesktopRequestId) -> bool {
         self.shared().declined.clear_for(id)
     }

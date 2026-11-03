@@ -119,7 +119,9 @@ impl DeclinedKeys {
         }
     }
 
-    /// Clears `key_id`'s mark; true when it was declined.
+    /// Clears `key_id`'s mark; true when it was declined. Unlock… clears
+    /// by request (`clear_for`); this per-key form serves the tests.
+    #[cfg(test)]
     pub(crate) fn clear(&self, key_id: SharedKeyId) -> bool {
         self.lock().keys.remove(&key_id)
     }
