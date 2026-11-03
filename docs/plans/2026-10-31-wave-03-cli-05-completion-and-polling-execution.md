@@ -2215,3 +2215,160 @@ since no portable way holds their pipes. The library rows pin them (`tests/mutat
 **Verified.** `--test cli_remote -- c5_interruption`: 30 SSH cases passed in 159 s, run alone.
 `cargo fmt --check` and whole-tree `clippy --all-targets --all-features -D warnings` pass. The whole
 `cli_remote` target and the fast tier run with Task 13b, below.
+
+## Task 13b: recovery walk and exits
+
+Base `a7fbf33d` (Task 13a); `origin/main` at `0dfd5a68` is contained. Files: `tests/cli_remote/lifecycle.rs`
+(walk and evidence rows) and `tests/cli/collaboration_exits.rs` (E-8). `tests/cli/exits.rs` is C2's table and
+needed no change: C5's codes are accounted for in E-8's new table. No library, bin, support or golden file changed.
+
+### The walk: every `next:` line the C5 verbs print
+
+Each line was followed through the binary, with only its placeholders filled. A walk ends when the reservation
+is free and the work is done.
+
+| Verb and stop | Lines printed | Walked by | Outcome |
+| --- | --- | --- | --- |
+| `ticket close`, refused checkpoint merge, request | four `context` lines, the same request | `c5_lifecycle_refused_checkpoint_merge_repaired_close` (12a); `the_refused_merges_route_finishes_the_close` (10b) | free, one close merge |
+| `ticket close`, refused checkpoint merge, **under `operation resume`** | four `context` lines, the resume | **`c5_lifecycle_walk_refused_merge_under_resume_close`** (new) | free: the resume line merges once, published, checkpoint fields kept |
+| either verb, child `remote_branch_deleted`, request | `request cancel`, same request, `item republish`, same request | `c5_lifecycle_deleted_branch_request_route_*` (12a) | free, one merge |
+| either verb, child `remote_branch_deleted`, resume (decision 19) | `item republish`, the resume | `c5_lifecycle_deleted_branch_resume_route_*` (12a) | free, one merge |
+| either verb, `push_rejected` (primary, deletion) | `request.retry` | `c5_lifecycle_refused_primary_push_*`, `_refused_deletion_*` (12a) | free |
+| `ticket close`, host and unlock stops | `request.retry`, `repo.inspect` | `c5_lifecycle_host_stop_*`, `_unlock_stop_*` (12a) | free |
+| either verb, `external_change` (`PrimaryAdvanced`, stale consent) | `request.retry` / `request.prepare` | `c5_lifecycle_primary_advanced_continues_*`, `_stale_consent_*` (12a) | free |
+| either verb, `cancelled` | `request.retry` | `c5_interruption_press_*`, `_request_cancel_*` (13a) | free, one merge |
+| either verb, prepare held by a request (decision 33) | the same request | `c5_interruption_press_before_integration_*`, `_request_cancel_*` (13a) | free |
+| either verb, prepare held by an operation no request holds | the resume | `c5_lifecycle_resume_with_no_record_continues_*` (12a) | free |
+| `ticket close`, prepare `integration_conflict` | four `context` lines, "prepare again" | **`c5_lifecycle_walk_prepare_conflict_close`** (new) | free: a new prepare is ready and closes once, keeping the context's side |
+| `document promote`, prepare `integration_conflict` | the same four lines | not walked: see *Gap* below | the document's path is new to primary, so the conflict is an add/add, external only (decision 30) |
+| `ticket close`, prepare `primary_ahead_of_remote` | `poll once`, `repo sync`, "prepare again" | **`c5_lifecycle_walk_primary_ahead_close`** (new) | free: the sync publishes primary, the close finishes once |
+| `ticket close`, prepare `primary_missing` | `poll once`, "prepare again" | **`c5_lifecycle_walk_primary_missing_close`** (new) | free |
+| `ticket close`, prepare `context_missing` | `ticket save … --input -`, "prepare again" | **`c5_lifecycle_walk_context_missing_close`** (new) | free: the save makes the context, the close finishes once |
+| `poll once`, `busy` | `request.retry`, `operation list`, `operation resume --operation-id <operation-id>` | **`c5_lifecycle_walk_poll_busy_route`** (new) | free: the resume of the request's own operation (from `request show`) names only that request (`original_request_required`), and once the lease is let go the same request polls under its operation. **Finding:** `operation list` names nothing here, since the holder is a lease outside any operation, so the note's "operation list names it" doesn't hold for this holder. The row doesn't assert the list's content. |
+| `poll once`, host and unlock stops (final, "a new request") | the stop's action, then a new request | `c5_polling_host_stop_is_final_then_a_new_request`, `_unlock_stop_*` (9) | free |
+| `context sync-local`, conflict | `show-local`, `resolve-local` | Task 10b's walk; `c5_interruption_*_resolve_local` (13a) | free |
+| `context sync-local`, `identity_required` | `repo.identity_set`, the same request | `no_identity_on_a_merge_is_identity_required_then_the_same_request` (10a) | free |
+| `context resolve-local`, after a partial resolution | `request.retry` of the original | `a_partial_accepted_resolution_is_finished_by_the_same_request_and_source` (10b) | free |
+| `context sync-local` stale, `resolve-local` invalid | `observe-local` / `show-local` | the 10a and 10b rows pin the line, and a fresh observation then goes on; this walk didn't repeat them | read again, as the row shows |
+| either verb, `identity_required`; `discovery_pending` under a resume (`index.refresh`) | `repo.identity_set`; `index.refresh` | not through the binary here: the library's identity rows (Task 6) and `c5_resume_index_pending` | as the library rows |
+
+**Gap, recorded.** A promotion's `integration_conflict` at prepare prints the four `context` lines, as a
+closure's does (`way_out`, Task 7's review). The document's path is new to primary, so the conflict is an
+add/add, and `context resolve-local` refuses it as external only (decision 30). So those lines lead to the
+external repair, which the note doesn't say. This is the same follow-up candidate as decision 30's.
+
+### STOP for the owner: no CLI route frees a retained-conflict close
+
+The three stop-for-owner walks all stop at the same point. **Even with no fence, no CLI route frees a closure
+whose context child has retained a conflict.** The sequence, through the binary over SSH (`CliPair`, one clone,
+closure only):
+
+1. `ticket save` of `ITEM` in A, then `item sync`: the context is published.
+2. A peer's commit on the remote's context branch rewrites the ticket's body, and A then saves a different
+   body.
+3. `ticket close --prepare`: `ok`. Then `ticket close --request-id R4 --confirm …`: `recovery_required`, exit 3,
+   blockers `[context_conflicted, conflict_pending, context_behind_remote]`, with `next: request.retry
+   request_id=R4` and `next: repo.inspect root=…`. `operation list` shows the parent `close` (`confirmed`)
+   and its child `synchronize_context` (`interrupted`, `next_action: resume`). `poll status` shows no
+   `active_operation_id`.
+4. Each line followed:
+   - **`request.retry`:** the same answer, every time.
+   - **`repo.inspect`:** registration, branches and the remote, with nothing about the conflict.
+5. Every other route tried:
+   - `ticket close --prepare`: decision 33's hold, `next: … --request-id R4`, back to step 4.
+   - `conflict show --operation-id` of the child, or of the parent: `invalid_input`, exit 2. The C4
+     resolution route can't address a lifecycle's child, and `conflict resolve` has no observation to send.
+   - `operation resume` of the child, or of the parent: `original_request_required`, exit 3, naming R4.
+   - `context observe-local`: `worktree_conflicted`, exit 3.
+   - `item sync`: `busy`, exit 5, after C2's retries.
+   - `request cancel R4`, then R4: `cancelled`, 130, once. Then R4 is `recovery_required` again: the retained
+     conflict is kept, as `c5_cancel_retained_conflict_is_kept` pins.
+   - `operation abandon --prepare` of the parent, or of the child: `operation_not_found`, exit 2.
+
+**The fenced variants answer the same:**
+
+- **`key clear` then `key select`** of the same key, through the binary: both `ok`. Then R4 is
+  `recovery_required` with the same lines, and `conflict show` is `invalid_input`.
+- **A poll's plan failure:** `poll once` with an invalid configuration answers `invalid_configuration`,
+  so the CLI doesn't fence; the domain's automatic poll does (`c5_cancel_poll_plan_failure_…`). Then R4 is
+  as above.
+
+**A released resolution with its branch deleted can't be staged through the binary.** Making the resolution
+needs `conflict show` and `conflict resolve` of the child, and step 5 shows the CLI refuses both. The library
+stages it (`c5_cancel_fenced_released_resolution_close`, stuck, and `_released_resolution_publishes`).
+
+**The only way on is outside the CLI:** a Git repair in the context worktree (see `context observe-local`'s
+`worktree_conflicted`), then the same request. I didn't try it, since the walk stops here by the plan. The
+exploratory rows weren't committed, because they would pin a stuck answer. For a ruling: should `conflict
+show` and `conflict resolve` address a lifecycle child's synchronization, or should the answer name another
+route, or is this a Known Limit?
+
+### Exit classes (E-8)
+
+`tests/cli/collaboration_exits.rs` gains C5's set equality, beside C4's:
+
+- **The union.** `c5_union()` expands the audit's C5 result-set table with the C4 refresh's group
+  definitions, and asserts each row's count against the table's Count column. That gives 46 library codes.
+  With the CLI's `usage_error`, `invalid_id` and `command_unavailable`, there are 49 codes.
+- **`C5_ROWS`.** Each row names a `#[test]` of `tests/cli`, or a `c5_` case of `cli_remote`, where a C5 verb
+  reaches the code through the binary. A remote reference counts when its literal name is registered, or when
+  it comes from lifecycle's `both!` macro.
+- **`C5_REASONS`.** Each unreachable code has its reason:
+  - `confirmation_expired`: the clock;
+  - `remote_unavailable`: no fixture;
+  - `unlock_failed`: C2's shared prompt, which C4's PTY case reaches;
+  - `worktree_conflicted`: `poll once` connects first, and the walk's `observe-local` sighting isn't pinned;
+  - `discovery_pending`: staged in-process by `tests/cli/local_sync.rs`;
+  - `command_unavailable`: R-8;
+  - `unlock_required`, off Unix only.
+- **The other checks** are C4's: every exit matches its code's class unless the row is partial, and every
+  class from 0 to 130 is reached.
+
+**New rows that reach codes.**
+
+- `tests/cli`, with `poll once`:
+  - `c5_poll_once_refuses_each_root`: the seven root codes;
+  - `_refuses_a_remote_or_key_it_cannot_use`: `no_selected_key`, `key_unavailable`, `invalid_remote`,
+    and `transport_unavailable` against a closed port;
+  - `_of_an_unreadable_configuration_is_invalid_configuration`;
+  - `_on_a_corrupt_registry_is_index_unavailable`;
+  - `_with_an_unopenable_data_directory_is_internal_error`.
+- `cli_remote`: `c5_lifecycle_exit_evidence_close`, with:
+  - `confirmation_used`: the spent consent under a new request;
+  - `key_rejected` from `poll once`;
+  - `poll_yielding` from `poll once` under a staged poll reservation, with no connection.
+
+**Seen first.**
+
+- **Candidates that answered otherwise:** two candidate rows answered other codes, and were changed or
+  dropped before anything was committed.
+  - `poll once` with the remote deleted from Git answered `publication_remote_required`, not
+    `invalid_configuration`. The row now uses an unparseable configuration.
+  - `poll once` over a conflicted index answered `transport_unavailable`, 5, so `worktree_conflicted` has a
+    reason, not a row.
+
+  Both were choices of staging, not design rows.
+- **A count of mine was wrong.** My first set-equality assertion expected 47 library codes. The audit's own
+  per-row counts all held, and a separate expansion gives 46, so 46 is right.
+- **The rules were checked by breaking them.** With the `busy` row removed, the set equality failed. With
+  a case name misspelled, the reference check failed. Both were restored.
+- **No design row answered otherwise.** The walk rows pin routes Parts A and B built, and passed on their
+  first complete run. The evidence row's first version finished the close after a staged poll reservation,
+  which nothing owns, so every later remote call answered `poll_yielding`. It now comes last.
+
+### Verified (Tasks 13a and 13b, on the final tree)
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--test cli_remote -- c5_interruption` | 30 SSH cases, 0 failed (Task 13a) | 159 s |
+| `--test cli_remote -- c5_lifecycle_walk` | 6 SSH cases, 0 failed, run in two filters, `_poll` after its last change | ~90 s |
+| `--test cli_remote -- c5_lifecycle_exit_evidence` | 1 | ~15 s |
+| `--test cli -- exits` | 40 (C2's `exits`, C4's and C5's `collaboration_exits`) | 17 s |
+| `--test cli_remote`, whole | 154 SSH cases, 0 failed. This ran before `c5_lifecycle_walk_poll_busy_route` was added, which was then run alone. | 878 s |
+| AGENTS.md's fast tier, verbatim, with `--no-fail-fast` | 79 results, 4917 passed, 0 failed | 1419 s |
+| `cargo check --all-features`, `cargo fmt --check`, whole-tree `clippy --all-targets --all-features -D warnings` | ok | |
+
+**A first fast-tier run** stopped at `--lib`: one failure, `closure::checkpoint::tests::remote_primary_advance_from_context_synchronized_is_primary_advanced`,
+whose two `ClosureRecord`s printed alike. No `src/` file changed in either task. It passed three times run alone,
+and in the whole rerun above, so I read it as load: I was compiling `cli_remote` beside it. Recorded as a flake,
+for whoever sees it again.

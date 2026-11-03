@@ -74,6 +74,34 @@ pub const ONE: &[ssh_harness::Case] = &[
         "c5_lifecycle_refused_checkpoint_merge_repaired_close",
         c5_lifecycle_refused_checkpoint_merge_repaired_close,
     ),
+    (
+        "c5_lifecycle_walk_prepare_conflict_close",
+        c5_lifecycle_walk_prepare_conflict_close,
+    ),
+    (
+        "c5_lifecycle_walk_refused_merge_under_resume_close",
+        c5_lifecycle_walk_refused_merge_under_resume_close,
+    ),
+    (
+        "c5_lifecycle_walk_primary_ahead_close",
+        c5_lifecycle_walk_primary_ahead_close,
+    ),
+    (
+        "c5_lifecycle_walk_primary_missing_close",
+        c5_lifecycle_walk_primary_missing_close,
+    ),
+    (
+        "c5_lifecycle_walk_context_missing_close",
+        c5_lifecycle_walk_context_missing_close,
+    ),
+    (
+        "c5_lifecycle_exit_evidence_close",
+        c5_lifecycle_exit_evidence_close,
+    ),
+    (
+        "c5_lifecycle_walk_poll_busy_route",
+        c5_lifecycle_walk_poll_busy_route,
+    ),
 ];
 
 const R1: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR1";
@@ -1535,5 +1563,419 @@ fn c5_lifecycle_refused_checkpoint_merge_repaired_close() -> Result<(), FixtureE
         "the close merges once; the resolution's merge is the repair"
     );
     assert_eq!(closure_at(&p.bare()?, PRIMARY)?, checkpoint);
+    Ok(())
+}
+
+// ------------------------------------------------------- the recovery walk
+
+/// The repair's four `context` lines a human answer prints, followed with
+/// only their placeholders filled, as `c5_lifecycle_refused_checkpoint_merge_repaired_close`
+/// follows them: observe, synchronize (a conflict), show, and resolve keeping
+/// the local side. Returns the local side the resolution kept.
+fn repaired(clone: &CliClone, lines: &[Vec<String>], first: &str, second: &str) -> String {
+    let fill = |words: &[String], values: &[(&str, &str)]| -> Vec<String> {
+        words
+            .iter()
+            .map(|word| {
+                values
+                    .iter()
+                    .find(|(placeholder, _)| word == placeholder)
+                    .map_or_else(|| word.clone(), |(_, value)| (*value).to_owned())
+            })
+            .collect()
+    };
+    let human = |words: Vec<String>, input: &[u8]| {
+        let args: Vec<&str> = words.iter().map(String::as_str).collect();
+        run(&clone.env, &args, input)
+    };
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    let observed = human(lines[0].clone(), &[]);
+    assert_eq!(observed.status, 0, "{}", stderr(&observed));
+    let observation = value_after(stdout(&observed), "Observation").to_owned();
+    let synced = human(
+        fill(&lines[1], &[("<new-request-id>", first)]),
+        serde_json::json!({ "observation": observation })
+            .to_string()
+            .as_bytes(),
+    );
+    assert_eq!(synced.status, 4, "{}", stderr(&synced));
+    let sync = value_after(stderr(&synced), "Operation id").to_owned();
+    let show = fill(&lines[2], &[("<sync-operation-id>", &sync)]);
+    let shown = human(show.clone(), &[]);
+    assert_eq!(shown.status, 0, "{}", stderr(&shown));
+    let resolution = value_after(stdout(&shown), "Observation").to_owned();
+    let token = stdout(&shown)
+        .lines()
+        .find_map(|line| {
+            line.split_whitespace()
+                .find_map(|word| word.strip_prefix("token="))
+        })
+        .unwrap()
+        .to_owned();
+    let sides = json_of(clone, &show, &["--token", &token, "--json"], "ok", 0);
+    let local = sides["data"]["local"].as_str().unwrap().to_owned();
+    let body = serde_json::json!({
+        "observation": resolution,
+        "resolutions": [{ "token": token, "source": local }],
+    });
+    let resolved = human(
+        fill(
+            &lines[3],
+            &[("<sync-operation-id>", &sync), ("<new-request-id>", second)],
+        ),
+        body.to_string().as_bytes(),
+    );
+    assert_eq!(resolved.status, 0, "{}", stderr(&resolved));
+    local
+}
+
+/// A peer's retitling of the ticket on the remote's primary, with its body
+/// moved too, polled into A's primary: it conflicts with A's context.
+fn ticket_moved_on_primary(p: &CliPair, request: &str) -> Result<git2::Oid, FixtureError> {
+    let moved = format!(
+        "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {ITEM}\ntitle: Moved on primary\n\
+         type: task\nstatus: open\n---\nBody moved on primary too.\n"
+    );
+    let incoming = peer_commit(p, &Verb::Close.path(), moved.as_bytes())?;
+    poll(&p.a, request);
+    assert_eq!(p.a.tip(PRIMARY)?, Some(incoming));
+    Ok(incoming)
+}
+
+/// The `next:` lines a blocked prepare prints, in human mode, and its note.
+fn prepare_lines(clone: &CliClone, verb: Verb) -> (Vec<Vec<String>>, String) {
+    let out = run(
+        &clone.env,
+        &[&verb.args(clone)[..], &["--prepare"][..]].concat(),
+        &[],
+    );
+    assert_eq!(out.status, 3, "{}", stderr(&out));
+    (commands(stderr(&out)), stderr(&out).to_owned())
+}
+
+/// A prepare blocked by `integration_conflict` prints the four `context`
+/// lines and "Then prepare again" (Task 7's review). Followed through the
+/// binary over SSH: the repair, then a prepare that is ready, and a confirm
+/// that closes once, keeping the context's side. One verb: a promotion's
+/// document never reached primary, so its conflict there is an add/add,
+/// external only (decision 30), and the same lines lead to the external repair.
+fn c5_lifecycle_walk_prepare_conflict_close() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let p = CliPair::new()?;
+    let a = &p.a;
+    verb.begin(a, R1);
+    ticket_moved_on_primary(&p, R2)?;
+    let (lines, text) = prepare_lines(a, verb);
+    assert!(text.contains("Blockers: integration_conflict\n"), "{text}");
+    assert!(text.contains("Then prepare again."), "{text}");
+    let local = repaired(a, &lines, R3, R4);
+    assert!(local.contains("Saved for its lifecycle."), "{local}");
+    let preview = verb.prepare(a, "ok", 0);
+    let done = verb.confirm(a, R5, &preview, "ok", 0);
+    assert_eq!(done["effects"]["publication"], "published", "{done}");
+    finished_once(&p, verb, None)?;
+    let primary = fixed(a.repo()?.refname_to_id(PRIMARY))?;
+    let source = source_at(&a.repo()?, primary, &verb.path())?.ok_or(FixtureError)?;
+    assert!(source.contains("Saved for its lifecycle."), "{source}");
+    Ok(())
+}
+
+/// Under `operation resume`, a closure's refused checkpoint merge prints the
+/// four `context` lines and the resume (Task 7's review, item 1). The closure
+/// no request holds is stopped past its checkpoint in this process; a peer
+/// then moves the ticket. Followed through the binary: the repair, then the
+/// resume line, which merges once and keeps the checkpoint's fields.
+fn c5_lifecycle_walk_refused_merge_under_resume_close() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let p = CliPair::new()?;
+    let a = &p.a;
+    verb.begin(a, R1);
+    let operation = begun_outside_at(a, FailurePoint::AfterClosureCheckpoint)?;
+    let checkpoint = closure_fields(&fixed(std::fs::read_to_string(
+        verb.worktree(a).join(verb.path()),
+    ))?);
+    assert_eq!(checkpoint.len(), 2, "{checkpoint:?}");
+    ticket_moved_on_primary(&p, R2)?;
+
+    let refused = run(&a.env, &resume_args(a, &operation, R3), &[]);
+    assert_eq!(refused.status, 4, "{}", stderr(&refused));
+    let lines = commands(stderr(&refused));
+    assert_eq!(lines.len(), 5, "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("Then resume it again"),
+        "{}",
+        stderr(&refused)
+    );
+    repaired(a, &lines[..4], R4, R5);
+    let resume: Vec<&str> = lines[4].iter().map(String::as_str).collect();
+    assert_eq!(&resume[..2], ["operation", "resume"]);
+    let done = lifecycle_data(json_of(
+        a,
+        &lines[4],
+        &["--request-id", R6, "--json"],
+        "ok",
+        0,
+    ));
+    assert_eq!(done["data"]["integration"], "merged", "{done}");
+    assert_eq!(done["effects"]["publication"], "published", "{done}");
+    finished_once(&p, verb, Some(&checkpoint))
+}
+
+/// `begun_outside`, stopped at `point` in place of the first safe point.
+fn begun_outside_at(clone: &CliClone, point: FailurePoint) -> Result<String, FixtureError> {
+    let service: RepositoryService = support::FailOnce::at(point).open_service(&clone.env.data);
+    let operation_id = OperationId::new();
+    let item_id: manyhands::canonical::ItemId = fixed(ITEM.parse())?;
+    let TicketClosurePreflight::Ready(preview) =
+        fixed(service.preview_ticket_closure(PreviewTicketClosureRequest {
+            root: clone.root.clone(),
+            item_id: item_id.clone(),
+            confirmed_identity: None,
+        }))?
+    else {
+        return Err(FixtureError);
+    };
+    let _stopped = service.close_ticket(
+        CloseTicketRequest {
+            root: clone.root.clone(),
+            operation_id,
+            item_id,
+            expected: preview.expectation(),
+            approval: None,
+            confirmed_identity: None,
+        },
+        &mut SessionCredentials::new(remote_world::Provider),
+    );
+    Ok(operation_id.to_string())
+}
+
+/// `line`, a `next:` command, with each `<new-request-id>` filled by `request`,
+/// in JSON mode.
+fn followed(clone: &CliClone, line: &[String], request: &str, code: &str, status: i32) -> Value {
+    let filled: Vec<String> = line
+        .iter()
+        .map(|word| {
+            if word == "<new-request-id>" {
+                request.to_owned()
+            } else {
+                word.clone()
+            }
+        })
+        .collect();
+    json_of(clone, &filled, &["--json"], code, status)
+}
+
+/// Primary holds a commit the remote lacks: the prepare is blocked by
+/// `primary_ahead_of_remote` and prints `poll once`, then `repo sync`, then
+/// "prepare again". Followed: the poll, the sync that publishes primary, and a
+/// ready prepare that closes once. One verb: `way_out` is shared (decision 27).
+fn c5_lifecycle_walk_primary_ahead_close() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let p = CliPair::new()?;
+    let a = &p.a;
+    verb.begin(a, R1);
+    let ahead = own_commit(a, "ahead.txt", b"ahead\n")?;
+    let (lines, text) = prepare_lines(a, verb);
+    assert!(
+        text.contains("Blockers: primary_ahead_of_remote\n"),
+        "{text}"
+    );
+    assert!(text.contains("Then prepare again."), "{text}");
+    assert_eq!(lines.len(), 2, "{text}");
+    assert_eq!(&lines[0][..2], ["poll", "once"]);
+    assert_eq!(&lines[1][..2], ["repo", "sync"]);
+    followed(a, &lines[0], R2, "ok", 0);
+    followed(a, &lines[1], R3, "ok", 0);
+    assert_eq!(p.served(PRIMARY)?, Some(ahead), "primary is published");
+    let preview = verb.prepare(a, "ok", 0);
+    verb.confirm(a, R4, &preview, "ok", 0);
+    finished_once(&p, verb, None)
+}
+
+/// No tracking ref of the remote's primary: the prepare is blocked by
+/// `primary_missing` and prints `poll once`, then "prepare again". Followed:
+/// the poll reads it, and the prepare is ready and closes once.
+fn c5_lifecycle_walk_primary_missing_close() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let p = CliPair::new()?;
+    let a = &p.a;
+    verb.begin(a, R1);
+    fixed(fixed(a.repo()?.find_reference("refs/remotes/origin/main"))?.delete())?;
+    let (lines, text) = prepare_lines(a, verb);
+    assert!(text.contains("primary_missing"), "{text}");
+    assert!(text.contains("Then prepare again."), "{text}");
+    assert_eq!(lines.len(), 1, "{text}");
+    assert_eq!(&lines[0][..2], ["poll", "once"]);
+    followed(a, &lines[0], R2, "ok", 0);
+    let preview = verb.prepare(a, "ok", 0);
+    verb.confirm(a, R3, &preview, "ok", 0);
+    finished_once(&p, verb, None)
+}
+
+/// A ticket with no editing context: the prepare is blocked by
+/// `context_missing` and prints the save that makes one. Followed with the
+/// note's input (the observation `ticket show` prints, and a body): the save,
+/// then a ready prepare that closes once.
+fn c5_lifecycle_walk_context_missing_close() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let p = CliPair::new()?;
+    let a = &p.a;
+    assert_eq!(a.tip(verb.branch())?, None);
+    let (lines, text) = prepare_lines(a, verb);
+    assert!(text.contains("Blockers: context_missing\n"), "{text}");
+    assert!(text.contains("Then prepare again."), "{text}");
+    assert_eq!(lines.len(), 1, "{text}");
+    assert_eq!(&lines[0][..2], ["ticket", "save"]);
+    let shown = a.json(
+        &["ticket", "show", "--repo", a.root(), "--id", ITEM],
+        &[],
+        "ok",
+        0,
+    );
+    let input = serde_json::json!({
+        "observation": shown["data"]["observation"],
+        "body": "Saved from the route.\n",
+    });
+    let filled: Vec<String> = lines[0]
+        .iter()
+        .map(|word| {
+            if word == "<new-request-id>" {
+                R2.to_owned()
+            } else {
+                word.clone()
+            }
+        })
+        .collect();
+    let mut args: Vec<&str> = filled.iter().map(String::as_str).collect();
+    args.push("--json");
+    a.json(&args, &serde_json::to_vec(&input).unwrap(), "ok", 0);
+    let preview = verb.prepare(a, "ok", 0);
+    verb.confirm(a, R3, &preview, "ok", 0);
+    finished_once(&p, verb, None)
+}
+
+/// Exit evidence for codes a C5 verb reaches only with the server. After a
+/// close: `confirmation_used`, its spent consent under a new request; then
+/// `key_rejected` from `poll once` at a server that lets the client in without
+/// its key; then `poll_yielding` from `poll once` while a poll holds the
+/// reservation, staged as C4's `c4_interruption_poll_holds_the_reservation`.
+/// The staged reservation has no owner to finish it, so it comes last.
+fn c5_lifecycle_exit_evidence_close() -> Result<(), FixtureError> {
+    use repository::{
+        RemoteOperationPriority, RemoteOperationTarget, RemoteRefPlan, RemoteReservationOutcome,
+    };
+    let verb = Verb::Close;
+    let p = CliPair::new()?;
+    let a = &p.a;
+    verb.begin_published(&p, R1, R2);
+    let preview = verb.prepare(a, "ok", 0);
+    verb.confirm(a, R3, &preview, "ok", 0);
+    finished_once(&p, verb, None)?;
+
+    let used = verb.confirm(a, R4, &preview, "confirmation_used", 3);
+    assert_eq!(used["outcome"], "blocked", "{used}");
+    assert_eq!(merges(&a.repo()?)?, 1);
+
+    let poll = |request: &str, code: &str, status: i32| {
+        a.json(
+            &["poll", "once", "--repo", a.root(), "--request-id", request],
+            &[],
+            code,
+            status,
+        )
+    };
+    p.server.accept_anonymous();
+    poll(R5, "key_rejected", 3);
+
+    let service = fixed(RepositoryService::open_at(&a.env.data))?;
+    let plan = fixed(RemoteRefPlan::from_configuration("origin", "main"))?;
+    let held = fixed(service.reserve_remote_operation_with_priority(
+        &a.root,
+        OperationId::new(),
+        &RemoteOperationTarget::for_poll(&plan),
+        RemoteOperationPriority::Poll,
+    ))?;
+    assert!(matches!(held, RemoteReservationOutcome::Reserved(_)));
+    let opened = connections(&p);
+    let yielded = poll(R6, "poll_yielding", 5);
+    assert_eq!(actions(&yielded), ["request.retry"], "{yielded}");
+    assert_eq!(connections(&p), opened, "no connection");
+    drop((held, service));
+    Ok(())
+}
+
+/// `poll once`'s `busy` route (Task 9), walked: the repository's lease held
+/// outside the CLI, as `c5_polling_a_second_process_holds_the_lease` holds it.
+/// The answer prints `operation list`, then `operation resume` with an
+/// `<operation-id>` placeholder. Followed: the list answers, and the resume of
+/// this request's own operation (from `request show`) names only this request
+/// (`original_request_required`), which the note says to send again once the
+/// holder lets go. Sent again, the same request polls, under its operation.
+/// Named under `c5_lifecycle_walk` with Task 13b's walks.
+fn c5_lifecycle_walk_poll_busy_route() -> Result<(), FixtureError> {
+    use fs4::fs_std::FileExt;
+    let p = CliPair::new()?;
+    let a = &p.a;
+    let incoming = peer_commit(&p, "incoming.txt", b"incoming\n")?;
+    let lease = fixed(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(a.repo()?.commondir().join("manyhands-operation.lock")),
+    )?;
+    assert!(fixed(FileExt::try_lock_exclusive(&lease))?);
+    let out = run(
+        &a.env,
+        &["poll", "once", "--repo", a.root(), "--request-id", R1],
+        &[],
+    );
+    assert_eq!(out.status, 5, "{}", stderr(&out));
+    let lines = commands(stderr(&out));
+    assert_eq!(lines.len(), 2, "{}", stderr(&out));
+    assert_eq!(&lines[0][..2], ["operation", "list"]);
+    assert_eq!(&lines[1][..2], ["operation", "resume"]);
+    let own = request_show(a, R1);
+    assert_eq!(own["state"], "accepted", "{own}");
+    let operation = own["operations"][0]["operation_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    // The list answers; what it names is not asserted. Here the holder is a
+    // lease outside any operation, so it names nothing (ledger, Task 13b).
+    json_of(a, &lines[0], &["--json"], "ok", 0);
+    let resume: Vec<String> = lines[1]
+        .iter()
+        .map(|word| {
+            if word == "<operation-id>" {
+                operation.clone()
+            } else {
+                word.clone()
+            }
+        })
+        .collect();
+    let named = json_of(
+        a,
+        &resume,
+        &["--request-id", R2, "--json"],
+        "original_request_required",
+        3,
+    );
+    assert!(
+        named["recovery"][0].to_string().contains(R1),
+        "names this request: {named}"
+    );
+
+    fixed(FileExt::unlock(&lease))?;
+    let polled = a.json(
+        &["poll", "once", "--repo", a.root(), "--request-id", R1],
+        &[],
+        "ok",
+        0,
+    );
+    assert_eq!(polled["operation_id"], operation.as_str());
+    assert_eq!(a.tip(PRIMARY)?, Some(incoming));
     Ok(())
 }
