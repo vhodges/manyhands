@@ -738,6 +738,13 @@ R-2, R-5, R-6, R-7 and R-11 of revision 1 became owner decisions 8, 10,
   CLI or another process, with the same request ID) is invisible to this
   session's worker and `Submissions`, so a rewritten comment can still be
   posted beside it (decision 27's boundary, as P17's).
+- **K-18.** When a post commits with discovery pending and no tab of its
+  item is open, no background refresh runs; the comment appears in the
+  thread at the next index refresh (the refresh is tied to the tab).
+- **K-19.** The "not shared yet" chip clears when any share of the item
+  answers Published or Current, so a share that began before the
+  comment's checkpoint and finished after it can clear the chip although
+  its push may not have carried the comment (session-only, beside K-1).
 
 ## Alternatives Rejected
 
