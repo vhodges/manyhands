@@ -314,24 +314,28 @@ impl Operations {
     /// Stopping… once pressed, and nothing otherwise. A resume stops at
     /// safe points only when it takes up a synchronization: the operation
     /// it names is listed pending in its repository as a remote item or
-    /// repository synchronization, a comment's publication among them
-    /// (`takes_up_remote_work`); any other resume ignores its token.
+    /// repository synchronization (`takes_up_remote_work`); any other
+    /// resume ignores its token. Once pressed it reads Stopping… until it
+    /// ends, whatever a later read of the pending operations lists.
     pub(crate) fn stop_offer(&self, id: DesktopRequestId, remote: bool) -> StopOffer {
         let Some(request) = self.request(id) else {
             return StopOffer::NotOffered;
         };
-        if !matches!(request.state, RequestState::Running { accepted: true, .. })
-            || !request.intent.stops_at_safe_points()
+        if !matches!(request.state, RequestState::Running { accepted: true, .. }) {
+            return StopOffer::NotOffered;
+        }
+        // Signalled: it reads Stopping… until it ends, even when a read
+        // since no longer lists the operation a resume took up.
+        if self.stopping.contains(&id) {
+            return StopOffer::Stopping;
+        }
+        if !request.intent.stops_at_safe_points()
             || !remote
             || !self.resumes_remote_work(&request.intent)
         {
             return StopOffer::NotOffered;
         }
-        if self.stopping.contains(&id) {
-            StopOffer::Stopping
-        } else {
-            StopOffer::Offered
-        }
+        StopOffer::Offered
     }
 
     /// Whether `intent`, if it is a resume, names an operation its
@@ -831,11 +835,17 @@ fn is_synchronization(operation: &OperationDto) -> bool {
 
 /// Whether a pending row is remote work a resume takes up, stopping at
 /// its safe points (decision 11): a remote item or repository
-/// synchronization. A comment's publication is listed as one, the
-/// synchronization of its item that publishes it; its `submit_comment`
-/// row is the comment's local write and hand-off, which a resume takes up
-/// as any local operation, ignoring its token. A local-context
-/// synchronization, which has no remote, is not remote work.
+/// synchronization. A local-context synchronization, which has no remote,
+/// is not remote work.
+///
+/// No row the library lists is a comment's publication waiting to be
+/// resumed: the synchronization that publishes a comment is listed with
+/// no next action (`read/status.rs`, `remote_standing`), and the
+/// comment's `submit_comment` row is listed only while its local work is
+/// incomplete or waits for its registration, when a resume does that
+/// local work, ignoring its token; a resume takes up a publication only
+/// once that row has completed, when it is no longer listed
+/// (`bind/resume.rs`, `found_comment`).
 fn takes_up_remote_work(operation: &OperationDto) -> bool {
     operation.family == OperationFamily::Remote
         && matches!(
@@ -855,10 +865,11 @@ pub(crate) enum ResumeOffer {
 }
 
 /// Resume is offered when the row waits to be resumed and is a local
-/// command, a comment's `submit_comment` among them, or a remote item or
-/// repository synchronization, which a comment's publication is listed
-/// as, by its operation ID (decision 11); a local-context synchronization
-/// shows it unavailable (D5).
+/// command (a comment's incomplete `submit_comment` among them) or a
+/// remote item or repository synchronization, by its operation ID
+/// (decision 11); a local-context synchronization shows it unavailable
+/// (D5). The library lists no comment publication waiting to be resumed
+/// (`takes_up_remote_work`), so none is offered.
 pub(crate) fn resume_offer(operation: &OperationDto) -> ResumeOffer {
     if operation.next_action != Some(OperationNextAction::Resume) {
         return ResumeOffer::NotOffered;

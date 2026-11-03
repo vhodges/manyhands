@@ -481,20 +481,24 @@ fn resume_is_offered_for_a_local_operation_and_not_for_a_synchronization() {
     assert!(!abandon_offered(&key));
 }
 
-/// A comment's publication is listed as the synchronization of its item
-/// that publishes it, and its `submit_comment` row as a local operation:
-/// both waiting to be resumed offer Resume, by the row's operation ID
-/// (decision 11). A remote row that holds the reservation waits for
-/// nothing the store can say, and offers none.
+/// What the library lists of a comment (`read/status.rs`): the
+/// synchronization that publishes it with no next action, which offers
+/// no Resume, and its `submit_comment` row while its local work waits,
+/// which is a local operation and offers Resume. A remote synchronization
+/// with no operation ID offers none either.
 #[test]
-fn resume_is_offered_for_a_comment_publication_row() {
+fn a_comments_rows_offer_resume_only_for_its_local_work() {
     let mut publication = operation(
         OperationFamily::Remote,
         OperationAction::SynchronizeContext,
-        Some(OperationNextAction::Resume),
+        None,
     );
     publication.item_id = Some("01ARZ3NDEKTSV4RRFFQ69G5FS0".to_owned());
-    assert_eq!(resume_offer(&publication), ResumeOffer::Offered);
+    publication.state = "fetch_prepared".to_owned();
+    assert_eq!(resume_offer(&publication), ResumeOffer::NotOffered);
+    publication.state = "failed".to_owned();
+    assert_eq!(resume_offer(&publication), ResumeOffer::NotOffered);
+
     let submitted = operation(
         OperationFamily::Local,
         OperationAction::SubmitComment,
@@ -502,9 +506,6 @@ fn resume_is_offered_for_a_comment_publication_row() {
     );
     assert_eq!(resume_offer(&submitted), ResumeOffer::Offered);
 
-    publication.next_action = None;
-    publication.state = "fetch_prepared".to_owned();
-    assert_eq!(resume_offer(&publication), ResumeOffer::NotOffered);
     let mut unnamed = operation(
         OperationFamily::Remote,
         OperationAction::SynchronizePrimary,
@@ -575,6 +576,25 @@ fn an_accepted_resume_offers_stop() {
         assert_eq!(operations.stop_offer(id, true), StopOffer::Offered);
         assert_eq!(operations.stop_offer(id, false), StopOffer::NotOffered);
     }
+}
+
+/// Stop pressed on a resume reads Stopping… until it ends, even when a
+/// read of the pending operations since no longer lists the operation it
+/// took up.
+#[test]
+fn a_stopping_resume_reads_stopping_after_its_row_goes() {
+    let row = operation(
+        OperationFamily::Remote,
+        OperationAction::SynchronizePrimary,
+        None,
+    );
+    let named = row.operation_id.clone().unwrap();
+    let (mut operations, id) = running_resume(vec![row], &named);
+    operations.stopping(id);
+    assert_eq!(operations.stop_offer(id, true), StopOffer::Stopping);
+    let stamp = operations.load_pending("/fixture/a".to_owned());
+    assert!(operations.apply_pending(stamp, ReadResult::Ok(list(vec![]))));
+    assert_eq!(operations.stop_offer(id, true), StopOffer::Stopping);
 }
 
 /// A resume of local work ignores its token after acceptance

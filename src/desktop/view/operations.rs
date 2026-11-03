@@ -28,11 +28,12 @@
 //! **Pending in repositories** lists the operations each listed
 //! repository reports with work outstanding: command, scope, operation ID
 //! and what it waits for. A local operation, or a remote item or
-//! repository synchronization, waiting to be resumed offers Resume (a
-//! comment's publication is listed as the synchronization that publishes
-//! it, decision 11); a local-context synchronization shows Resume
-//! unavailable (D5). A pending local operation offers Abandon, which is
-//! confirmed.
+//! repository synchronization, waiting to be resumed offers Resume
+//! (decision 11); a local-context synchronization shows Resume
+//! unavailable (D5). The library lists a comment's publication with
+//! nothing to resume, and its `submit_comment` row only while its local
+//! work waits, so no publication is offered Resume. A pending local
+//! operation offers Abandon, which is confirmed.
 //!
 //! Every recovery action an envelope offers is a control: the ones D1
 //! offers run, the rest are text, unavailable. So is the Retry of a context

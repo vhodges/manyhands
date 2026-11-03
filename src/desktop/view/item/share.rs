@@ -57,9 +57,11 @@ use crate::desktop::{
     },
 };
 
-/// The scope of the read after a share (`read_after_share`). The tab's
-/// share state keeps its own generations, so it is no tab's but its own.
-const AFTER_SHARE: ViewScope = ViewScope::Tab(TabId(0));
+/// The scope the read after a share (`read_after_share`) is stamped
+/// under. Its stamps are checked only against `ShareState`'s own
+/// generations, never against a tab's, so the scope is a fixed key and
+/// `TabId(0)` names no tab.
+const AFTER_SHARE_SCOPE: ViewScope = ViewScope::Tab(TabId(0));
 
 /// The item `id` of the repository at `root`'s observation as it reads
 /// now; `None` when it cannot be read.
@@ -224,7 +226,7 @@ impl ItemPane {
             return;
         };
         let (root, id) = (PathBuf::from(repo), id.clone());
-        let stamp = self.share.generations.next(AFTER_SHARE);
+        let stamp = self.share.generations.next(AFTER_SHARE_SCOPE);
         self.share.after = Some(self.services.read_job(
             stamp,
             move |reader| observation_of(reader, root, id),
