@@ -1899,3 +1899,69 @@ the same and differ in a field `Debug` leaves out. It passes alone, three runs o
 this round changed. It passed in the gate's `--lib` above, so it is recorded as a timing flake, not fixed.
 That run stopped at `--lib`, so the tier was run again whole, with `--no-fail-fast`: exit 0, 79 test results,
 4908 passed, none failed (`--lib` 1347).
+
+## Task 12a: lifecycle exit evidence over SSH
+
+Base `565523cc`; `origin/main` at `0dfd5a68` is contained. `tests/cli_remote/lifecycle.rs` holds the
+`c5_lifecycle_` cases, each a fresh `CliPair` under the 100-second watchdog, registered as `lifecycle::BOTH`
+and `lifecycle::ONE` in `tests/cli_remote.rs`. No library or bin file changed.
+
+**Staging.** A CLI child can't take a failure point. Three rows run their first call in the test's own
+process, on the clone's own data and with the confirmation the binary issued, and everything after it through
+the binary: `PrimaryAdvanced` (`AfterContextSync`), the refused checkpoint merge (`AfterClosureCheckpoint`),
+and a parent no request record holds (the domain's entry point stopped at `AfterConfirmed`, as `c5_resume`
+begins one). The unlock row's middle call also runs there (`AfterPublication`), because the PTY harness waits
+ten seconds for its child and each connection decrypts the key again: a whole close at a terminal took longer.
+
+**Rows (both verbs unless named).**
+
+| Case | What it shows through the binary |
+| --- | --- |
+| `dirty_primary_blocks` | `recovery_required`, 3, blockers `[primary_dirty]`, `repo.inspect`, `Blockers: primary_dirty` in text; no ref moves at either end, no push. Clean again, ready. |
+| `stale_consent_context_moved_close` | A second save between prepare and confirm: `external_change`, 3, `request.prepare`, no record, no merge, context kept; a fresh consent finishes once. One verb (decision 27: one digest). |
+| `refused_primary_push_then_same_request` | `push_rejected`, 4, partial, integration complete, publication and cleanup pending, context and worktree kept, record accepted. `operation resume` answers `original_request_required`, 3, naming the request, with no record of its own. Refused again under the same request: one merge still. Accepted: `ok`, published, cleaned up, one merge, one checkpoint, `closed_at`/`closed_by` unchanged; the replay is identical with no connection. |
+| `refused_deletion_then_same_request` | `push_rejected`, 4, published, `cleanup_pending: remote_deletion_rejected`, `request.retry` alone; the same request then deletes the branch; one merge, one checkpoint, fields kept; replay with no connection. |
+| `primary_advanced_continues` | Stopped after the context's synchronization (published first, so nothing durable), a peer's commit polled in: `external_change`, 3, blocked, `request.retry`, `repo.inspect`, same operation, record accepted; the same request then merges once, on top of the peer's commit. |
+| `resume_with_no_record_continues` | A new prepare is held, naming `operation.resume` with the operation (decision 33). The resume finishes in human mode; its JSON replay is the lifecycle's data with no connection; a fresh resume is `already_applied`; the same request ID for another operation is `request_mismatch`, 2; a malformed operation ID is `invalid_id`, 2. |
+| `deleted_branch_request_route` | Decision 18: `remote_branch_deleted`, 3, `request.cancel`, `repo.inspect`; `request cancel`, the same request `cancelled` 130 with nothing pushed, `item republish` (one push), the same request `ok`, one merge. For a close, the four `next:` lines printed are exactly the commands run. |
+| `deleted_branch_resume_route` | Decision 19: under `operation resume`, `remote_branch_deleted`, 3, `operation.resume` (naming the operation), `repo.inspect`, no record; `item republish`; the resume again `ok`, one merge. For a close, the two `next:` lines printed are the commands run. |
+| `host_stop_then_same_request_close` | A rotated host key: `host_replacement_required`, 3, `request.retry`, `repo.inspect`, record accepted; `host replace` through the binary; the same request finishes once. One verb: the child's synchronization is shared. |
+| `unlock_stop_then_same_request_close` (Unix) | A protected key with no terminal: `unlock_required`, 3, `request.retry`, record accepted; past publication, the deletion stops the same way, 4, partial; at a PTY the same request asks for the passphrase and completes, one merge, one checkpoint, published; the passphrase is in no output or transcript. One verb, as the host row. |
+| `refused_checkpoint_merge_repaired_close` | The local recovery over SSH: stopped past its checkpoint, a peer's edit of the ticket polled in, the same request refused (4) with the four `context` lines; each run with only its placeholders filled; the same request then `ok`, published, `integration: merged`; primary's merges are the closure's one integration and the resolution's, and the remote's primary holds the checkpoint's `closed_at` and `closed_by`. `tests/cli/local_sync.rs` proves it with no remote. |
+
+**Referenced, not repeated:** `c5_polling_promote_then_close_needs_no_poll` (both verbs published, then
+`ticket_closed`), `c5_polling_item_sync_of_a_copy_the_remote_still_holds` (a refused deletion's first answer),
+`tests/cli/lifecycle.rs` (Task 7's prepare, confirm, mismatch, local-only and sentinel rows), and the library
+tables for the expired confirmation's stored clock and cache loss.
+
+**Seen first.** No row here tests behaviour new in this task: Parts A and B implemented it, and the rows pin
+it through the binary. 14 of the 20 first written passed on their first run. What failed:
+
+- **`stale_consent_primary_moved` (both verbs) answered otherwise, and is not committed.** See Blockers.
+- `deleted_branch_request_route_promote` and `deleted_branch_resume_route_promote`, on the human lines. See
+  Blockers. The rows now follow the JSON actions for a promotion, and assert the printed lines for a close.
+- Fixture faults, not answers: the refused checkpoint merge first moved only the ticket's title on primary,
+  which Git merged cleanly with the checkpoint (the close answered `ok`), so the peer now edits the body line
+  too; the unlock row's terminal run exceeded the PTY harness's ten seconds, hence the staging above.
+
+**Blockers (for the owner), each left out of the commit as a row.**
+
+1. **A primary that moves by a clean fast-forward between prepare and confirm does not refuse the
+   consent.** The Cycle's acceptance row says "A prepare whose context or primary then moves answers
+   `external_change` at confirm". Through the binary, for both verbs: prepare (preview `primary_oid`
+   `57dcd346`), a peer's commit of an unrelated file on the remote's primary, `poll once` fast-forwards
+   primary to `95b3a04b`, then the confirmation answers **`ok`**: one merge `[95b3a04b, checkpoint]`,
+   published. The library's tables never move primary before a confirmation (`stale_at_confirm` dirties
+   primary; `crash_before_record_stale` edits the context). Not fitted; the row is out of the commit.
+2. **A promotion's stop at its child carries no lifecycle data, so its human answer prints no route.**
+   `document promote` meeting the deleted branch answers `remote_branch_deleted`, 3, with `request.cancel`,
+   `repo.inspect` as designed, but `data: null` and every effect `not_requested`; a close's answer carries its
+   data. `human_lifecycle` keys the route on the data, so a promotion prints only `next: request.cancel ...`
+   and `next: repo.inspect ...`, and under `operation resume` it prints C4's comment note ("the request that
+   started this publication, its comment add or item sync, still holds the reservation ..."), which is false
+   for a lifecycle resume that let the child go. Decision 19 says Task 7's human lines print the route. The
+   JSON routes walk to a finish for both verbs.
+
+**Verified.** `--test cli_remote -- c5_lifecycle`: 18 SSH cases passed in 228 s (one case was changed after
+it, the resume row's matrix cells, and that case was rerun alone for both verbs). `cargo fmt --check` and
+whole-tree clippy with `-D warnings` pass.

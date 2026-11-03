@@ -12,6 +12,8 @@ mod hosts;
 mod interruption;
 #[path = "cli_remote/journeys.rs"]
 mod journeys;
+#[path = "cli_remote/lifecycle.rs"]
+mod lifecycle;
 // As in the other SSH targets, preserve the shared fixture's domain error type.
 // Limit this allowance to that imported module, not the CLI cases or bin modules.
 #[allow(clippy::result_large_err)]
@@ -104,6 +106,8 @@ fn main() {
         .chain(collaboration::CASES)
         .chain(conflicts::CASES)
         .chain(polling::CASES)
+        .chain(lifecycle::BOTH)
+        .chain(lifecycle::ONE)
         .copied()
         .collect();
     ssh_harness::run(&cases);
