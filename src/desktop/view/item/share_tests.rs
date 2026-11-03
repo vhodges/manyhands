@@ -36,9 +36,13 @@ use crate::desktop::{
         requests::{CommentBody, DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
         worker::WorkerEvent,
     },
-    test_support::fixtures::{Fixture, item_id},
+    test_support::{
+        drafts::store_draft,
+        fixtures::{Fixture, item_id},
+    },
     view::{
         harness::{Shell, WAIT, key},
+        item::pill::{PillState, pill_words},
         operations::{STOP, STOPPING, request_id},
         settings::Shown,
         sidebar::{SHARE_MAIN, SHARE_MAIN_BUTTON, SHARE_MAIN_SET_UP, SHARING},
@@ -788,5 +792,84 @@ fn share_opens_remotes_on_its_own_repository_after_another(cx: &mut TestAppConte
         shell.label("remotes-root", cx),
         Some(format!("Repository: {}", key(&b))),
         "the Remotes page works on the item's repository"
+    );
+}
+
+fn published() -> Envelope<MutationDataDto> {
+    Envelope::classified_mutation(
+        "item sync",
+        Scope::default(),
+        false,
+        ResultCode::Ok,
+        Effects {
+            publication: PublicationEffect::Published,
+            ..Effects::not_requested()
+        },
+        false,
+    )
+}
+
+/// A kept draft of the item outranks a Shared outcome in the pill: the
+/// pill says the draft is kept, and the entry still says Shared.
+#[gpui_kit::test]
+fn a_kept_draft_after_a_shared_outcome_reads_draft_kept(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.commit_ticket(&root, TICKET, "Shared", "");
+    fixture.publish_over_ssh(&root);
+    fixture.refresh(&root);
+    store_draft(&fixture, &root, ItemDtoKind::Ticket, TICKET, "Draft body");
+    let shell = Shell::open(fixture, cx);
+    open_ticket(&shell, &root, cx);
+    let kept = pill_words(PillState::ViewingDraftKept);
+    assert_eq!(shell.label("item-pill", cx).as_deref(), Some(kept));
+
+    let share = running(&shell, 1, item_sync(&root), cx);
+    finish_with(&shell, share.id, published(), cx);
+    assert_eq!(
+        shell.label(request_id(share.id, "outcome"), cx).as_deref(),
+        Some(SHARED)
+    );
+    assert_eq!(shell.label("item-pill", cx).as_deref(), Some(kept));
+}
+
+/// The pill says a Shared outcome only of the read it was first seen
+/// with: once the item reads otherwise, the pill reads the item again.
+#[gpui_kit::test]
+async fn a_shared_outcome_leaves_the_pill_once_the_item_reads_otherwise(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(true, cx);
+    open_ticket(&shell, &root, cx);
+    let share = running(&shell, 1, item_sync(&root), cx);
+    finish_with(&shell, share.id, published(), cx);
+    // The share's own reload of the tab leaves the file as it was.
+    shell.run(cx);
+    assert_eq!(shell.label("item-pill", cx).as_deref(), Some(SHARED));
+
+    shell
+        .fixture
+        .commit_ticket(&root, TICKET, "Changed since", "");
+    let refresh = shell.workspace.update(cx, |workspace, _| {
+        workspace.services().worker().submit(
+            Intent::IndexRefresh { root: root.clone() },
+            Lane::User,
+            None,
+            None,
+        )
+    });
+    shell.until_ended(refresh, cx).await;
+    shell
+        .until_drawn(cx, "the tab read the changed item", |shell, cx| {
+            shell.label("item-title", cx).as_deref() == Some("Changed since")
+        })
+        .await;
+    assert_eq!(
+        shell.label("item-pill", cx).as_deref(),
+        Some(pill_words(PillState::ViewingShared))
+    );
+    assert_eq!(
+        shell.label(request_id(share.id, "outcome"), cx).as_deref(),
+        Some(SHARED),
+        "the entry still says it"
     );
 }

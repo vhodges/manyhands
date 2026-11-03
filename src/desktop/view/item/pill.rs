@@ -194,15 +194,15 @@ pub(super) fn progress_pill(
     drawn(Mark::Spinner, cx.theme().info, words.into(), read, cx)
 }
 
-/// The pill of the item's finished share, in its outcome's `words`: a
-/// conflict needs attention; any other outcome is the shared copy's.
+/// The pill of the item's finished share, in its outcome's `words`: one
+/// that needs `attention` has its look; the rest, the shared copy's.
 pub(super) fn outcome_pill(
     words: &str,
-    conflict: bool,
+    attention: bool,
     read: Option<&ItemDto>,
     cx: &App,
 ) -> impl IntoElement + use<> {
-    let state = if conflict {
+    let state = if attention {
         PillState::NeedsAttention
     } else {
         PillState::ViewingShared

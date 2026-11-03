@@ -37,7 +37,7 @@ use crate::desktop::{
         stamp::SettingsPage,
     },
     services::{
-        JobKind,
+        JobKind, ReadKind,
         requests::{DesktopRequestId, Intent},
     },
     test_support::fixtures::item_id,
@@ -342,12 +342,36 @@ fn busy_without_a_known_holder_points_to_pending_operations(cx: &mut TestAppCont
         outcome(&shell, id, cx).as_deref(),
         Some(ANOTHER_SHARE_HOLDS)
     );
+    let before = shell.backend.reads_seen(ReadKind::Operations);
     shell.click(request_id(id, offer_part(SyncOffer::ShowHolder)), cx);
     shell.run(cx);
     assert!(shell.present(Region::Operations.ring_id(), cx));
+    assert!(
+        shell.backend.reads_seen(ReadKind::Operations) > before,
+        "the pending operations were read again"
+    );
     assert_eq!(
         shell.label("pending-empty", cx).as_deref(),
-        Some(super::super::NOTHING_PENDING),
-        "the pending operations, read again"
+        Some(super::super::NOTHING_PENDING)
     );
+}
+
+// --- The record ---
+
+/// R-17: a failure the same request cannot get past, its record
+/// finished, offers Share, a new request, and not Retry, which would only
+/// replay the answer.
+#[gpui_kit::test]
+async fn a_final_failure_on_a_finished_record_offers_share_not_retry(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = open(false, cx);
+    let id = real_share(
+        &shell,
+        &root,
+        answer(ResultCode::PushRejected, Effects::not_requested()),
+        cx,
+    )
+    .await;
+    assert_row(&shell, id, None, &[SyncOffer::Share], cx);
+    assert!(!shell.present(request_id(id, offer_part(SyncOffer::Retry)), cx));
 }

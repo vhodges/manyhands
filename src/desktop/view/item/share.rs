@@ -13,7 +13,9 @@
 //! (`share_progress`, design, Stage text), from the request model. Once
 //! the item's newest share has finished, and until its operation area
 //! entry is dismissed, the pill says its outcome while no edit session
-//! says more, and a conflict raises the item's conflict banner, which
+//! says more, the item reads as the shared copy (or the share stopped on
+//! a conflict), and the item's read is still the one the outcome was
+//! first seen with; a conflict raises the item's conflict banner, which
 //! offers nothing (`share_outcome`, decision 13).
 //!
 //! The remote is the workspace's navigation's (`publication_remote`,
@@ -28,7 +30,7 @@ use gpui_kit::{
     component::{Disableable, Icon, Sizable, button::Button},
     div,
 };
-use manyhands::repository::{AuthoringKind, ItemDtoKind};
+use manyhands::repository::{AuthoringKind, ItemDto, ItemDtoKind};
 
 use super::{ItemPane, ItemRoute, PublicationRemote};
 use crate::desktop::{
@@ -39,7 +41,7 @@ use crate::desktop::{
         operations::{Progressing, progress_words},
         publication::SyncOutcome,
     },
-    services::requests::{Intent, Lane, RequestState},
+    services::requests::{DesktopRequestId, Intent, Lane, RequestState},
     view::{
         operations::{share_result, share_words},
         sidebar::SHARING,
@@ -69,14 +71,22 @@ pub(crate) fn share_tooltip(remote: &str) -> String {
 pub(super) struct ShareState {
     progress: Option<String>,
     pub(super) outcome: Option<ShareOutcome>,
+    /// The share whose outcome the pill may say, and the item's read
+    /// (`observation`) when its outcome was first seen: a later read that
+    /// differs ends it in the pill.
+    seen: Option<(DesktopRequestId, Option<String>)>,
 }
 
 /// What the item's newest finished share, while its operation area entry
 /// is listed, says in the pill, and whether it stopped on a conflict.
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct ShareOutcome {
+    pub(super) request: DesktopRequestId,
     pub(super) words: String,
     pub(super) conflict: bool,
+    /// Every outcome but shared, already current and nothing to share
+    /// needs attention.
+    pub(super) attention: bool,
 }
 
 impl ItemPane {
@@ -124,6 +134,13 @@ impl ItemPane {
     pub(super) fn share_progressed(&mut self, cx: &mut Context<Self>) {
         let progress = self.share_progress(cx);
         let outcome = self.share_outcome(cx);
+        // The read the outcome is first seen with is the one it speaks of.
+        if let Some(outcome) = &outcome
+            && self.share.seen.as_ref().map(|(id, _)| *id) != Some(outcome.request)
+            && let Some(item) = self.model.item().rows()
+        {
+            self.share.seen = Some((outcome.request, item.observation.clone()));
+        }
         if self.share.progress != progress || self.share.outcome != outcome {
             self.share.progress = progress;
             self.share.outcome = outcome;
@@ -147,9 +164,23 @@ impl ItemPane {
             .latest_item_share(&root, kind, &id)?;
         let result = share_result(&self.services, latest, cx)?;
         Some(ShareOutcome {
+            request: latest,
             words: share_words(&self.services, latest, &result, cx)?,
             conflict: matches!(result.outcome, SyncOutcome::Conflict { .. }),
+            attention: !matches!(
+                result.outcome,
+                SyncOutcome::Published | SyncOutcome::Current | SyncOutcome::NothingToShare
+            ),
         })
+    }
+
+    /// The outcome the pill may say: while `read`, the item as the tab
+    /// read it, is the read it was first seen with.
+    pub(super) fn share_outcome_shown(&self, read: Option<&ItemDto>) -> Option<&ShareOutcome> {
+        let outcome = self.share.outcome.as_ref()?;
+        let (id, observation) = self.share.seen.as_ref()?;
+        (*id == outcome.request && read.map(|item| &item.observation) == Some(observation))
+            .then_some(outcome)
     }
 
     /// What the pill says while a share (`item sync`) or a post

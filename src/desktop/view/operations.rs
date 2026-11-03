@@ -304,7 +304,7 @@ impl Workspace {
                 if let Some(result) = self.finished_share(id, cx)
                     && let Some(words) = share_words(self.services(), id, &result, cx)
                 {
-                    controls = controls.child(text(request_id(id, "outcome"), words).text_sm());
+                    entry = entry.child(text(request_id(id, "outcome"), words).text_sm());
                 }
                 controls = controls.child(self.dismiss(id, cx));
             }
