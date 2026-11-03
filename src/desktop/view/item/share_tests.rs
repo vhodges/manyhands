@@ -21,7 +21,7 @@ use crate::desktop::{
     view::{
         harness::{Shell, key},
         settings::Shown,
-        sidebar::{SHARE_MAIN, SHARE_MAIN_BUTTON, SHARING},
+        sidebar::{SHARE_MAIN, SHARE_MAIN_BUTTON, SHARE_MAIN_SET_UP, SHARING},
     },
 };
 
@@ -223,7 +223,16 @@ async fn share_main_in_the_repository_detail_submits_repo_sync(cx: &mut TestAppC
         "Share main sent repo sync"
     );
     assert_eq!(shell.label(SHARE_MAIN_BUTTON, cx).as_deref(), Some(SHARING));
-    shell.click(SHARE_MAIN_BUTTON, cx);
+    // The button is disabled, so a press reaches nothing: Share main's own
+    // guard is asked directly, as a press made before the frame is.
+    let workspace = shell.workspace.clone();
+    let repo = key(&root);
+    shell.visual(cx).update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.share_main(repo, true, window, cx)
+        })
+    });
+    shell.run(cx);
     assert_eq!(
         repo_syncs(&shell, &root, cx),
         1,
@@ -239,4 +248,64 @@ async fn share_main_in_the_repository_detail_submits_repo_sync(cx: &mut TestAppC
         shell.label(SHARE_MAIN_BUTTON, cx).as_deref(),
         Some(SHARE_MAIN)
     );
+}
+
+/// With no publication remote, the repository detail reads Share main…,
+/// and pressing it opens Settings › Remotes, sending nothing.
+#[gpui_kit::test]
+fn share_main_without_a_remote_reads_share_main_and_opens_remotes(cx: &mut TestAppContext) {
+    let (shell, root) = shell(false, cx);
+    shell.select(&root, cx);
+    assert_eq!(
+        shell.label(SHARE_MAIN_BUTTON, cx).as_deref(),
+        Some(SHARE_MAIN_SET_UP)
+    );
+
+    shell.click(SHARE_MAIN_BUTTON, cx);
+    let shown = shell
+        .workspace
+        .read_with(cx, |workspace, cx| workspace.settings_shown(cx));
+    assert!(matches!(shown, Shown::Settings(SettingsPage::Remotes)));
+    assert_eq!(repo_syncs(&shell, &root, cx), 0, "nothing was sent");
+}
+
+/// While an item tab is shown, the repository detail at the end of its
+/// scroll region offers Share main too, and it sends `repo sync`.
+#[gpui_kit::test]
+async fn share_main_at_the_end_of_an_item_tab_submits_repo_sync(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(true, cx);
+    shell.select(&root, cx);
+    open_ticket(&shell, &root, cx);
+    assert!(
+        shell
+            .workspace
+            .read_with(cx, |workspace, _| workspace.item_pane())
+            .is_some(),
+        "the ticket's tab is shown"
+    );
+    // The detail ends the item's scroll region: End brings it on screen.
+    shell.keys("secondary-3", cx);
+    shell.keys("end", cx);
+    assert_eq!(
+        shell.label(SHARE_MAIN_BUTTON, cx).as_deref(),
+        Some(SHARE_MAIN)
+    );
+
+    let held = shell.backend.hold_job(JobKind::SynchronizeRepo);
+    shell.click(SHARE_MAIN_BUTTON, cx);
+    held.wait_reached();
+    assert_eq!(
+        repo_syncs(&shell, &root, cx),
+        1,
+        "Share main sent repo sync"
+    );
+    assert_eq!(shell.label(SHARE_MAIN_BUTTON, cx).as_deref(), Some(SHARING));
+    assert_eq!(item_syncs(&shell, &root, cx), 0, "not the item's share");
+
+    let sent = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::RepoSync { .. })
+    });
+    held.release();
+    shell.until_ended(sent[0], cx).await;
 }
