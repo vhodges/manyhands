@@ -40,6 +40,26 @@ pub(crate) fn open_editor(body: &str, window: &mut Window, cx: &mut App) -> Enti
     })
 }
 
+/// A new editor as `open_editor` makes one, for a comment composer: it
+/// shows `placeholder` while its text is empty.
+#[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
+pub(crate) fn open_compact_editor(
+    body: &str,
+    placeholder: &'static str,
+    window: &mut Window,
+    cx: &mut App,
+) -> Entity<EditorState> {
+    let text = crlf_to_lf(body);
+    let style = style::page_style(cx);
+    cx.new(|cx| {
+        let mut editor = EditorState::new(window, cx)
+            .with_text(text)
+            .with_placeholder(placeholder);
+        editor.set_markdown_style(style, cx);
+        editor
+    })
+}
+
 /// R-67: keeps `editor`'s caret in view in the region `scroll` scrolls.
 /// The editor never scrolls itself (fact 70), and no focus-reveal marker
 /// sits on it, since a marker would move a tall editor to its top on
