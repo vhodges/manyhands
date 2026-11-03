@@ -72,7 +72,8 @@ const OFFERS: [SyncOffer; 9] = [
 
 /// Repository `a` holding the ticket, publishing over SSH, indexed, in an
 /// open window. With `committed`, the publication selection is committed,
-/// so a share is accepted.
+/// so a share is accepted. Without it, the configuration holds an
+/// uncommitted edit, so a share is refused before its acceptance.
 pub(super) fn open(committed: bool, cx: &mut TestAppContext) -> (Shell, PathBuf) {
     open_with(committed, false, cx).0
 }
@@ -91,6 +92,14 @@ pub(super) fn open_with(
     if committed {
         let config = fs::read(root.join(CONFIG_PATH)).unwrap();
         fixture.commit_file(&root, CONFIG_PATH, &config);
+    } else {
+        // `remote select` commits the selection, and since C5's fix of
+        // `01M669FJR2` it leaves the index current, so the tree is clean.
+        // An uncommitted edit keeps the configuration dirty, as the stale
+        // index left it before that fix.
+        let mut config = fs::read(root.join(CONFIG_PATH)).unwrap();
+        config.extend_from_slice(b"# An uncommitted edit.\n");
+        fs::write(root.join(CONFIG_PATH), config).unwrap();
     }
     fixture.refresh(&root);
     ((Shell::open(fixture, cx), root), other)
