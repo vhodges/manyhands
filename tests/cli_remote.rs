@@ -12,6 +12,8 @@ mod hosts;
 mod interruption;
 #[path = "cli_remote/journeys.rs"]
 mod journeys;
+#[path = "cli_remote/journeys_c5.rs"]
+mod journeys_c5;
 #[path = "cli_remote/lifecycle.rs"]
 mod lifecycle;
 // As in the other SSH targets, preserve the shared fixture's domain error type.
@@ -108,6 +110,7 @@ fn main() {
         .chain(polling::CASES)
         .chain(lifecycle::BOTH)
         .chain(lifecycle::ONE)
+        .chain(journeys_c5::CASES)
         .copied()
         .collect();
     ssh_harness::run(&cases);

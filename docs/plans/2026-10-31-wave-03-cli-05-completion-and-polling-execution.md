@@ -1965,3 +1965,58 @@ it through the binary. 14 of the 20 first written passed on their first run. Wha
 **Verified.** `--test cli_remote -- c5_lifecycle`: 18 SSH cases passed in 228 s (one case was changed after
 it, the resume row's matrix cells, and that case was rerun alone for both verbs). `cargo fmt --check` and
 whole-tree clippy with `-D warnings` pass.
+
+## Task 12b: the six journeys
+
+Base `30a37018`; `origin/main` at `0dfd5a68` is contained. `tests/cli_remote/journeys_c5.rs` holds the
+design's journey table as eight `c5_journey_` cases through the binary over SSH, each asserting Git objects
+and canonical content, with every output scanned. It reuses Task 12a's helpers (`lifecycle::Verb`,
+`finished_once`, `closure_at`) and C4's (`collaboration`, `conflicts`). "Final save" differs by design: each
+journey saves before it promotes or closes, and says so. No library or bin file changed.
+
+| Case | PRD journey | What it shows |
+| --- | --- | --- |
+| `offline_edit_then_sync` | Offline edit, checkpoint and later sync | With the server dropping every connection, a save checkpoints and connects to nothing. `item sync` answers `transport_unavailable` naming the same request, the checkpoint kept; reachable again, that request publishes it byte for byte. Variant: the remote refuses the next checkpoint, `push_rejected` naming the same request, the work kept; accepted, the same request publishes it. |
+| `conflict_recovery` | Concurrent conflict recovery (thin) | C4's `tickets_diverge`: B's sync stops on the conflict with B's commit kept; `conflict show`, then `conflict resolve` with the tokens shown; one resolution commit `[local, incoming]` holding the resolved sources, published; the stopped sync's own request then answers `ok` with that commit and pushes nothing. C4's `c4_conflicts_*` hold every other answer. |
+| `background_update_and_discovery` | Background remote update and discovery | B publishes its context with a comment, a peer publishes primary with a new ticket. One `poll once` in A fast-forwards primary, materializes the context, makes exactly one worktree, and indexes the new ticket (`ticket show`) and the comment (`comment list`); a second poll finds both current, one worktree, nothing pushed. |
+| `threaded_discussion` | Durable threaded discussion | Roots from both clones and two replies to one root, each published by `comment add`; every comment file on the remote's branch. After `index rebuild` in A, the list read from the item's own worktree (`--repo` the context worktree), from A's root and from B's is the same: roots in creation order, each reply beneath its parent in creation order. |
+| `document_promotion` | Confirmed document promotion | Created and saved, the preview names branch, primary, remote, the added path, a merge commit, publication and all three cleanups, no closure. Confirmed: merged, published, cleaned up at both ends, one merge, the saved body on the remote's primary. B's poll brings it in; a fresh `document save` in A starts a new context whose parent is primary. |
+| `document_promotion_local_only_then_published` | The same, local only | A clone of the server enabled with no publication remote and no key: the preview says `pending_no_remote` and no remote; the promotion exits 0, `publication_pending: no_publication_remote`, cleanup complete, nothing remote moved. Then `key import`, `key select`, `remote select` (the worktree clean after its commit, `01M669FJR2`), `host approve`, `repo sync`: the remote's primary is the integrated history, with no fixture seeding (decision 10). |
+| `close_with_retryable_failure` | Confirmed close with retryable failure | A dependent is on primary. The preview names `closed_by`. A dirty primary after it, the injected prerequisite failure, refuses the confirmation (`external_change`, `request.prepare`), and the new prepare names `primary_dirty`, the failed step; context, branch, worktree and the remote are untouched, no merge. Corrected, the close is published and cleaned up, one merge and one checkpoint, `made_ready` is the dependent (`current`), and `ticket ready` lists it and not the closed ticket. |
+| `close_local_only_then_published` | The same, local only | As the promotion's local-only case, for a close: one checkpoint, and the remote's primary holds the same `closed_at` and `closed_by` once `repo sync` publishes. |
+
+**Referenced, not repeated:** the dirty, divergent, malformed and remotely deleted contexts of the
+background journey are `c5_polling_dirty_context_preserved`, `_divergent_context_preserved`,
+`_malformed_ref_names_nothing` and `_deleted_context_preserved`; the close's refused push and refused
+deletion are Task 12a's `c5_lifecycle_refused_primary_push_then_same_request_close` and
+`_refused_deletion_then_same_request_close`; conflict recovery's answers are C4's `c4_conflicts_*`.
+
+**Seen first.** Every journey pins behaviour that exists, so none was expected to fail. Six passed on their
+first run. Two failed on expectations of mine that no design row states, each read and corrected:
+
+- `offline_edit_then_sync`: `item sync`'s `push_rejected` with nothing durable done is `blocked`, exit 3, not
+  4; and a second request while the first, stopped, holds the reservation answers `busy` (C4's own note says
+  so), so the journey goes on under the same request.
+- `conflict_recovery`: the stopped sync's own request, sent again after the resolution, answers `ok` with the
+  resolution's commit, not `already_applied`.
+
+**Observed, for the owner (C4's behaviour, outside C5, not walked further).** In the offline journey's first
+form, the remote refused the context's **first** publication (the branch did not exist there yet), and the
+same `item sync` request, sent again once the remote accepted, answered `recovery_required`, 3, offering
+`request.retry` and `repo.inspect`, with nothing published. The journey's variant now refuses a later
+checkpoint of a published branch, which C4's comment row already shows finishing.
+
+**The design's matrix, Task 12a's cells.** `document promote` and `ticket close`: replay and same-request
+continuation, in the refused push and refused deletion rows. `operation resume` of a lifecycle: human and
+JSON, input failure (`invalid_id`), no-op (`already_applied`), replay and mismatch in
+`resume_with_no_record_continues`; continuation by a later resume in `deleted_branch_resume_route`.
+
+**Verified.**
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--test cli_remote -- c5_journey` | 8 SSH cases | 69 s |
+| `--test cli_remote -- c5_lifecycle` | 18 SSH cases (Task 12a) | 228 s |
+| `--test cli_remote`, whole | 111 SSH cases, 0 failed | 814 s |
+| AGENTS.md's fast tier, verbatim | 79 results, 4908 passed, 0 failed | 1510 s |
+| `cargo check --all-features --locked`, `cargo fmt --check`, whole-tree clippy `-D warnings` | ok | |
