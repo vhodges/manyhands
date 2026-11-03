@@ -31,7 +31,6 @@ pub(crate) const UNKNOWN_AUTHOR: &str = "unknown author";
 
 /// The design's action labels, each by name.
 pub(crate) const EDIT: &str = "Edit";
-#[allow(dead_code)] // Called from Task 8: no test uses it before then.
 pub(crate) const SHARE: &str = "Share";
 pub(crate) const APPROVE_AND_MERGE: &str = "Approve and merge…";
 pub(crate) const CLOSE_TICKET: &str = "Close ticket…";

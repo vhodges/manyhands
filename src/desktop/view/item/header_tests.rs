@@ -849,8 +849,8 @@ fn an_inspect_tab_of_a_conforming_item_needs_no_fixing(cx: &mut TestAppContext) 
     );
 }
 
-/// Tab runs from the tab strip into the header, through Edit and the
-/// chips in order, then into the page; the header's unavailable actions
+/// Tab runs from the tab strip into the header, through Edit, Share and
+/// the chips in order, then into the page; the header's unavailable actions
 /// take no focus. Shift-Tab runs back.
 #[gpui_kit::test]
 fn tab_order_runs_strip_header_chips_page(cx: &mut TestAppContext) {
@@ -881,7 +881,9 @@ fn tab_order_runs_strip_header_chips_page(cx: &mut TestAppContext) {
     shell.keys("tab", cx);
     assert!(focused(&shell, "item-edit", cx), "Edit after Comments");
     shell.keys("tab", cx);
-    assert!(focused(&shell, chips[0].id(), cx), "the chips after Edit");
+    assert!(focused(&shell, "item-share", cx), "Share after Edit");
+    shell.keys("tab", cx);
+    assert!(focused(&shell, chips[0].id(), cx), "the chips after Share");
     for later in 0..1usize {
         assert!(!focused(&shell, ("later-action", later), cx));
     }
@@ -904,7 +906,9 @@ fn tab_order_runs_strip_header_chips_page(cx: &mut TestAppContext) {
     }
     assert!(focused(&shell, chips[0].id(), cx));
     shell.keys("shift-tab", cx);
-    assert!(focused(&shell, "item-edit", cx), "Edit before the chips");
+    assert!(focused(&shell, "item-share", cx), "Share before the chips");
+    shell.keys("shift-tab", cx);
+    assert!(focused(&shell, "item-edit", cx), "Edit before Share");
     shell.keys("shift-tab", cx);
     assert!(focused(&shell, "item-comments", cx), "Comments before Edit");
     shell.keys("shift-tab", cx);

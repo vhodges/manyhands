@@ -6,11 +6,15 @@
 //! While viewing, the pill reads the item: a context that needs recovery,
 //! a closed ticket, a kept or stored draft, then the copy it was read
 //! from. While a session is made ready or lives, the pill reads its phase
-//! (`edit_state`).
+//! (`edit_state`). While a share or a post of the item runs, the pill
+//! reads its stage instead (`progress_pill`): "Sharing · …" or
+//! "Posting · …" (design, Stage text). Once the item's share has
+//! finished, while no session lives, the pill reads its outcome
+//! (`outcome_pill`, design, Outcomes and routes).
 
 use gpui_kit::{
-    App, Hsla, InteractiveElement, IntoElement, ParentElement, StatefulInteractiveElement, Styled,
-    TestSupportExt,
+    App, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, TestSupportExt,
     component::{ActiveTheme, Icon, h_flex, spinner::Spinner, tooltip::Tooltip},
     div, px,
 };
@@ -176,9 +180,45 @@ fn look(state: PillState, cx: &App) -> (Mark, Hsla) {
 /// read it, in its tooltip. A new item's stand-in, read from nowhere, has
 /// no tooltip (Part D fix 1, M2).
 pub(super) fn pill(state: PillState, read: Option<&ItemDto>, cx: &App) -> impl IntoElement + use<> {
-    let theme = cx.theme();
     let (mark, color) = look(state, cx);
-    let words = pill_words(state);
+    drawn(mark, color, pill_words(state).into(), read, cx)
+}
+
+/// The pill of a running share or post of the item, in `words` with a
+/// spinner, and the context of `read` in its tooltip.
+pub(super) fn progress_pill(
+    words: String,
+    read: Option<&ItemDto>,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    drawn(Mark::Spinner, cx.theme().info, words.into(), read, cx)
+}
+
+/// The pill of the item's finished share, in its outcome's `words`: one
+/// that needs `attention` has its look; the rest, the shared copy's.
+pub(super) fn outcome_pill(
+    words: &str,
+    attention: bool,
+    read: Option<&ItemDto>,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let state = if attention {
+        PillState::NeedsAttention
+    } else {
+        PillState::ViewingShared
+    };
+    let (mark, color) = look(state, cx);
+    drawn(mark, color, words.to_owned().into(), read, cx)
+}
+
+fn drawn(
+    mark: Mark,
+    color: Hsla,
+    words: SharedString,
+    read: Option<&ItemDto>,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let theme = cx.theme();
     let tooltip = read.map(|item| provenance_label(&item.context));
     let mark = match mark {
         Mark::Icon(name) => Icon::default()
@@ -192,7 +232,7 @@ pub(super) fn pill(state: PillState, read: Option<&ItemDto>, cx: &App) -> impl I
     let mut pill = div()
         .id("item-pill")
         .test_support()
-        .aria_label(words)
+        .aria_label(words.clone())
         .flex_none();
     if let Some(tooltip) = tooltip {
         pill = pill.tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx));

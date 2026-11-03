@@ -198,6 +198,7 @@ fn the_strip_header_chips_and_page_run_in_tab_order(cx: &mut TestAppContext) {
         ("tab-close-button", 1usize).into(),
         "item-comments".into(),
         "item-edit".into(),
+        "item-share".into(),
         "chip-type".into(),
         "chip-status".into(),
         "chip-project".into(),
@@ -230,6 +231,7 @@ fn the_strip_header_chips_and_page_run_in_tab_order(cx: &mut TestAppContext) {
     walk.on(("tab", shown), Region::Content, cx);
     walk.tab_to("tab", "item-edit", cx);
     for id in [
+        "item-share",
         "chip-status",
         "chip-author",
         "chip-date",
@@ -245,6 +247,7 @@ fn the_strip_header_chips_and_page_run_in_tab_order(cx: &mut TestAppContext) {
         "chip-date",
         "chip-author",
         "chip-status",
+        "item-share",
         "item-edit",
     ] {
         walk.step("shift-tab", id, Region::Content, cx);
