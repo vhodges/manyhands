@@ -635,6 +635,8 @@ prompts, and native §5 proves the journey.
 | E-11 | `view/item/discussion_tests.rs::tab_runs_through_each_comment_and_reveals_its_caret` | Tab reaches each comment's Reply after the comment. | Lane D |
 | E-12 | `services/requests_tests.rs`: `every_intent`, `variant`, `changes_items_names_the_intents_that_can_change_items`, `every_intent_builds_its_own_command` | The intent lists grow from 29 to 32 with the three new intents; the "kind of its own" assertion is kept, which is why Share item and Share main have separate `JobKind`s (owner, 2026-11-02, found by Task 0's sweep). | Part 0 |
 | E-13 | `view/keyboard_tests/frame.rs::the_strip_header_chips_and_page_run_in_tab_order` | Share is a tab stop after Edit, before the first chip, as E-6 (owner, 2026-11-02, found by Lane B Task 8). Applied by Lane B in Part E's file. | Lane B |
+| E-14 | `view/drafts_tests.rs::a_comment_rows_open_opens_its_item` | Open itself still claims nothing; the opened tab then adopts the draft (owner, 2026-11-02, Task 12). | Lane D |
+| E-15 | `view/keyboard_tests/frame.rs::the_discussion_is_reached_by_its_key_walked_and_left` | One more Tab after each comment (its Reply) and the matching Shift-Tabs, as E-11; adjusted for the collapsed new-comment start (decision 22). | Lane D |
 
 The round-1 source review swept `src/desktop` for these terms and found
 no other breakage; Task 0 sweeps again after merging main.
