@@ -2,7 +2,10 @@
 
 use super::{Region, Workspace};
 use crate::desktop::{
-    model::{operations::RecoveryStep, stamp::RepoKey},
+    model::{
+        operations::RecoveryStep,
+        stamp::{RepoKey, SettingsPage},
+    },
     services::{
         ReadKind,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
@@ -13,7 +16,10 @@ use crate::desktop::{
         operations::recovery_id,
     },
 };
-use gpui_kit::{App, Context, FocusHandle, Window, component::WindowExt};
+use gpui_kit::{
+    App, Context, FocusHandle, Window,
+    component::{Root, WindowExt},
+};
 use manyhands::{drafts::DraftId, repository::OperationId};
 use std::path::PathBuf;
 
@@ -91,12 +97,106 @@ impl Workspace {
     }
 
     /// A tab's share or post control asked for a place in the workspace
-    /// (`ItemRoute`). Nothing opens yet: Lane B's tasks open each.
+    /// (`ItemRoute`). The subscription brings no window, so the place
+    /// opens once the update that asked has ended, in this workspace's
+    /// window. Share… and Set up sharing open Settings › Remotes for the
+    /// repository; Lane B's later tasks open the others.
     pub(in crate::desktop::view) fn item_route(
         &mut self,
-        _route: &ItemRoute,
-        _cx: &mut Context<Self>,
+        route: &ItemRoute,
+        cx: &mut Context<Self>,
     ) {
+        match route {
+            ItemRoute::Remotes(root) => {
+                let root = root.clone();
+                self.in_window(cx, move |workspace, window, cx| {
+                    workspace.open_remotes(root, window, cx)
+                });
+            }
+            ItemRoute::SharingAndKeys
+            | ItemRoute::CheckHost { .. }
+            | ItemRoute::SetIdentity(_)
+            | ItemRoute::Holder { .. } => {}
+        }
+    }
+
+    /// Runs `f` on this workspace with its window, once the update under
+    /// way has ended: the window whose root view is this workspace.
+    fn in_window(
+        &self,
+        cx: &mut Context<Self>,
+        f: impl FnOnce(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) {
+        let id = cx.entity_id();
+        let workspace = cx.entity().downgrade();
+        let Some(window) = cx.windows().into_iter().find_map(|window| {
+            let root = window.downcast::<Root>()?;
+            let ours = root
+                .read(cx)
+                .is_ok_and(|root| root.view().entity_id() == id);
+            ours.then_some(root)
+        }) else {
+            return;
+        };
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                workspace.update(cx, |workspace, cx| f(workspace, window, cx))
+            });
+        });
+    }
+
+    /// Settings › Remotes, on the repository at `root`, in place of the
+    /// tabs, focused as Settings opened from the sidebar are.
+    pub(in crate::desktop::view) fn open_remotes(
+        &mut self,
+        root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.content.drafts.update(cx, |drafts, cx| drafts.hide(cx));
+        self.content.settings.update(cx, |settings, cx| {
+            settings.set_selection(Some(root));
+            settings.open(SettingsPage::Remotes, window, cx)
+        });
+        self.focus_region(Region::Content, window, cx);
+    }
+
+    /// Whether a share of the primary branch of `root` is queued, waiting
+    /// out `busy`, or running: the worker's own account, so a press made
+    /// before the request model has heard of the last one still finds it.
+    pub(in crate::desktop::view) fn sharing_main(&self, root: &str) -> bool {
+        let root = PathBuf::from(root);
+        self.services.worker().in_flight(
+            |intent| matches!(intent, Intent::RepoSync { root: asked } if *asked == root),
+        )
+    }
+
+    /// Share main pressed on the repository at `root`: `repo sync` when it
+    /// has a publication remote (`remote`) and no share of it is queued or
+    /// running; Settings › Remotes when it has none.
+    pub(in crate::desktop::view) fn share_main(
+        &mut self,
+        root: RepoKey,
+        remote: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !remote {
+            self.open_remotes(PathBuf::from(root), window, cx);
+            return;
+        }
+        if self.sharing_main(&root) {
+            return;
+        }
+        self.services.worker().submit(
+            Intent::RepoSync {
+                root: PathBuf::from(root),
+            },
+            Lane::User,
+            None,
+            None,
+        );
+        cx.notify();
     }
 
     pub(crate) fn maintain_index(
