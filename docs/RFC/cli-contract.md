@@ -95,11 +95,15 @@ only `--path` accepts an optional `--context` worktree path. `path observe`
 and `ticket check` move to C3. F2's `request show`, `request cancel` and
 `host observe` join C2, and `operation abandon` joins C4.
 Amended 2026-10-20 by C2: all eighteen C2 verbs are available with the rules
-below. Amended 2026-10-24 by C3: all thirteen C3 verbs are available;
-C4–C5 remain cataloged as planned until their delivering Cycles.
-Amended 2026-10-30 by C4 (R-1; decision 7): all eight C4 verbs are
-available, the new `item republish` among them; C5 remains cataloged as
-planned until it delivers.
+below. Amended 2026-10-24 by C3: all thirteen C3 verbs are available, and
+C4's and C5's were then cataloged as planned until their Cycles delivered
+them. Amended 2026-10-30 by C4 (R-1; decision 7): all eight C4 verbs are
+available, the new `item republish` among them. Amended 2026-11-03 by C5
+(decision 3; R-8): all ten C5 verbs are available: the six planned ones
+(`document promote`, `ticket close` and the four `poll` mutations) and the
+four `context` verbs. No verb is cataloged as planned; see
+[Exit statuses](#exit-statuses-and-partial-completion) for
+`command_unavailable`.
 
 Amended 2026-10-24 by C3: the C3 taxonomy rows below specify selectors and
 input fields. Every C3 verb requires `--repo`; only the four ID-selected
@@ -165,11 +169,11 @@ and `context release` are the desktop's and stay out of the CLI catalog
 | `comment add` | `--id` selects item; input `comment_id`, `body`, optional `parent_id`, optional `created_by`. One comment file and one checkpoint, then publication by a merging synchronization of the item's context when a publication remote is configured; no-remote means `ok` with publication pending. A retry of the same request publishes without writing again. `created_by` is the caller's when given, else the Git identity. A lifecycle-closed ticket is `ticket_closed`. Amended 2026-10-30 by C4 (dogfooding; the owner's decision): only nonconforming content the comment depends on refuses it: the comment itself, its item, or its parent chain. Each refusal keeps the code it had before, such as `item_not_found` for a broken parent chain, `occupied_path` for a comment ID another file claims, and `recovery_required` for a nonconforming item in an existing editing context. Unrelated nonconforming files, such as Markdown files under `docs/` without Manyhands front matter, or another item's or another comment's files, do not block a comment. |
 | `item sync`, `repo sync` | Deliberate item-context or primary synchronization; no input. Divergent history is merged with ordered parents, never rebased or force-pushed: an item syncs its remote context, then primary. Unsaved caller files are not implicitly submitted. A conflict stops with `recovery_required` and names its operation and next step in data. A remotely deleted item branch is `remote_branch_deleted`; only `item republish` recreates it. |
 | `item republish` | `--id` selects item; no input. Confirmed. The preview, from stored deletion evidence, names the branch, the remote, the last published commit and the local commit; confirming pushes exactly that local commit and integrates nothing. Without deletion evidence the preview is a no-op that says to run `item sync` first. A lifecycle-closed ticket is `ticket_closed`. |
-| `document promote`, `ticket close` | Exact item effect preview and confirmed integration/publication/cleanup. CLI callers save drafts first; final domain checkpoint still handles required lifecycle metadata. |
+| `document promote`, `ticket close` | Exact item effect preview and confirmed integration/publication/cleanup. CLI callers save drafts first; final domain checkpoint still handles required lifecycle metadata. Amended 2026-11-03 by C5 (decisions 6, 8, 9 and 33; R-2, R-3, R-4; the C5 design's verb sections): required `--id`, no input (R-2). `--prepare` returns the preview: kind, item, slug for a ticket that has one, branch, primary, remote, the context and primary commits, the whole branch's path changes, the planned integration, publication and cleanup and, for a closure, the planned `closed_by` and whether it is `record` or `existing`; no title, body or content. A blocked prepare names every blocker in `data.blockers`: `identity_required` alone with `repo.identity_set`, `ticket_closed` for an already closed ticket, else `recovery_required` with `repo.inspect`. While an unfinished parent that a new request cannot supersede holds the item, a prepare is `recovery_required`, naming the holder's `request.retry`, or `operation.resume` when no record holds it (decision 33). `--confirm` executes what was consented to, as Wave 02 Cycle 09's D6 binds it: with a remote, the item's change set and the D2 relation, not the moving OIDs. Consent expires ten minutes after creation, and once accepted stands for that request. Both use the repository's configured identity only, and no `closed_by` input (decision 6). The result's data is the lifecycle DTO: `recording`, checkpoint, integration, publication and cleanup with their pending reasons, `blockers`, and for a closure `made_ready` (`{id, slug}` entries) with `made_ready_state` (`current`, `index_pending`, `index_unavailable_final`, `not_computed`, `not_applicable`), as the [relationships RFC](ticket-relationships-and-short-codes.md#queries) defines it. With no publication remote both exit 0 with publication pending, and a later `repo sync` publishes. Sending the same request again continues an unfinished operation under its operation ID, also after `cancelled` (decision 8), and repeats no merge, checkpoint or push already done. See [C5 evidence and known limits](#c5-evidence-and-known-limits). |
 | `index status` | Inspect cache freshness; no mutation input. |
 | `index refresh`, `index rebuild` | Required `--repo`; no `--input` or `--id`. Explicit local scan/rebuild, with `--request-id` for JSON/noninteractive execution. Never fetch or rewrite canonical state. Rebuild supports explicit root after cache loss. |
-| `poll status`, `poll configure`, `poll pause`, `poll resume`, `poll once` | Durable policy and observed results; configure input `interval_seconds` in 60–3600. Once is explicit remote polling, not synchronization. No process discovery or worker control. |
-| `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. List returns every stored operation that resume could act on or that still has work outstanding; show finds any stored operation, finished or not. Resume never infers permission for a different target/action. Resume takes no input. It publishes a comment's pending publication, by the comment's operation ID or its synchronization's, without writing it again. Amended 2026-10-30 by C4 (Task 4b's ruling): a fenced comment publication, such as one held for a key whose selection then changed, answers `external_change` by either ID, as a fenced synchronization does, and the `comment add` request's own next call settles it. Resume publishes a resolution or an accepted outside repair, and passes a local-context sync to the gate's routing. `request cancel` does not reach it; Ctrl-C does. |
+| `poll status`, `poll configure`, `poll pause`, `poll resume`, `poll once` | Durable policy and observed results; configure input `interval_seconds` in 60–3600. Once is explicit remote polling, not synchronization. No process discovery or worker control. Amended 2026-11-03 by C5 (decisions 5, 11, 15, 24 and 28; R-16, R-17, R-18): the four mutations are unconfirmed. `poll once` is one explicit fetch, clean fast-forward, materialization and index pass, which runs while paused or disabled and never pushes, checkpoints, merges or cleans up; a completed poll is `ok`, exit 0, with each target's `{target, kind, item_id, disposition, before_oid, after_oid}` in its data (no slug, R-17), dirty, diverged, malformed and deleted targets preserved and marked there (R-16). A poll's transport, key, unlock or host stop is final, and a new request polls again (R-18); a fetch meeting a held repository lease answers `busy`, and the same request polls (decision 24). No publication remote is `publication_remote_required` with nothing written. `poll configure` sets the interval, `poll pause` sets the pause, and `poll resume` clears it and any stored deadline so an eligible poll is due (decision 11), leaving the stored backoff value and the recovery suspension, which no CLI verb clears (decision 5). Each writes one field in its request's own transaction: a committed request replays, and one that never committed is a new write when resent (last commit wins, decision 15). Already so is `already_applied`, exit 0. |
+| `operation list`, `operation show`, `operation resume` | Inspect/reconcile or deliberately resume one operation ID. List returns every stored operation that resume could act on or that still has work outstanding; show finds any stored operation, finished or not. Resume never infers permission for a different target/action. Resume takes no input. It publishes a comment's pending publication, by the comment's operation ID or its synchronization's, without writing it again. Amended 2026-10-30 by C4 (Task 4b's ruling): a fenced comment publication, such as one held for a key whose selection then changed, answers `external_change` by either ID, as a fenced synchronization does, and the `comment add` request's own next call settles it. Resume publishes a resolution or an accepted outside repair, and passes a local-context sync to the gate's routing. `request cancel` does not reach it; Ctrl-C does. Amended 2026-11-03 by C5 (decision 19; R-30 to R-36): an unfinished `document promote` or `ticket close` that an accepted request holds answers `original_request_required`, naming that request, which continues it; with no record holding it, resume continues it with the record's consent, and its data is the lifecycle DTO, made-ready included. A stop it cannot get past offers `operation.resume` and `repo.inspect`, after letting a child with nothing to lose go (decision 19). A complete parent is `already_applied`; an ended or superseded one is `invalid_input`. A `poll once` an accepted request holds names that request. `request cancel` of a resume is `requested: false` (R-34). |
 | `operation abandon` | F2's confirmed abandonment of a pending local operation; closes its journal record without changing files. No input. A remote operation's ID is `invalid_input`, and a pending remote conflict cannot be abandoned (`01M4H33R34Z7C7EEKTY1ZCT950`). A local-context sync goes to the gate's guarded abandonment. |
 | `request show`, `request cancel` | Required `--request-id`, refuse `--repo`; inspect the request's state/result or request safe-point cancellation. Accepted local C2 requests report `requested: false`; this does not interrupt their process. |
 | `conflict show`, `conflict resolve` | Select a remote synchronization's operation ID, a comment's operation, or a `document promote` or `ticket close` operation, which names its context child (amended 2026-11-03 by C5, decision 34); a local-context sync's is `invalid_input`. Show is a read: no request ID, `--prepare` refused. It reports the state, next step, observation and each path's token, kind, structure and, for an item's path the library reads as UTF-8 text, base/local/incoming sides, as `content_available` says. Resolve takes input `observation` and `resolutions`, one `{token, source}` per conflicted path, then publishes under the same request. See [Conflict and cancellation behavior](#conflict-and-cancellation-behavior). |
@@ -820,6 +824,10 @@ missing or conflicting inputs and malformed option values. An approved verb
 delivered by a later Cycle returns `command_unavailable`; human stderr names
 that Cycle. Both are input failures (exit 2), with empty scope, null data,
 no recovery actions and their fixed code messages in JSON.
+Amended 2026-11-03 by C5 (R-8): no approved verb is planned once C5
+delivers, so no command answers `command_unavailable` today. The code stays a
+CLI-only code for a later Cycle's planned verb, with an unreachable reason in
+the exit tables, and the catalog's test-only planned spec pins its answer.
 
 ### CLI-built refusals (R-6)
 
@@ -888,10 +896,13 @@ longer the "future CLI adapter contract" this amendment first named, and
 neither is an input schema for the local library operation. The
 [closure-recovery gate](../Cycles/wave-03-closure-recovery-gate.md) delivered
 production library reads and F2 identities `context sync-local` /
-`context resolve-local`, merged at `a372edb`. These identities are absent from
-the CLI catalog/dispatch; C5 exposes them. C4's `conflict show` and
+`context resolve-local`, merged at `a372edb`. These identities were absent
+from the CLI catalog/dispatch until C5; amended 2026-11-03 by C5 (decision 3),
+C5 exposes them with `context observe-local` and `context show-local`, as the
+taxonomy rows say. C4's `conflict show` and
 `conflict resolve` take remote synchronizations only, and answer a
-local-context sync's operation ID with `invalid_input`. No CLI human-mode
+local-context sync's operation ID with `invalid_input`; since decision 34 they
+also take a lifecycle's context child, below. No CLI human-mode
 conflict artifact export/edit/import workflow or desktop in-app conflict editor
 is supplied by the gate. Existing generic operation/request inspection is not
 that workflow.
@@ -902,7 +913,9 @@ with no fetch/push or primary mutation. It uses top-level observations and opaqu
 reads return nullable `base`, `local`, `incoming` plus `historical`, never mutable
 `current` content. Display paths are already escaped presentation strings.
 C5/D5 must adapt this local contract deliberately (amended 2026-10-30 by C4,
-decision 19, replacing "C4/D5 must adapt this contract"). C4 delivers the
+decision 19, replacing "C4/D5 must adapt this contract"). Amended 2026-11-03
+by C5 (decisions 1 and 3): C5 adapted it for the CLI with the four `context`
+verbs and delivered the lifecycle bindings; D5 consumes both after C5 merges. C4 delivers the
 separate remote-conflict wire bindings, and D5 consumes them through D4;
 C5/D5's lifecycle bindings are also downstream. See the
 [API audit](../research/wave-03-api-audit.md#closure-recovery-library-amendment-2026-10-27).
@@ -1033,7 +1046,10 @@ R-36):
 - **The window.** While `item sync`, `repo sync`, `item republish`,
   `comment add`, `conflict resolve` or `operation resume` runs its library
   call, the CLI installs a process-wide Ctrl-C handler, and removes it when
-  the call returns. Prompts run outside it, except the unlock prompt, which
+  the call returns. Amended 2026-11-03 by C5 (decision 8): so do
+  `document promote`, `ticket close`, `poll once`, `context sync-local` and
+  `context resolve-local`. The three policy verbs have no safe point, and
+  their one transaction is not interrupted. Prompts run outside it, except the unlock prompt, which
   reads Ctrl-C in raw mode and still answers `unlock_required`, exit 3.
   On Unix, a process that inherited an ignored `SIGINT` keeps it inside the
   window, as a Windows console handler is not called while Ctrl-C is
@@ -1045,7 +1061,12 @@ R-36):
   instead answer `transport_unavailable` with its effects intact.
 - **One latch per run.** A press that no safe point sees, after the last
   one, leaves the run's own answer, such as `push_rejected`, and stops C2's
-  bounded retry, so no retry follows it.
+  bounded retry, so no retry follows it. Amended 2026-11-03 by C5 (the
+  controller's ruling on Task 13a's Review Focus 4): for `document promote`
+  and `ticket close`, a press after the last pre-publication safe point whose
+  primary push is then refused answers `cancelled`, 130, since the primary
+  child reads the cancellation after the failed push, and cancellation comes
+  first in the classification order. The same request then publishes.
 - **A second press** ends the process: interruption, not rollback, with no
   stored result. The interrupted request stays accepted and keeps its
   reservation, so a new request ID answers `busy` until the same request is
@@ -1055,12 +1076,30 @@ R-36):
   `cancelled` result. A new request completes the work: `item sync` or
   `repo sync` for a synchronization and for a comment's or a resolution's
   publication, and a new prepare for `item republish`, whose confirmation
-  is spent.
+  is spent. Amended 2026-11-03 by C5 (decision 8): **not for `document
+  promote` or `ticket close`.** Their `cancelled` answer, exit 130, leaves
+  the lifecycle record unfinished and offers `request.retry`: the same
+  request continues it under its operation ID, before or after integration,
+  while a new request ID's prepare is held by the unfinished parent
+  (decision 33). A child with nothing to lose is let go; a retained conflict
+  or a resolution to publish stays (decision 18). `poll once` follows the
+  final rule: a new request polls again. `context sync-local` is final as
+  the gate's, and a new request with a fresh observation merges;
+  `context resolve-local` keeps its request accepted, and the same request
+  with the same sources finishes it.
 - **`request cancel`** reaches `comment add`, `item sync`, `repo sync` and
   `item republish` at their next safe point. It does not reach
   `operation resume` or `conflict resolve`, which hold no operation of their
   own; `request cancel` of the synchronization's own request does stop a
-  resolve's publication.
+  resolve's publication. Amended 2026-11-03 by C5 (decisions 8, 12 and 34):
+  it also reaches `document promote`, `ticket close`, `poll once`,
+  `context sync-local` and `context resolve-local`. For a lifecycle verb it
+  reaches the parent and its running child at their safe points, also between
+  automatic retries (decision 12), and with no parent yet the request's flag
+  stops the run at its first safe point. `request cancel` of the promote or
+  close request stops a resolution's publication of its context child
+  (decision 34). It asks nothing of `operation resume`, even while a resume
+  continues a parent (R-34).
 - **Lost stdout** exits 1. The work's effects stay, `request show` returns
   the stored result, and a replay under the same request ID makes no second
   push, file or checkpoint.
@@ -1463,7 +1502,12 @@ Known limits on main, which C4 states and does not work around:
 - `remote select` commits the configuration but leaves the Git index stale
   for it, so the next `repo sync` answers `worktree_not_clean`
   (`01M669FJR27FRHCNPWAMD6VH4V`). C4's two-clone fixture seeds the publication
-  remote in the server's primary instead.
+  remote in the server's primary instead. Amended 2026-11-03 by C5
+  (decision 10): fixed. A successful `remote select`, its retry and its replay
+  leave the index matching the commit, and the next synchronization goes on;
+  C4's fixture seed stays. The key-before-remote limit above stays open, and
+  C5's later-publication order (`key select`, then `remote select`) does not
+  reach it.
 
 Amended 2026-10-30 by C4 (the final review's rulings). Three of C4's own
 limits, which the final review recorded:
@@ -1488,3 +1532,58 @@ limits, which the final review recorded:
 
 The [C4 design's Known Limits](../plans/2026-10-26-wave-03-cli-04-discussion-and-sync-design.md#known-limits)
 list the rest.
+
+### C5 evidence and known limits
+
+Amended 2026-11-03 by C5 (the C5 design's Inventory And Evidence, Journeys
+and Known Limits). The ten C5 verbs have real-binary human/JSON evidence in
+[lifecycle](../../tests/cli/lifecycle.rs), [polling](../../tests/cli/polling.rs)
+and [local sync](../../tests/cli/local_sync.rs), and two-clone SSH evidence
+in [lifecycle](../../tests/cli_remote/lifecycle.rs),
+[polling](../../tests/cli_remote/polling.rs),
+[the six journeys](../../tests/cli_remote/journeys_c5.rs) and
+[interruption](../../tests/cli_remote/interruption.rs), which holds the
+Ctrl-C, `request cancel`, lost-stdout and no-resident-worker cases. The
+[inventory](../../tests/cli/inventory.rs) accounts for every approved
+command, and the [recovery tables](#recovery-tables) test holds each row to
+its golden. The [exit table](../../tests/cli/collaboration_exits.rs)
+accounts for the audit's 46 library / 49 CLI-inclusive C5 codes by set
+equality, and reaches exits 0, 1, 2, 3, 4, 5 and 130 through the binary
+with a C5 verb. The library's outcome tables are in `tests/mutation_remote/`
+(`c5_lifecycle`, `c5_cancel`, `c5_resume`, `c5_made_ready`, `c5_poll`).
+
+Known limits C5 states and does not work around (the
+[C5 design's Known Limits](../plans/2026-10-31-wave-03-cli-05-completion-and-polling-design.md#known-limits)
+list them all):
+- a closure records the repository's configured identity; there is no
+  caller-chosen `closed_by` (decision 6);
+- a CLI-only user sees `recovery_suspended` with no verb to clear it
+  (decision 5), and a protected key answers `unlock_required` without a
+  terminal;
+- a retained conflict under a raised generation (`key select` or `key clear`,
+  or the domain's own poll plan failure) leaves the promote or close request
+  answering `recovery_required` with no CLI way out (decision 34 frees the
+  unfenced case);
+- a retried or superseding close reports its own pass: a close stopped on
+  `remote_context_changed` answers `index_pending`, and `ticket ready` is
+  the live view (decision 20);
+- an add/add of a ticket file that reached primary by another commit is
+  external-only: `context resolve-local` refuses it, and the repair is with
+  Git, then the synchronization's request again (decision 30);
+- with split fetch and push endpoints, before a first fetch, or with the
+  repository's lease held past 250 ms, a push does not advance tracking, and
+  promote-then-close can be refused `primary_ahead_of_remote` until
+  `poll once` (decision 29);
+- a contained context whose remote branch has no tracking ref keeps that
+  branch on the remote (decision 32, withdrawn);
+- policy verbs are last commit wins (decision 15); a killed poll whose
+  request ID is lost is found through `operation list`;
+- a result's `Item id:` carries no slug, while a preview shows `Slug:` and
+  `made ready:` lines show theirs.
+
+Follow-up candidates, none opened without the owner's go-ahead: advance
+tracking from a verified fetch-side read; delete a contained context's
+remote branch guarded by stored push evidence; a resolvable canonical
+add/add of a ticket file; `effective_identity`'s per-key cascade (owner
+question 1); release timing of local sync's image-proof audits and
+discovery's history walk (decision 31).

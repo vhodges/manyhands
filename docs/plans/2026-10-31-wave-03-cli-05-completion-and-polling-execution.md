@@ -2727,3 +2727,45 @@ Cycle's reason renamed, the matching test failed each time, and passed once rest
 | `--test cli_remote -- c5_interruption_press_at_a_safe_point_of_sync_local`, twice | 1 SSH case |
 | `--test cli`, whole, and `--test mutation_contract` (the new goldens' registration and schemas) | 474 and 44, 0 failed |
 | `cargo fmt`, whole-tree clippy `--all-targets --all-features -D warnings` | ok |
+
+## Task 14b: document amendments
+
+Base `9e3908de` (Task 14a); `origin/main` at `0dfd5a68` is contained. Documents only, each amendment dated
+"Amended 2026-11-03 by C5" and citing its decision or ruling. No subagent was dispatched.
+
+| Document | Amendments |
+| --- | --- |
+| CLI contract RFC | Taxonomy: "C5 remains cataloged as planned" removed, with the C5 delivery and no planned verb (R-8); the `document promote`/`ticket close` row gains the preview, blocked and held prepares, consent, configured identity, the lifecycle DTO and made-ready shapes, local-only success and same-request continuation (decisions 6, 8, 9, 33); the `poll` row gains `poll once`'s report and final stops, `busy` on a held lease, and the policy verbs' single-field, last-commit-wins writes (decisions 5, 11, 15, 24, 28; R-16 to R-18); `operation resume` gains the lifecycle and poll routes (decision 19, R-30 to R-36). `command_unavailable` (`:770`) has no reachable path (R-8). The conflict section: C5 exposes the local identities, and decision 34's child. Cancellation (`:972-998`): the Ctrl-C window and `request cancel` lists gain the C5 verbs, a lifecycle cancellation isn't final (decision 8), the press after the last safe point (Task 13a's ruling). `:1139-1142`'s `remote select` limit is fixed (decision 10). A new "C5 evidence and known limits" section, with the follow-up candidates. |
+| Git workflow RFC `:411` | A lifecycle cancellation isn't final (decisions 8 and 18). |
+| Relationships RFC | The made-ready definition, its report-time evaluation and its five states (R-4, R-37, R-38; decisions 13, 20). |
+| Runtime RFC | `poll resume` clears the pause and any deadline and leaves the suspension (decisions 5, 11, 15); a one-shot poll meeting a held lease is `busy`, and the automatic poll's row is a D6 note (decision 24). |
+| Wave | Entry gate item 3: the audit-timing departure (owner question 4). "The merge prerequisite remains in force" marked historical. Track rule 2: D5 and D6 wait for C5's merge. Rule 5: the rebase sentence noted as superseded by `AGENTS.md`, and C5's exception (decision 1). Rule 6: C5 lands the bindings. `:658`'s closure line: until the post-C5 switch (decision 9). C5's section: the two reads, the folded tickets, the recovery tables, decision 34, owner question 5. D5 and D6 notes. The capability table's three rows. |
+| Gate Cycle | "C4/D5 consume" becomes C5/D5 (decision 1). |
+| API audit | The sentence near `:190` marked historical; the C5 refresh points to a new "C5 delivery reconciliation (2026-11-03)": entry points, schemas, codes (46/49, unchanged) and behaviour the rows didn't state. The CLI inventory's intro and the desktop D25 row say the planned C5 entries are delivered. |
+| `AGENTS.md`, `file-ticket` | "Until C5's `ticket close`" becomes "until the post-C5 switch" (decision 9). |
+| C5 ticket | "rebased onto main" corrected to a merge; the local verbs and the folded tickets added, by commit (`ticket save` is gated). |
+| C5 Cycle | The status line: Parts A-C through Task 14b on the branch; Task 15 remains. |
+
+**Not amended, by instruction.** The D5, D6, `01M5MK57` and `01M669FJR2` tickets live on other branches; the
+design's "notes that C5 delivered the bindings" for D5 and D6 wait for the owner's go-ahead, and the two folded
+tickets' files come with Task 15's closure.
+
+**Stale terms (Step 2).** After the edits, the grep of `C5 remains cataloged`, `arrives with C5`,
+`C4/D5 consume`, `NotResumable`, `until C5` and `canonical until C5` finds no live contract text. What remains:
+
+- `NotResumable` in `src/repository/mutation/bind/resume.rs`: the live name of the resume route's answer for an
+  ended or superseded parent (`invalid_input`), not a stale claim;
+- historical records left as they were: Wave 02 Cycles 09 and 10, earlier plans, designs, executions and
+  handoffs, the D3 Cycle and plan ("closure stays a canonical ticket-file edit until C5", true when written), the
+  audit's Cycle 09/10 domain updates and the C4 refresh's `Named::NotResumable` note, and old ticket comments;
+- the C5 design, plan and this ledger, which name the terms to grep for;
+- two amended sentences that keep the phrase as history: the Wave's C3 dogfooding record (`:679`, with its
+  amendment beside it) and the RFC's "absent from the CLI catalog/dispatch until C5".
+
+### Verified (Tasks 14a and 14b, on the final tree)
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--test cli -- inventory`, `--test cli -- recovery_tables`, after the amendments (the RFC tables they parse changed) | 8 and 4, 0 failed | <1 s each |
+| AGENTS.md's fast tier, verbatim | 79 results, 4929 passed, 0 failed | 1552 s |
+| `cargo fmt --check`; whole-tree clippy `--all-targets --all-features -D warnings` (after Task 14a; 14b changed no code) | ok | |

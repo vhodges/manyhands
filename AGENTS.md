@@ -114,7 +114,9 @@
   `ticket.md`: the CLI save checkpoints into that ticket's active worktree.
 - Comments remain canonical `.manyhands/comments/<item-id>/<comment-id>.md`
   edits until C4's `comment add`; closure remains a canonical ticket-file edit
-  until C5's `ticket close`. Saving status text `closed` is not lifecycle closure.
+  until the post-C5 switch: after C5 merges, a separate go-ahead closes one real
+  ticket through `ticket close` and then switches this rule (amended 2026-11-03
+  by C5, decision 9). Saving status text `closed` is not lifecycle closure.
 - Exception: `working-on-a-ticket` status edits and closure keep that skill's
   own procedure until it is revised. Its loop runs in sandbox clones without
   the main checkout's registration; C3 does not change that skill.

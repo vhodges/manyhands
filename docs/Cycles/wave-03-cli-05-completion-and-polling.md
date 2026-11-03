@@ -13,7 +13,7 @@ id: "01M69C6RZ2K0Q8DWPXA3EY81DH"
 ## Status
 
 **Approved, 2026-10-31.** The owner approved the documents at `cddacc54` ("Docs are approved. Approved to proceed. Use sub agent drive development."), authorizing implementation, subagent-driven. The approval takes owner questions 1 and 3–6 at their written recommendations, named edits E-1 to E-15 and the per-command commit identity. Pushes beyond this branch, a PR, the merge, branch deletion, closure, `ticket save`, native CI and cleanup stay separately gated. Reviewed in three rounds; the edits after round 3 had no independent review.
-Implementation is in progress: Part A's library work is on this branch and under review, and Parts B and C are not begun.
+Implementation is in progress: Parts A and B and Part C through Task 14b (the inventory, the recovery tables and the document amendments) are on this branch; Task 15's full verification, review and handoff remain (updated 2026-11-03).
 
 - [Design](../plans/2026-10-31-wave-03-cli-05-completion-and-polling-design.md)
 - [Implementation plan](../plans/2026-10-31-wave-03-cli-05-completion-and-polling-implementation.md)

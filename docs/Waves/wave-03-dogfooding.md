@@ -142,6 +142,9 @@ work can proceed while native access is arranged:
    departure from this item's timing. The design's Baseline Facts, read from
    current source, served as C4's planning audit, and C4's Task 0 refreshed
    the audit's C4 rows after the design was approved.
+   Amended 2026-11-03 by C5 (owner question 4): the owner accepted the same
+   departure for C5. Its design's Baseline Facts 1–41 served as the planning
+   audit, and Task 0 refreshed the audit's C5 rows.
 4. The editor investigation evaluates a pinned `zorite-editor` first and a
    pinned Velotype extraction if needed. Record dependency compatibility with
    the one GPUI Kit graph, host-controlled persistence/resources, rich/source
@@ -203,7 +206,9 @@ the [final ledger checkpoint](../plans/2026-10-25-closure-recovery-gate-executio
 distinguishes pre/post-fix evidence and Linux-only limitations. Production local
 start/read/resolve/resume and parent-specific wording are delivered on the ticket
 branch, with no owner final acceptance or merge claimed. **The merge prerequisite
-above remains in force.** This branch does not deliver CLI verbs, human-mode conflict artifacts or
+above remains in force.** (Historical: amended 2026-11-03 by C5. The gate
+`01M57SKVF6TQ3QM6AXJ35JGGSY` is closed and merged at `a372edb`, which C5's
+entry evidence records, so the prerequisite is met.) This branch does not deliver CLI verbs, human-mode conflict artifacts or
 desktop conflict editing. C5/D5 must adapt the local boundary (amended
 2026-10-30 by C4, decision 19, replacing "C4/D5 must adapt"), and C4/D5 still
 provide the separate remote-conflict wire boundary: C4 delivers it for the
@@ -337,6 +342,10 @@ codes, use the earlier numbers.
    bindings that D4's Post and Sync consume (comment submission, merging
    synchronization and the conflict data), under rule 5's exception below.
    D4 needs no CLI verb; Part A of C4 is not merged early.
+   Amended 2026-11-03 by C5 (decision 1): two more orderings, recorded as
+   C4's was. D5 waits until all of C5 is merged, because C5 carries the
+   lifecycle bindings and the local boundary D5 consumes; D6 waits for C5's
+   merge too, for the polling bindings. Neither needs a CLI verb.
 3. **Early starts.** C1 and D2 consume only F1 and may start when F1 exits if
    capacity allows. This is an allowance, not a third track: at most one Cycle
    is in flight per track, plus at most one foundation Cycle.
@@ -349,7 +358,9 @@ codes, use the earlier numbers.
    not carry the fix inside its own front-end branch. The change gets its own
    ticket, branch and worktree, stays narrowly scoped to the library, is
    reviewed and merged to main first, and both tracks rebase onto it at their
-   next work boundary. Front-end Cycle branches otherwise leave
+   next work boundary (superseded for ticket branches by `AGENTS.md`'s
+   "Working on a ticket": merge main into the branch, never rebase; noted
+   2026-11-03 by C5). Front-end Cycle branches otherwise leave
    `src/repository.rs` and `src/repository/` unchanged, which keeps the two
    tracks' branches from conflicting in the same files.
    Amended 2026-10-30 by C4 (decision 1): the owner approved C4 as an
@@ -358,12 +369,22 @@ codes, use the earlier numbers.
    `conflict resolve` and `item republish` bindings, the conflict read,
    merging synchronization settings, resume's routes and the durable state
    of an interrupted resolution. They merge with C4 as one Cycle.
+   Amended 2026-11-03 by C5 (decision 1): the owner approved C5 as a second
+   exception, "On C5's branch". C5's branch carries the library additions
+   its plan lists: the `document promote` and `ticket close` bindings with
+   their resume routes, cancellation probe and made-ready report, the four
+   polling bindings and an atomic policy update, and the identity and
+   `remote select` index fixes of `01M5MK57JKCSQFXBNZ8DBE548K` and
+   `01M669FJR27FRHCNPWAMD6VH4V` (decisions 2 and 10). They merge with C5 as
+   one Cycle.
 6. **Lifecycle bindings.** F2 defines confirmation and replay generically over
    effect previews and proves them with the operations available at its
    baseline. Promotion and closure do not exist until Wave 02 Cycles 09/10.
    Whichever of C5 or D5 is planned first lands the promotion/closure binding
    and its real-fixture replay evidence as a shared-library change under rule
-   5; the other consumes it.
+   5; the other consumes it. Amended 2026-11-03 by C5 (decision 1): C5 was
+   planned first, and lands them on its own branch under rule 5's exception;
+   D5 consumes them after C5 merges.
 7. **Mutation evidence.** Every mutating Cycle must include a named failure
    or interruption case and replay evidence in its detailed plan.
 
@@ -656,7 +677,10 @@ saves, value checks and pushes succeeded (`8da3890`); the subsequent AGENTS.md /
 file-ticket switch (`297bd781`) has separate SPEC/QUALITY approval. At the
 historical Task 8 checkpoint these steps were owed and those files unchanged.
 Comments remain canonical until C4; closure remains canonical until C5, with
-the explicit working-on-a-ticket exception. The normal main-based CLI workflow
+the explicit working-on-a-ticket exception. (Amended 2026-11-03 by C5,
+decision 9: closure stays a canonical file edit until the post-C5 switch,
+when a separate go-ahead after C5's merge closes one real ticket through
+`ticket close` and switches `AGENTS.md` and `file-ticket`.) The normal main-based CLI workflow
 becomes available after C3 merges. C3 is review-ready with its ticket **open**;
 closure, PR, merge, cleanup and native CI require their own authorization. The
 approved rule still forbids closure/merge while dogfooding evidence is owed
@@ -810,6 +834,19 @@ local-sync verbs, `context sync-local` and `context resolve-local`, with
 ticket closure, and any CLI inspection of a local-sync conflict they need.
 C4's `conflict show` and `conflict resolve` take remote synchronizations
 only, and answer a local sync's operation ID with `invalid_input`.
+
+**Amended 2026-11-03 by C5** (decisions 1–3, 10 and 34; the
+[Cycle](../Cycles/wave-03-cli-05-completion-and-polling.md)). In scope as
+well: the two read verbs `context observe-local` and `context show-local`
+beside the two local mutations (decision 3); the library bindings on C5's
+branch (decision 1, track rule 5's exception); and the two folded tickets,
+the identity fix `01M5MK57JKCSQFXBNZ8DBE548K` and the `remote select` index
+fix `01M669FJR27FRHCNPWAMD6VH4V` (decisions 2 and 10), which close with C5.
+The recovery examples are the CLI contract RFC's recovery tables, one per
+family, each row backed by a golden (decision 4). `conflict show` and
+`conflict resolve` also reach a promotion's or closure's context child
+(decision 34). `context prepare` and `context release` stay outside the CLI
+inventory (owner question 5).
 
 **Purpose:** Complete the approved headless command contract.
 
@@ -978,6 +1015,13 @@ conflict read (`show_conflict`) and `conflict resolve` binding for remote
 synchronizations, through D4. With C5, it owns the gate's local-sync
 boundary.
 
+**Amended 2026-11-03 by C5 (decision 1).** C5 delivers, at the shared
+mutation boundary, the `document promote` and `ticket close` bindings (prepare,
+confirm, ten-minute consent, replay, safe-point cancellation, same-request
+continuation, resume routes and the made-ready report) and exposes the
+local-sync boundary through the CLI. D5 consumes them as merged with C5, and
+waits for that merge (track rule 2).
+
 **Purpose:** Complete deliberate desktop collaboration lifecycles.
 
 **In scope:** Base/local/remote/result comparison, explicit canonical-path
@@ -999,6 +1043,17 @@ contexts remain inspectable and no retry repeats a merge or closure checkpoint.
 ### D6: Desktop Background Polling And Shutdown
 
 **Planned document:** `docs/Cycles/wave-03-desktop-06-polling-and-shutdown.md`
+
+**Amended 2026-11-03 by C5 (decisions 1, 5, 11, 15 and 24).** C5 delivers
+the `poll once`, `poll configure`, `poll pause` and `poll resume` bindings,
+each policy verb writing one field in its request's own transaction (last
+commit wins). D6 consumes them as merged with C5, and waits for that merge
+(track rule 2). Clearing the recovery suspension stays with D6:
+`resume_remote_polling_after_recovery` has no CLI verb, and `poll resume`
+does not lift it (decision 5). A one-shot poll meeting a held repository lease
+answers `busy` and its same request restarts it; an automatic poll's
+`interrupted` row from the same cause is D6's to restart, since nothing does
+today (decision 24).
 
 **Purpose:** Keep discovery current inside the desktop process while preserving
 manual priority and unsaved work.
@@ -1069,10 +1124,10 @@ a claim those public APIs exist.
 | Folder creation and marker-only adoption/repair | F2 | Scoped filesystem boundary, stable IDs, expected observations, no hidden migration. |
 | Command grammar, envelopes, exit classes, terminal secret provider | C1, C2 | CLI-only; no domain logic and no secret through argv/environment/files/pipes. |
 | Discussion/sync/conflict and resume | C4, D4, D5 | Wave 02 operations and owned canonical paths only. Amended 2026-10-30 by C4 (decision 1): C4 adds the bindings, `comment add`, `conflict resolve` and `item republish`, the merging settings of `item sync` and `repo sync`, and resume's routes; D4 and D5 consume them. |
-| Conflict inspection read | Local boundary: closure-recovery gate; remote boundary: C4 (amended 2026-10-30 by C4, decision 19) | Local observation/inspection/immutable-side DTOs are implemented and code-reviewed on the review-ready gate branch, awaiting authorized lifecycle delivery and merge. Remote: C4's `show_conflict` read and `conflict resolve` binding, through the CLI's `conflict show` and `conflict resolve`; D5 consumes them through D4. Front ends consume the shared boundaries and F1 redaction rules. |
+| Conflict inspection read | Local boundary: closure-recovery gate, exposed through the CLI by C5's `context` verbs (amended 2026-11-03 by C5, decision 3); remote boundary: C4 (amended 2026-10-30 by C4, decision 19), reaching a lifecycle's context child since C5 (decision 34) | Local observation/inspection/immutable-side DTOs are implemented and code-reviewed on the review-ready gate branch, awaiting authorized lifecycle delivery and merge. Remote: C4's `show_conflict` read and `conflict resolve` binding, through the CLI's `conflict show` and `conflict resolve`; D5 consumes them through D4. Front ends consume the shared boundaries and F1 redaction rules. |
 | One effective copy per item across worktrees | Defect ticket `01M4CKWWRA1DHFPMWKPNK7CQ1G`, before F1 | An item worktree contributes only its own item; every other item is read from primary. |
-| Promotion/close preflight and safe cleanup bindings | First of C5 or D5, as a shared-library change | Real effect preview and existing publication/cleanup ordering. |
-| Explicit one-shot polling | C5 | Existing Wave 02 one-shot operation; no resident worker. |
+| Promotion/close preflight and safe cleanup bindings | First of C5 or D5, as a shared-library change. Amended 2026-11-03 by C5 (decision 1): C5, on its own branch; D5 consumes them | Real effect preview and existing publication/cleanup ordering. |
+| Explicit one-shot polling | C5 | Existing Wave 02 one-shot operation; no resident worker. Amended 2026-11-03 by C5 (decisions 11 and 15): with the three policy bindings, each an atomic single-field update; D6 consumes them. |
 | Protected draft store and base snapshots | D2 | Separate from canonical files/cache/journals; versioned recoverable local files. |
 | Rich/source integration and stale response handling | D3 | One compatible GPUI graph; editor does not own Git, credential or network policy. |
 | Background scheduling and process exit | D6 | Desktop lifetime, existing one-shot operation, truthful safe-point stopping. |

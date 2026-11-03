@@ -409,6 +409,12 @@ commit.
 - `operation resume` finishes an attempt whose candidate commit is
   prepared, from durable state, with no input.
 - A remote cancellation is final: a new request completes the work.
+  Amended 2026-11-03 by C5 (decision 8): a `document promote` or
+  `ticket close` cancellation is not final. It answers `cancelled`, exit
+  130, and leaves the lifecycle record unfinished, so the same request
+  continues it under its operation ID; a new request ID would meet the
+  unfinished parent. A child synchronization with nothing to lose is let go
+  (decision 18); a retained conflict or a resolution still to publish stays.
 - An outside repair is refused while an attempt is unfinished, and accepted
   again once none is.
 

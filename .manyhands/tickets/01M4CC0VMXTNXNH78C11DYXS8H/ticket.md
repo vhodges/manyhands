@@ -39,10 +39,20 @@ Wave 03 dependencies: F1, F2 and C1–C4.
 
 Ticket relationships and short codes, per the
 [RFC](../../../docs/RFC/ticket-relationships-and-short-codes.md) and PRD
-`MH-CONTENT-005`/`MH-CONTENT-006`. The RFC reaches this branch when it is
-rebased onto main.
+`MH-CONTENT-005`/`MH-CONTENT-006`. The RFC reached this branch when main was
+merged into it (amended 2026-11-03 by C5: a ticket branch merges main and is
+never rebased, as `AGENTS.md` says).
 
 Ticket close reports the tickets it made ready.
+
+## Added Scope (2026-11-03)
+
+Amended 2026-11-03 by C5, by commit on this branch, since `ticket save` is
+separately gated. The closure-recovery gate's local verbs, `context
+observe-local`, `context sync-local`, `context show-local` and `context
+resolve-local` (decision 3), and the folded tickets `01M5MK57JKCSQFXBNZ8DBE548K`
+and `01M669FJR27FRHCNPWAMD6VH4V` (decisions 2 and 10), as the
+[Cycle](../../../docs/Cycles/wave-03-cli-05-completion-and-polling.md) records.
 
 ## Exit Evidence
 

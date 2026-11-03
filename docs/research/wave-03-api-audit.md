@@ -189,7 +189,11 @@ resolution artifacts and in-app conflict editing still need their owning adapter
 The library's explicit side-content DTO is an API, not an exported editable file
 or delivered UI. C4/D5 still owe remote-conflict wire bindings and C5/D5 lifecycle
 prepare/execute/expiry/schema/resume/made-ready reporting. C4/C5/D5 remain gated
-until this prerequisite is approved, closed and merged. Recorded execution is Linux
+until this prerequisite is approved, closed and merged. (Amended 2026-11-03 by
+C5: historical. The prerequisite merged at `a372edb`; C4 delivered the remote
+wire bindings, and C5 the local verbs and the lifecycle bindings, recorded in the
+[C5 delivery reconciliation](#c5-delivery-reconciliation-2026-11-03); D5
+consumes them.) Recorded execution is Linux
 x86_64; typed permission injections and a Windows lock-safe harness ordering fix
 are not native Windows ACL/macOS evidence. Native CI remains separately authorized
 post-merge work.
@@ -235,7 +239,9 @@ Task 0 source-inspected this refresh on **2026-10-31 UTC**, at
 `packaging/windows` and `scripts/release` only, and that merge changes nothing here. The [C5 Cycle](../Cycles/wave-03-cli-05-completion-and-polling.md)
 accepts this timing in **owner question 4**: the audit refresh is Task 0, not
 before planning. The design's Baseline Facts 1–41 served as the planning audit,
-and this refresh updates the C5 rows of the inventory in place. These are Linux
+and this refresh updates the C5 rows of the inventory in place. Amended 2026-11-03
+by C5 (Task 14b): what C5 delivered, and where it differs from these rows, is
+the [delivery reconciliation](#c5-delivery-reconciliation-2026-11-03) below. These are Linux
 source reads and binary runs on disposable repositories, not native evidence.
 
 The governing contract is the Cycle and its
@@ -292,6 +298,76 @@ an upper bound, not a promise that a fixture can force the path. C5 adds no
 and `ticket close` rows for the lifecycle routes (Task 3), with
 `original_request_required` and `already_applied` already in it. `command_unavailable`
 stays a CLI-only code with no reachable path once C5's last planned verb goes (R-8).
+
+#### C5 delivery reconciliation (2026-11-03)
+
+Amended 2026-11-03 by C5 (Task 14b). This reconciles the C5 rows above and
+the C5 inventory rows below with what Tasks 0–13b and decision 34 delivered
+on the ticket branch, which has merged main through `0dfd5a68`. Paths are
+relative to `src/repository/`. Every symbol marked **planned** above and in
+the inventory is delivered; the old rows' "on main" sentences describe the
+audit base, and the "No request ID" and "F2 resume NotResumable" statements
+no longer hold for C5's verbs.
+
+- **Entry points.**
+  - `document promote` and `ticket close`: `Mutation::DocumentPromote` and
+    `Mutation::TicketClose` in `mutation/bind/lifecycle.rs` (with
+    `lifecycle_verb.rs`), one `LifecycleBinding` for both (R-1). It reads the
+    parent record through the crate-private `lifecycle_parent`
+    (`promotion/mod.rs`), and calls the crate-private probe entries
+    `promote_document_observed` and `close_ticket_observed`, so public
+    signatures are unchanged. `confirm.rs` gains `Row::Unfinished` (R-19).
+    A cancelled parent releases a child with nothing to lose through
+    `release_promotion_child` (`remote/reservation.rs`, decision 18). The
+    preview is `PreviewDetailsDto::Lifecycle`; a blocked prepare is
+    `PrepareDataDto::LifecycleBlocked`.
+  - Made-ready: the crate-private `tickets_made_ready`
+    (`read/graph.rs`), stored with the request's answer.
+  - `poll once`, `poll configure`, `poll pause`, `poll resume`:
+    `Mutation::PollOnce` and the three policy variants in
+    `mutation/bind/poll.rs`; the policy verbs write through
+    `update_remote_polling` (`remote/state.rs`) in their request's own
+    transaction (decision 15). `set_remote_polling` keeps its test callers.
+  - `operation resume`: `mutation/bind/resume.rs` looks in the lifecycle
+    tables first (Task 3, R-30 to R-36, decision 19).
+  - `conflict show` and `conflict resolve` reach a lifecycle's context child
+    through `state::lifecycle_context_child` and `lifecycle_parent_of`
+    (`remote/state.rs`, decision 34).
+  - Identity: `select_committing_identity` (`remote/sync.rs`) treats an
+    unusable configured identity as none (decision 2, `01M5MK57`); local
+    synchronization and conflict resolution make the same check
+    (decisions 23 and 26). `remote select`'s index:
+    `set_publication_remote_recorded` (`src/repository.rs`), with one
+    `FailurePoint` variant (decisions 10 and 17, `01M669FJR2`).
+  - The CLI: `src/bin/manyhands-cli/lifecycle.rs`, `polling.rs` and
+    `local_sync.rs`, with the four `context` verbs added to the catalog
+    (decision 3). `Command` has 43 variants; the catalog has 77 verbs, none
+    planned.
+- **Schemas.** Output, under `schemas/v1/`: `lifecycle_preview`,
+  `lifecycle_blocked`, `lifecycle_mutation`, `poll_mutation` and
+  `poll_policy_mutation`, with additive values in `preview_effect`,
+  `polling_status`, `progress_event` and `synchronization_mutation`. Input,
+  under `schemas/input/v1/`: `poll_configure`, `context_sync_local` and
+  `context_resolve_local`, with examples under `tests/fixtures/cli_input_v1/`.
+- **Codes.** The result-set table above is unchanged: 46 library codes, 49
+  with the CLI's `usage_error`, `invalid_id` and `command_unavailable`.
+  `tests/cli/collaboration_exits.rs` reads it and asserts set equality
+  (Task 13b), and `tests/cli/recovery_tables.rs` reads its per-verb rows to
+  hold each recovery row's code to its verb. No `ResultCode` or
+  `RecoveryActionKind` was added.
+- **Behaviour the rows above did not state.** Each is in the C5 Cycle's
+  decisions or the design's rulings, dated 2026-10-31 to 2026-11-03:
+  - a lifecycle cancellation leaves the same request able to continue
+    (decision 8), and `request cancel` between automatic retries is honoured
+    (decision 12);
+  - a held item refuses a new prepare, naming its holder (decision 33);
+  - a stop reports what its child did (decision 25);
+  - a poll's fetch meeting a held lease is `busy` (decision 24); `poll once`
+    reports a remote branch whose tip primary holds as `current`, not
+    materialized (decision 28); a confirmed push advances an existing
+    tracking ref (decision 29);
+  - `poll resume` clears the pause and any stored deadline, and leaves the
+    recovery suspension (decisions 5 and 11).
 
 ### Wave 03 CLI Cycle C4 refresh (2026-10-28)
 
@@ -1582,7 +1658,10 @@ Line anchors identify inspected definitions at the recorded HEAD.
 
 ## CLI inventory — exactly one row per verb or invocation
 
-C0–C4 apply to every CLI row; references in cells specialize them. All mutation
+C0–C4 apply to every CLI row; references in cells specialize them.
+Amended 2026-11-03 by C5: the C5 rows' **planned** entries are delivered, as
+the [C5 delivery reconciliation](#c5-delivery-reconciliation-2026-11-03)
+records; their "on main" text describes the C5 refresh's base. All mutation
 rows require R-adapter even where only an admin/author/domain re-audit is listed.
 Read rows have no mutation request identity/confirmation requirement, but reads
 may have the application-local bookkeeping effects explicitly recorded in C0.
@@ -1703,7 +1782,7 @@ that capability. Catalog evidence is adjacent domain evidence, never UI proof.
 | D22 drafts survive removed/inaccessible repository or vanished context — W3-08 | E-remove/index do not implement draft store/tests | Persisted draft accessible independent of registration/context/cache | Preserve recovery/export on remove/rebuild; no auto worktree recreation | Explicit recover/discard, no hidden age cleanup | Owner-protected store separate C5 | absent | W3-08 over W3-01/02/03; R-draft |
 | D23 rich/source recoverable comment/reply composer — W3-10 | E-comment local checkpoint only; missing composer/draft/editor | Item/parent/comment IDs, body/base observation | One submission ID, do not include unsaved item draft; same fidelity as D07–D19 | Post and sync vs Save locally labels; partial publication retry | Local identity + future selected-key/trust C3/C4 | absent | W3-08/09 editor, W2-07 domain, W3-10; R-draft + R-domain |
 | D24 saved comment shown once; retry publication only — W3-10 | Amended 2026-10-30 by C4, replacing "E-comment exact local replay; missing compound outcome": Wave 02 Cycle 07 delivered the compound outcome (`CommentSubmissionOutcome`) and the publication-only retry, and C4 delivers the F2 `comment add` binding. A retry of the same request publishes without writing the comment again, and `operation resume` publishes a pending publication, with `CommentMutationDto` data. The desktop UI and its tests are missing (D4) | Retained comment/request/operation ID and original shared context | No new file/checkpoint/timestamp on publication retry C4 | Show completed/local saved and remaining publication; deliberate resume | Same session/trust boundary; redacted partial effects | library boundary delivered-C4 on the ticket branch; UI absent | W2-07 + C4's `comment add` binding, then D4; R-domain |
-| D25 explicit sync/completion dialogs distinguish branch-wide effects — W3-10/11 | Delivered/reviewed headless promotion preview/outcome: Merged/AlreadyContained, Published/AlreadyCurrent/Pending and Complete/Pending cleanup; Task 6 SPEC PASS and final quality approved; no desktop dialog | Whole branch incl code, primary/context/remote, final saved draft | Unsaved text separate; integration != publication != cleanup; NoPublicationRemote permits local cleanup; IndexPending preserves outcome; completed publication remains authoritative on cancellation; same-ID unfinished retry/completed replay covered by 188 targeted GREEN tests under approved T6-1 | C5/D5 boundary prepare/execute binding, ten-minute expiry, preview schema values and resume classification pending; current F2 promotion remains NotResumable | Confirmed Git identity + selected-key/trust | headless domain delivered/reviewed; dialog/boundary pending | W2-09 Task 7/8 + C5/D5; other sync/close owners unchanged; R-domain |
+| D25 explicit sync/completion dialogs distinguish branch-wide effects — W3-10/11 | Delivered/reviewed headless promotion preview/outcome: Merged/AlreadyContained, Published/AlreadyCurrent/Pending and Complete/Pending cleanup; Task 6 SPEC PASS and final quality approved; no desktop dialog | Whole branch incl code, primary/context/remote, final saved draft | Unsaved text separate; integration != publication != cleanup; NoPublicationRemote permits local cleanup; IndexPending preserves outcome; completed publication remains authoritative on cancellation; same-ID unfinished retry/completed replay covered by 188 targeted GREEN tests under approved T6-1 | C5/D5 boundary prepare/execute binding, ten-minute expiry, preview schema values and resume classification pending; current F2 promotion remains NotResumable | Confirmed Git identity + selected-key/trust | headless domain delivered/reviewed; dialog/boundary pending. Amended 2026-11-03 by C5: the boundary binding, expiry, preview schema and resume route are delivered on C5's branch ([reconciliation](#c5-delivery-reconciliation-2026-11-03)); the dialog stays D5's | W2-09 Task 7/8 + C5/D5; other sync/close owners unchanged; R-domain |
 | D26 canonical conflict base/local/remote/result editing — W3-11 | Amended 2026-10-30 by C4, replacing "Missing W2-06 public resolution/read": Wave 02 Cycle 06 delivered resolution, and C4 delivers the public read `show_conflict` (`ConflictDto`, with each path's string token, and an item path's base/local/incoming sides when the library reads them as UTF-8 text, as `content_available` says) and the F2 `conflict resolve` binding (`{observation, resolutions: [{token, source}]}`), for remote synchronizations. The desktop UI and its tests are missing (D5) | Owned canonical paths + all expected observations/valid resolutions | Validate all before write/checkpoint; markers not Git-resolution authority | Per-path explicit Mark resolved, no automatic side choice; resolution stays set-wide (C4 decision 12) | Requested source vs redacted progress C0 | library boundary delivered-C4 on the ticket branch; UI absent | W2-06 + C4's boundary, then D5 through D4; R-domain |
 | D27 noncanonical external recovery/recheck guidance — W3-11 | Amended 2026-10-30 by C4, replacing "Missing public conflict/re-observe DTO": C4's `ConflictDto` gives each path's kind and structure, `next_action: external_repair` for a set that is not all canonical, and the states `repaired` and `repair_refused` after an outside repair; `operation resume` continues an accepted repair. The desktop UI is missing (D5); private Git is not a frontend API | Code/binary/rename/delete/structural conflicts preserved | Open location deliberate; recheck actual Git, never arbitrary staging/publish | Explicit operation resume after real repair; no marker-only inference | Owned redacted recovery arguments C0 | library boundary delivered-C4 on the ticket branch; UI absent | W2-06 observations + C4's boundary, then D5 through D4; R-domain |
 | D28 keyboard focus/dialog Escape/action activation — W3-07…12 | Missing full control/focus contract/tests; Button scaffold only | Every core action labeled/focusable, tab order/visible focus/focus return | UI state only, color not sole state signal | Escape cancellation at dialog/request safe boundary | No secret text in UI diagnostics | absent | W3-07 shell, each feature, W3-13 gate; R-shell |
