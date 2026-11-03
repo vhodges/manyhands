@@ -88,6 +88,11 @@ pub(in crate::desktop::view::item) struct Composers {
     open: bool,
     /// Focus goes into the new comment's editor once it is drawn.
     focus_new: bool,
+    /// Focus goes to Write a comment… as it is drawn.
+    focus_start: bool,
+    /// A composer that took the place of a focused one: focus goes into
+    /// its editor as it is drawn.
+    focus: Option<Entity<Composer>>,
 }
 
 /// One composer and what its text is kept as.
@@ -261,6 +266,10 @@ impl ItemPane {
             self.composers.start = Some(cx.focus_handle().tab_stop(true));
         }
         self.follow_new_focus(window, cx);
+        if let Some(composer) = self.composers.focus.take() {
+            let editor = composer.read(cx).editor().clone();
+            editor.update(cx, |editor, cx| editor.focus(window, cx));
+        }
         let remote = self.has_remote();
         let registry = self.services.drafts().read(cx);
         let states: Vec<(Entity<Composer>, Option<RecoveryState>)> = self
@@ -308,10 +317,11 @@ impl ItemPane {
         };
         let here = matches!(&self.composers.reply, Some((at, _)) if *at == root);
         if !here {
+            // A reply left with no text is not kept, nor its draft.
             if let Some((left, slot)) = self.composers.reply.take() {
-                let empty = matches!(slot.draft, SlotDraft::None)
-                    && slot.composer.read(cx).text(cx).is_empty();
-                if !empty {
+                if slot.composer.read(cx).text(cx).trim().is_empty() {
+                    self.discard_slot_draft(&slot, cx);
+                } else {
                     self.composers.kept.insert(left, slot);
                 }
             }
@@ -370,10 +380,20 @@ impl ItemPane {
         }
     }
 
+    /// The draft of `slot`, if begun, is discarded. One still beginning is
+    /// discarded as it lands, since its composer is gone.
+    fn discard_slot_draft(&self, slot: &Slot, cx: &mut Context<Self>) {
+        if let SlotDraft::Begun(id) = slot.draft {
+            self.services
+                .drafts()
+                .update(cx, |registry, cx| registry.discard_comment(id, cx));
+        }
+    }
+
     /// Cancel with no text, or Discard: the draft goes, and the reply
-    /// composer closes, focus back on the Reply that opened it; the new
-    /// comment's starts again, empty, with focus. A Cancel of the new
-    /// comment's, empty, leaves it as it is.
+    /// composer closes, focus back on the Reply that opened it. The new
+    /// comment's starts again, empty: after Discard open, with focus; after
+    /// an empty Cancel collapsed, with focus on Write a comment….
     fn composer_closed(
         &mut self,
         composer: EntityId,
@@ -384,9 +404,6 @@ impl ItemPane {
         let Some((thread, slot)) = self.composers.find(composer) else {
             return;
         };
-        if thread.is_none() && !discard {
-            return;
-        }
         if let SlotDraft::Begun(id) = slot.draft {
             self.services
                 .drafts()
@@ -396,8 +413,9 @@ impl ItemPane {
             None => {
                 let slot = self.slot(ComposerKind::New, "", None, SlotDraft::None, window, cx);
                 self.composers.new = Some(slot);
-                self.composers.open = true;
-                self.composers.focus_new = true;
+                self.composers.open = discard;
+                self.composers.focus_new = discard;
+                self.composers.focus_start = !discard;
             }
             Some(root) => {
                 if matches!(&self.composers.reply, Some((at, _)) if *at == root) {

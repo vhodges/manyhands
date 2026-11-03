@@ -14,7 +14,7 @@ use gpui_kit::{Entity, TestAppContext, test::TestWindowExt};
 use manyhands::{
     drafts::{
         CommentTarget, DraftBase, DraftError, DraftErrorKind, DraftFields, DraftId, DraftTarget,
-        ItemKind, TargetState,
+        Held, ItemKind, TargetState,
     },
     repository::{ItemDtoKind, LeaseKind, RepositoryService},
 };
@@ -428,6 +428,9 @@ fn a_comment_rows_open_opens_its_item(cx: &mut TestAppContext) {
         .read_with(cx, |pane, _| pane.new_composer())
         .expect("the new comment's composer");
     assert!(composer.read_with(cx, |composer, cx| composer.text(cx)) == "A comment");
+    let held =
+        registry(&shell, cx).read_with(cx, |registry, _| registry.listed(id).map(|(_, held)| held));
+    assert_eq!(held, Some(Held::Here), "listed as held here");
 }
 
 /// While its item is read, a row says so and offers Inspect, Export, Discard.

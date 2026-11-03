@@ -939,3 +939,75 @@ fn write_a_comment_opens_the_composer_with_focus(cx: &mut TestAppContext) {
     assert!(!shell.present("new-comment-start", cx), "still open");
     assert_eq!(composer_text(&composer, cx), "Kept open.");
 }
+
+/// Space presses Reply and Write a comment…, as Enter and a click do.
+#[gpui_kit::test]
+fn reply_and_write_a_comment_open_by_space(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(1400., cx, two_threads);
+    shell.click("item-comments", cx);
+    assert!(shell.tab_reaches(("comment-reply", 0usize), 4, cx));
+    shell.press("space", cx);
+    let (root, reply) = reply_composer(&shell, cx).expect("Space opened the reply");
+    assert_eq!(root, A);
+    let editor = reply.read_with(cx, |composer, _| composer.editor().clone());
+    assert!(focused(&shell, &editor, cx));
+
+    // An empty Cancel closes it, focus back on its Reply.
+    shell.keys("escape", cx);
+    assert!(reply_composer(&shell, cx).is_none());
+    assert!(holds_focus(&shell, ("comment-reply", 0usize), cx));
+    assert!(shell.tab_reaches("new-comment-start", 8, cx));
+    shell.press("space", cx);
+    let composer = new_composer(&shell, cx);
+    let editor = composer.read_with(cx, |composer, _| composer.editor().clone());
+    assert!(focused(&shell, &editor, cx), "Space opened the composer");
+    assert!(!shell.present("new-comment-start", cx));
+}
+
+/// Text typed and then deleted leaves a draft with no text: an empty
+/// Cancel discards it, and the composer starts again collapsed, with focus
+/// on Write a comment….
+#[gpui_kit::test]
+fn an_empty_cancel_discards_the_new_comments_draft_and_collapses(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(1400., cx, two_threads);
+    open_new_composer(&shell, cx);
+    let composer = new_composer(&shell, cx);
+    type_into(&shell, &composer, "Gone.", cx);
+    flushed(&shell, cx);
+    assert_eq!(stored_comments(&shell.fixture).len(), 1);
+    shell.keys("secondary-a backspace", cx);
+    flushed(&shell, cx);
+    assert!(composer_text(&composer, cx).is_empty());
+
+    shell.keys("escape", cx);
+    flushed(&shell, cx);
+    assert!(stored_comments(&shell.fixture).is_empty(), "the draft went");
+    assert!(shell.present("new-comment-start", cx), "collapsed");
+    assert!(holds_focus(&shell, "new-comment-start", cx));
+    let fresh = new_composer(&shell, cx);
+    assert!(composer_text(&fresh, cx).is_empty());
+    assert_eq!(composer_target(&shell, &fresh, cx), None, "no comment ID");
+}
+
+/// A reply composer moved away with no text, but a draft, is not kept:
+/// its draft goes, and its thread's next reply starts afresh.
+#[gpui_kit::test]
+fn moving_an_emptied_reply_away_discards_its_draft(cx: &mut TestAppContext) {
+    let (shell, _root) = shell(1400., cx, two_threads);
+    press_reply(&shell, 0, cx);
+    let (_, reply) = reply_composer(&shell, cx).unwrap();
+    type_into(&shell, &reply, "Gone.", cx);
+    flushed(&shell, cx);
+    assert_eq!(stored_comments(&shell.fixture).len(), 1);
+    shell.keys("secondary-a backspace", cx);
+    flushed(&shell, cx);
+
+    press_reply(&shell, 2, cx);
+    flushed(&shell, cx);
+    assert!(stored_comments(&shell.fixture).is_empty(), "the draft went");
+    press_reply(&shell, 0, cx);
+    let (root, again) = reply_composer(&shell, cx).unwrap();
+    assert_eq!(root, A);
+    assert!(composer_text(&again, cx).is_empty());
+    assert_eq!(composer_target(&shell, &again, cx), None, "afresh");
+}

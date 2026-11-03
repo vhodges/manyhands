@@ -183,3 +183,71 @@ async fn a_draft_begins_on_the_first_keystroke_after_the_listing(cx: &mut TestAp
     assert_eq!(stored[0].0, target);
     assert_eq!(stored[0].1, "Early and more");
 }
+
+/// A draft whose adoption lands after the user began writing in its
+/// thread is held, not shown, and is shown once that thread's composer is
+/// free again: here, its text deleted and cancelled.
+#[gpui_kit::test]
+fn a_draft_adopted_into_a_busy_thread_is_shown_once_it_is_free(cx: &mut TestAppContext) {
+    let (shell, root) = shell(1400., cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Discussed", "");
+        commit_comment(fixture, root, A, None, 1, Some(ADA), "First.\n");
+    });
+    open_new_composer(&shell, cx);
+    let composer = new_composer(&shell, cx);
+
+    // A draft stored elsewhere is listed; its claim waits at the gate.
+    store_comment(
+        &shell.fixture,
+        &key(&root),
+        target(KEPT_NEW, None),
+        "Kept new.",
+    );
+    let drafts = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+    let listing = shell.backend.hold_read(ReadKind::Drafts);
+    let claim = shell.backend.hold_read(ReadKind::Drafts);
+    drafts.update(cx, |registry, cx| {
+        registry.reload_listing(cx);
+    });
+    shell.run(cx);
+    listing.send(()).unwrap();
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    shell.run(cx);
+    assert_eq!(new_composer(&shell, cx), composer, "the claim is held");
+
+    // The user writes meanwhile; then the claim lands.
+    type_into(&shell, &composer, "Mine.", cx);
+    claim.send(()).unwrap();
+    flushed(&shell, cx);
+    shell.frame(cx, |_, _| ());
+    shell.run(cx);
+    let shown = new_composer(&shell, cx);
+    assert_eq!(composer_text(&shown, cx), "Mine.", "the user's text stays");
+    assert!(
+        drafts.read_with(cx, |registry, _| registry
+            .comment_drafts(&crate::desktop::services::drafts::comments::ItemKey {
+                repo: key(&root),
+                kind: ItemDtoKind::Ticket,
+                id: item_id(TICKET),
+            })
+            .iter()
+            .all(|draft| draft.live)),
+        "the adopted draft is held here"
+    );
+
+    // Freed: the text deleted and cancelled, the held draft is shown.
+    shell.keys("secondary-a backspace escape", cx);
+    flushed(&shell, cx);
+    shell.frame(cx, |_, _| ());
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    let adopted = new_composer(&shell, cx);
+    assert_eq!(composer_text(&adopted, cx), "Kept new.");
+    assert_eq!(
+        composer_target(&shell, &adopted, cx),
+        Some(target(KEPT_NEW, None))
+    );
+}

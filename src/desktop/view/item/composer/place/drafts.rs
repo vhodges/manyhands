@@ -89,10 +89,13 @@ impl ItemPane {
         }
     }
 
-    /// An adopted draft goes in its thread's composer, unless that one
-    /// took text or a draft meanwhile, when it stays held here and listed.
-    /// A reply opens the reply composer in its thread when none is open,
-    /// without taking focus; else it is kept in its thread.
+    /// An adopted draft goes in its thread's composer. If that one took
+    /// text or a draft meanwhile, or its thread is no longer listed, it
+    /// stays held here and is met again: a later frame adopts it, at once
+    /// since its session is live, once the thread is free. A reply opens
+    /// the reply composer in its thread when none is open, without taking
+    /// focus; else it is kept in its thread. A composer it replaces that
+    /// had focus hands it to the new one.
     pub(super) fn comment_adopted(
         &mut self,
         adopted: AdoptedComment,
@@ -100,14 +103,24 @@ impl ItemPane {
         cx: &mut Context<Self>,
     ) {
         let Some(thread) = self.thread_for(&adopted.target) else {
+            self.composers.known.remove(&adopted.id);
             return;
         };
-        let taken = self.composers.of_thread(&thread).is_some_and(|slot| {
+        let replaced = self.composers.of_thread(&thread);
+        let taken = replaced.is_some_and(|slot| {
             !matches!(slot.draft, SlotDraft::None) || !slot.composer.read(cx).text(cx).is_empty()
         });
         if taken {
+            self.composers.known.remove(&adopted.id);
             return;
         }
+        let shown = match (&thread, &self.composers.reply) {
+            (None, _) => true,
+            (Some(root), Some((at, _))) => at == root,
+            (Some(_), None) => false,
+        };
+        let focused =
+            shown && replaced.is_some_and(|slot| slot.composer.read(cx).contains_focus(window, cx));
         let kind = match &adopted.target.parent_id {
             None => ComposerKind::New,
             Some(parent) => {
@@ -127,6 +140,9 @@ impl ItemPane {
             window,
             cx,
         );
+        if focused {
+            self.composers.focus = Some(slot.composer.clone());
+        }
         match thread {
             None => self.composers.new = Some(slot),
             Some(root) => match &self.composers.reply {
@@ -173,13 +189,24 @@ impl ItemPane {
             SlotDraft::None | SlotDraft::NotKept(_) if listed => {}
             SlotDraft::None | SlotDraft::NotKept(_) => return,
         }
-        let target = slot
-            .target
-            .get_or_insert_with(|| CommentTarget {
+        if slot.target.is_none() {
+            // A reply answers its root: one whose ID cannot be read gets no
+            // comment ID, and no draft, rather than becoming a new comment.
+            let parent_id = match thread {
+                None => None,
+                Some(root) => match root.parse() {
+                    Ok(root) => Some(root),
+                    Err(_) => return,
+                },
+            };
+            slot.target = Some(CommentTarget {
                 comment_id: ItemId::generate(),
-                parent_id: thread.and_then(|root| root.parse().ok()),
-            })
-            .clone();
+                parent_id,
+            });
+        }
+        let Some(target) = slot.target.clone() else {
+            return;
+        };
         slot.draft = SlotDraft::Beginning;
         self.composers.begun.insert(target.comment_id.clone());
         let body = text.to_owned();

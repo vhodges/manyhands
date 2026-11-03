@@ -25,23 +25,26 @@ impl ItemPane {
 
     /// As each frame begins: an opened new-comment composer that holds no
     /// text and no draft collapses again once focus has left it; one just
-    /// opened takes focus in its editor once this frame is drawn.
+    /// opened takes focus in its editor once this frame is drawn, and one
+    /// collapsed by an empty Cancel gives it to Write a comment….
     pub(super) fn follow_new_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(slot) = &self.composers.new else {
             return;
         };
         let composer = slot.composer.read(cx);
         let empty = matches!(slot.draft, SlotDraft::None) && composer.text(cx).is_empty();
-        if self.composers.open
-            && !self.composers.focus_new
-            && empty
-            && !composer.contains_focus(window, cx)
-        {
+        let left = !composer.contains_focus(window, cx);
+        let editor = composer.editor().clone();
+        if self.composers.open && !self.composers.focus_new && empty && left {
             self.composers.open = false;
+        }
+        if std::mem::take(&mut self.composers.focus_start)
+            && let Some(start) = self.composers.start.clone()
+        {
+            window.focus(&start, cx);
         }
         if std::mem::take(&mut self.composers.focus_new) {
             self.composers.open = true;
-            let editor = composer.editor().clone();
             cx.defer_in(window, move |_, window, cx| {
                 editor.update(cx, |editor, cx| editor.focus(window, cx));
             });
