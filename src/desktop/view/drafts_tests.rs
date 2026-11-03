@@ -19,7 +19,7 @@ use manyhands::{
     repository::{ItemDtoKind, LeaseKind, RepositoryService},
 };
 
-use super::{ACTIONS, CANNOT_READ, CHECKING, COMMENT_LATER, NO_DRAFTS, RESTORED_HERE, row_id};
+use super::{ACTIONS, CANNOT_READ, CHECKING, NO_DRAFTS, RESTORED_HERE, row_id};
 use crate::desktop::{
     model::{
         drafts::rows::{COMMENT_ON, TICKET as TICKET_KIND},
@@ -247,7 +247,8 @@ fn each_row_reads_its_state_and_offers_what_its_policy_allows(cx: &mut TestAppCo
             body: "A reply".to_owned(),
         },
     );
-    rows.push((orphan, PARENT_NOT_FOUND, REFUSED.to_vec()));
+    let opens = || [&["open"][..], &REFUSED].concat();
+    rows.push((orphan, PARENT_NOT_FOUND, opens()));
     let reply = store_target(
         &fixture,
         DraftTarget {
@@ -264,7 +265,7 @@ fn each_row_reads_its_state_and_offers_what_its_policy_allows(cx: &mut TestAppCo
             body: "A comment".to_owned(),
         },
     );
-    rows.push((reply, CURRENT, REFUSED.to_vec()));
+    rows.push((reply, CURRENT, opens()));
 
     // The item gone in a commit; the item made unreadable by its ID; the
     // repository no longer registered.
@@ -344,10 +345,6 @@ fn each_row_reads_its_state_and_offers_what_its_policy_allows(cx: &mut TestAppCo
         shell.label(row_id(reply, "kind"), cx),
         Some(format!("{COMMENT_ON} Current"))
     );
-    assert_eq!(
-        shell.label(row_id(reply, "note"), cx).as_deref(),
-        Some(COMMENT_LATER)
-    );
     for (id, reason) in unreadable {
         assert_eq!(
             state(&shell, id, cx),
@@ -355,6 +352,57 @@ fn each_row_reads_its_state_and_offers_what_its_policy_allows(cx: &mut TestAppCo
         );
         assert_eq!(actions(&shell, id, cx), ["export-raw", "discard"]);
     }
+}
+
+/// A comment draft's row offers Open, which opens and focuses its item's
+/// tab, leaving the page; the draft is not claimed, still listed for the
+/// item's composer to adopt.
+#[gpui_kit::test]
+fn a_comment_rows_open_opens_its_item(cx: &mut TestAppContext) {
+    const COMMENT_ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FEC";
+    let fixture = Fixture::new();
+    let a = with_ticket(&fixture, "a", ONE, "One");
+    fixture.commit_ticket(&a, TWO, "Two", "");
+    fixture.refresh(&a);
+    let id = store_target(
+        &fixture,
+        DraftTarget {
+            repository: key(&a),
+            item_kind: ItemKind::Ticket,
+            item_id: item_id(ONE),
+            comment: Some(CommentTarget {
+                comment_id: item_id(COMMENT_ID),
+                parent_id: None,
+            }),
+        },
+        None,
+        DraftFields::Comment {
+            body: "A comment".to_owned(),
+        },
+    );
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&a, TWO), cx);
+
+    shell.keys("secondary-shift-d", cx);
+    assert_eq!(state(&shell, id, cx).as_deref(), Some(CURRENT));
+    assert_eq!(actions(&shell, id, cx), [&["open"][..], &REFUSED].concat());
+
+    shell.click(row_id(id, "open"), cx);
+    assert!(!drafts_shown(&shell, cx));
+    let opened = shell
+        .workspace
+        .read_with(cx, |workspace, cx| workspace.opened(cx));
+    assert_eq!(opened, Some(ticket(&a, ONE)));
+    assert!(shell.frame(cx, |window, _| {
+        window.find(("tab", 1usize)).focused() == Some(true)
+    }));
+    let still_listed = registry(&shell, cx).read_with(cx, |registry, _| {
+        registry
+            .listing()
+            .rows()
+            .is_some_and(|rows| rows.iter().any(|row| row.id == id))
+    });
+    assert!(still_listed, "Open claims nothing");
 }
 
 /// While its item is read, a row says so and offers Inspect, Export, Discard.
