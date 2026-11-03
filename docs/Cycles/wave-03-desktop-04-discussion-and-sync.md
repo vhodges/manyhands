@@ -236,6 +236,12 @@ approval on 2026-11-02:
     replaces the planner's "Tab leaves the composer" (design, Slots and
     keys), which the owner had not chosen.
 
+20. **Share learns the remote from navigation** (2026-11-02, Lane B Task 8):
+    the item tab takes its repository's publication remote from the
+    workspace's repository summary, so opening a tab adds no remotes read
+    (D3's fact 41 unchanged); a seam on the ticket branch passes it in.
+    Named edit E-13 adds Share to the frame tab-order test.
+
 ## Open Questions
 
 None. U-1 to U-5 (design) are settled in Task 0 by reading the source.
