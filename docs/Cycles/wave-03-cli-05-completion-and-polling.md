@@ -130,7 +130,8 @@ The design's verb sections are the detailed contract. In summary:
 1. **`document promote`, `ticket close`.** Confirmed. `--prepare` shows the
    exact effects: the branch, primary, remote, whole-branch path changes,
    integration, publication, cleanup and, for closure, `closed_by`. `--confirm`
-   executes exactly what was consented to. Consent expires ten minutes after
+   executes exactly what was consented to, as Wave 02 Cycle 09's D6 binds it: with a remote,
+   the item's change set and the D2 relation, not the moving OIDs. Consent expires ten minutes after
    creation; once accepted it stands for that request.
 2. **Retry.** Sending the same request again continues an unfinished
    operation under its operation ID, including after a cancellation
@@ -176,7 +177,7 @@ The design's verb sections are the detailed contract. In summary:
 | --- | --- |
 | All approved commands accounted for | Tests compare the catalog, the RFC tables and the `Command` set, less the two exempt desktop commands. Nothing stays `Planned`. Every verb's `--help --json` answers, C5's verbs have goldens, and each verb has an input schema or a no-input entry and an output schema. |
 | Dirty-primary blocking | Through the binary, a dirty primary blocks both verbs at prepare, naming the blocker. No ref moves. |
-| Stale consent | A prepare whose context or primary then moves answers `external_change` at confirm. An expired confirmation answers `confirmation_expired` with a stored clock case. |
+| Stale consent | The consent is Wave 02 Cycle 09's D6 rule, which closure follows (corrected 2026-11-03: this row first said any primary move). With a remote, a primary advance that leaves the item's change set unchanged is accepted, and the confirm integrates onto it; a move of the context, a change to the item's change set, or any primary move without a remote answers `external_change` at confirm. An expired confirmation answers `confirmation_expired` with a stored clock case. |
 | Push and cleanup failures | Two-clone SSH: a primary push refused after integration is exit 4, cleanup stays pending, and the context stays. A refused remote-branch deletion leaves cleanup pending. The same request then completes. |
 | No duplicate close or merge | After every retry path, primary holds exactly one merge and one closure checkpoint, and `closed_at` and `closed_by` keep their first values. |
 | Later primary publication | Local-only: both verbs exit 0 with publication pending. After `key select` and `remote select` on that repository, `repo sync` publishes the integrated commit, with no fixture seeding (decision 10). |

@@ -614,17 +614,26 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
             return Ran {
                 answer: Answer {
                     effects,
-                    data: self.stop_data(None, &view, CheckpointEffect::NotRequested, report),
+                    data: self.stop_data(
+                        None,
+                        false,
+                        &view,
+                        CheckpointEffect::NotRequested,
+                        report,
+                    ),
                     recovery: vec![outcome::same_request(accepted.request_id)],
                     ..Answer::stopped(code)
                 },
                 standing: Standing::Owed,
             };
         }
+        // A child's stop names the item for both verbs, as its route out is
+        // the item's: the human answer prints it from this data.
+        let child = matches!(stop, Stop::ContextSynchronization(_));
         let blockers = self.named_blockers(service, &root, &stop, blockers);
         Ran {
             answer: Answer {
-                data: self.stop_data(blockers, &view, effects.checkpoint, report),
+                data: self.stop_data(blockers, child, &view, effects.checkpoint, report),
                 effects,
                 recovery: standing_recovery(code, accepted),
                 offers_nothing,
@@ -662,10 +671,12 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
     }
 
     /// The data of a stop: its blockers, with the checkpoint it wrote, and its
-    /// report. A closure's stop reports; a promotion's has only blockers to say.
+    /// report. A closure's stop reports; a promotion's has its blockers to
+    /// say, and names its item when its child stopped (`child`).
     fn stop_data(
         &self,
         blockers: Option<Vec<LifecycleBlocker>>,
+        child: bool,
         view: &ParentView<LifecycleBlocker>,
         checkpoint: CheckpointEffect,
         (made_ready, made_ready_state): MadeReadyReport,
@@ -682,7 +693,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
                     ..self.data()
                 }
             }
-            None if V::REPORTS_MADE_READY => self.data(),
+            None if V::REPORTS_MADE_READY || child => self.data(),
             None => return None,
         };
         Some(MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {

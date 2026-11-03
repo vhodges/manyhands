@@ -52,7 +52,13 @@ At `717b664d` (main `a52273ff` merged). Task 0 re-checks each one.
    return `Complete(outcome) | IndexPending(IndexPending<outcome>)`.
 7. Expectations are bare 32-byte digests (`closure/mod.rs:59`,
    `promotion/mod.rs:264`). The domain has no time expiry. The ten minutes come
-   from F2 (`CONFIRMATION_LIFETIME_SECONDS`, `mutation/confirm.rs:44-47`).
+   from F2 (`CONFIRMATION_LIFETIME_SECONDS`, `mutation/confirm.rs:44-47`). What a digest
+   binds is Wave 02 Cycle 09's D6, which closure follows: with a remote it leaves out the
+   context, local-primary and tracking OIDs, and the item's change set and the D2 relation
+   stand in; without one it binds both local OIDs. So with a remote a primary advance that
+   leaves the change set unchanged passes the confirm, which integrates onto it, and a moved
+   context, a changed change set, or any primary move without a remote is `external_change`
+   (corrected 2026-11-03, `c5_lifecycle_stale_consent_*`).
 8. Retry semantics (Cycle 09, item 10): "The same ID with the same digest
    reconciles the record against Git and resumes at the first unfinished step.
    After integration consent is not re-checked, and only publication and cleanup

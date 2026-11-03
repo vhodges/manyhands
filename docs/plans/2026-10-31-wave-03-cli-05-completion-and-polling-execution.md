@@ -1944,7 +1944,7 @@ it through the binary. 14 of the 20 first written passed on their first run. Wha
   which Git merged cleanly with the checkpoint (the close answered `ok`), so the peer now edits the body line
   too; the unlock row's terminal run exceeded the PTY harness's ten seconds, hence the staging above.
 
-**Blockers (for the owner), each left out of the commit as a row.**
+**Blockers (for the owner), each left out of the commit as a row.** Both ruled: see "Task 12 rulings" below.
 
 1. **A primary that moves by a clean fast-forward between prepare and confirm does not refuse the
    consent.** The Cycle's acceptance row says "A prepare whose context or primary then moves answers
@@ -2020,3 +2020,81 @@ JSON, input failure (`invalid_id`), no-op (`already_applied`), replay and mismat
 | `--test cli_remote`, whole | 111 SSH cases, 0 failed | 814 s |
 | AGENTS.md's fast tier, verbatim | 79 results, 4908 passed, 0 failed | 1510 s |
 | `cargo check --all-features --locked`, `cargo fmt --check`, whole-tree clippy `-D warnings` | ok | |
+
+## Task 12 rulings: the two blockers, and the C4 finding
+
+The coordinator ruled on Task 12a's two blockers. Base `b441e715`.
+
+**1. The stale-consent row: a correction, not a new decision.** Wave 02 Cycle 09's D6
+(`docs/Cycles/wave-02-cycle-09-confirmed-document-promotion.md:250-256`, owner-approved, and closure
+follows it) already says what a consent binds: with a remote the digest leaves out the context, local-primary
+and tracking OIDs, and the item's change set and the D2 relation stand in; without one it binds both local
+OIDs. The C5 Cycle's acceptance row overstated it. The controller's Cycle text is corrected to the Wave 02
+rule: with a remote, a primary advance that leaves the item's change set unchanged is accepted, and the
+confirm integrates onto it; a move of the context, a change to the item's change set, or any primary move
+without a remote answers `external_change` at confirm. Corrected in the Cycle (the acceptance row and Required
+Contract item 1) and in the design's fact 7. Task 12a's Blocker 1 is closed by this.
+
+Rows, all both verbs, since each verb's domain has its own digest encoding:
+
+| Case | Answer |
+| --- | --- |
+| `c5_lifecycle_stale_consent_primary_moved` | A peer's commit of another file, polled in: the confirm answers `ok`, merges onto the peer's commit (first parent) and publishes, once. |
+| `c5_lifecycle_stale_consent_item_path_moved` | A peer's commit of the item's own path, polled in (a ticket retitled, which Git merges cleanly; a document's path added with the bytes the context holds): `external_change`, 3, `request.prepare`, no record, no merge, context kept, nothing pushed. |
+| `c5_lifecycle_stale_consent_local_only_primary_moved` | A `LocalOnly` clone (no publication remote), a person's own commit of another file on primary: `external_change`, 3, as above. |
+| `c5_lifecycle_stale_consent_context_moved` | Was close only; now both verbs (a `document save` for a promotion), since the encodings are per verb. Unchanged in what it asserts. |
+
+**Seen to fail with the other expectation.** Each of the three new rows was run with its expectation flipped
+(`external_change` for the accepted case, `ok` for the two refused ones): all six failed by assertion at the
+code check, and with the expectations restored all six pass. The accepted case also failed that way in Task
+12a's first run.
+
+`LocalOnly` moved from `journeys_c5.rs` to `lifecycle.rs`, with no change, so both modules use it.
+
+**2. A promotion's child stop carries the same data as a close's.** In `bind/lifecycle.rs`, `stop_data`
+returned no data for a promotion's stop that named no blockers (`None if V::REPORTS_MADE_READY => self.data(),
+None => return None`), so a child's `remote_branch_deleted` came back with `data: null`. A stop whose child
+stopped (`Stop::ContextSynchronization`) now names its item with the lifecycle DTO for both verbs, a
+promotion's made-ready fields still null. That is the one library change. `human_lifecycle` keys decision 18's
+and 19's routes on that data, so both verbs print them, and under `operation resume` the lifecycle arm renders,
+so C4's comment note no longer prints for a lifecycle.
+
+- **Narrowed to child stops, for a ruling.** The first version gave every promotion stop the DTO. The
+  `mutation_remote` tier row on it: 683 passed and one failed by assertion, `c5_made_ready_promotion_stop_has_no_data`,
+  Task 4's own pin that a promotion's stop before primary (`BeforeIntegrationRef`) "holds no data, as before".
+  Changing that pin is a semantic edit no named edit covers, so the change is narrowed to what the ruling
+  names, a promotion's child stops, and the pin holds unchanged. If every promotion stop should name its item,
+  that row's edit is the owner's to approve; the wider patch is two lines (`None => self.data()`).
+- **Test first.** The promotion's human-route check was un-skipped in `deleted_branch_request_route` and
+  `deleted_branch_resume_route`, which now also assert the route's note (the reservation note, and the
+  resume's own "this resume released ..." note, with no "comment add or item sync"). Against the unchanged
+  binding both promotion rows failed by assertion at the route comparison, and the two close rows passed.
+  With the fix all four pass. The request route also asserts the JSON stop names the item.
+- **Library rows.** No library golden or row changed: the child's `remote_branch_deleted` rows
+  (`c5_lifecycle_child_remote_branch_deleted`, `c5_cancel_walk_remote_branch_deleted`,
+  `c5_resume_walk_remote_branch_deleted`) don't assert the data.
+
+**3. Follow-up candidate, not opened without the owner's go-ahead (C4's `item sync`).** A refused **first**
+publication of a context, then the same request, publishes nothing. The sequence, through the binary over
+SSH (`CliPair`): A saves `ITEM` (its context never published); the server's bare `HEAD` is set to the
+context's branch, which doesn't exist there yet, and receive-pack refuses the current branch; `item sync
+--request-id R` answers `push_rejected`, 3, blocked, `request.retry`; the refusal is lifted and `HEAD` set back
+to `main`; the same `item sync --request-id R` answers `recovery_required`, 3, offering `request.retry` and
+`repo.inspect`, with nothing published. A later checkpoint of an already published branch, refused then
+accepted, publishes under the same request, as C4's comment row and `c5_journey_offline_edit_then_sync` show.
+Whether the fixture's unborn `HEAD` contributes was not established.
+
+**Verified.**
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `--test cli_remote`, whole | 118 SSH cases, 0 failed | 890 s |
+| `--test mutation_remote -- c5_` | 426 SSH cases, 0 failed: `c5_cancel_` 99, `c5_lifecycle` 152, `c5_resume` 58, `c5_made_ready` 27, `c5_poll` 90 | 2090 s |
+| `--test mutation_remote`, whole (the tier row), on the first, wider version | 683 passed, 1 failed (`c5_made_ready_promotion_stop_has_no_data`, above) | 4734 s |
+| AGENTS.md's fast tier, verbatim (`--test cli` 455 within it) | 79 results, 4908 passed, 0 failed | 1426 s |
+| `cargo check --all-features --locked`, `cargo fmt --check`, whole-tree clippy `-D warnings` | ok | |
+
+The whole `mutation_remote` target was not run again on the narrowed version: the narrowing only takes back
+data from non-child promotion stops, which is the state every row but the one passed on before this change,
+and every `c5_` row ran on it. A fast-tier run on the wider version was stopped part way, and a `pkill` of it
+by command line may have matched another session's process of the same command line; nothing showed one.

@@ -35,7 +35,7 @@ use repository::{
     RepositoryService, RequestId, TicketCloseInput, TicketClosurePreflight,
     keys::SessionCredentials,
 };
-use ssh_remote::{FixtureError, fixed};
+use ssh_remote::{FixtureError, SshRemoteFixture, fixed};
 
 macro_rules! both {
     ($( $name:literal => $row:expr ),+ $(,)?) => {
@@ -48,6 +48,10 @@ macro_rules! both {
 
 pub const BOTH: &[ssh_harness::Case] = both![
     "dirty_primary_blocks" => dirty_primary_blocks,
+    "stale_consent_context_moved" => stale_consent_context_moved,
+    "stale_consent_primary_moved" => stale_consent_primary_moved,
+    "stale_consent_item_path_moved" => stale_consent_item_path_moved,
+    "stale_consent_local_only_primary_moved" => stale_consent_local_only_primary_moved,
     "refused_primary_push_then_same_request" => refused_primary_push_then_same_request,
     "refused_deletion_then_same_request" => refused_deletion_then_same_request,
     "primary_advanced_continues" => primary_advanced_continues,
@@ -57,10 +61,6 @@ pub const BOTH: &[ssh_harness::Case] = both![
 ];
 
 pub const ONE: &[ssh_harness::Case] = &[
-    (
-        "c5_lifecycle_stale_consent_context_moved_close",
-        c5_lifecycle_stale_consent_context_moved_close,
-    ),
     (
         "c5_lifecycle_host_stop_then_same_request_close",
         c5_lifecycle_host_stop_then_same_request_close,
@@ -156,6 +156,48 @@ impl Verb {
         assert!(clone.tip(self.branch()).unwrap().is_some());
     }
 
+    /// A further save of the item's body, which moves its context.
+    pub(super) fn resave(self, clone: &CliClone, request: &str, body: &str) {
+        match self {
+            Self::Close => {
+                save(clone, request, body);
+            }
+            Self::Promote => {
+                let shown = clone.json(
+                    &["document", "show", "--repo", clone.root(), "--id", DOCUMENT],
+                    &[],
+                    "ok",
+                    0,
+                );
+                let input =
+                    serde_json::json!({"observation": shown["data"]["observation"], "body": body});
+                let mut args = vec!["document", "save", "--repo", clone.root(), "--id", DOCUMENT];
+                args.extend(["--request-id", request, "--input", "-"]);
+                clone.json(&args, &serde_json::to_vec(&input).unwrap(), "ok", 0);
+            }
+        }
+    }
+
+    /// The item created in a clone whose primary doesn't hold it, as a
+    /// `LocalOnly` clone's doesn't.
+    pub(super) fn create(self, clone: &CliClone, request: &str) {
+        match self {
+            Self::Promote => self.begin(clone, request),
+            Self::Close => {
+                let created = serde_json::json!({
+                    "item_id": ITEM,
+                    "title": "Local ticket",
+                    "type": "task",
+                    "status": "open",
+                    "body": "Closed while local only.\n",
+                });
+                let mut args = vec!["ticket", "create", "--repo", clone.root()];
+                args.extend(["--request-id", request, "--input", "-"]);
+                clone.json(&args, &serde_json::to_vec(&created).unwrap(), "ok", 0);
+            }
+        }
+    }
+
     /// `begin`, then the context published by `item sync`.
     pub(super) fn begin_published(self, p: &CliPair, save: &str, sync: &str) {
         self.begin(&p.a, save);
@@ -208,6 +250,61 @@ impl Verb {
             Self::Promote => Mutation::DocumentPromote(DocumentPromoteInput { root, id }),
             Self::Close => Mutation::TicketClose(TicketCloseInput { root, id }),
         }
+    }
+}
+
+/// The request that enables a `LocalOnly` clone.
+const ENABLE: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR8";
+
+/// A clone of the remote made a Manyhands repository through the binary
+/// with no publication remote and no key: local only. Its Git remote `origin`
+/// is the server, as a person's clone has it.
+pub(super) struct LocalOnly {
+    pub(super) clone: CliClone,
+    _directory: tempfile::TempDir,
+}
+
+impl LocalOnly {
+    pub(super) fn new(server: &SshRemoteFixture) -> Result<Self, FixtureError> {
+        let directory = fixed(tempfile::tempdir())?;
+        let root = directory.path().join("local-only");
+        let mut fetch = git2::FetchOptions::new();
+        fetch.remote_callbacks(cli_pair::callbacks(server)?);
+        let mut builder = git2::build::RepoBuilder::new();
+        builder.fetch_options(fetch);
+        fixed(builder.clone(&server.url(), &root))?;
+        let env = CliEnv::new(directory.path().join("data"));
+        fixed(std::fs::write(
+            env.home.path().join(".gitconfig"),
+            "[core]\n\tautocrlf = false\n",
+        ))?;
+        let clone = CliClone { env, root };
+        let input = serde_json::to_vec(&serde_json::json!({
+            "primary_branch": "main",
+            "identity": {"name": "Local Person", "email": "local@example.invalid"},
+        }))
+        .unwrap();
+        let args = ["repo", "enable", "--repo", clone.root(), "--input", "-"];
+        let preview = clone.json(&[&args[..], &["--prepare"][..]].concat(), &input, "ok", 0);
+        clone.json(
+            &[
+                &args[..],
+                &[
+                    "--request-id",
+                    ENABLE,
+                    "--confirm",
+                    preview["data"]["confirmation_id"].as_str().unwrap(),
+                ][..],
+            ]
+            .concat(),
+            &input,
+            "ok",
+            0,
+        );
+        Ok(Self {
+            clone,
+            _directory: directory,
+        })
     }
 }
 
@@ -587,43 +684,151 @@ fn dirty_primary_blocks(verb: Verb) -> Result<(), FixtureError> {
 
 // ---------------------------------------------------------------- confirm
 
-/// A stale consent, with no record and nothing done, then a fresh consent.
-fn assert_stale(p: &CliPair, verb: Verb, refused: &Value) -> Result<(), FixtureError> {
-    let a = &p.a;
+/// A stale consent: refused at confirm, with no record and nothing done.
+fn assert_refused_consent(
+    clone: &CliClone,
+    verb: Verb,
+    refused: &Value,
+) -> Result<(), FixtureError> {
     assert_eq!(refused["outcome"], "blocked", "{refused}");
     assert_eq!(actions(refused), ["request.prepare"]);
     assert_eq!(refused["effects"]["integration"], "not_requested");
     checked(
-        &a.env,
+        &clone.env,
         &["request", "show", "--request-id", R3],
         &[],
         "request_not_found",
         2,
         None,
     );
-    assert_eq!(merges(&a.repo()?)?, 0);
-    assert!(a.tip(verb.branch())?.is_some(), "the context stays");
+    assert_eq!(merges(&clone.repo()?)?, 0);
+    assert!(clone.tip(verb.branch())?.is_some(), "the context stays");
+    Ok(())
+}
+
+/// `assert_refused_consent`, then a fresh consent that finishes once.
+fn assert_stale(p: &CliPair, verb: Verb, refused: &Value) -> Result<(), FixtureError> {
+    let a = &p.a;
+    assert_refused_consent(a, verb, refused)?;
     let preview = verb.prepare(a, "ok", 0);
     let done = verb.confirm(a, R4, &preview, "ok", 0);
     assert_eq!(done["effects"]["publication"], "published", "{done}");
     finished_once(p, verb, None)
 }
 
-/// The context moves between the prepare and its confirmation: a second save.
-/// The confirmation answers `external_change`, with no record and nothing
-/// done, and a fresh consent completes. Shared consent code, so one verb
-/// (decision 27): both verbs compare one digest of the preview.
-fn c5_lifecycle_stale_consent_context_moved_close() -> Result<(), FixtureError> {
-    let verb = Verb::Close;
+// The consent rule is Wave 02 Cycle 09's D6, which closure follows: with a
+// remote the digest leaves out the context, local-primary and tracking OIDs,
+// and the item's change set and the D2 relation stand in; with none it binds
+// both local OIDs.
+
+/// The context moves between the prepare and its confirmation: a second save,
+/// which changes the change set. The confirmation answers `external_change`,
+/// with no record and nothing done, and a fresh consent completes.
+fn stale_consent_context_moved(verb: Verb) -> Result<(), FixtureError> {
     let p = CliPair::new()?;
     let a = &p.a;
     verb.begin(a, R1);
     let preview = verb.prepare(a, "ok", 0);
-    save(a, R2, "Saved again before the confirmation.\n");
+    verb.resave(a, R2, "Saved again before the confirmation.\n");
     let tip = a.tip(verb.branch())?;
     let refused = verb.confirm(a, R3, &preview, "external_change", 3);
     assert_eq!(a.tip(verb.branch())?, tip);
     assert_stale(&p, verb, &refused)
+}
+
+/// With a remote, a collaborator's primary advance that leaves the item's
+/// change set as it was is accepted: a peer's commit of another file, polled
+/// in, and the confirmation integrates onto it and publishes, once.
+fn stale_consent_primary_moved(verb: Verb) -> Result<(), FixtureError> {
+    let p = CliPair::new()?;
+    let a = &p.a;
+    verb.begin(a, R1);
+    let preview = verb.prepare(a, "ok", 0);
+    let incoming = peer_commit(&p, "incoming.txt", b"incoming\n")?;
+    poll(a, R2);
+    assert_eq!(a.tip(PRIMARY)?, Some(incoming));
+    assert_ne!(
+        preview["data"]["details"]["primary_oid"],
+        incoming.to_string().as_str()
+    );
+    let done = verb.confirm(a, R3, &preview, "ok", 0);
+    assert_eq!(done["effects"]["publication"], "published", "{done}");
+    finished_once(&p, verb, None)?;
+    let repository = a.repo()?;
+    let merge = fixed(repository.find_commit(fixed(repository.refname_to_id(PRIMARY))?))?;
+    assert_eq!(merge.parent_id(0).ok(), Some(incoming), "onto the advance");
+    Ok(())
+}
+
+/// With a remote, a primary advance that touches the item's own path changes
+/// its change set: the confirmation answers `external_change`. For a ticket,
+/// a peer retitles it (a change Git merges cleanly); for a document, a peer
+/// adds the same path with the bytes the context holds.
+fn stale_consent_item_path_moved(verb: Verb) -> Result<(), FixtureError> {
+    let p = CliPair::new()?;
+    let a = &p.a;
+    verb.begin(a, R1);
+    let preview = verb.prepare(a, "ok", 0);
+    let bytes = match verb {
+        Verb::Close => format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {ITEM}\ntitle: Retitled on primary\n\
+             type: task\nstatus: open\n---\nBody of Shared.\n"
+        ),
+        Verb::Promote => fixed(std::fs::read_to_string(verb.worktree(a).join(verb.path())))?,
+    };
+    let incoming = peer_commit(&p, &verb.path(), bytes.as_bytes())?;
+    poll(a, R2);
+    assert_eq!(a.tip(PRIMARY)?, Some(incoming));
+    let pushes = remote_world::accepted(&p.server);
+    let refused = verb.confirm(a, R3, &preview, "external_change", 3);
+    assert_refused_consent(a, verb, &refused)?;
+    assert_eq!(a.tip(PRIMARY)?, Some(incoming));
+    assert_eq!(p.served(PRIMARY)?, Some(incoming));
+    assert_eq!(remote_world::accepted(&p.server), pushes, "nothing pushed");
+    Ok(())
+}
+
+/// Without a remote, any primary move refuses the consent: a person's own
+/// commit of another file on primary, between the prepare and its
+/// confirmation, answers `external_change`.
+fn stale_consent_local_only_primary_moved(verb: Verb) -> Result<(), FixtureError> {
+    let server = SshRemoteFixture::start()?;
+    private_fixture(&server);
+    let local = LocalOnly::new(&server)?;
+    let clone = &local.clone;
+    verb.create(clone, R1);
+    let preview = verb.prepare(clone, "ok", 0);
+    assert!(preview["data"]["details"]["remote"].is_null());
+    let moved = own_commit(clone, "unrelated.txt", b"unrelated\n")?;
+    let refused = verb.confirm(clone, R3, &preview, "external_change", 3);
+    assert_refused_consent(clone, verb, &refused)?;
+    assert_eq!(clone.tip(PRIMARY)?, Some(moved));
+    Ok(())
+}
+
+/// A person's own commit of `path` on the clone's primary, made with Git and
+/// checked out, which leaves the worktree clean.
+fn own_commit(clone: &CliClone, path: &str, bytes: &[u8]) -> Result<git2::Oid, FixtureError> {
+    let repository = clone.repo()?;
+    let parent = fixed(repository.find_commit(fixed(repository.refname_to_id(PRIMARY))?))?;
+    let mut builder = fixed(repository.treebuilder(Some(&fixed(parent.tree())?)))?;
+    fixed(builder.insert(path, fixed(repository.blob(bytes))?, 0o100644))?;
+    let tree = fixed(repository.find_tree(fixed(builder.write())?))?;
+    let signature = fixed(git2::Signature::now("A person", "person@example.invalid"))?;
+    let commit = fixed(repository.commit(
+        None,
+        &signature,
+        &signature,
+        "a person's own commit",
+        &tree,
+        &[&parent],
+    ))?;
+    fixed(repository.checkout_tree(
+        &fixed(repository.find_object(commit, None))?,
+        Some(git2::build::CheckoutBuilder::new().safe()),
+    ))?;
+    fixed(repository.reference(PRIMARY, commit, true, "a person's own commit"))?;
+    Ok(commit)
 }
 
 // --------------------------------------------------- refusals at the remote
@@ -874,11 +1079,9 @@ fn republish_line(clone: &CliClone, verb: Verb) -> Vec<String> {
 /// Decision 18 through the binary: the context's branch deleted at the
 /// remote stops the request, whose answer offers its cancellation. The route,
 /// followed: `request cancel`, the same request (`cancelled`, the child let
-/// go), `item republish`, the same request (`ok`, one merge). A closure's
-/// human answer prints those four lines and they are what is run. A
-/// promotion's stop carries no lifecycle data, so its human answer prints no
-/// route (for the owner: the ledger's Task 12a blockers), and its JSON
-/// actions are followed instead.
+/// go), `item republish`, the same request (`ok`, one merge). The human
+/// answer prints those four lines, with the note on the reservation, and they
+/// are what is run.
 fn deleted_branch_request_route(verb: Verb) -> Result<(), FixtureError> {
     let p = CliPair::new()?;
     let a = &p.a;
@@ -919,10 +1122,13 @@ fn deleted_branch_request_route(verb: Verb) -> Result<(), FixtureError> {
         republish_line(a, verb),
         again,
     ];
-    if verb == Verb::Close {
-        assert_eq!(commands(text), route, "{text}");
-    }
+    assert_eq!(commands(text), route, "{text}");
+    assert!(
+        text.contains("note: the refused request's context synchronization keeps its reservation"),
+        "{text}"
+    );
     let stopped = verb.send(a, R3, "remote_branch_deleted", 3);
+    assert_eq!(stopped["data"]["item_id"], verb.id(), "{stopped}");
     assert_eq!(actions(&stopped), ["request.cancel", "repo.inspect"]);
     assert_eq!(request_show(a, R3)["state"], "accepted");
     assert_eq!(merges(&a.repo()?)?, 0);
@@ -944,9 +1150,8 @@ fn deleted_branch_request_route(verb: Verb) -> Result<(), FixtureError> {
 /// Decision 19 through the binary: a parent no request holds meets the
 /// deleted branch under `operation resume`, which lets the child go and keeps
 /// no record. The route, followed: `item republish`, then the resume again
-/// (`ok`, one merge). A closure's human answer prints those two lines; a
-/// promotion's, with no lifecycle data, prints C4's note instead (for the
-/// owner, as above), and its JSON actions are followed.
+/// (`ok`, one merge). The human answer prints those two lines and the
+/// resume's own note, never C4's comment note, and they are what is run.
 fn deleted_branch_resume_route(verb: Verb) -> Result<(), FixtureError> {
     let p = CliPair::new()?;
     let a = &p.a;
@@ -972,9 +1177,12 @@ fn deleted_branch_resume_route(verb: Verb) -> Result<(), FixtureError> {
         .map(str::to_owned)
         .to_vec(),
     ];
-    if verb == Verb::Close {
-        assert_eq!(commands(text), route, "{text}");
-    }
+    assert_eq!(commands(text), route, "{text}");
+    assert!(
+        text.contains("note: this resume released the operation's context synchronization"),
+        "{text}"
+    );
+    assert!(!text.contains("comment add or item sync"), "{text}");
     checked(
         &a.env,
         &["request", "show", "--request-id", R3],

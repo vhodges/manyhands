@@ -25,8 +25,8 @@ use cli::stderr;
 use cli_pair::{CONTEXT, CliClone, CliPair, ITEM, OTHER_ITEM, PRIMARY};
 use collaboration::{add, item_sync, repo_sync, request_show, save};
 use lifecycle::{
-    DOCUMENT, DOCUMENT_BRANCH, DOCUMENT_PATH, Verb, closure_at, closure_checkpoints, finished_once,
-    merges, peer_commit, poll, refs, source_at,
+    DOCUMENT, DOCUMENT_BRANCH, DOCUMENT_PATH, LocalOnly, Verb, closure_at, closure_checkpoints,
+    finished_once, merges, peer_commit, poll, refs, source_at,
 };
 use ssh_remote::{FixtureBoundary, FixtureError, SshRemoteFixture, fixed};
 
@@ -69,7 +69,6 @@ const R4: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR4";
 const R5: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR5";
 const R6: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR6";
 const R7: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR7";
-const R8: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR8";
 const C1: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC1";
 const C2: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC2";
 const C3: &str = "01ARZ3NDEKTSV4RRFFQ69G5FC3";
@@ -549,57 +548,7 @@ fn c5_journey_document_promotion() -> Result<(), FixtureError> {
 
 // ------------------------------------------------- local only, then later
 
-/// A clone of the remote made a Manyhands repository through the binary
-/// with no publication remote and no key: local only. Its Git remote `origin`
-/// is the server, as a person's clone has it.
-struct LocalOnly {
-    clone: CliClone,
-    _directory: tempfile::TempDir,
-}
-
 impl LocalOnly {
-    fn new(server: &SshRemoteFixture) -> Result<Self, FixtureError> {
-        let directory = fixed(tempfile::tempdir())?;
-        let root = directory.path().join("local-only");
-        let mut fetch = git2::FetchOptions::new();
-        fetch.remote_callbacks(cli_pair::callbacks(server)?);
-        let mut builder = git2::build::RepoBuilder::new();
-        builder.fetch_options(fetch);
-        fixed(builder.clone(&server.url(), &root))?;
-        let env = CliEnv::new(directory.path().join("data"));
-        fixed(std::fs::write(
-            env.home.path().join(".gitconfig"),
-            "[core]\n\tautocrlf = false\n",
-        ))?;
-        let clone = CliClone { env, root };
-        let input = serde_json::to_vec(&serde_json::json!({
-            "primary_branch": "main",
-            "identity": {"name": "Local Person", "email": "local@example.invalid"},
-        }))
-        .unwrap();
-        let args = ["repo", "enable", "--repo", clone.root(), "--input", "-"];
-        let preview = clone.json(&[&args[..], &["--prepare"][..]].concat(), &input, "ok", 0);
-        clone.json(
-            &[
-                &args[..],
-                &[
-                    "--request-id",
-                    R8,
-                    "--confirm",
-                    preview["data"]["confirmation_id"].as_str().unwrap(),
-                ][..],
-            ]
-            .concat(),
-            &input,
-            "ok",
-            0,
-        );
-        Ok(Self {
-            clone,
-            _directory: directory,
-        })
-    }
-
     /// Decision 10's order: a key, then the remote, then the host, through
     /// the binary. The key is selected before any publication remote exists,
     /// so nothing is fenced (`01M66HFV44` is not reached).
