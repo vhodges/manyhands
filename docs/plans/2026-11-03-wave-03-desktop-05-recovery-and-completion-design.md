@@ -18,7 +18,7 @@ synchronization and repair, republish, and their evidence. Approval covers
 the mechanisms, rulings, named edits and task order. It does not authorize
 implementation, pushing beyond the ticket branch, merging or closing.
 
-Revision 2, after review round 1 (Review Record). The documents are drafted
+Revision 3, after review rounds 1 and 2 (Review Record). The documents are drafted
 against C5's tip `f59aceb6`, which is not merged (Cycle decision 1). Facts
 marked **(C5)** are read there; all others at `e39bb004`. Task 0 re-checks
 each after C5 merges.
@@ -188,6 +188,9 @@ expectation stops for the owner.
   child's `connecting`, `fetching` and `pushing` from `run.rs`, with no
   change under `R/remote/` or `R/local_sync/`. If not, the child's stages
   are not forwarded (K-11) rather than widening Part 0.
+- **U-5.** Where the D2 draft store's directory is resolved in the
+  desktop, so the resolution store sits beside it under the same
+  protection.
 
 ## API Audit Refresh (Entry-Gate Item 3)
 
@@ -222,12 +225,15 @@ Task 0 → Part 0: L1 → L2 → L3 → checkpoint
 Files: `R/mutation/way_out.rs` and `way_out_tests.rs` (new),
 `R/mutation/mod.rs` (export), `R/read/status.rs`,
 `R/mutation/bind/resume.rs` (share `lifecycle_standing`),
-`R/mutation/progress.rs`, `schemas/v1/progress_event.schema.json`,
+`R/mutation/progress.rs`, `R/mutation/command.rs` (the lifecycle's
+pre-call stage, and its table test at `:767-773`),
+`schemas/v1/progress_event.schema.json`,
 `R/promotion/run.rs`, `R/closure/lifecycle.rs`,
 `R/mutation/bind/lifecycle.rs`, `src/bin/manyhands-cli/human_lifecycle.rs`,
 `D/model/operations.rs` (`stage_text` arms only, to keep the tree green),
-and tests in `tests/read_status.rs`, `tests/mutation_remote/d5_progress.rs`
-and the CLI targets.
+and tests in `tests/read_status.rs`, `tests/mutation_remote.rs` (its
+`mod d5_progress;`), `tests/mutation_remote/d5_progress.rs` and the CLI
+targets.
 
 ### L1: Way out
 
@@ -243,11 +249,18 @@ pub enum LifecycleWayOut {
     SharePrimary,                                // repo sync
     PollOnce,                                    // poll once
     SaveItem { item_id: String },                // context_missing
+    RepairOutside,                               // a document's integration_conflict
     Inspect,
 }
 pub fn lifecycle_way_out(envelope: &Envelope<MutationDataDto>) -> Vec<LifecycleWayOut>;
-pub fn lifecycle_prepare_way_out(envelope: &Envelope<PrepareDataDto>) -> Vec<LifecycleWayOut>;
+pub fn lifecycle_prepare_way_out(
+    kind: ItemDtoKind,
+    envelope: &Envelope<PrepareDataDto>,
+) -> Vec<LifecycleWayOut>;
 ```
+
+`kind` is a parameter because `LifecycleBlockedDto` holds only blockers,
+as the CLI's `prepare(kind, …)` does (`human_lifecycle.rs:391`).
 
 Every rule of Fact 7 is moved, keeping its order; the CLI renders the
 returned values. Proof: C5's `lifecycle_tests.rs`, `cli` and `cli_remote`
@@ -269,17 +282,24 @@ descriptions (non-breaking under the CLI contract's enum rule):
 
 | Stage | Step it lights |
 | --- | --- |
-| `connecting`, `fetching`, `updating_local`, `pushing` (child, U-4) | Share with origin |
+| `accepted`, `observing` (pre-call) | none yet |
+| `connecting`, `fetching`, `updating_local`, `pushing` from the **context** child (U-4) | Share with origin |
 | `recording` | Mark as closed |
 | `integrating` | Merge into main |
-| `publishing` | Share main with origin |
+| `publishing` (once, when the **primary** child starts; its own safe points are not forwarded) | Share main with origin |
 | `cleaning_up` | Tidy up |
 
-`run_lifecycle` takes a domain observer of steps; the mutation layer maps
-it to `ProgressStage` and the request's sink. A stage is emitted only when
-its step runs, so a cleanup-only replay reports `cleaning_up` alone and a
+`Command::stage()` reports `observing`, not `connecting`, before a
+promotion's or closure's domain call (`command.rs:480-490`), so a
+local-only or cleanup-only run never shows "Connecting…". `run_lifecycle`
+takes a domain observer of steps and of the context child's safe points,
+by `ChildRole`; the mutation layer maps them to `ProgressStage` and the
+request's sink. A step's stage is emitted only when the step runs, so a
+cleanup-only replay reports `accepted, observing, cleaning_up` and a
 local-only run reports no `publishing`. `stage_text` gains words for the
-four stages. Named edit E-3.
+four stages. Named edit E-3, including `tests/cli_remote/journeys_c5.rs:793`
+(`progress: connecting` before `transport_unavailable`, which the context
+child's forwarded `connecting` keeps if U-4 holds).
 
 ## Part A: Close Ticket… And Approve And Merge…
 
@@ -298,9 +318,13 @@ four stages. Named edit E-3.
 ### A2: The lifecycle dialog
 
 A new view, `D/view/lifecycle.rs` with `lifecycle/` submodules, opened
-from the header. It calls `Services::prepare`, `Worker::submit_with_request_id`
-and `Worker::reconfirm`, and uses `offers_prepare_again`; it does not
-reuse `ConfirmDialog` (R-1). Header: kind icon, title "Close ticket" or
+from the header. It calls `Services::prepare`; the first run is
+`Worker::submit(intent, Lane::User, Some(confirmation), secret)`; after
+Prepare again it is `Worker::reconfirm`; Retry, Continue and the
+resend after Resume are `Worker::submit_with_request_id`, which passes no
+confirmation (an accepted record needs none) and no secret, so a
+protected key on a resend takes D4's unlock-then-Retry path. It uses
+`offers_prepare_again` and does not reuse `ConfirmDialog` (R-1). Header: kind icon, title "Close ticket" or
 "Approve and merge", subtitle "{slug or short ULID} · {title} · {repository}",
 and the context branch (MH-COLLAB-006).
 
@@ -338,9 +362,21 @@ All of it is merged." No line counts (R-3).
 `flush_now` then `save` and waits. A saved answer moves on to prepare; any
 other answer closes the dialog, and the tab shows that save's outcome.
 
-**Read-only while running (decision 12).** From Confirm until cleanup is
-complete, or until the run ends Failed or stopped, the item's tabs are
-read-only with "Closing…" or "Merging…"; Failed or stopped unlocks them.
+**Read-only while unfinished (decisions 12, 18).** Every tab and window
+on the item is read-only, with "Closing…" or "Merging…", while either:
+
+- the worker has this item's lifecycle request queued or in flight, from
+  the Saving stage on; or
+- the library lists an unfinished lifecycle parent for the item (L2's
+  rows, read at launch and after each lifecycle answer), so the lock
+  survives a restart.
+
+Unlock happens only when neither holds: cleanup complete; a refused or
+stale prepare or consent (nothing accepted); `busy` or `request_mismatch`
+before acceptance; Cancel or Esc before Confirm; or a stop or failure
+**before integration** that leaves no unfinished parent. After
+integration, the tabs stay read-only until cleanup completes, and the
+banner shows the way out (P20, P23).
 
 **Stale (contract 3).** When the library refuses the consent (an answer in
 `STALE_CODES`, `external_change` or `confirmation_expired`), the dialog says
@@ -364,8 +400,21 @@ pending"; Share main is offered once a remote exists (R-7). A remote
 publication or cleanup that is pending is **Failed** with the completed
 steps checked; Retry sends the same request ID (Fact 6). The way-out
 buttons follow L1: Repair locally…, Resolve conflict…, Republish…, Resume,
-Share main, Open repository details, or guidance text for `PollOnce` and
-`SaveItem`. Credential stops reuse D4's recovery: Unlock…, Open Sharing &
+Continue (`RetryRequest`: resends the holding request), Share main, Open
+repository details, or guidance text for `PollOnce`, `SaveItem` and
+`RepairOutside`.
+
+**Deleted branch** (`CancelThenSendAgain`, the CLI's sequence,
+`human_lifecycle.rs:156-190`): one button, "Stop and republish…", which
+(1) cancels and resends the lifecycle request through `Worker::give_up`,
+whose `cancelled` answer releases the child's reservation and shows
+"Stopped; ready to republish"; (2) opens Republish… (confirmed); (3) on
+its success, resends the lifecycle request (Retry). Each step's failure
+stops the sequence with its own answer (P21).
+
+**Already running.** Resume and Continue are not offered while the worker
+has the item's lifecycle in flight; a resend answered `busy` reads "Still
+running" with no failure (P22). Credential stops reuse D4's recovery: Unlock…, Open Sharing &
 keys, Check host. A stop at a safe point reports which steps completed and
 whether cancellation finished (MH-COLLAB-006).
 
@@ -395,6 +444,8 @@ page. A failed or partial run keeps the context and every draft.
 ### B1: Reads
 
 - Remote: `show_conflict(operation_id)`; observation from `ConflictDto`.
+  For a lifecycle child after a restart, the operation ID is the item's
+  L2 lifecycle row's, which the conflict verbs accept (C5 decision 34).
 - Local: `inspect_local_context_sync(operation_id)` for state, eligibility
   and observation, then `read_local_context_conflict` per token.
 - Reads run on the background executor, stamped; a late read never
@@ -431,16 +482,24 @@ Result editor is a newline; Ctrl+Enter saves. The note follows the source
 finishes bringing main into this item." (local) / "Saving lets the close
 continue." / "Saving lets the merge continue."
 
-Save resolution submits `ConflictResolve` or `LocalContextResolve` with
-B1's observation and every path's `{token, source}`; the submitted set
-stays in memory for this session (R-12).
+Save resolution submits `ConflictResolve` or `LocalContextResolve` (new
+intents `Intent::ConflictResolve`, `Intent::LocalContextResolve`, with
+`JobKind`s and build arms) with B1's observation and every path's
+`{token, source}`.
+
+**Kept sets (decision 19, R-12).** Before submission, the set is written
+per request ID to `D/services/resolutions.rs`'s store in the desktop's data
+directory, beside the D2 draft store (U-5), with the drafts' protection and
+no `Debug`; it is deleted when that request finishes (applied, refused or
+abandoned). Reopening the sheet while a request with a kept set is
+unfinished offers Retry with **that** request's set, never a new request.
 
 | Answer | Shows |
 | --- | --- |
 | applied, share or local | Banner clears; the share's or sync's outcome follows |
-| applied, lifecycle child | The desktop sends the lifecycle's request ID again (R-10, U-3); the dialog shows Running |
+| applied, lifecycle child | The desktop resends the lifecycle's request ID when it holds it; otherwise Resume on the item's L2 lifecycle row, then the Part C resend (R-10, U-3); the dialog shows Running |
 | `external_change` / stale observation | "This changed while you were choosing." Refreshed comparison; choices kept where the part is unchanged |
-| `original_request_required` | In session: Retry with the kept set. After restart: K-10 |
+| `original_request_required{request_id}` | Retry with the kept set of that request ID, after a restart too. A remote request with written paths only and no kept set: a new resolution that supersedes it (GRFC 402-403) |
 | stopped | Resume on the row (P15) |
 
 ### B4: External guidance
@@ -460,15 +519,17 @@ resolve, after a restart.
 
 ### B6: Local synchronization
 
-Repair locally… (L1 `RepairLocally`): observe, then `LocalContextSync`
-with that observation. A conflict opens the sheet; a clean result offers
-Retry on the lifecycle; a refusal or stop shows its answer, and Resume on
-the row continues it (P16). `resume_offer` offers Resume for local-context
+Repair locally… (L1 `RepairLocally`, new `Intent::LocalContextSync`):
+observe, then `LocalContextSync` with that observation. A conflict opens
+the sheet. A clean result offers the lifecycle's way on from L1: Retry
+when a request holds the lifecycle, Resume when none does, Prepare again
+when the earlier stop was a blocked prepare. A refusal or stop shows its
+answer, and Resume on the row continues it (P16). `resume_offer` offers Resume for local-context
 synchronizations and resolutions (E-5), keeping lifecycle rows apart.
 
 ## Part C: Republish And Resume
 
-- `Intent::ItemRepublish{root, kind, id}`. The share outcome for
+- `Intent::ItemRepublish{root, kind, id}`, with `JobKind` and build arm. The share outcome for
   `remote_branch_deleted` and L1's `Republish` offer Republish…, through
   `confirm_followed` with the existing Republish arm. `BRANCH_DELETED`
   loses "arrives in a later release" (E-6). A stopped republish is sent
@@ -477,8 +538,8 @@ synchronizations and resolutions (E-5), keeping lifecycle rows apart.
   `OperationResume`. On `original_request_required{request_id}` the desktop
   sends a rebuilt `DocumentPromote` or `TicketClose` intent with that
   request ID (`submit_with_request_id`) and opens the dialog in Running.
-  The same path serves a resolution's `original_request_required` only
-  in-session (R-12).
+  Resume is not offered while the worker has the item's lifecycle in
+  flight (P22).
 
 ## Required Outcomes
 
@@ -495,7 +556,7 @@ synchronizations and resolutions (E-5), keeping lifecycle rows apart.
 | P9 | Refused closure checkpoint merge | Repair locally…; then Retry |
 | P10 | Incompatible closures | External; no winner |
 | P11 | A side changes while the sheet is open | Refreshed comparison |
-| P12 | Held item at prepare | Names the holding request, or Resume |
+| P12 | Held item at prepare | Continue (resends the holding request), or Resume |
 | P13 | Close a ticket whose status text is `closed` | Runs; lifecycle Closed shown apart from status |
 | P14 | Already-closed ticket | `ticket_closed`; no run |
 | P15 | Remote resolution interrupted | Resume on its row finishes the prepared attempt |
@@ -503,7 +564,12 @@ synchronizations and resolutions (E-5), keeping lifecycle rows apart.
 | P17 | Republish stopped | Same request again; one publication |
 | P18 | Lifecycle stopped with no parent record | New prepare offered |
 | P19 | Dirty primary | Blocked at prepare, or stopped at execute; Open folder; nothing merged |
-| P20 | Edit attempted while running | Read-only until tidied, failed or stopped |
+| P20 | Edit attempted while a lifecycle is unfinished | Read-only in every tab and window of the item; after a restart too |
+| P21 | Shared branch deleted mid-lifecycle | Stop and republish…: cancel and resend (`cancelled`, reservation released), Republish, resend; no loop on `busy` |
+| P22 | Resume or Continue while the item's lifecycle is in flight | Not offered; a resend answered `busy` reads "Still running" |
+| P23 | Cleanup refused after integration, then the user tries to edit | Still read-only; Retry tidies; the context is never changed meanwhile |
+| P24 | Restart after a partial local resolution | Retry with that request's kept set finishes it |
+| P25 | Unlock paths | Refused or stale consent, `busy`, `request_mismatch`, Cancel before Confirm, or a pre-integration stop with no parent: tabs unlock |
 
 ## Native Checklist (Linux Wayland, Release Build, Product Owner)
 
@@ -522,9 +588,17 @@ seed each.
 ## Testing (Decision 9)
 
 Desktop tests use real local repositories for local-only runs and local
-conflicts, and canned answers for remote outcomes. Remote behaviour is
-proven by C5's and Part 0's library and CLI SSH tests, and by the native
-checklist against a real remote.
+conflicts. **Interruption is real:** a local-only run is stopped at a
+named stage through a new test seam in the worker's progress sink that
+holds at that stage (P4), or broken by a library failure point after
+`DelayingBackend::replace_service` (`delaying.rs:137-141`) and then
+resumed (P5, A8, A9); commits are counted on the real repositories.
+**Canned answers** (`hold_job_return_answering`, a canned prepare, a
+canned `ConflictDto`) are used only where the real call is refused with no
+effect, or to render a remote outcome the desktop cannot reach; each
+such test says so in its doc comment and asserts nothing about
+repository state. Remote behaviour is proven by C5's and Part 0's library
+and CLI SSH tests, and by the native checklist against a real remote.
 
 | Target | What |
 | --- | --- |
@@ -534,7 +608,11 @@ checklist against a real remote.
 | `D/view/lifecycle_tests.rs`, `lifecycle/*_tests.rs` | A2–A4; P1–P4, P6, P7, P12–P14, P18–P20 |
 | `D/model/conflict_tests.rs` | B2 |
 | `D/view/conflict_tests.rs`, `conflict/*_tests.rs` | B3–B6; P8–P11, P15, P16 |
-| `D/view/operations/resume_tests.rs` | P5, P17 |
+| `D/view/operations/resume_tests.rs` | P5, P22 |
+| `D/view/operations/republish_tests.rs` | P17, P21 |
+| `D/services/resolutions_tests.rs` | Kept sets: write, read after reopen, delete on finish; P24 |
+| `D/view/lifecycle/interruption_tests.rs` | P4, P5, A8, A9 (real, local-only) |
+| `D/view/lifecycle/lock_tests.rs` | P20, P23, P25 |
 | `D/view/keyboard_tests/lifecycle.rs`, `conflict.rs` | A1, A2 |
 
 ## Named Edits To Pre-Existing Tests
@@ -543,11 +621,11 @@ checklist against a real remote.
 | --- | --- | --- | --- |
 | E-1 | `tests/read_status.rs` rows for unfinished promotion/closure | `next_action` null → `resume` | L2 |
 | E-2 | CLI goldens with a lifecycle row (`tests/cli*`) | Same | L2 |
-| E-3 | Tests and CLI human goldens asserting a lifecycle's progress | New stages | L3 |
+| E-3 | Tests and CLI human goldens asserting a lifecycle's progress, including `tests/cli_remote/journeys_c5.rs:793`; `command.rs`'s stage table test (`:767-773`) | New stages; `observing` pre-call | L3 |
 | E-4 | `D/view/item/header_tests.rs`, `D/model/item_tests.rs`, `D/view/item_tests.rs` | Later notes → live actions | A1 |
 | E-5 | `D/model/operations_tests.rs:465,534` | Unavailable → Offered | B6 |
 | E-6 | `D/view/operations/outcomes_tests.rs:430-434`, `give_up_tests.rs:186,242`, `D/model/publication_tests.rs:597,764-772` | `BRANCH_DELETED` text; Republish offer | C |
-| E-7 | `D/view/item/share_tests.rs` conflict-banner test (from `:690`) | Banner gains Review changes | B5 |
+| E-7 | `D/view/item/share_tests.rs` conflict-banner test (from `:690`, the text at `:703` and its "no control" assertion) | `CONFLICT_BANNER` drops "Resolving it in Manyhands arrives in a later release"; the banner gains Review changes | B5 |
 
 Task 0's sweep confirms the list against merged C5.
 
@@ -581,7 +659,7 @@ Applied in the approval commit:
 | R-9 | All-mine submits mine's bytes; otherwise normalized | A whole-file layout change on a chosen merge |
 | R-10 | After a lifecycle child's resolution, the desktop sends the lifecycle request again | One extra request send |
 | R-11 | A local resolution's observation is the inspection's | The library refuses a stale one |
-| R-12 | A resolution's submitted set is kept in memory only | No retry after restart (K-10) |
+| R-12 | A resolution's submitted set is kept per request ID until that request finishes (decision 19) | A stale file after a crash; deleted when the request is next seen finished |
 
 ## Known Limits
 
@@ -601,9 +679,9 @@ Applied in the approval commit:
   slug only.
 - **K-9.** A context made by posting is not released by the desktop (D4
   K-9); a later close tidies it.
-- **K-10.** A partial local resolution interrupted by a restart needs its
-  original source; the desktop has none, so the CLI's `context
-  resolve-local` with the same request is the way out.
+- **K-10.** A partial local resolution whose kept set was lost (data
+  directory removed) cannot finish; abandoning the local synchronization
+  is the way out (GRFC local rule).
 - **K-11.** If U-4 fails, the child synchronization's stages are not
   forwarded; Share with origin shows as one running step.
 - **K-12.** `PollOnce` is guidance text until D6.
@@ -619,6 +697,8 @@ Applied in the approval commit:
 - The holder's request ID on the operation row (decision 10).
 - Inferring publication from stage order (decision 11).
 - Editable tabs with edits held as drafts (decision 12).
+- Unlocking the tabs on any failure, even after integration (decision 18).
+- Keeping resolution sets in memory only (decision 19).
 
 ## Risks
 
@@ -660,3 +740,16 @@ Applied in the approval commit:
 | Round 1, contract C15 | Entry-gate item 3; rule 6 | Proposed decision 17 | Amendments 1, 6 | Wave 133–144 |
 | Round 1, contract C16 | Tasks too large | Settled | Plan split | — |
 | Round 1, contract C17–C24 | Minor | Settled | Applied | — |
+| Round 2, scoped (`0d7a851c`) | 1 Blocking, 11 Important, 8 Minor | — | Revision 3 | Below |
+| Round 2, R2-1 | Lifecycle pre-call stage is `connecting` | Settled | `command.rs` joins Part 0; `observing` pre-call | `command.rs:480-490` |
+| Round 2, R2-2 | Primary child's stages light the wrong step | Settled | Forward by `ChildRole` | `run.rs:790,944` |
+| Round 2, R2-3 | L1 prepare routing needs `kind`; document repair note | Settled | `kind` parameter; `RepairOutside` | `human_lifecycle.rs:330-337,391` |
+| Round 2, R2-4 | Deleted-branch sequence undefined | Settled | Stop and republish…; P21 | `human_lifecycle.rs:156-190` |
+| Round 2, R2-5 | Lock unlocks after integration; lost on restart | Owner decision | Decision 18; P20, P23, P25 | `run.rs:1337-1364` |
+| Round 2, R2-6 | Canned interruption tests vacuous | Settled | Real local-only interruption; canned answers restricted | `delaying.rs:111-141` |
+| Round 2, R2-7, R2-8 | Kept set lost on restart; singular | Owner decision | Decision 19; R-12; P24 | GRFC 386-407 |
+| Round 2, R2-9 | Child resolution after restart | Settled | Resume the L2 row, then resend | Fact 21 |
+| Round 2, R2-10 | Resume offered while running | Settled | P22 | C5 `status.rs:290-300` |
+| Round 2, R2-11 | No task adds conflict and local-sync intents | Settled | B3, B6, Part C; plan Tasks 10, 14 | `requests.rs:59-260` |
+| Round 2, R2-12 | First run needs `submit` with consent | Settled | A2 | `worker.rs:353-360` |
+| Round 2, R2-13–R2-20 | Minor | Settled | Applied | — |

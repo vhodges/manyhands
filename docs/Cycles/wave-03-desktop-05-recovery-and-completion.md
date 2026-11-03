@@ -15,7 +15,7 @@ Ticket `01M4CC0VN2K8DBHNMZ46NTX5JJ`. Design:
 Plan:
 [2026-11-03-wave-03-desktop-05-recovery-and-completion-implementation.md](../plans/2026-11-03-wave-03-desktop-05-recovery-and-completion-implementation.md).
 
-Status: **draft** (revision 2), planned at `e39bb004` (origin/main `c2a34494` merged into
+Status: **draft** (revision 3), planned at `e39bb004` (origin/main `c2a34494` merged into
 the ticket branch) and against C5's branch tip `f59aceb6`, which is not yet
 merged (decision 1). Nothing has been built or run. Approval and
 implementation wait for C5's merge; Task 0 then merges main and re-checks
@@ -85,9 +85,10 @@ D5.
 
 1. **Library part (decision 2).** Three narrow additions, merged with D5:
    - **L1, way out.** A pure library classifier of a lifecycle result or a
-     blocked prepare that names its way out: continue the same request,
-     repair locally, resolve the child's conflict, republish, inspect, or
-     none. The CLI's `human_lifecycle.rs` calls it in place of its own
+     blocked prepare that names its way out: send the same request again,
+     continue a holding request, cancel then send again, resume, repair
+     locally, resolve the child's conflict, republish, share main, poll,
+     save the item, repair outside, or inspect. The CLI's `human_lifecycle.rs` calls it in place of its own
      rules, with no change to CLI output (decision 3).
    - **L2, resume for lifecycle parents.** An unfinished, non-refused
      promotion or closure is listed with `next_action: resume`
@@ -151,8 +152,9 @@ D5.
 ## Required Contract
 
 1. **Nothing lifecycle without consent.** Only Close ticket… and Approve and
-   merge… then Close ticket / Approve and merge, Retry, Resume and Republish
-   start or continue a promotion, closure or republish. Navigation, Save,
+   merge… then Close ticket / Approve and merge, Retry, Continue, Resume,
+   Republish, Stop and republish…, Repair locally… and Save resolution
+   start or continue a promotion, closure, republish or synchronization. Navigation, Save,
    Done, closing a tab and quitting never do.
 2. **The whole branch is shown.** The summary lists every changed path the
    preview names, code included, and nothing the preview does not.
@@ -192,7 +194,7 @@ D5.
 | A12 | External guidance for unsupported conflicts | Desktop tests: noncanonical path, incompatible closures (P10) | Planned |
 | A13 | Refused closure checkpoint merge repaired in the app | Desktop test through Repair locally… (P9, P16) | Planned |
 | A14 | Republish after a deleted shared branch | Canned desktop test (P17); library tests on main; native §5 | Planned |
-| A15 | Resume after restart | Lifecycle rows (L2) and local synchronizations offer Resume (P5, P15) | Planned |
+| A15 | Resume after restart | Lifecycle rows (L2) and local synchronizations offer Resume (P5, P16, P22, P24) | Planned |
 | A16 | Privacy (contract 10) | Sentinel tests | Planned |
 | A17 | Nothing lifecycle without consent (contract 1) | Desktop test over navigation, Save, Done, close and quit | Planned |
 | A18 | Library part | L1: CLI renderer tests and goldens unchanged; L2 and L3: library tests and named edits | Planned |
@@ -200,7 +202,8 @@ D5.
 | A20 | Closure apart from status (contract 8) | Characterization test of the closure display; P13 | Planned |
 | A21 | Keyboard and focus (contract 9) | Keyboard tests; focus returns to the header action | Planned |
 | A22 | Item, repository and context named; cancellation reported (MH-COLLAB-006) | Desktop tests of the dialog header and the stopped outcome | Planned |
-| A23 | Read-only until tidied (decision 12) | Desktop test (P20) | Planned |
+| A23 | Read-only while unfinished (decisions 12, 18) | Desktop tests (P20, P23, P25) | Planned |
+| A24 | Deleted branch mid-lifecycle | Desktop test of Stop and republish… (P21) | Planned |
 
 Native evidence: Linux (Wayland), release build, against a real SSH
 remote, run by the product owner from the checklist written in the final
@@ -249,9 +252,22 @@ Answered by the owner after review round 1:
     (main to origin, distinct from the share's `pushing`) and
     `cleaning_up`, in the progress-event schema; the CLI's progress output
     shows them.
-12. **Read-only until tidied.** From Confirm until cleanup completes, or
-    until the run ends failed or stopped, the item's tabs are read-only
-    with "Closing…" or "Merging…".
+12. **Read-only until tidied.** While a close or merge runs, the item's
+    tabs are read-only with "Closing…" or "Merging…" (refined by
+    decision 18).
+
+Answered by the owner after review round 2:
+
+18. **The lock follows an unfinished lifecycle** (refines decision 12).
+    It comes from the worker's in-flight request and the library's
+    unfinished lifecycle parent for the item, starts at Saving, and
+    survives a restart. Before the merge, a failed or stopped run unlocks;
+    after the merge, the tabs stay read-only until tidy-up completes.
+19. **Resolution sets are kept until finished.** Each submitted set is
+    stored per request ID in the desktop's data directory beside D2's
+    drafts, with the same protection and no `Debug`, and deleted when the
+    request finishes; Resume works after a restart. A remote resolution
+    with no kept set is superseded by a new one (GRFC).
 
 Proposed by the planner, for the owner to confirm with the documents'
 approval:
@@ -292,5 +308,6 @@ reading the source; an answer that differs stops for the owner.
 | Planning research | Native evidence and testers | Owner decision | Decision 7. | Wave entry item 6. |
 | Planning research | Handoff's "Closed by Vince Hodges" against no caller-chosen `closed_by` | Settled | The preview's `closed_by` is shown. | C5 decision 6. |
 | Planning research | Handoff's Reopen… against no reopening | Settled | Not built. | Wave 1007–1008. |
-| Review round 1, source and feasibility (`8e9dc65e`) | 3 Blocking, 10 Important, 7 Minor | — | Revision 2; S2 and S3 became decisions 9 and 10. | Design Review Record. |
+| Review round 1, source and feasibility (`8e9dc65e`) | 3 Blocking, 10 Important, 7 Minor | — | Revision 2; S3 became decision 9 and S2 decision 10. | Design Review Record. |
 | Review round 1, contract and consistency (`8e9dc65e`) | 1 Blocking, 15 Important, 8 Minor | — | Revision 2; questions became decisions 11 and 12; proposals 15 and 17 added. | Design Review Record. |
+| Review round 2, scoped with adversarial brief (`0d7a851c`) | 1 Blocking, 11 Important, 8 Minor | — | Revision 3; R2-5 and R2-7 became decisions 18 and 19. | Design Review Record. |
