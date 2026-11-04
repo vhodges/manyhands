@@ -1,0 +1,33 @@
+{
+  "code": "cancelled",
+  "command": "poll once",
+  "data": {
+    "completed_at": "<completed_at>",
+    "completion": "cancelled",
+    "next_eligible_at": null,
+    "operation_id": "<operation>",
+    "targets": []
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request was cancelled.",
+  "operation_id": "<operation>",
+  "outcome": "cancelled",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FP1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": null,
+    "remote": null,
+    "repository": "<root>",
+    "worktree": null
+  }
+}

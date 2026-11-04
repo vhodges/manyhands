@@ -514,3 +514,30 @@ fn an_object_list_that_is_missing_empty_or_not_a_list_of_objects_is_refused() {
         assert!(!detail.contains(SENTINEL));
     }
 }
+
+#[test]
+fn a_whole_number_is_required_and_is_nothing_else() {
+    let object = parse(br#"{"n":600}"#).ok().unwrap();
+    assert_eq!(object.whole_number("n").ok(), Some(600));
+    assert!(matches!(
+        object.whole_number("other"),
+        Err(InputError::Missing("other"))
+    ));
+    for text in [
+        &br#"{"n":"600"}"#[..],
+        br#"{"n":600.5}"#,
+        br#"{"n":600.0}"#,
+        br#"{"n":-1}"#,
+        br#"{"n":null}"#,
+        br#"{"n":[600]}"#,
+    ] {
+        let object = parse(text).ok().unwrap();
+        assert!(matches!(
+            object.whole_number("n"),
+            Err(InputError::WrongType {
+                field: "n",
+                expected: "a whole number"
+            })
+        ));
+    }
+}

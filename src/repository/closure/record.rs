@@ -223,6 +223,8 @@ impl std::fmt::Debug for ClosureRecord {
     }
 }
 
+/// The table parents are kept in.
+pub(in super::super) const TABLE: &str = "ticket_closures";
 const SCHEMA:&str="CREATE TABLE ticket_closures (
     repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
     operation_id TEXT NOT NULL UNIQUE CHECK(length(operation_id)=26),
@@ -786,6 +788,12 @@ pub(in super::super) fn clear_cancellation(
 }
 
 impl ParentRecord for ClosureRecord {
+    fn supersedable(&self) -> bool {
+        supersedable(self)
+    }
+    fn written_checkpoint(&self) -> Option<Oid> {
+        self.closure_oid
+    }
     const KIND: LifecycleKind = KIND;
     fn decode(row: &rusqlite::Row<'_>) -> Result<Self, RepositoryError> {
         decode(row)

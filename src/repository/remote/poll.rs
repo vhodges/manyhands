@@ -6,7 +6,9 @@ use time::OffsetDateTime;
 
 use super::{RemoteOutcomeCategory, RemotePollInvocation, RemotePollingConfiguration, state};
 use super::{RemoteRefPlan, SynchronizationError, SynchronizationTarget, refs, sync};
-use crate::repository::{RepositoryError, RepositoryService};
+use crate::repository::{
+    RepositoryError, RepositoryService, promotion::lifecycle::CancellationProbe,
+};
 use crate::{
     canonical,
     repository::{
@@ -15,8 +17,11 @@ use crate::{
     },
 };
 
-// Task 4 internal seams are consumed by the Task 6 orchestrator.
-#[allow(dead_code)]
+/// How often a transfer's callback looks at what it has been asked: it runs for
+/// every packet. Public for a test that waits past it.
+#[doc(hidden)]
+pub const POLL_PROGRESS_THROTTLE: std::time::Duration = std::time::Duration::from_millis(250);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PollDisposition {
     Current,
@@ -35,7 +40,6 @@ pub enum PollDisposition {
     HistoryUnknown,
     NotReached,
 }
-#[allow(dead_code)]
 impl PollDisposition {
     pub fn guidance(self) -> &'static str {
         match self {
@@ -77,7 +81,6 @@ pub(super) enum PollRelation {
     Diverged,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // Absent-ref states are supplied by the Task 6 batch orchestrator.
 pub(super) enum PollTrackingState {
     Present(git2::Oid),
     RemotelyDeleted,
@@ -99,7 +102,6 @@ pub(super) struct PollFastForward {
     pub before: git2::Oid,
     pub after: git2::Oid,
 }
-#[allow(dead_code)]
 pub(super) fn classify_relation<E>(
     local: git2::Oid,
     remote: git2::Oid,
@@ -196,7 +198,6 @@ fn poll_materialized_target(
     Ok(linked)
 }
 
-#[allow(dead_code)]
 pub(super) fn classify_local_target(
     root: &Path,
     primary: &str,
@@ -243,7 +244,7 @@ pub(super) fn classify_local_target(
     })
 }
 impl RepositoryService {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(super) fn materialize_context(
         &self,
         root: &Path,
@@ -397,6 +398,16 @@ impl RepositoryService {
         )? {
             return Ok(refused(PollDisposition::Nonconforming));
         }
+        // Decision 28: a branch whose tip primary already holds, locally or as
+        // last fetched, is an older copy, so it is current and nothing is
+        // made. A started materialization goes on. After every refusal, before
+        // every effect.
+        if action == MaterializationAction::Start
+            && intent.is_none()
+            && primary_holds(repository, plan, request.oid)
+        {
+            return Ok(refused(PollDisposition::Current));
+        }
         if intent.is_none() {
             state::with_transaction(self, root, |tx, id| {
                 state::insert_materialization(
@@ -428,11 +439,7 @@ impl RepositoryService {
         let intent = intent
             .as_ref()
             .ok_or(SynchronizationError::RecoveryRequired)?;
-        self.check_failure(
-            FailurePoint::PollAfterMaterializationIntent,
-            operation,
-            root,
-        )?;
+        self.poll_boundary(FailurePoint::PollAfterMaterializationIntent, None, root)?;
         // Parent creation is part of the guarded local provisioning step, after
         // refusal/conformity/intent. No pre-existing deterministic entry is used.
         ensure_authoring_worktree_base(root, operation)?;
@@ -531,7 +538,7 @@ impl RepositoryService {
         Ok(PollMaterializationOutcome::Materialized)
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(super) fn poll_fast_forward(
         &self,
         root: &Path,
@@ -699,7 +706,6 @@ impl RepositoryService {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Clone)]
 pub(super) struct PollMaterializationRequest {
     pub operation_id: crate::repository::OperationId,
@@ -708,13 +714,29 @@ pub(super) struct PollMaterializationRequest {
     pub oid: git2::Oid,
 }
 
-#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PollMaterializationOutcome {
     Materialized,
     // The caller classifies an existing context against its own tracking OID.
     Present,
     Refused(PollDisposition),
+}
+
+/// Whether primary's local branch or its tracking ref is `oid` or descends
+/// from it. A read that fails says no, so the branch materializes as before.
+fn primary_holds(repository: &git2::Repository, plan: &RemoteRefPlan, oid: git2::Oid) -> bool {
+    [
+        format!("refs/heads/{}", plan.primary_branch()),
+        plan.primary().tracking_ref().to_owned(),
+    ]
+    .iter()
+    .filter_map(|reference| repository.refname_to_id(reference).ok())
+    .any(|primary| {
+        primary == oid
+            || repository
+                .graph_descendant_of(primary, oid)
+                .unwrap_or(false)
+    })
 }
 
 fn poll_entry_present(path: &Path) -> bool {
@@ -864,7 +886,6 @@ fn poll_retiring_directory_obstructed(
     Ok(false)
 }
 
-#[allow(dead_code)]
 pub(super) fn conforming_context_tree(
     repository: &git2::Repository,
     tree: &git2::Tree<'_>,
@@ -1010,7 +1031,6 @@ pub(super) fn eligibility(
 /// `None` means keep the stored deadline, not clear it. Busy, yield, interruption,
 /// conflict-pending and not-eligible have no outcome category and do not call this.
 /// The policy is the pre-finish policy; reservation finish still owns backoff writes.
-#[allow(dead_code)] // Consumed by reservation finish in Cycle 08 Task 2.
 pub(super) fn next_eligible(
     category: RemoteOutcomeCategory,
     invocation: RemotePollInvocation,
@@ -1072,7 +1092,6 @@ impl RepositoryService {
     }
 }
 
-// Task 6 contracts; behavior is introduced after the recorded regression RED.
 #[derive(Clone)]
 pub struct PollPublicationRemoteRequest {
     pub root: std::path::PathBuf,
@@ -1118,7 +1137,7 @@ impl PollTargetReport {
         self.after_oid
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct RemotePollReport {
     operation_id: crate::repository::OperationId,
     completion: PollCompletion,
@@ -1126,8 +1145,26 @@ pub struct RemotePollReport {
     next_eligible_at: Option<OffsetDateTime>,
     targets: Vec<PollTargetReport>,
     outcome: Option<RemoteOutcomeCategory>,
+    /// Whether this pass changed a target, as its executor saw: a moved branch,
+    /// or a worktree or registration that appeared or went. A stored report has
+    /// no executor, so this is no part of what makes two reports the same.
+    local_changes: bool,
 }
+impl PartialEq for RemotePollReport {
+    fn eq(&self, other: &Self) -> bool {
+        self.operation_id == other.operation_id
+            && self.completion == other.completion
+            && self.completed_at == other.completed_at
+            && self.next_eligible_at == other.next_eligible_at
+            && self.targets == other.targets
+            && self.outcome == other.outcome
+    }
+}
+impl Eq for RemotePollReport {}
 impl RemotePollReport {
+    pub(in super::super) fn local_changes(&self) -> bool {
+        self.local_changes
+    }
     pub fn operation_id(&self) -> crate::repository::OperationId {
         self.operation_id
     }
@@ -1196,6 +1233,29 @@ impl RepositoryService {
         &self,
         request: PollPublicationRemoteRequest,
         session: &mut crate::repository::keys::SessionCredentials<P>,
+    ) -> Result<RemotePollResult, RemotePollError> {
+        self.poll_probed(request, session, None)
+    }
+
+    /// `poll_publication_remote`, stopped by `probe` as well: a request's token
+    /// and its flag are looked at at each safe point, where the poll is asked
+    /// to stop as `cancel_remote_operation` asks it. Only the boundary has one.
+    pub(in super::super) fn poll_publication_remote_observed<
+        P: crate::repository::keys::SessionCredentialProvider,
+    >(
+        &self,
+        request: PollPublicationRemoteRequest,
+        session: &mut crate::repository::keys::SessionCredentials<P>,
+        probe: CancellationProbe,
+    ) -> Result<RemotePollResult, RemotePollError> {
+        self.poll_probed(request, session, Some(&probe))
+    }
+
+    fn poll_probed<P: crate::repository::keys::SessionCredentialProvider>(
+        &self,
+        request: PollPublicationRemoteRequest,
+        session: &mut crate::repository::keys::SessionCredentials<P>,
+        probe: Option<&CancellationProbe>,
     ) -> Result<RemotePollResult, RemotePollError> {
         use super::{
             RemoteOperationPriority, RemoteOperationTarget, RemoteReservationOutcome as R,
@@ -1319,11 +1379,13 @@ impl RepositoryService {
             &root,
             &owner,
             super::RemoteOperationSafePoint::BeforeTransport,
+            probe,
         )? {
             return Ok(result);
         }
         let mut stopped = None;
         let mut last = None;
+        let lease_busy = std::cell::Cell::new(false);
         let fetched = self.with_authenticated_remote_policy_expected(
             VerifySshTransportRequest {
                 root: root.clone(),
@@ -1336,19 +1398,27 @@ impl RepositoryService {
                 .transport_expectation(SshDirection::Fetch)
                 .as_ref(),
             |remote| {
-                remote.fetch_poll_set(&plan, |_| {
+                remote.fetch_poll_set_noting_lease(&plan, &lease_busy, |_| {
                     if stopped.is_some() {
                         return false;
                     }
                     let now = std::time::Instant::now();
                     if last.is_some_and(|at: std::time::Instant| {
-                        now.duration_since(at) < std::time::Duration::from_millis(250)
+                        now.duration_since(at) < POLL_PROGRESS_THROTTLE
                     }) {
                         return true;
                     }
                     last = Some(now);
-                    let decision = super::reservation::poll_progress(self, &owner)
-                        .unwrap_or(super::RemoteSafePointOutcome::Interrupted);
+                    // The registry's flag isn't read here: a cache lock someone
+                    // holds would abort a healthy fetch. `request cancel` sets the
+                    // row's flag too, which `poll_progress` reads on a connection
+                    // of its own. The next safe point acknowledges either.
+                    let decision = if probe.is_some_and(CancellationProbe::token_asked) {
+                        super::RemoteSafePointOutcome::Cancelled
+                    } else {
+                        super::reservation::poll_progress(self, &owner)
+                            .unwrap_or(super::RemoteSafePointOutcome::Interrupted)
+                    };
                     if decision != super::RemoteSafePointOutcome::Continue {
                         stopped = Some(decision);
                         false
@@ -1364,6 +1434,7 @@ impl RepositoryService {
                 &root,
                 &owner,
                 super::RemoteOperationSafePoint::AfterAdvertisement,
+                probe,
             )? {
                 return Ok(result);
             }
@@ -1375,16 +1446,29 @@ impl RepositoryService {
             };
         }
         match fetched {
-            Ok(advertised) => {
-                self.poll_after_fetch(&root, &owner, &plan, &configuration, advertised)
-            }
+            Ok(advertised) => self.poll_after_fetch_observed(
+                &root,
+                &owner,
+                &plan,
+                &configuration,
+                advertised,
+                probe,
+            ),
             Err(error) => {
                 if let Some(result) = self.poll_safe_point(
                     &root,
                     &owner,
                     super::RemoteOperationSafePoint::AfterAdvertisement,
+                    probe,
                 )? {
                     return Ok(result);
+                }
+                // Another's short local work, and no failure of this poll: no
+                // category is stored to replay and no backoff grows. The row is
+                // left for the same request to restart.
+                if lease_busy.get() {
+                    self.poll_interrupt(&root, &owner, None)?;
+                    return Err(RemotePollError::Busy);
                 }
                 let (decision, captured) = self.finish_remote_operation_with(
                     &root,
@@ -1404,6 +1488,7 @@ impl RepositoryService {
 
     /// Everything after a successful real fetch. Local tests supply actual ODB
     /// commits and test-installed tracking refs; this is not a transport adapter.
+    #[cfg(test)]
     pub(crate) fn poll_after_fetch(
         &self,
         root: &Path,
@@ -1412,18 +1497,32 @@ impl RepositoryService {
         configuration: &super::observation::ObservationConfiguration,
         advertised: Vec<(String, git2::Oid)>,
     ) -> Result<RemotePollResult, RemotePollError> {
+        self.poll_after_fetch_observed(root, owner, plan, configuration, advertised, None)
+    }
+
+    fn poll_after_fetch_observed(
+        &self,
+        root: &Path,
+        owner: &super::RemoteReservation,
+        plan: &RemoteRefPlan,
+        configuration: &super::observation::ObservationConfiguration,
+        advertised: Vec<(String, git2::Oid)>,
+        probe: Option<&CancellationProbe>,
+    ) -> Result<RemotePollResult, RemotePollError> {
         use super::{
             RemoteOperationSafePoint as S, RemoteRefClassification as C,
             RemoteSafePointOutcome as D,
         };
-        if let Some(result) = self.poll_safe_point(root, owner, S::AfterAdvertisement)? {
+        if let Some(result) = self.poll_safe_point(root, owner, S::AfterAdvertisement, probe)? {
             return Ok(result);
         }
         let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
         let previous = state::with_transaction(self, root, |tx, id| state::read_snapshot(tx, id))?;
         let mut observations = Vec::new();
         for (name, oid) in advertised {
-            if let Some(result) = self.poll_safe_point(root, owner, S::BetweenObservations)? {
+            if let Some(result) =
+                self.poll_safe_point(root, owner, S::BetweenObservations, probe)?
+            {
                 return Ok(result);
             }
             if let Some(observation) = super::RemoteRefObservation::from_advertisement(
@@ -1521,7 +1620,7 @@ impl RepositoryService {
                 })
             })
             .collect::<Vec<_>>();
-        if let Some(result) = self.poll_safe_point(root, owner, S::BeforeBatchCommit)? {
+        if let Some(result) = self.poll_safe_point(root, owner, S::BeforeBatchCommit, probe)? {
             return Ok(result);
         }
         if !self.poll_configuration_matches(root, plan, configuration)? {
@@ -1547,6 +1646,7 @@ impl RepositoryService {
             owner,
             S::AfterBatchCommit,
             Some((&targets, false)),
+            probe,
         )? {
             return Ok(result);
         }
@@ -1557,6 +1657,7 @@ impl RepositoryService {
                 owner,
                 S::BeforeLocalMutation,
                 Some((&targets, local_changes)),
+                probe,
             )? {
                 return Ok(result);
             }
@@ -1730,6 +1831,7 @@ impl RepositoryService {
                         owner,
                         S::BeforeLocalMutation,
                         Some((&targets, local_changes)),
+                        probe,
                     )? {
                         return Ok(result);
                     }
@@ -1756,6 +1858,7 @@ impl RepositoryService {
             owner,
             S::BeforeDiscovery,
             Some((&targets, local_changes)),
+            probe,
         )? {
             return Ok(result);
         }
@@ -1875,8 +1978,9 @@ impl RepositoryService {
         root: &Path,
         owner: &super::RemoteReservation,
         point: super::RemoteOperationSafePoint,
+        probe: Option<&CancellationProbe>,
     ) -> Result<Option<RemotePollResult>, RemotePollError> {
-        self.poll_safe_point_with_targets(root, owner, point, None)
+        self.poll_safe_point_with_targets(root, owner, point, None, probe)
     }
     fn poll_safe_point_with_targets(
         &self,
@@ -1884,7 +1988,16 @@ impl RepositoryService {
         owner: &super::RemoteReservation,
         point: super::RemoteOperationSafePoint,
         targets: Option<(&[PollTargetReport], bool)>,
+        probe: Option<&CancellationProbe>,
     ) -> Result<Option<RemotePollResult>, RemotePollError> {
+        // A flag that cannot be read is an error, and is not taken for "no". A
+        // request that cannot be recorded loses nothing: the flag stands, and
+        // the next safe point reads it.
+        if let Some(probe) = probe
+            && probe.asked(self)?
+        {
+            let _ = self.request_synchronization_cancellation(root, owner);
+        }
         let (decision, captured) =
             match self.remote_safe_point_with(root, owner, point, |tx, id, decision| {
                 self.poll_capture_stop(tx, id, owner.operation_id(), decision, targets)
@@ -1983,6 +2096,7 @@ impl RepositoryService {
             next_eligible_at,
             targets,
             outcome: record.outcome,
+            local_changes: original_targets.is_some_and(|(_, changed)| changed),
         });
         let pending: bool = tx
             .query_row(

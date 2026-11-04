@@ -2173,6 +2173,22 @@ impl RemoteSnapshot {
         }
     }
 
+    /// Whether a fetch has observed the context of `kind` and `id` absent from
+    /// the remote after it was published: its stored state is
+    /// `remotely_deleted`. A push proves publication, never deletion, and an
+    /// absent tracking ref proves neither (decision 35).
+    pub(in super::super) fn context_deletion_observed(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+    ) -> bool {
+        self.contexts.iter().any(|context| {
+            context.kind == Some(kind)
+                && context.item_id.as_ref() == Some(id)
+                && context.state == RemoteContextState::RemotelyDeleted
+        })
+    }
+
     /// Fetch planning must not reinterpret a qualified Push proof as a fetched
     /// ref/absence. The public projection also reports verified Push history.
     pub(in super::super) fn fetch_publication_evidence_for(
@@ -3072,6 +3088,65 @@ pub(in super::super) fn lookup_fenced(
         )
         .optional()?
         .unwrap_or(false))
+}
+
+/// The context child that the promotion or closure `operation_id` of the
+/// repository `repository_id` holds now (decision 34): the outer `None` when
+/// `operation_id` is no lifecycle parent of it, the inner one when the parent
+/// has no context child yet. A plain read of the parent's own row, as
+/// `conflict show` and `conflict resolve` map a parent's ID to its child. A
+/// stored ID that isn't one is `recovery_required`, never "no child".
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(in super::super) fn lifecycle_context_child(
+    connection: &Connection,
+    repository_id: i64,
+    operation_id: crate::repository::OperationId,
+) -> Result<Option<Option<crate::repository::OperationId>>, ReadError> {
+    let row: Option<Option<String>> = connection
+        .query_row(
+            "SELECT context_sync_id FROM document_promotions
+              WHERE repository_id = ?1 AND operation_id = ?2
+             UNION ALL
+             SELECT context_sync_id FROM ticket_closures
+              WHERE repository_id = ?1 AND operation_id = ?2
+             LIMIT 1",
+            params![repository_id, operation_id.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    row.map(|child| child.as_deref().map(stored_operation_id).transpose())
+        .transpose()
+}
+
+/// An operation ID a parent's row stores: one that isn't is
+/// `recovery_required`.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+fn stored_operation_id(text: &str) -> Result<crate::repository::OperationId, ReadError> {
+    crate::repository::OperationId::parse(text).map_err(|_| recovery_required().into())
+}
+
+/// The promotion or closure of the repository `repository_id` whose context
+/// child is `child` now, if one is (decision 34). A stored ID that isn't one
+/// is `recovery_required`.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(in super::super) fn lifecycle_parent_of(
+    connection: &Connection,
+    repository_id: i64,
+    child: crate::repository::OperationId,
+) -> Result<Option<crate::repository::OperationId>, ReadError> {
+    let row: Option<String> = connection
+        .query_row(
+            "SELECT operation_id FROM document_promotions
+              WHERE repository_id = ?1 AND context_sync_id = ?2
+             UNION ALL
+             SELECT operation_id FROM ticket_closures
+              WHERE repository_id = ?1 AND context_sync_id = ?2
+             LIMIT 1",
+            params![repository_id, child.to_string()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    row.as_deref().map(stored_operation_id).transpose()
 }
 
 /// What the remote operation `operation_id` of the registration at
@@ -6381,6 +6456,8 @@ impl crate::repository::RepositoryService {
             .map(|snapshot| snapshot.remote)
     }
 
+    /// Writes all three fields, whatever was read of them and whenever. Only
+    /// tests call this: a policy verb goes through `update_remote_polling`.
     pub fn set_remote_polling(
         &self,
         root: &Path,
@@ -6395,6 +6472,80 @@ impl crate::repository::RepositoryService {
             Ok(())
         })
     }
+}
+
+/// What a polling policy verb changes. Each names only what it writes, so a
+/// verb can't overwrite a field another caller changed since it last read one.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum PollingChange {
+    /// The interval, and not the stored due time.
+    Interval(PollingInterval),
+    /// The pause.
+    Pause,
+    /// The pause and the stored deadline, so an eligible poll is due. The
+    /// suspension, `enabled` and the backoff value stay.
+    Resume,
+}
+
+/// The policy as an `update_remote_polling` left it.
+#[derive(Clone, Debug)]
+pub(crate) struct PollingUpdate {
+    /// False when the policy was already so, and nothing was written.
+    pub(crate) changed: bool,
+    pub(crate) polling: RemotePollingConfiguration,
+    pub(crate) next_eligible_at: Option<OffsetDateTime>,
+}
+
+/// Applies `change` to the policy of the registration whose root is
+/// `root_path`, in the caller's transaction, so the request's record commits
+/// with it or not at all. Whether it is already so is read in the
+/// same transaction. Unlike `set_remote_polling`, it writes no other field.
+pub(in super::super) fn update_remote_polling(
+    transaction: &Transaction<'_>,
+    root_path: &str,
+    change: PollingChange,
+) -> Result<PollingUpdate, RepositoryError> {
+    let id: i64 = transaction
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path=?1",
+            [root_path],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| recovery_required())?
+        .ok_or_else(|| {
+            RepositoryError::new(
+                RepositoryOperation::RepositorySnapshot,
+                None,
+                RepositoryErrorKind::RepositoryNotRegistered,
+                "the repository is not registered",
+            )
+        })?;
+    let before = read_policy(transaction, id)?.polling;
+    let written = match change {
+        PollingChange::Interval(interval) if before.interval() != interval.duration() => {
+            transaction.execute(
+                "UPDATE remote_polling_state SET interval_seconds=?2 WHERE repository_id=?1",
+                params![id, interval.duration().as_secs()],
+            )
+        }
+        PollingChange::Pause if !before.paused() => transaction.execute(
+            "UPDATE remote_polling_state SET paused=1 WHERE repository_id=?1",
+            [id],
+        ),
+        PollingChange::Resume if before.paused() => transaction.execute(
+            "UPDATE remote_polling_state SET paused=0,next_eligible_at=NULL WHERE repository_id=?1",
+            [id],
+        ),
+        PollingChange::Interval(_) | PollingChange::Pause | PollingChange::Resume => Ok(0),
+    }
+    .map_err(|_| recovery_required())?;
+    let after = read_policy(transaction, id)?;
+    Ok(PollingUpdate {
+        changed: written != 0,
+        polling: after.polling,
+        next_eligible_at: after.next_eligible_at,
+    })
 }
 
 /// A short cache-recovery-guarded transaction, never held across Git or network

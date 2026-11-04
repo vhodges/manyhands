@@ -12,6 +12,10 @@ mod hosts;
 mod interruption;
 #[path = "cli_remote/journeys.rs"]
 mod journeys;
+#[path = "cli_remote/journeys_c5.rs"]
+mod journeys_c5;
+#[path = "cli_remote/lifecycle.rs"]
+mod lifecycle;
 // As in the other SSH targets, preserve the shared fixture's domain error type.
 // Limit this allowance to that imported module, not the CLI cases or bin modules.
 #[allow(clippy::result_large_err)]
@@ -35,6 +39,8 @@ mod human_admin;
 #[allow(dead_code, unused_imports)]
 #[path = "../src/bin/manyhands-cli/parse.rs"]
 mod parse;
+#[path = "cli_remote/polling.rs"]
+mod polling;
 #[allow(dead_code, unused_imports)]
 #[path = "../src/bin/manyhands-cli/render.rs"]
 mod render;
@@ -101,6 +107,10 @@ fn main() {
         .chain(interruption::CASES)
         .chain(collaboration::CASES)
         .chain(conflicts::CASES)
+        .chain(polling::CASES)
+        .chain(lifecycle::BOTH)
+        .chain(lifecycle::ONE)
+        .chain(journeys_c5::CASES)
         .copied()
         .collect();
     ssh_harness::run(&cases);

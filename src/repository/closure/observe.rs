@@ -786,9 +786,10 @@ fn observe_git(
             }
         }
     }
-    // D5: an absent tracking context that was published means another clone
-    // deleted it. Only a context child could recreate it, and none runs for a
-    // contained context.
+    // D5: an absent tracking context that was published, and that a fetch has
+    // seen gone, means another clone deleted it; published and not seen gone
+    // is unknown (decision 35). Only a context child could recreate it, and
+    // none runs for a contained context.
     if config.publication_remote.is_some()
         && tracking_context.is_none()
         && !contained

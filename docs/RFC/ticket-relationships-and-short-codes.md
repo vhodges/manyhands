@@ -236,6 +236,28 @@ complete; silent truncation is forbidden.
 A ticket closure result additionally reports the tickets that became ready
 because of it.
 
+Amended 2026-11-03 by C5 (R-4, R-37, R-38; decisions 13 and 20; the C5
+design's Made-Ready Report). Closing T can make ready only the tickets that
+depend on T directly, and none of them was ready while T was open, so the
+report is the **direct dependents of T, in ULID order, that the index reads
+as open with every dependency closed** when the report is produced. It is
+evaluated at report time, from the index's effective copy, not reconstructed
+from history: a dependent closed, reopened or re-pointed since by another
+clone reads as it is now, so the list can differ from a historical diff.
+Readiness is lifecycle closure; status text plays no part, and a dependent
+whose status text is `closed` is read by its closure metadata. A dependent
+with another open or unresolved dependency is left out. Each entry carries
+the ticket's ULID and slug, and no title.
+
+`made_ready_state` says when there is no set: `current` (the set, complete),
+`index_pending` (the index hand-off or the read is owed, and the same request
+reads again), `index_unavailable_final` (the closure is complete but the read
+failed or was incomplete; it is not recomputed, and `ticket ready` is the live
+view), `not_computed` (the closure is not yet integrated) or `not_applicable`
+(a cleanup-only or superseding run). A finished request's report is stored,
+so a replay returns it unchanged; a retry evaluates again. `ticket ready`
+remains the live view.
+
 ## CLI
 
 These verbs extend the [CLI taxonomy](cli-contract.md#command-taxonomy).

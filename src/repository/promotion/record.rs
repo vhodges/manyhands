@@ -135,6 +135,8 @@ impl std::fmt::Debug for PromotionRecord {
             .finish()
     }
 }
+/// The table parents are kept in.
+pub(in super::super) const TABLE: &str = "document_promotions";
 const SCHEMA:&str="CREATE TABLE document_promotions (
     repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
     operation_id TEXT NOT NULL UNIQUE CHECK(length(operation_id)=26),
@@ -421,6 +423,9 @@ pub(in super::super) fn save_record(
 
 impl ParentRecord for PromotionRecord {
     const KIND: LifecycleKind = KIND;
+    fn supersedable(&self) -> bool {
+        self.cleanup.is_some_and(CleanupCategory::supersedable)
+    }
     fn decode(row: &rusqlite::Row<'_>) -> Result<Self, RepositoryError> {
         decode(row)
     }

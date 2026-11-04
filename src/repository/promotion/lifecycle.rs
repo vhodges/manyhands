@@ -18,7 +18,10 @@ use crate::{
     repository::{
         AuthoringKind, CommitIdentity, ConfirmedCommitIdentity, ExpectedConfiguration,
         IndexPending, OperationId, RemoteOperationAction, RepositoryError, RepositoryService,
-        SynchronizationError, cleanup::RetirementEvidence, remote::reservation::RemoteReservation,
+        SynchronizationError, SynchronizationTarget,
+        cleanup::RetirementEvidence,
+        mutation::{CancellationToken, RequestId},
+        remote::{reservation::RemoteReservation, state, sync},
         transport::HostApproval,
     },
 };
@@ -71,8 +74,44 @@ impl LifecycleKind {
     }
 }
 
+/// What stops a run besides its parent's own flag, for a run the mutation
+/// boundary makes: the call's token, and the flag `request cancel` sets on the
+/// request's record. A same-ID call clears the parent's flag, and neither of
+/// these, so a run reads them at every safe point its parent's flag is read at.
+#[derive(Clone)]
+pub(in super::super) struct CancellationProbe {
+    token: CancellationToken,
+    request: RequestId,
+}
+impl CancellationProbe {
+    pub(in super::super) fn new(token: CancellationToken, request: RequestId) -> Self {
+        Self { token, request }
+    }
+    /// Whether the call's token has been cancelled. It reads nothing, so a
+    /// transfer's callback can ask it with no registry involved.
+    pub(in super::super) fn token_asked(&self) -> bool {
+        self.token.is_cancelled()
+    }
+
+    /// Whether the run has been asked to stop. The flag is read and left set:
+    /// the boundary takes it once the request has answered `cancelled`. A flag
+    /// that cannot be read is an error, and is not taken for "no".
+    pub(in super::super) fn asked(
+        &self,
+        service: &RepositoryService,
+    ) -> Result<bool, RepositoryError> {
+        if self.token.is_cancelled() {
+            return Ok(true);
+        }
+        service
+            .cancellation_requested(self.request)
+            .map_err(|_| state::recovery_required())
+    }
+}
+
 /// The runner's kind-neutral request. Each lifecycle's public request
-/// converts into it field for field.
+/// converts into it field for field. `probe` is the boundary's, through an
+/// `_observed` entry point: the public signatures have none.
 #[derive(Clone)]
 pub(in super::super) struct LifecycleRequest<E> {
     pub(in super::super) root: PathBuf,
@@ -81,6 +120,7 @@ pub(in super::super) struct LifecycleRequest<E> {
     pub(in super::super) expected: E,
     pub(in super::super) approval: Option<HostApproval>,
     pub(in super::super) confirmed_identity: Option<ConfirmedCommitIdentity>,
+    pub(in super::super) probe: Option<CancellationProbe>,
 }
 
 /// The parent steps the runner branches on, shared by every lifecycle. A
@@ -397,6 +437,16 @@ pub(in super::super) trait Lifecycle {
     ) -> Result<Self::Preflight, RepositoryError>;
     /// A ready preview, or the `Blocked` refusal of a blocked preflight.
     fn ready(preflight: Self::Preflight) -> Result<Self::Preview, Self::Refusal>;
+    /// What a new record needs of the identity, asked once its preview is
+    /// known unchanged. A refusal leaves no record. Closure needs nothing
+    /// here: its preview has checked, and a change is `ExternalChange`.
+    fn require_identity(
+        _preview: &Self::Preview,
+        _repository: &git2::Repository,
+        _confirmation: Option<&ConfirmedCommitIdentity>,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
     fn refusal_error(refusal: &Self::Refusal) -> Self::Error;
 
     // Integration.
@@ -820,6 +870,32 @@ impl Lifecycle for DocumentPromotionLifecycle {
         repository: &git2::Repository,
     ) -> Result<DocumentPromotionPreflight, RepositoryError> {
         observation.revalidate(service, repository)
+    }
+    /// A planned merge commit needs a usable identity, and a request
+    /// that has none has not begun. A record's own run stays the guard.
+    fn require_identity(
+        preview: &DocumentPromotionPreview,
+        repository: &git2::Repository,
+        confirmation: Option<&ConfirmedCommitIdentity>,
+    ) -> Result<(), DocumentPromotionError> {
+        if preview.integration() == PlannedIntegration::AlreadyContained {
+            return Ok(());
+        }
+        sync::select_committing_identity(repository, confirmation, &SynchronizationTarget::Primary)
+            .map(|_| ())
+            .map_err(|error| match error {
+                SynchronizationError::IdentityRequired {
+                    expected_configuration,
+                    ..
+                } => DocumentPromotionError::IdentityRequired {
+                    expected_configuration,
+                },
+                SynchronizationError::ExternalChange => DocumentPromotionError::ExternalChange,
+                SynchronizationError::Repository(error) => {
+                    DocumentPromotionError::Repository(error)
+                }
+                _ => DocumentPromotionError::RecoveryRequired,
+            })
     }
     fn ready(
         preflight: DocumentPromotionPreflight,

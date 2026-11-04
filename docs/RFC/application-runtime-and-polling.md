@@ -65,6 +65,13 @@ default, one-to-sixty-minute interval, persisted explicit pause, and automatic f
 backoff from one minute doubling to a fifteen-minute cap. Explicit Poll now
 bypasses automatic pause/backoff for that attempt without clearing the stored
 pause. Resume clears explicit pause and makes an eligible poll due.
+Amended 2026-11-03 by C5 (decision 11): the CLI's `poll resume` does this by
+clearing `paused` and any stored next-eligible deadline, a backoff deadline
+included. It leaves the stored backoff value, `enabled` and the recovery
+suspension alone (decision 5: clearing the suspension stays with D6, and has
+no CLI verb). `poll pause` sets the flag and `poll configure` the interval,
+each in its request's own transaction, so neither overwrites another field;
+last commit wins (decision 15).
 
 Use the last attempt's completion time to compute the next attempt. Success
 uses the configured interval and clears failure backoff; a retryable transport
@@ -86,6 +93,11 @@ recheck, never a busy loop.
 Manual actions retain Wave 02 priority and safe-point yield. Reuse existing
 repository leases, reservations and interruption recovery for actual Git
 operations, including a one-shot CLI command overlapping desktop activity.
+Amended 2026-11-03 by C5 (decision 24): a one-shot `poll once` whose fetch
+meets a held repository lease answers `busy`, exit 5, retryable, told apart
+from a protocol failure; its row stays interrupted with no category or backoff
+stored, and the same request polls again under the same operation. An
+automatic poll that meets the same is a D6 note: nothing restarts its row.
 No new cross-process scheduler election, due-slot claiming, session heartbeat
 table or guarantee of one automatic attempt across multiple desktop processes
 is required. Coordinating concurrent resident pollers is outside this Wave's

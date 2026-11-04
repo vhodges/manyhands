@@ -1,0 +1,21 @@
+The request completed.
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX1
+operation: <id>
+effects: discovery=current publication=pending integration=complete cleanup=complete commit=<oid>
+Blockers: none
+Checkpoint oid: none
+Cleanup: complete
+Cleanup pending: none
+Integration: merged
+Integration oid: <oid>
+Item id: 01ARZ3NDEKTSV4RRFFQ69G5FDN
+Kind: document
+Publication: pending
+Publication oid: none
+Publication pending: no_publication_remote
+Recording: none
+--- stderr
+progress: accepted
+progress: connecting
+note: primary is not published, because this repository has no publication remote; once one is selected, repo sync publishes it.
+--- exit 0

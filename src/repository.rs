@@ -94,6 +94,8 @@ use recovery::{
     record_owned_persisted_context, record_persisted_context as record_recovery_context,
     touch_indexing, transition_indexing,
 };
+#[doc(hidden)]
+pub use remote::POLL_PROGRESS_THROTTLE;
 pub use remote::{
     AutomaticBackoff, AutomaticPollEligibility, ConfirmedCommitIdentity, ConflictDto,
     ConflictEligibility, ConflictObservation, ConflictPathDto, ConflictPathKind,
@@ -967,6 +969,9 @@ pub enum FailurePoint {
     /// the branch and the row holding the step before it.
     AfterInitializationCommit,
     BeforePublicationConfigurationCommit,
+    /// `set_publication_remote`, after the commit and the step that records
+    /// it, before the Git index is brought up to it.
+    AfterPublicationConfigurationCommit,
     BeforeContextBranchCreation,
     AfterContextBranchBeforeWorktreeGitFailure,
     BeforeWorktreeCreation,
@@ -4498,6 +4503,10 @@ impl RepositoryService {
         }
         self.run_lifecycle_lease_hook(LifecycleLeasePhase::SetPublicationRemoteExisting);
         if config.publication_remote == request.name {
+            // A selection already made may have stopped before its index
+            // update, or come from a version that made none. The checks above
+            // showed the file matches HEAD and the entry only lags behind it.
+            publish_configuration_index(&repository, &root, operation)?;
             self.reconcile_registration(&repository, &root, operation)
                 .map_err(|error| registry_refresh_pending(operation, &root, error))?;
             if !record.is_pending
@@ -4626,6 +4635,12 @@ impl RepositoryService {
             }
         };
         self.advance_lifecycle(&root, operation, record, LocalStep::PublicationCommitted)?;
+        self.check_failure(
+            FailurePoint::AfterPublicationConfigurationCommit,
+            operation,
+            &root,
+        )?;
+        publish_configuration_index(&repository, &root, operation)?;
         match self.reconcile_registration(&repository, &root, operation) {
             Ok(()) => {
                 if self.handoff_post_authoritative(
@@ -8814,6 +8829,39 @@ fn refresh_configuration_index(
         &[Path::new(canonical::CONFIG_PATH)],
         None,
         policy,
+    )
+}
+
+/// Brings the live index's configuration entry up to HEAD's, leaving every
+/// other entry alone. An entry already there writes nothing, and takes no
+/// lock. A failure is the caller's: the same request heals it.
+fn publish_configuration_index(
+    repository: &Repository,
+    root: &Path,
+    operation: RepositoryOperation,
+) -> Result<(), RepositoryError> {
+    let git = |error| RepositoryError::git(operation, Some(root.to_owned()), error);
+    let head = repository
+        .head()
+        .and_then(|head| head.peel_to_commit())
+        .map_err(git)?;
+    let committed = configuration_entry_from_tree(&head.tree().map_err(git)?);
+    let mut index = repository.index().map_err(git)?;
+    index.read(false).map_err(git)?;
+    let current = index
+        .get_path(Path::new(canonical::CONFIG_PATH), 0)
+        .map(|entry| (entry.id, entry.mode));
+    if current == committed {
+        return Ok(());
+    }
+    refresh_configuration_index(repository, head.id(), IndexRefreshPolicy::ReplaceOwned).map_err(
+        |_| {
+            RepositoryError::io(
+                operation,
+                Some(root.to_owned()),
+                std::io::Error::other("the Git index could not be updated"),
+            )
+        },
     )
 }
 

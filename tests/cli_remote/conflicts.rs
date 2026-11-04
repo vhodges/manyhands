@@ -77,7 +77,7 @@ const R5: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR5";
 const R6: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR6";
 /// The synchronization that stops on the conflict, or is refused for the
 /// deleted branch: the request that holds the reservation.
-const SYNC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FY2";
+pub(super) const SYNC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FY2";
 /// A line of every resolution's source, which no output may hold.
 const PRIVATE_SOURCE: &str = "cli-pair-private-resolution-source-sentinel";
 /// A well-formed token that no conflict issued.

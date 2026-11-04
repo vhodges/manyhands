@@ -91,7 +91,7 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         code,
         effects,
         // What a request would report is not what `prepare` gives: a
-        // preview, or what the one refusal below is about.
+        // preview, or what one of the two refusals below is about.
         data: _,
         // What the binding or a read suggested is kept, as `execute`
         // keeps it; `outcome::offered` decides.
@@ -99,6 +99,7 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
         local_change,
         offers_nothing,
         host_replacement,
+        lifecycle_blocked,
     } = answer;
     // The host a refusal is about is named by its data, and the action
     // that replaces its pin takes the host.
@@ -120,9 +121,10 @@ fn without_preview(command: Command, scope: Scope, answer: Answer) -> Envelope<P
     let envelope =
         Envelope::classified_mutation(command.name(), scope, false, code, effects, local_change)
             .with_recovery(recovery);
-    match host_replacement {
-        Some(data) => envelope.with_data(PrepareDataDto::HostReplacement(*data)),
-        None => envelope,
+    match (host_replacement, lifecycle_blocked) {
+        (Some(data), _) => envelope.with_data(PrepareDataDto::HostReplacement(*data)),
+        (None, Some(data)) => envelope.with_data(PrepareDataDto::LifecycleBlocked(data)),
+        (None, None) => envelope,
     }
 }
 
@@ -142,6 +144,11 @@ pub(crate) enum Row {
     /// is: the domain is called. A row there is, then: this answer for
     /// a request with no row is `internal_error`, and nothing is run.
     Recorded,
+    /// The operation's own parent record says it began, and a parent usually
+    /// has no journal row. Nothing is compared, for the same
+    /// reason as `Recorded`, and the domain is called: it continues the
+    /// parent, or gives the outcome it stored.
+    Unfinished,
     /// Nothing of the request's is known to be done: the state is
     /// observed again and compared with what was previewed.
     Unrecorded,
@@ -181,7 +188,8 @@ pub(crate) enum Seen {
 ///    that no operation of the command has, ends the call here. A row
 ///    that has recorded the request's work is taken up by the domain
 ///    call with nothing compared. That is never said of a request with
-///    no row: a binding that says it is answered `internal_error`.
+///    no row: a binding that says it is answered `internal_error`. A
+///    parent record says the same with no row, as `Row::Unfinished`.
 /// 2. Otherwise the binding observes; see `Seen`. When the command's
 ///    end state holds and no row stands, the request is a no-op and is
 ///    finished; with a pending row the domain is called to end it.
@@ -218,6 +226,7 @@ pub(crate) fn reenter<B: Confirmed + ?Sized>(
             }
             return Ok(Entered::Unfinished);
         }
+        Row::Unfinished => return Ok(Entered::Unfinished),
         Row::Unrecorded => {}
     }
     match binding.observe_again(call, accepted, &journal)? {

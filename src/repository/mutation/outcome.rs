@@ -582,6 +582,36 @@ pub(crate) fn inspect_the_root_it_lies_in(root: &Path) -> Vec<RecoveryAction> {
         .collect()
 }
 
+/// The refresh of the index of the repository at `root`.
+pub(crate) fn refresh_the_root(root: &str) -> RecoveryAction {
+    RecoveryAction::new(
+        RecoveryActionKind::IndexRefresh,
+        [(ROOT_ARGUMENT, root.into())],
+    )
+}
+
+/// The codes of a failure that passes by itself: a poll giving way, a lease
+/// another call holds, a remote or a network that could not be reached.
+macro_rules! passes_by_itself {
+    () => {
+        ResultCode::Busy
+            | ResultCode::PollYielding
+            | ResultCode::RemoteUnavailable
+            | ResultCode::TransportUnavailable
+    };
+}
+
+/// Whether `code` is of a failure that passes by itself.
+pub(crate) fn passes_by_itself(code: ResultCode) -> bool {
+    matches!(code, passes_by_itself!())
+}
+
+/// The action that asks for a new preview, offered when a request's own record
+/// has gone, so that a new prepare is what follows.
+pub(crate) fn prepare_again() -> RecoveryAction {
+    RecoveryAction::new(RecoveryActionKind::RequestPrepare, [])
+}
+
 /// What a result names, for the actions it offers.
 pub(crate) struct Named<'a> {
     pub(crate) code: ResultCode,
@@ -738,7 +768,6 @@ fn recovery(
             .into_iter()
             .collect()
     };
-    let prepare_again = || vec![RecoveryAction::new(RecoveryActionKind::RequestPrepare, [])];
     let mut actions = match code {
         // A hand-off that is no operation's to owe: nothing is pending
         // under the request's operation ID, and any refresh brings the
@@ -778,7 +807,7 @@ fn recovery(
         // one.
         ResultCode::ConfirmationRequired
         | ResultCode::ConfirmationExpired
-        | ResultCode::ConfirmationNotFound => prepare_again(),
+        | ResultCode::ConfirmationNotFound => vec![prepare_again()],
         // A result that names no repository has none to inspect: it is
         // of a request of the application, as a key generation is. When
         // its record was left accepted, as that of a generation that was
@@ -832,18 +861,23 @@ fn recovery(
             retry,
             root,
         ) {
-            (true, false, _) => prepare_again(),
+            (true, false, _) => vec![prepare_again()],
             (true, true, Some(_)) => vec![at_root(RecoveryActionKind::RepoInspect)],
             (true, true, None) | (false, _, _) => Vec::new(),
         },
+        // A poll's transport stop is final: its record is finished, so the
+        // same request would only read the stored failure again, and a new
+        // request is what polls. `replay` asks this too.
+        ResultCode::RemoteUnavailable | ResultCode::TransportUnavailable
+            if final_transport_stop(command, retry) =>
+        {
+            Vec::new()
+        }
         // Nothing was accepted, or what was accepted is still there:
         // either way the same request is the one to send. So it is for
         // a failure that passes by itself: a poll that is giving way, a
         // remote or a network that could not be reached.
-        ResultCode::Busy
-        | ResultCode::PollYielding
-        | ResultCode::RemoteUnavailable
-        | ResultCode::TransportUnavailable => retry_request(),
+        passes_by_itself!() => retry_request(),
         // The commit exists and the registry write failed: the same
         // request completes the registration.
         ResultCode::RegistrationPending => retry_request(),
@@ -997,8 +1031,15 @@ fn recovery(
     actions
 }
 
-/// Whether `code`, from a synchronization, is one the same request
-/// never gets past; see the closing rule of `recovery`.
+/// Whether a transport code is a final answer that offers nothing: of `poll
+/// once`, whose record was not left accepted (design, Polling Verbs).
+fn final_transport_stop(command: Option<Command>, retry: bool) -> bool {
+    matches!(command, Some(Command::PollOnce)) && !retry
+}
+
+/// Whether `code` is one the same request never gets past, of a command that
+/// stops at safe points: a synchronization's, or a lifecycle's child's. See the
+/// closing rule of `recovery`.
 fn never_finished_by_the_same_request(code: ResultCode, command: Option<Command>) -> bool {
     command.is_some_and(Command::stops_at_safe_points) && never_gets_past(code)
 }
@@ -1244,25 +1285,32 @@ impl RepositoryService {
                     return false;
                 };
                 let active = active.operation_id();
-                active.to_string() == operation_id
-                    || OperationId::parse(operation_id).is_ok_and(|operation_id| {
-                        let bound = self.read_session(RepositoryOperation::Read, |connection| {
-                            comment::comment_synchronization(
-                                connection,
-                                Path::new(root),
-                                operation_id,
-                            )
-                        });
-                        // An envelope carries no second error: a registry
-                        // that cannot say whose the reservation is offers
-                        // no cancellation of it.
-                        match bound {
-                            Ok(Some((comment, synchronization))) => {
-                                comment == operation_id && synchronization == active
-                            }
-                            Ok(None) | Err(_) => false,
-                        }
-                    })
+                if active.to_string() == operation_id {
+                    return true;
+                }
+                let Ok(operation) = OperationId::parse(operation_id) else {
+                    return false;
+                };
+                if super::bind::lifecycle::held_by_its_child(
+                    self,
+                    Command::parse(&envelope.command),
+                    Path::new(root),
+                    operation,
+                    active,
+                ) {
+                    return true;
+                }
+                let bound = self.read_session(RepositoryOperation::Read, |connection| {
+                    comment::comment_synchronization(connection, Path::new(root), operation)
+                });
+                // An envelope carries no second error: a registry that cannot
+                // say whose the reservation is offers no cancellation of it.
+                match bound {
+                    Ok(Some((comment, synchronization))) => {
+                        comment == operation && synchronization == active
+                    }
+                    Ok(None) | Err(_) => false,
+                }
             });
         if !own {
             // A request with no operation of its own, as `conflict resolve`
@@ -1301,10 +1349,26 @@ impl RepositoryService {
         else {
             return false;
         };
+        let repository_id = self
+            .resolve_repository(Path::new(root))
+            .ok()
+            .map(|repository| repository.registration_id());
         self.read_session(RepositoryOperation::Read, |connection| {
-            if records::operation_holder(connection, OperationFamily::Remote, root, active, None)?
-                .is_some_and(|holder| holder == named)
-            {
+            // A lifecycle's context child is held by the request that holds
+            // its parent (decision 34).
+            let holder = match repository_id {
+                Some(repository_id) => {
+                    records::operation_or_parent_holder(connection, root, repository_id, active)?
+                }
+                None => records::operation_holder(
+                    connection,
+                    OperationFamily::Remote,
+                    root,
+                    active,
+                    None,
+                )?,
+            };
+            if holder.is_some_and(|holder| holder == named) {
                 return Ok(true);
             }
             let Some((comment, _)) =

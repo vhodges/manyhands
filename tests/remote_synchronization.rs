@@ -34,6 +34,22 @@ fn main() {
     ssh_harness::run_with_output_privacy(CASES, OUTPUT_CONTROLS);
 }
 const CASES: &[ssh_harness::Case] = &[
+    ("c5_identity_configured_bracketed", || {
+        c5_identity_configured_refused(BRACKETED_NAME)
+    }),
+    ("c5_identity_configured_trimmed", || {
+        c5_identity_configured_refused(TRIMMED_NAME)
+    }),
+    (
+        "c5_identity_confirmed_unusable",
+        c5_identity_confirmed_unusable,
+    ),
+    ("c5_identity_plain_control", c5_identity_plain_control),
+    ("c5_identity_same_id_recovers", c5_identity_same_id_recovers),
+    (
+        "c5_identity_kept_replay_and_recovery",
+        c5_identity_kept_replay_and_recovery,
+    ),
     ("ignored_primary_file_collision", || {
         ignored_collision(false, IgnoredCollision::File)
     }),
@@ -2875,5 +2891,225 @@ fn fixture_rejected_push() -> Result<(), FixtureError> {
     )?;
     assert_eq!(fixed(w.bare()?.refname_to_id(reference))?, old);
     assert!(w.server.receive_updates().len() == before + 1);
+    Ok(())
+}
+
+// `01M5MK57`: an identity Git cannot commit as is, on the merge a divergent
+// primary needs.
+
+const BRACKETED_NAME: &str = "Example <example@example.invalid>";
+/// Git drops a trailing comma: the commit would carry another name.
+const TRIMMED_NAME: &str = "Example Person,";
+const IDENTITY_EMAIL: &str = "example@example.invalid";
+const PRIMARY: &str = "refs/heads/main";
+
+/// A clone whose primary and the server's have each moved on.
+fn c5_diverged() -> Result<World, FixtureError> {
+    let w = World::new()?;
+    fixed(w.sync(w.primary()))?;
+    advance(&w.peer, PRIMARY, "peer.txt")?;
+    push_peer(&w.peer, &w.server, PRIMARY)?;
+    advance(&w.repo()?, PRIMARY, "local.txt")?;
+    Ok(w)
+}
+
+fn c5_set_identity(w: &World, name: &str, email: &str) -> Result<(), FixtureError> {
+    let mut config = fixed(w.repo()?.config())?;
+    fixed(config.set_str("user.name", name))?;
+    fixed(config.set_str("user.email", email))
+}
+
+fn c5_remove_identity(w: &World) -> Result<(), FixtureError> {
+    let mut config = fixed(w.repo()?.config())?;
+    fixed(config.remove("user.name"))?;
+    fixed(config.remove("user.email"))
+}
+
+/// What a refusal of an identity must leave as it was.
+#[derive(Debug, PartialEq, Eq)]
+struct C5Kept {
+    configuration: Vec<u8>,
+    primary: git2::Oid,
+    pushes: usize,
+    confirmations: i64,
+}
+
+fn c5_kept(w: &World) -> Result<C5Kept, FixtureError> {
+    let repo = w.repo()?;
+    Ok(C5Kept {
+        configuration: fixed(std::fs::read(repo.path().join("config")))?,
+        primary: fixed(repo.refname_to_id(PRIMARY))?,
+        pushes: accepted(&w.server),
+        confirmations: fixed(w.db()?.query_row(
+            "SELECT count(*) FROM remote_identity_confirmations",
+            [],
+            |row| row.get(0),
+        ))?,
+    })
+}
+
+fn c5_restart(request: &SynchronizeRemoteRequest) -> SynchronizeRemoteRequest {
+    let mut restart = request.clone();
+    restart.restart = true;
+    restart
+}
+
+fn c5_confirmed(
+    name: &str,
+    expected_configuration: ExpectedConfiguration,
+) -> ConfirmedCommitIdentity {
+    ConfirmedCommitIdentity {
+        confirmation_id: OperationId::new(),
+        identity: CommitIdentity {
+            name: name.into(),
+            email: IDENTITY_EMAIL.into(),
+        },
+        expected_configuration,
+    }
+}
+
+fn c5_published(result: SynchronizationResult) -> Result<git2::Oid, FixtureError> {
+    match result {
+        SynchronizationResult::Complete(SynchronizationOutcome::Published { oid, .. }) => Ok(oid),
+        _ => Err(FixtureError),
+    }
+}
+
+/// A configured identity no commit can carry counts as none: the existing
+/// refusal, with the observed digest, which then accepts a usable
+/// confirmation.
+///
+/// The rule for synchronization (decision 21): a refusal makes no configuration
+/// write, no local-branch move, no merge and no push, which is `C5Kept`. A
+/// fetch's tracking refs and its recoverable row may remain, as for a missing
+/// identity: the refusal can only come once the fetch has shown a merge is
+/// needed.
+fn c5_identity_configured_refused(name: &str) -> Result<(), FixtureError> {
+    let w = c5_diverged()?;
+    c5_set_identity(&w, name, IDENTITY_EMAIL)?;
+    let kept = c5_kept(&w)?;
+    let request = w.primary();
+    let Err(SynchronizationError::IdentityRequired {
+        target,
+        expected_configuration,
+    }) = w.sync(request.clone())
+    else {
+        return Err(FixtureError);
+    };
+    assert_eq!(target, SynchronizationTarget::Primary);
+    assert_eq!(c5_kept(&w)?, kept);
+    let mut confirmed = c5_restart(&request);
+    confirmed.confirmed_identity = Some(c5_confirmed("Confirmed", expected_configuration));
+    let merged = c5_published(fixed(w.sync(confirmed))?)?;
+    let repo = w.repo()?;
+    let commit = fixed(repo.find_commit(merged))?;
+    assert_eq!(commit.author().name(), Some("Confirmed"));
+    Ok(())
+}
+
+/// A confirmed identity no commit can carry is refused before it is
+/// persisted, as a confirmation for another configuration is.
+fn c5_identity_confirmed_unusable() -> Result<(), FixtureError> {
+    let w = c5_diverged()?;
+    c5_remove_identity(&w)?;
+    let request = w.primary();
+    let Err(SynchronizationError::IdentityRequired {
+        expected_configuration,
+        ..
+    }) = w.sync(request.clone())
+    else {
+        return Err(FixtureError);
+    };
+    let kept = c5_kept(&w)?;
+    for name in [BRACKETED_NAME, TRIMMED_NAME] {
+        let mut confirmed = c5_restart(&request);
+        confirmed.confirmed_identity = Some(c5_confirmed(name, expected_configuration));
+        assert!(matches!(
+            w.sync(confirmed),
+            Err(SynchronizationError::ExternalChange)
+        ));
+        assert_eq!(c5_kept(&w)?, kept);
+    }
+    Ok(())
+}
+
+/// Decision 21: what a refusal may leave is recoverable. The same operation
+/// asks for its restart, and with a usable identity that restart merges.
+fn c5_identity_same_id_recovers() -> Result<(), FixtureError> {
+    let w = c5_diverged()?;
+    c5_set_identity(&w, BRACKETED_NAME, IDENTITY_EMAIL)?;
+    let kept = c5_kept(&w)?;
+    let request = w.primary();
+    assert!(matches!(
+        w.sync(request.clone()),
+        Err(SynchronizationError::IdentityRequired { .. })
+    ));
+    assert!(matches!(
+        w.sync(request.clone()),
+        Err(SynchronizationError::RecoveryRequired)
+    ));
+    assert_eq!(c5_kept(&w)?, kept);
+    c5_set_identity(&w, "Example Person", IDENTITY_EMAIL)?;
+    let merged = c5_published(fixed(w.sync(c5_restart(&request)))?)?;
+    let repo = w.repo()?;
+    assert_eq!(fixed(repo.refname_to_id(PRIMARY))?, merged);
+    let commit = fixed(repo.find_commit(merged))?;
+    assert_eq!(commit.parent_count(), 2);
+    assert_eq!(commit.author().name(), Some("Example Person"));
+    let unfinished: i64 = fixed(w.db()?.query_row(
+        "SELECT count(*) FROM remote_operation_records WHERE operation_ulid=?1 AND phase!='completed'",
+        [request.operation_id.to_string()],
+        |row| row.get(0),
+    ))?;
+    assert_eq!(unfinished, 0);
+    Ok(())
+}
+
+/// The control: a plain configured identity still commits the merge.
+fn c5_identity_plain_control() -> Result<(), FixtureError> {
+    let w = c5_diverged()?;
+    c5_set_identity(&w, "Example Person", IDENTITY_EMAIL)?;
+    let merged = c5_published(fixed(w.sync(w.primary()))?)?;
+    let repo = w.repo()?;
+    let commit = fixed(repo.find_commit(merged))?;
+    assert_eq!(commit.author().name(), Some("Example Person"));
+    assert_eq!(commit.parent_count(), 2);
+    Ok(())
+}
+
+/// Existing records stay: a completed request replays what it stored with an
+/// unusable identity configured, and a stopped one continues once a usable
+/// identity is back, under the same operation.
+fn c5_identity_kept_replay_and_recovery() -> Result<(), FixtureError> {
+    let w = World::new()?;
+    let finished = w.primary();
+    let first = fixed(w.sync(finished.clone()))?;
+    c5_set_identity(&w, BRACKETED_NAME, IDENTITY_EMAIL)?;
+    let replayed = fixed(w.sync(finished))?;
+    assert_eq!(format!("{first:?}"), format!("{replayed:?}"));
+
+    advance(&w.peer, PRIMARY, "peer.txt")?;
+    push_peer(&w.peer, &w.server, PRIMARY)?;
+    advance(&w.repo()?, PRIMARY, "local.txt")?;
+    c5_remove_identity(&w)?;
+    let stopped = w.primary();
+    assert!(matches!(
+        w.sync(stopped.clone()),
+        Err(SynchronizationError::IdentityRequired { .. })
+    ));
+    c5_set_identity(&w, BRACKETED_NAME, IDENTITY_EMAIL)?;
+    assert!(matches!(
+        w.sync(c5_restart(&stopped)),
+        Err(SynchronizationError::IdentityRequired { .. })
+    ));
+    c5_set_identity(&w, "Example Person", IDENTITY_EMAIL)?;
+    let merged = c5_published(fixed(w.sync(c5_restart(&stopped)))?)?;
+    assert_eq!(fixed(w.repo()?.find_commit(merged))?.parent_count(), 2);
+    let operations: i64 = fixed(w.db()?.query_row(
+        "SELECT count(*) FROM remote_operation_records WHERE operation_ulid=?1 AND phase='completed'",
+        [stopped.operation_id.to_string()],
+        |row| row.get(0),
+    ))?;
+    assert_eq!(operations, 1);
     Ok(())
 }

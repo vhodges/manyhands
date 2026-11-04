@@ -1530,6 +1530,44 @@ fn contained(tracking: bool) -> Fixture {
     f
 }
 
+/// What a stop's made-ready report reads from the parent: a merge is not a
+/// context primary already held.
+#[test]
+fn the_parent_view_says_how_the_operation_reached_primary() {
+    use crate::repository::promotion::record::IntegrationKind;
+    let kind = |f: &Fixture, request: &CloseTicketRequest| {
+        crate::repository::promotion::lifecycle_parent::<record::ClosureRecord, _>(
+            &f.service,
+            f.root(),
+            request.operation_id,
+        )
+        .unwrap()
+        .unwrap()
+        .integration_kind
+    };
+    let merged = Fixture::new();
+    let request = merged.request();
+    let _ = merged.close(&merged.service, request.clone());
+    assert_eq!(kind(&merged, &request), Some(IntegrationKind::Merged));
+
+    let held = Fixture(support::Fixture::new(false));
+    checkout(&held.repo, held.context_oid());
+    let closed = closed_ticket_bytes(
+        &read(&held.repo, &ticket()),
+        support::at(1_800_000_000),
+        "Earlier <earlier@example.invalid>",
+    )
+    .unwrap();
+    write(&held.repo, &ticket(), closed);
+    commit(&held.repo);
+    let request = held.request();
+    let _ = held.close(&held.service, request.clone());
+    assert_eq!(
+        kind(&held, &request),
+        Some(IntegrationKind::AlreadyContained)
+    );
+}
+
 /// (b) No context child ran: the pre-checkpoint tracking OID guards it.
 #[test]
 fn without_a_child_the_tracking_oid_guards_the_delete() {
