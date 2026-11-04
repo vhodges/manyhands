@@ -22,6 +22,15 @@ interfaces, not claims that they exist at the baseline.
 
 Verified at `c0e93f87`, with implementation source equal to planning-base main:
 
+Task 0 rechecked these facts at `74186d51` against main `c69789d9`; source,
+tests and schemas are unchanged from that planning revision. The execution
+ledger records the exact integration/pin sweep and holds H1–H3. In particular,
+ordinary `PollMutationDto` and its published root are **untagged** today; the
+Results section's “with tag `poll`” wording conflicts with its unchanged-output
+requirement. That contradiction is raised for resolution, not implemented as a
+new field. Two additional existing SSH disposition pins and the recovery-store
+step-name enumeration also require explicit inclusion before expectation edits.
+
 1. `remote/poll.rs:201–244` returns `RemotelyDeleted` before worktree inspection.
    `PollDisposition`/guidance are at `:25–73`; `primary_holds` at `:725–739`
    is ancestry-based and only shortcuts fresh materialization (`:401–409`).

@@ -69,6 +69,12 @@ at Task 0. D6 is unplanned and depends on D5. Read-precedence ticket
 `01M6K04YQM2JF6SBGPB1ZT6R8T` remains separate. The remote-branch-deletion gap
 `01M6K06B7H8V7347SRM3XGV7CB` is not folded in: retirement never deletes a remote ref.
 
+Task 0 recheck at `74186d51`, main `c69789d9`: no newly merged D5 implementation
+overlap was found; implementation source still equals the planning base. No
+unmerged D5 branch was consumed. The execution ledger records newly discovered
+pin/ordinary-output contradictions H1–H3 for owner resolution before Task 1;
+existing document/implementation approvals are preserved, not silently expanded.
+
 ## Scope
 
 - Shared terminal-state recognition and conservative content proof.

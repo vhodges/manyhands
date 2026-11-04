@@ -78,6 +78,12 @@ test in Tasks 1–6. The mechanism checkpoints in Tasks 2/4 are mandatory.
 
 ## Task 0: Re-Ground Main, Pins And Ledger
 
+**Grounding checkpoint:** source/pin reconnaissance at `74186d51` found the
+ledger's H1–H3 (ordinary output is untagged despite the design's `poll` tag
+wording; two unnamed SSH disposition expectations; one unnamed exact recovery
+step enumeration). These are raised for owner resolution before Task 1. No
+additional existing test semantics are approved by recording the findings.
+
 **Files:** create `docs/plans/2026-11-04-completed-context-retirement-execution.md`;
 update the three planning documents only where grounding changes facts.
 
