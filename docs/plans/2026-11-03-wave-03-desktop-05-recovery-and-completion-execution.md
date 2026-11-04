@@ -27,6 +27,11 @@ is written only by the orchestrator. Implementers never edit it.
   tables, which no named edit covered. The owner approved the edit as
   **E-10**, recorded in the design. The owner also ruled that the header's
   live lifecycle action is a no-op until Task 6a, with a note in the code.
+- **Task 5 second stop, 2026-11-04.** The live header action takes Tab
+  focus, so two keyboard Tab-order tests failed. The owner approved
+  **E-11**, recorded in the design.
+- **Carried to Task 6a:** a nonconforming file still offers its kind's
+  lifecycle action but has no ID. Task 6a decides what pressing it does.
 
 ## Follow-ups
 
