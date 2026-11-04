@@ -22,6 +22,11 @@ is written only by the orchestrator. Implementers never edit it.
   - That branch starts from the ticket branch. It is merged back, never
     rebased, once Task 4 is recorded. Then the side worktree and branch are
     removed.
+- **Task 5 stop, 2026-11-04.** The implementer stopped before writing any
+  code: the new intents break `requests_tests.rs`'s exhaustive intent
+  tables, which no named edit covered. The owner approved the edit as
+  **E-10**, recorded in the design. The owner also ruled that the header's
+  live lifecycle action is a no-op until Task 6a, with a note in the code.
 
 ## Follow-ups
 

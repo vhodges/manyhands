@@ -747,6 +747,7 @@ and CLI SSH tests, and by the native checklist against a real remote.
 | E-7 | `D/view/item/share_tests.rs` conflict-banner test (from `:690`, the text at `:703` and its "no control" assertion) | `CONFLICT_BANNER` drops "Resolving it in Manyhands arrives in a later release"; the banner gains Review changes | B5 |
 | E-8 | `D/view/item/posting_tests/decisions.rs:143-149` (asserts `CONFLICT_BANNER` and that the banner offers no action) | The banner's text as E-7; it offers Review changes | B5 |
 | E-9 | `R/promotion/record_tests.rs:696` `promotion_status_reports_parent_step_once_and_never_offers_boundary_resume` (owner 2026-11-04, Task 2) | `next_action` None → `Resume`; renamed for the new rule | L2 |
+| E-10 | `D/services/requests_tests.rs`: `every_intent`, `variant`, `every_intent_builds_its_own_command`, `changes_items_names_the_intents_that_can_change_items`, `syncs_comments_and_resume_stop_at_safe_points_and_saves_do_not` (owner 2026-11-04, Task 5; mirrors D4's E-12) | Add `DocumentPromote` and `TicketClose` to the intent tables (32 → 34), their command names, `changes_items` range to `17..=33`, safe-point set to `17 \| 29..=33` | A1 |
 
 Task 0's sweep (2026-11-04) confirmed the list against merged C5 and added
 E-8; E-2 found no CLI golden with a lifecycle `next_action` row, so it may
