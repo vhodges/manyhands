@@ -196,7 +196,7 @@ impl Services {
                     Some(delay) if envelope.code == ResultCode::Busy => timers.timer(*delay).await,
                     // A test may put a canned answer in place of the
                     // library's last one.
-                    _ => return backend.after_prepare().unwrap_or(envelope),
+                    _ => return backend.after_prepare(&mutation).unwrap_or(envelope),
                 }
             }
         });

@@ -25,7 +25,7 @@ use futures::channel::oneshot;
 use manyhands::{
     drafts::{DraftError, DraftStore},
     repository::{
-        ConflictDto, MutationDataDto, OperationId, PrepareDataDto, ProgressStage,
+        ConflictDto, Mutation, MutationDataDto, OperationId, PrepareDataDto, ProgressStage,
         RepositoryService, keys::KeyStore,
     },
     results::Envelope,
@@ -64,9 +64,9 @@ pub(crate) struct DelayingBackend {
     seen: Mutex<Vec<JobKind>>,
     /// Holds taken when a job of the kind reports the stage.
     stages: Mutex<StageHolds>,
-    /// Canned prepare answers, each standing in place of the next
-    /// prepare's.
-    prepares: Mutex<VecDeque<Envelope<PrepareDataDto>>>,
+    /// Canned prepare answers, each by the command whose next prepare it
+    /// stands in place of.
+    prepares: Mutex<Vec<(&'static str, Envelope<PrepareDataDto>)>>,
     /// Canned conflicts, each standing in place of the next conflict read
     /// of its own operation ID.
     conflicts: Mutex<Vec<ConflictDto>>,
@@ -166,7 +166,6 @@ impl DelayingBackend {
     /// `integrating` under it), so a test does not open a second
     /// repository operation until it releases the gate.
     #[must_use = "dropping the handle releases the hold"]
-    #[allow(dead_code)] // Called from Task 7.
     pub(crate) fn hold_at_stage(&self, kind: JobKind, stage: ProgressStage) -> JobGate {
         let gate = Arc::new(Gate::default());
         self.stages
@@ -178,12 +177,18 @@ impl DelayingBackend {
         JobGate(gate)
     }
 
-    /// A canned prepare answer: the next prepare's library call still
-    /// runs, and `answer` stands in place of its answer. Canned answers
+    /// A canned prepare answer for `command` (`Mutation::command`, as
+    /// "ticket close"): the next prepare of that command still calls the
+    /// library, and `answer` stands in place of its answer. A prepare of
+    /// any other command takes none. Canned answers for one command
     /// stack: each prepare takes the oldest.
     #[allow(dead_code)] // Called from Task 6a.
-    pub(crate) fn answer_next_prepare(&self, answer: Envelope<PrepareDataDto>) {
-        self.prepares.lock().unwrap().push_back(answer);
+    pub(crate) fn answer_next_prepare(
+        &self,
+        command: &'static str,
+        answer: Envelope<PrepareDataDto>,
+    ) {
+        self.prepares.lock().unwrap().push((command, answer));
     }
 
     /// A canned conflict read: the next conflict read of
@@ -290,8 +295,11 @@ impl Backend for DelayingBackend {
         }
     }
 
-    fn after_prepare(&self) -> Option<Envelope<PrepareDataDto>> {
-        self.prepares.lock().unwrap().pop_front()
+    fn after_prepare(&self, mutation: &Mutation) -> Option<Envelope<PrepareDataDto>> {
+        let mut prepares = self.prepares.lock().unwrap();
+        let command = mutation.command();
+        let at = prepares.iter().position(|(of, _)| *of == command)?;
+        Some(prepares.remove(at).1)
     }
 
     fn after_conflict_read(&self, operation_id: &OperationId) -> Option<ConflictDto> {
@@ -350,9 +358,11 @@ impl Gate {
     }
 }
 
-/// A held job. The worker thread blocks before the job's library call
-/// until `release` is called or the gate is dropped, so a failed test
-/// cannot leave the worker waiting.
+/// A held job. The worker thread blocks at the gate until `release` is
+/// called or the gate is dropped, so a failed test cannot leave the worker
+/// waiting: before the job's library call for `hold_job`, after it returns
+/// for `hold_job_return`, and once the named stage has been sent to the UI
+/// for `hold_at_stage`.
 #[must_use = "dropping the handle releases the hold"]
 pub(crate) struct JobGate(Arc<Gate>);
 
@@ -361,9 +371,11 @@ impl JobGate {
         self.0.release();
     }
 
-    /// Blocks the test until the worker thread has reached this gate, so
-    /// the job is running and not yet accepted. Panics after ten seconds,
-    /// inside the scheduler's fifteen.
+    /// Blocks the test until the worker thread has reached this gate:
+    /// for `hold_job` the job is running and not yet accepted; for
+    /// `hold_at_stage` it is past acceptance, its stage already sent; for
+    /// `hold_job_return` its library call has returned. Panics after ten
+    /// seconds, inside the scheduler's fifteen.
     pub(crate) fn wait_reached(&self) {
         assert!(
             self.0.wait_reached(Duration::from_secs(10)),

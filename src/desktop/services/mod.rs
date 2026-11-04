@@ -25,7 +25,7 @@ use gpui_kit::{App, AppContext, Entity};
 use manyhands::{
     drafts::{DraftError, DraftStore},
     repository::{
-        ConflictDto, ContextPrepareIntent, MutationDataDto, OperationId, PrepareDataDto,
+        ConflictDto, ContextPrepareIntent, Mutation, MutationDataDto, OperationId, PrepareDataDto,
         ProgressStage, RepositoryService, keys::KeyStore,
     },
     results::{Envelope, Outcome, PublicationEffect, ResultCode},
@@ -179,10 +179,10 @@ pub(crate) trait Backend: Send + Sync + 'static {
     /// `integrating` under it).
     fn on_progress(&self, _kind: JobKind, _stage: ProgressStage) {}
 
-    /// Called after a prepare's library call returns. An answer it gives
+    /// Called after a prepare of `mutation` returns. An answer it gives
     /// stands in place of the library's: a test's canned prepare answer
     /// (D5 decision 9).
-    fn after_prepare(&self) -> Option<Envelope<PrepareDataDto>> {
+    fn after_prepare(&self, _mutation: &Mutation) -> Option<Envelope<PrepareDataDto>> {
         None
     }
 

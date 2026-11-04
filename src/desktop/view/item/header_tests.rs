@@ -586,7 +586,9 @@ fn assert_live(
     assert!(live_button(shell, LIFECYCLE_ACTION, cx), "{label}");
     assert!(!shell.present(("later-action", 0usize), cx));
     assert!(!shell.present(("later-note", 0usize), cx));
+    let pill = shell.label("item-pill", cx);
     shell.click(LIFECYCLE_ACTION, cx);
+    assert_eq!(shell.label("item-pill", cx), pill, "{label} did nothing");
     assert_eq!(RepositorySnapshot::take(root), before, "{label}");
 }
 
