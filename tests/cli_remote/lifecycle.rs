@@ -1721,8 +1721,7 @@ fn prepare_lines(clone: &CliClone, verb: Verb) -> (Vec<Vec<String>>, String) {
 /// binary over SSH: the repair, then a prepare that is ready, and a confirm
 /// that closes once, keeping the context's side. One verb: a promotion's
 /// document never reached primary, so its conflict there is an add/add,
-/// external only (decision 30), and its prepare prints the external-repair
-/// note in place of these lines (Task 15's F2).
+/// external only (decision 30), and the same lines lead to the external repair.
 fn c5_lifecycle_walk_prepare_conflict_close() -> Result<(), FixtureError> {
     let verb = Verb::Close;
     let p = CliPair::new()?;

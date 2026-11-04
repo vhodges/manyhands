@@ -72,8 +72,8 @@ const OFFERS: [SyncOffer; 9] = [
 
 /// Repository `a` holding the ticket, publishing over SSH, indexed, in an
 /// open window. With `committed`, the publication selection is committed,
-/// so a share is accepted. Without it, the configuration holds an
-/// uncommitted edit, so a share is refused before its acceptance.
+/// so a share is accepted. `false` dirties the configuration, so a share is
+/// refused before its acceptance.
 pub(super) fn open(committed: bool, cx: &mut TestAppContext) -> (Shell, PathBuf) {
     open_with(committed, false, cx).0
 }

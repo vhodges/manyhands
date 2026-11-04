@@ -1248,7 +1248,7 @@ for one of the Cycle's verbs, or a reason below.
 | `document promote`, `ticket close` | `recovery_required` | `request.retry` | 3 | `cli_v1/ticket_close_prepare_held.json` |
 | `ticket close` | `recovery_required` | `manyhands-cli ticket close` | 3 | `cli_v1/ticket_close_prepare_held_text.txt` |
 | `ticket close` | `recovery_required` | `manyhands-cli context observe-local` | 3 | `cli_v1/ticket_close_prepare_conflict_text.txt` |
-| `document promote` | `recovery_required` | `repo.inspect` | 3 | `cli_v1/document_promote_prepare_conflict_text.txt` |
+| `document promote` | `recovery_required` | `manyhands-cli context observe-local` | 3 | `cli_v1/document_promote_prepare_conflict_text.txt` |
 | `ticket close` | `recovery_required` | `manyhands-cli ticket save` | 3 | `cli_v1/ticket_close_prepare_context_missing_text.txt` |
 | `document promote` | `recovery_required` | `manyhands-cli document save` | 3 | `cli_v1/document_promote_prepare_context_missing_text.txt` |
 | `ticket close` | `recovery_required` | `manyhands-cli poll once` | 3 | `cli_v1/ticket_close_prepare_primary_ahead_text.txt` |
@@ -1589,8 +1589,9 @@ list them all):
   `poll once` (decision 29);
 - a published context with no tracking ref, which no fetch has seen gone,
   prepares `history_unknown`, not `remote_context_deleted`, and human output
-  names `poll once`, then a new prepare; a deletion a fetch has observed
-  answers `remote_context_deleted` (decision 35);
+  names `poll once`, then a new prepare; a deletion a fetch has observed,
+  once its tracking ref is gone (pruned), answers `remote_context_deleted`
+  (decision 35);
 - a contained context whose remote branch has no tracking ref keeps that
   branch on the remote (decision 32, withdrawn);
 - policy verbs are last commit wins (decision 15); a killed poll whose

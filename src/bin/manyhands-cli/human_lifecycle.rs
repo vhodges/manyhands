@@ -11,10 +11,10 @@
 //!   them, and none may be added (design, Answers). The context verbs'
 //!   grammar answers to this text, which `lifecycle_tests.rs` pins.
 //!   Any other form of that blocker relies on its offered actions;
-//! - for a blocked prepare, its way out: the same repair (for a ticket; a
-//!   promotion's `integration_conflict` is an add/add, which only a repair
-//!   outside Manyhands resolves, decision 30, so it gets that note and no
-//!   context lines), the save that makes a missing context, or the poll that
+//! - for a blocked prepare, its way out: the same repair, with a note that an
+//!   `external_resolution_required` answer is repaired with Git in the
+//!   context (an add/add, decision 30), the save that makes a missing
+//!   context, or the poll that
 //!   reads a primary tracking ref left behind or missing, or a published
 //!   context whose remote state is unknown (decision 35), and then a new
 //!   prepare;
@@ -34,7 +34,6 @@
 use crate::{
     human_admin,
     human_collaboration::republish,
-    human_local_sync::EXTERNAL_NOTE,
     render::{self, Output, field, note_lines, quoted, refusal_of},
 };
 use manyhands::{
@@ -49,6 +48,7 @@ use manyhands::{
 /// walked through the binary, from a refused closure to its finish, by
 /// `tests/cli/local_sync.rs` `the_refused_merges_route_finishes_the_close`.
 const REPAIR_NOTE: &str = "The commands above are the local repair: the <...> values are placeholders to fill in, context sync-local's --input - takes {\"observation\": \"...\"} with the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict.";
+const EXTERNAL_REPAIR_NOTE: &str = "If context sync-local answers external_resolution_required, repair it with Git in the context.";
 const REFUSED_NOTE: &str = "primary refused this closure's checkpoint.";
 const POLL_NOTE: &str = "this repository has no record of the remote's primary, and a poll reads it; <new-request-id> is a placeholder to fill in.";
 const UNKNOWN_NOTE: &str = "this repository hasn't read whether the remote still holds this item's branch, and a poll reads it; <new-request-id> is a placeholder to fill in.";
@@ -352,23 +352,12 @@ fn way_out(
         ]
         .iter()
         .any(|other| blockers.contains(other));
-    if !reachable {
-        return None;
-    }
-    // A document's file is new on the context, so primary holding one is an
-    // add/add, which `resolve-local` refuses (decision 30).
-    if kind == ItemDtoKind::Document {
-        return Some((
-            Vec::new(),
-            format!(
-                "this context can't merge into primary. {EXTERNAL_NOTE} Repair it in the context and commit the merge, then prepare again."
-            ),
-        ));
-    }
-    Some((
-        merge_refused(root, item),
-        format!("this context can't merge into primary. {REPAIR_NOTE} Then prepare again."),
-    ))
+    reachable.then(|| {
+        (
+            merge_refused(root, item),
+            format!("this context can't merge into primary. {REPAIR_NOTE} Then prepare again."),
+        )
+    })
 }
 
 /// A prepare refused because an unfinished request, or an operation no request
@@ -439,6 +428,15 @@ pub fn prepare(kind: ItemDtoKind, envelope: &Envelope<PrepareDataDto>) -> Output
     let refusal = refusal_of(envelope, envelope.recovery.clone());
     let mut output = render::failure_output(false, &refusal, Some(extra));
     output.stderr.extend(render::note_line(&note).into_bytes());
+    // An add/add is external-only (decision 30): the repair's sync says so.
+    if data
+        .blockers
+        .contains(&LifecycleBlocker::IntegrationConflict)
+    {
+        output
+            .stderr
+            .extend(render::note_line(EXTERNAL_REPAIR_NOTE).into_bytes());
+    }
     output
 }
 

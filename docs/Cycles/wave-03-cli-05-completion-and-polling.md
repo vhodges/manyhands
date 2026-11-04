@@ -335,11 +335,6 @@ Also required:
     parent that a new request can't supersede holds the item, a prepare is `recovery_required`, naming
     the holding request's `request.retry`, or `operation.resume` when no record holds it. Supersedable
     cleanup stops still prepare.
-35. **An untracked published context is unknown, not deleted (2026-11-03).** "Say unknown, point to
-    poll" (Task 15's F6): with publication evidence but no tracking ref, and no fetch that has seen the
-    branch gone, both previews answer `history_unknown`, and human output prints `poll once` and then a
-    new prepare. A deletion a fetch has observed still answers `remote_context_deleted`.
-
 34. **The conflict verbs reach a lifecycle's child (2026-11-03).** "Conflict verbs reach the child":
     `conflict show` and `conflict resolve` accept a promotion's or closure's context child, by the
     child's ID or the parent's, through C4's read and resolution with C4's contract unchanged (the
@@ -354,6 +349,11 @@ Also required:
     conflict's way on is a Git repair in the context, then the same request. A child holding a
     resolution whose remote branch is then deleted loops on cancel and republish (`busy`), a Known
     Limit.
+35. **An untracked published context is unknown, not deleted (2026-11-03).** "Say unknown, point to
+    poll" (Task 15's F6): with publication evidence but no tracking ref, and no fetch that has seen the
+    branch gone, both previews answer `history_unknown`, and human output prints `poll once` and then a
+    new prepare. A deletion a fetch has observed, once its tracking ref is gone (pruned), answers
+    `remote_context_deleted`.
 
 **Owner questions, approved at these recommendations on 2026-10-31.**
 

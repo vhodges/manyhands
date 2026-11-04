@@ -2998,8 +2998,10 @@ The owner's ruling on the F6 blocker (2026-11-03), "Say unknown, point to poll".
 
 **What the preview read.** Both previews (`closure/observe.rs`, `promotion/observe.rs`) ask
 `remote_context_history` only when the context has no tracking ref. It answered `Deleted` for any
-`ObservedPublished` evidence. That evidence comes from a verified push or a fetch that saw the branch, so it
-proves publication, never deletion. A fetch that sees a published branch gone stores its context state as
+`ObservedPublished` evidence. On the preview path that evidence comes from fetch rows only
+(`fetch_publication_evidence_for` reads the stored context rows a fetch wrote, never the push overlay): a fetch
+saw the branch once. So it proves publication, never deletion; here a lifecycle's fetch had seen U advertised.
+(Corrected in the review round below: it first said a verified push also gives it.) A fetch that sees a published branch gone stores its context state as
 `remotely_deleted` (`record_observation_batch`). Now `Deleted` needs that state
 (`RemoteSnapshot::context_deletion_observed`); published and not seen gone is `Unknown`, which the previews
 already map to `history_unknown`. That blocker fits: the remote state is not known from what the repository has
@@ -3060,3 +3062,22 @@ and Task 15 Step 1 now name `--all-targets --features desktop-test-support`, wit
 | `--test ticket_closure` (`closure/` changed) | 78 | 677 s |
 | `remote/state.rs` changed, so every remote row: `remote_synchronization`, `remote_merge_recovery`, `remote_polling`, `ssh_transport`, `remote_observation` | 69, 29, 84, 123, 15 | 581, 239, 178, 175, 7 s |
 | `git merge-tree --write-tree HEAD origin/main` (`c2a34494`) | clean | |
+
+### The scoped review of the last two rounds (controller's rulings)
+
+1. **F2 reverted.** F2's premise, that a promotion's `integration_conflict` is always an add/add, came from the
+   controller's ruling and was wrong: a re-edited document whose primary copy changed is a modify/modify, which
+   `sync-local` and `resolve-local` handle. A blocked prepare on `integration_conflict` prints the four `context`
+   lines again for both verbs, with one added note line: "If context sync-local answers
+   external_resolution_required, repair it with Git in the context." Reverted with it: the golden
+   `document_promote_prepare_conflict_text` (now its F2-before text plus that line; `ticket_close_prepare_conflict_text`
+   gains the line too), the RFC recovery-table row (back to `manyhands-cli context observe-local`),
+   `tests/cli/lifecycle.rs`'s `a_blocked_prepare_offers_its_way_out`, the bin row (both verbs again, and asserting
+   the new line; the promotion-only row removed), the walk's doc comment in `tests/cli_remote/lifecycle.rs`, and the
+   design's answers sentence.
+2. Decision 35's wording, in the Cycle, the design's Known Limit and the RFC: "a deletion a fetch has observed,
+   once its tracking ref is gone (pruned), answers `remote_context_deleted`".
+3. The sentence above on where `ObservedPublished` comes from is corrected: on the preview path, fetch rows only.
+4. `RemoteContextHistory`'s doc gives the three-way meaning.
+5. Decision 35 follows 34 in the Cycle.
+6. `outcomes_tests.rs`'s `open`: "`false` dirties the configuration".

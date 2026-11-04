@@ -732,11 +732,15 @@ pub(in super::super) fn remote_facts(
     }))
 }
 
-/// D5: whether an absent tracking context was once published.
+/// D5 and decision 35: what an absent tracking context says of the remote.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in super::super) enum RemoteContextHistory {
+    /// No fetch has seen it published: a first publication will make it.
     NeverPublished,
+    /// A fetch saw it published and a later one saw it gone.
     Deleted,
+    /// Published, or its history unknown, with no fetch that saw it gone:
+    /// the branch may stand, and a poll reads it.
     Unknown,
 }
 /// What an absent tracking context says of the remote. Published and then

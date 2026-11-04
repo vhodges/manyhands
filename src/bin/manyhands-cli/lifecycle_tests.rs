@@ -378,8 +378,7 @@ fn blocked(
 
 #[test]
 fn a_blocked_prepare_on_an_integration_conflict_offers_the_repair_then_a_new_prepare() {
-    {
-        let command = "ticket close";
+    for command in ["ticket close", "document promote"] {
         let out = prepare(&blocked(
             command,
             ResultCode::RecoveryRequired,
@@ -401,34 +400,14 @@ fn a_blocked_prepare_on_an_integration_conflict_offers_the_repair_then_a_new_pre
             ),
             "{text}"
         );
+        // An add/add, a promotion's or a ticket's, is external-only (decision 30).
+        assert!(
+            text.contains(
+                "note: If context sync-local answers external_resolution_required, repair it with Git in the context.\n"
+            ),
+            "{text}"
+        );
     }
-}
-
-/// A promotion's integration conflict is an add/add, external-only (decision
-/// 30): the note sends the repair outside, and no context line is printed.
-#[test]
-fn a_blocked_promotion_on_an_integration_conflict_offers_the_external_repair() {
-    let out = prepare(&blocked(
-        "document promote",
-        ResultCode::RecoveryRequired,
-        vec![LifecycleBlocker::IntegrationConflict],
-        vec![inspect()],
-    ));
-    assert_eq!(out.status, 3);
-    let text = stderr(&out);
-    assert!(!text.contains("manyhands-cli context"), "{text}");
-    assert_eq!(
-        next_lines(text),
-        [format!("next: repo.inspect root={ROOT}")],
-        "{text}"
-    );
-    assert!(text.contains("Blockers: integration_conflict\n"), "{text}");
-    assert!(
-        text.contains(
-            "note: this context can't merge into primary. Manyhands can't resolve this: it takes a repair outside it, with Git. Repair it in the context and commit the merge, then prepare again.\n"
-        ),
-        "{text}"
-    );
 }
 
 /// `sync-local` refuses a dirty or conflicted context, and a pending conflict or

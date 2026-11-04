@@ -787,16 +787,11 @@ fn a_blocked_prepare_offers_its_way_out() {
         let human = case.text(&["--prepare"]);
         assert_eq!(human.status, 3);
         let text = stderr(&human);
-        // A promotion's conflict is an add/add, repaired outside (decision 30).
-        assert_eq!(
-            text.contains("next: manyhands-cli context observe-local "),
-            verb.resource != "document",
-            "{text}"
-        );
         assert!(
-            text.contains("then prepare again.\n") || text.contains("Then prepare again.\n"),
+            text.contains("next: manyhands-cli context observe-local "),
             "{text}"
         );
+        assert!(text.contains("Then prepare again.\n"), "{text}");
         text_golden(
             &format!("{}_prepare_conflict_text", verb.golden),
             &human,
