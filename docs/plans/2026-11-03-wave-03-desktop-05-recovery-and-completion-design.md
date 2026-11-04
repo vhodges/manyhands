@@ -18,16 +18,45 @@ synchronization and repair, republish, and their evidence. Approval covers
 the mechanisms, rulings, named edits and task order. It does not authorize
 implementation, pushing beyond the ticket branch, merging or closing.
 
-Revision 4, after review rounds 1–3 (Review Record). Revision 4's edits had no independent review. The documents are drafted
-against C5's tip `f59aceb6`, which is not merged (Cycle decision 1). Facts
-marked **(C5)** are read there; all others at `e39bb004`. Task 0 re-checks
-each after C5 merges.
+Revision 5, after review rounds 1–3 (Review Record). Revisions 4 and 5 had
+no independent review. The documents were drafted against C5's tip
+`f59aceb6` (Cycle decision 1) and re-grounded on merged C5 (`2d912d10`,
+merged here as `cd2e922e`) on 2026-11-04 (Re-grounding, below). Facts
+marked **(C5)** hold on merged C5; all others at `e39bb004`, unchanged by
+C5.
+
+## Re-grounding On Merged C5 (2026-11-04)
+
+C5's commits after `f59aceb6` (`aa0934a3..323924af`) were compared with
+every (C5) fact. What changed for D5:
+
+- **Decision 35.** A published context with no tracking ref and no fetch
+  that saw it gone answers `history_unknown`, not `remote_context_deleted`
+  (`R/promotion/observe.rs` `remote_context_history`;
+  `RemoteSnapshot::context_deletion_observed`). The CLI's `way_out` now
+  routes `history_unknown`, like `primary_missing`, to `poll once` with its
+  own note (`UNKNOWN_NOTE`). L1 takes this rule (Fact 7, L1).
+- **Add/add note.** A blocked prepare with `integration_conflict` also
+  prints `EXTERNAL_REPAIR_NOTE` (decision 30): the repair's
+  `context sync-local` may answer `external_resolution_required`. L1 keeps
+  the route `RepairLocally`; the note stays the CLI's text, and the
+  desktop's Repair locally… already handles that answer (B4).
+- **Holder reads** (`records::operation_or_parent_holder`, decision 34) and
+  `LifecycleVerb::holder` taking a read session: internal, no boundary
+  change.
+- `set_made_ready_hook_for_testing` is now an associated function
+  (`RepositoryService::set_made_ready_hook_for_testing(hook)`); D5's tests
+  do not use it.
+- Line citations in `human_lifecycle.rs` moved by +6 to +17; Facts 7 and
+  20 and L1 cite the merged lines.
+
+No (C5) fact's meaning changed otherwise; U-1 to U-5 stay for Task 0.
 
 Conventions: "Fact n" refers to Baseline Facts; `D/` is `src/desktop/`; `R/`
 is `src/repository/`; "the handoff" is `docs/design/05-sheets-and-dialogs.md`;
 GRFC is the Git workflow and conflict recovery RFC.
 
-## Baseline Facts At `e39bb004` And C5 `f59aceb6`
+## Baseline Facts At `e39bb004` And Merged C5 (`cd2e922e`)
 
 **Library boundary (consumed).**
 
@@ -74,11 +103,13 @@ GRFC is the Git workflow and conflict recovery RFC.
    a new prepare (C5 contract 2). `cancel_request` reaches the lifecycle and
    its children.
 7. **(C5)** The way-out rules live in the CLI binary:
-   `src/bin/manyhands-cli/human_lifecycle.rs` `branch_deleted` (`:156`),
-   `merge_refused_route` (`:192`), `child_conflict_route` (`:218`),
-   `route_of` (`:259`), `way_out` (`:289-345`, which also routes
-   `primary_ahead_of_remote` and `primary_missing` to `repo sync` or
-   `poll once`, and `[context_missing]` to an item save), `held` (`:349`).
+   `src/bin/manyhands-cli/human_lifecycle.rs` `branch_deleted` (`:162`),
+   `merge_refused_route` (`:198`), `child_conflict_route` (`:224`),
+   `route_of` (`:265`), `way_out` (`:295-361`, which also routes
+   `primary_ahead_of_remote` to `poll once` then `repo sync`,
+   `primary_missing` and `history_unknown` (C5 decision 35) to `poll once`,
+   and `[context_missing]` to an item save), `held` (`:366`), `prepare`
+   (`:408`, which adds `EXTERNAL_REPAIR_NOTE` for `integration_conflict`).
    Its tests are bin unit tests, `src/bin/manyhands-cli/lifecycle_tests.rs`.
 8. **(C5)** `promotion_operations` and `closure_operations`
    (`R/read/status.rs:365,413`) list unfinished parents with
@@ -150,7 +181,7 @@ GRFC is the Git workflow and conflict recovery RFC.
     `offers_prepare_again` (`:139`), `STALE_CODES` (`:123`), `detail_fields`
     (`:611`, Republish arm `:700`). `ConfirmDialog::prepare` is private
     (`:349`). **(C5)** adds a `Lifecycle` arm showing Branch, Primary and
-    Remote.
+    Remote (`:706`).
 21. Services: `Services::prepare` (`D/services/reads.rs:177`), `read` and
     `read_job` (`:117,149`). Worker: `submit`, `submit_with_request_id`,
     `give_up`, `record_state`, `reconfirm`, `in_flight`
@@ -194,7 +225,7 @@ expectation stops for the owner.
 
 ## API Audit Refresh (Entry-Gate Item 3)
 
-| Audit row | D5 consumes | State at C5 `f59aceb6` |
+| Audit row | D5 consumes | State on merged C5 (`cd2e922e`) |
 | --- | --- | --- |
 | Promotion/close preflight and cleanup bindings | `DocumentPromote`, `TicketClose`, prepare, execute | Delivered by C5 (Facts 2–6). |
 | Conflict inspection read, remote | `show_conflict`, `ConflictResolve` | On main (Facts 10–11). |
@@ -205,8 +236,8 @@ expectation stops for the owner.
 | Lifecycle progress | `ProgressSink` | Missing: L3. |
 | Made-ready titles | ticket read | Existing read. |
 
-Drafted against an unmerged branch (Cycle decision 17); Task 0 re-checks
-every row after C5 merges.
+Drafted against an unmerged branch (Cycle decision 17) and re-checked on
+merged C5 on 2026-11-04: every row stands.
 
 ## Execution Order (Decision 8)
 
@@ -260,14 +291,18 @@ pub fn lifecycle_prepare_way_out(
 ```
 
 `kind` is a parameter because `LifecycleBlockedDto` holds only blockers,
-as the CLI's `prepare(kind, …)` does (`human_lifecycle.rs:391`).
+as the CLI's `prepare(kind, …)` does (`human_lifecycle.rs:408`).
 
 Every rule of Fact 7 is moved, keeping its order; the CLI renders the
 returned values. `RepairOutside` applies to **execute** results only (a
 document's `integration_conflict`, which the CLI's `route_of` leaves
-without a route, `:280`); the CLI renders nothing for it. A blocked
+without a route, `:289`); the CLI renders nothing for it. A blocked
 prepare's `integration_conflict` gives `RepairLocally` whatever the kind
-(`:329-343`); `kind` serves only `SaveItem`'s wording (`:323`). Proof: C5's `lifecycle_tests.rs`, `cli` and `cli_remote`
+(`:344-360`); `kind` serves only `SaveItem`'s wording (`:338-342`).
+`PollOnce` covers `primary_missing` and `history_unknown` (C5 decision 35);
+the CLI keeps choosing its note (`POLL_NOTE` or `UNKNOWN_NOTE`) and the
+add/add note (`EXTERNAL_REPAIR_NOTE`) from the blockers, so notes stay
+CLI text and the variants carry no wording. Proof: C5's `lifecycle_tests.rs`, `cli` and `cli_remote`
 lifecycle tests pass unchanged; `way_out_tests.rs` (lib unit tests, fast
 tier) covers each variant.
 
@@ -420,7 +455,7 @@ repository details, or guidance text for `PollOnce`, `SaveItem` and
 `RepairOutside`.
 
 **Deleted branch** (`CancelThenSendAgain`, the CLI's sequence,
-`human_lifecycle.rs:156-190`): one button, "Stop and republish…", which
+`human_lifecycle.rs:162-196`): one button, "Stop and republish…", which
 (1) cancels and resends the lifecycle request through `Worker::give_up`
 (`worker.rs:384`); it goes on only on `GaveUp::Resent` with a `cancelled`
 answer, which releases the child's reservation and shows "Stopped; ready
@@ -676,7 +711,8 @@ Applied in the approval commit:
 4. API audit: the rows above.
 5. Ticket `deps` gains C5 `01M4CC0VMXTNXNH78C11DYXS8H` (by `ticket save`).
 6. Wave entry-gate item 3: D5's audit drafted against unmerged C5 and
-   re-checked in Task 0 (decision 17), as C4 and C5 recorded theirs.
+   re-checked on merged C5 on 2026-11-04 (decision 17), as C4 and C5
+   recorded theirs.
 
 ## Rulings
 

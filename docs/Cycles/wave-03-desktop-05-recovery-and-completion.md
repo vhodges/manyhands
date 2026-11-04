@@ -15,11 +15,14 @@ Ticket `01M4CC0VN2K8DBHNMZ46NTX5JJ`. Design:
 Plan:
 [2026-11-03-wave-03-desktop-05-recovery-and-completion-implementation.md](../plans/2026-11-03-wave-03-desktop-05-recovery-and-completion-implementation.md).
 
-Status: **draft** (revision 4; its edits after review round 3 had no independent review), planned at `e39bb004` (origin/main `c2a34494` merged into
-the ticket branch) and against C5's branch tip `f59aceb6`, which is not yet
-merged (decision 1). Nothing has been built or run. Approval and
-implementation wait for C5's merge; Task 0 then merges main and re-checks
-every cited name.
+Status: **draft** (revision 5; its edits after review round 3 had no independent review), planned at `e39bb004` (origin/main `c2a34494` merged into
+the ticket branch) and against C5's branch tip `f59aceb6` (decision 1).
+**Re-grounded 2026-11-04:** C5 merged as `2d912d10` on the local main, which
+this branch merged as `cd2e922e` (origin had not yet updated; the owner
+directed proceeding on local main). C5's changes after `f59aceb6` touch D5
+only through decision 35 and the CLI's way-out text (design, Re-grounding).
+Nothing has been built or run. Task 0 runs the baseline gates and settles
+U-1 to U-5.
 
 ## Purpose And Authority
 
@@ -64,8 +67,8 @@ Authorities, in order:
 | Wave 02 Cycles 06, 09 and 10 on main | Closed and merged before the Wave 03 replan baseline. |
 | Closure-recovery gate `01M57SKVF6TQ3QM6AXJ35JGGSY` | Closed and merged (`a372edb`). |
 | D1–D4 merged (track rule 1) | All closed and merged; D4 at `c2a34494`. |
-| C5 merged (track rule 2, C5 decision 1) | **Not yet.** C5 is through Task 14b; Task 15 remains. Approval and Task 0 wait for it. |
-| API audit refreshed (entry-gate item 3) | Drafted at planning against C5's tip (design, API Audit Refresh); re-checked in Task 0. |
+| C5 merged (track rule 2, C5 decision 1) | **Merged** as `2d912d10` on local main (2026-11-04), ticket closed at `323924af`; merged into this branch as `cd2e922e`. |
+| API audit refreshed (entry-gate item 3) | Drafted against C5's tip, re-checked against merged C5 on 2026-11-04 (design, API Audit Refresh and Re-grounding). |
 | Required checks at baseline (entry-gate item 7) | Not run during planning. Task 0 runs them. |
 | Tester assignment (entry-gate item 6) | Linux (Wayland): the product owner (decision 7). Windows and macOS: G1. |
 
@@ -216,6 +219,7 @@ Answered by the owner during planning:
 1. **Draft now, re-ground later.** The documents are drafted against C5's
    branch tip `f59aceb6`. After C5 merges, main is merged again and the API
    audit re-checked; approval and implementation wait for that merge.
+   Done 2026-11-04 on local main (`2d912d10`, merged as `cd2e922e`).
 2. **D5 carries a library part,** as C4 and C5 did: an owner-approved
    exception to track rules 5 and 6, limited to the files the design's
    Part 0 lists and merged with D5. It covers the way-out routing, resume
@@ -299,7 +303,8 @@ approval:
     area's entry for a stopped share, post, synchronization or lifecycle,
     and its pending rows after a restart.
 17. **Entry-gate item 3 departure.** The API audit is drafted against
-    unmerged C5 and re-checked in Task 0, as C4 and C5 recorded theirs.
+    unmerged C5 and re-checked once C5 merged (2026-11-04), as C4 and C5
+    recorded theirs.
 
 ## Open Questions
 
@@ -314,6 +319,7 @@ reading the source; an answer that differs stops for the owner.
 | Planning research | Way-out routing lives only in the CLI binary | Owner decision | Decisions 2, 3. | C5 `human_lifecycle.rs:192,218,259,289`. |
 | Planning research | Unfinished lifecycle parents list no resume | Owner decision | Decisions 2, 10. | C5 `read/status.rs:299,411`. |
 | Planning research | Lifecycle progress stays at `connecting` | Owner decision | Decisions 2, 11. | C5 `command.rs` `stage()`; `progress.rs:83-94`. |
+| Re-grounding on merged C5 (2026-11-04) | C5's decision 35 and way-out text changed after `f59aceb6` | Settled | L1 takes `history_unknown` → poll and the add/add note; facts and line citations refreshed (design, Re-grounding). | `f59aceb6..2d912d10^2`; `human_lifecycle.rs:295-361`. |
 | Planning research | Handoff's per-part sheet against per-path binding | Owner decision | Decision 4. | `05-sheets-and-dialogs.md:113-117`; `bind/conflict.rs:99`. |
 | Planning research | `item republish` handed to D5 by D4 but not named in the Wave | Owner decision | Decision 5. | D4 Cycle 111–112. |
 | Planning research | Handoff shows made-ready at confirm; preview has none | Owner decision | Decision 6. | `05-sheets-and-dialogs.md:87`; C5 `dto.rs:310`. |

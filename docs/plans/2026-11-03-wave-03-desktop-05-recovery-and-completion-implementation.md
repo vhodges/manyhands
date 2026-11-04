@@ -10,7 +10,7 @@ id: "01M6HPQ3PV69Z8FA294YW507N3"
 
 # Desktop Conflict Recovery, Promotion And Closure Implementation Plan
 
-> **For agentic workers:** Draft (revision 4), 2026-11-03. Not approved; implementation
+> **For agentic workers:** Draft (revision 5, re-grounded on merged C5 2026-11-04), 2026-11-03. Not approved; implementation
 > is not authorized. Once approved, use `implementing-a-cycle` task by
 > task, re-read the design, repeat the ticket preflight, and record every
 > checkpoint on ticket `01M4CC0VN2K8DBHNMZ46NTX5JJ`. Steps use checkbox
@@ -172,12 +172,16 @@ Order: 0 → 1 → 2 → 3 → 4 → 5 → 6a → 6b → 7 → … → 16, one a
 
 ## Task 0: Baseline, References And Ledger
 
-- [ ] **Step 1: Merge and baseline (entry-gate item 7).**
+- [ ] **Step 1: Merge and baseline (entry-gate item 7).** C5's merge
+  (`2d912d10`, local main) is already merged here as `cd2e922e`, and the
+  (C5) facts were re-checked on 2026-11-04 (design, Re-grounding). Origin
+  had not updated when this was written: merge whichever of `main` and
+  `origin/main` is newer, never rebase, and re-check facts only for
+  commits after `2d912d10`.
 ```sh
 git fetch origin
-git merge origin/main          # never rebase; C5 must be in it
-git merge-base --is-ancestor origin/main HEAD
-git merge-base --is-ancestor f59aceb6 HEAD || echo "C5 tip moved: re-check every (C5) fact"
+git merge main                 # or origin/main once it holds 2d912d10
+git merge-base --is-ancestor 2d912d10 HEAD
 devenv shell -- cargo check --all-features --locked
 devenv shell -- cargo fmt --check
 devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
@@ -216,6 +220,7 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   `an_execute_result_for_a_documents_integration_conflict_is_repair_outside`;
   `a_blocked_prepares_integration_conflict_is_repair_locally_for_either_kind`;
   `prepare_routing_takes_the_items_kind`;
+  `an_unknown_remote_context_polls_once` (C5 decision 35);
   `mixed_blockers_keep_the_cli_order`.
 - [ ] **Code:** `mutation/way_out.rs`, `mutation/mod.rs` export;
   `src/bin/manyhands-cli/human_lifecycle.rs` renders the returned values
