@@ -558,10 +558,14 @@ git merge-tree --write-tree HEAD origin/main
 - [ ] Whole-branch SPEC and QUALITY reviews; fill the Acceptance Status
   column; the owner runs the checklist.
 - [ ] Ticket comment: review-ready; `ticket save`.
-- [ ] After code-review approval, close the ticket by a canonical
-  ticket-file edit (AGENTS.md; `ticket close` is not used on D5's own
-  ticket) in the final push before merge. Native CI runs after merge, on
-  main, only when the owner dispatches it.
+- [ ] After code-review approval, and only with the owner's go-ahead for
+  closure, the ticket closes with `manyhands-cli ticket close --repo
+  /home/vhodges/work/src/manyhands --id 01M4CC0VN2K8DBHNMZ46NTX5JJ` from the
+  registered main checkout. Under AGENTS.md as amended on main on
+  2026-11-04, the close performs the merge, publishes main and removes the
+  branch and worktree. With a passphrase-protected key, the owner runs it
+  at their terminal. Native CI runs after merge, on main, only when the
+  owner dispatches it.
 
 ---
 

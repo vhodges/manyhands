@@ -99,6 +99,14 @@ The implementer's checkpoint, reviewed by the orchestrator against the design's 
 - **Noted risk.** `integrating` is sent while the repository lease is held, as the progress sink's contract already allows. The desktop sink is a non-blocking channel.
 - **Run by name.** `cli_remote` `c5_journey_close_with_retryable_failure`, because the `lifecycle` filter misses it.
 
+## Main Merges
+
+- **2026-11-04, at Task 4: merged `origin/main` `c69789d9` as `074ebde0`.**
+  - No conflicts.
+  - Only skills, docs, `.gitignore` and `AGENTS.md` changed.
+  - Under `AGENTS.md`, a ticket now closes with `manyhands-cli ticket close`, which performs the merge.
+  - Plan Task 16's closure step was updated to match.
+
 ## Tasks
 
 | Task | State | Base | Commits | Review | Verification |
