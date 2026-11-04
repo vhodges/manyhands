@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D5 Desktop Conflict Recovery, Promotion And Closure Design"
 date: 2026-11-03
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document

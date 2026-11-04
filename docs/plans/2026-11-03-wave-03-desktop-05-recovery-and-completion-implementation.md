@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D5 Desktop Conflict Recovery, Promotion And Closure Implementation Plan"
 date: 2026-11-03
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -10,8 +10,8 @@ id: "01M6HPQ3PV69Z8FA294YW507N3"
 
 # Desktop Conflict Recovery, Promotion And Closure Implementation Plan
 
-> **For agentic workers:** Draft (revision 5, re-grounded on merged C5 2026-11-04), 2026-11-03. Not approved; implementation
-> is not authorized. Once approved, use `implementing-a-cycle` task by
+> **For agentic workers:** Revision 5 (re-grounded on merged C5), 2026-11-03. Approved 2026-11-04;
+> implementation authorized, subagent-driven and serial. Use `implementing-a-cycle` task by
 > task, re-read the design, repeat the ticket preflight, and record every
 > checkpoint on ticket `01M4CC0VN2K8DBHNMZ46NTX5JJ`. Steps use checkbox
 > (`- [ ]`) syntax.

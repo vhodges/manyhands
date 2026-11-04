@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 D5: Desktop Conflict Recovery, Promotion And Closure"
 date: 2026-11-03
-status: "draft"
+status: "approved"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -15,7 +15,15 @@ Ticket `01M4CC0VN2K8DBHNMZ46NTX5JJ`. Design:
 Plan:
 [2026-11-03-wave-03-desktop-05-recovery-and-completion-implementation.md](../plans/2026-11-03-wave-03-desktop-05-recovery-and-completion-implementation.md).
 
-Status: **draft** (revision 5; its edits after review round 3 had no independent review), planned at `e39bb004` (origin/main `c2a34494` merged into
+Status: **approved, 2026-11-04.** The owner approved the documents at
+`0785a807` ("The docs and execution are approved, use subagent driven
+development"): decisions 13–17 at their written proposals, rulings R-1 to
+R-12, named edits E-1 to E-7 and Document Amendments 1–6, with
+implementation authorized, subagent-driven and serial (decision 8). Pushes
+beyond the ticket branch, a PR, the merge, closure, native CI and cleanup
+stay separately gated.
+
+Planning record: revision 5; its edits after review round 3 had no independent review), planned at `e39bb004` (origin/main `c2a34494` merged into
 the ticket branch) and against C5's branch tip `f59aceb6` (decision 1).
 **Re-grounded 2026-11-04:** C5 merged as `2d912d10` on the local main, which
 this branch merged as `cd2e922e` (origin had not yet updated; the owner
@@ -285,8 +293,8 @@ Answered by the owner after review round 3:
     branch changed, the tabs unlock and the item shows "Merged, but not
     tidied up: {reason}" with Open folder and Check again (K-13).
 
-Proposed by the planner, for the owner to confirm with the documents'
-approval:
+Proposed by the planner and confirmed with the documents' approval
+(2026-11-04):
 
 13. **Save first, inside the dialog.** Opening Close ticket… or Approve and
     merge… on an item with unsaved edits saves them as the dialog's first
@@ -308,7 +316,7 @@ approval:
 
 ## Open Questions
 
-None beyond decisions 13–17. U-1 to U-5 (design) are settled in Task 0 by
+None: decisions 13–17 were confirmed with approval. U-1 to U-5 (design) are settled in Task 0 by
 reading the source; an answer that differs stops for the owner.
 
 ## Review Record

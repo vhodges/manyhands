@@ -145,6 +145,10 @@ work can proceed while native access is arranged:
    Amended 2026-11-03 by C5 (owner question 4): the owner accepted the same
    departure for C5. Its design's Baseline Facts 1–41 served as the planning
    audit, and Task 0 refreshed the audit's C5 rows.
+   Amended 2026-11-04 by D5 (decision 17): the owner accepted a departure
+   for D5. Its audit rows were drafted against C5's unmerged branch and
+   re-checked on merged C5 on 2026-11-04 (`2d912d10`, merged into D5's
+   branch as `cd2e922e`), before D5's documents were approved.
 4. The editor investigation evaluates a pinned `zorite-editor` first and a
    pinned Velotype extraction if needed. Record dependency compatibility with
    the one GPUI Kit graph, host-controlled persistence/resources, rich/source
@@ -377,6 +381,12 @@ codes, use the earlier numbers.
    `remote select` index fixes of `01M5MK57JKCSQFXBNZ8DBE548K` and
    `01M669FJR27FRHCNPWAMD6VH4V` (decisions 2 and 10). They merge with C5 as
    one Cycle.
+   Amended 2026-11-04 by D5 (decision 2): the owner approved D5 as a third
+   exception, to this rule and rule 6. D5's branch carries the library part
+   its design's Part 0 lists, limited to those files: the lifecycle way-out
+   routing, which the CLI calls in place of its own copy, resume for
+   unfinished lifecycle parents and four lifecycle progress stages. They
+   merge with D5 as one Cycle.
 6. **Lifecycle bindings.** F2 defines confirmation and replay generically over
    effect previews and proves them with the operations available at its
    baseline. Promotion and closure do not exist until Wave 02 Cycles 09/10.
@@ -384,7 +394,9 @@ codes, use the earlier numbers.
    and its real-fixture replay evidence as a shared-library change under rule
    5; the other consumes it. Amended 2026-11-03 by C5 (decision 1): C5 was
    planned first, and lands them on its own branch under rule 5's exception;
-   D5 consumes them after C5 merges.
+   D5 consumes them after C5 merges. Amended 2026-11-04 by D5 (decision 2):
+   D5's library part extends the lifecycle bindings it consumes, under
+   rule 5's exception.
 7. **Mutation evidence.** Every mutating Cycle must include a named failure
    or interruption case and replay evidence in its detailed plan.
 
@@ -1038,6 +1050,34 @@ confirm, ten-minute consent, replay, safe-point cancellation, same-request
 continuation, resume routes and the made-ready report) and exposes the
 local-sync boundary through the CLI. D5 consumes them as merged with C5, and
 waits for that merge (track rule 2).
+
+**Amended 2026-11-04 by D5** (the
+[Cycle](../Cycles/wave-03-desktop-05-recovery-and-completion.md), approved
+2026-11-04 after C5 merged). The product-owner decisions numbered there
+change this section as follows:
+
+- **The library part is in D5** (decision 2): an exception to track rules
+  5 and 6, limited to the files the design's Part 0 lists and merged with
+  D5. It adds the shared lifecycle way-out routing, resume for lifecycle
+  parents and lifecycle progress stages.
+- **`item republish` is in scope** (decision 5), replacing D4's "arrives
+  in a later release".
+- **Serial execution** (decision 8): no parallel lanes and no `AGENTS.md`
+  exception.
+- **Remote evidence** (decision 9) is canned answers in desktop tests, the
+  library and CLI SSH targets, and the native checklist against a real SSH
+  remote. Local conflicts and local-only runs use real repositories.
+- **Resume, then resend** (decision 10). Every unfinished, non-refused
+  promotion or closure parent lists `next_action: resume`; when Resume
+  answers `original_request_required`, the desktop sends that request
+  again.
+- **Four new progress stages** (decision 11): `recording`, `integrating`,
+  `publishing` and `cleaning_up`, in the progress-event schema and the
+  CLI's progress output.
+- **Read-only until tidied** (decision 12, refined by decisions 18, 20 and
+  21). While a close or merge runs, the item's tabs are read-only with
+  "Closing…" or "Merging…".
+- **The audit timing** (decision 17): see entry-gate item 3.
 
 **Purpose:** Complete deliberate desktop collaboration lifecycles.
 
