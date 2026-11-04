@@ -37,6 +37,8 @@ pub enum PollDisposition {
     MaterializationIncomplete,
     Malformed,
     RemotelyDeleted,
+    Closed,
+    Promoted,
     HistoryUnknown,
     NotReached,
 }
@@ -66,6 +68,12 @@ impl PollDisposition {
             }
             Self::Malformed => "Repair the remote context's branch name.",
             Self::RemotelyDeleted => "The remote context is absent; local state was preserved.",
+            Self::Closed => {
+                "Local primary holds the ticket's closure; use context retire to check and remove the old local context. Local safety checks still apply."
+            }
+            Self::Promoted => {
+                "Local primary preserves the document context's work; use context retire to check and remove the old local context. Local safety checks still apply."
+            }
             Self::HistoryUnknown => {
                 "Publication history is unknown; inspect remote state before proceeding."
             }
@@ -211,7 +219,11 @@ pub(super) fn classify_local_target(
     let incoming = match tracking {
         PollTrackingState::Present(oid) => oid,
         PollTrackingState::RemotelyDeleted => {
-            return Ok(unchanged(PollDisposition::RemotelyDeleted, None));
+            return Ok(unchanged(
+                completed_deleted_context(root, primary, target)
+                    .unwrap_or(PollDisposition::RemotelyDeleted),
+                None,
+            ));
         }
         PollTrackingState::HistoryUnknown => {
             return Ok(unchanged(PollDisposition::HistoryUnknown, None));
@@ -242,6 +254,36 @@ pub(super) fn classify_local_target(
         PollRelation::LocalAhead => unchanged(PollDisposition::LocalAhead, Some(local)),
         PollRelation::Diverged => unchanged(PollDisposition::Diverged, Some(local)),
     })
+}
+
+fn completed_deleted_context(
+    root: &Path,
+    primary: &str,
+    target: &SynchronizationTarget,
+) -> Option<PollDisposition> {
+    use crate::repository::context_retirement::proof;
+    let SynchronizationTarget::Context { kind, item_id } = target else {
+        return None;
+    };
+    let repository = git2::Repository::open(root).ok()?;
+    let primary = direct_oid(&repository, &format!("refs/heads/{primary}"))?;
+    let local = direct_oid(
+        &repository,
+        &format!(
+            "refs/heads/manyhands/{}/{item_id}",
+            crate::repository::authoring_kind_segment(kind)
+        ),
+    )?;
+    match kind {
+        AuthoringKind::Ticket => {
+            proof::completion(&repository, primary, *kind, item_id).ok()?;
+            Some(PollDisposition::Closed)
+        }
+        AuthoringKind::Document => {
+            proof::preservation(&repository, local, primary, *kind, item_id).ok()?;
+            Some(PollDisposition::Promoted)
+        }
+    }
 }
 impl RepositoryService {
     #[cfg(test)]

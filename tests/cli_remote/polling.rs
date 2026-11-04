@@ -15,6 +15,18 @@ use ssh_remote::{FixtureError, fixed};
 
 pub const CASES: &[ssh_harness::Case] = &[
     (
+        "c5_polling_closed_deleted_context_preserved",
+        c5_polling_closed_deleted_context_preserved,
+    ),
+    (
+        "c5_polling_closed_deleted_dirty_context_preserved",
+        c5_polling_closed_deleted_dirty_context_preserved,
+    ),
+    (
+        "c5_polling_tracking_closure_without_local_primary_advance",
+        c5_polling_tracking_closure_without_local_primary_advance,
+    ),
+    (
         "c5_polling_fast_forward_and_materialize_once",
         c5_polling_fast_forward_and_materialize_once,
     ),
@@ -510,6 +522,73 @@ fn c5_polling_deleted_context_preserved() -> Result<(), FixtureError> {
     assert_eq!(a.tip(CONTEXT)?, tip);
     assert!(a.context().is_dir());
     assert_eq!(p.served(CONTEXT)?, None, "no republish");
+    Ok(())
+}
+
+fn c5_polling_closed_deleted_context_preserved() -> Result<(), FixtureError> {
+    completed_deleted(false, false)
+}
+fn c5_polling_closed_deleted_dirty_context_preserved() -> Result<(), FixtureError> {
+    completed_deleted(true, false)
+}
+fn c5_polling_tracking_closure_without_local_primary_advance() -> Result<(), FixtureError> {
+    completed_deleted(false, true)
+}
+
+fn completed_deleted(dirty_context: bool, dirty_primary: bool) -> Result<(), FixtureError> {
+    let p = CliPair::new()?;
+    let (a, b) = (&p.a, &p.b);
+    published(a, R1, R2, "Saved in clone A.\n");
+    assert_eq!(disposition(&polled(b, R1), CONTEXT), "materialized");
+    let old = b.tip(CONTEXT)?;
+    let primary = b.tip(PRIMARY)?;
+    close_in_a(&p, R3)?;
+    let context_file = b
+        .context()
+        .join(format!(".manyhands/tickets/{ITEM}/ticket.md"));
+    let original = fixed(std::fs::read(&context_file))?;
+    if dirty_context {
+        fixed(std::fs::write(&context_file, b"private dirty context"))?;
+    }
+    let primary_file = b.root.join(format!(".manyhands/tickets/{ITEM}/ticket.md"));
+    if dirty_primary {
+        fixed(std::fs::write(&primary_file, b"private dirty primary"))?;
+    }
+    let pushes = remote_world::accepted(&p.server);
+    let value = polled(b, R2);
+    assert_eq!(
+        disposition(&value, CONTEXT),
+        if dirty_primary {
+            "remotely_deleted"
+        } else {
+            "closed"
+        }
+    );
+    if dirty_primary {
+        assert_eq!(disposition(&value, PRIMARY), "dirty");
+        assert_eq!(b.tip(PRIMARY)?, primary);
+        holds_the_closure(b, "refs/remotes/origin/main")?;
+        assert_eq!(
+            fixed(std::fs::read(primary_file))?,
+            b"private dirty primary"
+        );
+    } else {
+        holds_the_closure(b, PRIMARY)?;
+    }
+    assert_eq!(b.tip(CONTEXT)?, old);
+    assert!(b.context().is_dir());
+    assert_eq!(
+        fixed(std::fs::read(&context_file))?,
+        if dirty_context {
+            b"private dirty context".to_vec()
+        } else {
+            original
+        }
+    );
+    assert_eq!(p.served(CONTEXT)?, None);
+    assert_eq!(remote_world::accepted(&p.server), pushes);
+    let replay = polled(b, R2);
+    assert_eq!(replay["data"], value["data"]);
     Ok(())
 }
 

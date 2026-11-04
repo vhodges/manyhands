@@ -1614,6 +1614,8 @@ contract_enum!(
         MaterializationIncomplete => "materialization_incomplete",
         Malformed => "malformed",
         RemotelyDeleted => "remotely_deleted",
+        Closed => "closed",
+        Promoted => "promoted",
         HistoryUnknown => "history_unknown",
         NotReached => "not_reached",
     }
@@ -1638,6 +1640,8 @@ impl PollTargetDisposition {
             Self::MaterializationIncomplete => Domain::MaterializationIncomplete,
             Self::Malformed => Domain::Malformed,
             Self::RemotelyDeleted => Domain::RemotelyDeleted,
+            Self::Closed => Domain::Closed,
+            Self::Promoted => Domain::Promoted,
             Self::HistoryUnknown => Domain::HistoryUnknown,
             Self::NotReached => Domain::NotReached,
         }
@@ -1925,6 +1929,38 @@ impl MutationDataDto {
             | Command::RepoRemove
             | Command::FolderCreate
             | Command::ContextRelease => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod poll_retirement_recognition_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_poll_stored_reports_keep_their_untagged_shape_and_all_old_values() {
+        let legacy = [
+            "current",
+            "fast_forwarded",
+            "local_ahead",
+            "diverged",
+            "dirty",
+            "conflicted",
+            "inaccessible",
+            "materialized",
+            "nonconforming",
+            "blocked_by_local_state",
+            "materialization_incomplete",
+            "malformed",
+            "remotely_deleted",
+            "history_unknown",
+            "not_reached",
+        ];
+        for disposition in legacy.into_iter().chain(["closed", "promoted"]) {
+            let stored = serde_json::json!({"operation_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","completion":"completed","completed_at":"2026-11-04T00:00:00Z","next_eligible_at":null,"targets":[{"target":null,"kind":null,"item_id":null,"disposition":disposition,"before_oid":null,"after_oid":null}]});
+            let decoded = PollMutationDto::from_stored(&stored).expect("old and new values decode");
+            assert_eq!(serde_json::to_value(decoded).unwrap(), stored);
+            assert_eq!(stored.as_object().unwrap().len(), 5);
         }
     }
 }

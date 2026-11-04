@@ -23,7 +23,8 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
   those already-approved items is requested.
 - Method: sequential bounded fresh implementers, controller's independent spec
   review, then quality review per task. Tasks 2/4 retain adversarial checkpoints.
-  This implementer owns **Task 0 only**; no other agents were spawned.
+  Task 0's implementer owned **Task 0 only**. A fresh bounded implementer now
+  owns Task 1; neither implementer spawned other agents.
 - Task 0 is source reconnaissance, three baseline runs, factual planning notes,
   this ledger and a canonical ticket checkpoint. No Rust, test, schema or Cargo
   edits; no Task 1 work. All new interfaces below remain **planned**.
@@ -359,7 +360,8 @@ are not authorized; numeric exits must come from existing results registry.
   `docs: start completed-context retirement execution`, based on `74186d51`.
   Independent spec and quality reviews passed without findings on
   `74186d51..6a8b4259`; owner H1–H3 resolution is now recorded, no open holds.
-- [ ] **1 — Shared proof, recognition, disposition upgrade.** Not started.
+- [ ] **1 — Shared proof, recognition, disposition upgrade.** Implemented;
+  targeted verification green; controller spec/quality reviews pending.
 - [ ] **2 — Durable single-context retirement.** Not started; adversarial gate.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
@@ -369,7 +371,108 @@ are not authorized; numeric exits must come from existing results registry.
 - [ ] **8 — Final local gates/independent reviews/owner handoff.** Not started;
   merge/close/native dispatch remain separately authorized.
 
-Immediate next step: dispatch Task 1's fresh implementer with the approved
-amendments, followed by independent spec then quality review. Preserve every
-other assertion and existing lifecycle cleanup behavior. No reapproval of the
-documents, Q1/Q2, E-1–E-10, implementation or execution method is needed.
+Immediate next step: Task 1's feature-commit handoff, then controller independent
+spec review followed by quality review.
+Do not start Task 2 before that handoff. Preserve every other assertion and
+existing lifecycle cleanup behavior. No reapproval of the documents, Q1/Q2,
+E-1–E-10, implementation or execution method is needed.
+
+## Task 1 — Shared Proof, Recognition And Disposition Upgrade
+
+### Scope, Base And Internal Choices
+
+- Entry HEAD verified clean at
+  `834415b95825f84d15ce00a5586316abcfe1a6f7`, on the exact registered ticket
+  branch/worktree. `AGENTS.md`, approved Cycle/design and this ledger reread;
+  controller's fresh fetch/no-op main merge accepted without redundant network.
+- Implementation range starts at that base; the feature commit's subject is
+  `feat: recognize completed remotely deleted contexts`. No push or other
+  worktree edit; no Task 2 code, retirement cleanup, new mutation/CLI verb, batch,
+  recovery step, dependency, Cargo target or native CI.
+- `context_retirement/{mod,proof,tests}.rs` is headless and tree-only. Positive
+  primary-item/completion evidence is independent of preservation: a valid
+  closed ticket is recognizable despite dirty/unmatched local state. Unrelated
+  unreadable blob content cannot negate that positive closure; preservation
+  still refuses missing objects. Documents require presence **and** preservation.
+- Preservation uses committed local primary, not tracking-primary. It refuses
+  shallow/missing/unrelated/multiple-base history and compares the complete raw
+  base-to-local leaf-entry delta (including empty trees). Renames are add/delete;
+  no similarity, pathspec, filesystem scanner or effects. Untouched inherited
+  paths may differ on primary. Iterative tree traversal avoids call-stack growth.
+- The sole ticket exception substitutes normalized canonical content for blob
+  OID only, after identical regular modes; local must be open and primary validly
+  closed. Only closure fields are cleared; all other fields, unknown data, body,
+  comments and code remain significant. Both executable-bit mismatch directions
+  refuse; equal executable modes are accepted.
+- SQL recognizes the exact prior 15-value table or new 17-value table, paired
+  exact poll-time columns and immutable-owner trigger. Upgrade copies all rows
+  inside the migration transaction and recreates the exact trigger; it does not
+  manufacture an empty replacement report. Literal-aware schema normalization
+  preserves CHECK/trigger string case, rather than accepting a substituted enum.
+  The small SQL-object extraction helper now borrows its input instead of
+  requiring a static string; other schema validators retain their old behavior.
+- Existing pre-envelope fallback/migration and latest-only ordinary replay are
+  unchanged. Ordinary poll keeps five untagged fields, old literals, digest and
+  decode behavior. SQL/DTO/schema mappings gain only `closed` and `promoted`.
+- E-5/H2 changes exactly the two named collaborator disposition assertions;
+  all other assertions and lifecycle code remain intact. No golden changed:
+  still-advertised closed contexts stay `current`, open deletion stays
+  `remotely_deleted`. E-1/E-2 inventories already derive their enum list from
+  registrations/schema; their targeted checks need no fitted old expectations.
+
+### Test-First And Investigation Evidence
+
+All Cargo commands below ran through Devenv. Logs are local review artifacts
+under `/tmp/opencode/task1-*.log`, not canonical content or real-context data.
+
+| Command / log | Observed evidence |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --lib retirement_proof`; `task1-proof-red.log` | Behavioral RED: **0 passed / 4 failed**, compiling successfully. Missing proof returned `ContentMismatch` instead of ancestor/folded success or typed missing-object refusal. Transient refusal scaffold was replaced and is consumed by production polling; no scaffold-only commit |
+| `... --lib retirement_`; `task1-recognition-red.log` | **26 passed / 3 failed**: new poll returned old `RemotelyDeleted` instead of `Closed`; exact-old SQL stayed old instead of upgrading; primary executable-mode fixture exposed an unchanged-ticket test setup. Broad substring also ran existing retirement-named tests; this was not a whole suite |
+| Fixture investigation | The mode fixture inherited an unchanged ticket from base, so it did not exercise the semantic exception. Changed the **base fixture body**, keeping the expected refusals, so both modes now test an actually changed ticket. Document-positive fixture also explicitly uses distinct sibling trees, removing incidental same-second commit identity dependence |
+| `... --lib retirement_disposition_old_corrupt`; `task1-envelope-red.log` | **0 passed / 1 failed**: column-name-only envelope accepted a substituted `TEXT` completion column. Exact definition validation added |
+| `... --lib retirement_proof_completion_is_independent`; `task1-completion-red.log` | **0 passed / 1 failed**: unrelated unreadable primary blob incorrectly suppressed valid closure. Completion now reads only canonical blobs, while preservation validates object availability |
+| `... --lib retirement_proof_empty_tree`; `task1-empty-tree-red.log` | **0 passed / 1 failed**: leaf flattening omitted an unmatched empty Git tree. Empty trees are now compared as entries, without weakening the full-delta rule |
+| `... --lib retirement_disposition_old_corrupt`; `task1-literal-envelope-red.log` | **0 passed / 1 failed**: old normalizer folded quoted enum literals and accepted `REMOTELY_DELETED`. Disposition-specific literal-aware comparison now refuses it |
+| Corruption fixture investigation; `task1-envelope-investigation.log` | A direct migration test accidentally carried its writer's `ignore_check_constraints=ON` into the migration connection. Reset that connection-local fixture bypass before migrating, as real startup does; corrupt stored data remains and rollback assertions are retained |
+| Initial required-command attempt; `task1-{remote,read-contract,cli-polling,closure,promotion}.log` | Shell's explicit 120 s deadline expired during build-lock waits or partial test execution. These are **not** green results. Reruns have no shell deadline |
+| Broad remote retry; `task1-remote-retry.log` | **420 passed / 6 failed**: one corruption-fixture failure above plus five process-death spawn `ENOENT`s while another TDD compile replaced the running unit executable. Rust source was then frozen; rerun required, no harness assertion or test was weakened |
+
+### Final Targeted Verification
+
+| Command | Result / log |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --lib retirement_proof` | **6 passed**, 0 failed; latest `task1-proof-final-green.log`. Table-driven predicates/deltas plus independent completion and empty-tree rows; temporary repositories only |
+| `devenv shell -- cargo test --all-features --locked --lib retirement_disposition` | **2 passed**, 0 failed; `task1-schema-verified.log`. All 15 old disposition rows/OIDs retained, owner trigger/times/idempotence retained, both new values readable; corrupt/partial envelope rollback matrix |
+| `devenv shell -- cargo test --all-features --locked --lib ordinary_poll_stored_reports_keep` | **1 passed**, 0 failed; latest `task1-dto-final.log`. Round-trip all 15 old plus 2 new values with identical five-field untagged JSON; test module placed at the file tail |
+| `devenv shell -- cargo test --all-features --locked --lib retirement_recognition` | **3 passed**, 0 failed; `task1-recognition-final.log`. Strengthened 9-row classification matrix, guidance and the matching-named stored DTO module |
+| `devenv shell -- cargo test --all-features --locked --lib repository::remote::` | **427 passed**, 0 failed; latest `task1-remote-final.log`, 308.55 s. Includes the strengthened unmatched-content row and all existing process-death cases; no spawn failures |
+| `devenv shell -- cargo test --all-features --locked --test read_contract` | **72 passed**, 0 failed; `task1-read-contract-verified.log` |
+| `devenv shell -- cargo test --all-features --locked --test cli_remote c5_polling` | **23 SSH cases passed**; `task1-cli-polling-verified.log`. Three new CASES registered in the existing runner before execution: closed+deleted, dirty closed+deleted, and tracking closure with dirty/nonadvanced local primary |
+| `devenv shell -- cargo test --all-features --locked --test ticket_closure contained_closed_collaborator_cleanup_only` | **1 SSH case passed**; `task1-closure-verified.log` |
+| `devenv shell -- cargo test --all-features --locked --test document_promotion happy_comment_history_and_collaborator_poll` | **1 SSH case passed**; `task1-promotion-verified.log` |
+| `devenv shell -- cargo fmt --check` | Exit 0; `task1-fmt-final.log` (formatting also through Devenv) |
+| `git diff --check` and `git diff --cached --check` | Clean at final self-review; repeat after staging final evidence before commit |
+
+All listed executed filters have nonzero counts; no whole suite or native CI.
+Controller owns Task 8's whole-tree check/Clippy and fast/changed-path test gates;
+Task 1 ran the required whole-tree format check here. Initial
+72/23/1/1 reruns passed before the final proof/schema hardening; the final rows
+above come from completed commands after that hardening, not inferred from earlier runs.
+
+### Self-Review And Next Gate
+
+- Reviewed completion vs preservation, raw paths, mode/OID/kind comparisons,
+  duplicate/malformed/missing item evidence, SQL rollback/trigger retention,
+  unchanged wire shape, scoped E-5 changes and absence of cleanup/remote mutation.
+- Self-review found and corrected empty-tree omission, completion's dependence on
+  unrelated object reads, quoted-literal schema comparison and nondeterministic
+  document test identity. Last fixture inspection also strengthened the unmatched
+  ticket row: primary must explicitly lack its private local file. The row now
+  uses typed dispositions, and the remote module passed again after this test-only edit.
+  This is self-review, **not** spec/quality approval.
+- Canonical Task 1 checkpoint uses CLI-generated distinct ULID
+  `01M6ME9SX9CK5WE4RHNVENBSFQ`, parent `01M6MCT4HYJ7VKG22J6R0ZNSWQ`,
+  actual UTC `2026-11-04T23:37:44Z`. No ticket body/status save.
+- Next: feature-commit handoff, then controller spec review
+  **before** quality review. Task 2 remains unstarted; no review is marked passed.

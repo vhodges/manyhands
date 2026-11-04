@@ -317,7 +317,7 @@ const POLL_DISPOSITION_SCHEMA: &str = r#"
         remote_ref TEXT,
         kind TEXT CHECK(kind IN ('document','ticket')),
         item_id TEXT,
-        disposition TEXT NOT NULL CHECK(disposition IN ('current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','history_unknown','not_reached')),
+        disposition TEXT NOT NULL CHECK(disposition IN ('current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','closed','promoted','history_unknown','not_reached')),
         before_oid TEXT CHECK(length(before_oid)=40 AND before_oid NOT GLOB '*[^0-9a-f]*'),
         after_oid TEXT CHECK(length(after_oid)=40 AND after_oid NOT GLOB '*[^0-9a-f]*'),
         observed_at INTEGER NOT NULL CHECK(typeof(observed_at)='integer' AND observed_at BETWEEN 0 AND 253402300799),
@@ -334,15 +334,47 @@ const POLL_DISPOSITION_OBJECTS: &[(&str, &str)] = &[
     ("TRIGGER", "remote_poll_disposition_owner_immutable"),
 ];
 fn validate_poll_disposition_schema(db: &Connection) -> Result<(), RepositoryError> {
+    validate_poll_disposition_envelope(db, POLL_DISPOSITION_SCHEMA)
+}
+fn validate_poll_disposition_envelope(
+    db: &Connection,
+    schema: &str,
+) -> Result<(), RepositoryError> {
     for &(kind, name) in POLL_DISPOSITION_OBJECTS {
-        validate_schema_object(
-            db,
-            kind,
-            name,
-            schema_object_sql(POLL_DISPOSITION_SCHEMA, kind, name).ok_or_else(recovery_required)?,
-        )?;
+        let actual: String = db
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type=?1 AND name=?2",
+                params![kind.to_ascii_lowercase(), name],
+                |r| r.get(0),
+            )
+            .map_err(|_| recovery_required())?;
+        let expected = schema_object_sql(schema, kind, name).ok_or_else(recovery_required)?;
+        if normalized_poll_schema_sql(&actual)
+            != normalized_poll_schema_sql(expected.trim_end_matches(';'))
+        {
+            return Err(recovery_required());
+        }
     }
     Ok(())
+}
+fn normalized_poll_schema_sql(sql: &str) -> String {
+    // SQL keywords/spacing may vary, but CHECK/trigger string literals must
+    // match exactly. Folding literal case would accept a different enum.
+    let mut quoted = false;
+    sql.chars()
+        .filter_map(|character| {
+            if character == '\'' {
+                quoted = !quoted;
+            }
+            if quoted || character == '\'' {
+                Some(character)
+            } else if character.is_whitespace() {
+                None
+            } else {
+                Some(character.to_ascii_lowercase())
+            }
+        })
+        .collect()
 }
 fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError> {
     let objects:i64=tx.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('remote_poll_dispositions','remote_poll_disposition_owner_immutable')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
@@ -373,8 +405,63 @@ fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError
         // completion fallback. Freeze it once during migration; its original
         // retry deadline is unknown and remains NULL. New rows never infer it.
         tx.execute("UPDATE remote_operation_records SET poll_completed_at=updated_at WHERE action='poll' AND poll_kind='update' AND phase IN ('completed','cancelled','failed','interrupted')",[]).map_err(|_|recovery_required())?;
+    } else {
+        validate_poll_time_columns(tx)?;
+        if validate_poll_disposition_schema(tx).is_err() {
+            // Recognize only the exact old table AND its immutable-owner trigger.
+            // The enclosing migration transaction rolls back every DDL/data step.
+            let old_schema = POLL_DISPOSITION_SCHEMA.replace("'closed','promoted',", "");
+            validate_poll_disposition_envelope(tx, &old_schema)?;
+            tx.execute_batch("DROP TRIGGER remote_poll_disposition_owner_immutable; ALTER TABLE remote_poll_dispositions RENAME TO remote_poll_dispositions_old;").map_err(|_|recovery_required())?;
+            tx.execute_batch(POLL_DISPOSITION_SCHEMA)
+                .map_err(|_| recovery_required())?;
+            tx.execute_batch("INSERT INTO remote_poll_dispositions SELECT * FROM remote_poll_dispositions_old; DROP TABLE remote_poll_dispositions_old;").map_err(|_|recovery_required())?;
+        }
     }
     validate_poll_disposition_schema(tx)?;
+    Ok(())
+}
+
+fn validate_poll_time_columns(db: &Connection) -> Result<(), RepositoryError> {
+    let sql: String = db
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='remote_operation_records'",
+            [],
+            |r| r.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    let sql = normalized_poll_schema_sql(&sql);
+    let definitions = sql
+        .split_once('(')
+        .and_then(|(_, body)| body.strip_suffix(')'))
+        .ok_or_else(recovery_required)?;
+    // Split only top-level column definitions, respecting SQL string literals
+    // and nested CHECK expressions. A name alone is not the paired envelope.
+    let mut depth = 0;
+    let mut quoted = false;
+    let mut start = 0;
+    let mut columns = Vec::new();
+    for (at, byte) in definitions.bytes().enumerate() {
+        match byte {
+            b'\'' => quoted = !quoted,
+            b'(' if !quoted => depth += 1,
+            b')' if !quoted => depth -= 1,
+            b',' if !quoted && depth == 0 => {
+                columns.push(&definitions[start..at]);
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    columns.push(&definitions[start..]);
+    for name in ["poll_completed_at", "poll_next_eligible_at"] {
+        let expected = format!(
+            "{name}integercheck({name}isnullor(typeof({name})='integer'and{name}between0and253402300799))"
+        );
+        if !columns.contains(&expected.as_str()) {
+            return Err(recovery_required());
+        }
+    }
     Ok(())
 }
 
@@ -438,6 +525,8 @@ fn disposition_name(d: super::poll::PollDisposition) -> &'static str {
         MaterializationIncomplete => "materialization_incomplete",
         Malformed => "malformed",
         RemotelyDeleted => "remotely_deleted",
+        Closed => "closed",
+        Promoted => "promoted",
         HistoryUnknown => "history_unknown",
         NotReached => "not_reached",
     }
@@ -458,6 +547,8 @@ fn disposition(value: &str) -> Result<super::poll::PollDisposition, RepositoryEr
         "materialization_incomplete" => MaterializationIncomplete,
         "malformed" => Malformed,
         "remotely_deleted" => RemotelyDeleted,
+        "closed" => Closed,
+        "promoted" => Promoted,
         "history_unknown" => HistoryUnknown,
         "not_reached" => NotReached,
         _ => return Err(recovery_required()),
@@ -1238,7 +1329,7 @@ fn merge_schema_object_sql(kind: &str, name: &str) -> Option<&'static str> {
     schema_object_sql(MERGE_EVIDENCE_SCHEMA, kind, name)
 }
 
-fn schema_object_sql(schema: &'static str, kind: &str, name: &str) -> Option<&'static str> {
+fn schema_object_sql<'a>(schema: &'a str, kind: &str, name: &str) -> Option<&'a str> {
     let prefix = format!("CREATE {kind} {name}");
     let start = schema.find(&prefix)?;
     let statement = &schema[start..];
@@ -5993,6 +6084,7 @@ pub(in super::super) fn audit_registry(connection: &mut Connection) -> Result<()
     crate::repository::closure::record::audit(&transaction)?;
     audit_poll_materializations(&transaction)?;
     validate_poll_disposition_schema(&transaction)?;
+    validate_poll_time_columns(&transaction)?;
     validate_schema_object(
         &transaction,
         "TABLE",

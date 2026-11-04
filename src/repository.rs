@@ -35,6 +35,7 @@ pub use closure::{
 };
 mod comment_publication;
 mod context_release;
+mod context_retirement;
 pub use context_release::{ContextReleaseOutcome, ReleaseContextRequest};
 mod coordination;
 pub use comment_publication::*;

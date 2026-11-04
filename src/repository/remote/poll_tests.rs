@@ -13,6 +13,184 @@ use time::OffsetDateTime;
 struct PanicCredentials;
 
 #[test]
+fn retirement_recognition_guidance_requires_explicit_action_and_local_checks() {
+    for disposition in [PollDisposition::Closed, PollDisposition::Promoted] {
+        let guidance = disposition.guidance();
+        assert!(guidance.contains("Local primary"));
+        assert!(guidance.contains("context retire to check and remove"));
+        assert!(guidance.contains("Local safety checks still apply."));
+    }
+}
+
+#[test]
+fn retirement_recognition_committed_primary_and_independent_ticket_completion() {
+    for case in [
+        "closed",
+        "dirty",
+        "unmatched",
+        "open",
+        "unknown",
+        "malformed",
+        "tracking_only",
+        "promoted",
+        "presence_only",
+    ] {
+        let f = LocalFixture::new();
+        let ticket = !matches!(case, "promoted" | "presence_only");
+        let kind = if ticket {
+            AuthoringKind::Ticket
+        } else {
+            AuthoringKind::Document
+        };
+        let path = if ticket {
+            format!(".manyhands/tickets/{POLL_ID}/ticket.md")
+        } else {
+            "docs/example.md".into()
+        };
+        let source = if ticket {
+            format!(
+                "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {POLL_ID}\ntitle: Example\ntype: task\nstatus: open\n---\nBody\n"
+            )
+        } else {
+            format!(
+                "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {POLL_ID}\ntitle: Example\n---\nBody\n"
+            )
+        };
+        let write_commit = |source: &str, parent: git2::Oid, extra: bool| {
+            let mut index = git2::Index::new().unwrap();
+            index
+                .read_tree(&f.repository.find_commit(parent).unwrap().tree().unwrap())
+                .unwrap();
+            let mut entry = f
+                .repository
+                .index()
+                .unwrap()
+                .get_path(Path::new("file"), 0)
+                .unwrap();
+            entry.path = path.as_bytes().to_vec();
+            entry.id = f.repository.blob(source.as_bytes()).unwrap();
+            index.add(&entry).unwrap();
+            if extra {
+                entry.path = b"unmatched".to_vec();
+                entry.id = f.repository.blob(b"private").unwrap();
+                index.add(&entry).unwrap();
+            }
+            let tree = f
+                .repository
+                .find_tree(index.write_tree_to(&f.repository).unwrap())
+                .unwrap();
+            let sig = git2::Signature::now("Peer", "peer@example.com").unwrap();
+            f.repository
+                .commit(
+                    None,
+                    &sig,
+                    &sig,
+                    "completion",
+                    &tree,
+                    &[&f.repository.find_commit(parent).unwrap()],
+                )
+                .unwrap()
+        };
+        let local = write_commit(&source, f.old, false);
+        let local = if matches!(case, "unmatched" | "presence_only") {
+            write_commit(&source, local, true)
+        } else {
+            local
+        };
+        let branch = format!(
+            "manyhands/{}/{POLL_ID}",
+            if ticket { "ticket" } else { "document" }
+        );
+        let reference = f
+            .repository
+            .branch(&branch, &f.repository.find_commit(local).unwrap(), false)
+            .unwrap()
+            .into_reference();
+        let context_path = f.root.join(".manyhands/worktrees").join(POLL_ID);
+        fs::create_dir_all(context_path.parent().unwrap()).unwrap();
+        let mut options = git2::WorktreeAddOptions::new();
+        options.reference(Some(&reference));
+        f.repository
+            .worktree(POLL_ID, &context_path, Some(&options))
+            .unwrap();
+        let closed = source.replace(
+            "---\nBody",
+            "closed_at: '2026-11-04T00:00:00Z'\nclosed_by: Peer\n---\nBody",
+        );
+        let primary_source = match case {
+            "open" => &source,
+            "malformed" => "not canonical",
+            _ if ticket => &closed,
+            _ => &source,
+        };
+        let primary = write_commit(
+            primary_source,
+            if matches!(case, "unmatched" | "presence_only") {
+                f.old
+            } else {
+                local
+            },
+            false,
+        );
+        if case == "unmatched" {
+            assert!(
+                f.repository
+                    .find_commit(local)
+                    .unwrap()
+                    .tree()
+                    .unwrap()
+                    .get_name("unmatched")
+                    .is_some()
+            );
+            assert!(
+                f.repository
+                    .find_commit(primary)
+                    .unwrap()
+                    .tree()
+                    .unwrap()
+                    .get_name("unmatched")
+                    .is_none()
+            );
+        }
+        f.tracking(&SynchronizationTarget::Primary, primary);
+        if case != "tracking_only" {
+            f.repository
+                .reference("refs/heads/main", primary, true, "fixture primary")
+                .unwrap();
+        }
+        if case == "dirty" {
+            fs::write(context_path.join("file"), b"dirty").unwrap();
+        }
+        let before = snapshot(&f.root, &f.repository);
+        let result = classify_local_target(
+            &f.root,
+            "main",
+            &SynchronizationTarget::Context {
+                kind,
+                item_id: POLL_ID.parse().unwrap(),
+            },
+            if case == "unknown" {
+                PollTrackingState::HistoryUnknown
+            } else {
+                PollTrackingState::RemotelyDeleted
+            },
+        )
+        .unwrap();
+        let LocalPollClassification::Unchanged { disposition, .. } = result else {
+            panic!("recognition must not fast-forward")
+        };
+        let expected = match case {
+            "closed" | "dirty" | "unmatched" => PollDisposition::Closed,
+            "promoted" => PollDisposition::Promoted,
+            "unknown" => PollDisposition::HistoryUnknown,
+            _ => PollDisposition::RemotelyDeleted,
+        };
+        assert_eq!(disposition, expected, "{case}");
+        assert_eq!(snapshot(&f.root, &f.repository), before, "{case}");
+    }
+}
+
+#[test]
 fn whole_review_materialization_held_external_ref_transaction_is_refused() {
     use std::io::{BufRead, Write};
     struct ChildGuard(Option<std::process::Child>);

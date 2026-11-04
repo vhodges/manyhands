@@ -492,7 +492,7 @@ fn happy() -> Result<(), FixtureError> {
             .targets()
             .iter()
             .any(|r| r.item_id().is_some_and(|id| id.to_string() == DOC)
-                && r.disposition() == PollDisposition::RemotelyDeleted)
+                && r.disposition() == PollDisposition::Promoted)
     );
     assert_eq!(image(&p.b.worktree())?, before);
     let after = poll(&p, &p.a)?;
