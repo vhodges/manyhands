@@ -2991,3 +2991,72 @@ The fast tier and the SSH targets ran in two parallel streams (the fast tier the
 Not run, by the table: `ticket_closure` (no `closure/` change), `comment_publication`, `ssh_fixture` (no
 `transport/`, `keys/` or `tests/support/ssh_*` change) and `--lib repository::local_sync::` (no `local_sync/`
 change). They passed at `f59aceb6` above.
+
+## Decision 35: an untracked published context is unknown, not deleted
+
+The owner's ruling on the F6 blocker (2026-11-03), "Say unknown, point to poll". Commit `b90b1ea9`.
+
+**What the preview read.** Both previews (`closure/observe.rs`, `promotion/observe.rs`) ask
+`remote_context_history` only when the context has no tracking ref. It answered `Deleted` for any
+`ObservedPublished` evidence. That evidence comes from a verified push or a fetch that saw the branch, so it
+proves publication, never deletion. A fetch that sees a published branch gone stores its context state as
+`remotely_deleted` (`record_observation_batch`). Now `Deleted` needs that state
+(`RemoteSnapshot::context_deletion_observed`); published and not seen gone is `Unknown`, which the previews
+already map to `history_unknown`. That blocker fits: the remote state is not known from what the repository has
+read. No enum value, DTO field or schema changed. A ready preview's digest is unchanged: the check adds a
+blocker or not, and blocked prepares have no confirmation. The case only changes where a prepare was refused
+before.
+
+**Human route.** `history_unknown` joins `primary_missing` and `primary_ahead_of_remote` among what a poll reads:
+alone (or with `context_missing`), `next: manyhands-cli poll once --repo <root> --request-id <new-request-id>`, then
+"this repository hasn't read whether the remote still holds this item's branch, and a poll reads it; … Then
+prepare again." With `primary_ahead_of_remote` it is poll then `repo sync`, as before. The repository-wide
+unknown-history mark prints the same line, since it is the same blocker (a Known Limit says a poll resolves that
+only once it observes the branch).
+
+**Rows, seen to fail first.**
+
+| Row | Before | After |
+| --- | --- | --- |
+| `mutation_remote` `c5_lifecycle_tracking_published_untracked_context_is_unknown`: ticket saved, its first `item sync`, a document promoted (published), then the close prepare; then `poll once` and the prepare again | failed at the blockers (`remote_context_deleted`) | `recovery_required`, `[history_unknown]`, `[repo.inspect]`; after the poll, `ok` |
+| `mutation_remote` `c5_lifecycle_tracking_a_fetched_deletion_is_deleted` (control): context synchronized, a poll sees it, the bare branch deleted, a second poll, the tracking ref deleted (a user's prune) | passes | passes: `[remote_context_deleted]` |
+| `cli_remote` `c5_polling_a_published_untracked_context_names_the_poll`: the F6 sequence through the binary, JSON and human, golden `ticket_close_prepare_remote_unknown_text`, then `poll once` and a ready prepare | failed (line 1318, the blockers) | passes |
+| bin `lifecycle_tests::an_unknown_remote_context_names_the_poll`, both verbs | new | passes |
+| RFC lifecycle recovery table: `ticket close`, `recovery_required`, `manyhands-cli poll once`, 3, the new golden | | `recovery_tables` 4 pass |
+
+**My first deletion control was wrong, and is corrected.** Staged with one poll after the deletion only (no poll
+that had seen the branch), the prepare was `ok` on the unchanged code: no context row was stored as published by a
+fetch, so the evidence was `NeverPublished`. That is the existing behaviour, not this decision's. The control
+now polls once before the deletion, as `tests/document_promotion/journeys.rs`'s D5 row does.
+
+**Earlier rows naming `remote_context_deleted`.** The unit rows `promotion::observe::tests::remote_context_deleted`,
+`multiple_blockers_have_fixed_order` and `closure::observe::tests::remote_context_deleted` stage the state
+`remotely_deleted` and pass unchanged (`--lib -- observe` 154). `document_promotion`'s journeys row (D5: peer
+deletes, poll, prune) and decision 32's withdrawn-case row (contained context, so the check isn't reached) run in
+the targets below. Synchronization's own `RemoteContextDeleted` (`remote/sync.rs`) is a separate path and is
+untouched. No expectation changed.
+
+**Documents.** The Cycle's decision 35; the design's answers sentence and a Known Limit; the RFC's known limit and
+recovery-table row.
+
+**A main issue for the owner, not fixed here.** The plan's `cargo clippy --all-targets --locked --features desktop
+-- -D warnings` fails on main since D4's merge (`c2a34494`): D4's test modules (`services/prompts_tests.rs`,
+`services/submissions_tests.rs`, `view/mod.rs`'s `harness`, `model/operations.rs`'s imports) need
+`desktop-test-support`. These pass: `--all-targets --features desktop-test-support`, CI's `--features desktop
+--bin manyhands`, `--features desktop --lib --bins`, and whole-tree `--all-features`. The plan's checkpoint gate
+and Task 15 Step 1 now name `--all-targets --features desktop-test-support`, with the reason.
+
+**Verified on `b90b1ea9`** (two parallel streams, times under load). All exit 0.
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `cargo check --all-features`, `fmt --check`, whole-tree clippy `--all-targets --all-features -D warnings` | ok | |
+| `cargo check --features desktop`; clippy `--all-targets --features desktop-test-support` and `--features desktop --bin manyhands` | ok | |
+| `cargo check --bin manyhands-cli`, `scripts/check-cli-no-gpui.sh` | ok | |
+| AGENTS.md's fast tier, verbatim | 79 results, 5164 passed, 0 failed | 1548 s |
+| `--test mutation_remote` | 702 SSH cases (two new) | 5014 s |
+| `--test cli_remote` | 161 (one new) | 940 s |
+| `--test document_promotion` (`promotion/` changed) | 79 | 752 s |
+| `--test ticket_closure` (`closure/` changed) | 78 | 677 s |
+| `remote/state.rs` changed, so every remote row: `remote_synchronization`, `remote_merge_recovery`, `remote_polling`, `ssh_transport`, `remote_observation` | 69, 29, 84, 123, 15 | 581, 239, 178, 175, 7 s |
+| `git merge-tree --write-tree HEAD origin/main` (`c2a34494`) | clean | |
