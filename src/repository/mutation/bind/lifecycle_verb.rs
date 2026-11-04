@@ -297,7 +297,6 @@ impl LifecycleVerb for Promote {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn call(
         session: &dyn Session,
         service: &RepositoryService,
@@ -402,7 +401,6 @@ impl LifecycleVerb for Close {
         )
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn call(
         session: &dyn Session,
         service: &RepositoryService,

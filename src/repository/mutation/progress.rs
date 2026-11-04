@@ -116,7 +116,9 @@ contract_enum!(
 /// the request carries or meets: no body or source, no commit message,
 /// no remote location, no credential and no text a server sent.
 /// `effects` is what the request has completed so far; the request's
-/// result is what names a commit.
+/// result is what names a commit. A promotion's or a closure's stage events
+/// carry no effects, as `not_requested` throughout (D5 decision 11): its
+/// result is what reports them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ProgressEvent {
     pub request_id: String,

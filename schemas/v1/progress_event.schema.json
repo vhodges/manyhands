@@ -39,6 +39,7 @@
       ]
     },
     "effects": {
+      "description": "What the request has completed so far. A promotion's or a closure's stage events carry none, as not_requested throughout (D5 decision 11): its result is what reports its effects.",
       "$ref": "effects.schema.json"
     }
   }

@@ -91,9 +91,9 @@ fn completed(
     stages
 }
 
-/// The stages of a remote run, with its context synchronization's stages, which
-/// depend on what it fetches and pushes, taken out: each one is between
-/// `connecting` and the next step's stage, and is one of the three U-4 maps.
+/// The stages of a remote run, with its context synchronization's stages taken
+/// out once they are checked: between `connecting` and the next step's stage,
+/// exactly those of a context that is fetched and then published (U-4).
 fn without_the_context(stages: &[ProgressStage]) -> Vec<ProgressStage> {
     let connecting = stages
         .iter()
@@ -109,8 +109,7 @@ fn without_the_context(stages: &[ProgressStage]) -> Vec<ProgressStage> {
     }
     // The context of a remote world is saved and never pushed: its child
     // fetches, then publishes it.
-    assert!(context.contains(&S::Fetching), "{stages:?}");
-    assert!(context.contains(&S::Pushing), "{stages:?}");
+    assert_eq!(context, [S::Fetching, S::Pushing], "{stages:?}");
     kept.extend(rest);
     kept
 }

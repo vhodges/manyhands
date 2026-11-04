@@ -185,7 +185,6 @@ impl LifecycleVerb for Fixed {
         Ok(Observed::Blocked(Vec::new()))
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn call(
         _session: &dyn Session,
         _service: &RepositoryService,

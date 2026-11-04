@@ -164,7 +164,17 @@ impl RunObserver for Stages<'_> {
                 RemoteOperationSafePoint::BeforeFetch => ProgressStage::Fetching,
                 RemoteOperationSafePoint::BeforeLocalUpdate => ProgressStage::UpdatingLocal,
                 RemoteOperationSafePoint::BeforePush => ProgressStage::Pushing,
-                _ => return,
+                RemoteOperationSafePoint::BeforeTransport
+                | RemoteOperationSafePoint::AfterAdvertisement
+                | RemoteOperationSafePoint::BetweenObservations
+                | RemoteOperationSafePoint::BeforeBatchCommit
+                | RemoteOperationSafePoint::AfterBatchCommit
+                | RemoteOperationSafePoint::BeforeLocalMutation
+                | RemoteOperationSafePoint::AfterFetch
+                | RemoteOperationSafePoint::AfterLocalUpdate
+                | RemoteOperationSafePoint::AfterPushReturn
+                | RemoteOperationSafePoint::AfterPushVerification
+                | RemoteOperationSafePoint::BeforeDiscovery => return,
             },
             RunEvent::ChildSafePoint(ChildRole::Primary, _) => return,
             RunEvent::Recording if self.closure_exists => return,
