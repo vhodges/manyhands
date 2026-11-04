@@ -1,5 +1,5 @@
 --- stderr
-progress: connecting
+progress: observing
 error: Recovery is required before this can continue.
 code: recovery_required
 request: 01ARZ3NDEKTSV4RRFFQ69G5FX1

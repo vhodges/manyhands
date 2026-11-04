@@ -57,13 +57,14 @@ use super::{
             AuthoringKind, ClosureRecording, OperationFamily, OperationId, PlannedClosure,
             PlannedIntegration, PlannedPublication, PromotionCleanup, PromotionCleanupPending,
             PromotionIntegration, PromotionPublication, PromotionPublicationPending,
-            PromotionRemoteDeletionCategory, PromotionSynchronizationCategory, RepositoryOperation,
-            RepositoryService,
+            PromotionRemoteDeletionCategory, PromotionSynchronizationCategory,
+            RemoteOperationSafePoint, RepositoryOperation, RepositoryService,
             promotion::{
                 ParentView,
                 lifecycle::ParentStep,
-                lifecycle_record::Refusal,
+                lifecycle_record::{ChildRole, Refusal},
                 record::{IntegrationKind, PublicationCategory},
+                run::{RunEvent, RunObserver},
             },
             recovery::JournalRow,
         },
@@ -81,7 +82,9 @@ use super::{
         evidence::{self, Position},
         identity::{IntentDigestBuilder, RequestId, ScopeKey},
         observe::{Observation, ObservationDigest},
-        outcome, records,
+        outcome,
+        progress::{ProgressStage, Session, Subject},
+        records,
     },
     Accepted, Answer, Binding, CallContext, Confirmed, EndedWithoutCheckpoint, Entered, Place,
     Prepared, Previewed, Ran, Standing, primary_position, refused, resolve_root,
@@ -100,6 +103,10 @@ pub(in super::super) struct LifecycleBinding<V> {
     /// observed it. `None` for a state that is blocked now, which the
     /// boundary refuses before anything runs.
     expected: Option<[u8; 32]>,
+    /// Whether what this call observed, and consented to, is a closure the
+    /// ticket already holds: its run records nothing, and reports no
+    /// `recording` (R-15). `false` when this call observed nothing.
+    closure_exists: bool,
     verb: PhantomData<V>,
 }
 
@@ -110,6 +117,7 @@ impl From<DocumentPromoteInput> for LifecycleBinding<Promote> {
             root,
             id,
             expected: None,
+            closure_exists: false,
             verb: PhantomData,
         }
     }
@@ -122,8 +130,50 @@ impl From<TicketCloseInput> for LifecycleBinding<Close> {
             root,
             id,
             expected: None,
+            closure_exists: false,
             verb: PhantomData,
         }
+    }
+}
+
+/// Whether `observed` is ready with a closure the ticket already holds (R-15).
+fn closure_exists(observed: &Observed) -> bool {
+    matches!(
+        observed,
+        Observed::Ready(ready) if matches!(ready.closure, Some(PlannedClosure::Existing { .. }))
+    )
+}
+
+/// A run's steps as the request's progress stages (D5 decision 11). The
+/// context's synchronization reports `connecting` as it starts, and its
+/// fetch, local update and push as a share's do (U-4); the primary's reports
+/// `publishing` once, and none of its safe points.
+struct Stages<'a> {
+    session: &'a dyn Session,
+    subject: Subject,
+    /// A closure the ticket already holds is not recorded again (R-15).
+    closure_exists: bool,
+}
+
+impl RunObserver for Stages<'_> {
+    fn event(&mut self, event: RunEvent) {
+        let stage = match event {
+            RunEvent::ChildStarting(ChildRole::Context) => ProgressStage::Connecting,
+            RunEvent::ChildStarting(ChildRole::Primary) => ProgressStage::Publishing,
+            RunEvent::ChildSafePoint(ChildRole::Context, point) => match point {
+                RemoteOperationSafePoint::BeforeFetch => ProgressStage::Fetching,
+                RemoteOperationSafePoint::BeforeLocalUpdate => ProgressStage::UpdatingLocal,
+                RemoteOperationSafePoint::BeforePush => ProgressStage::Pushing,
+                _ => return,
+            },
+            RunEvent::ChildSafePoint(ChildRole::Primary, _) => return,
+            RunEvent::Recording if self.closure_exists => return,
+            RunEvent::Recording => ProgressStage::Recording,
+            RunEvent::Integrating => ProgressStage::Integrating,
+            RunEvent::CleaningUp => ProgressStage::CleaningUp,
+        };
+        self.session
+            .report(&self.subject.event(stage, Effects::not_requested()));
     }
 }
 
@@ -711,8 +761,14 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
         })))
     }
 
-    /// The one domain call, under the request's operation ID.
+    /// The one domain call, under the request's operation ID, whose steps
+    /// are reported to the call's sink.
     fn call(&self, call: &CallContext<'_>, accepted: &Accepted, entered_again: bool) -> Ran {
+        let mut stages = Stages {
+            session: call.session,
+            subject: Subject::of(self, accepted),
+            closure_exists: self.closure_exists,
+        };
         let called = self.expected.and_then(|expected| {
             V::call(
                 call.session,
@@ -722,6 +778,7 @@ impl<V: LifecycleVerb> LifecycleBinding<V> {
                 self.id.clone(),
                 expected,
                 accepted.request_id,
+                &mut stages,
             )
         });
         let ran = match called {
@@ -843,6 +900,7 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
             id: _,
             // What a call observed, and no part of the request.
             expected: _,
+            closure_exists: _,
             verb: _,
         } = self;
         builder
@@ -878,6 +936,7 @@ impl<V: LifecycleVerb> Binding for LifecycleBinding<V> {
             Observed::Ready(ready) => Some(ready.expected),
             Observed::Blocked(_) => None,
         };
+        self.closure_exists = closure_exists(&observed);
         Ok(Prepared {
             family: Some(OperationFamily::Remote),
             position,
@@ -1054,6 +1113,7 @@ impl<V: LifecycleVerb> Confirmed for LifecycleBinding<V> {
             standing: Standing::Stopped { journal: None },
         })?;
         let found = digest_of(V::COMMAND, &observed);
+        self.closure_exists = closure_exists(&observed);
         match observed {
             Observed::Ready(ready) => {
                 self.expected = Some(ready.expected);

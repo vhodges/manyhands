@@ -606,6 +606,10 @@ pub(crate) fn stage_text(
         (ProgressStage::Pushing, _) => "Sending your saved changes…",
         (ProgressStage::Verifying, _) => "Checking it arrived…",
         (ProgressStage::Indexing, _) => "Updating the list…",
+        (ProgressStage::Recording, _) => "Marking it closed…",
+        (ProgressStage::Integrating, _) => "Merging into main…",
+        (ProgressStage::Publishing, _) => "Sharing main…",
+        (ProgressStage::CleaningUp, _) => "Tidying up…",
         (ProgressStage::Stopping, _) => "Stopping at a safe point…",
     };
     Some(words.to_owned())

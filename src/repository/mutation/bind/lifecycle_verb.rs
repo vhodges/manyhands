@@ -19,7 +19,7 @@ use super::super::super::{
         RepositoryService, SynchronizationError, SynchronizationTarget, TicketClosureError,
         TicketClosureOutcome, TicketClosurePreflight, TicketClosurePreview, TicketClosureResult,
         closure, promotion,
-        promotion::{ParentView, lifecycle::LifecyclePreview},
+        promotion::{ParentView, lifecycle::LifecyclePreview, run::RunObserver},
         remote::{state, sync},
         transport::SshTransportError,
     },
@@ -112,7 +112,9 @@ pub(in super::super::super) trait LifecycleVerb {
         id: &ItemId,
     ) -> Result<Observed, RepositoryError>;
 
-    /// `None` when the session has no credentials to call it with.
+    /// `None` when the session has no credentials to call it with. `progress`
+    /// is told of each step the run takes (D5 decision 11).
+    #[allow(clippy::too_many_arguments)]
     fn call(
         session: &dyn Session,
         service: &RepositoryService,
@@ -121,6 +123,7 @@ pub(in super::super::super) trait LifecycleVerb {
         item_id: ItemId,
         expected: [u8; 32],
         request_id: RequestId,
+        progress: &mut dyn RunObserver,
     ) -> Option<Result<Reached, Stop>>;
 
     fn parent(
@@ -294,6 +297,7 @@ impl LifecycleVerb for Promote {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call(
         session: &dyn Session,
         service: &RepositoryService,
@@ -302,6 +306,7 @@ impl LifecycleVerb for Promote {
         item_id: ItemId,
         expected: [u8; 32],
         request_id: RequestId,
+        progress: &mut dyn RunObserver,
     ) -> Option<Result<Reached, Stop>> {
         let result = session.promote_document(
             service,
@@ -314,6 +319,7 @@ impl LifecycleVerb for Promote {
                 confirmed_identity: None,
             },
             request_id,
+            progress,
         )?;
         Some(match result {
             Ok(DocumentPromotionResult::Complete(outcome)) => {
@@ -396,6 +402,7 @@ impl LifecycleVerb for Close {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call(
         session: &dyn Session,
         service: &RepositoryService,
@@ -404,6 +411,7 @@ impl LifecycleVerb for Close {
         item_id: ItemId,
         expected: [u8; 32],
         request_id: RequestId,
+        progress: &mut dyn RunObserver,
     ) -> Option<Result<Reached, Stop>> {
         let result = session.close_ticket(
             service,
@@ -416,6 +424,7 @@ impl LifecycleVerb for Close {
                 confirmed_identity: None,
             },
             request_id,
+            progress,
         )?;
         Some(match result {
             Ok(TicketClosureResult::Complete(outcome)) => Ok(closure_reached(&outcome, false)),

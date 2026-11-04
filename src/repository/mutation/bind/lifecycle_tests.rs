@@ -185,6 +185,7 @@ impl LifecycleVerb for Fixed {
         Ok(Observed::Blocked(Vec::new()))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn call(
         _session: &dyn Session,
         _service: &RepositoryService,
@@ -193,6 +194,7 @@ impl LifecycleVerb for Fixed {
         _item_id: ItemId,
         _expected: [u8; 32],
         _request_id: RequestId,
+        _progress: &mut dyn RunObserver,
     ) -> Option<Result<Reached, Stop>> {
         None
     }
@@ -279,6 +281,7 @@ fn stopped_with(step: ParentStep, refusal: Option<Refusal<LifecycleBlocker>>, st
         root: PathBuf::from("/nowhere"),
         id,
         expected: None,
+        closure_exists: false,
         verb: PhantomData,
     };
     binding.stopped(&service, &accepted(), stop, true)
@@ -393,6 +396,7 @@ fn a_transient_stop_entered_again_with_no_parent_leaves_the_record() {
         root: PathBuf::from("/nowhere"),
         id: ITEM.parse().unwrap(),
         expected: None,
+        closure_exists: false,
         verb: PhantomData,
     };
     let again = binding.stopped(&service, &accepted(), Stop::Busy, true);
