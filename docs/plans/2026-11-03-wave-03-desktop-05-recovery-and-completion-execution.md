@@ -30,6 +30,15 @@ is written only by the orchestrator. Implementers never edit it.
 - **Task 5 second stop, 2026-11-04.** The live header action takes Tab
   focus, so two keyboard Tab-order tests failed. The owner approved
   **E-11**, recorded in the design.
+- **Standing approval, test expansion (owner, 2026-11-04).** The owner
+  wrote: "Any test expansion is approved". An edit to an existing test
+  that only extends it to cover D5's new behaviour no longer stops for the
+  owner. That covers a new variant in an exhaustive table, a new element
+  in a Tab order, or a widened count or range. The orchestrator still
+  records each such edit as a named edit (E-12 onward), and the reviewer
+  checks it.
+  - Removing or weakening an existing assertion, or changing an expected
+    behaviour, still stops for the owner.
 - **Carried to Task 6a:** a nonconforming file still offers its kind's
   lifecycle action but has no ID. Task 6a decides what pressing it does.
 
