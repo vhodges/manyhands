@@ -102,7 +102,8 @@ layout differ, follow the repo. The plan needs:
 - **A final task:**
   - run the gates and `git merge-tree --write-tree HEAD origin/main`;
   - mark the ticket review-ready;
-  - close the ticket before merge.
+  - after review approval, set the resolution status and close the ticket
+    with `ticket close`, which performs the merge.
 
 ## 5. Check before anyone else reads it
 
