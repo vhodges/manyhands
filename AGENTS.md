@@ -113,10 +113,15 @@
 - Before `ticket save` of your own Cycle ticket, commit your owned edits to its
   `ticket.md`: the CLI save checkpoints into that ticket's active worktree.
 - Comments remain canonical `.manyhands/comments/<item-id>/<comment-id>.md`
-  edits until C4's `comment add`; closure remains a canonical ticket-file edit
-  until the post-C5 switch: after C5 merges, a separate go-ahead closes one real
-  ticket through `ticket close` and then switches this rule (amended 2026-11-03
-  by C5, decision 9). Saving status text `closed` is not lifecycle closure.
+  edits until C4's `comment add`. Close a ticket with `manyhands-cli ticket close
+  --repo /home/vhodges/work/src/manyhands --id <ID>` from the registered main
+  checkout, after review approval: it records `closed_at`/`closed_by`, merges the
+  ticket's branch into main, publishes main, and removes the branch and worktree,
+  so it replaces the separate merge and cleanup. With a passphrase-protected key it
+  runs at the owner's terminal, since a non-interactive run answers
+  `unlock_required` (switched 2026-11-04 after the first real close,
+  `01M6KD8E25BWXQKF4REYM1DZMC`; C5 decision 9). Saving status text `closed` is not
+  lifecycle closure.
 - Exception: `working-on-a-ticket` status edits and closure keep that skill's
   own procedure until it is revised. Its loop runs in sandbox clones without
   the main checkout's registration; C3 does not change that skill.
@@ -127,8 +132,8 @@
 - Add Manyhands comments to the ticket at implementation-plan checkpoints to
   record progress, decisions, blockers, verification results, and review-ready
   status.
-- Close the ticket only after the associated change receives code-review or PR
-  approval, normally in the final push before merge.
+- Close the ticket with `ticket close` only after the associated change receives
+  code-review or PR approval; the close performs the merge.
 
 ## Working on a ticket
 

@@ -83,12 +83,14 @@ Do not hold or reopen the merged Cycle for it. In that session:
 ## Approved merge and closure
 
 Code review alone does not authorize merging. Once merge is approved, add the
-requested approval/verification comment and close the ticket in the final
-pre-merge update, following current `AGENTS.md`. Refresh stale test counts.
-Push that update and merge the exact intended PR head using
-normal repository rules; do not bypass required checks or use admin overrides.
-Verify the remote PR is merged and record its merge commit. Preserve unrelated
-edits in the main checkout; a remote merge does not require resetting local main.
+requested approval/verification comment and refresh stale test counts, commit
+and push the ticket branch. Then set the ticket's status to its resolution
+(`done`, or `wontdo`, `duplicate` or `obsolete`) with `ticket save`, and close it
+with `ticket close`, following current `AGENTS.md` and the `file-ticket` skill.
+The close is the merge: it merges the ticket branch into main, publishes main,
+and removes the branch and worktree. Read its preview before confirming. If a PR
+is open for the branch, check afterwards that GitHub shows it merged. Do not
+bypass required checks. Preserve unrelated edits in the main checkout.
 
 ## Separately authorized local cleanup
 
