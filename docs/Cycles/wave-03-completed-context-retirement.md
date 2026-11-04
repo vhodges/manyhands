@@ -1,7 +1,7 @@
 ---
 title: "Wave 03: Completed-Context Retirement"
 date: 2026-11-04
-status: "draft"
+status: "approved"
 author: "GPT-6.1 Sol"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,7 +12,13 @@ id: "01M6M3B4TF7MQM8QCZAVSZWA6Y"
 
 ## Status
 
-**Reviewed draft, awaiting owner approval (2026-11-04).** The mechanism at
+**Approved; implementation authorized (2026-11-04).** The owner said:
+“Docs are approved. Implementation is approved as well. Use subagent-drive
+development”. This approves the Cycle, design and implementation plan, including
+Q1/Q2 and E-1–E-10. Execution uses sequential implementers, spec review, then
+quality review per task; Tasks 2/4 retain their adversarial checkpoints.
+
+The mechanism at
 `5a6136e5` passed the third focused source/feasibility and adversarial/contract
 reviews with 0 Blocking, 0 Important and 0 Minor findings in each. Earlier rounds
 and their resolutions are recorded below. These are source-grounded planning
@@ -20,10 +26,9 @@ reviews, not runtime proof. Only this final status/review record and the ticket
 checkpoint were edited after that reviewed revision; those metadata edits have
 no additional independent review.
 
-The owner authorized drafting/review only. Q1/Q2's detailed outcome/resource
-tables, named edits E-1–E-10 and the documents still need approval; execution
-method and implementation need separate authorization. No implementation, Cargo
-build/test, real-context cleanup, merge into main, closure or native CI has run.
+Approval does not authorize real-context deletion, other-branch pushes, PR
+creation, main merge/closure or native CI. Execution evidence is tracked in the
+[ledger](../plans/2026-11-04-completed-context-retirement-execution.md).
 
 - [Design](../plans/2026-11-04-completed-context-retirement-design.md)
 - [Implementation plan](../plans/2026-11-04-completed-context-retirement-implementation.md)
@@ -51,7 +56,8 @@ Authorities: this ticket and brief `01M6KZ2PM15ZE3ZSMMVS76YDSB`; current
 `git-workflow-and-conflict-recovery.md`, `canonical-content-and-comment-schema.md`,
 `cli-contract.md`, and `mvp-rfc.md`; D3's release contract (decisions 11/18,
 R-32/R-43); C5 decisions 28 and 35 and its execution ledger. The owner decisions
-below authorize the specified departures, not implementation or lifecycle actions.
+below authorize the specified departures; the subsequent approval above
+authorizes implementation, not separately gated lifecycle actions.
 
 ## Entry Evidence And Dependency Boundary
 
@@ -113,7 +119,7 @@ That narrow renderer/test scope is D13; implementation itself remains gated.
 7. Refresh follows authoritative local removal. Pending refresh stays distinct
    from complete cleanup; retries resume only work still owed.
 8. The proposed per-target result/exit rules in the design are an explicit
-   approval item, not an unrecorded ruling about external behavior.
+    approved contract, not an unrecorded ruling about external behavior.
 
 ## Acceptance And Exit Evidence
 
@@ -283,12 +289,10 @@ rewriting their original approval. No sibling ticket edits without permission.
 | Independent review round 2, `6a6301be` | Source: 0 Blocking, 3 Important, 0 Minor. Adversarial/contract: 1 Blocking, 3 Important, 0 Minor | Findings verified | Addressed and checked in round 3, including D14 and R-7/R-8 | No round-2 finding is left open |
 | Independent review round 3, `5a6136e5` | Source/feasibility: 0 Blocking, 0 Important, 0 Minor. Adversarial/contract: 0 Blocking, 0 Important, 0 Minor | Settled at planning level | Both reviewers verified prior fixes and the new interactions; no repeated blocker remains | No Cargo/native/runtime evidence; Task 2/4 test-first checkpoints remain mandatory |
 
-## Approval Handoff
+## Approval And Execution Handoff
 
-The remaining asks are approval of these three documents including Q1/Q2 and
-E-1–E-10, choice of execution method, and separate implementation authorization.
-Recommended method: subagent-driven, sequential task ownership and independent
-review at the mechanism checkpoints; cost is additional review/context overhead.
-Do not treat any one of those approvals as the others. The ticket remains
-`waiting`; only its branch has been pushed. The broader existing lifecycle
+The owner approved all three documents including Q1/Q2 and E-1–E-10, separately
+authorized implementation, and selected subagent-driven development on
+2026-11-04. No renewed approval of these items is needed. The ticket moves to
+`implementing`; only its branch may be pushed. The broader existing lifecycle
 materialization-intent issue remains a proposed follow-up, not a filed ticket.

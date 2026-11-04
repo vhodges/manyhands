@@ -1,7 +1,7 @@
 ---
 title: "Completed-Context Retirement Implementation Plan"
 date: 2026-11-04
-status: "draft"
+status: "approved"
 author: "GPT-6.1 Sol"
 manyhands_managed: true
 manyhands_kind: document
@@ -10,9 +10,9 @@ id: "01M6M3B4V4GJQZJ82CS32N4W0V"
 
 # Completed-Context Retirement Implementation Plan
 
-> **For agentic workers:** after explicit implementation/method authorization,
-> use `executing-plans` for checkpointed execution or the owner's selected
-> `subagent-driven-development` workflow. This draft authorizes neither.
+> **For agentic workers:** the owner approved the documents and implementation
+> on 2026-11-04 and selected `subagent-driven-development`: sequential task
+> ownership, spec review, then quality review, with the named adversarial checks.
 
 **Goal:** recognize completed peer contexts and retire only proven-safe local
 copies through `context retire` and explicit `poll once --retire-completed`.
@@ -29,7 +29,7 @@ or Cargo test-target addition is planned.
 **Spec:** [Cycle](../Cycles/wave-03-completed-context-retirement.md) and
 [design](2026-11-04-completed-context-retirement-design.md). The Cycle governs
 the design, which governs this plan. D1–D14/R-1–R-8 apply; the expanded Q1 routing
-and Q2 initial-state tables still need document approval.
+and Q2 initial-state tables were included in the owner's document approval.
 
 ## Global Constraints
 
@@ -53,7 +53,7 @@ and Q2 initial-state tables still need document approval.
   inability to prove a promised row stop for the owner, not expectation fitting.
 - Keep the headless library free of GPUI. No desktop Retire action here. E-10
   permits only the existing generic abandon-confirmation's new safety details
-  and corresponding tests (D13); implementation remains subject to document approval. Run desktop
+  and corresponding tests (D13), included in document approval. Run desktop
   check/release clippy with `--features desktop` alone, and confirmation tests
   with `desktop-test-support`; D4's all-targets desktop-only clippy baseline needs
   that test-support feature. No navigation/release or new desktop action scope.

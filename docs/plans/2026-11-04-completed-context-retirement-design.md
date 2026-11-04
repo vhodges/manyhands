@@ -1,7 +1,7 @@
 ---
 title: "Completed-Context Retirement Design"
 date: 2026-11-04
-status: "draft"
+status: "approved"
 author: "GPT-6.1 Sol"
 manyhands_managed: true
 manyhands_kind: document
@@ -12,7 +12,8 @@ id: "01M6M3B4V6ZW2PS74C1SSA9AFD"
 
 ## Status And Authority
 
-Draft, not implementation authorization. The [Cycle](../Cycles/wave-03-completed-context-retirement.md)
+Approved with implementation authorization and subagent-driven execution on
+2026-11-04, including Q1/Q2 and E-1–E-10. The [Cycle](../Cycles/wave-03-completed-context-retirement.md)
 governs; its D1–D14 and R-1–R-8 apply. The [plan](2026-11-04-completed-context-retirement-implementation.md)
 maps the tables below to tests and checkpoints. All new names below are proposed
 interfaces, not claims that they exist at the baseline.
@@ -548,8 +549,8 @@ repository status rows.
 
 ## Results, Request Finality And Recovery (Approval Item Q1)
 
-D10 settles mixed completed batches at exit 0. The full proposed routing below
-still needs approval with the documents. `R` is the originating request; `S` its
+D10 settles mixed completed batches at exit 0. The full routing below was approved
+with the documents on 2026-11-04. `R` is the originating request; `S` its
 standalone local operation, `P` its batch poll, and `K` the current local child.
 All cleanup-only results have write/checkpoint/publication `not_requested`;
 discovery is current/pending as observed. Set `local_change` when any owned removal
@@ -642,7 +643,7 @@ must not silently manufacture missing deletion authorization.
 | E-9 | Existing root/help golden registries, `tests/cli/recovery_tables.rs` | Catalog new verb/flag and recovery evidence; regenerate only affected approved goldens and inspect every diff |
 | E-10 | `src/repository/mutation/bind/abandon.rs` preview construction; `src/bin/manyhands-cli/human_admin.rs`; `src/desktop/view/{confirm,confirm_tests}.rs`; operation-abandon preview/schema/golden fixtures registered by E-3/E-9 | Add required-nullable retirement metadata to the existing preview variant, null for old abandon; show preserving effects in existing confirmation only. No desktop Retire action or navigation/release change |
 
-These are bounded proposed edits, not permission to loosen a failing expectation.
+These are bounded approved edits, not permission to loosen a failing expectation.
 Task 0 must reconfirm the named pins and locate any additional exhaustive-arm
 constructor edits before source changes; unknown additional semantic pins are
 an owner checkpoint. No existing read-precedence tests change.
