@@ -844,3 +844,27 @@ fn a_host_observation_is_kept_for_the_page_that_asked() {
     assert!(operations.requests().is_empty());
     assert!(operations.take_changed().is_empty());
 }
+
+/// A promotion's or closure's parent row (L2) is listed as remote work
+/// with Resume, but it is not a synchronization: Resume on it is not
+/// offered until Part C sends it (design, A1), rather than shown
+/// unavailable as a local-context synchronization is. It is never offered
+/// Abandon. The rows are built here as `read/status.rs` lists them.
+#[test]
+fn a_lifecycle_row_is_not_a_synchronization() {
+    for action in [OperationAction::Promote, OperationAction::Close] {
+        let mut row = operation(
+            OperationFamily::Remote,
+            action,
+            Some(OperationNextAction::Resume),
+        );
+        row.item_id = Some("01ARZ3NDEKTSV4RRFFQ69G5FS0".to_owned());
+        row.state = "integrating".to_owned();
+        row.completed_step = Some("integrating".to_owned());
+        assert_eq!(resume_offer(&row), ResumeOffer::NotOffered, "{action:?}");
+        assert!(!abandon_offered(&row), "{action:?}");
+
+        row.next_action = None;
+        assert_eq!(resume_offer(&row), ResumeOffer::NotOffered, "{action:?}");
+    }
+}

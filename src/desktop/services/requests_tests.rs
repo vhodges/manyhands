@@ -14,7 +14,10 @@ use manyhands::{
 };
 
 use super::{CommentBody, Intent, NotBuilt};
-use crate::desktop::{services::KeyStoreUnavailable, test_support::fixtures::Fixture};
+use crate::desktop::{
+    services::{JobKind, KeyStoreUnavailable},
+    test_support::fixtures::Fixture,
+};
 
 const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
 const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG1";
@@ -192,10 +195,18 @@ fn every_intent(root: &Path) -> Vec<Intent> {
             kind: AuthoringKind::Document,
             id: ITEM.parse().unwrap(),
         },
-        Intent::RepoSync { root },
+        Intent::RepoSync { root: root.clone() },
+        Intent::DocumentPromote {
+            root: root.clone(),
+            id: ITEM.parse().unwrap(),
+        },
+        Intent::TicketClose {
+            root,
+            id: ITEM.parse().unwrap(),
+        },
     ];
     let listed: HashSet<usize> = intents.iter().map(variant).collect();
-    assert_eq!(listed.len(), 32, "one intent of every variant");
+    assert_eq!(listed.len(), 34, "one intent of every variant");
     intents
 }
 
@@ -233,6 +244,8 @@ fn variant(intent: &Intent) -> usize {
         Intent::CommentAdd { .. } => 29,
         Intent::ItemSync { .. } => 30,
         Intent::RepoSync { .. } => 31,
+        Intent::DocumentPromote { .. } => 32,
+        Intent::TicketClose { .. } => 33,
     }
 }
 
@@ -296,6 +309,8 @@ fn every_intent_builds_its_own_command() {
         "comment add",
         "item sync",
         "repo sync",
+        "document promote",
+        "ticket close",
     ];
     let intents = every_intent(fixture.home());
     let mut kinds = HashSet::new();
@@ -350,7 +365,7 @@ fn changes_items_names_the_intents_that_can_change_items() {
             // RepoCreate, RepoEnable, IndexRefresh, IndexRebuild,
             // OperationResume, OperationAbandon, DocumentSave, TicketSave,
             // the eight Part C commands, and the comment and the two syncs.
-            0 | 1 | 7 | 8 | 17..=31 => true,
+            0 | 1 | 7 | 8 | 17..=33 => true,
             // RepoRemove closes the tabs instead; the rest change
             // settings, keys or hosts, never an item.
             2..=6 | 9..=16 => false,
@@ -433,8 +448,9 @@ fn labels_are_fixed_text() {
 fn syncs_comments_and_resume_stop_at_safe_points_and_saves_do_not() {
     for intent in every_intent(Path::new("/repo")) {
         let expected = match variant(&intent) {
-            // OperationResume, CommentAdd, ItemSync, RepoSync.
-            17 | 29..=31 => true,
+            // OperationResume, CommentAdd, ItemSync, RepoSync,
+            // DocumentPromote, TicketClose.
+            17 | 29..=33 => true,
             // Every local command, the saves among them.
             0..=16 | 18..=28 => false,
             other => unreachable!("variant {other}"),
@@ -446,4 +462,48 @@ fn syncs_comments_and_resume_stop_at_safe_points_and_saves_do_not() {
             intent.label()
         );
     }
+}
+
+/// Approve and merge… builds `document promote` of the document it was
+/// asked for, confirmed, stopping at safe points, and changing items.
+#[test]
+fn document_promote_builds_its_mutation() {
+    let root = PathBuf::from("/repo");
+    let intent = Intent::DocumentPromote {
+        root: root.clone(),
+        id: ITEM.parse().unwrap(),
+    };
+    let Ok(Mutation::DocumentPromote(input)) = intent.build(None, || panic!("no store")) else {
+        panic!("an approval builds `document promote`");
+    };
+    assert_eq!(input.root, root);
+    assert_eq!(input.id.to_string(), ITEM);
+    assert_eq!(intent.label(), "Approve and merge");
+    assert_eq!(intent.job_kind(), JobKind::DocumentPromote);
+    assert_eq!(intent.root(), Some(root.as_path()));
+    assert!(intent.confirmed());
+    assert!(intent.changes_items());
+    assert!(intent.stops_at_safe_points());
+}
+
+/// Close ticket… builds `ticket close` of the ticket it was asked for,
+/// confirmed, stopping at safe points, and changing items.
+#[test]
+fn ticket_close_builds_its_mutation() {
+    let root = PathBuf::from("/repo");
+    let intent = Intent::TicketClose {
+        root: root.clone(),
+        id: ITEM.parse().unwrap(),
+    };
+    let Ok(Mutation::TicketClose(input)) = intent.build(None, || panic!("no store")) else {
+        panic!("a close builds `ticket close`");
+    };
+    assert_eq!(input.root, root);
+    assert_eq!(input.id.to_string(), ITEM);
+    assert_eq!(intent.label(), "Close ticket");
+    assert_eq!(intent.job_kind(), JobKind::TicketClose);
+    assert_eq!(intent.root(), Some(root.as_path()));
+    assert!(intent.confirmed());
+    assert!(intent.changes_items());
+    assert!(intent.stops_at_safe_points());
 }

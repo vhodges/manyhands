@@ -259,6 +259,22 @@ pub(crate) enum Intent {
     RepoSync {
         root: PathBuf,
     },
+    /// Approve and merge…: a document's work merged into the primary
+    /// branch, shared, and tidied up. No identity or input: the library
+    /// takes the configured identity (C5 decision 6).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 6a.
+    DocumentPromote {
+        root: PathBuf,
+        id: ItemId,
+    },
+    /// Close ticket…: a ticket marked closed, merged into the primary
+    /// branch, shared, and tidied up. `closed_by` is the configured
+    /// identity (C5 decision 6).
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 6a.
+    TicketClose {
+        root: PathBuf,
+        id: ItemId,
+    },
 }
 
 impl Intent {
@@ -277,7 +293,9 @@ impl Intent {
             | Self::HostReplace { .. }
             | Self::OperationAbandon { .. }
             | Self::DocumentRepair { .. }
-            | Self::TicketRepair { .. } => true,
+            | Self::TicketRepair { .. }
+            | Self::DocumentPromote { .. }
+            | Self::TicketClose { .. } => true,
             Self::RemoteAdd { .. }
             | Self::RemoteSelect { .. }
             | Self::IndexRefresh { .. }
@@ -338,6 +356,8 @@ impl Intent {
             Self::CommentAdd { .. } => "Post comment",
             Self::ItemSync { .. } => "Share item",
             Self::RepoSync { .. } => "Share main",
+            Self::DocumentPromote { .. } => "Approve and merge",
+            Self::TicketClose { .. } => "Close ticket",
         }
     }
 
@@ -369,7 +389,9 @@ impl Intent {
             | Self::TicketRepair { root, .. }
             | Self::CommentAdd { root, .. }
             | Self::ItemSync { root, .. }
-            | Self::RepoSync { root } => Some(root),
+            | Self::RepoSync { root }
+            | Self::DocumentPromote { root, .. }
+            | Self::TicketClose { root, .. } => Some(root),
             Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -412,7 +434,9 @@ impl Intent {
             | Self::TicketRepair { .. }
             | Self::CommentAdd { .. }
             | Self::ItemSync { .. }
-            | Self::RepoSync { .. } => true,
+            | Self::RepoSync { .. }
+            | Self::DocumentPromote { .. }
+            | Self::TicketClose { .. } => true,
             Self::RepoRemove { .. }
             | Self::RepoIdentitySet { .. }
             | Self::RemoteAdd { .. }
@@ -431,14 +455,17 @@ impl Intent {
 
     /// Whether the library honours a cancellation after accepting the
     /// command, at a synchronization's safe points (fact 9): the comment,
-    /// the two syncs and `operation resume`. Every other command, the saves
+    /// the two syncs, `operation resume`, and a promotion or closure, which
+    /// stops between its steps (D5 fact 2). Every other command, the saves
     /// among them, cannot be stopped once accepted.
     pub(crate) fn stops_at_safe_points(&self) -> bool {
         match self {
             Self::OperationResume { .. }
             | Self::CommentAdd { .. }
             | Self::ItemSync { .. }
-            | Self::RepoSync { .. } => true,
+            | Self::RepoSync { .. }
+            | Self::DocumentPromote { .. }
+            | Self::TicketClose { .. } => true,
             Self::RepoCreate { .. }
             | Self::RepoEnable { .. }
             | Self::RepoRemove { .. }
@@ -569,6 +596,8 @@ impl Intent {
             Self::CommentAdd { .. } => JobKind::Comment,
             Self::ItemSync { .. } => JobKind::SynchronizeItem,
             Self::RepoSync { .. } => JobKind::SynchronizeRepo,
+            Self::DocumentPromote { .. } => JobKind::DocumentPromote,
+            Self::TicketClose { .. } => JobKind::TicketClose,
         }
     }
 }

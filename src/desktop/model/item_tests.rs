@@ -11,8 +11,9 @@ use manyhands::{
 use serde_json::json;
 
 use super::{
-    ItemReads, ItemView, KIND_ACTIVE, KIND_PRIMARY, KIND_UNVERIFIED, LATER, NO_BRANCH,
-    comment_author, context_problems, metadata_value, provenance_label,
+    APPROVE_AND_MERGE, CLOSE_TICKET, ItemReads, ItemView, KIND_ACTIVE, KIND_PRIMARY,
+    KIND_UNVERIFIED, LATER, NO_BRANCH, comment_author, context_problems, metadata_value,
+    provenance_label,
 };
 use crate::desktop::{
     model::{
@@ -60,9 +61,13 @@ fn provenance_names_the_context_kind_its_branch_and_worktree() {
     assert_eq!(KIND_UNVERIFIED, "Unverified");
 }
 
+/// No action waits for a later release: the header's lifecycle actions
+/// are live, with the design's labels (E-4).
 #[test]
 fn the_unavailable_actions_are_the_designs() {
-    assert_eq!(LATER, ["Approve and merge…", "Close ticket…"]);
+    assert!(LATER.is_empty());
+    assert_eq!(APPROVE_AND_MERGE, "Approve and merge…");
+    assert_eq!(CLOSE_TICKET, "Close ticket…");
 }
 
 #[test]

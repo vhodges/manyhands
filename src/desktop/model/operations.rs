@@ -879,6 +879,15 @@ impl Operations {
     }
 }
 
+/// Whether a pending row is a document promotion's or a ticket closure's
+/// parent (L2), which the library lists as remote work.
+fn is_lifecycle(operation: &OperationDto) -> bool {
+    matches!(
+        operation.action,
+        OperationAction::Promote | OperationAction::Close
+    )
+}
+
 /// Whether a pending row is a synchronization.
 fn is_synchronization(operation: &OperationDto) -> bool {
     operation.family == OperationFamily::Remote
@@ -924,9 +933,14 @@ pub(crate) enum ResumeOffer {
 /// remote item or repository synchronization, by its operation ID
 /// (decision 11); a local-context synchronization shows it unavailable
 /// (D5). The library lists no comment publication waiting to be resumed
-/// (`takes_up_remote_work`), so none is offered.
+/// (`takes_up_remote_work`), so none is offered. A promotion's or
+/// closure's parent (L2) is no synchronization: it is not offered until
+/// Part C sends its resume (D5 design, A1).
 pub(crate) fn resume_offer(operation: &OperationDto) -> ResumeOffer {
     if operation.next_action != Some(OperationNextAction::Resume) {
+        return ResumeOffer::NotOffered;
+    }
+    if is_lifecycle(operation) {
         return ResumeOffer::NotOffered;
     }
     if takes_up_remote_work(operation) {

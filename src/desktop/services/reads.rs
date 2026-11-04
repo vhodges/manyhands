@@ -194,7 +194,9 @@ impl Services {
                 let envelope = backend.service().prepare(&mutation);
                 match delays.next() {
                     Some(delay) if envelope.code == ResultCode::Busy => timers.timer(*delay).await,
-                    _ => return envelope,
+                    // A test may put a canned answer in place of the
+                    // library's last one.
+                    _ => return backend.after_prepare().unwrap_or(envelope),
                 }
             }
         });
