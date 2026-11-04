@@ -14,7 +14,7 @@ use gpui_kit::{
     div, px,
 };
 use manyhands::{
-    repository::{ItemDtoKind, PreviewDetailsDto, PreviewDto},
+    repository::{ItemDtoKind, PreviewDetailsDto},
     results::ResultCode,
 };
 
@@ -22,7 +22,7 @@ use super::{
     CANCEL, CLOSE, HELD_LEAD, LifecycleDialog, PREPARE_AGAIN, PREPARING, Phase, RETRY,
     SAVING_FIRST, STARTED,
 };
-use crate::desktop::{assets::icon_path, view::confirm::local_time};
+use crate::desktop::assets::icon_path;
 
 /// A piece of text a test reads by `id`.
 pub(super) type Text = gpui_kit::base::ObservedElement<gpui_kit::Stateful<gpui_kit::Div>>;
@@ -127,29 +127,6 @@ impl LifecycleDialog {
         }
     }
 
-    /// The confirm stage's lead and expiry; Task 6b's summary goes here.
-    fn confirm_body(&self, preview: &PreviewDto, cx: &App) -> impl IntoElement + use<> {
-        let lead = match self.heading.kind {
-            ItemDtoKind::Ticket => {
-                "Closing runs these steps in order. If one fails, it stops there and nothing after it happens."
-            }
-            ItemDtoKind::Document => {
-                "Merging runs these steps in order. If one fails, it stops there and nothing after it happens."
-            }
-        };
-        v_flex()
-            .gap_1()
-            .child(text("lifecycle-lead", lead).text_sm())
-            .child(
-                text(
-                    "lifecycle-expires",
-                    format!("Expires {}", local_time(&preview.expires_at)),
-                )
-                .text_xs()
-                .text_color(cx.theme().muted_foreground),
-            )
-    }
-
     fn answer(code: ResultCode, message: &str, cx: &App) -> impl IntoElement + use<> {
         v_flex()
             .gap_1()
@@ -217,6 +194,18 @@ impl Render for LifecycleDialog {
                 buttons = buttons
                     .children(self.held_action(way_out, cx))
                     .child(self.cancel(CLOSE));
+            }
+            Phase::Stale { code, message } => {
+                body = body.child(Self::stale_body(*code, message, cx));
+                let again = self.on(cx, |dialog, _, cx| dialog.prepare(cx));
+                buttons = buttons
+                    .child(button(
+                        "lifecycle-prepare-again",
+                        PREPARE_AGAIN,
+                        true,
+                        again,
+                    ))
+                    .child(self.cancel(CANCEL));
             }
             Phase::Answered { code, message } => {
                 body = body.child(Self::answer(*code, message, cx));

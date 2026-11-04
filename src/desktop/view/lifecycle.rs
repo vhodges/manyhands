@@ -15,9 +15,13 @@
 //!   sent is then not saved.
 //! - **Preparing.** The command is prepared (`Services::prepare`), as a
 //!   read: nothing runs.
-//! - **Confirm.** The preview's confirmation is held; Confirm, by click or
-//!   Enter, sends the first run once with it (`Worker::submit`), and then
-//!   the dialog says it started. The summary is Task 6b's.
+//! - **Confirm.** The preview's summary: steps, changed paths, code note,
+//!   Git line and expiry (`lifecycle/confirm.rs`). Its confirmation is held;
+//!   Confirm, by click or Enter, sends the first run once with it
+//!   (`Worker::submit`), and then the dialog says it started.
+//! - **Stale.** The library refused that consent: "Something changed since
+//!   you confirmed", and Prepare again, after which Confirm sends the same
+//!   request again with the new confirmation (`Worker::reconfirm`; P2, P3).
 //! - **Blocked.** Each blocker in words, with its way out (L1,
 //!   `lifecycle_prepare_way_out`), and the answer's code; a dirty main says
 //!   so and offers Open folder (P19). Prepare again prepares once more,
@@ -35,6 +39,7 @@
 //! opened it. The dialog holds the item's title for its header and derives
 //! no `Debug`.
 
+mod confirm;
 mod prepare;
 mod view;
 
@@ -56,7 +61,7 @@ use crate::desktop::{
     model::stamp::Generations,
     services::{
         Services,
-        requests::{DesktopRequestId, Intent, Lane},
+        requests::{DesktopRequestId, Intent},
     },
     view::item::ItemPane,
 };
@@ -208,6 +213,12 @@ enum Phase {
     Held {
         way_out: LifecycleWayOut,
     },
+    /// The confirmed run's consent was refused: nothing ran, and Prepare
+    /// again is offered.
+    Stale {
+        code: ResultCode,
+        message: String,
+    },
     /// The prepare gave no preview: a refusal, or nothing to do.
     Answered {
         code: ResultCode,
@@ -216,7 +227,7 @@ enum Phase {
     /// Nothing was asked of the library.
     Message(&'static str),
     /// A run was sent: the first, a Continue or a Resume.
-    Submitted(#[cfg_attr(not(test), allow(dead_code))] DesktopRequestId), // Called from Task 7.
+    Submitted(DesktopRequestId),
 }
 
 pub(crate) struct LifecycleDialog {
@@ -229,6 +240,9 @@ pub(crate) struct LifecycleDialog {
     prepare_read: Option<Task<()>>,
     /// The tab saving first, while the dialog waits for it.
     saving: Option<WeakEntity<ItemPane>>,
+    /// The request Confirm sent, and its attempt: an answer to it that
+    /// refuses the consent offers Prepare again.
+    confirmed: Option<(DesktopRequestId, u32)>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -245,7 +259,9 @@ impl LifecycleDialog {
             origin,
             saving,
         } = opening;
-        let mut subscriptions = Vec::new();
+        let mut subscriptions = vec![cx.observe(services.operations(), |this, _, cx| {
+            this.operations_changed(cx)
+        })];
         if let Some(pane) = saving.as_ref().and_then(WeakEntity::upgrade) {
             subscriptions.push(cx.observe_in(&pane, window, |this, _, window, cx| {
                 this.saving_changed(window, cx)
@@ -274,6 +290,7 @@ impl LifecycleDialog {
             generations: Generations::default(),
             prepare_read: None,
             saving,
+            confirmed: None,
             _subscriptions: subscriptions,
         };
         if dialog.saving.is_none() {
@@ -290,23 +307,6 @@ impl LifecycleDialog {
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.close_dialog(cx);
         window.focus(&self.origin, cx);
-    }
-
-    /// Confirm: the first run, sent once with the preview's confirmation.
-    /// Anything but a held preview does nothing.
-    pub(crate) fn confirm(&mut self, cx: &mut Context<Self>) {
-        let Phase::Confirm { confirmation, .. } = &self.phase else {
-            return;
-        };
-        let confirmation = *confirmation;
-        let request = self.services.worker().submit(
-            self.intent.clone(),
-            Lane::User,
-            Some(confirmation),
-            None,
-        );
-        self.phase = Phase::Submitted(request);
-        cx.notify();
     }
 }
 
@@ -340,3 +340,7 @@ mod save_first_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/action_tests.rs"]
 mod action_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/confirm_tests.rs"]
+mod confirm_tests;

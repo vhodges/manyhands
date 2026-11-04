@@ -51,6 +51,8 @@ icon_assets!(
         ArrowUp,
         ArrowDown,
         Archive,
+        Plus,
+        Minus,
     ]
 );
 
