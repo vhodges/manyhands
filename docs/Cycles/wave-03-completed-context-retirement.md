@@ -12,8 +12,18 @@ id: "01M6M3B4TF7MQM8QCZAVSZWA6Y"
 
 ## Status
 
-Draft for review, not approved for implementation. The owner authorized drafting
-and independent review on 2026-11-04. No implementation, build or test has run.
+**Reviewed draft, awaiting owner approval (2026-11-04).** The mechanism at
+`5a6136e5` passed the third focused source/feasibility and adversarial/contract
+reviews with 0 Blocking, 0 Important and 0 Minor findings in each. Earlier rounds
+and their resolutions are recorded below. These are source-grounded planning
+reviews, not runtime proof. Only this final status/review record and the ticket
+checkpoint were edited after that reviewed revision; those metadata edits have
+no additional independent review.
+
+The owner authorized drafting/review only. Q1/Q2's detailed outcome/resource
+tables, named edits E-1–E-10 and the documents still need approval; execution
+method and implementation need separate authorization. No implementation, Cargo
+build/test, real-context cleanup, merge into main, closure or native CI has run.
 
 - [Design](../plans/2026-11-04-completed-context-retirement-design.md)
 - [Implementation plan](../plans/2026-11-04-completed-context-retirement-implementation.md)
@@ -262,7 +272,7 @@ rewriting their original approval. No sibling ticket edits without permission.
 | Review S1 | Concurrent pending children made aggregate indexing unexecutable | Decision | D12; sequential existing handoff, no new batch-local journal | A removed/B not started; child-index interruption rows |
 | Review S2 | Old observation child could retain reservation on retry | Ruling | Exact parent capability at every ownership guard; atomically fence bound old read-only child before new child | Stale executor and four observation crash windows |
 | Review S5 | Task 2 optional SSH module could run zero tests | Settled | Register module/CASES in same task as first tests | Tasks 2/4, nonzero-case assertion |
-| Independent review round 1, `4fa05c2c` | Source: 1 Blocking, 3 Important, 1 Minor. Contract: 2 Blocking, 6 Important, 1 Minor | Findings verified | Revisions above; revised mechanisms not yet independently reviewed | Next: scoped source and adversarial re-review |
+| Independent review round 1, `4fa05c2c` | Source: 1 Blocking, 3 Important, 1 Minor. Contract: 2 Blocking, 6 Important, 1 Minor | Findings verified | Addressed and checked in round 2; additional lifetime/routing gaps recorded below | No original finding is left open |
 | Round 2 adversarial A1 | Admin token is gone before interrupted branch-delete retry; same-OID recreated branch could be removed | Ruling | R-7: no surviving branch deletion across a new executor without lifetime proof | Delete/crash/recreate-T/retry preservation row |
 | Round 2 adversarial A2 | Intended nonce could stamp a recreated registration during bootstrap retry | Ruling | Commit identity only after installed-token verification; missing token after interrupted bootstrap refuses this candidate | Before-install/recreated-registration and installed-before-SQL cases |
 | Round 2 adversarial A3 / source S3 | Between indexed A and unstarted B there is no pending abandon target | Approval item Q1 | Explicit completed-child `K_last` batch-stop handle; no reopening local row or aggregate owner | Stop/confirm/crash/stale-coordinator gap cases |
@@ -270,4 +280,15 @@ rewriting their original approval. No sibling ticket edits without permission.
 | Round 2 source S1 | Old materialization intent can resurrect an obsolete document tip | Decision | D14; exact-intent consumption/receipt with owned local cleanup; existing lifecycle omission stays proposed follow-up | T retire/new-Q materialization, plus Git/SQL crash window |
 | Round 2 source S2 | Original poll refresh success/pending could be confused with later repair | Ruling | R-8 durable original-handoff eligibility; conservative unconfirmed replay | Failed original/unrelated repair; success/lost eligibility-write cases |
 | Owner after round 2 | Existing generic abandonment safety display | Decision | D13 authorizes E-10's limited display/test scope, not a desktop Retire action | Task 3 |
-| Independent review round 2, `6a6301be` | Source: 0 Blocking, 3 Important, 0 Minor. Adversarial/contract: 1 Blocking, 3 Important, 0 Minor | Findings verified | Revisions recorded above; third focused review still required | If the same mechanism remains blocked after that review, stop redesign and present the required-outcome/test checkpoint |
+| Independent review round 2, `6a6301be` | Source: 0 Blocking, 3 Important, 0 Minor. Adversarial/contract: 1 Blocking, 3 Important, 0 Minor | Findings verified | Addressed and checked in round 3, including D14 and R-7/R-8 | No round-2 finding is left open |
+| Independent review round 3, `5a6136e5` | Source/feasibility: 0 Blocking, 0 Important, 0 Minor. Adversarial/contract: 0 Blocking, 0 Important, 0 Minor | Settled at planning level | Both reviewers verified prior fixes and the new interactions; no repeated blocker remains | No Cargo/native/runtime evidence; Task 2/4 test-first checkpoints remain mandatory |
+
+## Approval Handoff
+
+The remaining asks are approval of these three documents including Q1/Q2 and
+E-1–E-10, choice of execution method, and separate implementation authorization.
+Recommended method: subagent-driven, sequential task ownership and independent
+review at the mechanism checkpoints; cost is additional review/context overhead.
+Do not treat any one of those approvals as the others. The ticket remains
+`waiting`; only its branch has been pushed. The broader existing lifecycle
+materialization-intent issue remains a proposed follow-up, not a filed ticket.
