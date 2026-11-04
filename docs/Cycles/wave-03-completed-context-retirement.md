@@ -18,6 +18,11 @@ development”. This approves the Cycle, design and implementation plan, includi
 Q1/Q2 and E-1–E-10. Execution uses sequential implementers, spec review, then
 quality review per task; Tasks 2/4 retain their adversarial checkpoints.
 
+The owner subsequently answered “yes” to Task 0's three narrow amendments
+(H1–H3): correct ordinary poll's tag prose without changing its untagged output,
+extend E-5 for the two named collaborator disposition assertions, and extend E-2
+for the exact recovery-step inventory. No broader lifecycle cleanup is included.
+
 The mechanism at
 `5a6136e5` passed the third focused source/feasibility and adversarial/contract
 reviews with 0 Blocking, 0 Important and 0 Minor findings in each. Earlier rounds
@@ -72,8 +77,8 @@ at Task 0. D6 is unplanned and depends on D5. Read-precedence ticket
 Task 0 recheck at `74186d51`, main `c69789d9`: no newly merged D5 implementation
 overlap was found; implementation source still equals the planning base. No
 unmerged D5 branch was consumed. The execution ledger records newly discovered
-pin/ordinary-output contradictions H1–H3 for owner resolution before Task 1;
-existing document/implementation approvals are preserved, not silently expanded.
+pin/ordinary-output contradictions H1–H3, subsequently approved as the narrow
+amendments above. Existing document/implementation approvals remain in force.
 
 ## Scope
 

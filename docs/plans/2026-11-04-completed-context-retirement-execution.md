@@ -27,9 +27,9 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 - Task 0 is source reconnaissance, three baseline runs, factual planning notes,
   this ledger and a canonical ticket checkpoint. No Rust, test, schema or Cargo
   edits; no Task 1 work. All new interfaces below remain **planned**.
-- **Hold before Task 1:** source/pin sweep found H1–H3 below. Ask the owner about
-  the omitted semantic test edits and ordinary poll tag contradiction; do not
-  change new expectations or silently reinterpret the approved contract.
+- **H1–H3 approved:** the owner answered “yes” to all three narrow amendments.
+  Ordinary output stays untagged; E-5/E-2 are explicitly extended as recorded
+  below. Task 1 may proceed under the existing implementation/method approval.
 - No push, PR, other-worktree edit, main integration/closure, native CI, real
   context retirement, remote deletion, key/profile cleanup or follow-up filing.
   Release behavior, drafts, default/background non-cleanup and read ranking stay
@@ -45,6 +45,7 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 | Owner / coauthor | Git `user.name=Vince Hodges`, `user.email=vince@imbas.ca`; agent trailer `Co-Authored-By: GPT-6.1 Sol <noreply@openai.com>` |
 | Fresh controller preflight, same execution phase | Fetch succeeded; base `origin/main` and local main both `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; no local-only main commits. Merge before/after `f4962f610df27a429d424307bca7c279c5a3720a`; already up to date; no conflicts, no rebase. Recorded in approval comment `01M6M8HJT3SGJR25FV4RTDP66J` |
 | Task 0 reconfirmation | Same main/base. `git merge origin/main` again says already up to date; before/after `74186d51507471b385f1ba3da644f426ab09180b`; ancestry check exits 0. No redundant network fetch; no conflicts |
+| Pre-Task 1 after H1–H3 approval | Both checkouts clean; registered worktree/branch reconfirmed. Fresh fetch succeeded; main/base still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`. Merge before/after `0b73471fc03565e7ab82f0a4cde63d6957d2bcec`, already up to date; no conflicts/rebase. Current origin/main rules reread. An unrelated remote ticket ref advanced; it was not merged or consumed |
 | Rules | Current worktree `AGENTS.md` and `git show origin/main:AGENTS.md` reread; preflight reference reread |
 | Source base | `git diff origin/main -- src tests schemas Cargo.toml Cargo.lock .github/workflows/build.yml` empty. `git diff c0e93f87ada218f26428d5a9387e6729274220cf -- src tests schemas .github/workflows/build.yml` also empty |
 | D5 overlap | No newly merged D5 source at this main/base: same implementation as planning, no D5 Cycle on main. Existing mutation exports, CLI lifecycle adapter and generic desktop confirmation were reread. D5's unmerged branch/worktree was not consumed; do not infer that its future changes cannot overlap |
@@ -66,6 +67,13 @@ no publication. Earlier mistaken CLI invocations had no effects. This worker
 made no additional ticket save/index mutation.
 
 ## Grounding Findings Requiring Resolution
+
+**Resolved by owner, 2026-11-04:** “yes” to the controller's three-amendment
+request. The findings below preserve what Task 0 discovered; their historical
+ask text no longer represents an open gate. H1 preserves the existing untagged
+ordinary poll shape and adds no legacy tag; H2 extends E-5 for exactly its two
+named `Closed`/`Promoted` assertions, retaining all other assertions/lifecycle
+code; H3 extends E-2 for the two already-approved stored step names only.
 
 | ID | Exact observation | Required checkpoint; no semantic edit made |
 | --- | --- | --- |
@@ -157,7 +165,7 @@ evidence. No implementation-source drift from `c0e93f87` was found.
 ## Concrete Pin Sweep And Constructor Register
 
 References are baseline locations. Lists below distinguish old pins (do not
-reinterpret), approved catalogue additions, and newly discovered H2/H3 holds.
+reinterpret), approved catalogue additions, and the now-approved H2/H3 additions.
 No test or constructor was edited in Task 0.
 
 | Edit authority | Exact existing pins / include path | Anticipated bounded change or unchanged control |
@@ -174,7 +182,7 @@ No test or constructor was edited in Task 0.
 | E-8 | `tests/recovery_foundation_gate.rs`: `pending_lifecycle_records_block_differently_identified_mutations_without_side_effects` (795), `pending_lifecycle_record_rejects_a_same_id_different_target` (915); `schemas/v1/{operation,operation_list,operation_mutation}.schema.json` | Extend new-action matrices/registries without changing old release or lifecycle expectations |
 | E-9 | `tests/cli/recovery_tables.rs`: `every_row_names_a_golden_that_holds_its_code_next_action_and_exit`, `every_row_s_code_is_one_its_verbs_answer_with_by_the_audit`, `every_recoverable_code_of_c5_s_outcome_tables_has_a_row`, `every_recoverable_code_of_an_earlier_cycle_s_union_has_a_row_or_a_reason` | Add retirement recovery rows/evidence; inspect every changed golden |
 | E-10 | `mutation/bind/abandon.rs:433`; `src/bin/manyhands-cli/human_admin_tests.rs:127` `every_details_shape_renders_its_fields`; `tests/mutation_contract.rs` `an_operation_abandon_and_its_preview_match_their_schemas_and_goldens`; `tests/mutation_confirmation/abandon.rs` `a_preview_of_an_abandon_shows_what_the_operation_left_and_changes_nothing`; `tests/cli/collaboration.rs::abandon_closes_c3_s_stuck_save_and_leaves_its_file_as_it_is`; existing desktop `view/{confirm,confirm_tests}.rs` | Add nullable preview metadata and new preserving renderer cases only. `tests/fixtures/{mutation_v1,cli_v1}/operation_abandon_preview.json` require the approved null property, not new effects. No-op/not-found previews carry no preview data and need no fabricated details |
-| Additional hold | H2's two real SSH journey CASES; H3's `every_step_is_stored_under_its_own_name_and_read_back` | Owner checkpoint; outside explicitly named old pins. Do not edit until authorized |
+| Approved H2/H3 amendment | H2's two real SSH journey CASES; H3's `every_step_is_stored_under_its_own_name_and_read_back` | Owner's “yes” extends E-5/E-2 only as specified above; no broader semantic or lifecycle-code edit |
 
 ### Constructor-only / Exhaustive-arm Checklist
 
@@ -279,7 +287,7 @@ Task 0. Passing old controls is not new retirement safety evidence.
 
 | ID | Contract / owning tasks | Evidence still owed |
 | --- | --- | --- |
-| A1 | Recognize closed peer copy; deliberate retire corrects reads, Tasks 1/2/5/6 | CliPair close/delete/default preserve/retire/show/list/ready; H2 blocks unapproved old-pin edit |
+| A1 | Recognize closed peer copy; deliberate retire corrects reads, Tasks 1/2/5/6 | CliPair close/delete/default preserve/retire/show/list/ready; H2 old-pin amendment approved |
 | A2 | Preserve dirt, ignored/hidden/submodule/identity/unmatched work, Tasks 1/2/6 | Proof/cleanup matrices and byte-exact binary refusals |
 | A3 | Conservative folded-ticket proof, Tasks 1/2/6 | Unique-base/all-path/mode/canonical closure-only positive and negative matrices; nonancestor binary row |
 | A4 | Promoted-document recognition and retirement, Tasks 1/2/6 | Presence-only negative, peer promotion/content proof; H2 old-pin approval; D14 new-Q rematerialization |
@@ -335,11 +343,12 @@ are not authorized; numeric exits must come from existing results registry.
 | Planning round 2, `6a6301be` | Source 0 Blocking/3 Important/0 Minor; adversarial 1 Blocking/3 Important/0 Minor | Resolved by R-7/R-8, D14, marker bootstrap/gap-stop/receipt fixes |
 | Planning round 3, `5a6136e5` | Both source/feasibility and adversarial/contract reviews 0 Blocking/0 Important/0 Minor | Planning evidence only, not runtime proof |
 | Approval metadata, `622f6136` | Owner approved all documents/Q1/Q2/E-1–E-10, implementation and sequential method | Preserved; not an implementation review |
-| Task 0 source/pin sweep | H1 ordinary tag contradiction; H2 two omitted SSH expectation edits; H3 omitted exact local-step enumeration | Open owner checkpoint, not silently authorized |
+| Task 0 source/pin sweep | H1 ordinary tag contradiction; H2 two omitted SSH expectation edits; H3 omitted exact local-step enumeration | Initially held, subsequently resolved by the owner's explicit “yes” below |
 | Task 0 self-review | Rechecked source references, fixture provenance, constructor counts, command outputs and docs-only diff; `git diff --check` clean before checkpoint finalization | No source changes; H1–H3 left open rather than resolved by assumption |
 | Task 0 independent spec review, `74186d51..6a8b4259` | Session `ses_e57684f71ffedpO7q4KuRNUgeS`: 0 Blocking/0 Important/0 Minor Task 0 defects; source corroborated H1–H3 and found no additional semantic pins or mandatory constructor omissions | Spec compliant; H1–H3 are owner-scope holds, not Task 0 defects; no Cargo rerun |
 | Task 0 independent quality review, same range, after spec pass | Session `ses_e57654396ffew9p9o8gygVkEQj`: 0 Critical/0 Important/0 Minor; ledger/source references, metadata/links, evidence limits and unchanged controls verified | Task 0 quality approved; no source changes or Cargo rerun; no Task 1 authorization inferred |
 | Controller verification after both reviews | Actual DTO, the two SSH journey assertions and exact recovery step list inspected; H1–H3 confirmed. Task 0 range `git diff --check` passed; tree clean before this review-record update. Supported `ticket show` verified status `implementing`, lifecycle `open`, exact active ticket context after the CLI save | Narrow H1–H3 amendment requested; implementation approval/Q1/Q2/E-1–E-10 remain intact |
+| Owner H1–H3 resolution | “yes” to all three exact amendments in the controller's preceding request; canonical approval checkpoint `01M6MCT4HYJ7VKG22J6R0ZNSWQ` | No open Task 0 holds; preserve prior approvals and separate lifecycle gates |
 | Tasks 2/4 adversarial reviews, final whole-range reviews | Not yet run | Mandatory future checkpoints |
 
 ## Task Checklist And Next Step
@@ -349,7 +358,7 @@ are not authorized; numeric exits must come from existing results registry.
   canonical checkpoint `01M6M8YY54YSZ42XHA0S1Q2KE8` are in the Task 0 commit,
   `docs: start completed-context retirement execution`, based on `74186d51`.
   Independent spec and quality reviews passed without findings on
-  `74186d51..6a8b4259`; only H1–H3 owner resolution remains outstanding.
+  `74186d51..6a8b4259`; owner H1–H3 resolution is now recorded, no open holds.
 - [ ] **1 — Shared proof, recognition, disposition upgrade.** Not started.
 - [ ] **2 — Durable single-context retirement.** Not started; adversarial gate.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
@@ -360,10 +369,7 @@ are not authorized; numeric exits must come from existing results registry.
 - [ ] **8 — Final local gates/independent reviews/owner handoff.** Not started;
   merge/close/native dispatch remain separately authorized.
 
-Immediate next step: obtain owner resolution for H1–H3 before dispatching Task 1.
-Recommended narrow amendment: preserve ordinary poll's existing untagged wire
-shape and correct the baseline/tag prose, keeping the new opted-in root distinct;
-authorize only the two named collaborator disposition expectation changes and
-the mechanical two-step inventory addition. Preserve every other assertion and
-existing lifecycle cleanup behavior. This does not reopen approval of the
-documents, Q1/Q2, E-1–E-10, implementation or execution method.
+Immediate next step: dispatch Task 1's fresh implementer with the approved
+amendments, followed by independent spec then quality review. Preserve every
+other assertion and existing lifecycle cleanup behavior. No reapproval of the
+documents, Q1/Q2, E-1–E-10, implementation or execution method is needed.

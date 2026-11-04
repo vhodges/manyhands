@@ -81,8 +81,9 @@ test in Tasks 1–6. The mechanism checkpoints in Tasks 2/4 are mandatory.
 **Grounding checkpoint:** source/pin reconnaissance at `74186d51` found the
 ledger's H1–H3 (ordinary output is untagged despite the design's `poll` tag
 wording; two unnamed SSH disposition expectations; one unnamed exact recovery
-step enumeration). These are raised for owner resolution before Task 1. No
-additional existing test semantics are approved by recording the findings.
+step enumeration). The owner subsequently approved all three narrow amendments:
+ordinary output remains untagged, E-5 includes the two named collaborator
+disposition assertions and E-2 includes the mechanical step inventory addition.
 
 **Files:** create `docs/plans/2026-11-04-completed-context-retirement-execution.md`;
 update the three planning documents only where grounding changes facts.
@@ -119,6 +120,9 @@ devenv shell -- cargo test --all-features --locked --test cli_remote c5_polling_
 **Modify:** `src/repository.rs`; `src/repository/remote/{poll,state}.rs` and test
 modules; `src/repository/mutation/{dto.rs,bind/poll.rs}`;
 `schemas/v1/poll_mutation.schema.json`; E-1/E-2/E-5.
+E-5's approved H2 amendment also permits only the two named disposition
+assertions in `tests/{ticket_closure,document_promotion}/journeys.rs`; run their
+filtered cases in this task, retaining all other assertions and lifecycle code.
 
 - [ ] Add table-driven `retirement_proof_` tests for design predicates and full
   changed-entry algorithm: ancestor, folded ticket, canonical normalization,
@@ -142,6 +146,8 @@ devenv shell -- cargo test --all-features --locked --lib retirement_proof
 devenv shell -- cargo test --all-features --locked --lib repository::remote::
 devenv shell -- cargo test --all-features --locked --test read_contract
 devenv shell -- cargo test --all-features --locked --test cli_remote c5_polling
+devenv shell -- cargo test --all-features --locked --test ticket_closure contained_closed_collaborator_cleanup_only
+devenv shell -- cargo test --all-features --locked --test document_promotion happy_comment_history_and_collaborator_poll
 ```
 
 ## Task 2: Single-Context Durable Retirement
@@ -354,7 +360,7 @@ in this task before running its filter.
 - [ ] Keep ordinary `PollMutationDto` and its existing literals/output unchanged.
   Add a distinct `PollRetirementMutationDto`/`poll_retirement` tag and closed
   schema root requiring every field, retirement outcomes included. Register both
-  roots for command `poll once`, decode old and new stored tags, and validate
+   roots for command `poll once`, decode the old untagged shape and new stored tag, and validate
   legacy ordinary, opted-in and invalid missing/mixed shapes. Do not add `oneOf`
   or change `tests/support/schema.rs` to support it. Verify, commit
   `feat: opt explicit polls into safe context retirement`;

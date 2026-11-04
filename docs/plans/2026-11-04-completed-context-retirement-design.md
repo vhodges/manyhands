@@ -24,12 +24,11 @@ Verified at `c0e93f87`, with implementation source equal to planning-base main:
 
 Task 0 rechecked these facts at `74186d51` against main `c69789d9`; source,
 tests and schemas are unchanged from that planning revision. The execution
-ledger records the exact integration/pin sweep and holds H1–H3. In particular,
-ordinary `PollMutationDto` and its published root are **untagged** today; the
-Results section's “with tag `poll`” wording conflicts with its unchanged-output
-requirement. That contradiction is raised for resolution, not implemented as a
-new field. Two additional existing SSH disposition pins and the recovery-store
-step-name enumeration also require explicit inclusion before expectation edits.
+ledger records the exact integration/pin sweep and H1–H3. The owner approved
+all three narrow amendments: ordinary `PollMutationDto` and its published root
+remain **untagged**, correcting the earlier tag claim without adding a field;
+E-5 now includes the two named SSH collaborator disposition pins and E-2 includes
+the recovery-store step-name enumeration. No other test semantics are changed.
 
 1. `remote/poll.rs:201–244` returns `RemotelyDeleted` before worktree inspection.
    `PollDisposition`/guidance are at `:25–73`; `primary_holds` at `:725–739`
@@ -619,7 +618,7 @@ Keep `closed`/`promoted` as observation dispositions, distinct from retirement
 outcomes. Do not label a dirty closed context `retired`.
 
 Publish two closed **separate roots**: existing `poll_mutation.schema.json`
-with tag `poll`, and proposed `poll_retirement_mutation.schema.json` with tag
+with its unchanged untagged wire shape, and proposed `poll_retirement_mutation.schema.json` with tag
 `poll_retirement`. Each requires all its properties and rejects additional
 properties. Keep ordinary `PollMutationDto` unchanged: no optional-field schema
 exception or old-literal edits. The CLI inventory already supports several data
@@ -642,10 +641,10 @@ must not silently manufacture missing deletion authorization.
 | ID | Files / existing pins | Permitted change |
 | --- | --- | --- |
 | E-1 | `src/repository/remote/state_tests.rs`: `task6_disposition_schema_upgrade_rollback_corruption_and_privacy`, `review_disposition_genuine_old_envelope_migrates_once_preserving_original_rows`; `remote/poll_tests.rs`: `task6_batch_completion_once_and_older_replay_keeps_its_times_but_no_targets`, `review_original_report_survives_second_poll_before_refresh_return` | Exact old/new disposition/schema enumeration expectations; preserve ordinary-poll historical replay semantics, add opted-in immutable-report controls separately |
-| E-2 | `tests/read_contract.rs`: `published_enumerations_list_exactly_the_registered_values`, enumeration/root lists; `src/repository/read/status_tests.rs`: `repository_operations`, `every_action_the_recovery_store_writes_is_one_the_read_knows` | Add two dispositions, retirement action, absent/preserved local steps and new DTO enum/schema roots; no removal/reinterpretation of old values |
+| E-2 | `tests/read_contract.rs`: `published_enumerations_list_exactly_the_registered_values`, enumeration/root lists; `src/repository/read/status_tests.rs`: `repository_operations`, `every_action_the_recovery_store_writes_is_one_the_read_knows`; `src/repository/recovery.rs::every_step_is_stored_under_its_own_name_and_read_back` (H3 amendment) | Add two dispositions, retirement action, absent/preserved local steps and new DTO enum/schema roots; mechanical addition of the two approved steps to the exact stored-name inventory; no removal/reinterpretation of old values |
 | E-3 | `src/repository/mutation/command.rs` tests, `tests/support/{conformance,mutation_golden}.rs`, `tests/mutation_contract.rs` inventory/root/case lists | Register `context retire`, same-command opted-in poll variant, new schema/goldens; predicate assertions matching the design |
 | E-4 | `tests/cli/inventory.rs` named inventory tests and `NO_INPUT`/`DATA`; CLI catalog/help/parser/dispatch test inventories | Add one CLI verb (baseline totals become 42 mutating/78 total), flag and help. Keep both existing exemptions; no new input-taking verb |
-| E-5 | `tests/cli_remote/polling.rs` peer-closure cases and `tests/fixtures/cli_v1/poll_once_closed_ticket.json` | Only remotely-deleted-and-locally-materialized closed-context expectations gain `closed`. Still-present remote-context materialization and open-item deletion controls remain unchanged |
+| E-5 | `tests/cli_remote/polling.rs` peer-closure cases and `tests/fixtures/cli_v1/poll_once_closed_ticket.json`; `tests/ticket_closure/journeys.rs` case `contained_closed_collaborator_cleanup_only`; `tests/document_promotion/journeys.rs` case `happy_comment_history_and_collaborator_poll` (H2 amendment) | Only remotely-deleted-and-locally-materialized completed-context expectations gain `closed` / `promoted`. The two named collaborator assertions change from `RemotelyDeleted` to `Closed` / `Promoted`, retaining every Git/content/preservation assertion. Still-present remote-context materialization (including that closed-ticket golden's `current`) and open-item deletion controls remain unchanged; no existing lifecycle cleanup change |
 | E-6 | Stored decoding in `mutation/dto.rs`; output-root inventories; new cases in `manyhands-cli/polling_tests.rs` | Add the opted-in `poll_retirement` tag/root and decoding/rendering cases; keep ordinary `PollMutationDto` literals and output unchanged |
 | E-7 | `tests/mutation_replay/resume.rs`: `a_resume_of_a_pending_local_row_no_request_holds_offers_its_abandon`, poll-original-request rows; `tests/mutation_bridges/context.rs` exhaustive test arms only if required by the new mutation | Add retirement-specific routes/cases without changing those rows' existing actions; retain all release run-as-new and closed-ticket-refusal expectations |
 | E-8 | `schemas/v1/{operation,operation_list,operation_mutation}.schema.json` and corresponding fixture registries; `src/repository/read/status_tests.rs` enumerations; `tests/recovery_foundation_gate.rs`: `pending_lifecycle_records_block_differently_identified_mutations_without_side_effects`, `pending_lifecycle_record_rejects_a_same_id_different_target` | Register new local action and extend action matrices if present, not reinterpret old release rows |
