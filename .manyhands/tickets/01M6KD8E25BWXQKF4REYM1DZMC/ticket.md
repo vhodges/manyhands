@@ -3,7 +3,7 @@ slug: vh-q5a6b
 id: 01M6KD8E25BWXQKF4REYM1DZMC
 title: Close a ticket through manyhands-cli ticket close
 type: task
-status: open
+status: done
 project: manyhands
 team: core
 closed_at: 2026-11-04T14:00:57Z
