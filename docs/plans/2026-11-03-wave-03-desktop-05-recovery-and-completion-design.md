@@ -290,7 +290,8 @@ Files: `R/mutation/way_out.rs` and `way_out_tests.rs` (new),
 `R/mutation/progress.rs`, `R/mutation/command.rs` (the lifecycle's
 pre-call stage, and its table test at `:767-773`),
 `schemas/v1/progress_event.schema.json`,
-`R/promotion/run.rs`, `R/closure/lifecycle.rs`,
+`R/promotion/run.rs`, `R/promotion/lifecycle.rs` (L2's shared
+`resumable` predicate, owner 2026-11-04), `R/closure/lifecycle.rs`,
 `R/mutation/bind/lifecycle.rs`, `src/bin/manyhands-cli/human_lifecycle.rs`,
 `D/model/operations.rs` (`stage_text` arms only, to keep the tree green),
 `src/drafts/mod.rs` and `src/drafts/protect.rs` with its platform modules
@@ -743,6 +744,7 @@ and CLI SSH tests, and by the native checklist against a real remote.
 | E-6 | `D/view/operations/outcomes_tests.rs:431-444`, `give_up_tests.rs:186,242`, `D/model/publication_tests.rs:597,764-772` | `BRANCH_DELETED` text; Republish offer | C |
 | E-7 | `D/view/item/share_tests.rs` conflict-banner test (from `:690`, the text at `:703` and its "no control" assertion) | `CONFLICT_BANNER` drops "Resolving it in Manyhands arrives in a later release"; the banner gains Review changes | B5 |
 | E-8 | `D/view/item/posting_tests/decisions.rs:143-149` (asserts `CONFLICT_BANNER` and that the banner offers no action) | The banner's text as E-7; it offers Review changes | B5 |
+| E-9 | `R/promotion/record_tests.rs:696` `promotion_status_reports_parent_step_once_and_never_offers_boundary_resume` (owner 2026-11-04, Task 2) | `next_action` None → `Resume`; renamed for the new rule | L2 |
 
 Task 0's sweep (2026-11-04) confirmed the list against merged C5 and added
 E-8; E-2 found no CLI golden with a lifecycle `next_action` row, so it may
