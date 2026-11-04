@@ -391,6 +391,7 @@ impl ItemPane {
             heading,
             origin,
             saving,
+            following: None,
         };
         lifecycle::open(opening, &self.services, window, cx);
     }

@@ -68,8 +68,9 @@ pub(crate) fn blocker_words(blocker: LifecycleBlocker) -> &'static str {
 }
 
 /// A way out that is guidance, not a button, in words; `None` for one the
-/// dialog offers as a button.
-fn guidance(way_out: &LifecycleWayOut, item: &'static str) -> Option<String> {
+/// dialog offers as a button. The repository's details are both: these
+/// words, and Open repository details.
+pub(super) fn guidance(way_out: &LifecycleWayOut, item: &'static str) -> Option<String> {
     match way_out {
         LifecycleWayOut::PollOnce => {
             Some("Check origin for others' changes, then prepare again.".to_owned())
@@ -215,14 +216,20 @@ impl LifecycleDialog {
     /// or a resume of the operation that holds it: Continue and Resume are
     /// not offered meanwhile (P22).
     fn in_flight(&self) -> bool {
-        let (Some(root), Some(id)) = (self.root(), self.item_id()) else {
-            return false;
-        };
         let held = match &self.phase {
             Phase::Held {
                 way_out: LifecycleWayOut::ResumeOperation { operation_id },
             } => Some(operation_id.as_str()),
             _ => None,
+        };
+        self.in_flight_with(held)
+    }
+
+    /// As `in_flight`, with a resume of `held`, the operation a way out
+    /// names, counted too.
+    pub(super) fn in_flight_with(&self, held: Option<&str>) -> bool {
+        let (Some(root), Some(id)) = (self.root(), self.item_id()) else {
+            return false;
         };
         self.services.worker().in_flight(|intent| match intent {
             Intent::TicketClose {
@@ -254,6 +261,7 @@ impl LifecycleDialog {
         if self.in_flight() {
             return;
         }
+        self.following_anew();
         self.phase = match RequestId::parse(request) {
             Ok(request) => Phase::Submitted(self.services.worker().submit_with_request_id(
                 self.intent.clone(),
@@ -265,11 +273,13 @@ impl LifecycleDialog {
         cx.notify();
     }
 
-    /// Resume: the operation holding the item, resumed.
-    fn resume_held(&mut self, operation: &str, cx: &mut Context<Self>) {
-        if self.in_flight() {
+    /// Resume: the operation holding the item, or the one an outcome's way
+    /// out names, resumed.
+    pub(super) fn resume_held(&mut self, operation: &str, cx: &mut Context<Self>) {
+        if self.in_flight_with(Some(operation)) {
             return;
         }
+        self.following_anew();
         let (Some(root), Ok(operation_id)) = (self.root(), OperationId::parse(operation)) else {
             self.phase = Phase::Message(NOT_SENT);
             cx.notify();
@@ -384,6 +394,9 @@ impl LifecycleDialog {
         if way_out.contains(&LifecycleWayOut::SharePrimary) && !shared {
             let share = self.on(cx, |dialog, _, cx| dialog.share_main(cx));
             actions.push(button("lifecycle-share-main", SHARE_MAIN, false, share));
+        }
+        if way_out.contains(&LifecycleWayOut::Inspect) {
+            actions.push(self.inspect_button(cx));
         }
         (rows, actions)
     }

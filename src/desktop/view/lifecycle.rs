@@ -35,13 +35,23 @@
 //!   dialog says it is still running (P22).
 //! - **Answered.** Any other answer is shown with its message and code,
 //!   and nothing runs.
+//! - **Running, Done, Failed, Stopped.** A sent run's steps lit from its
+//!   stages, Stop at a safe point, and how it ended, with its way out and
+//!   D4's credential recovery (A3, `lifecycle/running.rs`). Retry sends the
+//!   same request ID again (P7). The operation area's entry of a failed or
+//!   stopped run opens the dialog again on it (`reopen`).
 //!
 //! Escape closes the dialog, and focus goes back to the control that
-//! opened it. The dialog holds the item's title for its header and derives
+//! opened it; a sent run goes on. The dialog holds the item's title for its header and derives
 //! no `Debug`.
 
+mod actions;
 mod confirm;
+mod outcome;
+
+pub(crate) use outcome::{item_of, progress_words};
 mod prepare;
+mod running;
 mod view;
 
 use std::path::Path;
@@ -52,7 +62,8 @@ use gpui_kit::{
 };
 use manyhands::{
     repository::{
-        ConfirmationId, ItemDto, ItemDtoKind, LifecycleBlocker, LifecycleWayOut, PreviewDto,
+        ConfirmationId, ItemDto, ItemDtoKind, LifecycleBlocker, LifecyclePreviewDto,
+        LifecycleWayOut, PreviewDto,
     },
     results::ResultCode,
 };
@@ -79,9 +90,9 @@ pub(crate) const OPEN_FOLDER: &str = "Open folder";
 pub(crate) const SHARE_MAIN: &str = "Share main";
 /// Continue and Resume wait while the item's lifecycle runs (P22).
 pub(crate) const STILL_RUNNING: &str = "Still running\u{2026}";
-/// Confirm sent the first run: what runs next is Task 7's to show.
+/// A run is sent: it goes on with the dialog hidden.
 pub(crate) const STARTED: &str =
-    "Started. It continues in the background and shows up in Activity.";
+    "It continues in the background if you close this, and shows up in Activity.";
 /// A blocked prepare's lead.
 pub(crate) const BLOCKED_LEAD: &str =
     "Nothing was changed. Each thing below stands in the way; deal with it, then prepare again.";
@@ -147,6 +158,9 @@ pub(crate) struct Opening {
     /// The tab whose save runs first (decision 13); `None` when nothing was
     /// unsaved.
     pub saving: Option<WeakEntity<ItemPane>>,
+    /// A run of this session the dialog shows, opened again from the
+    /// operation area (A3): nothing is prepared.
+    pub following: Option<DesktopRequestId>,
 }
 
 /// Opens the lifecycle dialog. `None` while quitting, or while drafts are
@@ -172,8 +186,8 @@ pub(crate) fn open(
             .child(dialog.clone())
             // Enter: Confirm, or Prepare again on a refused consent. The
             // Kit never closes the dialog here.
-            .on_ok(move |_, _, cx| {
-                confirming.update(cx, |dialog, cx| dialog.enter(cx));
+            .on_ok(move |_, window, cx| {
+                confirming.update(cx, |dialog, cx| dialog.enter(window, cx));
                 false
             })
             // Escape: close; what was sent goes on.
@@ -183,6 +197,39 @@ pub(crate) fn open(
     #[cfg(all(test, feature = "desktop-test-support"))]
     cx.set_global(OpenedLifecycle(opened.downgrade()));
     Some(opened)
+}
+
+/// Opens the lifecycle dialog on the run `request` of this session, from
+/// its operation area entry (A3, Open…): its item by its short ID, in its
+/// repository; focus goes back to `origin`. `None` for a request that is no
+/// lifecycle, or while quitting.
+pub(crate) fn reopen(
+    request: &crate::desktop::services::requests::DesktopRequest,
+    origin: FocusHandle,
+    services: &Services,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Entity<LifecycleDialog>> {
+    let (kind, id) = match &request.intent {
+        Intent::TicketClose { id, .. } => (ItemDtoKind::Ticket, id),
+        Intent::DocumentPromote { id, .. } => (ItemDtoKind::Document, id),
+        _ => return None,
+    };
+    let heading = Heading {
+        kind,
+        short: short_id(&id.to_string()),
+        title: None,
+        repository: crate::desktop::view::operations::scope_name(request.intent.root()),
+        branch: None,
+    };
+    let opening = Opening {
+        intent: request.intent.clone(),
+        heading,
+        origin,
+        saving: None,
+        following: Some(request.id),
+    };
+    open(opening, services, window, cx)
 }
 
 /// The lifecycle dialog last opened, for a test to read what it holds.
@@ -244,6 +291,12 @@ pub(crate) struct LifecycleDialog {
     /// The request Confirm sent, and its attempt: an answer to it that
     /// refuses the consent offers Prepare again.
     confirmed: Option<(DesktopRequestId, u32)>,
+    /// The preview Confirm sent: the steps a run shows (A2).
+    plan: Option<Box<LifecyclePreviewDto>>,
+    /// The step of the last stage the shown run reported (L3).
+    reached: Option<outcome::StepKey>,
+    /// Stop at a safe point was pressed on the shown run.
+    stop_pressed: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -259,6 +312,7 @@ impl LifecycleDialog {
             heading,
             origin,
             saving,
+            following,
         } = opening;
         let mut subscriptions = vec![cx.observe(services.operations(), |this, _, cx| {
             this.operations_changed(cx)
@@ -287,14 +341,17 @@ impl LifecycleDialog {
             heading,
             services,
             origin,
-            phase: Phase::Saving,
+            phase: following.map_or(Phase::Saving, Phase::Submitted),
             generations: Generations::default(),
             prepare_read: None,
             saving,
             confirmed: None,
+            plan: None,
+            reached: None,
+            stop_pressed: false,
             _subscriptions: subscriptions,
         };
-        if dialog.saving.is_none() {
+        if dialog.saving.is_none() && following.is_none() {
             dialog.prepare(cx);
         }
         dialog
@@ -349,3 +406,15 @@ mod confirm_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/stale_tests.rs"]
 mod stale_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/outcome_tests.rs"]
+mod outcome_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/outcome_canned_tests.rs"]
+mod outcome_canned_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/credential_tests.rs"]
+mod credential_tests;

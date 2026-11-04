@@ -26,7 +26,7 @@ use std::path::Path;
 
 use gpui_kit::{
     AnyElement, App, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, TestSupportExt,
+    StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{ActiveTheme, Icon, h_flex, v_flex},
     div, px,
 };
@@ -40,7 +40,11 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::{LifecycleDialog, Phase, text};
+use super::{
+    LifecycleDialog, Phase,
+    outcome::{StepKey, stage_step},
+    text,
+};
 use crate::desktop::{
     assets::icon_path,
     services::requests::{Lane, RequestState},
@@ -58,16 +62,18 @@ pub(crate) const TIDY_UP: &str = "Tidy up";
 /// The changed paths' list scrolls past this height.
 const PATHS_MAX_HEIGHT: f32 = 180.;
 
-/// One step of the list: its title and what it does. It may name who
-/// closes the ticket, and derives no `Debug`.
+/// One step of the list: which it is, its title and what it does. It may
+/// name who closes the ticket, and derives no `Debug`.
 pub(crate) struct Step {
+    pub key: StepKey,
     pub title: String,
     pub note: String,
 }
 
 impl Step {
-    fn new(title: impl Into<String>, note: impl Into<String>) -> Self {
+    pub(super) fn new(key: StepKey, title: impl Into<String>, note: impl Into<String>) -> Self {
         Self {
+            key,
             title: title.into(),
             note: note.into(),
         }
@@ -92,15 +98,18 @@ pub(crate) fn steps(details: &LifecyclePreviewDto) -> Vec<Step> {
         .as_deref()
         .filter(|_| details.publication == LifecyclePlannedPublication::Publish);
     let mut steps = vec![Step::new(
+        StepKey::Save,
         SAVE_STEP,
         "Anything unsaved in this tab is saved first.",
     )];
     steps.push(match sharing {
         Some(remote) => Step::new(
+            StepKey::ShareContext,
             format!("Share with {remote}"),
             "Bring in other people's changes, then send yours.",
         ),
         None => Step::new(
+            StepKey::ShareContext,
             KEEP_LOCAL,
             "This repository has no remote, so nothing is sent.",
         ),
@@ -110,25 +119,33 @@ pub(crate) fn steps(details: &LifecyclePreviewDto) -> Vec<Step> {
             LifecycleRecording::Record => MARK_CLOSED,
             LifecycleRecording::Existing => ALREADY_MARKED,
         };
-        steps.push(Step::new(title, format!("Closed by {}", closure.closed_by)));
+        steps.push(Step::new(
+            StepKey::MarkClosed,
+            title,
+            format!("Closed by {}", closure.closed_by),
+        ));
     }
     steps.push(match details.integration {
         LifecyclePlannedIntegration::MergeCommit => Step::new(
+            StepKey::Merge,
             format!("Merge into {primary}"),
             format!("The files below become part of {primary}."),
         ),
         LifecyclePlannedIntegration::AlreadyContained => Step::new(
+            StepKey::Merge,
             format!("Already in {primary}"),
             format!("{primary} already holds every change below."),
         ),
     });
     if let Some(remote) = sharing {
         steps.push(Step::new(
+            StepKey::SharePrimary,
             format!("Share {primary} with {remote}"),
             format!("Send {primary} to {remote}."),
         ));
     }
     steps.push(Step::new(
+        StepKey::TidyUp,
         TIDY_UP,
         tidy_note(&details.cleanup, details.remote.as_deref()),
     ));
@@ -217,10 +234,19 @@ impl LifecycleDialog {
     /// after Prepare again, the same request queued again with the new one.
     /// Anything but a held preview does nothing.
     pub(crate) fn confirm(&mut self, cx: &mut Context<Self>) {
-        let Phase::Confirm { confirmation, .. } = &self.phase else {
+        let Phase::Confirm {
+            confirmation,
+            preview,
+        } = &self.phase
+        else {
             return;
         };
         let confirmation = *confirmation;
+        self.plan = match &preview.details {
+            PreviewDetailsDto::Lifecycle(details) => Some(details.clone()),
+            _ => None,
+        };
+        self.following_anew();
         let worker = self.services.worker();
         let (request, attempt) = match self.confirmed {
             None => (
@@ -242,21 +268,39 @@ impl LifecycleDialog {
     }
 
     /// Enter in the dialog: Confirm on the confirm stage, Prepare again on
-    /// a refused consent; nothing elsewhere.
-    pub(crate) fn enter(&mut self, cx: &mut Context<Self>) {
+    /// a refused consent, and on a sent run what its outcome takes
+    /// (`enter_submitted`); nothing elsewhere.
+    pub(crate) fn enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.phase {
             Phase::Confirm { .. } => self.confirm(cx),
             Phase::Stale { .. } => self.prepare(cx),
+            Phase::Submitted(_) => self.enter_submitted(window, cx),
             _ => {}
         }
     }
 
-    /// The confirmed request was answered: a refused consent shows Stale,
-    /// with Prepare again. Any other answer is Task 7's to show.
+    /// The shown run moved on: its stage lights its step (L3), and the
+    /// dialog draws it again. An answer to the confirmed request that
+    /// refuses the consent shows Stale, with Prepare again.
     pub(super) fn operations_changed(&mut self, cx: &mut Context<Self>) {
         let Phase::Submitted(shown) = self.phase else {
             return;
         };
+        let stage = match self
+            .services
+            .operations()
+            .read(cx)
+            .request(shown)
+            .map(|request| &request.state)
+        {
+            Some(RequestState::Running {
+                stage: Some(stage), ..
+            }) => stage_step(*stage),
+            _ => None,
+        };
+        // Stages come in order: the latest seen is the furthest.
+        self.reached = self.reached.max(stage);
+        cx.notify();
         let Some((request, attempt)) = self.confirmed else {
             return;
         };

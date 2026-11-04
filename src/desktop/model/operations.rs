@@ -128,6 +128,10 @@ pub(crate) struct Operations {
     /// Each finished share's last answer, which its outcome is classified
     /// from (`share_result`).
     shares: HashMap<DesktopRequestId, Envelope<MutationDataDto>>,
+    /// Each finished lifecycle's last answer, which the lifecycle dialog
+    /// shows and takes its way out from (D5, A3): a promotion's or a
+    /// closure's, or a resume's that answered with lifecycle data.
+    lifecycles: HashMap<DesktopRequestId, Envelope<MutationDataDto>>,
 }
 
 /// What finished requests may have changed since the views last read.
@@ -192,6 +196,7 @@ impl Operations {
             WorkerEvent::Queued(request) => {
                 self.stopping.remove(&request.id);
                 self.shares.remove(&request.id);
+                self.lifecycles.remove(&request.id);
                 self.sends += 1;
                 self.sent.insert(request.id, self.sends);
                 self.answers.entry(request.id).or_default().queued();
@@ -227,6 +232,15 @@ impl Operations {
                     .is_some_and(|request| ShareTarget::of(&request.intent).is_some())
                 {
                     self.shares.insert(id, envelope.clone());
+                }
+                if self.request(id).is_some_and(|request| {
+                    matches!(
+                        request.intent,
+                        Intent::TicketClose { .. } | Intent::DocumentPromote { .. }
+                    )
+                }) || matches!(envelope.data, Some(MutationDataDto::Lifecycle(_)))
+                {
+                    self.lifecycles.insert(id, envelope.clone());
                 }
                 match &envelope.data {
                     Some(MutationDataDto::Ticket(ticket)) if !ticket.rejected.is_empty() => {
@@ -382,6 +396,16 @@ impl Operations {
                 after_give_up,
             },
         ))
+    }
+
+    /// The last answer of the lifecycle `id`: a promotion's or a closure's,
+    /// or a resume's with lifecycle data. `None` while it is queued or
+    /// running again, and for any other request.
+    pub(crate) fn lifecycle_answer(
+        &self,
+        id: DesktopRequestId,
+    ) -> Option<&Envelope<MutationDataDto>> {
+        self.lifecycles.get(&id)
     }
 
     /// The answer of the host observation `id`, once it has one.

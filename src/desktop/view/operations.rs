@@ -46,7 +46,7 @@ use gpui_kit::{
     AnyElement, App, ClickEvent, Context, ElementId, FocusHandle, InteractiveElement, IntoElement,
     ParentElement, StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
-        ActiveTheme, Disableable,
+        ActiveTheme, Disableable, WindowExt,
         button::{Button, ButtonVariants},
         h_flex, v_flex,
     },
@@ -63,7 +63,7 @@ mod recovered;
 use outcomes::{ALREADY_FINISHED, already_finished};
 pub(crate) use outcomes::{share_result, share_words};
 
-use super::workspace::Workspace;
+use super::{lifecycle, workspace::Workspace};
 use crate::desktop::{
     model::{
         list_state::ListState,
@@ -100,6 +100,8 @@ pub(crate) const ABANDON: &str = "Abandon";
 pub(crate) const APPLICATION: &str = "Application";
 pub(crate) const NO_NEXT_ACTION: &str = "Nothing to do";
 pub(crate) const NO_OPERATION_ID: &str = "No operation ID";
+/// A lifecycle's entry, once failed or stopped: its dialog again (D5, A3).
+pub(crate) const OPEN_LIFECYCLE: &str = "Open\u{2026}";
 
 /// An outcome in fixed text.
 pub(crate) fn outcome_label(outcome: Outcome) -> &'static str {
@@ -243,14 +245,38 @@ impl Workspace {
     }
 
     /// A request's state in words: a running share or post by its stage,
-    /// naming the publication remote `remote`; any other as `state_label`.
+    /// naming the publication remote `remote`, and a running lifecycle by
+    /// its latest stage (D5, A3); any other as `state_label`.
     fn entry_state(request: &DesktopRequest, remote: Option<&str>) -> String {
         match (&request.state, Progressing::of(&request.intent)) {
             (RequestState::Running { stage, .. }, Some(kind)) => {
                 progress_words(kind, *stage, remote)
             }
+            (RequestState::Running { stage, .. }, None) => {
+                lifecycle::progress_words(&request.intent, *stage)
+                    .unwrap_or_else(|| state_label(&request.state))
+            }
             (state, _) => state_label(state),
         }
+    }
+
+    /// Open… on a lifecycle's entry: its dialog again, on that request
+    /// (D5, A3). Focus goes back to Open… when it closes.
+    fn open_lifecycle(
+        &mut self,
+        id: DesktopRequestId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if window.has_active_dialog(cx) {
+            return;
+        }
+        let Some(request) = self.services().operations().read(cx).request(id).cloned() else {
+            return;
+        };
+        let origin = self.control_focus_for(request_id(id, "open"), cx);
+        let services = self.services().clone();
+        lifecycle::reopen(&request, origin, &services, window, cx);
     }
 
     /// One request of this session.
@@ -262,9 +288,16 @@ impl Workspace {
         let id = request.id;
         let muted = cx.theme().muted_foreground;
         let remote = self.publication_remote_of(request);
+        // A lifecycle names its item by its short ID: never its title.
+        let item = lifecycle::item_of(&request.intent);
         let line = h_flex()
             .gap_2()
             .child(text(request_id(id, "command"), request.intent.label()).text_sm())
+            .children(item.map(|item| {
+                text(request_id(id, "item"), item)
+                    .text_xs()
+                    .text_color(muted)
+            }))
             .child(
                 text(request_id(id, "scope"), scope_name(request.intent.root()))
                     .text_xs()
@@ -341,6 +374,18 @@ impl Workspace {
                                 .text_color(muted),
                         ),
                 );
+                // A lifecycle's dialog shows its outcome and way out.
+                if lifecycle::item_of(&request.intent).is_some() {
+                    let focus = self.control_focus_for(request_id(id, "open"), cx);
+                    controls = controls.child(button(
+                        request_id(id, "open"),
+                        OPEN_LIFECYCLE,
+                        Some(&focus),
+                        cx.listener(move |this, _: &ClickEvent, window, cx| {
+                            this.open_lifecycle(id, window, cx)
+                        }),
+                    ));
+                }
                 // A share's outcome offers its own controls in place of
                 // the envelope's recovery actions.
                 if let Some(result) = self.finished_share(id, cx) {

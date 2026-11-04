@@ -193,8 +193,9 @@ async fn a_dirty_primary_blocks_at_prepare(cx: &mut TestAppContext) {
 /// The blocker is shown in words, then L1's way out: the poll as guidance,
 /// Share main as a button, and the repository's details, since a blocked
 /// answer offers `repo.inspect` (as `tests/cli/lifecycle.rs`
-/// `a_dirty_primary_blocks_naming_the_blocker` prints it). Nothing is
-/// asserted of the repository.
+/// `a_dirty_primary_blocks_naming_the_blocker` prints it), in words and as
+/// Open repository details (Task 7). Nothing is asserted of the
+/// repository.
 #[gpui_kit::test]
 async fn a_blocked_prepare_lists_blockers_and_way_out(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -233,6 +234,10 @@ async fn a_blocked_prepare_lists_blockers_and_way_out(cx: &mut TestAppContext) {
     assert_eq!(
         shell.label("lifecycle-share-main", cx).as_deref(),
         Some(SHARE_MAIN)
+    );
+    assert_eq!(
+        shell.label("lifecycle-inspect", cx).as_deref(),
+        Some(super::outcome::OPEN_REPOSITORY_DETAILS)
     );
     assert!(!shell.present("lifecycle-open-folder", cx));
     assert!(!shell.present("lifecycle-confirm", cx));

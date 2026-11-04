@@ -19,8 +19,7 @@ use manyhands::{
 };
 
 use super::{
-    CANCEL, CLOSE, HELD_LEAD, LifecycleDialog, PREPARE_AGAIN, PREPARING, Phase, RETRY,
-    SAVING_FIRST, STARTED,
+    CANCEL, CLOSE, HELD_LEAD, LifecycleDialog, PREPARE_AGAIN, PREPARING, Phase, RETRY, SAVING_FIRST,
 };
 use crate::desktop::assets::icon_path;
 
@@ -73,6 +72,12 @@ impl LifecycleDialog {
                 PreviewDetailsDto::Lifecycle(lifecycle) => Some(lifecycle.branch.clone()),
                 _ => self.heading.branch.clone(),
             },
+            // The preview the run was confirmed with names its branch.
+            Phase::Submitted(_) => self
+                .plan
+                .as_ref()
+                .map(|plan| plan.branch.clone())
+                .or_else(|| self.heading.branch.clone()),
             _ => self.heading.branch.clone(),
         };
         h_flex()
@@ -219,9 +224,10 @@ impl Render for LifecycleDialog {
                 body = body.child(text("lifecycle-message", *why).text_sm());
                 buttons = buttons.child(self.cancel(CLOSE));
             }
-            Phase::Submitted(_) => {
-                body = body.child(text("lifecycle-state", STARTED).text_sm());
-                buttons = buttons.child(self.cancel(CLOSE));
+            Phase::Submitted(id) => {
+                let (shown, actions) = self.submitted_body(*id, cx);
+                body = body.child(shown);
+                buttons = buttons.children(actions).child(self.cancel(CLOSE));
             }
         }
         body.child(buttons)
