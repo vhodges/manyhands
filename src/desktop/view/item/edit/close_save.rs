@@ -155,7 +155,7 @@ impl ItemPane {
     /// Whether a save is in flight, or Continue editing's steps before one
     /// run: a claim, a prepare, or the read before the editor opens. A
     /// prepare waiting for Resume is not running.
-    fn close_busy(&self, cx: &App) -> bool {
+    pub(super) fn close_busy(&self, cx: &App) -> bool {
         let preparing = match self.edit.phase {
             Phase::Preparing(_) => true,
             Phase::Loading => self.edit.stopped.is_none(),

@@ -36,6 +36,7 @@ use crate::desktop::{
         requests::{DesktopRequest, DesktopRequestId, Intent, RequestState},
     },
     test_support::{
+        drafts::{store_draft, stored_body},
         fixtures::{Fixture, NoPassphrase, item_id},
         snapshot::RepositorySnapshot,
     },
@@ -188,6 +189,63 @@ async fn unsaved_edits_are_saved_before_prepare(cx: &mut TestAppContext) {
     assert_eq!(commits(&root, &branch), before + 1, "the save committed");
     let body = shown(&shell, &root, TICKET).body.unwrap_or_default();
     assert!(body.ends_with('x'), "the typed text was saved");
+    assert_eq!(shell.backend.reads_seen(ReadKind::Prepare), 1);
+    assert!(closes(&shell, cx).is_empty(), "nothing runs before Confirm");
+}
+
+/// R-17: a draft of the ticket stored with no edit session in the tab is
+/// unsaved edits too. It is continued and saved through the draft services
+/// first, while the dialog says so; only once that save has committed, and
+/// the draft is retired, is the close prepared.
+#[gpui_kit::test]
+async fn a_stored_draft_is_saved_before_prepare(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    saved_ticket(&fixture, &root, "Stored", "");
+    fixture.refresh(&root);
+    let draft = store_draft(&fixture, &root, ItemDtoKind::Ticket, TICKET, "Stored body");
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&root), cx);
+    let branch = shown(&shell, &root, TICKET)
+        .context
+        .branch
+        .expect("the ticket's own branch");
+    let before = commits(&root, &branch);
+    assert!(pane(&shell, cx).read_with(cx, |pane, _| !pane.has_session()));
+
+    let held = shell.backend.hold_job(JobKind::TicketSave);
+    shell.click(LIFECYCLE_ACTION, cx);
+    // The draft is claimed, its context prepared and its editor opened on
+    // the foreground before the save is sent: wait for that save.
+    shell
+        .until_drawn(cx, "the draft's save", |shell, _| {
+            shell.backend.jobs_seen().contains(&JobKind::TicketSave)
+        })
+        .await;
+    held.wait_reached();
+    assert_eq!(
+        shell.label("lifecycle-state", cx).as_deref(),
+        Some(SAVING_FIRST)
+    );
+    assert_eq!(
+        shell.backend.reads_seen(ReadKind::Prepare),
+        0,
+        "nothing is prepared while the draft is saved"
+    );
+
+    held.release();
+    until_present(&shell, "lifecycle-confirm", cx).await;
+    assert_eq!(commits(&root, &branch), before + 1, "the draft was saved");
+    let body = shown(&shell, &root, TICKET).body.unwrap_or_default();
+    assert!(
+        body.trim_end() == "Stored body",
+        "the stored text was saved"
+    );
+    assert!(
+        stored_body(&shell.fixture.draft_store(), draft).is_none(),
+        "the saved draft is retired"
+    );
     assert_eq!(shell.backend.reads_seen(ReadKind::Prepare), 1);
     assert!(closes(&shell, cx).is_empty(), "nothing runs before Confirm");
 }

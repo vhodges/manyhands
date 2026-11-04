@@ -114,6 +114,10 @@ pub(super) struct TabSave {
     /// A Save that Continue editing's steps carry out waits for the open's
     /// relationship check (`restored`, Task 27 fix 2, N1).
     pub(super) continued: bool,
+    /// A lifecycle's save first continues a stored or restored draft, and
+    /// waits for Continue editing's steps until a save starts
+    /// (`save_first`, R-17).
+    pub(super) first: bool,
 }
 
 impl TabSave {
@@ -130,6 +134,7 @@ impl TabSave {
             read: None,
             remotes: None,
             continued: false,
+            first: false,
         }
     }
 
@@ -174,6 +179,9 @@ impl ItemPane {
     /// in the tab and in the details sheet, a restored draft's Save and
     /// the close dialog's come here.
     pub(super) fn start_save(&mut self, cx: &mut Context<Self>) -> bool {
+        // A lifecycle's save first waits no longer: this is its save, or
+        // why it has none (`save_first`).
+        self.edit.save.first = false;
         let Some(session) = self.shown_session() else {
             return false;
         };
