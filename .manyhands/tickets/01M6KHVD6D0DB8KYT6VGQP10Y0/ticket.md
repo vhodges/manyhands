@@ -3,7 +3,7 @@ slug: vh-8hc7g
 id: 01M6KHVD6D0DB8KYT6VGQP10Y0
 title: Recognize and retire remotely deleted contexts of closed tickets
 type: gap
-status: open
+status: waiting
 project: manyhands
 team: core
 manyhands_managed: true
@@ -30,3 +30,18 @@ Reads prefer an item's own worktree copy, so on that clone `ticket list` and `ti
 Two-clone rows: one clone closes a ticket and deletes its branch; the other polls and sees the new disposition; the retire verb removes the context and reads then report the ticket closed. Rows for a dirty or unpublished local copy (refused, nothing removed), for a folded ticket whose branch was never merged, and for a document promoted elsewhere.
 
 Raised by the owner on 2026-11-04 after Wave 03 C5 (`01M4CC0VMXTNXNH78C11DYXS8H`).
+
+## Planning (2026-11-04)
+
+- [x] Ground the brief and ask the owner about preservation, CLI naming,
+  dispositions, desktop timing and read scope.
+- [x] Draft the [Cycle contract](../../../docs/Cycles/wave-03-completed-context-retirement.md),
+  [design](../../../docs/plans/2026-11-04-completed-context-retirement-design.md) and
+  [implementation plan](../../../docs/plans/2026-11-04-completed-context-retirement-implementation.md).
+- [ ] Complete independent planning review and obtain document approval.
+- [ ] Obtain separate implementation and execution-method authorization.
+
+Owner-approved planning scope additionally includes explicit
+`poll once --retire-completed` (not default/background cleanup). The desktop
+action is assigned to D6; this ticket supplies the shared binding and CLI.
+Read precedence remains with `01M6K04YQM2JF6SBGPB1ZT6R8T`.
