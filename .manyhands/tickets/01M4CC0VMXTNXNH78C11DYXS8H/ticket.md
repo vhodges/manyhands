@@ -10,6 +10,8 @@ type: cycle
 status: open
 project: manyhands
 team: core
+closed_at: '2026-11-04T10:25:46Z'
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
 ---
@@ -21,8 +23,8 @@ The Wave document owns this Cycle's scope, exclusions and track rules.
 
 ## Planning
 
-- [ ] Create `docs/Cycles/wave-03-cli-05-completion-and-polling.md`.
-- [ ] Create the design and implementation plan and record their checkpoints
+- [x] Create `docs/Cycles/wave-03-cli-05-completion-and-polling.md`.
+- [x] Create the design and implementation plan and record their checkpoints
   as ticket comments.
 
 ## Entry Gate
