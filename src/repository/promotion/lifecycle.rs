@@ -143,6 +143,27 @@ pub(in super::super) enum ParentStep {
     Superseded,
 }
 
+/// Whether a parent is left to continue under its own ID: it has not ended
+/// and no consent refusal ended it. `operation resume` continues such a
+/// parent, or names the accepted request that holds it, and the operation
+/// list offers resume for it, held or not, so the two never disagree (D5
+/// decision 10). A complete, abandoned or superseded parent owes nothing.
+pub(in super::super) fn resumable(record: &impl LifecycleRecord) -> bool {
+    match record.step() {
+        ParentStep::Complete | ParentStep::Abandoned | ParentStep::Superseded => false,
+        ParentStep::Confirmed
+        | ParentStep::ContextSynchronized
+        | ParentStep::Integrating
+        | ParentStep::Integrated
+        | ParentStep::Published
+        | ParentStep::PublicationPending
+        | ParentStep::RemoteDeleted
+        | ParentStep::WorktreeRemoving
+        | ParentStep::WorktreeRemoved
+        | ParentStep::BranchDeleted => record.refusal().is_none(),
+    }
+}
+
 /// Exactly the parent fields the runner reads and writes.
 pub(in super::super) trait LifecycleRecord: Clone {
     type Expectation;
