@@ -75,7 +75,9 @@ use bind::{
     host::HostBinding,
     index::IndexBinding,
     key::{KeyDeleteBinding, KeyGenerateBinding, KeyRegistryBinding},
+    lifecycle::LifecycleBinding,
     local_sync::LocalSyncBinding,
+    poll::{PollOnceBinding, PollPolicyBinding},
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
     repair::RepairBinding,
     repo::RepoBinding,
@@ -99,7 +101,9 @@ pub use bind::{
         KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
         KeySelectInput,
     },
+    lifecycle::{DocumentPromoteInput, TicketCloseInput},
     local_sync::{LocalConflictResolutionInput, LocalContextResolveInput, LocalContextSyncInput},
+    poll::{PollConfigureInput, PollOnceInput, PollPauseInput, PollResumeInput},
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
     repair::{DocumentRepairInput, TicketRepairInput},
     repo::{RepoCreateInput, RepoEnableInput},
@@ -117,12 +121,19 @@ pub use dto::{
     ConflictNextDto, ConflictResolutionMutationDto, ConflictResolutionMutationType,
     ContextMutationDto, DocumentMutationDto, HostMutationDto, HostObservationDto, HostPreviewDto,
     HostReplacementDto, IdentityMutationDto, IdentityPreviewDto, ItemRepublishPreviewDto,
-    KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState, KeyMutationDto, LocalIdentityDto,
-    MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto, PrepareDataDto,
-    PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
-    PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto,
-    RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
-    RequestOperationDto, RequestResultDto, RequestState, SynchronizationConflictMutationDto,
+    KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState, KeyMutationDto,
+    LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupPendingReason, LifecycleCleanupState,
+    LifecycleIntegrationKind, LifecycleMadeReadyDto, LifecycleMadeReadyState, LifecycleMutationDto,
+    LifecycleMutationType, LifecyclePathChangeDto, LifecyclePathChangeKind,
+    LifecyclePlannedCleanupDto, LifecyclePlannedClosureDto, LifecyclePlannedIntegration,
+    LifecyclePlannedPublication, LifecyclePreviewDto, LifecyclePublicationPendingReason,
+    LifecyclePublicationState, LifecycleRecording, LocalIdentityDto, MutationDataDto,
+    OperationAbandonPreviewDto, OperationMutationDto, PollMutationCompletion, PollMutationDto,
+    PollPolicyMutationDto, PollTargetDisposition, PollTargetDto, PrepareDataDto, PreviewDetailsDto,
+    PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
+    RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto, RepairPreviewDto,
+    RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
+    RequestResultDto, RequestState, SynchronizationConflictMutationDto,
     SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
@@ -454,6 +465,12 @@ pub enum Mutation {
     TicketRepair(TicketRepairInput),
     ContextPrepare(ContextPrepareInput),
     ContextRelease(ContextReleaseInput),
+    DocumentPromote(DocumentPromoteInput),
+    TicketClose(TicketCloseInput),
+    PollConfigure(PollConfigureInput),
+    PollPause(PollPauseInput),
+    PollResume(PollResumeInput),
+    PollOnce(PollOnceInput),
 }
 
 impl Mutation {
@@ -501,6 +518,12 @@ impl Mutation {
             Self::TicketRepair(_) => Command::TicketRepair,
             Self::ContextPrepare(_) => Command::ContextPrepare,
             Self::ContextRelease(_) => Command::ContextRelease,
+            Self::DocumentPromote(_) => Command::DocumentPromote,
+            Self::TicketClose(_) => Command::TicketClose,
+            Self::PollConfigure(_) => Command::PollConfigure,
+            Self::PollPause(_) => Command::PollPause,
+            Self::PollResume(_) => Command::PollResume,
+            Self::PollOnce(_) => Command::PollOnce,
         }
     }
 
@@ -529,9 +552,15 @@ impl Mutation {
             Self::HostReplace(input) => Some(Box::new(HostBinding::from(input.clone()))),
             Self::DocumentRepair(input) => Some(Box::new(RepairBinding::from(input.clone()))),
             Self::TicketRepair(input) => Some(Box::new(RepairBinding::from(input.clone()))),
+            Self::DocumentPromote(input) => Some(Box::new(LifecycleBinding::from(input.clone()))),
+            Self::TicketClose(input) => Some(Box::new(LifecycleBinding::from(input.clone()))),
             Self::DocumentCreate(_)
             | Self::DocumentSave(_)
             | Self::DocumentMove(_)
+            | Self::PollConfigure(_)
+            | Self::PollPause(_)
+            | Self::PollResume(_)
+            | Self::PollOnce(_)
             | Self::TicketCreate(_)
             | Self::TicketSave(_)
             | Self::TicketSlugAssign(_)
@@ -592,6 +621,12 @@ impl Mutation {
             Self::TicketRepair(input) => Box::new(RepairBinding::from(input)),
             Self::ContextPrepare(input) => Box::new(ContextPrepareBinding::from(input)),
             Self::ContextRelease(input) => Box::new(ContextReleaseBinding::from(input)),
+            Self::DocumentPromote(input) => Box::new(LifecycleBinding::from(input)),
+            Self::TicketClose(input) => Box::new(LifecycleBinding::from(input)),
+            Self::PollConfigure(input) => Box::new(PollPolicyBinding::from(input)),
+            Self::PollPause(input) => Box::new(PollPolicyBinding::from(input)),
+            Self::PollResume(input) => Box::new(PollPolicyBinding::from(input)),
+            Self::PollOnce(input) => Box::new(PollOnceBinding::from(input)),
         }
     }
 }

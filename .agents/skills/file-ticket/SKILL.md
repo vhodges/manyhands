@@ -152,7 +152,9 @@ Use comments for progress, decisions, blockers, verification and review-ready
 status; put the initial problem in the ticket body. Commit canonical comment
 edits only when authorized, staging only owned files in the ticket worktree.
 
-Until C5's `ticket close`, closure remains a canonical-file operation after
-review approval and under lifecycle authorization. Status text `closed` is not
+Until the post-C5 switch, closure remains a canonical-file operation after
+review approval and under lifecycle authorization. C5 delivers `ticket close`;
+after C5 merges, a separate go-ahead closes one real ticket through it and then
+switches this rule (amended 2026-11-03 by C5, decision 9). Status text `closed` is not
 closure. **`working-on-a-ticket` keeps its own status-edit/closure procedure**
 until revised: its sandbox clones lack the main checkout's registration.

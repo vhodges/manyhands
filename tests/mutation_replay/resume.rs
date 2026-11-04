@@ -7,10 +7,12 @@
 use manyhands::{
     repository::{
         AbandonOperationOutcome, AbandonOperationRequest, CancellationToken, FailurePoint,
-        Mutation, MutationCall, MutationDataDto, OperationId, OperationResumeInput, ProgressStage,
-        RemoteAddInput, RequestId, RequestState,
+        Mutation, MutationCall, MutationDataDto, OperationFamily, OperationId,
+        OperationResumeInput, ProgressStage, RemoteAddInput, RequestId, RequestState,
         keys::SessionCredentials,
-        request_store::{FinalKind, JournalRow},
+        request_store::{
+            DigestSalt, FinalKind, IntentDigest, JournalRow, NewRequest, RequestOperation, ScopeKey,
+        },
     },
     results::{
         CheckpointEffect, DiscoveryEffect, Effects, Envelope, FailureClass, Outcome, ResultCode,
@@ -1189,8 +1191,9 @@ fn a_resume_of_a_poll_that_has_not_ended_is_not_taken_up() {
     let before = stored_remote(&world, OPERATION_A);
 
     let refused = world.execute(REQUEST_1, resume(&world, OPERATION_A));
-    // No request begins a poll, and nothing takes one up under its ID:
-    // the ID is not one this command is for.
+    // No accepted record holds this poll, and nothing takes one up under its
+    // ID: the ID is not one this command is for. A record that holds it is
+    // named, in the row below.
     assert_refused(
         &world,
         REQUEST_1,
@@ -1199,6 +1202,59 @@ fn a_resume_of_a_poll_that_has_not_ended_is_not_taken_up() {
         ResultCode::InvalidInput,
     );
     assert!(refused.recovery.is_empty());
+    assert_eq!(stored_remote(&world, OPERATION_A), before);
+}
+
+/// E-10: what a request record holds is named, a poll's as any other's.
+#[test]
+fn a_resume_of_a_poll_an_accepted_request_holds_names_that_request() {
+    let world = remote_world();
+    operations::insert_remote_poll(world.data.path(), OPERATION_A, "interrupted", None, None);
+    let before = stored_remote(&world, OPERATION_A);
+    let holder = RequestId::parse(REQUEST_2).unwrap();
+    let scope = ScopeKey::for_repository(&world.root).unwrap();
+    world
+        .service
+        .insert_request(&NewRequest {
+            request_id: holder,
+            command: "poll once".to_owned(),
+            target: OPERATION_A.to_owned(),
+            intent_digest: IntentDigest::builder(
+                DigestSalt::Request(holder),
+                "poll once",
+                &scope,
+                OPERATION_A,
+            )
+            .finish(),
+            scope,
+            confirmation: None,
+            base_ref: None,
+            base_oid: None,
+            expected_digest: None,
+            operations: vec![RequestOperation {
+                family: OperationFamily::Remote,
+                operation_id: OperationId::parse(OPERATION_A).unwrap(),
+            }],
+        })
+        .unwrap();
+
+    let refused = world.execute(REQUEST_1, resume(&world, OPERATION_A));
+    assert_refused(
+        &world,
+        REQUEST_1,
+        &refused,
+        Outcome::Blocked,
+        ResultCode::OriginalRequestRequired,
+    );
+    assert_eq!(recovery_actions(&refused), ["request.retry"]);
+    assert!(
+        refused.recovery[0]
+            .arguments
+            .values()
+            .any(|value| value == REQUEST_2),
+        "names the request: {:?}",
+        refused.recovery
+    );
     assert_eq!(stored_remote(&world, OPERATION_A), before);
 }
 

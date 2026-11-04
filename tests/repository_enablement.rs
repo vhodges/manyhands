@@ -3813,7 +3813,7 @@ fn assert_recovery_before_publication_configuration_commit(fixture: support::Tes
         panic!("expected the unfinished publication commit");
     };
     assert_eq!(commit_count(&fixture.repository), commits_before + 1);
-    assert_eq!(support::index_bytes(&fixture.repository), index_before);
+    enablement_index::assert_configuration_current(&fixture.root);
     assert_eq!(remote_names(&fixture.repository), remotes_before);
     assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
     assert_eq!(

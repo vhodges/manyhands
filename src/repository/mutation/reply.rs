@@ -129,6 +129,7 @@ impl Reply<'_> {
             offers_nothing,
             // Of a preview that is refused, and of no request.
             host_replacement: _,
+            lifecycle_blocked: _,
         } = answer;
         let scope = self.scope(accepted.map(|accepted| &accepted.position));
         // A request with no operation names none.

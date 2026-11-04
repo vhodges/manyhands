@@ -355,7 +355,7 @@ fn exit_class_table_runs_every_reachable_class_through_the_binary() {
     let rows = [
         (vec!["repo", "list"], ResultCode::Ok, 0),
         (vec!["unknown"], ResultCode::UsageError, 2),
-        (vec!["ticket", "close"], ResultCode::CommandUnavailable, 2),
+        (vec!["ticket", "close"], ResultCode::UsageError, 2),
         (
             vec!["ticket", "show", "--repo", root, "--id", "bad"],
             ResultCode::InvalidId,

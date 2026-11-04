@@ -1,0 +1,7 @@
+--- stderr
+error: The request input is not valid.
+code: invalid_input
+request: 01ARZ3NDEKTSV4RRFFQ69G5FX2
+next: manyhands-cli context observe-local --repo '<repository>' --id 01ARZ3NDEKTSV4RRFFQ69G5FC0
+note: this observation can't be used: observe again, and use a new request.
+--- exit 2

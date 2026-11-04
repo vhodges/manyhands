@@ -45,7 +45,7 @@
 //! adds a result code or a recovery-action kind (decision 8).
 
 use crate::{
-    human_admin::{self, REPUBLISH},
+    human_admin::REPUBLISH,
     render::{self, Human, Output, field, note_lines, quoted},
 };
 use manyhands::{
@@ -135,7 +135,7 @@ pub fn branch_deleted(
 }
 
 /// The `item republish` preview of `item` in the repository at `root`.
-fn republish(root: &str, item: &str) -> String {
+pub(crate) fn republish(root: &str, item: &str) -> String {
     format!(
         "manyhands-cli item republish --repo {} --id {} --prepare",
         quoted(root),
@@ -439,42 +439,23 @@ pub fn output(envelope: &Envelope<MutationDataDto>, supplied: bool, seen: &Seen)
     if lines.replaces_fields {
         shown.data = None;
     }
-    if envelope.failure_class().is_none() {
-        let mut stdout = human_admin::mutation_success(&shown).stdout;
-        stdout.push_str(&lines.body());
-        return Output {
-            stdout: stdout.into_bytes(),
-            stderr: lines.notes().into_bytes(),
-            status: render::exit_status(None),
-        };
-    }
-    let mut extra = human_admin::failure_extra(&shown, supplied);
-    extra.push_str(&lines.body());
-    // `extra` is printed before the recovery lines the refusal carries.
-    extra.push_str(&lines.lead());
-    let refusal = Envelope::<serde_json::Value> {
-        schema_version: envelope.schema_version,
-        command: envelope.command.clone(),
-        request_id: envelope.request_id.clone(),
-        operation_id: envelope.operation_id.clone(),
-        outcome: envelope.outcome,
-        code: envelope.code,
-        message: envelope.message.clone(),
-        scope: envelope.scope.clone(),
-        effects: envelope.effects.clone(),
-        data: None,
-        // C2's lines for the actions C4 did not render.
-        recovery: envelope
-            .recovery
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| !lines.rendered.contains(index))
-            .map(|(_, action)| action.clone())
-            .collect(),
-    };
-    let mut output = render::failure_output(false, &refusal, Some(extra));
-    output.stderr.extend(lines.notes().into_bytes());
-    output
+    // C2's lines for the actions C4 did not render.
+    let recovery = envelope
+        .recovery
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !lines.rendered.contains(index))
+        .map(|(_, action)| action.clone())
+        .collect();
+    // The lead is printed before the recovery lines the refusal carries.
+    render::compact(
+        &shown,
+        supplied,
+        &lines.body(),
+        &lines.lead(),
+        recovery,
+        &lines.notes(),
+    )
 }
 
 #[cfg(test)]

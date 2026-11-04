@@ -1,0 +1,9 @@
+--- stderr
+progress: accepted
+progress: connecting
+error: The key must be unlocked.
+code: unlock_required
+request: 01ARZ3NDEKTSV4RRFFQ69G5FR2
+operation: <id>
+note: polling again takes a new request, made at a terminal, where it can ask for the passphrase.
+--- exit 3

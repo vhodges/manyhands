@@ -1,0 +1,9 @@
+--- stderr
+error: Recovery is required before this can continue.
+code: recovery_required
+Blockers: primary_ahead_of_remote
+next: manyhands-cli poll once --repo '<repository>' --request-id <new-request-id>
+next: manyhands-cli repo sync --repo '<repository>' --request-id <new-request-id>
+next: repo.inspect root=<repository>
+note: primary holds commits the remote's primary, as this repository last read it, lacks: a poll reads the remote again, and if primary is still ahead, repo sync publishes it; each <new-request-id> is a placeholder for a request of its own. Then prepare again.
+--- exit 3

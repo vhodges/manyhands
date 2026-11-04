@@ -48,7 +48,7 @@ pub trait Boundary {
     fn request_exists(&self, id: RequestId) -> Result<bool, Envelope<RequestDto>>;
 }
 /// Whether a Ctrl-C stops the mutation at its next safe point (R-21): the
-/// six verbs that stop at safe points or take a synchronization up. Their
+/// verbs that stop at safe points or take a synchronization up. Their
 /// `execute` runs inside the Ctrl-C window.
 pub fn stops_on_ctrl_c(mutation: &Mutation) -> bool {
     matches!(
@@ -59,6 +59,11 @@ pub fn stops_on_ctrl_c(mutation: &Mutation) -> bool {
             | Mutation::CommentAdd(_)
             | Mutation::ConflictResolve(_)
             | Mutation::OperationResume(_)
+            | Mutation::DocumentPromote(_)
+            | Mutation::TicketClose(_)
+            | Mutation::PollOnce(_)
+            | Mutation::LocalContextSync(_)
+            | Mutation::LocalContextResolve(_)
     )
 }
 impl Boundary for RepositoryService {
@@ -92,6 +97,12 @@ impl Boundary for RepositoryService {
 }
 pub const RETRY_DELAYS_MS: [u64; 3] = [100, 200, 400];
 pub fn should_retry(envelope: &Envelope<MutationDataDto>, request_id: RequestId) -> bool {
+    // What a lifecycle answer names as blocking won't pass by itself.
+    if let Some(MutationDataDto::Lifecycle(data)) = &envelope.data
+        && !data.blockers.is_empty()
+    {
+        return false;
+    }
     (envelope.code == ResultCode::Busy || envelope.outcome == Outcome::Partial)
         && envelope.recovery.first().is_some_and(|action| {
             action.action == RecoveryActionKind::RequestRetry
@@ -133,6 +144,11 @@ pub struct Plan {
     pub identity_prompt: bool,
     pub retry: bool,
 }
+/// C2's bounded retry, with no identity prompt: what most verbs run.
+pub const RETRYING: Plan = Plan {
+    identity_prompt: false,
+    retry: true,
+};
 pub fn note(line: &str) {
     let _ = writeln!(std::io::stderr().lock(), "{line}");
 }
@@ -146,11 +162,30 @@ pub fn run(
     build: &mut dyn FnMut(&Extras) -> Mutation,
     sleep: &mut dyn FnMut(Duration),
 ) -> Output {
-    match drive(boundary, session, spec, flags, plan, build, sleep) {
+    finish(
+        session.json,
+        drive(boundary, session, spec, flags, plan, build, sleep),
+        |envelope| render::prepare_output(false, envelope),
+        |envelope, supplied| render::mutation_output(false, envelope, supplied),
+    )
+}
+
+/// The tail a verb's `drive` shares: an answer as it is, JSON as C2 renders
+/// it, and in human mode a prepare by `prepared` and a result by `executed`.
+pub fn finish(
+    json: bool,
+    driven: Driven,
+    prepared: impl FnOnce(&Envelope<PrepareDataDto>) -> Output,
+    executed: impl FnOnce(&Envelope<MutationDataDto>, bool) -> Output,
+) -> Output {
+    match driven {
         Driven::Answered(output) => output,
-        Driven::Executed { envelope, supplied } => {
-            render::mutation_output(session.json, &envelope, supplied)
+        Driven::Prepared(envelope) if json => render::prepare_output(true, &envelope),
+        Driven::Prepared(envelope) => prepared(&envelope),
+        Driven::Executed { envelope, supplied } if json => {
+            render::mutation_output(true, &envelope, supplied)
         }
+        Driven::Executed { envelope, supplied } => executed(&envelope, supplied),
     }
 }
 
@@ -158,6 +193,8 @@ pub fn run(
 /// envelope of the last `execute`, for the verb to render.
 pub enum Driven {
     Answered(Output),
+    /// The answer of a prepare, for the verb to render.
+    Prepared(Box<Envelope<PrepareDataDto>>),
     Executed {
         envelope: Box<Envelope<MutationDataDto>>,
         /// Whether a passphrase was supplied during the run.
@@ -187,10 +224,7 @@ pub fn drive(
     );
     let mut extras = Extras::default();
     if flags.prepare {
-        return Driven::Answered(render::prepare_output(
-            session.json,
-            &boundary.prepare(&build(&extras)),
-        ));
+        return Driven::Prepared(Box::new(boundary.prepare(&build(&extras))));
     }
     flags.allocate(session);
     let request_id = match flags.request_id {
@@ -259,7 +293,7 @@ pub fn drive(
                 envelope = boundary.prepare(&build(&extras));
             }
             let Some(preview) = envelope.data.as_ref().and_then(PrepareDataDto::preview) else {
-                return Driven::Answered(render::prepare_output(session.json, &envelope));
+                return Driven::Prepared(Box::new(envelope));
             };
             let consent = session
                 .terminal

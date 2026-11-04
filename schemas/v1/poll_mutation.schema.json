@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 poll mutation data",
+  "description": "The data of a poll once envelope that has a report: a poll's pass as the domain reports it. Dirty, diverged, conflicted, malformed, deleted and incomplete targets are data, not failures. A restart reports what its own pass saw. A poll whose first call stopped on a host that is not trusted carries synchronization_mutation data instead, and is followed by host approve and a new request: its stop is final. Guidance for each disposition is the front end's, from PollTargetDisposition::guidance.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "operation_id",
+    "completion",
+    "completed_at",
+    "next_eligible_at",
+    "targets"
+  ],
+  "properties": {
+    "operation_id": {
+      "type": "string"
+    },
+    "completion": {
+      "type": "string",
+      "enum": ["completed", "interrupted", "cancelled"]
+    },
+    "completed_at": {
+      "type": "string"
+    },
+    "next_eligible_at": {
+      "description": "The stored deadline of the next automatic poll. Null when none is stored.",
+      "type": ["string", "null"]
+    },
+    "targets": {
+      "type": "array",
+      "items": {
+        "description": "One target. A malformed remote ref has every field but its disposition null: its name is not reported.",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "target",
+          "kind",
+          "item_id",
+          "disposition",
+          "before_oid",
+          "after_oid"
+        ],
+        "properties": {
+          "target": {
+            "description": "The local reference, or null for a malformed remote ref.",
+            "type": ["string", "null"]
+          },
+          "kind": {
+            "type": ["string", "null"],
+            "enum": ["document", "ticket", null]
+          },
+          "item_id": {
+            "type": ["string", "null"]
+          },
+          "disposition": {
+            "type": "string",
+            "enum": [
+              "current",
+              "fast_forwarded",
+              "local_ahead",
+              "diverged",
+              "dirty",
+              "conflicted",
+              "inaccessible",
+              "materialized",
+              "nonconforming",
+              "blocked_by_local_state",
+              "materialization_incomplete",
+              "malformed",
+              "remotely_deleted",
+              "history_unknown",
+              "not_reached"
+            ]
+          },
+          "before_oid": {
+            "type": ["string", "null"]
+          },
+          "after_oid": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    }
+  }
+}

@@ -9,8 +9,8 @@ use crate::repository::{
     *,
 };
 use lifecycle::{
-    DocumentPromotionLifecycle, Lifecycle, LifecycleError, LifecycleKind, LifecyclePreview,
-    LifecycleRecord, LifecycleRefusal, LifecycleRequest, ParentStep as Step,
+    CancellationProbe, DocumentPromotionLifecycle, Lifecycle, LifecycleError, LifecycleKind,
+    LifecyclePreview, LifecycleRecord, LifecycleRefusal, LifecycleRequest, ParentStep as Step,
 };
 use record::{
     ChildRole, ChildState, CleanupCategory as Clean, IntegrationKind, PublicationCategory as Pub,
@@ -43,11 +43,16 @@ pub(super) fn promote<P: SessionCredentialProvider>(
     service: &RepositoryService,
     request: PromoteDocumentRequest,
     session: &mut SessionCredentials<P>,
+    probe: Option<CancellationProbe>,
 ) -> Result<DocumentPromotionResult, DocumentPromotionError> {
-    promote_with_io(
+    run_lifecycle(
+        &DocumentPromotionLifecycle,
         service,
-        request,
-        &mut Direct(session, DocumentPromotionLifecycle::KIND),
+        LifecycleRequest {
+            probe,
+            ..lifecycle_request(request)
+        },
+        session,
     )
 }
 
@@ -225,17 +230,21 @@ fn abandon<L: Lifecycle>(
 }
 fn cancelled<L: Lifecycle>(
     service: &RepositoryService,
-    root: &Path,
+    request: &LifecycleRequest<L::Expectation>,
     r: &L::Record,
 ) -> Result<bool, RepositoryError> {
-    Ok(load::<L>(service, root, r.operation_id())?.cancel_requested())
+    if load::<L>(service, &request.root, r.operation_id())?.cancel_requested() {
+        return Ok(true);
+    }
+    match &request.probe {
+        Some(probe) => probe.asked(service),
+        None => Ok(false),
+    }
 }
 
-pub(super) fn promote_with_io(
-    service: &RepositoryService,
+pub(super) fn lifecycle_request(
     request: PromoteDocumentRequest,
-    io: &mut impl PromotionIo,
-) -> Result<DocumentPromotionResult, DocumentPromotionError> {
+) -> LifecycleRequest<PromotionExpectation> {
     let PromoteDocumentRequest {
         root,
         operation_id,
@@ -244,17 +253,27 @@ pub(super) fn promote_with_io(
         approval,
         confirmed_identity,
     } = request;
+    LifecycleRequest {
+        root,
+        operation_id,
+        item_id,
+        expected,
+        approval,
+        confirmed_identity,
+        probe: None,
+    }
+}
+
+#[cfg(test)]
+pub(super) fn promote_with_io(
+    service: &RepositoryService,
+    request: PromoteDocumentRequest,
+    io: &mut impl PromotionIo,
+) -> Result<DocumentPromotionResult, DocumentPromotionError> {
     run_with_io(
         &DocumentPromotionLifecycle,
         service,
-        LifecycleRequest {
-            root,
-            operation_id,
-            item_id,
-            expected,
-            approval,
-            confirmed_identity,
-        },
+        lifecycle_request(request),
         io,
     )
 }
@@ -431,6 +450,9 @@ fn promote_inner<L: Lifecycle>(
             Ok(Err(blocked)) => Some(blocked),
             Ok(Ok(p)) => {
                 let changed = p.expectation() != request.expected;
+                if !changed {
+                    L::require_identity(&p, &repository, request.confirmed_identity.as_ref())?;
+                }
                 observed = Some(p);
                 changed.then(L::Refusal::external_change)
             }
@@ -564,7 +586,10 @@ fn promote_inner<L: Lifecycle>(
     if !existing {
         boundary(service, &root, FailurePoint::AfterConfirmed)?;
     }
-    if cancelled::<L>(service, &root, &r)? {
+    if cancelled::<L>(service, &request, &r)? {
+        if r.step() == Step::Confirmed {
+            release_child::<L>(service, &request, &r, ChildRole::Context);
+        }
         return Err(L::Error::interrupted());
     }
     if r.step() == Step::Confirmed {
@@ -581,7 +606,8 @@ fn promote_inner<L: Lifecycle>(
             && !cleanup_only
             && let Err(error) = child::<L>(service, &request, &mut r, ChildRole::Context, io)
         {
-            if cancelled::<L>(service, &root, &r)? {
+            if cancelled::<L>(service, &request, &r)? {
+                release_child::<L>(service, &request, &r, ChildRole::Context);
                 return Err(L::Error::interrupted());
             }
             return Err(L::Error::context_synchronization(Box::new(error)));
@@ -608,7 +634,7 @@ fn promote_inner<L: Lifecycle>(
         save::<L>(service, &root, &r)?;
         boundary(service, &root, FailurePoint::AfterContextSync)?;
     }
-    if cancelled::<L>(service, &root, &r)? {
+    if cancelled::<L>(service, &request, &r)? {
         return Err(L::Error::interrupted());
     }
     let input = if r.effect_written() {
@@ -687,7 +713,7 @@ fn promote_inner<L: Lifecycle>(
     r.set_integration_oid(Some(candidate.oid()));
     save::<L>(service, &root, &r)?;
     boundary(service, &root, FailurePoint::BeforeIntegrationRef)?;
-    if cancelled::<L>(service, &root, &r)? {
+    if cancelled::<L>(service, &request, &r)? {
         return Err(L::Error::interrupted());
     }
     let integrated = L::apply(candidate)?;
@@ -744,17 +770,16 @@ fn integration_context<R: LifecycleRecord, E: LifecycleError>(
         oid: r.merged_context().ok_or_else(E::recovery_required)?,
     })
 }
-struct CancellationObserver<'a, L> {
-    lifecycle: std::marker::PhantomData<L>,
+struct CancellationObserver<'a, L: Lifecycle> {
     service: &'a RepositoryService,
-    root: &'a Path,
-    op: OperationId,
+    request: &'a LifecycleRequest<L::Expectation>,
+    record: &'a L::Record,
 }
 impl<L: Lifecycle> SynchronizationObserver for CancellationObserver<'_, L> {
     fn safe_point(&mut self, _: RemoteOperationSafePoint) -> SafePointRequest {
-        match load::<L>(self.service, self.root, self.op) {
-            Ok(r) if r.cancel_requested() => SafePointRequest::Cancel,
-            Ok(_) => SafePointRequest::Continue,
+        match cancelled::<L>(self.service, self.request, self.record) {
+            Ok(true) => SafePointRequest::Cancel,
+            Ok(false) => SafePointRequest::Continue,
             Err(_) => SafePointRequest::Stop,
         }
     }
@@ -763,6 +788,26 @@ fn child_id<R: LifecycleRecord>(r: &R, role: ChildRole) -> Option<OperationId> {
     match role {
         ChildRole::Context => r.context_sync_id(),
         ChildRole::Primary => r.primary_sync_id(),
+    }
+}
+/// A cancellation that stops the parent lets its stopped child go, or the
+/// child's reservation would refuse what the caller does next. The
+/// guards and the end of its row are one transaction, in
+/// `release_promotion_child`. Nothing proves that no other process still runs
+/// the child: one that does is fenced at its next safe point, as `child()`'s
+/// retry would fence it, and a new attempt learns of any push by fetching. A
+/// failure here leaves the row as it was, for the same request.
+fn release_child<L: Lifecycle>(
+    service: &RepositoryService,
+    request: &LifecycleRequest<L::Expectation>,
+    r: &L::Record,
+    role: ChildRole,
+) {
+    let Some(child) = child_id(r, role) else {
+        return;
+    };
+    if let Ok(execution) = L::child_execution(r, role) {
+        let _ = service.release_promotion_child(&request.root, child, &execution);
     }
 }
 fn child<L: Lifecycle>(
@@ -817,11 +862,10 @@ fn child<L: Lifecycle>(
                         confirmed_identity: request.confirmed_identity.clone(),
                         restart: true,
                     };
-                    let mut observer = CancellationObserver {
-                        lifecycle: std::marker::PhantomData::<L>,
+                    let mut observer = CancellationObserver::<L> {
                         service,
-                        root,
-                        op: r.operation_id(),
+                        request,
+                        record: &*r,
                     };
                     let execution = L::child_execution(r, role)?;
                     let _ack_result = io.synchronize(service, ack, &mut observer, &execution);
@@ -856,11 +900,10 @@ fn child<L: Lifecycle>(
         })?;
         restart = false;
     }
-    let mut observer = CancellationObserver {
-        lifecycle: std::marker::PhantomData::<L>,
+    let mut observer = CancellationObserver::<L> {
         service,
-        root,
-        op: r.operation_id(),
+        request,
+        record: &*r,
     };
     let execution = L::child_execution(r, role)?;
     let result = io.synchronize(
@@ -881,7 +924,7 @@ fn child<L: Lifecycle>(
     match state::with_transaction(service, root, |tx, _| L::child_state(tx, r, role))? {
         ChildState::Complete(stored) => stored_child_outcome(L::KIND, &stored, role, r.item_id()),
         _ => {
-            if result.is_err() && cancelled::<L>(service, root, r)? {
+            if result.is_err() && cancelled::<L>(service, request, r)? {
                 return Err(SynchronizationError::Interrupted);
             }
             match result {
@@ -1060,8 +1103,9 @@ fn finish_steps<L: Lifecycle>(
     if config.primary_branch != primary || config.publication_remote.as_deref() != r.remote_name() {
         return Err(Clean::RecoveryRequired);
     }
-    if cancelled::<L>(service, root, r).map_err(recovery)? {
+    if cancelled::<L>(service, request, r).map_err(recovery)? {
         if matches!(r.step(), Step::Integrated | Step::PublicationPending) {
+            release_child::<L>(service, request, r, ChildRole::Primary);
             r.set_publication(Some(Pub::Cancelled));
             r.set_step(Step::PublicationPending);
         }
@@ -1093,6 +1137,9 @@ fn finish_steps<L: Lifecycle>(
                     r.set_step(Step::PublicationPending);
                 }
                 Err(error) => {
+                    if cancelled::<L>(service, request, r).unwrap_or(false) {
+                        release_child::<L>(service, request, r, ChildRole::Primary);
+                    }
                     r.set_publication(Some(publication_error(&error)));
                     r.set_step(Step::PublicationPending);
                 }
@@ -1104,7 +1151,7 @@ fn finish_steps<L: Lifecycle>(
         }
         boundary(service, root, FailurePoint::AfterPublication).map_err(recovery)?;
     }
-    if cancelled::<L>(service, root, r).map_err(recovery)? {
+    if cancelled::<L>(service, request, r).map_err(recovery)? {
         return Err(Clean::Cancelled);
     }
     require_configuration(root, primary, r.remote_name())?;
@@ -1181,7 +1228,7 @@ fn finish_steps<L: Lifecycle>(
     {
         if needs_owner {
             boundary(service, root, FailurePoint::BeforeRemoteDeletion).map_err(recovery)?;
-            if cancelled::<L>(service, root, r).map_err(recovery)? {
+            if cancelled::<L>(service, request, r).map_err(recovery)? {
                 return Err(Clean::Cancelled);
             }
             validate_cleanup_owner(
@@ -1233,7 +1280,18 @@ fn finish_steps<L: Lifecycle>(
                     published_context,
                     r.item_id(),
                 )
-                .map_err(|e| deletion_error(&e))?;
+                .map_err(|e| match &e {
+                    // The reservation's own boundary refuses a run asked to
+                    // stop, around the transport call and with no word of it.
+                    // A rejection, a key or a transport failure is its own.
+                    SynchronizationError::Repository(error)
+                        if error.kind == RepositoryErrorKind::RecoveryRequired
+                            && cancelled::<L>(service, request, r).unwrap_or(false) =>
+                    {
+                        Clean::Cancelled
+                    }
+                    _ => deletion_error(&e),
+                })?;
             safe(
                 service,
                 root,
@@ -1260,7 +1318,7 @@ fn finish_steps<L: Lifecycle>(
             RemoteOperationSafePoint::AfterAdvertisement,
         )?;
     }
-    if cancelled::<L>(service, root, r).map_err(recovery)? {
+    if cancelled::<L>(service, request, r).map_err(recovery)? {
         return Err(Clean::Cancelled);
     }
     let cleanup = ContextCleanup::acquire(root).map_err(recovery)?;
@@ -1286,7 +1344,7 @@ fn finish_steps<L: Lifecycle>(
     }
     if r.step() == Step::WorktreeRemoving {
         boundary(service, root, FailurePoint::DuringWorktreeRemoval).map_err(recovery)?;
-        if cancelled::<L>(service, root, r).map_err(recovery)? {
+        if cancelled::<L>(service, request, r).map_err(recovery)? {
             return Err(Clean::Cancelled);
         }
         validate_cleanup_owner(
@@ -1310,12 +1368,12 @@ fn finish_steps<L: Lifecycle>(
         r.set_cleanup(None);
         save::<L>(service, root, r).map_err(recovery)?;
     }
-    if cancelled::<L>(service, root, r).map_err(recovery)? {
+    if cancelled::<L>(service, request, r).map_err(recovery)? {
         return Err(Clean::Cancelled);
     }
     if r.step() == Step::WorktreeRemoved {
         boundary(service, root, FailurePoint::BeforeBranchDeletion).map_err(recovery)?;
-        if cancelled::<L>(service, root, r).map_err(recovery)? {
+        if cancelled::<L>(service, request, r).map_err(recovery)? {
             return Err(Clean::Cancelled);
         }
         validate_cleanup_owner(
@@ -1337,7 +1395,7 @@ fn finish_steps<L: Lifecycle>(
         r.set_step(Step::BranchDeleted);
         save::<L>(service, root, r).map_err(recovery)?;
     }
-    if cancelled::<L>(service, root, r).map_err(recovery)? {
+    if cancelled::<L>(service, request, r).map_err(recovery)? {
         return Err(Clean::Cancelled);
     }
     if r.step() != Step::BranchDeleted {
@@ -1354,7 +1412,7 @@ fn finish_steps<L: Lifecycle>(
         primary,
     )?;
     boundary(service, root, FailurePoint::BeforeCompletion).map_err(recovery)?;
-    if cancelled::<L>(service, root, r).map_err(recovery)? {
+    if cancelled::<L>(service, request, r).map_err(recovery)? {
         return Err(Clean::Cancelled);
     }
     cleanup

@@ -265,6 +265,13 @@ pub(in super::super) trait ParentRecord: LifecycleRecord + Sized {
     fn context_attempt(&self) -> u32;
     fn primary_attempt(&self) -> u32;
     fn expectation_bytes(&self) -> [u8; 32];
+    /// Whether a new request may supersede this unfinished record: only a
+    /// cleanup stop of the kinds `begin_record` replaces.
+    fn supersedable(&self) -> bool;
+    /// The closure checkpoint the record holds. A promotion writes none.
+    fn written_checkpoint(&self) -> Option<Oid> {
+        None
+    }
 }
 
 pub(in super::super) fn read_record<R: ParentRecord>(
@@ -315,11 +322,11 @@ fn bindings<R: ParentRecord>(db: &Connection, op: OperationId) -> Result<Vec<R>,
     .collect()
 }
 pub(in super::super) fn unfinished_record<R: ParentRecord>(
-    tx: &Transaction<'_>,
+    db: &Connection,
     id: i64,
     item: &ItemId,
 ) -> Result<Option<R>, RepositoryError> {
-    tx
+    db
         .query_row(
             &format!("SELECT * FROM {} WHERE repository_id=?1 AND item_id=?2 AND step NOT IN ('complete','abandoned','superseded')",R::KIND.table()),
             params![id, item.to_string()],

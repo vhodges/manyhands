@@ -814,3 +814,543 @@ fn repo_sync_with_an_unopenable_data_directory_is_internal_error() {
     assert!(value["request_id"].is_null(), "{value}");
     assert_eq!(f.snapshot(), before);
 }
+
+// ---------------------------------------------------------------- C5
+
+fn poll_once(root: &Path) -> Vec<&str> {
+    vec![
+        "poll",
+        "once",
+        "--repo",
+        root.to_str().unwrap(),
+        "--request-id",
+        REQUEST,
+        "--json",
+    ]
+}
+
+/// Each root `poll once` is refused before it reads the repository, as C4's
+/// verbs are. Nothing changes.
+#[test]
+fn c5_poll_once_refuses_each_root() {
+    for (case, code, exit) in [
+        ("bare", "bare_repository", 2),
+        ("home", "not_repository", 2),
+        ("nested", "not_repository_root", 2),
+        ("unreadable", "repository_inaccessible", 3),
+        ("plain", "repository_not_enabled", 2),
+        ("absent", "invalid_path", 2),
+        ("other data", "repository_not_registered", 3),
+    ] {
+        let f = Fixture::new();
+        let mut env = None;
+        let root = match case {
+            "bare" => {
+                let root = f.env.home.path().join("bare");
+                git2::Repository::init_bare(&root).unwrap();
+                root
+            }
+            "home" => f.env.home.path().to_owned(),
+            "nested" => f.repo.root.join("docs"),
+            "unreadable" => {
+                fs::write(f.repo.repository.path().join("config"), "[invalid\n").unwrap();
+                f.repo.root.clone()
+            }
+            "plain" => {
+                let root = f.env.home.path().join("plain");
+                git2::Repository::init(&root).unwrap();
+                root
+            }
+            "absent" => f.env.home.path().join("absent-parent/target"),
+            "other data" => {
+                env = Some(CliEnv::new(f.env.home.path().join("other-data")));
+                f.repo.root.clone()
+            }
+            _ => unreachable!(),
+        };
+        let env = env.as_ref().unwrap_or(&f.env);
+        let before = support::repository_git_file_bytes(&f.repo);
+        let value = checked(&poll_once(&root), env, &[], exit, code, None);
+        assert_eq!(value["command"], "poll once", "{case}");
+        assert_eq!(
+            support::repository_git_file_bytes(&f.repo),
+            before,
+            "{case}"
+        );
+    }
+}
+
+/// `poll once` refuses, before it connects, what the transport cannot use:
+/// no selected key, a selected key whose private source is missing, and a
+/// remote address that names no user. With a usable key and address, a port
+/// nothing listens on is `transport_unavailable`. Nothing changes.
+#[test]
+fn c5_poll_once_refuses_a_remote_or_key_it_cannot_use() {
+    for (case, code, exit) in [
+        ("no key", "no_selected_key", 3),
+        ("missing source", "key_unavailable", 3),
+        ("no user", "invalid_remote", 2),
+        ("refused", "transport_unavailable", 5),
+    ] {
+        let port = closed_port();
+        let url = if case == "no user" {
+            format!("ssh://127.0.0.1:{port}/repository.git")
+        } else {
+            format!("ssh://git@127.0.0.1:{port}/repository.git")
+        };
+        let f = Fixture::new().with_remote(&url);
+        match case {
+            "no key" => {}
+            "missing source" => select_a_key(&f.env, "absent-private-source"),
+            "no user" | "refused" => {
+                let home = f.env.home.path();
+                fs::write(
+                    home.join("imported"),
+                    support::credentials::private_fixture_bytes(),
+                )
+                .unwrap();
+                select_a_key(&f.env, "imported");
+            }
+            _ => unreachable!(),
+        }
+        let before = f.snapshot();
+        let value = checked(&poll_once(&f.repo.root), &f.env, &[], exit, code, None);
+        assert_eq!(value["command"], "poll once", "{case}");
+        assert_eq!(f.snapshot(), before, "{case}");
+    }
+}
+
+/// Selects a usable key, imported from the fixture's private bytes.
+fn usable_key(env: &CliEnv) {
+    fs::write(
+        env.home.path().join("imported"),
+        support::credentials::private_fixture_bytes(),
+    )
+    .unwrap();
+    select_a_key(env, "imported");
+}
+
+/// A repository configuration that does not parse: `poll once` is refused as
+/// an invalid configuration, before it connects.
+#[test]
+fn c5_poll_once_of_an_unreadable_configuration_is_invalid_configuration() {
+    let f = Fixture::new().with_remote("ssh://git@127.0.0.1:9/repository.git");
+    usable_key(&f.env);
+    fs::write(f.repo.root.join(".manyhands/config.toml"), "invalid = [").unwrap();
+    let before = f.snapshot();
+    let value = checked(
+        &poll_once(&f.repo.root),
+        &f.env,
+        &[],
+        3,
+        "invalid_configuration",
+        None,
+    );
+    assert_eq!(value["command"], "poll once");
+    assert_eq!(f.snapshot(), before);
+}
+
+/// A registry that is no database: `poll once` is blocked, offering an
+/// index rebuild, and changes nothing.
+#[test]
+fn c5_poll_once_on_a_corrupt_registry_is_index_unavailable() {
+    let f = Fixture::new();
+    for name in ["manyhands.sqlite3-wal", "manyhands.sqlite3-shm"] {
+        match fs::remove_file(f.env.data.join(name)) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => panic!("remove SQLite sidecar: {error}"),
+        }
+    }
+    fs::write(f.env.data.join("manyhands.sqlite3"), [0xA5; 4096]).unwrap();
+    let before = f.snapshot();
+    let value = checked(
+        &poll_once(&f.repo.root),
+        &f.env,
+        &[],
+        3,
+        "index_unavailable",
+        None,
+    );
+    assert_eq!(actions(&value), ["index.rebuild"]);
+    assert_eq!(f.snapshot(), before);
+}
+
+/// Exit 1: a data directory that is a file, for `poll once`.
+#[test]
+fn c5_poll_once_with_an_unopenable_data_directory_is_internal_error() {
+    let f = Fixture::new();
+    let path = f.env.home.path().join("file-data");
+    fs::write(&path, b"not a directory").unwrap();
+    let before = f.snapshot();
+    let value = checked(
+        &poll_once(&f.repo.root),
+        &CliEnv::new(path),
+        &[],
+        1,
+        "internal_error",
+        None,
+    );
+    assert!(value["request_id"].is_null(), "{value}");
+    assert_eq!(f.snapshot(), before);
+}
+
+// ------------------------------------------------- C5's exit evidence (E-8)
+
+/// The CLI's own codes beside C5's library union: `usage_error` and
+/// `invalid_id`, which the union does not hold, and `command_unavailable`,
+/// which no verb reaches once nothing is planned (R-8).
+const C5_CLI_ONLY: &[&str] = &["usage_error", "invalid_id", "command_unavailable"];
+
+/// C5's library union, expanded from the audit's C5 result-set table
+/// (`#### C5 bindings and result-set key`) with the C4 refresh's groups:
+/// each row's count is checked, and the union is every row's codes.
+fn c5_union() -> BTreeSet<&'static str> {
+    let c4 = AUDIT
+        .split("### Wave 03 CLI Cycle C4 refresh")
+        .nth(1)
+        .unwrap();
+    let definitions = c4
+        .split("The groups are:")
+        .nth(1)
+        .unwrap()
+        .split("#### ")
+        .next()
+        .unwrap();
+    let mut groups: std::collections::BTreeMap<char, BTreeSet<&'static str>> =
+        std::collections::BTreeMap::new();
+    let names = definitions
+        .split("**")
+        .skip(1)
+        .step_by(2)
+        .filter(|part| part.len() == 1 && part.chars().all(|c| c.is_ascii_uppercase()));
+    for part in names {
+        let name = part.chars().next().unwrap();
+        let rest = definitions.split(&format!("**{part}** = ")).nth(1).unwrap();
+        let mut codes = BTreeSet::new();
+        let first = rest.chars().next().unwrap();
+        if first.is_ascii_uppercase() {
+            codes.extend(groups[&first].iter().copied());
+        }
+        codes.extend(rest.split('`').nth(1).unwrap().split_whitespace());
+        groups.insert(name, codes);
+    }
+    assert_eq!(groups.len(), 10, "{groups:?}");
+    let table = AUDIT
+        .split("#### C5 bindings and result-set key")
+        .nth(1)
+        .unwrap()
+        .split("| Verb | Codes | Count | Design anchor |")
+        .nth(1)
+        .unwrap()
+        .split("\n\n")
+        .next()
+        .unwrap();
+    let mut union = BTreeSet::new();
+    for row in table.lines().filter(|line| line.starts_with("| `")) {
+        let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+        let mut codes = BTreeSet::new();
+        for part in cells[2].split(" + ") {
+            match part.trim_matches('`') {
+                group if group.len() == 1 => {
+                    codes.extend(groups[&group.chars().next().unwrap()].iter().copied())
+                }
+                explicit => codes.extend(explicit.split_whitespace()),
+            }
+        }
+        assert_eq!(
+            codes.len().to_string(),
+            cells[3],
+            "{}: the audit's count",
+            cells[1]
+        );
+        union.extend(codes);
+    }
+    union
+}
+
+/// A C5 verb reaching each code through the binary: a `#[test]` of this
+/// target, or a `c5_` SSH case of `cli_remote`.
+const C5_ROWS: &[Row] = &[
+    remote("ok", 0, "c5_lifecycle_walk_primary_ahead_close"),
+    binary(
+        "already_applied",
+        0,
+        "a_contained_primary_is_already_applied_and_equal_too",
+    ),
+    binary(
+        "usage_error",
+        2,
+        "a_verb_without_its_options_is_a_usage_error",
+    ),
+    binary("invalid_id", 2, "a_malformed_id_is_invalid_id"),
+    binary(
+        "invalid_input",
+        2,
+        "input_failures_answer_invalid_input_and_write_nothing",
+    ),
+    binary("invalid_path", 2, "c5_poll_once_refuses_each_root"),
+    binary("bare_repository", 2, "c5_poll_once_refuses_each_root"),
+    binary("not_repository", 2, "c5_poll_once_refuses_each_root"),
+    binary("not_repository_root", 2, "c5_poll_once_refuses_each_root"),
+    binary(
+        "repository_not_enabled",
+        2,
+        "c5_poll_once_refuses_each_root",
+    ),
+    binary(
+        "repository_inaccessible",
+        3,
+        "c5_poll_once_refuses_each_root",
+    ),
+    binary(
+        "repository_not_registered",
+        3,
+        "c5_poll_once_refuses_each_root",
+    ),
+    binary(
+        "item_not_found",
+        2,
+        "an_unknown_item_is_item_not_found_for_both_verbs",
+    ),
+    binary(
+        "operation_not_found",
+        2,
+        "an_unknown_operation_is_operation_not_found",
+    ),
+    binary("not_confirmable", 2, "a_prepare_is_not_confirmable"),
+    binary(
+        "request_mismatch",
+        2,
+        "a_request_or_confirmation_for_another_item_is_a_mismatch",
+    ),
+    binary(
+        "confirmation_mismatch",
+        2,
+        "a_request_or_confirmation_for_another_item_is_a_mismatch",
+    ),
+    binary(
+        "invalid_remote",
+        2,
+        "c5_poll_once_refuses_a_remote_or_key_it_cannot_use",
+    ),
+    binary(
+        "confirmation_required",
+        3,
+        "input_failures_are_usage_and_id_errors_with_nothing_done",
+    ),
+    binary(
+        "confirmation_not_found",
+        3,
+        "input_failures_are_usage_and_id_errors_with_nothing_done",
+    ),
+    remote("confirmation_used", 3, "c5_lifecycle_exit_evidence_close"),
+    binary(
+        "external_change",
+        3,
+        "a_primary_moved_after_the_preview_is_external_change",
+    ),
+    binary(
+        "recovery_required",
+        3,
+        "a_dirty_primary_blocks_naming_the_blocker",
+    ),
+    binary(
+        "identity_required",
+        3,
+        "no_usable_identity_is_identity_required_with_its_action",
+    ),
+    binary(
+        "invalid_configuration",
+        3,
+        "c5_poll_once_of_an_unreadable_configuration_is_invalid_configuration",
+    ),
+    binary(
+        "worktree_not_clean",
+        3,
+        "a_dirty_context_is_worktree_not_clean",
+    ),
+    binary(
+        "ticket_closed",
+        3,
+        "a_closed_ticket_is_ticket_closed_at_prepare",
+    ),
+    remote("publication_remote_required", 3, "c5_polling_no_remote"),
+    binary(
+        "no_selected_key",
+        3,
+        "c5_poll_once_refuses_a_remote_or_key_it_cannot_use",
+    ),
+    binary(
+        "key_unavailable",
+        3,
+        "c5_poll_once_refuses_a_remote_or_key_it_cannot_use",
+    ),
+    remote(
+        "host_approval_required",
+        3,
+        "c5_polling_host_stop_is_final_then_a_new_request",
+    ),
+    remote(
+        "host_replacement_required",
+        3,
+        "c5_lifecycle_host_stop_then_same_request_close",
+    ),
+    #[cfg(unix)]
+    remote(
+        "unlock_required",
+        3,
+        "c5_polling_unlock_stop_is_final_then_a_new_request",
+    ),
+    remote("key_rejected", 3, "c5_lifecycle_exit_evidence_close"),
+    binary(
+        "original_request_required",
+        3,
+        "a_resume_of_a_parent_a_request_holds_names_the_request_and_nothing_else",
+    ),
+    remote(
+        "remote_branch_deleted",
+        3,
+        "c5_lifecycle_deleted_branch_request_route_close",
+    ),
+    binary(
+        "index_unavailable",
+        3,
+        "c5_poll_once_on_a_corrupt_registry_is_index_unavailable",
+    ),
+    // A closure integrated before its primary push is refused: partial.
+    partial(
+        "push_rejected",
+        "c5_lifecycle_refused_primary_push_then_same_request_close",
+    ),
+    remote("busy", 5, "c5_polling_a_second_poll_overlaps"),
+    remote("poll_yielding", 5, "c5_lifecycle_exit_evidence_close"),
+    binary(
+        "transport_unavailable",
+        5,
+        "c5_poll_once_refuses_a_remote_or_key_it_cannot_use",
+    ),
+    binary(
+        "internal_error",
+        1,
+        "c5_poll_once_with_an_unopenable_data_directory_is_internal_error",
+    ),
+    remote("cancelled", 130, "c5_interruption_request_cancel_close"),
+];
+
+/// The codes no fixture reaches through the binary with a C5 verb.
+const C5_REASONS: &[Row] = &[
+    reason(
+        "confirmation_expired",
+        3,
+        "A lifecycle confirmation expires after ten minutes on the library's clock, which an isolated CLI child cannot advance; the library's stored clock case pins it (tests/mutation_remote/c5_lifecycle.rs), as C2-C4 record.",
+    ),
+    reason(
+        "remote_unavailable",
+        5,
+        "libgit2's NotFound is its only source (src/repository/transport/remote.rs), and no deterministic fixture produces it, as C2 and C4 record.",
+    ),
+    reason(
+        "unlock_failed",
+        3,
+        "A wrong passphrase is typed at C2's shared terminal prompt; c4_interruption_unlock_prompt reaches it through item sync, and the C5 rows reach the same prompt's unlock_required. No C5 PTY row types a wrong passphrase (Task 9's unit row pins poll once's text).",
+    ),
+    reason(
+        "worktree_conflicted",
+        3,
+        "poll once connects before it looks at the primary worktree (with a conflicted index it answers transport_unavailable against a closed port), and a lifecycle verb meets it only inside a child's synchronization, which a CLI child cannot stage. Task 13b's walk saw context observe-local answer it over a lifecycle child's retained conflict (a read the audit's row does not list); no committed row pins that.",
+    ),
+    reason(
+        "discovery_pending",
+        4,
+        "Needs an index hand-off that fails after the work; the CLI child takes no failure point, so tests/cli/local_sync.rs discovery_pending_is_finished_by_the_same_request stages the answer in its own process and the binary's same request finishes it; the library's made-ready tables pin IndexPending.",
+    ),
+    reason(
+        "command_unavailable",
+        2,
+        "No verb stays planned once poll once is bound (R-8, E-21); startup_tests.rs pins its answer on a test-only planned spec.",
+    ),
+    #[cfg(not(unix))]
+    reason(
+        "unlock_required",
+        3,
+        "A protected key at no terminal: the Unix cases c5_polling_unlock_stop_is_final_then_a_new_request and c5_lifecycle_unlock_stop_then_same_request_close reach it; the SSH unlock fixture is Unix-only.",
+    ),
+];
+
+#[test]
+fn the_c5_table_and_reasons_account_for_every_code_of_the_audit() {
+    let library = c5_union();
+    assert_eq!(library.len(), 46);
+    let expected = set(library.iter().copied().chain(C5_CLI_ONLY.iter().copied()));
+    assert_eq!(expected.len(), 49);
+    let covered = set(C5_ROWS.iter().map(|row| row.code));
+    let reasons = set(C5_REASONS.iter().map(|row| row.code));
+    assert_eq!(covered.len(), C5_ROWS.len(), "a code appears twice");
+    assert_eq!(reasons.len(), C5_REASONS.len(), "a reason appears twice");
+    assert!(covered.is_disjoint(&reasons));
+    assert_eq!(set(covered.into_iter().chain(reasons)), expected);
+}
+
+/// A `c5_` SSH case is registered by its literal name, or by
+/// `tests/cli_remote/lifecycle.rs`'s `both!` macro, which names a row
+/// `c5_lifecycle_<row>_promote` and `_close`.
+fn registered(ssh: &[String], case: &str) -> bool {
+    if ssh
+        .iter()
+        .any(|source| source.contains(&format!("\"{case}\"")))
+    {
+        return true;
+    }
+    let row = case.strip_prefix("c5_lifecycle_").and_then(|rest| {
+        rest.strip_suffix("_promote")
+            .or_else(|| rest.strip_suffix("_close"))
+    });
+    row.is_some_and(|row| {
+        ssh.iter()
+            .any(|source| source.contains(&format!("\"{row}\" =>")))
+    })
+}
+
+#[test]
+fn every_c5_reference_names_an_existing_case() {
+    let local = sources("tests/cli");
+    let ssh = sources("tests/cli_remote");
+    for row in C5_ROWS {
+        match row.how {
+            How::Binary(case) => {
+                let test = format!("#[test]\nfn {case}(");
+                assert!(
+                    local.iter().any(|source| source.contains(&test)),
+                    "missing CLI test {case}"
+                );
+            }
+            How::Remote(case) => {
+                assert!(case.starts_with("c5_"), "{case}");
+                assert!(registered(&ssh, case), "missing cli_remote case {case}");
+            }
+            How::Reason(_) => panic!("{}: a reason belongs in C5_REASONS", row.code),
+        }
+    }
+    for row in C5_REASONS {
+        let How::Reason(why) = row.how else {
+            panic!("{}: a test belongs in C5_ROWS", row.code)
+        };
+        assert!(!why.is_empty(), "{}", row.code);
+    }
+}
+
+#[test]
+fn every_c5_row_exits_by_its_code_s_class_unless_partial() {
+    for row in C5_ROWS.iter().chain(C5_REASONS) {
+        let expected = if row.partial { 4 } else { class_exit(row.code) };
+        assert_eq!(row.exit, expected, "{}", row.code);
+    }
+    assert!(C5_REASONS.iter().all(|row| !row.partial));
+}
+
+#[test]
+fn every_c5_exit_class_is_reached_by_a_c5_verb_through_the_binary() {
+    let reached = C5_ROWS.iter().map(|row| row.exit).collect::<BTreeSet<_>>();
+    assert_eq!(reached, [0, 1, 2, 3, 4, 5, 130].into_iter().collect());
+}

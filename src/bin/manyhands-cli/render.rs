@@ -1,9 +1,9 @@
 use std::io::{self, Write};
 
 use crate::human_admin;
-use manyhands::results::{Envelope, FailureClass, ResultCode};
+use manyhands::results::{Envelope, FailureClass, RecoveryAction, ResultCode};
 use manyhands::{
-    repository::{MutationDataDto, PrepareDataDto},
+    repository::{ItemDtoKind, MutationDataDto, PrepareDataDto},
     results::Outcome,
 };
 use serde::Serialize;
@@ -155,6 +155,77 @@ fn json_output<T: Serialize>(envelope: &Envelope<T>) -> Output {
             json_output(&failure)
         }
     }
+}
+
+/// A result's human output in the compact form C4's and C5's verbs share:
+/// C2's lines of `shown`, the envelope with any data `body` shows left out,
+/// then `body`. A success prints both on stdout. A failure prints them on
+/// stderr, then `after`, then the `next:` lines of `recovery`, the actions no
+/// line of `body` or `after` renders. `notes` follow on stderr either way.
+pub fn compact(
+    shown: &Envelope<MutationDataDto>,
+    supplied: bool,
+    body: &str,
+    after: &str,
+    recovery: Vec<RecoveryAction>,
+    notes: &str,
+) -> Output {
+    if shown.failure_class().is_none() {
+        let mut stdout = human_admin::mutation_success(shown).stdout;
+        stdout.push_str(body);
+        return Output {
+            stdout: stdout.into_bytes(),
+            stderr: notes.as_bytes().to_vec(),
+            status: exit_status(None),
+        };
+    }
+    let mut extra = human_admin::failure_extra(shown, supplied);
+    extra.push_str(body);
+    extra.push_str(after);
+    let mut output = failure_output(false, &refusal_of(shown, recovery), Some(extra));
+    output.stderr.extend(notes.as_bytes());
+    output
+}
+
+/// A refusal's lines without its data, which the caller has shown.
+pub fn refusal_of<T>(
+    envelope: &Envelope<T>,
+    recovery: Vec<RecoveryAction>,
+) -> Envelope<serde_json::Value> {
+    Envelope {
+        schema_version: envelope.schema_version,
+        command: envelope.command.clone(),
+        request_id: envelope.request_id.clone(),
+        operation_id: envelope.operation_id.clone(),
+        outcome: envelope.outcome,
+        code: envelope.code,
+        message: envelope.message.clone(),
+        scope: envelope.scope.clone(),
+        effects: envelope.effects.clone(),
+        data: None,
+        recovery,
+    }
+}
+
+/// What a missing context's note says, here and in `context observe-local`.
+pub const NO_CONTEXT_NOTE: &str = "this item has no editing context, and a save makes one; <new-request-id> is a placeholder to fill in, and the save's --input - takes {\"observation\": \"...\"}, with the observation ticket show or document show prints, and the fields it changes, such as \"body\".";
+
+/// The save that makes an item's editing context, as a pasteable command.
+pub fn save_line(kind: ItemDtoKind, root: &str, item: &str) -> String {
+    let save = match kind {
+        ItemDtoKind::Document => "document save",
+        ItemDtoKind::Ticket => "ticket save",
+    };
+    format!(
+        "manyhands-cli {save} --repo {} --id {} --input - --request-id <new-request-id>",
+        quoted(root),
+        field(item)
+    )
+}
+
+/// `note` as one `note:` line, ended.
+pub fn note_line(note: &str) -> String {
+    format!("note: {note}\n")
 }
 
 /// `notes` as `note:` lines, each ended.
