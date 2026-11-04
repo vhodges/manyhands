@@ -793,6 +793,8 @@ Applied in the approval commit:
 | R-14 | `integrating` is emitted only when a merge runs (integration kind `merged`); an already-contained item emits none (Task 3 checkpoint) | "Merge into main" lights without its stage on an already-contained run; the step list still reads the result |
 | R-15 | `recording` is not emitted for a closure whose accepted preview says the closure already exists; the mapping layer in `bind/lifecycle.rs` filters it (Task 3 checkpoint) | "Mark as closed" briefly shows running for a closure that was already recorded |
 | R-16 | "Cleanup-only replay" (P/L3) is a local-only, already-contained, already-closed first run: exactly `accepted, observing, cleaning_up`. A remote one adds `publishing`, because the primary child runs (already current); a same-ID resend never reports `accepted` (Task 3 checkpoint) | The name over-promises for remote runs; the tests pin each order |
+| R-17 | Save first (decision 13) covers a stored or restored draft of the item that has no live session in the tab: it is saved through `flush_now` then `save`, the same as a live session. Unsent comment drafts don't block (decision 14) (Task 6a) | A draft the person has not looked at in this session is saved without being shown again |
+| R-18 | A tab with no item ID (a new item not yet created, or a nonconforming Inspect tab) keeps the lifecycle action visible but disabled, with its reason in `item-lifecycle-note`; pressing it opens nothing (Task 5 review Minor 1, Task 6a) | The action shows where it can't run |
 
 ## Known Limits
 
