@@ -37,7 +37,7 @@ only in documentation.
 | `cargo fmt --check` | pass |
 | `cargo clippy --all-targets --all-features --locked -- -D warnings` | pass |
 | `scripts/check-cli-no-gpui.sh` | pass |
-| `cargo test --all-features --locked --no-fail-fast` | running |
+| `cargo test --all-features --locked --no-fail-fast` | pass: 32 test results, 5347 passed, 0 failed, 1 ignored; 10:41–13:40 UTC |
 
 **Step 2, facts.** The (C5) facts were re-checked against
 `f59aceb6..2d912d10^2`. What changed is recorded in the design's
@@ -69,4 +69,4 @@ These were committed at `a6ba36cf`.
 
 | Task | State | Base | Commits | Review | Verification |
 | --- | --- | --- | --- | --- | --- |
-| 0 | baseline running | `cd2e922e` | `f203e865`, `a6ba36cf`, this ledger | — | above |
+| 0 | done | `cd2e922e` | `f203e865`, `a6ba36cf`, this ledger | — | above |
