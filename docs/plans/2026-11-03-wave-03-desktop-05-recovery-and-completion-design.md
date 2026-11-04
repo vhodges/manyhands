@@ -829,6 +829,9 @@ Applied in the approval commit:
   not yet written its checkpoint (Task 3).
 - **K-17.** A lifecycle's progress events carry no effects; its result
   reports them (Task 3 review).
+- **K-18.** `Folder::open_named` deletes stale temporaries; a `replace` that
+  another process runs on the same folder at that moment fails and is
+  retried (Task 3b review).
 
 ## Alternatives Rejected
 
