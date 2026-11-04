@@ -3081,3 +3081,8 @@ and Task 15 Step 1 now name `--all-targets --features desktop-test-support`, wit
 4. `RemoteContextHistory`'s doc gives the three-way meaning.
 5. Decision 35 follows 34 in the Cycle.
 6. `outcomes_tests.rs`'s `open`: "`false` dirties the configuration".
+
+**Verified on `87bffef7`.** All exit 0: `cargo fmt --check`; whole-tree clippy `--all-targets --all-features -D
+warnings`; `--bin manyhands-cli` 305; `--test cli` whole 474 (`recovery_tables` 4 and `inventory` 8 within it, also
+run alone); AGENTS.md's fast tier, verbatim, 79 results, 5163 passed, 0 failed, 1499 s; `--test cli_remote` 161 SSH
+cases, 949 s, since the prepare's human output changed. `git merge-tree --write-tree HEAD origin/main` clean.
