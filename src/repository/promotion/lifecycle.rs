@@ -160,7 +160,10 @@ pub(in super::super) fn resumable(record: &impl LifecycleRecord) -> bool {
         | ParentStep::RemoteDeleted
         | ParentStep::WorktreeRemoving
         | ParentStep::WorktreeRemoved
-        | ParentStep::BranchDeleted => record.refusal().is_none(),
+        | ParentStep::BranchDeleted => {
+            // Defensive: the schema CHECK ties a refusal to `abandoned`.
+            record.refusal().is_none()
+        }
     }
 }
 

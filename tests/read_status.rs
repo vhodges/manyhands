@@ -1771,14 +1771,29 @@ fn an_unfinished_promotion_lists_resume() {
     // The run stopped; `operation resume` continues it (D5 decision 10).
     assert_eq!(operation.next_action, Some(OperationNextAction::Resume));
 
-    // A superseded promotion owes nothing: shown by its ID, nothing offered.
-    items::index(data)
-        .execute("UPDATE document_promotions SET step = 'superseded'", [])
-        .unwrap();
-    assert!(service.list_operations(&repo).unwrap().items.is_empty());
-    let shown = service.show_operation(&repo, id).unwrap();
-    assert_eq!(shown.state, "superseded");
-    assert_eq!(shown.next_action, None);
+    // A finished promotion owes nothing: shown by its ID, nothing offered.
+    // `complete` carries the columns its record requires of that step.
+    for (step, columns) in [
+        (
+            "complete",
+            "context_oid = '1111111111111111111111111111111111111111',
+             integration_kind = 'merged',
+             integration_oid = '3333333333333333333333333333333333333333',
+             publication_category = 'published'",
+        ),
+        ("superseded", "updated_at = updated_at"),
+    ] {
+        items::index(data)
+            .execute(
+                &format!("UPDATE document_promotions SET step = ?1, {columns}"),
+                [step],
+            )
+            .unwrap();
+        assert!(service.list_operations(&repo).unwrap().items.is_empty());
+        let shown = service.show_operation(&repo, id).unwrap();
+        assert_eq!(shown.state, step);
+        assert_eq!(shown.next_action, None);
+    }
     assert_git_transport_uninitialized();
 }
 
@@ -1855,12 +1870,13 @@ fn a_held_parent_still_lists_resume() {
 }
 
 #[test]
-fn a_refused_parent_lists_no_resume() {
+fn an_abandoned_refused_parent_lists_no_resume() {
     let (_fixture, enabled, repo) = enabled();
     let (service, data) = (&enabled.service, enabled.data_directory.path());
     configure_remote(data);
     let promotion = OperationId::new();
     let closure = OperationId::new();
+    // A refused parent is always abandoned: the schema ties the two.
     insert_promotion(data, promotion, "abandoned", Some("external_change"));
     insert_closure(data, closure, "abandoned", Some("reconfirmation_required"));
 
