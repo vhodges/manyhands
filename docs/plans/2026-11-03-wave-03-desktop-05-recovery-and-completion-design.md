@@ -292,7 +292,9 @@ pre-call stage, and its table test at `:767-773`),
 `schemas/v1/progress_event.schema.json`,
 `R/promotion/run.rs`, `R/promotion/lifecycle.rs` (L2's shared
 `resumable` predicate, owner 2026-11-04), `R/closure/lifecycle.rs`,
-`R/mutation/bind/lifecycle.rs`, `src/bin/manyhands-cli/human_lifecycle.rs`,
+`R/mutation/bind/lifecycle.rs`, `R/mutation/bind/lifecycle_verb.rs`,
+`R/promotion/mod.rs` and `R/closure/mod.rs` (L3's observer parameter only,
+owner 2026-11-04), `src/bin/manyhands-cli/human_lifecycle.rs`,
 `D/model/operations.rs` (`stage_text` arms only, to keep the tree green),
 `src/drafts/mod.rs` and `src/drafts/protect.rs` with its platform modules
 (L4, decision 22), and tests in `tests/read_status.rs`, `tests/mutation_remote.rs` (its
@@ -784,6 +786,9 @@ Applied in the approval commit:
 | R-11 | A local resolution's observation is the inspection's | The library refuses a stale one |
 | R-12 | A resolution's submitted set is kept per request ID until that request finishes (decision 19) | A stale file after a crash; deleted when the request is next seen finished |
 | R-13 | `RepairOutside` is any `recovery_required` result with `integration_conflict` that no other rule routes, a ticket's included (Task 1 review, 2026-11-04) | A closure the CLI can repair locally shown outside guidance; the CLI prints nothing for it either way |
+| R-14 | `integrating` is emitted only when a merge runs (integration kind `merged`); an already-contained item emits none (Task 3 checkpoint) | "Merge into main" lights without its stage on an already-contained run; the step list still reads the result |
+| R-15 | `recording` is not emitted for a closure whose accepted preview says the closure already exists; the mapping layer in `bind/lifecycle.rs` filters it (Task 3 checkpoint) | "Mark as closed" briefly shows running for a closure that was already recorded |
+| R-16 | "Cleanup-only replay" (P/L3) is a local-only, already-contained, already-closed first run: exactly `accepted, observing, cleaning_up`. A remote one adds `publishing`, because the primary child runs (already current); a same-ID resend never reports `accepted` (Task 3 checkpoint) | The name over-promises for remote runs; the tests pin each order |
 
 ## Known Limits
 

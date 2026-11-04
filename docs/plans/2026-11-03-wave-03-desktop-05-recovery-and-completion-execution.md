@@ -65,6 +65,40 @@ These were committed at `a6ba36cf`.
   `3b1443c0`.
 - 3's schema part lands with Task 3.
 
+## Task 3 Design Checkpoint (2026-11-04, at `12cf2311`)
+
+The implementer's checkpoint, reviewed by the orchestrator against the design's L3.
+
+- **Stages.** `Recording`, `Integrating`, `Publishing` and `CleaningUp` go after `Indexing` and before `Stopping`, in the enum and the schema.
+  - The schema description gains the lifecycle order.
+  - `stage_text`: "Marking it closed…", "Merging into main…", "Sharing main…", "Tidying up…".
+- **Pre-call stage.** `Command::stage()` reports `observing` for `DocumentPromote` and `TicketClose`; `ItemRepublish` and the shares keep `connecting`.
+  - The stage table test changes, and so does `command.rs:981`, which E-3 is extended to cover (owner, 2026-11-04).
+- **Threading.** `run.rs` defines `RunEvent { ChildStarting(ChildRole), ChildSafePoint(ChildRole, RemoteOperationSafePoint), Recording, Integrating, CleaningUp }`, `trait RunObserver`, and a no-op `Unobserved`.
+  - The observer is threaded through `run_lifecycle`, `promote_inner`, `child`, `finish_integrated` and `finish_steps`, and through `CancellationObserver` as an optional progress observer with its role.
+  - It reaches `run_lifecycle` from `Session::promote_document` and `close_ticket`, through `V::call` in `lifecycle_verb.rs` and the `_observed` methods in `promotion/mod.rs` and `closure/mod.rs`. Those three files were added to Part 0 on 2026-11-04, by the owner.
+  - `bind/lifecycle.rs` maps events to `ProgressStage`: context `ChildStarting` → `connecting`; context `BeforeFetch`, `BeforeLocalUpdate` and `BeforePush` → `fetching`, `updating_local` and `pushing`; primary `ChildStarting` → `publishing`; the three steps directly. Every other safe point, and every primary safe point, is dropped.
+  - The domain never names `ProgressStage`.
+- **Emission points.**
+  - `recording`: before `prepare_integration`, when the closure effect is not yet written.
+  - `integrating`: inside the lease, before the merge.
+  - `connecting` and `publishing`: in `child()`, before `io.synchronize`.
+  - `cleaning_up`: after the cleanup cancel check.
+  - Nothing is emitted for:
+    - the cancel acknowledgement;
+    - an adopted complete child;
+    - the primary adoption probe;
+    - primary safe points;
+    - reconciliation or recovery.
+- **Orders.**
+  - A remote promotion: `accepted, observing, connecting, {fetching, updating_local, pushing}, integrating, publishing, cleaning_up`.
+  - A closure: the same, with `recording` before `integrating`.
+  - A local-only run has no `connecting` and no `publishing`.
+  - A same-ID resend never reports `accepted`.
+- **Orchestrator rulings.** R-14 (`integrating` only on a merge), R-15 (no `recording` for an existing closure, filtered in `bind/lifecycle.rs`) and R-16 (the meaning of "cleanup-only replay"); see the design's Rulings.
+- **Noted risk.** `integrating` is sent while the repository lease is held, as the progress sink's contract already allows. The desktop sink is a non-blocking channel.
+- **Run by name.** `cli_remote` `c5_journey_close_with_retryable_failure`, because the `lifecycle` filter misses it.
+
 ## Tasks
 
 | Task | State | Base | Commits | Review | Verification |
