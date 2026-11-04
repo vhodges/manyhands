@@ -350,6 +350,8 @@ are not authorized; numeric exits must come from existing results registry.
 | Task 0 independent quality review, same range, after spec pass | Session `ses_e57654396ffew9p9o8gygVkEQj`: 0 Critical/0 Important/0 Minor; ledger/source references, metadata/links, evidence limits and unchanged controls verified | Task 0 quality approved; no source changes or Cargo rerun; no Task 1 authorization inferred |
 | Controller verification after both reviews | Actual DTO, the two SSH journey assertions and exact recovery step list inspected; H1–H3 confirmed. Task 0 range `git diff --check` passed; tree clean before this review-record update. Supported `ticket show` verified status `implementing`, lifecycle `open`, exact active ticket context after the CLI save | Narrow H1–H3 amendment requested; implementation approval/Q1/Q2/E-1–E-10 remain intact |
 | Owner H1–H3 resolution | “yes” to all three exact amendments in the controller's preceding request; canonical approval checkpoint `01M6MCT4HYJ7VKG22J6R0ZNSWQ` | No open Task 0 holds; preserve prior approvals and separate lifecycle gates |
+| Task 1 initial spec review, `834415b9..5be0de55` | Controller relayed and source-verified **1 Important** finding: shared direct-local-ref lookup incorrectly made ticket completion depend on local identity/preservation evidence. Proof/migration/compatibility/H2 scope otherwise passed | Correction below; spec re-review is required before quality review. No pass recorded by implementer |
+| Task 1 spec correction, `5be0de55..a95f01d3` | Required lookup moved into Document only; missing/symbolic ticket refs and unchanged document refusals covered; focused red **2 passed / 1 failed**, green **3 passed**; frozen-source remote gate **427 passed** | Implementation correction verified; controller spec re-review, then quality review pending. No review pass recorded |
 | Tasks 2/4 adversarial reviews, final whole-range reviews | Not yet run | Mandatory future checkpoints |
 
 ## Task Checklist And Next Step
@@ -361,7 +363,8 @@ are not authorized; numeric exits must come from existing results registry.
   Independent spec and quality reviews passed without findings on
   `74186d51..6a8b4259`; owner H1–H3 resolution is now recorded, no open holds.
 - [ ] **1 — Shared proof, recognition, disposition upgrade.** Implemented;
-  targeted verification green; controller spec/quality reviews pending.
+  initial spec review found one Important issue; correction verified at
+  `a95f01d3`; controller spec re-review/quality review pending.
 - [ ] **2 — Durable single-context retirement.** Not started; adversarial gate.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
@@ -371,8 +374,8 @@ are not authorized; numeric exits must come from existing results registry.
 - [ ] **8 — Final local gates/independent reviews/owner handoff.** Not started;
   merge/close/native dispatch remain separately authorized.
 
-Immediate next step: Task 1's feature-commit handoff, then controller independent
-spec review followed by quality review.
+Immediate next step: return Task 1's full review range for controller spec
+re-review, then quality review.
 Do not start Task 2 before that handoff. Preserve every other assertion and
 existing lifecycle cleanup behavior. No reapproval of the documents, Q1/Q2,
 E-1–E-10, implementation or execution method is needed.
@@ -440,6 +443,9 @@ under `/tmp/opencode/task1-*.log`, not canonical content or real-context data.
 
 ### Final Targeted Verification
 
+This table records the initial feature handoff at `5be0de55`; verification of
+the subsequent spec-review correction is recorded separately below.
+
 | Command | Result / log |
 | --- | --- |
 | `devenv shell -- cargo test --all-features --locked --lib retirement_proof` | **6 passed**, 0 failed; latest `task1-proof-final-green.log`. Table-driven predicates/deltas plus independent completion and empty-tree rows; temporary repositories only |
@@ -474,5 +480,60 @@ above come from completed commands after that hardening, not inferred from earli
 - Canonical Task 1 checkpoint uses CLI-generated distinct ULID
   `01M6ME9SX9CK5WE4RHNVENBSFQ`, parent `01M6MCT4HYJ7VKG22J6R0ZNSWQ`,
   actual UTC `2026-11-04T23:37:44Z`. No ticket body/status save.
-- Next: feature-commit handoff, then controller spec review
-  **before** quality review. Task 2 remains unstarted; no review is marked passed.
+- Initial feature handoff: `5be0de55f0465ee0a814ba06f677e2be79c653d7`.
+  The controller's subsequent spec finding and correction are recorded below;
+  quality review still waits for spec re-review. Task 2 remains unstarted.
+
+### Task 1 Spec-Review Correction — Ticket Completion Without A Local Direct Ref
+
+- Controller relayed one source-verified **Important** finding against the full
+  Task 1 range `834415b95825f84d15ce00a5586316abcfe1a6f7` through initial feature
+  head `5be0de55f0465ee0a814ba06f677e2be79c653d7`. Correction entry was clean at
+  that feature head, on the same ticket branch/worktree; no new task or push.
+- Verified against design lines 172–178 and 212–222: for a proven remotely
+  deleted ticket, valid committed-primary closure is completion evidence even
+  when the local branch is missing or symbolic. A document still needs a direct
+  local tip and preservation proof. The shared `direct_oid(...)?` before the
+  kind match was an unintended extra ticket predicate, not approved policy.
+- Minimal production change: move that unchanged local-ref lookup into the
+  `Document` arm of `completed_deleted_context`. The ticket arm now depends only
+  on positive committed-primary completion after the caller's existing deletion
+  evidence checks. No cleanup, repair, new effects or primary/deletion relaxation.
+- Added four rows to the existing recognition matrix (9 → **13 rows**): ticket
+  missing ref and symbolic ref both report `Closed`; documents in either state
+  retain `RemotelyDeleted`. The old Git worktree and admin registration remain
+  present; full before/after snapshots preserve bytes, refs/index and registration.
+  Existing open, unknown, malformed, dirty, unmatched, promoted and tracking-only
+  controls remain unchanged. All repositories are temporary.
+
+| Correction command | Evidence |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --lib retirement_recognition` before fix | Behavioral RED: **2 passed / 1 failed**, exit 101, compiling successfully. `closed_missing_local_ref` returned `RemotelyDeleted`, expected `Closed`; `/tmp/opencode/task1-spec-fix-recognition-red.log` |
+| Same focused command after minimal fix | GREEN: **3 passed**, 0 failed, exit 0; 13-row matrix, guidance and the matching-named stored DTO module. `/tmp/opencode/task1-spec-fix-recognition-green.log` |
+| `devenv shell -- cargo test --all-features --locked --lib repository::remote::` | **427 passed**, 0 failed, exit 0, 307.01 s. Rust source frozen with no concurrent compilation; no process-spawn errors. `/tmp/opencode/task1-spec-fix-remote.log` |
+| `devenv shell -- cargo fmt --check` | Exit 0; `/tmp/opencode/task1-spec-fix-fmt.log`; formatting also through Devenv |
+| `git diff --check`, `git diff --cached --check`, full `834415b9..a95f01d3` range check | Clean before source commit and after it; final documentation/staged checks also required before handoff |
+
+Not duplicated for this correction: standalone `retirement_proof`, `read_contract`,
+the `cli_remote c5_polling` group and the two H2 SSH journeys. Their recorded
+6/72/23/1/1 results above are from initial Task 1, **not** claimed as reruns here.
+Their proof algorithm, schema/DTO mappings, wire shape and lifecycle/CLI paths
+are unchanged; the expanded focused matrix directly covers the affected identity
+states and unchanged document rule. The remote module gate additionally reruns
+all poll/migration/classification controls. Whole-tree check/Clippy, broad test
+tiers and native CI remain with the existing controller/owner gates.
+
+Source correction commit: `a95f01d34bb47fcc8bac79346d84de45e37c8e4c`,
+`fix: recognize closed tickets without local context refs`, with required
+`Co-Authored-By: GPT-6.1 Sol <noreply@openai.com>` trailer. Its narrow fix range is
+`5be0de55f0465ee0a814ba06f677e2be79c653d7..a95f01d34bb47fcc8bac79346d84de45e37c8e4c`;
+the full Task 1 source-review range remains
+`834415b95825f84d15ce00a5586316abcfe1a6f7..a95f01d34bb47fcc8bac79346d84de45e37c8e4c`.
+This evidence/checkpoint follows in a documentation-only commit; the controller
+must review from `834415b9` through the returned HEAD, **not `HEAD~1`**.
+
+Canonical correction checkpoint: CLI-generated distinct ULID
+`01M6MFK79ZVEMZN6JEEGVZQ4WB`, parent `01M6ME9SX9CK5WE4RHNVENBSFQ`,
+actual UTC `2026-11-04T23:57:59Z`. No push, additional agents, main integration,
+ticket status/body save or Task 2 work. Next is controller spec re-review using
+the same reviewer, then quality review; neither is marked passed here.
