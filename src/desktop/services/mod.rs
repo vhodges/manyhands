@@ -24,7 +24,10 @@ use futures::StreamExt;
 use gpui_kit::{App, AppContext, Entity};
 use manyhands::{
     drafts::{DraftError, DraftStore},
-    repository::{ContextPrepareIntent, MutationDataDto, RepositoryService, keys::KeyStore},
+    repository::{
+        ConflictDto, ContextPrepareIntent, Mutation, MutationDataDto, OperationId, PrepareDataDto,
+        ProgressStage, RepositoryService, keys::KeyStore,
+    },
     results::{Envelope, Outcome, PublicationEffect, ResultCode},
 };
 
@@ -129,6 +132,8 @@ pub(crate) enum JobKind {
     Comment,
     SynchronizeItem,
     SynchronizeRepo,
+    DocumentPromote,
+    TicketClose,
     ObserveHost,
 }
 
@@ -164,6 +169,28 @@ pub(crate) trait Backend: Send + Sync + 'static {
     /// before the worker decides what follows it. An answer it gives
     /// stands in place of the library's: a test's constructed answer.
     fn after_job(&self, _kind: JobKind) -> Option<Envelope<MutationDataDto>> {
+        None
+    }
+
+    /// Called on the worker thread with each progress stage a job of
+    /// `kind` reports, once the stage has been forwarded to the UI and
+    /// before the library goes on. A test may hold the job here; the
+    /// library may hold the repository lease meanwhile (L3 reports
+    /// `integrating` under it).
+    fn on_progress(&self, _kind: JobKind, _stage: ProgressStage) {}
+
+    /// Called after a prepare of `mutation` returns. An answer it gives
+    /// stands in place of the library's: a test's canned prepare answer
+    /// (D5 decision 9).
+    fn after_prepare(&self, _mutation: &Mutation) -> Option<Envelope<PrepareDataDto>> {
+        None
+    }
+
+    /// Called after a conflict read of `operation_id` returns. A
+    /// conflict it gives stands in place of the library's: a test's
+    /// canned `ConflictDto` (D5 decision 9).
+    #[allow(dead_code)] // Called from Task 10.
+    fn after_conflict_read(&self, _operation_id: &OperationId) -> Option<ConflictDto> {
         None
     }
 }

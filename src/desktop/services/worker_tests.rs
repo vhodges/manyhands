@@ -1241,3 +1241,43 @@ fn giving_up_an_unreadable_record_resends_with_its_token_cancelled() {
     assert_eq!(harness.worker.gave_up(id), Some(GaveUp::Resent));
     assert_eq!(harness.worker.record_state(id), Some(RecordState::Unknown));
 }
+
+/// The progress-sink seam (D5 Testing): a job held at a named stage parks
+/// once that stage has reached the UI, accepted and still running, and
+/// dropping the gate lets the library go on. Nothing else touches the
+/// repository while it is parked: the job may hold its lease.
+#[test]
+fn a_stage_hold_parks_after_its_stage_reaches_the_ui() {
+    let mut harness = Harness::new();
+    let held = harness
+        .backend
+        .hold_at_stage(JobKind::IndexRefresh, ProgressStage::Accepted);
+    let id = harness
+        .worker
+        .submit(harness.refresh(), Lane::User, None, None);
+    held.wait_reached();
+    loop {
+        match harness.next() {
+            Seen::Progress(of, progress) if of == id => {
+                assert_eq!(progress.stage, ProgressStage::Accepted);
+                break;
+            }
+            Seen::Finished(of, _) if of == id => panic!("the held job finished"),
+            _ => {}
+        }
+    }
+    let running = harness.worker.running_job().expect("the job is parked");
+    assert_eq!(running.id, id);
+    assert!(running.accepted);
+    assert!(matches!(
+        harness.state(id),
+        RequestState::Running {
+            stage: Some(ProgressStage::Accepted),
+            accepted: true,
+        }
+    ));
+
+    drop(held);
+    let seen = harness.until_end_of(id);
+    assert_eq!(finished(&seen, id).code, ResultCode::Ok);
+}

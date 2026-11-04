@@ -40,11 +40,12 @@ pub(crate) const REPAIR: &str = "Repair…";
 /// An unmanaged document's banner's action: a repair with adoption.
 pub(crate) const ADOPT: &str = "Adopt…";
 
-/// The actions the item view shows that are not available yet, with the
-/// design's labels: the header's primary action. Edit (E-6) and Repair
-/// (E-6, Task 25) are available; Share and the discussion's composers are
-/// D4's own controls, not later actions.
-pub(crate) const LATER: [&str; 2] = [APPROVE_AND_MERGE, CLOSE_TICKET];
+/// The actions the item view shows that are not available yet: none. The
+/// header's primary action, Approve and merge… or Close ticket…, is live
+/// (D5, A1); Edit and Repair were made available before it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const LATER: [&str; 0] = [];
+/// What a control not available yet says: the close-draft dialog's still.
 pub(crate) const LATER_NOTE: &str = "Available in a later release";
 
 /// The problems that make the header a recovery view: the item's branch

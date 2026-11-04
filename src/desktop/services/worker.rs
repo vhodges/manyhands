@@ -873,7 +873,12 @@ fn execute(
     if give_up {
         give_up_first(shared, backend.service(), id, request_id, &cancel);
     }
-    let mut progress = Forward { id, shared };
+    let mut progress = Forward {
+        id,
+        shared,
+        backend,
+        kind: intent.job_kind(),
+    };
     let envelope = backend.service().execute(
         MutationCall {
             request_id,
@@ -1087,7 +1092,9 @@ fn finish(shared: &Shared) {
 }
 
 /// The running job's progress sink. It only records acceptance and
-/// forwards a copy: it never calls back into the library.
+/// forwards a copy: it never calls back into the library. Then the
+/// backend hears of the stage (`Backend::on_progress`), where a test may
+/// hold the job.
 ///
 /// Every stage is reported after acceptance, and a same-ID re-entry
 /// reports later stages only (fact 10), so any stage marks the job
@@ -1095,6 +1102,8 @@ fn finish(shared: &Shared) {
 struct Forward<'a> {
     id: DesktopRequestId,
     shared: &'a Shared,
+    backend: &'a dyn Backend,
+    kind: JobKind,
 }
 
 impl ProgressSink for Forward<'_> {
@@ -1104,6 +1113,7 @@ impl ProgressSink for Forward<'_> {
         }
         self.shared
             .send(WorkerEvent::Progress(self.id, event.clone()));
+        self.backend.on_progress(self.kind, event.stage);
     }
 }
 

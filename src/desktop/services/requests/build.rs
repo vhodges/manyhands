@@ -2,13 +2,13 @@
 
 use manyhands::repository::{
     CommentAddInput, CommitIdentity, ContextPrepareInput, ContextReleaseInput, DocumentCreateInput,
-    DocumentDraft, DocumentMoveInput, DocumentRepairInput, DocumentSaveInput, FolderCreateInput,
-    HostApproveInput, HostReplaceInput, IndexRebuildInput, IndexRefreshInput, ItemSyncInput,
-    KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
+    DocumentDraft, DocumentMoveInput, DocumentPromoteInput, DocumentRepairInput, DocumentSaveInput,
+    FolderCreateInput, HostApproveInput, HostReplaceInput, IndexRebuildInput, IndexRefreshInput,
+    ItemSyncInput, KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
     KeySelectInput, Mutation, OperationAbandonInput, OperationResumeInput, RemoteAddInput,
     RemoteRemoveInput, RemoteSelectInput, RepoCreateInput, RepoEnableInput, RepoIdentitySetInput,
-    RepoRemoveInput, RepoSyncInput, TicketCreateInput, TicketDraft, TicketRepairInput,
-    TicketSaveInput,
+    RepoRemoveInput, RepoSyncInput, TicketCloseInput, TicketCreateInput, TicketDraft,
+    TicketRepairInput, TicketSaveInput,
     keys::{KeyProtection, KeyStore, SecretPassphrase},
 };
 
@@ -330,6 +330,14 @@ impl Intent {
                 id: id.clone(),
             }),
             Self::RepoSync { root } => Mutation::RepoSync(RepoSyncInput { root: root.clone() }),
+            Self::DocumentPromote { root, id } => Mutation::DocumentPromote(DocumentPromoteInput {
+                root: root.clone(),
+                id: id.clone(),
+            }),
+            Self::TicketClose { root, id } => Mutation::TicketClose(TicketCloseInput {
+                root: root.clone(),
+                id: id.clone(),
+            }),
         })
     }
 }
