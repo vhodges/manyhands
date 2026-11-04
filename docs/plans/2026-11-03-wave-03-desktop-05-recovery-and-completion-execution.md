@@ -14,6 +14,21 @@ is written only by the orchestrator. Implementers never edit it.
   one implementer per task, then a fresh reviewer, one at a time.
 - **Still gated:** pushes beyond the ticket branch, a PR, the merge,
   closure, native CI and cleanup.
+- **Task 5 in parallel (owner, 2026-11-04).** While Task 4's SSH tier
+  runs, the owner wrote: "approve working on Task 5 in parallel". This is
+  an exception to the plan's "no lane branches" rule, for Task 5 only.
+  - Task 5 runs in a side worktree, `/home/vhodges/work/src/manyhands-d5-task5`,
+    on the local branch `manyhands/ticket/01M4CC0VN2K8DBHNMZ46NTX5JJ-task5`.
+  - That branch starts from the ticket branch. It is merged back, never
+    rebased, once Task 4 is recorded. Then the side worktree and branch are
+    removed.
+
+## Follow-ups
+
+- **AGENTS.md SSH-tier timing (owner, 2026-11-04).** When D5 is done,
+  update AGENTS.md's figure of "about 1 h 36 min" for the SSH targets.
+  C5 grew `mutation_remote` to 708 cases; at Task 4 that target alone ran
+  about 2 hours. Use the timings measured at Task 4 and Task 16.
 
 ## Base
 
