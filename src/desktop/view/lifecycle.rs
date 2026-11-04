@@ -22,6 +22,7 @@
 //! - **Stale.** The library refused that consent: "Something changed since
 //!   you confirmed", and Prepare again, after which Confirm sends the same
 //!   request again with the new confirmation (`Worker::reconfirm`; P2, P3).
+//!   Enter on it prepares again.
 //! - **Blocked.** Each blocker in words, with its way out (L1,
 //!   `lifecycle_prepare_way_out`), and the answer's code; a dirty main says
 //!   so and offers Open folder (P19). Prepare again prepares once more,
@@ -169,10 +170,10 @@ pub(crate) fn open(
             .close_button(false)
             .overlay_closable(false)
             .child(dialog.clone())
-            // Enter: Confirm, when it is offered. The Kit never closes the
-            // dialog here.
+            // Enter: Confirm, or Prepare again on a refused consent. The
+            // Kit never closes the dialog here.
             .on_ok(move |_, _, cx| {
-                confirming.update(cx, |dialog, cx| dialog.confirm(cx));
+                confirming.update(cx, |dialog, cx| dialog.enter(cx));
                 false
             })
             // Escape: close; what was sent goes on.
@@ -344,3 +345,7 @@ mod action_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/confirm_tests.rs"]
 mod confirm_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/stale_tests.rs"]
+mod stale_tests;

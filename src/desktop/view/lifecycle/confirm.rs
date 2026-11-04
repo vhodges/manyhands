@@ -55,6 +55,8 @@ pub(crate) const KEEP_LOCAL: &str = "Keep on this computer (sharing pending)";
 pub(crate) const MARK_CLOSED: &str = "Mark as closed";
 pub(crate) const ALREADY_MARKED: &str = "Already marked closed";
 pub(crate) const TIDY_UP: &str = "Tidy up";
+/// The changed paths' list scrolls past this height.
+const PATHS_MAX_HEIGHT: f32 = 180.;
 
 /// One step of the list: its title and what it does. It may name who
 /// closes the ticket, and derives no `Debug`.
@@ -82,23 +84,26 @@ fn item_word(kind: ItemDtoKind) -> &'static str {
 /// The steps the preview plans, in the library's order (R-8): a closure is
 /// recorded before the merge.
 pub(crate) fn steps(details: &LifecyclePreviewDto) -> Vec<Step> {
-    let remote = details.remote.as_deref().unwrap_or("origin");
     let primary = details.primary_branch.as_str();
-    let local = details.publication == LifecyclePlannedPublication::PendingNoRemote;
+    // The remote, where the work is shared: the library names one with
+    // every `publish` publication, and none with `pending_no_remote`.
+    let sharing = details
+        .remote
+        .as_deref()
+        .filter(|_| details.publication == LifecyclePlannedPublication::Publish);
     let mut steps = vec![Step::new(
         SAVE_STEP,
         "Anything unsaved in this tab is saved first.",
     )];
-    steps.push(if local {
-        Step::new(
-            KEEP_LOCAL,
-            "This repository has no remote, so nothing is sent.",
-        )
-    } else {
-        Step::new(
+    steps.push(match sharing {
+        Some(remote) => Step::new(
             format!("Share with {remote}"),
             "Bring in other people's changes, then send yours.",
-        )
+        ),
+        None => Step::new(
+            KEEP_LOCAL,
+            "This repository has no remote, so nothing is sent.",
+        ),
     });
     if let Some(closure) = &details.closure {
         let title = match closure.recording {
@@ -117,19 +122,26 @@ pub(crate) fn steps(details: &LifecyclePreviewDto) -> Vec<Step> {
             format!("{primary} already holds every change below."),
         ),
     });
-    if !local {
+    if let Some(remote) = sharing {
         steps.push(Step::new(
             format!("Share {primary} with {remote}"),
             format!("Send {primary} to {remote}."),
         ));
     }
-    steps.push(Step::new(TIDY_UP, tidy_note(&details.cleanup, remote)));
+    steps.push(Step::new(
+        TIDY_UP,
+        tidy_note(&details.cleanup, details.remote.as_deref()),
+    ));
     steps
 }
 
-/// What the tidy-up removes, in words.
-fn tidy_note(cleanup: &LifecyclePlannedCleanupDto, remote: &str) -> String {
-    let on_remote = format!("the branch on {remote}");
+/// What the tidy-up removes, in words: the remote branch by its remote's
+/// name, when the preview names one.
+pub(super) fn tidy_note(cleanup: &LifecyclePlannedCleanupDto, remote: Option<&str>) -> String {
+    let on_remote = match remote {
+        Some(remote) => format!("the branch on {remote}"),
+        None => "the remote branch".to_owned(),
+    };
     let parts: Vec<&str> = [
         (cleanup.worktree, "the working copy"),
         (cleanup.local_branch, "the local branch"),
@@ -192,7 +204,7 @@ pub(crate) fn code_note(kind: ItemDtoKind) -> String {
     )
 }
 
-fn change_words(change: LifecyclePathChangeKind) -> (&'static str, &'static str) {
+pub(super) fn change_words(change: LifecyclePathChangeKind) -> (&'static str, &'static str) {
     match change {
         LifecyclePathChangeKind::Added => ("added", "plus"),
         LifecyclePathChangeKind::Modified => ("modified", "pencil"),
@@ -227,6 +239,16 @@ impl LifecycleDialog {
         self.confirmed = Some((request, attempt));
         self.phase = Phase::Submitted(request);
         cx.notify();
+    }
+
+    /// Enter in the dialog: Confirm on the confirm stage, Prepare again on
+    /// a refused consent; nothing elsewhere.
+    pub(crate) fn enter(&mut self, cx: &mut Context<Self>) {
+        match self.phase {
+            Phase::Confirm { .. } => self.confirm(cx),
+            Phase::Stale { .. } => self.prepare(cx),
+            _ => {}
+        }
     }
 
     /// The confirmed request was answered: a refused consent shows Stale,
@@ -342,33 +364,49 @@ impl LifecycleDialog {
                     .text_sm()
                     .font_weight(FontWeight::SEMIBOLD),
                 )
-                .children(details.changes.iter().enumerate().map(|(ix, change)| {
-                    let (words, icon) = change_words(change.change);
-                    let tag = path_tag(&change.path);
-                    h_flex()
-                        .gap_2()
-                        .items_center()
-                        .child(
-                            div()
-                                .id(("lifecycle-path-change", ix))
+                .child(
+                    // Its own scroll, so Confirm and Cancel stay in view on
+                    // a long branch.
+                    v_flex()
+                        .id("lifecycle-paths")
+                        .gap_1()
+                        .max_h(px(PATHS_MAX_HEIGHT))
+                        .overflow_y_scroll()
+                        .children(details.changes.iter().enumerate().map(|(ix, change)| {
+                            let (words, icon) = change_words(change.change);
+                            let tag = path_tag(&change.path);
+                            h_flex()
+                                .id(("lifecycle-path-row", ix))
                                 .test_support()
-                                .aria_label(words)
-                                .flex_none()
-                                .child(Icon::default().path(icon_path(icon)).w(px(14.)).h(px(14.))),
-                        )
-                        .child(
-                            text(("lifecycle-path", ix), change.path.clone())
-                                .min_w_0()
-                                .text_xs()
-                                .font_family(mono.clone()),
-                        )
-                        .child(
-                            text(("lifecycle-path-tag", ix), tag)
-                                .flex_none()
-                                .text_xs()
-                                .text_color(if tag == "code" { info } else { muted }),
-                        )
-                }));
+                                .gap_2()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .id(("lifecycle-path-change", ix))
+                                        .test_support()
+                                        .aria_label(words)
+                                        .flex_none()
+                                        .child(
+                                            Icon::default()
+                                                .path(icon_path(icon))
+                                                .w(px(14.))
+                                                .h(px(14.)),
+                                        ),
+                                )
+                                .child(
+                                    text(("lifecycle-path", ix), change.path.clone())
+                                        .min_w_0()
+                                        .text_xs()
+                                        .font_family(mono.clone()),
+                                )
+                                .child(
+                                    text(("lifecycle-path-tag", ix), tag)
+                                        .flex_none()
+                                        .text_xs()
+                                        .text_color(if tag == "code" { info } else { muted }),
+                                )
+                        })),
+                );
             body =
                 body.child(list)
                     .child(paths)

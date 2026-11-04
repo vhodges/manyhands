@@ -304,11 +304,22 @@ impl ItemPane {
             _ => None,
         };
         // The wrapper tracks the action's focus, so its dialog gives focus
-        // back here (A2), as the operation area's buttons do.
+        // back here (A2, A21), as the operation area's buttons do. Focused,
+        // it shows a ring, and Enter or Space opens the dialog again; Tab
+        // goes on to the Kit button inside. A pointer's click is the
+        // button's only.
+        let ring = cx.theme().ring;
         let wrapper = div()
             .id(LIFECYCLE_FOCUS)
             .flex_none()
-            .track_focus(&self.lifecycle_focus);
+            .rounded_sm()
+            .track_focus(&self.lifecycle_focus)
+            .focus(move |style| style.border_2().border_color(ring))
+            .on_click(cx.listener(|pane, event: &ClickEvent, window, cx| {
+                if event.is_keyboard() {
+                    pane.open_lifecycle(window, cx);
+                }
+            }));
         let wrapper = match note {
             Some(reason) => wrapper.child(
                 div()

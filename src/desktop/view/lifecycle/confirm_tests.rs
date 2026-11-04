@@ -1,44 +1,47 @@
 //! The lifecycle dialog's confirm stage (D5 design, A2): the step list, the
 //! whole branch's changed paths with their tags and the code note, the
 //! local-only wording, `closed_by` from the preview, a refused consent that
-//! offers Prepare again (P2, P3), a ticket whose status text is `closed`
+//! offers Prepare again (P2, P3, in `stale_tests.rs`), a ticket whose status text is `closed`
 //! (P13) and the keys (A21). Every test runs over a real local-only
 //! repository, except one that renders a remote preview through a canned
 //! prepare (decision 9) and says so.
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::TestAppContext;
+use gpui_kit::{AssetSource, ElementId, TestAppContext};
 use manyhands::{
     repository::{
-        Clock, LifecyclePlannedPublication, Mutation, PreviewDetailsDto, RepositoryService,
-        TicketCloseInput,
+        ItemDtoKind, LifecyclePathChangeKind, LifecyclePlannedCleanupDto,
+        LifecyclePlannedClosureDto, LifecyclePlannedIntegration, LifecyclePlannedPublication,
+        LifecyclePreviewDto, LifecycleRecording, Mutation, PreviewDetailsDto, TicketCloseInput,
     },
     results::ResultCode,
 };
 
+use super::confirm::{change_words, git_line, steps, tidy_note};
 use super::tests::{
-    TICKET, closes, code, commits, dialog, open, pane, request, saved_ticket, shell, shown, ticket,
+    TICKET, closes, code, dialog, open, pane, request, saved_ticket, shell, shown, ticket,
     until_present,
 };
 use crate::desktop::{
+    assets::{DesktopAssets, icon_path},
     model::item::CLOSE_TICKET,
     test_support::fixtures::{identity, item_id, ticket_path, ticket_source},
     view::{harness::Shell, item::LIFECYCLE_ACTION},
 };
 
 const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5KF0";
-const STALE: &str = "Something changed since you confirmed.";
-const CODE_NOTE: &str =
+pub(super) const STALE: &str = "Something changed since you confirmed.";
+pub(super) const CODE_NOTE: &str =
     "This working copy includes code as well as the ticket. All of it is merged.";
 
 /// The ticket's own working copy, where its branch is checked out.
-fn worktree(shell: &Shell, root: &Path) -> PathBuf {
+pub(super) fn worktree(shell: &Shell, root: &Path) -> PathBuf {
     PathBuf::from(shown(shell, root, TICKET).context.worktree)
 }
 
 /// The confirm stage's changed paths: (path, tag, change), in order.
-fn paths(shell: &Shell, cx: &mut TestAppContext) -> Vec<(String, String, String)> {
+pub(super) fn paths(shell: &Shell, cx: &mut TestAppContext) -> Vec<(String, String, String)> {
     let paths = shell.rows("lifecycle-path", cx);
     let tags = shell.rows("lifecycle-path-tag", cx);
     let changes = shell.rows("lifecycle-path-change", cx);
@@ -52,12 +55,32 @@ fn paths(shell: &Shell, cx: &mut TestAppContext) -> Vec<(String, String, String)
         .collect()
 }
 
-fn row(path: &str, tag: &str, change: &str) -> (String, String, String) {
+pub(super) fn row(path: &str, tag: &str, change: &str) -> (String, String, String) {
     (path.to_owned(), tag.to_owned(), change.to_owned())
 }
 
+/// The observed elements inside the path row `ix`, by their own IDs.
+fn row_elements(shell: &Shell, ix: usize, cx: &mut TestAppContext) -> Vec<ElementId> {
+    let row = ElementId::from(("lifecycle-path-row", ix));
+    let mut inside: Vec<ElementId> = shell.frame(cx, |window, _| {
+        gpui_kit::base::test_support::snapshots(window)
+            .into_iter()
+            .filter_map(|element| {
+                let path = element.path();
+                let at = path.iter().position(|id| *id == row)?;
+                (path.len() > at + 1)
+                    .then(|| path.last().cloned())
+                    .flatten()
+            })
+            .collect()
+    });
+    inside.sort_by_key(|id| format!("{id:?}"));
+    inside.dedup();
+    inside
+}
+
 /// Opens the ticket's tab and the dialog, and waits for its preview.
-async fn confirming(shell: &Shell, root: &Path, cx: &mut TestAppContext) {
+pub(super) async fn confirming(shell: &Shell, root: &Path, cx: &mut TestAppContext) {
     open(shell, ticket(root), cx);
     shell.click(LIFECYCLE_ACTION, cx);
     until_present(shell, "lifecycle-confirm", cx).await;
@@ -102,8 +125,16 @@ async fn the_summary_lists_every_changed_path_with_its_tag(cx: &mut TestAppConte
         shell.label("lifecycle-paths-heading", cx).as_deref(),
         Some("Files that will be merged into main (4)")
     );
-    for path in shell.rows("lifecycle-path", cx) {
-        assert!(!path.contains('+'), "no line counts: {path}");
+    // No line counts (R-3): each row holds its change, path and tag, and
+    // nothing else.
+    for ix in 0..4 {
+        let mut expected = vec![
+            ElementId::from(("lifecycle-path", ix)),
+            ElementId::from(("lifecycle-path-change", ix)),
+            ElementId::from(("lifecycle-path-tag", ix)),
+        ];
+        expected.sort_by_key(|id| format!("{id:?}"));
+        assert_eq!(row_elements(&shell, ix, cx), expected, "row {ix}");
     }
     assert!(closes(&shell, cx).is_empty(), "nothing runs before Confirm");
 }
@@ -264,125 +295,6 @@ async fn closure_shows_closed_by_from_the_preview(cx: &mut TestAppContext) {
     );
 }
 
-/// P2, A4, real: a path added on the ticket's branch after the preview
-/// changes what was confirmed. The library refuses the consent
-/// (`external_change`, before anything is accepted): the dialog says
-/// something changed and offers Prepare again, and nothing runs. Prepare
-/// again shows the new path; Confirm then sends the same request again, and
-/// the close finishes.
-#[gpui_kit::test]
-async fn a_new_path_after_prepare_offers_prepare_again(cx: &mut TestAppContext) {
-    cx.executor().allow_parking();
-    let (shell, root) = shell(cx, |fixture, root| saved_ticket(fixture, root, "Stale", ""));
-    confirming(&shell, &root, cx).await;
-    assert_eq!(paths(&shell, cx).len(), 1);
-    let main = commits(&root, "main");
-    let context = worktree(&shell, &root);
-    shell
-        .fixture
-        .commit_file(&context, "src/late.rs", b"// late\n");
-
-    shell.click("lifecycle-confirm", cx);
-    let sent = closes(&shell, cx);
-    assert_eq!(sent.len(), 1);
-    shell.until_ended(sent[0], cx).await;
-    assert_eq!(code(&shell, sent[0], cx), Some(ResultCode::ExternalChange));
-    until_present(&shell, "lifecycle-stale", cx).await;
-    assert_eq!(shell.label("lifecycle-stale", cx).as_deref(), Some(STALE));
-    assert_eq!(
-        shell.label("lifecycle-code", cx).as_deref(),
-        Some(ResultCode::ExternalChange.as_str())
-    );
-    assert!(!shell.present("lifecycle-confirm", cx));
-    assert_eq!(commits(&root, "main"), main, "a refused consent never runs");
-
-    shell.click("lifecycle-prepare-again", cx);
-    until_present(&shell, "lifecycle-confirm", cx).await;
-    assert!(
-        paths(&shell, cx).contains(&row("src/late.rs", "code", "added")),
-        "the new summary: {:?}",
-        paths(&shell, cx)
-    );
-    assert_eq!(
-        shell.label("lifecycle-code-note", cx).as_deref(),
-        Some(CODE_NOTE)
-    );
-    let fresh = dialog(cx)
-        .read_with(cx, |dialog, _| dialog.confirmation())
-        .expect("a new confirmation");
-
-    shell.click("lifecycle-confirm", cx);
-    assert_eq!(closes(&shell, cx), sent, "the same request");
-    shell
-        .until(cx, {
-            let id = sent[0];
-            move |operations| operations.request(id).is_some_and(|r| r.attempt == 2)
-        })
-        .await;
-    shell.until_ended(sent[0], cx).await;
-    let again = request(&shell, sent[0], cx);
-    assert_eq!(again.confirmation, Some(fresh), "with the new confirmation");
-    assert_eq!(code(&shell, sent[0], cx), Some(ResultCode::Ok));
-    assert!(commits(&root, "main") > main, "merged once confirmed again");
-}
-
-/// A clock a test moves on, which the library times its records by.
-struct MovedClock(std::sync::Mutex<time::OffsetDateTime>);
-
-impl Clock for MovedClock {
-    fn now(&self) -> time::OffsetDateTime {
-        *self.0.lock().unwrap()
-    }
-}
-
-/// P3, real: a consent older than ten minutes is refused
-/// `confirmation_expired`. The dialog says something changed and offers
-/// Prepare again, and nothing runs; a fresh preview then closes the ticket.
-#[gpui_kit::test]
-async fn expired_consent_offers_prepare_again(cx: &mut TestAppContext) {
-    cx.executor().allow_parking();
-    let (shell, root) = shell(cx, |fixture, root| saved_ticket(fixture, root, "Late", ""));
-    let clock = std::sync::Arc::new(MovedClock(std::sync::Mutex::new(
-        time::OffsetDateTime::now_utc(),
-    )));
-    shell.backend.replace_service(
-        RepositoryService::open_at(shell.fixture.data_dir())
-            .unwrap()
-            .with_clock_for_testing(clock.clone()),
-    );
-    confirming(&shell, &root, cx).await;
-    let main = commits(&root, "main");
-    *clock.0.lock().unwrap() += time::Duration::minutes(11);
-
-    shell.click("lifecycle-confirm", cx);
-    let sent = closes(&shell, cx);
-    shell.until_ended(sent[0], cx).await;
-    assert_eq!(
-        code(&shell, sent[0], cx),
-        Some(ResultCode::ConfirmationExpired)
-    );
-    until_present(&shell, "lifecycle-stale", cx).await;
-    assert_eq!(shell.label("lifecycle-stale", cx).as_deref(), Some(STALE));
-    assert_eq!(
-        shell.label("lifecycle-code", cx).as_deref(),
-        Some(ResultCode::ConfirmationExpired.as_str())
-    );
-    assert_eq!(commits(&root, "main"), main, "nothing ran");
-
-    shell.click("lifecycle-prepare-again", cx);
-    until_present(&shell, "lifecycle-confirm", cx).await;
-    shell.click("lifecycle-confirm", cx);
-    shell
-        .until(cx, {
-            let id = sent[0];
-            move |operations| operations.request(id).is_some_and(|r| r.attempt == 2)
-        })
-        .await;
-    shell.until_ended(sent[0], cx).await;
-    assert_eq!(code(&shell, sent[0], cx), Some(ResultCode::Ok));
-    assert_eq!(closes(&shell, cx), sent, "one request");
-}
-
 /// P13, real: a ticket whose status text is `closed` is not closed by its
 /// lifecycle. It offers Close ticket…, its preview records the closure, and
 /// the close runs; the ticket then holds its lifecycle closure, and its
@@ -418,6 +330,10 @@ async fn status_text_closed_still_closes(cx: &mut TestAppContext) {
     let sent = closes(&shell, cx);
     shell.until_ended(sent[0], cx).await;
     assert_eq!(code(&shell, sent[0], cx), Some(ResultCode::Ok));
+    // The tab's display of lifecycle Closed apart from status text is
+    // pinned by `item::tests::lifecycle_closure_and_project_status_are_separate_fields`
+    // (`view/item_tests.rs`); reopening the tab from primary after a close
+    // is Task 9's (A4). Here the library's read says it.
     let closed = shown(&shell, &root, TICKET);
     let closure = closed.closure.expect("a ticket's closure");
     assert!(closure.closed_at.is_some(), "lifecycle closed");
@@ -445,6 +361,12 @@ async fn enter_confirms_esc_cancels_and_focus_returns(cx: &mut TestAppContext) {
     assert!(!shell.present("lifecycle-dialog", cx));
     assert!(closes(&shell, cx).is_empty(), "Escape sends nothing");
     assert!(returned(&shell, cx), "focus is back at the action");
+    shell.press("enter", cx);
+    until_present(&shell, "lifecycle-confirm", cx).await;
+    assert!(closes(&shell, cx).is_empty(), "reopened, nothing sent");
+    shell.keys("escape", cx);
+    assert!(!shell.present("lifecycle-dialog", cx));
+    assert!(returned(&shell, cx), "focus is back at the action");
     assert!(
         shell.tab_reaches(LIFECYCLE_ACTION, 1, cx),
         "one Tab is the action"
@@ -464,4 +386,100 @@ async fn enter_confirms_esc_cancels_and_focus_returns(cx: &mut TestAppContext) {
     assert!(returned(&shell, cx), "focus is back at the action");
     shell.until_ended(sent[0], cx).await;
     assert_eq!(closes(&shell, cx), sent, "sent once");
+}
+
+/// A preview of a closure already recorded on a branch main already holds:
+/// built from the library's type, as `closure/observe_tests.rs` and
+/// `tests/cli/lifecycle.rs` (`already_contained`) produce one.
+fn recorded_and_contained(cleanup: LifecyclePlannedCleanupDto) -> LifecyclePreviewDto {
+    LifecyclePreviewDto {
+        root: "/r".to_owned(),
+        kind: ItemDtoKind::Ticket,
+        item_id: TICKET.to_owned(),
+        slug: None,
+        branch: format!("manyhands/ticket/{TICKET}"),
+        primary_branch: "trunk".to_owned(),
+        remote: None,
+        context_oid: "c".repeat(40),
+        primary_oid: "p".repeat(40),
+        changes: Vec::new(),
+        integration: LifecyclePlannedIntegration::AlreadyContained,
+        publication: LifecyclePlannedPublication::PendingNoRemote,
+        cleanup,
+        closure: Some(LifecyclePlannedClosureDto {
+            recording: LifecycleRecording::Existing,
+            closed_by: "Ada Example <ada@example.invalid>".to_owned(),
+        }),
+    }
+}
+
+/// Review Minor 2: an existing closure and an already-contained branch
+/// read "Already marked closed" and "Already in {primary}", the Git line
+/// says the branch is already in it, and the tidy-up names what it removes.
+#[test]
+fn existing_closure_and_already_contained_read_already() {
+    let details = recorded_and_contained(LifecyclePlannedCleanupDto {
+        remote_branch: false,
+        worktree: true,
+        local_branch: true,
+    });
+    let titles: Vec<String> = steps(&details).into_iter().map(|step| step.title).collect();
+    assert_eq!(
+        titles,
+        [
+            "Save your latest edits",
+            "Keep on this computer (sharing pending)",
+            "Already marked closed",
+            "Already in trunk",
+            "Tidy up",
+        ]
+    );
+    let notes: Vec<String> = steps(&details).into_iter().map(|step| step.note).collect();
+    assert_eq!(notes[2], "Closed by Ada Example <ada@example.invalid>");
+    assert_eq!(
+        git_line(&details),
+        format!(
+            "Git: manyhands/ticket/{TICKET} already in trunk \u{b7} delete worktree, local branch"
+        )
+    );
+    assert_eq!(
+        tidy_note(&details.cleanup, None),
+        "Remove the working copy and the local branch."
+    );
+    let nothing = LifecyclePlannedCleanupDto {
+        remote_branch: false,
+        worktree: false,
+        local_branch: false,
+    };
+    assert_eq!(tidy_note(&nothing, None), "Nothing is left to remove.");
+    assert_eq!(
+        git_line(&recorded_and_contained(nothing)),
+        format!("Git: manyhands/ticket/{TICKET} already in trunk")
+    );
+    let only_remote = LifecyclePlannedCleanupDto {
+        remote_branch: true,
+        worktree: false,
+        local_branch: false,
+    };
+    assert_eq!(
+        tidy_note(&only_remote, Some("upstream")),
+        "Remove the branch on upstream."
+    );
+}
+
+/// Review Minor 5: each change's icon comes from the Kit's own set.
+#[test]
+fn the_path_change_icons_load() {
+    for change in [
+        LifecyclePathChangeKind::Added,
+        LifecyclePathChangeKind::Modified,
+        LifecyclePathChangeKind::Deleted,
+    ] {
+        let (_, icon) = change_words(change);
+        let svg = DesktopAssets
+            .load(&icon_path(icon))
+            .unwrap_or_else(|_| panic!("{icon} errored"))
+            .unwrap_or_else(|| panic!("{icon} is missing"));
+        assert!(svg.starts_with(b"<svg"), "{icon} is not an SVG");
+    }
 }
