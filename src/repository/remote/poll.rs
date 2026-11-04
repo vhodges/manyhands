@@ -267,19 +267,19 @@ fn completed_deleted_context(
     };
     let repository = git2::Repository::open(root).ok()?;
     let primary = direct_oid(&repository, &format!("refs/heads/{primary}"))?;
-    let local = direct_oid(
-        &repository,
-        &format!(
-            "refs/heads/manyhands/{}/{item_id}",
-            crate::repository::authoring_kind_segment(kind)
-        ),
-    )?;
     match kind {
         AuthoringKind::Ticket => {
             proof::completion(&repository, primary, *kind, item_id).ok()?;
             Some(PollDisposition::Closed)
         }
         AuthoringKind::Document => {
+            let local = direct_oid(
+                &repository,
+                &format!(
+                    "refs/heads/manyhands/{}/{item_id}",
+                    crate::repository::authoring_kind_segment(kind)
+                ),
+            )?;
             proof::preservation(&repository, local, primary, *kind, item_id).ok()?;
             Some(PollDisposition::Promoted)
         }

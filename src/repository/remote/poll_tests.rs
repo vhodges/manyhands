@@ -26,6 +26,8 @@ fn retirement_recognition_guidance_requires_explicit_action_and_local_checks() {
 fn retirement_recognition_committed_primary_and_independent_ticket_completion() {
     for case in [
         "closed",
+        "closed_missing_local_ref",
+        "closed_symbolic_local_ref",
         "dirty",
         "unmatched",
         "open",
@@ -33,10 +35,18 @@ fn retirement_recognition_committed_primary_and_independent_ticket_completion() 
         "malformed",
         "tracking_only",
         "promoted",
+        "document_missing_local_ref",
+        "document_symbolic_local_ref",
         "presence_only",
     ] {
         let f = LocalFixture::new();
-        let ticket = !matches!(case, "promoted" | "presence_only");
+        let ticket = !matches!(
+            case,
+            "promoted"
+                | "presence_only"
+                | "document_missing_local_ref"
+                | "document_symbolic_local_ref"
+        );
         let kind = if ticket {
             AuthoringKind::Ticket
         } else {
@@ -161,6 +171,29 @@ fn retirement_recognition_committed_primary_and_independent_ticket_completion() 
         if case == "dirty" {
             fs::write(context_path.join("file"), b"dirty").unwrap();
         }
+        let local_ref = format!("refs/heads/{branch}");
+        if case.ends_with("missing_local_ref") {
+            f.repository
+                .find_reference(&local_ref)
+                .unwrap()
+                .delete()
+                .unwrap();
+        } else if case.ends_with("symbolic_local_ref") {
+            f.repository
+                .reference_symbolic(
+                    &local_ref,
+                    "refs/heads/main",
+                    true,
+                    "fixture symbolic context",
+                )
+                .unwrap();
+        }
+        // Ref damage is not context absence: keep its old files and registered
+        // admin directory. Recognition neither repairs nor retires that state.
+        let admin = f.repository.commondir().join("worktrees").join(POLL_ID);
+        assert!(context_path.is_dir());
+        assert!(admin.is_dir());
+        assert!(f.repository.find_worktree(POLL_ID).is_ok());
         let before = snapshot(&f.root, &f.repository);
         let result = classify_local_target(
             &f.root,
@@ -180,13 +213,20 @@ fn retirement_recognition_committed_primary_and_independent_ticket_completion() 
             panic!("recognition must not fast-forward")
         };
         let expected = match case {
-            "closed" | "dirty" | "unmatched" => PollDisposition::Closed,
+            "closed"
+            | "closed_missing_local_ref"
+            | "closed_symbolic_local_ref"
+            | "dirty"
+            | "unmatched" => PollDisposition::Closed,
             "promoted" => PollDisposition::Promoted,
             "unknown" => PollDisposition::HistoryUnknown,
             _ => PollDisposition::RemotelyDeleted,
         };
         assert_eq!(disposition, expected, "{case}");
         assert_eq!(snapshot(&f.root, &f.repository), before, "{case}");
+        assert!(context_path.is_dir());
+        assert!(admin.is_dir());
+        assert!(f.repository.find_worktree(POLL_ID).is_ok());
     }
 }
 
