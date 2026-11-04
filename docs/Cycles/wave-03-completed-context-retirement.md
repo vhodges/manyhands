@@ -76,6 +76,9 @@ D6 must add the explicit desktop Retire action using this binding, preserve open
 editors and drafts, show refusals/pending cleanup, and test its keyboard/recovery
 journeys. This ticket does not edit D6's worktree or silently mark that work done.
 Until retirement, an old own-worktree row can still mask primary's closure.
+The only proposed desktop edit here is rendering the added safety details in
+the **existing** generic operation-abandon confirmation; it adds no Retire action.
+That narrow renderer/test scope is included explicitly in document approval.
 
 ## Required Contract
 
@@ -111,10 +114,10 @@ Until retirement, an old own-worktree row can still mask primary's closure.
 | A3 | An unmerged folded ticket with identical carried content except closure fields can retire; unrelated/comment/status/body changes cannot | proof matrix and two-clone folded CLI row |
 | A4 | A document promoted elsewhere reports `promoted` and retires; mere primary document presence is insufficient | document two-clone row and negative content row |
 | A5 | Open primary ticket, malformed closure, unknown deletion history and reappeared remote context do not retire | domain/boundary/CLI negative rows |
-| A6 | Failures before/after each cleanup step, ref movement, configuration change, lost response and index failure are recoverable without removing a later context | retirement recovery table and mutation replay/resume rows |
+| A6 | Failures before/after each cleanup step, ref movement, configuration change, lost response and index failure are recoverable without removing a later context; guarded abandon preserves residual state and ends the blocker | retirement recovery/abandon tables and mutation replay/resume rows |
 | A7 | Explicit poll flag retires safe targets, preserves/reports unsafe ones, uses one observation and survives interruption with a frozen worklist | batch boundary/SSH rows, advertisement counter and replay assertions |
 | A8 | Old registry/report/request fixtures remain readable; new enums and command are fully catalogued | migration/corruption tests, read/mutation/CLI contract inventories and goldens |
-| A9 | No default/background cleanup, remote mutation, or draft deletion; existing release behavior unchanged | negative/control tests; branch-scope review |
+| A9 | No default/background cleanup, remote mutation, or draft deletion; existing release behavior unchanged | negative/control tests; isolated stored-draft sentinel remains readable/exportable after CLI retirement; branch-scope review |
 
 All evidence above is planned, not executed. Real second-machine branches have
 not been inspected here; conservative proof may refuse them if primary omitted
@@ -151,6 +154,21 @@ All dated 2026-11-04, recorded from this chat:
    branch commits/pushes are authorized. Document approval, implementation,
    execution method, other-branch pushes, merge, closure, real deletion and native
    CI remain separate go-aheads.
+10. **Mixed batches:** “Exit 0 with rows (Recommended)”. A completed opted-in
+    poll can safely skip refused targets and exit 0 with explicit per-target
+    outcomes. Standalone refusal is non-success; interrupted/partial cleanup and
+    pending indexing remain non-success with truthful recovery obligations.
+11. **Fenced partial cleanup:** “Preserve, abandon, reprove (Recommended)”. Stop
+    with remaining branches/resources intact; extend existing confirmed
+    `operation abandon` with retirement-specific preserving/index settlement and
+    a retained partial receipt. No silent remote/generation rebinding; a later
+    retirement is a new request with fresh proof. For a batch, the draft's
+    preserving-abandon table proposes ending its whole remaining worklist.
+12. **Indexing trade-off:** “Existing per-context handoff (Recommended)”. Finish
+    each local retirement and its existing index handoff before the next. Reuse
+    one remote observation per live batch attempt, accepting up to N local
+    retirement refreshes plus the original poll refresh. Do not introduce an
+    aggregate journal/debt-transfer mechanism here.
 
 ## Rulings
 
@@ -169,21 +187,35 @@ All dated 2026-11-04, recorded from this chat:
 - **R-4 — Strict upgrade.** Recognize exact old/new SQL envelopes; preserve old
   rows atomically and reject substituted/partial schemas. Cost: explicit upgrade
   fixtures rather than deleting/rebuilding evidence.
+- **R-5 — Exact selection and existing debt ownership.** Freeze the full
+  candidate image in the owned poll finalization transaction; current reads can
+  refuse but not reselect it. Each local child keeps its own cleanup/index debt
+  until completion (D12). Cost: per-context refreshes and explicit parent/child
+  routing when a poll's remote row is already complete.
+- **R-6 — Registration lifetime token.** A validated local Git-admin nonce
+  distinguishes a selected worktree from a later recreation at the same tip.
+  It grants no deletion authority. Cost: local noncanonical marker bookkeeping;
+  a corrupt/partial marker conservatively requires inspection/manual repair.
+  New mechanism: adversarial review is required before approval.
 
 ## Named Edits To Pre-Existing Tests
 
-See design E-1–E-9 for the bounded list, including literal-only DTO additions.
+See design E-1–E-10 for the bounded list, including output-root additions
+and existing abandon-confirmation rendering.
 Approval must include those named changes. Any additional semantic test change
 stops implementation for the owner; additive new cases are expected.
 
 ## Document Amendments
 
-At implementation Task 7, amend the Git-workflow RFC's unconditional poll cleanup
+At implementation Task 7, amend PRD `MH-COLLAB-006`'s exclusive confirmed-lifecycle
+cleanup rules for deliberate peer-context retirement, preserving its background
+ban. Amend the Git-workflow RFC's unconditional poll cleanup
 ban with the explicit-only option; retain the prohibition for default/automatic
 polling. Amend MVP's “promotion only” context-cleanup wording for peer retirement
 without introducing document closure. Add the new verb, flag, schemas, exact
 outcomes and recovery rows to the CLI RFC. Record D6's explicit desktop obligation
-in Wave 03 and refresh `docs/research/wave-03-api-audit.md` against delivered APIs.
+in Wave 03, record this ticket's shared-library-plus-CLI exception to track rule 5,
+and refresh `docs/research/wave-03-api-audit.md` against delivered APIs.
 Historical Cycle decisions remain historical; link the new contract rather than
 rewriting their original approval. No sibling ticket edits without permission.
 
@@ -198,5 +230,16 @@ rewriting their original approval. No sibling ticket edits without permission.
 | Source research | Latest-only poll rows can be overwritten | Ruling | R-3 | Frozen per-operation worklist; recovery review required |
 | Source research | Observation outcomes read current snapshots, not the operation's advertisement | Ruling | Bind exact operation/epoch/batch in the owned transaction; pin pending evidence | Design capture seam; Tasks 2/4 |
 | Adjacent tickets | D5 overlap, D6 UI, read precedence | Decision | D4/D5; explicit downstream scope | Task 0 and A1/A9 |
-| Planning | Mixed batch outcomes and replay after partial deletion | Decision pending | Design approval question Q1 | Outcome/recovery tables |
-| Independent review | Not yet run | Pending | Drafts must be reviewed before approval request | Review counts and resolutions will be added here |
+| Owner / review C3 | Mixed outcomes and request/recovery routing | Decision/approval item | D10 settles mixed exit 0; expanded Q1 table proposed for approval | Full phase/result/routing table |
+| Review C1 | Captured candidate image could be reinterpreted after a crash | Ruling | R-5: capture is selection; never rebuild from current tips | Crash-before-manifest/same-tip recreation tests |
+| Reviews C2/S4 | Changed configuration after partial cleanup had no way out | Decision | D11; preserving-abandon table, no silent rebinding | Fresh proof only under a new retirement request |
+| Review C4 | Branch-only/absent/mixed initial resources were undefined | Approval item Q2 | Proposed explicit initial-state matrix | Absent refresh and identity/refusal rows |
+| Review C5 | PRD exclusivity and Wave library-only rule omitted | Settled scope amendment | Add PRD and track-rule exception; no background cleanup | Task 7, D4/D7/D8 |
+| Review C6 | Optional field conflicted with output all-properties rule | Ruling | Separate closed `poll`/`poll_retirement` roots, every property required; no unsupported `oneOf` in the existing test interpreter | Legacy and new-tag/shape schema tests |
+| Reviews C7/S3 | Ticket exception could waive file mode | Settled | Exception changes OID comparison only; exact equal mode required first | Both executable-bit mismatch directions |
+| Review C8 | Draft preservation had no direct proof | Settled | Add isolated stored-draft sentinel CLI row | A9, Task 6 |
+| Review C9 | Prepare/confirm parser convention drift | Settled | Declare common options; answer `not_confirmable` | CLI parser/catalog/golden row |
+| Review S1 | Concurrent pending children made aggregate indexing unexecutable | Decision | D12; sequential existing handoff, no new batch-local journal | A removed/B not started; child-index interruption rows |
+| Review S2 | Old observation child could retain reservation on retry | Ruling | Exact parent capability at every ownership guard; atomically fence bound old read-only child before new child | Stale executor and four observation crash windows |
+| Review S5 | Task 2 optional SSH module could run zero tests | Settled | Register module/CASES in same task as first tests | Tasks 2/4, nonzero-case assertion |
+| Independent review round 1, `4fa05c2c` | Source: 1 Blocking, 3 Important, 1 Minor. Contract: 2 Blocking, 6 Important, 1 Minor | Findings verified | Revisions above; revised mechanisms not yet independently reviewed | Next: scoped source and adversarial re-review |

@@ -28,7 +28,8 @@ or Cargo test-target addition is planned.
 
 **Spec:** [Cycle](../Cycles/wave-03-completed-context-retirement.md) and
 [design](2026-11-04-completed-context-retirement-design.md). The Cycle governs
-the design, which governs this plan. D1–D9/R-1–R-4 apply; Q1 still needs approval.
+the design, which governs this plan. D1–D12/R-1–R-6 apply; the expanded Q1 routing
+and Q2 initial-state tables still need document approval.
 
 ## Global Constraints
 
@@ -40,7 +41,7 @@ the design, which governs this plan. D1–D9/R-1–R-4 apply; Q1 still needs app
   gate overrides the older planning-template full-suite instruction: targeted
   tests between tasks; static gates, fast tier and changed-path SSH tier at the
   end; full suite/native CI after merge, native dispatch separately authorized.
-- No implementation until the Cycle/design/plan, E-1–E-9, Q1 and execution method
+- No implementation until the Cycle/design/plan, E-1–E-10, Q1/Q2 and execution method
   are approved. Drafting approval is not implementation authorization.
 - Tests first: introduce each observable row, run it and see the behavioral
   failure, then implement minimally and rerun. A compile failure alone is not
@@ -48,12 +49,14 @@ the design, which governs this plan. D1–D9/R-1–R-4 apply; Q1 still needs app
 - Use existing test targets. New harness-false SSH cases go into the module's
   `CASES` and the runner's chain, split below the existing watchdog. Confirm each
   filtered run executes nonzero cases; Cargo takes one positional filter.
-- Only E-1–E-9 may change old test semantics. Additional semantic changes or
+- Only E-1–E-10 may change old test semantics. Additional semantic changes or
   inability to prove a promised row stop for the owner, not expectation fitting.
-- Keep the headless library free of GPUI. No desktop implementation here. Any
-  genuinely necessary desktop compile-only exhaustive arm is an owner checkpoint,
-  and also needs `--features desktop` on its own plus the current desktop-test
-  clippy configuration; do not silently broaden scope.
+- Keep the headless library free of GPUI. No desktop Retire action here. E-10
+  permits only the existing generic abandon-confirmation's new safety details
+  and corresponding tests, explicitly subject to document approval. Run desktop
+  check/release clippy with `--features desktop` alone, and confirmation tests
+  with `desktop-test-support`; D4's all-targets desktop-only clippy baseline needs
+  that test-support feature. No navigation/release or new desktop action scope.
 - Preserve ordinary poll request digests/shape and existing release behavior.
   Never persist canonical sources, titles, secrets or raw backend diagnostics in
   retirement evidence. No direct recursive deletion or shell Git in domain code.
@@ -64,11 +67,13 @@ the design, which governs this plan. D1–D9/R-1–R-4 apply; Q1 still needs app
 
 ## Review Focus
 
-Proof preserves all changed paths, not only the ticket; partial pruning never
+Proof preserves all changed paths and modes, not only the ticket; partial pruning never
 becomes clean absence without owned intent; new attempts make fresh observations
 but completed requests replay; normal-poll identity is backward-compatible;
-batch state survives another poll and never enrolls a new context; one pass's
-observation is reused without nested reservation/lease acquisition. Each has a
+batch state survives another poll and never enrolls a new context, even one
+recreated at the same tip; one pass's observation is reused without nested
+reservation/lease acquisition; sequential local children complete their own
+index handoffs rather than accumulating blocked rows. Each has a
 test in Tasks 1–6. The mechanism checkpoints in Tasks 2/4 are mandatory.
 
 ## Task 0: Re-Ground Main, Pins And Ledger
@@ -81,13 +86,15 @@ update the three planning documents only where grounding changes facts.
   base/before/after SHAs and conflicts. Recheck D5's newly merged overlap; do not
   consume its unmerged branch.
 - [ ] Reconfirm every Baseline Fact, proposed interface integration point, schema
-  envelope and E-1–E-9 include/name. Read current `recovery` begin/resume/abandon,
-  reservation guards and observation replay. Prove the exact child-observation
-  correlation needed for a pending retirement without weakening other blockers.
+  envelope and E-1–E-10 include/name. Read current `recovery` begin/resume/abandon,
+  reservation guards and observation replay. Re-ground the design's specified
+  child fencing/capability checks at reserve/restart/owned, registration token
+  installation and preserving-abandon index finalizer. Do not choose different
+  semantics under this re-grounding task.
 - [ ] Sweep for all `PollOnce`, `PollMutationDto`, `PollDisposition`,
   `PollTargetDisposition`, `ReleaseContext`, operation action and CLI count pins.
   Record exact existing test names and every constructor-only edit in the ledger.
-  If E-1–E-9 is insufficient, stop and ask before editing a new expectation.
+  If E-1–E-10 is insufficient, stop and ask before editing a new expectation.
 - [ ] Run baseline targeted commands below (not a whole suite), record counts and
   any pre-existing failures. Read the existing `CliPair` and harness cases before
   writing a new helper.
@@ -109,7 +116,8 @@ modules; `src/repository/mutation/{dto.rs,bind/poll.rs}`;
 
 - [ ] Add table-driven `retirement_proof_` tests for design predicates and full
   changed-entry algorithm: ancestor, folded ticket, canonical normalization,
-  status/body/unknown/comment/code mismatches, deletions/renames/modes, document
+  status/body/unknown/comment/code mismatches, deletions/renames/modes (including
+  both executable-bit directions on the exceptional ticket path), document
   presence only, malformed closure, different closed copies, missing objects,
   unrelated/shallow history and multiple merge bases. Use temporary repositories,
   never the registered checkout's real contexts.
@@ -132,7 +140,7 @@ devenv shell -- cargo test --all-features --locked --test cli_remote c5_polling
 
 ## Task 2: Single-Context Durable Retirement
 
-**Create:** `src/repository/context_retirement/{record,run}.rs` and additional
+**Create:** `src/repository/context_retirement/{record,instance,run}.rs` and additional
 tests in the new module; `tests/mutation_remote/context_retirement.rs` if the
 existing shared SSH world is needed for domain tests.
 **Modify:** module exports, `src/repository/{recovery.rs,read/{dto,status}.rs,
@@ -140,12 +148,23 @@ bridges/abandon.rs,discovery.rs}`;
 `src/repository/remote/{observation,reservation,state}.rs` for the exact owned
 advertisement receipt/capture and pin retention, not a current-snapshot guess;
 `src/repository/cleanup.rs` only for narrowly shared guarded capability seams;
-operation schemas and E-2/E-8. No release guard is relaxed.
+operation schemas and E-2/E-8. No release guard is relaxed. If the optional SSH
+module is used, add its module declaration and `CASES` chain to
+`tests/mutation_remote.rs` in this task, before its first test command.
 
 - [ ] Write domain `retirement_` outcome/recovery rows first: fresh advertised
   absence, unknown history, reappeared ref, unavailable transport, primary wrong
   branch/item dirty, branch-only and already-absent, all cleanliness/ownership
   refusals, unrelated pending operation, own correlated observation retry.
+- [ ] Implement the Q2 initial-state matrix, including branch-only full proof,
+  all-absent local discovery settlement, and no-follow mixed/invalid identity
+  refusals. Test stale index rows after externally removed contexts. No remote
+  connection for all-absent/index-only results.
+- [ ] Implement registration-lifetime token capture using exclusive no-follow
+  admin-file installation and an owned intended token. Test interrupted install,
+  malformed/colliding marker preservation, missing/replaced token and same-tip
+  recreated worktree. Never refresh a captured old identity by installing a new
+  token. Default/background polling installs none.
 - [ ] Persist retirement/observation identities and fixed tip before effects;
   capture operation/epoch/batch/generation in the live advertisement transaction,
   add receipt pin retention through configuration changes, and prove that a
@@ -154,12 +173,19 @@ operation schemas and E-2/E-8. No release guard is relaxed.
   implement exact primary proof and shared cleanup with recorded intent before
   prune, then worktree/branch steps. Test crash between effects and step writes,
   mixed partial prune, tip/primary/config changes and replacement registration.
+- [ ] Test the exact read-only child-replacement transaction: crash before/after
+  advertisement and after batch commit, active older child, new parent's epoch,
+  unrelated reservation, and stale old executor returning after replacement.
+  Install the bound-parent capability checks at reserve, restart, every owned
+  write and completion, not only initial reservation. Generation change refuses
+  rebinding and offers the preserving-abandon path.
 - [ ] **Design checkpoint:** run the required-outcome table against the proposed
   record/reservation transitions; obtain independent adversarial review before
   proceeding. A needed recovery-contract change goes to the owner.
 - [ ] Implement completed replay, index handoff and resume/abandon visibility.
-  Index-only reentry does no network or deletion. Interrupted partial removal
-  cannot be abandoned into an apparently clean success. Add additive schema
+  Index-only reentry does no network or deletion. Guarded abandonment is delivered
+  in Task 3; until then do not let generic abandonment release a retirement's
+  request identity or hide a partial record. Add additive schema
   migration/corruption/audit rows. Verify and commit
   `feat: retire proven completed contexts with recoverable cleanup`; checkpoint.
 
@@ -176,8 +202,12 @@ devenv shell -- cargo test --all-features --locked --test mutation_remote retire
 
 **Create:** `src/repository/mutation/bind/retire.rs`,
 `schemas/v1/context_retirement_mutation.schema.json` and new golden cases.
-**Modify:** mutation `{mod,command,dto,outcome,progress}.rs`, binding registration,
-`bind/resume.rs`, E-2/E-3/E-7/E-8; `tests/mutation_remote.rs` case registration.
+**Modify:** mutation `{mod,command,dto,outcome,progress,records,reenter}.rs`, binding
+registration, `bind/{resume,abandon}.rs`, `bridges/abandon.rs`,
+retirement run/record modules and claimed-refresh completion in `src/repository.rs`
+and its discovery helper; E-2/E-3/E-7/E-8/E-10; existing CLI/desktop generic
+confirmation rendering. Add missing `tests/mutation_remote.rs` case registration
+now only for cases first introduced here; Task 2's cases are already registered.
 
 - [ ] Write boundary rows before binding: same-ID retry, finished replay after
   context recreation, changed item/mode request mismatch, unrelated recovery,
@@ -189,9 +219,26 @@ devenv shell -- cargo test --all-features --locked --test mutation_remote retire
   stored retirement evidence, not release's run-as-new rule. Do not globally mark
   `ContextBranchReleased` as a checkpoint.
 - [ ] Implement typed data/schema and existing result-code/effects mappings from
-  the approved Q1 table. Partial effects remain visible; no source/title/secret
-  enters persisted evidence or diagnostic. Verify and commit
-  `feat: bind explicit context retirement and recovery`; checkpoint.
+  the approved full Q1/Q2 tables. Test Final versus Owed/no-effect/index-only,
+  original-request routing and `resume::takes_up`, token and `request cancel`
+  routing, stable refused-request replay and no run-as-new after final refusal.
+  Partial effects remain visible; no source/title/secret enters persisted evidence
+  or diagnostic. Commit only after the preserving-abandon rows also pass.
+- [ ] Implement D11 preserving abandonment under the existing prepare/confirm
+  workflow: retirement-specific metadata in its existing preview variant,
+  retained old request identity (never `release_operation_owner`), immediate
+  fencing of destructive executor/observer, noncheckpoint authoritative
+  `ContextRetirementPreserved`, claimed-refresh completion that atomically
+  persists abandoned/partial receipts before releasing the blocker. Old request
+  finishes/replays `external_change`; index failure stays owed to preserving
+  continuation only. Test all no-removal/partial/config-changed/reappeared-remote,
+  failed refresh/finalization and lost-result rows, including stale executor
+  return. Generic non-retirement abandonment stays unchanged.
+- [ ] Add required-nullable preview retirement metadata to the existing schema
+  and old fixtures as null; render its retained resources in existing CLI and
+  desktop confirmation only. This is E-10, not a desktop Retire action. Verify
+  and commit `feat: bind context retirement and guarded preserving recovery`;
+  checkpoint.
 
 ```sh
 devenv shell -- cargo test --all-features --locked --test mutation_remote retirement_
@@ -199,42 +246,67 @@ devenv shell -- cargo test --all-features --locked --test mutation_replay
 devenv shell -- cargo test --all-features --locked --test mutation_contract
 devenv shell -- cargo test --all-features --locked --test mutation_confirmation
 devenv shell -- cargo test --all-features --locked --test mutation_bridges
+devenv shell -- cargo check --features desktop --locked --bin manyhands
+devenv shell -- cargo clippy --features desktop --locked --bin manyhands -- -D warnings
+devenv shell -- cargo test --features desktop-test-support --locked --bin manyhands confirm
 ```
 
 ## Task 4: Explicit Poll Retirement Batch
 
 **Create:** `src/repository/mutation/bind/poll_retirement.rs` and
-`tests/mutation_remote/poll_retirement.rs` (proposed modules).
+`tests/mutation_remote/poll_retirement.rs` (proposed modules),
+`schemas/v1/poll_retirement_mutation.schema.json`.
 **Modify:** retirement record/run module, mutation registration/poll binding/DTO,
 session seam, `src/repository/remote/{poll,reservation,state}.rs` only for the
 opted-in evidence capture (no destructive domain-poll path),
 `schemas/v1/poll_mutation.schema.json`, E-3/E-6/E-7/E-9.
+Register the new test module and `CASES` chain in `tests/mutation_remote.rs`
+in this task before running its filter.
 
 - [ ] Write `retirement_batch_` rows: opted-in versus ordinary/background;
   successful/dirty/unmatched mixed targets; empty planned list; poll failed,
   cancelled, interrupted or index-pending; mode mismatch and normal legacy digest;
-  one live advertisement for many targets; no refresh per target.
+  one live advertisement for many targets; each completed local child's handoff
+  precedes the next child's begin (D12).
 - [ ] Write interrupted-parent cases before implementation: crash before/after
-  manifest; latest-only poll report overwritten by another poll; changed tip;
+  selection in the poll-finalization transaction; crash after captured selection
+  but before first child; latest-only poll report overwritten by another poll;
+  changed tip or a context recreated at the same tip with a different admin token;
   second context created after selection; stopped partial child; new process
   resume uses one fresh observation but never a fresh worklist; completed replay
-  with recreated contexts; final aggregate index failure.
+  with recreated contexts; child index failure and lost response after refresh;
+  A removed/indexed but B not started; guarded abandonment ends the entire batch.
 - [ ] Implement additive per-operation batch/target records and immutable report,
   selected child IDs and progress. Coordinate only around the existing explicit
-  poll; do not add a destructive flag to its automatic domain request. Freeze
-  the original report/candidate tip image in owned poll finalization before its
-  reservation is released, then the worklist before first removal. A completed
+  poll; do not add a destructive flag to its automatic domain request. During
+  opted-in per-target capture, bind the existing registered instance token under
+  that target's lease. Freeze the full original report/worklist/identity/child-ID
+  image in owned poll finalization before its reservation is released; **that
+  transaction is selection**, not a later current-state scan. A completed
   index-pending poll returns final `discovery_pending` without cleanup; only a new
   request can start it after repair. Before successful final capture, interrupted
   polls keep existing restart/refetch semantics with no retirement effects.
   Fence each executor, and preserve refusal
   versus pending/not-reached distinctions.
+- [ ] Keep `P` as the existing remote poll/request operation, with `K_i` as
+  distinct local operations, one active at a time. No batch-local journal row or
+  aggregate index debt. Complete each child handoff before starting the next;
+  reconcile an interrupted parent result copy from the child's stored outcome.
+  Overlay pending batch state in opted-in request reentry, `operation list/show`
+  and cancellation even though `P` is already complete. Direct child resume
+  either names the original batch request or finishes its index-only handoff;
+  it never starts another target. Preserve ordinary ended-poll visibility.
 - [ ] **Design checkpoint:** independent adversarial review of exact ownership,
   cancellation, report/replay and index transitions. If this mechanism still has
   repeat blockers after three planning/review rounds, stop rewriting it; pin the
   required outcomes as tests and ask the owner for the design checkpoint.
-- [ ] Preserve ordinary DTO output (optional field omitted) and old stored result
-  decoding. Verify, commit `feat: opt explicit polls into safe context retirement`;
+- [ ] Keep ordinary `PollMutationDto` and its existing literals/output unchanged.
+  Add a distinct `PollRetirementMutationDto`/`poll_retirement` tag and closed
+  schema root requiring every field, retirement outcomes included. Register both
+  roots for command `poll once`, decode old and new stored tags, and validate
+  legacy ordinary, opted-in and invalid missing/mixed shapes. Do not add `oneOf`
+  or change `tests/support/schema.rs` to support it. Verify, commit
+  `feat: opt explicit polls into safe context retirement`;
   ticket checkpoint.
 
 ```sh
@@ -254,7 +326,9 @@ path-module pattern. **Modify:** CLI entrypoint module list,
 
 - [ ] Test parser/help/rendering before implementation. Grammar:
   `context retire --repo <root> --kind <ticket|document> --id <ULID>` plus existing
-  mutation request/JSON options; no `--input`, `--prepare`, `--confirm` or force.
+  mutation request/JSON options; no `--input` or force. Declare the common
+  `--prepare`/`--confirm` options but return `not_confirmable`, as other
+  unconfirmed mutations do; do not turn them into parser errors.
   `poll once` gains boolean `--retire-completed`, default false.
 - [ ] Use existing CLI mutation driver and session/transport initialization;
   include standalone retirement in the transport-requiring verb routing. JSON
@@ -284,6 +358,12 @@ add no new target, no real keys, no global Git identity or real profile writes.
   nonancestor source copy; promoted document; dirty/unpublished code/comment/body
   variants; open/malformed/unknown; remote reappearance; primary not advanced;
   server unchanged and no checkpoint/push; optional mixed batch; replay/new context.
+- [ ] Add a direct A9 preservation row: create a sentinel item/comment draft via
+  `DraftStore::open_in(&p.b.env.data)` and `create`, targeting clone B's actual
+  registered root/item. Release its claim, retire the clean context through the
+  binary, reopen/list the isolated draft store, and assert ID, revision and full
+  draft body/base remain recoverable and exportable. Use `tests/drafts/support.rs`
+  and `src/drafts/export_tests.rs` as patterns, not developer-profile fixtures.
 - [ ] Assert refs, registration, full working content and index before/after
   refusals, not only envelope codes. Successful rows prove context absent and
   primary item/readiness correct. Measure advertisement count for many targets,
@@ -303,7 +383,8 @@ devenv shell -- cargo test --all-features --locked --test read_relationships
 
 ## Task 7: Contract And Downstream Amendments
 
-**Modify:** `docs/RFC/{git-workflow-and-conflict-recovery,mvp-rfc,cli-contract}.md`,
+**Modify:** `docs/PRD/mvp.md`,
+`docs/RFC/{git-workflow-and-conflict-recovery,mvp-rfc,cli-contract}.md`,
 `docs/Waves/wave-03-dogfooding.md`, `docs/research/wave-03-api-audit.md`, the three
 planning documents and execution ledger.
 
@@ -311,7 +392,10 @@ planning documents and execution ledger.
   Document exact result/exit/recovery rows and delivered interfaces, explicit-only
   flag versus background prohibition, conservative proof limits and extra
   standalone round trip. Note D6 desktop action/draft obligations and unchanged
-  reads; do not edit D6 or latest-copy tickets without permission.
+  reads; amend PRD `MH-COLLAB-006` and record this ticket's shared-library-plus-CLI
+  exception to Wave track rule 5. Include the existing abandon-preview renderer
+  scope without treating it as a desktop Retire action. Do not edit D6 or
+  latest-copy tickets without permission.
 - [ ] Re-run CLI taxonomy/recovery-table/schema inventory tests; grep old blanket
   cleanup claims and update only governing current contract text, not historical
   approval records. Commit `docs: specify completed-context retirement contract`;
@@ -327,7 +411,7 @@ planning documents and execution ledger.
   If cleanup changes reach promotion/closure, also run `document_promotion` and
   `ticket_closure`; when unsure run them. Shared SSH-harness edits imply every
   SSH-harness target. Never describe a zero-case filter as passing evidence.
-- [ ] Self-review `git diff origin/main...HEAD` against A1–A9 and E-1–E-9. Obtain
+- [ ] Self-review `git diff origin/main...HEAD` against A1–A9 and E-1–E-10. Obtain
   fresh independent spec/source and quality/adversarial reviews; verify findings
   against code, fix, re-review. No Blocking/Important findings remain at handoff.
 - [ ] `git merge-tree --write-tree HEAD origin/main`; resolve conflicts by merge,
@@ -369,11 +453,11 @@ git merge-tree --write-tree HEAD origin/main
 | A1/A3, D1, R-1 | 1 proof table; 2 cleanup; 6 folded/closed binary reads |
 | A2/A5 | 1 strict predicates; 2 preservation/freshness/ownership; 6 negative SSH rows |
 | A4, D3 | 1 document content evidence; 6 promotion row |
-| A6, D2/D6/D8 | 2 durable single-context table; 3 request/resume; 6 binary replay |
-| A7, D7, R-3 | 4 frozen manifest/adversarial checkpoint; 5 flag; 6 count/mixed batch |
+| A6, D2/D6/D8/D11, R-6 | 2 durable single-context/instance table; 3 request/resume/preserving abandon; 6 binary replay |
+| A7, D7/D10/D12, R-3/R-5 | 4 frozen manifest/sequential child handoffs/adversarial checkpoint; 5 flag; 6 count/mixed batch |
 | A8, R-2/R-4 | 1 schema upgrade; 2 record migrations; 3–5 inventories and legacy replay |
-| A9, D4/D5 | 2 release controls; 4 ordinary/background controls; 7 D6/read exclusions |
-| D9, Q1, E-1–E-9 | Approval gate/Task 0, named edits in owning tasks, final authorization audit |
+| A9, D4/D5 | 2 release controls; 4 ordinary/background controls; 6 draft sentinel; 7 D6/read exclusions |
+| D9, Q1/Q2, E-1–E-10 | Approval gate/Task 0, named edits in owning tasks (E-10 existing confirmation only), final authorization audit |
 
 All commands and outcomes above are planned. No Cargo command, new behavior,
 native CI, real deletion, merge or close has been executed during planning.
