@@ -63,6 +63,8 @@ pub(crate) const CRUMB_SEPARATOR: &str = " › ";
 pub(crate) const TICKETS: &str = "Tickets";
 /// The header's lifecycle action: Close ticket… or Approve and merge….
 pub(crate) const LIFECYCLE_ACTION: &str = "item-lifecycle-action";
+/// The lifecycle action's wrapper, which tracks its focus.
+const LIFECYCLE_FOCUS: &str = "item-lifecycle-focus";
 /// Why the lifecycle action is disabled, as an element that carries it as
 /// its label.
 pub(crate) const LIFECYCLE_NOTE: &str = "item-lifecycle-note";
@@ -285,26 +287,46 @@ impl ItemPane {
     ) -> Option<AnyElement> {
         let label = lifecycle_action(self.shown_kind(item), item)?;
         let target = self.lifecycle_target(cx);
-        let button = Button::new(LIFECYCLE_ACTION)
+        let ready = matches!(target, LifecycleTarget::Ready { .. }) && !self.lifecycle_busy(cx);
+        let mut button = Button::new(LIFECYCLE_ACTION)
             .label(label)
             .small()
             .warning()
-            .disabled(!matches!(target, LifecycleTarget::Ready { .. }))
+            .disabled(!ready)
             .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
                 pane.open_lifecycle(window, cx);
             }));
-        let LifecycleTarget::NoId(reason) = target else {
-            return Some(button.into_any_element());
+        let note = match target {
+            LifecycleTarget::NoId(reason) => {
+                button = button.tooltip(reason);
+                Some(reason)
+            }
+            _ => None,
         };
-        Some(
-            div()
-                .id(LIFECYCLE_NOTE)
-                .test_support()
-                .aria_label(reason)
-                .flex_none()
-                .child(button.tooltip(reason))
-                .into_any_element(),
-        )
+        // The wrapper tracks the action's focus, so its dialog gives focus
+        // back here (A2), as the operation area's buttons do.
+        let wrapper = div()
+            .id(LIFECYCLE_FOCUS)
+            .flex_none()
+            .track_focus(&self.lifecycle_focus);
+        let wrapper = match note {
+            Some(reason) => wrapper.child(
+                div()
+                    .id(LIFECYCLE_NOTE)
+                    .test_support()
+                    .aria_label(reason)
+                    .child(button),
+            ),
+            None => wrapper.child(button),
+        };
+        Some(wrapper.into_any_element())
+    }
+
+    /// The header's lifecycle action's focus, where its dialog gives focus
+    /// back.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn lifecycle_focus(&self) -> gpui_kit::FocusHandle {
+        self.lifecycle_focus.clone()
     }
 
     /// What the lifecycle action acts on: the item as read, by its ID.
@@ -341,6 +363,9 @@ impl ItemPane {
         let LifecycleTarget::Ready { intent, heading } = self.lifecycle_target(cx) else {
             return;
         };
+        if self.lifecycle_busy(cx) {
+            return;
+        }
         if window.has_active_dialog(cx) {
             return;
         }
@@ -349,7 +374,7 @@ impl ItemPane {
             Some(_) => Some(cx.entity().downgrade()),
             None => None,
         };
-        let origin = window.focused(cx).unwrap_or_else(|| cx.focus_handle());
+        let origin = self.lifecycle_focus.clone();
         let opening = Opening {
             intent: *intent,
             heading,

@@ -180,8 +180,10 @@ impl ItemPane {
     /// the close dialog's come here.
     pub(super) fn start_save(&mut self, cx: &mut Context<Self>) -> bool {
         // A lifecycle's save first waits no longer: this is its save, or
-        // why it has none (`save_first`).
-        self.edit.save.first = false;
+        // why it has none (`save_first`). Its dialog hears either way.
+        if std::mem::take(&mut self.edit.save.first) {
+            cx.notify();
+        }
         let Some(session) = self.shown_session() else {
             return false;
         };

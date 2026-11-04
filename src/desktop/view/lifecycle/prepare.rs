@@ -16,7 +16,7 @@ use manyhands::{
 
 use super::{
     CONTINUE, LifecycleDialog, NOT_SENT, OPEN_FOLDER, Phase, RESUME, SHARE_MAIN, SHARING_MAIN,
-    button, text,
+    STILL_RUNNING, button, text,
 };
 use crate::desktop::{
     model::stamp::{Stamp, ViewScope},
@@ -32,7 +32,14 @@ pub(crate) const PRIMARY_DIRTY: &str = "Main has unsaved changes outside Manyhan
 
 /// A blocker in words.
 pub(crate) fn blocker_words(blocker: LifecycleBlocker) -> &'static str {
-    use LifecycleBlocker::*;
+    use LifecycleBlocker::{
+        AlreadyClosed, CommentPublicationPending, ConflictPending, ContextBehindRemote,
+        ContextConflicted, ContextDirty, ContextMissing, ContextNonconforming,
+        DocumentInvalidAfterIntegration, HistoryUnknown, IdentityRequired, IntegrationConflict,
+        LocalOperationPending, NotADocument, NotATicket, PrimaryAheadOfRemote, PrimaryConflicted,
+        PrimaryDirty, PrimaryMissing, PrimaryNotCheckedOut, PrimaryReopened, RemoteContextDeleted,
+        TicketInvalidAfterClosure,
+    };
     match blocker {
         NotADocument => "This item is not a document.",
         NotATicket => "This item is not a ticket.",
@@ -204,11 +211,18 @@ impl LifecycleDialog {
         cx.notify();
     }
 
-    /// Whether the item's lifecycle is queued or running in this process:
-    /// Continue and Resume are not offered meanwhile (P22).
+    /// Whether the item's lifecycle is queued or running in this process,
+    /// or a resume of the operation that holds it: Continue and Resume are
+    /// not offered meanwhile (P22).
     fn in_flight(&self) -> bool {
         let (Some(root), Some(id)) = (self.root(), self.item_id()) else {
             return false;
+        };
+        let held = match &self.phase {
+            Phase::Held {
+                way_out: LifecycleWayOut::ResumeOperation { operation_id },
+            } => Some(operation_id.as_str()),
+            _ => None,
         };
         self.services.worker().in_flight(|intent| match intent {
             Intent::TicketClose {
@@ -219,6 +233,10 @@ impl LifecycleDialog {
                 root: asked,
                 id: asked_id,
             } => asked == root && asked_id == id,
+            Intent::OperationResume {
+                root: asked,
+                operation_id,
+            } => asked == root && held == Some(operation_id.to_string().as_str()),
             _ => false,
         })
     }
@@ -286,15 +304,19 @@ impl LifecycleDialog {
         }
     }
 
-    /// The held item's one way on, as a button; none while the item's
-    /// lifecycle is in flight.
+    /// The held item's one way on, as a button; while the item's lifecycle
+    /// is in flight, that it is still running.
     pub(super) fn held_action(
         &self,
         way_out: &LifecycleWayOut,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
         if self.in_flight() {
-            return None;
+            return Some(
+                text("lifecycle-still-running", STILL_RUNNING)
+                    .text_sm()
+                    .into_any_element(),
+            );
         }
         match way_out {
             LifecycleWayOut::RetryRequest { request_id } => {

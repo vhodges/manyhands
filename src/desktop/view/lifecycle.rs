@@ -7,10 +7,12 @@
 //! short ID} · {title} · {repository}", and the item's context branch
 //! (MH-COLLAB-006, A22).
 //!
-//! - **Saving.** With unsaved edits in the tab, the tab saves them first
-//!   (decision 13): "Saving your latest edits…". A saved answer goes on to
-//!   prepare; any other answer closes the dialog, and the tab shows that
-//!   save's outcome (P1). Escape cancels before the prepare.
+//! - **Saving.** With unsaved edits in the tab, or a draft of the item
+//!   stored or restored there (R-17), the tab saves them first (decision
+//!   13): "Saving your latest edits…". A saved answer goes on to prepare;
+//!   any other answer closes the dialog, and the tab shows that save's
+//!   outcome (P1). Escape cancels before the prepare; a stored draft not yet
+//!   sent is then not saved.
 //! - **Preparing.** The command is prepared (`Services::prepare`), as a
 //!   read: nothing runs.
 //! - **Confirm.** The preview's confirmation is held; Confirm, by click or
@@ -24,7 +26,8 @@
 //! - **Held.** An unfinished earlier run holds the item (C5 decision 33):
 //!   Continue sends that request again under its own request ID, with no
 //!   confirmation, or Resume resumes its operation (P12). Neither is
-//!   offered while the item's lifecycle is already in flight.
+//!   offered while the item's lifecycle, or that resume, is in flight: the
+//!   dialog says it is still running (P22).
 //! - **Answered.** Any other answer is shown with its message and code,
 //!   and nothing runs.
 //!
@@ -68,6 +71,8 @@ pub(crate) const CONTINUE: &str = "Continue";
 pub(crate) const RESUME: &str = "Resume";
 pub(crate) const OPEN_FOLDER: &str = "Open folder";
 pub(crate) const SHARE_MAIN: &str = "Share main";
+/// Continue and Resume wait while the item's lifecycle runs (P22).
+pub(crate) const STILL_RUNNING: &str = "Still running\u{2026}";
 /// Confirm sent the first run: what runs next is Task 7's to show.
 pub(crate) const STARTED: &str =
     "Started. It continues in the background and shows up in Activity.";
@@ -250,6 +255,15 @@ impl LifecycleDialog {
                     this.saving_changed(window, cx)
                 }),
             );
+            // Dismissed while it waits for the save first: nothing the
+            // person has not seen is saved for it (review M-1).
+            subscriptions.push(cx.on_release(|this: &mut Self, cx| {
+                if matches!(this.phase, Phase::Saving)
+                    && let Some(pane) = this.saving.as_ref().and_then(WeakEntity::upgrade)
+                {
+                    pane.update(cx, |pane, cx| pane.stop_save_first(cx));
+                }
+            }));
         }
         let mut dialog = Self {
             intent,
@@ -318,3 +332,11 @@ impl LifecycleDialog {
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/save_first_tests.rs"]
+mod save_first_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/action_tests.rs"]
+mod action_tests;

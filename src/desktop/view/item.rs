@@ -181,6 +181,8 @@ pub(crate) struct ItemPane {
     sheet_focus: Vec<FocusHandle>,
     /// Around the sheet's Inspect link, whose own focus is the Kit's.
     link_focus: FocusHandle,
+    /// The header's lifecycle action, where its dialog gives focus back.
+    lifecycle_focus: FocusHandle,
     /// The details sheet's own scroll, where its focused controls are
     /// revealed.
     pub(super) sheet_scroll: ContentScroll,
@@ -294,6 +296,7 @@ impl ItemPane {
             chip_focus: chips::chip_focus(cx),
             sheet_focus: sheet::sheet_focus(cx),
             link_focus: cx.focus_handle(),
+            lifecycle_focus: cx.focus_handle(),
             fields: sheet::SheetFields::default(),
             relations,
             sheet_scroll: scroll.region(),

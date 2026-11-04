@@ -83,4 +83,24 @@ impl ItemPane {
             SaveFirst::Saved
         }
     }
+
+    /// The lifecycle dialog was dismissed while it waited for the save
+    /// first: a stored draft still in Continue editing's steps opens in the
+    /// editor, but nothing the person has not seen is saved, as the close
+    /// dialog's precedent (Task 18 fix 1, M1). A save already sent goes on.
+    pub(in crate::desktop::view) fn stop_save_first(&mut self, cx: &mut Context<Self>) {
+        self.continue_without_saving();
+        self.edit.save.first = false;
+        cx.notify();
+    }
+
+    /// Whether a press of the lifecycle action could not act now: a save,
+    /// a claim, a prepare or Continue editing's steps run, a Discard waits
+    /// for its draft, or the review is open (review M-5).
+    pub(in crate::desktop::view) fn lifecycle_busy(&self, cx: &App) -> bool {
+        self.close_busy(cx)
+            || self.edit.save.continued
+            || self.edit.discard_begun.is_some()
+            || self.edit.phase() == Phase::Review
+    }
 }
