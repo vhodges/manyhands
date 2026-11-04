@@ -1,7 +1,7 @@
 ---
 title: "Wave 03 C5: CLI Completion And One-Shot Polling"
 date: 2026-10-31
-status: "approved"
+status: "review-ready"
 author: "Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -11,6 +11,14 @@ id: "01M69C6RZ2K0Q8DWPXA3EY81DH"
 # Wave 03 C5: CLI Completion And One-Shot Polling
 
 ## Status
+
+**Review-ready, 2026-11-04,** at `4165e25e` (main `c2a34494` merged; merge-tree clean). Tasks 0–15 Step 3 are done; Step 4 (closure) and Step 5 (follow-ups) wait for the owner. The ticket stays **open**.
+
+- **Final gate (Task 15, AGENTS.md's tiers):** at `f59aceb6` the static gates, the fast tier and all eleven SSH-harness targets passed (mutation_remote 700 cases). After the D4 merge, the final reviews' fixes and decisions 35 and the F2 reversal, the fast tier and every SSH target those paths touch passed again (ledger, "Task 15: final gate"). `ticket_closure`, `comment_publication`, `ssh_fixture` and `--lib local_sync` were not rerun after `f59aceb6`, as no later change touches their paths.
+- **Reviews:** independent whole-branch spec and quality reviews at `f59aceb6`, then a scoped review of the last two rounds; every finding fixed or ruled.
+- **Not done here:** native CI (post-merge, with the owner's approval), the full `cargo test` suite (post-merge, per AGENTS.md), and the follow-up tickets, which need the owner's go-ahead.
+- **Known main issue:** `clippy --all-targets --features desktop` fails on main because D4's test modules need `desktop-test-support`.
+
 
 **Approved, 2026-10-31.** The owner approved the documents at `cddacc54` ("Docs are approved. Approved to proceed. Use sub agent drive development."), authorizing implementation, subagent-driven. The approval takes owner questions 1 and 3–6 at their written recommendations, named edits E-1 to E-15 and the per-command commit identity. Pushes beyond this branch, a PR, the merge, branch deletion, closure, `ticket save`, native CI and cleanup stay separately gated. Reviewed in three rounds; the edits after round 3 had no independent review.
 Implementation is in progress: Parts A and B and Part C through Task 14b (the inventory, the recovery tables and the document amendments) are on this branch; Task 15's full verification, review and handoff remain (updated 2026-11-03).
