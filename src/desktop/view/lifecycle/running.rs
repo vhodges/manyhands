@@ -28,7 +28,7 @@ use manyhands::{
         ItemDtoKind, LifecycleMutationDto, LifecyclePublicationPendingReason, MutationDataDto,
         lifecycle_way_out,
     },
-    results::{Envelope, RecoveryActionKind},
+    results::Envelope,
 };
 
 use super::{
@@ -37,15 +37,15 @@ use super::{
     button,
     confirm::{Step, steps},
     outcome::{
-        CANCELLATION_FINISHED, CHECK_HOST, Credential, Ending, FINISHED_BEFORE_STOP, NO_RECORD,
-        OPEN_SHARING_AND_KEYS, REMOVED, Reach, STOP, STOPPING, StepState, UNLOCK, guidance,
-        lifecycle_data, outcome_lines, running_states, steps_by_kind,
+        CANCELLATION_FINISHED, CHECK_HOST, Credential, DISMISSED, Ending, FINISHED_BEFORE_STOP,
+        NO_RECORD, OPEN_SHARING_AND_KEYS, REMOVED, Reach, STOP, STOPPING, StepState, UNLOCK,
+        guidance, lifecycle_data, outcome_lines, running_states, steps_by_kind,
     },
     prepare::blocker_words,
     text,
 };
 use crate::desktop::{
-    model::operations::parse_authority,
+    model::publication::host_authority,
     services::requests::{DesktopRequestId, RequestState},
     view::item::ItemRoute,
 };
@@ -62,14 +62,22 @@ impl LifecycleDialog {
     pub(super) fn shown_steps(&self, answer: Option<&LifecycleMutationDto>) -> Vec<Step> {
         match &self.plan {
             Some(plan) => steps(plan),
-            None => steps_by_kind(self.heading.kind, answer),
+            None => steps_by_kind(
+                self.heading.kind,
+                answer,
+                &self.primary(),
+                self.heading.remote.as_ref().map(Option::as_deref),
+            ),
         }
     }
 
     fn primary(&self) -> String {
+        // The confirmed preview's, else the one the workspace knows.
         self.plan
             .as_ref()
-            .map_or_else(|| "main".to_owned(), |plan| plan.primary_branch.clone())
+            .map(|plan| plan.primary_branch.clone())
+            .or_else(|| self.heading.primary.clone())
+            .unwrap_or_else(|| "main".to_owned())
     }
 
     /// The body and buttons of a sent run, by where its request stands.
@@ -84,6 +92,8 @@ impl LifecycleDialog {
         match (state, answer) {
             (Some(RequestState::Removed), _) => (self.message(REMOVED), Vec::new()),
             (Some(RequestState::NotSent(_)), _) => (self.message(NOT_SENT), Vec::new()),
+            // Its answer went with its entry (review O-1).
+            (Some(RequestState::Dismissed), None) => (self.message(DISMISSED), Vec::new()),
             (_, Some(envelope)) => self.ended(id, &envelope, cx),
             _ => self.running(cx),
         }
@@ -209,12 +219,7 @@ impl LifecycleDialog {
                 text(("lifecycle-blocker", ix), blocker_words(*blocker)).text_sm()
             }));
         }
-        if offers.prepare
-            && envelope
-                .recovery
-                .iter()
-                .any(|action| action.action == RecoveryActionKind::RequestPrepare)
-        {
+        if offers.no_record {
             body = body.child(text("lifecycle-no-record", NO_RECORD).text_sm());
         }
         let item = self.item_word();
@@ -281,18 +286,7 @@ impl LifecycleDialog {
                 buttons.push(button("lifecycle-unlock", UNLOCK, true, unlock));
             }
             Some(Credential::Host) => {
-                let authority = envelope
-                    .recovery
-                    .iter()
-                    .filter(|action| {
-                        matches!(
-                            action.action,
-                            RecoveryActionKind::HostApprove | RecoveryActionKind::HostReplace
-                        )
-                    })
-                    .find_map(|action| {
-                        parse_authority(action.arguments.get("authority")?.as_str()?)
-                    });
+                let authority = host_authority(envelope);
                 let go = self.on(cx, move |dialog, window, cx| {
                     if let Some(root) = dialog.root().map(|root| root.to_path_buf()) {
                         let authority = authority.clone();

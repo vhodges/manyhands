@@ -440,14 +440,14 @@ impl SyncResult {
 }
 
 /// The codes of a key the share could not use.
-const KEY_CODES: [ResultCode; 3] = [
+pub(crate) const KEY_CODES: [ResultCode; 3] = [
     ResultCode::NoSelectedKey,
     ResultCode::KeyUnavailable,
     ResultCode::KeyRejected,
 ];
 
 /// The codes of a host that is not trusted.
-const HOST_CODES: [ResultCode; 2] = [
+pub(crate) const HOST_CODES: [ResultCode; 2] = [
     ResultCode::HostApprovalRequired,
     ResultCode::HostReplacementRequired,
 ];
@@ -470,7 +470,7 @@ fn comment_data(envelope: &Envelope<MutationDataDto>) -> Option<&CommentMutation
 }
 
 /// The host a share's host recovery names, if it names one it can read.
-fn host_authority(envelope: &Envelope<MutationDataDto>) -> Option<SshAuthority> {
+pub(crate) fn host_authority(envelope: &Envelope<MutationDataDto>) -> Option<SshAuthority> {
     envelope
         .recovery
         .iter()

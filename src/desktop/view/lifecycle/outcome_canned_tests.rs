@@ -164,7 +164,7 @@ fn cancel(request: RequestId) -> RecoveryAction {
     )
 }
 
-fn inspect(root: &Path) -> RecoveryAction {
+pub(super) fn inspect(root: &Path) -> RecoveryAction {
     RecoveryAction::new(
         RecoveryActionKind::RepoInspect,
         [("root", key(root).into())],

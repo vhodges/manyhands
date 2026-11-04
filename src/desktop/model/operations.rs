@@ -470,6 +470,8 @@ impl Operations {
             )
         {
             request.state = RequestState::Dismissed;
+            // Nothing shows a dismissed lifecycle's answer again.
+            self.lifecycles.remove(&id);
         }
     }
 

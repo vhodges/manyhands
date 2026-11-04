@@ -24,7 +24,8 @@ use manyhands::{
 use super::{
     outcome::{CHECK_HOST, OPEN_SHARING_AND_KEYS, UNLOCK},
     outcome_canned_tests::{
-        answer, buttons, finished, intent, reached, reached_effects, reopen, retry, short_of_main,
+        answer, buttons, finished, inspect, intent, reached, reached_effects, reopen, retry,
+        short_of_main,
     },
     tests::{TICKET, closes, request, saved_ticket, shell, ticket, until_present},
 };
@@ -54,7 +55,7 @@ async fn a_refused_key_offers_unlock_and_sharing_and_keys(cx: &mut TestAppContex
     cx.executor().allow_parking();
     let (shell, root) = shell(cx, |fixture, root| saved_ticket(fixture, root, "Keys", ""));
     let request = RequestId::new();
-    let stopped = |code, reason| {
+    let stopped = |code, reason, recovery| {
         let mut data = reached(ItemDtoKind::Ticket, TICKET, vec![]);
         data.cleanup = Some(LifecycleCleanupState::Pending);
         data.cleanup_pending = Some(reason);
@@ -65,7 +66,7 @@ async fn a_refused_key_offers_unlock_and_sharing_and_keys(cx: &mut TestAppContex
             Outcome::Partial,
             data,
             reached_effects(CleanupEffect::Pending),
-            vec![retry(request)],
+            recovery,
             request,
         )
     };
@@ -74,6 +75,7 @@ async fn a_refused_key_offers_unlock_and_sharing_and_keys(cx: &mut TestAppContex
             stopped(
                 ResultCode::UnlockRequired,
                 LifecycleCleanupPendingReason::RemoteDeletionUnlock,
+                vec![retry(request)],
             ),
             vec!["lifecycle-unlock", "lifecycle-sharing-and-keys"],
         ),
@@ -81,6 +83,7 @@ async fn a_refused_key_offers_unlock_and_sharing_and_keys(cx: &mut TestAppContex
             stopped(
                 ResultCode::NoSelectedKey,
                 LifecycleCleanupPendingReason::RemoteDeletionKey,
+                vec![retry(request)],
             ),
             vec!["lifecycle-retry", "lifecycle-sharing-and-keys"],
         ),
@@ -88,8 +91,15 @@ async fn a_refused_key_offers_unlock_and_sharing_and_keys(cx: &mut TestAppContex
             stopped(
                 ResultCode::HostApprovalRequired,
                 LifecycleCleanupPendingReason::RemoteDeletionHost,
+                // As the `ticket_close_host_approval_required` golden: the
+                // same request, then the repository (review M-2).
+                vec![retry(request), inspect(&root)],
             ),
-            vec!["lifecycle-retry", "lifecycle-check-host"],
+            vec![
+                "lifecycle-retry",
+                "lifecycle-check-host",
+                "lifecycle-inspect",
+            ],
         ),
     ];
     for (n, (envelope, expected)) in rows.into_iter().enumerate() {
@@ -230,5 +240,49 @@ async fn a_resend_without_a_secret_takes_the_unlock_path(cx: &mut TestAppContext
     assert!(resent.confirmation.is_none(), "no confirmation");
     declined(&shell, key_id, cx).await;
     again.release();
+    shell.until_ended(sent[0], cx).await;
+}
+
+/// Review M-6, canned as `a_refused_key_offers_unlock_and_sharing_and_keys`
+/// (`deletion_unlock`): on a locked-key stop, which offers Unlock… and no
+/// Retry, Enter unlocks. It sends the same request again under its own
+/// request ID, with no confirmation.
+#[gpui_kit::test]
+async fn enter_on_a_locked_key_unlocks(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| saved_ticket(fixture, root, "Enter", ""));
+    let named = RequestId::new();
+    let mut data = reached(ItemDtoKind::Ticket, TICKET, vec![]);
+    data.cleanup = Some(LifecycleCleanupState::Pending);
+    data.cleanup_pending = Some(LifecycleCleanupPendingReason::RemoteDeletionUnlock);
+    let id = finished(
+        &shell,
+        0,
+        intent(&root, ItemDtoKind::Ticket),
+        named,
+        answer(
+            "ticket close",
+            &root,
+            ResultCode::UnlockRequired,
+            Outcome::Partial,
+            data,
+            reached_effects(CleanupEffect::Pending),
+            vec![retry(named)],
+            named,
+        ),
+        cx,
+    );
+    reopen(&shell, id, cx).await;
+    assert!(shell.present("lifecycle-unlock", cx));
+    assert!(!shell.present("lifecycle-retry", cx));
+    let held = shell.backend.hold_job(JobKind::TicketClose);
+    shell.keys("enter", cx);
+    held.wait_reached();
+    let sent = closes(&shell, cx);
+    assert_eq!(sent.len(), 2, "Enter sent the close again");
+    let resent = request(&shell, sent[0], cx);
+    assert_eq!(resent.request_id, named, "the same request");
+    assert!(resent.confirmation.is_none());
+    held.release();
     shell.until_ended(sent[0], cx).await;
 }

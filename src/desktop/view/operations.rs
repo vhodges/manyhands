@@ -274,9 +274,23 @@ impl Workspace {
         let Some(request) = self.services().operations().read(cx).request(id).cloned() else {
             return;
         };
+        // What navigation lists of its repository names its steps.
+        let known = request
+            .intent
+            .root()
+            .and_then(|root| root.to_str())
+            .and_then(|root| self.navigation().entry(root))
+            .map(|entry| {
+                let configuration = &entry.summary.configuration;
+                (
+                    configuration.primary_branch.clone(),
+                    Some(configuration.publication_remote.clone()),
+                )
+            })
+            .unwrap_or_default();
         let origin = self.control_focus_for(request_id(id, "open"), cx);
         let services = self.services().clone();
-        lifecycle::reopen(&request, origin, &services, window, cx);
+        lifecycle::reopen(&request, known, origin, &services, window, cx);
     }
 
     /// One request of this session.

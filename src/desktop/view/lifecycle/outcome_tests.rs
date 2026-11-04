@@ -24,8 +24,8 @@ use super::{
     confirm_tests::{confirming, paths, row, worktree},
     outcome::{
         CANCELLATION_FINISHED, ENDING_DONE, ENDING_FAILED, ENDING_STOPPED, MERGED, NO_RECORD,
-        NOT_MERGED, OPEN_REPOSITORY_DETAILS, SHARING_PENDING, STATE_DONE, STATE_NOT_DONE,
-        STATE_NOT_STARTED, STATE_RUNNING, STOP, STOPPING, TIDIED_UP,
+        NOT_MERGED, OPEN_REPOSITORY_DETAILS, SHARING_PENDING, STATE_DONE, STATE_FAILED,
+        STATE_NOT_DONE, STATE_NOT_STARTED, STATE_RUNNING, STOP, STOPPING, TIDIED_UP,
     },
     prepare::PRIMARY_DIRTY,
     short_id,
@@ -254,7 +254,10 @@ async fn local_only_with_cleanup_complete_is_done(cx: &mut TestAppContext) {
 /// same request ID again, with no confirmation, and the close finishes. It
 /// adds no checkpoint and one merge only: main then holds exactly what it
 /// and the stopped branch held, and one merge commit whose second parent is
-/// the branch as the stop left it.
+/// the branch as the stop left it. A local-only run publishes nothing; that
+/// a Retry repeats no publication is the library's to prove, over a real
+/// remote (`tests/mutation_remote/c5_lifecycle.rs` `push_rejected_continues`
+/// and `deletion_rejected`).
 #[gpui_kit::test]
 async fn retry_sends_the_same_request_id(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -384,6 +387,17 @@ async fn a_dirty_primary_stop_at_execute_merges_nothing(cx: &mut TestAppContext)
         Some(ENDING_FAILED)
     );
     assert_eq!(shell.rows("lifecycle-blocker", cx), [PRIMARY_DIRTY]);
+    // Review M-1: a dirty main stands in the merge's way.
+    assert_eq!(
+        shell.rows("lifecycle-step-state", cx),
+        [
+            STATE_DONE,
+            STATE_NOT_DONE,
+            STATE_NOT_DONE,
+            STATE_FAILED,
+            STATE_NOT_DONE
+        ]
+    );
     assert!(shell.present("lifecycle-open-folder", cx));
     assert_eq!(
         shell.label("lifecycle-inspect", cx).as_deref(),
@@ -452,6 +466,9 @@ async fn the_operation_entry_reopens_the_dialog(cx: &mut TestAppContext) {
         shell.label("lifecycle-title", cx).as_deref(),
         Some("Close ticket")
     );
+    // Review M-5: the workspace knows the repository has no remote, and its
+    // main branch, so the steps are the local-only ones.
+    assert_eq!(shell.rows("lifecycle-step", cx), local_steps());
     shell.click("lifecycle-retry", cx);
     let sent = closes(&shell, cx);
     assert_eq!(sent.len(), 2);

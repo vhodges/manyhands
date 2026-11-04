@@ -29,6 +29,9 @@ use crate::desktop::{
 pub(super) struct Offers {
     pub(super) retry: bool,
     pub(super) prepare: bool,
+    /// Nothing of the run is kept: the library deleted its request, or
+    /// stopped it before any record (P18, review I-1).
+    pub(super) no_record: bool,
     pub(super) resume: Option<String>,
     pub(super) credential: Option<Credential>,
     pub(super) inspect: bool,
@@ -168,11 +171,17 @@ impl LifecycleDialog {
                 LifecycleWayOut::Republish { .. } | LifecycleWayOut::CancelThenSendAgain { .. }
             )
         });
-        let prepare = offered(RecoveryActionKind::RequestPrepare)
-            || (ending == Ending::Failed
-                && !reach.integrated
-                && record == Some(RecordState::Finished)
-                && !offered(RecoveryActionKind::RequestRetry));
+        // A run that ended short of main with its record finished or gone
+        // has nothing left to continue: a stored refusal, or a stop with no
+        // parent, whose request the library deleted (review I-1).
+        let ended_short = matches!(ending, Ending::Failed | Ending::Stopped)
+            && !reach.integrated
+            && record == Some(RecordState::Finished)
+            && !offered(RecoveryActionKind::RequestRetry);
+        let prepare = offered(RecoveryActionKind::RequestPrepare) || ended_short;
+        // A stored refusal names its blockers; one with none kept nothing.
+        let blocked = lifecycle_data(envelope).is_some_and(|data| !data.blockers.is_empty());
+        let no_record = offered(RecoveryActionKind::RequestPrepare) || (ended_short && !blocked);
         let retry = ending != Ending::Done
             && !prepare
             && !republish
@@ -184,10 +193,15 @@ impl LifecycleDialog {
             LifecycleWayOut::ResumeOperation { operation_id } => Some(operation_id.clone()),
             _ => None,
         });
+        // Retry and Resume both go on with the run: the one L1 routes is
+        // offered, and Retry when it routes neither (review O-4).
+        let retry = retry && (resume.is_none() || way_out.contains(&LifecycleWayOut::SendAgain));
+        let resume = resume.filter(|_| !retry);
         let waiting = self.in_flight_with(resume.as_deref());
         Offers {
             retry: ending != Ending::Done && retry,
             prepare,
+            no_record,
             resume,
             credential: credential.filter(|_| ending != Ending::Done),
             inspect: way_out.contains(&LifecycleWayOut::Inspect),
@@ -198,7 +212,8 @@ impl LifecycleDialog {
     }
 
     /// Enter on a sent run: a done one closes, a failed or stopped one
-    /// retries, or prepares again where that is its way on.
+    /// retries, unlocks a locked key, or prepares again where that is its
+    /// way on.
     pub(super) fn enter_submitted(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Phase::Submitted(id) = self.phase else {
             return;
@@ -221,6 +236,9 @@ impl LifecycleDialog {
         let offers = self.offers(id, &envelope, ending, &reach, &lifecycle_way_out(&envelope));
         if offers.retry && !offers.waiting {
             self.resend(cx);
+        } else if offers.credential == Some(Credential::Locked) && !offers.waiting {
+            // Unlock… is a locked key's retry (review M-6).
+            self.unlock(cx);
         } else if offers.prepare {
             self.prepare_anew(cx);
         }

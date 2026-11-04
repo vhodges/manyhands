@@ -116,6 +116,12 @@ pub(crate) struct Heading {
     /// The item's context branch as the tab read it; a preview's names it
     /// once one is shown.
     pub branch: Option<String>,
+    /// The repository's main branch, as the workspace knows it, for a run
+    /// shown without its preview (review M-5).
+    pub primary: Option<String>,
+    /// Its publication remote as the workspace knows it: `None` unknown,
+    /// `Some(None)` none.
+    pub remote: Option<Option<String>>,
 }
 
 impl Heading {
@@ -128,6 +134,8 @@ impl Heading {
             title: item.title.clone(),
             repository,
             branch: item.context.branch.clone(),
+            primary: None,
+            remote: None,
         }
     }
 
@@ -201,10 +209,12 @@ pub(crate) fn open(
 
 /// Opens the lifecycle dialog on the run `request` of this session, from
 /// its operation area entry (A3, Open…): its item by its short ID, in its
-/// repository; focus goes back to `origin`. `None` for a request that is no
-/// lifecycle, or while quitting.
+/// repository, whose main branch and publication remote the workspace knows
+/// as `primary` and `remote` (`Heading`); focus goes back to `origin`.
+/// `None` for a request that is no lifecycle, or while quitting.
 pub(crate) fn reopen(
     request: &crate::desktop::services::requests::DesktopRequest,
+    (primary, remote): (Option<String>, Option<Option<String>>),
     origin: FocusHandle,
     services: &Services,
     window: &mut Window,
@@ -221,6 +231,8 @@ pub(crate) fn reopen(
         title: None,
         repository: crate::desktop::view::operations::scope_name(request.intent.root()),
         branch: None,
+        primary,
+        remote,
     };
     let opening = Opening {
         intent: request.intent.clone(),
@@ -418,3 +430,11 @@ mod outcome_canned_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/credential_tests.rs"]
 mod credential_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/no_record_tests.rs"]
+mod no_record_tests;
+
+#[cfg(test)]
+#[path = "lifecycle/steps_tests.rs"]
+mod steps_tests;

@@ -24,7 +24,7 @@
 
 use manyhands::{
     repository::{
-        ItemDtoKind, LifecycleCleanupPendingReason, LifecycleCleanupState,
+        ItemDtoKind, LifecycleBlocker, LifecycleCleanupPendingReason, LifecycleCleanupState,
         LifecycleIntegrationKind, LifecycleMutationDto, LifecyclePublicationPendingReason,
         LifecyclePublicationState, LifecycleWayOut, MutationDataDto, ProgressStage,
     },
@@ -35,7 +35,10 @@ use manyhands::{
 
 use super::confirm::{KEEP_LOCAL, MARK_CLOSED, SAVE_STEP, Step, TIDY_UP};
 use crate::desktop::{
-    model::operations::{Progressing, stage_text},
+    model::{
+        operations::{Progressing, stage_text},
+        publication::{HOST_CODES, KEY_CODES},
+    },
     services::requests::Intent,
 };
 
@@ -65,6 +68,9 @@ pub(crate) const TIDIED_UP: &str = "Tidied up";
 pub(crate) const NO_RECORD: &str = "This run stopped before it changed anything, and nothing of it is kept. Prepare again to see what it would do now.";
 /// The run was taken off the queue before it ran.
 pub(crate) const REMOVED: &str = "Cancelled before it ran. Nothing was changed.";
+/// The run's entry was dismissed from the operation area, and its answer
+/// with it.
+pub(crate) const DISMISSED: &str = "This run was dismissed from Activity.";
 pub(crate) const UNLOCK: &str = "Unlock\u{2026}";
 pub(crate) const OPEN_SHARING_AND_KEYS: &str = "Open Sharing & keys";
 pub(crate) const CHECK_HOST: &str = "Check host";
@@ -125,22 +131,43 @@ pub(crate) fn stage_step(stage: ProgressStage) -> Option<StepKey> {
 
 /// The steps of a run whose preview this dialog does not hold (opened
 /// again from the operation area, or a Continue or Resume): by the item's
-/// kind, and local-only when the answer says main waits for a remote.
-pub(crate) fn steps_by_kind(kind: ItemDtoKind, answer: Option<&LifecycleMutationDto>) -> Vec<Step> {
-    let local = answer.is_some_and(|data| {
-        data.publication_pending == Some(LifecyclePublicationPendingReason::NoPublicationRemote)
-    });
+/// kind, naming the main branch `primary` and the publication remote the
+/// workspace knows (`remote`: `None` when it knows none, `Some(None)` when the
+/// repository has none). Local-only when it has none, or the answer says main
+/// waits for one (review M-5).
+pub(crate) fn steps_by_kind(
+    kind: ItemDtoKind,
+    answer: Option<&LifecycleMutationDto>,
+    primary: &str,
+    remote: Option<Option<&str>>,
+) -> Vec<Step> {
+    let local = remote == Some(None)
+        || answer.is_some_and(|data| {
+            data.publication_pending == Some(LifecyclePublicationPendingReason::NoPublicationRemote)
+        });
+    let named = remote.flatten();
     let mut steps = vec![Step::new(StepKey::Save, SAVE_STEP, "")];
-    steps.push(match local {
-        true => Step::new(StepKey::ShareContext, KEEP_LOCAL, ""),
-        false => Step::new(StepKey::ShareContext, "Share with the remote", ""),
+    steps.push(match (local, named) {
+        (true, _) => Step::new(StepKey::ShareContext, KEEP_LOCAL, ""),
+        (false, Some(remote)) => {
+            Step::new(StepKey::ShareContext, format!("Share with {remote}"), "")
+        }
+        (false, None) => Step::new(StepKey::ShareContext, "Share with the remote", ""),
     });
     if kind == ItemDtoKind::Ticket {
         steps.push(Step::new(StepKey::MarkClosed, MARK_CLOSED, ""));
     }
-    steps.push(Step::new(StepKey::Merge, "Merge into main", ""));
+    steps.push(Step::new(
+        StepKey::Merge,
+        format!("Merge into {primary}"),
+        "",
+    ));
     if !local {
-        steps.push(Step::new(StepKey::SharePrimary, "Share main", ""));
+        let title = match named {
+            Some(remote) => format!("Share {primary} with {remote}"),
+            None => format!("Share {primary}"),
+        };
+        steps.push(Step::new(StepKey::SharePrimary, title, ""));
     }
     steps.push(Step::new(StepKey::TidyUp, TIDY_UP, ""));
     steps
@@ -209,6 +236,8 @@ pub(crate) struct Reach {
     pub shared: bool,
     pub tidied: bool,
     reached: Option<StepKey>,
+    /// The step the answer's blockers stand in the way of (review M-1).
+    blocked_at: Option<StepKey>,
 }
 
 impl Reach {
@@ -245,6 +274,7 @@ impl Reach {
             tidied: data.is_some_and(|data| data.cleanup == Some(LifecycleCleanupState::Complete))
                 || effects.cleanup == CleanupEffect::Complete,
             reached,
+            blocked_at: data.and_then(|data| blocked_step(&data.blockers)),
         }
     }
 
@@ -268,12 +298,15 @@ impl Reach {
 
     /// Each step's state once the run ended as `ending`.
     pub(crate) fn states(&self, keys: &[StepKey], ending: Ending, local: bool) -> Vec<StepState> {
+        // Where the blockers stand in the way, that step failed; with none,
+        // the first step not done.
+        let at = self.blocked_at.filter(|at| keys.contains(at));
         let mut failed = false;
         keys.iter()
             .map(|key| {
                 if self.done(*key, local) || ending == Ending::Done {
                     StepState::Done
-                } else if !failed && ending == Ending::Failed {
+                } else if !failed && ending == Ending::Failed && at.is_none_or(|at| at == *key) {
                     failed = true;
                     StepState::Failed
                 } else {
@@ -282,6 +315,25 @@ impl Reach {
             })
             .collect()
     }
+}
+
+/// The step a stop's blockers stand in the way of (review M-1): a dirty
+/// main or a refused merge, the merge; a conflict on the item's own copy,
+/// its sharing. The earliest, when they name more than one; `None` when
+/// none of them names a step.
+fn blocked_step(blockers: &[LifecycleBlocker]) -> Option<StepKey> {
+    blockers
+        .iter()
+        .filter_map(|blocker| match blocker {
+            LifecycleBlocker::PrimaryDirty | LifecycleBlocker::IntegrationConflict => {
+                Some(StepKey::Merge)
+            }
+            LifecycleBlocker::ContextConflicted | LifecycleBlocker::ConflictPending => {
+                Some(StepKey::ShareContext)
+            }
+            _ => None,
+        })
+        .min()
 }
 
 /// The outcome lines (A3): the merge, the sharing and the tidy-up, each
@@ -413,14 +465,11 @@ pub(crate) enum Credential {
 
 impl Credential {
     pub(crate) fn of(code: ResultCode) -> Option<Self> {
+        // D4's routing of a share's credential codes (`publication.rs`).
         match code {
             ResultCode::UnlockRequired | ResultCode::UnlockFailed => Some(Self::Locked),
-            ResultCode::NoSelectedKey | ResultCode::KeyUnavailable | ResultCode::KeyRejected => {
-                Some(Self::Key)
-            }
-            ResultCode::HostApprovalRequired | ResultCode::HostReplacementRequired => {
-                Some(Self::Host)
-            }
+            code if KEY_CODES.contains(&code) => Some(Self::Key),
+            code if HOST_CODES.contains(&code) => Some(Self::Host),
             _ => None,
         }
     }
