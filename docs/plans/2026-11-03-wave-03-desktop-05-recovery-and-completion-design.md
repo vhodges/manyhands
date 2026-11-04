@@ -823,6 +823,12 @@ Applied in the approval commit:
   `display_path` does not classify (U-2, decision 23).
 - **K-15.** A comment post whose item's branch was deleted offers Give up
   only, as before D5; Republish covers shares and lifecycles (decision 24).
+- **K-16.** R-15 holds only where the binding observes the item in the
+  same call: a same-ID resend that re-enters through an existing parent
+  record still reports `recording` for a closure that already exists and has
+  not yet written its checkpoint (Task 3).
+- **K-17.** A lifecycle's progress events carry no effects; its result
+  reports them (Task 3 review).
 
 ## Alternatives Rejected
 
