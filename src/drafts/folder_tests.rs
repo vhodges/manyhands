@@ -137,3 +137,73 @@ fn the_drafts_folder_is_unchanged() {
     assert!(!data.path().join("drafts/b").exists());
     assert!(!data.path().join("resolutions/a.tmp").exists());
 }
+
+#[test]
+fn names_list_would_hide_or_windows_reserves_are_refused_for_new_files() {
+    use super::folder::{MAX_NAME_BYTES, reserved_on_windows};
+    let data = tempfile::tempdir().unwrap();
+    let mut folder = Folder::open_named(data.path(), "resolutions").unwrap();
+    let long = "a".repeat(MAX_NAME_BYTES + 1);
+    for name in [
+        "a.lock",
+        ".a.0123456789abcdef.tmp",
+        "CON",
+        "nul.json",
+        "Com1",
+        "lpt9.txt",
+        "a.",
+        "a ",
+        long.as_str(),
+    ] {
+        assert_eq!(
+            folder.create_new(name).map(drop).err().map(|e| e.kind),
+            Some(DraftErrorKind::Io),
+            "create_new {name:?}"
+        );
+        assert_eq!(
+            folder.replace(name, b"x").err().map(|e| e.kind),
+            Some(DraftErrorKind::Io),
+            "replace {name:?}"
+        );
+    }
+    for name in ["COM0", "COM10", "CONSOLE", "LPT", "a.con"] {
+        assert!(!reserved_on_windows(name), "{name:?} is not reserved");
+    }
+    let longest = "a".repeat(MAX_NAME_BYTES);
+    folder.replace(&longest, b"x").unwrap();
+    assert_eq!(folder.list().unwrap(), vec![longest]);
+}
+
+#[test]
+fn opening_by_name_removes_stale_temporaries() {
+    let data = tempfile::tempdir().unwrap();
+    let mut folder = Folder::open_named(data.path(), "resolutions").unwrap();
+    folder.replace("a", b"kept").unwrap();
+    drop(folder);
+    let path = data.path().join("resolutions");
+    std::fs::write(path.join(".a.0123456789abcdef.tmp"), b"half").unwrap();
+    std::fs::write(path.join("b.lock"), b"").unwrap();
+    let folder = Folder::open_named(data.path(), "resolutions").unwrap();
+    assert!(!path.join(".a.0123456789abcdef.tmp").exists());
+    assert!(path.join("b.lock").exists(), "only temporaries are removed");
+    assert_eq!(folder.read("a").unwrap(), b"kept");
+}
+
+#[test]
+fn a_failed_replace_leaves_no_temporary() {
+    let data = tempfile::tempdir().unwrap();
+    let mut folder = Folder::open_named(data.path(), "resolutions").unwrap();
+    let path = data.path().join("resolutions");
+    std::fs::create_dir(path.join("sub")).unwrap();
+    assert!(folder.replace("sub", b"x").is_err());
+    let on_disk: Vec<String> = std::fs::read_dir(&path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    assert_eq!(on_disk, vec!["sub".to_owned()], "no temporary remains");
+    assert!(path.join("sub").is_dir());
+    assert!(
+        folder.list().unwrap().is_empty(),
+        "list returns only regular files"
+    );
+}

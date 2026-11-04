@@ -79,16 +79,42 @@ pub mod folder {
         /// `<data>/<name>`, made or checked and held open. `name` must be a
         /// single normal path component: an empty name, `.`, `..`, a
         /// separator or a NUL (and on Windows a `:`) is refused with
-        /// [`DraftErrorKind::Io`].
+        /// [`DraftErrorKind::Io`]. Temporary files that an interrupted
+        /// [`Folder::replace`] left behind are removed.
+        ///
+        /// Callers given a data directory (and tests) use this; the
+        /// application uses [`Folder::open_named_default`].
         pub fn open_named(data: &Path, name: &str) -> Result<Self, DraftError> {
-            protect::Folder::open_named(data, name).map(Self)
+            let folder = protect::Folder::open_named(data, name).map(Self)?;
+            for stale in folder.0.names()? {
+                if is_temporary(&stale) {
+                    let _ = folder.0.remove(&stale);
+                }
+            }
+            Ok(folder)
+        }
+
+        /// [`Folder::open_named`] in the platform's application data
+        /// directory, the one the repository registry and the drafts store
+        /// use. [`DraftErrorKind::Unavailable`] when the platform gives none.
+        pub fn open_named_default(name: &str) -> Result<Self, DraftError> {
+            Self::open_named(&protect::default_data_directory()?, name)
         }
 
         /// A new owner-only file in the held folder, made exclusively and
-        /// never through a link. `name` is checked as [`Folder::open_named`]
-        /// checks a folder name, here and in every method below.
+        /// never through a link.
+        ///
+        /// `name` is checked as [`Folder::open_named`] checks a folder name,
+        /// here and in every method below. `create_new` and
+        /// [`Folder::replace`] also refuse, with [`DraftErrorKind::Io`], a
+        /// name that [`Folder::list`] would hide (`*.lock`, or the shape of
+        /// a temporary file), a name longer than [`MAX_NAME_BYTES`] bytes,
+        /// and on every platform a name Windows reserves: a device name
+        /// (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`, in any
+        /// case, with or without an extension) or a name ending in `.` or a
+        /// space, so the same names work everywhere.
         pub fn create_new(&mut self, name: &str) -> Result<File, DraftError> {
-            self.0.create_new(name)
+            self.0.create_new(file_name(name)?)
         }
 
         /// Replaces the file `name` with `bytes` atomically: a new
@@ -97,7 +123,8 @@ pub mod folder {
         /// the rename the temporary file is removed and any previous file
         /// is left as it was.
         pub fn replace(&mut self, name: &str, bytes: &[u8]) -> Result<(), DraftError> {
-            let temporary = temporary_name(name)?;
+            let name = file_name(name)?;
+            let temporary = temporary_name(name);
             let mut file = self.0.create_new(&temporary)?;
             let written = file
                 .write_all(bytes)
@@ -136,7 +163,8 @@ pub mod folder {
             Ok(bytes)
         }
 
-        /// The names of the files in the folder, sorted, leaving out
+        /// The names of the regular files in the folder (on Unix, ours),
+        /// sorted. Folders, links and other entries are left out, as are
         /// temporary files (`.<name>.<16 hex>.tmp`), lock files (`*.lock`)
         /// and names that are not UTF-8.
         pub fn list(&self) -> Result<Vec<String>, DraftError> {
@@ -145,6 +173,7 @@ pub mod folder {
                 .names()?
                 .into_iter()
                 .filter(|name| !is_temporary(name) && !name.ends_with(".lock"))
+                .filter(|name| matches!(self.0.open_file(name), Ok(Some(_))))
                 .collect();
             names.sort();
             Ok(names)
@@ -158,11 +187,45 @@ pub mod folder {
         }
     }
 
-    /// `.<name>.<16 random hex>.tmp`, for a checked `name`.
-    fn temporary_name(name: &str) -> Result<String, DraftError> {
+    /// The longest file name, in bytes, that [`Folder::create_new`] and
+    /// [`Folder::replace`] accept: 255 (the usual limit of one path
+    /// component) less the 22 bytes `replace`'s temporary file adds.
+    pub const MAX_NAME_BYTES: usize = 255 - TEMPORARY_EXTRA;
+
+    /// What `.<name>.<16 hex>.tmp` adds to `name`.
+    const TEMPORARY_EXTRA: usize = ".".len() + ".".len() + 16 + ".tmp".len();
+
+    /// A checked name for a file this API makes (see [`Folder::create_new`]).
+    pub(super) fn file_name(name: &str) -> Result<&str, DraftError> {
         let name = protect::entry_name(name)?;
+        if name.len() > MAX_NAME_BYTES
+            || name.ends_with(".lock")
+            || is_temporary(name)
+            || reserved_on_windows(name)
+        {
+            return Err(DraftError::new(DraftErrorKind::Io));
+        }
+        Ok(name)
+    }
+
+    /// Whether Windows reserves `name`: a device name, alone or with an
+    /// extension, in any case; or a name ending in `.` or a space.
+    pub(super) fn reserved_on_windows(name: &str) -> bool {
+        if name.ends_with(['.', ' ']) {
+            return true;
+        }
+        let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
+        let numbered = |prefix: &str| {
+            stem.strip_prefix(prefix)
+                .is_some_and(|digit| matches!(digit.as_bytes(), [b'1'..=b'9']))
+        };
+        matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") || numbered("COM") || numbered("LPT")
+    }
+
+    /// `.<name>.<16 random hex>.tmp`, for a checked `name`.
+    fn temporary_name(name: &str) -> String {
         let random = ulid::Ulid::new().random() as u64;
-        Ok(format!(".{name}.{random:016x}.tmp"))
+        format!(".{name}.{random:016x}.tmp")
     }
 
     /// Whether `name` is a temporary file of [`Folder::replace`].
