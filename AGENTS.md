@@ -132,8 +132,8 @@
 - Add Manyhands comments to the ticket at implementation-plan checkpoints to
   record progress, decisions, blockers, verification results, and review-ready
   status.
-- Close the ticket only after the associated change receives code-review or PR
-  approval, normally in the final push before merge.
+- Close the ticket with `ticket close` only after the associated change receives
+  code-review or PR approval; the close performs the merge.
 
 ## Working on a ticket
 
