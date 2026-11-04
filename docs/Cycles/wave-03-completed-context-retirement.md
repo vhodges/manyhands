@@ -76,9 +76,9 @@ D6 must add the explicit desktop Retire action using this binding, preserve open
 editors and drafts, show refusals/pending cleanup, and test its keyboard/recovery
 journeys. This ticket does not edit D6's worktree or silently mark that work done.
 Until retirement, an old own-worktree row can still mask primary's closure.
-The only proposed desktop edit here is rendering the added safety details in
+The only desktop edit authorized for this plan is rendering the added safety details in
 the **existing** generic operation-abandon confirmation; it adds no Retire action.
-That narrow renderer/test scope is included explicitly in document approval.
+That narrow renderer/test scope is D13; implementation itself remains gated.
 
 ## Required Contract
 
@@ -169,6 +169,15 @@ All dated 2026-11-04, recorded from this chat:
     one remote observation per live batch attempt, accepting up to N local
     retirement refreshes plus the original poll refresh. Do not introduce an
     aggregate journal/debt-transfer mechanism here.
+13. **Existing abandonment preview:** “Update existing preview (Recommended)”.
+    Add only the safety metadata/rendering and tests to the existing CLI and
+    desktop operation-abandon confirmation. This does not add a desktop Retire
+    action; D6 still owns it.
+14. **Old provisioning intent:** “Retirement path only (Recommended)”. Consume
+    only this retirement's exact captured old materialization intent after
+    proven local cleanup/absence, with a later same-ID/new-OID document-edit test.
+    The same omission in existing promotion/closure cleanup is only a proposed
+    follow-up: neither fix those paths nor file a new ticket here.
 
 ## Rulings
 
@@ -197,6 +206,17 @@ All dated 2026-11-04, recorded from this chat:
   It grants no deletion authority. Cost: local noncanonical marker bookkeeping;
   a corrupt/partial marker conservatively requires inspection/manual repair.
   New mechanism: adversarial review is required before approval.
+- **R-7 — No branch-lifetime guess across interruption.** Once the admin token
+  is gone (or a candidate was branch-only), a new executor may not delete a
+  surviving branch under the old request, even at the same OID. Preserve and
+  abandon/reprove instead; local absence can finish metadata/indexing only.
+  Cost: an interrupted branch-level cleanup can require two deliberate commands.
+- **R-8 — Original handoff eligibility is durable.** A live original complete
+  poll wrapper plus its process-only capture token must record `eligible` before
+  any child begins. After a crash, unconfirmed eligibility is a final
+  no-retirement `discovery_pending`, never inferred from a later index repair.
+  Cost: even a successful original refresh may require a new request if the
+  eligibility write was lost.
 
 ## Named Edits To Pre-Existing Tests
 
@@ -243,3 +263,11 @@ rewriting their original approval. No sibling ticket edits without permission.
 | Review S2 | Old observation child could retain reservation on retry | Ruling | Exact parent capability at every ownership guard; atomically fence bound old read-only child before new child | Stale executor and four observation crash windows |
 | Review S5 | Task 2 optional SSH module could run zero tests | Settled | Register module/CASES in same task as first tests | Tasks 2/4, nonzero-case assertion |
 | Independent review round 1, `4fa05c2c` | Source: 1 Blocking, 3 Important, 1 Minor. Contract: 2 Blocking, 6 Important, 1 Minor | Findings verified | Revisions above; revised mechanisms not yet independently reviewed | Next: scoped source and adversarial re-review |
+| Round 2 adversarial A1 | Admin token is gone before interrupted branch-delete retry; same-OID recreated branch could be removed | Ruling | R-7: no surviving branch deletion across a new executor without lifetime proof | Delete/crash/recreate-T/retry preservation row |
+| Round 2 adversarial A2 | Intended nonce could stamp a recreated registration during bootstrap retry | Ruling | Commit identity only after installed-token verification; missing token after interrupted bootstrap refuses this candidate | Before-install/recreated-registration and installed-before-SQL cases |
+| Round 2 adversarial A3 / source S3 | Between indexed A and unstarted B there is no pending abandon target | Approval item Q1 | Explicit completed-child `K_last` batch-stop handle; no reopening local row or aggregate owner | Stop/confirm/crash/stale-coordinator gap cases |
+| Round 2 adversarial A4 | A B-bound observation could not legitimately serve C after B completes | Ruling | Separate transport execution capability from batch-attempt receipt consumer scope | B handoff/C start uses one advertisement; foreign/stale receipt refusal |
+| Round 2 source S1 | Old materialization intent can resurrect an obsolete document tip | Decision | D14; exact-intent consumption/receipt with owned local cleanup; existing lifecycle omission stays proposed follow-up | T retire/new-Q materialization, plus Git/SQL crash window |
+| Round 2 source S2 | Original poll refresh success/pending could be confused with later repair | Ruling | R-8 durable original-handoff eligibility; conservative unconfirmed replay | Failed original/unrelated repair; success/lost eligibility-write cases |
+| Owner after round 2 | Existing generic abandonment safety display | Decision | D13 authorizes E-10's limited display/test scope, not a desktop Retire action | Task 3 |
+| Independent review round 2, `6a6301be` | Source: 0 Blocking, 3 Important, 0 Minor. Adversarial/contract: 1 Blocking, 3 Important, 0 Minor | Findings verified | Revisions recorded above; third focused review still required | If the same mechanism remains blocked after that review, stop redesign and present the required-outcome/test checkpoint |

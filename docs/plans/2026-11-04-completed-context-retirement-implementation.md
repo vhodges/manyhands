@@ -28,7 +28,7 @@ or Cargo test-target addition is planned.
 
 **Spec:** [Cycle](../Cycles/wave-03-completed-context-retirement.md) and
 [design](2026-11-04-completed-context-retirement-design.md). The Cycle governs
-the design, which governs this plan. D1–D12/R-1–R-6 apply; the expanded Q1 routing
+the design, which governs this plan. D1–D14/R-1–R-8 apply; the expanded Q1 routing
 and Q2 initial-state tables still need document approval.
 
 ## Global Constraints
@@ -53,7 +53,7 @@ and Q2 initial-state tables still need document approval.
   inability to prove a promised row stop for the owner, not expectation fitting.
 - Keep the headless library free of GPUI. No desktop Retire action here. E-10
   permits only the existing generic abandon-confirmation's new safety details
-  and corresponding tests, explicitly subject to document approval. Run desktop
+  and corresponding tests (D13); implementation remains subject to document approval. Run desktop
   check/release clippy with `--features desktop` alone, and confirmation tests
   with `desktop-test-support`; D4's all-targets desktop-only clippy baseline needs
   that test-support feature. No navigation/release or new desktop action scope.
@@ -159,12 +159,17 @@ module is used, add its module declaration and `CASES` chain to
 - [ ] Implement the Q2 initial-state matrix, including branch-only full proof,
   all-absent local discovery settlement, and no-follow mixed/invalid identity
   refusals. Test stale index rows after externally removed contexts. No remote
-  connection for all-absent/index-only results.
+  connection for all-absent/index-only results. Use noncheckpoint authoritative
+  `ContextRetirementAbsent` for a fresh absent no-op; do not invent prior removal.
 - [ ] Implement registration-lifetime token capture using exclusive no-follow
   admin-file installation and an owned intended token. Test interrupted install,
   malformed/colliding marker preservation, missing/replaced token and same-tip
-  recreated worktree. Never refresh a captured old identity by installing a new
-  token. Default/background polling installs none.
+  recreated worktree, specifically crash-before-install plus recreated admin
+  directory. A missing token after interruption refuses the candidate, never
+  installs the old intended token. A fully installed matching token may complete
+  its interrupted SQL selection commit; a partial token is not repaired. Never
+  refresh a captured old identity by installing a new token. Default/background
+  polling installs none.
 - [ ] Persist retirement/observation identities and fixed tip before effects;
   capture operation/epoch/batch/generation in the live advertisement transaction,
   add receipt pin retention through configuration changes, and prove that a
@@ -173,12 +178,32 @@ module is used, add its module declaration and `CASES` chain to
   implement exact primary proof and shared cleanup with recorded intent before
   prune, then worktree/branch steps. Test crash between effects and step writes,
   mixed partial prune, tip/primary/config changes and replacement registration.
+- [ ] Pin R-7 in tests: worktree removed/admin token gone, branch delete, crash
+  before SQL receipt, branch recreated at the same OID, retry must preserve it.
+  More generally a surviving branch-only/tokenless branch on a new executor
+  cannot be deleted under the old request; use guarded abandon/new-request
+  reproof. When all resources are absent after owned intent, reconcile metadata
+  only. Keep release's pre-existing automatic branch retry tests unchanged.
+- [ ] Implement D14 exact old materialization-intent capture and atomic
+  compare-and-consume receipt when cleanup/absence is established. Refuse
+  incomplete/ambiguous/replaced intent, preserve new intent, and do not rewrite
+  an immutable old target OID. Test crash after Git absence/before SQL settlement
+  and idempotent replay. Do not delete tracking refs or change current observation
+  projections through the existing lifecycle retirement helper; do not change
+  existing promotion/closure cleanup. Fresh all-absent settlement can consume
+  only the exact completed old intent, without claiming an owned removal.
 - [ ] Test the exact read-only child-replacement transaction: crash before/after
   advertisement and after batch commit, active older child, new parent's epoch,
   unrelated reservation, and stale old executor returning after replacement.
   Install the bound-parent capability checks at reserve, restart, every owned
   write and completion, not only initial reservation. Generation change refuses
   rebinding and offers the preserving-abandon path.
+- [ ] Separate observer-execution authorization from batch receipt-consumption:
+  receipts bind the batch/request attempt, generation and frozen worklist digest.
+  Once observing child B finishes, authorized C can consume that same receipt;
+  B cannot keep writing through its ended execution capability. Test one
+  advertisement across B handoff/C begin, foreign/stale scope refusal and
+  observation from a no-pending-child gap under the batch-attempt scope.
 - [ ] **Design checkpoint:** run the required-outcome table against the proposed
   record/reservation transitions; obtain independent adversarial review before
   proceeding. A needed recovery-contract change goes to the owner.
@@ -234,6 +259,15 @@ now only for cases first introduced here; Task 2's cases are already registered.
   continuation only. Test all no-removal/partial/config-changed/reappeared-remote,
   failed refresh/finalization and lost-result rows, including stale executor
   return. Generic non-retirement abandonment stays unchanged.
+- [ ] Implement the exact gap route: the last completed retirement child is a
+  confirmed batch-stop handle only while its batch is unfinished and no child
+  is pending. Special-case it before the generic completed-local no-op. Bind
+  preview to batch/worklist/cursor/epoch; stop remaining targets atomically,
+  without reopening the local row or adding aggregate index ownership. A raced
+  new child makes the preview stale. Test stop after index-only resume, lost
+  parent result-copy, cancelled A-complete/B-not-started gap, crash during stop,
+  and old coordinator attempting B afterward. Generic remote P remains invalid
+  for abandonment; ordinary completed operations remain no-ops.
 - [ ] Add required-nullable preview retirement metadata to the existing schema
   and old fixtures as null; render its retained resources in existing CLI and
   desktop confirmation only. This is E-10, not a desktop Retire action. Verify
@@ -276,6 +310,11 @@ in this task before running its filter.
   resume uses one fresh observation but never a fresh worklist; completed replay
   with recreated contexts; child index failure and lost response after refresh;
   A removed/indexed but B not started; guarded abandonment ends the entire batch.
+- [ ] Test original-handoff eligibility: failed original refresh, unrelated
+  successful repair, original request retry still cannot retire; successful
+  original refresh with loss before eligibility persistence conservatively
+  cannot retire; loss after eligibility persistence can resume fixed selection.
+  A replayed Complete wrapper/current stale flag is never live success evidence.
 - [ ] Implement additive per-operation batch/target records and immutable report,
   selected child IDs and progress. Coordinate only around the existing explicit
   poll; do not add a destructive flag to its automatic domain request. During
@@ -288,6 +327,12 @@ in this task before running its filter.
   polls keep existing restart/refetch semantics with no retirement effects.
   Fence each executor, and preserve refusal
   versus pending/not-reached distinctions.
+- [ ] Persist `unconfirmed` original-handoff eligibility with captured selection.
+  Only this call's process-only owned-finalization capture token plus original
+  successful Complete wrapper and current request epoch can mark it `eligible`
+  before child begin. Persist `ineligible` for original pending/failure; after a
+  crash, unconfirmed completed-poll handoff becomes final no-retirement
+  `discovery_pending`, never inferred from later repair or public replay (R-8).
 - [ ] Keep `P` as the existing remote poll/request operation, with `K_i` as
   distinct local operations, one active at a time. No batch-local journal row or
   aggregate index debt. Complete each child handoff before starting the next;
@@ -364,6 +409,11 @@ add no new target, no real keys, no global Git identity or real profile writes.
   binary, reopen/list the isolated draft store, and assert ID, revision and full
   draft body/base remain recoverable and exportable. Use `tests/drafts/support.rs`
   and `src/drafts/export_tests.rs` as patterns, not developer-profile fixtures.
+- [ ] Add D14's lifecycle row: B materializes document T; A promotes/deletes it;
+  B retires and settles the exact old intent; A publishes a new same-ID edit Q;
+  B's later default poll must materialize Q with a new intent, not resurrect T.
+  Include a Git-absence/intent-settlement crash in the domain/boundary matrix;
+  preserve new/foreign intent and unchanged observation/tracking state.
 - [ ] Assert refs, registration, full working content and index before/after
   refusals, not only envelope codes. Successful rows prove context absent and
   primary item/readiness correct. Measure advertisement count for many targets,
@@ -453,8 +503,9 @@ git merge-tree --write-tree HEAD origin/main
 | A1/A3, D1, R-1 | 1 proof table; 2 cleanup; 6 folded/closed binary reads |
 | A2/A5 | 1 strict predicates; 2 preservation/freshness/ownership; 6 negative SSH rows |
 | A4, D3 | 1 document content evidence; 6 promotion row |
-| A6, D2/D6/D8/D11, R-6 | 2 durable single-context/instance table; 3 request/resume/preserving abandon; 6 binary replay |
-| A7, D7/D10/D12, R-3/R-5 | 4 frozen manifest/sequential child handoffs/adversarial checkpoint; 5 flag; 6 count/mixed batch |
+| A6, D2/D6/D8/D11/D13, R-6/R-7 | 2 durable single-context/instance/branch-lifetime table; 3 request/resume/preserving abandon and gap handle; 6 binary replay |
+| A7, D7/D10/D12, R-3/R-5/R-8 | 4 frozen manifest/handoff eligibility/batch receipt scope/sequential child handoffs/adversarial checkpoint; 5 flag; 6 count/mixed batch |
+| A4/A6, D14 | 2 exact old-intent consumption; 6 T retire/new-Q document materialization; existing cleanup issue only proposed follow-up |
 | A8, R-2/R-4 | 1 schema upgrade; 2 record migrations; 3–5 inventories and legacy replay |
 | A9, D4/D5 | 2 release controls; 4 ordinary/background controls; 6 draft sentinel; 7 D6/read exclusions |
 | D9, Q1/Q2, E-1–E-10 | Approval gate/Task 0, named edits in owning tasks (E-10 existing confirmation only), final authorization audit |

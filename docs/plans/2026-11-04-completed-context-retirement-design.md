@@ -13,7 +13,7 @@ id: "01M6M3B4V6ZW2PS74C1SSA9AFD"
 ## Status And Authority
 
 Draft, not implementation authorization. The [Cycle](../Cycles/wave-03-completed-context-retirement.md)
-governs; its D1–D12 and R-1–R-6 apply. The [plan](2026-11-04-completed-context-retirement-implementation.md)
+governs; its D1–D14 and R-1–R-8 apply. The [plan](2026-11-04-completed-context-retirement-implementation.md)
 maps the tables below to tests and checkpoints. All new names below are proposed
 interfaces, not claims that they exist at the baseline.
 
@@ -71,6 +71,12 @@ Verified at `c0e93f87`, with implementation source equal to planning-base main:
     another poll replacing dispositions can leave an old domain replay with no
     targets. Capture immutable opted-in evidence inside the owned transactions,
     not by rereading the latest snapshot after a public poll call returns.
+15. `remote_poll_materializations` keeps an immutable owner/target OID keyed by
+    repository/kind/item (`remote/state.rs:547–560`). An all-absent intent can
+    restart at that old OID rather than a new advertisement
+    (`remote/poll.rs:387,405–409,818–834`). Existing lifecycle retirement does not
+    consume it (`cleanup.rs:774–780`). D14 limits the fix here to this ticket's
+    retirement path, not existing promotion/closure cleanup.
 
 ## Architecture And Interfaces
 
@@ -223,6 +229,13 @@ branch, worktree directory and Git admin registration, respectively.
 Neither fresh absence nor a fresh branch-only request proves an earlier request
 removed anything. The result reports actual removals separately from an observed
 no-op. The table does not permit bypassing an unrelated pending operation.
+All-absent settlement may consume the exact captured **completed** old
+materialization intent as stale bookkeeping, with an `absence_observed` receipt,
+not a claim that this request removed anything. An incomplete or ambiguous
+provisioning intent is a refusal; it is not erased by this no-op path.
+Use proposed noncheckpoint authoritative `LocalStep::ContextRetirementAbsent`
+for this index-only no-op, not a fabricated `ContextBranchReleased`. Its final
+receipt is `already_absent`, not a preserving-abandon result.
 
 ## Durable Records And Cleanup
 
@@ -232,12 +245,16 @@ title, passphrase, raw endpoint or host approval):
 - `context_retirement_records`: parent/local-operation identity, repository,
   kind/item, expected branch tip, initial primary OID, proof kind, configured
   remote/generation, registered-instance token (or branch-only state), exact
-  observation child/batch, attempt/fence, optional controlling batch and phase.
+  observation child/batch, attempt/fence, optional controlling batch and phase;
+  capture the complete optional old materialization-intent identity and its
+  consumed/not-consumed state as specified below.
 - `retirement_observation_receipts`: exact operation/epoch/batch/configuration
-  correlation, created only by the owned live advertisement transaction; bind
-  it to its authorized parent. Pin referenced batches while cleanup is pending.
+  correlation, created only by the owned live advertisement transaction; record
+  the execution parent and a distinct single-operation or batch-attempt consumer
+  scope. Pin referenced batches while cleanup is pending.
 - `poll_retirement_batches`: parent request/poll identity, mode, poll/result
-  identity, immutable original poll report, frozen-worklist marker, batch phase
+  identity, immutable original poll report, frozen-worklist marker, durable
+  original-handoff eligibility (`unconfirmed`, `eligible`, `ineligible`), batch phase
   and final report. A planned-empty list differs from one not planned yet.
 - `poll_retirement_targets`: immutable ordinal, kind/item, expected tip,
   registered-instance identity, local child-operation identity, terminal/skip
@@ -256,6 +273,18 @@ not current authority: refuse it. Do not let a configuration cascade erase a
 partial cleanup obligation. Completed requests use their final stored report and
 need not keep a live advertisement authorization forever.
 
+Retirement records are keyed by operation identity, not permanently by item ID;
+keep completed/abandoned history while allowing a later new request for that
+item. Batch targets have unique `(batch, ordinal)` and `(batch, kind, item)` plus
+distinct reserved local child IDs. An unstarted target reserves an ID without
+claiming it already has a local journal row. Validate those reservations in
+common local/remote foreign-ID guards: only its current batch-authorized child
+may begin that retirement ID, and a refresh may borrow it only when its own
+index handoff is due. Reject standalone or unrelated operations attempting to
+use a reserved child/observer ID. Full cross-table audits run only after remote,
+local and mutation-request schema dependencies have all migrated; do not query
+not-yet-created companion tables from an earlier migration phase.
+
 ### Registered-instance identity (R-6)
 
 Tip equality alone cannot distinguish a worktree removed and recreated at the
@@ -264,11 +293,17 @@ obtain a versioned opaque lifetime token in the validated worktree's Git admin
 directory, at proposed filename `manyhands-retirement-instance`. It contains only
 version, kind/item and a generated ULID nonce; it is identity, not deletion
 authority. A valid existing token can be reused for a new request against the
-same registration. If absent, persist the candidate's intended token before
-exclusive `create_new` installation under the repository lease; revalidate links,
-tip and ownership after installation. A crash before installation can retry only
-that owned intended token. Never overwrite an existing, redirected, partial or
-unrecognized marker. Ambiguity refuses retirement and names inspect/manual repair.
+same registration. If absent, persist a **provisional**, non-authorizing intended
+token before exclusive `create_new` installation under the repository lease in
+the same uninterrupted execution; revalidate links, tip and ownership afterward.
+Commit candidate identity only after a full matching installed token is verified.
+On restart, a provisional record whose token is missing may **not** install it:
+the registration could have been recreated. End that candidate as an unverified
+before-effect refusal; a new request can select current state. A full installed
+token matching the durable provisional intent can be verified and committed;
+partial/mismatching/redirected markers are never overwritten or guessed repaired.
+Intended-token ownership alone is not registration continuity. This deliberately
+adds a new-request/manual-inspection cost to the crash-before-install window.
 
 The opted-in per-target capture hook installs/reads this token under that target's
 lease before freezing its candidate image; default/background polls create no
@@ -276,7 +311,9 @@ marker. Removal/recreation by normal Git deletes the old admin directory and
 token. A later token mismatch/missing token is a refusal, even at the same tip;
 do not install a replacement on an old request. After owned worktree removal,
 require directory/registration absence before deleting the branch. A branch-only
-candidate must remain branch-only at its frozen direct OID. Arbitrary external
+candidate must remain branch-only at its frozen direct OID in the same live
+execution. Across a later execution attempt, the lifetime rule below applies.
+Arbitrary external
 copying of identical protected admin metadata is outside the existing filesystem
 writer model; independent current cleanliness/content checks still apply.
 
@@ -305,7 +342,28 @@ both parent and child epochs, root, phase and generation still match. All other
 pending rows remain blockers. An old executor returning after replacement fails
 these checks and cannot write a receipt or advance cleanup.
 
-Every new live retirement attempt uses a new observation child; an old child
+**Execution authorization is not receipt-consumption authority.** A batch receipt
+has immutable consumer scope `(P, R, batch_attempt_epoch, generation,
+frozen_worklist_digest)` and the exact observation operation/epoch/batch. A child
+`K_i` authorizes the observation's execution while it is the otherwise-pending
+local row; it does not permanently own all uses of that receipt. The trusted
+commit transaction verifies that execution parent maps to this batch and binds
+the receipt to the batch attempt. After `K_i` completes, later frozen children
+may consume it if the batch/request attempt and generation are still current,
+their own fixed identity is in that worklist, its ordered cursor permits them,
+and the observed batch remains current. Consumption does not require the old
+observing child to remain pending and grants no further transport writes under
+that child. Unrelated requests, siblings outside the frozen list, old batch
+attempts and returning old executors cannot consume/write the receipt.
+
+Between children, when **no** local journal row is pending, a new observation
+may instead be executed under the validated active batch-attempt scope; normal
+no-pending-local exclusion still applies. Its receipt has the same consumer
+scope. A currently pending index-only child is finished before observing for
+later children. There is no aggregate journal/debt-transfer owner.
+
+Every new live attempt that may delete local state uses a new observation child;
+metadata-only/absence/index completion needs no fresh network. An old child
 stopped after batch commit is fenced/retired too, never completed via public
 replay and presented as fresh. A configuration-generation change is not eligible
 for capability rebinding: follow D11's preserving abandonment path. During an
@@ -317,9 +375,10 @@ restart, one fresh `O` covers the remaining fixed worklist, not one per target.
 | Observe/plan | Explicit intent, known identity and selected remote; no destructive effect | Fresh observation and fixed tip; no completed-child replay used as fresh |
 | Prepared | Valid completion/content proof; initial-state matrix passes; registered-instance token matches when a worktree exists; no unfinished closure/promotion or unrelated synchronization/recovery | Persist intent before pruning; recheck all still-present inputs |
 | Worktree removing | Same tip/identity; cleanup primitive repeats cleanliness | Reconcile actual directory/registration pair. Both absent may advance only with this persisted intent; mixed/partial state remains recovery-required |
-| Worktree removed | Fresh observation on a new live attempt; same frozen tip; no replacement checkout; revalidate primary/completion | `ContextWorktreeReleased`; changed tip refuses and stays pending |
-| Branch deleting | Exact ref lock/OID and complete checkout inventory | Delete only frozen tip; absent branch reconciles owned intent; never adopt moved tip |
-| Branch removed | No further destructive work, even if context recreated | `ContextBranchReleased`; only index handoff owed |
+| Worktree removed | In this same uninterrupted executor only: original branch tip, no replacement checkout, current proof/receipt; on a later attempt a surviving branch has no lifetime proof | `ContextWorktreeReleased`; a surviving branch on restart is preserved and goes to guarded abandon/new-request reproof, even at the same OID |
+| Branch deleting | Persist deletion intent before the ref transaction; check exact lock/OID and complete checkout inventory | Delete only in the same authorized live execution; on restart, surviving branch is ambiguous and cannot be deleted |
+| Branch absent after owned intent | Require worktree/admin/ref all absent and exact captured materialization intent; no new deletion | Atomically consume that old intent and record `ContextBranchReleased`; only indexing remains |
+| Branch removed recorded | No further destructive work, even if context recreated | Index handoff only; never touch new refs/intent/registration |
 | Index pending | Refresh outside lease under recorded identity | `discovery_pending`; same request or `operation resume` finishes handoff |
 | Complete | Stored outcome | Replay without network, rescan, new enrollment or cleanup of a later context |
 
@@ -330,6 +389,49 @@ its primary observation only after reproving the same frozen context tip.
 Configuration changes or remote reappearance after a worktree was removed stop
 branch cleanup. Preserve the branch and offer the guarded abandonment below,
 not a silent generation/remote rebinding or a permanently stuck owner.
+
+### Branch lifetime and interruption (R-7)
+
+The admin nonce ends with worktree removal; it is **not** a branch-lifetime token.
+For any new executor/attempt, a selected branch-only context or a context whose
+worktree/admin are gone cannot have a surviving branch deleted under the old
+request, even if its OID is unchanged. This includes crash after branch deletion
+but before its SQL receipt followed by branch recreation at the same OID.
+Preserve it: a no-removal attempt ends with `external_change`; an operation that
+removed anything remains owed and offers D11 preserving abandonment, then a new
+explicit request. A still-present worktree with its verified original lifetime
+token may be rechecked and continued; an absent branch after owned intent can
+complete metadata/index work only. Persisted intent is not proof that a surviving
+branch is the original branch. No blanket automatic branch-delete retry remains.
+
+### Old materialization intent settlement (D14)
+
+At candidate capture, store the exact optional
+`remote_poll_materializations` identity `(repository, kind, item, operation_ulid,
+target_oid, step)`, not just its item ID. Refuse incomplete/ambiguous provisioning
+authority before cleanup. For a captured completed intent, once owned cleanup is
+established and all local branch/worktree/admin state is absent, consume **only
+that exact row** by compare-and-delete and record a consumed receipt in the same
+transaction that records branch cleanup complete. A captured absent intent must
+still be absent; a different/new intent is not yours to erase. Never mutate an
+immutable old intent to a new OID. Missing captured evidence without its consumed
+receipt is recovery-required, not invented success.
+
+A crash after Git deletion but before this transaction is reconciled from owned
+intent plus actual local absence; it authorizes no further Git deletion and needs
+no fresh remote observation. Keep the local row pending until the transaction
+settles. If a replacement ref/registration/intent exists, preserve it; do not
+erase new provisioning authority. After recorded completion, replay never checks
+or consumes any later intent. Preserving abandonment leaves a still-retained
+context's intent intact.
+For a fresh all-absent request, use only the initial-state matrix's explicit
+completed-intent bookkeeping rule; do not invent an earlier owned deletion.
+
+This helper does not delete a tracking ref or rewrite the current observation
+projection: the old fetched absence remains the batch receipt for sibling
+consumers. Do not call the existing lifecycle retirement helper that expects a
+deleted tracking ref/updates projections. The wider existing promotion/closure
+omission is only a proposed follow-up, not fixed or filed here (D14).
 
 ### Guarded preserving abandonment (D11)
 
@@ -349,11 +451,12 @@ action. Preserve generic abandonment behavior and never advertise
 
 | State | Confirmed abandon / continuation | Durable end and routing |
 | --- | --- | --- |
-| Active executor, live index heartbeat or unrelated reservation | Busy; no abandonment | Preserve all records/resources |
+| Lease-held local effect, live index heartbeat or unrelated reservation | Busy; no abandonment | Preserve all records/resources; a bound read-only observer may be fenced through its exact parent, not an unrelated operation |
 | No retirement removal yet | Fence the bound executor/observer, mark preserving intent; do not delete anything | Settle discovery locally; terminal abandoned receipt, old request cannot run as new |
 | Partial or ambiguous prune, worktree removed, changed generation, or remote reappearance | Same preserving transition; retain every remaining resource exactly as found, including the branch; do not finish deletion | Persist partial effects and residual-state metadata, not a claim of successful retirement |
 | Preserving, index pending | New proposed noncheckpoint authoritative `LocalStep::ContextRetirementPreserved` means no further deletion is authorized, not that branch is absent | `discovery_pending`; only the abandon request or index-only `operation resume <local-id>` continues |
 | Discovery settled | Atomically finalize the retirement's preserving receipt and local journal as abandoned in the claimed-refresh completion transaction | Release blockers only here; old retirement/batch requests finish/replay `external_change` with truthful partial data, never free their request IDs |
+| Between children: no local child pending, batch unfinished | The last completed retirement child is an explicit **batch-stop handle**, not reopened as pending; confirmed retirement-specific abandon stops only the remaining frozen batch | Atomically fence batch attempt/observer and store terminal batch receipt; no deletion, no aggregate index row or new cleanup debt |
 | Complete / already abandoned | Replay/no-op; inspect nothing for deletion | Never remove a subsequently recreated context |
 
 Persist abandon request/epoch correlation before dropping the lease; revoke old
@@ -370,6 +473,27 @@ batch receipt before letting its old request replay. A new explicit request can
 later inspect/reprove the remaining branch under current configuration; the old
 request can never acquire new remote authority. Missing proof records require
 inspection/repair, not reconstructing authorization from present Git state.
+
+**Exact between-child handle.** `operation abandon --id K_last` may preview a
+batch stop when `K_last` is a verified completed child of this still-unfinished
+batch and no child is pending. Reconcile a lost parent result-copy from that
+child's immutable result first. Special-case this before generic completed-local
+no-op handling; never allow arbitrary completed operations or remote ID `P` to
+be abandoned. The preview/confirmation digest binds batch/cursor/worklist,
+controlling request, child ID/result and current batch epoch. Under the lease
+and one transaction, fence the coordinator and its exact bound observer, mark
+remaining targets not reached, and store the final preserving batch receipt.
+Do not reopen or relabel `K_last`'s successful local journal. Its index handoff
+is already settled; this stop neither takes on unrelated index debt nor claims
+a new refresh. If a new child began first, the expected snapshot is stale and
+the user must prepare against that pending child's handle instead.
+
+This also works after index-only resume finishes a child without starting the
+next. Recovery actions name `K_last` in the gap, the pending `K_i` otherwise,
+and never an unstarted child. Before any retirement removal, cancellation can
+finish the no-effect batch directly, so no completed-child handle is needed.
+All child begin/effect/result writes verify the batch epoch, preventing an old
+coordinator from starting B after a confirmed stop of the A/B gap.
 
 ## Opt-In Poll Batch
 
@@ -388,6 +512,19 @@ inspection/repair, not reconstructing authorization from present Git state.
    changed/recreated candidates. If the exact observation/configuration was
    superseded in the poll's refresh/handoff gap, perform no retirement and report
    the before-effect refusal.
+   Set original-handoff eligibility `unconfirmed` in this transaction. Only the
+   same live calling attempt receiving the original poll's successful **complete
+   wrapper** may atomically change it to `eligible`, after checking its executor
+   epoch, configuration and receipt. Require a process-only live-capture token
+   from this call's owned finalization callback; a replayed Complete wrapper
+   cannot supply it. No child may start before that durable write.
+   An original index-pending/failure result records `ineligible` and a final
+   no-retirement `discovery_pending` outcome. On restart, `unconfirmed` after a
+   completed poll is conservatively finalized the same way, even if indexing
+   actually succeeded before the response/eligibility write was lost. Never
+   infer original eligibility from today's `refresh_required`, another refresh,
+   or the public domain replay wrapper. After durable `eligible`, a lost response
+   can resume the fixed worklist with one fresh batch-attempt observation (R-8).
 3. Use the same pass's receipt for all targets in this live attempt, with local
    rechecks per target. No per-target advertisement, no extra full poll. A resumed
    retirement phase makes at most one fresh observation for the remaining frozen
@@ -427,17 +564,18 @@ not an empty refusal. No success message hides incomplete removal.
 | Retryable live exclusion (`busy`, `poll_yielding`), no removal | Existing retryable code; retain same bound input | `request.retry R`, never a new target/configuration |
 | Standalone cancellation before removal | `cancelled`, Final | Close owned no-effect attempt; preserve context; new request for new consent |
 | Standalone retired, or initial all-absent discovery settled | `ok` / `already_applied`, Final | `retired` / `already_absent`; discovery current; replay without network or deletion |
-| Partial removal, proof/configuration/remote change after removal, or cancellation after removal | `recovery_required` / `cancelled`, Owed | Partial data; `request.retry R` for unchanged authority, or confirmed `operation.abandon S/K` to preserve and end; no automatic rollback |
+| Partial removal, proof/configuration/remote change after removal, or cancellation after removal | `recovery_required` / `cancelled`, Owed | Partial data; retry only where lifetime/authority still prove continuation; otherwise confirmed `operation.abandon S/K` to preserve, then new-request reproof; never re-delete a surviving branch after token loss/restart |
 | All removal done, index pending (including initial absence) | `discovery_pending`, Owed | Index-only same request or `operation.resume S/K`; no remote observation or deletion |
 | Batch poll fails/cancels before frozen selection | Existing default-poll finality; interrupted poll remains Owed as today | No retirement; original-request routing, not child cleanup |
-| Poll's own refresh pending before retirement starts | Final `discovery_pending` | No cleanup; repair index and use a new opted-in request |
+| Poll's original refresh pending, or original handoff eligibility unconfirmed after crash | Final `discovery_pending` | No cleanup, even if a later refresh repairs the index; new opted-in request required |
 | Batch target before-effect refusal | Child Final; parent continues fixed remainder | Record refusal once; do not reconsider it on this batch's retry |
 | Batch current child incomplete or its index pending | Parent Owed even though `P` is complete | Later targets not reached. Retry `R` continues `K` first; resume cannot skip it |
 | Batch cancellation after selection but before any retirement removal | `cancelled`, Final once any owned no-effect child/observer is closed | No retirement; targets not reached; original poll effects stay reported |
 | Batch cancellation after a retirement removal | `cancelled`, Owed | Preserve progress; acknowledge flag once; retry `R` continues fixed list, or guarded abandon ends whole batch |
+| Batch stopped/cancelled after A indexed and before B began | Owed while unfinished; confirmed batch stop through `K_last=A` | No pending local child is invented; stable stop receipt preserves B/C and fences stale coordinator |
 | Batch complete, including before-effect refusals | `ok`, exit 0, Final (D10) | Explicit per-target rows; all child handoffs complete |
 | Guarded abandonment preserving/index pending | `discovery_pending`, Owed under abandon request | Only preservation/index continuation, never original cleanup |
-| Abandonment complete | Abandon request `ok`; old retirement request Final `external_change` | Stable partial/retained-resource receipt, discovery current, blocker released; new request must reprove |
+| Abandonment complete | Abandon request `ok`; old retirement request Final `external_change` | Stable partial/retained-resource receipt; owned discovery debt settled (between-child stop requests no new refresh), blocker released; new request must reprove |
 
 **Resume/cancel authority.** For unfinished destructive work, `operation resume S`
 or `P/K` answers `original_request_required` naming `R`, not independent cleanup.
@@ -494,7 +632,7 @@ must not silently manufacture missing deletion authorization.
 | ID | Files / existing pins | Permitted change |
 | --- | --- | --- |
 | E-1 | `src/repository/remote/state_tests.rs`: `task6_disposition_schema_upgrade_rollback_corruption_and_privacy`, `review_disposition_genuine_old_envelope_migrates_once_preserving_original_rows`; `remote/poll_tests.rs`: `task6_batch_completion_once_and_older_replay_keeps_its_times_but_no_targets`, `review_original_report_survives_second_poll_before_refresh_return` | Exact old/new disposition/schema enumeration expectations; preserve ordinary-poll historical replay semantics, add opted-in immutable-report controls separately |
-| E-2 | `tests/read_contract.rs`: `published_enumerations_list_exactly_the_registered_values`, enumeration/root lists; `src/repository/read/status_tests.rs`: `repository_operations`, `every_action_the_recovery_store_writes_is_one_the_read_knows` | Add two dispositions, retirement action, preserved local step and new DTO enum/schema roots; no removal/reinterpretation of old values |
+| E-2 | `tests/read_contract.rs`: `published_enumerations_list_exactly_the_registered_values`, enumeration/root lists; `src/repository/read/status_tests.rs`: `repository_operations`, `every_action_the_recovery_store_writes_is_one_the_read_knows` | Add two dispositions, retirement action, absent/preserved local steps and new DTO enum/schema roots; no removal/reinterpretation of old values |
 | E-3 | `src/repository/mutation/command.rs` tests, `tests/support/{conformance,mutation_golden}.rs`, `tests/mutation_contract.rs` inventory/root/case lists | Register `context retire`, same-command opted-in poll variant, new schema/goldens; predicate assertions matching the design |
 | E-4 | `tests/cli/inventory.rs` named inventory tests and `NO_INPUT`/`DATA`; CLI catalog/help/parser/dispatch test inventories | Add one CLI verb (baseline totals become 42 mutating/78 total), flag and help. Keep both existing exemptions; no new input-taking verb |
 | E-5 | `tests/cli_remote/polling.rs` peer-closure cases and `tests/fixtures/cli_v1/poll_once_closed_ticket.json` | Only remotely-deleted-and-locally-materialized closed-context expectations gain `closed`. Still-present remote-context materialization and open-item deletion controls remain unchanged |
