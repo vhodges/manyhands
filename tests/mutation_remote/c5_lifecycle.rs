@@ -123,6 +123,14 @@ const ONE: &[ssh_harness::Case] = &[
     ),
     ("c5_lifecycle_tracking_item_sync", tracking_item_sync),
     (
+        "c5_lifecycle_tracking_published_untracked_context_is_unknown",
+        tracking_published_untracked_context_is_unknown,
+    ),
+    (
+        "c5_lifecycle_tracking_a_fetched_deletion_is_deleted",
+        tracking_a_fetched_deletion_is_deleted,
+    ),
+    (
         "c5_lifecycle_tracking_item_sync_advances_a_fetched_ref",
         tracking_item_sync_advances,
     ),
@@ -3205,6 +3213,79 @@ fn tracking_item_sync() -> Result<(), FixtureError> {
     assert_eq!(synced.code, ResultCode::Ok, "{:?}", synced.data);
     assert_eq!(accepted(&w.server), pushes + 1);
     assert_eq!(tracking_of(&w, &context_tracking(verb))?, None);
+    Ok(())
+}
+
+const POLL_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FJ5";
+
+fn polled(w: &World, id: &str) -> Envelope<MutationDataDto> {
+    execute(
+        w,
+        id,
+        Mutation::PollOnce(PollOnceInput {
+            root: w.root.clone(),
+        }),
+    )
+}
+
+/// Decision 35 (Task 15's F6): a context first published by `item sync` has
+/// no tracking ref (decision 29 makes none). Once another item's promotion
+/// has run, the close prepare reads the remote state as unknown, not
+/// deleted: `history_unknown`, `repo.inspect`. After a poll it is ready.
+fn tracking_published_untracked_context_is_unknown() -> Result<(), FixtureError> {
+    let w = remote(Verb::Promote)?;
+    Verb::Close.save(&w.service, &w.root)?;
+    let synced = execute(&w, SECOND, item_sync(&w));
+    assert_eq!(synced.code, ResultCode::Ok, "{:?}", synced.data);
+    assert_eq!(tracking_of(&w, &context_tracking(Verb::Close))?, None);
+    let done = confirmed_call(&w, Verb::Promote, FIRST);
+    assert_eq!(done.code, ResultCode::Ok, "{:?}", done.data);
+    let envelope = prepared(&w.service, Verb::Close, &w.root, Verb::Close.id());
+    assert_eq!(
+        envelope.code,
+        ResultCode::RecoveryRequired,
+        "{:?}",
+        envelope.data
+    );
+    assert_eq!(blockers_of(&envelope), [LifecycleBlocker::HistoryUnknown]);
+    assert_eq!(
+        prepare_actions(&envelope),
+        [RecoveryActionKind::RepoInspect]
+    );
+    let poll = polled(&w, POLL_REQUEST);
+    assert_eq!(poll.code, ResultCode::Ok, "{:?}", poll.data);
+    let envelope = prepared(&w.service, Verb::Close, &w.root, Verb::Close.id());
+    assert_eq!(envelope.code, ResultCode::Ok, "{:?}", envelope.data);
+    Ok(())
+}
+
+/// Decision 35: a deletion a fetch has observed still answers
+/// `remote_context_deleted`, once the tracking ref is gone (a user's prune).
+/// A poll first sees the branch advertised, then a second sees it gone, as
+/// `tests/document_promotion/journeys.rs`'s D5 row stages it.
+fn tracking_a_fetched_deletion_is_deleted() -> Result<(), FixtureError> {
+    let verb = Verb::Close;
+    let w = remote(verb)?;
+    fixed(w.sync(w.request(context_target(verb)?)))?;
+    let poll = polled(&w, SECOND);
+    assert_eq!(poll.code, ResultCode::Ok, "{:?}", poll.data);
+    fixed(fixed(w.bare()?.find_reference(verb.branch()))?.delete())?;
+    let poll = polled(&w, POLL_REQUEST);
+    assert_eq!(poll.code, ResultCode::Ok, "{:?}", poll.data);
+    if let Ok(mut tracking) = w.repo()?.find_reference(&context_tracking(verb)) {
+        fixed(tracking.delete())?;
+    }
+    let envelope = prepared(&w.service, verb, &w.root, verb.id());
+    assert_eq!(
+        envelope.code,
+        ResultCode::RecoveryRequired,
+        "{:?}",
+        envelope.data
+    );
+    assert_eq!(
+        blockers_of(&envelope),
+        [LifecycleBlocker::RemoteContextDeleted]
+    );
     Ok(())
 }
 

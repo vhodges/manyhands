@@ -1253,6 +1253,7 @@ for one of the Cycle's verbs, or a reason below.
 | `document promote` | `recovery_required` | `manyhands-cli document save` | 3 | `cli_v1/document_promote_prepare_context_missing_text.txt` |
 | `ticket close` | `recovery_required` | `manyhands-cli poll once` | 3 | `cli_v1/ticket_close_prepare_primary_ahead_text.txt` |
 | `ticket close` | `recovery_required` | `manyhands-cli poll once` | 3 | `cli_v1/ticket_close_prepare_primary_missing_text.txt` |
+| `ticket close` | `recovery_required` | `manyhands-cli poll once` | 3 | `cli_v1/ticket_close_prepare_remote_unknown_text.txt` |
 | `ticket close` | `recovery_required` | `request.retry` | 4 | `mutation_v1/ticket_close_checkpoint_merge_refused.json` |
 | `ticket close` | `recovery_required` | `manyhands-cli context observe-local` | 4 | `cli_v1/ticket_close_checkpoint_merge_refused_text.txt` |
 | `document promote` | `identity_required` | `repo.identity_set` | 3 | `cli_v1/document_promote_identity_required.json` |
@@ -1586,6 +1587,10 @@ list them all):
   repository's lease held past 250 ms, a push does not advance tracking, and
   promote-then-close can be refused `primary_ahead_of_remote` until
   `poll once` (decision 29);
+- a published context with no tracking ref, which no fetch has seen gone,
+  prepares `history_unknown`, not `remote_context_deleted`, and human output
+  names `poll once`, then a new prepare; a deletion a fetch has observed
+  answers `remote_context_deleted` (decision 35);
 - a contained context whose remote branch has no tracking ref keeps that
   branch on the remote (decision 32, withdrawn);
 - policy verbs are last commit wins (decision 15); a killed poll whose

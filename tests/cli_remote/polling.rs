@@ -82,6 +82,10 @@ pub const CASES: &[ssh_harness::Case] = &[
         c5_polling_a_missing_tracking_ref_names_the_poll,
     ),
     (
+        "c5_polling_a_published_untracked_context_names_the_poll",
+        c5_polling_a_published_untracked_context_names_the_poll,
+    ),
+    (
         "c5_polling_an_unpushed_primary_commit_names_poll_then_sync",
         c5_polling_an_unpushed_primary_commit_names_poll_then_sync,
     ),
@@ -1254,6 +1258,84 @@ fn c5_polling_a_missing_tracking_ref_names_the_poll() -> Result<(), FixtureError
         port,
     );
     polled(a, R2);
+    a.json(&args, &[], "ok", 0);
+    Ok(())
+}
+
+/// Decision 35 through the binary (Task 15's F6): a context first published
+/// by `item sync` has no tracking ref. After another item's promotion, the
+/// close prepare reads its remote state as unknown, `history_unknown`, and
+/// names the poll that reads it; once that has run, the prepare is ready.
+fn c5_polling_a_published_untracked_context_names_the_poll() -> Result<(), FixtureError> {
+    let p = CliPair::new()?;
+    let port = p.server.address().port();
+    let a = &p.a;
+    let created = serde_json::json!({
+        "item_id": DOCUMENT,
+        "path": "docs/new.md",
+        "title": "New document",
+        "body": "A new document body.\n",
+    });
+    a.json(
+        &[
+            "document",
+            "create",
+            "--repo",
+            a.root(),
+            "--request-id",
+            R1,
+            "--input",
+            "-",
+        ],
+        &fixed(serde_json::to_vec(&created))?,
+        "ok",
+        0,
+    );
+    save(a, R2, "Saved in clone A.\n");
+    collaboration::item_sync(a, ITEM, R3, "ok", 0);
+    let promote = ["document", "promote", "--repo", a.root(), "--id", DOCUMENT];
+    let mut prepare = promote.to_vec();
+    prepare.push("--prepare");
+    let preview = a.json(&prepare, &[], "ok", 0);
+    let mut confirm = promote.to_vec();
+    confirm.extend([
+        "--request-id",
+        R4,
+        "--confirm",
+        preview["data"]["confirmation_id"].as_str().unwrap(),
+    ]);
+    a.json(&confirm, &[], "ok", 0);
+    let args = [
+        "ticket",
+        "close",
+        "--repo",
+        a.root(),
+        "--id",
+        ITEM,
+        "--prepare",
+    ];
+    let blocked = a.json(&args, &[], "recovery_required", 3);
+    assert_eq!(
+        blocked["data"]["blockers"],
+        serde_json::json!(["history_unknown"]),
+        "{blocked}"
+    );
+    let out = run(&a.env, &args, &[]);
+    assert_eq!(out.status, 3);
+    let text = stderr(&out);
+    let poll = format!(
+        "next: manyhands-cli poll once --repo '{}' --request-id <new-request-id>\n",
+        a.root.canonicalize().unwrap().display()
+    );
+    assert!(text.contains(&poll), "{text}");
+    assert!(text.contains("Then prepare again.\n"), "{text}");
+    text_golden(
+        "ticket_close_prepare_remote_unknown_text",
+        &out,
+        &a.root,
+        port,
+    );
+    polled(a, R5);
     a.json(&args, &[], "ok", 0);
     Ok(())
 }

@@ -2173,6 +2173,22 @@ impl RemoteSnapshot {
         }
     }
 
+    /// Whether a fetch has observed the context of `kind` and `id` absent from
+    /// the remote after it was published: its stored state is
+    /// `remotely_deleted`. A push proves publication, never deletion, and an
+    /// absent tracking ref proves neither (decision 35).
+    pub(in super::super) fn context_deletion_observed(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+    ) -> bool {
+        self.contexts.iter().any(|context| {
+            context.kind == Some(kind)
+                && context.item_id.as_ref() == Some(id)
+                && context.state == RemoteContextState::RemotelyDeleted
+        })
+    }
+
     /// Fetch planning must not reinterpret a qualified Push proof as a fetched
     /// ref/absence. The public projection also reports verified Push history.
     pub(in super::super) fn fetch_publication_evidence_for(

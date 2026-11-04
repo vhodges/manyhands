@@ -453,6 +453,37 @@ fn a_blocked_prepare_the_repair_cannot_reach_prints_no_route() {
     }
 }
 
+/// Decision 35: a published context whose remote state is unknown (no
+/// tracking ref, and no fetch that saw it gone) names the poll that reads it,
+/// then a new prepare.
+#[test]
+fn an_unknown_remote_context_names_the_poll() {
+    for command in ["ticket close", "document promote"] {
+        let out = prepare(&blocked(
+            command,
+            ResultCode::RecoveryRequired,
+            vec![LifecycleBlocker::HistoryUnknown],
+            vec![inspect()],
+        ));
+        assert_eq!(out.status, 3);
+        let text = stderr(&out);
+        assert_eq!(
+            next_lines(text),
+            [
+                format!(
+                    "next: manyhands-cli poll once --repo '{ROOT}' --request-id <new-request-id>"
+                ),
+                format!("next: repo.inspect root={ROOT}"),
+            ],
+            "{text}"
+        );
+        assert!(
+            text.contains("note: this repository hasn't read whether the remote still holds this item's branch, and a poll reads it; <new-request-id> is a placeholder to fill in. Then prepare again.\n"),
+            "{text}"
+        );
+    }
+}
+
 #[test]
 fn a_missing_context_names_the_save_verb_by_kind() {
     for (command, save) in [

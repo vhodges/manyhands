@@ -15,7 +15,8 @@
 //!   promotion's `integration_conflict` is an add/add, which only a repair
 //!   outside Manyhands resolves, decision 30, so it gets that note and no
 //!   context lines), the save that makes a missing context, or the poll that
-//!   reads a primary tracking ref left behind or missing, and then a new
+//!   reads a primary tracking ref left behind or missing, or a published
+//!   context whose remote state is unknown (decision 35), and then a new
 //!   prepare;
 //! - for a prepare refused because an unfinished request or operation holds
 //!   the item (decision 33), that request sent again, or the resume;
@@ -50,6 +51,7 @@ use manyhands::{
 const REPAIR_NOTE: &str = "The commands above are the local repair: the <...> values are placeholders to fill in, context sync-local's --input - takes {\"observation\": \"...\"} with the observation the first line prints, and context show-local and context resolve-local apply only if context sync-local answers a conflict.";
 const REFUSED_NOTE: &str = "primary refused this closure's checkpoint.";
 const POLL_NOTE: &str = "this repository has no record of the remote's primary, and a poll reads it; <new-request-id> is a placeholder to fill in.";
+const UNKNOWN_NOTE: &str = "this repository hasn't read whether the remote still holds this item's branch, and a poll reads it; <new-request-id> is a placeholder to fill in.";
 const AHEAD_NOTE: &str = "primary holds commits the remote's primary, as this repository last read it, lacks: a poll reads the remote again, and if primary is still ahead, repo sync publishes it; each <new-request-id> is a placeholder for a request of its own.";
 const HELD_NOTE: &str = "an unfinished request holds this item; send it again to finish it, and prepare again once it has finished, or has stopped on a cleanup a new request can replace.";
 const HELD_RESUME_NOTE: &str = "an unfinished operation that no request holds has this item; resume it (add --request-id unless you run it at a terminal), and prepare again only once it has finished.";
@@ -297,11 +299,17 @@ fn way_out(
     item: &str,
 ) -> Option<(Vec<String>, String)> {
     use LifecycleBlocker::{
-        ConflictPending, ContextConflicted, ContextDirty, ContextMissing, IntegrationConflict,
-        LocalOperationPending, PrimaryAheadOfRemote, PrimaryMissing,
+        ConflictPending, ContextConflicted, ContextDirty, ContextMissing, HistoryUnknown,
+        IntegrationConflict, LocalOperationPending, PrimaryAheadOfRemote, PrimaryMissing,
     };
-    let tracking =
-        |blocker: &LifecycleBlocker| matches!(blocker, PrimaryAheadOfRemote | PrimaryMissing);
+    // What a poll reads: primary's tracking, and whether a published context
+    // still stands, which an absent tracking ref leaves unknown (decision 35).
+    let tracking = |blocker: &LifecycleBlocker| {
+        matches!(
+            blocker,
+            PrimaryAheadOfRemote | PrimaryMissing | HistoryUnknown
+        )
+    };
     if blockers.iter().any(tracking)
         && blockers
             .iter()
@@ -312,7 +320,12 @@ fn way_out(
         // Missing, a poll makes it. Ahead, primary may hold work never
         // published, which a poll doesn't push.
         if !blockers.contains(&PrimaryAheadOfRemote) {
-            return Some((vec![poll], format!("{POLL_NOTE} Then prepare again.")));
+            let note = if blockers.contains(&PrimaryMissing) {
+                POLL_NOTE
+            } else {
+                UNKNOWN_NOTE
+            };
+            return Some((vec![poll], format!("{note} Then prepare again.")));
         }
         return Some((
             vec![

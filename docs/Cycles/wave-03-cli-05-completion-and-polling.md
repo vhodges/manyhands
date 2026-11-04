@@ -335,6 +335,10 @@ Also required:
     parent that a new request can't supersede holds the item, a prepare is `recovery_required`, naming
     the holding request's `request.retry`, or `operation.resume` when no record holds it. Supersedable
     cleanup stops still prepare.
+35. **An untracked published context is unknown, not deleted (2026-11-03).** "Say unknown, point to
+    poll" (Task 15's F6): with publication evidence but no tracking ref, and no fetch that has seen the
+    branch gone, both previews answer `history_unknown`, and human output prints `poll once` and then a
+    new prepare. A deletion a fetch has observed still answers `remote_context_deleted`.
 
 34. **The conflict verbs reach a lifecycle's child (2026-11-03).** "Conflict verbs reach the child":
     `conflict show` and `conflict resolve` accept a promotion's or closure's context child, by the

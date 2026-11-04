@@ -52,14 +52,14 @@ id: "01M69C6SHD04G8PT6D1Y36CDN7"
   - Each task runs the targets and filters it names. Check that more than zero tests ran. Cargo takes one positional filter per command.
   - A task editing `src/repository/remote/` also runs `--lib remote`, `--lib local_sync` and `--lib integration`, each as its own command.
   - No task runs the full suite. The full `cargo test` and native CI run after merge. Use a 600-second tool timeout for gate commands, and run a long tier detached.
-- **Checkpoint gate** (amended 2026-11-02, caused by main). The static gates across the whole tree, then `AGENTS.md`'s fast tier verbatim, then the SSH tier selected by changed path per `AGENTS.md`'s table:
+- **Checkpoint gate** (amended 2026-11-02, caused by main; desktop clippy amended 2026-11-03, caused by main: since D4's merge, `--all-targets --features desktop` fails on main, because D4's test modules need `desktop-test-support`, so the gate runs that feature, as whole-tree `--all-features` does; CI's `--features desktop --bin manyhands` also passes). The static gates across the whole tree, then `AGENTS.md`'s fast tier verbatim, then the SSH tier selected by changed path per `AGENTS.md`'s table:
 
   ```sh
   devenv shell -- cargo check --all-features --locked
   devenv shell -- cargo fmt --check
   devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
   devenv shell -- cargo check --locked --features desktop
-  devenv shell -- cargo clippy --all-targets --locked --features desktop -- -D warnings
+  devenv shell -- cargo clippy --all-targets --locked --features desktop-test-support -- -D warnings
   devenv shell -- cargo check --locked --bin manyhands-cli
   devenv shell -- sh scripts/check-cli-no-gpui.sh
   devenv shell -- cargo test --all-features --locked --lib --bins \
@@ -318,7 +318,7 @@ Part A (library): Tasks 0, 2a–6. There is no Task 1: each command arrives in t
 
 ## Task 15: Full Verification, Review And Handoff
 
-- [ ] **Step 1:** Merge `origin/main` and run, detached, the static gates, the fast tier and every SSH-harness target: the branch's diff touches `src/repository/transport/`, and Task 15 follows `AGENTS.md`'s table across the branch's full diff (owner, 2026-11-02). No full suite (amended 2026-11-02, caused by main). Record per-target counts. A failure stops for the owner.
+- [ ] **Step 1:** Merge `origin/main` and run, detached, the static gates (desktop clippy with `--all-targets --features desktop-test-support`, as the checkpoint gate says, amended 2026-11-03), the fast tier and every SSH-harness target: the branch's diff touches `src/repository/transport/`, and Task 15 follows `AGENTS.md`'s table across the branch's full diff (owner, 2026-11-02). No full suite (amended 2026-11-02, caused by main). Record per-target counts. A failure stops for the owner.
 - [ ] **Step 2:** Independent whole-branch spec and quality reviews. Fix or rule every finding. Rerun the gate and the affected targets, and say what ran after the fixes.
 - [ ] **Step 3:** Mark the Cycle and design `review-ready`, run `git merge-tree --write-tree HEAD origin/main`, add the review-ready comment and push. The ticket stays **open**.
 - [ ] **Step 4: Closure,** only after the owner approves the review, in the final push before merge. Close this ticket by the canonical file edit (decision 9). Copy `01M5MK57` and `01M669FJR2`'s ticket files byte for byte from their branches, add the closure fields and a comment each, on the same go-ahead. Merging needs its own go-ahead, which also covers deleting those two remote branches, after confirming that they hold only their ticket files (decision 14).

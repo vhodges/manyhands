@@ -519,6 +519,7 @@ pub const CLI_TEXT_CASES: &[&str] = &[
     "ticket_close_prepare_held_text",
     "ticket_close_prepare_primary_missing_text",
     "ticket_close_prepare_primary_ahead_text",
+    "ticket_close_prepare_remote_unknown_text",
 ];
 pub const CLI_REPOSITORY_VALUES: &[&str] = &["required", "refused"];
 
