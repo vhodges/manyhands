@@ -13,17 +13,18 @@ line as it is.
 status: implementing
 ```
 
-The values are `open`, `implementing`, `waiting`, `review_ready` and `closed`.
+The values are `open`, `implementing`, `waiting`, `review_ready`, and at
+closure a resolution: `done`, or `wontdo`, `duplicate` or `obsolete`.
 Status is free-form text. A ticket is closed by `closed_at` and `closed_by`,
 not by its status.
 
 ## Closing, only after the owner's approval
 
-Set `status: closed`. Add both fields after `team` (or after the last of
+Set the status to its resolution, normally `status: done`. Add both fields after `team` (or after the last of
 `status`, `project` and `team`), before `manyhands_managed`:
 
 ```yaml
-status: closed
+status: done
 project: manyhands
 team: core
 closed_at: 2026-10-24T15:04:05Z

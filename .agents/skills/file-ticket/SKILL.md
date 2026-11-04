@@ -152,7 +152,10 @@ Use comments for progress, decisions, blockers, verification and review-ready
 status; put the initial problem in the ticket body. Commit canonical comment
 edits only when authorized, staging only owned files in the ticket worktree.
 
-Close a ticket after review approval and under lifecycle authorization with
+Close a ticket after review approval and under lifecycle authorization. First
+set its status to a resolution with `ticket save` (section 3): `done`, or
+`wontdo`, `duplicate` or `obsolete` when it closes without the work; the save
+checkpoints into the ticket's context, so the close publishes it. Then run
 `mh ticket close --repo "$repo" --id "$ticket_id"` (without `--non-interactive`
 when the selected key is passphrase-protected: it then runs at the owner's
 terminal). It records the closure, merges the ticket's branch into main,

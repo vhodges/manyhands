@@ -83,8 +83,9 @@ Do not hold or reopen the merged Cycle for it. In that session:
 ## Approved merge and closure
 
 Code review alone does not authorize merging. Once merge is approved, add the
-requested approval/verification comment and close the ticket in the final
-pre-merge update, following current `AGENTS.md`. Refresh stale test counts.
+requested approval/verification comment, set the ticket's status to its
+resolution (`done`, or `wontdo`, `duplicate` or `obsolete`) with `ticket save`,
+and then close it, following current `AGENTS.md` and the `file-ticket` skill. Refresh stale test counts.
 Push that update and merge the exact intended PR head using
 normal repository rules; do not bypass required checks or use admin overrides.
 Verify the remote PR is merged and record its merge commit. Preserve unrelated
