@@ -15,6 +15,7 @@ pub(crate) mod harness;
 pub(crate) mod item;
 #[cfg(all(test, feature = "desktop-test-support"))]
 mod keyboard_tests;
+pub(crate) mod lifecycle;
 pub(crate) mod lists;
 pub(crate) mod move_document;
 pub(crate) mod new_folder;

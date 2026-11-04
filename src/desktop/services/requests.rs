@@ -262,7 +262,6 @@ pub(crate) enum Intent {
     /// Approve and merge…: a document's work merged into the primary
     /// branch, shared, and tidied up. No identity or input: the library
     /// takes the configured identity (C5 decision 6).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 6a.
     DocumentPromote {
         root: PathBuf,
         id: ItemId,
@@ -270,7 +269,6 @@ pub(crate) enum Intent {
     /// Close ticket…: a ticket marked closed, merged into the primary
     /// branch, shared, and tidied up. `closed_by` is the configured
     /// identity (C5 decision 6).
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 6a.
     TicketClose {
         root: PathBuf,
         id: ItemId,

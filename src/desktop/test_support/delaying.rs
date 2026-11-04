@@ -182,7 +182,6 @@ impl DelayingBackend {
     /// library, and `answer` stands in place of its answer. A prepare of
     /// any other command takes none. Canned answers for one command
     /// stack: each prepare takes the oldest.
-    #[allow(dead_code)] // Called from Task 6a.
     pub(crate) fn answer_next_prepare(
         &self,
         command: &'static str,

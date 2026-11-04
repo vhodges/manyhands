@@ -64,6 +64,7 @@ mod restored;
 mod review;
 mod review_view;
 mod save;
+mod save_first;
 mod save_view;
 mod saved;
 
@@ -71,6 +72,7 @@ pub(crate) use self::leave::{CloseThisTab, Leaving};
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(super) use self::recovery_off::{CONTINUE, message as recovery_off_message};
 use self::restored::{Continuing, Then};
+pub(crate) use self::save_first::SaveFirst;
 pub(crate) use self::save_view::InitialsInSettings;
 
 use futures::{channel::oneshot, future::Shared};

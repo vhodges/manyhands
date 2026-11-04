@@ -90,7 +90,9 @@ pub(super) use details::text;
 pub(crate) use draft::NOT_SAVED;
 pub(crate) use draft::{NOT_DISCARDED, ReviewInDrafts, refused_label};
 pub(crate) use draft_actions::DraftDiscarded;
-pub(crate) use edit::{CloseThisTab, InitialsInSettings, Leaving};
+pub(crate) use edit::{CloseThisTab, InitialsInSettings, Leaving, SaveFirst};
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use header::{LIFECYCLE_ACTION, LIFECYCLE_NOTE, NO_ID, NOT_CREATED};
 pub(crate) use repair::FollowItem;
 pub(crate) use sheet::open_details;
 

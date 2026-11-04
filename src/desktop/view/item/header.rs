@@ -10,24 +10,30 @@
 //! (`discussion`), then Edit while viewing, or Done while editing
 //! (`edit`), then Share (`share`), then the item's lifecycle action: Close
 //! ticket… on a ticket the lifecycle has not closed, Approve and merge… on a
-//! document (D5, A1).
+//! document (D5, A1). It opens the lifecycle dialog (`view::lifecycle`,
+//! A2), the tab's unsaved edits saved first; on a tab whose item has no ID,
+//! a new item not created yet or a nonconforming file, it is disabled and
+//! says why.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement,
     ParentElement, StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
-        ActiveTheme, Icon, Sizable,
+        ActiveTheme, Disableable, Icon, Sizable, WindowExt,
         button::{Button, ButtonVariants},
         h_flex, v_flex,
     },
     div, px, relative,
 };
-use manyhands::repository::{ClosureState, ItemDto, ItemDtoKind};
+use manyhands::{
+    canonical::ItemId,
+    repository::{ClosureState, ItemDto, ItemDtoKind},
+};
 use time::OffsetDateTime;
 
-use super::{ItemPane, chips::chips, pill, text, tokens::item_colors};
+use super::{ItemPane, SaveFirst, chips::chips, pill, text, tokens::item_colors};
 use crate::desktop::{
     assets::icon_path,
     model::{
@@ -36,6 +42,8 @@ use crate::desktop::{
         navigation::OpenTarget,
         tabs::TabKey,
     },
+    services::requests::Intent,
+    view::lifecycle::{self, Heading, Opening},
 };
 
 /// The block's padding, vertical and horizontal.
@@ -55,6 +63,26 @@ pub(crate) const CRUMB_SEPARATOR: &str = " › ";
 pub(crate) const TICKETS: &str = "Tickets";
 /// The header's lifecycle action: Close ticket… or Approve and merge….
 pub(crate) const LIFECYCLE_ACTION: &str = "item-lifecycle-action";
+/// Why the lifecycle action is disabled, as an element that carries it as
+/// its label.
+pub(crate) const LIFECYCLE_NOTE: &str = "item-lifecycle-note";
+/// A new item not created yet has no ID to close or merge.
+pub(crate) const NOT_CREATED: &str = "Save this new item first: it is not created yet.";
+/// A nonconforming file has no ID until it is repaired.
+pub(crate) const NO_ID: &str = "This file has no ID until it is repaired.";
+
+/// What the lifecycle action acts on.
+enum LifecycleTarget {
+    /// The item as read, by its ID.
+    Ready {
+        intent: Box<Intent>,
+        heading: Heading,
+    },
+    /// No ID: why.
+    NoId(&'static str),
+    /// Not read yet.
+    NotRead,
+}
 
 /// The repository's name, as the tab strip names it: its folder.
 fn repository_name(repo: &str) -> String {
@@ -246,23 +274,89 @@ impl ItemPane {
             .into_any_element()
     }
 
-    /// The lifecycle action's button, live, when the item offers one.
-    fn lifecycle_button(&self, item: Option<&ItemDto>, cx: &mut Context<Self>) -> Option<Button> {
+    /// The lifecycle action's button, when the item offers one: live once
+    /// the item is read with its ID. A new item not created yet, and a
+    /// nonconforming file, have no ID: the action is drawn disabled, saying
+    /// why. While the item is not read yet it waits, disabled.
+    fn lifecycle_button(
+        &self,
+        item: Option<&ItemDto>,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
         let label = lifecycle_action(self.shown_kind(item), item)?;
+        let target = self.lifecycle_target(cx);
+        let button = Button::new(LIFECYCLE_ACTION)
+            .label(label)
+            .small()
+            .warning()
+            .disabled(!matches!(target, LifecycleTarget::Ready { .. }))
+            .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
+                pane.open_lifecycle(window, cx);
+            }));
+        let LifecycleTarget::NoId(reason) = target else {
+            return Some(button.into_any_element());
+        };
         Some(
-            Button::new(LIFECYCLE_ACTION)
-                .label(label)
-                .small()
-                .warning()
-                .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
-                    pane.open_lifecycle(window, cx);
-                })),
+            div()
+                .id(LIFECYCLE_NOTE)
+                .test_support()
+                .aria_label(reason)
+                .flex_none()
+                .child(button.tooltip(reason))
+                .into_any_element(),
         )
     }
 
-    /// Close ticket… or Approve and merge… pressed.
-    fn open_lifecycle(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        // Task 6a opens the lifecycle dialog.
+    /// What the lifecycle action acts on: the item as read, by its ID.
+    fn lifecycle_target(&self, cx: &App) -> LifecycleTarget {
+        if self.shows_new_item(cx) {
+            return LifecycleTarget::NoId(NOT_CREATED);
+        }
+        let Some(item) = self.model.item().rows() else {
+            return LifecycleTarget::NotRead;
+        };
+        let Some(id) = item.id.as_deref().and_then(|id| id.parse::<ItemId>().ok()) else {
+            return LifecycleTarget::NoId(NO_ID);
+        };
+        let root = PathBuf::from(self.repo());
+        let intent = match item.kind {
+            ItemDtoKind::Ticket => Intent::TicketClose { root, id },
+            ItemDtoKind::Document => Intent::DocumentPromote { root, id },
+        };
+        LifecycleTarget::Ready {
+            intent: Box::new(intent),
+            heading: Heading::of(
+                item,
+                item.id.as_deref().unwrap_or_default(),
+                repository_name(self.repo()),
+            ),
+        }
+    }
+
+    /// Close ticket… or Approve and merge… pressed: the tab saves its
+    /// unsaved edits first, then the lifecycle dialog prepares (D5, A2). A
+    /// tab whose item has no ID opens nothing; neither does a save that
+    /// could not start, the tab saying why.
+    fn open_lifecycle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let LifecycleTarget::Ready { intent, heading } = self.lifecycle_target(cx) else {
+            return;
+        };
+        if window.has_active_dialog(cx) {
+            return;
+        }
+        let saving = match self.start_save_first(cx) {
+            Some(SaveFirst::Failed) => return,
+            Some(_) => Some(cx.entity().downgrade()),
+            None => None,
+        };
+        let origin = window.focused(cx).unwrap_or_else(|| cx.focus_handle());
+        let opening = Opening {
+            intent: *intent,
+            heading,
+            origin,
+            saving,
+        };
+        lifecycle::open(opening, &self.services, window, cx);
     }
 
     /// `folder-git-2`, then repository › section › file, at 12 px, with no
