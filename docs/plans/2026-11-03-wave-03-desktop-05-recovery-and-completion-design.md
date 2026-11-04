@@ -795,6 +795,7 @@ Applied in the approval commit:
 | R-16 | "Cleanup-only replay" (P/L3) is a local-only, already-contained, already-closed first run: exactly `accepted, observing, cleaning_up`. A remote one adds `publishing`, because the primary child runs (already current); a same-ID resend never reports `accepted` (Task 3 checkpoint) | The name over-promises for remote runs; the tests pin each order |
 | R-17 | Save first (decision 13) covers a stored or restored draft of the item that has no live session in the tab: it is saved through `flush_now` then `save`, the same as a live session. Unsent comment drafts don't block (decision 14) (Task 6a) | A draft the person has not looked at in this session is saved without being shown again |
 | R-18 | A tab with no item ID (a new item not yet created, or a nonconforming Inspect tab) keeps the lifecycle action visible but disabled, with its reason in `item-lifecycle-note`; pressing it opens nothing (Task 5 review Minor 1, Task 6a) | The action shows where it can't run |
+| R-19 | The dialog's short ID for an item without a slug is the last 8 characters of its ULID (`D/view/lifecycle.rs` `short_id`); Done (Task 8) reuses it (Task 6a review) | Two items may share a short ID; the full ID is in the preview |
 
 ## Known Limits
 
