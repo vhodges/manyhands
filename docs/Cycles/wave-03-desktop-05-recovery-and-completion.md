@@ -107,6 +107,9 @@ D5.
    - **L3, lifecycle progress.** A promotion or closure reports
      `recording`, `integrating`, `publishing` and `cleaning_up` as it
      reaches them (decision 11).
+   - **L4, protected folder by name.** The drafts folder's owner-only
+     protection, opened by folder name, for the desktop's kept resolution
+     sets (decision 22).
 2. **Close ticket… and Approve and merge….** The header actions become
    live and open the lifecycle dialog: confirm, running, failed, done
    (design handoff 2c–2e), over the existing confirmation services. The
@@ -292,6 +295,23 @@ Answered by the owner after review round 3:
     is refused because the working copy, its ignored files or the remote
     branch changed, the tabs unlock and the item shows "Merged, but not
     tidied up: {reason}" with Open folder and Check again (K-13).
+
+Ruled by the owner on Task 0's findings (2026-11-04):
+
+22. **Kept resolution sets use the library's protection** (U-5). Part 0
+    adds L4: a public protected folder by name in `src/drafts/`, which the
+    desktop's resolution store opens as `<data_dir>/resolutions`. The
+    library-part exception (decision 2) covers it, as one of Part 0's files.
+23. **Non-ASCII local conflict paths are a known limit** (U-2): a local
+    conflict on a document whose path has non-ASCII bytes or a control
+    character goes to the external guidance (design K-14). No library
+    change.
+24. **Comment posts keep Give up** on a deleted branch (design K-15);
+    Republish covers shares and lifecycles.
+
+Corrections accepted with them: the lifecycle runner emits `connecting` when
+the context child starts (U-4, inside Part 0's files); named edit E-8;
+`LATER_NOTE` stays for the close-draft dialog; refreshed line citations.
 
 Proposed by the planner and confirmed with the documents' approval
 (2026-11-04):

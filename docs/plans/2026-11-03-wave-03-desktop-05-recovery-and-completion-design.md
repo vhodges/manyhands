@@ -121,8 +121,8 @@ GRFC is the Git workflow and conflict recovery RFC.
 9. `ProgressStage` (`R/mutation/progress.rs:83-94`): `accepted`,
    `observing`, `writing`, `connecting`, `fetching`, `updating_local`,
    `pushing`, `verifying`, `indexing`, `stopping`. Its values are pinned by
-   `schemas/v1/progress_event.schema.json` (`tests/read_contract.rs:1004-1008`)
-   and matched exhaustively by `D/model/operations.rs:589-606`
+   `schemas/v1/progress_event.schema.json` (`tests/read_contract.rs:1139-1143`)
+   and matched exhaustively by `D/model/operations.rs:584-610`
    (`stage_text`). **(C5)** A lifecycle reports `accepted` then
    `connecting` only (before L3). The step runner is `run_lifecycle`
    (`R/promotion/run.rs:60`), shared by closure through
@@ -223,6 +223,37 @@ expectation stops for the owner.
   desktop, so the resolution store sits beside it under the same
   protection.
 
+**Settled in Task 0 (2026-11-04).** U-1 and U-3 hold. U-2, U-4 and U-5
+hold in part; the owner ruled on each (Cycle decisions 22–24, corrections
+accepted the same day):
+
+- **U-1 holds.** `R/local_sync/resolve.rs` moves only the local context ref
+  (`complete_candidate`, `finish`); nothing under `R/local_sync/` pushes.
+- **U-2 partly.** `display_path` escapes every byte outside `' '..='~'`
+  (`request.rs:317-330`), and `classify_canonical_path` rejects a `\`
+  (`canonical.rs:773-778`). Tickets, comments and ASCII documents classify;
+  a document path with non-ASCII bytes or a control character does not and
+  goes to the external guidance (decision 23, K-14).
+- **U-3 holds.** A resend adopts the completed child (`run.rs:824-826`); a
+  moved change set abandons with `ReconfirmationRequired`
+  (`run.rs:615-629`), answered `external_change`
+  (`bind/lifecycle.rs:797-798`). Proven by
+  `tests/mutation_remote/c5_child_conflict.rs` `resolved_then_the_same_request`
+  and `unconsented_resolution`.
+- **U-4 partly.** The child's safe points map to `fetching`,
+  `updating_local` and `pushing` as `bind/sync.rs` `stage_at` maps a
+  share's, but no safe point yields `connecting`. `run_lifecycle` emits
+  `connecting` itself when it starts the context child's synchronization
+  (before `io.synchronize`), inside Part 0's files. The cancel-acknowledgement
+  synchronization (`run.rs:865-871`) forwards no stages, and a resend that
+  adopts an already-published child shows none for Share with origin.
+  K-11 no longer applies.
+- **U-5 partly.** The store is `<data_dir>/drafts`, opened in the library
+  (`DraftStore::open_default`, `src/drafts/store.rs:222`; `D/mod.rs:98`),
+  and its protection (`protect::Folder`) is `pub(crate)`. Decision 22: Part
+  0 adds L4, a public protected folder by name, which the desktop's
+  resolution store uses.
+
 ## API Audit Refresh (Entry-Gate Item 3)
 
 | Audit row | D5 consumes | State on merged C5 (`cd2e922e`) |
@@ -262,7 +293,8 @@ pre-call stage, and its table test at `:767-773`),
 `R/promotion/run.rs`, `R/closure/lifecycle.rs`,
 `R/mutation/bind/lifecycle.rs`, `src/bin/manyhands-cli/human_lifecycle.rs`,
 `D/model/operations.rs` (`stage_text` arms only, to keep the tree green),
-and tests in `tests/read_status.rs`, `tests/mutation_remote.rs` (its
+`src/drafts/mod.rs` and `src/drafts/protect.rs` with its platform modules
+(L4, decision 22), and tests in `tests/read_status.rs`, `tests/mutation_remote.rs` (its
 `mod d5_progress;`), `tests/mutation_remote/d5_progress.rs` and the CLI
 targets.
 
@@ -337,8 +369,22 @@ request's sink. A step's stage is emitted only when the step runs, so a
 cleanup-only replay reports `accepted, observing, cleaning_up` and a
 local-only run reports no `publishing`. `stage_text` gains words for the
 four stages. Named edit E-3, including `tests/cli_remote/journeys_c5.rs:793`
-(`progress: connecting` before `transport_unavailable`, which the context
-child's forwarded `connecting` keeps if U-4 holds).
+(`progress: connecting` before `transport_unavailable`, which the
+`connecting` that `run_lifecycle` emits at the context child's start keeps,
+per U-4's settlement).
+
+### L4: Protected folder by name (decision 22)
+
+`drafts::folder` (today `#[doc(hidden)]`, `src/drafts/mod.rs:52`) becomes a
+documented public API: `Folder::open_named(data: &Path, name: &str)`
+(a single path component; anything else is refused) holds
+`<data>/<name>` under `protect::Folder`'s verdicts and lock, and offers
+`create_new`, `replace` (write to a new owner-only file, then rename),
+`read`, `list` and `remove`. The drafts store's own folder stays
+`protect::Folder::open(data)`; `Folder::open` keeps its meaning. No type
+derives `Debug` over file contents. Lib unit tests cover a bad name, owner-only
+modes on Unix, `replace` atomicity and `list` order. The desktop's
+`D/services/resolutions.rs` opens `resolutions` beside `drafts` (B3).
 
 ## Part A: Close Ticket… And Approve And Merge…
 
@@ -544,15 +590,16 @@ intents `Intent::ConflictResolve`, `Intent::LocalContextResolve`, with
 
 **Kept sets (decision 19, R-12).** Before submission, the set is written
 per request ID to `D/services/resolutions.rs`'s store in the desktop's data
-directory, beside the D2 draft store (U-5), with the drafts' protection and
-no `Debug`. Each set records its request ID, root, operation ID, item and
+directory, in `<data_dir>/resolutions` through L4 (decision 22), with the
+drafts' protection and no `Debug`. Each set records its request ID, root, operation ID, item and
 remote or local kind. It is deleted when its request finishes (applied,
 refused or abandoned), and a **launch sweep** calls `show_request` for every
 kept set and deletes finished and not-found ones. Reopening the sheet for
 an operation with a kept, unfinished set offers Retry with **that** set,
 never a new request; if the user had made different choices (another
 window), the sheet says "An earlier resolution is still being saved; it
-is used instead." U-5 is settled: the D2 store is `<data_dir>/drafts`.
+is used instead." U-5 is settled in part: the D2 store is `<data_dir>/drafts`,
+and its protection reaches the desktop only through L4.
 
 | Answer | Shows |
 | --- | --- |
@@ -691,12 +738,16 @@ and CLI SSH tests, and by the native checklist against a real remote.
 | E-1 | `tests/read_status.rs` rows for unfinished promotion/closure | `next_action` null → `resume` | L2 |
 | E-2 | CLI goldens with a lifecycle row (`tests/cli*`) | Same | L2 |
 | E-3 | Lifecycle progress pins: `tests/cli_remote/journeys_c5.rs:793` (keeps `connecting` from the forwarded child if U-4 holds; otherwise asserts `progress: observing`); the five fast-tier goldens `tests/fixtures/cli_v1/ticket_close_local_only_text.txt:21`, `ticket_close_made_ready_text.txt:21`, `ticket_close_checkpoint_merge_refused_text.txt:2`, `document_promote_local_only_text.txt:19`, `document_promote_already_contained_text.txt:19` (asserted by `tests/cli/lifecycle.rs`); `command.rs`'s stage table test (`:767-773`), splitting `ItemRepublish` from the lifecycles | New stages; `observing` pre-call | L3 |
-| E-4 | `D/view/item/header_tests.rs`, `D/model/item_tests.rs`, `D/view/item_tests.rs` | Later notes → live actions | A1 |
+| E-4 | `D/view/item/header_tests.rs`, `D/model/item_tests.rs`, `D/view/item_tests.rs` | Later notes → live actions. `LATER_NOTE` stays: `D/view/close_draft.rs:44,421,424` uses it | A1 |
 | E-5 | `D/model/operations_tests.rs:465,534` | Unavailable → Offered | B6 |
-| E-6 | `D/view/operations/outcomes_tests.rs:430-434`, `give_up_tests.rs:186,242`, `D/model/publication_tests.rs:597,764-772` | `BRANCH_DELETED` text; Republish offer | C |
+| E-6 | `D/view/operations/outcomes_tests.rs:431-444`, `give_up_tests.rs:186,242`, `D/model/publication_tests.rs:597,764-772` | `BRANCH_DELETED` text; Republish offer | C |
 | E-7 | `D/view/item/share_tests.rs` conflict-banner test (from `:690`, the text at `:703` and its "no control" assertion) | `CONFLICT_BANNER` drops "Resolving it in Manyhands arrives in a later release"; the banner gains Review changes | B5 |
+| E-8 | `D/view/item/posting_tests/decisions.rs:143-149` (asserts `CONFLICT_BANNER` and that the banner offers no action) | The banner's text as E-7; it offers Review changes | B5 |
 
-Task 0's sweep confirms the list against merged C5.
+Task 0's sweep (2026-11-04) confirmed the list against merged C5 and added
+E-8; E-2 found no CLI golden with a lifecycle `next_action` row, so it may
+be empty. `D/model/publication_tests.rs:265,477` (a post's deleted branch
+offers Give up only) stay unchanged (decision 24, K-15).
 
 ## Document Amendments
 
@@ -752,13 +803,18 @@ Applied in the approval commit:
 - **K-10.** A partial local resolution whose kept set was lost (data
   directory removed) cannot finish; abandoning the local synchronization
   is the way out (GRFC local rule).
-- **K-11.** If U-4 fails, the child synchronization's stages are not
-  forwarded; Share with origin shows as one running step.
+- **K-11.** Withdrawn: U-4 held in part (Task 0). A resend that adopts an
+  already-published context child shows no stages for Share with origin.
 - **K-12.** `PollOnce` is guidance text until D6.
 - **K-13.** A merged item whose tidy-up is refused because its working
   copy, ignored files or remote branch changed (decision 21) is unlocked
   and stays untidied until that change is undone or cleaned outside the
   app; Check again then Retries.
+- **K-14.** A local conflict on a document whose path has non-ASCII bytes
+  or a control character goes to the external guidance: its escaped
+  `display_path` does not classify (U-2, decision 23).
+- **K-15.** A comment post whose item's branch was deleted offers Give up
+  only, as before D5; Republish covers shares and lifecycles (decision 24).
 
 ## Alternatives Rejected
 

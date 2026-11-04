@@ -51,7 +51,7 @@ on `manyhands/ticket/01M4CC0VN2K8DBHNMZ46NTX5JJ`. No lane branches
 (decision 8). Every Rust command is `devenv shell -- cargo …` with
 `--locked`.
 
-**Library boundary.** Only Tasks 1–3 change library files, and only those
+**Library boundary.** Only Tasks 1–3 and 3b change library files, and only those
 the design's Part 0 lists (Task 3 also adds `stage_text` arms in
 `src/desktop/model/operations.rs` so the tree stays green). No other task changes `src/repository.rs`,
 `src/repository/`, `src/results.rs`, `src/canonical.rs`, `src/drafts/`,
@@ -148,6 +148,7 @@ created in Task 0.
 | 1 | 0 | L1 way out; CLI renders it. |
 | 2 | 0 | L2 resume for lifecycle parents. |
 | 3 | 0 | L3 lifecycle progress (test-first, design checkpoint). |
+| 3b | 0 | L4 protected folder by name (decision 22). |
 | 4 | 0 | Part 0 checkpoint. |
 | 5 | A | Intents; header live; test seams. |
 | 6a | A | Dialog: save first, prepare, blocked, held. |
@@ -166,7 +167,7 @@ created in Task 0.
 | 15c | D | Privacy and consent. |
 | 16 | D | Checklist, gates, review-ready. |
 
-Order: 0 → 1 → 2 → 3 → 4 → 5 → 6a → 6b → 7 → … → 16, one at a time.
+Order: 0 → 1 → 2 → 3 → 3b → 4 → 5 → 6a → 6b → 7 → … → 16, one at a time.
 
 ---
 
@@ -264,6 +265,20 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
 - [ ] **Verify:** `--test mutation_remote d5_progress`; `--test
   read_contract`; `--test cli lifecycle` (the five E-3 goldens); `--test document_promotion`; `--test ticket_closure`;
   `--test cli_remote lifecycle`; the four lines.
+- [ ] **Commit; review.**
+
+## Task 3b: L4 Protected Folder By Name (Decision 22)
+
+- [ ] **Tests first** (lib unit tests beside `src/drafts/mod.rs`'s
+  `folder`): `a_name_that_is_not_one_component_is_refused`;
+  `files_are_owner_only` (Unix); `replace_swaps_whole_files`;
+  `list_returns_names_in_order`; `remove_deletes_one_file`;
+  `the_drafts_folder_is_unchanged` (`Folder::open` still holds
+  `<data>/drafts`).
+- [ ] **Code:** design L4 in `src/drafts/mod.rs` and `src/drafts/protect.rs`
+  (and its platform modules only if `protect::Folder` needs a folder
+  name). No change to the draft store's behaviour.
+- [ ] **Verify:** `--lib drafts`; `--test drafts`; the four lines.
 - [ ] **Commit; review.**
 
 ## Task 4: Part 0 Checkpoint
@@ -415,8 +430,9 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   `a_set_has_no_debug_and_never_reaches_a_message`,
   `the_launch_sweep_deletes_finished_and_unknown_sets`,
   `a_set_records_root_operation_item_and_kind`.
-- [ ] **Code:** `services/resolutions.rs` beside the D2 store (U-5;
-  design, B3).
+- [ ] **Code:** `services/resolutions.rs` over L4's
+  `Folder::open_named(data, "resolutions")` (Task 3b; decision 22; design,
+  B3). The data directory reaches the store as the draft store's does.
 - [ ] **Verify:** `… resolutions`; the four lines.
 - [ ] **Commit; review.**
 
