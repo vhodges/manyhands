@@ -56,6 +56,7 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 | `f4962f61..622f6136f7498a2bcd194d8558db3c3c66005ed7` | Controller's document/implementation/method approval record |
 | `622f6136..74186d51507471b385f1ba3da644f426ab09180b` | Supported CLI ticket-save checkpoint: status only, `implementing` |
 | Task 0 base `74186d51507471b385f1ba3da644f426ab09180b` | Review Task 0's full range from this base, not an assumed `HEAD~1`; Task 0 commit is the commit introducing this ledger and its checkpoint comment |
+| Task 0 head `6a8b42593082c3cb78d38162108c0f0a55c737c2` | Both independent reviews below examined `74186d51..6a8b4259`; no source changed in that range |
 
 Controller's supported registered-main CLI prelude refreshed the index (request
 `01M6M8QXG6ZPVAXR9AH3AB3D4G`), observed via `ticket show`, and saved implementing
@@ -336,7 +337,9 @@ are not authorized; numeric exits must come from existing results registry.
 | Approval metadata, `622f6136` | Owner approved all documents/Q1/Q2/E-1–E-10, implementation and sequential method | Preserved; not an implementation review |
 | Task 0 source/pin sweep | H1 ordinary tag contradiction; H2 two omitted SSH expectation edits; H3 omitted exact local-step enumeration | Open owner checkpoint, not silently authorized |
 | Task 0 self-review | Rechecked source references, fixture provenance, constructor counts, command outputs and docs-only diff; `git diff --check` clean before checkpoint finalization | No source changes; H1–H3 left open rather than resolved by assumption |
-| Task 0 controller spec then quality review | Not yet run | Controller-owned before advancing |
+| Task 0 independent spec review, `74186d51..6a8b4259` | Session `ses_e57684f71ffedpO7q4KuRNUgeS`: 0 Blocking/0 Important/0 Minor Task 0 defects; source corroborated H1–H3 and found no additional semantic pins or mandatory constructor omissions | Spec compliant; H1–H3 are owner-scope holds, not Task 0 defects; no Cargo rerun |
+| Task 0 independent quality review, same range, after spec pass | Session `ses_e57654396ffew9p9o8gygVkEQj`: 0 Critical/0 Important/0 Minor; ledger/source references, metadata/links, evidence limits and unchanged controls verified | Task 0 quality approved; no source changes or Cargo rerun; no Task 1 authorization inferred |
+| Controller verification after both reviews | Actual DTO, the two SSH journey assertions and exact recovery step list inspected; H1–H3 confirmed. Task 0 range `git diff --check` passed; tree clean before this review-record update. Supported `ticket show` verified status `implementing`, lifecycle `open`, exact active ticket context after the CLI save | Narrow H1–H3 amendment requested; implementation approval/Q1/Q2/E-1–E-10 remain intact |
 | Tasks 2/4 adversarial reviews, final whole-range reviews | Not yet run | Mandatory future checkpoints |
 
 ## Task Checklist And Next Step
@@ -345,7 +348,8 @@ are not authorized; numeric exits must come from existing results registry.
   reconnaissance and all three nonzero baselines recorded. This ledger and
   canonical checkpoint `01M6M8YY54YSZ42XHA0S1Q2KE8` are in the Task 0 commit,
   `docs: start completed-context retirement execution`, based on `74186d51`.
-  Controller spec/quality review and H1–H3 resolution remain outstanding.
+  Independent spec and quality reviews passed without findings on
+  `74186d51..6a8b4259`; only H1–H3 owner resolution remains outstanding.
 - [ ] **1 — Shared proof, recognition, disposition upgrade.** Not started.
 - [ ] **2 — Durable single-context retirement.** Not started; adversarial gate.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
@@ -356,7 +360,10 @@ are not authorized; numeric exits must come from existing results registry.
 - [ ] **8 — Final local gates/independent reviews/owner handoff.** Not started;
   merge/close/native dispatch remain separately authorized.
 
-Immediate next step: return the docs-only commit range from `74186d51` to this
-ledger's introducing commit to the controller for independent spec and quality review. Obtain
-owner resolution for H1–H3 before dispatching Task 1. No next-task authorization
-is inferred from this implementer's Task 0 completion.
+Immediate next step: obtain owner resolution for H1–H3 before dispatching Task 1.
+Recommended narrow amendment: preserve ordinary poll's existing untagged wire
+shape and correct the baseline/tag prose, keeping the new opted-in root distinct;
+authorize only the two named collaborator disposition expectation changes and
+the mechanical two-step inventory addition. Preserve every other assertion and
+existing lifecycle cleanup behavior. This does not reopen approval of the
+documents, Q1/Q2, E-1–E-10, implementation or execution method.
