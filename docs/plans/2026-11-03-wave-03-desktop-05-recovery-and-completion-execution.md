@@ -164,3 +164,9 @@ The implementer's checkpoint, reviewed by the orchestrator against the design's 
   - a scrolling path list;
   - Enter on Stale runs Prepare again.
   One extra test, `a_remote_preview_shares_with_origin`, uses a canned answer citing `c5_lifecycle_prepare_ready`. Test files were split (`stale_tests.rs`). The step wording is the implementer's own, following the handoff. No existing test changed. | `lifecycle` 33; `header` 25; `assets` 2; whole desktop bin suite 1355 passed, 0 failed; fmt, check and both clippy lines clean. |
+| 7 | done | `1ec53176` | `ec617b4d`, `05ff91d2` (review fixes) | Written test-first: all 11 tests failed before the code. Independent review: approve with fixes, nothing Blocking. Fixes:
+  - **I-1:** a stop that leaves no record now offers Prepare again. The real Stop can't reach this, because the parent record stands by the first safe point (`c5_cancel.rs` `no_parent_yet`), so the test uses a canned answer citing `no_parent_recovery`.
+  - **Minors fixed:** blockers decide which step failed; the host row now matches its golden; D4's credential routing is reused; a pure stage→step test covers remote runs, R-14 and R-15; a reopened dialog names the workspace's remote and primary; Enter on a locked key unlocks.
+  - **Optionals applied:** O-1, O-2 (the Retry test cites the library proof that publication doesn't repeat: `push_rejected_continues`, `deletion_rejected`) and O-4.
+
+  P19 is real rather than canned; the reviewer accepted this. E-14 extends Task 6a's blocked test. `publication.rs` exposes `KEY_CODES`, `HOST_CODES` and `host_authority` as `pub(crate)`. `outcome.rs` is 502 lines and `outcome_canned_tests.rs` 515. | `lifecycle` 50; `operations` 69; `publication` 46; whole desktop bin suite 1372 passed, 0 failed; fmt, check and both clippy lines clean. |

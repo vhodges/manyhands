@@ -751,6 +751,7 @@ and CLI SSH tests, and by the native checklist against a real remote.
 | E-11 | `D/view/keyboard_tests/frame.rs` `the_strip_header_chips_and_page_run_in_tab_order`, `D/view/keyboard_tests/discussion.rs` `tab_order_runs_header_share_chips_page_discussion_composer` (owner 2026-11-04, Task 5) | The header's live lifecycle action `item-lifecycle-action` joins Tab order after `item-share`; the discussion array goes from 10 to 11 | A1 |
 | E-12 | `D/view/keyboard_tests/frame.rs` `the_strip_header_chips_and_page_run_in_tab_order`, the document walk (standing test-expansion approval, 2026-11-04) | `item-lifecycle-action` (Approve and merge…) between `item-share` and `chip-status`, forward and back | A1 |
 | E-13 | `D/view/keyboard_tests/discussion.rs` `tab_order_runs_header_share_chips_page_discussion_composer`, the editing walk (standing test-expansion approval) | `item-lifecycle-action` after Share, before `chip-type`; the action is still drawn while editing | A1 |
+| E-14 | `D/view/lifecycle_tests.rs` `a_blocked_prepare_lists_blockers_and_way_out` (Task 6a's own test; standing test-expansion approval, Task 7) | Also asserts the Open repository details button (`lifecycle-inspect`) beside the guidance row | A3 |
 
 Task 0's sweep (2026-11-04) confirmed the list against merged C5 and added
 E-8; E-2 found no CLI golden with a lifecycle `next_action` row, so it may
