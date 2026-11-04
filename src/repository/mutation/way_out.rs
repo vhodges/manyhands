@@ -45,9 +45,10 @@ pub enum LifecycleWayOut {
     PollOnce,
     /// A save of the item, which makes its missing context.
     SaveItem { item_id: String },
-    /// A promotion's refused merge, which only Git outside Manyhands repairs:
-    /// `sync-local` admits only a closure recording its own checkpoint. Of an
-    /// execute result only; the CLI prints nothing for it.
+    /// A refused merge no other step routes, of a promotion or a closure,
+    /// which only Git outside Manyhands repairs: `sync-local` admits only a
+    /// closure recording its own checkpoint, with a way to go on (ruling
+    /// R-13). Of an execute result only; the CLI prints nothing for it.
     RepairOutside,
     /// `repo inspect`, when the answer offers it.
     Inspect,
@@ -69,14 +70,13 @@ pub fn lifecycle_way_out(envelope: &Envelope<MutationDataDto>) -> Vec<LifecycleW
 /// the request or operation that holds the item, or a blocked prepare's way
 /// out, which a new prepare follows.
 ///
-/// `kind` is the item's, which the blocked answer doesn't hold. No route
+/// `_kind` is the item's, which the blocked answer doesn't hold. No route
 /// differs by it: a blocked prepare's `integration_conflict` is
 /// `RepairLocally` for either kind, and a front end words `SaveItem` by it.
 pub fn lifecycle_prepare_way_out(
-    kind: ItemDtoKind,
+    _kind: ItemDtoKind,
     envelope: &Envelope<PrepareDataDto>,
 ) -> Vec<LifecycleWayOut> {
-    let _ = kind;
     if let Some(held) = held(envelope) {
         return vec![held];
     }
@@ -115,14 +115,15 @@ fn resume(envelope: &Envelope<MutationDataDto>) -> Option<Option<LifecycleWayOut
     )
 }
 
-/// The first rule that applies, in the CLI's order.
+/// The first rule that applies, in the CLI's order; a refused merge it leaves
+/// without a step is repaired outside (ruling R-13).
 fn route_of(
     envelope: &Envelope<MutationDataDto>,
     data: &LifecycleMutationDto,
 ) -> Vec<LifecycleWayOut> {
     let blocked_by = |blocker| data.blockers.contains(&blocker);
     let refused = blocked_by(LifecycleBlocker::IntegrationConflict);
-    match envelope.code {
+    let route = match envelope.code {
         ResultCode::RecoveryRequired
             if refused
                 && data.kind == ItemDtoKind::Ticket
@@ -137,11 +138,12 @@ fn route_of(
             child_conflict(envelope)
         }
         ResultCode::RemoteBranchDeleted => branch_deleted(envelope, &data.item_id),
-        ResultCode::RecoveryRequired if refused && data.kind == ItemDtoKind::Document => {
-            vec![LifecycleWayOut::RepairOutside]
-        }
         _ => Vec::new(),
+    };
+    if route.is_empty() && refused && envelope.code == ResultCode::RecoveryRequired {
+        return vec![LifecycleWayOut::RepairOutside];
     }
+    route
 }
 
 /// The repair, when the same request or a resume can then go on: `sync-local`

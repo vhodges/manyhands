@@ -320,8 +320,16 @@ fn way_out_lines(kind: ItemDtoKind, way_out: &[LifecycleWayOut], root: &str) -> 
             LifecycleWayOut::RepairLocally { item_id } => {
                 next.extend(merge_refused(root, item_id));
             }
-            // `Inspect` is C2's action; a blocked prepare has no other step.
-            _ => {}
+            // `Inspect` is C2's action; the rest are a result's or a held
+            // prepare's.
+            LifecycleWayOut::Inspect
+            | LifecycleWayOut::SendAgain
+            | LifecycleWayOut::RetryRequest { .. }
+            | LifecycleWayOut::CancelThenSendAgain { .. }
+            | LifecycleWayOut::ResumeOperation { .. }
+            | LifecycleWayOut::ResolveChildConflict { .. }
+            | LifecycleWayOut::Republish { .. }
+            | LifecycleWayOut::RepairOutside => {}
         }
     }
     next

@@ -244,7 +244,11 @@ fn repair_locally_comes_before_the_same_request() {
             other,
             recovery,
         );
-        assert_eq!(lifecycle_way_out(&envelope), [Inspect], "{recording:?}");
+        assert_eq!(
+            lifecycle_way_out(&envelope),
+            [RepairOutside, Inspect],
+            "{recording:?}"
+        );
     }
 }
 
@@ -522,10 +526,18 @@ fn a_blocked_prepares_integration_conflict_is_repair_locally_for_either_kind() {
     }
 }
 
-/// The kind is the item's, which a blocked answer doesn't hold; the routes are
-/// the same for both, and a front end words the save by it.
+/// The kind is the item's, which a blocked answer doesn't hold; the save
+/// carries the item's ID for both, and a front end words it by the kind.
 #[test]
-fn prepare_routing_takes_the_items_kind() {
+fn save_item_routes_the_same_for_either_kind() {
+    for kind in [ItemDtoKind::Ticket, ItemDtoKind::Document] {
+        let envelope = blocked(vec![LifecycleBlocker::ContextMissing], vec![]);
+        assert_eq!(
+            lifecycle_prepare_way_out(kind, &envelope),
+            [SaveItem { item_id: item() }],
+            "{kind:?}"
+        );
+    }
     for blockers in [
         vec![LifecycleBlocker::ContextMissing],
         vec![LifecycleBlocker::IntegrationConflict],
@@ -539,11 +551,45 @@ fn prepare_routing_takes_the_items_kind() {
             "{blockers:?}"
         );
     }
-    let envelope = blocked(vec![LifecycleBlocker::ContextMissing], vec![]);
-    assert_eq!(
-        lifecycle_prepare_way_out(ItemDtoKind::Document, &envelope),
-        [SaveItem { item_id: item() }]
+}
+
+/// Ruling R-13: a closure's refused merge that `sync-local` can't take, or
+/// that has no way on, is repaired outside, as a promotion's is.
+#[test]
+fn a_tickets_unrouted_integration_conflict_is_repair_outside() {
+    for (recording, recovery) in [
+        (Some(LifecycleRecording::Existing), vec![retry(), inspect()]),
+        (None, vec![retry(), inspect()]),
+        (Some(LifecycleRecording::Record), vec![inspect()]),
+    ] {
+        let mut refused = data(
+            ItemDtoKind::Ticket,
+            vec![LifecycleBlocker::IntegrationConflict],
+        );
+        refused.recording = recording;
+        let envelope = answer(
+            "ticket close",
+            ResultCode::RecoveryRequired,
+            refused,
+            recovery,
+        );
+        assert_eq!(
+            lifecycle_way_out(&envelope),
+            [RepairOutside, Inspect],
+            "{recording:?}"
+        );
+    }
+    // Not for another code, nor without the blocker.
+    let envelope = answer(
+        "ticket close",
+        ResultCode::TransportUnavailable,
+        data(
+            ItemDtoKind::Ticket,
+            vec![LifecycleBlocker::IntegrationConflict],
+        ),
+        vec![retry()],
     );
+    assert!(lifecycle_way_out(&envelope).is_empty());
 }
 
 /// C5 decision 35: a published context whose remote state is unknown is read
@@ -615,12 +661,12 @@ fn mixed_blockers_keep_the_cli_order() {
         [RepairLocally { item_id: item() }, SendAgain, Inspect]
     );
     // The closure's rule applies with no way on, and the conflict's isn't
-    // tried after it.
+    // tried after it: the merge is repaired outside (ruling R-13).
     let envelope = answer(
         "ticket close",
         ResultCode::RecoveryRequired,
         both,
         vec![inspect()],
     );
-    assert_eq!(lifecycle_way_out(&envelope), [Inspect]);
+    assert_eq!(lifecycle_way_out(&envelope), [RepairOutside, Inspect]);
 }
