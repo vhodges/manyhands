@@ -781,6 +781,7 @@ Applied in the approval commit:
 | R-10 | After a lifecycle child's resolution, the desktop sends the lifecycle request again | One extra request send |
 | R-11 | A local resolution's observation is the inspection's | The library refuses a stale one |
 | R-12 | A resolution's submitted set is kept per request ID until that request finishes (decision 19) | A stale file after a crash; deleted when the request is next seen finished |
+| R-13 | `RepairOutside` is any `recovery_required` result with `integration_conflict` that no other rule routes, a ticket's included (Task 1 review, 2026-11-04) | A closure the CLI can repair locally shown outside guidance; the CLI prints nothing for it either way |
 
 ## Known Limits
 

@@ -70,3 +70,4 @@ These were committed at `a6ba36cf`.
 | Task | State | Base | Commits | Review | Verification |
 | --- | --- | --- | --- | --- | --- |
 | 0 | done | `cd2e922e` | `f203e865`, `a6ba36cf`, this ledger | — | above |
+| 1 | done | `019f8200` | `d8eddb95`, `5ac5dd5a` (review fixes) | Independent review of `019f8200..d8eddb95`: no Blocking findings. One Important finding (a ticket's unrouted refused merge got no `RepairOutside`) became ruling R-13 and was fixed in `5ac5dd5a`. Minor findings: an explicit `match`, `_kind`, a test renamed; all fixed. Optional item 5 (choose the note from the next step) was skipped because it would change CLI output. Parity was confirmed, and no `tests/` change. | `--lib way_out` 19; `--bin manyhands-cli lifecycle` 27; `--test cli` 474; `--test cli_remote lifecycle` 35 (at `d8eddb95`; `5ac5dd5a` changes no rendering); fmt, check (desktop) and both clippy lines clean |
