@@ -2853,3 +2853,141 @@ All exit 0.
 | `--test mutation_remote` | 700 | 4799 s |
 
 Then `origin/main` moved to `c2a34494` (Wave 03 D4 merged; it changes only `src/desktop` and `docs`).
+
+### The merge of `origin/main` (`c2a34494`, Wave 03 D4)
+
+Merge commit `a6d11b16`, never a rebase. The one conflict was the API audit's D24 and D25 rows: resolved
+additively, keeping D4's two amendments (2026-11-02) and C5's status amendment (2026-11-03). Nothing needed a
+product judgement.
+
+- **Desktop compile.** `cargo check --locked --features desktop` passed with no new arm: D4's code compiles
+  against C5's extended DTOs as they are.
+- **The plan's desktop clippy, `--all-targets --features desktop`, fails on main itself**, not on C5: D4's
+  test modules (`services/prompts_tests.rs`, `services/submissions_tests.rs`, `view/mod.rs`'s `harness`,
+  `model/operations.rs`'s imports) need `desktop-test-support`, and no C5 file is among them. C5 changes
+  nothing there. Run instead, all exit 0: `--all-targets --features desktop-test-support`, CI's own
+  `--features desktop --bin manyhands`, and `--features desktop --lib --bins`; whole-tree `--all-features`
+  clippy covers the rest. For the owner: main's gate list may want the feature named.
+- **Four D4 desktop tests failed after the merge** (`outcomes::route_tests::a_final_failure_on_a_finished_record_offers_share_not_retry`,
+  `…share_after_a_finished_locked_key_clears_its_declined_key`, `give_up_tests::give_up_is_offered_exactly_when_the_record_is_accepted`,
+  `…give_up_is_offered_on_exactly_the_rows_that_name_it`). Their `open(false)` staged "a share refused before
+  its acceptance" through `remote select`'s stale index, which is `01M669FJR2`, the bug C5 fixes (decision 10).
+  After the fix the share was accepted. The staging now leaves an uncommitted edit in `.manyhands/config.toml`,
+  which keeps the share refused before acceptance as before (`f6ccba93`, a test file only; no desktop behaviour
+  changed). `desktop::view::operations::` 40 passed after it.
+- The merged tree's fast tier (before that fix) stopped at `--bin manyhands` on those four: 51 results, 2661
+  passed, 4 failed, 1001 s.
+
+### Final quality review (`1da3c12a`)
+
+- `records::operation_or_parent_holder` replaces the three holder copies (`bind/conflict.rs`, `outcome.rs`'s
+  `holds_the_reservation`, `bind/lifecycle.rs`'s `held`).
+- `promotion::unfinished_holder` takes the connection and the registration ID the binding resolved: no raw SQL,
+  no canonicalize, and `held` reads the parent and its holder in one read session. `LifecycleVerb::holder`
+  changed with it.
+- The stale `#[allow(dead_code)]` (on `Json::Number`, `input.rs`) is gone; clippy agrees.
+- `set_made_ready_hook_for_testing` is an associated fn, documented per thread and consumed once.
+- `c5_poll`'s wait is `POLL_PROGRESS_THROTTLE + 50 ms`; the const is `#[doc(hidden)] pub` for it. This touches
+  `src/repository/remote/`, so every remote row runs below.
+- Known Limit: a `conflict resolve` resend should name the child's ID.
+
+### Final spec review (`68e19869`, `919f618f`)
+
+- **F1.** `BUSY_NOTE` no longer says `operation list` names the holder, which may be a lease outside any
+  operation. Golden `poll_once_busy_text` and the unit row updated.
+- **F2.** A promotion's blocked prepare on `integration_conflict` prints the external-repair note ("…it takes a
+  repair outside it, with Git. Repair it in the context and commit the merge, then prepare again.") and no
+  `context` line. Golden `document_promote_prepare_conflict_text`, its recovery-table row (`repo.inspect`), a
+  bin row and the design's sentence updated.
+- **F3.** One consolidated follow-up list in the RFC's "C5 evidence and known limits" (eleven candidates:
+  performance profile; reads by latest copy; ticket reopening; canonical add/add; split-endpoint tracking; a
+  contained context's stale remote branch; C4's refused first publication; synchronization's held lease as
+  `internal_error`; `progress: connecting`; the `closure::checkpoint` flakes; `effective_identity`'s cascade).
+  Known Limits for the lease and `progress: connecting` items, in the design and the RFC. Task 15 Step 5 points
+  to the list.
+- **F5.** The design's approval line, the Exit Statuses' Ctrl-C sentence (narrowed as `stops_on_ctrl_c`'s is),
+  and the Risks row.
+- **F7.** The split table above is joined.
+- **F8.** The plan's library scope names `remote/conflict_read.rs` and `mutation/bind/conflict.rs`; decision 34
+  says C4's contract is unchanged.
+
+### F6: real content at the final code
+
+Run 2026-11-03 with `target/debug/manyhands-cli` built at `919f618f`, copied out so the test runs could not
+replace it. Isolation as Task 11: a `mktemp -d` root holding `HOME`, an empty `GIT_CONFIG_GLOBAL`,
+`GIT_CONFIG_NOSYSTEM=1`, `MANYHANDS_DATA_DIR` and the XDG directories, with the SSH agent and `GIT_SSH*`
+unset. A `git clone --no-local` of this worktree's repository, checked out at main's `c2a34494` (D4's merge)
+with no `origin` and no other branch; repository-local identity `Manyhands Dogfood
+<dogfood@example.invalid>`. A bare repository seeded with that `main`, served by an unprivileged `sshd` on
+`127.0.0.1:22433` with a host key made for the run, `AuthorizedKeysFile` holding only the key `key generate`
+made, no password or agent, and a `ForceCommand` running `git-shell` under `env -i`. A plain-Git peer clone
+pushed the peer's edits. The CLI's own verbs took the key and host. `sshd` logged 215 accepted logins. It was
+stopped by its PID and the root removed; the main checkout's `main` is still `c2a34494` and its status is
+unchanged.
+
+| Step | Exit | Code |
+| --- | --- | --- |
+| Setup: `repo enable` prepare/confirm, `key generate`, `key public`, `key select`, `host observe`, `host approve` prepare/confirm | 0 | `ok` |
+| `repo sync`, for tracking | 0 | `already_applied` |
+| `document create` (throwaway), `ticket create` T, U | 0 | `ok` |
+| `item sync` U (its context's first publication) | 0 | `ok` |
+| `document promote --prepare` / `--confirm` (throwaway) | 0 / 0 | `ok` / `ok`: merged, published, cleanup complete; `refs/remotes/origin/main` advanced to the pushed commit (98 s) |
+| **`ticket close --prepare` T, right after the promotion, no poll (decision 29)** | 0 | **`ok`** |
+| `ticket close --confirm` T | 0 | `ok`: checkpoint, integration, published, cleanup complete, `recording: record`, `made_ready_state: current`, tracking advanced again (101 s) |
+| **`ticket close --prepare` T, just closed, no fetch** (JSON, human) | 3 | **`ticket_closed`**, `[already_closed]` |
+| `ticket save` U (A's edit), after the peer pushed an edit of U's context | 0 | `ok` |
+| **`ticket close --prepare` U** (JSON, human) | 3 | **`recovery_required`, `[remote_context_deleted]`**, `repo.inspect` only (see BLOCKERS) |
+| `poll once`, then `ticket close --prepare` U | 0, 3 | `ok` (U `diverged`), then `recovery_required`, `[context_behind_remote]`, `repo.inspect` only |
+| `item sync` U, `conflict show` of its operation, `conflict resolve` with A's side | 3, 0, 0 | `recovery_required`; `conflict_pending`, `resolve`, `eligible_canonical`, one path; `ok`, published (C4's route) |
+| `ticket close` U, prepare/confirm | 0 / 0 | `ok` / `ok`, closure fields on primary, A's body |
+| `ticket create` V, `item sync` V, `ticket close --prepare` V at once | 0 | `ok` (so the simple sequence is not affected) |
+| Peer pushes an edit of V's context; `ticket save` V (A's edit); `ticket close --prepare` V | 0 | `ok` |
+| **`ticket close --confirm` V** | 3 | **`recovery_required`, `[context_conflicted, conflict_pending, context_behind_remote]`, `[request.retry, repo.inspect]`** |
+| The same request, human | 3 | prints `next: manyhands-cli conflict show … --operation-id <parent>` and `conflict resolve … --request-id <new-request-id>`, then `request.retry`, `repo.inspect` and the note |
+| **`conflict show --operation-id <parent>`** | 0 | `ok`: `conflict_pending`, `resolve`, stage `context`, `operation_id` the child's, one path |
+| **`conflict resolve --operation-id <parent>`**, A's side | 0 | `ok`, the child's ID in data, `published`; the remote's context branch at the resolution commit |
+| **The same `ticket close` request** | 0 | **`ok`**: cleanup complete, one integration merge (plus the resolution's merge on the context), primary descends from the resolution, closure fields on primary and the remote, A's body, branch gone locally and on the remote |
+| The close's replay; the resolution's replay by the child's ID (same input) | 0 / 0 | `ok` / `ok` |
+| `ticket close --prepare` V, closed; `ticket ready`; `index status` | 3 / 0 / 0 | `ticket_closed` / `ok` / `ok`, `current`, 42 problems (main's nonconforming files) |
+
+No data-directory file held A's edit text. Decisions 29 and 34 answered as documented. One answer did not:
+
+**BLOCKER (F6): a published, untracked context reads as deleted after another item's lifecycle.** U's context was
+published by `item sync` (its first publication, so no tracking ref is made: decision 29 advances existing refs
+only). After the throwaway promotion and T's closure ran, `ticket close --prepare` U answered
+`recovery_required`, `[remote_context_deleted]`, offering only `repo.inspect`. The branch stood on the remote. V, with
+the same publication, the same peer edit and A's save but no lifecycle between, prepared `ok`, so the
+intervening lifecycles are the likely cause; that was inferred from the contrast, not traced in the code. This is the false `remote_context_deleted` the
+ledger found at `AfterPublication` (Task 2's decision 18 section: "published, and no tracking ref", not
+deleted), now met in plain use: publish one item, complete another, then prepare the first. The Known Limit on
+tracking names `primary_ahead_of_remote` or `primary_missing` and a printed `poll once`; neither is what this
+prints. A `poll once` gets past it, to `context_behind_remote` (true here, since the peer had pushed), and then
+the route is C4's (`item sync`, `conflict show`, `conflict resolve`), and the close finishes. Not fixed: it is
+the closure and promotion observation's (`closure/observe.rs:789-805`, `promotion/observe.rs:919-928`), outside
+this task. For the owner: whether to fix it before merge, or to document it as a Known Limit with a poll line.
+
+### Verified on the final tree (`919f618f`; the ledger commits after it change documents only)
+
+The fast tier and the SSH targets ran in two parallel streams (the fast tier then stream A's targets, beside
+`mutation_remote`), so times are under load.
+
+| Command | Ran | Time |
+| --- | --- | --- |
+| `cargo check --all-features --locked`, `cargo fmt --check`, whole-tree clippy `--all-targets --all-features -D warnings` | ok | |
+| `cargo check --locked --features desktop`; desktop clippy `--all-targets --features desktop-test-support` and `--features desktop --lib --bins` | ok | |
+| The plan's `clippy --all-targets --features desktop` | exit 101, main's own (D4's test modules need `desktop-test-support`; see the merge above) | |
+| `cargo check --locked --bin manyhands-cli`, `scripts/check-cli-no-gpui.sh` | ok | |
+| AGENTS.md's fast tier, verbatim | exit 0: 79 results, 5163 passed, 0 failed | 1630 s |
+| `--test mutation_remote` (`mutation/` changed) | 700 SSH cases | 5116 s |
+| `--test document_promotion` (`promotion/` changed) | 79 | 757 s |
+| `--test cli_remote` (`remote/` and CLI remote commands changed) | 160 | 939 s |
+| `--test remote_synchronization` | 69 | 582 s |
+| `--test remote_merge_recovery` | 29 | 240 s |
+| `--test remote_polling` | 84 | 179 s |
+| `--test ssh_transport` | 123 | 176 s |
+| `--test remote_observation` | 15 | 7 s |
+| `git merge-tree --write-tree HEAD origin/main` (`c2a34494`) | clean | |
+
+Not run, by the table: `ticket_closure` (no `closure/` change), `comment_publication`, `ssh_fixture` (no
+`transport/`, `keys/` or `tests/support/ssh_*` change) and `--lib repository::local_sync::` (no `local_sync/`
+change). They passed at `f59aceb6` above.
