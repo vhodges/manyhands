@@ -413,83 +413,7 @@ impl ContextCleanup {
         }
     }
     fn branch_is_checked_out(&self, reference: &str) -> Result<bool, ()> {
-        let at_branch = |gitdir: &Path| -> Result<bool, ()> {
-            let head = std::fs::read_to_string(gitdir.join("HEAD")).map_err(|_| ())?;
-            let head = head.trim_end_matches('\n');
-            if let Some(branch) = head.strip_prefix("ref: ") {
-                if !git2::Reference::is_valid_name(branch) {
-                    return Err(());
-                }
-                if branch == reference {
-                    return Ok(true);
-                }
-                // An indirect alias is not evidence of an unrelated checkout.
-                direct_oid(&self.repository, branch)
-                    .map_err(|_| ())?
-                    .ok_or(())?;
-                Ok(false)
-            } else {
-                let detached = Oid::from_str(head).map_err(|_| ())?;
-                if detached.is_zero() {
-                    return Err(());
-                }
-                Ok(false)
-            }
-        };
-        if at_branch(self.repository.path())? {
-            return Ok(true);
-        }
-        // libgit2's worktrees() silently filters incomplete registrations. Only
-        // a complete filesystem inventory can prove no checkout exists; missing
-        // or invalid evidence is a refusal, never permission to delete a ref.
-        let inventory = self.repository.commondir().join("worktrees");
-        match std::fs::symlink_metadata(&inventory) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
-            Err(_) => return Err(()),
-            Ok(_) => plain_metadata(&inventory, true)?,
-        }
-        let common = self.repository.commondir().canonicalize().map_err(|_| ())?;
-        for entry in std::fs::read_dir(&inventory).map_err(|_| ())? {
-            let entry = entry.map_err(|_| ())?;
-            let admin = entry.path();
-            plain_metadata(&admin, true)?;
-            for member in ["commondir", "gitdir", "HEAD"] {
-                plain_metadata(&admin.join(member), false)?;
-            }
-            let read_link = |member: &str| -> Result<PathBuf, ()> {
-                let text = std::fs::read_to_string(admin.join(member)).map_err(|_| ())?;
-                let text = text.trim_end_matches('\n');
-                if text.is_empty() {
-                    return Err(());
-                }
-                // Absolute links remain absolute; relative metadata links are
-                // interpreted at their registration, as Git's commondir is.
-                admin.join(text).canonicalize().map_err(|_| ())
-            };
-            if read_link("commondir")? != common {
-                return Err(());
-            }
-            let name = entry.file_name();
-            let worktree = self
-                .repository
-                .find_worktree(name.to_str().ok_or(())?)
-                .map_err(|_| ())?;
-            if read_link("gitdir")?
-                != worktree
-                    .path()
-                    .join(".git")
-                    .canonicalize()
-                    .map_err(|_| ())?
-            {
-                return Err(());
-            }
-            // Inspect this actual registration's HEAD, never a redirected .git
-            // link in its working directory.
-            if at_branch(&admin)? {
-                return Ok(true);
-            }
-        }
-        Ok(false)
+        branch_is_checked_out(&self.repository, reference)
     }
     /// Git-first completion seam. Caller must first persist branch_deleted and
     /// validate the real reservation/configuration. This helper never invents
@@ -668,6 +592,88 @@ fn require_cleanup_clean(
         }
     }
     Ok(())
+}
+
+/// Complete registration/HEAD inventory shared by cleanup and metadata-only
+/// retirement admission. Call under the repository lease; it grants no effects.
+pub(super) fn branch_is_checked_out(
+    repository: &git2::Repository,
+    reference: &str,
+) -> Result<bool, ()> {
+    let at_branch = |gitdir: &Path| -> Result<bool, ()> {
+        let head = std::fs::read_to_string(gitdir.join("HEAD")).map_err(|_| ())?;
+        let head = head.trim_end_matches('\n');
+        if let Some(branch) = head.strip_prefix("ref: ") {
+            if !git2::Reference::is_valid_name(branch) {
+                return Err(());
+            }
+            if branch == reference {
+                return Ok(true);
+            }
+            // An indirect alias is not evidence of an unrelated checkout.
+            direct_oid(repository, branch).map_err(|_| ())?.ok_or(())?;
+            Ok(false)
+        } else {
+            let detached = Oid::from_str(head).map_err(|_| ())?;
+            if detached.is_zero() {
+                return Err(());
+            }
+            Ok(false)
+        }
+    };
+    if at_branch(repository.path())? {
+        return Ok(true);
+    }
+    // libgit2's worktrees() silently filters incomplete registrations. Only
+    // a complete filesystem inventory can prove no checkout exists; missing
+    // or invalid evidence is a refusal, never permission to delete a ref.
+    let inventory = repository.commondir().join("worktrees");
+    match std::fs::symlink_metadata(&inventory) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(_) => return Err(()),
+        Ok(_) => plain_metadata(&inventory, true)?,
+    }
+    let common = repository.commondir().canonicalize().map_err(|_| ())?;
+    for entry in std::fs::read_dir(&inventory).map_err(|_| ())? {
+        let entry = entry.map_err(|_| ())?;
+        let admin = entry.path();
+        plain_metadata(&admin, true)?;
+        for member in ["commondir", "gitdir", "HEAD"] {
+            plain_metadata(&admin.join(member), false)?;
+        }
+        let read_link = |member: &str| -> Result<PathBuf, ()> {
+            let text = std::fs::read_to_string(admin.join(member)).map_err(|_| ())?;
+            let text = text.trim_end_matches('\n');
+            if text.is_empty() {
+                return Err(());
+            }
+            // Absolute links remain absolute; relative metadata links are
+            // interpreted at their registration, as Git's commondir is.
+            admin.join(text).canonicalize().map_err(|_| ())
+        };
+        if read_link("commondir")? != common {
+            return Err(());
+        }
+        let name = entry.file_name();
+        let worktree = repository
+            .find_worktree(name.to_str().ok_or(())?)
+            .map_err(|_| ())?;
+        if read_link("gitdir")?
+            != worktree
+                .path()
+                .join(".git")
+                .canonicalize()
+                .map_err(|_| ())?
+        {
+            return Err(());
+        }
+        // Inspect this actual registration's HEAD, never a redirected .git
+        // link in its working directory.
+        if at_branch(&admin)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn plain_metadata(path: &Path, directory: bool) -> Result<(), ()> {

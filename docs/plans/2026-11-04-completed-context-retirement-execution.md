@@ -361,6 +361,7 @@ are not authorized; numeric exits must come from existing results registry.
 | Pre-Task 2 main refresh, 2026-11-05 | Both checkouts clean before bookkeeping; fresh fetch succeeded; main still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`. Merge before/after `2f2f9b9dc14144d00658c7d2ce2d63b7405281a8`, already up to date; current rules reread. Another unrelated remote ticket ref advanced, not consumed | No conflict, rebase or changed main assumption; no native/real-context/lifecycle action |
 | Task 2 adversarial checkpoint, `7b1912d1..85bc17d7` | Controller relayed and accepted **2 Important internal mechanism defects**: original-P advertisement precedes the frozen digest/eligibility required by the proposed immutable receipt; last-pin release after configuration fencing leaves an unauditable obsolete batch | Concrete proposal corrections below; **same reviewer's re-review required, checkpoint not approved**. No runtime finding or owner-policy change inferred |
 | Task 2 corrected checkpoint, `7b1912d1..66c2ca2b` | Same independent adversarial reviewer, session `ses_e56ce3361ffe0Y48AKdejYpbyv`, verified both corrections and their producer/pin/audit/FK interactions against source: **0 remaining findings** | Mandatory record/reservation checkpoint approved; same implementer may begin Task 2 TDD. This is not runtime evidence or Task 2 completion |
+| Task 2 limited initial-absence SPEC review at `bdfaa98e33f0a0150cf74b48d0c00d5f9b3e7c9e` | Controller relayed and source-verified **3 Important current-behavior findings**: S1 nonstandard registration/HEAD inventory omitted; S2 dangling/nonregular loose-ref slot could become absence; S3 terminal remote index/reconciliation debt did not block fresh retirement | Limited SPEC review **failed**; corrections/evidence below. Same spec reviewer's re-review is required before quality. No full Task 2 or quality pass, new owner-policy question or authority extension |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -378,7 +379,8 @@ are not authorized; numeric exits must come from existing results registry.
 - [ ] **2 — Durable single-context retirement.** Checkpoint approved at `66c2ca2b`;
   the IN-PROGRESS initial-absence code milestone includes the local-only domain
   path, exact refresh guards, single-consumer Z and stronger audits. Latest
-  context-retirement filter: **36 passed** (30 Task 2 tests, 6 unchanged proof).
+  context-retirement filter after limited-SPEC S1–S3 fixes: **45 passed** (39
+  Task 2 tests, 6 unchanged proof). Same-reviewer spec re-review remains pending.
   Live observation/instance/destructive and source/batch capability paths remain
   unfinished and unexposed. See the latest bounded-increment section below;
   not complete/review-ready, full Task 2 spec/quality review remains owed.
@@ -391,8 +393,8 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: controller-owned independent **limited-milestone spec
-review, then quality review** of the initial-absence core/code checkpoint below.
+Immediate next step: controller-owned **same-reviewer limited-milestone SPEC
+re-review of S1–S3 corrections, then quality review** of the initial-absence core.
 Do not extend source/batch/destructive authorities until that review checkpoint.
 This is not full Task 2 review/completion or permission for Task 3. The corrected
 design checkpoint stays cleared, not awaiting reapproval.
@@ -1651,3 +1653,131 @@ unique ID, parent **`01M6MTDF93JH832NBMSRS2X2QQ`**, actual UTC
 **`2026-11-05T03:09:12Z`**. The commit preserves both earlier canonical progress
 comments as historical evidence. Wait for the controller's limited review before
 continuing authorities; fixes return to this same implementer/session.
+
+## Task 2 — Limited SPEC Corrections S1–S3 (Re-review Pending)
+
+### Finding Authority, Exact Scope And Entry
+
+Controller relayed the limited initial-absence SPEC failure at
+**`bdfaa98e33f0a0150cf74b48d0c00d5f9b3e7c9e`**: three Important bugs in behavior
+already exposed by this milestone, not missing future features or new policy.
+That clean commit is this fix's parent; no squash/reset/rebase was performed.
+Full Task 2 base remains **`7b1912d152a1ab7440bd17c48a0a544e40e19258`**, original
+implementation source base **`daab73e70fa9e84ff07a8d1214cda89a7d3766c2`**.
+
+**Task2 initial-absence core only; present/branch-only fail closed before claim;
+remaining 44-matrix cases explicitly owed.** Same spec reviewer must re-review
+these corrections before quality review. Local GREEN is not an independent
+review pass, full Task 2 completion or permission for Task 3/4/producer extension.
+
+### Source-Grounded Corrections And Observable Regressions
+
+- **S1 — complete registration/checkout inventory.** Reproduced with an actual
+  libgit2 worktree outside the deterministic directory and under
+  `alternate-admin-name`; its actual registration HEAD still names the context
+  branch after the fixture externally removes that loose branch ref. The old
+  implementation consumed the completed intent and returned `AlreadyAbsent`.
+  Admission now shares cleanup's existing complete `read_dir`/registration-link/
+  HEAD inventory. The extraction changes only `self.repository` to an explicit
+  repository parameter; `ContextCleanup` delegates to the same body, retaining
+  all old checks. A matching residual, incomplete registration, unreadable HEAD
+  text or foreign commondir yields a stable no-effect recovery refusal. A complete
+  unrelated registration remains allowed. Actual admin/worktree file/type/link
+  snapshots and complete old intent/repository row images remain equal.
+- **S2 — no-follow authoritative ref storage.** Reproduced the exact dangling
+  loose-ref-slot counterexample (`find_reference` returns `NotFound`), plus a
+  nonregular target slot and redirected dangling `packed-refs`. All three old
+  paths consumed the completed intent and returned `AlreadyAbsent`. Admission
+  now inspects the target loose slot and packed-ref store **before** libgit2 reads
+  them, checking every ancestor without following redirects and requiring a
+  present ref-storage leaf to be a regular file. A Git `NotFound` is accepted
+  only with an absent loose slot and a successful complete libgit2 ref inventory.
+  The path walker explicitly rejects Windows reparse attributes (the existing
+  cleanup `0x400` policy), not only symlink file types. Tests preserve the actual
+  link type and raw `read_link` target plus the whole fixture Git-admin image,
+  intent and repository rows. No expanded atomicity against arbitrary external
+  Git/filesystem writers is promised. Windows runtime/reparse fixtures have not
+  been run on this Linux host; no native-CI claim is made.
+- **S3 — retained remote debt before fresh claim.** Reproduced with valid metadata
+  fixtures built through real owned reservation/checkpoint/complete-batch paths:
+  `classify_synchronization` produces `completed/index_pending=1` before any local
+  handoff row exists; restart + cancellation produces a terminal
+  `cancelled/reconciliation_required=1` row. Both pass full startup audit before
+  the retirement call. The old retirement admitted both, consumed D14 and returned
+  `AlreadyAbsent`. The fresh-retirement-only exclusion now checks retained
+  `index_pending`/`reconciliation_required` in addition to active phases. Repeated
+  calls refuse without enrollment; complete remote row images, old intent and
+  repository rows (including deliberately stale `refresh_required=1`) remain
+  identical. An active read-only observer and the existing pending-local control
+  still block. These are valid isolated journal fixtures, not authenticated SSH
+  journeys; no transport, source/batch scope or producer was added.
+
+S1/S2 accepted refusals assert exact companion/envelope metadata:
+`initial_resources=invalid`, `phase=refused`, `absence_basis=none`,
+`materialization_settled=0`, both removal flags `none`, local state `completed`
+and **no** authoritative completed step. Each replays the old request stably;
+the alternate-registration test also restores the branch and still gets the old
+refusal. S3 rejects before creating either the local envelope or companion.
+
+All added inventory/ref checks remain exclusively in initial admission/T7's
+same-live initial check. The existing pending index-only and completed-result
+branches are unchanged: no new inventory freshness, target selection or new
+intent consumption on retry/replay. Their same-ID/OID recreation and new-intent
+preservation tests remain in the full passing context-retirement filter.
+
+### Actual Test-First Evidence
+
+Every command used serial `devenv shell -- cargo test --all-features --locked
+--lib <filter>`, with logs under `/tmp/opencode/` and no shell deadline.
+
+| Filter / behavioral RED | GREEN / exact evidence |
+| --- | --- |
+| `retirement_specfix_s1_`: `task2-specfix-s1-red.log`, **1 passed / 2 failed**. External differently named registration and incomplete registration both incorrectly returned `AlreadyAbsent` and erased the exact intent row; valid unrelated registration passed | `task2-specfix-s1-green-2.log`: **3 passed**, 0 failed. Incomplete/unreadable/foreign subcases and stable replay/image assertions all execute |
+| `retirement_specfix_s2_`: `task2-specfix-s2-red.log`, **0 passed / 3 failed**. Dangling loose slot, nonregular slot and dangling packed storage each produced false absence/D14 consumption | `task2-specfix-s2-green.log`: **3 passed**, 0 failed |
+| `retirement_specfix_s3_`: `task2-specfix-s3-red.log`, **0 passed / 2 failed**. Valid `("completed", true, false)` and `("cancelled", false, true)` debt rows admitted retirement and removed the captured old intent | `task2-specfix-s3-green.log`: **2 passed**, 0 failed; both calls repeated with no enrollment or metadata changes |
+| Combined `retirement_specfix_`, with additional active-observer compatibility control | `task2-specfix-focused-green.log`: **9 passed**, 0 failed |
+
+The raw RED logs show the exact before/after materialization row images and
+incorrect final flags/outcome. `task2-specfix-s1-green.log` was an intermediate
+**compilation error**, not GREEN or another behavioral RED: the extracted helper's
+parameter needed `git2::Repository`, not an unimported `Repository`. Corrected the
+type qualification; the `-green-2` log above is the actual passing run. No fixture
+constraint/audit or old assertion was weakened.
+
+### Frozen-Source Gates And Self-Review
+
+Formatted then froze Rust source before these serial runs; no compilation during
+process-spawn tests. No unchanged broad tier, SSH tier or native CI was dispatched.
+
+| Exact command, prefixed with `devenv shell --` | Raw log / actual result |
+| --- | --- |
+| `cargo check --all-features --locked` | `task2-specfix-check-final.log`: exit **0** |
+| `cargo fmt --check` | `task2-specfix-fmt-final.log`: exit **0** |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `task2-specfix-clippy-final.log`: exit **0**, including nested-production compilation, not native/SSH execution |
+| `cargo test --all-features --locked --lib context_retirement` | `task2-specfix-context-retirement-final.log`: **45 passed**, 0 failed = previous 36 + 9 new; **not 45 matrix groups** |
+| `cargo test --all-features --locked --lib recovery` | `task2-specfix-recovery-final.log`: **60 passed**, 0 failed |
+| `cargo test --all-features --locked --test recovery_foundation_gate` | `task2-specfix-foundation-final.log`: **52 passed**, 0 failed |
+| `cargo test --all-features --locked --lib cleanup` | `task2-specfix-cleanup-final.log`: **50 passed**, 0 failed; old cleanup/release controls unchanged |
+
+Self-review: working diff contains only owned corrections in
+`src/repository/cleanup.rs`, `src/repository/context_retirement/execution.rs` and
+`src/repository/context_retirement/execution_tests.rs`, plus this ledger and the
+new canonical comment. No unexpected user changes identified. Reviewed the
+extraction against the old helper body, retirement-only scope of the remote-debt
+predicate, no-follow order before Git lookup and unchanged replay/owed paths.
+`git diff --check` passed; staged content/whitespace checks precede the coherent
+fix commit with the required coauthor trailer. Source blob fingerprints (not
+commits): cleanup `cd4dc1e8397752aa9fb340d9c02235a3eda74b42`, execution
+`90bc512d1ed82f9070a56a835ab075fc7d6d732c`, execution tests
+`9fea2e9b8565a6f0bffad550412ba7e5117936b5`.
+
+All prior full Task 2 remaining groups/cases stay owed. No other old semantic pin
+change, future authority, marker/cleanup producer, binding/DTO/CLI/coordinator,
+status/lifecycle action, agent, push, other-worktree edit, real-context/key/profile/
+draft action or native CI. `mutation_remote retirement_` remains unrun until a
+module/CASES and real nonzero cases exist; no zero-case pass claimed.
+
+Canonical checkpoint **`01M6MX09FC0R79VR76JGFA269D`**, unique existing-CLI ID,
+parent **`01M6MTX4MXEB7ZG8X5XT162XGH`**, actual UTC **`2026-11-05T03:45:53Z`**.
+Next is the controller's **same limited SPEC reviewer re-review, then quality**.
+No independent approval/pass or full Task 2 completion is claimed by implementer.

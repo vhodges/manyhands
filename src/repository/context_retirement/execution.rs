@@ -45,6 +45,15 @@ fn absent_path(root: &Path, path: &Path) -> Result<bool, RepositoryError> {
                 if metadata.file_type().is_symlink() || (at != path && !metadata.is_dir()) {
                     return Err(recovery_required());
                 }
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::MetadataExt;
+                    // A junction or other reparse point need not report as a
+                    // symlink. Match cleanup's existing no-follow policy.
+                    if metadata.file_attributes() & 0x400 != 0 {
+                        return Err(recovery_required());
+                    }
+                }
                 if at == path {
                     return Ok(false);
                 }
@@ -54,6 +63,14 @@ fn absent_path(root: &Path, path: &Path) -> Result<bool, RepositoryError> {
         }
     }
     Ok(false)
+}
+
+fn ref_file_absent(root: &Path, path: &Path) -> Result<bool, RepositoryError> {
+    let absent = absent_path(root, path)?;
+    if !absent && !std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file()) {
+        return Err(recovery_required());
+    }
+    Ok(absent)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -69,6 +86,18 @@ fn initial_inventory(
     request: &RetireContextRequest,
 ) -> Inventory {
     let context = item_context(root, request.kind, request.item_id.clone());
+    // Check the file stores BEFORE asking libgit2 to read/follow a ref slot.
+    let loose_absent = match ref_file_absent(
+        root,
+        &git.commondir()
+            .join(format!("refs/heads/{}", context.branch)),
+    ) {
+        Ok(absent) => absent,
+        Err(_) => return Inventory::Invalid,
+    };
+    if ref_file_absent(root, &git.commondir().join("packed-refs")).is_err() {
+        return Inventory::Invalid;
+    }
     let branch_absent = match git.find_reference(&format!("refs/heads/{}", context.branch)) {
         Ok(reference)
             if reference.symbolic_target().is_none()
@@ -80,6 +109,17 @@ fn initial_inventory(
         Err(error) if error.code() == git2::ErrorCode::NotFound => true,
         Err(_) => return Inventory::Invalid,
     };
+    // Git's NotFound alone may have followed a dangling loose-ref symlink.
+    // Inspect both authoritative file stores without following redirected slots
+    // or ancestors, and require libgit2 to read the complete ref inventory.
+    if branch_absent
+        && (!loose_absent
+            || !git
+                .references()
+                .is_ok_and(|mut refs| refs.all(|reference| reference.is_ok())))
+    {
+        return Inventory::Invalid;
+    }
     let parts = (
         absent_path(root, &context.worktree),
         absent_path(
@@ -95,7 +135,23 @@ fn initial_inventory(
         ),
     );
     match parts {
-        (Ok(true), Ok(true), Ok(true)) if branch_absent => Inventory::Absent,
+        (Ok(true), Ok(true), Ok(true)) if branch_absent => {
+            // Deterministic path absence alone misses renamed/external
+            // registrations and incomplete entries filtered out by libgit2.
+            if matches!(absent_path(root, &git.path().join("HEAD")), Ok(false))
+                && matches!(
+                    super::super::cleanup::branch_is_checked_out(
+                        git,
+                        &format!("refs/heads/{}", context.branch)
+                    ),
+                    Ok(false)
+                )
+            {
+                Inventory::Absent
+            } else {
+                Inventory::Invalid
+            }
+        }
         (Ok(w), Ok(a), Ok(true)) if !branch_absent && w == a => Inventory::PresentOrBranchOnly,
         _ => Inventory::Invalid,
     }
@@ -182,7 +238,10 @@ impl RepositoryService {
                     return Err(recovery_required());
                 }
                 recovery::require_no_pending_local(&tx, repository_id)?;
-                let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')) OR EXISTS(SELECT 1 FROM request_operations WHERE operation_ulid=?2)", params![repository_id,id], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+                // A terminal remote row may still own discovery/reconciliation
+                // before a local handoff row exists. Its released reservation
+                // is not permission for a new retirement to settle that debt.
+                let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0)) OR EXISTS(SELECT 1 FROM request_operations WHERE operation_ulid=?2)", params![repository_id,id], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
                 if blocked {
                     return Err(recovery_required());
                 }

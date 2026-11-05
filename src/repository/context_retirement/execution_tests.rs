@@ -1,7 +1,93 @@
 use crate::repository::*;
 use rusqlite::{Connection, params};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 const ITEM: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+#[derive(Debug, PartialEq, Eq)]
+enum DiskNode {
+    Directory,
+    File(Vec<u8>),
+    Link(PathBuf),
+}
+
+fn disk_image(root: &Path) -> BTreeMap<PathBuf, DiskNode> {
+    fn visit(root: &Path, at: &Path, image: &mut BTreeMap<PathBuf, DiskNode>) {
+        let metadata = std::fs::symlink_metadata(at).unwrap();
+        let node = if metadata.file_type().is_symlink() {
+            DiskNode::Link(std::fs::read_link(at).unwrap())
+        } else if metadata.is_dir() {
+            DiskNode::Directory
+        } else {
+            assert!(metadata.is_file());
+            DiskNode::File(std::fs::read(at).unwrap())
+        };
+        let directory = node == DiskNode::Directory;
+        image.insert(at.strip_prefix(root).unwrap().into(), node);
+        if directory {
+            for entry in std::fs::read_dir(at).unwrap() {
+                visit(root, &entry.unwrap().path(), image);
+            }
+        }
+    }
+    let mut image = BTreeMap::new();
+    visit(root, root, &mut image);
+    image
+}
+
+fn row_image(db: &Connection, table: &str) -> Vec<Vec<rusqlite::types::Value>> {
+    db.prepare(&format!("SELECT * FROM {table} ORDER BY rowid"))
+        .unwrap()
+        .query_map([], |row| {
+            (0..row.as_ref().column_count())
+                .map(|i| row.get(i))
+                .collect()
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
+fn assert_inventory_refusal(
+    f: &Fixture,
+    request: &RetireContextRequest,
+    result: &ContextRetirementOutcome,
+) {
+    assert!(
+        matches!(result, ContextRetirementOutcome::Final(report)
+        if report.code==crate::results::ResultCode::RecoveryRequired
+        && report.outcome==RetirementDisposition::Refused
+        && report.worktree_removal==RetirementRemoval::None
+        && report.branch_removal==RetirementRemoval::None
+        && !report.materialization_settled),
+        "expected stable no-effect inventory refusal, got {result:?}"
+    );
+    let flags: Vec<rusqlite::types::Value> = f.db().query_row(
+        "SELECT c.initial_resources,c.phase,c.absence_basis,c.materialization_settled,c.worktree_removal,c.branch_removal,o.state,o.completed_step FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id WHERE c.operation_ulid=?1",
+        [request.operation_id.to_string()], |row| (0..row.as_ref().column_count()).map(|i| row.get(i)).collect()).unwrap();
+    use rusqlite::types::Value::{Integer, Null, Text};
+    assert_eq!(
+        flags,
+        vec![
+            Text("invalid".into()),
+            Text("refused".into()),
+            Text("none".into()),
+            Integer(0),
+            Text("none".into()),
+            Text("none".into()),
+            Text("completed".into()),
+            Null
+        ]
+    );
+    assert_eq!(
+        f.service.retire_context(request.clone()).unwrap(),
+        *result,
+        "accepted no-effect refusal must replay stably"
+    );
+}
 
 struct Fixture {
     root: tempfile::TempDir,
@@ -538,4 +624,487 @@ fn retirement_dangling_or_redirected_ancestor_is_not_initial_absence() {
                 .is_symlink()
         );
     }
+}
+
+#[test]
+fn retirement_specfix_s1_alternate_registration_with_deleted_branch_is_not_absent() {
+    let f = Fixture::new();
+    f.materialization("complete");
+    let git = git2::Repository::open(f.root.path()).unwrap();
+    let branch = format!("manyhands/ticket/{ITEM}");
+    let tip = git.head().unwrap().peel_to_commit().unwrap();
+    let reference = git.branch(&branch, &tip, false).unwrap().into_reference();
+    let external = tempfile::tempdir().unwrap();
+    let worktree = external.path().join("actual-context");
+    let mut options = git2::WorktreeAddOptions::new();
+    options.reference(Some(&reference));
+    git.worktree("alternate-admin-name", &worktree, Some(&options))
+        .unwrap();
+    std::fs::write(worktree.join("user-content"), b"preserve external context").unwrap();
+    std::fs::remove_file(git.commondir().join("refs/heads").join(&branch)).unwrap();
+    assert!(
+        !f.root
+            .path()
+            .join(".manyhands/worktrees")
+            .join(ITEM)
+            .exists()
+    );
+    assert!(!git.commondir().join("worktrees").join(ITEM).exists());
+    let admin_before = disk_image(&git.commondir().join("worktrees"));
+    let worktree_before = disk_image(&worktree);
+    let db = f.db();
+    let materialization_before = row_image(&db, "remote_poll_materializations");
+    let repository_before = row_image(&db, "repositories");
+    let request = RetireContextRequest {
+        root: f.root.path().into(),
+        kind: AuthoringKind::Ticket,
+        item_id: ITEM.parse().unwrap(),
+        operation_id: OperationId::new(),
+    };
+    let result = f.service.retire_context(request.clone()).unwrap();
+    let materialization_after = row_image(&db, "remote_poll_materializations");
+    assert_eq!(
+        materialization_after, materialization_before,
+        "alternate checkout must not consume D14; outcome={result:?}"
+    );
+    assert_eq!(disk_image(&git.commondir().join("worktrees")), admin_before);
+    assert_eq!(disk_image(&worktree), worktree_before);
+    assert_eq!(row_image(&db, "repositories"), repository_before);
+    assert_inventory_refusal(&f, &request, &result);
+    git.reference(
+        &format!("refs/heads/{branch}"),
+        tip.id(),
+        false,
+        "fixture repair",
+    )
+    .unwrap();
+    assert_eq!(f.service.retire_context(request).unwrap(), result);
+}
+
+#[test]
+fn retirement_specfix_s1_incomplete_unreadable_or_foreign_inventory_refuses() {
+    for defect in ["incomplete", "unreadable_head", "foreign_commondir"] {
+        let f = Fixture::new();
+        f.materialization("complete");
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        let admin = git.commondir().join("worktrees/unlisted");
+        std::fs::create_dir_all(&admin).unwrap();
+        let external = tempfile::tempdir().unwrap();
+        if defect != "incomplete" {
+            let reference = git
+                .branch(
+                    "unrelated",
+                    &git.head().unwrap().peel_to_commit().unwrap(),
+                    false,
+                )
+                .unwrap()
+                .into_reference();
+            // Remove just this empty fixture directory before libgit2 installs
+            // an actual differently named registration there.
+            std::fs::remove_dir(&admin).unwrap();
+            let mut options = git2::WorktreeAddOptions::new();
+            options.reference(Some(&reference));
+            git.worktree(
+                "unlisted",
+                &external.path().join("checkout"),
+                Some(&options),
+            )
+            .unwrap();
+            if defect == "unreadable_head" {
+                std::fs::write(admin.join("HEAD"), [0xff]).unwrap();
+            } else {
+                std::fs::write(admin.join("commondir"), external.path().to_str().unwrap()).unwrap();
+            }
+        }
+        let admin_before = disk_image(&admin);
+        let external_before = disk_image(external.path());
+        let db = f.db();
+        let materialization_before = row_image(&db, "remote_poll_materializations");
+        let repository_before = row_image(&db, "repositories");
+        let request = RetireContextRequest {
+            root: f.root.path().into(),
+            kind: AuthoringKind::Ticket,
+            item_id: ITEM.parse().unwrap(),
+            operation_id: OperationId::new(),
+        };
+        let result = f.service.retire_context(request.clone()).unwrap();
+        assert_eq!(
+            row_image(&db, "remote_poll_materializations"),
+            materialization_before,
+            "{defect}: {result:?}"
+        );
+        assert_eq!(row_image(&db, "repositories"), repository_before);
+        assert_eq!(disk_image(&admin), admin_before);
+        assert_eq!(disk_image(external.path()), external_before);
+        assert_inventory_refusal(&f, &request, &result);
+    }
+}
+
+#[test]
+fn retirement_specfix_s1_complete_unrelated_registration_does_not_block_absence() {
+    let f = Fixture::new();
+    let git = git2::Repository::open(f.root.path()).unwrap();
+    let reference = git
+        .branch(
+            "unrelated",
+            &git.head().unwrap().peel_to_commit().unwrap(),
+            false,
+        )
+        .unwrap()
+        .into_reference();
+    let external = tempfile::tempdir().unwrap();
+    let mut options = git2::WorktreeAddOptions::new();
+    options.reference(Some(&reference));
+    git.worktree(
+        "unrelated-registration",
+        &external.path().join("checkout"),
+        Some(&options),
+    )
+    .unwrap();
+    let admin_before = disk_image(&git.commondir().join("worktrees"));
+    let external_before = disk_image(external.path());
+    let result = f
+        .service
+        .retire_context(RetireContextRequest {
+            root: f.root.path().into(),
+            kind: AuthoringKind::Ticket,
+            item_id: ITEM.parse().unwrap(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    assert!(
+        matches!(result, ContextRetirementOutcome::Final(report) if report.outcome==RetirementDisposition::AlreadyAbsent)
+    );
+    assert_eq!(disk_image(&git.commondir().join("worktrees")), admin_before);
+    assert_eq!(disk_image(external.path()), external_before);
+}
+
+#[cfg(unix)]
+#[test]
+fn retirement_specfix_s2_dangling_loose_ref_slot_is_not_absence() {
+    let f = Fixture::new();
+    f.materialization("complete");
+    let git = git2::Repository::open(f.root.path()).unwrap();
+    let slot = git
+        .commondir()
+        .join(format!("refs/heads/manyhands/ticket/{ITEM}"));
+    std::fs::create_dir_all(slot.parent().unwrap()).unwrap();
+    let target = PathBuf::from("missing-reference-target");
+    std::os::unix::fs::symlink(&target, &slot).unwrap();
+    match git.find_reference(&format!("refs/heads/manyhands/ticket/{ITEM}")) {
+        Err(error) => assert_eq!(error.code(), git2::ErrorCode::NotFound),
+        Ok(_) => panic!("fixture must reproduce libgit2's dangling-ref NotFound"),
+    }
+    let admin_before = disk_image(git.commondir());
+    let db = f.db();
+    let materialization_before = row_image(&db, "remote_poll_materializations");
+    let repository_before = row_image(&db, "repositories");
+    let request = RetireContextRequest {
+        root: f.root.path().into(),
+        kind: AuthoringKind::Ticket,
+        item_id: ITEM.parse().unwrap(),
+        operation_id: OperationId::new(),
+    };
+    let result = f.service.retire_context(request.clone()).unwrap();
+    assert_eq!(
+        row_image(&db, "remote_poll_materializations"),
+        materialization_before,
+        "dangling branch slot must not consume D14: {result:?}"
+    );
+    assert_eq!(disk_image(git.commondir()), admin_before);
+    assert_eq!(row_image(&db, "repositories"), repository_before);
+    assert!(
+        std::fs::symlink_metadata(&slot)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read_link(&slot).unwrap(), target);
+    assert_inventory_refusal(&f, &request, &result);
+}
+
+#[cfg(unix)]
+#[test]
+fn retirement_specfix_s2_redirected_packed_storage_is_not_absence() {
+    let f = Fixture::new();
+    f.materialization("complete");
+    let git = git2::Repository::open(f.root.path()).unwrap();
+    let slot = git.commondir().join("packed-refs");
+    std::os::unix::fs::symlink("missing-packed-reference-target", &slot).unwrap();
+    let admin_before = disk_image(git.commondir());
+    let db = f.db();
+    let materialization_before = row_image(&db, "remote_poll_materializations");
+    let repository_before = row_image(&db, "repositories");
+    let request = RetireContextRequest {
+        root: f.root.path().into(),
+        kind: AuthoringKind::Ticket,
+        item_id: ITEM.parse().unwrap(),
+        operation_id: OperationId::new(),
+    };
+    let result = f.service.retire_context(request.clone()).unwrap();
+    assert_eq!(
+        row_image(&db, "remote_poll_materializations"),
+        materialization_before,
+        "redirected packed storage must not consume D14: {result:?}"
+    );
+    assert_eq!(disk_image(git.commondir()), admin_before);
+    assert_eq!(row_image(&db, "repositories"), repository_before);
+    assert_inventory_refusal(&f, &request, &result);
+}
+
+#[test]
+fn retirement_specfix_s2_nonregular_loose_ref_slot_is_not_absence() {
+    let f = Fixture::new();
+    f.materialization("complete");
+    let git = git2::Repository::open(f.root.path()).unwrap();
+    std::fs::create_dir_all(
+        git.commondir()
+            .join(format!("refs/heads/manyhands/ticket/{ITEM}")),
+    )
+    .unwrap();
+    let admin_before = disk_image(git.commondir());
+    let db = f.db();
+    let materialization_before = row_image(&db, "remote_poll_materializations");
+    let request = RetireContextRequest {
+        root: f.root.path().into(),
+        kind: AuthoringKind::Ticket,
+        item_id: ITEM.parse().unwrap(),
+        operation_id: OperationId::new(),
+    };
+    let result = f.service.retire_context(request.clone()).unwrap();
+    assert_eq!(
+        row_image(&db, "remote_poll_materializations"),
+        materialization_before,
+        "nonregular branch slot must not consume D14: {result:?}"
+    );
+    assert_eq!(disk_image(git.commondir()), admin_before);
+    assert_inventory_refusal(&f, &request, &result);
+}
+
+fn assert_retirement_preserves_remote_debt(reconciliation: bool) {
+    use crate::repository::remote::{reservation::commit_observation_batch, state};
+    let f = Fixture::new();
+    f.materialization("complete");
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    state::with_transaction(&f.service, f.root.path(), |tx, id| {
+        state::configure(tx, id, Some(&plan), false)
+    })
+    .unwrap();
+    let target = RemoteOperationTarget::for_primary_synchronization(&plan);
+    let operation = OperationId::new();
+    let owner = match f
+        .service
+        .reserve_remote_operation(f.root.path(), operation, &target)
+        .unwrap()
+    {
+        RemoteReservationOutcome::Reserved(owner) => owner,
+        other => panic!("fixture reservation: {other:?}"),
+    };
+    let oid = git2::Repository::open(f.root.path())
+        .unwrap()
+        .head()
+        .unwrap()
+        .target()
+        .unwrap();
+    f.service
+        .checkpoint_synchronization(
+            f.root.path(),
+            &owner,
+            state::SynchronizationCheckpoint::FetchPrepared,
+            &state::SynchronizationEvidence::default(),
+        )
+        .unwrap();
+    f.service
+        .remote_safe_point(f.root.path(), &owner, RemoteOperationSafePoint::BeforeFetch)
+        .unwrap();
+    let observation =
+        RemoteRefObservation::from_advertisement(&plan, "refs/heads/main", oid, Some(oid)).unwrap();
+    // Metadata-only synchronization fixture using the real owned checkpoint,
+    // complete-batch, classification/restart/cancellation paths, not a corrupt
+    // row with hand-edited index/reconciliation flags. No transport is claimed.
+    commit_observation_batch(&f.service, f.root.path(), &owner, &plan, &[observation], 1).unwrap();
+    let evidence = state::SynchronizationEvidence {
+        expected_oid: Some(oid),
+        local_oid: Some(oid),
+        tracking_oid: Some(oid),
+        primary_tracking_oid: Some(oid),
+        push_oid: Some(oid),
+        push_advertised_oid: (!reconciliation).then_some(oid),
+    };
+    if reconciliation {
+        f.service
+            .checkpoint_synchronization(
+                f.root.path(),
+                &owner,
+                state::SynchronizationCheckpoint::PushPrepared,
+                &evidence,
+            )
+            .unwrap();
+        let restarted = match f
+            .service
+            .restart_remote_synchronization(f.root.path(), operation, &target)
+            .unwrap()
+        {
+            RemoteReservationOutcome::Reserved(owner) => owner,
+            other => panic!("fixture restart: {other:?}"),
+        };
+        f.service
+            .cancel_remote_operation(f.root.path(), operation)
+            .unwrap();
+        assert_eq!(
+            f.service
+                .remote_safe_point(
+                    f.root.path(),
+                    &restarted,
+                    RemoteOperationSafePoint::BeforeFetch
+                )
+                .unwrap(),
+            RemoteSafePointOutcome::Cancelled
+        );
+    } else {
+        f.service
+            .checkpoint_synchronization(
+                f.root.path(),
+                &owner,
+                state::SynchronizationCheckpoint::PushVerified,
+                &evidence,
+            )
+            .unwrap();
+        f.service
+            .classify_synchronization(
+                f.root.path(),
+                &owner,
+                state::SynchronizationAuthority::AlreadyCurrent(oid),
+            )
+            .unwrap();
+    }
+    let db = f.db();
+    let flags: (String,bool,bool) = db.query_row("SELECT phase,index_pending,reconciliation_required FROM remote_operation_records WHERE operation_ulid=?1", [operation.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+    assert_eq!(
+        flags,
+        (
+            if reconciliation {
+                "cancelled"
+            } else {
+                "completed"
+            }
+            .into(),
+            !reconciliation,
+            reconciliation
+        )
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM operation_records WHERE state!='completed'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0,
+        "exercise the real remote-completed/local-not-yet-created gap"
+    );
+    assert!(
+        RepositoryService::open_at(f.data.path()).is_ok(),
+        "fixture must pass the complete startup audit"
+    );
+    db.execute("UPDATE repositories SET refresh_required=1", [])
+        .unwrap();
+    let remote_before = row_image(&db, "remote_operation_records");
+    let intent_before = row_image(&db, "remote_poll_materializations");
+    let repository_before = row_image(&db, "repositories");
+    let request = RetireContextRequest {
+        root: f.root.path().into(),
+        kind: AuthoringKind::Ticket,
+        item_id: ITEM.parse().unwrap(),
+        operation_id: OperationId::new(),
+    };
+    for _ in 0..2 {
+        let result = f.service.retire_context(request.clone());
+        assert!(
+            matches!(result, Err(ref error) if error.kind==RepositoryErrorKind::RecoveryRequired),
+            "unrelated retained debt must block before claim, flags={flags:?}, got {result:?}; intent before={intent_before:?}, after={:?}",
+            row_image(&db, "remote_poll_materializations")
+        );
+        assert_eq!(row_image(&db, "remote_operation_records"), remote_before);
+        assert_eq!(
+            row_image(&db, "remote_poll_materializations"),
+            intent_before
+        );
+        assert_eq!(
+            row_image(&db, "repositories"),
+            repository_before,
+            "retirement must not clear unrelated stale/index debt"
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM operation_records WHERE operation_ulid=?1",
+                [request.operation_id.to_string()],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            db.query_row("SELECT count(*) FROM context_retirement_records", [], |r| r
+                .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
+fn retirement_specfix_s3_completed_sync_index_debt_blocks_before_claim() {
+    assert_retirement_preserves_remote_debt(false);
+}
+
+#[test]
+fn retirement_specfix_s3_terminal_reconciliation_debt_blocks_before_claim() {
+    assert_retirement_preserves_remote_debt(true);
+}
+
+#[test]
+fn retirement_specfix_s3_active_observer_still_blocks_before_claim() {
+    use crate::repository::remote::state;
+    let f = Fixture::new();
+    f.materialization("complete");
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    state::with_transaction(&f.service, f.root.path(), |tx, id| {
+        state::configure(tx, id, Some(&plan), false)
+    })
+    .unwrap();
+    assert!(matches!(
+        f.service
+            .reserve_remote_operation_with_priority(
+                f.root.path(),
+                OperationId::new(),
+                &RemoteOperationTarget::for_poll(&plan),
+                RemoteOperationPriority::Manual
+            )
+            .unwrap(),
+        RemoteReservationOutcome::Reserved(_)
+    ));
+    let db = f.db();
+    let remote_before = row_image(&db, "remote_operation_records");
+    let intent_before = row_image(&db, "remote_poll_materializations");
+    let repository_before = row_image(&db, "repositories");
+    let result = f.service.retire_context(RetireContextRequest {
+        root: f.root.path().into(),
+        kind: AuthoringKind::Ticket,
+        item_id: ITEM.parse().unwrap(),
+        operation_id: OperationId::new(),
+    });
+    assert!(matches!(result, Err(ref error) if error.kind==RepositoryErrorKind::RecoveryRequired));
+    assert_eq!(row_image(&db, "remote_operation_records"), remote_before);
+    assert_eq!(
+        row_image(&db, "remote_poll_materializations"),
+        intent_before
+    );
+    assert_eq!(row_image(&db, "repositories"), repository_before);
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM context_retirement_records", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
 }
