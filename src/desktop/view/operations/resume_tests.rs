@@ -350,3 +350,101 @@ async fn a_running_resume_counts_as_in_flight(cx: &mut TestAppContext) {
         .await;
     until_lock(&shell, &root, LockState::Open, cx).await;
 }
+
+/// P22, real then canned: Resume's resend of the stranded close is answered
+/// `busy` each time the worker takes it (as `tests/mutation_remote/
+/// c5_lifecycle.rs` `busy_with_a_standing_parent` answers while another
+/// call holds the parent): the dialog reads "Still running…", with no
+/// failure.
+#[gpui_kit::test]
+async fn a_resent_close_answered_busy_reads_still_running(cx: &mut TestAppContext) {
+    let (shell, _, _) = stranded(cx);
+    let row = close_row(&shell, cx).await;
+    let busy = Envelope::<MutationDataDto>::failure(
+        "ticket close",
+        Scope::default(),
+        ResultCode::Busy,
+        Vec::new(),
+    );
+    for _ in 0..=BUSY_RETRY_DELAYS.len() {
+        shell
+            .backend
+            .hold_job_return_answering(JobKind::TicketClose, busy.clone())
+            .release();
+    }
+    shell.click(("pending-resume", row), cx);
+    shell
+        .until(cx, |operations| {
+            operations.requests().iter().any(|request| {
+                matches!(request.intent, Intent::TicketClose { .. })
+                    && matches!(request.state, RequestState::Finished(..))
+            })
+        })
+        .await;
+    let close = closes(&shell, cx)[0];
+    shell
+        .until_drawn(cx, "the dialog follows the close", |shell, cx| {
+            shown(cx) == Some(close) && shell.present("lifecycle-ending", cx)
+        })
+        .await;
+    assert_eq!(
+        shell.label("lifecycle-ending", cx).as_deref(),
+        Some(STILL_RUNNING)
+    );
+}
+
+/// Decision 10, canned: a resume answered `original_request_required` for
+/// an operation the lifecycle rows do not name sends nothing again; the
+/// dialog shows the answer's message and code, with no way on of its own.
+/// The answer is `tests/mutation_remote/c5_resume.rs`
+/// `resume_held_by_its_request`'s, naming a request this session does not
+/// hold.
+#[gpui_kit::test]
+async fn a_resume_naming_an_unknown_lifecycle_sends_nothing(cx: &mut TestAppContext) {
+    let (shell, root, _) = stranded(cx);
+    let row = close_row(&shell, cx).await;
+    let named = RequestId::new();
+    let refused = Envelope::<MutationDataDto>::failure(
+        "operation resume",
+        Scope::default(),
+        ResultCode::OriginalRequestRequired,
+        vec![RecoveryAction::new(
+            RecoveryActionKind::RequestRetry,
+            [("request_id", named.to_string().into())],
+        )],
+    );
+    let services = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().clone());
+    // The lock's rows are forgotten: they name no lifecycle for the resume.
+    shell
+        .backend
+        .hold_job_return_answering(JobKind::OperationResume, refused)
+        .release();
+    shell.operations(cx).update(cx, |operations, _| {
+        operations.locks_mut().forget(&key(&root));
+    });
+    shell.click(("pending-resume", row), cx);
+    let resume = resumes(&shell, cx)[0];
+    shell.until_ended(resume, cx).await;
+    shell
+        .until_drawn(cx, "the answer", |shell, cx| {
+            shell.present("lifecycle-code", cx)
+        })
+        .await;
+    assert_eq!(
+        shell.label("lifecycle-code", cx).as_deref(),
+        Some("original_request_required")
+    );
+    assert!(closes(&shell, cx).is_empty(), "nothing sent again");
+    assert!(services.resends().follow(resume).is_none());
+    for button in [
+        "lifecycle-retry",
+        "lifecycle-resume",
+        "lifecycle-republish",
+        "lifecycle-stop-and-republish",
+        "lifecycle-prepare-again",
+    ] {
+        assert!(!shell.present(button, cx), "{button}");
+    }
+}

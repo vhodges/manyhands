@@ -514,10 +514,10 @@ impl Intent {
     /// Whether the call's cancellation token is honoured after the library
     /// accepts the command, at a synchronization's safe points (fact 9): the
     /// comment, the two syncs, a republish (P21), `operation resume`, a
-    /// promotion or closure,
-    /// which stops between its steps (D5 fact 2), a local synchronization
-    /// and its resolution, and a remote resolution. Every other command, the
-    /// saves among them, cannot be stopped once accepted.
+    /// promotion or closure, which stops between its steps (D5 fact 2), a
+    /// local synchronization and its resolution, and a remote resolution.
+    /// Every other command, the saves among them, cannot be stopped once
+    /// accepted.
     ///
     /// This is not the library's `Command::stops_at_safe_points`
     /// (`R/mutation/command.rs:407-414`), which says whether `request

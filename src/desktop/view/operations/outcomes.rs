@@ -34,12 +34,12 @@ use super::{
 use crate::desktop::{
     model::{
         item::SHARE,
-        operations::sync_text,
+        operations::share_text,
         publication::{ShareTarget, SyncOffer, SyncOutcome, SyncResult},
     },
     services::{
         Services,
-        requests::{DesktopRequestId, RequestState},
+        requests::{DesktopRequestId, Intent, RequestState},
         worker::{GaveUp, RecordState},
     },
     view::{item::ItemRoute, sidebar::RETRY, workspace::Workspace},
@@ -142,7 +142,7 @@ pub(crate) fn share_words(
         .flatten()
         .and_then(|holder| services.operations().read(cx).request(holder))
         .map(|holder| holder.intent.label());
-    sync_text(&result.outcome, holder)
+    share_text(&result.outcome, result.attempt.target, holder)
 }
 
 /// Where the offer `offer` of the finished share `id` goes in the
@@ -225,14 +225,12 @@ impl Workspace {
     /// The item the share `id` is of, to republish: no lifecycle follows.
     fn share_republished(&self, id: DesktopRequestId, cx: &App) -> Option<Republishing> {
         match &self.services().operations().read(cx).request(id)?.intent {
-            crate::desktop::services::requests::Intent::ItemSync { root, kind, id } => {
-                Some(Republishing {
-                    root: root.clone(),
-                    kind: *kind,
-                    id: id.clone(),
-                    after: None,
-                })
-            }
+            Intent::ItemSync { root, kind, id } => Some(Republishing {
+                root: root.clone(),
+                kind: *kind,
+                id: id.clone(),
+                after: None,
+            }),
             _ => None,
         }
     }
@@ -277,7 +275,7 @@ impl Workspace {
                 if offer == SyncOffer::Republish {
                     self.republish(target, origin, window, cx);
                 } else {
-                    self.stop_and_republish(id, target, origin, cx);
+                    self.stop_and_republish(id, target, origin, None, cx);
                 }
             }
             _ => {

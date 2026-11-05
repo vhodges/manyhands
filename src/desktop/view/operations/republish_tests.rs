@@ -13,10 +13,11 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::TestAppContext;
 use manyhands::{
+    canonical::CONFIG_PATH,
     repository::{
         AuthoringKind, ConfirmationId, ItemDtoKind, ItemRepublishPreviewDto, LifecycleMutationDto,
         LifecycleMutationType, Mutation, MutationDataDto, PrepareDataDto, PreviewDetailsDto,
-        RequestId, TicketCloseInput,
+        RepoRemoveInput, RequestId,
     },
     results::{
         Effects, Envelope, Outcome, PublicationEffect, RecoveryAction, RecoveryActionKind,
@@ -24,13 +25,13 @@ use manyhands::{
     },
 };
 
-use super::REPUBLISH;
+use super::{REPUBLISH, STOP_AND_REPUBLISH};
 use crate::desktop::{
     model::{navigation::OpenTarget, operations::BRANCH_DELETED},
     services::{
         JobKind,
         requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
-        worker::WorkerEvent,
+        worker::{GaveUp, RecordState, WorkerEvent},
     },
     test_support::fixtures::{Fixture, item_id},
     view::{
@@ -78,18 +79,18 @@ fn republish_of(root: &Path) -> Intent {
 
 /// A canned preview of the ticket's republish, as `tests/mutation_remote/
 /// republish.rs` `c4_republish_preview_fetched` gives one: this repository's
-/// close preview, for a confirmation of the right form, with the republish's
-/// command and details.
+/// removal preview, which every registered repository gives, for a
+/// confirmation of the right form, with the republish's command and
+/// details.
 pub(super) fn republish_preview(shell: &Shell, root: &Path) -> Envelope<PrepareDataDto> {
     let mut prepared = shell
         .fixture
         .service()
-        .prepare(&Mutation::TicketClose(TicketCloseInput {
+        .prepare(&Mutation::RepoRemove(RepoRemoveInput {
             root: root.to_owned(),
-            id: item_id(TICKET),
         }));
     let Some(PrepareDataDto::Preview(preview)) = prepared.data.as_mut() else {
-        panic!("the close is ready");
+        panic!("the removal previews");
     };
     preview.command = "item republish".to_owned();
     preview.effects = Vec::new();
@@ -366,6 +367,18 @@ async fn republish_confirms_then_shares(cx: &mut TestAppContext) {
         done[0].state,
         RequestState::Finished(Outcome::Success, ResultCode::Ok, ..)
     ));
+    // Its entry, one line: Republish, Done.
+    shell
+        .until_drawn(cx, "the entry's state", |shell, cx| {
+            shell.label(request_id(sent[0].id, "state"), cx).as_deref() == Some("Done")
+        })
+        .await;
+    assert_eq!(
+        shell
+            .label(request_id(sent[0].id, "command"), cx)
+            .as_deref(),
+        Some("Republish")
+    );
     assert!(!shell.present("confirm-ok", cx), "the dialog closed");
 }
 
@@ -411,4 +424,86 @@ async fn a_stopped_republish_sends_the_same_request(cx: &mut TestAppContext) {
     assert_eq!(again[0].attempt, 2);
     assert_eq!(again[0].request_id, request, "the same request ID");
     shell.until_ended(id, cx).await;
+}
+
+/// R-30 (orchestrator), review M8, canned: an item's share whose record is
+/// accepted (a share over SSH in the test binary is accepted, then fails its
+/// transport, which is never initialized) and whose answer is canned as its
+/// deleted branch (`tests/mutation_remote.rs` `a_remotely_deleted_item_
+/// branch_is_remote_branch_deleted_and_holds_its_reservation`) offers Stop
+/// and republish… beside Give up. Pressed, it gives the share up; the Give
+/// up's answer canned `cancelled` (`c4_republish_busy`: the republish waits
+/// for the share's reservation, which a cancellation lets go), Republish…
+/// opens.
+#[gpui_kit::test]
+async fn an_item_shares_stop_and_republish_opens_republish(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.commit_ticket(&root, TICKET, "Untitled", "");
+    fixture.publish_over_ssh(&root);
+    let config = std::fs::read(root.join(CONFIG_PATH)).unwrap();
+    fixture.commit_file(&root, CONFIG_PATH, &config);
+    fixture.refresh(&root);
+    fixture.save_ticket(&root, TICKET, "Shared");
+    fixture.refresh(&root);
+    let shell = Shell::open(fixture, cx);
+    let preview = republish_preview(&shell, &root);
+    let share = Intent::ItemSync {
+        root: root.clone(),
+        kind: AuthoringKind::Ticket,
+        id: item_id(TICKET),
+    };
+    let deleted = Envelope::classified_mutation(
+        "item sync",
+        Scope::default(),
+        false,
+        ResultCode::RemoteBranchDeleted,
+        Effects::not_requested(),
+        false,
+    );
+    shell
+        .backend
+        .hold_job_return_answering(JobKind::SynchronizeItem, deleted)
+        .release();
+    let worker = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().worker().clone());
+    let id = worker.submit(share, Lane::User, None, None);
+    shell.until_ended(id, cx).await;
+    assert_eq!(worker.record_state(id), Some(RecordState::Accepted));
+    shell
+        .until_drawn(cx, "the share's offers", |shell, cx| {
+            shell.present(request_id(id, "stop-and-republish"), cx)
+        })
+        .await;
+    assert_eq!(
+        shell
+            .label(request_id(id, "stop-and-republish"), cx)
+            .as_deref(),
+        Some(STOP_AND_REPUBLISH)
+    );
+    assert!(shell.present(request_id(id, "give-up"), cx));
+    assert!(!shell.present(request_id(id, "republish"), cx));
+
+    let cancelled = Envelope::classified_mutation(
+        "item sync",
+        Scope::default(),
+        true,
+        ResultCode::Cancelled,
+        Effects::not_requested(),
+        false,
+    );
+    shell
+        .backend
+        .hold_job_return_answering(JobKind::SynchronizeItem, cancelled)
+        .release();
+    shell.backend.answer_next_prepare("item republish", preview);
+    shell.click(request_id(id, "stop-and-republish"), cx);
+    until_present(&shell, "confirm-ok", cx).await;
+    assert_eq!(worker.gave_up(id), Some(GaveUp::Resent));
+    assert!(
+        requests_of(&shell, cx, is_republish).is_empty(),
+        "not sent yet"
+    );
 }

@@ -149,6 +149,7 @@ impl Render for LifecycleDialog {
         let mut body = v_flex()
             .id("lifecycle-dialog")
             .test_support()
+            .track_focus(&self.focus)
             .gap_3()
             .child(self.header(cx));
         let mut buttons = h_flex().gap_2();

@@ -2,7 +2,8 @@
 //! 11b note): a lifecycle child's resolution applied with no lifecycle
 //! request in this session resumes the lifecycle's row; that resume names
 //! the request that holds it, and the desktop sends that close again under
-//! that request ID, with the sheet closed.
+//! that request ID, with the sheet closed. The lifecycle dialog follows the
+//! resume, then the close, to its end (E-16, owner 2026-11-05).
 //!
 //! The close is real: another process stranded it at `closing`, its request
 //! accepted, before the window opened. The conflict read and the
@@ -130,13 +131,22 @@ async fn a_child_resolutions_resume_sends_the_holding_close_again(cx: &mut TestA
         request(&shell, close, cx).state,
         RequestState::Finished(_, ResultCode::Ok, ..)
     ));
-    // M-b: the sheet opens no lifecycle dialog for a resume; the operation
-    // area shows the resume and the close it sent.
-    assert!(
-        cx.update(|cx| cx
-            .try_global::<OpenedLifecycle>()
-            .and_then(|opened| opened.0.upgrade())
-            .is_none()),
-        "no lifecycle dialog"
+    // E-16: the dialog follows the resume to the close it sent, and its end.
+    let dialog = cx
+        .update(|cx| {
+            cx.try_global::<OpenedLifecycle>()
+                .and_then(|opened| opened.0.upgrade())
+        })
+        .expect("the lifecycle dialog opened");
+    shell
+        .until_drawn(cx, "the close's end", |shell, cx| {
+            shell.present("lifecycle-ending", cx)
+        })
+        .await;
+    assert_eq!(
+        dialog.read_with(cx, |dialog, _| dialog.submitted()),
+        Some(close),
+        "it shows the close sent again"
     );
+    assert_eq!(shell.label("lifecycle-ending", cx).as_deref(), Some("Done"));
 }

@@ -14,7 +14,7 @@ use crate::desktop::{
         requests::{DesktopRequestId, Intent, Lane, PathResolution, RequestState},
         resolutions::{Followed, Followup, KeptSet, ResolutionStore, ResolutionStoreError},
     },
-    view::lifecycle::reopen_repaired,
+    view::lifecycle::{follow_resume, reopen_repaired},
 };
 
 impl ResolveSheet {
@@ -292,10 +292,11 @@ impl ResolveSheet {
     /// Applied (B3's table): the sheet closes. A lifecycle child's is sent
     /// on by the drain's follow-up (R-10, I-3), which says what it did
     /// (M-b): the lifecycle's request sent again, whose run its dialog then
-    /// shows; or the operation resumed, which the operation area shows, and
-    /// never the earlier run. When that resume names the request that holds
-    /// the lifecycle, the drain sends that request again (D5 Part C,
-    /// `Resends`), which the operation area shows too.
+    /// shows; or the operation resumed, which the lifecycle dialog follows,
+    /// Running, then how it ends, never the earlier run: when that resume
+    /// names the request that holds the lifecycle, the drain sends that
+    /// request again (D5 Part C, `Resends`), and the dialog follows it (E-16,
+    /// owner 2026-11-05).
     pub(super) fn applied(
         &mut self,
         resolution: RequestId,
@@ -310,6 +311,25 @@ impl ResolveSheet {
             return;
         }
         let followed = self.services.followups().take_followed(resolution);
+        if let (Some(Followed::Resumed(resume)), SheetSource::Close(_) | SheetSource::Merge(_)) =
+            (followed, self.source)
+        {
+            let (root, id) = (self.root.clone(), self.item.clone());
+            let intent = match self.source {
+                SheetSource::Close(_) => Intent::TicketClose { root, id },
+                _ => Intent::DocumentPromote { root, id },
+            };
+            follow_resume(
+                intent,
+                self.heading.clone(),
+                resume,
+                self.origin.clone(),
+                &self.services,
+                window,
+                cx,
+            );
+            return;
+        }
         let (
             Some(Followed::Resent),
             SheetSource::Close(Some(lifecycle)) | SheetSource::Merge(Some(lifecycle)),

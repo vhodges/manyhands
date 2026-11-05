@@ -12,7 +12,11 @@
 //!   republish`. Once it is done, the drain sends the run on: the same
 //!   request again, or the resume L1 names (C5 decision 19).
 //!
-//! Neither is offered while the item's lifecycle is in flight (P22). The
+//! Neither is offered while the item's lifecycle is in flight (P22), while
+//! a republish of the item is queued or running, or while one confirmed
+//! from this run's way out waits to be done (review I-2): one republish,
+//! and one resend after it. A Give up that could not be queued says so.
+//! Republish… opens over the dialog, and gives focus back to it. The
 //! workspace runs both (`view/operations/republish.rs`).
 
 use gpui_kit::{AnyElement, Context, IntoElement, Styled, Window, component::Root};
@@ -23,7 +27,11 @@ use manyhands::{
 
 use super::{LifecycleDialog, Phase, button, text};
 use crate::desktop::{
-    services::{requests::DesktopRequestId, resends::AfterRepublish, worker::GaveUp},
+    services::{
+        requests::{DesktopRequestId, Intent},
+        resends::AfterRepublish,
+        worker::GaveUp,
+    },
     view::{
         operations::republish::{REPUBLISH, Republishing, STOP_AND_REPUBLISH},
         workspace::Workspace,
@@ -32,6 +40,9 @@ use crate::desktop::{
 
 /// A run given up by Stop and republish…, stopped: Republish… is next.
 pub(crate) const STOPPED_READY: &str = "Stopped; ready to republish.";
+/// Stop and republish… could not give the run up: it is queued or running,
+/// or this session does not hold it.
+pub(crate) const NOT_STOPPED: &str = "This run could not be stopped now.";
 
 impl LifecycleDialog {
     /// Whether the run `id`, answered `envelope`, is a Give up of an
@@ -52,10 +63,32 @@ impl LifecycleDialog {
         id: DesktopRequestId,
         envelope: &Envelope<MutationDataDto>,
     ) -> Option<AnyElement> {
+        if self.stop_refused {
+            return Some(
+                text("lifecycle-stop-refused", NOT_STOPPED)
+                    .text_sm()
+                    .into_any_element(),
+            );
+        }
         self.stopped_to_republish(id, envelope).then(|| {
             text("lifecycle-stopped-ready", STOPPED_READY)
                 .text_sm()
                 .into_any_element()
+        })
+    }
+
+    /// Whether a republish of the item is queued or running, or one
+    /// confirmed from the way out of `run` waits to be done.
+    fn republishing_now(&self, run: DesktopRequestId) -> bool {
+        if self.services.resends().pending_for(run) {
+            return true;
+        }
+        let (Some(root), Some(item)) = (self.root(), self.item_id()) else {
+            return false;
+        };
+        self.services.worker().in_flight(|intent| {
+            matches!(intent, Intent::ItemRepublish { root: asked, id, .. }
+                if asked.as_path() == root && id == item)
         })
     }
 
@@ -70,13 +103,13 @@ impl LifecycleDialog {
         waiting: bool,
         cx: &Context<Self>,
     ) -> Vec<AnyElement> {
-        if waiting {
+        if waiting || self.republishing_now(id) {
             return Vec::new();
         }
         if self.stopped_to_republish(id, envelope) {
             let after = AfterRepublish::Retry(id);
             let go = self.on(cx, move |dialog, window, cx| {
-                dialog.republish(after.clone(), window, cx)
+                dialog.republish(Some(after.clone()), window, cx)
             });
             return vec![button("lifecycle-republish", REPUBLISH, true, go)];
         }
@@ -100,40 +133,49 @@ impl LifecycleDialog {
         {
             return Vec::new();
         }
-        // The republish, then what L1 names after it.
+        // The republish, then what L1 names after it; with nothing named
+        // (a resume's way out that names no operation), the republish alone
+        // (review M2).
         let after = way_out.iter().find_map(|step| match step {
             LifecycleWayOut::SendAgain => Some(AfterRepublish::Retry(id)),
             LifecycleWayOut::ResumeOperation { operation_id } => {
                 let root = self.root()?.to_path_buf();
                 let operation_id = OperationId::parse(operation_id).ok()?;
-                Some(AfterRepublish::Resume { root, operation_id })
+                Some(AfterRepublish::Resume {
+                    shown: id,
+                    root,
+                    operation_id,
+                })
             }
             _ => None,
         });
         let go = self.on(cx, move |dialog, window, cx| {
-            if let Some(after) = after.clone() {
-                dialog.republish(after, window, cx)
-            }
+            dialog.republish(after.clone(), window, cx)
         });
         vec![button("lifecycle-republish", REPUBLISH, true, go)]
     }
 
     /// The item to republish, the run going on as `after` says.
-    fn republishing(&self, after: AfterRepublish) -> Option<Republishing> {
+    fn republishing(&self, after: Option<AfterRepublish>) -> Option<Republishing> {
         Some(Republishing {
             root: self.root()?.to_path_buf(),
             kind: self.authoring_kind(),
             id: self.item_id()?.clone(),
-            after: Some(after),
+            after,
         })
     }
 
-    /// Republish…, over the dialog.
-    fn republish(&mut self, after: AfterRepublish, window: &mut Window, cx: &mut Context<Self>) {
+    /// Republish…, over the dialog, which has focus again once it closes.
+    fn republish(
+        &mut self,
+        after: Option<AfterRepublish>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(target) = self.republishing(after) else {
             return;
         };
-        let origin = self.origin.clone();
+        let origin = self.focus.clone();
         self.with_workspace(window, cx, move |workspace, window, cx| {
             workspace.republish(target, origin, window, cx);
         });
@@ -148,18 +190,22 @@ impl LifecycleDialog {
         if self.in_flight_with(None) {
             return;
         }
-        let Some(target) = self.republishing(AfterRepublish::Retry(shown)) else {
+        let Some(target) = self.republishing(Some(AfterRepublish::Retry(shown))) else {
             return;
         };
-        let origin = self.origin.clone();
+        let origin = self.focus.clone();
+        let dialog = cx.entity().downgrade();
         let mut queued = false;
         self.with_workspace(window, cx, |workspace, _, cx| {
-            queued = workspace.stop_and_republish(shown, target, origin, cx);
+            queued = workspace.stop_and_republish(shown, target, origin, Some(dialog), cx);
         });
         if queued {
             self.following_anew();
-            cx.notify();
+        } else {
+            // A3: the sequence stops, and says so.
+            self.stop_refused = true;
         }
+        cx.notify();
     }
 
     /// Runs `f` on the window's workspace, the dialog staying open.

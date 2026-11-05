@@ -440,6 +440,8 @@ impl Workspace {
         id: DesktopRequestId,
         cx: &mut Context<Self>,
     ) {
+        // Nothing follows a dismissed run any more (review M4).
+        self.services.resends().forget(id);
         let dismissed = self.services.operations().update(cx, |operations, cx| {
             operations.dismiss(id);
             cx.notify();

@@ -5,7 +5,9 @@
 //! The dialog follows the resume as a run. When its answer names the
 //! request that holds the lifecycle (`original_request_required`), the
 //! drain sends that close or merge again (`Resends`), and the dialog
-//! follows that run instead: Running, then how it ends. A resume answered
+//! follows that run instead: Running, then how it ends. So does a run whose
+//! republish was done under a resume: the dialog follows the resume sent
+//! after it, and the request that resume names (R → X → C). A resume answered
 //! with lifecycle data ends as a run does. One answered `busy` reads "Still
 //! running…", with no failure; any other answer with no lifecycle data shows
 //! its message and code.
@@ -52,13 +54,13 @@ pub(crate) fn follow_resume(
 }
 
 impl LifecycleDialog {
-    /// The shown resume was sent on as the request it named: the dialog
-    /// follows that run.
+    /// A run follows the shown one, a resume's resend or a republish's
+    /// resume: the dialog follows the last of them.
     pub(super) fn follow_resend(&mut self, cx: &mut Context<Self>) {
         let Phase::Submitted(shown) = self.phase else {
             return;
         };
-        let Some(sent) = self.services.resends().resent(shown) else {
+        let Some(sent) = self.services.resends().follow(shown) else {
             return;
         };
         if sent != shown {

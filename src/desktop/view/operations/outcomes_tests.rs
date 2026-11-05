@@ -32,7 +32,7 @@ use super::{offer_label, offer_part};
 use crate::desktop::{
     model::{
         operations::{
-            ANOTHER_SHARE_HOLDS, BRANCH_DELETED, CHOOSE_A_KEY, CURRENT, KEY_LOCKED,
+            ANOTHER_SHARE_HOLDS, CHOOSE_A_KEY, CURRENT, KEY_LOCKED, MAIN_BRANCH_DELETED,
             NEEDS_ATTENTION, NEEDS_IDENTITY, NOWHERE_TO_SHARE, SHARED, STOPPED_BEFORE_SENDING,
             check_host_text,
         },
@@ -428,7 +428,8 @@ fn a_share_with_no_remote_offers_set_up_sharing(cx: &mut TestAppContext) {
 }
 
 /// A deleted shared branch offers Give up while the record is accepted,
-/// and never Share: republishing is D5's (decision 8).
+/// and never Share (decision 8). This share is of main, which has no item
+/// to republish: its words promise no Republish… (E-6; review M3).
 #[gpui_kit::test]
 async fn a_deleted_branch_offers_give_up_and_no_share(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -440,7 +441,13 @@ async fn a_deleted_branch_offers_give_up_and_no_share(cx: &mut TestAppContext) {
         cx,
     )
     .await;
-    assert_row(&shell, id, Some(BRANCH_DELETED), &[SyncOffer::GiveUp], cx);
+    assert_row(
+        &shell,
+        id,
+        Some(MAIN_BRANCH_DELETED),
+        &[SyncOffer::GiveUp],
+        cx,
+    );
     assert!(!shell.present(request_id(id, offer_part(SyncOffer::Share)), cx));
 }
 

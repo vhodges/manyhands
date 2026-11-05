@@ -18,7 +18,7 @@ use manyhands::{
 
 use super::{Operations, stopped_text};
 use crate::desktop::{
-    model::publication::{NOTHING_TO_SHARE, SyncOutcome},
+    model::publication::{NOTHING_TO_SHARE, ShareTarget, SyncOutcome},
     services::{
         requests::{DesktopRequestId, Intent, RequestState},
         worker::RecordState,
@@ -38,6 +38,9 @@ pub(crate) const ANOTHER_SHARE_HOLDS: &str = "Another share may be holding this 
 pub(crate) const NOWHERE_TO_SHARE: &str = "This repository has nowhere to share to";
 pub(crate) const BRANCH_DELETED: &str = "The shared copy of this item was deleted. \
      Republish it to share it again.";
+/// A share of main whose shared copy was deleted: main has nothing to
+/// republish, so no Republish… is promised (review M3).
+pub(crate) const MAIN_BRANCH_DELETED: &str = "The shared copy of main was deleted.";
 /// The item banner of a share or post stopped on a conflict (decision 13):
 /// it offers Review changes (D5 B5, E-7).
 pub(crate) const CONFLICT_BANNER: &str = "You and someone else both changed this since it \
@@ -79,6 +82,19 @@ pub(crate) fn sync_text(outcome: &SyncOutcome, holder: Option<&str>) -> Option<S
         SyncOutcome::Failed { .. } => return None,
     };
     Some(words.to_owned())
+}
+
+/// What a share's outcome says, as `sync_text` does, of the share `target`:
+/// a deleted branch of main has its own words.
+pub(crate) fn share_text(
+    outcome: &SyncOutcome,
+    target: ShareTarget,
+    holder: Option<&str>,
+) -> Option<String> {
+    match (outcome, target) {
+        (SyncOutcome::BranchDeleted, ShareTarget::Main) => Some(MAIN_BRANCH_DELETED.to_owned()),
+        _ => sync_text(outcome, holder),
+    }
 }
 
 /// The codes a request is answered only once it has reserved its

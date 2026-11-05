@@ -840,10 +840,11 @@ fn a_host_observation_is_kept_for_the_page_that_asked() {
 }
 
 /// A promotion's or closure's parent row (L2) is listed as remote work
-/// with Resume, but it is not a synchronization: Resume on it is not
-/// offered until Part C sends it (design, A1), rather than shown
-/// unavailable as a local-context synchronization is. It is never offered
-/// Abandon. The rows are built here as `read/status.rs` lists them.
+/// with Resume, but it is not a synchronization: `resume_offer` does not
+/// offer it, nor show it unavailable as a local-context synchronization
+/// is. Its own row offers Resume instead (D5 Part C,
+/// `view/operations/resume.rs`). It is never offered Abandon. The rows are
+/// built here as `read/status.rs` lists them.
 #[test]
 fn a_lifecycle_row_is_not_a_synchronization() {
     for action in [OperationAction::Promote, OperationAction::Close] {

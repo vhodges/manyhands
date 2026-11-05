@@ -46,6 +46,7 @@ impl LifecycleDialog {
     pub(super) fn following_anew(&mut self) {
         self.reached = None;
         self.stop_pressed = false;
+        self.stop_refused = false;
     }
 
     /// Stop at a safe point: the run's token is cancelled, and it stops at

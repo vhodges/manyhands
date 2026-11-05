@@ -150,11 +150,14 @@ async fn closing_the_sheet_still_resends_the_lifecycle(cx: &mut TestAppContext) 
 
 /// M-3, canned as above: a lifecycle request that cannot be sent again
 /// (here, one the worker never took) resumes the operation instead of
-/// doing nothing.
+/// doing nothing. E-16 (owner 2026-11-05): the lifecycle dialog then shows
+/// that resume running, then its end (its real call is refused, the
+/// repository holding no such operation), and never the earlier run.
 #[gpui_kit::test]
 async fn a_lifecycle_that_cannot_be_sent_again_resumes_its_row(cx: &mut TestAppContext) {
     let (shell, root) = remote_shell(cx);
     let unknown = DesktopRequestId(9_999);
+    let held = shell.backend.hold_job(JobKind::OperationResume);
     let operation = save_answered(
         &shell,
         SheetSource::Close(Some(unknown)),
@@ -172,13 +175,35 @@ async fn a_lifecycle_that_cannot_be_sent_again_resumes_its_row(cx: &mut TestAppC
         })
         .await;
     assert_eq!(resumed(&shell, cx), [operation]);
-    // M-b: the sheet shows the resume, not an earlier run's dialog.
-    assert!(
-        cx.update(|cx| cx
-            .try_global::<crate::desktop::view::lifecycle::OpenedLifecycle>()
-            .and_then(|opened| opened.0.upgrade())
-            .is_none()),
-        "no lifecycle dialog"
-    );
+    let resume = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::OperationResume { .. })
+    })[0];
+    held.wait_reached();
+    // M-b, E-16: the dialog shows the resume running, never an earlier run.
+    let shown = |cx: &mut TestAppContext| {
+        cx.update(|cx| {
+            cx.try_global::<crate::desktop::view::lifecycle::OpenedLifecycle>()
+                .and_then(|opened| opened.0.upgrade())
+        })
+        .and_then(|dialog| dialog.read_with(cx, |dialog, _| dialog.submitted()))
+    };
+    shell
+        .until_drawn(cx, "the dialog shows the resume running", |shell, cx| {
+            shell.present("lifecycle-stop", cx)
+        })
+        .await;
+    assert_eq!(shown(cx), Some(resume), "the resume, never {unknown:?}");
     assert!(!shell.present("conflict-sheet", cx));
+    held.release();
+    shell.until_ended(resume, cx).await;
+    shell
+        .until_drawn(cx, "the resume's end", |shell, cx| {
+            shell.present("lifecycle-code", cx)
+        })
+        .await;
+    assert_eq!(shown(cx), Some(resume), "the resume, never {unknown:?}");
+    assert_eq!(
+        shell.label("lifecycle-code", cx).as_deref(),
+        Some("operation_not_found")
+    );
 }

@@ -13,12 +13,12 @@
 //!   accepted record (`GaveUp::Resent`) and answered `cancelled` does
 //!   Republish… open; any other answer ends the sequence, and the entry or
 //!   the dialog shows that answer, so a `busy` never loops (P21). The
-//!   workspace waits for the answer, whether or not the dialog that asked
-//!   is still open.
+//!   workspace waits for the answer; one a lifecycle dialog asked for ends
+//!   when that dialog closes (review M5).
 
 use std::{path::PathBuf, rc::Rc};
 
-use gpui_kit::{Context, FocusHandle, Window};
+use gpui_kit::{Context, FocusHandle, WeakEntity, Window};
 use manyhands::{canonical::ItemId, repository::AuthoringKind, results::ResultCode};
 
 use crate::desktop::{
@@ -29,6 +29,7 @@ use crate::desktop::{
     },
     view::{
         confirm::{self, Followed},
+        lifecycle::LifecycleDialog,
         workspace::Workspace,
     },
 };
@@ -48,6 +49,9 @@ pub(crate) struct Republishing {
 
 /// A Stop and republish… waiting for its Give up's answer.
 pub(crate) struct StopThenRepublish {
+    /// The lifecycle dialog that asked for it, if one did: closed, it ends
+    /// the wait, so Republish… never opens out of context (review M5).
+    dialog: Option<WeakEntity<LifecycleDialog>>,
     request: DesktopRequestId,
     /// The attempt the Give up sends: an answer to an earlier one is not
     /// its.
@@ -102,6 +106,7 @@ impl Workspace {
         id: DesktopRequestId,
         target: Republishing,
         origin: FocusHandle,
+        dialog: Option<WeakEntity<LifecycleDialog>>,
         cx: &mut Context<Self>,
     ) -> bool {
         let Some(attempt) = self
@@ -117,6 +122,7 @@ impl Workspace {
             return false;
         }
         self.stopping_to_republish.push(StopThenRepublish {
+            dialog,
             request: id,
             attempt,
             target,
@@ -141,6 +147,13 @@ impl Workspace {
         let operations = self.services().operations().read(cx);
         let mut ready = Vec::new();
         self.stopping_to_republish.retain(|waiting| {
+            if waiting
+                .dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.upgrade().is_none())
+            {
+                return false;
+            }
             let Some(request) = operations.request(waiting.request) else {
                 return false;
             };

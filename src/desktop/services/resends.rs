@@ -14,9 +14,13 @@
 //! - **Republish, then resend.** A republish confirmed from a lifecycle's
 //!   way out (A3's Stop and republish…, L1's Republish…) sends that
 //!   lifecycle on once it is answered with success: its request again, or
-//!   a resume of its operation (C5 decision 19). Any other answer leaves it
-//!   waiting, so a stopped republish sent again under its own request
-//!   (P17) still sends the lifecycle on.
+//!   a resume of its operation (C5 decision 19), which the run shown then
+//!   is followed by (`resent`). An answer that leaves the republish to be
+//!   sent again under its own request (P17) keeps it waiting; any other
+//!   ends it.
+//!
+//! An entry goes once a view has followed it, or once its run is dismissed
+//! (`forget`).
 
 use std::{
     collections::HashMap,
@@ -31,7 +35,7 @@ use manyhands::{
 };
 
 use super::{
-    requests::{DesktopRequestId, Intent, Lane, RequestState},
+    requests::{DesktopRequestId, Intent, Lane},
     worker::WorkerHandle,
 };
 use crate::desktop::model::operations::Operations;
@@ -40,19 +44,36 @@ use crate::desktop::model::operations::Operations;
 /// done.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) enum AfterRepublish {
-    /// The lifecycle's request again, under its own request ID.
+    /// The lifecycle's request again, under its own request ID: the run
+    /// shown.
     Retry(DesktopRequestId),
-    /// A resume of the lifecycle's operation.
+    /// A resume of the lifecycle's operation, which then follows `shown`,
+    /// the run whose way out asked for the republish.
     Resume {
+        shown: DesktopRequestId,
         root: PathBuf,
         operation_id: OperationId,
     },
 }
 
+impl AfterRepublish {
+    /// The run whose way out asked for the republish.
+    fn shown(&self) -> DesktopRequestId {
+        match self {
+            Self::Retry(shown) | Self::Resume { shown, .. } => *shown,
+        }
+    }
+}
+
+/// The most runs one follow walks (R → X → C is two): a guard, not a
+/// limit any chain reaches.
+const HOPS: usize = 8;
+
 #[derive(Default)]
 struct Registry {
-    /// Each resume answered `original_request_required`, and the run sent
-    /// for it.
+    /// Each run followed by another: a resume answered
+    /// `original_request_required` by the run sent for it, and a run whose
+    /// republish was done by the resume sent after it.
     resent: HashMap<DesktopRequestId, DesktopRequestId>,
     /// Each republish confirmed from a lifecycle's way out, and how that
     /// lifecycle goes on.
@@ -64,16 +85,44 @@ struct Registry {
 pub(crate) struct Resends(Arc<Mutex<Registry>>);
 
 impl Resends {
-    /// The run the resume `resume` was sent on as, once its answer named
-    /// the request that holds the lifecycle.
-    pub(crate) fn resent(&self, resume: DesktopRequestId) -> Option<DesktopRequestId> {
-        self.lock().resent.get(&resume).copied()
+    /// The run that follows `shown`, taken: the last of the chain that
+    /// leads from it (a resume, then the request it named), as far as the
+    /// drain has sent. `None` when nothing follows it.
+    pub(crate) fn follow(&self, shown: DesktopRequestId) -> Option<DesktopRequestId> {
+        let mut registry = self.lock();
+        let mut last = None;
+        let mut at = shown;
+        for _ in 0..HOPS {
+            let Some(next) = registry.resent.remove(&at) else {
+                break;
+            };
+            last = Some(next);
+            at = next;
+        }
+        last
     }
 
     /// Once the republish `republish` is done, its lifecycle goes on as
     /// `after` says.
     pub(crate) fn after_republish(&self, republish: DesktopRequestId, after: AfterRepublish) {
         self.lock().republishes.insert(republish, after);
+    }
+
+    /// Whether a republish confirmed from the way out of `run` waits to be
+    /// done: Republish… is not offered again meanwhile (review I-2).
+    pub(crate) fn pending_for(&self, run: DesktopRequestId) -> bool {
+        self.lock()
+            .republishes
+            .values()
+            .any(|after| after.shown() == run)
+    }
+
+    /// The request `id` was dismissed: nothing follows it, or from it.
+    pub(crate) fn forget(&self, id: DesktopRequestId) {
+        let mut registry = self.lock();
+        registry.resent.remove(&id);
+        registry.republishes.remove(&id);
+        registry.republishes.retain(|_, after| after.shown() != id);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Registry> {
@@ -105,23 +154,40 @@ impl Resends {
                 };
                 self.lock().resent.insert(id, sent);
             }
-            Intent::ItemRepublish { .. }
-                if matches!(envelope.outcome, Outcome::Success | Outcome::Noop) =>
-            {
-                let Some(after) = self.lock().republishes.remove(&id) else {
+            Intent::ItemRepublish { .. } => {
+                let done = matches!(envelope.outcome, Outcome::Success | Outcome::Noop);
+                // A stop the same request goes on from keeps it waiting
+                // (P17); any other answer ends it.
+                let again = envelope
+                    .recovery
+                    .iter()
+                    .any(|action| action.action == RecoveryActionKind::RequestRetry);
+                let mut registry = self.lock();
+                if !done {
+                    if !again {
+                        registry.republishes.remove(&id);
+                    }
+                    return;
+                }
+                let Some(after) = registry.republishes.remove(&id) else {
                     return;
                 };
                 match after {
                     AfterRepublish::Retry(lifecycle) => {
                         worker.retry(lifecycle, None);
                     }
-                    AfterRepublish::Resume { root, operation_id } => {
-                        worker.submit(
+                    AfterRepublish::Resume {
+                        shown,
+                        root,
+                        operation_id,
+                    } => {
+                        let resume = worker.submit(
                             Intent::OperationResume { root, operation_id },
                             Lane::User,
                             None,
                             None,
                         );
+                        registry.resent.insert(shown, resume);
                     }
                 }
             }
@@ -132,7 +198,8 @@ impl Resends {
 
 /// The close or merge of the lifecycle `operation_id` of `root`, sent again
 /// under the request `envelope` names: this session's request of it when
-/// it holds one (left running when it runs), else a new desktop request.
+/// it holds one (left running when it runs, or when it cannot be queued
+/// again), else a new desktop request.
 /// `None` when the answer names no request, or the rows name no item for
 /// the operation.
 fn resend(
@@ -164,14 +231,14 @@ fn resend(
                 Intent::TicketClose { .. } | Intent::DocumentPromote { .. }
             )
     });
+    // Never a second desktop request under the same request ID (review M1).
     if let Some(held) = held {
-        let running = matches!(
-            held.state,
-            RequestState::Queued | RequestState::Running { .. }
-        );
-        if running || worker.retry(held.id, None) {
-            return Some(held.id);
-        }
+        worker.retry(held.id, None);
+        return Some(held.id);
     }
     Some(worker.submit_with_request_id(intent, Lane::User, named))
 }
+
+#[cfg(test)]
+#[path = "resends_tests.rs"]
+mod tests;

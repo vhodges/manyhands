@@ -30,7 +30,12 @@ use crate::desktop::{
         worker::GaveUp,
     },
     test_support::fixtures::item_id,
-    view::{harness::Shell, item::LIFECYCLE_ACTION, operations::request_id},
+    view::{
+        harness::Shell,
+        item::LIFECYCLE_ACTION,
+        lifecycle::{NOT_STOPPED, OpenedLifecycle},
+        operations::request_id,
+    },
 };
 
 /// Runs a close from the ticket's dialog through a service that stops it at
@@ -118,6 +123,21 @@ async fn stop_and_republish_cancels_republishes_then_resends(cx: &mut TestAppCon
     shell.click("confirm-ok", cx);
     let republish = requests_of(&shell, cx, is_republish);
     assert_eq!(republish.len(), 1);
+    // Review M5: once the confirmation closes, the lifecycle dialog has
+    // focus again.
+    shell
+        .until_drawn(cx, "the confirmation closes", |shell, cx| {
+            !shell.present("confirm-ok", cx)
+        })
+        .await;
+    let dialog = cx
+        .update(|cx| {
+            cx.try_global::<OpenedLifecycle>()
+                .and_then(|opened| opened.0.upgrade())
+        })
+        .expect("the lifecycle dialog is open");
+    let focus = dialog.read_with(cx, |dialog, _| dialog.focus().clone());
+    assert!(shell.frame(cx, |window, _| focus.is_focused(window)));
     assert!(matches!(
         &republish[0].intent,
         Intent::ItemRepublish { root: asked_root, kind: AuthoringKind::Ticket, id }
@@ -204,36 +224,169 @@ async fn stop_and_republish_stops_unless_give_up_resent_and_cancelled(cx: &mut T
     assert!(requests_of(&shell, cx, is_republish).is_empty());
 }
 
-/// C5 decision 19, canned: under a resume, L1 routes Republish… then the
-/// resume, with nothing to cancel (`src/repository/mutation/way_out_tests.rs`
-/// `republish_under_a_resume_comes_before_the_resume`). The dialog offers
-/// Republish… and no Stop and republish…; once the republish is done, the
-/// operation is resumed.
-#[gpui_kit::test]
-async fn republish_under_a_resume_then_resumes(cx: &mut TestAppContext) {
-    let (shell, root) = ticket_shell(cx);
+/// A close answered `remote_branch_deleted` under a resume, put in the
+/// request model and opened from its entry's Open…: its way out offers
+/// `resume` (`recovery`), with `operation` as the answer's own.
+async fn under_a_resume(
+    shell: &Shell,
+    root: &Path,
+    recovery: RecoveryAction,
+    operation: Option<&str>,
+    cx: &mut TestAppContext,
+) -> DesktopRequestId {
     let mut answer = close_answer(
-        &root,
+        root,
         ResultCode::RemoteBranchDeleted,
         Outcome::Blocked,
-        vec![RecoveryAction::for_operation(
-            RecoveryActionKind::OperationResume,
-            OPERATION,
-            [],
-        )],
+        vec![recovery],
         RequestId::new(),
     );
     answer.command = "operation resume".to_owned();
+    answer.operation_id = operation.map(str::to_owned);
     let close = Intent::TicketClose {
-        root: root.clone(),
+        root: root.to_owned(),
         id: item_id(TICKET),
     };
-    let id = finished(&shell, 1, close, answer, cx);
+    let id = finished(shell, 1, close, answer, cx);
     shell.click(request_id(id, "open"), cx);
-    until_present(&shell, "lifecycle-republish", cx).await;
+    until_present(shell, "lifecycle-republish", cx).await;
     assert!(!shell.present("lifecycle-stop-and-republish", cx));
     assert!(!shell.present("lifecycle-retry", cx));
+    id
+}
 
+fn resume_of_operation() -> RecoveryAction {
+    RecoveryAction::for_operation(RecoveryActionKind::OperationResume, OPERATION, [])
+}
+
+fn resumes(shell: &Shell, cx: &mut TestAppContext) -> Vec<DesktopRequestId> {
+    let operation = OperationId::parse(OPERATION).unwrap();
+    requests_of(shell, cx, move |intent| {
+        matches!(intent, Intent::OperationResume { operation_id, .. } if *operation_id == operation)
+    })
+    .into_iter()
+    .map(|request| request.id)
+    .collect()
+}
+
+/// The run the open lifecycle dialog shows.
+fn shown(cx: &mut TestAppContext) -> Option<DesktopRequestId> {
+    cx.update(|cx| {
+        cx.try_global::<OpenedLifecycle>()
+            .and_then(|opened| opened.0.upgrade())
+    })
+    .and_then(|dialog| dialog.read_with(cx, |dialog, _| dialog.submitted()))
+}
+
+/// C5 decision 19, review I-1, canned: under a resume, L1 routes
+/// Republish… then the resume, with nothing to cancel
+/// (`src/repository/mutation/way_out_tests.rs`
+/// `republish_under_a_resume_comes_before_the_resume`). The dialog offers
+/// Republish… and no Stop and republish…; once the republish is done, the
+/// operation is resumed, and the dialog follows that resume: running, then
+/// its end (its real call is refused, the repository holding no such
+/// operation).
+#[gpui_kit::test]
+async fn republish_under_a_resume_then_resumes(cx: &mut TestAppContext) {
+    let (shell, root) = ticket_shell(cx);
+    let id = under_a_resume(&shell, &root, resume_of_operation(), Some(OPERATION), cx).await;
+    assert_eq!(shown(cx), Some(id));
+
+    shell
+        .backend
+        .answer_next_prepare("item republish", republish_preview(&shell, &root));
+    shell.click("lifecycle-republish", cx);
+    until_present(&shell, "confirm-ok", cx).await;
+    shell
+        .backend
+        .hold_job_return_answering(JobKind::ItemRepublish, republished())
+        .release();
+    let held = shell.backend.hold_job(JobKind::OperationResume);
+    shell.click("confirm-ok", cx);
+    let republish = requests_of(&shell, cx, is_republish);
+    shell.until_ended(republish[0].id, cx).await;
+    shell
+        .until(cx, |operations| {
+            operations
+                .requests()
+                .iter()
+                .any(|request| matches!(request.intent, Intent::OperationResume { .. }))
+        })
+        .await;
+    let resume = resumes(&shell, cx);
+    assert_eq!(resume.len(), 1);
+    held.wait_reached();
+    shell
+        .until_drawn(cx, "the dialog follows the resume", |shell, cx| {
+            shown(cx) == Some(resume[0]) && shell.present("lifecycle-stop", cx)
+        })
+        .await;
+    assert!(!shell.present("lifecycle-republish", cx));
+
+    held.release();
+    shell.until_ended(resume[0], cx).await;
+    shell
+        .until_drawn(cx, "the resume's end", |shell, cx| {
+            shell.present("lifecycle-code", cx)
+        })
+        .await;
+    assert_eq!(shown(cx), Some(resume[0]));
+    assert_eq!(
+        shell.label("lifecycle-code", cx).as_deref(),
+        Some("operation_not_found")
+    );
+}
+
+/// Review I-2, canned as above: while the republish runs, the dialog offers
+/// no second Republish…; one republish is sent, and one resume after it.
+#[gpui_kit::test]
+async fn a_republish_in_flight_offers_no_second_republish(cx: &mut TestAppContext) {
+    let (shell, root) = ticket_shell(cx);
+    under_a_resume(&shell, &root, resume_of_operation(), Some(OPERATION), cx).await;
+    shell
+        .backend
+        .answer_next_prepare("item republish", republish_preview(&shell, &root));
+    shell.click("lifecycle-republish", cx);
+    until_present(&shell, "confirm-ok", cx).await;
+    let held = shell.backend.hold_job(JobKind::ItemRepublish);
+    shell
+        .backend
+        .hold_job_return_answering(JobKind::ItemRepublish, republished())
+        .release();
+    shell.click("confirm-ok", cx);
+    held.wait_reached();
+    shell
+        .until_drawn(cx, "no Republish… while it runs", |shell, cx| {
+            !shell.present("lifecycle-republish", cx)
+        })
+        .await;
+    held.release();
+    let republish = requests_of(&shell, cx, is_republish);
+    assert_eq!(republish.len(), 1, "one republish");
+    shell.until_ended(republish[0].id, cx).await;
+    shell
+        .until(cx, |operations| {
+            operations
+                .requests()
+                .iter()
+                .any(|request| matches!(request.intent, Intent::OperationResume { .. }))
+        })
+        .await;
+    let resume = resumes(&shell, cx);
+    shell.until_ended(resume[0], cx).await;
+    shell.run(cx);
+    assert_eq!(requests_of(&shell, cx, is_republish).len(), 1);
+    assert_eq!(resumes(&shell, cx).len(), 1, "one resume after it");
+}
+
+/// Review M2, canned: a resume's way out that names no operation routes
+/// Republish… alone (`way_out.rs` `resume`, `Some(None)`). Republish…
+/// opens and republishes, and nothing is sent after it.
+#[gpui_kit::test]
+async fn a_republish_with_nothing_after_sends_nothing_after(cx: &mut TestAppContext) {
+    let (shell, root) = ticket_shell(cx);
+    let nameless = RecoveryAction::new(RecoveryActionKind::OperationResume, []);
+    under_a_resume(&shell, &root, nameless, None, cx).await;
     shell
         .backend
         .answer_next_prepare("item republish", republish_preview(&shell, &root));
@@ -245,14 +398,86 @@ async fn republish_under_a_resume_then_resumes(cx: &mut TestAppContext) {
         .release();
     shell.click("confirm-ok", cx);
     let republish = requests_of(&shell, cx, is_republish);
+    assert_eq!(republish.len(), 1);
     shell.until_ended(republish[0].id, cx).await;
-    let operation = OperationId::parse(OPERATION).unwrap();
+    shell.run(cx);
+    assert!(
+        requests_of(&shell, cx, |intent| matches!(
+            intent,
+            Intent::OperationResume { .. }
+        ))
+        .is_empty(),
+        "nothing after it"
+    );
+}
+
+/// A3, review M8, canned: Stop and republish… on a run this session's worker
+/// never took cannot give it up: the dialog says so, and nothing opens.
+#[gpui_kit::test]
+async fn a_stop_that_cannot_be_queued_says_so(cx: &mut TestAppContext) {
+    let (shell, root) = ticket_shell(cx);
+    let close = Intent::TicketClose {
+        root: root.clone(),
+        id: item_id(TICKET),
+    };
+    let id = finished(
+        &shell,
+        1,
+        close,
+        branch_deleted(&root, RequestId::new()),
+        cx,
+    );
+    shell.click(request_id(id, "open"), cx);
+    until_present(&shell, "lifecycle-stop-and-republish", cx).await;
+    shell.click("lifecycle-stop-and-republish", cx);
+    until_present(&shell, "lifecycle-stop-refused", cx).await;
+    assert_eq!(
+        shell.label("lifecycle-stop-refused", cx).as_deref(),
+        Some(NOT_STOPPED)
+    );
+    assert!(!shell.present("confirm-ok", cx));
+    assert!(requests_of(&shell, cx, is_republish).is_empty());
+}
+
+/// Review M5, canned: a Stop and republish… whose dialog is closed before
+/// its Give up answers opens no Republish… later, out of context.
+#[gpui_kit::test]
+async fn a_closed_dialog_ends_its_stop_and_republish(cx: &mut TestAppContext) {
+    let (shell, root) = ticket_shell(cx);
+    let preview = republish_preview(&shell, &root);
+    let close = close_on_a_deleted_branch(&shell, &root, cx).await;
+    let asked = requests_of(&shell, cx, |intent| {
+        matches!(intent, Intent::TicketClose { .. })
+    })[0]
+        .request_id;
+    let held = shell.backend.hold_job_return_answering(
+        JobKind::TicketClose,
+        close_answer(
+            &root,
+            ResultCode::Cancelled,
+            Outcome::Cancelled,
+            Vec::new(),
+            asked,
+        ),
+    );
+    shell.backend.answer_next_prepare("item republish", preview);
+    shell.click("lifecycle-stop-and-republish", cx);
+    held.wait_reached();
+    shell.keys("escape", cx);
+    assert!(!shell.present("lifecycle-dialog", cx));
+    held.release();
     shell
         .until(cx, move |operations| {
-            operations.requests().iter().any(|request| {
-                matches!(&request.intent, Intent::OperationResume { operation_id, .. }
-                    if *operation_id == operation)
+            operations.request(close).is_some_and(|request| {
+                request.attempt == 2 && matches!(request.state, RequestState::Finished(..))
             })
         })
         .await;
+    shell.run(cx);
+    shell.run(cx);
+    assert!(
+        !shell.present("confirm-ok", cx),
+        "no Republish… out of context"
+    );
+    assert!(requests_of(&shell, cx, is_republish).is_empty());
 }

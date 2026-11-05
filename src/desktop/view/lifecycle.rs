@@ -55,6 +55,8 @@ mod outcome;
 
 pub(crate) use outcome::{cleanup_reason, item_of, progress_words};
 pub(crate) use repair::{Reopen, reopen_repaired};
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use republish::NOT_STOPPED;
 pub(crate) use resumed::follow_resume;
 mod prepare;
 mod repair;
@@ -355,6 +357,11 @@ pub(crate) struct LifecycleDialog {
     titles: made_ready::Titles,
     /// Repair locally… since the dialog last moved on (B6).
     repair: repair::Repair,
+    /// Stop and republish… could not give the shown run up (A3).
+    stop_refused: bool,
+    /// The dialog's own focus: a dialog opened over it, Republish…, gives
+    /// focus back here (review M5).
+    focus: FocusHandle,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -414,6 +421,8 @@ impl LifecycleDialog {
             stop_pressed: false,
             titles: made_ready::Titles::default(),
             repair: repair::Repair::repaired(repaired),
+            stop_refused: false,
+            focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         };
         // The dialog locks its item until it is dropped, in every phase
@@ -483,6 +492,11 @@ impl LifecycleDialog {
             Phase::Confirm { confirmation, .. } => Some(*confirmation),
             _ => None,
         }
+    }
+
+    /// The dialog's own focus.
+    pub(crate) fn focus(&self) -> &FocusHandle {
+        &self.focus
     }
 
     /// The run the dialog sent.
