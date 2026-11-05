@@ -355,6 +355,9 @@ are not authorized; numeric exits must come from existing results registry.
 | Task 1 initial quality review, full base through `0698671c` | Controller confirmed **1 Important** source/SQL-reproduced finding: widened CHECK accepted old15-invalid `closed`/`promoted` rows, laundering corrupt evidence | Quality correction below; same reviewer's re-review required. Existing approved corruption-refusal policy applies; no new owner decision |
 | Task 1 quality correction, `0698671c..ed899a00` | Explicit old15-only membership validation before DDL; both laundering cases demonstrated in behavioral red **1 passed / 1 failed**, green **2 passed**; full-row/schema/trigger rollback and current17 reopen/decode controls; frozen-source remote gate **427 passed** | Correction verified, same quality reviewer's re-review pending. No quality pass marked by implementer |
 | Task 1 pre-push visibility correction, `fb7e1d76..baa4153c` | Controller's all-targets Clippy exposed E0433 when `lib.rs` is nested under integration-test `production`; minimal `mutation_remote` check reproduced it. Four proof visibility declarations now use the same relative repository ancestor in both layouts; minimal check, all three full static gates and **6 proof tests** pass | Controller delta spec then quality re-reviews pending before push; no review approval claimed |
+| Task 1 final spec review through `2f2f9b9d`, base `834415b9` | Session `ses_e570cad9fffeIoFuZjIAkxRtBF` re-reviewed recognition, migration and final visibility corrections: 0 Blocking/0 Important/0 Minor remaining; actual source/diff and raw red/green/static logs inspected | Task 1 spec approved at the final source head |
+| Task 1 final quality review through `2f2f9b9d`, same base, after spec pass | Session `ses_e56fd2b47ffe124OrJLE2JwpCS`: old-enum evidence laundering resolved; relative visibility preserves repository-private access; 0 Critical/0 Important/0 Minor remaining. Raw logs, exact range whitespace and clean head verified | Task 1 quality approved; performance on large repositories remains unmeasured, not a blocking finding |
+| Pre-Task 2 main refresh, 2026-11-05 | Both checkouts clean before bookkeeping; fresh fetch succeeded; main still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`. Merge before/after `2f2f9b9dc14144d00658c7d2ce2d63b7405281a8`, already up to date; current rules reread. Another unrelated remote ticket ref advanced, not consumed | No conflict, rebase or changed main assumption; no native/real-context/lifecycle action |
 | Tasks 2/4 adversarial reviews, final whole-range reviews | Not yet run | Mandatory future checkpoints |
 
 ## Task Checklist And Next Step
@@ -365,10 +368,10 @@ are not authorized; numeric exits must come from existing results registry.
   `docs: start completed-context retirement execution`, based on `74186d51`.
   Independent spec and quality reviews passed without findings on
   `74186d51..6a8b4259`; owner H1–H3 resolution is now recorded, no open holds.
-- [ ] **1 — Shared proof, recognition, disposition upgrade.** Implemented;
-  spec pass reported by controller after the `a95f01d3` correction; one Important
-  quality finding corrected at `ed899a00`; integration visibility corrected at
-  `baa4153c`. Full static gates and focused proof tests green; delta reviews pending.
+- [x] **1 — Shared proof, recognition, disposition upgrade.** Implemented and
+  independently spec/quality approved through `2f2f9b9d` from base `834415b9`,
+  no remaining findings. Recognition, migration and nested-harness visibility
+  corrections verified. All three static gates and targeted evidence recorded.
 - [ ] **2 — Durable single-context retirement.** Not started; adversarial gate.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
@@ -379,11 +382,11 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: return Task 1's full review range, including its visibility
-correction, for controller delta spec then quality re-reviews before any push.
-Do not start Task 2 before that handoff. Preserve every other assertion and
-existing lifecycle cleanup behavior. No reapproval of the documents, Q1/Q2,
-E-1–E-10, implementation or execution method is needed.
+Immediate next step: publish the reviewed Task 1 checkpoint on this ticket
+branch only, then dispatch Task 2's fresh implementer. Task 2 must return at its
+record/reservation adversarial design checkpoint before proceeding past it.
+Preserve all unchanged assertions/lifecycle cleanup and prior approvals. Final
+fast/SSH tiers and whole-branch review remain owed; this is not feature completion.
 
 ## Task 1 — Shared Proof, Recognition And Disposition Upgrade
 
