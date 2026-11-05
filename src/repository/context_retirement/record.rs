@@ -6,13 +6,35 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use super::super::{RepositoryError, remote::state::recovery_required};
 
 const MARKER: &str = "context_retirement_v1";
+const REENTRY_MARKER: &str = "context_retirement_v2";
+#[cfg(test)]
+thread_local! {static MIGRATION_FAILURE:std::cell::Cell<Option<u8>>=const {std::cell::Cell::new(None)};}
+#[cfg(test)]
+pub(super) fn fail_migration_at(point: u8) {
+    MIGRATION_FAILURE.with(|slot| slot.set(Some(point)));
+}
+#[cfg(test)]
+fn migration_checkpoint(point: u8) -> Result<(), RepositoryError> {
+    if MIGRATION_FAILURE.with(|slot| {
+        if slot.get() == Some(point) {
+            slot.set(None);
+            true
+        } else {
+            false
+        }
+    }) {
+        return Err(recovery_required());
+    }
+    Ok(())
+}
 
 #[path = "authority.rs"]
 mod authority;
 pub(in super::super) use authority::ObserverExecution;
 pub(super) use authority::{
-    BranchClaim, claim_branch, claim_present, refuse_before_branch_effect,
-    refuse_before_worktree_effect, refuse_execution, refuse_fresh, settle_branch_after_prune,
+    BranchClaim, bind_reentry_observer, claim_branch, claim_present, preserve_worktree_resumption,
+    refuse_before_branch_effect, refuse_before_worktree_effect, refuse_execution, refuse_fresh,
+    settle_branch_after_prune,
 };
 
 /// Retirement identities are spent even after their executor ends. Include the
@@ -219,6 +241,16 @@ const PROVENANCE: &str = "CREATE TABLE retirement_advertisement_provenance (
  CHECK(execution_kind='local_parent' OR (execution_request_ulid IS NOT NULL AND execution_batch_operation_ulid IS NOT NULL))
 )";
 
+const REENTRIES: &str = "CREATE TABLE context_retirement_reentries (
+ operation_ulid TEXT NOT NULL,
+ owner_epoch INTEGER NOT NULL CHECK(typeof(owner_epoch)='integer' AND owner_epoch>1),
+ previous_epoch INTEGER NOT NULL CHECK(typeof(previous_epoch)='integer' AND previous_epoch>0 AND owner_epoch=previous_epoch+1),
+ purpose TEXT NOT NULL CHECK(purpose IN ('observe','resume_worktree','metadata','preserve','no_effect')),
+ PRIMARY KEY(operation_ulid,owner_epoch),
+ FOREIGN KEY(operation_ulid,owner_epoch) REFERENCES context_retirement_attempts(operation_ulid,owner_epoch) ON DELETE CASCADE,
+ FOREIGN KEY(operation_ulid,previous_epoch) REFERENCES context_retirement_attempts(operation_ulid,owner_epoch) ON DELETE NO ACTION
+)";
+
 const RECEIPTS: &str = "CREATE TABLE retirement_observation_receipts (
  id INTEGER PRIMARY KEY,
  provenance_id INTEGER NOT NULL UNIQUE REFERENCES retirement_advertisement_provenance(id) ON DELETE CASCADE,
@@ -233,6 +265,37 @@ const RECEIPTS: &str = "CREATE TABLE retirement_observation_receipts (
  CHECK((consumer_request_ulid IS NULL)=(consumer_request_attempt IS NULL)),
  CHECK((consumer_kind='batch')=(frozen_worklist_digest IS NOT NULL)),
  CHECK(consumer_kind!='batch' OR consumer_request_ulid IS NOT NULL)
+)";
+
+/// M is an owned all-resource-absence receipt, not a branch-deletion receipt.
+/// The exact earlier intent remains immutable, including any uncertainty.
+const ABSENCE_RECEIPTS: &str = "CREATE TABLE context_retirement_absence_receipts (
+ operation_ulid TEXT NOT NULL,
+ owner_epoch INTEGER NOT NULL,
+ intent_owner_epoch INTEGER NOT NULL,
+ intent_resource TEXT NOT NULL CHECK(intent_resource IN ('worktree','branch')),
+ intent_receipt_id INTEGER NOT NULL REFERENCES retirement_observation_receipts(id) ON DELETE NO ACTION,
+ inventory TEXT NOT NULL CHECK(inventory='all_absent'),
+ worktree_removal TEXT NOT NULL CHECK(worktree_removal IN ('none','possible','observed')),
+ branch_removal TEXT NOT NULL CHECK(branch_removal IN ('none','possible','observed')),
+ PRIMARY KEY(operation_ulid,owner_epoch),
+ UNIQUE(operation_ulid),
+ FOREIGN KEY(operation_ulid,owner_epoch) REFERENCES context_retirement_reentries(operation_ulid,owner_epoch) ON DELETE CASCADE,
+ FOREIGN KEY(operation_ulid,intent_owner_epoch,intent_resource) REFERENCES context_retirement_effect_intents(operation_ulid,owner_epoch,resource) ON DELETE NO ACTION,
+ CHECK(owner_epoch>intent_owner_epoch),
+ CHECK(worktree_removal!='none' OR branch_removal!='none')
+)";
+
+const WORKTREE_RESUMPTIONS: &str = "CREATE TABLE context_retirement_worktree_resumptions (
+ operation_ulid TEXT NOT NULL,
+ owner_epoch INTEGER NOT NULL,
+ intent_owner_epoch INTEGER NOT NULL,
+ intent_resource TEXT NOT NULL CHECK(intent_resource='worktree'),
+ intent_receipt_id INTEGER NOT NULL REFERENCES retirement_observation_receipts(id) ON DELETE NO ACTION,
+ PRIMARY KEY(operation_ulid,owner_epoch),
+ FOREIGN KEY(operation_ulid,owner_epoch) REFERENCES context_retirement_reentries(operation_ulid,owner_epoch) ON DELETE CASCADE,
+ FOREIGN KEY(operation_ulid,intent_owner_epoch,intent_resource) REFERENCES context_retirement_effect_intents(operation_ulid,owner_epoch,resource) ON DELETE NO ACTION,
+ CHECK(owner_epoch>intent_owner_epoch)
 )";
 
 const INTENTS: &str = "CREATE TABLE context_retirement_effect_intents (
@@ -260,7 +323,7 @@ const PINS: &str = "CREATE TABLE retirement_observation_pins (
  CHECK((pin_kind='consumer_attempt')=(binding_id IS NOT NULL))
 )";
 
-const RELEASES: &str = "CREATE TABLE retirement_observation_pin_releases (
+const RELEASES: &str = "CREATE TABLE \"retirement_observation_pin_releases\" (
  provenance_id INTEGER NOT NULL REFERENCES retirement_advertisement_provenance(id) ON DELETE CASCADE,
  pin_kind TEXT NOT NULL CHECK(pin_kind IN ('source_attempt','consumer_attempt')),
  holder_operation_ulid TEXT NOT NULL,
@@ -268,7 +331,7 @@ const RELEASES: &str = "CREATE TABLE retirement_observation_pin_releases (
  repository_id INTEGER NOT NULL,
  observation_batch_id INTEGER NOT NULL CHECK(typeof(observation_batch_id)='integer' AND observation_batch_id>0),
  binding_id INTEGER REFERENCES retirement_observation_receipts(id) ON DELETE NO ACTION DEFERRABLE INITIALLY DEFERRED,
- reason TEXT NOT NULL CHECK(reason IN ('source_terminal','source_fenced','handoff_decided','consumer_terminal')),
+ reason TEXT NOT NULL CHECK(reason IN ('source_terminal','source_fenced','handoff_decided','consumer_terminal','consumer_fenced')),
  PRIMARY KEY(provenance_id,pin_kind,holder_operation_ulid,holder_epoch),
  CHECK((pin_kind='consumer_attempt')=(binding_id IS NOT NULL))
 )";
@@ -279,6 +342,9 @@ fn objects() -> Vec<(&'static str, &'static str, String)> {
     let mut objects = vec![
         ("table", "context_retirement_records", RECORDS.to_owned()),
         ("table", "context_retirement_attempts", ATTEMPTS.to_owned()),
+        ("table", "context_retirement_reentries", REENTRIES.to_owned()),
+        ("table", "context_retirement_absence_receipts", ABSENCE_RECEIPTS.to_owned()),
+        ("table", "context_retirement_worktree_resumptions", WORKTREE_RESUMPTIONS.to_owned()),
         ("table", "retirement_advertisement_provenance", PROVENANCE.to_owned()),
         ("table", "retirement_observation_receipts", RECEIPTS.to_owned()),
         ("table", "context_retirement_effect_intents", INTENTS.to_owned()),
@@ -322,6 +388,24 @@ fn objects() -> Vec<(&'static str, &'static str, String)> {
             "retirement_effect_identity",
             "context_retirement_effect_intents",
             "operation_ulid,owner_epoch,resource,receipt_id,primary_oid,proof_kind",
+            "",
+        ),
+        (
+            "retirement_reentry_immutable",
+            "context_retirement_reentries",
+            "",
+            "",
+        ),
+        (
+            "retirement_absence_receipt_immutable",
+            "context_retirement_absence_receipts",
+            "",
+            "",
+        ),
+        (
+            "retirement_worktree_resumption_immutable",
+            "context_retirement_worktree_resumptions",
+            "",
             "",
         ),
         (
@@ -380,6 +464,48 @@ fn objects() -> Vec<(&'static str, &'static str, String)> {
     objects
 }
 
+pub(super) fn published_v1_objects()
+-> Result<Vec<(&'static str, &'static str, String)>, RepositoryError> {
+    let mut objects = objects();
+    objects.retain(|(_, name, _)| {
+        !matches!(
+            *name,
+            "context_retirement_reentries"
+                | "context_retirement_absence_receipts"
+                | "context_retirement_worktree_resumptions"
+                | "retirement_reentry_immutable"
+                | "retirement_absence_receipt_immutable"
+                | "retirement_worktree_resumption_immutable"
+        )
+    });
+    for (_, name, sql) in &mut objects {
+        if *name == "retirement_observation_pin_releases" {
+            *sql = sql.replace(",'consumer_fenced'", "").replace(
+                "CREATE TABLE \"retirement_observation_pin_releases\"",
+                "CREATE TABLE retirement_observation_pin_releases",
+            );
+        }
+    }
+    let mut bytes = Vec::new();
+    for (kind, name, sql) in &objects {
+        for field in [*kind, *name, &normalized(sql)] {
+            bytes.extend_from_slice(field.as_bytes());
+            bytes.push(0);
+        }
+    }
+    // Independently extracted from 7b153deb9ed829c948092f6a855acbf2819612a0:
+    // kind NUL name NUL normalized-SQL NUL, in published object order. This
+    // prevents a later edit of the current envelope silently redefining v1.
+    if git2::Oid::hash_object(git2::ObjectType::Blob, &bytes)
+        .map_err(|_| recovery_required())?
+        .to_string()
+        != "b8ac7ae7201e6182a91d1a8546e63ad518dc9701"
+    {
+        return Err(recovery_required());
+    }
+    Ok(objects)
+}
+
 /// Expand the same canonical scalar constraints at each statically declared
 /// column. The leading space anchors the complete column name: operation_ulid
 /// must not accidentally rewrite consumer_operation_ulid's CHECK expression.
@@ -432,6 +558,7 @@ fn normalized(sql: &str) -> String {
 }
 
 pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryError> {
+    require_known_markers(db)?;
     let marked: bool = db
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
@@ -439,7 +566,17 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
             |r| r.get(0),
         )
         .map_err(|_| recovery_required())?;
-    if marked {
+    let current: bool = db
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [REENTRY_MARKER],
+            |r| r.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    if current && !marked {
+        return Err(recovery_required());
+    }
+    if marked && current {
         return validate_schema(db);
     }
     let tx = db
@@ -453,6 +590,58 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
         )
         .map_err(|_| recovery_required())?;
     let definitions = objects();
+    require_known_markers(&tx)?;
+    let current: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+            [REENTRY_MARKER],
+            |r| r.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    if current && !marked {
+        return Err(recovery_required());
+    }
+    if marked && !current {
+        let prior = published_v1_objects()?;
+        validate_schema_objects(&tx, &prior)?;
+        for (kind, name, sql) in &definitions {
+            if !prior.iter().any(|(_, old, _)| old == name) {
+                let present: bool = tx
+                    .query_row(
+                        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name=?1)",
+                        [name],
+                        |r| r.get(0),
+                    )
+                    .map_err(|_| recovery_required())?;
+                if present {
+                    return Err(recovery_required());
+                }
+                if !matches!(*kind, "table" | "trigger") {
+                    return Err(recovery_required());
+                }
+                tx.execute_batch(sql).map_err(|_| recovery_required())?;
+            }
+        }
+        #[cfg(test)]
+        migration_checkpoint(1)?;
+        // Empty additive companions cannot excuse any legacy row. Audit all
+        // old CHECKs, FKs and history BEFORE widening the old release CHECK.
+        let mut transition = definitions.clone();
+        let prior_release = &prior
+            .iter()
+            .find(|(_, name, _)| *name == "retirement_observation_pin_releases")
+            .ok_or_else(recovery_required)?
+            .2;
+        transition
+            .iter_mut()
+            .find(|(_, name, _)| *name == "retirement_observation_pin_releases")
+            .ok_or_else(recovery_required)?
+            .2 = prior_release.clone();
+        audit_objects(&tx, &transition)?;
+        #[cfg(test)]
+        migration_checkpoint(2)?;
+        replace_release_table(&tx, &definitions)?;
+    }
     if !marked {
         for (_, name, _) in &definitions {
             if tx
@@ -472,8 +661,69 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
         tx.execute("INSERT INTO registry_migrations(name) VALUES(?1)", [MARKER])
             .map_err(|_| recovery_required())?;
     }
+    if !current {
+        tx.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [REENTRY_MARKER],
+        )
+        .map_err(|_| recovery_required())?;
+    }
+    #[cfg(test)]
+    migration_checkpoint(7)?;
     audit(&tx)?;
     tx.commit().map_err(|_| recovery_required())
+}
+
+fn replace_release_table(
+    tx: &rusqlite::Transaction<'_>,
+    definitions: &[(&str, &str, String)],
+) -> Result<(), RepositoryError> {
+    let sql = &definitions
+        .iter()
+        .find(|(_, name, _)| *name == "retirement_observation_pin_releases")
+        .ok_or_else(recovery_required)?
+        .2;
+    tx.execute_batch(&sql.replace(
+        "CREATE TABLE \"retirement_observation_pin_releases\"",
+        "CREATE TABLE retirement_observation_pin_releases_upgrade",
+    ))
+    .map_err(|_| recovery_required())?;
+    tx.execute_batch("INSERT INTO retirement_observation_pin_releases_upgrade(rowid,provenance_id,pin_kind,holder_operation_ulid,holder_epoch,repository_id,observation_batch_id,binding_id,reason) SELECT rowid,provenance_id,pin_kind,holder_operation_ulid,holder_epoch,repository_id,observation_batch_id,binding_id,reason FROM retirement_observation_pin_releases;").map_err(|_|recovery_required())?;
+    #[cfg(test)]
+    migration_checkpoint(3)?;
+    // No incoming FK targets this receipt table in the exact recognized v1
+    // catalog. Build/copy the replacement first; never rename the old parent
+    // and accidentally retarget immutable FK evidence to a discarded table.
+    for name in [
+        "retirement_release_immutable",
+        "retirement_no_repin",
+        "retirement_pin_release_required",
+    ] {
+        tx.execute_batch(&format!("DROP TRIGGER {name}"))
+            .map_err(|_| recovery_required())?;
+    }
+    #[cfg(test)]
+    migration_checkpoint(4)?;
+    tx.execute_batch("DROP TABLE retirement_observation_pin_releases")
+        .map_err(|_| recovery_required())?;
+    #[cfg(test)]
+    migration_checkpoint(5)?;
+    tx.execute_batch("ALTER TABLE retirement_observation_pin_releases_upgrade RENAME TO retirement_observation_pin_releases").map_err(|_|recovery_required())?;
+    for name in [
+        "retirement_release_immutable",
+        "retirement_no_repin",
+        "retirement_pin_release_required",
+    ] {
+        let sql = &definitions
+            .iter()
+            .find(|(_, candidate, _)| *candidate == name)
+            .ok_or_else(recovery_required)?
+            .2;
+        tx.execute_batch(sql).map_err(|_| recovery_required())?;
+    }
+    #[cfg(test)]
+    migration_checkpoint(6)?;
+    Ok(())
 }
 
 /// Full retained history is audited in a read transaction at service startup,
@@ -487,7 +737,14 @@ pub(in super::super) fn audit_registry(db: &mut Connection) -> Result<(), Reposi
 }
 
 fn validate_schema(db: &Connection) -> Result<(), RepositoryError> {
-    for (kind, name, sql) in objects() {
+    validate_schema_objects(db, &objects())
+}
+
+fn validate_schema_objects(
+    db: &Connection,
+    definitions: &[(&str, &str, String)],
+) -> Result<(), RepositoryError> {
+    for (kind, name, sql) in definitions {
         let actual: Option<String> = db
             .query_row(
                 "SELECT sql FROM sqlite_master WHERE type=?1 AND name=?2",
@@ -496,7 +753,7 @@ fn validate_schema(db: &Connection) -> Result<(), RepositoryError> {
             )
             .optional()
             .map_err(|_| recovery_required())?;
-        if actual.as_deref().map(normalized) != Some(normalized(&sql)) {
+        if actual.as_deref().map(normalized) != Some(normalized(sql)) {
             return Err(recovery_required());
         }
     }
@@ -504,9 +761,35 @@ fn validate_schema(db: &Connection) -> Result<(), RepositoryError> {
 }
 
 fn audit(db: &Connection) -> Result<(), RepositoryError> {
-    validate_schema(db)?;
-    for (kind, name, _) in objects() {
-        if kind == "table" {
+    require_known_markers(db)?;
+    let marked: bool = db
+        .query_row(
+            "SELECT count(*)=2 FROM registry_migrations WHERE name IN (?1,?2)",
+            params![MARKER, REENTRY_MARKER],
+            |r| r.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    if !marked {
+        return Err(recovery_required());
+    }
+    audit_objects(db, &objects())
+}
+
+fn require_known_markers(db: &Connection) -> Result<(), RepositoryError> {
+    let unknown:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name LIKE 'context_retirement_%' AND name NOT IN (?1,?2))",params![MARKER,REENTRY_MARKER],|r|r.get(0)).map_err(|_|recovery_required())?;
+    if unknown {
+        return Err(recovery_required());
+    }
+    Ok(())
+}
+
+fn audit_objects(
+    db: &Connection,
+    definitions: &[(&str, &str, String)],
+) -> Result<(), RepositoryError> {
+    validate_schema_objects(db, definitions)?;
+    for (kind, name, _) in definitions {
+        if *kind == "table" {
             let mut q = db
                 .prepare(&format!("PRAGMA integrity_check('{name}')"))
                 .map_err(|_| recovery_required())?;
@@ -616,9 +899,9 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
        OR (c.worktree_removal!='none' AND (c.initial_resources!='present' OR NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.resource='worktree')))
        OR (c.branch_removal!='none' AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.resource='branch'))
        OR (c.phase IN ('local_absent','index_pending','complete') AND (c.materialization_settled!=1 OR c.absence_basis='none'
-         OR o.completed_step IS NOT CASE c.absence_basis WHEN 'initial' THEN 'context_retirement_absent' ELSE 'context_branch_released' END))
+           OR o.completed_step IS NOT CASE WHEN c.absence_basis='initial' THEN 'context_retirement_absent' ELSE 'context_branch_released' END))
        OR (c.phase IN ('local_absent','index_pending','complete') AND c.absence_basis='owned_intent' AND
-         (c.branch_removal='none' OR NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.resource='branch')))
+           ((c.branch_removal='none' OR NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.resource='branch')) AND NOT EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch)))
        OR (c.request_ulid IS NULL AND (EXISTS(SELECT 1 FROM request_operations ro WHERE ro.operation_ulid=c.operation_ulid)
          OR EXISTS(SELECT 1 FROM context_retirement_attempts a WHERE a.operation_ulid=c.operation_ulid AND a.request_attempt IS NOT NULL)))
        OR (c.request_ulid IS NOT NULL AND (NOT EXISTS(SELECT 1 FROM request_records r JOIN request_operations ro ON ro.request_ulid=r.request_ulid
@@ -627,7 +910,7 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
            AND ro.family='local' AND ro.operation_ulid=c.operation_ulid AND a.request_attempt IS NOT NULL AND a.request_attempt<=r.attempt
            AND (c.phase IN ('complete','refused','abandoned') OR (r.state='accepted' AND a.request_attempt=r.attempt)))
          OR (SELECT count(*) FROM request_operations ro WHERE ro.operation_ulid=c.operation_ulid)!=1))
-       OR (o.completed_step='context_retirement_absent' AND (c.absence_basis!='initial' OR c.materialization_settled!=1 OR c.phase NOT IN ('local_absent','index_pending','complete')))
+         OR (o.completed_step='context_retirement_absent' AND (c.absence_basis!='initial' OR c.materialization_settled!=1 OR c.phase NOT IN ('local_absent','index_pending','complete')))
        OR (o.completed_step='context_branch_released' AND (c.absence_basis!='owned_intent' OR c.materialization_settled!=1 OR c.phase NOT IN ('local_absent','index_pending','complete')))
         OR (o.completed_step='context_worktree_released' AND (c.worktree_removal='none' OR c.phase NOT IN ('worktree_removed','branch_deleting','preserving')))
         OR (o.completed_step='context_retirement_preserved' AND c.phase NOT IN ('preserving','index_pending','abandoned'))
@@ -648,6 +931,60 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
         OR (c.phase IN ('local_absent','index_pending') AND o.state NOT IN ('authoritative_observed','indexing','failed','observed','persisted','retry','index_invalidated'))
     )", [], |r| r.get(0)).map_err(|_| recovery_required())?;
     if inconsistent {
+        return Err(recovery_required());
+    }
+    let invalid_reentry:bool=db.query_row("SELECT EXISTS(
+      SELECT 1 FROM context_retirement_reentries rr
+      JOIN context_retirement_records c ON c.operation_ulid=rr.operation_ulid
+      JOIN context_retirement_attempts a ON a.operation_ulid=rr.operation_ulid AND a.owner_epoch=rr.owner_epoch
+      JOIN context_retirement_attempts old ON old.operation_ulid=rr.operation_ulid AND old.owner_epoch=rr.previous_epoch
+      WHERE old.phase!='fenced' OR rr.owner_epoch>c.owner_epoch OR a.repository_id!=c.repository_id
+        OR c.request_ulid IS NOT NULL OR c.batch_operation_ulid IS NOT NULL
+        OR c.owner_epoch-c.selection_epoch!=(SELECT count(*) FROM context_retirement_reentries chain WHERE chain.operation_ulid=c.operation_ulid)
+        OR (rr.purpose IN ('observe','resume_worktree'))!=(a.observer_operation_ulid IS NOT NULL)
+        OR (old.observer_operation_ulid IS NOT NULL AND NOT EXISTS(
+          SELECT 1 FROM remote_operation_records o WHERE o.repository_id=c.repository_id AND o.operation_ulid=old.observer_operation_ulid
+            AND o.owner_epoch=old.observer_owner_epoch+1 AND o.phase IN ('interrupted','completed','cancelled','failed')
+            AND o.action='poll' AND o.poll_kind='observe' AND o.priority='manual'
+            AND o.configuration_generation=c.configuration_generation AND o.remote_name=c.remote_name AND o.primary_branch=c.primary_branch))
+        OR (old.observer_operation_ulid IS NULL AND NOT EXISTS(SELECT 1 FROM context_retirement_reentries previous WHERE previous.operation_ulid=rr.operation_ulid AND previous.owner_epoch=rr.previous_epoch AND previous.purpose='preserve'))
+        OR (rr.purpose='observe' AND (c.initial_resources!='present' OR EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.owner_epoch<rr.owner_epoch)))
+        OR (rr.purpose NOT IN ('observe','resume_worktree') AND (EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.owner_epoch=rr.owner_epoch)
+          OR EXISTS(SELECT 1 FROM retirement_observation_receipts b WHERE b.consumer_operation_ulid=c.operation_ulid AND b.consumer_attempt_epoch=rr.owner_epoch)))
+        OR (rr.purpose IN ('metadata','preserve') AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.owner_epoch<rr.owner_epoch AND (e.observation IS NULL OR e.observation IN ('removed','already_absent','incomplete'))))
+        OR (rr.purpose='no_effect' AND EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid))
+        OR (rr.purpose='resume_worktree' AND NOT EXISTS(SELECT 1 FROM context_retirement_worktree_resumptions w WHERE w.operation_ulid=rr.operation_ulid AND w.owner_epoch=rr.owner_epoch))
+        OR (rr.owner_epoch=c.owner_epoch AND rr.purpose='no_effect' AND (c.phase!='refused' OR c.final_code!='external_change' OR c.worktree_removal!='none' OR c.branch_removal!='none'))
+        OR (rr.owner_epoch=c.owner_epoch AND rr.purpose='preserve' AND (c.phase NOT IN ('worktree_removing','worktree_removed','branch_deleting') OR (c.worktree_removal='none' AND c.branch_removal='none')))
+        OR (rr.owner_epoch=c.owner_epoch AND rr.purpose='metadata' AND (c.phase NOT IN ('index_pending','local_absent','complete') OR c.absence_basis!='owned_intent' OR c.materialization_settled!=1 OR NOT EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch))))",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+    if invalid_reentry {
+        return Err(recovery_required());
+    }
+    let invalid_resumption:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_worktree_resumptions w
+      JOIN context_retirement_reentries rr ON rr.operation_ulid=w.operation_ulid AND rr.owner_epoch=w.owner_epoch
+      JOIN context_retirement_records c ON c.operation_ulid=w.operation_ulid
+      JOIN context_retirement_effect_intents e ON e.operation_ulid=w.operation_ulid AND e.owner_epoch=w.intent_owner_epoch AND e.resource=w.intent_resource
+      JOIN context_retirement_attempts old ON old.operation_ulid=e.operation_ulid AND old.owner_epoch=e.owner_epoch
+      WHERE rr.purpose!='resume_worktree' OR e.receipt_id!=w.intent_receipt_id OR old.phase!='fenced'
+        OR c.initial_resources!='present' OR c.instance_verified!=1 OR c.initial_primary_oid IS NULL
+        OR (e.observation IS NOT NULL AND e.observation!='incomplete')
+        OR EXISTS(SELECT 1 FROM context_retirement_effect_intents prior WHERE prior.operation_ulid=c.operation_ulid AND prior.owner_epoch<w.owner_epoch AND (prior.resource='branch' OR prior.observation='removed')))",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+    if invalid_resumption {
+        return Err(recovery_required());
+    }
+    let invalid_absence:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_absence_receipts m
+      JOIN context_retirement_records c ON c.operation_ulid=m.operation_ulid
+      JOIN context_retirement_reentries rr ON rr.operation_ulid=m.operation_ulid AND rr.owner_epoch=m.owner_epoch
+      JOIN context_retirement_effect_intents e ON e.operation_ulid=m.operation_ulid AND e.owner_epoch=m.intent_owner_epoch AND e.resource=m.intent_resource
+      JOIN context_retirement_attempts old ON old.operation_ulid=e.operation_ulid AND old.owner_epoch=e.owner_epoch
+      JOIN retirement_observation_receipts b ON b.id=m.intent_receipt_id
+      WHERE c.owner_epoch!=m.owner_epoch OR rr.purpose!='metadata' OR old.phase!='fenced'
+        OR e.receipt_id!=m.intent_receipt_id OR b.consumer_operation_ulid!=c.operation_ulid OR b.consumer_attempt_epoch!=e.owner_epoch OR b.repository_id!=c.repository_id
+        OR (e.observation IS NOT NULL AND e.observation NOT IN ('removed','already_absent','incomplete'))
+        OR c.absence_basis!='owned_intent' OR c.materialization_settled!=1 OR c.phase NOT IN ('index_pending','local_absent','complete')
+        OR m.worktree_removal!=c.worktree_removal OR m.branch_removal!=c.branch_removal
+        OR EXISTS(SELECT 1 FROM context_retirement_effect_intents current WHERE current.operation_ulid=c.operation_ulid AND current.owner_epoch=m.owner_epoch))",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+    if invalid_absence {
         return Err(recovery_required());
     }
     // No batch/source or guarded-preservation producer/correlation is installed
@@ -677,10 +1014,12 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
       WHERE b.consumer_kind!='single' OR b.consumer_operation_ulid!=e.operation_ulid OR b.consumer_attempt_epoch!=e.owner_epoch
         OR b.repository_id!=c.repository_id OR c.initial_resources NOT IN ('present','branch_only')
         OR (e.resource='worktree' AND (c.initial_resources!='present' OR c.instance_verified!=1 OR (c.worktree_removal='none' AND NOT coalesce(c.phase='refused' AND e.observation='changed',0))))
-        OR (e.resource='branch' AND c.branch_removal='none' AND NOT coalesce((c.phase='refused' OR (c.phase='worktree_removed' AND c.worktree_removal='observed')) AND e.observation='changed',0))
+        OR (e.resource='branch' AND c.branch_removal='none' AND NOT coalesce((c.phase='refused' OR (c.phase='worktree_removed' AND c.worktree_removal='observed') OR EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch)) AND e.observation='changed',0))
         OR (c.phase IN ('local_absent','index_pending','complete') AND c.absence_basis='owned_intent' AND NOT coalesce(
           (e.observation='removed' AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='observed')
-          OR (e.observation IN ('already_absent','incomplete') AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='possible'),0)))", [], |r| r.get(0)).map_err(|_| recovery_required())?;
+           OR (e.observation IN ('already_absent','incomplete') AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='possible')
+           OR (EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch) AND ((e.observation IS NULL AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='possible') OR (e.observation='changed' AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='none')))
+           OR (e.resource='worktree' AND e.owner_epoch<c.owner_epoch AND EXISTS(SELECT 1 FROM context_retirement_worktree_resumptions w JOIN context_retirement_effect_intents current ON current.operation_ulid=w.operation_ulid AND current.owner_epoch=w.owner_epoch AND current.resource='worktree' JOIN context_retirement_attempts old ON old.operation_ulid=e.operation_ulid AND old.owner_epoch=e.owner_epoch WHERE w.operation_ulid=c.operation_ulid AND w.owner_epoch>e.owner_epoch AND w.owner_epoch<=c.owner_epoch AND old.phase='fenced' AND ((current.observation='removed' AND c.worktree_removal='observed') OR EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch AND m.intent_resource='worktree' AND m.intent_owner_epoch=current.owner_epoch AND m.intent_receipt_id=current.receipt_id AND m.worktree_removal='possible' AND c.worktree_removal='possible')))),0)))", [], |r| r.get(0)).map_err(|_| recovery_required())?;
     if invalid_effect {
         return Err(recovery_required());
     }
@@ -742,10 +1081,10 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
       LEFT JOIN retirement_observation_receipts b ON b.id=r.binding_id
       WHERE r.repository_id!=p.repository_id OR r.observation_batch_id!=p.observation_batch_id
         OR EXISTS(SELECT 1 FROM retirement_observation_pins pin WHERE pin.provenance_id=r.provenance_id AND pin.pin_kind=r.pin_kind AND pin.holder_operation_ulid=r.holder_operation_ulid AND pin.holder_epoch=r.holder_epoch)
-        OR (r.pin_kind='consumer_attempt' AND (r.reason!='consumer_terminal' OR b.provenance_id IS NOT p.id
+         OR (r.pin_kind='consumer_attempt' AND (r.reason NOT IN ('consumer_terminal','consumer_fenced') OR b.provenance_id IS NOT p.id
           OR b.consumer_operation_ulid IS NOT r.holder_operation_ulid OR b.consumer_attempt_epoch IS NOT r.holder_epoch
           OR (b.consumer_kind='single' AND NOT EXISTS(SELECT 1 FROM context_retirement_records c JOIN context_retirement_attempts a ON a.operation_ulid=c.operation_ulid
-            WHERE c.operation_ulid=b.consumer_operation_ulid AND a.owner_epoch=b.consumer_attempt_epoch AND a.phase IN ('ended','fenced') AND c.phase IN ('complete','refused','abandoned')))))
+            WHERE c.operation_ulid=b.consumer_operation_ulid AND a.owner_epoch=b.consumer_attempt_epoch AND ((r.reason='consumer_terminal' AND a.phase IN ('ended','fenced') AND c.phase IN ('complete','refused','abandoned')) OR (r.reason='consumer_fenced' AND a.phase='fenced' AND EXISTS(SELECT 1 FROM context_retirement_reentries rr WHERE rr.operation_ulid=c.operation_ulid AND rr.previous_epoch=a.owner_epoch AND rr.owner_epoch<=c.owner_epoch)))))))
         OR (r.pin_kind='source_attempt' AND (p.execution_kind!='poll_parent' OR r.holder_operation_ulid!=p.source_operation_ulid OR r.holder_epoch!=p.source_owner_epoch
           OR r.reason NOT IN ('source_terminal','source_fenced','handoff_decided')
           OR NOT EXISTS(SELECT 1 FROM remote_operation_records o WHERE o.repository_id=p.repository_id AND o.operation_ulid=p.source_operation_ulid
@@ -908,17 +1247,38 @@ fn release_single_consumer(
     operation: &str,
     epoch: i64,
 ) -> Result<(), RepositoryError> {
+    release_consumer(tx, operation, epoch, false)
+}
+pub(super) fn release_replaced_consumer(
+    tx: &rusqlite::Transaction<'_>,
+    operation: &str,
+    epoch: i64,
+) -> Result<(), RepositoryError> {
+    release_consumer(tx, operation, epoch, true)
+}
+fn release_consumer(
+    tx: &rusqlite::Transaction<'_>,
+    operation: &str,
+    epoch: i64,
+    replaced: bool,
+) -> Result<(), RepositoryError> {
     let terminal: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records c JOIN context_retirement_attempts a ON a.operation_ulid=c.operation_ulid
       WHERE c.operation_ulid=?1 AND a.owner_epoch=?2 AND a.phase IN ('ended','fenced') AND c.phase IN ('complete','refused','abandoned') AND c.request_ulid IS NULL AND c.batch_operation_ulid IS NULL)", params![operation,epoch], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
-    if !terminal {
+    let fenced:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_reentries rr JOIN context_retirement_attempts a ON a.operation_ulid=rr.operation_ulid AND a.owner_epoch=rr.previous_epoch JOIN context_retirement_records c ON c.operation_ulid=rr.operation_ulid WHERE rr.operation_ulid=?1 AND rr.previous_epoch=?2 AND a.phase='fenced' AND rr.owner_epoch=c.owner_epoch AND c.request_ulid IS NULL AND c.batch_operation_ulid IS NULL)",params![operation,epoch],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
+    if (!replaced && !terminal) || (replaced && !fenced) {
         return Err(recovery_required());
     }
+    let reason = if replaced {
+        "consumer_fenced"
+    } else {
+        "consumer_terminal"
+    };
     let binding: Option<(i64,i64,i64,i64)> = tx.query_row("SELECT b.id,p.id,p.repository_id,p.observation_batch_id FROM retirement_observation_receipts b JOIN retirement_advertisement_provenance p ON p.id=b.provenance_id
       WHERE b.consumer_kind='single' AND b.consumer_operation_ulid=?1 AND b.consumer_attempt_epoch=?2", params![operation,epoch], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(RepositoryError::sqlite)?;
     let Some((binding, provenance, repository, batch)) = binding else {
         return Ok(());
     };
-    let released: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM retirement_observation_pin_releases WHERE provenance_id=?1 AND pin_kind='consumer_attempt' AND holder_operation_ulid=?2 AND holder_epoch=?3 AND repository_id=?4 AND observation_batch_id=?5 AND binding_id=?6 AND reason='consumer_terminal')", params![provenance,operation,epoch,repository,batch,binding], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+    let released: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM retirement_observation_pin_releases WHERE provenance_id=?1 AND pin_kind='consumer_attempt' AND holder_operation_ulid=?2 AND holder_epoch=?3 AND repository_id=?4 AND observation_batch_id=?5 AND binding_id=?6 AND reason=?7)", params![provenance,operation,epoch,repository,batch,binding,reason], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
     let live: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM retirement_observation_pins WHERE provenance_id=?1 AND pin_kind='consumer_attempt' AND holder_operation_ulid=?2 AND holder_epoch=?3 AND repository_id=?4 AND observation_batch_id=?5 AND binding_id=?6)", params![provenance,operation,epoch,repository,batch,binding], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
     if released {
         // Never resolve/collect a historical scalar ID: it may have been reused.
@@ -936,7 +1296,7 @@ fn release_single_consumer(
     if !exact {
         return Err(recovery_required());
     }
-    tx.execute("INSERT INTO retirement_observation_pin_releases(provenance_id,pin_kind,holder_operation_ulid,holder_epoch,repository_id,observation_batch_id,binding_id,reason) VALUES(?1,'consumer_attempt',?2,?3,?4,?5,?6,'consumer_terminal')", params![provenance,operation,epoch,repository,batch,binding]).map_err(RepositoryError::sqlite)?;
+    tx.execute("INSERT INTO retirement_observation_pin_releases(provenance_id,pin_kind,holder_operation_ulid,holder_epoch,repository_id,observation_batch_id,binding_id,reason) VALUES(?1,'consumer_attempt',?2,?3,?4,?5,?6,?7)", params![provenance,operation,epoch,repository,batch,binding,reason]).map_err(RepositoryError::sqlite)?;
     if tx.execute("DELETE FROM retirement_observation_pins WHERE provenance_id=?1 AND pin_kind='consumer_attempt' AND holder_operation_ulid=?2 AND holder_epoch=?3 AND repository_id=?4 AND observation_batch_id=?5 AND binding_id=?6", params![provenance,operation,epoch,repository,batch,binding]).map_err(RepositoryError::sqlite)?!=1 { return Err(recovery_required()); }
     tx.execute("DELETE FROM remote_observation_batches WHERE repository_id=?1 AND id=?2 AND is_current=0
       AND NOT EXISTS(SELECT 1 FROM remote_integration_windows w WHERE w.observation_batch_id=remote_observation_batches.id)
@@ -972,7 +1332,7 @@ pub(in super::super) fn finalize_index(
     }
     // Only implemented standalone handoffs. Preserving/source/batch authority
     // remains closed; refresh never manufactures an executor or repeats effects.
-    let handoff: Option<(String,String,String)> = tx.query_row("SELECT absence_basis,branch_removal,worktree_removal FROM context_retirement_records WHERE operation_ulid=?1 AND repository_id=?2 AND request_ulid IS NULL AND batch_operation_ulid IS NULL AND ((initial_resources='absent' AND absence_basis='initial' AND worktree_removal='none') OR (initial_resources='branch_only' AND absence_basis='owned_intent' AND worktree_removal='none') OR (initial_resources='present' AND instance_verified=1 AND absence_basis='owned_intent' AND worktree_removal='observed'))", params![operation,repository_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_| recovery_required())?;
+    let handoff: Option<(String,String,String)> = tx.query_row("SELECT absence_basis,branch_removal,worktree_removal FROM context_retirement_records c WHERE operation_ulid=?1 AND repository_id=?2 AND request_ulid IS NULL AND batch_operation_ulid IS NULL AND ((initial_resources='absent' AND absence_basis='initial' AND worktree_removal='none') OR (initial_resources='branch_only' AND absence_basis='owned_intent' AND worktree_removal='none') OR (initial_resources='present' AND instance_verified=1 AND absence_basis='owned_intent' AND worktree_removal='observed') OR (absence_basis='owned_intent' AND EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch)))", params![operation,repository_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_| recovery_required())?;
     let Some((basis, branch, worktree)) = handoff else {
         return Err(recovery_required());
     };
@@ -982,11 +1342,14 @@ pub(in super::super) fn finalize_index(
         let branch = match branch.as_str() {
             "observed" => super::RetirementRemoval::Observed,
             "possible" => super::RetirementRemoval::Possible,
+            "none" => super::RetirementRemoval::None,
             _ => return Err(recovery_required()),
         };
         super::ContextRetirementReport::retired(
             if worktree == "observed" {
                 super::RetirementRemoval::Observed
+            } else if worktree == "possible" {
+                super::RetirementRemoval::Possible
             } else {
                 super::RetirementRemoval::None
             },

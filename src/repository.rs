@@ -38,8 +38,8 @@ mod context_release;
 mod context_retirement;
 pub use context_release::{ContextReleaseOutcome, ReleaseContextRequest};
 pub use context_retirement::{
-    ContextRetirementOutcome, ContextRetirementReport, RetireContextRequest, RetirementDisposition,
-    RetirementRemoval,
+    ContextRetirementOutcome, ContextRetirementReport, ReenterContextRetirementRequest,
+    RetireContextRequest, RetirementDisposition, RetirementRemoval,
 };
 mod coordination;
 pub use comment_publication::*;

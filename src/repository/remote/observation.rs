@@ -26,6 +26,17 @@ impl ObservationConfiguration {
         if observation_plan(root).ok().as_ref() != Some(plan) {
             return Ok(false);
         }
+        Ok(self == &Self::capture_owned(service, db, root, plan)?)
+    }
+
+    /// Capture under a caller-owned registry transaction. This never takes a
+    /// second cache guard; metadata-only retirement does not invoke it.
+    pub(in super::super) fn capture_owned(
+        service: &RepositoryService,
+        db: &rusqlite::Connection,
+        root: &std::path::Path,
+        plan: &RemoteRefPlan,
+    ) -> Result<Self, RepositoryError> {
         let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
         let selected = crate::repository::keys::stored_shared_key_registrations(
             db,
@@ -42,21 +53,20 @@ impl ObservationConfiguration {
             let source = KeySourceToken::observe(&key.private_key_path).ok();
             (key.id, key.private_key_path, source)
         });
-        Ok(self
-            == &Self {
-                plan: plan.clone(),
-                selected,
-                fetch: crate::repository::transport::endpoint::configured_remote_endpoint(
-                    &repository,
-                    plan.remote_name(),
-                    SshDirection::Fetch,
-                ),
-                push: crate::repository::transport::endpoint::configured_remote_endpoint(
-                    &repository,
-                    plan.remote_name(),
-                    SshDirection::Push,
-                ),
-            })
+        Ok(Self {
+            plan: plan.clone(),
+            selected,
+            fetch: crate::repository::transport::endpoint::configured_remote_endpoint(
+                &repository,
+                plan.remote_name(),
+                SshDirection::Fetch,
+            ),
+            push: crate::repository::transport::endpoint::configured_remote_endpoint(
+                &repository,
+                plan.remote_name(),
+                SshDirection::Push,
+            ),
+        })
     }
     /// Tracking refs describe Fetch history. A Push-only endpoint's observation
     /// must never be installed as if it had been fetched from another server.

@@ -23,6 +23,55 @@ use std::{io::Read, path::PathBuf};
 pub(super) const MARKER: &str = "manyhands-retirement-instance";
 const LIMIT: u64 = 192;
 #[cfg(test)]
+struct BootstrapHook {
+    after_install: bool,
+    action: Box<dyn FnOnce()>,
+}
+#[cfg(test)]
+thread_local! {static BOOTSTRAP_HOOK:std::cell::RefCell<Option<BootstrapHook>>=const { std::cell::RefCell::new(None) };}
+#[cfg(test)]
+thread_local! {static PRUNE_ENTRY_HOOK:std::cell::RefCell<Option<Box<dyn FnOnce()>>>=std::cell::RefCell::new(None);}
+#[cfg(test)]
+impl RepositoryService {
+    #[allow(dead_code)]
+    pub(crate) fn set_retirement_prune_entry_hook_for_testing(hook: impl FnOnce() + 'static) {
+        PRUNE_ENTRY_HOOK.with(|slot| {
+            assert!(slot.borrow().is_none());
+            *slot.borrow_mut() = Some(Box::new(hook));
+        });
+    }
+    #[allow(dead_code)]
+    pub(crate) fn set_retirement_bootstrap_hook_for_testing(
+        after_install: bool,
+        hook: impl FnOnce() + 'static,
+    ) {
+        BOOTSTRAP_HOOK.with(|slot| {
+            assert!(slot.borrow().is_none());
+            *slot.borrow_mut() = Some(BootstrapHook {
+                after_install,
+                action: Box::new(hook),
+            });
+        });
+    }
+}
+#[cfg(test)]
+fn bootstrap_hook(after_install: bool) {
+    let hook = BOOTSTRAP_HOOK.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot
+            .as_ref()
+            .is_some_and(|hook| hook.after_install == after_install)
+        {
+            slot.take().map(|hook| hook.action)
+        } else {
+            None
+        }
+    });
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+#[cfg(test)]
 #[path = "instance_tests.rs"]
 mod tests;
 
@@ -350,6 +399,8 @@ impl Selection {
             }
             self.anchor.validate().map_err(|_| recovery_required())?;
             if self.create {
+                #[cfg(test)]
+                bootstrap_hook(false);
                 self.anchor
                     .create(&bytes(expected.kind, &expected.item, expected.nonce))
                     .map_err(|_| recovery_required())?;
@@ -358,6 +409,8 @@ impl Selection {
             self.anchor.validate().map_err(|_| recovery_required())?;
             super::record::audit_connection(tx)
         })?;
+        #[cfg(test)]
+        bootstrap_hook(true);
         // This phase has NO installation authority; it may only verify a fully
         // installed marker against the durable intent and finish the SQL CAS.
         self.anchor.validate().map_err(|_| recovery_required())?;
@@ -382,6 +435,58 @@ impl Identity {
     }
 }
 impl Verified {
+    pub(super) fn matches_stored(
+        tx: &rusqlite::Transaction<'_>,
+        git: &git2::Repository,
+        request: &RetireContextRequest,
+        cleanup: &ContextCleanup,
+    ) -> Result<bool, RepositoryError> {
+        let (tip,nonce):(String,String)=tx.query_row("SELECT expected_tip,instance_nonce FROM context_retirement_records WHERE operation_ulid=?1 AND initial_resources='present'",[request.operation_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?))).map_err(RepositoryError::sqlite)?;
+        let identity = Identity {
+            root: request.root.clone(),
+            kind: request.kind,
+            item: request.item_id.clone(),
+            tip: git2::Oid::from_str(&tip).map_err(|_| recovery_required())?,
+            nonce: OperationId::parse(&nonce).map_err(|_| recovery_required())?,
+        };
+        Ok(identity.verify_marker(git, request).is_ok()
+            && cleanup.precheck_context(request.kind, &request.item_id, identity.tip)
+                == Precheck::Ok)
+    }
+    /// Reentry has verification-only authority. No Selection/create permit is
+    /// reconstructed from the stored intended nonce, even when its marker lacks.
+    pub(super) fn resume(
+        service: &RepositoryService,
+        request: &RetireContextRequest,
+        owner: &RemoteReservation,
+        cleanup: &ContextCleanup,
+    ) -> Result<Self, RepositoryError> {
+        let verified = state::with_transaction(service, &request.root, |tx, id| {
+            owner
+                .retirement_execution()?
+                .validate_install(service, tx, id)?;
+            let (tip,nonce,verified):(String,String,bool)=tx.query_row("SELECT expected_tip,instance_nonce,instance_verified FROM context_retirement_records c WHERE operation_ulid=?1 AND initial_resources='present' AND (phase='selected' OR (phase='worktree_removing' AND instance_verified=1 AND EXISTS(SELECT 1 FROM context_retirement_worktree_resumptions w WHERE w.operation_ulid=c.operation_ulid AND w.owner_epoch=c.owner_epoch)))",[request.operation_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(RepositoryError::sqlite)?;
+            let identity = Identity {
+                root: request.root.clone(),
+                kind: request.kind,
+                item: request.item_id.clone(),
+                tip: git2::Oid::from_str(&tip).map_err(|_| recovery_required())?,
+                nonce: OperationId::parse(&nonce).map_err(|_| recovery_required())?,
+            };
+            let git = git2::Repository::open(&request.root).map_err(|_| recovery_required())?;
+            identity.verify_marker(&git, request)?;
+            if cleanup.precheck_context(request.kind, &request.item_id, identity.tip)
+                != Precheck::Ok
+            {
+                return Err(recovery_required());
+            }
+            Ok(verified.then_some(Self(identity)))
+        })?;
+        match verified {
+            Some(v) => Ok(v),
+            None => finish_provisional(service, request, owner, cleanup),
+        }
+    }
     pub(super) fn verify(
         &self,
         git: &git2::Repository,
@@ -402,6 +507,13 @@ impl Verified {
     ) -> Prune {
         let result =
             cleanup.remove_retirement_worktree(self.0.kind, &self.0.item, self.0.tip, || {
+                #[cfg(test)]
+                {
+                    let hook = PRUNE_ENTRY_HOOK.with(|slot| slot.borrow_mut().take());
+                    if let Some(hook) = hook {
+                        hook();
+                    }
+                }
                 self.0.verify_marker(git, request).is_ok()
             });
         match result {

@@ -291,6 +291,51 @@ fn claim_fresh(
     })
 }
 
+pub(in super::super) fn bind_reentry_observer(
+    service: &RepositoryService,
+    tx: &Transaction<'_>,
+    id: i64,
+    request: &RetireContextRequest,
+    epoch: i64,
+    configuration: ObservationConfiguration,
+) -> Result<Box<RemoteReservation>, RepositoryError> {
+    let (remote_name,primary,generation):(String,String,i64)=tx.query_row("SELECT c.remote_name,c.primary_branch,c.configuration_generation FROM context_retirement_records c JOIN context_retirement_reentries rr ON rr.operation_ulid=c.operation_ulid AND rr.owner_epoch=c.owner_epoch WHERE c.operation_ulid=?1 AND c.owner_epoch=?2 AND rr.purpose IN ('observe','resume_worktree') AND c.request_ulid IS NULL AND c.batch_operation_ulid IS NULL",params![request.operation_id.to_string(),epoch],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(RepositoryError::sqlite)?;
+    let plan = crate::repository::RemoteRefPlan::from_configuration(&remote_name, &primary)
+        .map_err(|_| recovery_required())?;
+    let observer = OperationId::new();
+    if local_sync::record::foreign_id_collision(tx, &observer.to_string(), None)?
+        || super::owned_identity(tx, &observer.to_string())?
+    {
+        return Err(recovery_required());
+    }
+    state::insert_operation(
+        tx,
+        id,
+        observer,
+        &RemoteOperationTarget::for_poll(&plan),
+        RemoteOperationPriority::Manual,
+        service.clock.now().unix_timestamp(),
+    )?;
+    let remote = state::read_operation(tx, id, observer)?.ok_or_else(recovery_required)?;
+    if tx.execute("UPDATE context_retirement_attempts SET observer_operation_ulid=?3,observer_owner_epoch=?4 WHERE operation_ulid=?1 AND owner_epoch=?2 AND phase='active' AND observer_operation_ulid IS NULL",params![request.operation_id.to_string(),epoch,observer.to_string(),remote.owner_epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
+    let execution = ObserverExecution {
+        scope: Arc::clone(&service.remote_reservation_scope),
+        operation: request.operation_id,
+        repository: id,
+        root: request.root.clone(),
+        epoch,
+        observer,
+        observer_epoch: remote.owner_epoch,
+        generation,
+        plan,
+        configuration,
+    };
+    execution.validate_install(service, tx, id)?;
+    Ok(Box::new(reservation::retirement_token(
+        service, id, &remote, execution,
+    )))
+}
+
 pub(in super::super) fn refuse_fresh(
     service: &RepositoryService,
     request: &RetireContextRequest,
@@ -428,5 +473,35 @@ pub(in super::super) fn settle_branch_after_prune(
         uninvoked.settle(tx, execution.operation, execution.epoch)?;
         if tx.execute("UPDATE context_retirement_records SET phase='worktree_removed',branch_removal='none' WHERE operation_ulid=?1 AND owner_epoch=?2",params![execution.operation.to_string(),execution.epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
         super::audit_connection(tx)
+    })
+}
+
+/// A new no-effect witness describes only this attempt, never the old crash.
+/// Keep the old possible W debt and the local blocker even when a new proof,
+/// authentication or immediate pre-prune guard refuses.
+pub(in super::super) fn preserve_worktree_resumption(
+    service: &RepositoryService,
+    root: &std::path::Path,
+    owner: &RemoteReservation,
+    uninvoked: &mut Option<super::super::run::UninvokedWorktree>,
+) -> Result<Option<crate::repository::ContextRetirementOutcome>, RepositoryError> {
+    let execution = owner.retirement_execution()?;
+    state::with_transaction(service, root, |tx, id| {
+        execution.local_owner(service, tx, id)?;
+        let prior:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_worktree_resumptions w JOIN context_retirement_records c ON c.operation_ulid=w.operation_ulid AND c.owner_epoch=w.owner_epoch WHERE w.operation_ulid=?1 AND w.owner_epoch=?2 AND c.phase='worktree_removing' AND c.worktree_removal='possible' AND c.branch_removal='none')",params![execution.operation.to_string(),execution.epoch],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
+        if !prior {
+            return Ok(None);
+        }
+        if let Some(witness) = uninvoked.take() {
+            witness.settle(tx, execution.operation, execution.epoch)?;
+        }
+        tx.execute("UPDATE remote_operation_records SET phase='interrupted',outcome='repository_unavailable' WHERE repository_id=?1 AND operation_ulid=?2 AND owner_epoch=?3 AND phase IN ('reserved','advertising','persisting')",params![id,execution.observer.to_string(),execution.observer_epoch]).map_err(RepositoryError::sqlite)?;
+        super::audit_connection(tx)?;
+        Ok(Some(
+            crate::repository::ContextRetirementOutcome::CleanupPending {
+                worktree_removal: crate::repository::RetirementRemoval::Possible,
+                branch_removal: crate::repository::RetirementRemoval::None,
+            },
+        ))
     })
 }

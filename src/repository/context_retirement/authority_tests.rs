@@ -131,6 +131,296 @@ impl SessionCredentialProvider for Provider {
 }
 
 #[test]
+fn retirement_reentry_audit_rejects_unfenced_observer_and_false_purposes() {
+    for case in [
+        "old_observer_not_fenced",
+        "preserve_without_debt",
+        "observe_branch_only",
+    ] {
+        let f = Fixture::new();
+        let db = f.db();
+        db.execute("UPDATE context_retirement_attempts SET phase='fenced'", [])
+            .unwrap();
+        db.execute("UPDATE context_retirement_records SET owner_epoch=2", [])
+            .unwrap();
+        db.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase) SELECT operation_ulid,2,repository_id,'active' FROM context_retirement_records",[]).unwrap();
+        let purpose = match case {
+            "old_observer_not_fenced" => "no_effect",
+            "preserve_without_debt" => "preserve",
+            _ => "observe",
+        };
+        db.execute("INSERT INTO context_retirement_reentries(operation_ulid,owner_epoch,previous_epoch,purpose) VALUES(?1,2,1,?2)",params![f.request.operation_id.to_string(),purpose]).unwrap();
+        if case == "old_observer_not_fenced" {
+            let report =
+                ContextRetirementReport::refused(crate::results::ResultCode::ExternalChange);
+            db.execute("UPDATE context_retirement_records SET phase='refused',final_code='external_change',final_result=?1",[report.encode().unwrap()]).unwrap();
+            db.execute_batch("UPDATE context_retirement_attempts SET phase='ended' WHERE owner_epoch=2; UPDATE operation_records SET state='completed' WHERE action='retire_context';").unwrap();
+        } else {
+            db.execute("UPDATE remote_operation_records SET owner_epoch=owner_epoch+1,phase='interrupted',outcome='repository_unavailable' WHERE operation_ulid=?1",[f.owner.operation_id().to_string()]).unwrap();
+        }
+        if case == "observe_branch_only" {
+            let op = OperationId::new();
+            state::with_transaction(&f.service,&f.request.root,|tx,id|{
+                state::insert_operation(tx,id,op,&RemoteOperationTarget::for_poll(f.owner.retirement_execution()?.plan()),RemoteOperationPriority::Manual,1)?;
+                tx.execute("UPDATE context_retirement_attempts SET observer_operation_ulid=?1,observer_owner_epoch=0 WHERE owner_epoch=2",[op.to_string()]).map_err(RepositoryError::sqlite)?;Ok(())
+            }).unwrap();
+        }
+        let before = registry_image(&db);
+        assert!(super::super::audit_connection(&db).is_err(), "{case}");
+        assert!(
+            matches!(RepositoryService::open_at(f._data.path()),Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired),
+            "{case}"
+        );
+        assert_eq!(before, registry_image(&db));
+    }
+}
+
+#[test]
+fn retirement_reentry_explicit_replacement_fences_all_old_write_boundaries() {
+    for stage in ["reserved", "advertised", "batch", "completed"] {
+        let f = Fixture::new();
+        if stage != "reserved" {
+            f.service
+                .remote_safe_point(
+                    &f.request.root,
+                    &f.owner,
+                    RemoteOperationSafePoint::BeforeTransport,
+                )
+                .unwrap();
+            f.service
+                .remote_safe_point(
+                    &f.request.root,
+                    &f.owner,
+                    RemoteOperationSafePoint::AfterAdvertisement,
+                )
+                .unwrap();
+        }
+        if matches!(stage, "batch" | "completed") {
+            f.service
+                .remote_safe_point(
+                    &f.request.root,
+                    &f.owner,
+                    RemoteOperationSafePoint::BeforeBatchCommit,
+                )
+                .unwrap();
+            reservation::commit_observation_batch(
+                &f.service,
+                &f.request.root,
+                &f.owner,
+                f.owner.retirement_execution().unwrap().plan(),
+                &[],
+                1,
+            )
+            .unwrap();
+        }
+        if stage == "completed" {
+            f.service
+                .finish_remote_operation(
+                    &f.request.root,
+                    &f.owner,
+                    RemoteOutcomeCategory::Completed,
+                )
+                .unwrap();
+        }
+        let result = f
+            .service
+            .reenter_context_retirement_authenticated(
+                ReenterContextRetirementRequest {
+                    retirement: f.request.clone(),
+                    expected_owner_epoch: 1,
+                },
+                None,
+                &mut SessionCredentials::new(Provider),
+            )
+            .unwrap();
+        assert!(
+            matches!(result,ContextRetirementOutcome::Final(ref r) if r.code==crate::results::ResultCode::ExternalChange)
+        );
+        let before = registry_image(&f.db());
+        for point in [
+            RemoteOperationSafePoint::BeforeTransport,
+            RemoteOperationSafePoint::AfterAdvertisement,
+            RemoteOperationSafePoint::BeforeBatchCommit,
+            RemoteOperationSafePoint::AfterBatchCommit,
+        ] {
+            assert!(
+                f.service
+                    .remote_safe_point(&f.request.root, &f.owner, point)
+                    .is_err()
+            );
+        }
+        assert!(
+            f.service
+                .finish_remote_operation(
+                    &f.request.root,
+                    &f.owner,
+                    RemoteOutcomeCategory::TransportUnavailable
+                )
+                .is_err()
+        );
+        assert!(
+            reservation::commit_observation_batch(
+                &f.service,
+                &f.request.root,
+                &f.owner,
+                f.owner.retirement_execution().unwrap().plan(),
+                &[],
+                2
+            )
+            .is_err()
+        );
+        assert!(
+            refuse_execution(
+                &f.service,
+                &f.request.root,
+                &f.owner,
+                crate::results::ResultCode::ExternalChange
+            )
+            .is_err()
+        );
+        assert!(
+            state::with_transaction(&f.service, &f.request.root, |tx, id| {
+                reservation::owned(&f.service, tx, id, &f.owner)?;
+                state::configure(tx, id, None, false)
+            })
+            .is_err()
+        );
+        assert_eq!(before, registry_image(&f.db()));
+        assert!(RepositoryService::open_at(f._data.path()).is_ok());
+    }
+}
+
+#[test]
+fn retirement_reentry_exclusions_and_fixed_inputs_cannot_replace_an_owner() {
+    for case in [
+        "local",
+        "comment",
+        "observe",
+        "update",
+        "request_mapping",
+        "wrong_epoch",
+        "wrong_target",
+    ] {
+        let f = Fixture::new();
+        let db = f.db();
+        let mut request = f.request.clone();
+        if matches!(case, "observe" | "update") {
+            f.before_batch();
+            reservation::commit_observation_batch(
+                &f.service,
+                &f.request.root,
+                &f.owner,
+                f.owner.retirement_execution().unwrap().plan(),
+                &[],
+                1,
+            )
+            .unwrap();
+            f.service
+                .finish_remote_operation(
+                    &f.request.root,
+                    &f.owner,
+                    RemoteOutcomeCategory::Completed,
+                )
+                .unwrap();
+        }
+        match case {
+            "local" | "comment" => {
+                db.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,state,completed_step,observed_at) SELECT id,root_path,?1,'refresh',?2,?3,1 FROM repositories",params![OperationId::new().to_string(),if case=="local"{"created"}else{"completed"},(case=="comment").then_some("comment_registration_pending")]).unwrap();
+            }
+            "observe" | "update" => {
+                db.execute("INSERT INTO remote_operation_records(repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,action,priority,phase,created_at,updated_at,poll_kind) SELECT repository_id,?1,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,'poll','manual','reserved',1,1,?2 FROM remote_operation_records WHERE operation_ulid=?3",params![OperationId::new().to_string(),if case=="observe"{"observe"}else{"update"},f.owner.operation_id().to_string()]).unwrap();
+            }
+            "request_mapping" => {
+                let r = OperationId::new().to_string();
+                db.execute("INSERT INTO request_records(request_ulid,attempt,scope_key,command,target,intent_digest,state,accepted_at) VALUES(?1,1,?2,'context retire',?3,?4,'accepted',1)",params![r,f.request.root.to_str(),f.request.item_id.to_string(),"1".repeat(64)]).unwrap();
+                db.execute(
+                    "INSERT INTO request_operations VALUES(?1,0,'local',?2)",
+                    params![r, f.request.operation_id.to_string()],
+                )
+                .unwrap();
+            }
+            "wrong_target" => request.kind = AuthoringKind::Document,
+            _ => {}
+        }
+        let before = registry_image(&db);
+        assert!(
+            f.service
+                .reenter_context_retirement_authenticated(
+                    ReenterContextRetirementRequest {
+                        retirement: request,
+                        expected_owner_epoch: if case == "wrong_epoch" { 2 } else { 1 }
+                    },
+                    None,
+                    &mut SessionCredentials::new(Provider)
+                )
+                .is_err(),
+            "{case}"
+        );
+        assert_eq!(registry_image(&db), before, "{case}");
+    }
+}
+
+#[test]
+fn retirement_reentry_owned_absence_requires_exact_receipt_not_purpose_or_initial_step() {
+    for case in ["missing_receipt", "initial_step", "receipt_flags"] {
+        // Real domain claim/advertisement capability, inert durable effect
+        // projection as in branch_intent(); this is an audit, not a Git proof.
+        let f = Fixture::new();
+        f.branch_intent();
+        let git = git2::Repository::open(&f.request.root).unwrap();
+        git.find_reference(&format!(
+            "refs/heads/manyhands/ticket/{}",
+            f.request.item_id
+        ))
+        .unwrap()
+        .delete()
+        .unwrap();
+        let result = f
+            .service
+            .reenter_context_retirement_authenticated(
+                ReenterContextRetirementRequest {
+                    retirement: f.request.clone(),
+                    expected_owner_epoch: 1,
+                },
+                None,
+                &mut SessionCredentials::new(Provider),
+            )
+            .unwrap();
+        assert!(matches!(result, ContextRetirementOutcome::Final(_)));
+        let db = f.db();
+        assert!(
+            db.execute(
+                "UPDATE context_retirement_absence_receipts SET branch_removal='observed'",
+                []
+            )
+            .is_err(),
+            "immutable receipt"
+        );
+        match case {
+            "missing_receipt" => {
+                db.execute("DELETE FROM context_retirement_absence_receipts", [])
+                    .unwrap();
+            }
+            "initial_step" => {
+                db.execute("UPDATE operation_records SET completed_step='context_retirement_absent' WHERE action='retire_context'",[]).unwrap();
+            }
+            _ => {
+                let sql:String=db.query_row("SELECT sql FROM sqlite_master WHERE name='retirement_absence_receipt_immutable'",[],|r|r.get(0)).unwrap();
+                db.execute_batch("DROP TRIGGER retirement_absence_receipt_immutable; UPDATE context_retirement_absence_receipts SET branch_removal='observed';").unwrap();
+                db.execute_batch(&sql).unwrap();
+            }
+        }
+        let before = registry_image(&db);
+        assert!(super::super::audit_connection(&db).is_err(), "{case}");
+        assert!(
+            matches!(RepositoryService::open_at(f._data.path()),Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired),
+            "{case}"
+        );
+        assert_eq!(registry_image(&db), before);
+    }
+}
+
+#[test]
 fn retirement_live_public_observer_cannot_configure_a_reserved_private_id() {
     let f = Fixture::new();
     std::fs::write(

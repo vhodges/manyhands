@@ -2716,3 +2716,280 @@ replacement, owned-absence recovery, remaining fault/source/batch protocols and
 full Task 2 review remain owed. No Task 2 completion/Task 3/4 expansion, agents,
 push, status/PR/main integration/closure/native CI, other-worktree or real-context
 actions. No Windows/native/casefold runtime or cross-compilation claim.
+
+## Task 2 Recovery Delta — Connected Domain Reentry, Preserved In Progress
+
+Base/unchanged HEAD **`7b153deb9ed829c948092f6a855acbf2819612a0`** equals upstream;
+full Task 2 base remains `7b1912d1`. Controller's same-phase fetch/merge evidence
+was reused; recorded `origin/main` remains `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`.
+The fresh-present LIMITED SPEC+QUALITY approvals through `66d21ed2` remain cleared,
+recorded by parent comment **`01M6NMG9KEQEXB3X8A24JMS5M4`**. No new approval is
+claimed for this delta. **No commit: exact owned implementation is retained
+unstaged/untracked, not publication-ready or full Task 2 complete.**
+
+### Connected behavior and bounded authority
+
+- Public domain-only `ReenterContextRetirementRequest` carries the fixed retirement
+  inputs and expected old owner epoch. Ordinary duplicate calls remain non-owning.
+  Request/batch forms fail closed; no Task 3 mutation binding is represented.
+- One lease-held immediate transaction checks the durable parent/root/target,
+  domain scope, epoch and exclusions; fences only its exact bound read-only O,
+  raises O's epoch, fences the old local attempt, increments the parent epoch,
+  appends a new attempt and immutable typed reentry purpose, releases the exact old
+  consumer hold and (only for `observe`) binds a fresh O before transport.
+  New purposes are `observe`, `metadata`, `preserve`, `no_effect`; null O is never
+  destructive authority. Existing runner/proof/instance/lock/checkout guards are
+  reused. The remote configuration helper can capture under the owned transaction
+  without recursively taking the key-list cache guard.
+- Original selected W without prior effect intent can resume only the exact stored
+  nonce/tip. Provisional missing, same-tip recreated, partial and collision markers
+  are preserved; full installed bytes can finish SQL verification without install.
+  A verified instance missing its marker cannot select a new identity.
+- Surviving branch-only/tokenless resources are never deleted by a new executor.
+  No owned effect intent yields stable Final ExternalChange; possible/observed
+  removals retain CleanupPending debt. An intact W with an earlier possible intent
+  at this preserved checkpoint also retained debt; the bounded milestone below
+  subsequently connects that required continuation without erasing old intent.
+- Genuine complete absence after owned intent can settle exact D14 and the local
+  authoritative/index handoff without transport, key or publication-config reads
+  in that path. W-only uncertainty keeps B None; a known uninvoked B stays None.
+  Old uncertain effect rows and provenance are retained, not rewritten into proof.
+  The milestone below corrects M to `ContextBranchReleased` under a dedicated
+  owned-absence receipt, not merely a metadata purpose. D14 missing or
+  replacement failures roll back the entire replacement transaction.
+
+### Evidence, frozen source and exact retained scope
+
+All commands serial through Devenv, no shell deadlines, agents or overlapping
+build/test executables. New SSH cases were registered in the existing CASES chain
+before filtering. Logs below are `/tmp/opencode/task2-reentry-<suffix>.log`.
+
+| Evidence | Actual result |
+| --- | --- |
+| `cargo test --all-features --locked --test mutation_remote retirement_reentry_`, `red-2` → `green-1` | compiled behavioral **0/4 → 4/4** |
+| Expanded public bootstrap/replacement tests, `red-4` → `green-2` | **9 passed / 3 failed → 12 passed**; one RED was the missing bootstrap boundary; two exposed fixture/hook issues, not three production defects |
+| `cargo test --all-features --locked --lib retirement_reentry_`, `audit-red` → `audit-green` | **1 passed / 1 failed → 2 passed**; audit accepted an unfenced old O before correction |
+| Registered known-uninvoked-B owned-absence case, `uninvoked-red` → `green-3` | compiled behavioral **0/1 → 13/13** combined reentry cases |
+| `cargo check --all-features --locked`, `check-final` | exit 0 |
+| `cargo fmt --check`, `fmt-final` | exit 0; formatting applied with patch, stdout-only formatter |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings`, `clippy-final` | exit 0 |
+| `cargo test --all-features --locked --lib context_retirement`, `context-final` | **79 passed** = original 76 +3 new; old expectations retained |
+| Same flags, `--lib cleanup`, `cleanup-final` | **51 passed** |
+| Same flags, `--lib recovery`, `recovery-final` | **60 passed** |
+| Same flags, `--lib read::status`, `status-final` | **10 passed** |
+| Same flags, `--test recovery_foundation_gate`, `foundation-final` | **52 passed** |
+| Same flags, `--test mutation_remote retirement_`, `ssh-final` | **76 registered SSH passed** = original 63 +13 new |
+| Same flags, `--test ssh_transport --test remote_observation --test remote_synchronization --test remote_merge_recovery --test remote_polling --test cli_remote`, `remote-controls-final` | respectively **123 / 15 / 69 / 29 / 84 / 164 SSH passed**, exit 0 |
+
+`red-3` was a fixture compilation error, not behavioral RED. Initial Clippy runs
+identified argument/type grouping and a test-hook const initializer; all corrected
+before final source freeze. Two exclusion-fixture runs hit real SQL constraints
+(two active remote reservations; invalid poll index debt). Those invalid fixtures
+were replaced with valid unrelated Observe/Update reservations; **replacement
+against valid terminal index/reconciliation debt is still owed**, not claimed by
+the old fresh-admission tests. No constraint bypass or old expectation adjustment.
+
+Frozen source inventory `/tmp/opencode/task2-reentry-frozen-source.sha256` includes
+all **11** Rust/test files, including untracked `reentry.rs`; inventory SHA-256
+**`c4fd0dd930df4b318c327e88105395419eca9e5d294b65e761265bb69c021ff2`**.
+Review candidate is `7b153deb` plus those working-tree files, not a new commit SHA.
+Owned scope: `src/repository.rs`; `context_retirement/{authority,authority_tests,
+instance,mod,record,reentry,run,store_tests}.rs`; `remote/observation.rs`;
+`tests/mutation_remote/context_retirement.rs`; this ledger and the new comment.
+No cleanup/release/proof implementation or old test assertion changed. No broad
+unchanged baseline/native/Windows/casefold-volume/cross-compile evidence claimed.
+
+### All-44 progress register (evidence is not row completion)
+
+`E` means **Task 2 evidence verified at the named test**, including preserved old
+tests in the final runs above; `O` means **Task 2 still owed**; `D` means
+**downstream Task 3/4 actual journey owed**, never required here as nonexistent UI.
+Names below share the `retirement_` prefix. Updated by the recovery-core milestone
+below; unchanged E/O/D annotations retain their earlier evidence. The authoritative 44-row matrix above
+is unchanged; these are current incremental evidence/remaining-work annotations.
+
+| Row | Current Task 2 evidence / remaining obligation |
+| --- | --- |
+| 01 | E `present_fresh_prunes_then_retires_and_replay_preserves_recreation`, `present_document_prunes_then_retires`; O remaining fault variants |
+| 02 | E `branch_only_unknown_fetch_history_is_final`; O explicit Push-only history variant |
+| 03 | E `branch_only_remote_reappearance_is_final`; O foreign-current-batch substitution matrix |
+| 04 | E `branch_only_host_stop_is_final_for_old_id`; O complete auth/unavailable/config stop matrix including reentry |
+| 05 | E `branch_only_dirty_primary_item_is_final`, `spec_s4_plain_packed_primary_remains_eligible`; O remaining primary/disk variants |
+| 06 | E `proof_ancestor_requires_positive_completion`, `proof_document_presence_is_not_preservation`; O complete runtime refusal journeys |
+| 07 | E `branch_only_fresh_fetch_retires_closed_ticket`, `branch_only_fresh_document_keeps_other_context` |
+| 08 | E `all_absent_is_local_only_and_completed_replay_does_not_inspect_recreation` |
+| 09 | E `absence_index_retry_does_not_reselect_or_touch_new_worktree`; O new M index-failure/recreation journey |
+| 10 | E `mixed_initial_resources_refuse_stably_without_adopting_user_content`; O exhaustive public reentry mixed/inventory variants |
+| 11 | E `present_cleanup_hidden_and_ignored_matrix`; O remaining submodule/deletion fault variants |
+| 12 | E `reentry_exclusions_and_fixed_inputs_cannot_replace_an_owner`; O valid terminal remote index/reconciliation debt during replacement |
+| 13 | E `reentry_public_provisional_bootstrap_matrix`: actual before-create missing and same-tip recreated admin |
+| 14 | E same public bootstrap matrix: actual installed-before-SQL verification-only completion |
+| 15 | E same public bootstrap matrix partial/nonce collision; old instance collision units preserved; O remaining public marker shape/platform variants |
+| 16 | E `reentry_missing_verified_marker_cannot_select_new_identity`; O public link/admin replacement variants |
+| 17 | O explicit default/background no-marker journey; remote controls green, not a substitute for that assertion |
+| 18 | E `spec_s2_ref_move_before_git_is_final_no_effect`, `present_marker_changed_after_intent_is_final_no_effect`, `reentry_intact_prior_worktree_intent_uses_new_proof_and_preserves_history`; O remaining before-effect variant matrix |
+| 19 | E `present_prune_sql_gap_preserves_surviving_branch_on_retry`, `reentry_interrupted_prune_intact_instance_continues`, `reentry_prior_intent_mismatched_dirty_mixed_recreated_instance_preserves`; O remaining prune/mixed inventory fault windows |
+| 20 | E `reentry_same_oid_branch_recreation_after_sql_gap_is_owed` |
+| 21 | E `reentry_branch_only_never_reconstructs_old_lifetime`; unit replacement matrix also covers selected/ad/batch/completed O |
+| 22 | E `reentry_owned_all_absent_is_metadata_only`, `reentry_worktree_intent_cannot_invent_branch_removal`, `reentry_owned_absence_after_known_uninvoked_branch_keeps_branch_none`, `reentry_resumed_prune_sql_gap_owned_absence_preserves_all_old_uncertainty`; M uses a dedicated receipt and BranchReleased with truthful B None. O no-owned-intent and mixed public M variants |
+| 23 | E `present_incomplete_or_ambiguous_materialization_refuses_before_prune`; O remaining malformed owner/OID capture variants |
+| 24 | E `reentry_d14_mismatch_rolls_back_replacement_and_preserves_new_intent`; O replacement OID/step/captured-absent-now-present public M variants |
+| 25 | E `reentry_owned_all_absent_is_metadata_only` completed/context recreation replay; O new materialization Q and I-only M replay |
+| 26 | E `d14_exact_completed_intent_settles_atomically_and_incomplete_refusal_is_stable` |
+| 27 | E `reentry_explicit_replacement_fences_all_old_write_boundaries`, `reentry_active_observer_return_cannot_write_after_replacement`, `reentry_present_replaces_completed_observer_and_retires`; O remaining positive present after-ad/after-batch interruption windows |
+| 28 | E `reentry_replacement_transaction_failure_rolls_back_every_write`, `reentry_exclusions_and_fixed_inputs_cannot_replace_an_owner`; O every-write/commit failure points, valid terminal remote debt, foreign-O/action correlation matrix |
+| 29 | E unit all-old-write-boundaries matrix plus active/completed public stale-executor cases; O actual current accepted F2 attempt/mapping shared fence contract |
+| 30 | E `reentry_selected_generation_change_is_final_without_network`, old-generation retention units; O partial-effect generation variant |
+| 31 | E `live_advertisement_captures_exact_batch_and_public_replay_cannot_mint`; O original-P handoff contract; D actual Task 4 producer |
+| 32 | O inert batch B-execution/C-consumption seam; D actual Task 4 journey |
+| 33 | O foreign/stale request+batch consumer contract projections; D actual Task 3/4 binding/coordinator |
+| 34 | O no-child gap execution/request+batch fences; D actual Task 4 coordinator |
+| 35 | E public reentry R7 no-effect/possible/observed reports, `reentry_resumed_worktree_reappeared_remote_retains_prior_uncertainty`, `reentry_resumed_worktree_late_identity_stop_settles_only_new_uninvoked_intent`; O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
+| 36 | E `claimed_refresh_cannot_release_blocker_without_final_result`; O M index failures/stale index-owner matrix |
+| 37 | E `generic_abandon_preserves_pending_and_terminal_identity`; D guarded preserving abandon Task 3 |
+| 38 | E existing envelope/corruption units, `reentry_audit_rejects_unfenced_observer_and_false_purposes`, `reentry_owned_absence_requires_exact_receipt_not_purpose_or_initial_step`, four `migration_*` history/rollback/corruption/marker tests; exact published-v1 → v2 upgrade verified. O remaining resumption/M FK/tamper/deletion-order and source/batch inventory variants |
+| 39 | O A0–A4 original-P ordering contract projections; D actual Task 4 producer |
+| 40 | O A1–A3 crash/capability/empty manifest projections; D actual Task 4 producer |
+| 41 | O source/unbound provenance lifecycle and source+consumer pin contracts; D actual Task 4 producer |
+| 42 | E old last-pin refusal/reopen units + public generation-change release; O source and partial-effect G→G+1 contracts |
+| 43 | E `z_keeps_a_valid_integration_window_and_its_batch`; O shared source+consumer handoff-gap projection; D actual Task 4 journey |
+| 44 | E `release_history_cannot_excuse_live_or_unsettled_debt`, immutable old reentry receipt/provenance checks; O new replacement history/ID-reuse and full shared-source variants |
+
+### Exact next work before publication / Task 2 completion
+
+Historical preserved-checkpoint list: items 1 and 3 are addressed by the bounded
+core milestone below. Items 2 and 4 remain Task 2 obligations, not exclusions.
+
+1. Test first and connect intact-original-W continuation after an old possible W
+   intent using new owned observation/proof/intent correlation, without clearing
+   uncertainty, reusing the old proof, or minting an old B lifetime permit.
+2. Add the shared current-accepted-F2 + exact `request_operations` join contract
+   with explicitly inert projections and missing/stale-map negatives. Current
+   domain API rejects request-bound rows; this is not that shared seam or Task 3.
+3. Finish strict new reentry schema/history and migration-order tests. The added
+   table and release reason currently extend the unmerged v1 envelope in place;
+   an already-installed earlier v1 envelope fails closed, with no compatibility
+   migration implemented or claimed. Resolve via approved additive mechanism,
+   never schema auto-repair, evidence fabrication or index rebuild.
+4. Fill remaining public replacement/M/D14/partial/index fault variants above,
+   then the Task 2 source/batch A0–A4/execution-vs-consumption/Z/GC projections.
+   Re-run affected frozen-source gates after further source edits. Full Task 2
+   SPEC then QUALITY/adversarial source review remains mandatory before Task 3.
+
+Checkpoint **`01M6NV9QJTZBHD31V5K3GWYVZX`**, unique ID from existing
+`devenv shell -- cargo run --locked --bin manyhands-cli -- id new`, actual UTC
+**`2026-11-05T12:35:26Z`**, parent **`01M6NMG9KEQEXB3X8A24JMS5M4`**.
+Controller owns further reviews/push/status. No agents, push, ticket status, PR,
+other-worktree edits, main integration/closure, native CI, real context/key/profile/
+draft actions, Task 3 binding/CLI/guarded abandon or Task 4 coordinator.
+
+## Task 2 Bounded Milestone — Fenced Interrupted-Retirement Recovery (Review Pending)
+
+Base **`7b153deb9ed829c948092f6a855acbf2819612a0`**; full Task 2 base `7b1912d1`.
+This milestone incorporates all preserved owned work plus the three requested
+corrections. Source range is that base through the commit introducing checkpoint
+**`01M6NZ8F8KM4F9X52WNSTA4HXA`**, subject
+`feat: recover interrupted retirement with fenced reentry`. Prior fresh approvals
+remain cleared; this recovery core is **not independently reviewed or approved**.
+No Task 2 completion, publication or Task 3/4 behavior is claimed.
+
+### Core mechanisms now connected
+
+- **Intact W after prior possible W intent:** only the original verified nonce,
+  fixed tip, full identity and cleanup guards admit `resume_worktree`. The new
+  immutable resumption row points to the exact earlier uncertain W intent/receipt;
+  its epoch is fenced, not rewritten. Fresh O captures a new receipt; a new
+  current-epoch proof/intent precedes guarded W prune. Only successful live prune
+  mints B authority. Initial primary/tip/nonce/materialization capture remain fixed;
+  tests also advance the current primary and prove the new proof does not overwrite
+  the initial primary. Old NULL intent observations remain NULL after success.
+- **Stops retain truthful debt:** remote reappearance or late identity failure
+  cannot turn the old crash into Final/no-effect. A live uninvoked witness settles
+  only the *new* intent as changed. Missing/different tokens, dirty/mixed worktrees
+  and same-tip recreated registrations preserve all remaining resources. A later
+  SQL gap can reach M without losing either old uncertainty or the new no-effect
+  history. Ordinary duplicates remain non-owning; request/batch forms fail closed.
+- **Approved M semantics corrected:** `context_retirement_absence_receipts` binds
+  the current fenced metadata attempt to an exact prior owned intent/receipt,
+  guarded all-B/W/A absence and unchanged truthful W/B flags. D14 consume, receipt,
+  settled parent and `ContextBranchReleased` authoritative handoff share one TX.
+  B stays None for W-only intent; no B intent/removal is invented. The fresh
+  initial/Absent/already_absent path remains separate. Normal B-effect handoffs
+  still require their B intent and settled observation; a metadata purpose alone
+  is insufficient. M/I-only replay does not reconsume a recreated context/intent.
+- **Exact published v1 upgrade:** independently extracted schema-object bytes from
+  `git show 7b153deb:src/repository/context_retirement/record.rs` have Git-blob digest
+  **`b8ac7ae7201e6182a91d1a8546e63ad518dc9701`** (kind NUL name NUL normalized SQL
+  NUL, in published order). Production pins that digest while deriving the exact
+  old catalog. Only canonical v1 upgrades to the versioned v2 envelope. Missing,
+  mixed, substituted and unknown-marker schemas refuse, not repair/rebuild.
+  Empty new companions are installed inside the upgrade TX, then legacy rows,
+  old CHECKs/FKs and history are audited **before** widening the release reason.
+  Replacement-first release-table copy preserves every row and rowid (including
+  nontrivial rowid 71), never renames the old parent into an FK-retargeted shadow.
+  New history tables remain empty for old history. Current-marker audit is strict.
+
+### Test-first evidence and final gates
+
+Compile-success behavioral REDs: `task2-owned-m-step-red.log` **0/1**;
+`task2-intact-w-red.log` **0/2**; `task2-intact-w-stops-red.log` **0/2**;
+`task2-resumed-m-history-red.log` **0/1**; `task2-v1-migration-red.log`
+**2 passed / 1 failed**; `task2-v1-migration-fault-red.log`,
+`task2-v1-migration-marker-red.log`, `task2-v2-marker-audit-red.log` each **0/1**.
+All named regressions are green in the final filters below. Intermediate intact-W
+runs exposed an unbalanced new SQL predicate, corrected from numeric diagnostics
+and syntax inspection; diagnostic writes were removed before source freeze.
+
+Source frozen before final runs; all Rust/Cargo commands serial through Devenv,
+no shell deadline or rebuild while test processes run. Formatter used stdout and
+patch-only edits. Logs `/tmp/opencode/task2-recovery-core-<suffix>.log`:
+
+| Exact command after `devenv shell --` | Suffix | Result |
+| --- | --- | --- |
+| `cargo check --all-features --locked` | `check-final` | exit 0 |
+| `cargo fmt --check` | `fmt-final` | exit 0 |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy-final` | exit 0 |
+| `cargo test --all-features --locked --lib context_retirement` | `context-final` | **84 passed**, prior 79 +5; original 76 unchanged |
+| Same flags, `--test mutation_remote retirement_` | `ssh-final` | **82 registered SSH passed**, prior 76 +6; original 63 unchanged |
+| Same flags, `--lib recovery` | `recovery-final` | **60 passed** |
+| Same flags, `--test recovery_foundation_gate` | `foundation-final` | **52 passed** |
+| Same flags, `--lib retirement_migration_` | `migration-final` | **5 passed**: four new tests + existing late-migration control |
+| Same flags, `--lib remote::state::persistence_tests` | `persistence-final` | **70 passed** |
+| Same flags, `--lib cleanup` | `cleanup-final` | **51 passed** |
+| Same flags, `--lib read::status` | `status-final` | **10 passed** |
+
+Migration positives cover refusal, initial/branch completion, index owed, selected
+pinned and possible-effect pinned histories; reopen/idempotence/terminal replay,
+unknown OIDs/timestamps and immutable rows are preserved. Ten corrupt/partial
+catalog/history variants include laundering `consumer_fenced` through a disabled
+old CHECK (explicit corruption fixture only). Seven injected upgrade boundaries
+roll back rows, rowids, schema and schema_version exactly; retry succeeds.
+The new M audit matrix rejects purpose-only/missing proof, an initial-absence step
+and mismatched receipt flags. No old baseline assertion or constraint was weakened.
+
+The six unchanged remote SSH targets retain their earlier source-specific evidence
+**123/15/69/29/84/164**; they were not repeated by habit or claimed freshly run here.
+No native/Windows/casefold-volume/cross-compilation claim. The frozen **12-file**
+inventory `/tmp/opencode/task2-recovery-core-frozen-source.sha256` hashes to
+**`6973728f6efa1a9a5197275197a8bfcc1f472e064a9ea600fed4ab175e87c057`**.
+
+### Remaining Task 2 work and handoff
+
+The 44-row E/O/D register above has only affected rows updated. Still owed: the
+shared **current accepted F2 + exact request_operations mapping** authority seam
+with labeled inert projections (not Task 3 binding); remaining replacement,
+M/D14/partial/index/stale-index-owner and schema/history fault variants; shared
+source/batch A0–A4, execution-vs-consumption, source/consumer Z and GC contracts.
+Downstream actual Task 3 mutation/CLI/guarded-abandon and Task 4 coordinator journeys
+remain separate. Full Task 2 SPEC then QUALITY/adversarial review and Task 8 gates
+are still owed; controller owns review, push and lifecycle/status actions.
+
+Checkpoint **`01M6NZ8F8KM4F9X52WNSTA4HXA`**, parent
+**`01M6NV9QJTZBHD31V5K3GWYVZX`**, actual UTC **`2026-11-05T13:44:41Z`**.
+Existing CLI `id new` was used with supported
+`MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data`; exit 0.
+The first default-profile invocation built but returned `internal_error` before ID
+generation (`task2-recovery-core-comment-id.log`); no profile repair or retry was
+performed. That startup failure is unresolved evidence, not a successful real-profile
+upgrade claim. No agent/push/status/PR/main integration/closure/native/other-worktree
+or real-context/key/draft actions. This milestone is local and coauthored only.

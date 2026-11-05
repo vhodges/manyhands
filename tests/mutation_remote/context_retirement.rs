@@ -4,6 +4,82 @@ use std::{fs, path::Path};
 
 pub(crate) const CASES: &[ssh_harness::Case] = &[
     (
+        "retirement_reentry_intact_prior_worktree_intent_uses_new_proof_and_preserves_history",
+        reentry_intact_intent,
+    ),
+    (
+        "retirement_reentry_interrupted_prune_intact_instance_continues",
+        reentry_intact_prune,
+    ),
+    (
+        "retirement_reentry_prior_intent_mismatched_dirty_mixed_recreated_instance_preserves",
+        reentry_intact_negative,
+    ),
+    (
+        "retirement_reentry_resumed_worktree_reappeared_remote_retains_prior_uncertainty",
+        reentry_intact_remote_stop,
+    ),
+    (
+        "retirement_reentry_resumed_worktree_late_identity_stop_settles_only_new_uninvoked_intent",
+        reentry_intact_late_stop,
+    ),
+    (
+        "retirement_reentry_resumed_prune_sql_gap_owned_absence_preserves_all_old_uncertainty",
+        reentry_resumed_gap_m,
+    ),
+    (
+        "retirement_reentry_public_provisional_bootstrap_matrix",
+        reentry_bootstrap,
+    ),
+    (
+        "retirement_reentry_missing_verified_marker_cannot_select_new_identity",
+        reentry_missing_verified,
+    ),
+    (
+        "retirement_reentry_replacement_transaction_failure_rolls_back_every_write",
+        reentry_rollback,
+    ),
+    (
+        "retirement_reentry_d14_mismatch_rolls_back_replacement_and_preserves_new_intent",
+        reentry_d14_mismatch,
+    ),
+    (
+        "retirement_reentry_active_observer_return_cannot_write_after_replacement",
+        reentry_active,
+    ),
+    (
+        "retirement_reentry_completed_old_executor_cannot_write_after_replacement",
+        reentry_stale_completed,
+    ),
+    (
+        "retirement_reentry_selected_generation_change_is_final_without_network",
+        reentry_generation,
+    ),
+    (
+        "retirement_reentry_same_oid_branch_recreation_after_sql_gap_is_owed",
+        reentry_recreated_branch,
+    ),
+    (
+        "retirement_reentry_owned_absence_after_known_uninvoked_branch_keeps_branch_none",
+        reentry_uninvoked_branch,
+    ),
+    (
+        "retirement_reentry_present_replaces_completed_observer_and_retires",
+        reentry_present,
+    ),
+    (
+        "retirement_reentry_branch_only_never_reconstructs_old_lifetime",
+        reentry_branch_only,
+    ),
+    (
+        "retirement_reentry_owned_all_absent_is_metadata_only",
+        reentry_all_absent,
+    ),
+    (
+        "retirement_reentry_worktree_intent_cannot_invent_branch_removal",
+        reentry_worktree_only,
+    ),
+    (
         "retirement_branch_only_fresh_fetch_retires_closed_ticket",
         fresh_absence,
     ),
@@ -293,6 +369,843 @@ fn setup() -> Result<World, FixtureError> {
     ))?;
     fixed(repo.reference(CONTEXT, tip, false, "branch-only fixture"))?;
     Ok(w)
+}
+
+fn reentry_call(
+    w: &World,
+    request: RetireContextRequest,
+    epoch: i64,
+) -> Result<ContextRetirementOutcome, FixtureError> {
+    fixed(w.service.reenter_context_retirement_authenticated(
+        ReenterContextRetirementRequest {
+            retirement: request,
+            expected_owner_epoch: epoch,
+        },
+        w.primary().approval,
+        &mut SessionCredentials::new(Provider),
+    ))
+}
+
+fn interrupted_worktree_intent(w: &World, request: &RetireContextRequest, inside_prune: bool) {
+    if inside_prune {
+        RepositoryService::set_retirement_prune_entry_hook_for_testing(|| {
+            std::panic::resume_unwind(Box::new(()))
+        });
+    } else {
+        RepositoryService::set_retirement_worktree_hook_for_testing(|| {
+            std::panic::resume_unwind(Box::new(()))
+        });
+    }
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = w.service.retire_context_authenticated(
+                request.clone(),
+                w.primary().approval,
+                &mut SessionCredentials::new(Provider),
+            );
+        }))
+        .is_err()
+    );
+}
+fn reentry_intact_intent() -> Result<(), FixtureError> {
+    reentry_intact(false)
+}
+fn reentry_intact_prune() -> Result<(), FixtureError> {
+    reentry_intact(true)
+}
+fn reentry_intact(inside_prune: bool) -> Result<(), FixtureError> {
+    let w = setup()?;
+    let path = add_present(&w)?;
+    history(&w, true)?;
+    let request = request(&w);
+    interrupted_worktree_intent(&w, &request, inside_prune);
+    let old=fixed(w.db()?.query_row("SELECT owner_epoch,receipt_id,primary_oid,proof_kind,observation FROM context_retirement_effect_intents WHERE resource='worktree'",[],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,Option<String>>(4)?))))?;
+    assert!(old.4.is_none());
+    let fixed_inputs=fixed(w.db()?.query_row("SELECT expected_tip,instance_nonce,initial_primary_oid,materialization_capture FROM context_retirement_records",[],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?))))?;
+    let rows = registry_image(&w.db()?);
+    assert!(
+        w.service
+            .retire_context_authenticated(
+                request.clone(),
+                w.primary().approval,
+                &mut SessionCredentials::new(Provider)
+            )
+            .is_err()
+    );
+    assert!(rows == registry_image(&w.db()?));
+    if !inside_prune {
+        advance(&w.repo()?, "refs/heads/main", "new-proof-primary")?;
+    }
+    let result = reentry_call(&w, request.clone(), 1)?;
+    assert!(
+        matches!(&result,ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Retired && r.worktree_removal==RetirementRemoval::Observed && r.branch_removal==RetirementRemoval::Observed)
+    );
+    assert!(!path.exists());
+    assert!(w.repo()?.find_reference(CONTEXT).is_err());
+    assert_eq!(fixed(w.db()?.query_row("SELECT owner_epoch,receipt_id,primary_oid,proof_kind,observation FROM context_retirement_effect_intents WHERE resource='worktree' AND owner_epoch=1",[],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,i64>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,Option<String>>(4)?))))?,old);
+    assert_eq!(fixed(w.db()?.query_row("SELECT expected_tip,instance_nonce,initial_primary_oid,materialization_capture FROM context_retirement_records",[],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?))))?,fixed_inputs);
+    assert_eq!(fixed(w.db()?.query_row("SELECT count(*) FROM context_retirement_effect_intents WHERE owner_epoch=2 AND observation='removed'",[],|r|r.get::<_,i64>(0)))?,2);
+    assert_eq!(
+        fixed(w.db()?.query_row(
+            "SELECT count(*) FROM retirement_advertisement_provenance",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        2
+    );
+    assert_eq!(
+        fixed(w.db()?.query_row(
+            "SELECT count(*) FROM retirement_observation_pins",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    assert_eq!(reentry_call(&w, request, 1)?, result);
+    w.privacy()
+}
+fn reentry_intact_negative() -> Result<(), FixtureError> {
+    for case in ["missing", "different", "dirty", "mixed", "recreated"] {
+        let w = setup()?;
+        let path = add_present(&w)?;
+        history(&w, true)?;
+        let request = request(&w);
+        interrupted_worktree_intent(&w, &request, false);
+        let marker = w
+            .repo()?
+            .commondir()
+            .join(format!("worktrees/{ITEM}/manyhands-retirement-instance"));
+        match case {
+            "missing" => fixed(fs::remove_file(marker))?,
+            "different" => fixed(fs::write(
+                marker,
+                format!(
+                    "manyhands-retirement-instance-v1\nticket\n{ITEM}\n{}\n",
+                    OperationId::new()
+                ),
+            ))?,
+            "dirty" => fixed(fs::write(path.join("pending-user-bytes"), b"preserve"))?,
+            "mixed" => fixed(fs::rename(&path, w.root.join("fixture-moved-worktree")))?,
+            _ => {
+                fixed(w.repo()?.find_worktree(ITEM).and_then(|w| {
+                    w.prune(Some(
+                        git2::WorktreePruneOptions::new()
+                            .valid(true)
+                            .working_tree(true),
+                    ))
+                }))?;
+                add_present(&w)?;
+            }
+        }
+        let resources = resource_image(&w.root);
+        let commands = w.server.commands();
+        assert_eq!(
+            reentry_call(&w, request, 1)?,
+            ContextRetirementOutcome::CleanupPending {
+                worktree_removal: RetirementRemoval::Possible,
+                branch_removal: RetirementRemoval::None
+            }
+        );
+        assert!(resources == resource_image(&w.root));
+        assert_eq!(commands, w.server.commands());
+        assert!(RepositoryService::open_at(&w.data()).is_ok());
+        w.privacy()?;
+    }
+    Ok(())
+}
+fn reentry_intact_remote_stop() -> Result<(), FixtureError> {
+    reentry_intact_stop(false)
+}
+fn reentry_intact_late_stop() -> Result<(), FixtureError> {
+    reentry_intact_stop(true)
+}
+fn reentry_intact_stop(late: bool) -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let request = request(&w);
+    interrupted_worktree_intent(&w, &request, false);
+    let marker = w
+        .repo()?
+        .commondir()
+        .join(format!("worktrees/{ITEM}/manyhands-retirement-instance"));
+    let bytes = fixed(fs::read(&marker))?;
+    if late {
+        let marker = marker.clone();
+        RepositoryService::set_retirement_worktree_hook_for_testing(move || {
+            fs::write(marker, b"foreign-marker").unwrap();
+        });
+    } else {
+        let bare = w.bare()?;
+        let oid = fixed(bare.refname_to_id("refs/heads/main"))?;
+        fixed(bare.reference(CONTEXT, oid, false, "reappeared"))?;
+    }
+    let result = reentry_call(&w, request.clone(), 1)?;
+    assert_eq!(
+        result,
+        ContextRetirementOutcome::CleanupPending {
+            worktree_removal: RetirementRemoval::Possible,
+            branch_removal: RetirementRemoval::None
+        }
+    );
+    assert_eq!(fixed(w.db()?.query_row("SELECT observation FROM context_retirement_effect_intents WHERE owner_epoch=1 AND resource='worktree'",[],|r|r.get::<_,Option<String>>(0)))?,None);
+    assert!(w.repo()?.find_reference(CONTEXT).is_ok());
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    if late {
+        assert_eq!(fixed(w.db()?.query_row("SELECT observation FROM context_retirement_effect_intents WHERE owner_epoch=2 AND resource='worktree'",[],|r|r.get::<_,String>(0)))?,"changed");
+        fixed(fs::write(marker, bytes))?;
+    } else {
+        fixed(
+            w.bare()?
+                .find_reference(CONTEXT)
+                .and_then(|mut r| r.delete()),
+        )?;
+    }
+    assert!(
+        matches!(reentry_call(&w,request,2)?,ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Retired)
+    );
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
+}
+fn reentry_resumed_gap_m() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let request = request(&w);
+    interrupted_worktree_intent(&w, &request, false);
+    let marker = w
+        .repo()?
+        .commondir()
+        .join(format!("worktrees/{ITEM}/manyhands-retirement-instance"));
+    let bytes = fixed(fs::read(&marker))?;
+    let changed = marker.clone();
+    RepositoryService::set_retirement_worktree_hook_for_testing(move || {
+        fs::write(changed, b"changed").unwrap();
+    });
+    assert!(matches!(
+        reentry_call(&w, request.clone(), 1)?,
+        ContextRetirementOutcome::CleanupPending { .. }
+    ));
+    fixed(fs::write(marker, bytes))?;
+    fixed(w.db()?.execute_batch("CREATE TRIGGER resumed_gap BEFORE UPDATE OF observation ON context_retirement_effect_intents WHEN OLD.owner_epoch=3 AND OLD.resource='worktree' BEGIN SELECT RAISE(ABORT,'fixture'); END;"))?;
+    assert!(matches!(
+        reentry_call(&w, request.clone(), 2)?,
+        ContextRetirementOutcome::CleanupPending { .. }
+    ));
+    fixed(w.db()?.execute_batch("DROP TRIGGER resumed_gap"))?;
+    fixed(
+        w.repo()?
+            .find_reference(CONTEXT)
+            .and_then(|mut r| r.delete()),
+    )?;
+    let commands = w.server.commands();
+    let result = reentry_call(&w, request, 3)?;
+    assert!(
+        matches!(result,ContextRetirementOutcome::Final(r) if r.worktree_removal==RetirementRemoval::Possible && r.branch_removal==RetirementRemoval::None)
+    );
+    assert_eq!(commands, w.server.commands());
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
+}
+fn reentry_bootstrap() -> Result<(), FixtureError> {
+    for case in [
+        "missing",
+        "missing_recreated",
+        "installed",
+        "partial",
+        "collision",
+    ] {
+        let w = setup()?;
+        let path = add_present(&w)?;
+        history(&w, true)?;
+        let request = request(&w);
+        RepositoryService::set_retirement_bootstrap_hook_for_testing(
+            !case.starts_with("missing"),
+            || std::panic::resume_unwind(Box::new(())),
+        );
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = w.service.retire_context_authenticated(
+                    request.clone(),
+                    w.primary().approval,
+                    &mut SessionCredentials::new(Provider),
+                );
+            }))
+            .is_err()
+        );
+        let marker = w
+            .repo()?
+            .commondir()
+            .join(format!("worktrees/{ITEM}/manyhands-retirement-instance"));
+        assert_eq!(
+            fixed(w.db()?.query_row(
+                "SELECT instance_verified FROM context_retirement_records",
+                [],
+                |r| r.get::<_, i64>(0)
+            ))?,
+            0
+        );
+        if case.starts_with("missing") {
+            assert!(!marker.exists());
+        }
+        if case == "missing_recreated" {
+            fixed(w.repo()?.find_worktree(ITEM).and_then(|w| {
+                w.prune(Some(
+                    git2::WorktreePruneOptions::new()
+                        .valid(true)
+                        .working_tree(true),
+                ))
+            }))?;
+            add_present(&w)?;
+        }
+        if case == "partial" {
+            fixed(fs::write(
+                &marker,
+                b"manyhands-retirement-instance-v1\nticket\n",
+            ))?;
+        }
+        if case == "collision" {
+            fixed(fs::write(
+                &marker,
+                format!(
+                    "manyhands-retirement-instance-v1\nticket\n{ITEM}\n{}\n",
+                    OperationId::new()
+                ),
+            ))?;
+        }
+        let resources = resource_image(&w.root);
+        let commands = w.server.commands();
+        let result = reentry_call(&w, request.clone(), 1)?;
+        if case == "installed" {
+            assert!(
+                matches!(&result,ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Retired)
+            );
+            assert!(!path.exists());
+        } else {
+            assert!(
+                matches!(&result,ContextRetirementOutcome::Final(r) if r.code==ResultCode::ExternalChange && r.worktree_removal==RetirementRemoval::None)
+            );
+            assert!(resources == resource_image(&w.root));
+            assert_eq!(commands, w.server.commands());
+        }
+        assert_eq!(reentry_call(&w, request, 1)?, result);
+        assert!(RepositoryService::open_at(&w.data()).is_ok());
+        w.privacy()?;
+    }
+    Ok(())
+}
+fn reentry_missing_verified() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let request = request(&w);
+    interrupt_selected(&w, &request, false);
+    let marker = w
+        .repo()?
+        .commondir()
+        .join(format!("worktrees/{ITEM}/manyhands-retirement-instance"));
+    fixed(fs::remove_file(marker))?;
+    let resources = resource_image(&w.root);
+    let commands = w.server.commands();
+    let result = reentry_call(&w, request, 1)?;
+    assert!(
+        matches!(result,ContextRetirementOutcome::Final(r) if r.code==ResultCode::ExternalChange)
+    );
+    assert!(resources == resource_image(&w.root));
+    assert_eq!(commands, w.server.commands());
+    w.privacy()
+}
+fn reentry_rollback() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let request = request(&w);
+    interrupt_selected(&w, &request, true);
+    for injection in [
+        "BEFORE UPDATE OF phase ON context_retirement_attempts WHEN NEW.phase='fenced'",
+        "BEFORE INSERT ON context_retirement_reentries",
+        "BEFORE INSERT ON retirement_observation_pin_releases",
+        "BEFORE INSERT ON remote_operation_records WHEN NEW.action='poll'",
+    ] {
+        fixed(w.db()?.execute_batch(&format!(
+            "CREATE TRIGGER reentry_fail {injection} BEGIN SELECT RAISE(ABORT,'fixture'); END;"
+        )))?;
+        let rows = registry_image(&w.db()?);
+        let resources = resource_image(&w.root);
+        let commands = w.server.commands();
+        assert!(
+            w.service
+                .reenter_context_retirement_authenticated(
+                    ReenterContextRetirementRequest {
+                        retirement: request.clone(),
+                        expected_owner_epoch: 1
+                    },
+                    w.primary().approval,
+                    &mut SessionCredentials::new(Provider)
+                )
+                .is_err()
+        );
+        assert!(rows == registry_image(&w.db()?));
+        assert!(resources == resource_image(&w.root));
+        assert_eq!(commands, w.server.commands());
+        fixed(w.db()?.execute_batch("DROP TRIGGER reentry_fail"))?;
+        assert!(RepositoryService::open_at(&w.data()).is_ok());
+    }
+    assert!(
+        matches!(reentry_call(&w,request,1)?,ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Retired)
+    );
+    w.privacy()
+}
+fn reentry_d14_mismatch() -> Result<(), FixtureError> {
+    for missing in [false, true] {
+        let w = setup()?;
+        add_present(&w)?;
+        history(&w, true)?;
+        let old = complete_materialization(&w)?;
+        let request = request(&w);
+        fixed(w.db()?.execute_batch("CREATE TRIGGER reentry_fail_d14 BEFORE DELETE ON remote_poll_materializations BEGIN SELECT RAISE(IGNORE); END;"))?;
+        assert!(matches!(
+            fixed(w.service.retire_context_authenticated(
+                request.clone(),
+                w.primary().approval,
+                &mut SessionCredentials::new(Provider)
+            ))?,
+            ContextRetirementOutcome::CleanupPending { .. }
+        ));
+        fixed(w.db()?.execute_batch(
+            "DROP TRIGGER reentry_fail_d14; DELETE FROM remote_poll_materializations;",
+        ))?;
+        if !missing {
+            let new = OperationId::new().to_string();
+            fixed(w.db()?.execute("INSERT INTO remote_operation_records(repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,action,priority,phase,completed_step,outcome,created_at,updated_at,poll_kind,poll_completed_at) SELECT repository_id,?1,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,action,priority,phase,completed_step,outcome,created_at,updated_at,poll_kind,poll_completed_at FROM remote_operation_records WHERE operation_ulid=?2",rusqlite::params![new,old.0]))?;
+            fixed(w.db()?.execute("INSERT INTO remote_poll_materializations SELECT id,'ticket',?1,?2,?3,'complete' FROM repositories",rusqlite::params![ITEM,new,old.1]))?;
+        }
+        let rows = registry_image(&w.db()?);
+        let resources = resource_image(&w.root);
+        let commands = w.server.commands();
+        assert!(
+            w.service
+                .reenter_context_retirement_authenticated(
+                    ReenterContextRetirementRequest {
+                        retirement: request,
+                        expected_owner_epoch: 1
+                    },
+                    None,
+                    &mut SessionCredentials::new(Provider)
+                )
+                .is_err()
+        );
+        assert!(rows == registry_image(&w.db()?));
+        assert!(resources == resource_image(&w.root));
+        assert_eq!(commands, w.server.commands());
+        assert!(RepositoryService::open_at(&w.data()).is_ok());
+        w.privacy()?;
+    }
+    Ok(())
+}
+fn reentry_active() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let request = request(&w);
+    let hold = w.server.hold_advertisement()?;
+    let data = w.data();
+    let request2 = request.clone();
+    let stale = std::thread::scope(|scope| {
+        let controller = scope.spawn(move || {
+            hold.wait_until_held().unwrap();
+            let service = RepositoryService::open_at(&data).unwrap();
+            RepositoryService::set_retirement_selected_hook_for_testing(|| {
+                std::panic::resume_unwind(Box::new(()))
+            });
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = service.reenter_context_retirement_authenticated(
+                        ReenterContextRetirementRequest {
+                            retirement: request2,
+                            expected_owner_epoch: 1,
+                        },
+                        None,
+                        &mut SessionCredentials::new(Provider),
+                    );
+                }))
+                .is_err()
+            );
+            let rows =
+                registry_image(&rusqlite::Connection::open(data.join(REGISTRY_FILE)).unwrap());
+            hold.release().unwrap();
+            rows
+        });
+        let stale = w.service.retire_context_authenticated(
+            request.clone(),
+            w.primary().approval,
+            &mut SessionCredentials::new(Provider),
+        );
+        let rows = controller.join().unwrap();
+        assert!(rows == registry_image(&w.db().unwrap()));
+        stale
+    });
+    assert!(stale.is_err());
+    assert!(w.repo()?.find_reference(CONTEXT).is_ok());
+    assert!(
+        matches!(reentry_call(&w,request,2)?,ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Retired)
+    );
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
+}
+fn reentry_stale_completed() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let request = request(&w);
+    let data = w.data();
+    let second = request.clone();
+    let image = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let after = image.clone();
+    RepositoryService::set_retirement_observed_hook_for_testing(move || {
+        let service = RepositoryService::open_at(&data).unwrap();
+        let result = service
+            .reenter_context_retirement_authenticated(
+                ReenterContextRetirementRequest {
+                    retirement: second,
+                    expected_owner_epoch: 1,
+                },
+                None,
+                &mut SessionCredentials::new(Provider),
+            )
+            .unwrap();
+        assert!(matches!(result, ContextRetirementOutcome::Final(_)));
+        *after.borrow_mut() = Some(registry_image(
+            &rusqlite::Connection::open(data.join(REGISTRY_FILE)).unwrap(),
+        ));
+    });
+    assert!(
+        w.service
+            .retire_context_authenticated(
+                request,
+                w.primary().approval,
+                &mut SessionCredentials::new(Provider)
+            )
+            .is_err()
+    );
+    assert!(image.borrow().as_ref() == Some(&registry_image(&w.db()?)));
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
+}
+fn reentry_generation() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let request = request(&w);
+    interrupt_selected(&w, &request, true);
+    fixed(fs::write(
+        w.root.join(".manyhands/config.toml"),
+        b"invalid = [",
+    ))?;
+    assert!(
+        w.service
+            .observe_publication_remote(
+                ObservePublicationRemoteRequest {
+                    root: w.root.clone(),
+                    operation_id: OperationId::new(),
+                    invocation: RemotePollInvocation::Explicit,
+                    approval: None,
+                    restart: false
+                },
+                &mut SessionCredentials::new(Provider)
+            )
+            .is_err()
+    );
+    let resources = resource_image(&w.root);
+    let commands = w.server.commands();
+    let result = reentry_call(&w, request, 1)?;
+    assert!(
+        matches!(result,ContextRetirementOutcome::Final(r) if r.code==ResultCode::ExternalChange)
+    );
+    assert!(resources == resource_image(&w.root));
+    assert_eq!(commands, w.server.commands());
+    assert_eq!(
+        fixed(w.db()?.query_row(
+            "SELECT count(*) FROM retirement_observation_pins",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
+}
+fn reentry_recreated_branch() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let old = complete_materialization(&w)?;
+    let request = request(&w);
+    fixed(w.db()?.execute_batch("CREATE TRIGGER reentry_fail_d14 BEFORE DELETE ON remote_poll_materializations BEGIN SELECT RAISE(IGNORE); END;"))?;
+    let _ = fixed(w.service.retire_context_authenticated(
+        request.clone(),
+        w.primary().approval,
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    fixed(w.db()?.execute_batch("DROP TRIGGER reentry_fail_d14"))?;
+    fixed(
+        w.repo()?
+            .reference(CONTEXT, fixed(old.1.parse())?, false, "new branch lifetime"),
+    )?;
+    let resources = resource_image(&w.root);
+    let commands = w.server.commands();
+    assert_eq!(
+        reentry_call(&w, request, 1)?,
+        ContextRetirementOutcome::CleanupPending {
+            worktree_removal: RetirementRemoval::Observed,
+            branch_removal: RetirementRemoval::Possible
+        }
+    );
+    assert!(resources == resource_image(&w.root));
+    assert_eq!(commands, w.server.commands());
+    assert_materialization(&w, &old)?;
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
+}
+fn reentry_uninvoked_branch() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let request = request(&w);
+    let root = w.root.clone();
+    RepositoryService::set_retirement_intent_hook_for_testing(move || {
+        let git = git2::Repository::open(root).unwrap();
+        git.find_reference(CONTEXT).unwrap().delete().unwrap();
+    });
+    assert_eq!(
+        fixed(w.service.retire_context_authenticated(
+            request.clone(),
+            w.primary().approval,
+            &mut SessionCredentials::new(Provider)
+        ))?,
+        ContextRetirementOutcome::CleanupPending {
+            worktree_removal: RetirementRemoval::Observed,
+            branch_removal: RetirementRemoval::None
+        }
+    );
+    let commands = w.server.commands();
+    let result = reentry_call(&w, request, 1)?;
+    assert!(
+        matches!(result,ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Retired && r.worktree_removal==RetirementRemoval::Observed && r.branch_removal==RetirementRemoval::None)
+    );
+    assert_eq!(commands, w.server.commands());
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
+}
+fn interrupt_selected(w: &World, request: &RetireContextRequest, observed: bool) {
+    if observed {
+        RepositoryService::set_retirement_observed_hook_for_testing(|| {
+            std::panic::resume_unwind(Box::new(()))
+        });
+    } else {
+        RepositoryService::set_retirement_selected_hook_for_testing(|| {
+            std::panic::resume_unwind(Box::new(()))
+        });
+    }
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = w.service.retire_context_authenticated(
+                request.clone(),
+                w.primary().approval,
+                &mut SessionCredentials::new(Provider),
+            );
+        }))
+        .is_err()
+    );
+}
+fn reentry_present() -> Result<(), FixtureError> {
+    let w = setup()?;
+    let path = add_present(&w)?;
+    history(&w, true)?;
+    let request = request(&w);
+    interrupt_selected(&w, &request, true);
+    let rows = registry_image(&w.db()?);
+    let resources = resource_image(&w.root);
+    let commands = w.server.commands();
+    assert!(
+        w.service
+            .retire_context_authenticated(
+                request.clone(),
+                w.primary().approval,
+                &mut SessionCredentials::new(Provider)
+            )
+            .is_err()
+    );
+    assert!(rows == registry_image(&w.db()?));
+    assert!(resources == resource_image(&w.root));
+    assert_eq!(commands, w.server.commands());
+    let result = reentry_call(&w, request.clone(), 1)?;
+    assert!(
+        matches!(&result,ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Retired && r.worktree_removal==RetirementRemoval::Observed && r.branch_removal==RetirementRemoval::Observed)
+    );
+    assert!(!path.exists());
+    assert!(w.repo()?.find_reference(CONTEXT).is_err());
+    let db = w.db()?;
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT owner_epoch FROM context_retirement_records",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        2
+    );
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT count(*) FROM context_retirement_attempts WHERE phase='fenced'",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        1
+    );
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT count(*) FROM retirement_advertisement_provenance",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        2
+    );
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT count(*) FROM retirement_observation_pins",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    assert_eq!(reentry_call(&w, request, 1)?, result);
+    w.privacy()
+}
+fn reentry_branch_only() -> Result<(), FixtureError> {
+    let w = setup()?;
+    history(&w, true)?;
+    let request = request(&w);
+    interrupt_selected(&w, &request, false);
+    let resources = resource_image(&w.root);
+    let commands = w.server.commands();
+    let result = reentry_call(&w, request.clone(), 1)?;
+    assert!(
+        matches!(&result,ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Refused && r.code==ResultCode::ExternalChange && r.worktree_removal==RetirementRemoval::None && r.branch_removal==RetirementRemoval::None)
+    );
+    assert!(resources == resource_image(&w.root));
+    assert_eq!(commands, w.server.commands());
+    assert_eq!(reentry_call(&w, request, 1)?, result);
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
+}
+fn reentry_all_absent() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let old = complete_materialization(&w)?;
+    let request = request(&w);
+    fixed(w.db()?.execute_batch("CREATE TRIGGER reentry_ignore_d14 BEFORE DELETE ON remote_poll_materializations BEGIN SELECT RAISE(IGNORE); END;"))?;
+    let partial = fixed(w.service.retire_context_authenticated(
+        request.clone(),
+        w.primary().approval,
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    assert_eq!(
+        partial,
+        ContextRetirementOutcome::CleanupPending {
+            worktree_removal: RetirementRemoval::Observed,
+            branch_removal: RetirementRemoval::Possible
+        }
+    );
+    fixed(w.db()?.execute_batch("DROP TRIGGER reentry_ignore_d14"))?;
+    fixed(fs::write(
+        w.root.join(".manyhands/config.toml"),
+        b"invalid configuration = [",
+    ))?;
+    let resources = resource_image(&w.root);
+    let commands = w.server.commands();
+    let result = reentry_call(&w, request.clone(), 1)?;
+    assert!(
+        matches!(&result,ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Retired && r.worktree_removal==RetirementRemoval::Observed && r.branch_removal==RetirementRemoval::Possible && r.materialization_settled)
+    );
+    assert!(resources == resource_image(&w.root));
+    assert_eq!(commands, w.server.commands());
+    assert_eq!(
+        fixed(w.db()?.query_row(
+            "SELECT count(*) FROM remote_poll_materializations",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    fixed(w.repo()?.reference(
+        CONTEXT,
+        fixed(old.1.parse())?,
+        false,
+        "same-OID new lifetime",
+    ))?;
+    add_present(&w)?;
+    let resources = resource_image(&w.root);
+    let rows = registry_image(&w.db()?);
+    assert_eq!(reentry_call(&w, request, 1)?, result);
+    assert!(resources == resource_image(&w.root));
+    assert!(rows == registry_image(&w.db()?));
+    w.privacy()
+}
+fn reentry_worktree_only() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let old = complete_materialization(&w)?;
+    let request = request(&w);
+    fixed(w.db()?.execute_batch("CREATE TRIGGER reentry_ignore_w_observation BEFORE UPDATE OF observation ON context_retirement_effect_intents WHEN OLD.resource='worktree' BEGIN SELECT RAISE(ABORT,'fixture'); END;"))?;
+    let _ = fixed(w.service.retire_context_authenticated(
+        request.clone(),
+        w.primary().approval,
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    fixed(
+        w.db()?
+            .execute_batch("DROP TRIGGER reentry_ignore_w_observation"),
+    )?;
+    let resources = resource_image(&w.root);
+    let commands = w.server.commands();
+    assert_eq!(
+        reentry_call(&w, request.clone(), 1)?,
+        ContextRetirementOutcome::CleanupPending {
+            worktree_removal: RetirementRemoval::Possible,
+            branch_removal: RetirementRemoval::None
+        }
+    );
+    assert!(resources == resource_image(&w.root));
+    assert_eq!(commands, w.server.commands());
+    assert_materialization(&w, &old)?;
+    fixed(
+        w.repo()?
+            .find_reference(CONTEXT)
+            .and_then(|mut r| r.delete()),
+    )?;
+    fixed(fs::write(
+        w.root.join(".manyhands/config.toml"),
+        b"invalid = [",
+    ))?;
+    let result = reentry_call(&w, request, 2)?;
+    assert!(
+        matches!(result,ContextRetirementOutcome::Final(r) if r.worktree_removal==RetirementRemoval::Possible && r.branch_removal==RetirementRemoval::None && r.materialization_settled)
+    );
+    assert_eq!(
+        fixed(w.db()?.query_row(
+            "SELECT completed_step FROM operation_records WHERE action='retire_context'",
+            [],
+            |r| r.get::<_, String>(0)
+        ))?,
+        "context_branch_released"
+    );
+    assert_eq!(fixed(w.db()?.query_row("SELECT count(*) FROM context_retirement_absence_receipts m JOIN context_retirement_records c ON c.operation_ulid=m.operation_ulid AND c.owner_epoch=m.owner_epoch WHERE m.worktree_removal='possible' AND m.branch_removal='none' AND c.absence_basis='owned_intent'",[],|r|r.get::<_,i64>(0)))?,1);
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
 }
 
 fn observe(w: &World) -> Result<(), FixtureError> {

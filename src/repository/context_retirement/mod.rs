@@ -3,9 +3,11 @@ mod execution;
 mod instance;
 pub(super) mod proof;
 pub(super) mod record;
+mod reentry;
 mod result;
 mod run;
 pub use execution::{ContextRetirementOutcome, RetireContextRequest};
+pub use reentry::ReenterContextRetirementRequest;
 pub use result::{ContextRetirementReport, RetirementDisposition, RetirementRemoval};
 
 #[cfg(test)]

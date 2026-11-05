@@ -4,11 +4,15 @@ use crate::repository::{
 };
 use rusqlite::{Connection, params};
 
+#[path = "migration_tests.rs"]
+mod migration_tests;
+
 const REFUSAL: &str = r#"{"version":1,"code":"external_change","outcome":"refused","worktree_removal":"none","branch_removal":"none","materialization_settled":false}"#;
 
-const TABLES: [&str; 7] = [
+const TABLES: [&str; 8] = [
     "context_retirement_records",
     "context_retirement_attempts",
+    "context_retirement_reentries",
     "context_retirement_effect_intents",
     "retirement_advertisement_provenance",
     "retirement_observation_receipts",
