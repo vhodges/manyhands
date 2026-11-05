@@ -309,3 +309,111 @@ fn retirement_migration_current_envelope_missing_marker_is_not_legacy_authority(
         assert_eq!(registry_image(&db), before);
     }
 }
+
+#[test]
+fn retirement_specfix_r1_rejects_unknown_release_attachments_without_evidence_loss() {
+    let mut violations = Vec::new();
+    for current in [false, true] {
+        for case in ["trigger", "index", "both", "case_trigger", "case_index"] {
+            let data = tempfile::tempdir().unwrap();
+            let (db, _) = legacy(data.path(), "released");
+            if current {
+                drop(RepositoryService::open_at(data.path()).unwrap());
+            }
+            let parent = if case.starts_with("case_") {
+                "RETIREMENT_OBSERVATION_PIN_RELEASES"
+            } else {
+                "retirement_observation_pin_releases"
+            };
+            if matches!(case, "trigger" | "both" | "case_trigger") {
+                db.execute_batch(&format!("CREATE TRIGGER ForeignReleaseGuard BEFORE DELETE ON \"{parent}\" BEGIN SELECT 1; END;")).unwrap();
+            }
+            if matches!(case, "index" | "both" | "case_index") {
+                db.execute_batch(&format!(
+                    "CREATE INDEX ForeignReleaseIndex ON \"{parent}\"(reason);"
+                ))
+                .unwrap();
+            }
+            let before = specfix_r1_full_image(&db);
+            let opened = RepositoryService::open_at(data.path());
+            if !matches!(opened, Err(ref e) if e.kind == RepositoryErrorKind::RecoveryRequired)
+                || specfix_r1_full_image(&db) != before
+            {
+                violations.push((current, case));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "accepted or changed attached evidence: {violations:?}"
+    );
+}
+
+#[test]
+fn retirement_specfix_r1_rejects_unknown_incoming_release_fks_before_cascade() {
+    let mut violations = Vec::new();
+    for current in [false, true] {
+        for action in ["CASCADE", "NO ACTION", "RESTRICT"] {
+            for populated in [false, true] {
+                let data = tempfile::tempdir().unwrap();
+                let (db, _) = legacy(data.path(), "released");
+                if current {
+                    drop(RepositoryService::open_at(data.path()).unwrap());
+                }
+                db.execute_batch(&format!("CREATE TABLE foreign_release_history(id INTEGER PRIMARY KEY, provenance_id INTEGER, pin_kind TEXT, holder_operation_ulid TEXT, holder_epoch INTEGER, payload TEXT, FOREIGN KEY(provenance_id,pin_kind,holder_operation_ulid,holder_epoch) REFERENCES \"RETIREMENT_OBSERVATION_PIN_RELEASES\"(provenance_id,pin_kind,holder_operation_ulid,holder_epoch) ON DELETE {action});")).unwrap();
+                if populated {
+                    db.execute_batch("INSERT INTO foreign_release_history SELECT 91,provenance_id,pin_kind,holder_operation_ulid,holder_epoch,'foreign-row-91-sentinel' FROM retirement_observation_pin_releases;").unwrap();
+                }
+                let before = specfix_r1_full_image(&db);
+                let opened = RepositoryService::open_at(data.path());
+                if !matches!(opened, Err(ref e) if e.kind == RepositoryErrorKind::RecoveryRequired)
+                    || specfix_r1_full_image(&db) != before
+                {
+                    violations.push((current, action, populated));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "accepted or changed incoming dependencies: {violations:?}"
+    );
+}
+
+fn specfix_r1_full_image(
+    db: &Connection,
+) -> std::collections::BTreeMap<String, Vec<Vec<rusqlite::types::Value>>> {
+    let mut image = registry_image(db);
+    let tables = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    for table in tables {
+        let quoted = table.replace('"', "\"\"");
+        let rows = db
+            .prepare(&format!("SELECT rowid,* FROM \"{quoted}\" ORDER BY rowid"))
+            .unwrap()
+            .query_map([], |r| {
+                (0..r.as_ref().column_count()).map(|i| r.get(i)).collect()
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        image.insert(format!("rowids/{table}"), rows);
+    }
+    image
+}
+
+#[test]
+fn retirement_specfix_r1_unrelated_schema_is_not_part_of_release_closure() {
+    let data = tempfile::tempdir().unwrap();
+    let (db, _) = legacy(data.path(), "released");
+    db.execute_batch("CREATE TABLE unrelated_history(id INTEGER PRIMARY KEY,payload TEXT); INSERT INTO unrelated_history VALUES(91,'keep'); CREATE INDEX unrelated_index ON unrelated_history(payload); CREATE TRIGGER unrelated_guard BEFORE DELETE ON unrelated_history BEGIN SELECT RAISE(ABORT,'keep'); END;").unwrap();
+    drop(RepositoryService::open_at(data.path()).unwrap());
+    let before = registry_image(&db);
+    drop(RepositoryService::open_at(data.path()).unwrap());
+    assert_eq!(registry_image(&db), before);
+}

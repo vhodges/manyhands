@@ -1085,10 +1085,13 @@ fn retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen() {
         crate::repository::remote::state::configure(&tx, 1, Some(&plan), true).unwrap();
         tx.commit().unwrap();
         let service = RepositoryService::open_at(data.path()).unwrap();
-        if let Some(failure) = failure {
+        if failure == Some("receipt") {
+            // A schema fault trigger on the release table is no longer a valid
+            // envelope. Inject at the same INSERT boundary, not at startup audit.
+            super::record::set_release_failure(true);
+        } else if let Some(failure) = failure {
             let event = match failure {
                 "result" => "UPDATE OF final_result ON context_retirement_records",
-                "receipt" => "INSERT ON retirement_observation_pin_releases",
                 "pin" => "DELETE ON retirement_observation_pins",
                 "batch" => "DELETE ON remote_observation_batches",
                 "journal" => "UPDATE OF state ON operation_records",
@@ -1104,6 +1107,12 @@ fn retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen() {
         };
         if failure.is_some() {
             assert!(service.retire_context(request.clone()).is_err());
+            if failure == Some("receipt") {
+                assert!(
+                    !super::record::set_release_failure(false),
+                    "the release INSERT fault must have been reached and consumed"
+                );
+            }
             assert_eq!(
                 db.query_row("SELECT phase FROM context_retirement_records", [], |r| {
                     r.get::<_, String>(0)
@@ -1136,7 +1145,9 @@ fn retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen() {
                 1
             );
             assert!(RepositoryService::open_at(data.path()).is_ok());
-            db.execute_batch("DROP TRIGGER fail_z").unwrap();
+            if failure != Some("receipt") {
+                db.execute_batch("DROP TRIGGER fail_z").unwrap();
+            }
         }
         let result = service.retire_context(request.clone());
         assert!(

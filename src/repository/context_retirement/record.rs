@@ -10,6 +10,12 @@ const REENTRY_MARKER: &str = "context_retirement_v2";
 #[cfg(test)]
 thread_local! {static MIGRATION_FAILURE:std::cell::Cell<Option<u8>>=const {std::cell::Cell::new(None)};}
 #[cfg(test)]
+thread_local! {static RELEASE_FAILURE:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
+#[cfg(test)]
+pub(super) fn set_release_failure(fail: bool) -> bool {
+    RELEASE_FAILURE.with(|slot| slot.replace(fail))
+}
+#[cfg(test)]
 pub(super) fn fail_migration_at(point: u8) {
     MIGRATION_FAILURE.with(|slot| slot.set(Some(point)));
 }
@@ -691,9 +697,9 @@ fn replace_release_table(
     tx.execute_batch("INSERT INTO retirement_observation_pin_releases_upgrade(rowid,provenance_id,pin_kind,holder_operation_ulid,holder_epoch,repository_id,observation_batch_id,binding_id,reason) SELECT rowid,provenance_id,pin_kind,holder_operation_ulid,holder_epoch,repository_id,observation_batch_id,binding_id,reason FROM retirement_observation_pin_releases;").map_err(|_|recovery_required())?;
     #[cfg(test)]
     migration_checkpoint(3)?;
-    // No incoming FK targets this receipt table in the exact recognized v1
-    // catalog. Build/copy the replacement first; never rename the old parent
-    // and accidentally retarget immutable FK evidence to a discarded table.
+    // validate_schema_objects checked the affected attachment/FK closure before
+    // any upgrade DDL. Build/copy the replacement first; never rename the old
+    // parent and accidentally retarget immutable FK evidence to a shadow table.
     for name in [
         "retirement_release_immutable",
         "retirement_no_repin",
@@ -754,6 +760,62 @@ fn validate_schema_objects(
             .optional()
             .map_err(|_| recovery_required())?;
         if actual.as_deref().map(normalized) != Some(normalized(sql)) {
+            return Err(recovery_required());
+        }
+    }
+    validate_release_closure(db, definitions)?;
+    Ok(())
+}
+
+/// Required-object equality alone does not prove DROP TABLE is lossless:
+/// SQLite drops attached objects and may cascade into unknown incoming FKs.
+/// Only this affected closure is closed; unrelated repository schema is allowed.
+fn validate_release_closure(
+    db: &Connection,
+    definitions: &[(&str, &str, String)],
+) -> Result<(), RepositoryError> {
+    const RELEASE: &str = "retirement_observation_pin_releases";
+    let attached = db.prepare("SELECT type,name,sql FROM sqlite_master WHERE tbl_name=?1 COLLATE NOCASE AND type IN ('index','trigger')")
+        .and_then(|mut q| q.query_map([RELEASE], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?)))?.collect::<Result<Vec<_>,_>>())
+        .map_err(|_| recovery_required())?;
+    for (kind, name, sql) in attached {
+        // The pinned table DDL has exactly this single implicit primary index.
+        let primary = kind == "index"
+            && sql.is_none()
+            && name.eq_ignore_ascii_case("sqlite_autoindex_retirement_observation_pin_releases_1");
+        let declared = definitions.iter().any(|(expected_kind, expected_name, _)| {
+            kind == *expected_kind && name.eq_ignore_ascii_case(expected_name)
+        });
+        if !primary && !declared {
+            return Err(recovery_required());
+        }
+    }
+    let tables = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+        .and_then(|mut q| {
+            q.query_map([], |r| r.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?;
+    for table in tables {
+        let parents = db
+            .prepare("SELECT \"table\" FROM pragma_foreign_key_list(?1)")
+            .and_then(|mut q| {
+                q.query_map([&table], |r| r.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .map_err(|_| recovery_required())?;
+        // Managed tables' exact DDL, including every FK, was checked above.
+        // Any unknown child is outside that canonical dependency closure,
+        // regardless of action, row count, or SQLite identifier spelling.
+        let declared = definitions
+            .iter()
+            .any(|(kind, name, _)| *kind == "table" && table.eq_ignore_ascii_case(name));
+        if !declared
+            && parents
+                .iter()
+                .any(|parent| parent.eq_ignore_ascii_case(RELEASE))
+        {
             return Err(recovery_required());
         }
     }
@@ -1008,6 +1070,9 @@ fn audit_objects(
     // claim. Settled removal uses this closed mapping; incomplete/owned-absence
     // evidence remains Possible, never Observed. A live pre-Git refusal instead
     // retains the branch intent as changed with no claimed effect.
+    // The direct resumed-W -> M exception below correlates the changed attempt's
+    // own immutable resumption with M's exact older uncertain intent/receipt.
+    // It preserves Possible W debt; changed+Possible or purpose alone is not proof.
     let invalid_effect: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_effect_intents e
       JOIN context_retirement_records c ON c.operation_ulid=e.operation_ulid
       JOIN retirement_observation_receipts b ON b.id=e.receipt_id
@@ -1018,7 +1083,17 @@ fn audit_objects(
         OR (c.phase IN ('local_absent','index_pending','complete') AND c.absence_basis='owned_intent' AND NOT coalesce(
           (e.observation='removed' AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='observed')
            OR (e.observation IN ('already_absent','incomplete') AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='possible')
-           OR (EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch) AND ((e.observation IS NULL AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='possible') OR (e.observation='changed' AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='none')))
+            OR (EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch) AND ((e.observation IS NULL AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='possible') OR (e.observation='changed' AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='none')))
+            OR (e.resource='worktree' AND e.observation='changed' AND c.worktree_removal='possible' AND c.branch_removal='none' AND c.materialization_settled=1 AND EXISTS(
+              SELECT 1 FROM context_retirement_absence_receipts m
+              JOIN context_retirement_reentries mr ON mr.operation_ulid=m.operation_ulid AND mr.owner_epoch=m.owner_epoch
+              JOIN context_retirement_worktree_resumptions w ON w.operation_ulid=e.operation_ulid AND w.owner_epoch=e.owner_epoch
+              JOIN context_retirement_effect_intents prior ON prior.operation_ulid=w.operation_ulid AND prior.owner_epoch=w.intent_owner_epoch AND prior.resource=w.intent_resource AND prior.receipt_id=w.intent_receipt_id
+              JOIN context_retirement_attempts resumed ON resumed.operation_ulid=e.operation_ulid AND resumed.owner_epoch=e.owner_epoch
+              WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch AND mr.purpose='metadata' AND mr.previous_epoch=e.owner_epoch
+                AND m.intent_resource='worktree' AND m.intent_owner_epoch=w.intent_owner_epoch AND m.intent_receipt_id=w.intent_receipt_id
+                AND (prior.observation IS NULL OR prior.observation='incomplete') AND resumed.phase='fenced'
+                AND m.inventory='all_absent' AND m.worktree_removal='possible' AND m.branch_removal='none'))
            OR (e.resource='worktree' AND e.owner_epoch<c.owner_epoch AND EXISTS(SELECT 1 FROM context_retirement_worktree_resumptions w JOIN context_retirement_effect_intents current ON current.operation_ulid=w.operation_ulid AND current.owner_epoch=w.owner_epoch AND current.resource='worktree' JOIN context_retirement_attempts old ON old.operation_ulid=e.operation_ulid AND old.owner_epoch=e.owner_epoch WHERE w.operation_ulid=c.operation_ulid AND w.owner_epoch>e.owner_epoch AND w.owner_epoch<=c.owner_epoch AND old.phase='fenced' AND ((current.observation='removed' AND c.worktree_removal='observed') OR EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch AND m.intent_resource='worktree' AND m.intent_owner_epoch=current.owner_epoch AND m.intent_receipt_id=current.receipt_id AND m.worktree_removal='possible' AND c.worktree_removal='possible')))),0)))", [], |r| r.get(0)).map_err(|_| recovery_required())?;
     if invalid_effect {
         return Err(recovery_required());
@@ -1294,6 +1369,12 @@ fn release_consumer(
     let exact: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_observation_batches batch JOIN retirement_advertisement_provenance p ON p.observation_batch_id=batch.id
       WHERE p.id=?1 AND batch.repository_id=p.repository_id AND batch.remote_name=p.remote_name AND batch.primary_branch=p.primary_branch AND batch.configuration_generation=p.configuration_generation AND batch.observed_at=p.observed_at)", [provenance], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
     if !exact {
+        return Err(recovery_required());
+    }
+    // Preserve the existing receipt-boundary rollback control without installing
+    // an unknown release-table attachment (now correctly rejected by R1).
+    #[cfg(test)]
+    if set_release_failure(false) {
         return Err(recovery_required());
     }
     tx.execute("INSERT INTO retirement_observation_pin_releases(provenance_id,pin_kind,holder_operation_ulid,holder_epoch,repository_id,observation_batch_id,binding_id,reason) VALUES(?1,'consumer_attempt',?2,?3,?4,?5,?6,?7)", params![provenance,operation,epoch,repository,batch,binding,reason]).map_err(RepositoryError::sqlite)?;

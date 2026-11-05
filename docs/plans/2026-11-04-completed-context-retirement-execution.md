@@ -2831,23 +2831,23 @@ is unchanged; these are current incremental evidence/remaining-work annotations.
 | 19 | E `present_prune_sql_gap_preserves_surviving_branch_on_retry`, `reentry_interrupted_prune_intact_instance_continues`, `reentry_prior_intent_mismatched_dirty_mixed_recreated_instance_preserves`; O remaining prune/mixed inventory fault windows |
 | 20 | E `reentry_same_oid_branch_recreation_after_sql_gap_is_owed` |
 | 21 | E `reentry_branch_only_never_reconstructs_old_lifetime`; unit replacement matrix also covers selected/ad/batch/completed O |
-| 22 | E `reentry_owned_all_absent_is_metadata_only`, `reentry_worktree_intent_cannot_invent_branch_removal`, `reentry_owned_absence_after_known_uninvoked_branch_keeps_branch_none`, `reentry_resumed_prune_sql_gap_owned_absence_preserves_all_old_uncertainty`; M uses a dedicated receipt and BranchReleased with truthful B None. O no-owned-intent and mixed public M variants |
+| 22 | E prior M cases plus `specfix_r2_direct_uninvoked_resumption_to_owned_absence`: direct epoch-2 changed W → M retains old NULL/W Possible/B None and BranchReleased under exact resumption/absence receipts. O no-owned-intent and mixed public M variants |
 | 23 | E `present_incomplete_or_ambiguous_materialization_refuses_before_prune`; O remaining malformed owner/OID capture variants |
-| 24 | E `reentry_d14_mismatch_rolls_back_replacement_and_preserves_new_intent`; O replacement OID/step/captured-absent-now-present public M variants |
-| 25 | E `reentry_owned_all_absent_is_metadata_only` completed/context recreation replay; O new materialization Q and I-only M replay |
+| 24 | E `reentry_d14_mismatch_rolls_back_replacement_and_preserves_new_intent`, `specfix_r2_exact_d14_replacement_rolls_back` (changed OID and ignored DELETE); O remaining step/captured-absent-now-present public M variants |
+| 25 | E `reentry_owned_all_absent_is_metadata_only` and `specfix_r2_direct_uninvoked_resumption_to_owned_absence`: completed replay preserves new W/A/B and exact new materialization; O I-only M replay |
 | 26 | E `d14_exact_completed_intent_settles_atomically_and_incomplete_refusal_is_stable` |
-| 27 | E `reentry_explicit_replacement_fences_all_old_write_boundaries`, `reentry_active_observer_return_cannot_write_after_replacement`, `reentry_present_replaces_completed_observer_and_retires`; O remaining positive present after-ad/after-batch interruption windows |
-| 28 | E `reentry_replacement_transaction_failure_rolls_back_every_write`, `reentry_exclusions_and_fixed_inputs_cannot_replace_an_owner`; O every-write/commit failure points, valid terminal remote debt, foreign-O/action correlation matrix |
+| 27 | E prior replacement/stale-executor cases plus `specfix_r3_terminal_history_preserved_while_every_old_owner_is_fenced`: active three-phase and four-terminal-phase matrix preserves terminal O projection/all metadata while raising epoch. O remaining positive present after-ad/after-batch interruption windows |
+| 28 | E prior replacement rollback/exclusion cases plus the R3 eight-state matrix's whole-transaction rollback and stale-write assertions. O remaining every-write/commit failure points, valid terminal remote debt, foreign-O/action correlation matrix |
 | 29 | E unit all-old-write-boundaries matrix plus active/completed public stale-executor cases; O actual current accepted F2 attempt/mapping shared fence contract |
 | 30 | E `reentry_selected_generation_change_is_final_without_network`, old-generation retention units; O partial-effect generation variant |
 | 31 | E `live_advertisement_captures_exact_batch_and_public_replay_cannot_mint`; O original-P handoff contract; D actual Task 4 producer |
 | 32 | O inert batch B-execution/C-consumption seam; D actual Task 4 journey |
 | 33 | O foreign/stale request+batch consumer contract projections; D actual Task 3/4 binding/coordinator |
 | 34 | O no-child gap execution/request+batch fences; D actual Task 4 coordinator |
-| 35 | E public reentry R7 no-effect/possible/observed reports, `reentry_resumed_worktree_reappeared_remote_retains_prior_uncertainty`, `reentry_resumed_worktree_late_identity_stop_settles_only_new_uninvoked_intent`; O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
+| 35 | E prior R7 reports/stops plus direct changed-W → M truthful Possible/None and R3 terminal-observer outcome preservation. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
 | 36 | E `claimed_refresh_cannot_release_blocker_without_final_result`; O M index failures/stale index-owner matrix |
 | 37 | E `generic_abandon_preserves_pending_and_terminal_identity`; D guarded preserving abandon Task 3 |
-| 38 | E existing envelope/corruption units, `reentry_audit_rejects_unfenced_observer_and_false_purposes`, `reentry_owned_absence_requires_exact_receipt_not_purpose_or_initial_step`, four `migration_*` history/rollback/corruption/marker tests; exact published-v1 → v2 upgrade verified. O remaining resumption/M FK/tamper/deletion-order and source/batch inventory variants |
+| 38 | E prior migration/history/audit controls plus three `specfix_r1_*` units (closed release attachments/incoming FKs, unrelated compatibility) and `specfix_r2_exact_lineage_receipt_epoch_and_flags_fail_closed`. O remaining resumption/M FK/tamper/deletion-order and source/batch inventory variants |
 | 39 | O A0–A4 original-P ordering contract projections; D actual Task 4 producer |
 | 40 | O A1–A3 crash/capability/empty manifest projections; D actual Task 4 producer |
 | 41 | O source/unbound provenance lifecycle and source+consumer pin contracts; D actual Task 4 producer |
@@ -3033,3 +3033,82 @@ Future checkpoint IDs use the supported isolated `MANYHANDS_DATA_DIR` override;
 ID generation succeeded there. Diagnostic checkpoint
 `01M6P039AYM6A3TQR2642C42PH`, actual UTC `2026-11-05T13:59:11Z`, parent
 `01M6NZ8F8KM4F9X52WNSTA4HXA`.
+
+## Task 2 Recovery-Core SPEC Corrections R1–R3 — Same SPEC Re-review Pending
+
+Entry **`59cc4a4fa77b64d8be18e69edd7ec79a394fea46`** (controller docs only) atop
+preserved core **`65970f4322b9452ed09833d807fbed345717a29e`**. Both commits remain
+intact. Limited recovery-core SPEC found three current defects; controller accepted
+all three. This correction does not expand producers or complete Task 2. Exact
+review range remains **`7b153deb9ed829c948092f6a855acbf2819612a0..fix-HEAD`**;
+`fix-HEAD` is the commit introducing checkpoint **`01M6P3A3QGEJ0YGZF17RGXXCKT`**,
+subject `fix: preserve retirement recovery evidence and terminal history`.
+Full Task 2 base remains `7b1912d1`; same-phase fetch/merge reused, main unchanged
+at `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`. No reset/squash/rebase.
+
+### Counterexamples, corrections and test-first evidence
+
+All log names below are under `/tmp/opencode/task2-recovery-specfix-`.
+
+| Finding | Correction and bounded evidence | Compiled behavioral RED → GREEN |
+| --- | --- | --- |
+| **R1 High — silent migration evidence loss** | Required-object equality did not close the affected release catalog: DROP removed extra attached trigger/index and cascaded into unknown child row 91. `validate_schema_objects` now validates release attachments and every table's incoming FK list **before upgrade DDL** and for v2 audit. Only canonical declared objects and the implicit PK index are allowed; unknown dependencies refuse irrespective of action/rows or ASCII identifier case. Unrelated schema still opens. Tests cover trigger/index separately/combined/case spellings, CASCADE/NO ACTION/RESTRICT empty/populated children on v1/v2; compare full sqlite_master, every row and rowid, schema_version and markers. | `r1-red.log`: **1 passed / 2 failed**, accepted attachments and incoming dependencies; `r1-green.log`: **3 passed**; strengthened rowid images also pass in final 88. |
+| **R2 Medium — direct known-uninvoked resumed W → M refused** | Epoch 1 uncertain W plus epoch 2's own changed W retained Possible/None, but only a later resumption could excuse changed history. New audit exception joins that exact changed attempt's stored W resumption to M's **same older uncertain intent/receipt**, M's previous epoch, fenced attempt, all-absent receipt, settled materialization and Possible/None flags. No blanket changed+Possible or purpose-only permission. Actual public late-stop producer, external all-absence, then M at expected epoch 2 completes BranchReleased/Retired, exact D14 and index settlement. Old NULL/new changed rows, proofs/receipts/ads remain identical; invalid config, no-credential provider, command/resource snapshots prove no new transport/proof/effect. Reopen and replay preserve recreated W/A/B and new materialization. Five lineage/receipt/epoch/flag corruption controls and two D14 mismatch/ignored-delete cases retain rows/resources and fail closed. | `r2-red-confirmed.log`: **0 passed / 1 failed SSH**, assertion at public M acceptance; `r2-controls-green.log`: **3 registered SSH passed**. An intermediate D14 fixture attempted an immutable UPDATE; corrected to legal DELETE/INSERT replacement, not counted as behavioral RED. |
+| **R3 Medium — terminal O relabeled during fencing** | Exact old O epoch still rises for all accepted phases. SQL CASE terminalizes only Reserved/Advertising/Persisting; Completed/Failed/Cancelled/Interrupted retain original phase/outcome. Eight-state unit matrix uses real claim/safepoints/batch/finish plus one valid interrupted-unavailable projection (no CHECK bypass). It checks all O columns and report projection, polling metadata, old attempt fencing, stale safe points/ad/finish/domain writes, reopen and whole-TX rollback after O update. Existing held-network stale-executor SSH remains green. | `r3-red.log`: **0 passed / 1 failed**, terminal completed/failed/cancelled/interrupted history changed; `r3-green.log`: **1 passed**, all eight states. |
+
+**Existing Z fault control retained, not exempted:** the first context run was
+87/88 because the old receipt fault trigger itself violated R1's closed attachment
+rule (`context-fixture-conflict.log`). Its receipt-only injector now fails at the
+same INSERT boundary via a cfg(test) one-shot; all original assertions remain and
+a new assertion proves that boundary was reached/consumed. No test-name schema
+whitelist or production exception. `z-control-confirmed-green.log`: **1 passed**.
+The earlier missing-module compile error in the test helper is not RED evidence.
+
+### Frozen final gates and self-review
+
+Rust source was re-frozen after the injector adjustment and self-review's R2
+stale-index 1→0/current-attempt settlement assertions (`r2-index-green.log`: 3 SSH).
+All nine final gates below were rerun on that last freeze. All Cargo commands ran
+serially through Devenv with no shell deadlines, overlapping rebuild/test binary,
+or zero-case pass. Final logs use `<suffix>.log` under the prefix above:
+
+| Command after `devenv shell --` | Suffix | Result |
+| --- | --- | --- |
+| `cargo check --all-features --locked` | `check-final` | exit 0 |
+| `cargo fmt --check` | `fmt-final` | exit 0 |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy-final` | exit 0 |
+| `cargo test --all-features --locked --lib context_retirement` | `context-final` | **88 passed** (84 retained + 3 R1 + 1 R3) |
+| Same test flags, `--test mutation_remote retirement_` | `ssh-final` | **85 registered SSH passed** (82 retained + 3 R2) |
+| Same test flags, `--lib retirement_migration_` | `migration-final` | **5 passed**, canonical/history/fault-seven controls retained |
+| Same test flags, `--lib recovery` | `recovery-final` | **60 passed** |
+| Same test flags, `--test recovery_foundation_gate` | `foundation-final` | **52 passed** |
+| Same test flags, `--lib remote::state::persistence_tests` | `persistence-final` | **70 passed** |
+
+Original 76/63 published controls and subsequent 84/82 controls retain their
+assertions/semantics; only the Z receipt fault mechanism changed as disclosed.
+Self-review checked closure-before-DDL ordering/current audit, narrow exact
+resumption/receipt correlation and unchanged normal branch-effect checks, atomic
+terminal-preserving O CAS, stale-owner guards, and no authority from replay.
+No schema definition/digest/dependency/enum/policy change. All **767 tracked Rust
+files** are inventoried at `/tmp/opencode/task2-recovery-specfix-frozen-source.sha256`;
+inventory SHA-256 **`f89e76f2e8b0e65aa1526bd290d3b19eb56af0b4a045d14f85918209061795d8`**.
+Only six owned Rust/test files differ from entry. Cleanup/status and the unchanged
+six remote SSH targets were not redundantly repeated; their earlier counts are
+historical source-specific evidence, not these final gates. Linux-only evidence;
+no native/Windows/casefold-volume/cross-compilation or full-suite claim.
+
+Only affected E/O/D annotations above changed; all 44 obligations remain tracked.
+Still Task 2 owed: shared current accepted F2/exact request-operation mapping,
+remaining replacement/M/D14/index/stale-index-owner and history fault variants,
+source/batch A0–A4/execution-versus-consumption/Z/GC contracts. Actual Task 3
+bindings/CLI/guarded abandon and Task 4 coordination remain downstream, unexpanded.
+Same SPEC reviewer re-review must pass **before QUALITY**; full Task 2 and Task 8
+gates remain owed. This is a local coauthored fix, not implementer approval.
+
+Checkpoint **`01M6P3A3QGEJ0YGZF17RGXXCKT`**, parent
+**`01M6P039AYM6A3TQR2642C42PH`**, actual UTC **`2026-11-05T14:55:25Z`**.
+ID generated with supported `MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data`
+and current CLI (`comment-id.log`, exit 0). No default-profile CLI/read/repair/key
+copy or real context/draft action in this phase; controller's intermediate-v1
+diagnosis above remains authoritative and needs no source exception. No agents,
+push/status/PR/main integration/closure/native CI/other-worktree edits.

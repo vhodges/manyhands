@@ -4,6 +4,18 @@ use std::{fs, path::Path};
 
 pub(crate) const CASES: &[ssh_harness::Case] = &[
     (
+        "retirement_specfix_r2_direct_uninvoked_resumption_to_owned_absence",
+        specfix_r2_direct_m,
+    ),
+    (
+        "retirement_specfix_r2_exact_lineage_receipt_epoch_and_flags_fail_closed",
+        specfix_r2_correlations,
+    ),
+    (
+        "retirement_specfix_r2_exact_d14_replacement_rolls_back",
+        specfix_r2_d14,
+    ),
+    (
         "retirement_reentry_intact_prior_worktree_intent_uses_new_proof_and_preserves_history",
         reentry_intact_intent,
     ),
@@ -607,6 +619,228 @@ fn reentry_resumed_gap_m() -> Result<(), FixtureError> {
     assert_eq!(commands, w.server.commands());
     assert!(RepositoryService::open_at(&w.data()).is_ok());
     w.privacy()
+}
+
+// Actual producer: old crash, new fenced proof/intent, private uninvoked witness.
+// No third resumption is allowed to supply a different lineage for M.
+fn specfix_r2_late_stop(w: &World) -> Result<RetireContextRequest, FixtureError> {
+    add_present(w)?;
+    fixed(w.service.refresh_repository(RefreshRepositoryRequest {
+        root: w.root.clone(),
+        operation_id: OperationId::new(),
+    }))?;
+    assert_eq!(
+        fixed(w.db()?.query_row(
+            "SELECT count(*) FROM contexts WHERE item_id=?1",
+            [ITEM],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        1
+    );
+    history(w, true)?;
+    complete_materialization(w)?;
+    let request = request(w);
+    interrupted_worktree_intent(w, &request, false);
+    let marker = w
+        .repo()?
+        .commondir()
+        .join(format!("worktrees/{ITEM}/manyhands-retirement-instance"));
+    RepositoryService::set_retirement_worktree_hook_for_testing(move || {
+        fs::write(marker, b"foreign-marker").unwrap();
+    });
+    assert_eq!(
+        reentry_call(w, request.clone(), 1)?,
+        ContextRetirementOutcome::CleanupPending {
+            worktree_removal: RetirementRemoval::Possible,
+            branch_removal: RetirementRemoval::None,
+        }
+    );
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    fixed(w.repo()?.find_worktree(ITEM).and_then(|tree| {
+        tree.prune(Some(
+            git2::WorktreePruneOptions::new()
+                .valid(true)
+                .working_tree(true),
+        ))
+    }))?;
+    fixed(
+        w.repo()?
+            .find_reference(CONTEXT)
+            .and_then(|mut r| r.delete()),
+    )?;
+    Ok(request)
+}
+struct SpecfixNoCredentials;
+impl SessionCredentialProvider for SpecfixNoCredentials {
+    fn request_passphrase(&mut self, _: &UnlockRequest) -> PassphraseResponse {
+        panic!("metadata-only M must not request credentials")
+    }
+}
+fn specfix_r2_direct_m() -> Result<(), FixtureError> {
+    let w = setup()?;
+    let request = specfix_r2_late_stop(&w)?;
+    let before = registry_image(&w.db()?);
+    assert_eq!(fixed(w.db()?.query_row("SELECT count(*) FROM context_retirement_effect_intents WHERE (owner_epoch=1 AND observation IS NULL) OR (owner_epoch=2 AND observation='changed')", [], |r| r.get::<_,i64>(0)))?, 2);
+    // M cannot rely on configuration, transport, keys, or a newly minted proof.
+    fixed(fs::write(
+        w.root.join(".manyhands/config.toml"),
+        b"invalid = [",
+    ))?;
+    let resources = resource_image(&w.root);
+    let commands = w.server.commands();
+    let result = w.service.reenter_context_retirement_authenticated(
+        ReenterContextRetirementRequest {
+            retirement: request.clone(),
+            expected_owner_epoch: 2,
+        },
+        None,
+        &mut SessionCredentials::new(SpecfixNoCredentials),
+    );
+    assert!(
+        result.is_ok(),
+        "direct known-uninvoked W history must admit M"
+    );
+    let result = fixed(result)?;
+    assert!(
+        matches!(&result, ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Retired && r.worktree_removal==RetirementRemoval::Possible && r.branch_removal==RetirementRemoval::None && r.materialization_settled)
+    );
+    let after = registry_image(&w.db()?);
+    for table in [
+        "context_retirement_effect_intents",
+        "context_retirement_worktree_resumptions",
+        "retirement_advertisement_provenance",
+        "retirement_observation_receipts",
+        "remote_observation_batches",
+        "remote_ref_observations",
+    ] {
+        assert_eq!(
+            before.get(table),
+            after.get(table),
+            "no new or rewritten evidence: {table}"
+        );
+    }
+    assert_eq!(fixed(w.db()?.query_row("SELECT c.owner_epoch,c.phase,c.worktree_removal,c.branch_removal,c.materialization_settled,o.completed_step FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id", [], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,bool>(4)?,r.get::<_,String>(5)?))))?, (3,"complete".into(),"possible".into(),"none".into(),true,"context_branch_released".into()));
+    assert_eq!(
+        fixed(w.db()?.query_row(
+            "SELECT count(*) FROM contexts WHERE item_id=?1",
+            [ITEM],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert_eq!(fixed(w.db()?.query_row("SELECT o.state,a.phase FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id JOIN context_retirement_attempts a ON a.operation_ulid=c.operation_ulid AND a.owner_epoch=c.owner_epoch", [], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))))?, ("completed".into(),"ended".into()));
+    assert_eq!(
+        fixed(w.db()?.query_row(
+            "SELECT count(*) FROM remote_poll_materializations",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert_eq!(fixed(w.db()?.query_row("SELECT intent_owner_epoch,intent_resource,worktree_removal,branch_removal FROM context_retirement_absence_receipts", [], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?))))?, (1,"worktree".into(),"possible".into(),"none".into()));
+    assert_eq!(commands, w.server.commands());
+    assert!(resources == resource_image(&w.root));
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    // A new same-tip lifetime and exact new intent are not consumed by replay.
+    let tip = fixed(w.db()?.query_row(
+        "SELECT expected_tip FROM context_retirement_records",
+        [],
+        |r| r.get::<_, String>(0),
+    ))?;
+    fixed(
+        w.repo()?
+            .reference(CONTEXT, fixed(tip.parse())?, false, "new lifetime"),
+    )?;
+    add_present(&w)?;
+    let new_intent = complete_materialization(&w)?;
+    let rows = registry_image(&w.db()?);
+    let resources = resource_image(&w.root);
+    assert_eq!(reentry_call(&w, request, 2)?, result);
+    assert_eq!(rows, registry_image(&w.db()?));
+    assert!(resources == resource_image(&w.root));
+    assert_materialization(&w, &new_intent)?;
+    w.privacy()
+}
+// Explicit corruption probes only: restore the exact immutable trigger before
+// calling startup/public recovery. No CHECK bypass or fabricated Git authority.
+fn specfix_r2_correlations() -> Result<(), FixtureError> {
+    for (trigger, sql) in [
+        (None, "DELETE FROM context_retirement_worktree_resumptions"),
+        (
+            Some("retirement_worktree_resumption_immutable"),
+            "UPDATE context_retirement_worktree_resumptions SET intent_receipt_id=(SELECT receipt_id FROM context_retirement_effect_intents WHERE owner_epoch=2)",
+        ),
+        (
+            Some("retirement_absence_receipt_immutable"),
+            "UPDATE context_retirement_absence_receipts SET intent_receipt_id=(SELECT receipt_id FROM context_retirement_effect_intents WHERE owner_epoch=2)",
+        ),
+        (
+            Some("retirement_absence_receipt_immutable"),
+            "UPDATE context_retirement_absence_receipts SET intent_owner_epoch=2,intent_receipt_id=(SELECT receipt_id FROM context_retirement_effect_intents WHERE owner_epoch=2)",
+        ),
+        (
+            Some("retirement_absence_receipt_immutable"),
+            "UPDATE context_retirement_absence_receipts SET worktree_removal='observed'",
+        ),
+    ] {
+        let w = setup()?;
+        let request = specfix_r2_late_stop(&w)?;
+        assert!(matches!(
+            reentry_call(&w, request.clone(), 2)?,
+            ContextRetirementOutcome::Final(_)
+        ));
+        let db = w.db()?;
+        let restore = if let Some(trigger) = trigger {
+            let ddl = fixed(db.query_row(
+                "SELECT sql FROM sqlite_master WHERE name=?1",
+                [trigger],
+                |r| r.get::<_, String>(0),
+            ))?;
+            fixed(db.execute_batch(&format!("DROP TRIGGER {trigger}")))?;
+            Some(ddl)
+        } else {
+            None
+        };
+        fixed(db.execute_batch(sql))?;
+        if let Some(ddl) = restore {
+            fixed(db.execute_batch(&ddl))?;
+        }
+        let rows = registry_image(&db);
+        let resources = resource_image(&w.root);
+        let commands = w.server.commands();
+        assert!(
+            matches!(RepositoryService::open_at(&w.data()), Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+        );
+        assert!(
+            matches!(w.service.reenter_context_retirement_authenticated(ReenterContextRetirementRequest { retirement: request, expected_owner_epoch: 3 }, None, &mut SessionCredentials::new(SpecfixNoCredentials)), Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+        );
+        assert_eq!(rows, registry_image(&db));
+        assert!(resources == resource_image(&w.root));
+        assert_eq!(commands, w.server.commands());
+        w.privacy()?;
+    }
+    Ok(())
+}
+fn specfix_r2_d14() -> Result<(), FixtureError> {
+    for changed_tuple in [false, true] {
+        let w = setup()?;
+        let request = specfix_r2_late_stop(&w)?;
+        if changed_tuple {
+            fixed(w.db()?.execute_batch("DELETE FROM remote_poll_materializations; INSERT INTO remote_poll_materializations SELECT repository_id,kind,item_id,materialization_operation_ulid,'dddddddddddddddddddddddddddddddddddddddd','complete' FROM context_retirement_records;"))?;
+        } else {
+            fixed(w.db()?.execute_batch("CREATE TRIGGER specfix_d14 BEFORE DELETE ON remote_poll_materializations BEGIN SELECT RAISE(IGNORE); END;"))?;
+        }
+        assert!(RepositoryService::open_at(&w.data()).is_ok());
+        let rows = registry_image(&w.db()?);
+        let resources = resource_image(&w.root);
+        let commands = w.server.commands();
+        assert!(reentry_call(&w, request, 2).is_err());
+        assert_eq!(rows, registry_image(&w.db()?));
+        assert!(resources == resource_image(&w.root));
+        assert_eq!(commands, w.server.commands());
+        w.privacy()?;
+    }
+    Ok(())
 }
 fn reentry_bootstrap() -> Result<(), FixtureError> {
     for case in [

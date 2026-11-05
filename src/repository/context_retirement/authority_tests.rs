@@ -130,6 +130,245 @@ impl SessionCredentialProvider for Provider {
     }
 }
 
+fn specfix_r3_observer(stage: &str) -> Fixture {
+    let f = Fixture::new();
+    if stage == "reserved" {
+        return f;
+    }
+    f.service
+        .remote_safe_point(
+            &f.request.root,
+            &f.owner,
+            RemoteOperationSafePoint::BeforeTransport,
+        )
+        .unwrap();
+    if stage == "advertising" {
+        return f;
+    }
+    f.service
+        .remote_safe_point(
+            &f.request.root,
+            &f.owner,
+            RemoteOperationSafePoint::AfterAdvertisement,
+        )
+        .unwrap();
+    f.service
+        .remote_safe_point(
+            &f.request.root,
+            &f.owner,
+            RemoteOperationSafePoint::BeforeBatchCommit,
+        )
+        .unwrap();
+    if stage == "persisting" {
+        return f;
+    }
+    reservation::commit_observation_batch(
+        &f.service,
+        &f.request.root,
+        &f.owner,
+        f.owner.retirement_execution().unwrap().plan(),
+        &[],
+        2,
+    )
+    .unwrap();
+    match stage {
+        "interrupted" => {
+            f.db()
+                .execute("UPDATE remote_operation_records SET yield_requested=1", [])
+                .unwrap();
+            assert_eq!(
+                f.service
+                    .remote_safe_point(
+                        &f.request.root,
+                        &f.owner,
+                        RemoteOperationSafePoint::AfterBatchCommit
+                    )
+                    .unwrap(),
+                RemoteSafePointOutcome::Interrupted
+            );
+        }
+        "interrupted_unavailable" => {
+            // Valid durable stop projection, not a fabricated CHECK-bypassed pair.
+            f.db().execute("UPDATE remote_operation_records SET phase='interrupted',outcome='repository_unavailable'", []).unwrap();
+        }
+        _ => {
+            f.service
+                .finish_remote_operation(
+                    &f.request.root,
+                    &f.owner,
+                    match stage {
+                        "completed" => RemoteOutcomeCategory::Completed,
+                        "cancelled" => RemoteOutcomeCategory::Cancelled,
+                        _ => RemoteOutcomeCategory::TransportUnavailable,
+                    },
+                )
+                .unwrap();
+        }
+    }
+    f
+}
+
+#[test]
+fn retirement_specfix_r3_terminal_history_preserved_while_every_old_owner_is_fenced() {
+    let mut relabeled = Vec::new();
+    for stage in [
+        "reserved",
+        "advertising",
+        "persisting",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted",
+        "interrupted_unavailable",
+    ] {
+        let f = specfix_r3_observer(stage);
+        let db = f.db();
+        assert!(
+            RepositoryService::open_at(f._data.path()).is_ok(),
+            "valid {stage} fixture"
+        );
+        let reenter = || {
+            f.service.reenter_context_retirement_authenticated(
+                ReenterContextRetirementRequest {
+                    retirement: f.request.clone(),
+                    expected_owner_epoch: 1,
+                },
+                None,
+                &mut SessionCredentials::new(Provider),
+            )
+        };
+        // Failure after the O update must undo the epoch, phase, parent and Z.
+        db.execute_batch("CREATE TRIGGER specfix_replacement_rollback BEFORE INSERT ON context_retirement_reentries BEGIN SELECT RAISE(ABORT,'fixture'); END;").unwrap();
+        let before = registry_image(&db);
+        assert!(reenter().is_err());
+        assert_eq!(
+            registry_image(&db),
+            before,
+            "{stage}: atomic replacement rollback"
+        );
+        db.execute_batch("DROP TRIGGER specfix_replacement_rollback")
+            .unwrap();
+        let before = registry_image(&db);
+        let id = db
+            .query_row("SELECT id FROM repositories", [], |r| r.get::<_, i64>(0))
+            .unwrap();
+        let old = state::read_operation(&db, id, f.owner.operation_id())
+            .unwrap()
+            .unwrap();
+        let old_epoch = old.owner_epoch;
+        let old_report = RemoteOperationInspection::from(old);
+        let result = reenter().unwrap();
+        assert!(matches!(result, ContextRetirementOutcome::Final(_)));
+        assert_eq!(
+            db.query_row(
+                "SELECT phase FROM context_retirement_attempts WHERE owner_epoch=1",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "fenced"
+        );
+        let new = state::read_operation(&db, id, f.owner.operation_id())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            new.owner_epoch,
+            old_epoch + 1,
+            "{stage}: fence even terminal O"
+        );
+        let report = RemoteOperationInspection::from(new);
+        let active = matches!(stage, "reserved" | "advertising" | "persisting");
+        if active {
+            assert_eq!(report.phase(), RemoteOperationPhase::Interrupted);
+            assert_eq!(
+                report.outcome(),
+                Some(RemoteOutcomeCategory::RepositoryUnavailable)
+            );
+        } else if report.phase() != old_report.phase() || report.outcome() != old_report.outcome() {
+            relabeled.push(stage);
+        }
+        assert_eq!(report.completed_step(), old_report.completed_step());
+        assert_eq!(report.yield_requested(), old_report.yield_requested());
+        assert_eq!(report.cancel_requested(), old_report.cancel_requested());
+        // Compare every O column, not just its public outcome projection.
+        let columns = db
+            .prepare("SELECT * FROM remote_operation_records")
+            .unwrap()
+            .column_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>();
+        let after = registry_image(&db);
+        for (column, (old, new)) in columns.iter().zip(
+            before["remote_operation_records"][0]
+                .iter()
+                .zip(&after["remote_operation_records"][0]),
+        ) {
+            if column != "owner_epoch"
+                && !matches!((active, column.as_str()), (true, "phase" | "outcome"))
+                && old != new
+            {
+                relabeled.push(stage);
+            }
+        }
+        assert_eq!(
+            before["remote_polling_state"],
+            after["remote_polling_state"]
+        );
+        for point in [
+            RemoteOperationSafePoint::BeforeTransport,
+            RemoteOperationSafePoint::AfterAdvertisement,
+            RemoteOperationSafePoint::BeforeBatchCommit,
+            RemoteOperationSafePoint::AfterBatchCommit,
+        ] {
+            assert!(
+                f.service
+                    .remote_safe_point(&f.request.root, &f.owner, point)
+                    .is_err()
+            );
+        }
+        assert!(
+            f.service
+                .finish_remote_operation(
+                    &f.request.root,
+                    &f.owner,
+                    RemoteOutcomeCategory::Completed
+                )
+                .is_err()
+        );
+        assert!(
+            reservation::commit_observation_batch(
+                &f.service,
+                &f.request.root,
+                &f.owner,
+                f.owner.retirement_execution().unwrap().plan(),
+                &[],
+                3
+            )
+            .is_err()
+        );
+        assert!(
+            refuse_execution(
+                &f.service,
+                &f.request.root,
+                &f.owner,
+                crate::results::ResultCode::ExternalChange
+            )
+            .is_err()
+        );
+        assert_eq!(
+            registry_image(&db),
+            after,
+            "{stage}: stale calls cannot write"
+        );
+        assert!(RepositoryService::open_at(f._data.path()).is_ok());
+    }
+    assert!(
+        relabeled.is_empty(),
+        "terminal observer history changed: {relabeled:?}"
+    );
+}
+
 #[test]
 fn retirement_reentry_audit_rejects_unfenced_observer_and_false_purposes() {
     for case in [

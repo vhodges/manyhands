@@ -172,11 +172,11 @@ impl RepositoryService {
             } else {
                 if possible { "preserve" } else { "no_effect" }
             };
-            // Every replacement write, including exact O termination, old Z,
+            // Every replacement write, including exact O fencing, old Z,
             // new local epoch/attempt/purpose and fresh O, commits or rolls back
             // together under this same common-Git lease and immediate TX.
             if let Some(remote)=old_remote
-                && tx.execute("UPDATE remote_operation_records SET owner_epoch=owner_epoch+1,phase='interrupted',outcome='repository_unavailable' WHERE id=?1 AND owner_epoch=?2 AND poll_kind='observe'",params![remote.id,remote.owner_epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
+                && tx.execute("UPDATE remote_operation_records SET owner_epoch=owner_epoch+1,phase=CASE WHEN phase IN ('reserved','advertising','persisting') THEN 'interrupted' ELSE phase END,outcome=CASE WHEN phase IN ('reserved','advertising','persisting') THEN 'repository_unavailable' ELSE outcome END WHERE id=?1 AND owner_epoch=?2 AND poll_kind='observe' AND phase IN ('reserved','advertising','persisting','completed','failed','cancelled','interrupted')",params![remote.id,remote.owner_epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
             if tx.execute("UPDATE context_retirement_attempts SET phase='fenced' WHERE operation_ulid=?1 AND owner_epoch=?2 AND phase='active'",params![operation,old_epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
             if tx.execute("UPDATE context_retirement_records SET owner_epoch=?3 WHERE operation_ulid=?1 AND owner_epoch=?2 AND final_result IS NULL",params![operation,old_epoch,epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
             tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase) VALUES(?1,?2,?3,'active')",params![operation,epoch,id]).map_err(RepositoryError::sqlite)?;
