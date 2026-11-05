@@ -381,6 +381,10 @@ are not authorized; numeric exits must come from existing results registry.
 | Limited fresh-present final SPEC pass through `66d21ed2`, increment base `7fde7e5f` | Same reviewer `ses_e564dd7a7ffeYzKXesoyVuGJFs`: **0 Blocking/0 Important/0 Minor**. Complete W→B checkout authorization, lock/Unicode identity limits, installed-instance history and truthful partial/no-effect transitions verified | Limited fresh-present SPEC approved; public reentry/replacement and full Task 2 review remain owed |
 | Limited fresh-present final QUALITY pass through `66d21ed2`, same base, after SPEC | Same reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Fresh unchanged original probe and targeted under-ref-lock/history tests confirm valid retirement, conservative Unicode refusal and blocked verification rollback with preserved resources | Limited fresh-present QUALITY approved. Controller inspected raw final static/context logs and independent probe. No casefold-volume, Windows/native or cross-compilation result claimed |
 | Recovery-continuation preflight, 2026-11-05 | Both checkouts clean; fresh fetch succeeded. Main/base remains `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `66d21ed2b20ba4aaeed1c9d293a8e08684755502` already up to date, no conflicts/rebase | No upstream contract drift or unmerged branch consumption |
+| Bounded recovery-core SPEC, `7b153deb..65970f43` | Same reviewer `ses_e564dd7a7ffeYzKXesoyVuGJFs`: High unknown migration dependencies could lose evidence; Medium direct resumed-uninvoked-W → M audit gap; Medium terminal O relabeling. Source/probes verified by controller | Corrections at `0862f6f6`; re-review cleared migration/O findings, retained a Medium intervening-preserve lineage gap, corrected at `fd1549b7` |
+| Bounded recovery-core final SPEC through `fd1549b7`, base `7b153deb` | Same reviewer: **0 remaining findings**. Fresh actual one-preserve SSH journey, prior public-API counterexample, and missing-chain refusal verified; full debt interval and exact receipt correlation inspected | Limited domain-only recovery SPEC approved; request/F2, shared batch/source and full Task 2 review remain owed |
+| Bounded recovery-core final QUALITY through `fd1549b7`, same base, after SPEC | Reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Fresh 3 closure controls, 1 eight-state O matrix, 1 v1 migration history test and 6 registered lineage SSH cases passed; exact source, tests, raw gates and all source hashes inspected | Limited domain-only recovery QUALITY approved; controller inspected fresh review logs and final static evidence. No full Task 2, native or full-suite claim |
+| Pre-next-increment refresh, 2026-11-05 | Both checkouts clean; fresh fetch succeeded, main/base still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `fd1549b751a6c81eb48b6b1cd0fd2c503d8b81ae` already up to date | No conflicts/rebase, new upstream assumptions or unmerged branch consumption |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -403,14 +407,19 @@ are not authorized; numeric exits must come from existing results registry.
   both passed through `2f06ac72` from base `b1a986c2` with no remaining findings,
   including the cleanup-lease correction and preserved S1–S4 protections.
   Fresh-present selection/install/prune → branch/index is now connected in the
-   next bounded increment from `7fde7e5f`. Independent limited SPEC and QUALITY
-   both passed through `66d21ed2` with no remaining findings, including the
-   conservative Unicode guards and forward-only verified-history audit.
-  Latest correction gates: **76** context-retirement tests, **63** registered
-  retirement SSH, all static gates (prior 76/59 unchanged; +4 SSH). Unchanged
-  cleanup **51** / recovery-foundation **52** evidence remains at `892212fe`.
-  Authorized executor replacement/recovery and source/batch scopes remain
-  unfinished/closed; all 44 matrix obligations stay explicitly tracked.
+  next bounded increment from `7fde7e5f`. Independent limited SPEC and QUALITY
+  both passed through `66d21ed2` with no remaining findings, including the
+  conservative Unicode guards and forward-only verified-history audit.
+  Domain-only epoch-checked executor/O replacement, provisional/intact-W recovery,
+  owned-absence M/D14/index settlement and exact published-v1 upgrade are now
+  independently SPEC/QUALITY approved through `fd1549b7` from base `7b153deb`.
+  Latest recorded gates: **88** context-retirement tests, **91** registered
+  retirement SSH cases and all three static gates. Earlier migration **5**,
+  recovery **60**, foundation **52** and persistence **70** results retain their
+  `0862f6f6` source scope; independent focused review reruns are listed above.
+  Current accepted-F2/exact request-operation authority, remaining fault variants
+  and shared source/batch scopes remain owed/closed as recorded; all 44 E/O/D
+  obligations stay explicitly tracked, not completed by test counts.
   Full Task 2 spec/quality review remains owed; no full completion claimed.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
@@ -427,10 +436,11 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: publish the reviewed fresh-present increment only to this
-ticket branch, then continue the same Task 2 implementer into authorized
-replacement/reentry and metadata-only owned-absence recovery. Source/batch work
-and remaining fault matrices remain owed; no such producer is enabled yet.
+Immediate next step: publish the reviewed bounded recovery core only to this
+ticket branch, then continue the same Task 2 implementer into the current
+accepted-F2/exact request-operation authority seam. Request-bound producers must
+remain closed until that seam and its owned-write fences are connected and tested.
+Remaining fault matrices and shared source/batch mechanisms are still owed.
 Prior corrections, design and initial-absence approvals remain intact; no new
 owner-policy decision is required. Full Task 2 and all 44 obligations remain
 tracked/in progress; this is not permission for Task 3/4 or a completion claim.
