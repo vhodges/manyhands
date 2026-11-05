@@ -18,6 +18,8 @@
 //!   buttons being later tasks'. Retry, Resume and Unlock… wait while the
 //!   item's lifecycle is in flight, which the dialog then says (P22).
 //!   Enter retries a failed or stopped run, and closes a done one.
+//! - **Made ready.** Below the outcome lines of a closure that reached
+//!   main, `made_ready.rs`'s part, and its Open ready tickets.
 
 use gpui_kit::{
     AnyElement, App, Context, FontWeight, IntoElement, ParentElement, Styled,
@@ -206,6 +208,7 @@ impl LifecycleDialog {
             body = body.child(text("lifecycle-stop-late", FINISHED_BEFORE_STOP).text_sm());
         }
         body = body.child(Self::step_rows(&steps, &states, cx));
+        let mut open_ready = None;
         if ending != Ending::StillRunning {
             body = body.children(
                 outcome_lines(envelope, &reach, &self.primary())
@@ -213,6 +216,10 @@ impl LifecycleDialog {
                     .enumerate()
                     .map(|(ix, line)| text(("lifecycle-outcome", ix), line).text_sm()),
             );
+            // A closure that reached main: the tickets it made ready (R-20).
+            let (part, button) = self.made_ready_part(envelope, cx);
+            body = body.children(part);
+            open_ready = button;
         }
         if let Some(data) = data {
             body = body.children(data.blockers.iter().enumerate().map(|(ix, blocker)| {
@@ -250,10 +257,9 @@ impl LifecycleDialog {
                         .text_color(muted),
                 );
         }
-        (
-            body.into_any_element(),
-            self.ended_buttons(envelope, &offers, cx),
-        )
+        let mut buttons = self.ended_buttons(envelope, &offers, cx);
+        buttons.extend(open_ready);
+        (body.into_any_element(), buttons)
     }
 
     fn ended_buttons(

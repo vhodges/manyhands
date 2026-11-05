@@ -49,6 +49,10 @@ pub(crate) enum ViewScope {
     /// The draft registry's listing of the store. One scope: a new listing
     /// drops the last.
     Drafts,
+    /// The lifecycle dialog's reads of the titles of the tickets a closure
+    /// made ready (D5 design, A3). Each dialog keeps its own generations,
+    /// so one scope serves them all.
+    MadeReady,
     /// One Drafts page row's reads of its item. A new listing, or Retry,
     /// moves it on, so a late read never lands on a newer row.
     DraftRow(manyhands::drafts::DraftId),

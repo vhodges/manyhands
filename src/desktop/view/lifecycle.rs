@@ -40,6 +40,9 @@
 //!   D4's credential recovery (A3, `lifecycle/running.rs`). Retry sends the
 //!   same request ID again (P7). The operation area's entry of a failed or
 //!   stopped run opens the dialog again on it (`reopen`).
+//! - **Made ready.** A closure that reached main lists the tickets it made
+//!   ready, with their titles, or says none could be worked out and offers
+//!   Open ready tickets (A3, R-20, `lifecycle/made_ready.rs`).
 //!
 //! Escape closes the dialog, and focus goes back to the control that
 //! opened it; a sent run goes on. The dialog holds the item's title for its header and derives
@@ -47,6 +50,7 @@
 
 mod actions;
 mod confirm;
+mod made_ready;
 mod outcome;
 
 pub(crate) use outcome::{item_of, progress_words};
@@ -309,6 +313,8 @@ pub(crate) struct LifecycleDialog {
     reached: Option<outcome::StepKey>,
     /// Stop at a safe point was pressed on the shown run.
     stop_pressed: bool,
+    /// The titles of the tickets the shown run made ready (A3).
+    titles: made_ready::Titles,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -361,8 +367,11 @@ impl LifecycleDialog {
             plan: None,
             reached: None,
             stop_pressed: false,
+            titles: made_ready::Titles::default(),
             _subscriptions: subscriptions,
         };
+        // Opened again on a run that has its answer already.
+        dialog.read_made_ready(cx);
         if dialog.saving.is_none() && following.is_none() {
             dialog.prepare(cx);
         }
@@ -434,6 +443,10 @@ mod credential_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/no_record_tests.rs"]
 mod no_record_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/made_ready_tests.rs"]
+mod made_ready_tests;
 
 #[cfg(test)]
 #[path = "lifecycle/steps_tests.rs"]

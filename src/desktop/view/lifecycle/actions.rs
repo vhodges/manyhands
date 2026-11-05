@@ -122,7 +122,7 @@ impl LifecycleDialog {
         });
     }
 
-    fn in_workspace(
+    pub(super) fn in_workspace(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,

@@ -300,6 +300,7 @@ impl LifecycleDialog {
         };
         // Stages come in order: the latest seen is the furthest.
         self.reached = self.reached.max(stage);
+        self.read_made_ready(cx);
         cx.notify();
         let Some((request, attempt)) = self.confirmed else {
             return;
