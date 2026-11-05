@@ -15,12 +15,18 @@
 //!   way out (A3's Stop and republish…, L1's Republish…) sends that
 //!   lifecycle on once it is answered with success: its request again, or
 //!   a resume of its operation (C5 decision 19), which the run shown then
-//!   is followed by (`resent`). An answer that leaves the republish to be
-//!   sent again under its own request (P17) keeps it waiting; any other
-//!   ends it.
+//!   is followed by (`resent`). It waits until the republish succeeds; an
+//!   answer that offers neither the same request again (`request.retry`,
+//!   P17) nor a new preview under it (`request.prepare`, which the
+//!   operation area's Prepare again confirms) ends it, and so does the
+//!   republish being removed from the queue or not sent, or its own entry
+//!   being dismissed (orchestrator ruling (a)). Dismissing the lifecycle's
+//!   run does not end it: the drain sends the lifecycle on whether or not
+//!   a view shows it (ruling (b)).
 //!
-//! An entry goes once a view has followed it, or once its run is dismissed
-//! (`forget`).
+//! A chain is read, not taken, so every view of it follows it; a cycle is
+//! broken as it is made (a resend that is a run the chain already leads
+//! from), and a dismissed run's link goes (`forget`).
 
 use std::{
     collections::HashMap,
@@ -35,7 +41,7 @@ use manyhands::{
 };
 
 use super::{
-    requests::{DesktopRequestId, Intent, Lane},
+    requests::{DesktopRequestId, Intent, Lane, RequestState},
     worker::WorkerHandle,
 };
 use crate::desktop::model::operations::Operations;
@@ -85,17 +91,20 @@ struct Registry {
 pub(crate) struct Resends(Arc<Mutex<Registry>>);
 
 impl Resends {
-    /// The run that follows `shown`, taken: the last of the chain that
-    /// leads from it (a resume, then the request it named), as far as the
-    /// drain has sent. `None` when nothing follows it.
+    /// The run that follows `shown`: the last of the chain that leads from
+    /// it (a resume, then the request it named), as far as the drain has
+    /// sent. `None` when nothing follows it.
     pub(crate) fn follow(&self, shown: DesktopRequestId) -> Option<DesktopRequestId> {
-        let mut registry = self.lock();
+        let registry = self.lock();
         let mut last = None;
         let mut at = shown;
         for _ in 0..HOPS {
-            let Some(next) = registry.resent.remove(&at) else {
+            let Some(next) = registry.resent.get(&at).copied() else {
                 break;
             };
+            if next == shown {
+                break;
+            }
             last = Some(next);
             at = next;
         }
@@ -117,12 +126,20 @@ impl Resends {
             .any(|after| after.shown() == run)
     }
 
-    /// The request `id` was dismissed: nothing follows it, or from it.
+    /// The request `id` was dismissed: its link in a chain goes, and so
+    /// does what waits on it as a republish. What waits on it as the run a
+    /// republish sends on stays (ruling (b)).
     pub(crate) fn forget(&self, id: DesktopRequestId) {
         let mut registry = self.lock();
         registry.resent.remove(&id);
+        registry.resent.retain(|_, next| *next != id);
         registry.republishes.remove(&id);
-        registry.republishes.retain(|_, after| after.shown() != id);
+    }
+
+    /// The request `id` was removed from the queue, or not sent: a
+    /// republish of it will not be done.
+    pub(in crate::desktop::services) fn not_run(&self, id: DesktopRequestId) {
+        self.lock().republishes.remove(&id);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Registry> {
@@ -152,16 +169,23 @@ impl Resends {
                 let Some(sent) = resend(root, *operation_id, envelope, operations, worker) else {
                     return;
                 };
-                self.lock().resent.insert(id, sent);
+                let mut registry = self.lock();
+                // The run sent again is one the chain leads from: it no
+                // longer leads on (review 3).
+                registry.resent.remove(&sent);
+                registry.resent.insert(id, sent);
             }
             Intent::ItemRepublish { .. } => {
                 let done = matches!(envelope.outcome, Outcome::Success | Outcome::Noop);
-                // A stop the same request goes on from keeps it waiting
-                // (P17); any other answer ends it.
-                let again = envelope
-                    .recovery
-                    .iter()
-                    .any(|action| action.action == RecoveryActionKind::RequestRetry);
+                // A stop the same request goes on from (P17), or a preview
+                // to confirm again under it, keeps it waiting; any other
+                // answer ends it (ruling (a)).
+                let again = envelope.recovery.iter().any(|action| {
+                    matches!(
+                        action.action,
+                        RecoveryActionKind::RequestRetry | RecoveryActionKind::RequestPrepare
+                    )
+                });
                 let mut registry = self.lock();
                 if !done {
                     if !again {
@@ -198,10 +222,10 @@ impl Resends {
 
 /// The close or merge of the lifecycle `operation_id` of `root`, sent again
 /// under the request `envelope` names: this session's request of it when
-/// it holds one (left running when it runs, or when it cannot be queued
-/// again), else a new desktop request.
-/// `None` when the answer names no request, or the rows name no item for
-/// the operation.
+/// it holds one (left running when it runs), else a new desktop request.
+/// `None` when the answer names no request, the rows name no item for the
+/// operation, or this session's request cannot be queued again: the
+/// resume's own answer is then what shows.
 fn resend(
     root: &std::path::Path,
     operation_id: OperationId,
@@ -233,12 +257,15 @@ fn resend(
     });
     // Never a second desktop request under the same request ID (review M1).
     if let Some(held) = held {
-        worker.retry(held.id, None);
-        return Some(held.id);
+        let running = matches!(
+            held.state,
+            RequestState::Queued | RequestState::Running { .. }
+        );
+        return (running || worker.retry(held.id, None)).then_some(held.id);
     }
     Some(worker.submit_with_request_id(intent, Lane::User, named))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "resends_tests.rs"]
 mod tests;

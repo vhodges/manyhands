@@ -439,6 +439,10 @@ impl Services {
                             matches!(request.intent, requests::Intent::ContextPrepare { .. })
                                 .then(|| (request.id, ContextKey::of(&request.intent)))
                         });
+                        // A republish that never ran will not be done.
+                        if let WorkerEvent::Removed(id) | WorkerEvent::NotSent(id, _) = &event {
+                            resent.not_run(*id);
+                        }
                         let mut made_here = false;
                         if let WorkerEvent::Finished(id, envelope) = &event {
                             resent.ended(*id, envelope, operations, &resending);
@@ -587,6 +591,19 @@ impl Services {
             .in_flight(|intent| lifecycle_of(intent, &key, &held));
         let loading = matches!(operations.pending().get(root), Some(ListState::Loading));
         operations.locks().state(&key, in_flight, loading)
+    }
+
+    /// Whether a republish of the item `id` of `root` is queued or running
+    /// (D5 Part C; review I-2, R-30): Republish… waits meanwhile.
+    pub(crate) fn republishing(
+        &self,
+        root: &std::path::Path,
+        id: &manyhands::canonical::ItemId,
+    ) -> bool {
+        self.worker.in_flight(|intent| {
+            matches!(intent, requests::Intent::ItemRepublish { root: asked, id: asked_id, .. }
+                if asked == root && asked_id == id)
+        })
     }
 
     /// The drafts this session knows of.

@@ -409,7 +409,7 @@ impl Workspace {
                     if let Some(words) = share_words(self.services(), id, &result, cx) {
                         entry = entry.child(text(request_id(id, "outcome"), words).text_sm());
                     }
-                    for offer in result.offers() {
+                    for offer in outcomes::shown_offers(self.services(), id, &result, cx) {
                         controls = controls.child(self.share_offer(id, offer, cx));
                     }
                 } else {

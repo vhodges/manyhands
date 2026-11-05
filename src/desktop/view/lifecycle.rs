@@ -357,8 +357,9 @@ pub(crate) struct LifecycleDialog {
     titles: made_ready::Titles,
     /// Repair locally… since the dialog last moved on (B6).
     repair: repair::Repair,
-    /// Stop and republish… could not give the shown run up (A3).
-    stop_refused: bool,
+    /// Stop and republish… could not give the shown run up (A3): the
+    /// attempt of it shown then. Another attempt clears it.
+    stop_refused: Option<u32>,
     /// The dialog's own focus: a dialog opened over it, Republish…, gives
     /// focus back here (review M5).
     focus: FocusHandle,
@@ -421,7 +422,7 @@ impl LifecycleDialog {
             stop_pressed: false,
             titles: made_ready::Titles::default(),
             repair: repair::Repair::repaired(repaired),
-            stop_refused: false,
+            stop_refused: None,
             focus: cx.focus_handle(),
             _subscriptions: subscriptions,
         };

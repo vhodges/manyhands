@@ -426,14 +426,15 @@ async fn a_stopped_republish_sends_the_same_request(cx: &mut TestAppContext) {
     shell.until_ended(id, cx).await;
 }
 
-/// R-30 (orchestrator), review M8, canned: an item's share whose record is
-/// accepted (a share over SSH in the test binary is accepted, then fails its
-/// transport, which is never initialized) and whose answer is canned as its
-/// deleted branch (`tests/mutation_remote.rs` `a_remotely_deleted_item_
-/// branch_is_remote_branch_deleted_and_holds_its_reservation`) offers Stop
-/// and republish… beside Give up. Pressed, it gives the share up; the Give
-/// up's answer canned `cancelled` (`c4_republish_busy`: the republish waits
-/// for the share's reservation, which a cancellation lets go), Republish…
+/// R-30 (orchestrator), review M8: a real share of the item, run against
+/// an SSH remote whose transport the test binary never initializes, so no
+/// host is contacted: the library accepts it, and its record stays
+/// accepted. Its answer is canned as its deleted branch
+/// (`tests/mutation_remote.rs` `a_remotely_deleted_item_branch_is_remote_
+/// branch_deleted_and_holds_its_reservation`). It offers Stop and
+/// republish… beside Give up. Pressed, it gives the share up; the Give up's
+/// answer canned `cancelled` (`c4_republish_busy`: the republish waits for
+/// the share's reservation, which a cancellation lets go), Republish…
 /// opens.
 #[gpui_kit::test]
 async fn an_item_shares_stop_and_republish_opens_republish(cx: &mut TestAppContext) {

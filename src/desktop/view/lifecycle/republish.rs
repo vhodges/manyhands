@@ -19,7 +19,7 @@
 //! Republish… opens over the dialog, and gives focus back to it. The
 //! workspace runs both (`view/operations/republish.rs`).
 
-use gpui_kit::{AnyElement, Context, IntoElement, Styled, Window, component::Root};
+use gpui_kit::{AnyElement, App, Context, IntoElement, Styled, Window, component::Root};
 use manyhands::{
     repository::{LifecycleWayOut, MutationDataDto, OperationId},
     results::{Envelope, ResultCode},
@@ -27,13 +27,9 @@ use manyhands::{
 
 use super::{LifecycleDialog, Phase, button, text};
 use crate::desktop::{
-    services::{
-        requests::{DesktopRequestId, Intent},
-        resends::AfterRepublish,
-        worker::GaveUp,
-    },
+    services::{requests::DesktopRequestId, resends::AfterRepublish, worker::GaveUp},
     view::{
-        operations::republish::{REPUBLISH, Republishing, STOP_AND_REPUBLISH},
+        operations::republish::{REPUBLISH, REPUBLISHING, Republishing, STOP_AND_REPUBLISH},
         workspace::Workspace,
     },
 };
@@ -43,6 +39,10 @@ pub(crate) const STOPPED_READY: &str = "Stopped; ready to republish.";
 /// Stop and republish… could not give the run up: it is queued or running,
 /// or this session does not hold it.
 pub(crate) const NOT_STOPPED: &str = "This run could not be stopped now.";
+/// Stopped, and the republish confirmed after it stopped in turn: its own
+/// entry sends it again.
+pub(crate) const REPUBLISH_STOPPED: &str =
+    "The republish stopped; retry it from its entry in Activity.";
 
 impl LifecycleDialog {
     /// Whether the run `id`, answered `envelope`, is a Give up of an
@@ -56,40 +56,53 @@ impl LifecycleDialog {
             && self.services.worker().gave_up(id) == Some(GaveUp::Resent)
     }
 
-    /// "Stopped; ready to republish", once Stop and republish… stopped the
-    /// run `id`.
+    /// Where Stop and republish… of the run `id` stands, in words: it could
+    /// not give this attempt up; or it stopped it, and Republish… is next,
+    /// runs, or stopped in turn.
     pub(super) fn republish_line(
         &self,
         id: DesktopRequestId,
         envelope: &Envelope<MutationDataDto>,
+        cx: &App,
     ) -> Option<AnyElement> {
-        if self.stop_refused {
+        let attempt = self
+            .services
+            .operations()
+            .read(cx)
+            .request(id)
+            .map(|request| request.attempt);
+        if self.stop_refused.is_some() && self.stop_refused == attempt {
             return Some(
                 text("lifecycle-stop-refused", NOT_STOPPED)
                     .text_sm()
                     .into_any_element(),
             );
         }
-        self.stopped_to_republish(id, envelope).then(|| {
-            text("lifecycle-stopped-ready", STOPPED_READY)
-                .text_sm()
-                .into_any_element()
-        })
+        if !self.stopped_to_republish(id, envelope) {
+            return None;
+        }
+        let (part, words) = if self.republish_in_flight() {
+            ("lifecycle-republishing", REPUBLISHING)
+        } else if self.services.resends().pending_for(id) {
+            ("lifecycle-republish-stopped", REPUBLISH_STOPPED)
+        } else {
+            ("lifecycle-stopped-ready", STOPPED_READY)
+        };
+        Some(text(part, words).text_sm().into_any_element())
+    }
+
+    /// Whether a republish of the item is queued or running.
+    fn republish_in_flight(&self) -> bool {
+        let (Some(root), Some(item)) = (self.root(), self.item_id()) else {
+            return false;
+        };
+        self.services.republishing(root, item)
     }
 
     /// Whether a republish of the item is queued or running, or one
     /// confirmed from the way out of `run` waits to be done.
     fn republishing_now(&self, run: DesktopRequestId) -> bool {
-        if self.services.resends().pending_for(run) {
-            return true;
-        }
-        let (Some(root), Some(item)) = (self.root(), self.item_id()) else {
-            return false;
-        };
-        self.services.worker().in_flight(|intent| {
-            matches!(intent, Intent::ItemRepublish { root: asked, id, .. }
-                if asked.as_path() == root && id == item)
-        })
+        self.services.resends().pending_for(run) || self.republish_in_flight()
     }
 
     /// Stop and republish… or Republish…, where the way out of the run
@@ -202,8 +215,13 @@ impl LifecycleDialog {
         if queued {
             self.following_anew();
         } else {
-            // A3: the sequence stops, and says so.
-            self.stop_refused = true;
+            // A3: the sequence stops, and says so, for this attempt.
+            self.stop_refused = self
+                .services
+                .operations()
+                .read(cx)
+                .request(shown)
+                .map(|request| request.attempt);
         }
         cx.notify();
     }

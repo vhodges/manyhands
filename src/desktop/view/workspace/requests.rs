@@ -440,8 +440,6 @@ impl Workspace {
         id: DesktopRequestId,
         cx: &mut Context<Self>,
     ) {
-        // Nothing follows a dismissed run any more (review M4).
-        self.services.resends().forget(id);
         let dismissed = self.services.operations().update(cx, |operations, cx| {
             operations.dismiss(id);
             cx.notify();
@@ -449,6 +447,11 @@ impl Workspace {
                 .request(id)
                 .is_some_and(|request| matches!(request.state, RequestState::Dismissed))
         });
+        // A dismissed run's follow-ups go (review M4), but for one a
+        // republish sends on (ruling (b)).
+        if dismissed {
+            self.services.resends().forget(id);
+        }
         // A pending save dismissed is over (ruling R22).
         if dismissed {
             self.services

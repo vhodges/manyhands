@@ -33,7 +33,7 @@ use crate::desktop::{
     },
 };
 
-const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5KQ0";
+pub(in crate::desktop::view::operations) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5KQ0";
 
 /// Prepares and executes a close of the ticket through `service`, under
 /// `request_id`: another process's close.
@@ -70,7 +70,9 @@ fn close_through(
 /// A ticket of its own working copy in repository `a`, whose close another
 /// process stranded at `closing` before the window opened: the shell, the
 /// root and the stranded request.
-pub(super) fn stranded(cx: &mut TestAppContext) -> (Shell, PathBuf, RequestId) {
+pub(in crate::desktop::view::operations) fn stranded(
+    cx: &mut TestAppContext,
+) -> (Shell, PathBuf, RequestId) {
     cx.executor().allow_parking();
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
@@ -91,7 +93,10 @@ pub(super) fn stranded(cx: &mut TestAppContext) -> (Shell, PathBuf, RequestId) {
 }
 
 /// The close's pending row, once listed.
-async fn close_row(shell: &Shell, cx: &mut TestAppContext) -> usize {
+pub(in crate::desktop::view::operations) async fn close_row(
+    shell: &Shell,
+    cx: &mut TestAppContext,
+) -> usize {
     let close = OperationAction::Close.as_str().to_owned();
     let wanted = close.clone();
     shell
@@ -122,6 +127,31 @@ async fn until_lock(shell: &Shell, root: &Path, expected: LockState, cx: &mut Te
             lock(shell, &root, cx) == expected
         })
         .await;
+}
+
+/// Draws frames until `done` holds, for up to a minute: for answers whose
+/// retries outlast the harness's own wait under the whole suite.
+async fn until_long(
+    shell: &Shell,
+    what: &str,
+    cx: &mut TestAppContext,
+    done: impl Fn(&Shell, &mut TestAppContext) -> bool,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        shell.frame(cx, |_, _| ());
+        shell.run(cx);
+        if done(shell, cx) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{what} did not happen"
+        );
+        cx.executor()
+            .timer(std::time::Duration::from_millis(10))
+            .await;
+    }
 }
 
 fn resumes(shell: &Shell, cx: &mut TestAppContext) -> Vec<DesktopRequestId> {
@@ -296,7 +326,14 @@ async fn resume_is_not_offered_while_in_flight_and_busy_reads_still_running(
     }
     shell.click(("pending-resume", row), cx);
     let resume = resumes(&shell, cx)[0];
-    shell.until_ended(resume, cx).await;
+    until_long(&shell, "the resume's busy answer", cx, |shell, cx| {
+        shell.operations(cx).read_with(cx, |operations, _| {
+            operations
+                .request(resume)
+                .is_some_and(|request| matches!(request.state, RequestState::Finished(..)))
+        })
+    })
+    .await;
     shell
         .until_drawn(cx, "the dialog says it", |shell, cx| {
             shell.present("lifecycle-still-running", cx)
@@ -373,14 +410,17 @@ async fn a_resent_close_answered_busy_reads_still_running(cx: &mut TestAppContex
             .release();
     }
     shell.click(("pending-resume", row), cx);
-    shell
-        .until(cx, |operations| {
+    // Each busy answer still runs the real call, then waits out its delay:
+    // longer than the harness's wait under the whole suite.
+    until_long(&shell, "the close's busy answer", cx, |shell, cx| {
+        shell.operations(cx).read_with(cx, |operations, _| {
             operations.requests().iter().any(|request| {
                 matches!(request.intent, Intent::TicketClose { .. })
                     && matches!(request.state, RequestState::Finished(..))
             })
         })
-        .await;
+    })
+    .await;
     let close = closes(&shell, cx)[0];
     shell
         .until_drawn(cx, "the dialog follows the close", |shell, cx| {

@@ -170,4 +170,4 @@ impl Workspace {
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "resume_tests.rs"]
-mod tests;
+pub(in crate::desktop::view::operations) mod tests;

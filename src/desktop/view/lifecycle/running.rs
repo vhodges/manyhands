@@ -235,7 +235,7 @@ impl LifecycleDialog {
         if offers.no_record {
             body = body.child(text("lifecycle-no-record", NO_RECORD).text_sm());
         }
-        body = body.children(self.republish_line(id, envelope));
+        body = body.children(self.republish_line(id, envelope, cx));
         let item = self.item_word();
         body = body.children(
             way_out

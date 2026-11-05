@@ -120,7 +120,17 @@ async fn stop_and_republish_cancels_republishes_then_resends(cx: &mut TestAppCon
         .backend
         .hold_job_return_answering(JobKind::ItemRepublish, republished())
         .release();
+    let running = shell.backend.hold_job(JobKind::ItemRepublish);
     shell.click("confirm-ok", cx);
+    running.wait_reached();
+    // The re-review's UX: the stopped run now points at the republish.
+    shell
+        .until_drawn(cx, "Republishing…", |shell, cx| {
+            shell.present("lifecycle-republishing", cx)
+        })
+        .await;
+    assert!(!shell.present("lifecycle-stopped-ready", cx));
+    running.release();
     let republish = requests_of(&shell, cx, is_republish);
     assert_eq!(republish.len(), 1);
     // Review M5: once the confirmation closes, the lifecycle dialog has
@@ -227,7 +237,7 @@ async fn stop_and_republish_stops_unless_give_up_resent_and_cancelled(cx: &mut T
 /// A close answered `remote_branch_deleted` under a resume, put in the
 /// request model and opened from its entry's Open…: its way out offers
 /// `resume` (`recovery`), with `operation` as the answer's own.
-async fn under_a_resume(
+pub(super) async fn under_a_resume(
     shell: &Shell,
     root: &Path,
     recovery: RecoveryAction,
@@ -255,11 +265,11 @@ async fn under_a_resume(
     id
 }
 
-fn resume_of_operation() -> RecoveryAction {
+pub(super) fn resume_of_operation() -> RecoveryAction {
     RecoveryAction::for_operation(RecoveryActionKind::OperationResume, OPERATION, [])
 }
 
-fn resumes(shell: &Shell, cx: &mut TestAppContext) -> Vec<DesktopRequestId> {
+pub(super) fn resumes(shell: &Shell, cx: &mut TestAppContext) -> Vec<DesktopRequestId> {
     let operation = OperationId::parse(OPERATION).unwrap();
     requests_of(shell, cx, move |intent| {
         matches!(intent, Intent::OperationResume { operation_id, .. } if *operation_id == operation)
@@ -270,7 +280,7 @@ fn resumes(shell: &Shell, cx: &mut TestAppContext) -> Vec<DesktopRequestId> {
 }
 
 /// The run the open lifecycle dialog shows.
-fn shown(cx: &mut TestAppContext) -> Option<DesktopRequestId> {
+pub(super) fn shown(cx: &mut TestAppContext) -> Option<DesktopRequestId> {
     cx.update(|cx| {
         cx.try_global::<OpenedLifecycle>()
             .and_then(|opened| opened.0.upgrade())

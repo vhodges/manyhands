@@ -36,6 +36,8 @@ use crate::desktop::{
 
 pub(crate) const REPUBLISH: &str = "Republish\u{2026}";
 pub(crate) const STOP_AND_REPUBLISH: &str = "Stop and republish\u{2026}";
+/// A share's deleted branch whose republish is queued or running.
+pub(crate) const REPUBLISHING: &str = "Republishing\u{2026}";
 
 /// The item to republish, and how its lifecycle goes on once it is done:
 /// `None` for a share's, which nothing follows.
@@ -190,3 +192,7 @@ mod tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "republish_stop_tests.rs"]
 mod stop_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "republish_follow_tests.rs"]
+mod follow_tests;

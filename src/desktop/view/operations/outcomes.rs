@@ -28,7 +28,7 @@ use gpui_kit::{AnyElement, App, ClickEvent, Context, Window};
 
 use super::{
     button,
-    republish::{REPUBLISH, Republishing, STOP_AND_REPUBLISH},
+    republish::{REPUBLISH, REPUBLISHING, Republishing, STOP_AND_REPUBLISH},
     request_id,
 };
 use crate::desktop::{
@@ -129,14 +129,52 @@ pub(crate) fn busy_holder(
         .busy_holder(id, |holder| worker.record_state(holder))
 }
 
+/// Whether the share `id` is of an item a republish of which is queued or
+/// running (R-30; review 4).
+fn republishing(services: &Services, id: DesktopRequestId, cx: &App) -> bool {
+    match services
+        .operations()
+        .read(cx)
+        .request(id)
+        .map(|request| &request.intent)
+    {
+        Some(Intent::ItemSync { root, id, .. }) => services.republishing(root, id),
+        _ => false,
+    }
+}
+
+/// The offers the finished share `id`, of outcome `result`, shows: its
+/// own, but for Republish… and Stop and republish… while a republish of
+/// its item is queued or running (R-30; review 4).
+pub(crate) fn shown_offers(
+    services: &Services,
+    id: DesktopRequestId,
+    result: &SyncResult,
+    cx: &App,
+) -> Vec<SyncOffer> {
+    let republishing = republishing(services, id, cx);
+    result
+        .offers()
+        .into_iter()
+        .filter(|offer| {
+            !(republishing && matches!(offer, SyncOffer::Republish | SyncOffer::StopAndRepublish))
+        })
+        .collect()
+}
+
 /// What the finished share `id`, of outcome `result`, says; `None` for a
-/// failure, whose message and code the entry shows.
+/// failure, whose message and code the entry shows. A deleted branch
+/// whose republish is queued or running says so, on the entry and the
+/// item's pill.
 pub(crate) fn share_words(
     services: &Services,
     id: DesktopRequestId,
     result: &SyncResult,
     cx: &App,
 ) -> Option<String> {
+    if result.outcome == SyncOutcome::BranchDeleted && republishing(services, id, cx) {
+        return Some(REPUBLISHING.to_owned());
+    }
     let holder = matches!(result.outcome, SyncOutcome::Busy)
         .then(|| busy_holder(services, id, cx))
         .flatten()
@@ -246,7 +284,7 @@ impl Workspace {
         let Some(result) = self.finished_share(id, cx) else {
             return;
         };
-        if !result.offers().contains(&offer) {
+        if !shown_offers(self.services(), id, &result, cx).contains(&offer) {
             return;
         }
         let worker = self.services().worker().clone();
