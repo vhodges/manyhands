@@ -869,6 +869,11 @@ Applied in the approval commit:
   folder hold; a Retry that re-keeps the identical set in between does
   nothing and the set is removed. The Retry's request still runs with its
   input (Task 11a review).
+- **K-23.** P10 (incompatible closures) is tested as a remote case only: no
+  local closure-disagreement fixture or canned-inspection seam exists. A
+  local `immutable_closure_disagreement` answers `next_action: None`
+  (`R/local_sync/request.rs:237`), so Check again never leads to Resume;
+  the guidance says to decide the closure outside Manyhands (Task 12 review).
 
 ## Alternatives Rejected
 
