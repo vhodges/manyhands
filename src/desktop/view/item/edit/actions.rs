@@ -57,11 +57,15 @@ impl ItemPane {
             .label(label)
             .small()
             .icon(Icon::default().path(icon_path("pencil")))
-            .disabled(!self.edit_available(cx))
+            .disabled(!self.edit_available(cx) || self.edits_wait(cx))
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.edit_requested(window, cx);
             }));
-        vec![button.into_any_element()]
+        vec![self.locked_note(
+            super::super::lock::LOCKED_NOTE,
+            button.into_any_element(),
+            cx,
+        )]
     }
 
     /// The header's Done while editing: the focus Escape in the editor

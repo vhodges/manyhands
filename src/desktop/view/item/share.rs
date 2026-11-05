@@ -335,6 +335,7 @@ impl ItemPane {
             PublicationRemote::Named(name) => Some(name),
         };
         let sharing = self.sharing();
+        let locked = self.edits_wait(cx);
         let label = match (remote, sharing) {
             (_, true) => SHARING,
             (Some(_), false) => SHARE,
@@ -344,10 +345,18 @@ impl ItemPane {
             .label(label)
             .small()
             .icon(Icon::default().path(icon_path("cloud-upload")))
-            .disabled(sharing)
+            .disabled(sharing || locked)
             .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
                 pane.share_item(window, cx);
             }));
+        // While the item's close or merge is unfinished, Share waits (R-23).
+        if self.locked_words(cx).is_some() {
+            return Some(self.locked_note(
+                super::lock::SHARE_LOCKED,
+                button.into_any_element(),
+                cx,
+            ));
+        }
         let Some(remote) = remote else {
             return Some(button.into_any_element());
         };
@@ -372,7 +381,7 @@ impl ItemPane {
         let Some(intent) = self.share_target() else {
             return false;
         };
-        if self.model.item().rows().is_none() {
+        if self.model.item().rows().is_none() || self.edits_wait(cx) {
             return false;
         }
         match self.publication_remote() {

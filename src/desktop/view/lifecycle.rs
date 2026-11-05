@@ -53,7 +53,7 @@ mod confirm;
 mod made_ready;
 mod outcome;
 
-pub(crate) use outcome::{item_of, progress_words};
+pub(crate) use outcome::{cleanup_reason, item_of, progress_words};
 mod prepare;
 mod running;
 mod view;
@@ -74,7 +74,7 @@ use manyhands::{
 
 use self::view::{button, text};
 use crate::desktop::{
-    model::stamp::Generations,
+    model::{lifecycle_lock::LockKey, stamp::Generations},
     services::{
         Services,
         requests::{DesktopRequestId, Intent},
@@ -370,6 +370,19 @@ impl LifecycleDialog {
             titles: made_ready::Titles::default(),
             _subscriptions: subscriptions,
         };
+        // The dialog locks its item until it is dropped, in every phase
+        // before its run is sent (A2, R-21).
+        let entity = cx.entity_id();
+        let operations = dialog.services.operations().downgrade();
+        cx.on_release(move |_, cx| {
+            let _ = operations.update(cx, |operations, cx| {
+                if operations.locks_mut().release_dialog(entity) {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+        dialog.sync_lock(cx);
         // Opened again on a run that has its answer already.
         dialog.read_made_ready(cx);
         if dialog.saving.is_none() && following.is_none() {
@@ -381,6 +394,27 @@ impl LifecycleDialog {
     /// The command's repository.
     fn root(&self) -> Option<&Path> {
         self.intent.root()
+    }
+
+    /// Moves the dialog to `phase`, and tells the lock whether it holds
+    /// the item now: in every phase before its run is sent (R-21).
+    fn set_phase(&mut self, phase: Phase, cx: &mut Context<Self>) {
+        self.phase = phase;
+        self.sync_lock(cx);
+    }
+
+    fn sync_lock(&mut self, cx: &mut Context<Self>) {
+        let (Some(root), Some(id)) = (self.root().and_then(Path::to_str), self.item_id()) else {
+            return;
+        };
+        let key = LockKey::new(root, &id.to_string());
+        let holds = !matches!(self.phase, Phase::Submitted(_));
+        let entity = cx.entity_id();
+        self.services.operations().update(cx, |operations, cx| {
+            if operations.locks_mut().set_dialog(entity, key, holds) {
+                cx.notify();
+            }
+        });
     }
 
     fn close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -455,3 +489,15 @@ mod made_ready_review_tests;
 #[cfg(test)]
 #[path = "lifecycle/steps_tests.rs"]
 mod steps_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/lock_tests.rs"]
+mod lock_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/lock_restart_tests.rs"]
+mod lock_restart_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/after_tests.rs"]
+mod after_tests;

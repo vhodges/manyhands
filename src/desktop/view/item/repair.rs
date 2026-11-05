@@ -208,6 +208,11 @@ impl ItemPane {
 
     /// Repair…: the view opens on the file exactly as this tab read it.
     fn open_repair(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // While the item's close or merge is unfinished, Repair… waits
+        // (R-23).
+        if self.edits_wait(cx) {
+            return;
+        }
         let Some(source) = self
             .model
             .item()

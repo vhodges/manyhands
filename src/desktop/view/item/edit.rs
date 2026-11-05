@@ -380,7 +380,7 @@ impl ItemPane {
     pub(super) fn edit_requested(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         // A dialog in front of the tab takes every key (controller ruling,
         // 2026-10-27).
-        if window.has_active_dialog(cx) || !self.edit_available(cx) {
+        if window.has_active_dialog(cx) || !self.edit_available(cx) || self.edits_wait(cx) {
             return false;
         }
         // R-58: a kept session shows its editor again; nothing is prepared.
@@ -424,6 +424,26 @@ impl ItemPane {
                 Some(item) => edit_offered(self.model.target(), item),
                 None => self.continued_not_created(cx),
             }
+    }
+
+    /// A run of the item, or its record, locks the tab (D5 A2, R-23): a
+    /// session shown ends if clean, its context left as it is, and is kept
+    /// if it holds unsaved text. Nothing happens while a save, a claim, a
+    /// prepare or the review runs; the next change of the lock tries again.
+    pub(super) fn lock_session(&mut self, cx: &mut Context<Self>) {
+        if self.edit.phase != Phase::Editing
+            || self.shown_session().is_none()
+            || self.lifecycle_busy(cx)
+            || self.save_in_flight(cx)
+            || self.edit.save.run.is_some()
+        {
+            return;
+        }
+        if self.edit_dirty(cx) {
+            self.keep_session(cx);
+        } else {
+            self.end_session(None, cx);
+        }
     }
 
     /// The edit session while its editor is shown, not kept.

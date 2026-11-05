@@ -123,6 +123,10 @@ pub(crate) struct Workspace {
     /// A session's recovery state shows in the operation area.
     _drafts: Subscription,
     _focus_lost: Subscription,
+    /// The window taking focus reads every listed repository's pending
+    /// operations again: the lifecycle lock follows what another process
+    /// did meanwhile (D5 A2, P26).
+    _activation: Subscription,
     _ticket_events: Subscription,
     repositories_pane: RepositoriesPane,
     _repository_events: Subscription,
@@ -147,6 +151,11 @@ impl Workspace {
         });
         let drafts = cx.observe(services.drafts(), |_, _, cx| cx.notify());
         let focus_lost = cx.on_focus_lost(window, |this, window, cx| this.focus_lost(window, cx));
+        let activation = cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.reload_pending(cx);
+            }
+        });
         let workspace = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             workspace
@@ -257,6 +266,7 @@ impl Workspace {
             _operations: operations,
             _drafts: drafts,
             _focus_lost: focus_lost,
+            _activation: activation,
             _ticket_events: ticket_events,
             repositories_pane,
             _repository_events: repository_events,

@@ -31,7 +31,11 @@ use manyhands::{
     results::{Envelope, Outcome, PublicationEffect, ResultCode},
 };
 
-use crate::desktop::model::operations::Operations;
+use crate::desktop::model::{
+    lifecycle_lock::{LockKey, LockState},
+    list_state::ListState,
+    operations::Operations,
+};
 use created_contexts::{ContextKey, CreatedContexts};
 use drafts::DraftRegistry;
 use edit_tabs::EditTabs;
@@ -483,6 +487,20 @@ impl Services {
         &self.operations
     }
 
+    /// Where the item `id` of the repository at `root` stands under the
+    /// lifecycle lock (D5 A2; R-21 to R-23): an open lifecycle dialog of
+    /// it, its lifecycle in the worker, or its L2 row.
+    pub(crate) fn lifecycle_lock(&self, root: &str, id: &str, cx: &App) -> LockState {
+        let operations = self.operations.read(cx);
+        let key = LockKey::new(root, id);
+        let held = operations.locks().operations(&key);
+        let in_flight = self
+            .worker
+            .in_flight(|intent| lifecycle_of(intent, &key, &held));
+        let loading = matches!(operations.pending().get(root), Some(ListState::Loading));
+        operations.locks().state(&key, in_flight, loading)
+    }
+
     /// The drafts this session knows of.
     pub(crate) fn drafts(&self) -> &Entity<DraftRegistry> {
         &self.drafts
@@ -513,6 +531,26 @@ impl Services {
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn backend(&self) -> &Arc<dyn Backend> {
         &self.backend
+    }
+}
+
+/// Whether `intent` is the lifecycle of `key`: its close or merge, or a
+/// resume of one of `operations`, its lifecycle operations.
+pub(crate) fn lifecycle_of(
+    intent: &requests::Intent,
+    key: &LockKey,
+    operations: &[String],
+) -> bool {
+    use requests::Intent;
+    let same_root = |root: &std::path::Path| root.to_str() == Some(key.root.as_str());
+    match intent {
+        Intent::TicketClose { root, id } | Intent::DocumentPromote { root, id } => {
+            same_root(root) && id.to_string() == key.id
+        }
+        Intent::OperationResume { root, operation_id } => {
+            same_root(root) && operations.contains(&operation_id.to_string())
+        }
+        _ => false,
     }
 }
 

@@ -50,6 +50,13 @@ impl Workspace {
             .map(|rows| rows.iter().map(|entry| entry.key().clone()).collect())
     }
 
+    /// Reads every listed repository's pending operations again.
+    pub(super) fn reload_pending(&mut self, cx: &mut Context<Self>) {
+        for root in self.listed().unwrap_or_default() {
+            self.load_pending(root, cx);
+        }
+    }
+
     /// Refresh on launch once; read pending operations only for new roots.
     fn repositories_loaded(&mut self, cx: &mut Context<Self>) {
         let Some(roots) = self.listed() else {

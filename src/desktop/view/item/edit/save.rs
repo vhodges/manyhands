@@ -165,6 +165,10 @@ impl ItemPane {
         if self.shown_session().is_none() {
             return false;
         }
+        // A run of the item, or its record, locks it (R-23).
+        if self.run_locks(cx) {
+            return true;
+        }
         if !window.has_active_dialog(cx) {
             self.start_save(cx);
         }

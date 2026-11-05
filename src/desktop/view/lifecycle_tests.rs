@@ -280,7 +280,7 @@ fn close_through(
 /// `ClosureAfterClosingRecorded`: its `closing` step and checkpoint are
 /// recorded, its context untouched, and its request left accepted (the
 /// recipe of `closure/run_tests.rs`). Gives its request ID.
-fn strand_close(fixture: &Fixture, root: &Path) -> RequestId {
+pub(super) fn strand_close(fixture: &Fixture, root: &Path) -> RequestId {
     let failing = RepositoryService::open_at_with_failure_point_for_testing(
         fixture.data_dir(),
         FailurePoint::ClosureAfterClosingRecorded,

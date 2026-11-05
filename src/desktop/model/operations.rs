@@ -39,6 +39,7 @@ pub(crate) use outcomes::{
 pub(crate) use outcomes::{CONFLICT_BANNER, sync_text};
 
 use super::{
+    lifecycle_lock::{LifecycleLocks, LockKey},
     list_state::{ListState, Rows},
     navigation::UNAVAILABLE_CODES,
     publication::{ShareAttempt, ShareTarget, SyncResult, sync_outcome},
@@ -132,6 +133,8 @@ pub(crate) struct Operations {
     /// shows and takes its way out from (D5, A3): a promotion's or a
     /// closure's, or a resume's that answered with lifecycle data.
     lifecycles: HashMap<DesktopRequestId, Envelope<MutationDataDto>>,
+    /// The lifecycle lock's own state (D5 A2; R-21, R-22).
+    locks: LifecycleLocks,
 }
 
 /// What finished requests may have changed since the views last read.
@@ -242,6 +245,7 @@ impl Operations {
                 {
                     self.lifecycles.insert(id, envelope.clone());
                 }
+                self.lifecycle_answered(id, &envelope);
                 match &envelope.data {
                     Some(MutationDataDto::Ticket(ticket)) if !ticket.rejected.is_empty() => {
                         self.rejected.insert(id, ticket.rejected.clone());
@@ -408,6 +412,42 @@ impl Operations {
         self.lifecycles.get(&id)
     }
 
+    /// A finished request of an item's lifecycle, or a resume that
+    /// answered with lifecycle data, tells the lock: until the rows are
+    /// read again the item awaits, and the answer sets or ends its L-4
+    /// exemption (D5 A2; R-21, R-22).
+    fn lifecycle_answered(&mut self, id: DesktopRequestId, envelope: &Envelope<MutationDataDto>) {
+        let Some(request) = self.request(id) else {
+            return;
+        };
+        let Some(root) = request.intent.root().and_then(Path::to_str) else {
+            return;
+        };
+        let data = match &envelope.data {
+            Some(MutationDataDto::Lifecycle(data)) => Some(data.as_ref()),
+            _ => None,
+        };
+        let item = match (&request.intent, data) {
+            (_, Some(data)) => data.item_id.clone(),
+            (Intent::TicketClose { id, .. } | Intent::DocumentPromote { id, .. }, None) => {
+                id.to_string()
+            }
+            _ => return,
+        };
+        let key = LockKey::new(root, &item);
+        self.locks.answered(key, id, data);
+    }
+
+    /// The lifecycle lock's state.
+    pub(crate) fn locks(&self) -> &LifecycleLocks {
+        &self.locks
+    }
+
+    /// The lifecycle lock's state, to change.
+    pub(crate) fn locks_mut(&mut self) -> &mut LifecycleLocks {
+        &mut self.locks
+    }
+
     /// The answer of the host observation `id`, once it has one.
     pub(crate) fn observation(
         &self,
@@ -534,6 +574,7 @@ impl Operations {
         let ViewScope::Operations(root) = stamp.scope else {
             return false;
         };
+        self.locks.rows_read(&root, &result);
         if let ReadResult::Failed(failure) = &result
             && UNAVAILABLE_CODES.contains(&failure.code)
         {
@@ -559,6 +600,7 @@ impl Operations {
             .cloned()
             .collect();
         for root in gone {
+            self.locks.forget(&root);
             self.pending.remove(&root);
             self.generations.next(ViewScope::Operations(root));
         }

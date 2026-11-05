@@ -402,7 +402,7 @@ fn publication_reason(reason: Option<LifecyclePublicationPendingReason>) -> &'st
     }
 }
 
-fn cleanup_reason(reason: Option<LifecycleCleanupPendingReason>) -> &'static str {
+pub(crate) fn cleanup_reason(reason: Option<LifecycleCleanupPendingReason>) -> &'static str {
     use LifecycleCleanupPendingReason as R;
     match reason {
         Some(R::AwaitingPublication) => "main is not shared yet",

@@ -108,6 +108,9 @@ pub(crate) enum Banner {
     Unmanaged,
     /// A link not found, or opened as the nearest match.
     Link,
+    /// Merged, but not tidied up, with Open folder and Check again (D5
+    /// L-4).
+    NotTidied,
 }
 
 impl Banner {
@@ -125,7 +128,8 @@ impl Banner {
             | Self::ReviewBeforeSaving
             | Self::Conflict
             | Self::NeedsFixing
-            | Self::Unmanaged => Tone::Amber,
+            | Self::Unmanaged
+            | Self::NotTidied => Tone::Amber,
         }
     }
 }
@@ -221,6 +225,7 @@ impl ItemPane {
             banners.push((Banner::Conflict, conflict));
         }
         banners.extend(self.edit_banners(cx));
+        banners.extend(self.not_tidied_banner(cx));
         most_severe_first(banners)
             .into_iter()
             .enumerate()

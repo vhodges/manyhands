@@ -88,11 +88,11 @@ impl LifecycleDialog {
             return;
         };
         self.following_anew();
-        self.phase = Phase::Submitted(self.services.worker().submit_with_request_id(
-            intent,
-            Lane::User,
-            request_id,
-        ));
+        let request = self
+            .services
+            .worker()
+            .submit_with_request_id(intent, Lane::User, request_id);
+        self.set_phase(Phase::Submitted(request), cx);
         cx.notify();
     }
 

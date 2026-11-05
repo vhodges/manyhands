@@ -176,10 +176,20 @@ impl ItemPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let waits = self.edits_wait(cx);
+        let words = self.refused_words();
         let Some((_, slot)) = self.composers.find(composer) else {
             return;
         };
         if slot.post.busy || slot.post.resend_pending {
+            return;
+        }
+        // While the item's close or merge is unfinished, a comment waits:
+        // it would change the item's working copy (R-23). Its text stays.
+        if waits {
+            slot.composer
+                .clone()
+                .update(cx, |composer, cx| composer.say_refused(words, cx));
             return;
         }
         let checks = slot.post.unchecked;

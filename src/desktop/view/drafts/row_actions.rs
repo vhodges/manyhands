@@ -25,7 +25,7 @@ use crate::desktop::{
         tabs::TabKey,
     },
     services::drafts::RestoreRefused,
-    view::item::{NOT_DISCARDED, refused_label},
+    view::item::{NOT_DISCARDED, lock_words, refused_label},
 };
 
 /// The desktop's item kind of a draft's.
@@ -78,6 +78,27 @@ impl DraftsPage {
             return;
         };
         let target = open_target(&draft.target);
+        // While the item's close or merge is unfinished, its draft is not
+        // restored into its tab (D5 A2, R-23).
+        if draft.target.comment.is_none()
+            && self
+                .services
+                .lifecycle_lock(
+                    &draft.target.repository,
+                    &draft.target.item_id.to_string(),
+                    cx,
+                )
+                .blocks()
+        {
+            let words = lock_words(dto_kind(draft.target.item_kind));
+            let notice = Notice {
+                text: words.to_owned(),
+                restore: false,
+            };
+            self.notices.insert(id, notice);
+            cx.notify();
+            return;
+        }
         if !self.restoring.insert(id) {
             return;
         }

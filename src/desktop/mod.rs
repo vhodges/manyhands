@@ -297,6 +297,13 @@ fn open_test_window_over(
     open_main_window(services, cx)
 }
 
+/// Opens another main window over `services`, as a second window of the
+/// same process (D5 Task 9, P20).
+#[cfg(all(test, feature = "desktop-test-support"))]
+fn open_window_over_services(services: Services, cx: &mut App) -> WindowHandle<Root> {
+    open_main_window(services, cx)
+}
+
 #[cfg(test)]
 mod test_support;
 

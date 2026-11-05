@@ -256,14 +256,14 @@ impl LifecycleDialog {
             Some((request, _)) => match worker.reconfirm(request, confirmation) {
                 Some(attempt) => (request, attempt),
                 None => {
-                    self.phase = Phase::Message(NOT_QUEUED);
+                    self.set_phase(Phase::Message(NOT_QUEUED), cx);
                     cx.notify();
                     return;
                 }
             },
         };
         self.confirmed = Some((request, attempt));
-        self.phase = Phase::Submitted(request);
+        self.set_phase(Phase::Submitted(request), cx);
         cx.notify();
     }
 
@@ -325,7 +325,7 @@ impl LifecycleDialog {
             }
         };
         if let Some((code, message)) = stale {
-            self.phase = Phase::Stale { code, message };
+            self.set_phase(Phase::Stale { code, message }, cx);
             cx.notify();
         }
     }

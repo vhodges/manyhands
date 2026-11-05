@@ -19,9 +19,12 @@ use super::{
     STILL_RUNNING, button, text,
 };
 use crate::desktop::{
-    model::stamp::{Stamp, ViewScope},
+    model::{
+        lifecycle_lock::LockKey,
+        stamp::{Stamp, ViewScope},
+    },
     services::{
-        KEY_STORE_UNAVAILABLE,
+        KEY_STORE_UNAVAILABLE, lifecycle_of,
         requests::{Intent, Lane, NotBuilt},
     },
     view::{confirm::SECRET_REQUIRED, item::SaveFirst},
@@ -125,17 +128,17 @@ impl LifecycleDialog {
 
     /// Prepares the command afresh: nothing runs.
     pub(super) fn prepare(&mut self, cx: &mut Context<Self>) {
-        self.phase = Phase::Preparing;
+        self.set_phase(Phase::Preparing, cx);
         let services = self.services.clone();
         let mutation = match self.intent.build(None, || services.key_store()) {
             Ok(mutation) => mutation,
             Err(NotBuilt::KeyStoreUnavailable) => {
-                self.phase = Phase::Message(KEY_STORE_UNAVAILABLE);
+                self.set_phase(Phase::Message(KEY_STORE_UNAVAILABLE), cx);
                 cx.notify();
                 return;
             }
             Err(NotBuilt::MissingSecret) => {
-                self.phase = Phase::Message(SECRET_REQUIRED);
+                self.set_phase(Phase::Message(SECRET_REQUIRED), cx);
                 cx.notify();
                 return;
             }
@@ -164,7 +167,7 @@ impl LifecycleDialog {
             data,
             ..
         } = envelope;
-        self.phase = match data {
+        let phase = match data {
             Some(PrepareDataDto::Preview(preview)) if code == ResultCode::Ok => {
                 match ConfirmationId::parse(&preview.confirmation_id) {
                     Ok(confirmation) => Phase::Confirm {
@@ -196,6 +199,7 @@ impl LifecycleDialog {
             }
             _ => Phase::Answered { code, message },
         };
+        self.set_phase(phase, cx);
         // What the tab shows may be gone, a ticket already closed among it:
         // the views that show the repository read it again. Busy says
         // nothing changed.
@@ -228,27 +232,18 @@ impl LifecycleDialog {
     /// As `in_flight`, with a resume of `held`, the operation a way out
     /// names, counted too.
     pub(super) fn in_flight_with(&self, held: Option<&str>) -> bool {
-        let (Some(root), Some(id)) = (self.root(), self.item_id()) else {
+        let (Some(root), Some(id)) = (self.root().and_then(|root| root.to_str()), self.item_id())
+        else {
             return false;
         };
-        self.services.worker().in_flight(|intent| match intent {
-            Intent::TicketClose {
-                root: asked,
-                id: asked_id,
-            }
-            | Intent::DocumentPromote {
-                root: asked,
-                id: asked_id,
-            } => asked == root && asked_id == id,
-            Intent::OperationResume {
-                root: asked,
-                operation_id,
-            } => asked == root && held == Some(operation_id.to_string().as_str()),
-            _ => false,
-        })
+        let key = LockKey::new(root, &id.to_string());
+        let held: Vec<String> = held.into_iter().map(str::to_owned).collect();
+        self.services
+            .worker()
+            .in_flight(|intent| lifecycle_of(intent, &key, &held))
     }
 
-    fn item_id(&self) -> Option<&manyhands::canonical::ItemId> {
+    pub(super) fn item_id(&self) -> Option<&manyhands::canonical::ItemId> {
         match &self.intent {
             Intent::TicketClose { id, .. } | Intent::DocumentPromote { id, .. } => Some(id),
             _ => None,
@@ -262,7 +257,7 @@ impl LifecycleDialog {
             return;
         }
         self.following_anew();
-        self.phase = match RequestId::parse(request) {
+        let phase = match RequestId::parse(request) {
             Ok(request) => Phase::Submitted(self.services.worker().submit_with_request_id(
                 self.intent.clone(),
                 Lane::User,
@@ -270,6 +265,7 @@ impl LifecycleDialog {
             )),
             Err(_) => Phase::Message(NOT_SENT),
         };
+        self.set_phase(phase, cx);
         cx.notify();
     }
 
@@ -281,7 +277,7 @@ impl LifecycleDialog {
         }
         self.following_anew();
         let (Some(root), Ok(operation_id)) = (self.root(), OperationId::parse(operation)) else {
-            self.phase = Phase::Message(NOT_SENT);
+            self.set_phase(Phase::Message(NOT_SENT), cx);
             cx.notify();
             return;
         };
@@ -293,7 +289,7 @@ impl LifecycleDialog {
             .services
             .worker()
             .submit(intent, Lane::User, None, None);
-        self.phase = Phase::Submitted(request);
+        self.set_phase(Phase::Submitted(request), cx);
         cx.notify();
     }
 
