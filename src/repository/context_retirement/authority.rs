@@ -255,10 +255,33 @@ pub(in super::super) fn refuse_execution(
     owner: &RemoteReservation,
     code: crate::results::ResultCode,
 ) -> Result<ContextRetirementReport, RepositoryError> {
+    refuse(service, root, owner, code, None)
+}
+
+pub(in super::super) fn refuse_before_branch_effect(
+    service: &RepositoryService,
+    root: &std::path::Path,
+    owner: &RemoteReservation,
+    code: crate::results::ResultCode,
+    uninvoked: super::super::run::UninvokedBranch,
+) -> Result<ContextRetirementReport, RepositoryError> {
+    refuse(service, root, owner, code, Some(uninvoked))
+}
+
+fn refuse(
+    service: &RepositoryService,
+    root: &std::path::Path,
+    owner: &RemoteReservation,
+    code: crate::results::ResultCode,
+    uninvoked: Option<super::super::run::UninvokedBranch>,
+) -> Result<ContextRetirementReport, RepositoryError> {
     let execution = owner.retirement_execution()?;
     state::with_transaction(service, root, |tx, id| {
         execution.local_owner(service, tx, id)?;
-        let safe:bool=tx.query_row("SELECT phase='selected' AND worktree_removal='none' AND branch_removal='none' AND absence_basis='none' AND materialization_settled=0 AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid) FROM context_retirement_records c WHERE operation_ulid=?1",[execution.operation.to_string()],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
+        let safe:bool=tx.query_row("SELECT worktree_removal='none' AND absence_basis='none' AND materialization_settled=0 AND
+          ((?2=0 AND phase='selected' AND branch_removal='none' AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid)) OR
+           (?2=1 AND initial_resources='branch_only' AND phase='branch_deleting' AND branch_removal='possible' AND (SELECT count(*) FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid)=1))
+          FROM context_retirement_records c WHERE operation_ulid=?1",params![execution.operation.to_string(),uninvoked.is_some()],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
         if !safe {
             return Err(recovery_required());
         }
@@ -272,8 +295,11 @@ pub(in super::super) fn refuse_execution(
             return Err(recovery_required());
         }
         tx.execute("UPDATE remote_operation_records SET phase='interrupted',outcome='repository_unavailable',owner_epoch=owner_epoch+1 WHERE id=?1 AND phase IN ('reserved','advertising','persisting')",[remote.id]).map_err(RepositoryError::sqlite)?;
+        if let Some(uninvoked) = uninvoked {
+            uninvoked.settle(tx, execution.operation, execution.epoch)?;
+        }
         let report = ContextRetirementReport::refused(code);
-        if tx.execute("UPDATE context_retirement_records SET phase='refused',final_code=?2,final_result=?3 WHERE operation_ulid=?1 AND owner_epoch=?4 AND phase='selected'",params![execution.operation.to_string(),code.as_str(),report.encode()?,execution.epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
+        if tx.execute("UPDATE context_retirement_records SET phase='refused',branch_removal='none',final_code=?2,final_result=?3 WHERE operation_ulid=?1 AND owner_epoch=?4 AND phase IN ('selected','branch_deleting')",params![execution.operation.to_string(),code.as_str(),report.encode()?,execution.epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
         if tx.execute("UPDATE context_retirement_attempts SET phase='ended' WHERE operation_ulid=?1 AND owner_epoch=?2 AND phase='active'",params![execution.operation.to_string(),execution.epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
         super::release_single_consumer(tx, &execution.operation.to_string(), execution.epoch)?;
         if tx.execute("UPDATE operation_records SET state='completed' WHERE operation_ulid=?1 AND action='retire_context' AND state!='completed'",[execution.operation.to_string()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}

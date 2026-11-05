@@ -1315,6 +1315,10 @@ impl RepositoryService {
         };
         // Terminal replay is checked before policy/endpoint/authentication work.
         let existing = state::with_transaction(self, &root, |tx, id| {
+            crate::repository::context_retirement::record::require_foreign_id_available(
+                tx,
+                request.operation_id,
+            )?;
             state::read_operation(tx, id, request.operation_id)
         })?;
         let replay_reservation = if let Some(record) = existing {
@@ -1357,6 +1361,10 @@ impl RepositoryService {
             Err(error) => {
                 session.clear_cached_passphrase();
                 state::with_transaction(self, &root, |tx, id| {
+                    crate::repository::context_retirement::record::require_foreign_id_available(
+                        tx,
+                        request.operation_id,
+                    )?;
                     let policy = state::read_snapshot(tx, id)?.polling().clone();
                     // Configuration fencing clears observer retry state. Full
                     // poll attention uses the pre-failure policy in this same TX.
@@ -1393,6 +1401,10 @@ impl RepositoryService {
         }
         let configuration = self.observation_configuration(&root, &plan)?;
         let may_reserve = state::with_transaction(self, &root, |tx, id| {
+            crate::repository::context_retirement::record::require_foreign_id_available(
+                tx,
+                request.operation_id,
+            )?;
             crate::repository::recovery::require_no_pending_local(tx, id)?;
             if state::has_pending_conflict(tx, id)? {
                 return Ok(false);

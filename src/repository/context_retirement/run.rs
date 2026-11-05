@@ -25,7 +25,45 @@ use rusqlite::{Transaction, params};
 use state::recovery_required;
 use std::path::Path;
 
+// The source-included SSH runner uses the same thread-local, one-shot fault
+// boundary pattern as reservation tests. No runtime/public authority surface.
+#[cfg(test)]
+thread_local! {static INTENT_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);}
+
+/// Only this uninterrupted call can prove the primitive was never invoked.
+/// Created after the durable intent and consumed BEFORE calling Git. Neither a
+/// saved intent nor a new executor can reconstruct this no-effect authority.
+pub(super) struct UninvokedBranch {
+    operation: crate::repository::OperationId,
+    epoch: i64,
+    receipt: i64,
+    primary: git2::Oid,
+    proof: proof::PreservationProof,
+}
+impl UninvokedBranch {
+    pub(super) fn settle(
+        self,
+        tx: &Transaction<'_>,
+        operation: crate::repository::OperationId,
+        epoch: i64,
+    ) -> Result<(), RepositoryError> {
+        if self.operation != operation || self.epoch != epoch {
+            return Err(recovery_required());
+        }
+        if tx.execute("UPDATE context_retirement_effect_intents SET observation='changed' WHERE operation_ulid=?1 AND owner_epoch=?2 AND resource='branch' AND receipt_id=?3 AND primary_oid=?4 AND proof_kind=?5 AND observation IS NULL",params![operation.to_string(),epoch,self.receipt,self.primary.to_string(),proof_name(self.proof)]).map_err(RepositoryError::sqlite)?!=1 {return Err(recovery_required());}
+        Ok(())
+    }
+}
+
 impl RepositoryService {
+    #[cfg(test)]
+    #[allow(dead_code)] // Used by the source-included SSH target, not unit fixtures.
+    pub(crate) fn set_retirement_intent_hook_for_testing(hook: impl FnOnce() + 'static) {
+        INTENT_HOOK.with(|slot| {
+            assert!(slot.borrow().is_none());
+            *slot.borrow_mut() = Some(Box::new(hook));
+        });
+    }
     /// Explicit authenticated standalone retirement. This increment accepts a
     /// fresh branch-only lifetime, never a saved branch-only deletion permit.
     pub fn retire_context_authenticated<P: SessionCredentialProvider>(
@@ -91,9 +129,9 @@ impl RepositoryService {
             tx.execute("INSERT INTO context_retirement_effect_intents(operation_ulid,owner_epoch,resource,receipt_id,primary_oid,proof_kind) SELECT operation_ulid,owner_epoch,'branch',?2,?3,?4 FROM context_retirement_records WHERE operation_ulid=?1 AND phase='selected'",params![request.operation_id.to_string(),receipt,primary.to_string(),proof_name(proof)]).map_err(RepositoryError::sqlite)?;
             if tx.execute("UPDATE context_retirement_records SET phase='branch_deleting',branch_removal='possible' WHERE operation_ulid=?1 AND phase='selected' AND owner_epoch=?2",params![request.operation_id.to_string(),execution.epoch()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
             record::audit_connection(tx)?;
-            Ok((primary, proof))
+            Ok((primary, proof, receipt))
         });
-        let (primary, proof) = match prepared {
+        let (primary, proof, receipt) = match prepared {
             Ok(value) => value,
             Err(_) => {
                 return record::refuse_execution(
@@ -107,6 +145,19 @@ impl RepositoryService {
         };
         // Intent committed before the primitive. Keep the same live capability
         // and lease; no persisted row/step can recreate this branch permit.
+        let mut uninvoked = Some(UninvokedBranch {
+            operation: request.operation_id,
+            epoch: owner.retirement_execution()?.epoch(),
+            receipt,
+            primary,
+            proof,
+        });
+        #[cfg(test)]
+        INTENT_HOOK.with(|slot| {
+            if let Some(hook) = slot.borrow_mut().take() {
+                hook();
+            }
+        });
         let settled = state::with_transaction(self, &request.root, |tx, id| {
             owner
                 .retirement_execution()?
@@ -122,6 +173,9 @@ impl RepositoryService {
             {
                 return Err(recovery_required());
             }
+            // From this point even a SQL rollback cannot prove Git had no effect.
+            // Discard the process-only no-effect witness before entering the primitive.
+            let _ = uninvoked.take().ok_or_else(recovery_required)?;
             let removal = cleanup.delete_context_branch(request.kind, &request.item_id, tip);
             let (observation, flag) = match removal {
                 BranchDeletion::Deleted => ("removed", "observed"),
@@ -142,6 +196,16 @@ impl RepositoryService {
         });
         drop(cleanup);
         if settled.is_err() {
+            if let Some(uninvoked) = uninvoked {
+                return record::refuse_before_branch_effect(
+                    self,
+                    &request.root,
+                    &owner,
+                    ResultCode::ExternalChange,
+                    uninvoked,
+                )
+                .map(ContextRetirementOutcome::Final);
+            }
             return Ok(ContextRetirementOutcome::CleanupPending {
                 worktree_removal: RetirementRemoval::None,
                 branch_removal: RetirementRemoval::Possible,
@@ -302,6 +366,24 @@ fn local_proof(
     tip: git2::Oid,
     primary: &str,
 ) -> Result<(git2::Oid, proof::PreservationProof), RepositoryError> {
+    // libgit2 follows loose-ref symlinks (including ancestors). Trust the
+    // configured primary's actual storage, not just HEAD's resolved name/OID or
+    // matching item bytes. Repeat on each proof, including immediately before
+    // the effect; an absent loose slot may legitimately resolve from packed-refs.
+    plain_registration_path(&git.path().join("HEAD"), false).map_err(|_| recovery_required())?;
+    let primary_ref = format!("refs/heads/{primary}");
+    let primary_slot = git.commondir().join(&primary_ref);
+    ref_file_absent(&request.root, &primary_slot)?;
+    ref_file_absent(&request.root, &git.commondir().join("packed-refs"))?;
+    for lock in [
+        git.commondir().join(format!("{primary_ref}.lock")),
+        git.commondir().join("packed-refs.lock"),
+        git.path().join("HEAD.lock"),
+    ] {
+        if !absent_path(&request.root, &lock)? {
+            return Err(recovery_required());
+        }
+    }
     let head = git.head().map_err(|_| recovery_required())?;
     if head.name() != Some(format!("refs/heads/{primary}").as_str())
         || git.workdir().and_then(|p| p.canonicalize().ok()).as_ref() != Some(&request.root)

@@ -10,7 +10,9 @@ const MARKER: &str = "context_retirement_v1";
 #[path = "authority.rs"]
 mod authority;
 pub(in super::super) use authority::ObserverExecution;
-pub(super) use authority::{BranchClaim, claim_branch, refuse_execution};
+pub(super) use authority::{
+    BranchClaim, claim_branch, refuse_before_branch_effect, refuse_execution,
+};
 
 /// Retirement identities are spent even after their executor ends. Include the
 /// envelope independently of its companion, so companion loss never frees an ID.
@@ -613,6 +615,8 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
        OR (c.branch_removal!='none' AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.resource='branch'))
        OR (c.phase IN ('local_absent','index_pending','complete') AND (c.materialization_settled!=1 OR c.absence_basis='none'
          OR o.completed_step IS NOT CASE c.absence_basis WHEN 'initial' THEN 'context_retirement_absent' ELSE 'context_branch_released' END))
+       OR (c.phase IN ('local_absent','index_pending','complete') AND c.absence_basis='owned_intent' AND
+         (c.branch_removal='none' OR NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.resource='branch')))
        OR (c.request_ulid IS NULL AND (EXISTS(SELECT 1 FROM request_operations ro WHERE ro.operation_ulid=c.operation_ulid)
          OR EXISTS(SELECT 1 FROM context_retirement_attempts a WHERE a.operation_ulid=c.operation_ulid AND a.request_attempt IS NOT NULL)))
        OR (c.request_ulid IS NOT NULL AND (NOT EXISTS(SELECT 1 FROM request_records r JOIN request_operations ro ON ro.request_ulid=r.request_ulid
@@ -661,13 +665,20 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
     if identity_collision {
         return Err(recovery_required());
     }
+    // An intent alone authorizes no authoritative handoff or terminal removal
+    // claim. Settled removal uses this closed mapping; incomplete/owned-absence
+    // evidence remains Possible, never Observed. A live pre-Git refusal instead
+    // retains the branch intent as changed with no claimed effect.
     let invalid_effect: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_effect_intents e
       JOIN context_retirement_records c ON c.operation_ulid=e.operation_ulid
       JOIN retirement_observation_receipts b ON b.id=e.receipt_id
       WHERE b.consumer_kind!='single' OR b.consumer_operation_ulid!=e.operation_ulid OR b.consumer_attempt_epoch!=e.owner_epoch
         OR b.repository_id!=c.repository_id OR c.initial_resources NOT IN ('present','branch_only')
         OR (e.resource='worktree' AND (c.initial_resources!='present' OR c.worktree_removal='none'))
-        OR (e.resource='branch' AND c.branch_removal='none'))", [], |r| r.get(0)).map_err(|_| recovery_required())?;
+        OR (e.resource='branch' AND c.branch_removal='none' AND NOT coalesce(c.phase='refused' AND e.observation='changed',0))
+        OR (c.phase IN ('local_absent','index_pending','complete') AND c.absence_basis='owned_intent' AND NOT coalesce(
+          (e.observation='removed' AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='observed')
+          OR (e.observation IN ('already_absent','incomplete') AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='possible'),0)))", [], |r| r.get(0)).map_err(|_| recovery_required())?;
     if invalid_effect {
         return Err(recovery_required());
     }

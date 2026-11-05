@@ -177,6 +177,14 @@ pub(super) fn initial_inventory(
     if ref_file_absent(root, &git.commondir().join("packed-refs")).is_err() {
         return Inventory::Invalid;
     }
+    // Shared invalid-shape routing must agree with branch admission: a packed
+    // store lock (including a redirected slot) is not a fresh eligible lifetime.
+    if !matches!(
+        absent_path(root, &git.commondir().join("packed-refs.lock")),
+        Ok(true)
+    ) {
+        return Inventory::Invalid;
+    }
     let branch_absent = match git.find_reference(&format!("refs/heads/{}", context.branch)) {
         Ok(reference)
             if reference.symbolic_target().is_none()

@@ -89,6 +89,39 @@ impl Fixture {
             );
         }
     }
+
+    // Metadata audit fixture: real claim and owned returned-batch receipt,
+    // followed by CHECK/trigger-valid intent/handoff mutations, not Git evidence.
+    fn branch_intent(&self) {
+        self.before_batch();
+        reservation::commit_observation_batch(
+            &self.service,
+            &self.request.root,
+            &self.owner,
+            self.owner.retirement_execution().unwrap().plan(),
+            &[],
+            2,
+        )
+        .unwrap();
+        self.service
+            .finish_remote_operation(
+                &self.request.root,
+                &self.owner,
+                RemoteOutcomeCategory::Completed,
+            )
+            .unwrap();
+        let db = self.db();
+        let oid = git2::Repository::open(&self.request.root)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap()
+            .to_string();
+        db.execute("UPDATE context_retirement_records SET initial_primary_oid=?1,phase='branch_deleting',branch_removal='possible'",[&oid]).unwrap();
+        db.execute("INSERT INTO context_retirement_effect_intents(operation_ulid,owner_epoch,resource,receipt_id,primary_oid,proof_kind) SELECT c.operation_ulid,c.owner_epoch,'branch',b.id,?1,'ancestor' FROM context_retirement_records c JOIN retirement_observation_receipts b ON b.consumer_operation_ulid=c.operation_ulid",[oid]).unwrap();
+        super::super::audit_connection(&db).unwrap();
+    }
 }
 struct Provider;
 impl SessionCredentialProvider for Provider {
@@ -272,4 +305,147 @@ fn retirement_live_advertisement_captures_exact_batch_and_public_replay_cannot_m
     );
     assert_eq!(registry_image(&db), before);
     assert!(RepositoryService::open_at(f._data.path()).is_ok());
+}
+
+#[test]
+fn retirement_spec_s1_branch_handoff_and_terminal_require_settled_matching_effect() {
+    let mut accepted = Vec::new();
+    for terminal in [false, true] {
+        for observation in [
+            None,
+            Some("removed"),
+            Some("already_absent"),
+            Some("incomplete"),
+            Some("changed"),
+            Some("not_clean"),
+        ] {
+            for flag in ["observed", "possible"] {
+                let f = Fixture::new();
+                f.branch_intent();
+                let db = f.db();
+                if let Some(observation) = observation {
+                    db.execute(
+                        "UPDATE context_retirement_effect_intents SET observation=?1",
+                        [observation],
+                    )
+                    .unwrap();
+                }
+                db.execute("UPDATE context_retirement_records SET phase='index_pending',absence_basis='owned_intent',materialization_settled=1,branch_removal=?1",[flag]).unwrap();
+                db.execute("UPDATE operation_records SET state='authoritative_observed',completed_step='context_branch_released' WHERE action='retire_context'",[]).unwrap();
+                if terminal {
+                    let removal = if flag == "observed" {
+                        RetirementRemoval::Observed
+                    } else {
+                        RetirementRemoval::Possible
+                    };
+                    let report = ContextRetirementReport::retired(RetirementRemoval::None, removal);
+                    db.execute("UPDATE context_retirement_records SET phase='complete',final_code='ok',final_result=?1",[report.encode().unwrap()]).unwrap();
+                    db.execute("UPDATE context_retirement_attempts SET phase='ended'", [])
+                        .unwrap();
+                    db.execute("UPDATE operation_records SET state='completed' WHERE action='retire_context'",[]).unwrap();
+                }
+                let valid = matches!(
+                    (observation, flag),
+                    (Some("removed"), "observed")
+                        | (Some("already_absent" | "incomplete"), "possible")
+                );
+                let before = registry_image(&db);
+                let audited = super::super::audit_connection(&db);
+                let opened = RepositoryService::open_at(f._data.path());
+                if valid {
+                    assert!(
+                        audited.is_ok() && opened.is_ok(),
+                        "valid {terminal}/{observation:?}/{flag}"
+                    );
+                } else {
+                    if audited.is_ok()
+                        || !matches!(opened,Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+                    {
+                        accepted.push((terminal, observation, flag));
+                    }
+                    let retry = f.service.retire_context(f.request.clone());
+                    if !matches!(retry,Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+                    {
+                        accepted.push((terminal, observation, flag));
+                    }
+                }
+                assert_eq!(
+                    registry_image(&db),
+                    before,
+                    "audit/startup/index retry must retain corrupt history"
+                );
+                assert!(
+                    git2::Repository::open(&f.request.root)
+                        .unwrap()
+                        .find_reference(&format!(
+                            "refs/heads/manyhands/ticket/{}",
+                            f.request.item_id
+                        ))
+                        .is_ok()
+                );
+            }
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "unsettled/mismatching effect authorized handoff or terminal: {accepted:?}"
+    );
+}
+
+#[test]
+fn retirement_spec_s3_public_update_rejects_parent_and_observer_before_configuration_writes() {
+    let mut failures = Vec::new();
+    for terminal in [false, true] {
+        for observer in [false, true] {
+            for valid_config in [false, true] {
+                let f = Fixture::new();
+                if terminal {
+                    refuse_execution(
+                        &f.service,
+                        &f.request.root,
+                        &f.owner,
+                        crate::results::ResultCode::ExternalChange,
+                    )
+                    .unwrap();
+                }
+                let git = git2::Repository::open(&f.request.root).unwrap();
+                git.remote("other", "ssh://fixture@127.0.0.1:1/fixture")
+                    .unwrap();
+                let path = f.request.root.join(".manyhands/config.toml");
+                let text = if valid_config {
+                    std::fs::read_to_string(&path).unwrap().replace(
+                        "publication_remote = \"origin\"",
+                        "publication_remote = \"other\"",
+                    )
+                } else {
+                    "invalid = [".into()
+                };
+                std::fs::write(path, text).unwrap();
+                let before = registry_image(&f.db());
+                let result = f.service.poll_publication_remote(
+                    PollPublicationRemoteRequest {
+                        root: f.request.root.clone(),
+                        operation_id: if observer {
+                            f.owner.operation_id()
+                        } else {
+                            f.request.operation_id
+                        },
+                        invocation: RemotePollInvocation::Explicit,
+                        approval: None,
+                        restart: true,
+                    },
+                    &mut SessionCredentials::new(Provider),
+                );
+                if !matches!(result,Err(RemotePollError::Repository(ref e)) if e.kind==RepositoryErrorKind::RecoveryRequired)
+                    || registry_image(&f.db()) != before
+                {
+                    failures.push((terminal, observer, valid_config));
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "reserved update-poll ID wrote configuration/metadata or failed to refuse (terminal,observer,valid): {failures:?}"
+    );
 }

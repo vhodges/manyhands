@@ -367,6 +367,7 @@ are not authorized; numeric exits must come from existing results registry.
 | Limited SPEC final/delta pass through `03c0c63b`, source base `daab73e7` | Session `ses_e564dd7a7ffeYzKXesoyVuGJFs`: S1/S2/S3 and subsequent quality-correction deltas verified; **0 Blocking/0 Important/0 Minor remaining**. Registration identity checks are retirement-only, index-only/replay and shared cleanup remain unchanged | Initial-absence milestone SPEC approved only; full Task 2 obligations remain open |
 | Limited QUALITY final pass through `03c0c63b`, same source base, after SPEC pass | Session `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/Blocking/0 Important/0 Minor remaining**. Fresh original probes now refuse redirected commondir and contradictory checkpoint evidence; valid absence and terminal/pending unregister controls retain their expected outcomes | Initial-absence milestone QUALITY approved only; Windows runtime/cross-compilation and deferred source/batch/destructive authority remain unverified |
 | Next Task 2 continuation preflight, 2026-11-05 | Fresh fetch succeeded; ticket and main checkouts clean. Main/base remains `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `03c0c63b1371fea1b59f46fae6495ef69e39315a` already up to date, no conflicts/rebase | No upstream assumption change or unmerged branch consumption |
+| Limited branch-only SPEC review at `ade567fc`, increment base `b1a986c2` | Controller relayed and source-verified **4 Important current-producer gaps**: S1 intended-only effect accepted as settled handoff/result; S2 known pre-Git rejection reported possible effects; S3 public update-poll configuration wrote before reserved-ID refusal; S4 primary loose-ref storage followed redirects | SPEC **failed**, Quality **held**. Test-first corrections and local evidence below; same SPEC re-review, then Quality required. No future-feature/policy substitution or full Task 2 approval |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -385,8 +386,10 @@ are not authorized; numeric exits must come from existing results registry.
   initial absence is independently approved through `03c0c63b`, published with
   the controller's record at `b1a986c2`. The next IN-PROGRESS increment connects
   fresh authenticated **branch-only** retirement: claim/O/receipt/proof/guarded
-  branch deletion/D14/index result. Latest gates: **64** context-retirement tests
-  (unchanged 58 + 6 additive), **10** registered retirement SSH cases. Present
+  branch deletion/D14/index result. Its limited SPEC review at `ade567fc` found
+  S1–S4; corrections are locally verified, **same SPEC re-review pending, Quality
+  held**. Latest gates: **66** context-retirement tests (unchanged 58 + 8 additive),
+  **21** registered retirement SSH cases. Present
   instances, authorized executor replacement/recovery and source/batch scopes
   remain unfinished/closed; all 44 matrix obligations stay explicitly tracked.
   Full Task 2 spec/quality review remains owed; no full completion claimed.
@@ -399,13 +402,12 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: continue the same Task 2 implementer from the connected
-branch-only increment into durable present-instance installation and exact
-authorized executor/observer replacement and owned-absence recovery, then the
-remaining source/batch audits and shared stages. Prior corrections remain
-covered; no new policy decision or reapproval is needed. This is not full Task 2
-review/completion or permission for Task 3. The corrected design checkpoint
-and limited initial-absence review checkpoint are both cleared.
+Immediate next step: controller's **same limited SPEC reviewer** re-reviews
+`b1a986c2..fixHEAD` for S1–S4, then Quality. No further present-instance/authority
+expansion or push in this correction phase. Prior design and initial-absence
+approvals remain intact; no new owner-policy decision is required. Full Task 2
+and all 44 future obligations remain in progress; this is not permission for
+Task 3/4 or a completion claim.
 Preserve all unchanged assertions/lifecycle cleanup and prior approvals. Final
 fast/SSH tiers and whole-branch review remain owed; this is not feature completion.
 
@@ -2138,3 +2140,72 @@ actual UTC **`2026-11-05T05:44:16Z`**. Coherent coauthored commit only, no push,
 agents, other-worktree edits, status/PR/main closure/native CI or real contexts/
 keys/profiles/drafts. Full Task 2 SPEC→QUALITY/adversarial source review remains
 controller-owned after implementation, before Task 3; no new approval hold added.
+
+## Task 2 Progress Delta — Limited Branch-Only SPEC S1–S4 Corrections
+
+Controller reported **4 Important** findings at `ade567fccb63b41afd33bea4c3edd931064fef78`;
+all traced to the live producer/approved contract, not future mechanisms. Entry
+clean; controller's fresh fetch confirmed main still `c69789d9`, reused in this
+phase. Review range remains **`b1a986c2ce45331fb403bec5dc7a521a29506f1a..fixHEAD`**;
+full Task 2 base **`7b1912d1`**. Corrections are **locally verified only**: same
+SPEC re-review pending, Quality held. No present-instance/authority expansion.
+
+| Finding | Correction / additive controls |
+| --- | --- |
+| S1 settlement/result authority | Startup, refresh admission and terminal audit now require settled effect observations matching removal flags. Closed handoff mapping: `removed→observed`, `already_absent/incomplete→possible`; NULL/intended-only, changed/not-clean and mismatches cannot authorize I. 24 handoff/terminal combinations (including valid Possible controls) use ordinary CHECK/trigger-valid SQL; corrupt startup/retry retains the complete registry image. Real SSH paused-after-intent probe likewise retains branch, pin and all rows without Git/finalization. |
+| S2 definite no-effect vs uncertainty | Private non-Clone `UninvokedBranch` witness exists only in the current call after intent commit; discarded before the Git primitive. Current exact ownership/epoch plus exact intent receipt/primary/proof may atomically settle pre-Git rejection as `changed`, removals None, Final refusal, ended attempt/journal and Z. Intent history and captured materialization remain. Ref/primary moves at the precise intent boundary produce stable Final results after repair; a fenced call cannot settle, and a new call cannot reconstruct the witness. Existing post-Git D14 failure remains `CleanupPending`/Possible. |
+| S3 public update-poll configuration | Reserved retirement parent and O IDs are refused at initial lookup and **inside both** invalid/valid configuration-write transactions. Eight active/terminal × parent/O × valid/invalid-config combinations assert the complete registry image unchanged. Ordinary update-poll attention/current and observation controls remain green. No Task 4 coordination. |
+| S4 primary pointer/locks | Each local proof, including final effect recheck, validates configured-primary loose slot/ancestors, packed store, HEAD and primary/packed/HEAD lock slots without following redirects. Absent loose storage remains valid for a plain packed primary. Shared invalid-shape routing now recognizes a packed-store lock, so initial lock rejection is stable rather than falling through to the unsupported-present error path. Real target/ancestor symlinks and all three lock slots are exercised initially and after intent; primary/context/item/old materialization and old result survive, including repair/replay. |
+
+### Compile-Success Behavioral RED → GREEN
+
+All logs below are `/tmp/opencode/task2-spec-<name>.log`. Test commands use
+`devenv shell -- cargo test --all-features --locked <suffix>`.
+
+| Suffix | RED log / actual result | GREEN log / actual result |
+| --- | --- | --- |
+| `--lib retirement_spec_s1_` | `s1-red`: 0/1; intended-only retry fabricated Retired/Observed and changed rows/released pin | `s1-green`: 1 passed, full 24-combination audit matrix |
+| `--test mutation_remote retirement_spec_s2_` | `s2-red`: **0/2 SSH**, markers `201 1` then `202 0 1`: after committed intent, Final false / CleanupPending true before Git | `s2-green`: **2 SSH passed**; final suite also includes fenced/no-new-executor and captured-intent/replay controls |
+| `--lib retirement_spec_s3_` | `s3-red`: 0/1; eight-combination probe found active-parent invalid and terminal-parent invalid/valid writes | `s3-green`: 1 passed, all eight combinations |
+| `--test mutation_remote retirement_spec_s4_` | `s4-red`: **0/6 SSH**, real redirected/locked primary admitted. First correction reached 5/6 but exposed initial packed-lock routing error | `s4-green-2`: **6 SSH passed**, including all three lock variants at both boundaries; final suite adds plain packed-primary positive control |
+
+The after-intent fault seam is crate-private, `cfg(test)`, one-shot thread-local
+following the existing reservation fault-hook pattern; no public unsafe/TestOnly
+authority API. The S3 intermediate unused SSH-hook warning was scoped to that
+test-only hook, not an authority constructor. No compilation error is counted as
+behavioral RED; no zero-case pass is claimed.
+
+### Frozen Correction Source Gates
+
+All serial Devenv commands below exited 0, no deadlines or overlapping Cargo/test
+binaries. Source frozen after formatting; only ledger/comment metadata afterward.
+No unchanged cleanup/recovery/foundation broad reruns without a new reason.
+
+| Command / test suffix | Log name | Result |
+| --- | --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | `check-final` | passed |
+| `devenv shell -- cargo fmt --check` | `fmt-final` | passed |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy-final` | passed |
+| `--lib context_retirement` | `context-final` | **66 passed** |
+| `--test mutation_remote retirement_` | `ssh-final` | **21 SSH passed** (existing 10 + 11 additive) |
+| `--lib repository::remote::poll::tests` | `poll-unit-final` | **81 passed** |
+| `--test remote_polling poll_whole_review_` | `poll-attention-final` | **10 SSH passed** |
+| `--test remote_polling poll_already_current` | `poll-current-final` | **1 SSH passed** |
+| `--test remote_observation authenticated_` | `observation-final` | **4 SSH passed** |
+
+Original 58 tests, six prior additive unit tests, ten prior SSH controls, proof and
+cleanup/release implementation remain unchanged. No old semantic test edited.
+The seven-code-path correction diff against `ade567fc` has SHA-256
+`5d9bba7e9aba7092cc768dc6b7fe97531de80f8723938c635cc4216bc5908001`.
+Canonical checkpoint **`01M6N6N0ENV50FDX321B7JBTSW`**, parent
+**`01M6N3S2C9N0FHW08ACD7PYD37`**, actual UTC **`2026-11-05T06:34:29Z`**.
+
+**All 01–44 acceptance obligations remain tracked**, not 66 or 21 completed
+groups. These fixes strengthen the existing branch-only scope, not completion of
+present installation/W-prune, authorized local/request/O replacement or owned
+all-absent recovery, remaining D14/index fault variants, or source/batch audit,
+A0–A4 and Z/GC matrices. Full Task 2 SPEC→QUALITY/adversarial review and final
+fast/changed-path SSH tiers remain owed. Linux evidence only; Unix symlink cases
+are cfg-gated, not Windows runtime proof. No push, reset/squash/rebase, agents,
+other-worktree edits, ticket-status/main/PR/closure/native-CI actions, Task 3/4 or
+real contexts/keys/profiles/drafts. No new policy hold; return to same SPEC first.
