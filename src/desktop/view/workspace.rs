@@ -145,6 +145,9 @@ pub(crate) struct Workspace {
     /// Each change gives the open tabs their repository's publication
     /// remote from `navigation` (`TabContent::share_remotes`).
     _remotes: Subscription,
+    /// Each Stop and republish… waiting for its Give up's answer (D5 A3).
+    pub(in crate::desktop::view) stopping_to_republish:
+        Vec<super::operations::republish::StopThenRepublish>,
 }
 
 impl Workspace {
@@ -287,6 +290,7 @@ impl Workspace {
             retry_focus: cx.focus_handle(),
             _remotes: cx
                 .observe_self(|this, cx| this.content.tabs.share_remotes(&this.navigation, cx)),
+            stopping_to_republish: Vec::new(),
         };
         workspace.load_repositories(cx);
         workspace

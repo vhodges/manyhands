@@ -293,7 +293,9 @@ impl ResolveSheet {
     /// on by the drain's follow-up (R-10, I-3), which says what it did
     /// (M-b): the lifecycle's request sent again, whose run its dialog then
     /// shows; or the operation resumed, which the operation area shows, and
-    /// never the earlier run.
+    /// never the earlier run. When that resume names the request that holds
+    /// the lifecycle, the drain sends that request again (D5 Part C,
+    /// `Resends`), which the operation area shows too.
     pub(super) fn applied(
         &mut self,
         resolution: RequestId,

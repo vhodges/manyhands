@@ -55,8 +55,11 @@ mod outcome;
 
 pub(crate) use outcome::{cleanup_reason, item_of, progress_words};
 pub(crate) use repair::{Reopen, reopen_repaired};
+pub(crate) use resumed::follow_resume;
 mod prepare;
 mod repair;
+mod republish;
+mod resumed;
 mod running;
 mod view;
 
@@ -426,6 +429,8 @@ impl LifecycleDialog {
         })
         .detach();
         dialog.sync_lock(cx);
+        // Opened on a resume already sent on as the request it named.
+        dialog.follow_resend(cx);
         // Opened again on a run that has its answer already.
         dialog.read_made_ready(cx);
         if dialog.saving.is_none() && following.is_none() && !repaired {

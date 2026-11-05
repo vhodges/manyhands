@@ -16,6 +16,10 @@
 //! - Where `show_request` failed and the record's state is unknown, a
 //!   post offers no Give up, no Edit text and no Share in place of a
 //!   retry, and adds Check again (P17). Check again classifies afresh.
+//! - An item's share whose shared copy was deleted offers Stop and
+//!   republish… while its record is accepted, and Republish… once it is
+//!   not (D5 Part C, E-6): the same request never gets past a deleted
+//!   branch. A share of main has no item to republish.
 
 use manyhands::{
     repository::{
@@ -349,6 +353,11 @@ pub(crate) enum SyncOffer {
     ShowHolder,
     /// The repository's Remotes page.
     SetUpSharing,
+    /// Republish… (D5 Part C): `item republish`, confirmed.
+    Republish,
+    /// Stop and republish… (D5 A3, P21): Give up, then, once the share is
+    /// stopped, Republish….
+    StopAndRepublish,
 }
 
 /// The outcome of a share's attempt.
@@ -417,6 +426,15 @@ impl SyncResult {
                 .collect()
         };
         let mut offers = match &self.outcome {
+            SyncOutcome::BranchDeleted if self.attempt.target == ShareTarget::Item => {
+                let held =
+                    self.attempt.record == RecordState::Accepted && !self.attempt.after_give_up;
+                vec![if held {
+                    O::StopAndRepublish
+                } else {
+                    O::Republish
+                }]
+            }
             SyncOutcome::Published
             | SyncOutcome::Current
             | SyncOutcome::Conflict { .. }

@@ -594,7 +594,8 @@ fn after_a_give_up_give_up_is_not_offered_again() {
         (ResultCode::UnlockRequired, vec![S::Unlock]),
         (ResultCode::KeyRejected, vec![S::OpenSharingAndKeys]),
         (ResultCode::TransportUnavailable, vec![S::Retry]),
-        (ResultCode::RemoteBranchDeleted, vec![]),
+        // E-6: Republish… after a Give up (D5 Part C).
+        (ResultCode::RemoteBranchDeleted, vec![S::Republish]),
     ];
     for (code, expected) in cases {
         let result = sync_outcome(&share(code, nothing()), share_given_up);
@@ -759,6 +760,9 @@ fn sync_conflict_data_is_a_conflict_with_no_action() {
     assert!(sync_offers(&envelope, ShareTarget::Item, RecordState::Finished).is_empty());
 }
 
+/// E-6 (D5 Part C): an item's deleted shared branch offers Stop and
+/// republish… beside Give up while its record is accepted, Republish… once
+/// it is not, and never Share. A share of main has no item to republish.
 #[test]
 fn sync_a_deleted_branch_offers_give_up_and_no_share() {
     let envelope = share(ResultCode::RemoteBranchDeleted, nothing());
@@ -768,9 +772,21 @@ fn sync_a_deleted_branch_offers_give_up_and_no_share() {
     );
     assert_eq!(
         sync_offers(&envelope, ShareTarget::Item, RecordState::Accepted),
+        [S::StopAndRepublish, S::GiveUp]
+    );
+    assert_eq!(
+        sync_offers(&envelope, ShareTarget::Item, RecordState::Finished),
+        [S::Republish]
+    );
+    assert_eq!(
+        sync_offers(&envelope, ShareTarget::Item, RecordState::Unknown),
+        [S::Republish]
+    );
+    assert_eq!(
+        sync_offers(&envelope, ShareTarget::Main, RecordState::Accepted),
         [S::GiveUp]
     );
-    assert!(sync_offers(&envelope, ShareTarget::Item, RecordState::Finished).is_empty());
+    assert!(sync_offers(&envelope, ShareTarget::Main, RecordState::Finished).is_empty());
 }
 
 #[test]

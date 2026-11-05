@@ -1044,7 +1044,8 @@ pub(crate) enum ResumeOffer {
 /// shows it unavailable. The library lists no comment publication waiting
 /// to be resumed (`takes_up_remote_work`), so none is offered. A
 /// promotion's or closure's parent (L2) is no synchronization: it is not
-/// offered until Part C sends its resume (D5 design, A1).
+/// offered here, but by its own row, whose resume opens the lifecycle
+/// dialog (D5 Part C, `view/operations/resume.rs`).
 pub(crate) fn resume_offer(operation: &OperationDto) -> ResumeOffer {
     if operation.next_action != Some(OperationNextAction::Resume) {
         return ResumeOffer::NotOffered;

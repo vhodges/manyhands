@@ -5,12 +5,12 @@ use manyhands::repository::{
     ContextPrepareInput, ContextReleaseInput, DocumentCreateInput, DocumentDraft,
     DocumentMoveInput, DocumentPromoteInput, DocumentRepairInput, DocumentSaveInput,
     FolderCreateInput, HostApproveInput, HostReplaceInput, IndexRebuildInput, IndexRefreshInput,
-    ItemSyncInput, KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
-    KeySelectInput, LocalConflictResolutionInput, LocalContextResolveInput, LocalContextSyncInput,
-    Mutation, OperationAbandonInput, OperationResumeInput, RemoteAddInput, RemoteRemoveInput,
-    RemoteSelectInput, RepoCreateInput, RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput,
-    RepoSyncInput, TicketCloseInput, TicketCreateInput, TicketDraft, TicketRepairInput,
-    TicketSaveInput,
+    ItemRepublishInput, ItemSyncInput, KeyClearInput, KeyDeleteInput, KeyGenerateInput,
+    KeyImportInput, KeyRemoveInput, KeySelectInput, LocalConflictResolutionInput,
+    LocalContextResolveInput, LocalContextSyncInput, Mutation, OperationAbandonInput,
+    OperationResumeInput, RemoteAddInput, RemoteRemoveInput, RemoteSelectInput, RepoCreateInput,
+    RepoEnableInput, RepoIdentitySetInput, RepoRemoveInput, RepoSyncInput, TicketCloseInput,
+    TicketCreateInput, TicketDraft, TicketRepairInput, TicketSaveInput,
     keys::{KeyProtection, KeyStore, SecretPassphrase},
 };
 
@@ -332,6 +332,11 @@ impl Intent {
                 id: id.clone(),
             }),
             Self::RepoSync { root } => Mutation::RepoSync(RepoSyncInput { root: root.clone() }),
+            Self::ItemRepublish { root, kind, id } => Mutation::ItemRepublish(ItemRepublishInput {
+                root: root.clone(),
+                kind: *kind,
+                id: id.clone(),
+            }),
             Self::DocumentPromote { root, id } => Mutation::DocumentPromote(DocumentPromoteInput {
                 root: root.clone(),
                 id: id.clone(),

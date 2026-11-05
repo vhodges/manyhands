@@ -545,3 +545,7 @@ mod entry_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "conflict/repair_tests.rs"]
 mod repair_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "conflict/lifecycle_resume_tests.rs"]
+mod lifecycle_resume_tests;

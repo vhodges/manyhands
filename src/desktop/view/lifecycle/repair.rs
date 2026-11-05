@@ -109,7 +109,7 @@ pub(crate) fn reopen_repaired(
 }
 
 impl LifecycleDialog {
-    fn authoring_kind(&self) -> AuthoringKind {
+    pub(super) fn authoring_kind(&self) -> AuthoringKind {
         match self.heading.kind {
             ItemDtoKind::Ticket => AuthoringKind::Ticket,
             ItemDtoKind::Document => AuthoringKind::Document,

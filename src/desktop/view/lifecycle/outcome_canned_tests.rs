@@ -238,6 +238,8 @@ pub(super) fn buttons(shell: &Shell, cx: &mut TestAppContext) -> Vec<&'static st
         "lifecycle-check-host",
         "lifecycle-inspect",
         "lifecycle-open-folder",
+        "lifecycle-stop-and-republish",
+        "lifecycle-republish",
     ]
     .into_iter()
     .filter(|id| shell.present(*id, cx))
@@ -257,8 +259,8 @@ pub(super) fn buttons(shell: &Shell, cx: &mut TestAppContext) -> Vec<&'static st
 ///   (`tests/mutation_remote/c5_child_conflict.rs`): guidance, Resolve
 ///   conflict… and Resume;
 /// - a deleted shared branch (`c5_lifecycle.rs` `child_remote_branch_deleted`):
-///   guidance only (Stop and republish… and Republish… are Task 14's), and no
-///   Retry, which the same request cannot get past;
+///   guidance, Stop and republish… (Task 14) and no Republish… beside it, and
+///   no Retry, which the same request cannot get past;
 /// - a document's refused merge (`way_out_tests.rs`
 ///   `an_execute_result_for_a_documents_integration_conflict_is_repair_outside`):
 ///   guidance to repair outside, then Retry;
@@ -324,7 +326,7 @@ async fn each_way_out_offers_its_button(cx: &mut TestAppContext) {
                 vec![],
                 vec![cancel(request), inspect(&root)],
             ),
-            vec!["lifecycle-inspect"],
+            vec!["lifecycle-inspect", "lifecycle-stop-and-republish"],
             3,
         ),
         (

@@ -29,7 +29,9 @@
 //! repository reports with work outstanding: command, scope, operation ID
 //! and what it waits for. A local operation, a remote item or repository
 //! synchronization, or a local-context synchronization (D5 B6, E-5),
-//! waiting to be resumed offers Resume (decision 11). The library lists a
+//! waiting to be resumed offers Resume (decision 11), and so does a
+//! promotion's or closure's parent (D5 decision 10, `resume`), whose
+//! resume opens the lifecycle dialog. The library lists a
 //! comment's publication with nothing to resume, and its `submit_comment`
 //! row only while its local work waits, so no publication is offered
 //! Resume. A pending local operation offers Abandon, which is confirmed.
@@ -62,6 +64,8 @@ use manyhands::{
 
 mod outcomes;
 mod recovered;
+pub(crate) mod republish;
+mod resume;
 mod review;
 
 use outcomes::{ALREADY_FINISHED, already_finished};
@@ -762,6 +766,8 @@ impl Workspace {
                     }
                     ResumeOffer::NotOffered => {}
                 }
+                // A promotion's or closure's parent (decision 10).
+                controls = controls.children(self.lifecycle_resume(&root, &operation, index, cx));
                 controls = controls.children(self.pending_review(
                     &root,
                     operation_id.as_deref(),

@@ -30,8 +30,8 @@ use std::collections::{HashMap, HashSet};
 
 use gpui_kit::EntityId;
 use manyhands::repository::{
-    LifecycleCleanupPendingReason, LifecycleCleanupState, LifecycleMutationDto, OperationAction,
-    OperationListDto,
+    ItemDtoKind, LifecycleCleanupPendingReason, LifecycleCleanupState, LifecycleMutationDto,
+    OperationAction, OperationListDto,
 };
 
 use super::stamp::RepoKey;
@@ -90,6 +90,8 @@ impl LockState {
 /// A lifecycle row of L2, as the lock reads it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct RecordRow {
+    /// A closure's is a ticket; a promotion's, a document.
+    kind: ItemDtoKind,
     item_id: String,
     step: String,
     operation_id: Option<String>,
@@ -162,14 +164,14 @@ impl LifecycleLocks {
             ReadResult::Ok(list) => list
                 .items
                 .iter()
-                .filter(|row| {
-                    matches!(
-                        row.action,
-                        OperationAction::Close | OperationAction::Promote
-                    )
-                })
                 .filter_map(|row| {
+                    let kind = match row.action {
+                        OperationAction::Close => ItemDtoKind::Ticket,
+                        OperationAction::Promote => ItemDtoKind::Document,
+                        _ => return None,
+                    };
                     Some(RecordRow {
+                        kind,
                         item_id: row.item_id.clone()?,
                         step: row.state.clone(),
                         operation_id: row.operation_id.clone(),
@@ -249,6 +251,18 @@ impl LifecycleLocks {
             .filter(|row| row.item_id == key.id)
             .filter_map(|row| row.operation_id.clone())
             .collect()
+    }
+
+    /// The item whose lifecycle the operation `operation_id` of `root` is,
+    /// by its kind and ID, as the rows last read list it: a resume of it
+    /// that names its holding request sends that close or merge again
+    /// (decision 10).
+    pub(crate) fn item_of(&self, root: &str, operation_id: &str) -> Option<(ItemDtoKind, &str)> {
+        self.records
+            .get(root)?
+            .iter()
+            .find(|row| row.operation_id.as_deref() == Some(operation_id))
+            .map(|row| (row.kind, row.item_id.as_str()))
     }
 
     /// Where `key` stands, given whether its lifecycle is in flight in the

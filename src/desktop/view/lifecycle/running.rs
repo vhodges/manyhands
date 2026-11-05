@@ -15,10 +15,10 @@
 //!   stored answer stands before main; Open repository details; Open
 //!   folder for a dirty main (P19); and D4's credential recovery: Unlock…,
 //!   Open Sharing & keys, Check host; and Repair locally… and Resolve
-//!   conflict… beside their guidance (`repair.rs`). The rest of L1 is
-//!   guidance, its buttons being later tasks'. Retry, Resume and Unlock…
-//!   wait while the item's lifecycle is in flight, which the dialog then
-//!   says (P22).
+//!   conflict… beside their guidance (`repair.rs`); Stop and republish… and
+//!   Republish… beside theirs (`republish.rs`). The rest of L1 is guidance.
+//!   Retry, Resume and Unlock… wait while the item's lifecycle is in
+//!   flight, which the dialog then says (P22).
 //!   Enter retries a failed or stopped run, and closes a done one.
 //! - **Made ready.** Below the outcome lines of a closure that reached
 //!   main, `made_ready.rs`'s part, and its Open ready tickets.
@@ -99,6 +99,10 @@ impl LifecycleDialog {
             // Its answer went with its entry (review O-1).
             (Some(RequestState::Dismissed), None) => (self.message(DISMISSED), Vec::new()),
             (_, Some(envelope)) => self.ended(id, &envelope, cx),
+            // A resume answered with no lifecycle data (P22).
+            (Some(RequestState::Finished(_, code, _, _, message)), None) => {
+                self.resume_answered(code, &message, cx)
+            }
             _ => self.running(cx),
         }
     }
@@ -231,6 +235,7 @@ impl LifecycleDialog {
         if offers.no_record {
             body = body.child(text("lifecycle-no-record", NO_RECORD).text_sm());
         }
+        body = body.children(self.republish_line(id, envelope));
         let item = self.item_word();
         body = body.children(
             way_out
@@ -259,7 +264,8 @@ impl LifecycleDialog {
                         .text_color(muted),
                 );
         }
-        let mut buttons = self.ended_buttons(envelope, &offers, cx);
+        let mut buttons = self.republish_buttons(id, envelope, &way_out, offers.waiting, cx);
+        buttons.extend(self.ended_buttons(envelope, &offers, cx));
         buttons.extend(open_ready);
         (body.into_any_element(), buttons)
     }

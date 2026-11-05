@@ -125,6 +125,7 @@ impl Workspace {
         // Confirmation observers close their dialogs before a prompt opens.
         // The Kit closes the top dialog only.
         cx.defer_in(window, |this, window, cx| this.show_prompt(window, cx));
+        self.stops_to_republish_answered(window, cx);
         self.quit_if_finished(cx);
         let changed = self
             .services

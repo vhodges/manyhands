@@ -37,7 +37,7 @@ pub(crate) const NEEDS_IDENTITY: &str = "Set your identity before sharing";
 pub(crate) const ANOTHER_SHARE_HOLDS: &str = "Another share may be holding this repository";
 pub(crate) const NOWHERE_TO_SHARE: &str = "This repository has nowhere to share to";
 pub(crate) const BRANCH_DELETED: &str = "The shared copy of this item was deleted. \
-     Republishing it arrives in a later release.";
+     Republish it to share it again.";
 /// The item banner of a share or post stopped on a conflict (decision 13):
 /// it offers Review changes (D5 B5, E-7).
 pub(crate) const CONFLICT_BANNER: &str = "You and someone else both changed this since it \

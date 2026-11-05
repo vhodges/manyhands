@@ -268,6 +268,14 @@ pub(crate) enum Intent {
     RepoSync {
         root: PathBuf,
     },
+    /// Republish… (D5 Part C): an item's editing branch, which the remote
+    /// deleted, pushed to it again at the local commit the preview showed.
+    /// Confirmed: ordinary sharing never recreates a deleted branch.
+    ItemRepublish {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+    },
     /// Approve and merge…: a document's work merged into the primary
     /// branch, shared, and tidied up. No identity or input: the library
     /// takes the configured identity (C5 decision 6).
@@ -328,6 +336,7 @@ impl Intent {
             | Self::OperationAbandon { .. }
             | Self::DocumentRepair { .. }
             | Self::TicketRepair { .. }
+            | Self::ItemRepublish { .. }
             | Self::DocumentPromote { .. }
             | Self::TicketClose { .. } => true,
             Self::RemoteAdd { .. }
@@ -393,6 +402,7 @@ impl Intent {
             Self::CommentAdd { .. } => "Post comment",
             Self::ItemSync { .. } => "Share item",
             Self::RepoSync { .. } => "Share main",
+            Self::ItemRepublish { .. } => "Republish",
             Self::DocumentPromote { .. } => "Approve and merge",
             Self::TicketClose { .. } => "Close ticket",
             Self::ConflictResolve { .. } => "Resolve conflict",
@@ -430,6 +440,7 @@ impl Intent {
             | Self::CommentAdd { root, .. }
             | Self::ItemSync { root, .. }
             | Self::RepoSync { root }
+            | Self::ItemRepublish { root, .. }
             | Self::DocumentPromote { root, .. }
             | Self::TicketClose { root, .. }
             | Self::ConflictResolve { root, .. }
@@ -478,6 +489,7 @@ impl Intent {
             | Self::CommentAdd { .. }
             | Self::ItemSync { .. }
             | Self::RepoSync { .. }
+            | Self::ItemRepublish { .. }
             | Self::DocumentPromote { .. }
             | Self::TicketClose { .. }
             | Self::ConflictResolve { .. }
@@ -501,7 +513,8 @@ impl Intent {
 
     /// Whether the call's cancellation token is honoured after the library
     /// accepts the command, at a synchronization's safe points (fact 9): the
-    /// comment, the two syncs, `operation resume`, a promotion or closure,
+    /// comment, the two syncs, a republish (P21), `operation resume`, a
+    /// promotion or closure,
     /// which stops between its steps (D5 fact 2), a local synchronization
     /// and its resolution, and a remote resolution. Every other command, the
     /// saves among them, cannot be stopped once accepted.
@@ -520,6 +533,7 @@ impl Intent {
             | Self::CommentAdd { .. }
             | Self::ItemSync { .. }
             | Self::RepoSync { .. }
+            | Self::ItemRepublish { .. }
             | Self::DocumentPromote { .. }
             | Self::TicketClose { .. }
             | Self::ConflictResolve { .. }
@@ -663,6 +677,7 @@ impl Intent {
             Self::CommentAdd { .. } => JobKind::Comment,
             Self::ItemSync { .. } => JobKind::SynchronizeItem,
             Self::RepoSync { .. } => JobKind::SynchronizeRepo,
+            Self::ItemRepublish { .. } => JobKind::ItemRepublish,
             Self::DocumentPromote { .. } => JobKind::DocumentPromote,
             Self::TicketClose { .. } => JobKind::TicketClose,
             Self::ConflictResolve { .. } => JobKind::ConflictResolve,

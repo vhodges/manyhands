@@ -9,7 +9,7 @@
 use gpui_kit::{AnyElement, Context, Window, component::Root};
 use manyhands::{
     repository::{LifecycleBlocker, LifecycleWayOut, MutationDataDto, lifecycle_way_out},
-    results::{Envelope, RecoveryActionKind},
+    results::{Envelope, RecoveryActionKind, ResultCode},
 };
 
 use super::{
@@ -19,7 +19,7 @@ use super::{
 use crate::desktop::{
     services::{
         requests::{DesktopRequestId, Lane},
-        worker::{CancelResult, RecordState},
+        worker::{CancelResult, GaveUp, RecordState},
     },
     view::{item::ItemRoute, workspace::Workspace},
 };
@@ -163,14 +163,16 @@ impl LifecycleDialog {
         let offered = |kind| envelope.recovery.iter().any(|action| action.action == kind);
         let record = self.services.worker().record_state(id);
         let credential = Credential::of(envelope.code);
-        // Republish… and Stop and republish… go first (Task 14): the same
-        // request cannot get past a deleted branch.
+        // Republish… and Stop and republish… go first (`republish.rs`): the
+        // same request cannot get past a deleted branch, nor can a run Stop
+        // and republish… stopped.
         let republish = way_out.iter().any(|step| {
             matches!(
                 step,
                 LifecycleWayOut::Republish { .. } | LifecycleWayOut::CancelThenSendAgain { .. }
             )
-        });
+        }) || (envelope.code == ResultCode::Cancelled
+            && self.services.worker().gave_up(id) == Some(GaveUp::Resent));
         // A run that ended short of main with its record finished or gone
         // has nothing left to continue: a stored refusal, or a stop with no
         // parent, whose request the library deleted (review I-1).

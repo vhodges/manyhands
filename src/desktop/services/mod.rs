@@ -17,6 +17,7 @@ pub(crate) mod prompts;
 mod reads;
 pub(crate) mod release;
 pub(crate) mod requests;
+pub(crate) mod resends;
 pub(crate) mod resolutions;
 pub(crate) mod submissions;
 pub(crate) mod worker;
@@ -153,6 +154,7 @@ pub(crate) enum JobKind {
     Comment,
     SynchronizeItem,
     SynchronizeRepo,
+    ItemRepublish,
     DocumentPromote,
     TicketClose,
     ConflictResolve,
@@ -287,6 +289,8 @@ pub(crate) struct Services {
     submissions: Entity<Submissions>,
     /// What follows each lifecycle child's resolution once applied (R-10).
     followups: resolutions::Followups,
+    /// What follows a lifecycle's resume or republish (D5 decision 10, A3).
+    resends: resends::Resends,
     /// Whether the workspace refreshes every listed repository once its
     /// list first loads. Tests that do not wait for the worker turn it
     /// off.
@@ -326,6 +330,11 @@ impl Services {
     /// A resolution's end has its kept set deleted once `show_request`
     /// says its request finished (R-12), and the launch sweep does the same
     /// for every set kept from before (`resolutions`).
+    ///
+    /// A lifecycle's resume answered `original_request_required` sends the
+    /// request it names again, and a republish done from a lifecycle's way
+    /// out sends that lifecycle on, before the request model has the answer
+    /// (`resends`).
     pub(crate) fn start(backend: Arc<dyn Backend>, cx: &mut App) -> Self {
         let (worker, mut events) = WorkerHandle::spawn(backend.clone());
         resolutions::sweep_at_launch(&backend, cx);
@@ -344,6 +353,8 @@ impl Services {
         let following = followups.clone();
         let settled_followups = followups.clone();
         let resending = worker.clone();
+        let resends = resends::Resends::default();
+        let resent = resends.clone();
         cx.spawn(async move |cx| {
             while let Some(event) = events.next().await {
                 let mut batch = vec![event];
@@ -430,6 +441,7 @@ impl Services {
                         });
                         let mut made_here = false;
                         if let WorkerEvent::Finished(id, envelope) = &event {
+                            resent.ended(*id, envelope, operations, &resending);
                             if let Some(request) = operations.request(*id) {
                                 made_here = made
                                     .update(cx, |created, _| {
@@ -528,6 +540,7 @@ impl Services {
             edit_tabs: cx.new(|_| EditTabs::default()),
             submissions,
             followups,
+            resends,
             launch_refresh: true,
         };
         drafts.update(cx, |registry, cx| {
@@ -606,6 +619,11 @@ impl Services {
     /// What follows each lifecycle child's resolution once applied.
     pub(crate) fn followups(&self) -> &resolutions::Followups {
         &self.followups
+    }
+
+    /// What follows a lifecycle's resume or republish.
+    pub(crate) fn resends(&self) -> &resends::Resends {
+        &self.resends
     }
 
     #[cfg(all(test, feature = "desktop-test-support"))]

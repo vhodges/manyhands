@@ -217,14 +217,19 @@ fn every_intent(root: &Path) -> Vec<Intent> {
             observation: "local-sync-v1:observation".to_owned(),
         },
         Intent::LocalContextResolve {
-            root,
+            root: root.clone(),
             operation_id: OperationId::new(),
             observation: "local-sync-v1:observation".to_owned(),
             resolutions: vec![resolution("token", "source")],
         },
+        Intent::ItemRepublish {
+            root,
+            kind: AuthoringKind::Ticket,
+            id: ITEM.parse().unwrap(),
+        },
     ];
     let listed: HashSet<usize> = intents.iter().map(variant).collect();
-    assert_eq!(listed.len(), 37, "one intent of every variant");
+    assert_eq!(listed.len(), 38, "one intent of every variant");
     intents
 }
 
@@ -267,6 +272,7 @@ fn variant(intent: &Intent) -> usize {
         Intent::ConflictResolve { .. } => 34,
         Intent::LocalContextSync { .. } => 35,
         Intent::LocalContextResolve { .. } => 36,
+        Intent::ItemRepublish { .. } => 37,
     }
 }
 
@@ -342,6 +348,7 @@ fn every_intent_builds_its_own_command() {
         "conflict resolve",
         "context sync-local",
         "context resolve-local",
+        "item republish",
     ];
     let intents = every_intent(fixture.home());
     let mut kinds = HashSet::new();
@@ -396,8 +403,9 @@ fn changes_items_names_the_intents_that_can_change_items() {
             // RepoCreate, RepoEnable, IndexRefresh, IndexRebuild,
             // OperationResume, OperationAbandon, DocumentSave, TicketSave,
             // the eight Part C commands, the comment and the two syncs, the
-            // two lifecycles, and the resolutions and local synchronization.
-            0 | 1 | 7 | 8 | 17..=36 => true,
+            // two lifecycles, the resolutions and local synchronization, and
+            // the republish.
+            0 | 1 | 7 | 8 | 17..=37 => true,
             // RepoRemove closes the tabs instead; the rest change
             // settings, keys or hosts, never an item.
             2..=6 | 9..=16 => false,
@@ -482,8 +490,8 @@ fn syncs_comments_and_resume_stop_at_safe_points_and_saves_do_not() {
         let expected = match variant(&intent) {
             // OperationResume, CommentAdd, ItemSync, RepoSync,
             // DocumentPromote, TicketClose, ConflictResolve,
-            // LocalContextSync, LocalContextResolve.
-            17 | 29..=36 => true,
+            // LocalContextSync, LocalContextResolve, ItemRepublish.
+            17 | 29..=37 => true,
             // Every local command, the saves among them.
             0..=16 | 18..=28 => false,
             other => unreachable!("variant {other}"),

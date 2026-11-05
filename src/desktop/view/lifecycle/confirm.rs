@@ -283,6 +283,8 @@ impl LifecycleDialog {
     /// dialog draws it again. An answer to the confirmed request that
     /// refuses the consent shows Stale, with Prepare again.
     pub(super) fn operations_changed(&mut self, cx: &mut Context<Self>) {
+        // A resume sent on as the request it named: that run is followed.
+        self.follow_resend(cx);
         let Phase::Submitted(shown) = self.phase else {
             return;
         };

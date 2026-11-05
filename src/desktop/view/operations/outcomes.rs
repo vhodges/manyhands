@@ -10,6 +10,10 @@
 //!   R-13, R-17).
 //! - Retry sends the same request again; Stop trying to share gives it up
 //!   (decision 8).
+//! - An item whose shared copy was deleted offers Republish…, confirmed,
+//!   or, while the share's record is accepted, Stop and republish…, which
+//!   gives the share up and then opens Republish… (D5 Part C,
+//!   `republish.rs`).
 //! - The rest open a place in the workspace (`ItemRoute`): Open Sharing &
 //!   keys, Check host (the host the outcome names, or the repository's
 //!   Hosts page, K-3), Set identity, Set up sharing (Remotes), and Show it,
@@ -22,7 +26,11 @@ use std::path::PathBuf;
 
 use gpui_kit::{AnyElement, App, ClickEvent, Context, Window};
 
-use super::{button, request_id};
+use super::{
+    button,
+    republish::{REPUBLISH, Republishing, STOP_AND_REPUBLISH},
+    request_id,
+};
 use crate::desktop::{
     model::{
         item::SHARE,
@@ -61,6 +69,8 @@ pub(crate) fn offer_label(offer: SyncOffer) -> &'static str {
         SyncOffer::SetIdentity => SET_IDENTITY,
         SyncOffer::ShowHolder => SHOW_IT,
         SyncOffer::SetUpSharing => SET_UP_SHARING,
+        SyncOffer::Republish => REPUBLISH,
+        SyncOffer::StopAndRepublish => STOP_AND_REPUBLISH,
     }
 }
 
@@ -77,6 +87,8 @@ pub(crate) fn offer_part(offer: SyncOffer) -> &'static str {
         SyncOffer::SetIdentity => "set-identity",
         SyncOffer::ShowHolder => "show-holder",
         SyncOffer::SetUpSharing => "set-up-sharing",
+        SyncOffer::Republish => "republish",
+        SyncOffer::StopAndRepublish => "stop-and-republish",
     }
 }
 
@@ -168,7 +180,12 @@ pub(crate) fn share_route(
             root: root()?,
             request: busy_holder(services, id, cx),
         },
-        SyncOffer::Share | SyncOffer::Retry | SyncOffer::GiveUp | SyncOffer::Unlock => {
+        SyncOffer::Share
+        | SyncOffer::Retry
+        | SyncOffer::GiveUp
+        | SyncOffer::Unlock
+        | SyncOffer::Republish
+        | SyncOffer::StopAndRepublish => {
             return None;
         }
     })
@@ -205,6 +222,21 @@ impl Workspace {
         )
     }
 
+    /// The item the share `id` is of, to republish: no lifecycle follows.
+    fn share_republished(&self, id: DesktopRequestId, cx: &App) -> Option<Republishing> {
+        match &self.services().operations().read(cx).request(id)?.intent {
+            crate::desktop::services::requests::Intent::ItemSync { root, kind, id } => {
+                Some(Republishing {
+                    root: root.clone(),
+                    kind: *kind,
+                    id: id.clone(),
+                    after: None,
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// Runs the offer `offer` of the finished share `id`.
     pub(in crate::desktop::view) fn run_share_offer(
         &mut self,
@@ -236,6 +268,17 @@ impl Workspace {
             }
             SyncOffer::GiveUp => {
                 worker.give_up(id);
+            }
+            SyncOffer::Republish | SyncOffer::StopAndRepublish => {
+                let Some(target) = self.share_republished(id, cx) else {
+                    return;
+                };
+                let origin = self.control_focus_for(request_id(id, offer_part(offer)), cx);
+                if offer == SyncOffer::Republish {
+                    self.republish(target, origin, window, cx);
+                } else {
+                    self.stop_and_republish(id, target, origin, cx);
+                }
             }
             _ => {
                 if let Some(route) = share_route(self.services(), id, &result, offer, cx) {
