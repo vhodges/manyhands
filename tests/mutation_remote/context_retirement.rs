@@ -1,8 +1,66 @@
 //! Standalone domain journeys, not mutation/CLI/batch retirement behavior.
 use super::*;
 use std::{fs, path::Path};
+#[path = "retirement_request_fence.rs"]
+mod request_fence;
 
 pub(crate) const CASES: &[ssh_harness::Case] = &[
+    (
+        "retirement_f2_changed_operation_envelope_before_persist_is_owed_without_cache_writes",
+        request_fence::envelope_persistence,
+    ),
+    (
+        "retirement_f2_invalidated_index_uses_independent_epoch_and_single_use_current_claim",
+        request_fence::invalidation,
+    ),
+    (
+        "retirement_f2_current_accepted_projection_executes_real_protocol",
+        request_fence::fresh,
+    ),
+    (
+        "retirement_f2_exact_current_mapping_is_not_caller_or_cached_authority",
+        request_fence::identity,
+    ),
+    (
+        "retirement_f2_held_network_advance_fences_old_return_and_new_reentry",
+        request_fence::network,
+    ),
+    (
+        "retirement_f2_index_handoff_rejects_stale_and_accepts_new_current_request",
+        request_fence::index,
+    ),
+    (
+        "retirement_f2_cancellation_before_effect_is_owned_final_no_effect",
+        request_fence::cancel,
+    ),
+    (
+        "retirement_f2_advance_before_worktree_or_branch_retains_truthful_debt",
+        request_fence::effect_boundaries,
+    ),
+    (
+        "retirement_f2_current_metadata_recovery_and_finished_replay_preserve_new_lifetimes",
+        request_fence::metadata,
+    ),
+    (
+        "retirement_f2_initial_absence_and_preclaim_cancel_are_owned",
+        request_fence::initial,
+    ),
+    (
+        "retirement_f2_replacement_failure_rolls_back_scope_epochs_and_pins",
+        request_fence::rollback,
+    ),
+    (
+        "retirement_f2_current_reentry_cancellation_ends_no_effect_but_preserves_partial_debt",
+        request_fence::reentry_cancel,
+    ),
+    (
+        "retirement_f2_finished_while_real_network_is_held_grants_no_return_authority",
+        request_fence::network_finished,
+    ),
+    (
+        "retirement_f2_mapping_loss_at_persistence_blocks_cache_and_completion",
+        request_fence::persistence,
+    ),
     (
         "retirement_specfix_r2_lineage_zero_preserve",
         specfix_r2_lineage_zero,

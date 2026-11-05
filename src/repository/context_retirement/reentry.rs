@@ -51,9 +51,23 @@ impl RepositoryService {
     /// Request/batch-bound operations remain closed until their F2 fence joins.
     pub fn reenter_context_retirement_authenticated<P: SessionCredentialProvider>(
         &self,
+        reentry: ReenterContextRetirementRequest,
+        approval: Option<HostApproval>,
+        session: &mut SessionCredentials<P>,
+    ) -> Result<ContextRetirementOutcome, RepositoryError> {
+        self.reenter_context_retirement_scoped(
+            reentry,
+            approval,
+            session,
+            super::request_scope::Scope::Domain,
+        )
+    }
+    pub(super) fn reenter_context_retirement_scoped<P: SessionCredentialProvider>(
+        &self,
         mut reentry: ReenterContextRetirementRequest,
         approval: Option<HostApproval>,
         session: &mut SessionCredentials<P>,
+        scope: super::request_scope::Scope,
     ) -> Result<ContextRetirementOutcome, RepositoryError> {
         let request = &mut reentry.retirement;
         self.require_index_available(RepositoryOperation::RetireContext, Some(&request.root))?;
@@ -84,10 +98,7 @@ impl RepositoryService {
                     "retirement inputs do not match the original operation",
                 ));
             }
-            let domain:bool=tx.query_row("SELECT request_ulid IS NULL AND batch_operation_ulid IS NULL AND NOT EXISTS(SELECT 1 FROM request_operations ro WHERE ro.operation_ulid=c.operation_ulid) FROM context_retirement_records c WHERE operation_ulid=?1",[&operation],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
-            if !domain {
-                return Err(recovery_required());
-            }
+            let cancelled = scope.validate(tx, &operation, &request.root)?;
             // Terminal and authoritative I-only replay never inspect a new
             // lifetime or D14 tuple, even when the supplied old epoch is stale.
             if let Some(result) = result {
@@ -96,7 +107,7 @@ impl RepositoryService {
                 )));
             }
             if matches!(phase.as_str(), "local_absent" | "index_pending") {
-                if !record::refresh_allowed(tx, &operation, &request.root)? {
+                if !record::refresh_allowed_scoped(tx, &operation, &request.root, scope)? {
                     return Err(recovery_required());
                 }
                 return Ok(Claim::Index);
@@ -105,7 +116,12 @@ impl RepositoryService {
                 return Err(recovery_required());
             }
             let epoch = old_epoch.checked_add(1).ok_or_else(recovery_required)?;
-            let (old_observer,old_remote_epoch):(Option<String>,Option<i64>)=tx.query_row("SELECT observer_operation_ulid,observer_owner_epoch FROM context_retirement_attempts WHERE operation_ulid=?1 AND owner_epoch=?2 AND repository_id=?3 AND phase='active' AND request_attempt IS NULL AND batch_attempt_epoch IS NULL",params![operation,old_epoch,id],|r|Ok((r.get(0)?,r.get(1)?))).map_err(RepositoryError::sqlite)?;
+            let (old_observer,old_remote_epoch,old_request_attempt):(Option<String>,Option<i64>,Option<i64>)=tx.query_row("SELECT observer_operation_ulid,observer_owner_epoch,request_attempt FROM context_retirement_attempts WHERE operation_ulid=?1 AND owner_epoch=?2 AND repository_id=?3 AND phase='active' AND batch_attempt_epoch IS NULL",params![operation,old_epoch,id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(RepositoryError::sqlite)?;
+            if let Some(current) = scope.attempt()
+                && old_request_attempt.is_none_or(|old| current <= old)
+            {
+                return Err(recovery_required());
+            }
             let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records o WHERE (o.repository_id=?1 OR o.root_path=?2) AND o.operation_ulid IS NOT ?3 AND (o.state!='completed' OR o.completed_step='comment_registration_pending')) OR EXISTS(SELECT 1 FROM remote_operation_records o WHERE o.repository_id=?1 AND ((o.operation_ulid IS NOT ?4 AND o.phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')) OR o.index_pending!=0 OR o.reconciliation_required!=0))",params![id,request.root.to_str(),operation,old_observer],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
             if blocked {
                 return Err(recovery_required());
@@ -149,7 +165,9 @@ impl RepositoryService {
             let absent = initial_inventory(&git, &request.root, request) == Inventory::Absent;
             let resumable:bool=tx.query_row("SELECT c.instance_verified=1 AND c.phase='worktree_removing' AND c.worktree_removal='possible' AND c.branch_removal='none' AND EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.resource='worktree' AND (e.observation IS NULL OR e.observation='incomplete')) AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND (e.resource='branch' OR e.observation='removed')) FROM context_retirement_records c WHERE c.operation_ulid=?1",[&operation],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
             let mut configuration = None;
-            let purpose = if absent && possible && intent {
+            let purpose = if cancelled {
+                if possible { "preserve" } else { "no_effect" }
+            } else if absent && possible && intent {
                 "metadata"
             } else if (phase == "selected" || resumable)
                 && initial == "present"
@@ -179,7 +197,7 @@ impl RepositoryService {
                 && tx.execute("UPDATE remote_operation_records SET owner_epoch=owner_epoch+1,phase=CASE WHEN phase IN ('reserved','advertising','persisting') THEN 'interrupted' ELSE phase END,outcome=CASE WHEN phase IN ('reserved','advertising','persisting') THEN 'repository_unavailable' ELSE outcome END WHERE id=?1 AND owner_epoch=?2 AND poll_kind='observe' AND phase IN ('reserved','advertising','persisting','completed','failed','cancelled','interrupted')",params![remote.id,remote.owner_epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
             if tx.execute("UPDATE context_retirement_attempts SET phase='fenced' WHERE operation_ulid=?1 AND owner_epoch=?2 AND phase='active'",params![operation,old_epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
             if tx.execute("UPDATE context_retirement_records SET owner_epoch=?3 WHERE operation_ulid=?1 AND owner_epoch=?2 AND final_result IS NULL",params![operation,old_epoch,epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
-            tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase) VALUES(?1,?2,?3,'active')",params![operation,epoch,id]).map_err(RepositoryError::sqlite)?;
+            tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase,request_attempt) VALUES(?1,?2,?3,'active',?4)",params![operation,epoch,id,scope.attempt()]).map_err(RepositoryError::sqlite)?;
             tx.execute("INSERT INTO context_retirement_reentries(operation_ulid,owner_epoch,previous_epoch,purpose) VALUES(?1,?2,?3,?4)",params![operation,epoch,old_epoch,purpose]).map_err(RepositoryError::sqlite)?;
             if purpose=="resume_worktree" && tx.execute("INSERT INTO context_retirement_worktree_resumptions(operation_ulid,owner_epoch,intent_owner_epoch,intent_resource,intent_receipt_id) SELECT operation_ulid,?2,owner_epoch,resource,receipt_id FROM context_retirement_effect_intents WHERE operation_ulid=?1 AND resource='worktree' AND owner_epoch<?2 AND (observation IS NULL OR observation='incomplete') ORDER BY owner_epoch DESC LIMIT 1",params![operation,epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
             record::release_replaced_consumer(tx, &operation, old_epoch)?;
@@ -192,6 +210,7 @@ impl RepositoryService {
                         request,
                         epoch,
                         configuration.ok_or_else(recovery_required)?,
+                        scope,
                     )?,
                     git2::Oid::from_str(&tip.ok_or_else(recovery_required)?)
                         .map_err(|_| recovery_required())?,
@@ -216,7 +235,12 @@ impl RepositoryService {
                     if has_intent {
                         return Err(recovery_required());
                     }
-                    let report = ContextRetirementReport::refused(ResultCode::ExternalChange);
+                    let report = ContextRetirementReport::refused(if cancelled {
+                        ResultCode::Cancelled
+                    } else {
+                        ResultCode::ExternalChange
+                    });
+                    if cancelled && tx.execute("UPDATE request_records SET cancel_requested=0 WHERE request_ulid=?1 AND attempt=?2 AND state='accepted' AND cancel_requested=1",params![scope.request_id(),scope.attempt()]).map_err(RepositoryError::sqlite)?!=1 {return Err(recovery_required());}
                     tx.execute("UPDATE context_retirement_records SET phase='refused',final_code=?2,final_result=?3 WHERE operation_ulid=?1",params![operation,report.code.as_str(),report.encode()?]).map_err(RepositoryError::sqlite)?;
                     tx.execute("UPDATE context_retirement_attempts SET phase='ended' WHERE operation_ulid=?1 AND owner_epoch=?2",params![operation,epoch]).map_err(RepositoryError::sqlite)?;
                     tx.execute(
@@ -238,7 +262,7 @@ impl RepositoryService {
             Claim::Report(report) => Ok(report),
             Claim::Index => {
                 drop(cleanup);
-                self.retire_context(reentry.retirement)
+                self.retire_context_scoped(reentry.retirement, scope)
             }
             Claim::Observe(owner, tip) => {
                 let verified = match instance::Verified::resume(self, request, &owner, &cleanup) {

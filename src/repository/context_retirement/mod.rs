@@ -4,6 +4,7 @@ mod instance;
 pub(super) mod proof;
 pub(super) mod record;
 mod reentry;
+pub(super) mod request_scope;
 mod result;
 mod run;
 pub use execution::{ContextRetirementOutcome, RetireContextRequest};

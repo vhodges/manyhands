@@ -2828,7 +2828,7 @@ is unchanged; these are current incremental evidence/remaining-work annotations.
 | 06 | E `proof_ancestor_requires_positive_completion`, `proof_document_presence_is_not_preservation`; O complete runtime refusal journeys |
 | 07 | E `branch_only_fresh_fetch_retires_closed_ticket`, `branch_only_fresh_document_keeps_other_context` |
 | 08 | E `all_absent_is_local_only_and_completed_replay_does_not_inspect_recreation` |
-| 09 | E `absence_index_retry_does_not_reselect_or_touch_new_worktree`; O new M index-failure/recreation journey |
+| 09 | E `absence_index_retry_does_not_reselect_or_touch_new_worktree`, `f2_index_handoff_rejects_stale_and_accepts_new_current_request` (I-only new-context/new-intent preservation); O remaining M index-failure variants |
 | 10 | E `mixed_initial_resources_refuse_stably_without_adopting_user_content`; O exhaustive public reentry mixed/inventory variants |
 | 11 | E `present_cleanup_hidden_and_ignored_matrix`; O remaining submodule/deletion fault variants |
 | 12 | E `reentry_exclusions_and_fixed_inputs_cannot_replace_an_owner`; O valid terminal remote index/reconciliation debt during replacement |
@@ -2837,27 +2837,27 @@ is unchanged; these are current incremental evidence/remaining-work annotations.
 | 15 | E same public bootstrap matrix partial/nonce collision; old instance collision units preserved; O remaining public marker shape/platform variants |
 | 16 | E `reentry_missing_verified_marker_cannot_select_new_identity`; O public link/admin replacement variants |
 | 17 | O explicit default/background no-marker journey; remote controls green, not a substitute for that assertion |
-| 18 | E `spec_s2_ref_move_before_git_is_final_no_effect`, `present_marker_changed_after_intent_is_final_no_effect`, `reentry_intact_prior_worktree_intent_uses_new_proof_and_preserves_history`; O remaining before-effect variant matrix |
+| 18 | E `spec_s2_ref_move_before_git_is_final_no_effect`, `present_marker_changed_after_intent_is_final_no_effect`, `reentry_intact_prior_worktree_intent_uses_new_proof_and_preserves_history`, `f2_advance_before_worktree_or_branch_retains_truthful_debt` (F2 advance/finish/map-loss and partial cancellation); O remaining before-effect variant matrix |
 | 19 | E `present_prune_sql_gap_preserves_surviving_branch_on_retry`, `reentry_interrupted_prune_intact_instance_continues`, `reentry_prior_intent_mismatched_dirty_mixed_recreated_instance_preserves`; O remaining prune/mixed inventory fault windows |
 | 20 | E `reentry_same_oid_branch_recreation_after_sql_gap_is_owed` |
 | 21 | E `reentry_branch_only_never_reconstructs_old_lifetime`; unit replacement matrix also covers selected/ad/batch/completed O |
-| 22 | E prior M/direct cases plus `specfix_r2_lineage_*`: zero/one/multiple preserve gaps and repeated uninvoked resumptions → M retain old NULL/all changed W, Possible/None and BranchReleased under the exact outstanding debt lineage. O no-owned-intent and mixed inventory public M variants; R2 finding remains open pending same SPEC re-review |
+| 22 | E prior M/direct cases plus `specfix_r2_lineage_*`: zero/one/multiple preserve gaps and repeated uninvoked resumptions → M retain old NULL/all changed W, Possible/None and BranchReleased under the exact outstanding debt lineage; `f2_current_metadata_recovery_and_finished_replay_preserve_new_lifetimes` adds current-request M. R2 limited SPEC+QUALITY approved at `fd1549b7`; O no-owned-intent and mixed inventory public M variants |
 | 23 | E `present_incomplete_or_ambiguous_materialization_refuses_before_prune`; O remaining malformed owner/OID capture variants |
 | 24 | E `reentry_d14_mismatch_rolls_back_replacement_and_preserves_new_intent`, `specfix_r2_exact_d14_replacement_rolls_back` (changed OID and ignored DELETE); O remaining step/captured-absent-now-present public M variants |
-| 25 | E prior owned-absence/direct replay plus all five positive `specfix_r2_lineage_*` histories: completed replay preserves new W/A/B and exact new materialization; O I-only M replay |
+| 25 | E prior owned-absence/direct replay plus all five positive `specfix_r2_lineage_*` histories; `f2_current_metadata_recovery_and_finished_replay_preserve_new_lifetimes` and `f2_index_handoff_rejects_stale_and_accepts_new_current_request`: finished read-only replay and new-current I-only completion preserve recreated W/A/B and exact new materialization. O remaining M/I fault variants |
 | 26 | E `d14_exact_completed_intent_settles_atomically_and_incomplete_refusal_is_stable` |
-| 27 | E prior replacement/stale-executor cases plus `specfix_r3_terminal_history_preserved_while_every_old_owner_is_fenced`: active three-phase and four-terminal-phase matrix preserves terminal O projection/all metadata while raising epoch. O remaining positive present after-ad/after-batch interruption windows |
-| 28 | E prior replacement rollback/exclusion cases plus the R3 eight-state matrix's whole-transaction rollback and stale-write assertions. O remaining every-write/commit failure points, valid terminal remote debt, foreign-O/action correlation matrix |
-| 29 | E unit all-old-write-boundaries matrix plus active/completed public stale-executor cases; O actual current accepted F2 attempt/mapping shared fence contract |
+| 27 | E prior replacement/stale-executor cases plus `specfix_r3_terminal_history_preserved_while_every_old_owner_is_fenced`: active three-phase and four-terminal-phase matrix preserves terminal O projection/all metadata while raising epoch; `f2_held_network_advance_fences_old_return_and_new_reentry` adds validated new-F2 replacement before old transport returns. O remaining positive present after-ad/after-batch interruption windows |
+| 28 | E prior replacement rollback/exclusion cases plus the R3 eight-state matrix and `f2_replacement_failure_rolls_back_scope_epochs_and_pins` whole-transaction rollback/stale-write assertions. O remaining every-write/commit failure points, valid terminal remote debt, foreign-O/action correlation matrix |
+| 29 | E prior all-old-write-boundary/public stale-executor cases plus `f2_all_old_remote_and_local_write_boundaries_require_actual_current_scope`, exact-current identity SSH matrix and held-network advance/finish cases: actual current accepted attempt/exact mapping required, old matching S/O cannot write. O remaining fault combinations and source/batch request fences; D actual Task 3 binding |
 | 30 | E `reentry_selected_generation_change_is_final_without_network`, old-generation retention units; O partial-effect generation variant |
 | 31 | E `live_advertisement_captures_exact_batch_and_public_replay_cannot_mint`; O original-P handoff contract; D actual Task 4 producer |
 | 32 | O inert batch B-execution/C-consumption seam; D actual Task 4 journey |
 | 33 | O foreign/stale request+batch consumer contract projections; D actual Task 3/4 binding/coordinator |
 | 34 | O no-child gap execution/request+batch fences; D actual Task 4 coordinator |
-| 35 | E prior R7 reports/stops, direct and nonadjacent-lineage changed-W → M truthful Possible/None, R3 terminal-observer outcome preservation. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
-| 36 | E `claimed_refresh_cannot_release_blocker_without_final_result`; O M index failures/stale index-owner matrix |
+| 35 | E prior R7 reports/stops, direct and nonadjacent-lineage changed-W → M truthful Possible/None, R3 terminal-observer outcome preservation; F2 preclaim/selected/new-reentry cancellation Final/no-effect and uncertain/post-prune Owed preserve flags, stale calls cannot acknowledge. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
+| 36 | E `claimed_refresh_cannot_release_blocker_without_final_result`, F2 index SQL/unscoped/orphan/envelope matrices, actual mapping/envelope loss before persistence, and `f2_invalidated_index_uses_independent_epoch_and_single_use_current_claim`: independent index epoch plus durable single-use current-F2 claim, duplicate refusal and new-lifetime preservation. O remaining M/index fault and history variants |
 | 37 | E `generic_abandon_preserves_pending_and_terminal_identity`; D guarded preserving abandon Task 3 |
-| 38 | E prior migration/history/R1 controls, original exact R2 controls, and `specfix_r2_lineage_corruption_stays_fail_closed` (six missing/purpose/receipt/epoch/fence probes on actual multi-attempt history). O remaining resumption/M FK/tamper/deletion-order and source/batch inventory variants |
+| 38 | E prior migration/history/R1 controls, exact R2 controls, lineage corruption and F2 historical-scope/finished-replay tests; additive index-claim migration tests cover exact published-v2 history/rowids, four rollback boundaries and unknown/partial/dependency closure. Historical attempts <= current remain audit-only, never write authority. O remaining resumption/M FK/tamper/deletion-order and source/batch inventory variants |
 | 39 | O A0–A4 original-P ordering contract projections; D actual Task 4 producer |
 | 40 | O A1–A3 crash/capability/empty manifest projections; D actual Task 4 producer |
 | 41 | O source/unbound provenance lifecycle and source+consumer pin contracts; D actual Task 4 producer |
@@ -3201,3 +3201,156 @@ Unique CLI ID via supported isolated
 exit 0). No agents/push/status/PR/main integration/closure/native CI/other-worktree
 edits or default-profile/real-context/key/draft actions. Linux-only verification;
 no native/Windows/casefold-volume/cross-compilation/full-suite claim.
+
+## Task 2 Current Accepted-Request Fence — Bounded Increment (Limited Review Pending)
+
+Increment base **`597bed6ba668c8697579c2a79bc4c70ede4548d4`**; full Task 2 base
+remains `7b1912d1`. Prior recovery SPEC+QUALITY approval at `fd1549b7` and its
+`7b153deb..fd1549b7` review range stand, recorded by parent checkpoint
+**`01M6P6WWBE6YXJ9FYB6YSFV689`**. Same-phase preflight reused; remote main was
+rechecked at **`c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`**, with clean merge-tree.
+This increment has no independent approval; full Task 2 remains incomplete.
+
+### Connected scope and index safeguards
+
+- Private `retire_context_for_request` / `reenter_context_for_request` take the
+  existing crate-private `Accepted`, not public caller IDs as authority. The sealed
+  scope rejoins actual current accepted state/attempt, exact canonical root,
+  `context retire`, item target, request-salted `kind` digest, NULL confirmation/
+  base/expected metadata and unique ordinal-0/local mapping to this exact operation.
+  Domain APIs continue rejecting mapped/bound identities, including terminal ones.
+- Common S/O creation, token SQL/instance verification, every existing remote owning
+  guard, advertisement/receipt capture, error/config/completion, proof/intents,
+  final W/B callbacks, D14, reentry and index paths carry that scope. Existing
+  service/root/S/O/configuration/checkout guards remain. No lease spans transport.
+  New-F2 reentry validates its caller before atomically fencing old S/O and appending
+  immutable attempts. Old F2 history is retained but cannot authorize writes.
+- Current cancellation can acknowledge Final/no-effect; uncertain or post-prune
+  work remains truthful Owed with cancellation unacknowledged. Stale calls cannot
+  acknowledge. Finished-request results use a separate read-only lookup, never
+  reexecution; M/I-only completion and replay preserve recreated contexts/intents.
+- The invalidation RED proved that F2 attempt and index epoch are distinct counters.
+  A narrow append-only **`context_retirement_index_claims`** table spends each F2
+  attempt once and records its independently incremented index epoch. New current
+  F2 can immediately fence an old index worker; duplicates, including another
+  service/reconstructed same-attempt `Accepted`, cannot steal/reclaim. Invalidation
+  cannot unspend a claim. Every owning index check joins both identities.
+- Before touch/error/persist/stale-clear/finalization, the guard validates the exact
+  retirement envelope, root/repository, authoritative step, companion/history and
+  approved handoff. Missing companion/retirement evidence cannot fall through to
+  unscoped refresh. Retirement finalization settles companion/result/attempt/Z and
+  the index operation together; ordinary refresh retains its old completion route.
+- Late additive marker **`context_retirement_index_v1`** requires the exact
+  published-v2 catalog, independently pinned as Git-blob digest
+  **`7f82f75dbd4ea313b8e291c0849a1b7dc763fe4a`**. Extraction from the registered
+  isolated CLI registry and `597bed6b` object order also reproduced the unchanged
+  published-v1 digest. Old schema/history/dependency closure is checked before DDL;
+  the new empty table, immutable/delete guards and marker commit atomically.
+  Unknown/partial/substituted schemas and incoming claim dependencies refuse without
+  evidence loss. No old column, ordinary index counter or intermediate real-profile
+  envelope is reinterpreted. The default profile was never opened or repaired.
+
+### Test-first evidence and frozen-source distinction
+
+All logs below are under **`/tmp/opencode/`**. New SSH cases are registered in the
+existing runner. F2 fixtures are **inert canonical projections running the real
+private retirement protocol**, not Task 3 mutation/CLI journeys.
+
+| Compiled behavioral RED | Actual missing behavior |
+| --- | --- |
+| `task2-request-fence-fresh-red-compiled.log`: 1 passed / 1 failed | matching current F2 fresh retirement |
+| `task2-request-fence-reentry-index-cancel-red.log`: 3 passed / 3 failed | new-F2 reentry, I-only takeover, before-effect cancellation |
+| `task2-request-fence-metadata-initial-red.log`: 7 passed / 2 failed; separate `finished-replay-red` | request-bound initial absence and finished read-only replay |
+| `task2-request-fence-replay-identity-red.log`: 1 passed / 2 failed | zero-attempt replay and extra immutable metadata |
+| `task2-request-fence-reentry-cancel-red.log`: 0 passed / 1 failed | current new-F2 cancellation before effect / old uncertainty |
+| `task2-request-fence-index-sql-red.log`: 4 passed / 1 failed | unscoped low-level index claim |
+| `task2-request-fence-invalidation-red.log`: 0 passed / 1 failed | invalidation tombstone collides with next F2 attempt |
+| `task2-request-fence-envelope-red.log`: 0 passed / 1 failed | action/target/repository/step mismatch still allowed index writes |
+| `task2-request-fence-index-migration-red.log`: 0 passed / 2 failed | additive durable-claim envelope and rollback boundaries |
+| `task2-request-fence-null-target-red.log`: 0 passed / 1 failed | new guard must preserve ordinary refresh's NULL-target semantics |
+| `task2-request-fence-domain-reclaim-red.log`: 0 passed / 1 failed → focused green 1 passed | approved domain-only invalidation/reclaim must retain its exact tombstone CAS, not require the old live epoch |
+
+Intermediate compilation/fixture failures are not behavioral RED: initial missing
+private exports/`IndexOwner` constructor; a held-network resource baseline taken
+before legitimate bootstrap; and an invalid foreign-FK fixture insert into a missing
+parent. Corrections preserve constraints and prior assertions. Orphan-companion
+tests are explicitly labelled metadata corruption; their one removed refusal
+trigger is restored to canonical DDL before exercising any guard. No CHECK bypass.
+
+**Pre-index-fix only:** completed static gates, **93** context units and **103**
+registered retirement SSH passed at inventory
+`c838299a36845a045e6fa667f3a0fc7856bc9d89e2fd60bd6c614176c979208b`.
+Logs/inventory are retained as `task2-request-fence-prefixed-*`; the running SSH
+command was allowed to finish before any Rust edit/rebuild. Those results are not
+evidence for amended source. Focused amended green logs `index-fix-green` and
+`index-fix-ssh-green` report **11 units / 14 SSH** before the final ordinary-control
+addition; final frozen gates are recorded separately below after completion.
+
+The first amended inventory **`task2-request-fence-amended-source.sha256`**,
+SHA-256 **`702f0ab6ebe7c3f083c03592389ad2ef1cf4f2959380dcb023cd9c12a1201ce8`**,
+passed the complete selected batch: **100 context / 105 retirement SSH**, plus
+recovery/refresh/request/remote-ownership/persistence and the six integration
+targets (`task2-request-fence-amended-gates.json`). Final self-review then found
+the separate domain-only reclaim compatibility gap; the additional compiled RED
+above and its correction preserve the old CAS, while F2 auto-reclaim stays closed.
+Those first amended results are not relabelled as final-source results.
+
+Final candidate source inventory **`task2-request-fence-final-source.sha256`**
+covers **1,580** source/test/schema/build-input files, including both untracked Rust
+modules; SHA-256 **`e818e7d4098df2587488b764cf225233c3b11191310636abc09c69c5418d764d`**.
+All **15** owned Rust files are included. Formatter was stdout-only, applied with
+patch. Only ledger/internal-note/comment metadata changed after source freeze.
+All Cargo was serial Devenv, without shell deadlines, zero-case passes, source
+edits or rebuilds during running test binaries. Final logs below use prefix
+**`/tmp/opencode/task2-request-fence-verified-`**; every command exited **0**.
+
+| Exact command after `devenv shell --` | Log suffix | Final result |
+| --- | --- | --- |
+| `cargo check --all-features --locked` | `check.log` | pass |
+| `cargo fmt --check` | `fmt.log` | pass |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy.log` | pass |
+| `cargo test --all-features --locked --lib retirement_f2_` | `focused.log` | **13 passed** |
+| Same test flags, `--lib context_retirement` | `context.log` | **101 passed**, original 88 retained +13 |
+| Same test flags, `--lib recovery` | `recovery.log` | **60 passed** |
+| Same test flags, `--lib refresh` | `refresh.log` | **33 passed** |
+| Same test flags, `--lib repository::mutation::` | `mutation-unit.log` | **130 passed** |
+| Same test flags, `--lib repository::remote::reservation::` | `remote-owner.log` | **58 passed** |
+| Same test flags, `--lib remote::state::persistence_tests` | `persistence.log` | **70 passed** |
+| Same test flags, `--test mutation_replay --test mutation_confirmation --test mutation_contract --test recovery_foundation_gate --test remote_reservation --test discovery_rebuild` | `integration.log` | Cargo executed discovery **79**, confirmation **183**, contract **44**, replay **384**, foundation **52**, reservation **13**, all passed |
+| Same test flags, `--test mutation_remote retirement_` | `retirement-ssh.log` | **105 registered SSH passed**, original 91 retained +14 |
+
+`verified-gates.json` records exact test argv, exit status and raw log for every
+serial selection. Filters overlap; counts are not added into obligation groups.
+Published-v1 controls and the three new exact-v2 index migration tests are included
+in the 101-context gate. Both identified index safeguards have compiled RED/GREEN;
+the domain-only reclaim and ordinary NULL-target controls also have explicit RED/
+GREEN. The six broad unchanged remote SSH suites were not repeated or relabelled.
+No native, Windows/casefold-volume, cross-compilation or full-suite claim.
+
+Self-review traced the scope from accepted request through S/O reserve/reentry,
+token/marker verification, remote SQL/ad/error/config/finish, receipt/proof/intents,
+locked W/B callbacks, cancellation/refusal, D14, independent I claim and every cache
+write/finalization boundary. Historical audit/replay never grants current ownership;
+same-call index duplicates cannot reclaim; no generic pending-local exception or
+public constructible capability was added. Review should especially inspect the
+new additive claim schema/closure and the two-counter CAS, not infer safety solely
+from passing counts. No independent review approval is recorded here.
+
+Checkpoint **`01M6PFK6EZAAWE5YH55M5N5PV2`**, parent
+**`01M6P6WWBE6YXJ9FYB6YSFV689`**, actual UTC **`2026-11-05T18:30:06Z`**.
+Unique ID was generated by current CLI with
+`MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data` only
+(`verified-comment-id.log`, exit 0). The commit introducing this checkpoint,
+`feat: fence retirement execution by current accepted request`, is the new limited
+review endpoint from `597bed6b`; full Task 2 base remains `7b1912d1`.
+Main was rechecked unchanged and merge-tree is clean. No push, agents, ticket
+status/PR changes, main integration/closure, other-worktree edits, native CI or
+default-profile/real-context/key/draft actions. Branch/worktree remain in place
+for controller's limited SPEC then QUALITY review.
+
+No Task 3 command/DTO/CLI/guarded-abandon binding or Task 4 source/batch runtime was
+added. Only affected 44-row E/O/D annotations changed. Remaining Task 2 mechanisms:
+the recorded replacement/M/D14/index/history fault variants; shared source/batch
+A0–A4, execution-versus-consumption, no-child gaps and source/consumer holders/Z/GC.
+Actual Task 3/4 journeys remain downstream. Full Task 2/Task 8 gates/reviews remain
+owed; controller must run limited SPEC then QUALITY before authority expands.

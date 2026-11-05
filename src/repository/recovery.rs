@@ -515,6 +515,7 @@ pub(super) struct RecoveryRecord {
 pub(super) struct IndexOwner {
     pub(super) record_id: i64,
     pub(super) epoch: i64,
+    pub(super) retirement_request: Option<super::context_retirement::request_scope::RequestFence>,
 }
 
 #[cfg(test)]
@@ -1993,6 +1994,9 @@ pub(super) fn claim_indexing(
     record_id: i64,
     stale_before: i64,
 ) -> Result<Option<IndexOwner>, RepositoryError> {
+    // Request-bound retirement uses its private, current-F2 claim, never this
+    // generic claim which can mint only an unscoped index owner.
+    super::context_retirement::request_scope::validate_index(connection, record_id, None, None)?;
     let claimed = connection
         .execute(
             "UPDATE operation_records SET state = 'indexing', index_owner_epoch = index_owner_epoch + 1, observed_at = ?2
@@ -2014,7 +2018,11 @@ pub(super) fn claim_indexing(
             |row| row.get(0),
         )
         .map_err(RepositoryError::sqlite)?;
-    Ok(Some(IndexOwner { record_id, epoch }))
+    Ok(Some(IndexOwner {
+        record_id,
+        epoch,
+        retirement_request: None,
+    }))
 }
 
 /// A committed promotion invalidates observations collected before its cleanup.
@@ -2052,6 +2060,17 @@ pub(super) fn reclaim_invalidated_indexing(
     owner: IndexOwner,
     root_key: &str,
 ) -> Result<Option<IndexOwner>, RepositoryError> {
+    if owner.retirement_request.is_some() {
+        // A new current F2 call claims request-bound indexing explicitly. Never
+        // inflate its index epoch from a stale executor's cached request fence.
+        super::context_retirement::request_scope::validate_index(
+            connection,
+            owner.record_id,
+            owner.retirement_request,
+            Some(owner.epoch),
+        )?;
+        return Ok(None);
+    }
     let fenced = owner
         .epoch
         .checked_add(1)
@@ -2059,12 +2078,22 @@ pub(super) fn reclaim_invalidated_indexing(
     let next = fenced
         .checked_add(1)
         .ok_or_else(super::remote::state::recovery_required)?;
+    // Domain-only reclaim is authorized by the exact invalidation tombstone in
+    // the UPDATE below, not by still owning the pre-invalidation live epoch.
+    // Keep envelope/handoff validation without changing that established CAS.
+    super::context_retirement::request_scope::validate_index(
+        connection,
+        owner.record_id,
+        owner.retirement_request,
+        None,
+    )?;
     let changed=connection.execute(&format!(
         "UPDATE operation_records SET state='indexing',index_owner_epoch=?4,observed_at=?5 WHERE id=?1 AND root_path=?2 AND state='index_invalidated' AND index_owner_epoch=?3 AND {NOT_ABANDONED}"
     ),params![owner.record_id,root_key,fenced,next,now()]).map_err(RepositoryError::sqlite)?;
     Ok((changed == 1).then_some(IndexOwner {
         record_id: owner.record_id,
         epoch: next,
+        retirement_request: owner.retirement_request,
     }))
 }
 
@@ -2074,6 +2103,12 @@ pub(super) fn transition_indexing(
     state: &str,
     context: Option<&Path>,
 ) -> Result<bool, RepositoryError> {
+    super::context_retirement::request_scope::validate_index(
+        connection,
+        owner.record_id,
+        owner.retirement_request,
+        Some(owner.epoch),
+    )?;
     Ok(connection
         .execute(
             "UPDATE operation_records SET state = ?2, context_path = ?3, observed_at = ?4
@@ -2094,6 +2129,12 @@ pub(super) fn touch_indexing(
     connection: &Connection,
     owner: IndexOwner,
 ) -> Result<bool, RepositoryError> {
+    super::context_retirement::request_scope::validate_index(
+        connection,
+        owner.record_id,
+        owner.retirement_request,
+        Some(owner.epoch),
+    )?;
     Ok(connection
         .execute(
             "UPDATE operation_records SET observed_at = ?2 WHERE id = ?1 AND state = 'indexing' AND index_owner_epoch = ?3",
@@ -2107,6 +2148,12 @@ pub(super) fn owns_indexing(
     connection: &Connection,
     owner: IndexOwner,
 ) -> Result<bool, RepositoryError> {
+    super::context_retirement::request_scope::validate_index(
+        connection,
+        owner.record_id,
+        owner.retirement_request,
+        Some(owner.epoch),
+    )?;
     connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM operation_records WHERE id = ?1 AND state = 'indexing' AND index_owner_epoch = ?2)",
@@ -2137,6 +2184,12 @@ pub(super) fn record_owned_persisted_context(
     owner: IndexOwner,
     context: &Path,
 ) -> Result<bool, RepositoryError> {
+    super::context_retirement::request_scope::validate_index(
+        connection,
+        owner.record_id,
+        owner.retirement_request,
+        Some(owner.epoch),
+    )?;
     Ok(connection
         .execute(
             "UPDATE operation_records
@@ -2696,6 +2749,7 @@ mod abandoned_row_tests {
         let owner = IndexOwner {
             record_id: 1,
             epoch: 0,
+            retirement_request: None,
         };
         assert!(!transition_indexing(&connection, owner, "completed", None).unwrap());
         assert!(!touch_indexing(&connection, owner).unwrap());

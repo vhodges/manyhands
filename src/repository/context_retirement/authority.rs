@@ -1,5 +1,6 @@
 //! Standalone execution only. Source/batch scopes stay closed until their full
 //! holder/projection audits and release transitions are installed.
+use super::super::request_scope::Scope;
 use super::super::{ContextRetirementReport, RetireContextRequest};
 use crate::repository::{
     OperationId, RemoteOperationAction, RemoteOperationPriority, RemoteOperationTarget,
@@ -32,6 +33,7 @@ pub(in super::super::super) struct ObserverExecution {
     generation: i64,
     plan: crate::repository::RemoteRefPlan,
     configuration: ObservationConfiguration,
+    request_scope: Scope,
 }
 impl std::fmt::Debug for ObserverExecution {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -42,6 +44,9 @@ impl std::fmt::Debug for ObserverExecution {
     }
 }
 impl ObserverExecution {
+    pub(in super::super) fn request_scope(&self) -> Scope {
+        self.request_scope
+    }
     pub(in super::super) fn operation(&self) -> OperationId {
         self.operation
     }
@@ -69,12 +74,14 @@ impl ObserverExecution {
             return Err(recovery_required());
         }
         super::audit_connection(tx)?;
+        self.request_scope
+            .validate(tx, &self.operation.to_string(), &self.root)?;
         let valid: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id JOIN context_retirement_attempts a ON a.operation_ulid=c.operation_ulid AND a.owner_epoch=c.owner_epoch
           WHERE c.operation_ulid=?1 AND c.repository_id=?2 AND o.root_path=?3 AND o.state!='completed'
             AND c.owner_epoch=?4 AND a.phase='active' AND a.observer_operation_ulid=?5 AND a.observer_owner_epoch=?6
-            AND c.request_ulid IS NULL AND c.batch_operation_ulid IS NULL AND a.request_attempt IS NULL AND a.batch_attempt_epoch IS NULL
+            AND c.request_ulid IS ?11 AND c.batch_operation_ulid IS NULL AND a.request_attempt IS ?12 AND a.batch_attempt_epoch IS NULL
             AND c.configuration_generation=?7 AND c.remote_name=?8 AND c.primary_branch=?9 AND c.endpoint_digest=?10
-            AND c.phase IN ('selected','worktree_removing','worktree_removed','branch_deleting','local_absent','index_pending'))", params![self.operation.to_string(),id,self.root.to_str(),self.epoch,self.observer.to_string(),self.observer_epoch,self.generation,self.plan.remote_name(),self.plan.primary_branch(),self.configuration.endpoint_digest().as_slice()], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+            AND c.phase IN ('selected','worktree_removing','worktree_removed','branch_deleting','local_absent','index_pending'))", params![self.operation.to_string(),id,self.root.to_str(),self.epoch,self.observer.to_string(),self.observer_epoch,self.generation,self.plan.remote_name(),self.plan.primary_branch(),self.configuration.endpoint_digest().as_slice(),self.request_scope.request_id(),self.request_scope.attempt()], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
         let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records o WHERE (o.repository_id=?1 OR o.root_path=?2) AND o.operation_ulid IS NOT ?3 AND (o.state!='completed' OR o.completed_step='comment_registration_pending'))
           OR EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND ((operation_ulid!=?4 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')) OR index_pending!=0 OR reconciliation_required!=0))", params![id,self.root.to_str(),self.operation.to_string(),self.observer.to_string()], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
         if !valid || blocked {
@@ -90,6 +97,8 @@ impl ObserverExecution {
         id: i64,
     ) -> Result<(), RepositoryError> {
         self.local_owner(service, tx, id)?;
+        self.request_scope
+            .effect(tx, &self.operation.to_string(), &self.root)?;
         if state::generation(tx, id)? != self.generation
             || !self
                 .configuration
@@ -144,9 +153,9 @@ impl ObserverExecution {
     ) -> Result<(), RepositoryError> {
         self.validate_observer(service, tx, id, remote)?;
         let observed: i64 = tx.query_row("SELECT observed_at FROM remote_observation_batches WHERE id=?1 AND repository_id=?2 AND configuration_generation=?3 AND is_current=1 AND remote_name=?4 AND primary_branch=?5", params![batch,id,self.generation,self.plan.remote_name(),self.plan.primary_branch()], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
-        tx.execute("INSERT INTO retirement_advertisement_provenance(repository_id,source_operation_ulid,source_owner_epoch,observation_batch_id,observed_at,configuration_generation,remote_name,primary_branch,endpoint_digest,execution_kind,execution_parent_ulid,execution_parent_epoch) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'local_parent',?10,?11)", params![id,self.observer.to_string(),self.observer_epoch,batch,observed,self.generation,self.plan.remote_name(),self.plan.primary_branch(),self.configuration.endpoint_digest().as_slice(),self.operation.to_string(),self.epoch]).map_err(RepositoryError::sqlite)?;
+        tx.execute("INSERT INTO retirement_advertisement_provenance(repository_id,source_operation_ulid,source_owner_epoch,observation_batch_id,observed_at,configuration_generation,remote_name,primary_branch,endpoint_digest,execution_kind,execution_parent_ulid,execution_parent_epoch,execution_request_ulid,execution_request_attempt) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'local_parent',?10,?11,?12,?13)", params![id,self.observer.to_string(),self.observer_epoch,batch,observed,self.generation,self.plan.remote_name(),self.plan.primary_branch(),self.configuration.endpoint_digest().as_slice(),self.operation.to_string(),self.epoch,self.request_scope.request_id(),self.request_scope.attempt()]).map_err(RepositoryError::sqlite)?;
         let provenance = tx.last_insert_rowid();
-        tx.execute("INSERT INTO retirement_observation_receipts(provenance_id,repository_id,consumer_kind,consumer_operation_ulid,consumer_attempt_epoch,configuration_generation) VALUES(?1,?2,'single',?3,?4,?5)", params![provenance,id,self.operation.to_string(),self.epoch,self.generation]).map_err(RepositoryError::sqlite)?;
+        tx.execute("INSERT INTO retirement_observation_receipts(provenance_id,repository_id,consumer_kind,consumer_operation_ulid,consumer_attempt_epoch,configuration_generation,consumer_request_ulid,consumer_request_attempt) VALUES(?1,?2,'single',?3,?4,?5,?6,?7)", params![provenance,id,self.operation.to_string(),self.epoch,self.generation,self.request_scope.request_id(),self.request_scope.attempt()]).map_err(RepositoryError::sqlite)?;
         let binding = tx.last_insert_rowid();
         tx.execute("INSERT INTO retirement_observation_pins(provenance_id,pin_kind,holder_operation_ulid,holder_epoch,repository_id,observation_batch_id,binding_id) VALUES(?1,'consumer_attempt',?2,?3,?4,?5,?6)", params![provenance,self.operation.to_string(),self.epoch,id,batch,binding]).map_err(RepositoryError::sqlite)?;
         super::audit_connection(tx)
@@ -181,6 +190,7 @@ impl ObserverExecution {
     }
 }
 
+#[cfg(test)]
 pub(in super::super) fn claim_branch(
     service: &RepositoryService,
     request: &RetireContextRequest,
@@ -188,8 +198,17 @@ pub(in super::super) fn claim_branch(
     plan: crate::repository::RemoteRefPlan,
     configuration: ObservationConfiguration,
 ) -> Result<BranchClaim, RepositoryError> {
-    claim_fresh(service, request, tip, plan, configuration, None)
+    claim_scoped(
+        service,
+        request,
+        tip,
+        plan,
+        configuration,
+        None,
+        Scope::Domain,
+    )
 }
+#[cfg(test)]
 pub(in super::super) fn claim_present(
     service: &RepositoryService,
     request: &RetireContextRequest,
@@ -197,26 +216,29 @@ pub(in super::super) fn claim_present(
     plan: crate::repository::RemoteRefPlan,
     configuration: ObservationConfiguration,
 ) -> Result<BranchClaim, RepositoryError> {
-    claim_fresh(
+    claim_scoped(
         service,
         request,
         selection.tip(),
         plan,
         configuration,
         Some(selection.nonce()),
+        Scope::Domain,
     )
 }
-fn claim_fresh(
+pub(in super::super) fn claim_scoped(
     service: &RepositoryService,
     request: &RetireContextRequest,
     tip: git2::Oid,
     plan: crate::repository::RemoteRefPlan,
     configuration: ObservationConfiguration,
     nonce: Option<OperationId>,
+    scope: Scope,
 ) -> Result<BranchClaim, RepositoryError> {
     state::with_transaction(service, &request.root, |tx, id| {
         super::audit_connection(tx)?;
         let operation = request.operation_id.to_string();
+        scope.effect(tx, &operation, &request.root)?;
         if local_sync::record::foreign_id_collision(tx, &operation, None)?
             || local_sync::record::owned_identity(tx, &operation)?
             || super::owned_identity(tx, &operation)?
@@ -224,7 +246,7 @@ fn claim_fresh(
             return Err(recovery_required());
         }
         recovery::require_no_pending_local(tx, id)?;
-        let blocked: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0)) OR EXISTS(SELECT 1 FROM request_operations WHERE operation_ulid=?2)", params![id,operation],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
+        let blocked: bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))", [id],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
         if blocked {
             return Err(recovery_required());
         }
@@ -246,8 +268,8 @@ fn claim_fresh(
         let report = ContextRetirementReport::refused(crate::results::ResultCode::RecoveryRequired);
         tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,'retire_context',?4,?5,?6)",params![id,request.root.to_str(),operation,format!("authoring-context-v1/{}/{}/Retire",authoring_kind_segment(&request.kind),request.item_id),if valid {"created"}else{"completed"},service.clock.now().unix_timestamp()]).map_err(RepositoryError::sqlite)?;
         let local = tx.last_insert_rowid();
-        tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,expected_tip,selection_epoch,instance_verified,remote_name,primary_branch,configuration_generation,endpoint_digest,materialization_capture,materialization_operation_ulid,materialization_oid,materialization_step,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis,final_code,final_result,instance_nonce) VALUES(?1,?2,?3,1,?4,?5,?18,?6,1,0,?7,?8,?9,?10,?11,?12,?13,?14,0,1,?15,'none','none','none',?16,?17,?19)",params![operation,local,id,authoring_kind_segment(&request.kind),request.item_id.to_string(),tip.to_string(),plan.remote_name(),plan.primary_branch(),generation,configuration.endpoint_digest().as_slice(),if !valid {"unverified"}else if captured.is_some(){"complete"}else{"absent"},captured.map(|v|&v.0),captured.map(|v|&v.1),captured.map(|v|&v.2),if valid{"selected"}else{"refused"},(!valid).then_some(report.code.as_str()),if valid{None}else{Some(report.encode()?)},if nonce.is_some(){"present"}else{"branch_only"},nonce.map(|v|v.to_string())]).map_err(RepositoryError::sqlite)?;
-        tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase) VALUES(?1,1,?2,?3)",params![operation,id,if valid{"active"}else{"ended"}]).map_err(RepositoryError::sqlite)?;
+        tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,expected_tip,selection_epoch,instance_verified,remote_name,primary_branch,configuration_generation,endpoint_digest,materialization_capture,materialization_operation_ulid,materialization_oid,materialization_step,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis,final_code,final_result,instance_nonce,request_ulid) VALUES(?1,?2,?3,1,?4,?5,?18,?6,1,0,?7,?8,?9,?10,?11,?12,?13,?14,0,1,?15,'none','none','none',?16,?17,?19,?20)",params![operation,local,id,authoring_kind_segment(&request.kind),request.item_id.to_string(),tip.to_string(),plan.remote_name(),plan.primary_branch(),generation,configuration.endpoint_digest().as_slice(),if !valid {"unverified"}else if captured.is_some(){"complete"}else{"absent"},captured.map(|v|&v.0),captured.map(|v|&v.1),captured.map(|v|&v.2),if valid{"selected"}else{"refused"},(!valid).then_some(report.code.as_str()),if valid{None}else{Some(report.encode()?)},if nonce.is_some(){"present"}else{"branch_only"},nonce.map(|v|v.to_string()),scope.request_id()]).map_err(RepositoryError::sqlite)?;
+        tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase,request_attempt) VALUES(?1,1,?2,?3,?4)",params![operation,id,if valid{"active"}else{"ended"},scope.attempt()]).map_err(RepositoryError::sqlite)?;
         if !valid {
             super::audit_connection(tx)?;
             return Ok(BranchClaim::Refused(report));
@@ -279,6 +301,7 @@ fn claim_fresh(
             generation,
             plan,
             configuration,
+            request_scope: scope,
         };
         if nonce.is_some() {
             execution.validate_install(service, tx, id)?;
@@ -298,8 +321,10 @@ pub(in super::super) fn bind_reentry_observer(
     request: &RetireContextRequest,
     epoch: i64,
     configuration: ObservationConfiguration,
+    scope: Scope,
 ) -> Result<Box<RemoteReservation>, RepositoryError> {
-    let (remote_name,primary,generation):(String,String,i64)=tx.query_row("SELECT c.remote_name,c.primary_branch,c.configuration_generation FROM context_retirement_records c JOIN context_retirement_reentries rr ON rr.operation_ulid=c.operation_ulid AND rr.owner_epoch=c.owner_epoch WHERE c.operation_ulid=?1 AND c.owner_epoch=?2 AND rr.purpose IN ('observe','resume_worktree') AND c.request_ulid IS NULL AND c.batch_operation_ulid IS NULL",params![request.operation_id.to_string(),epoch],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(RepositoryError::sqlite)?;
+    scope.effect(tx, &request.operation_id.to_string(), &request.root)?;
+    let (remote_name,primary,generation):(String,String,i64)=tx.query_row("SELECT c.remote_name,c.primary_branch,c.configuration_generation FROM context_retirement_records c JOIN context_retirement_reentries rr ON rr.operation_ulid=c.operation_ulid AND rr.owner_epoch=c.owner_epoch WHERE c.operation_ulid=?1 AND c.owner_epoch=?2 AND rr.purpose IN ('observe','resume_worktree') AND c.request_ulid IS ?3 AND c.batch_operation_ulid IS NULL",params![request.operation_id.to_string(),epoch,scope.request_id()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(RepositoryError::sqlite)?;
     let plan = crate::repository::RemoteRefPlan::from_configuration(&remote_name, &primary)
         .map_err(|_| recovery_required())?;
     let observer = OperationId::new();
@@ -329,6 +354,7 @@ pub(in super::super) fn bind_reentry_observer(
         generation,
         plan,
         configuration,
+        request_scope: scope,
     };
     execution.validate_install(service, tx, id)?;
     Ok(Box::new(reservation::retirement_token(
@@ -336,14 +362,16 @@ pub(in super::super) fn bind_reentry_observer(
     )))
 }
 
-pub(in super::super) fn refuse_fresh(
+pub(in super::super) fn refuse_fresh_scoped(
     service: &RepositoryService,
     request: &RetireContextRequest,
     code: crate::results::ResultCode,
+    scope: Scope,
 ) -> Result<ContextRetirementReport, RepositoryError> {
     state::with_transaction(service, &request.root, |tx, id| {
         super::audit_connection(tx)?;
         let operation = request.operation_id.to_string();
+        let cancelled = scope.validate(tx, &operation, &request.root)?;
         if local_sync::record::foreign_id_collision(tx, &operation, None)?
             || local_sync::record::owned_identity(tx, &operation)?
             || super::owned_identity(tx, &operation)?
@@ -351,15 +379,22 @@ pub(in super::super) fn refuse_fresh(
             return Err(recovery_required());
         }
         recovery::require_no_pending_local(tx, id)?;
-        let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0)) OR EXISTS(SELECT 1 FROM request_operations WHERE operation_ulid=?2)",params![id,operation],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
+        let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))",[id],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
         if blocked {
             return Err(recovery_required());
         }
-        let report = ContextRetirementReport::refused(code);
+        let report = ContextRetirementReport::refused(if cancelled {
+            crate::results::ResultCode::Cancelled
+        } else {
+            code
+        });
         tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,'retire_context',?4,'completed',?5)",params![id,request.root.to_str(),operation,format!("authoring-context-v1/{}/{}/Retire",authoring_kind_segment(&request.kind),request.item_id),service.clock.now().unix_timestamp()]).map_err(RepositoryError::sqlite)?;
         let local = tx.last_insert_rowid();
-        tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,selection_epoch,instance_verified,materialization_capture,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis,final_code,final_result) VALUES(?1,?2,?3,1,?4,?5,'invalid',1,0,'unverified',0,1,'refused','none','none','none',?6,?7)",params![operation,local,id,authoring_kind_segment(&request.kind),request.item_id.to_string(),code.as_str(),report.encode()?]).map_err(RepositoryError::sqlite)?;
-        tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase) VALUES(?1,1,?2,'ended')",params![operation,id]).map_err(RepositoryError::sqlite)?;
+        tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,selection_epoch,instance_verified,materialization_capture,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis,final_code,final_result,request_ulid) VALUES(?1,?2,?3,1,?4,?5,'invalid',1,0,'unverified',0,1,'refused','none','none','none',?6,?7,?8)",params![operation,local,id,authoring_kind_segment(&request.kind),request.item_id.to_string(),report.code.as_str(),report.encode()?,scope.request_id()]).map_err(RepositoryError::sqlite)?;
+        tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase,request_attempt) VALUES(?1,1,?2,'ended',?3)",params![operation,id,scope.attempt()]).map_err(RepositoryError::sqlite)?;
+        if cancelled {
+            tx.execute("UPDATE request_records SET cancel_requested=0 WHERE request_ulid=?1 AND attempt=?2 AND state='accepted'",params![scope.request_id(),scope.attempt()]).map_err(RepositoryError::sqlite)?;
+        }
         super::audit_connection(tx)?;
         Ok(report)
     })
@@ -418,6 +453,10 @@ fn refuse(
     let execution = owner.retirement_execution()?;
     state::with_transaction(service, root, |tx, id| {
         execution.local_owner(service, tx, id)?;
+        let cancelled =
+            execution
+                .request_scope
+                .validate(tx, &execution.operation.to_string(), root)?;
         let kind = match &uninvoked {
             None => 0,
             Some(NoEffect::Branch(_)) => 1,
@@ -440,15 +479,20 @@ fn refuse(
         {
             return Err(recovery_required());
         }
-        tx.execute("UPDATE remote_operation_records SET phase='interrupted',outcome='repository_unavailable',owner_epoch=owner_epoch+1 WHERE id=?1 AND phase IN ('reserved','advertising','persisting')",[remote.id]).map_err(RepositoryError::sqlite)?;
+        tx.execute("UPDATE remote_operation_records SET phase=?2,outcome=?3,owner_epoch=owner_epoch+1 WHERE id=?1 AND phase IN ('reserved','advertising','persisting')",params![remote.id,if cancelled{"cancelled"}else{"interrupted"},if cancelled{"cancelled"}else{"repository_unavailable"}]).map_err(RepositoryError::sqlite)?;
         if let Some(uninvoked) = uninvoked {
             match uninvoked {
                 NoEffect::Branch(w) => w.settle(tx, execution.operation, execution.epoch)?,
                 NoEffect::Worktree(w) => w.settle(tx, execution.operation, execution.epoch)?,
             }
         }
-        let report = ContextRetirementReport::refused(code);
-        if tx.execute("UPDATE context_retirement_records SET phase='refused',worktree_removal='none',branch_removal='none',final_code=?2,final_result=?3 WHERE operation_ulid=?1 AND owner_epoch=?4 AND phase IN ('selected','branch_deleting','worktree_removing')",params![execution.operation.to_string(),code.as_str(),report.encode()?,execution.epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
+        let report = ContextRetirementReport::refused(if cancelled {
+            crate::results::ResultCode::Cancelled
+        } else {
+            code
+        });
+        if cancelled && tx.execute("UPDATE request_records SET cancel_requested=0 WHERE request_ulid=?1 AND attempt=?2 AND state='accepted' AND cancel_requested=1",params![execution.request_scope.request_id(),execution.request_scope.attempt()]).map_err(RepositoryError::sqlite)?!=1 {return Err(recovery_required());}
+        if tx.execute("UPDATE context_retirement_records SET phase='refused',worktree_removal='none',branch_removal='none',final_code=?2,final_result=?3 WHERE operation_ulid=?1 AND owner_epoch=?4 AND phase IN ('selected','branch_deleting','worktree_removing')",params![execution.operation.to_string(),report.code.as_str(),report.encode()?,execution.epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
         if tx.execute("UPDATE context_retirement_attempts SET phase='ended' WHERE operation_ulid=?1 AND owner_epoch=?2 AND phase='active'",params![execution.operation.to_string(),execution.epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
         super::release_single_consumer(tx, &execution.operation.to_string(), execution.epoch)?;
         if tx.execute("UPDATE operation_records SET state='completed' WHERE operation_ulid=?1 AND action='retire_context' AND state!='completed'",[execution.operation.to_string()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}

@@ -126,9 +126,23 @@ impl RepositoryService {
     /// fresh lifetime, never a saved branch-only or worktree-removal permit.
     pub fn retire_context_authenticated<P: SessionCredentialProvider>(
         &self,
+        request: RetireContextRequest,
+        approval: Option<HostApproval>,
+        session: &mut SessionCredentials<P>,
+    ) -> Result<ContextRetirementOutcome, RepositoryError> {
+        self.retire_context_authenticated_scoped(
+            request,
+            approval,
+            session,
+            super::request_scope::Scope::Domain,
+        )
+    }
+    pub(super) fn retire_context_authenticated_scoped<P: SessionCredentialProvider>(
+        &self,
         mut request: RetireContextRequest,
         approval: Option<HostApproval>,
         session: &mut SessionCredentials<P>,
+        scope: super::request_scope::Scope,
     ) -> Result<ContextRetirementOutcome, RepositoryError> {
         self.require_index_available(RepositoryOperation::RetireContext, Some(&request.root))?;
         let (git, root) =
@@ -137,18 +151,25 @@ impl RepositoryService {
             return Err(recovery_required());
         }
         request.root = root;
-        let existing = state::with_transaction(self, &request.root, |tx, _| {
+        let (existing, cancelled) = state::with_transaction(self, &request.root, |tx, _| {
             record::audit_connection(tx)?;
-            tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1)",
-                [request.operation_id.to_string()],
-                |r| r.get::<_, bool>(0),
-            )
-            .map_err(RepositoryError::sqlite)
+            let cancelled = scope.validate(tx, &request.operation_id.to_string(), &request.root)?;
+            let existing = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM operation_records WHERE operation_ulid=?1)",
+                    [request.operation_id.to_string()],
+                    |r| r.get::<_, bool>(0),
+                )
+                .map_err(RepositoryError::sqlite)?;
+            Ok((existing, cancelled))
         })?;
         // Includes terminal and index-only replay, before configuration/key reads.
         if existing {
-            return self.retire_context(request);
+            return self.retire_context_scoped(request, scope);
+        }
+        if cancelled {
+            return record::refuse_fresh_scoped(self, &request, ResultCode::Cancelled, scope)
+                .map(ContextRetirementOutcome::Final);
         }
         let lease = repository_lease(&git, &request.root, RepositoryOperation::RetireContext)?;
         let selection_cleanup = ContextCleanup::holding(&request.root, lease)?;
@@ -159,12 +180,12 @@ impl RepositoryService {
                     != Inventory::PresentOrBranchOnly
                 {
                     drop(selection_cleanup);
-                    return self.retire_context(request);
+                    return self.retire_context_scoped(request, scope);
                 }
                 match instance::Selection::capture(&git, &request, &selection_cleanup) {
                     Ok(selection) => (selection.tip(), Some(selection)),
                     Err(code) => {
-                        return record::refuse_fresh(self, &request, code)
+                        return record::refuse_fresh_scoped(self, &request, code, scope)
                             .map(ContextRetirementOutcome::Final);
                     }
                 }
@@ -172,11 +193,15 @@ impl RepositoryService {
         };
         let plan = observation_plan(&request.root).map_err(|_| recovery_required())?;
         let configuration = self.observation_configuration(&request.root, &plan)?;
-        let claimed = if let Some(selection) = &selection {
-            record::claim_present(self, &request, selection, plan, configuration)
-        } else {
-            record::claim_branch(self, &request, tip, plan, configuration)
-        }?;
+        let claimed = record::claim_scoped(
+            self,
+            &request,
+            tip,
+            plan,
+            configuration,
+            selection.as_ref().map(|s| s.nonce()),
+            scope,
+        )?;
         let owner = match claimed {
             record::BranchClaim::Refused(report) => {
                 return Ok(ContextRetirementOutcome::Final(report));
@@ -336,7 +361,12 @@ impl RepositoryService {
                     // Same complete authorization, now under the exact ref lock and
                     // immediately before Git removal. No selected-admin exemption
                     // or marker read can recreate the consumed W lifetime permit.
-                    if instance::require_checkout_inventory(&git, &request, None).is_err() {
+                    if owner
+                        .retirement_execution()
+                        .and_then(|e| e.validate_local(self, tx, id))
+                        .is_err()
+                        || instance::require_checkout_inventory(&git, &request, None).is_err()
+                    {
                         return false;
                     }
                     // Only this actual effect boundary spends the no-effect witness.
@@ -398,7 +428,7 @@ impl RepositoryService {
             });
         }
         // Existing I-only path owns its separate claimed index epoch/finalizer.
-        self.retire_context(request)
+        self.retire_context_scoped(request, owner.retirement_execution()?.request_scope())
     }
 }
 
@@ -463,7 +493,12 @@ fn prune_present(
             return Err(recovery_required());
         }
         require_materialization(tx, request.operation_id, false)?;
-        match verified.prune(git, request, cleanup) {
+        match verified.prune(git, request, cleanup, || {
+            owner
+                .retirement_execution()
+                .and_then(|e| e.validate_local(service, tx, id))
+                .is_ok()
+        }) {
             instance::Prune::Removed(pruned) => {
                 let _ = uninvoked.take();
                 permit = Some(pruned);

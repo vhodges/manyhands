@@ -5,6 +5,119 @@ use crate::repository::context_retirement::{
     ContextRetirementOutcome, RetireContextRequest, execution_tests::registry_image, record,
 };
 
+fn index_v2(data: &std::path::Path) -> Connection {
+    let (mut db, _) = legacy(data, "released");
+    record::migrate(&mut db).unwrap();
+    // Build the exact pre-index v2 catalog, retaining every old history row.
+    // Fresh fixture only; these objects/rows never exist in published v2.
+    if recovery::has_table(&db, "context_retirement_index_claims").unwrap() {
+        db.execute_batch("DROP TRIGGER retirement_index_claim_immutable; DROP TRIGGER retirement_index_claim_delete; DROP TABLE context_retirement_index_claims;").unwrap();
+    }
+    db.execute(
+        "DELETE FROM registry_migrations WHERE name='context_retirement_index_v1'",
+        [],
+    )
+    .unwrap();
+    db
+}
+
+#[test]
+fn retirement_f2_index_migration_is_additive_preserves_v2_history_and_reopens() {
+    let data = tempfile::tempdir().unwrap();
+    let mut db = index_v2(data.path());
+    let mut before = specfix_r1_full_image(&db);
+    before.remove("sqlite_master");
+    before.remove("schema_version");
+    before.remove("registry_migrations");
+    before.remove("rowids/registry_migrations");
+    record::migrate(&mut db).unwrap();
+    assert!(
+        recovery::has_table(&db, "context_retirement_index_claims").unwrap(),
+        "durable single-use F2 claims require the additive index envelope"
+    );
+    let after = specfix_r1_full_image(&db);
+    for (table, rows) in before {
+        assert_eq!(
+            after.get(&table),
+            Some(&rows),
+            "{table}: old values/rowids must be unchanged"
+        );
+    }
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM context_retirement_index_claims",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    record::audit_connection(&db).unwrap();
+    let before = specfix_r1_full_image(&db);
+    drop(RepositoryService::open_at(data.path()).unwrap());
+    assert_eq!(before, specfix_r1_full_image(&db));
+}
+
+#[test]
+fn retirement_f2_index_migration_each_new_boundary_rolls_back_exact_v2() {
+    for point in 8..=11 {
+        let data = tempfile::tempdir().unwrap();
+        let mut db = index_v2(data.path());
+        let before = specfix_r1_full_image(&db);
+        record::fail_migration_at(point);
+        assert!(
+            record::migrate(&mut db).is_err(),
+            "point {point}: missing index migration fault boundary"
+        );
+        assert_eq!(
+            before,
+            specfix_r1_full_image(&db),
+            "point {point}: no partial schema/marker/data/rowid changes"
+        );
+        assert!(RepositoryService::open_at(data.path()).is_ok());
+    }
+}
+
+#[test]
+fn retirement_f2_index_migration_unknown_partial_and_dependency_envelopes_preserve_evidence() {
+    for case in [
+        "unmarked_table",
+        "unknown_marker",
+        "old_schema_new_marker",
+        "foreign_child",
+        "foreign_trigger",
+        "missing_table",
+        "missing_marker",
+        "substituted_trigger",
+    ] {
+        let data = tempfile::tempdir().unwrap();
+        let mut db = index_v2(data.path());
+        if matches!(
+            case,
+            "foreign_trigger" | "missing_table" | "missing_marker" | "substituted_trigger"
+        ) {
+            record::migrate(&mut db).unwrap();
+        }
+        match case {
+            "unmarked_table"=>db.execute_batch("CREATE TABLE context_retirement_index_claims(payload TEXT); INSERT INTO context_retirement_index_claims VALUES('must-keep');").unwrap(),
+            "unknown_marker"=>{db.execute("INSERT INTO registry_migrations VALUES('context_retirement_index_v99')",[]).unwrap();},
+            "old_schema_new_marker"=>{db.execute("INSERT INTO registry_migrations VALUES('context_retirement_index_v1')",[]).unwrap();},
+            "foreign_child"=>db.execute_batch("CREATE TABLE foreign_claim_history(id INTEGER PRIMARY KEY,op TEXT,attempt INTEGER,payload TEXT,FOREIGN KEY(op,attempt) REFERENCES context_retirement_index_claims(operation_ulid,request_attempt) ON DELETE CASCADE); CREATE TABLE foreign_claim_payload(id INTEGER PRIMARY KEY,payload TEXT); INSERT INTO foreign_claim_payload VALUES(91,'must-keep');").unwrap(),
+            "foreign_trigger"=>db.execute_batch("CREATE TRIGGER foreign_claim_guard BEFORE DELETE ON context_retirement_index_claims BEGIN SELECT 1; END;").unwrap(),
+            "missing_table"=>db.execute_batch("DROP TABLE context_retirement_index_claims;").unwrap(),
+            "missing_marker"=>{db.execute("DELETE FROM registry_migrations WHERE name='context_retirement_index_v1'",[]).unwrap();},
+            _=>db.execute_batch("DROP TRIGGER retirement_index_claim_immutable; CREATE TRIGGER retirement_index_claim_immutable BEFORE UPDATE ON context_retirement_index_claims BEGIN SELECT 1; END;").unwrap(),
+        }
+        let before = specfix_r1_full_image(&db);
+        assert!(RepositoryService::open_at(data.path()).is_err(), "{case}");
+        assert_eq!(
+            before,
+            specfix_r1_full_image(&db),
+            "{case}: no widening/copy/evidence loss"
+        );
+    }
+}
+
 fn legacy(data: &std::path::Path, case: &str) -> (Connection, OperationId) {
     drop(RepositoryService::open_at(data).unwrap());
     git2::Repository::init(data).unwrap();
@@ -23,6 +136,7 @@ fn legacy(data: &std::path::Path, case: &str) -> (Connection, OperationId) {
         db.execute_batch(&format!("DROP TRIGGER {name}")).unwrap();
     }
     for name in [
+        "context_retirement_index_claims",
         "context_retirement_absence_receipts",
         "context_retirement_worktree_resumptions",
         "retirement_observation_pin_releases",

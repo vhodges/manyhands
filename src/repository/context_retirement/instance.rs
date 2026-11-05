@@ -504,6 +504,7 @@ impl Verified {
         git: &git2::Repository,
         request: &RetireContextRequest,
         cleanup: &ContextCleanup,
+        authorize: impl FnOnce() -> bool,
     ) -> Prune {
         let result =
             cleanup.remove_retirement_worktree(self.0.kind, &self.0.item, self.0.tip, || {
@@ -514,7 +515,7 @@ impl Verified {
                         hook();
                     }
                 }
-                self.0.verify_marker(git, request).is_ok()
+                authorize() && self.0.verify_marker(git, request).is_ok()
             });
         match result {
             WorktreeRelease::Removed => Prune::Removed(Pruned { _private: () }),

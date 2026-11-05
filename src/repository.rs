@@ -90,6 +90,8 @@ pub use keys::{
     UnregisterSharedKeyOutcome,
 };
 pub use local_sync::LocalContextSyncObservationDto;
+#[cfg(test)]
+pub(crate) use mutation::Accepted as RetirementAccepted;
 pub use mutation::*;
 pub use promotion::*;
 pub use read::*;
@@ -6406,9 +6408,11 @@ fn reconcile_disappeared_contexts(
     // transaction, and records the time from which the refresh observed.
     // A refresh that fails or must be retried never reaches it.
     transaction.execute("UPDATE repositories SET accessibility = 'accessible', refresh_required = 0, refreshed_at = ?2 WHERE id = ?1", params![repository_id, observed_from]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
-    context_retirement::record::finalize_index(&transaction, owner, repository_id, root)?;
-    if !transition_indexing(&transaction, owner, "completed", None)
-        .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
+    let retirement_completed =
+        context_retirement::record::finalize_index(&transaction, owner, repository_id, root)?;
+    if !retirement_completed
+        && !transition_indexing(&transaction, owner, "completed", None)
+            .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
     {
         return Err(nonowner_error(root));
     }

@@ -247,6 +247,13 @@ impl RepositoryService {
         &self,
         request: RetireContextRequest,
     ) -> Result<ContextRetirementOutcome, RepositoryError> {
+        self.retire_context_scoped(request, super::request_scope::Scope::Domain)
+    }
+    pub(super) fn retire_context_scoped(
+        &self,
+        request: RetireContextRequest,
+        scope: super::request_scope::Scope,
+    ) -> Result<ContextRetirementOutcome, RepositoryError> {
         self.require_index_available(OP, Some(&request.root))?;
         let (git, root) = canonical_repository_root(&request.root, OP)?;
         if git.is_worktree() {
@@ -283,6 +290,7 @@ impl RepositoryService {
                     )
                 })?;
             let id = request.operation_id.to_string();
+            scope.validate(&tx, &id, &root)?;
             let existing: Option<(String,String,String,Option<String>)> = tx.query_row("SELECT o.root_path,o.target,c.phase,c.final_result FROM operation_records o JOIN context_retirement_records c ON c.local_record_id=o.id WHERE o.operation_ulid=?1", [&id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(RepositoryError::sqlite)?;
             if let Some((bound_root, bound_target, phase, result)) = existing {
                 if Some(bound_root.as_str()) != root.to_str() || bound_target != target {
@@ -292,10 +300,6 @@ impl RepositoryService {
                         RepositoryErrorKind::OperationMismatch,
                         "retirement inputs do not match the original operation",
                     ));
-                }
-                let domain_only: bool = tx.query_row("SELECT request_ulid IS NULL AND batch_operation_ulid IS NULL FROM context_retirement_records WHERE operation_ulid=?1", [&id], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
-                if !domain_only {
-                    return Err(recovery_required());
                 }
                 if let Some(result) = result {
                     return Ok(ContextRetirementOutcome::Final(
@@ -307,13 +311,14 @@ impl RepositoryService {
                     return Ok(ContextRetirementOutcome::Final(result));
                 }
                 if !matches!(phase.as_str(), "local_absent" | "index_pending")
-                    || !record::refresh_allowed(&tx, &id, &root)?
+                    || !record::refresh_allowed_scoped(&tx, &id, &root, scope)?
                 {
                     return Err(recovery_required());
                 }
                 // An accepted authoritative handoff NEVER reinspects B/W/A or
                 // consumes another materialization, including after recreation.
             } else {
+                scope.effect(&tx, &id, &root)?;
                 if local_sync::record::foreign_id_collision(&tx, &id, None)?
                     || local_sync::record::owned_identity(&tx, &id)?
                     || record::owned_identity(&tx, &id)?
@@ -324,7 +329,7 @@ impl RepositoryService {
                 // A terminal remote row may still own discovery/reconciliation
                 // before a local handoff row exists. Its released reservation
                 // is not permission for a new retirement to settle that debt.
-                let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0)) OR EXISTS(SELECT 1 FROM request_operations WHERE operation_ulid=?2)", params![repository_id,id], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+                let blocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))", [repository_id], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
                 if blocked {
                     return Err(recovery_required());
                 }
@@ -351,10 +356,10 @@ impl RepositoryService {
                 tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,'retire_context',?4,'created',?5)", params![repository_id,root.to_str(),id,target,self.clock.now().unix_timestamp()]).map_err(RepositoryError::sqlite)?;
                 let local_id = tx.last_insert_rowid();
                 let captured = materialization.as_ref().filter(|_| complete);
-                tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,selection_epoch,instance_verified,materialization_capture,materialization_operation_ulid,materialization_oid,materialization_step,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis,final_code,final_result)
-                  VALUES(?1,?2,?3,1,?4,?5,?13,1,0,?6,?7,?8,?9,0,1,?10,'none','none','none',?11,?12)",
-                  params![id,local_id,repository_id,authoring_kind_segment(&request.kind),request.item_id.to_string(),if !complete { "unverified" } else if captured.is_some() { "complete" } else { "absent" },captured.map(|v| &v.0),captured.map(|v| &v.1),captured.map(|v| &v.2),if complete { "selected" } else { "refused" },(!complete).then_some(ResultCode::RecoveryRequired.as_str()),if complete { None } else { Some(ContextRetirementReport::refused(ResultCode::RecoveryRequired).encode()?) },if inventory==Inventory::Absent { "absent" } else { "invalid" }]).map_err(RepositoryError::sqlite)?;
-                tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase) VALUES(?1,1,?2,?3)", params![id,repository_id,if complete { "active" } else { "ended" }]).map_err(RepositoryError::sqlite)?;
+                tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,selection_epoch,instance_verified,materialization_capture,materialization_operation_ulid,materialization_oid,materialization_step,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis,final_code,final_result,request_ulid)
+                  VALUES(?1,?2,?3,1,?4,?5,?13,1,0,?6,?7,?8,?9,0,1,?10,'none','none','none',?11,?12,?14)",
+                  params![id,local_id,repository_id,authoring_kind_segment(&request.kind),request.item_id.to_string(),if !complete { "unverified" } else if captured.is_some() { "complete" } else { "absent" },captured.map(|v| &v.0),captured.map(|v| &v.1),captured.map(|v| &v.2),if complete { "selected" } else { "refused" },(!complete).then_some(ResultCode::RecoveryRequired.as_str()),if complete { None } else { Some(ContextRetirementReport::refused(ResultCode::RecoveryRequired).encode()?) },if inventory==Inventory::Absent { "absent" } else { "invalid" },scope.request_id()]).map_err(RepositoryError::sqlite)?;
+                tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase,request_attempt) VALUES(?1,1,?2,?3,?4)", params![id,repository_id,if complete { "active" } else { "ended" },scope.attempt()]).map_err(RepositoryError::sqlite)?;
                 if !complete {
                     tx.execute(
                         "UPDATE operation_records SET state='completed' WHERE id=?1",
@@ -390,10 +395,14 @@ impl RepositoryService {
         drop(lease);
         // Full discovery is local and outside the lease, under this SAME local
         // operation's separate index epoch. It cannot invoke cleanup/transport.
-        let refreshed = self.refresh_repository(RefreshRepositoryRequest {
-            root: root.clone(),
-            operation_id: request.operation_id,
-        });
+        let refreshed = if let Some(fence) = scope.fence() {
+            self.refresh_retirement_request(&request, fence)
+        } else {
+            self.refresh_repository(RefreshRepositoryRequest {
+                root: root.clone(),
+                operation_id: request.operation_id,
+            })
+        };
         match refreshed {
             Ok(RefreshOutcome::Refreshed { .. }) => {
                 let _guard = cache_write_guard(&self.registry_path, &root, OP)?;

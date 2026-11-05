@@ -12,6 +12,9 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        Self::with_request(false)
+    }
+    fn with_request(bound: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         let data = tempfile::tempdir().unwrap();
         let git = git2::Repository::init(root.path()).unwrap();
@@ -58,9 +61,47 @@ impl Fixture {
             .unwrap();
         let lease =
             repository_lease(&git, &request.root, RepositoryOperation::RetireContext).unwrap();
-        let BranchClaim::Execute(owner) =
-            claim_branch(&service, &request, tip, plan, configuration).unwrap()
-        else {
+        let claimed = if bound {
+            // INERT canonical accepted-F2 projection, not a mutation binding.
+            use crate::repository::mutation::{RequestId, request_store::*};
+            let id = RequestId::new();
+            let scope = ScopeKey::for_repository(&request.root).unwrap();
+            let digest = IntentDigest::builder(
+                DigestSalt::Request(id),
+                "context retire",
+                &scope,
+                &request.item_id.to_string(),
+            )
+            .field("kind", FieldValue::Text("ticket"))
+            .finish();
+            service
+                .insert_request(&NewRequest {
+                    request_id: id,
+                    scope,
+                    command: "context retire".into(),
+                    target: request.item_id.to_string(),
+                    intent_digest: digest,
+                    confirmation: None,
+                    base_ref: None,
+                    base_oid: None,
+                    expected_digest: None,
+                    operations: vec![RequestOperation {
+                        family: OperationFamily::Local,
+                        operation_id: request.operation_id,
+                    }],
+                })
+                .unwrap();
+            let row = service.request_record(id).unwrap().unwrap();
+            let accepted =
+                crate::repository::RetirementAccepted::of_record(&row, row.attempt).unwrap();
+            let scope =
+                super::super::super::request_scope::Scope::capture(&service, &request, &accepted)
+                    .unwrap();
+            claim_scoped(&service, &request, tip, plan, configuration, None, scope)
+        } else {
+            claim_branch(&service, &request, tip, plan, configuration)
+        };
+        let BranchClaim::Execute(owner) = claimed.unwrap() else {
             panic!("valid claim")
         };
         drop(lease);
@@ -121,6 +162,618 @@ impl Fixture {
         db.execute("UPDATE context_retirement_records SET initial_primary_oid=?1,phase='branch_deleting',branch_removal='possible'",[&oid]).unwrap();
         db.execute("INSERT INTO context_retirement_effect_intents(operation_ulid,owner_epoch,resource,receipt_id,primary_oid,proof_kind) SELECT c.operation_ulid,c.owner_epoch,'branch',b.id,?1,'ancestor' FROM context_retirement_records c JOIN retirement_observation_receipts b ON b.consumer_operation_ulid=c.operation_ulid",[oid]).unwrap();
         super::super::audit_connection(&db).unwrap();
+    }
+    fn index_handoff(&self) -> i64 {
+        // Inert effect/handoff metadata over a REAL owned observer receipt;
+        // this tests index SQL authority, not a destructive Git journey.
+        self.branch_intent();
+        let db = self.db();
+        db.execute_batch("UPDATE context_retirement_effect_intents SET observation='removed'; UPDATE context_retirement_records SET phase='index_pending',absence_basis='owned_intent',materialization_settled=1,branch_removal='observed'; UPDATE operation_records SET state='authoritative_observed',completed_step='context_branch_released' WHERE action='retire_context';").unwrap();
+        super::super::audit_connection(&db).unwrap();
+        db.query_row(
+            "SELECT local_record_id FROM context_retirement_records",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+    fn index_owner(&self) -> recovery::IndexOwner {
+        self.index_handoff();
+        let fence = self
+            .owner
+            .retirement_execution()
+            .unwrap()
+            .request_scope()
+            .fence()
+            .unwrap();
+        self.service
+            .set_refresh_claim_hook_for_testing(|| std::panic::resume_unwind(Box::new(())));
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = self
+                    .service
+                    .refresh_retirement_request(&self.request, fence);
+            }))
+            .is_err()
+        );
+        let (record_id,epoch)=self.db().query_row("SELECT local_record_id,index_owner_epoch FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+        recovery::IndexOwner {
+            record_id,
+            epoch,
+            retirement_request: Some(fence),
+        }
+    }
+}
+
+#[test]
+fn retirement_f2_index_envelope_is_checked_before_every_owned_write() {
+    let mut failures = Vec::new();
+    for sql in [
+        "UPDATE operation_records SET action='refresh' WHERE action='retire_context'",
+        "UPDATE operation_records SET target='authoring-context-v1/document/01ARZ3NDEKTSV4RRFFQ69G5FAV/Retire' WHERE action='retire_context'",
+        "UPDATE operation_records SET root_path='/foreign' WHERE action='retire_context'",
+        "UPDATE operation_records SET repository_id=NULL WHERE action='retire_context'",
+        "UPDATE operation_records SET completed_step='context_retirement_absent' WHERE action='retire_context'",
+    ] {
+        let f = Fixture::with_request(true);
+        let owner = f.index_owner();
+        let db = f.db();
+        assert!(recovery::owns_indexing(&db, owner).unwrap());
+        db.execute_batch(sql).unwrap();
+        let before = registry_image(&db);
+        if recovery::owns_indexing(&db, owner).is_ok() {
+            failures.push((sql, "ownership"));
+        }
+        if recovery::touch_indexing(&db, owner).is_ok() {
+            failures.push((sql, "heartbeat"));
+        }
+        if recovery::record_owned_persisted_context(&db, owner, &f.request.root).is_ok() {
+            failures.push((sql, "persistence"));
+        }
+        if recovery::transition_indexing(&db, owner, "failed", None).is_ok() {
+            failures.push((sql, "error"));
+        }
+        if before != registry_image(&db) {
+            failures.push((sql, "wrote before refusal"));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "mismatched envelope authorized index writes: {failures:?}"
+    );
+}
+
+#[test]
+fn retirement_f2_index_guard_keeps_ordinary_nullable_target_claim_semantics() {
+    let f = Fixture::new();
+    let db = f.db();
+    db.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) SELECT id,root_path,?1,'refresh',NULL,'authoritative_observed',1 FROM repositories",[OperationId::new().to_string()]).unwrap();
+    let id = db.last_insert_rowid();
+    let owner = recovery::claim_indexing(&db, id, 0)
+        .expect("ordinary refresh may have a NULL target")
+        .unwrap();
+    assert!(owner.retirement_request.is_none());
+    assert!(recovery::owns_indexing(&db, owner).unwrap());
+    assert!(recovery::touch_indexing(&db, owner).unwrap());
+}
+
+#[test]
+fn retirement_f2_index_guard_preserves_domain_only_explicit_invalidation_reclaim() {
+    let f = Fixture::new();
+    let local = f.index_handoff();
+    let db = f.db();
+    let old = recovery::claim_indexing(&db, local, 0).unwrap().unwrap();
+    state::with_transaction(&f.service, &f.request.root, |tx, id| {
+        recovery::invalidate_index_observations(tx, id)
+    })
+    .unwrap();
+    let new = recovery::reclaim_invalidated_indexing(&db, old, f.request.root.to_str().unwrap())
+        .expect("existing domain-only reclaim remains valid")
+        .unwrap();
+    assert_eq!(new.epoch, old.epoch + 2);
+    assert!(new.retirement_request.is_none());
+    assert!(recovery::owns_indexing(&db, new).unwrap());
+    assert!(recovery::touch_indexing(&db, old).is_err());
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM context_retirement_index_claims",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn retirement_f2_unscoped_index_claim_cannot_write_request_bound_retirement() {
+    let f = Fixture::with_request(true);
+    let local = f.index_handoff();
+    let db = f.db();
+    let before = registry_image(&db);
+    assert!(
+        recovery::claim_indexing(&db, local, i64::MAX).is_err(),
+        "generic claim must not mint an unscoped owner for a bound retirement"
+    );
+    assert_eq!(before, registry_image(&db));
+}
+
+#[test]
+fn retirement_f2_index_sql_rejoins_current_request_at_every_write_and_finalizer() {
+    use crate::repository::mutation::{RequestId, request_store::*};
+    for case in [
+        "advance",
+        "finished",
+        "missing_mapping",
+        "wrong_ordinal",
+        "wrong_family",
+        "foreign_request",
+        "wrong_request_owner",
+        "invalidated",
+    ] {
+        let f = Fixture::with_request(true);
+        let mut owner = f.index_owner();
+        let db = f.db();
+        assert!(recovery::owns_indexing(&db, owner).unwrap());
+        let id: String = db
+            .query_row("SELECT request_ulid FROM request_records", [], |r| r.get(0))
+            .unwrap();
+        let id = RequestId::parse(&id).unwrap();
+        match case {
+            "invalidated" => {
+                state::with_transaction(&f.service, &f.request.root, |tx, id| {
+                    recovery::invalidate_index_observations(tx, id)
+                })
+                .unwrap();
+                f.service.enter_request(id).unwrap().unwrap();
+            }
+            "advance" => {
+                f.service.enter_request(id).unwrap().unwrap();
+            }
+            "finished" => {
+                assert!(
+                    f.service
+                        .finish_request(
+                            id,
+                            1,
+                            &RequestResult {
+                                outcome: crate::results::Outcome::Cancelled,
+                                code: crate::results::ResultCode::Cancelled,
+                                effects: crate::results::Effects::not_requested(),
+                                data: None
+                            }
+                        )
+                        .unwrap()
+                );
+            }
+            "missing_mapping" => {
+                db.execute("DELETE FROM request_operations", []).unwrap();
+            }
+            "wrong_ordinal" => {
+                db.execute("UPDATE request_operations SET ordinal=1", [])
+                    .unwrap();
+            }
+            "wrong_family" => {
+                db.execute("UPDATE request_operations SET family='remote'", [])
+                    .unwrap();
+            }
+            "foreign_request" => {
+                db.execute("INSERT INTO request_records(request_ulid,attempt,scope_key,command,target,intent_digest,state,accepted_at) SELECT ?1,attempt,scope_key,command,target,intent_digest,state,accepted_at FROM request_records",[RequestId::new().to_string()]).unwrap();
+                db.execute("UPDATE request_operations SET request_ulid=(SELECT request_ulid FROM request_records WHERE request_ulid!=?1)",[id.to_string()]).unwrap();
+            }
+            _ => {
+                let foreign = Fixture::with_request(true);
+                owner.retirement_request = foreign
+                    .owner
+                    .retirement_execution()
+                    .unwrap()
+                    .request_scope()
+                    .fence();
+            }
+        }
+        let before = registry_image(&db);
+        assert!(recovery::owns_indexing(&db, owner).is_err(), "{case}");
+        assert!(recovery::touch_indexing(&db, owner).is_err(), "{case}");
+        assert!(
+            recovery::transition_indexing(&db, owner, "failed", None).is_err(),
+            "{case}"
+        );
+        assert!(
+            recovery::record_owned_persisted_context(&db, owner, &f.request.root).is_err(),
+            "{case}"
+        );
+        assert!(
+            recovery::reclaim_invalidated_indexing(&db, owner, f.request.root.to_str().unwrap())
+                .is_err(),
+            "{case}"
+        );
+        assert!(
+            state::with_transaction(&f.service, &f.request.root, |tx, id| {
+                super::super::finalize_index(tx, owner, id, &f.request.root)
+            })
+            .is_err(),
+            "{case}"
+        );
+        assert_eq!(
+            before,
+            registry_image(&db),
+            "{case}: no stale touch/error/persistence/completion/Z"
+        );
+    }
+}
+
+#[test]
+fn retirement_f2_index_claim_is_durable_single_use_even_after_invalidation() {
+    use crate::repository::mutation::RequestId;
+    let f = Fixture::with_request(true);
+    let old = f.index_owner();
+    let db = f.db();
+    state::with_transaction(&f.service, &f.request.root, |tx, id| {
+        recovery::invalidate_index_observations(tx, id)
+    })
+    .unwrap();
+    let before = registry_image(&db);
+    assert!(matches!(
+        f.service
+            .refresh_retirement_request(&f.request, old.retirement_request.unwrap()),
+        Ok(RefreshOutcome::IndexPending { .. })
+    ));
+    assert_eq!(
+        before,
+        registry_image(&db),
+        "invalidation does not unspend this accepted F2 call"
+    );
+    assert!(
+        db.execute(
+            "UPDATE context_retirement_index_claims SET index_owner_epoch=index_owner_epoch+1",
+            []
+        )
+        .is_err()
+    );
+    assert!(
+        db.execute("DELETE FROM context_retirement_index_claims", [])
+            .is_err()
+    );
+    let id: String = db
+        .query_row("SELECT request_ulid FROM request_records", [], |r| r.get(0))
+        .unwrap();
+    let id = RequestId::parse(&id).unwrap();
+    assert_eq!(f.service.enter_request(id).unwrap(), Some(2));
+    assert!(
+        RepositoryService::open_at(f._data.path()).is_ok(),
+        "historical claims remain history after F2 moves"
+    );
+    assert!(recovery::touch_indexing(&db, old).is_err());
+    assert_eq!(
+        before.get("context_retirement_index_claims"),
+        registry_image(&db).get("context_retirement_index_claims")
+    );
+}
+
+#[test]
+fn retirement_f2_orphaned_companion_never_becomes_unfenced_generic_index_authority() {
+    // Explicit metadata corruption fixture, not a supported deletion journey.
+    // Drop only the target refusal trigger, then restore canonical DDL before
+    // exercising ANY owner/refresh/audit. No CHECK constraint is disabled.
+    let f = Fixture::with_request(true);
+    let owner = f.index_owner();
+    let db = f.db();
+    let trigger: String = db
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name='retirement_record_delete'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    db.execute_batch(
+        "DROP TRIGGER retirement_record_delete; DELETE FROM context_retirement_records;",
+    )
+    .unwrap();
+    db.execute_batch(&trigger).unwrap();
+    for disguise in [false, true] {
+        if disguise {
+            db.execute(
+                "UPDATE operation_records SET action='refresh' WHERE id=?1",
+                [owner.record_id],
+            )
+            .unwrap();
+            db.execute("DELETE FROM request_operations", []).unwrap();
+        }
+        let before = registry_image(&db);
+        assert!(recovery::owns_indexing(&db, owner).is_err());
+        assert!(recovery::touch_indexing(&db, owner).is_err());
+        assert!(recovery::claim_indexing(&db, owner.record_id, i64::MAX).is_err());
+        assert!(
+            f.service
+                .refresh_repository(RefreshRepositoryRequest {
+                    root: f.request.root.clone(),
+                    operation_id: f.request.operation_id
+                })
+                .is_err()
+        );
+        assert_eq!(before, registry_image(&db));
+    }
+}
+
+#[test]
+fn retirement_f2_finished_replay_rejects_zero_attempt_without_writes() {
+    use crate::repository::mutation::{RequestId, request_store::RequestResult};
+    let f = Fixture::with_request(true);
+    let id: String = f
+        .db()
+        .query_row("SELECT request_ulid FROM request_records", [], |r| r.get(0))
+        .unwrap();
+    let id = RequestId::parse(&id).unwrap();
+    let row = f.service.request_record(id).unwrap().unwrap();
+    let mut accepted = RetirementAccepted::of_record(&row, row.attempt).unwrap();
+    let report = refuse_execution(
+        &f.service,
+        &f.request.root,
+        &f.owner,
+        crate::results::ResultCode::Cancelled,
+    )
+    .unwrap();
+    assert!(
+        f.service
+            .finish_request(
+                id,
+                1,
+                &RequestResult {
+                    outcome: crate::results::Outcome::Cancelled,
+                    code: report.code,
+                    effects: crate::results::Effects::not_requested(),
+                    data: None
+                }
+            )
+            .unwrap()
+    );
+    let before = registry_image(&f.db());
+    assert!(
+        matches!(f.service.retire_context_for_request(f.request.clone(),&accepted,None,&mut SessionCredentials::new(Provider)),Ok(ContextRetirementOutcome::Final(r)) if r==report)
+    );
+    accepted.attempt = 0;
+    assert!(
+        f.service
+            .retire_context_for_request(
+                f.request.clone(),
+                &accepted,
+                None,
+                &mut SessionCredentials::new(Provider)
+            )
+            .is_err(),
+        "zero was never an accepted execution attempt"
+    );
+    assert_eq!(before, registry_image(&f.db()));
+}
+
+#[test]
+fn retirement_f2_history_and_finished_replay_reject_extra_immutable_metadata() {
+    use crate::repository::mutation::{RequestId, request_store::RequestResult};
+    let mut allowed = Vec::new();
+    for sql in [
+        "UPDATE request_records SET confirmation_ulid='01ARZ3NDEKTSV4RRFFQ69G5FAV'",
+        "UPDATE request_records SET base_ref='refs/heads/main'",
+        "UPDATE request_records SET base_oid='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'",
+        "UPDATE request_records SET expected_digest='missing'",
+    ] {
+        let f = Fixture::with_request(true);
+        let db = f.db();
+        let id: String = db
+            .query_row("SELECT request_ulid FROM request_records", [], |r| r.get(0))
+            .unwrap();
+        let id = RequestId::parse(&id).unwrap();
+        let row = f.service.request_record(id).unwrap().unwrap();
+        let accepted = RetirementAccepted::of_record(&row, row.attempt).unwrap();
+        let report = refuse_execution(
+            &f.service,
+            &f.request.root,
+            &f.owner,
+            crate::results::ResultCode::Cancelled,
+        )
+        .unwrap();
+        assert!(
+            f.service
+                .finish_request(
+                    id,
+                    1,
+                    &RequestResult {
+                        outcome: crate::results::Outcome::Cancelled,
+                        code: report.code,
+                        effects: crate::results::Effects::not_requested(),
+                        data: None
+                    }
+                )
+                .unwrap()
+        );
+        db.execute_batch(sql).unwrap();
+        let before = registry_image(&db);
+        if super::super::audit_connection(&db).is_ok() {
+            allowed.push((sql, "history"));
+        }
+        if f.service
+            .retire_context_for_request(
+                f.request.clone(),
+                &accepted,
+                None,
+                &mut SessionCredentials::new(Provider),
+            )
+            .is_ok()
+        {
+            allowed.push((sql, "finished replay"));
+        }
+        assert_eq!(before, registry_image(&db));
+    }
+    assert!(
+        allowed.is_empty(),
+        "unexpected immutable request fields accepted: {allowed:?}"
+    );
+}
+
+#[test]
+fn retirement_f2_all_old_remote_and_local_write_boundaries_require_actual_current_scope() {
+    use crate::repository::mutation::{RequestId, request_store::RequestResult};
+    for case in [
+        "advance",
+        "finished",
+        "mapping_missing",
+        "wrong_ordinal",
+        "wrong_family",
+        "duplicate",
+        "foreign_request",
+        "foreign_command",
+        "wrong_scope",
+        "wrong_target",
+        "wrong_digest",
+        "extra_metadata",
+    ] {
+        let f = Fixture::with_request(true);
+        f.before_batch();
+        let db = f.db();
+        let id: String = db
+            .query_row("SELECT request_ulid FROM request_records", [], |r| r.get(0))
+            .unwrap();
+        let id = RequestId::parse(&id).unwrap();
+        state::with_transaction(&f.service, &f.request.root, |tx, id| {
+            f.owner
+                .retirement_execution()?
+                .validate_local(&f.service, tx, id)
+        })
+        .unwrap();
+        match case {
+            "advance" => {
+                f.service.enter_request(id).unwrap().unwrap();
+                db.execute("UPDATE request_records SET cancel_requested=1", [])
+                    .unwrap();
+            }
+            "finished" => {
+                assert!(
+                    f.service
+                        .finish_request(
+                            id,
+                            1,
+                            &RequestResult {
+                                outcome: crate::results::Outcome::Cancelled,
+                                code: crate::results::ResultCode::Cancelled,
+                                effects: crate::results::Effects::not_requested(),
+                                data: None
+                            }
+                        )
+                        .unwrap()
+                );
+            }
+            "mapping_missing" => {
+                db.execute("DELETE FROM request_operations", []).unwrap();
+            }
+            "wrong_ordinal" => {
+                db.execute("UPDATE request_operations SET ordinal=1", [])
+                    .unwrap();
+            }
+            "wrong_family" => {
+                db.execute("UPDATE request_operations SET family='remote'", [])
+                    .unwrap();
+            }
+            "duplicate" => {
+                db.execute("INSERT INTO request_operations SELECT request_ulid,1,family,operation_ulid FROM request_operations",[]).unwrap();
+            }
+            "foreign_request" => {
+                db.execute("INSERT INTO request_records(request_ulid,attempt,scope_key,command,target,intent_digest,state,accepted_at) SELECT ?1,attempt,scope_key,command,target,intent_digest,state,accepted_at FROM request_records",[RequestId::new().to_string()]).unwrap();
+                db.execute("UPDATE request_operations SET request_ulid=(SELECT request_ulid FROM request_records WHERE request_ulid!=?1)",[id.to_string()]).unwrap();
+            }
+            "foreign_command" => {
+                db.execute("UPDATE request_records SET command='context release'", [])
+                    .unwrap();
+            }
+            "wrong_scope" => {
+                db.execute("UPDATE request_records SET scope_key='/foreign'", [])
+                    .unwrap();
+            }
+            "wrong_target" => {
+                db.execute(
+                    "UPDATE request_records SET target='01ARZ3NDEKTSV4RRFFQ69G5FAW'",
+                    [],
+                )
+                .unwrap();
+            }
+            "extra_metadata" => {
+                db.execute("UPDATE request_records SET expected_digest='missing'", [])
+                    .unwrap();
+            }
+            _ => {
+                db.execute(
+                    "UPDATE request_records SET intent_digest=?1",
+                    ["0".repeat(64)],
+                )
+                .unwrap();
+            }
+        }
+        let before = registry_image(&db);
+        assert!(
+            state::with_transaction(&f.service, &f.request.root, |tx, id| f
+                .owner
+                .retirement_execution()?
+                .validate_install(&f.service, tx, id))
+            .is_err(),
+            "{case}: token installation/verification"
+        );
+        for point in [
+            RemoteOperationSafePoint::BeforeTransport,
+            RemoteOperationSafePoint::AfterAdvertisement,
+            RemoteOperationSafePoint::BeforeBatchCommit,
+            RemoteOperationSafePoint::AfterBatchCommit,
+        ] {
+            assert!(
+                f.service
+                    .remote_safe_point(&f.request.root, &f.owner, point)
+                    .is_err(),
+                "{case}"
+            );
+        }
+        for outcome in [
+            RemoteOutcomeCategory::Completed,
+            RemoteOutcomeCategory::TransportUnavailable,
+        ] {
+            assert!(
+                f.service
+                    .finish_remote_operation(&f.request.root, &f.owner, outcome)
+                    .is_err(),
+                "{case}"
+            );
+        }
+        assert!(
+            reservation::commit_observation_batch(
+                &f.service,
+                &f.request.root,
+                &f.owner,
+                f.owner.retirement_execution().unwrap().plan(),
+                &[],
+                2
+            )
+            .is_err(),
+            "{case}"
+        );
+        assert!(
+            refuse_execution(
+                &f.service,
+                &f.request.root,
+                &f.owner,
+                crate::results::ResultCode::ExternalChange
+            )
+            .is_err(),
+            "{case}: stale cancellation/refusal must not acknowledge"
+        );
+        assert!(
+            state::with_transaction(&f.service, &f.request.root, |tx, id| {
+                reservation::owned(&f.service, tx, id, &f.owner)?;
+                state::configure(tx, id, None, false)
+            })
+            .is_err(),
+            "{case}"
+        );
+        assert_eq!(
+            before,
+            registry_image(&db),
+            "{case}: stale owner must not write configuration, receipts, errors, cancellation ack or completion"
+        );
     }
 }
 struct Provider;
