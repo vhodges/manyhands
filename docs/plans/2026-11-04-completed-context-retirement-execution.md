@@ -2993,3 +2993,43 @@ generation (`task2-recovery-core-comment-id.log`); no profile repair or retry wa
 performed. That startup failure is unresolved evidence, not a successful real-profile
 upgrade claim. No agent/push/status/PR/main integration/closure/native/other-worktree
 or real-context/key/draft actions. This milestone is local and coauthored only.
+
+### Controller resumption and isolated startup diagnosis (2026-11-05)
+
+Recovery review retains the exact source range `7b153deb..65970f43`. Fresh fetch
+succeeded; ticket and main checkouts were clean. Registered ticket worktree/branch
+reconfirmed; main/base is still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`.
+Merge before/after `65970f4322b9452ed09833d807fbed345717a29e` was already up to
+date; ancestry passed. Current main rules reread. An unrelated remote ticket ref
+advanced, but was neither merged nor consumed. Independent limited SPEC review
+is in progress; QUALITY has not started. No recovery review pass is claimed.
+
+The earlier default-profile `id new` failure was investigated without rerunning
+the CLI against, repairing, or changing the real profile. A read-only SQLite
+connection reported `quick_check=ok`; the registry was backed up to a private
+temporary diagnostic directory, without copying key files. All service-opening
+and CLI reproductions then ran against that copy only:
+
+- Copied-registry CLI: exit 1, `internal_error`, matching the original log.
+- A public `RepositoryService::open_at` probe on the copy returned
+  `RepositorySnapshot / RecoveryRequired`, not a raw SQLite corruption error.
+- The copy has only the `context_retirement_v1` marker, but also an intermediate
+  `context_retirement_reentries` table (without `resume_worktree`) and a release
+  CHECK already containing `consumer_fenced`; it lacks the new M/resumption
+  tables and v2 marker. Its release catalog differs from the pinned published
+  `7b153deb` v1. There are zero retirement parent rows. These facts establish an
+  unsupported intermediate envelope, not evidence that canonical v1 migration
+  failed or that the database is corrupt.
+- `startup.rs:111` opens the service before `dispatch.rs:783` generates an ID;
+  `read/mod.rs:324–331` maps this startup `RecoveryRequired` to `internal_error`.
+  The strict schema refusal therefore explains the observed command output.
+
+Evidence: `/tmp/opencode/retirement-startup-diagnostic-lxrou1go/` contains
+`cli-result.log`, `service-probe.log`, and `catalog-comparison.log`. The probe is
+outside the repository; Rust commands used Devenv, offline resolution and a
+locked run. No production code/dependencies, real profile, keys or contexts were
+changed, and no profile repair or broader migration exception is authorized.
+Future checkpoint IDs use the supported isolated `MANYHANDS_DATA_DIR` override;
+ID generation succeeded there. Diagnostic checkpoint
+`01M6P039AYM6A3TQR2642C42PH`, actual UTC `2026-11-05T13:59:11Z`, parent
+`01M6NZ8F8KM4F9X52WNSTA4HXA`.
