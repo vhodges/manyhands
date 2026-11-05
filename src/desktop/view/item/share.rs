@@ -202,6 +202,8 @@ impl ItemPane {
             .is_some_and(|post| {
                 post.request == request.id
                     && !post.shared_since()
+                    // Until a resolution of it applies (D5 B3).
+                    && operations.review(request.id).is_some()
                     && matches!(&post.state, SubmissionState::Finished { result, .. }
                         if matches!(result.outcome, CommentOutcome::SavedConflict { .. }))
             })
@@ -226,7 +228,9 @@ impl ItemPane {
         Some(ShareOutcome {
             request: latest,
             words: share_words(&self.services, latest, &result, cx)?,
-            conflict: matches!(result.outcome, SyncOutcome::Conflict { .. }),
+            // Until a resolution of it applies (D5 B3: the banner clears).
+            conflict: matches!(result.outcome, SyncOutcome::Conflict { .. })
+                && self.services.operations().read(cx).review(latest).is_some(),
             attention: !matches!(
                 result.outcome,
                 SyncOutcome::Published | SyncOutcome::Current | SyncOutcome::NothingToShare

@@ -13,7 +13,7 @@ use gpui_kit::{AnyElement, ClickEvent, Context, Window, component::WindowExt};
 use super::{button, request_id};
 use crate::desktop::{
     model::stamp::RepoKey,
-    services::requests::DesktopRequestId,
+    services::requests::{DesktopRequestId, Intent},
     view::{
         conflict::{Entry, REVIEW_CHANGES},
         workspace::Workspace,
@@ -41,11 +41,23 @@ impl Workspace {
     }
 
     /// The sheet's entry of the finished request `id`, when its answer
-    /// stopped on a conflict of an item. Share main's names none, and is
-    /// not offered.
+    /// stopped on a conflict of an item: its own, or a resume's (M3). Share
+    /// main's names none, and is not offered (a known limit).
     fn entry_of(&self, id: DesktopRequestId, cx: &Context<Self>) -> Option<Entry> {
         let operations = self.services().operations().read(cx);
-        Entry::of_request(operations.request(id)?, operations)
+        let request = operations.request(id)?;
+        if let Some(entry) = Entry::of_request(request, operations) {
+            return Some(entry);
+        }
+        // A resumed remote synchronization's answer names no item: its
+        // pending row does, once read.
+        let Intent::OperationResume { root, .. } = &request.intent else {
+            return None;
+        };
+        let review = operations.review(id)?;
+        let root = root.to_str()?;
+        let conflict = self.pending_conflict(root, &review.operation_id.to_string())?;
+        Some(Entry::of_pending(PathBuf::from(root), conflict))
     }
 
     /// Review changes on the finished request `id`'s entry, when its

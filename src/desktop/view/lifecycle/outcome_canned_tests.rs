@@ -229,6 +229,8 @@ pub(super) async fn reopen(shell: &Shell, id: DesktopRequestId, cx: &mut TestApp
 pub(super) fn buttons(shell: &Shell, cx: &mut TestAppContext) -> Vec<&'static str> {
     [
         "lifecycle-retry",
+        "lifecycle-repair-locally",
+        "lifecycle-resolve-conflict",
         "lifecycle-resume",
         "lifecycle-prepare-again",
         "lifecycle-unlock",
@@ -243,16 +245,17 @@ pub(super) fn buttons(shell: &Shell, cx: &mut TestAppContext) -> Vec<&'static st
 }
 
 /// L1, A3, canned: each way out of an execute result shows as the dialog's
-/// button, or as guidance where its button is a later task's. The answers
+/// button, beside its guidance where it has some, or as guidance where its
+/// button is a later task's. The answers
 /// are `src/repository/mutation/way_out_tests.rs`'s, one per route, whose
 /// real ones are:
 /// - a refused closure checkpoint merge, `RepairLocally` then the same
 ///   request (`tests/mutation_remote/c5_lifecycle.rs`, the
-///   `ticket_close_checkpoint_merge_refused` golden): guidance (Repair
-///   locally… is Task 13's), Retry, Open repository details;
+///   `ticket_close_checkpoint_merge_refused` golden): guidance, Retry,
+///   Repair locally… and Open repository details;
 /// - a document's child conflict under a resume
-///   (`tests/mutation_remote/c5_child_conflict.rs`): guidance (Resolve
-///   conflict… is Task 13's), Resume;
+///   (`tests/mutation_remote/c5_child_conflict.rs`): guidance, Resolve
+///   conflict… and Resume;
 /// - a deleted shared branch (`c5_lifecycle.rs` `child_remote_branch_deleted`):
 ///   guidance only (Stop and republish… and Republish… are Task 14's), and no
 ///   Retry, which the same request cannot get past;
@@ -292,7 +295,11 @@ async fn each_way_out_offers_its_button(cx: &mut TestAppContext) {
         (
             ticket,
             merge_refused,
-            vec!["lifecycle-retry", "lifecycle-inspect"],
+            vec![
+                "lifecycle-retry",
+                "lifecycle-repair-locally",
+                "lifecycle-inspect",
+            ],
             2,
         ),
         (
@@ -306,7 +313,7 @@ async fn each_way_out_offers_its_button(cx: &mut TestAppContext) {
                 ],
                 vec![resume()],
             ),
-            vec!["lifecycle-resume"],
+            vec!["lifecycle-resolve-conflict", "lifecycle-resume"],
             1,
         ),
         (

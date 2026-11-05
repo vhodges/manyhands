@@ -220,6 +220,17 @@ impl Render for LifecycleDialog {
                 }
                 buttons = buttons.child(self.cancel(CLOSE));
             }
+            Phase::Repaired => {
+                let again = self.on(cx, |dialog, _, cx| dialog.prepare(cx));
+                buttons = buttons
+                    .child(button(
+                        "lifecycle-prepare-again",
+                        PREPARE_AGAIN,
+                        true,
+                        again,
+                    ))
+                    .child(self.cancel(CLOSE));
+            }
             Phase::Message(why) => {
                 body = body.child(text("lifecycle-message", *why).text_sm());
                 buttons = buttons.child(self.cancel(CLOSE));

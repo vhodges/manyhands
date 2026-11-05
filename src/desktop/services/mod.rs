@@ -12,6 +12,7 @@ pub(crate) mod drafts;
 pub(crate) mod edit_tabs;
 pub(crate) mod images;
 pub(crate) mod links;
+pub(crate) mod pending_conflicts;
 pub(crate) mod prompts;
 mod reads;
 pub(crate) mod release;
@@ -108,6 +109,12 @@ pub(crate) enum ReadKind {
     /// A conflict's reads (D5 B1): the remote `show_conflict`, or the
     /// local inspection and its content reads.
     Conflict,
+    /// The resolve sheet's read of its item's work folder (D5 B4), apart
+    /// from `Conflict` and from `Item`, which the tabs read under.
+    ConflictFolder,
+    /// Which pending rows hold a conflict to review (D5 B5), read after
+    /// the rows, apart from `Operations`.
+    PendingConflicts,
 }
 
 /// What a worker job does, so the seam can hold one kind and not another.

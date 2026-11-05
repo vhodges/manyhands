@@ -18,8 +18,14 @@ use super::{
     entry_tests::{opened_on, row_of, ticket_shell},
     tests::{TICKET, code, opened, until_long, until_present},
 };
+/// What the dialog says once main is in a ticket's working copy (B6).
+const REPAIRED_TICKET: &str = "Main is in this ticket's working copy now.";
+
 use crate::desktop::{
-    services::requests::{DesktopRequestId, Intent},
+    services::{
+        JobKind,
+        requests::{DesktopRequestId, Intent},
+    },
     test_support::fixtures::item_id,
     view::{
         harness::Shell, item::LIFECYCLE_ACTION, lifecycle::REPAIR_LOCALLY, operations::request_id,
@@ -99,8 +105,9 @@ async fn to_the_repair(shell: &Shell, root: &Path, cx: &mut TestAppContext) -> D
 /// P9, A13, real: Repair locally… on a close whose merge main refused
 /// observes the work context and sends `context sync-local` with that
 /// observation; its conflict opens the sheet on the synchronization, its
-/// folder the work context. Resolved there, the close's entry opens its
-/// dialog again, and Retry finishes the same close.
+/// folder the work context. Resolved there, the dialog opens again on its
+/// way on (B6): main is in the working copy, and Retry finishes the same
+/// close.
 #[gpui_kit::test]
 async fn repair_locally_syncs_and_opens_the_sheet_on_conflict(cx: &mut TestAppContext) {
     let (shell, root) = ticket_shell(cx);
@@ -140,16 +147,12 @@ async fn repair_locally_syncs_and_opens_the_sheet_on_conflict(cx: &mut TestAppCo
     })
     .await;
 
-    // Then Retry (P9): the same close, from its entry, once the entries
-    // the repair added above it are dismissed.
-    let resolved = shell.requests(cx, |request| {
-        matches!(request.intent, Intent::LocalContextResolve { .. })
-    });
-    for id in [resolved[0], syncs[0]] {
-        shell.click(request_id(id, "dismiss"), cx);
-    }
-    shell.click(request_id(close, "open"), cx);
+    // Then Retry (P9): the dialog again, on the same close.
     until_present(&shell, "lifecycle-retry", cx).await;
+    assert_eq!(
+        shell.label("lifecycle-repair", cx).as_deref(),
+        Some(REPAIRED_TICKET)
+    );
     shell.click("lifecycle-retry", cx);
     let retried = closes(&shell, cx)[0];
     assert_ne!(retried, close);
@@ -209,12 +212,23 @@ async fn a_refused_local_sync_shows_its_answer_and_resume(cx: &mut TestAppContex
         Some(ResultCode::RecoveryRequired),
         "still conflicted"
     );
+    // M3: the resume stopped on the conflict, whose entry offers it.
+    until_present(&shell, request_id(resumed[0], "review"), cx).await;
+    shell.click(request_id(resumed[0], "review"), cx);
+    let sheet = until_opened(&shell, cx).await;
+    assert_eq!(
+        opened_on(&sheet, cx).0,
+        SheetSource::Local,
+        "the resume's own conflict"
+    );
 }
 
 /// B6, real: a prepare blocked because main conflicts with the ticket
 /// (`a_blocked_prepare_offers_its_way_out` in `tests/cli/lifecycle.rs`)
 /// offers Repair locally… beside its guidance; pressed, its conflict opens
-/// the sheet in the dialog's place, on the local synchronization.
+/// the sheet in the dialog's place, on the local synchronization. Resolved
+/// there, the dialog opens again saying main is in the working copy, with
+/// Prepare again, which prepares the close afresh (B6).
 #[gpui_kit::test]
 async fn a_blocked_prepare_offers_repair_locally(cx: &mut TestAppContext) {
     let (shell, root) = ticket_shell(cx);
@@ -227,6 +241,73 @@ async fn a_blocked_prepare_offers_repair_locally(cx: &mut TestAppContext) {
     shell.click("lifecycle-repair-locally", cx);
     let sheet = until_opened(&shell, cx).await;
     assert!(!shell.present("lifecycle-dialog", cx));
+    assert_eq!(
+        opened_on(&sheet, cx),
+        (
+            SheetSource::Local,
+            listed_local_sync(&shell, &root),
+            shell.fixture.context_worktree(&root, TICKET)
+        )
+    );
+
+    until_present(&shell, "conflict-save", cx).await;
+    shell.click(("conflict-keep-mine", 0usize), cx);
+    shell.click("conflict-save", cx);
+    until_long(&shell, "the dialog again", cx, |shell, cx| {
+        shell.present("lifecycle-dialog", cx)
+    })
+    .await;
+    assert_eq!(
+        shell.label("lifecycle-repair", cx).as_deref(),
+        Some(REPAIRED_TICKET)
+    );
+    assert!(!shell.present("lifecycle-retry", cx));
+    shell.click("lifecycle-prepare-again", cx);
+    until_present(&shell, "lifecycle-confirm", cx).await;
+}
+
+/// M1 (P22), real: Repair locally… is not offered while a local
+/// synchronization of the item is queued or running. The dialog that sent
+/// it closed and opened again shows none; once the synchronization stops
+/// on its conflict, its entry offers Review changes.
+#[gpui_kit::test]
+async fn repair_locally_waits_for_a_queued_sync(cx: &mut TestAppContext) {
+    let (shell, root) = ticket_shell(cx);
+    shell.fixture.commit_ticket(&root, TICKET, "Moved", "");
+    let held = shell.backend.hold_job(JobKind::LocalContextSync);
+    shell.click(LIFECYCLE_ACTION, cx);
+    until_present(&shell, "lifecycle-repair-locally", cx).await;
+    shell.click("lifecycle-repair-locally", cx);
+    shell
+        .until(cx, |operations| {
+            operations
+                .requests()
+                .iter()
+                .any(|request| matches!(request.intent, Intent::LocalContextSync { .. }))
+        })
+        .await;
+    held.wait_reached();
+    assert!(!shell.present("lifecycle-repair-locally", cx), "under way");
+    shell.keys("escape", cx);
+    assert!(!shell.present("lifecycle-dialog", cx));
+
+    shell.click(LIFECYCLE_ACTION, cx);
+    until_present(&shell, "lifecycle-prepare-again", cx).await;
+    assert!(
+        !shell.present("lifecycle-repair-locally", cx),
+        "a synchronization of the item is running"
+    );
+    shell.keys("escape", cx);
+
+    held.release();
+    let sync = local_syncs(&shell, cx)[0];
+    until_long(&shell, "the synchronization's answer", cx, |shell, cx| {
+        code(shell, sync, cx).is_some()
+    })
+    .await;
+    until_present(&shell, request_id(sync, "review"), cx).await;
+    shell.click(request_id(sync, "review"), cx);
+    let sheet = until_opened(&shell, cx).await;
     assert_eq!(
         opened_on(&sheet, cx),
         (

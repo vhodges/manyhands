@@ -4,11 +4,10 @@ use super::{Region, Workspace};
 use crate::desktop::{
     model::{
         operations::RecoveryStep,
-        stamp::{RepoKey, SettingsPage},
+        stamp::{RepoKey, SettingsPage, ViewScope},
     },
     services::{
         ReadKind, ReadResult,
-        conflicts::pending_conflicts,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
         worker::CancelResult,
     },
@@ -57,17 +56,13 @@ impl Workspace {
             stamp,
             move |service| {
                 let repo = service.resolve_repository(&path)?;
-                let list = service.list_operations(&repo)?;
-                // Which rows hold a conflict to review (D5 B5).
-                let conflicts = pending_conflicts(service, &repo, &list);
-                Ok((list, conflicts))
+                service.list_operations(&repo)
             },
             cx,
             move |this: &mut Self, stamp, result, cx| {
-                let (result, conflicts) = match result {
-                    ReadResult::Ok((list, conflicts)) => (ReadResult::Ok(list), conflicts),
-                    ReadResult::Busy => (ReadResult::Busy, Vec::new()),
-                    ReadResult::Failed(failure) => (ReadResult::Failed(failure), Vec::new()),
+                let list = match &result {
+                    ReadResult::Ok(list) => Some(list.clone()),
+                    ReadResult::Busy | ReadResult::Failed(_) => None,
                 };
                 let applied = this.services.operations().update(cx, |operations, cx| {
                     let applied = operations.apply_pending(stamp, result);
@@ -77,13 +72,48 @@ impl Workspace {
                     applied
                 });
                 if applied {
-                    this.pending_conflicts.insert(read_root, conflicts);
-                    cx.notify();
+                    this.read_pending_conflicts(read_root, list, cx);
                 }
             },
         );
         self.pending_reads.insert(root, read);
         cx.notify();
+    }
+
+    /// Which of `root`'s pending rows, `list` as just read, hold a conflict
+    /// to review (D5 B5): a read of its own after the rows, stamped, so
+    /// the rows and the lifecycle lock never wait for it. Rows that could
+    /// not be read offer none.
+    fn read_pending_conflicts(
+        &mut self,
+        root: RepoKey,
+        list: Option<manyhands::repository::OperationListDto>,
+        cx: &mut Context<Self>,
+    ) {
+        let stamp = self
+            .conflict_generations
+            .next(ViewScope::PendingConflicts(root.clone()));
+        let Some(list) = list else {
+            self.pending_conflicts.remove(&root);
+            self.pending_conflict_reads.remove(&root);
+            return;
+        };
+        let read = self.services.read_pending_conflicts(
+            PathBuf::from(&root),
+            list,
+            stamp,
+            cx,
+            |this: &mut Self, stamp, conflicts, cx| {
+                if !this.conflict_generations.is_current(&stamp) {
+                    return;
+                }
+                if let ViewScope::PendingConflicts(root) = stamp.scope {
+                    this.pending_conflicts.insert(root, conflicts);
+                    cx.notify();
+                }
+            },
+        );
+        self.pending_conflict_reads.insert(root, read);
     }
 
     /// Coalesce each batch's changed roots, while keeping prompt/quit order.

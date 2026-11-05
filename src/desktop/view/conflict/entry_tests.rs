@@ -27,6 +27,7 @@ use manyhands::{
 
 use super::{
     REVIEW_CHANGES, ResolveSheet, SheetSource,
+    answer_tests::applied,
     tests::{TICKET, canned, canned_path, local_shell, open_sheet, opened, until_present},
 };
 use crate::desktop::{
@@ -35,6 +36,7 @@ use crate::desktop::{
         operations::{CONFLICT_BANNER, ResumeOffer, resume_offer},
     },
     services::{
+        JobKind,
         requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
         worker::WorkerEvent,
     },
@@ -421,6 +423,15 @@ async fn a_local_conflicts_open_folder_opens_its_work_context(cx: &mut TestAppCo
     let worktree = shell.fixture.context_worktree(&root, TICKET);
     open_sheet(&shell, SheetSource::Local, &root, operation, cx);
     until_present(&shell, "conflict-open-folder", cx).await;
+    // M5: the folder read has landed.
+    let wanted = worktree.clone();
+    shell
+        .until_drawn(cx, "the folder read", move |_, cx| {
+            opened(cx).is_some_and(|sheet| {
+                sheet.read_with(cx, |sheet, _| sheet.folder() == wanted.as_path())
+            })
+        })
+        .await;
     shell.click("conflict-open-folder", cx);
     let opened = cx.update(|cx| {
         cx.try_global::<OpenedFolders>()
@@ -428,4 +439,54 @@ async fn a_local_conflicts_open_folder_opens_its_work_context(cx: &mut TestAppCo
             .unwrap_or_default()
     });
     assert_eq!(opened, [worktree]);
+}
+
+/// I-1, B3 ("applied, share or local: Banner clears"), canned (decision
+/// 9): a share stopped on a conflict (`share_conflict`) is resolved
+/// through the banner's Review changes; once the resolution applies
+/// (`answer_tests::applied`, as `tests/mutation_remote/resolution.rs`
+/// `c4_resolution_publishes` answers), the banner, its Review changes and
+/// the share's entry's Review changes are gone. A dismissed entry offers
+/// its conflict no more either.
+#[gpui_kit::test]
+async fn an_applied_resolution_clears_the_banner_and_its_review(cx: &mut TestAppContext) {
+    let (shell, root) = ticket_shell(cx);
+    let operation = OperationId::parse(SYNCHRONIZATION).unwrap();
+    let sync = || Intent::ItemSync {
+        root: root.clone(),
+        kind: AuthoringKind::Ticket,
+        id: item_id(TICKET),
+    };
+    let share = fabricate(&shell, 4, sync(), share_conflict(), cx);
+    until_present(&shell, "item-review-changes", cx).await;
+    shell
+        .backend
+        .answer_next_conflict_read(canned(operation, vec![canned_path(TICKET, '1')]));
+    shell.click("item-review-changes", cx);
+    until_present(&shell, "conflict-save", cx).await;
+    shell.click(("conflict-keep-mine", 0usize), cx);
+    shell
+        .backend
+        .hold_job_return_answering(JobKind::ConflictResolve, applied())
+        .release();
+    shell.click("conflict-save", cx);
+    let resolve = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::ConflictResolve { .. })
+    });
+    shell.until_ended(resolve[0], cx).await;
+    shell
+        .until_drawn(cx, "the banner's clearing", |shell, cx| {
+            !shell.present("item-conflict", cx)
+        })
+        .await;
+    assert!(!shell.present("item-review-changes", cx));
+    assert!(!shell.present(request_id(share, "review"), cx));
+
+    // Dismissed, an entry offers its conflict no more.
+    let again = fabricate(&shell, 5, sync(), share_conflict(), cx);
+    until_present(&shell, request_id(again, "review"), cx).await;
+    shell.click(request_id(again, "dismiss"), cx);
+    let operations = shell.operations(cx);
+    assert!(operations.read_with(cx, |operations, _| operations.review(again).is_none()));
+    assert!(!shell.present("item-review-changes", cx));
 }

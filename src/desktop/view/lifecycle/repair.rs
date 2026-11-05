@@ -4,7 +4,10 @@
 //! - **Repair locally…** observes the item's work context, then sends
 //!   `context sync-local` with that observation (`Intent::LocalContextSync`).
 //!   A conflict closes the dialog and opens the resolve conflict sheet on
-//!   the synchronization, its folder the work context. A clean result says
+//!   the synchronization, its folder the work context; once its resolution
+//!   applies, the dialog opens again on its way on (P9). It is not offered
+//!   while a local synchronization of the item is queued or running, or
+//!   while the item's lifecycle is in flight (P22). A clean result says
 //!   main is in the working copy, and the dialog's way on stays offered:
 //!   Retry where a request holds the lifecycle, Resume where none does,
 //!   Prepare again after a blocked prepare. A refusal, of the observation
@@ -22,7 +25,8 @@
 use std::path::PathBuf;
 
 use gpui_kit::{
-    AnyElement, Context, IntoElement, ParentElement, Styled, Subscription, Task, Window,
+    AnyElement, App, Context, Entity, FocusHandle, IntoElement, ParentElement, Styled,
+    Subscription, Task, Window,
     component::{ActiveTheme, v_flex},
 };
 use manyhands::{
@@ -30,15 +34,17 @@ use manyhands::{
     results::ResultCode,
 };
 
-use super::{LifecycleDialog, NOT_SENT, Phase, REPAIR_LOCALLY, RESOLVE_CONFLICT, button, text};
+use super::{
+    Heading, LifecycleDialog, NOT_SENT, Phase, REPAIR_LOCALLY, RESOLVE_CONFLICT, button, text,
+};
 use crate::desktop::{
     model::stamp::{Stamp, ViewScope},
     services::{
-        ReadResult,
+        ReadResult, Services,
         conflicts::LocalObservation,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
     },
-    view::conflict::{self, Opening, SheetSource},
+    view::conflict::{self, Opening, ResolveSheet, SheetSource},
 };
 
 /// Where Repair locally… stands.
@@ -61,6 +67,47 @@ pub(super) struct Repair {
     watch: Option<Subscription>,
 }
 
+impl Repair {
+    /// Repaired already, for a dialog opened again once a local
+    /// resolution applied (P9).
+    pub(super) fn repaired(repaired: bool) -> Self {
+        Self {
+            state: repaired.then_some(State::Repaired),
+            ..Self::default()
+        }
+    }
+}
+
+/// What opens the lifecycle dialog again once a local resolution that its
+/// Repair locally… led to applies (B6, P9): the dialog's command and
+/// heading, and the run it showed, if it showed one.
+pub(crate) struct Reopen {
+    intent: Intent,
+    heading: Heading,
+    following: Option<DesktopRequestId>,
+}
+
+/// Opens the lifecycle dialog again on `reopen`, saying main is in the
+/// working copy, with its way on: the shown run's Retry or Resume, or
+/// Prepare again after a blocked prepare. Focus goes back to `origin`.
+pub(crate) fn reopen_repaired(
+    reopen: Reopen,
+    origin: FocusHandle,
+    services: &Services,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Entity<LifecycleDialog>> {
+    let opening = super::Opening {
+        intent: reopen.intent,
+        heading: reopen.heading,
+        origin,
+        saving: None,
+        following: reopen.following,
+        repaired: true,
+    };
+    super::open(opening, services, window, cx)
+}
+
 impl LifecycleDialog {
     fn authoring_kind(&self) -> AuthoringKind {
         match self.heading.kind {
@@ -69,11 +116,26 @@ impl LifecycleDialog {
         }
     }
 
-    fn repairing(&self) -> bool {
+    /// Whether this dialog's Repair locally… is observing or its
+    /// synchronization is out: the dialog keeps it as it moves on, so the
+    /// synchronization's conflict still opens the sheet.
+    pub(super) fn repairing(&self) -> bool {
         matches!(
             self.repair.state,
             Some(State::Observing | State::Syncing(_))
         )
+    }
+
+    /// Whether a local synchronization of the item is queued or running,
+    /// this dialog's or another's: its entry shows how it ends (M1).
+    fn syncing(&self) -> bool {
+        let (Some(root), Some(id)) = (self.root(), self.item_id()) else {
+            return false;
+        };
+        self.services.worker().in_flight(|intent| {
+            matches!(intent, Intent::LocalContextSync { root: asked, id: asked_id, .. }
+                if asked.as_path() == root && asked_id == id)
+        })
     }
 
     /// Repair locally…: the work context observed, then synchronized with
@@ -156,7 +218,10 @@ impl LifecycleDialog {
         };
         let state = match &request.state {
             RequestState::Finished(_, code, _, _, message) => match operations.review(sync) {
-                Some(operation) => return self.open_local_sheet(operation, window, cx),
+                Some(review) => {
+                    let operation = review.operation_id;
+                    return self.open_local_sheet(operation, window, cx);
+                }
                 None if *code == ResultCode::Ok => State::Repaired,
                 None => State::Answered(*code, message.clone()),
             },
@@ -171,6 +236,8 @@ impl LifecycleDialog {
 
     /// The local synchronization's conflict, in the sheet in place of this
     /// dialog.
+    /// Once its resolution applies, the sheet opens this dialog again on
+    /// its way on (P9).
     fn open_local_sheet(
         &mut self,
         operation_id: OperationId,
@@ -178,7 +245,17 @@ impl LifecycleDialog {
         cx: &mut Context<Self>,
     ) {
         let folder = std::mem::take(&mut self.repair).worktree;
-        self.open_sheet(SheetSource::Local, operation_id, folder, window, cx);
+        let reopen = Reopen {
+            intent: self.intent.clone(),
+            heading: self.heading.clone(),
+            following: match self.phase {
+                Phase::Submitted(shown) => Some(shown),
+                _ => None,
+            },
+        };
+        if let Some(sheet) = self.open_sheet(SheetSource::Local, operation_id, folder, window, cx) {
+            sheet.update(cx, |sheet, _| sheet.reopen_after(reopen));
+        }
     }
 
     /// Resolve conflict…: the child's conflict, by `operation`, in the sheet
@@ -223,10 +300,10 @@ impl LifecycleDialog {
         folder: Option<PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Option<Entity<ResolveSheet>> {
         let (Some(root), Some(item)) = (self.root().map(PathBuf::from), self.item_id().cloned())
         else {
-            return;
+            return None;
         };
         let opening = Opening {
             source,
@@ -238,20 +315,24 @@ impl LifecycleDialog {
             origin: self.origin.clone(),
         };
         self.close(window, cx);
-        conflict::open(opening, &self.services, window, cx);
+        conflict::open(opening, &self.services, window, cx)
     }
 
     /// Repair locally… and Resolve conflict…, where the way out names
-    /// them. Repair locally… is not offered again while it runs.
+    /// them. Repair locally… is not offered while it runs, while any local
+    /// synchronization of the item is queued or running, or while the
+    /// item's lifecycle is in flight (`waiting`, P22).
     pub(super) fn repair_buttons(
         &self,
         way_out: &[LifecycleWayOut],
+        waiting: bool,
         cx: &Context<Self>,
     ) -> Vec<AnyElement> {
         let mut buttons = Vec::new();
+        let repair = !waiting && !self.repairing() && !self.syncing();
         for step in way_out {
             match step {
-                LifecycleWayOut::RepairLocally { .. } if !self.repairing() => {
+                LifecycleWayOut::RepairLocally { .. } if repair => {
                     let go = self.on(cx, |dialog, window, cx| dialog.repair_locally(window, cx));
                     buttons.push(button(
                         "lifecycle-repair-locally",

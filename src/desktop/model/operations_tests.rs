@@ -433,7 +433,7 @@ fn pending_operations_load_per_repository_and_drop_stale_reads() {
 /// be resumed, so the rows are built here; production code never builds
 /// one.
 #[test]
-fn resume_is_offered_for_a_local_operation_and_not_for_a_synchronization() {
+fn resume_is_offered_for_a_local_operation_and_a_synchronization() {
     let local = operation(
         OperationFamily::Local,
         OperationAction::SaveTicket,

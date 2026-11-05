@@ -376,7 +376,7 @@ impl LifecycleDialog {
                     .text_xs()
                     .text_color(muted),
             );
-        let mut actions = self.repair_buttons(way_out, cx);
+        let mut actions = self.repair_buttons(way_out, false, cx);
         if blockers.contains(&LifecycleBlocker::PrimaryDirty)
             && let Some(root) = self.root().map(|root| root.to_path_buf())
         {

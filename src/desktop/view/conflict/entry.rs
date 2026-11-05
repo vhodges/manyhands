@@ -14,15 +14,15 @@ use std::path::PathBuf;
 use gpui_kit::{App, Entity, FocusHandle, Window};
 use manyhands::{
     canonical::ItemId,
-    repository::{AuthoringKind, ItemDtoKind, MutationDataDto, OperationId},
+    repository::{AuthoringKind, ItemDtoKind, OperationId},
 };
 
 use super::{Opening, ResolveSheet, SheetSource, open};
 use crate::desktop::{
-    model::operations::Operations,
+    model::operations::{Operations, ReviewOf},
     services::{
         Services,
-        conflicts::{PendingConflict, PendingSource},
+        pending_conflicts::{PendingConflict, PendingSource},
         requests::{DesktopRequest, Intent},
     },
     view::{
@@ -52,10 +52,13 @@ fn kind_of(kind: AuthoringKind) -> ItemDtoKind {
 impl Entry {
     /// The conflict the finished request `request` last stopped on, when
     /// it did: a share's, a post's, a local synchronization's, or a
-    /// lifecycle's child, as the close's or merge's this session holds, or,
-    /// for a resume, as the lifecycle row's (R-10).
+    /// lifecycle's child, as the close's or merge's this session holds. A
+    /// resume's names its item when the answer does: a local
+    /// synchronization's, or a lifecycle's child as the lifecycle row's
+    /// (R-10). A resumed remote synchronization's names none here; its
+    /// pending row does (`of_pending`).
     pub(crate) fn of_request(request: &DesktopRequest, operations: &Operations) -> Option<Self> {
-        let operation_id = operations.review(request.id)?;
+        let review = operations.review(request.id)?;
         let (source, root, kind, item) = match &request.intent {
             Intent::ItemSync { root, kind, id } => (SheetSource::Share, root, kind_of(*kind), id),
             Intent::CommentAdd { root, kind, id, .. } => {
@@ -77,33 +80,21 @@ impl Entry {
                 id,
             ),
             Intent::OperationResume { root, .. } => {
-                let Some(MutationDataDto::Lifecycle(data)) = operations
-                    .lifecycle_answer(request.id)
-                    .and_then(|envelope| envelope.data.as_ref())
-                else {
-                    return None;
+                let (item, kind) = review.item.as_ref()?;
+                let source = match (review.of, kind) {
+                    (ReviewOf::Local, _) => SheetSource::Local,
+                    (ReviewOf::Lifecycle, ItemDtoKind::Ticket) => SheetSource::Close(None),
+                    (ReviewOf::Lifecycle, ItemDtoKind::Document) => SheetSource::Merge(None),
+                    (ReviewOf::Synchronization, _) => return None,
                 };
-                let item: ItemId = data.item_id.parse().ok()?;
-                let source = match data.kind {
-                    ItemDtoKind::Ticket => SheetSource::Close(None),
-                    ItemDtoKind::Document => SheetSource::Merge(None),
-                };
-                return Some(Self {
-                    source,
-                    root: root.clone(),
-                    operation_id,
-                    item,
-                    kind: data.kind,
-                    slug: None,
-                    folder: None,
-                });
+                (source, root, *kind, item)
             }
             _ => return None,
         };
         Some(Self {
             source,
             root: root.clone(),
-            operation_id,
+            operation_id: review.operation_id,
             item: item.clone(),
             kind,
             slug: None,

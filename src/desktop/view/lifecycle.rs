@@ -54,6 +54,7 @@ mod made_ready;
 mod outcome;
 
 pub(crate) use outcome::{cleanup_reason, item_of, progress_words};
+pub(crate) use repair::{Reopen, reopen_repaired};
 mod prepare;
 mod repair;
 mod running;
@@ -179,6 +180,10 @@ pub(crate) struct Opening {
     /// A run of this session the dialog shows, opened again from the
     /// operation area (A3): nothing is prepared.
     pub following: Option<DesktopRequestId>,
+    /// Opened again once a local resolution its Repair locally… led to
+    /// applied (B6, P9): it says main is in the working copy and offers
+    /// the way on, Prepare again where no run is shown.
+    pub repaired: bool,
 }
 
 /// Opens the lifecycle dialog. `None` while quitting, or while drafts are
@@ -270,6 +275,7 @@ pub(crate) fn reopen_as(
         origin,
         saving: None,
         following: Some(request.id),
+        repaired: false,
     };
     open(opening, services, window, cx)
 }
@@ -316,6 +322,9 @@ enum Phase {
     },
     /// Nothing was asked of the library.
     Message(&'static str),
+    /// A local resolution that Repair locally… led to applied, after a
+    /// blocked prepare: Prepare again is the way on (B6).
+    Repaired,
     /// A run was sent: the first, a Continue or a Resume.
     Submitted(DesktopRequestId),
 }
@@ -359,6 +368,7 @@ impl LifecycleDialog {
             origin,
             saving,
             following,
+            repaired,
         } = opening;
         let mut subscriptions = vec![cx.observe(services.operations(), |this, _, cx| {
             this.operations_changed(cx)
@@ -387,7 +397,11 @@ impl LifecycleDialog {
             heading,
             services,
             origin,
-            phase: following.map_or(Phase::Saving, Phase::Submitted),
+            phase: match (following, repaired) {
+                (Some(request), _) => Phase::Submitted(request),
+                (None, true) => Phase::Repaired,
+                (None, false) => Phase::Saving,
+            },
             generations: Generations::default(),
             prepare_read: None,
             saving,
@@ -396,7 +410,7 @@ impl LifecycleDialog {
             reached: None,
             stop_pressed: false,
             titles: made_ready::Titles::default(),
-            repair: repair::Repair::default(),
+            repair: repair::Repair::repaired(repaired),
             _subscriptions: subscriptions,
         };
         // The dialog locks its item until it is dropped, in every phase
@@ -414,7 +428,7 @@ impl LifecycleDialog {
         dialog.sync_lock(cx);
         // Opened again on a run that has its answer already.
         dialog.read_made_ready(cx);
-        if dialog.saving.is_none() && following.is_none() {
+        if dialog.saving.is_none() && following.is_none() && !repaired {
             dialog.prepare(cx);
         }
         dialog
@@ -429,7 +443,10 @@ impl LifecycleDialog {
     /// the item now: in every phase before its run is sent (R-21).
     fn set_phase(&mut self, phase: Phase, cx: &mut Context<Self>) {
         self.phase = phase;
-        self.repair = repair::Repair::default();
+        // A repair under way is kept: its conflict still opens the sheet.
+        if !self.repairing() {
+            self.repair = repair::Repair::default();
+        }
         self.sync_lock(cx);
     }
 

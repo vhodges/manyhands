@@ -35,12 +35,12 @@ impl ItemPane {
             .outcome
             .as_ref()
             .filter(|outcome| outcome.conflict)
-            && let Some(operation) = operations.review(outcome.request)
+            && let Some(review) = operations.review(outcome.request)
         {
-            return Some((SheetSource::Share, operation));
+            return Some((SheetSource::Share, review.operation_id));
         }
         let post = self.post_conflict_request(cx)?;
-        Some((SheetSource::Post, operations.review(post)?))
+        Some((SheetSource::Post, operations.review(post)?.operation_id))
     }
 
     /// Review changes, when the conflict it would open is known.

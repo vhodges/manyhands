@@ -228,6 +228,9 @@ pub(crate) struct ResolveSheet {
     folder: PathBuf,
     /// The read of the item's work folder, when the opening named none.
     folder_read: Option<Task<()>>,
+    /// The lifecycle dialog whose Repair locally… led here, opened again
+    /// once a local resolution applies (B6, P9).
+    reopen: Option<crate::desktop::view::lifecycle::Reopen>,
     origin: FocusHandle,
     services: Services,
     generations: Generations,
@@ -285,6 +288,7 @@ impl ResolveSheet {
             heading: opening.heading,
             folder,
             folder_read: None,
+            reopen: None,
             origin: opening.origin,
             services,
             generations: Generations::default(),
@@ -317,17 +321,26 @@ impl ResolveSheet {
         sheet
     }
 
+    /// Once a local resolution applies, the lifecycle dialog opens again on
+    /// `reopen` (P9).
+    pub(crate) fn reopen_after(&mut self, reopen: crate::desktop::view::lifecycle::Reopen) {
+        self.reopen = Some(reopen);
+    }
+
     /// Reads the item's work folder, for Open folder (B4): an entry point
     /// that does not know it still opens the sheet on the item's work
     /// context, never the repository's while the item has one.
     fn read_folder(&mut self, cx: &mut Context<Self>) {
-        let stamp = Generations::default().next(ViewScope::Conflict);
+        let stamp = self.generations.next(ViewScope::ConflictFolder);
         self.folder_read = Some(self.services.read_item_folder(
             self.root.clone(),
             self.item.clone(),
             stamp,
             cx,
-            |sheet, _, result, cx| {
+            |sheet, stamp, result, cx| {
+                if !sheet.generations.is_current(&stamp) {
+                    return;
+                }
                 if let ReadResult::Ok(Some(folder)) = result {
                     sheet.folder = folder;
                     cx.notify();

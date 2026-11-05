@@ -273,7 +273,7 @@ impl LifecycleDialog {
     pub(crate) fn enter(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.phase {
             Phase::Confirm { .. } => self.confirm(cx),
-            Phase::Stale { .. } => self.prepare(cx),
+            Phase::Stale { .. } | Phase::Repaired => self.prepare(cx),
             Phase::Submitted(_) => self.enter_submitted(window, cx),
             _ => {}
         }

@@ -32,6 +32,8 @@ use manyhands::{
 mod outcomes;
 mod review;
 
+pub(crate) use review::{Review, ReviewOf};
+
 #[cfg(test)]
 pub(crate) use outcomes::{
     ANOTHER_SHARE_HOLDS, BRANCH_DELETED, CHOOSE_A_KEY, CURRENT, KEY_LOCKED, NEEDS_ATTENTION,
@@ -139,7 +141,7 @@ pub(crate) struct Operations {
     locks: LifecycleLocks,
     /// The operation each finished request's last answer stopped on with a
     /// conflict, whose sheet its entry offers (D5 B5, `review`).
-    reviews: HashMap<DesktopRequestId, OperationId>,
+    reviews: HashMap<DesktopRequestId, Review>,
 }
 
 /// What finished requests may have changed since the views last read.
@@ -237,9 +239,18 @@ impl Operations {
                 let envelope = *envelope;
                 self.stopping.remove(&id);
                 match review::conflict_of(&envelope) {
-                    Some(operation) => self.reviews.insert(id, operation),
+                    Some(review) => self.reviews.insert(id, review),
                     None => self.reviews.remove(&id),
                 };
+                // A resolution applied: no entry offers its conflict again,
+                // and the banner clears (B3).
+                if let Some(resolved) = self
+                    .request(id)
+                    .and_then(|request| review::resolved_by(&request.intent, envelope.code))
+                {
+                    self.reviews
+                        .retain(|_, review| review.operation_id != resolved);
+                }
                 if self
                     .request(id)
                     .is_some_and(|request| ShareTarget::of(&request.intent).is_some())
@@ -414,8 +425,8 @@ impl Operations {
 
     /// The operation whose conflict the finished request `id` last stopped
     /// on, which Review changes opens the sheet on (D5 B5).
-    pub(crate) fn review(&self, id: DesktopRequestId) -> Option<OperationId> {
-        self.reviews.get(&id).copied()
+    pub(crate) fn review(&self, id: DesktopRequestId) -> Option<&Review> {
+        self.reviews.get(&id)
     }
 
     /// The last answer of the lifecycle `id`: a promotion's or a closure's,
@@ -526,8 +537,10 @@ impl Operations {
             )
         {
             request.state = RequestState::Dismissed;
-            // Nothing shows a dismissed lifecycle's answer again.
+            // Nothing shows a dismissed lifecycle's answer, or offers its
+            // conflict, again.
             self.lifecycles.remove(&id);
+            self.reviews.remove(&id);
         }
     }
 

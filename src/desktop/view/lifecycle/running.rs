@@ -270,7 +270,7 @@ impl LifecycleDialog {
         offers: &Offers,
         cx: &Context<Self>,
     ) -> Vec<AnyElement> {
-        let mut buttons = self.repair_buttons(&lifecycle_way_out(envelope), cx);
+        let mut buttons = self.repair_buttons(&lifecycle_way_out(envelope), offers.waiting, cx);
         if offers.retry && !offers.waiting {
             let retry = self.on(cx, |dialog, _, cx| dialog.resend(cx));
             buttons.push(button("lifecycle-retry", RETRY, true, retry));

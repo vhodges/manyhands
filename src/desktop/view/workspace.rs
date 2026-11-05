@@ -36,9 +36,13 @@ use super::{
 };
 use crate::desktop::{
     model::{
-        documents::Documents, find::Find, navigation::Navigation, stamp::RepoKey, tickets::Tickets,
+        documents::Documents,
+        find::Find,
+        navigation::Navigation,
+        stamp::{Generations, RepoKey},
+        tickets::Tickets,
     },
-    services::{Services, conflicts::PendingConflict},
+    services::{Services, pending_conflicts::PendingConflict},
 };
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use focus::REGIONS;
@@ -118,6 +122,9 @@ pub(crate) struct Workspace {
     /// Each repository's pending rows whose conflict waits to be resolved,
     /// as its last read of them found (D5 B5).
     pending_conflicts: HashMap<RepoKey, Vec<PendingConflict>>,
+    /// Each repository's read of them; a newer read drops the last.
+    pending_conflict_reads: HashMap<RepoKey, Task<()>>,
+    conflict_generations: Generations,
     abandon_focus: HashMap<(RepoKey, String), FocusHandle>,
     abandon_drawn: HashSet<(RepoKey, String)>,
     control_focus: HashMap<String, FocusHandle>,
@@ -263,6 +270,8 @@ impl Workspace {
             launched: false,
             pending_reads: HashMap::new(),
             pending_conflicts: HashMap::new(),
+            pending_conflict_reads: HashMap::new(),
+            conflict_generations: Generations::default(),
             abandon_focus: HashMap::new(),
             abandon_drawn: HashSet::new(),
             control_focus: HashMap::new(),

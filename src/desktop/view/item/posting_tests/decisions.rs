@@ -105,7 +105,14 @@ fn banner_extras(
         let review = window
             .try_find("item-review-changes")
             .map(|review| review.path().to_vec());
-        let frame = &words[..words.len() - 1];
+        // The banner's own frame, however deep its words are drawn.
+        let at = words
+            .iter()
+            .rposition(|id| {
+                matches!(id, gpui_kit::ElementId::NamedInteger(name, _) if name.as_ref() == "item-banner")
+            })
+            .expect("the banner's frame");
+        let frame = &words[..=at];
         gpui_kit::base::test_support::snapshots(window)
             .iter()
             .filter(|element| {

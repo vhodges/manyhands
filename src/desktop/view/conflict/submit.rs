@@ -300,6 +300,18 @@ impl ResolveSheet {
         cx: &mut Context<Self>,
     ) {
         self.close(window, cx);
+        // A local resolution its Repair locally… led to: the lifecycle
+        // dialog again, on its way on (B6, P9).
+        if let (SheetSource::Local, Some(reopen)) = (self.source, self.reopen.take()) {
+            crate::desktop::view::lifecycle::reopen_repaired(
+                reopen,
+                self.origin.clone(),
+                &self.services,
+                window,
+                cx,
+            );
+            return;
+        }
         let followed = self.services.followups().take_followed(resolution);
         let (
             Some(Followed::Resent),

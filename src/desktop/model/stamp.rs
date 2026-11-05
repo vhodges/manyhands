@@ -56,6 +56,11 @@ pub(crate) enum ViewScope {
     /// The resolve conflict sheet's reads of its conflict (D5 B1). Each
     /// sheet keeps its own generations, so one scope serves them all.
     Conflict,
+    /// The resolve conflict sheet's read of its item's work folder (B4).
+    ConflictFolder,
+    /// Which of a repository's pending rows hold a conflict to review
+    /// (D5 B5), read once its rows have landed.
+    PendingConflicts(RepoKey),
     /// One Drafts page row's reads of its item. A new listing, or Retry,
     /// moves it on, so a late read never lands on a newer row.
     DraftRow(manyhands::drafts::DraftId),
