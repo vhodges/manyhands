@@ -246,6 +246,22 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         "retirement_quality_verified_history_survives_observer_completion_clear_attempt",
         quality_verified_completion,
     ),
+    (
+        "retirement_quality_unicode_admin_initial_lock_spelling_refuses",
+        quality_unicode_admin_initial_lock,
+    ),
+    (
+        "retirement_quality_unicode_admin_final_lock_spelling_is_no_effect",
+        quality_unicode_admin_final_lock,
+    ),
+    (
+        "retirement_quality_unicode_admin_initial_directory_component_refuses",
+        quality_unicode_admin_initial_directory,
+    ),
+    (
+        "retirement_quality_unicode_admin_final_directory_component_is_no_effect",
+        quality_unicode_admin_final_directory,
+    ),
 ];
 
 fn setup() -> Result<World, FixtureError> {
@@ -2692,6 +2708,67 @@ fn quality_verified_completion() -> Result<(), FixtureError> {
     assert_eq!(w.server.commands(), commands);
     assert!(RepositoryService::open_at(&w.data()).is_ok());
     w.privacy()
+}
+
+fn quality_unicode_admin_initial_lock() -> Result<(), FixtureError> {
+    quality_unicode_admin(false, false)
+}
+fn quality_unicode_admin_final_lock() -> Result<(), FixtureError> {
+    quality_unicode_admin(true, false)
+}
+fn quality_unicode_admin_initial_directory() -> Result<(), FixtureError> {
+    quality_unicode_admin(false, true)
+}
+fn quality_unicode_admin_final_directory() -> Result<(), FixtureError> {
+    quality_unicode_admin(true, true)
+}
+fn quality_unicode_admin(final_boundary: bool, directory: bool) -> Result<(), FixtureError> {
+    let member = if directory {
+        "refs/cafe\u{0301}/pending"
+    } else {
+        "index.loc\u{212a}"
+    };
+    // Kelvin lock spelling / decomposed directory component on ordinary Linux:
+    // this proves conservative unsupported-name refusal, NOT enabled casefold.
+    pre_prune_refusal(
+        final_boundary,
+        move |w| {
+            let path = w
+                .repo()
+                .unwrap()
+                .commondir()
+                .join("worktrees")
+                .join(ITEM)
+                .join(member);
+            Box::new(move || {
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, b"Unicode-spelled pending writer fixture bytes").unwrap();
+            })
+        },
+        move |w| {
+            let path = w
+                .repo()
+                .unwrap()
+                .commondir()
+                .join("worktrees")
+                .join(ITEM)
+                .join(member);
+            assert!(fs::symlink_metadata(&path).unwrap().file_type().is_file());
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                b"Unicode-spelled pending writer fixture bytes"
+            );
+            fs::remove_file(&path).unwrap();
+            if directory {
+                assert!(
+                    fs::symlink_metadata(path.parent().unwrap())
+                        .unwrap()
+                        .is_dir()
+                );
+                fs::remove_dir(path.parent().unwrap()).unwrap();
+            }
+        },
+    )
 }
 
 // Shared negative journey: capture all resource and registry rows at the actual

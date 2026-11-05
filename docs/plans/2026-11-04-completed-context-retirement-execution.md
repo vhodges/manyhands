@@ -377,6 +377,7 @@ are not authorized; numeric exits must come from existing results registry.
 | Same fresh-present SPEC re-review at `927de9e3` | Original P1/P2 common cases fixed; **2 Important remaining guard holes** accepted by controller: ASCII-case-equivalent lock suffixes missed, per-worktree HEAD refs looked up in primary namespace | Quality **held**; conservative retirement-only correction and compiled RED→GREEN below. **Same SPEC re-review then Quality pending**, no full Task 2 approval |
 | Same fresh-present SPEC at `c230f811` | P1 case locks and pre-W masked aliases resolved; **2 Important P2 chain holes** remain: late post-W/pre-B checkout uses old scanner; target case-equivalent HEAD is called unrelated | Controller accepts unified retirement-only checkout authorization across W→B; correction/evidence below. **Same SPEC re-review then Quality pending**, Quality still held |
 | Limited fresh-present SPEC pass through `1ed380c6`; subsequent QUALITY | Controller reports SPEC pass at that source; Quality finds **1 Important** unsupported Unicode filesystem identity alias and **1 Minor** verified-history rollback/audit gap, both accepted | Corrections below; **delta SPEC check then same QUALITY re-review pending**, no expansion/push or full Task 2 approval |
+| SPEC delta at `892212fe` | Prior HEAD Unicode/verified-history corrections accepted; **1 Important related lock-identity hole** remains: non-ASCII selected-admin entry can evade ASCII suffix matching (`index.locK`) | Conservative recursive component refusal and RED→GREEN below; **same SPEC then same QUALITY re-review pending**, no authority expansion |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -400,11 +401,11 @@ are not authorized; numeric exits must come from existing results registry.
    including the cleanup-lease correction and preserved S1–S4 protections.
   Fresh-present selection/install/prune → branch/index is now connected in the
   next bounded increment from `7fde7e5f`. Limited SPEC passes through `1ed380c6`;
-  Quality's Unicode identity/verified-history corrections await **delta SPEC
-  check then same QUALITY re-review**.
-  Latest gates: **76** context-retirement tests, **59** registered retirement SSH,
-  **51** cleanup and **52** recovery-foundation tests (+3 units/+4 SSH; earlier
-  cleared-verification corruption fixture strengthened with assertions intact).
+  SPEC delta accepts HEAD Unicode/history corrections at `892212fe`, but the
+  related Unicode admin-lock correction awaits **same SPEC then same QUALITY**.
+  Latest correction gates: **76** context-retirement tests, **63** registered
+  retirement SSH, all static gates (prior 76/59 unchanged; +4 SSH). Unchanged
+  cleanup **51** / recovery-foundation **52** evidence remains at `892212fe`.
   Authorized executor replacement/recovery and source/batch scopes remain
   unfinished/closed; all 44 matrix obligations stay explicitly tracked.
   Full Task 2 spec/quality review remains owed; no full completion claimed.
@@ -417,6 +418,8 @@ are not authorized; numeric exits must come from existing results registry.
   HEADs require ASCII direct shared `refs/heads/*` bindings; non-ASCII spellings
   refuse as unsupported filesystem equivalence, not as invalid Git names.
   Independent ASCII branches and detached checkouts at the same OID remain valid.
+  Selected-admin lock inventory additionally requires ASCII entry components,
+  including directory names recursively; non-ASCII namespace identity refuses.
 - [ ] **8 — Final local gates/independent reviews/owner handoff.** Controller-owned;
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
@@ -2660,3 +2663,53 @@ protocols and full Task 2 review remain owed. No Task 2 completion/Task 3/4 clai
 no Windows/native/casefold runtime or cross-compilation claim. No agents, push,
 status/PR/main integration/closure/native CI, other-worktree edits or real-context
 key/profile/draft action.
+
+## Task 2 SPEC Delta — Unsupported Unicode Admin Components
+
+Source parent **`892212fe6b49351a9457cfafb4ea971188d86e8b`**; present base
+`7fde7e5f`, full Task 2 base `7b1912d1`. Fresh fetch/merge unchanged at `c69789d9`,
+no rebase. SPEC accepts prior HEAD/history fixes but identifies Important P1 lock
+equivalence (`index.locK`); no native casefold end-to-end reproduction claimed.
+**Same SPEC then same Quality re-review remain pending.**
+
+The selected-admin recursive metadata-only scan now rejects **any non-ASCII entry
+component**, before admitting files or descending directories. This closes unknown
+folding/normalization aliases without hardcoding Kelvin/long-s or adding native
+detection/dependencies. Existing ASCII case-insensitive lock matching, no-follow
+checks, marker/ULID layout and immediate pre-W identity callback remain intact.
+Task 7 follow-up above records the additional conservative namespace limit.
+
+Registered compile-success TDD: `devenv shell -- cargo test --all-features --locked
+--test mutation_remote retirement_quality_unicode_admin_`:
+`/tmp/opencode/task2-present-unicode-admin-red.log` **0 passed / 4 failed SSH** →
+`...-green.log` **4 passed**. Cases use actual pending-byte `index.loc\u{212a}` files
+and decomposed non-ASCII directory components at **initial and final pre-W**
+boundaries. Linux tests prove conservative unsupported-name refusal, **not enabled
+casefold**. Full resource/type/non-TF/Z row images, old intent, pin=0, stable replay
+after repair, W/B None and final truthful `changed` W intent are asserted.
+
+Source frozen after format; all final commands serial Devenv, no deadlines or
+overlapping builds/tests; only ledger/comment edits follow. Log prefix
+`/tmp/opencode/task2-present-unicode-admin-`, suffixes below end in `.log`.
+
+| Final command | Log suffix | Result |
+| --- | --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | `check-final` | exit 0 |
+| `devenv shell -- cargo fmt --check` | `fmt-final` | exit 0 |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy-final` | exit 0 |
+| `devenv shell -- cargo test --all-features --locked --lib context_retirement` | `context-final` | **76 passed**, unchanged |
+| `devenv shell -- cargo test --all-features --locked --test mutation_remote retirement_` | `ssh-final` | **63 registered SSH passed**, prior 59 unchanged +4 |
+
+Only `instance.rs` and additive SSH cases changed. Verified-history/HEAD guards,
+proof, ordinary cleanup/release, witnesses, prior assertions/pins unchanged; no
+fixture adaptation. Unaffected broad/cleanup/foundation gates not repeated.
+Frozen diff SHA-256 against `892212fe`:
+`5c7d73db8e0b4ac4a1972b4a3e95ed9f91ea0d888b9f5e65f078ae612fbe8d58`.
+Checkpoint **`01M6NKZGHR7R3V0RVT3PC5AC1C`**, parent
+**`01M6NK03FP9YVMBWKD8N5YVD1X`**, actual UTC **`2026-11-05T10:27:28Z`**.
+
+**All 01–44 obligations remain tracked**, not completed by counts; public reentry/
+replacement, owned-absence recovery, remaining fault/source/batch protocols and
+full Task 2 review remain owed. No Task 2 completion/Task 3/4 expansion, agents,
+push, status/PR/main integration/closure/native CI, other-worktree or real-context
+actions. No Windows/native/casefold runtime or cross-compilation claim.

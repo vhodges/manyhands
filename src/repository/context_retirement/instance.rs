@@ -117,14 +117,18 @@ fn parse(
 /// regardless of node type, and never follow a redirected namespace to inspect it.
 /// Match ASCII case variants on every platform, including case-sensitive hosts,
 /// so a case-preserving filesystem cannot hide an occupied Git lock slot.
+/// Non-ASCII entry components (including directories) have unsupported folding/
+/// normalization identity and must not make the lock inventory appear complete.
 fn require_admin_locks_absent(path: &std::path::Path) -> Result<(), RepositoryError> {
     plain_registration_path(path, true).map_err(|_| recovery_required())?;
     for entry in std::fs::read_dir(path).map_err(|_| recovery_required())? {
         let entry = entry.map_err(|_| recovery_required())?;
         let path = entry.path();
         if entry.file_name().to_str().is_none_or(|name| {
-            name.rsplit_once('.')
-                .is_some_and(|(_, suffix)| suffix.eq_ignore_ascii_case("lock"))
+            !name.is_ascii()
+                || name
+                    .rsplit_once('.')
+                    .is_some_and(|(_, suffix)| suffix.eq_ignore_ascii_case("lock"))
         }) {
             return Err(recovery_required());
         }
