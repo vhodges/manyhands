@@ -134,6 +134,37 @@ The implementer's checkpoint, reviewed by the orchestrator against the design's 
 - **Noted risk.** `integrating` is sent while the repository lease is held, as the progress sink's contract already allows. The desktop sink is a non-blocking channel.
 - **Run by name.** `cli_remote` `c5_journey_close_with_retryable_failure`, because the `lifecycle` filter misses it.
 
+## Task 9 Lock Design Checkpoint (2026-11-05, at `a18b33f0`)
+
+The implementer's checkpoint, reviewed by the orchestrator against design A2's lock sources and L-1 to L-6. No library change is needed.
+
+- **State.** `D/model/lifecycle_lock.rs` holds `LifecycleLocks`, an entity shared through `Services`. It is keyed by root and item, and the `Lock` it returns carries the kind, which picks "Closing…" or "Merging…".
+- **Dialog.** A `set_phase` call registers the dialog in every phase before `Submitted` (R-21). `on_release` releases it on Cancel, Esc or window close. The Worker source takes over at `submit`, which queues synchronously.
+- **Worker.** One shared `Worker::in_flight` query covers `TicketClose`, `DocumentPromote` and `OperationResume` on the item's lifecycle operation IDs. The IDs come from the cached rows and the dialog's held operation.
+- **Record.** `list_operations` rows are read through `load_pending`: at launch, on the operation area's refresh, after each lifecycle answer and, new here, on window activation. The rows are cached in `LifecycleLocks`:
+  - `Ok` replaces the rows;
+  - `Busy` keeps the last rows;
+  - `Failed` clears them, so there is no lock.
+- **L-1 to L-6.**
+  - **L-1:** `confirmed` and `context_synchronized` don't lock. Tested real: a hold at `observing`, then Stop.
+  - **L-2:** `closing` locks across a restart. Tested real: `strand_close`, then a fresh shell.
+  - **L-3:** every step from `integrating` on locks (R-21). Tested real with `DuringWorktreeRemoval`; the canned `remote_deletion_rejected` answer is drawn only over that real row.
+  - **L-4:** a pending cleanup for `context_changed`, `ignored_files` or `remote_context_changed` unlocks through an exemption (R-22). It shows the banner "Merged, but not tidied up: {reason}" with Open folder and Check again. Tested real with the `c5_cancel.rs` untracked-file recipe.
+  - **L-5:** no row means no lock.
+  - **L-6:** an answer before acceptance adds no lock. Dirty primary, stale consent and Cancel are tested real. `busy` is canned (`busy_with_no_parent`), and so is `request_mismatch`.
+  - **P26** (the CLI finishes the close) and the unreadable repository are tested real.
+- **Read-only.** `ItemPane` observes the locks. A new `item/lock.rs` gates the scope in R-23, shows the pill and adds an `item-locked-note`.
+- **A4.**
+  - Existing reloads reopen tabs from primary.
+  - New: `CreatedContexts::finished` forgets a lifecycle's context on cleanup `Complete`.
+  - New: a tab ends its session when the item is tidied.
+  - Comment drafts and failed runs need tests only.
+- **Every window.** The lock is proved with a second `Workspace` window over the same `Services`, if `cx.add_window` supports it; otherwise with the item's tab and an Inspect tab.
+- **Rulings.**
+  - R-21 and R-22 are the orchestrator's: steps, Dialog phases, Busy, the awaiting gap, the exemption, Check again and the restart path.
+  - R-23 is the owner's (2026-11-05): the read-only scope.
+  - The other proposals are accepted as written: 8.3 (a stop at `integrating` stays locked), 8.13 (`busy` with a standing parent: the row decides) and 8.14 (P23's assertions run on the real row).
+
 ## Main Merges
 
 - **2026-11-04, at Task 4: merged `origin/main` `c69789d9` as `074ebde0`.**
