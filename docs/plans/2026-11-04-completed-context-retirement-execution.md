@@ -368,6 +368,8 @@ are not authorized; numeric exits must come from existing results registry.
 | Limited QUALITY final pass through `03c0c63b`, same source base, after SPEC pass | Session `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/Blocking/0 Important/0 Minor remaining**. Fresh original probes now refuse redirected commondir and contradictory checkpoint evidence; valid absence and terminal/pending unregister controls retain their expected outcomes | Initial-absence milestone QUALITY approved only; Windows runtime/cross-compilation and deferred source/batch/destructive authority remain unverified |
 | Next Task 2 continuation preflight, 2026-11-05 | Fresh fetch succeeded; ticket and main checkouts clean. Main/base remains `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `03c0c63b1371fea1b59f46fae6495ef69e39315a` already up to date, no conflicts/rebase | No upstream assumption change or unmerged branch consumption |
 | Limited branch-only SPEC review at `ade567fc`, increment base `b1a986c2` | Controller relayed and source-verified **4 Important current-producer gaps**: S1 intended-only effect accepted as settled handoff/result; S2 known pre-Git rejection reported possible effects; S3 public update-poll configuration wrote before reserved-ID refusal; S4 primary loose-ref storage followed redirects | SPEC **failed**, Quality **held**. Test-first corrections and local evidence below; same SPEC re-review, then Quality required. No future-feature/policy substitution or full Task 2 approval |
+| Limited branch-only SPEC re-review through `b4f187e7`, same base | Controller reports **S1–S4 passed, 0 findings** | Preserve those corrections unchanged; this is limited SPEC approval, not full Task 2 completion |
+| Limited branch-only QUALITY at `b4f187e7` | **1 Important reproduced defect**: cleanup-lease contention after successful observation returns Busy, leaving selected/created S, completed O and a live pin; retry cannot recover the same-live branch permit. Controller/reviewer agree Q1/R-7/TF requires Final ExternalChange/no effect for the exact still-owned attempt, not Final Busy or reentry | Test-first correction below; same SPEC delta-check then same QUALITY original-probe re-review pending. No new policy approval or authority extension |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -386,10 +388,11 @@ are not authorized; numeric exits must come from existing results registry.
   initial absence is independently approved through `03c0c63b`, published with
   the controller's record at `b1a986c2`. The next IN-PROGRESS increment connects
   fresh authenticated **branch-only** retirement: claim/O/receipt/proof/guarded
-  branch deletion/D14/index result. Its limited SPEC review at `ade567fc` found
-  S1–S4; corrections are locally verified, **same SPEC re-review pending, Quality
-  held**. Latest gates: **66** context-retirement tests (unchanged 58 + 8 additive),
-  **21** registered retirement SSH cases. Present
+  branch deletion/D14/index result. S1–S4 passed limited SPEC through `b4f187e7`
+  with 0 findings. Quality's subsequent cleanup-lease finding is locally corrected;
+  **same SPEC delta-check then same QUALITY original-probe re-review pending**.
+  Latest gates: **66** context-retirement tests (unchanged 58 + 8 additive),
+  **24** registered retirement SSH cases. Present
   instances, authorized executor replacement/recovery and source/batch scopes
   remain unfinished/closed; all 44 matrix obligations stay explicitly tracked.
   Full Task 2 spec/quality review remains owed; no full completion claimed.
@@ -402,8 +405,10 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: controller's **same limited SPEC reviewer** re-reviews
-`b1a986c2..fixHEAD` for S1–S4, then Quality. No further present-instance/authority
+Immediate next step: controller's **same limited SPEC reviewer** delta-checks
+the cleanup-lease correction, then the **same QUALITY reviewer** reruns its
+original probe on `b1a986c2..fixHEAD`. S1–S4 remain unchanged and approved.
+No further present-instance/authority
 expansion or push in this correction phase. Prior design and initial-absence
 approvals remain intact; no new owner-policy decision is required. Full Task 2
 and all 44 future obligations remain in progress; this is not permission for
@@ -2209,3 +2214,68 @@ fast/changed-path SSH tiers remain owed. Linux evidence only; Unix symlink cases
 are cfg-gated, not Windows runtime proof. No push, reset/squash/rebase, agents,
 other-worktree edits, ticket-status/main/PR/closure/native-CI actions, Task 3/4 or
 real contexts/keys/profiles/drafts. No new policy hold; return to same SPEC first.
+
+## Task 2 Progress Delta — QUALITY Cleanup-Lease Lifetime Correction
+
+Entry **`b4f187e7555827f31ac772b0905603805bb94118`**, clean; S1–S4 independently
+SPEC passed with **0 findings**, unchanged here. Fresh `git fetch origin main`
+succeeded; `git merge origin/main` already up to date at `c69789d9`. Increment
+review base **`b1a986c2ce45331fb403bec5dc7a521a29506f1a`**, full Task 2 base
+**`7b1912d1`**. Quality identified **one Important** current-producer defect;
+original read-only probe `/tmp/opencode/task2-branch-quality-b4f187e7-locked.log`
+lines 9–14 contrasts uncontended Retired/pin0 with contended Busy, selected/
+created S, pin1/effects0, completed O, then RecoveryRequired on same-ID retry.
+
+**Agreed routing, not new policy:** design lines 322–324 and 404–414 require the
+branch-only permit to remain within the same live call. Once this selected call
+gives up, a later executor cannot reacquire it; an attempt with no removal ends
+`external_change`. Accepted TF/Z provides metadata-only finalization while the
+current exact parent/attempt/O still owns selected/no-intent evidence. Therefore
+cleanup capability acquisition failure now calls existing `refuse_execution`
+with **ExternalChange**, atomically persisting Final Refused, removals None,
+materialization-settled false, ending attempt/journal and releasing its pin.
+No intent/primitive ran; captured materialization and all resources remain.
+The seam's audit/epoch/request/observer checks are unchanged: fenced or inconsistent
+evidence still fails closed. Pre-selection Busy remains retryable with no selection.
+No new permit/reselection/configuration rebinding or existing-request reopening.
+
+### Regression And Frozen-Source Verification
+
+Three real authenticated SSH cases were registered before running the filter:
+post-observation contention, uncontended retirement, and pre-selection Busy.
+The fixture holds the actual common lease with the existing fs4 protocol **until
+the retiring call returns**, not a synthetic acquisition error. Full local and
+remote resource images (including modes, links, Git files and lease-file presence),
+captured materialization, final ownership/pin state, and stable replay after lease
+release are asserted. A later same-ID document intent/surviving or recreated branch
+is preserved across reopened-service replay; command inventory proves no new ad.
+
+All logs use `/tmp/opencode/task2-branch-quality-lease-<name>.log`:
+
+- Compile-success **RED** `red`: `--test mutation_remote retirement_quality_cleanup_lease_`
+  returned **2 SSH passed / 1 failed**. Contention marker `301 1 0 1 1 1 0`
+  means contended, not Final, Busy, selected1, pin1, intents0; uncontended and
+  pre-selection controls passed. **GREEN** `green`: **3 SSH passed**, contention
+  marker `301 1 1 0 0 0 0` (Final, not Busy, selected0/pin0/intents0).
+- Final source frozen after formatting; only ledger/comment metadata afterward.
+  Every Cargo command serial through Devenv, no command deadlines or overlapping
+  builds/test binaries. Existing S1–S4 production code/controls, all 66 unit tests,
+  and prior 21 SSH controls are unchanged. No redundant broad gates rerun.
+
+| Command | Log name | Result |
+| --- | --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | `check-final` | exit 0 |
+| `devenv shell -- cargo fmt --check` | `fmt-final` | exit 0 |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy-final` | exit 0 |
+| `devenv shell -- cargo test --all-features --locked --lib context_retirement` | `context-final` | **66 passed** |
+| `devenv shell -- cargo test --all-features --locked --test mutation_remote retirement_` | `ssh-final` | **24 SSH passed** |
+
+Canonical checkpoint **`01M6N8G23WW10DPXSA2CTCAXE5`**, parent
+**`01M6N6N0ENV50FDX321B7JBTSW`**, actual UTC **`2026-11-05T07:06:44Z`**.
+Only runner/test plus this ledger/comment changed. No push, agents, status/PR/
+main integration/closure/native CI, Task 3/4, present/replacement/source/batch
+extension, or real contexts/keys/profiles/drafts. **All 44 obligations remain
+tracked; full Task 2 is in progress**, with the previously listed mechanisms and
+final broad gates still owed. Linux evidence only, no native/Windows runtime
+claim. Same SPEC delta-check then same QUALITY original-probe re-review before
+continuation; no independent Quality approval inferred from these local passes.

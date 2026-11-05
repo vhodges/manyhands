@@ -93,6 +93,18 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         "retirement_spec_s4_final_primary_lock_slots_are_refused",
         spec_s4_final_locks,
     ),
+    (
+        "retirement_quality_cleanup_lease_contention_is_final_external_change",
+        quality_cleanup_lease_contended,
+    ),
+    (
+        "retirement_quality_cleanup_lease_uncontended_control_retires",
+        quality_cleanup_lease_uncontended,
+    ),
+    (
+        "retirement_quality_cleanup_lease_preselection_busy_remains_retryable",
+        quality_preselection_busy,
+    ),
 ];
 
 fn setup() -> Result<World, FixtureError> {
@@ -973,4 +985,243 @@ fn spec_s4_redirect(final_boundary: bool, variant: &'static str) -> Result<(), F
     assert_materialization(&w, &materialization)?;
     assert!(RepositoryService::open_at(&w.data()).is_ok());
     w.privacy()
+}
+
+fn quality_cleanup_lease_contended() -> Result<(), FixtureError> {
+    quality_cleanup_lease(true)
+}
+fn quality_cleanup_lease_uncontended() -> Result<(), FixtureError> {
+    quality_cleanup_lease(false)
+}
+fn quality_cleanup_lease(contended: bool) -> Result<(), FixtureError> {
+    use fs4::fs_std::FileExt;
+    let w = setup()?;
+    history(&w, true)?;
+    let materialization = complete_materialization(&w)?;
+    let request = request(&w);
+    let before = resource_image(&w.root);
+    let remote_before = resource_image(w.bare()?.path());
+    let hold = w.server.hold_advertisement()?;
+    let data = w.data();
+    let running_request = request.clone();
+    let approval = w.primary().approval;
+    let running = std::thread::spawn(move || {
+        let service = RepositoryService::open_at(&data).unwrap();
+        service.retire_context_authenticated(
+            running_request,
+            approval,
+            &mut SessionCredentials::new(Provider),
+        )
+    });
+    hold.wait_until_held()?;
+    // Same actual common-lease file and fs4 protocol as the existing C5 SSH
+    // contention controls; no synthetic acquire failure or new test-only API.
+    let lease = fixed(
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(w.repo()?.commondir().join("manyhands-operation.lock")),
+    )?;
+    if contended {
+        assert!(fixed(FileExt::try_lock_exclusive(&lease))?);
+    }
+    hold.release()?;
+    let result = fixed(running.join())?;
+    let db = w.db()?;
+    let selected = fixed(db.query_row(
+        "SELECT count(*) FROM context_retirement_records WHERE phase='selected'",
+        [],
+        |r| r.get::<_, i64>(0),
+    ))?;
+    let pins = fixed(db.query_row(
+        "SELECT count(*) FROM retirement_observation_pins",
+        [],
+        |r| r.get::<_, i64>(0),
+    ))?;
+    let intents = fixed(db.query_row(
+        "SELECT count(*) FROM context_retirement_effect_intents",
+        [],
+        |r| r.get::<_, i64>(0),
+    ))?;
+    ssh_harness::observation(&[
+        301,
+        contended as u128,
+        matches!(&result, Ok(ContextRetirementOutcome::Final(_))) as u128,
+        matches!(&result,Err(e) if e.kind==RepositoryErrorKind::RepositoryBusy) as u128,
+        selected as u128,
+        pins as u128,
+        intents as u128,
+    ]);
+    assert!(
+        matches!(&result,Ok(ContextRetirementOutcome::Final(report)) if if contended {
+        report.code==ResultCode::ExternalChange && report.outcome==RetirementDisposition::Refused && report.worktree_removal==RetirementRemoval::None && report.branch_removal==RetirementRemoval::None && !report.materialization_settled
+    }else{report.code==ResultCode::Ok && report.outcome==RetirementDisposition::Retired && report.branch_removal==RetirementRemoval::Observed && report.materialization_settled})
+    );
+    if contended {
+        assert!(
+            resource_image(&w.root) == before,
+            "contention must preserve the entire local resource image"
+        );
+        assert_materialization(&w, &materialization)?;
+        assert_eq!(intents, 0);
+    } else {
+        assert!(w.repo()?.find_reference(CONTEXT).is_err());
+        assert_eq!(intents, 1);
+    }
+    assert!(
+        resource_image(w.bare()?.path()) == remote_before,
+        "retirement never modifies remote resources"
+    );
+    assert_eq!(pins, 0);
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT count(*) FROM context_retirement_attempts WHERE phase='active'",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert_eq!(fixed(db.query_row("SELECT count(*) FROM operation_records WHERE action='retire_context' AND state!='completed'",[],|r|r.get::<_,i64>(0)))?,0);
+    assert_eq!(fixed(db.query_row("SELECT count(*) FROM remote_operation_records WHERE operation_ulid IN (SELECT observer_operation_ulid FROM context_retirement_attempts) AND phase!='completed'",[],|r|r.get::<_,i64>(0)))?,0);
+    assert_eq!(fixed(db.query_row("SELECT count(*) FROM retirement_observation_pin_releases WHERE reason='consumer_terminal'",[],|r|r.get::<_,i64>(0)))?,1);
+    // Keep contention until AFTER the retiring call and its valid Final result;
+    // metadata-only TF/Z must not depend on obtaining this Git lease later.
+    if contended {
+        fixed(FileExt::unlock(&lease))?;
+    }
+    let result = fixed(result)?;
+    let first_replay_registry = registry_image(&db);
+    let first_replay_resources = resource_image(&w.root);
+    w.server.wait_for_helper_audits()?;
+    let first_commands = w.server.commands();
+    assert_eq!(
+        fixed(w.service.retire_context_authenticated(
+            request.clone(),
+            w.primary().approval,
+            &mut SessionCredentials::new(Provider)
+        ))?,
+        result
+    );
+    w.server.wait_for_helper_audits()?;
+    assert!(
+        registry_image(&db) == first_replay_registry,
+        "releasing the lease must not reopen or settle the old request again"
+    );
+    assert!(resource_image(&w.root) == first_replay_resources);
+    assert_eq!(
+        w.server.commands(),
+        first_commands,
+        "retry after lease release must not advertise again"
+    );
+    if !contended {
+        fixed(w.repo()?.reference(
+            CONTEXT,
+            fixed(materialization.1.parse())?,
+            false,
+            "new same-OID lifetime",
+        ))?;
+    }
+    fixed(db.execute("INSERT INTO remote_poll_materializations SELECT id,'document',?1,?2,?3,'complete' FROM repositories",rusqlite::params![ITEM,materialization.0,materialization.1]))?;
+    let reopened = fixed(RepositoryService::open_at(&w.data()))?;
+    let replay_registry = registry_image(&db);
+    let replay_resources = resource_image(&w.root);
+    w.server.wait_for_helper_audits()?;
+    let commands = w.server.commands();
+    assert_eq!(
+        fixed(reopened.retire_context_authenticated(
+            request,
+            w.primary().approval,
+            &mut SessionCredentials::new(Provider)
+        ))?,
+        result
+    );
+    w.server.wait_for_helper_audits()?;
+    assert!(
+        registry_image(&db) == replay_registry,
+        "old request must not consume new same-ID materialization"
+    );
+    assert!(
+        resource_image(&w.root) == replay_resources,
+        "replay must not delete the surviving/recreated branch"
+    );
+    assert_eq!(
+        w.server.commands(),
+        commands,
+        "replay must not advertise again"
+    );
+    w.privacy()
+}
+
+fn quality_preselection_busy() -> Result<(), FixtureError> {
+    use fs4::fs_std::FileExt;
+    let w = setup()?;
+    history(&w, true)?;
+    let request = request(&w);
+    let before = registry_image(&w.db()?);
+    let resources = resource_image(&w.root);
+    let lease = fixed(
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(w.repo()?.commondir().join("manyhands-operation.lock")),
+    )?;
+    assert!(fixed(FileExt::try_lock_exclusive(&lease))?);
+    let commands = w.server.commands();
+    assert!(
+        matches!(w.service.retire_context_authenticated(request.clone(),w.primary().approval,&mut SessionCredentials::new(Provider)),Err(ref e) if e.kind==RepositoryErrorKind::RepositoryBusy)
+    );
+    assert!(registry_image(&w.db()?) == before);
+    assert!(resource_image(&w.root) == resources);
+    assert_eq!(w.server.commands(), commands);
+    fixed(FileExt::unlock(&lease))?;
+    assert_eq!(retire(&w, request)?.outcome, RetirementDisposition::Retired);
+    w.privacy()
+}
+
+#[derive(PartialEq, Eq)]
+enum ResourceNode {
+    Directory(u32),
+    File(u32, Vec<u8>),
+    Link(std::path::PathBuf),
+}
+fn resource_image(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, ResourceNode> {
+    fn visit(
+        root: &Path,
+        path: &Path,
+        image: &mut std::collections::BTreeMap<std::path::PathBuf, ResourceNode>,
+    ) {
+        let metadata = fs::symlink_metadata(path).unwrap();
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.permissions().mode()
+        };
+        #[cfg(not(unix))]
+        let mode = u32::from(metadata.permissions().readonly());
+        let node = if metadata.file_type().is_symlink() {
+            ResourceNode::Link(fs::read_link(path).unwrap())
+        } else if metadata.is_dir() {
+            ResourceNode::Directory(mode)
+        } else {
+            assert!(metadata.is_file());
+            // Preserve the exact lease-file entry and its empty content, using
+            // metadata while locked (Windows mandatory byte-range lock safety).
+            let bytes = if path == root.join(".git/manyhands-operation.lock") {
+                assert_eq!(metadata.len(), 0);
+                Vec::new()
+            } else {
+                fs::read(path).unwrap()
+            };
+            ResourceNode::File(mode, bytes)
+        };
+        image.insert(path.strip_prefix(root).unwrap().into(), node);
+        if metadata.is_dir() && !metadata.file_type().is_symlink() {
+            for entry in fs::read_dir(path).unwrap() {
+                visit(root, &entry.unwrap().path(), image);
+            }
+        }
+    }
+    let mut image = std::collections::BTreeMap::new();
+    visit(root, root, &mut image);
+    image
 }

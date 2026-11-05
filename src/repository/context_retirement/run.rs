@@ -115,7 +115,21 @@ impl RepositoryService {
             return record::refuse_execution(self, &request.root, &owner, code)
                 .map(ContextRetirementOutcome::Final);
         }
-        let cleanup = ContextCleanup::acquire(&request.root)?;
+        let cleanup = match ContextCleanup::acquire(&request.root) {
+            Ok(cleanup) => cleanup,
+            Err(_) => {
+                // Selection already spent this call's branch-lifetime permit.
+                // No intent or primitive ran, so end the exact owned attempt
+                // through TF/Z; a later executor may not reacquire that permit.
+                return record::refuse_execution(
+                    self,
+                    &request.root,
+                    &owner,
+                    ResultCode::ExternalChange,
+                )
+                .map(ContextRetirementOutcome::Final);
+            }
+        };
         let prepared = state::with_transaction(self, &request.root, |tx, id| {
             let execution = owner.retirement_execution()?;
             let receipt = execution.receipt(self, tx, id, request.kind, &request.item_id)?;
