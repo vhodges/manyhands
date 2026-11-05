@@ -351,7 +351,9 @@ are not authorized; numeric exits must come from existing results registry.
 | Controller verification after both reviews | Actual DTO, the two SSH journey assertions and exact recovery step list inspected; H1–H3 confirmed. Task 0 range `git diff --check` passed; tree clean before this review-record update. Supported `ticket show` verified status `implementing`, lifecycle `open`, exact active ticket context after the CLI save | Narrow H1–H3 amendment requested; implementation approval/Q1/Q2/E-1–E-10 remain intact |
 | Owner H1–H3 resolution | “yes” to all three exact amendments in the controller's preceding request; canonical approval checkpoint `01M6MCT4HYJ7VKG22J6R0ZNSWQ` | No open Task 0 holds; preserve prior approvals and separate lifecycle gates |
 | Task 1 initial spec review, `834415b9..5be0de55` | Controller relayed and source-verified **1 Important** finding: shared direct-local-ref lookup incorrectly made ticket completion depend on local identity/preservation evidence. Proof/migration/compatibility/H2 scope otherwise passed | Correction below; spec re-review is required before quality review. No pass recorded by implementer |
-| Task 1 spec correction, `5be0de55..a95f01d3` | Required lookup moved into Document only; missing/symbolic ticket refs and unchanged document refusals covered; focused red **2 passed / 1 failed**, green **3 passed**; frozen-source remote gate **427 passed** | Implementation correction verified; controller spec re-review, then quality review pending. No review pass recorded |
+| Task 1 spec correction, `5be0de55..a95f01d3` | Required lookup moved into Document only; missing/symbolic ticket refs and unchanged document refusals covered; focused red **2 passed / 1 failed**, green **3 passed**; frozen-source remote gate **427 passed** | Controller subsequently reports spec pass held; quality then found the separate migration defect below. No quality approval |
+| Task 1 initial quality review, full base through `0698671c` | Controller confirmed **1 Important** source/SQL-reproduced finding: widened CHECK accepted old15-invalid `closed`/`promoted` rows, laundering corrupt evidence | Quality correction below; same reviewer's re-review required. Existing approved corruption-refusal policy applies; no new owner decision |
+| Task 1 quality correction, `0698671c..ed899a00` | Explicit old15-only membership validation before DDL; both laundering cases demonstrated in behavioral red **1 passed / 1 failed**, green **2 passed**; full-row/schema/trigger rollback and current17 reopen/decode controls; frozen-source remote gate **427 passed** | Correction verified, same quality reviewer's re-review pending. No quality pass marked by implementer |
 | Tasks 2/4 adversarial reviews, final whole-range reviews | Not yet run | Mandatory future checkpoints |
 
 ## Task Checklist And Next Step
@@ -363,8 +365,8 @@ are not authorized; numeric exits must come from existing results registry.
   Independent spec and quality reviews passed without findings on
   `74186d51..6a8b4259`; owner H1–H3 resolution is now recorded, no open holds.
 - [ ] **1 — Shared proof, recognition, disposition upgrade.** Implemented;
-  initial spec review found one Important issue; correction verified at
-  `a95f01d3`; controller spec re-review/quality review pending.
+  spec pass reported by controller after the `a95f01d3` correction; one Important
+  quality finding corrected and verified at `ed899a00`. Quality re-review pending.
 - [ ] **2 — Durable single-context retirement.** Not started; adversarial gate.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
@@ -374,8 +376,8 @@ are not authorized; numeric exits must come from existing results registry.
 - [ ] **8 — Final local gates/independent reviews/owner handoff.** Not started;
   merge/close/native dispatch remain separately authorized.
 
-Immediate next step: return Task 1's full review range for controller spec
-re-review, then quality review.
+Immediate next step: return Task 1's full review range, including its migration
+quality correction, to the controller's same quality reviewer.
 Do not start Task 2 before that handoff. Preserve every other assertion and
 existing lifecycle cleanup behavior. No reapproval of the documents, Q1/Q2,
 E-1–E-10, implementation or execution method is needed.
@@ -535,5 +537,78 @@ must review from `834415b9` through the returned HEAD, **not `HEAD~1`**.
 Canonical correction checkpoint: CLI-generated distinct ULID
 `01M6MFK79ZVEMZN6JEEGVZQ4WB`, parent `01M6ME9SX9CK5WE4RHNVENBSFQ`,
 actual UTC `2026-11-04T23:57:59Z`. No push, additional agents, main integration,
-ticket status/body save or Task 2 work. Next is controller spec re-review using
-the same reviewer, then quality review; neither is marked passed here.
+ticket status/body save or Task 2 work. The controller subsequently reported
+spec pass held; the following quality finding and correction are separate.
+
+### Task 1 Quality Correction — Reject Old-Enum Corruption Before Widening
+
+- Clean entry HEAD: `0698671cd293e6da43b27979b63a93105074a653`, same ticket
+  branch/worktree. Full review base remains
+  `834415b95825f84d15ce00a5586316abcfe1a6f7`, not `HEAD~1`.
+- Controller confirmed one **Important** quality defect using source and an
+  exact-SQL probe: an old15 row injected as `closed`/`promoted` fails its original
+  CHECK but passed the widened current17 CHECK during copying. The old
+  `substituted` row failed both constraints, so it did not expose this defect.
+- Minimal production change, only in `migrate_poll_dispositions`'s recognized
+  exact-old branch: explicitly test every retained disposition against the
+  **old15** literals (also refuse NULL) before any trigger drop/table rename or
+  widening. The test executes in the same migration transaction and returns the
+  existing typed recovery refusal. No global ban on the two valid new values;
+  no unrelated migration or schema/DTO changes.
+- The old corruption matrix now has **10 rows**, including both new laundering
+  cases and the old unknown-value case. CHECK bypass is isolated to each fixture
+  writer and turned OFF before migration; `integrity_check` first confirms the
+  original old CHECK violation. Tests collect both unexpected acceptances rather
+  than stopping after the first, so the behavioral red demonstrates both values.
+- Every refusal compares the exact whole original schema and `schema_version`,
+  and **all columns plus rowids** of disposition and owning-operation rows, not
+  just a count. Corrupt-enum cases additionally prove the retained immutable-owner
+  trigger still rejects a no-op owner UPDATE with its original error message.
+- Positive controls retain all valid old15 rows/OIDs and explicitly reopen/decode
+  valid `closed`/`promoted` rows in the current17 envelope without changing its
+  schema version. Existing genuine pre-envelope behavior is untouched. All data
+  and corruption fixtures are temporary; no registered real registry was opened.
+
+| Correction command | Evidence |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --lib retirement_disposition` before fix | Behavioral RED: **1 passed / 1 failed**, exit 101, compiling successfully. Failure lists **both** old-schema `closed` and `promoted` rows as unexpectedly accepted. `/tmp/opencode/task1-quality-fix-schema-red.log` |
+| Same focused command after fix, final serial run | **2 passed**, 0 failed, exit 0; valid old15/current17 and 10-row refusal/rollback matrix. `/tmp/opencode/task1-quality-fix-schema-final.log` |
+| `devenv shell -- cargo test --all-features --locked --lib repository::remote::` | **427 passed**, 0 failed, exit 0, 223.77 s. Rust source frozen with no concurrent compilation or spawn failures. `/tmp/opencode/task1-quality-fix-remote.log` |
+| `devenv shell -- cargo fmt --check` | Exit 0 in final serial run; `/tmp/opencode/task1-quality-fix-fmt-final.log`; formatting also through Devenv |
+| `git diff --check`, `git diff --cached --check`, full `834415b9..ed899a00` range check | Clean before source commit and after it; final documentation/staged checks repeated before handoff |
+
+Initial post-fix Cargo execution already passed both tests, but a concurrent
+Devenv shell entry reported missing `.devenv/load-exports` during startup
+(`/tmp/opencode/task1-quality-fix-schema-green.log`). Focused tests and format
+check were repeated **serially**, with clean Devenv startup and exit 0; no
+environment source/configuration or test check was changed.
+
+Spec regression check: production changes are limited to old-schema enum
+validation required by the already-approved strict refusal contract. Recognition,
+preservation, current17 validation, wire shapes and the pre-envelope branch are
+unchanged. Controller reports the preceding spec pass held; no new spec/policy
+approval is claimed by this implementer. Quality re-review remains pending.
+
+Not redundantly rerun: standalone proof, read-contract, CLI polling and H2 SSH
+journeys (previous initial-Task-1 6/72/23/1/1 results remain historical). Their
+source and ordinary valid-data setups are unchanged; the focused schema tests
+cover both old/new
+envelopes and actual current17 reopen/decoding, while the full remote gate also
+exercises poll recognition and genuine pre-envelope controls. Remaining final
+whole-tree check/Clippy, fast tier, changed-path SSH tier and native CI stay with
+the controller/owner's existing Task 8 and post-merge gates. No Task 2 or push.
+
+Source fix commit: `ed899a00598c2fe17168c1465974476ddc2b196e`,
+`fix: reject corrupt legacy poll dispositions before upgrade`, with required
+`Co-Authored-By: GPT-6.1 Sol <noreply@openai.com>` trailer. Narrow correction range:
+`0698671cd293e6da43b27979b63a93105074a653..ed899a00598c2fe17168c1465974476ddc2b196e`.
+Full Task 1 source-review range:
+`834415b95825f84d15ce00a5586316abcfe1a6f7..ed899a00598c2fe17168c1465974476ddc2b196e`.
+This record/checkpoint follows in a documentation-only commit; final review uses
+the original `834415b9` base through returned HEAD, not only `HEAD~1`.
+
+Canonical quality-correction checkpoint: CLI-generated distinct ULID
+`01M6MGTPJ2BNNXKN9WZ183RWQA`, parent `01M6MFK79ZVEMZN6JEEGVZQ4WB`, actual UTC
+`2026-11-05T00:15:46Z`. Same quality reviewer re-reviews next; no quality approval
+is claimed. No additional agents, push, real-registry change, ticket status/body
+save, main integration or Task 2 work.
