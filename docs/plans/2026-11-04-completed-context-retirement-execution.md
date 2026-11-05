@@ -374,6 +374,7 @@ are not authorized; numeric exits must come from existing results registry.
 | Limited branch-only final QUALITY pass through `2f06ac72`, same base, after SPEC | Same reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/Blocking/0 Important/0 Minor**. Fresh original authenticated probe confirms uncontended success, contended stable no-effect refusal, completed parent/result and zero residual pins/intents | Limited branch-only QUALITY approved. Controller inspected original probe and final static logs; Windows/native and deferred recovery/instance/source/batch scopes remain unverified |
 | Fresh-present runtime increment, base `7fde7e5f` | Connected durable marker selection/install/verification and guarded W prune → B retirement, with fresh receipt/proof/D14/index/Z; local evidence below | **Limited SPEC then QUALITY pending before further expansion**. Earlier approvals intact; not full Task 2 approval/completion |
 | Limited fresh-present SPEC at `9a932ae4`, same increment base | Controller accepts **2 Important current-producer defects**: P1 selected admin Git operation locks omitted; P2 other/root checkout HEAD syntax/direct-binding/existence not fully checked before W prune | SPEC **failed**, Quality **held**. Retirement-only additive correction and RED→GREEN/local gates below; **same SPEC re-review then Quality pending**, no authority expansion |
+| Same fresh-present SPEC re-review at `927de9e3` | Original P1/P2 common cases fixed; **2 Important remaining guard holes** accepted by controller: ASCII-case-equivalent lock suffixes missed, per-worktree HEAD refs looked up in primary namespace | Quality **held**; conservative retirement-only correction and compiled RED→GREEN below. **Same SPEC re-review then Quality pending**, no full Task 2 approval |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -396,10 +397,11 @@ are not authorized; numeric exits must come from existing results registry.
    both passed through `2f06ac72` from base `b1a986c2` with no remaining findings,
    including the cleanup-lease correction and preserved S1–S4 protections.
   Fresh-present selection/install/prune → branch/index is now connected in the
-  next bounded increment from `7fde7e5f`. Limited SPEC at `9a932ae4` failed P1/P2;
-  the locally verified correction awaits **same SPEC re-review then QUALITY**.
-  Latest gates: **73** context-retirement tests and **44** registered retirement
-  SSH cases (prior 72/36 unchanged; +1 root-HEAD unit and +8 P1/P2 SSH cases).
+  next bounded increment from `7fde7e5f`. Same SPEC at `927de9e3` fixed original
+  P1/P2 common cases but found case/namespace guard holes; their locally verified
+  correction awaits **same SPEC re-review then QUALITY**.
+  Latest gates: **73** context-retirement tests and **49** registered retirement
+  SSH cases (prior 73/44 unchanged; +5 case/namespace SSH cases).
   Authorized executor replacement/recovery and source/batch scopes remain
   unfinished/closed; all 44 matrix obligations stay explicitly tracked.
   Full Task 2 spec/quality review remains owed; no full completion claimed.
@@ -2452,3 +2454,63 @@ listed above remain owed. No Task 2 completion/independent approval claim or Tas
 claim; prior durability disclosure/conservative missing-token refusal preserved.
 No agents, push, ticket-status/PR/main integration/closure/native CI, other-worktree
 edits or real-context/key/profile/draft action.
+
+## Task 2 Correction Delta — Case-Equivalent Locks And Checkout Namespaces
+
+Source parent **`927de9e3d974ff15fdd078f63d4dbba688f1210a`**; review base still
+`7fde7e5f`, full Task 2 base `7b1912d1`. Fresh fetch/merge: already up to date at
+`c69789d9`, no rebase. Same SPEC confirms original common cases fixed but reports
+**2 Important remaining current-guard defects**; controller accepts, Quality held.
+The following is local evidence, **not** same-reviewer approval.
+
+- **P1:** selected-admin lock suffix matching is ASCII-case-insensitive on every
+  host, recursively including refs/logs. Seven uppercase/mixed-case lock names run
+  at both initial and final boundaries on Linux as a conservative property; no
+  filesystem-case detection or Windows runtime claim. Metadata/no-follow behavior
+  and byte/type preservation are unchanged.
+- **P2:** take the authorized conservative option: symbolic checkout HEADs must
+  name valid shared `refs/heads/*` direct bindings; reject every other namespace/
+  pseudoref before primary refdb/storage lookup. Valid detached commits remain
+  supported. This prevents a common-dir direct ref from masking an actual linked
+  admin alias. Four fixture variants (`refs/worktree`, `refs/bisect`,
+  `refs/rewritten`, `SHADOW_HEAD`) assert primary direct mask, linked symbolic alias
+  and linked HEAD's actual resolution to CONTEXT before retirement runs.
+  Existing ordinary-branch and new detached positive controls pass.
+- Both guards remain in the same identity path at capture/install/verification
+  and immediate prune callback. Existing negative journey asserts full resource
+  and non-TF/Z row images, old intent preservation, stable replay after repair,
+  W/B None, zero pins and truthful final `changed` W intent. No shared cleanup/
+  release, proof, old tests/expectations, or post-prune Owed routing changed.
+
+Logs `/tmp/opencode/task2-present-spec2-<suffix>.log`; new SSH cases registered
+before filters. Prefix below: `devenv shell -- cargo test --all-features --locked`.
+
+| Test suffix | Compiled behavioral RED | GREEN |
+| --- | --- | --- |
+| `--test mutation_remote retirement_present_p1_case_` | `p1-red`: **0 passed / 2 failed SSH**, initial/final lock bytes removed | `p1-green`: **2 SSH passed**, all 14 lock fixtures |
+| `--test mutation_remote retirement_present_p2_namespace_` | `p2-red`: **1 passed / 2 failed SSH**, masked alias permits removal; detached control passed | `p2-green`: **3 SSH passed**, all 8 alias fixtures + detached |
+
+Source frozen after format; serial Devenv commands, no deadlines/overlapping
+builds or tests. Only ledger/comment metadata edited afterward.
+
+| Final command | Log suffix | Result |
+| --- | --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | `check-final` | exit 0 |
+| `devenv shell -- cargo fmt --check` | `fmt-final` | exit 0 |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy-final` | exit 0 |
+| test prefix + `--lib context_retirement` | `context-final` | **73 passed** |
+| test prefix + `--test mutation_remote retirement_` | `ssh-final` | **49 registered SSH passed** |
+| test prefix + `--lib cleanup` | `cleanup-final` | **50 passed** |
+
+Only `instance.rs` and additive SSH tests changed. Frozen source diff against
+`927de9e3`, SHA-256 `b5ca2cdfed2e2cde5e798ea31dbfdd9fd949cc8e982f39c206e58fc5ab538149`.
+Unaffected broad gates not repeated. Checkpoint **`01M6NESWSY9BX1ARDJD01R2N2E`**,
+parent **`01M6NDNZR4XX7J2BQFS25J0M8N`**, UTC **`2026-11-05T08:57:00Z`**.
+
+**All 01–44 acceptance obligations remain tracked**, not discharged by 49 SSH
+cases. Public reentry/replacement, metadata-only owned-absence recovery, remaining
+fault matrices and source/batch mechanisms remain owed as listed above. Same SPEC
+re-review then Quality required before expansion; no Task 2 completion/Task 3/4
+claim. Linux evidence only, no Windows/native runtime/cross-compilation claim.
+No agents, push, status/PR/main integration/closure/native CI, other-worktree edits
+or real-context/key/profile/draft action.

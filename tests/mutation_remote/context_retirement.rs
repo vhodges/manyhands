@@ -186,6 +186,26 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         "retirement_present_p2_valid_other_checkout_allows_prune",
         p2_valid_other,
     ),
+    (
+        "retirement_present_p1_case_initial_git_locks_preserve_resources",
+        p1_case_initial_locks,
+    ),
+    (
+        "retirement_present_p1_case_final_git_locks_are_no_effect",
+        p1_case_final_locks,
+    ),
+    (
+        "retirement_present_p2_namespace_initial_masked_alias_refuses",
+        p2_namespace_initial,
+    ),
+    (
+        "retirement_present_p2_namespace_final_masked_alias_is_no_effect",
+        p2_namespace_final,
+    ),
+    (
+        "retirement_present_p2_namespace_valid_detached_checkout_allows_prune",
+        p2_namespace_detached,
+    ),
 ];
 
 fn setup() -> Result<World, FixtureError> {
@@ -1877,6 +1897,58 @@ fn p1_locks(final_boundary: bool) -> Result<(), FixtureError> {
     }
     Ok(())
 }
+fn p1_case_initial_locks() -> Result<(), FixtureError> {
+    p1_case_locks(false)
+}
+fn p1_case_final_locks() -> Result<(), FixtureError> {
+    p1_case_locks(true)
+}
+fn p1_case_locks(final_boundary: bool) -> Result<(), FixtureError> {
+    // Deliberately runs on case-sensitive Linux too: preserve these slots
+    // conservatively instead of guessing the filesystem's case-folding policy.
+    for member in [
+        "index.LOCK",
+        "HEAD.LoCk",
+        "config.worktree.lOcK",
+        "ORIG_HEAD.LOCK",
+        "FETCH_HEAD.LoCk",
+        "refs/worktree/private.LoCk",
+        "logs/HEAD.LOCK",
+    ] {
+        pre_prune_refusal(
+            final_boundary,
+            move |w| {
+                let path = w
+                    .repo()
+                    .unwrap()
+                    .commondir()
+                    .join("worktrees")
+                    .join(ITEM)
+                    .join(member);
+                Box::new(move || {
+                    fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    fs::write(path, b"case-equivalent pending Git writer bytes").unwrap();
+                })
+            },
+            move |w| {
+                let path = w
+                    .repo()
+                    .unwrap()
+                    .commondir()
+                    .join("worktrees")
+                    .join(ITEM)
+                    .join(member);
+                assert!(fs::symlink_metadata(&path).unwrap().file_type().is_file());
+                assert_eq!(
+                    fs::read(&path).unwrap(),
+                    b"case-equivalent pending Git writer bytes"
+                );
+                fs::remove_file(path).unwrap();
+            },
+        )?;
+    }
+    Ok(())
+}
 #[cfg(unix)]
 fn p1_redirected_locks() -> Result<(), FixtureError> {
     for final_boundary in [false, true] {
@@ -2004,6 +2076,93 @@ fn p2_valid_other() -> Result<(), FixtureError> {
     let other_before = resource_image(&other);
     let admin_before = resource_image(&admin);
     let tip = fixed(w.repo()?.refname_to_id(OTHER_BRANCH))?;
+    let report = retire(&w, request(&w))?;
+    assert_eq!(report.outcome, RetirementDisposition::Retired);
+    assert_eq!(report.worktree_removal, RetirementRemoval::Observed);
+    assert_eq!(report.branch_removal, RetirementRemoval::Observed);
+    assert!(resource_image(&other) == other_before);
+    assert!(resource_image(&admin) == admin_before);
+    assert_eq!(fixed(w.repo()?.refname_to_id(OTHER_BRANCH))?, tip);
+    w.privacy()
+}
+
+fn p2_namespace_initial() -> Result<(), FixtureError> {
+    p2_namespace_alias(false)
+}
+fn p2_namespace_final() -> Result<(), FixtureError> {
+    p2_namespace_alias(true)
+}
+fn p2_namespace_alias(final_boundary: bool) -> Result<(), FixtureError> {
+    for shadow in [
+        "refs/worktree/shadow",
+        "refs/bisect/shadow",
+        "refs/rewritten/shadow",
+        "SHADOW_HEAD",
+    ] {
+        pre_prune_refusal(
+            final_boundary,
+            move |w| {
+                let (path, admin) = add_other_checkout(w);
+                let root = w.root.clone();
+                Box::new(move || {
+                    let git = git2::Repository::open(root).unwrap();
+                    let tip = git.refname_to_id(CONTEXT).unwrap();
+                    let mask = git.commondir().join(shadow);
+                    fs::create_dir_all(mask.parent().unwrap()).unwrap();
+                    fs::write(mask, format!("{tip}\n")).unwrap();
+                    let actual = admin.join(shadow);
+                    fs::create_dir_all(actual.parent().unwrap()).unwrap();
+                    fs::write(actual, format!("ref: {CONTEXT}\n")).unwrap();
+                    fs::write(admin.join("HEAD"), format!("ref: {shadow}\n")).unwrap();
+
+                    // Prove the counterexample's actual checkout namespace, not
+                    // just HEAD text: primary sees a direct mask, linked sees
+                    // an alias which resolves to the selected target context.
+                    let mask = git.find_reference(shadow).unwrap();
+                    assert_eq!(mask.symbolic_target(), None);
+                    assert_eq!(mask.target(), Some(tip));
+                    let linked = git2::Repository::open(path).unwrap();
+                    assert_eq!(
+                        linked.find_reference("HEAD").unwrap().symbolic_target(),
+                        Some(shadow)
+                    );
+                    assert_eq!(
+                        linked.find_reference(shadow).unwrap().symbolic_target(),
+                        Some(CONTEXT)
+                    );
+                    let resolved = linked.head().unwrap();
+                    assert_eq!(resolved.name(), Some(CONTEXT));
+                    assert_eq!(resolved.target(), Some(tip));
+                })
+            },
+            move |w| {
+                fs::write(
+                    w.repo()
+                        .unwrap()
+                        .commondir()
+                        .join("worktrees/retirement-other/HEAD"),
+                    format!("ref: {OTHER_BRANCH}\n"),
+                )
+                .unwrap();
+            },
+        )?;
+    }
+    Ok(())
+}
+fn p2_namespace_detached() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    let (other, admin) = add_other_checkout(&w);
+    let tip = fixed(w.repo()?.refname_to_id(OTHER_BRANCH))?;
+    fixed(git2::Repository::open(&other).and_then(|repo| repo.set_head_detached(tip)))?;
+    assert!(
+        fixed(git2::Repository::open(&other))?
+            .head_detached()
+            .unwrap()
+    );
+    history(&w, true)?;
+    let other_before = resource_image(&other);
+    let admin_before = resource_image(&admin);
     let report = retire(&w, request(&w))?;
     assert_eq!(report.outcome, RetirementDisposition::Retired);
     assert_eq!(report.worktree_removal, RetirementRemoval::Observed);

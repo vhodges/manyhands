@@ -115,16 +115,17 @@ fn parse(
 /// index/HEAD/config/pseudoref and per-worktree ref/log lock files here without
 /// setting the worktree's separate `locked` marker. Preserve every *.lock slot
 /// regardless of node type, and never follow a redirected namespace to inspect it.
+/// Match ASCII case variants on every platform, including case-sensitive hosts,
+/// so a case-preserving filesystem cannot hide an occupied Git lock slot.
 fn require_admin_locks_absent(path: &std::path::Path) -> Result<(), RepositoryError> {
     plain_registration_path(path, true).map_err(|_| recovery_required())?;
     for entry in std::fs::read_dir(path).map_err(|_| recovery_required())? {
         let entry = entry.map_err(|_| recovery_required())?;
         let path = entry.path();
-        if entry
-            .file_name()
-            .to_str()
-            .is_none_or(|name| name.ends_with(".lock"))
-        {
+        if entry.file_name().to_str().is_none_or(|name| {
+            name.rsplit_once('.')
+                .is_some_and(|(_, suffix)| suffix.eq_ignore_ascii_case("lock"))
+        }) {
             return Err(recovery_required());
         }
         let metadata = std::fs::symlink_metadata(&path).map_err(|_| recovery_required())?;
@@ -140,6 +141,8 @@ fn require_admin_locks_absent(path: &std::path::Path) -> Result<(), RepositoryEr
 /// no-checkout proof for B. The only exemption is the exact selected admin's
 /// direct symbolic context binding at its fixed tip. Every other HEAD, including
 /// the main checkout, must be parseable and refer directly to an existing commit.
+/// Symbolic HEADs are supported only for shared refs/heads/* bindings; other
+/// namespaces and pseudorefs may resolve in a different checkout's own admin.
 /// Keep ordinary cleanup/release's scanner and behavior unchanged.
 fn require_checkout_inventory(
     git: &git2::Repository,
@@ -161,7 +164,9 @@ fn require_checkout_inventory(
             return Err(recovery_required());
         }
         if let Some(reference) = head.strip_prefix("ref: ") {
-            if !git2::Reference::is_valid_name(reference) {
+            // Do not resolve a per-worktree name through the primary refdb:
+            // a common-dir direct ref could mask a linked admin's target alias.
+            if !reference.starts_with("refs/heads/") || !git2::Reference::is_valid_name(reference) {
                 return Err(recovery_required());
             }
             ref_file_absent(&request.root, &git.commondir().join(reference))?;
