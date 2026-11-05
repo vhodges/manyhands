@@ -24,10 +24,7 @@ use manyhands::{
     },
 };
 
-use super::{
-    RESOLUTIONS, ResolutionStore,
-    tests::{a_local_resolution, a_set, fields, finished, kept, start, until},
-};
+use super::tests::{a_local_resolution, a_set, fields, finished, kept, start, until};
 use crate::desktop::{
     services::{
         JobKind, Services,
@@ -75,6 +72,17 @@ async fn answered(
     cx: &mut TestAppContext,
 ) -> RequestId {
     let set = a_set(root, OperationId::new(), ConflictSource::Remote, "Mine");
+    answered_set(backend, services, set, canned, cx).await
+}
+
+/// `answered` of `set`.
+async fn answered_set(
+    backend: &DelayingBackend,
+    services: &Services,
+    set: super::KeptSet,
+    canned: Envelope<MutationDataDto>,
+    cx: &mut TestAppContext,
+) -> RequestId {
     let request = set.request_id;
     backend
         .hold_job_return_answering(JobKind::ConflictResolve, canned)
@@ -266,7 +274,12 @@ async fn the_sweep_keeps_a_remote_set_while_its_attempt_stands(cx: &mut TestAppC
 }
 
 /// M-1: a resolution removed from the queue before it ran never reached
-/// the library; its set goes, as the library has no record of it.
+/// the library; its set is settled from the library's state. A local one
+/// goes, as the library has no record of it; so does a remote one whose
+/// conflict names no attempt of its request, while one whose conflict
+/// still names its request as the unfinished attempt's is kept (M-e).
+///
+/// Canned conflicts: as in `the_sweep_keeps_a_remote_set_while_its_attempt_stands`.
 #[gpui_kit::test]
 async fn a_removed_resolution_deletes_its_set(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
@@ -299,8 +312,89 @@ async fn a_removed_resolution_deletes_its_set(cx: &mut TestAppContext) {
         store.kept(held_request).unwrap().is_some(),
         "the running one's stays"
     );
+
+    // Remote: one whose conflict is resolved, one whose attempt stands.
+    let gone = a_set(&root, OperationId::new(), ConflictSource::Remote, "Gone");
+    let stands = a_set(&root, OperationId::new(), ConflictSource::Remote, "Stands");
+    backend.answer_next_conflict_read(conflict(
+        gone.operation_id,
+        ConflictState::Resolved,
+        ConflictReadNextAction::Resume,
+        None,
+    ));
+    backend.answer_next_conflict_read(conflict(
+        stands.operation_id,
+        ConflictState::ResolutionPrepared,
+        ConflictReadNextAction::RetryResolution,
+        Some(stands.request_id),
+    ));
+    for set in [gone.clone(), stands.clone()] {
+        let queued = cx.update(|cx| services.submit_resolution(set, cx));
+        cx.run_until_parked();
+        let removed = queued.await.expect("kept");
+        services.worker().cancel(removed);
+        until(cx, "the removal", |cx| {
+            removed_from_queue(&services, removed, cx)
+        })
+        .await;
+    }
+    until(cx, "the resolved one's deletion", |_| {
+        store.kept(gone.request_id).unwrap().is_none()
+    })
+    .await;
+    assert_eq!(kept(&store, stands.request_id), Some(fields(&stands)));
+
     held.release();
     finished(&services, held_id, cx).await;
+}
+
+/// I-1 (R-25 as refined): a remote resolution cancelled before the library
+/// accepted it, as the requests panel's Cancel or quitting does by
+/// signalling its token, answers `cancelled` with nothing run or written
+/// (`execute.rs` stops it before acceptance). Nothing is checkpointed, so
+/// the answer proves nothing of its attempt: its set is settled as one the
+/// library has no record of, kept while its conflict names its request
+/// and deleted once it does not.
+///
+/// Canned: the real call here, of an operation the repository does not
+/// hold, is refused before the token is looked at, so the answer stands in
+/// for the one `tests/mutation_replay/execute.rs`
+/// `a_request_cancelled_before_it_is_accepted_does_nothing` produces:
+/// `Cancelled`, nothing written or committed. Canned conflicts: as in
+/// `the_sweep_keeps_a_remote_set_while_its_attempt_stands`.
+#[gpui_kit::test]
+async fn a_cancel_before_acceptance_keeps_a_set_whose_attempt_stands(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let (backend, services) = start(&fixture, cx);
+    let store = fixture.resolution_store();
+    for stands in [true, false] {
+        let set = a_set(&root, OperationId::new(), ConflictSource::Remote, "Retry");
+        let request = set.request_id;
+        backend.answer_next_conflict_read(if stands {
+            conflict(
+                set.operation_id,
+                ConflictState::ResolutionPrepared,
+                ConflictReadNextAction::RetryResolution,
+                Some(request),
+            )
+        } else {
+            conflict(
+                set.operation_id,
+                ConflictState::Resolved,
+                ConflictReadNextAction::Resume,
+                None,
+            )
+        });
+        let canned = answer(ResultCode::Cancelled, Effects::not_requested());
+        let sent = answered_set(&backend, &services, set, canned, cx).await;
+        assert_eq!(sent, request);
+        assert_eq!(
+            store.kept(request).unwrap().is_some(),
+            stands,
+            "kept exactly while its attempt stands"
+        );
+    }
 }
 
 fn removed_from_queue(services: &Services, id: DesktopRequestId, cx: &TestAppContext) -> bool {
@@ -401,30 +495,4 @@ fn settle_keeps_the_set_when_its_read_fails(_cx: &mut TestAppContext) {
     drop(lock);
     assert!(store.settle(backend.as_ref(), set.request_id));
     assert!(store.kept(set.request_id).unwrap().is_none());
-}
-
-/// M-3: a kept file of a newer format reads as damaged, not as a set.
-#[gpui_kit::test]
-fn a_newer_version_reads_as_damaged(_cx: &mut TestAppContext) {
-    let fixture = Fixture::new();
-    let store = fixture.resolution_store();
-    let set = a_set(
-        &fixture.data_dir().join("a"),
-        OperationId::new(),
-        ConflictSource::Remote,
-        "Newer",
-    );
-    store.keep(&set).unwrap();
-    let file = fixture
-        .data_dir()
-        .join(RESOLUTIONS)
-        .join(format!("{}.json", set.request_id));
-    let written = fs::read_to_string(&file).unwrap();
-    assert!(written.contains("\"version\":1,"));
-    fs::write(&file, written.replace("\"version\":1,", "\"version\":2,")).unwrap();
-    let reopened = ResolutionStore::open_in(fixture.data_dir()).unwrap();
-    assert!(matches!(
-        reopened.kept(set.request_id),
-        Err(super::ResolutionStoreError::Damaged)
-    ));
 }

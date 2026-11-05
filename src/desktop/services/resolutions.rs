@@ -31,7 +31,7 @@ use manyhands::{
     canonical::ItemId,
     drafts::{DraftError, DraftErrorKind, folder::Folder},
     repository::{OperationId, RequestId, RequestState},
-    results::ResultCode,
+    results::{CheckpointEffect, ResultCode},
 };
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +65,9 @@ pub(crate) enum ResolutionStoreError {
     /// A different set is already kept under the request ID: a request is
     /// only ever sent again with the set it was first sent with.
     Differs,
+    /// A kept file was written by a newer build, in a format this one
+    /// does not read.
+    Newer,
     /// A kept file is not a set this version reads.
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
     Damaged,
@@ -80,6 +83,7 @@ impl fmt::Display for ResolutionStoreError {
             Self::Access => "Access to the resolutions folder was denied.",
             Self::NoSpace => "There is no space left to keep the resolution.",
             Self::Differs => "A different resolution is already kept for this request.",
+            Self::Newer => "A kept resolution was saved by a newer version of Manyhands.",
             Self::Damaged => "A kept resolution could not be read.",
             Self::Io => "The resolutions folder could not be read or written.",
         })
@@ -252,7 +256,9 @@ impl ResolutionStore {
     /// again with the set it was first sent with (the library answers
     /// another input under the same ID `request_mismatch`), so keeping the
     /// same set again changes nothing, and a different one under the same
-    /// ID is refused with `Differs`, the kept one left as it was. The
+    /// ID is refused with `Differs`, the kept one left as it was. A kept
+    /// file that does not read as a set is refused with its own error
+    /// (`Damaged` or `Newer`), and left as it was too. The
     /// folder is held from the look to the write: no two keeps of this
     /// process interleave.
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
@@ -262,7 +268,8 @@ impl ResolutionStore {
         let mut folder = self.folder();
         match folder.read(&name) {
             Ok(kept) if kept == bytes => Ok(()),
-            Ok(_) => Err(ResolutionStoreError::Differs),
+            // A file this build cannot read as a set is named as such.
+            Ok(kept) => decode(&kept, set.request_id).and(Err(ResolutionStoreError::Differs)),
             Err(error) if error.kind == DraftErrorKind::NotFound => {
                 folder.replace(&name, &bytes)?;
                 Ok(())
@@ -279,11 +286,7 @@ impl ResolutionStore {
             Err(error) if error.kind == DraftErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error.into()),
         };
-        serde_json::from_slice::<Stored>(&bytes)
-            .ok()
-            .and_then(|stored| stored.into_set(request))
-            .map(Some)
-            .ok_or(ResolutionStoreError::Damaged)
+        decode(&bytes, request).map(Some)
     }
 
     /// The request IDs of every kept set, in order. A file of any other
@@ -316,8 +319,9 @@ impl ResolutionStore {
     ///   stand. Its set is kept while `show_conflict` of its operation names
     ///   this request as the unfinished attempt's, and deleted once it does
     ///   not;
-    /// - a set that no longer reads (`Damaged`): no request can be sent
-    ///   with it.
+    /// - a set that does not parse (`Damaged`): no request can be sent with
+    ///   it. One a newer build wrote (`Newer`) is kept: that build may
+    ///   still send it.
     ///
     /// Any failed read keeps the set. True when the set was deleted.
     pub(crate) fn settle(&self, backend: &dyn Backend, request: RequestId) -> bool {
@@ -348,50 +352,72 @@ impl ResolutionStore {
     ///
     /// A remote answer is read as it is, since the request keeps no record
     /// on any stop (`bind/conflict.rs` `call`): the set goes on an answer
-    /// that ends the attempt or proves this request has none
-    /// (`remote_answer_ends_the_attempt`), and is kept on any other, for
-    /// the launch sweep to settle. A local answer, and a request that
-    /// never reached the library, are settled from the library's state.
+    /// that ends the attempt or proves this request has none, is settled
+    /// on a `cancelled` before acceptance, and is kept on any other, for
+    /// the launch sweep to settle (`remote_answer`). A local answer, and a
+    /// request that never reached the library, are settled from the
+    /// library's state.
     fn ended(&self, backend: &dyn Backend, ended: &Ended) {
-        match (ended.source, ended.code) {
-            (ConflictSource::Remote, Some(code)) => {
-                if remote_answer_ends_the_attempt(code) {
-                    let _ = self.forget(ended.request);
-                }
+        let remote = match (ended.source, ended.answer) {
+            (ConflictSource::Remote, Some((code, checkpoint))) => remote_answer(code, checkpoint),
+            _ => RemoteAnswer::Settle,
+        };
+        match remote {
+            RemoteAnswer::Ends => {
+                let _ = self.forget(ended.request);
             }
-            _ => {
+            RemoteAnswer::Settle => {
                 self.settle(backend, ended.request);
             }
+            RemoteAnswer::Keep => {}
         }
     }
 }
 
-/// Whether a remote resolution answered `code` leaves no attempt that this
-/// request's set could still finish (R-25; `bind/conflict.rs`):
+/// What a remote resolution's answer means for its set.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RemoteAnswer {
+    /// No attempt is left that the set could still finish: it goes.
+    Ends,
+    /// The answer proves nothing of the attempt, and nothing ran: the set
+    /// is settled as one the library has no record of (`settle`).
+    Settle,
+    /// The attempt may stand: the set is kept for the launch sweep.
+    Keep,
+}
+
+/// What a remote resolution answered `code`, with the checkpoint effect
+/// `checkpoint`, means for its set (R-25 as refined; `bind/conflict.rs`):
 ///
 /// - `ok` and `already_applied`: the resolution is checkpointed and
-///   published (`continued`);
-/// - `cancelled`: the call's token stopped it after the checkpoint, the
-///   synchronization left resolved for `operation resume` (`continued`);
+///   published (`continued`). Ends.
+/// - `cancelled` with the checkpoint `committed`: the call's token stopped
+///   it after the checkpoint, the synchronization left resolved for
+///   `operation resume` (`continued`). Ends.
+/// - `cancelled` with nothing committed: the token was signalled before
+///   acceptance (the requests panel's Cancel, or quitting), and
+///   `execute.rs` stopped it with nothing run. It proves nothing of an
+///   attempt an earlier call left: Settle.
 /// - `original_request_required`: another request's attempt stands and
 ///   this one has none. It is answered before this request owns an
 ///   attempt (`fresh`, step 3), or after a refused supersede, once the
-///   request is disowned of the attempt the domain never recorded.
+///   request is disowned of the attempt the domain never recorded. Ends.
 ///
-/// Every other code is kept: `external_change`, `invalid_input`,
+/// Every other code is Keep: `external_change`, `invalid_input`,
 /// `identity_required` and `recovery_required` are also answered on a
 /// retry whose attempt has written paths and stands (`resolve`, the
 /// `PathsApplying` and `RecoveryRequired` phases, through `reported`),
 /// and a failure's effects show only what that call moved (`effects_of`),
 /// so the answer cannot tell them from a refusal before any write.
-fn remote_answer_ends_the_attempt(code: ResultCode) -> bool {
-    matches!(
-        code,
-        ResultCode::Ok
-            | ResultCode::AlreadyApplied
-            | ResultCode::Cancelled
-            | ResultCode::OriginalRequestRequired
-    )
+fn remote_answer(code: ResultCode, checkpoint: CheckpointEffect) -> RemoteAnswer {
+    match code {
+        ResultCode::Ok | ResultCode::AlreadyApplied | ResultCode::OriginalRequestRequired => {
+            RemoteAnswer::Ends
+        }
+        ResultCode::Cancelled if checkpoint == CheckpointEffect::Committed => RemoteAnswer::Ends,
+        ResultCode::Cancelled => RemoteAnswer::Settle,
+        _ => RemoteAnswer::Keep,
+    }
 }
 
 /// Whether `show_conflict` of the set's operation names the set's request
@@ -413,6 +439,27 @@ fn attempt_stands(backend: &dyn Backend, set: &KeptSet) -> bool {
         Ok(conflict) => conflict.request_id.as_deref() == Some(&set.request_id.to_string()),
         Err(()) => true,
     }
+}
+
+/// Only a kept file's format version, read first so a newer format is told
+/// from a damaged file.
+#[derive(Deserialize)]
+struct StoredVersion {
+    version: u32,
+}
+
+/// The set a kept file holds for `request`: `Newer` when a newer build
+/// wrote it, `Damaged` when it is not a set this build reads.
+fn decode(bytes: &[u8], request: RequestId) -> Result<KeptSet, ResolutionStoreError> {
+    match serde_json::from_slice::<StoredVersion>(bytes) {
+        Ok(stored) if stored.version > VERSION => return Err(ResolutionStoreError::Newer),
+        Ok(_) => {}
+        Err(_) => return Err(ResolutionStoreError::Damaged),
+    }
+    serde_json::from_slice::<Stored>(bytes)
+        .ok()
+        .and_then(|stored| stored.into_set(request))
+        .ok_or(ResolutionStoreError::Damaged)
 }
 
 /// A kept set's file name.
@@ -472,9 +519,9 @@ pub(super) fn sweep_at_launch(backend: &Arc<dyn Backend>, cx: &App) {
 pub(super) struct Ended {
     pub request: RequestId,
     pub source: ConflictSource,
-    /// The answer's code; `None` when the request never reached the
-    /// library (removed from the queue, or not sent).
-    pub code: Option<ResultCode>,
+    /// The answer's code and checkpoint effect; `None` when the request
+    /// never reached the library (removed from the queue, or not sent).
+    pub answer: Option<(ResultCode, CheckpointEffect)>,
 }
 
 /// What each of `ended` means for its kept set, on the background
@@ -507,3 +554,7 @@ mod tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "resolutions_answers_tests.rs"]
 mod answers_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "resolutions_format_tests.rs"]
+mod format_tests;

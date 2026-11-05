@@ -383,8 +383,10 @@ impl Services {
                             settled.push(resolutions::Ended {
                                 request: request.request_id,
                                 source,
-                                code: match &event {
-                                    WorkerEvent::Finished(_, envelope) => Some(envelope.code),
+                                answer: match &event {
+                                    WorkerEvent::Finished(_, envelope) => {
+                                        Some((envelope.code, envelope.effects.checkpoint))
+                                    }
                                     _ => None,
                                 },
                             });

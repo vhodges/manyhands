@@ -375,6 +375,7 @@ async fn a_set_has_no_debug_and_never_reaches_a_message(cx: &mut TestAppContext)
         ResolutionStoreError::NoSpace,
         ResolutionStoreError::Damaged,
         ResolutionStoreError::Differs,
+        ResolutionStoreError::Newer,
         ResolutionStoreError::Io,
     ] {
         let words = error.to_string();
