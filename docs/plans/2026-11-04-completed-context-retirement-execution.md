@@ -370,6 +370,8 @@ are not authorized; numeric exits must come from existing results registry.
 | Limited branch-only SPEC review at `ade567fc`, increment base `b1a986c2` | Controller relayed and source-verified **4 Important current-producer gaps**: S1 intended-only effect accepted as settled handoff/result; S2 known pre-Git rejection reported possible effects; S3 public update-poll configuration wrote before reserved-ID refusal; S4 primary loose-ref storage followed redirects | SPEC **failed**, Quality **held**. Test-first corrections and local evidence below; same SPEC re-review, then Quality required. No future-feature/policy substitution or full Task 2 approval |
 | Limited branch-only SPEC re-review through `b4f187e7`, same base | Controller reports **S1–S4 passed, 0 findings** | Preserve those corrections unchanged; this is limited SPEC approval, not full Task 2 completion |
 | Limited branch-only QUALITY at `b4f187e7` | **1 Important reproduced defect**: cleanup-lease contention after successful observation returns Busy, leaving selected/created S, completed O and a live pin; retry cannot recover the same-live branch permit. Controller/reviewer agree Q1/R-7/TF requires Final ExternalChange/no effect for the exact still-owned attempt, not Final Busy or reentry | Test-first correction below; same SPEC delta-check then same QUALITY original-probe re-review pending. No new policy approval or authority extension |
+| Limited branch-only final SPEC pass through `2f06ac72`, increment base `b1a986c2` | Same reviewer `ses_e564dd7a7ffeYzKXesoyVuGJFs` verified S1–S4 and the contention delta: **0 Blocking/0 Important/0 Minor**. Preselection Busy stays retryable; postselection same-live permit loss uses guarded Final ExternalChange with no effects | Limited branch-only SPEC approved; no full Task 2 completion |
+| Limited branch-only final QUALITY pass through `2f06ac72`, same base, after SPEC | Same reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/Blocking/0 Important/0 Minor**. Fresh original authenticated probe confirms uncontended success, contended stable no-effect refusal, completed parent/result and zero residual pins/intents | Limited branch-only QUALITY approved. Controller inspected original probe and final static logs; Windows/native and deferred recovery/instance/source/batch scopes remain unverified |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -388,9 +390,9 @@ are not authorized; numeric exits must come from existing results registry.
   initial absence is independently approved through `03c0c63b`, published with
   the controller's record at `b1a986c2`. The next IN-PROGRESS increment connects
   fresh authenticated **branch-only** retirement: claim/O/receipt/proof/guarded
-  branch deletion/D14/index result. S1–S4 passed limited SPEC through `b4f187e7`
-  with 0 findings. Quality's subsequent cleanup-lease finding is locally corrected;
-  **same SPEC delta-check then same QUALITY original-probe re-review pending**.
+   branch deletion/D14/index result. Independent limited SPEC and QUALITY reviews
+   both passed through `2f06ac72` from base `b1a986c2` with no remaining findings,
+   including the cleanup-lease correction and preserved S1–S4 protections.
   Latest gates: **66** context-retirement tests (unchanged 58 + 8 additive),
   **24** registered retirement SSH cases. Present
   instances, authorized executor replacement/recovery and source/batch scopes
@@ -405,14 +407,12 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: controller's **same limited SPEC reviewer** delta-checks
-the cleanup-lease correction, then the **same QUALITY reviewer** reruns its
-original probe on `b1a986c2..fixHEAD`. S1–S4 remain unchanged and approved.
-No further present-instance/authority
-expansion or push in this correction phase. Prior design and initial-absence
-approvals remain intact; no new owner-policy decision is required. Full Task 2
-and all 44 future obligations remain in progress; this is not permission for
-Task 3/4 or a completion claim.
+Immediate next step: publish the reviewed branch-only increment on this ticket
+branch only, then continue the same Task 2 implementer into present-instance
+installation, guarded worktree pruning and remaining recovery/authority work.
+Prior corrections, design and initial-absence approvals remain intact; no new
+owner-policy decision is required. Full Task 2 and all 44 obligations remain
+tracked/in progress; this is not permission for Task 3/4 or a completion claim.
 Preserve all unchanged assertions/lifecycle cleanup and prior approvals. Final
 fast/SSH tiers and whole-branch review remain owed; this is not feature completion.
 
