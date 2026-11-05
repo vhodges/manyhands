@@ -378,6 +378,9 @@ are not authorized; numeric exits must come from existing results registry.
 | Same fresh-present SPEC at `c230f811` | P1 case locks and pre-W masked aliases resolved; **2 Important P2 chain holes** remain: late post-W/pre-B checkout uses old scanner; target case-equivalent HEAD is called unrelated | Controller accepts unified retirement-only checkout authorization across W→B; correction/evidence below. **Same SPEC re-review then Quality pending**, Quality still held |
 | Limited fresh-present SPEC pass through `1ed380c6`; subsequent QUALITY | Controller reports SPEC pass at that source; Quality finds **1 Important** unsupported Unicode filesystem identity alias and **1 Minor** verified-history rollback/audit gap, both accepted | Corrections below; **delta SPEC check then same QUALITY re-review pending**, no expansion/push or full Task 2 approval |
 | SPEC delta at `892212fe` | Prior HEAD Unicode/verified-history corrections accepted; **1 Important related lock-identity hole** remains: non-ASCII selected-admin entry can evade ASCII suffix matching (`index.locK`) | Conservative recursive component refusal and RED→GREEN below; **same SPEC then same QUALITY re-review pending**, no authority expansion |
+| Limited fresh-present final SPEC pass through `66d21ed2`, increment base `7fde7e5f` | Same reviewer `ses_e564dd7a7ffeYzKXesoyVuGJFs`: **0 Blocking/0 Important/0 Minor**. Complete W→B checkout authorization, lock/Unicode identity limits, installed-instance history and truthful partial/no-effect transitions verified | Limited fresh-present SPEC approved; public reentry/replacement and full Task 2 review remain owed |
+| Limited fresh-present final QUALITY pass through `66d21ed2`, same base, after SPEC | Same reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Fresh unchanged original probe and targeted under-ref-lock/history tests confirm valid retirement, conservative Unicode refusal and blocked verification rollback with preserved resources | Limited fresh-present QUALITY approved. Controller inspected raw final static/context logs and independent probe. No casefold-volume, Windows/native or cross-compilation result claimed |
+| Recovery-continuation preflight, 2026-11-05 | Both checkouts clean; fresh fetch succeeded. Main/base remains `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `66d21ed2b20ba4aaeed1c9d293a8e08684755502` already up to date, no conflicts/rebase | No upstream contract drift or unmerged branch consumption |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -396,13 +399,13 @@ are not authorized; numeric exits must come from existing results registry.
   initial absence is independently approved through `03c0c63b`, published with
   the controller's record at `b1a986c2`. The next IN-PROGRESS increment connects
   fresh authenticated **branch-only** retirement: claim/O/receipt/proof/guarded
-   branch deletion/D14/index result. Independent limited SPEC and QUALITY reviews
-   both passed through `2f06ac72` from base `b1a986c2` with no remaining findings,
-   including the cleanup-lease correction and preserved S1–S4 protections.
+  branch deletion/D14/index result. Independent limited SPEC and QUALITY reviews
+  both passed through `2f06ac72` from base `b1a986c2` with no remaining findings,
+  including the cleanup-lease correction and preserved S1–S4 protections.
   Fresh-present selection/install/prune → branch/index is now connected in the
-  next bounded increment from `7fde7e5f`. Limited SPEC passes through `1ed380c6`;
-  SPEC delta accepts HEAD Unicode/history corrections at `892212fe`, but the
-  related Unicode admin-lock correction awaits **same SPEC then same QUALITY**.
+   next bounded increment from `7fde7e5f`. Independent limited SPEC and QUALITY
+   both passed through `66d21ed2` with no remaining findings, including the
+   conservative Unicode guards and forward-only verified-history audit.
   Latest correction gates: **76** context-retirement tests, **63** registered
   retirement SSH, all static gates (prior 76/59 unchanged; +4 SSH). Unchanged
   cleanup **51** / recovery-foundation **52** evidence remains at `892212fe`.
@@ -424,10 +427,10 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: controller's **delta SPEC check then same QUALITY re-review**
-of the corrected fresh-present producer from `7fde7e5f` before further expansion.
-Authorized replacement/reentry, owned-absence recovery and source/batch work
-remain owed; no such producer is enabled by this increment.
+Immediate next step: publish the reviewed fresh-present increment only to this
+ticket branch, then continue the same Task 2 implementer into authorized
+replacement/reentry and metadata-only owned-absence recovery. Source/batch work
+and remaining fault matrices remain owed; no such producer is enabled yet.
 Prior corrections, design and initial-absence approvals remain intact; no new
 owner-policy decision is required. Full Task 2 and all 44 obligations remain
 tracked/in progress; this is not permission for Task 3/4 or a completion claim.
