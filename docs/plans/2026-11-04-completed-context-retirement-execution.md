@@ -385,6 +385,7 @@ are not authorized; numeric exits must come from existing results registry.
 | Bounded recovery-core final SPEC through `fd1549b7`, base `7b153deb` | Same reviewer: **0 remaining findings**. Fresh actual one-preserve SSH journey, prior public-API counterexample, and missing-chain refusal verified; full debt interval and exact receipt correlation inspected | Limited domain-only recovery SPEC approved; request/F2, shared batch/source and full Task 2 review remain owed |
 | Bounded recovery-core final QUALITY through `fd1549b7`, same base, after SPEC | Reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Fresh 3 closure controls, 1 eight-state O matrix, 1 v1 migration history test and 6 registered lineage SSH cases passed; exact source, tests, raw gates and all source hashes inspected | Limited domain-only recovery QUALITY approved; controller inspected fresh review logs and final static evidence. No full Task 2, native or full-suite claim |
 | Pre-next-increment refresh, 2026-11-05 | Both checkouts clean; fresh fetch succeeded, main/base still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `fd1549b751a6c81eb48b6b1cd0fd2c503d8b81ae` already up to date | No conflicts/rebase, new upstream assumptions or unmerged branch consumption |
+| Limited current-request-fence SPEC at `026f9171`, increment base `597bed6b` | **1 Medium audit/corruption finding** accepted by controller: a deleted spend receipt passed startup and allowed the same current accepted F2 attempt to claim indexing again. Actual private initial-absence probe; not a supported API bypass or new policy | Correction/evidence below; **same SPEC re-review required before QUALITY**. No current-request-fence approval recorded |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -2855,9 +2856,9 @@ is unchanged; these are current incremental evidence/remaining-work annotations.
 | 33 | O foreign/stale request+batch consumer contract projections; D actual Task 3/4 binding/coordinator |
 | 34 | O no-child gap execution/request+batch fences; D actual Task 4 coordinator |
 | 35 | E prior R7 reports/stops, direct and nonadjacent-lineage changed-W → M truthful Possible/None, R3 terminal-observer outcome preservation; F2 preclaim/selected/new-reentry cancellation Final/no-effect and uncertain/post-prune Owed preserve flags, stale calls cannot acknowledge. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
-| 36 | E `claimed_refresh_cannot_release_blocker_without_final_result`, F2 index SQL/unscoped/orphan/envelope matrices, actual mapping/envelope loss before persistence, and `f2_invalidated_index_uses_independent_epoch_and_single_use_current_claim`: independent index epoch plus durable single-use current-F2 claim, duplicate refusal and new-lifetime preservation. O remaining M/index fault and history variants |
+| 36 | E prior F2 index SQL/unscoped/orphan/envelope/invalidation controls plus `f2_specfix_missing_spend_*` and intact/takeover controls: claimed live/failed/retry/persisted-cache/completed states and invalidation tombstones require their spend before startup/recovery can proceed; no same-attempt repair. O remaining M/index fault and history variants; SPEC finding awaits same re-review |
 | 37 | E `generic_abandon_preserves_pending_and_terminal_identity`; D guarded preserving abandon Task 3 |
-| 38 | E prior migration/history/R1 controls, exact R2 controls, lineage corruption and F2 historical-scope/finished-replay tests; additive index-claim migration tests cover exact published-v2 history/rowids, four rollback boundaries and unknown/partial/dependency closure. Historical attempts <= current remain audit-only, never write authority. O remaining resumption/M FK/tamper/deletion-order and source/batch inventory variants |
+| 38 | E prior migration/history/R1/R2/F2 controls plus reverse spend/epoch-history audit and explicit canonical-guard-restored corruption tests. Never-claimed zero-epoch handoffs and published DOMAIN history retain their semantics; historical attempts remain audit-only. Both catalog pins/old schema unchanged. O remaining resumption/M FK/tamper/deletion-order and source/batch inventory variants; SPEC finding awaits same re-review |
 | 39 | O A0–A4 original-P ordering contract projections; D actual Task 4 producer |
 | 40 | O A1–A3 crash/capability/empty manifest projections; D actual Task 4 producer |
 | 41 | O source/unbound provenance lifecycle and source+consumer pin contracts; D actual Task 4 producer |
@@ -3354,3 +3355,85 @@ the recorded replacement/M/D14/index/history fault variants; shared source/batch
 A0–A4, execution-versus-consumption, no-child gaps and source/consumer holders/Z/GC.
 Actual Task 3/4 journeys remain downstream. Full Task 2/Task 8 gates/reviews remain
 owed; controller must run limited SPEC then QUALITY before authority expands.
+
+## Current-Request SPEC Correction — Missing Index Spend (Same Re-review Pending)
+
+Entry **`026f91711b6a0641a7c30e2b13c40e2e01ed7b91`**, clean/ahead 1. Controller
+accepts the limited SPEC review's **one Medium audit/corruption finding**. The
+increment review range remains **`597bed6ba668c8697579c2a79bc4c70ede4548d4..fix-HEAD`**,
+where fix-HEAD is the commit introducing checkpoint **`01M6PKVWHG7R8EJN1Z6S1E0RNR`**,
+subject `fix: reject retirement indexing with missing spend evidence`.
+Full Task 2 base `7b1912d1`; prior recovery approval/range through `fd1549b7` stand.
+
+- **Counterexample:** real private initial absence under inert accepted F2 attempt 1
+  stops after I claim `(1,1)`. Explicit corruption removes only the spend receipt,
+  restoring canonical delete-guard DDL before recovery, with FKs/integrity valid.
+  The forward-only audit accepted the empty ledger; another service reconstructed
+  the same F2 call, minted epoch 2/receipt `(1,2)` and completed AlreadyAbsent.
+  Reviewer source/log: `/tmp/opencode/request-fence-spec-026f-ce20yrd9/`.
+- **Correction:** keep existing forward checks and guards; add reverse audit before
+  the claim path's `used` check through its existing full handoff audit. A provably
+  untouched I handoff has epoch 0, authoritative state and no persistence footprint.
+  Claimed/failed/observed/persisted/retry/completed histories require the exact
+  operation/request/repository spend at their index epoch. An invalidation tombstone
+  requires the preceding live epoch's spend, never a spend at the tombstone itself.
+  First spend is index epoch 1; later spends advance by one, or two across one
+  explicit invalidation. Reject provable older-history loss/gaps. These are index
+  transition facts, **not F2-attempt/index-epoch equality**. Missing evidence is
+  RecoveryRequired, with no reconstruction, epoch/claim replacement, cache write,
+  stale clear or Final result. No DDL, object/pin changes or migration exception.
+- **Tests:** nine claimed/history controls include real partial cache persistence,
+  complete and finished replay; observed/persisted compatibility states use the
+  existing guarded shared-journal transition, not invented fresh producer claims.
+  Both unpoisoned already-open services run recovery after corruption even when
+  startup refuses. Full registry/cache and disk images remain unchanged. Separate
+  producer services alone host crash hooks; the reviewer's poisoned auxiliary hook
+  is not used as evidence. First/middle/last provable history losses refuse even a
+  genuinely newer current F2. Intact duplicate/new-F2/tombstone, never-claimed and
+  published-DOMAIN controls pass. Corruption restores exact DDL and keeps FKs on;
+  no CHECK bypass, profile action or actual Task 3 binding is represented.
+
+Compiled RED `task2-request-fence-specfix-red.log`: **2 passed / 2 failed**;
+expanded `history-red.log`: **2 passed / 3 failed**. Final focused GREEN:
+**5 passed**. All final commands below were foreground `timeout:0`, serial Devenv,
+on frozen source; no detached batch/final handoff before results, source edits
+during tests, concurrent rebuild, shell deadline or zero-case pass. Logs use
+**`/tmp/opencode/task2-request-fence-specfix-<suffix>.log`**; every final exit **0**.
+
+| Exact command after `devenv shell --` | Suffix | Actual result |
+| --- | --- | --- |
+| `cargo check --all-features --locked` | `check` | pass |
+| `cargo fmt --check` | `fmt` | pass |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy` | pass |
+| `cargo test --all-features --locked --lib retirement_f2_specfix_` | `focused-green` | **5 passed** |
+| Same test flags, `--lib context_retirement` | `context` | **106 passed** = prior 101 retained +5 |
+| Same test flags, `--test mutation_remote retirement_` | `retirement-ssh` | **105 registered SSH passed**, unchanged |
+| Same test flags, `--lib recovery` / `--lib refresh` | `recovery` / `refresh` | **60 / 33 passed** |
+| Same test flags, `--lib remote::state::persistence_tests` | `persistence` | **70 passed** |
+| Same test flags, `--lib retirement_migration_` / `--lib retirement_f2_index_migration_` | `migration` / `index-migration` | **5 / 3 passed** |
+| Same test flags, `--lib repository::mutation::` | `request` | **130 passed** |
+| Same test flags, `--test mutation_replay --test recovery_foundation_gate --test discovery_rebuild` | `integration` | Cargo order: discovery **79**, replay **384**, foundation **52**, all passed |
+
+Final **1,581-file** source inventory `task2-request-fence-specfix-source.sha256`
+includes the new `index_claim_tests.rs` and every current build input; SHA-256
+**`addf29e1263376270220f57831490f91ecf614fd649e2eddb6c310e814b8fd91`**.
+All hashes rechecked after verification. Only four Rust files changed: the new test
+module, its `execution_tests.rs` registration, `record.rs` reverse audit and a
+`request_scope.rs` ordering comment. Source formatted via stdout and patch. The
+026f 101/105/other gates remain historical evidence, not relabelled for this fix.
+Unchanged broad six-target remote SSH suites and full fast/native suites not run.
+
+Only 44-row annotations **36/38** changed. Remaining Task 2: recorded fault/index/
+history variants and source/batch A0–A4, execution-versus-consumption, no-child gaps,
+holders/Z/GC. Task 3 binding/DTO/CLI/guarded abandon and Task 4 producer/coordinator
+remain downstream. This is a verified correction, **not SPEC approval**: controller
+must obtain the **same SPEC re-review, then QUALITY**, before expansion/push.
+
+Checkpoint **`01M6PKVWHG7R8EJN1Z6S1E0RNR`**, parent
+**`01M6PFK6EZAAWE5YH55M5N5PV2`**, actual UTC **`2026-11-05T19:44:47Z`**.
+Current CLI ID generation used only supported isolated
+`MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data` (`comment-id.log`).
+Same-phase preflight reused; remote main rechecked unchanged at `c69789d9`, clean
+merge-tree. No agents/push/status/PR/main integration/closure/native CI/other-worktree
+edits or default-profile/real-context/key/draft actions. Linux-only; no native,
+Windows/casefold-volume, cross-compilation or full Task 2/Task 8 completion claim.

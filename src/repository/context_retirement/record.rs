@@ -991,6 +991,45 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
     if invalid {
         return Err(recovery_required());
     }
+    audit_index_spends(db)
+}
+
+/// Reverse correlation is required in addition to validating rows that exist.
+/// A lost spend is corruption, never evidence that an accepted call is unused.
+/// This is history validation only; current F2 is independently rejoined before
+/// every claim/write. No F2 attempt is equated with an index executor epoch.
+fn audit_index_spends(db: &Connection) -> Result<(), RepositoryError> {
+    let missing: bool = db.query_row("SELECT EXISTS(
+      SELECT 1 FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id
+      WHERE c.request_ulid IS NOT NULL AND (
+        typeof(o.index_owner_epoch)!='integer' OR o.index_owner_epoch<0
+        OR (o.index_owner_epoch=0 AND (
+          c.phase='complete' OR o.state IN ('indexing','observed','persisted','retry','index_invalidated')
+          OR (c.phase IN ('local_absent','index_pending') AND
+            (o.state!='authoritative_observed' OR o.persisted_context_count!=0 OR o.context_path IS NOT NULL))))
+        OR (o.index_owner_epoch>0 AND (
+          c.phase NOT IN ('local_absent','index_pending','complete')
+          OR o.state NOT IN ('indexing','observed','persisted','failed','retry','index_invalidated','completed')
+          OR NOT EXISTS(SELECT 1 FROM context_retirement_index_claims i
+            WHERE i.operation_ulid=c.operation_ulid AND i.request_ulid=c.request_ulid AND i.repository_id=c.repository_id
+              AND i.index_owner_epoch=CASE WHEN o.state='index_invalidated' THEN o.index_owner_epoch-1 ELSE o.index_owner_epoch END)
+          OR (o.state='index_invalidated' AND EXISTS(SELECT 1 FROM context_retirement_index_claims i
+            WHERE i.operation_ulid=c.operation_ulid AND i.index_owner_epoch>=o.index_owner_epoch))))))",
+        [], |r| r.get(0)).map_err(|_| recovery_required())?;
+    // Request-bound indexing starts at zero and each successful claim advances
+    // by one. A live owner may be invalidated once (+1) before the next claim;
+    // invalidation cannot advance a tombstone, and F2 auto-reclaim is closed.
+    // Thus first spend is epoch 1; later spends differ by 1 or 2. Reject losses
+    // that this retained history can prove, without fabricating missing rows or
+    // pretending every unknown corruption is distinguishable from a tombstone.
+    let gap: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_index_claims i WHERE
+      (NOT EXISTS(SELECT 1 FROM context_retirement_index_claims p WHERE p.operation_ulid=i.operation_ulid AND p.index_owner_epoch<i.index_owner_epoch)
+        AND i.index_owner_epoch!=1)
+      OR i.index_owner_epoch>(SELECT max(p.index_owner_epoch)+2 FROM context_retirement_index_claims p
+        WHERE p.operation_ulid=i.operation_ulid AND p.index_owner_epoch<i.index_owner_epoch))", [], |r| r.get(0)).map_err(|_| recovery_required())?;
+    if missing || gap {
+        return Err(recovery_required());
+    }
     Ok(())
 }
 

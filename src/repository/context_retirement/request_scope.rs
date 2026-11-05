@@ -290,6 +290,8 @@ impl RepositoryService {
             // F2 authorizes the claim; the independent index counter identifies
             // its executor. Durable append-only claims spend an F2 attempt once,
             // even across services, invalidation, failures and process restart.
+            // The full handoff audit above first proves reverse spend coverage:
+            // absence here cannot launder a previously claimed index epoch.
             let used:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_index_claims WHERE operation_ulid=?1 AND request_attempt>=?2)",params![request.operation_id.to_string(),fence.attempt()],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
             if used {
                 return Ok((id, None));
