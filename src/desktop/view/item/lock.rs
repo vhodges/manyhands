@@ -60,7 +60,7 @@ pub(crate) fn not_tidied(untidied: Untidied) -> String {
 
 /// Opens `folder` in the system's file manager. A test records it instead:
 /// the test platform opens nothing.
-fn open_folder(folder: &std::path::Path, cx: &mut App) {
+pub(crate) fn open_folder(folder: &std::path::Path, cx: &mut App) {
     #[cfg(all(test, feature = "desktop-test-support"))]
     {
         cx.default_global::<OpenedFolders>()
@@ -71,7 +71,8 @@ fn open_folder(folder: &std::path::Path, cx: &mut App) {
     cx.open_with_system(folder);
 }
 
-/// The folders the banner's Open folder opened, in a test.
+/// The folders Open folder opened, the banner's or the resolve sheet's,
+/// in a test.
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[derive(Default)]
 pub(crate) struct OpenedFolders(pub(crate) Vec<PathBuf>);

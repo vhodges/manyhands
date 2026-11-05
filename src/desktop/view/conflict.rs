@@ -27,9 +27,15 @@
 //!   prepared, offers Resume (P15). Any other answer is shown, and the
 //!   conflict read again.
 //!
+//! - **Outside** (B4; `conflict/external.rs`). A set that goes outside
+//!   (R-6, R-26) shows each path's card with its reason, Open folder and
+//!   Check again, and no Save resolution and no winner. Check again reads
+//!   again, and offers Resume only when the library's `next_action` does.
+//!
 //! A resolution is never given up (R-24): the sheet offers no Give up.
 //! The sheet holds item text, and derives no `Debug`.
 
+mod external;
 mod render;
 mod submit;
 
@@ -154,6 +160,10 @@ pub(crate) struct Opening {
     /// repository for its meta line, and the main branch and remote a
     /// reopened lifecycle dialog shows (review M-2).
     pub heading: Heading,
+    /// The item's work folder, where a set that goes outside is repaired:
+    /// Open folder opens it (B4), or the repository's when it is not
+    /// known.
+    pub folder: Option<PathBuf>,
     /// Where focus goes back when the sheet closes.
     pub origin: FocusHandle,
 }
@@ -209,6 +219,8 @@ pub(crate) struct ResolveSheet {
     operation_id: OperationId,
     item: ItemId,
     heading: Heading,
+    /// The folder Open folder opens (B4).
+    folder: PathBuf,
     origin: FocusHandle,
     services: Services,
     generations: Generations,
@@ -229,6 +241,9 @@ pub(crate) struct ResolveSheet {
     answer: Option<(ResultCode, String)>,
     /// Resume is offered: the resolution stopped after its checkpoint.
     stopped: bool,
+    /// A read of this sheet sent the set outside: a later read that says
+    /// Resume speaks of the repair (B4).
+    outside: bool,
     /// A set is being kept, before its request is sent (review I-1).
     submitting: bool,
     /// The resolve request the sheet follows, and the first attempt of it
@@ -253,12 +268,14 @@ impl ResolveSheet {
                     this.operations_changed(window, cx)
                 }),
             ];
+        let folder = opening.folder.unwrap_or_else(|| opening.root.clone());
         let mut sheet = Self {
             source: opening.source,
             root: opening.root,
             operation_id: opening.operation_id,
             item: opening.item,
             heading: opening.heading,
+            folder,
             origin: opening.origin,
             services,
             generations: Generations::default(),
@@ -272,6 +289,7 @@ impl ResolveSheet {
             error: None,
             answer: None,
             stopped: false,
+            outside: false,
             submitting: false,
             following: None,
             editors: Vec::new(),
@@ -321,6 +339,11 @@ impl ResolveSheet {
                     model.keep_choices(earlier);
                 }
                 self.kept = self.kept_of(&model, cx);
+                self.outside |= match model.set() {
+                    ConflictSet::External(_) => true,
+                    ConflictSet::Settled => model.external_repair(),
+                    ConflictSet::Canonical(_) => false,
+                };
                 self.model = Some(model);
                 self.not_read = None;
                 self.editors_stale = true;
@@ -449,3 +472,7 @@ mod stale_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "conflict/followup_tests.rs"]
 mod followup_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "conflict/external_tests.rs"]
+mod external_tests;

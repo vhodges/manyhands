@@ -97,6 +97,7 @@ pub(crate) use header::{LIFECYCLE_ACTION, LIFECYCLE_NOTE, NO_ID, NOT_CREATED};
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use lock::OpenedFolders;
 pub(crate) use lock::lock_words;
+pub(crate) use lock::{CHECK_AGAIN, open_folder};
 pub(crate) use repair::FollowItem;
 pub(crate) use sheet::open_details;
 

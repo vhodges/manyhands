@@ -83,6 +83,19 @@ pub(super) fn open_sheet(
     operation: OperationId,
     cx: &mut TestAppContext,
 ) -> Entity<ResolveSheet> {
+    open_sheet_in(shell, source, root, operation, None, cx)
+}
+
+/// Opens the sheet as `open_sheet` does, naming `folder` as the item's
+/// work folder (B4's Open folder).
+pub(super) fn open_sheet_in(
+    shell: &Shell,
+    source: SheetSource,
+    root: &Path,
+    operation: OperationId,
+    folder: Option<PathBuf>,
+    cx: &mut TestAppContext,
+) -> Entity<ResolveSheet> {
     let services = services(shell, cx);
     let opening = Opening {
         source,
@@ -90,6 +103,7 @@ pub(super) fn open_sheet(
         operation_id: operation,
         item: item_id(TICKET),
         heading: heading(),
+        folder,
         origin: cx.update(|cx| cx.focus_handle()),
     };
     let sheet = shell

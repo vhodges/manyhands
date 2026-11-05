@@ -66,7 +66,6 @@ pub(crate) enum ExternalReason {
 #[derive(Clone)]
 pub(crate) struct ExternalPath {
     pub display_path: String,
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
     pub reason: ExternalReason,
 }
 
@@ -85,8 +84,13 @@ pub(crate) struct ConflictModel {
     observation: Option<String>,
     historical: bool,
     /// The library says the synchronization is resumed, with no input
-    /// (P15): its resolution's commit is prepared.
+    /// (P15): its resolution's commit is prepared, or a repair made outside
+    /// is taken up (B4).
     resume: bool,
+    /// The library's way on is a repair outside Manyhands
+    /// (`external_repair`), whether or not a conflict is live: after Check
+    /// again, a repair it refuses as it stands (B4).
+    external_repair: bool,
     /// The request whose resolution attempt is unfinished, as the read
     /// names it: the remote `request_id`, or the local
     /// `required_request_id`.
@@ -106,6 +110,7 @@ impl ConflictModel {
         let observation = conflict.observation.clone();
         let historical = conflict.historical;
         let resume = conflict.next_action == ConflictReadNextAction::Resume;
+        let external_repair = conflict.next_action == ConflictReadNextAction::ExternalRepair;
         let attempt = conflict.request_id.clone();
         let parents = (
             conflict.local_parent.clone(),
@@ -116,6 +121,7 @@ impl ConflictModel {
                 observation,
                 historical,
                 resume,
+                external_repair,
                 attempt,
                 parents,
                 set: ConflictSet::Settled,
@@ -142,6 +148,7 @@ impl ConflictModel {
             observation,
             historical,
             resume,
+            external_repair,
             attempt,
             parents,
             set: ConflictSet::of(read.collect(), external),
@@ -165,6 +172,7 @@ impl ConflictModel {
         let observation = inspection.observation.clone();
         let historical = contents.iter().any(|content| content.historical);
         let resume = inspection.next_action == LocalContextSyncNextAction::Resume;
+        let external_repair = inspection.next_action == LocalContextSyncNextAction::ExternalRepair;
         let attempt = inspection.required_request_id.clone();
         let parents = (
             inspection.context_parent.clone(),
@@ -175,6 +183,7 @@ impl ConflictModel {
                 observation,
                 historical,
                 resume,
+                external_repair,
                 attempt,
                 parents,
                 set: ConflictSet::Settled,
@@ -211,6 +220,7 @@ impl ConflictModel {
             observation,
             historical,
             resume,
+            external_repair,
             attempt,
             parents,
             set: ConflictSet::of(read.collect(), external),
@@ -233,6 +243,11 @@ impl ConflictModel {
     /// resolution's commit is prepared (P15).
     pub(crate) fn resume(&self) -> bool {
         self.resume
+    }
+
+    /// Whether the library's way on is a repair outside Manyhands (B4).
+    pub(crate) fn external_repair(&self) -> bool {
+        self.external_repair
     }
 
     /// Mine's and theirs' commits, for the footer's Git line.

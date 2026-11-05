@@ -20,7 +20,7 @@ use crate::desktop::model::conflict::{BodyChoice, Choice, Mark, Marked};
 const NONE: &str = "(none)";
 
 /// A piece of text a test reads by `id`.
-pub(super) fn text(
+pub(in crate::desktop::view::conflict) fn text(
     id: impl Into<ElementId>,
     value: impl Into<String>,
 ) -> gpui_kit::base::ObservedElement<gpui_kit::Stateful<gpui_kit::Div>> {

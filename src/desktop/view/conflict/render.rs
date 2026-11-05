@@ -21,7 +21,7 @@ use manyhands::repository::ItemDtoKind;
 use super::{
     BodyEditors, CANCEL, DESCRIPTION_LOCAL, DESCRIPTION_REMOTE, LOST, NOT_READ, READ_AGAIN,
     READING, RESULT_NOTE, RESUME, RESUME_LEAD, RETRY, ResolveSheet, SAVE_RESOLUTION, SETTLED,
-    SheetSource,
+    SheetSource, external::REPAIRED,
 };
 use crate::desktop::{
     assets::icon_path,
@@ -33,7 +33,8 @@ use crate::desktop::{
 
 mod pieces;
 
-use pieces::{before_column, body_state, field_state, marked_column, state, taken_words, text};
+pub(super) use pieces::text;
+use pieces::{before_column, body_state, field_state, marked_column, state, taken_words};
 
 /// What a part is called in its card: the body is the Description.
 const DESCRIPTION: &str = "Description";
@@ -44,11 +45,9 @@ const BEFORE: &str = "Before";
 const YOURS: &str = "Yours";
 const THEIRS: &str = "Theirs";
 const RESULT: &str = "Result";
-/// An external set's card, until Task 12's guidance.
-const OUTSIDE: &str = "This file needs fixing outside Manyhands";
 
 impl ResolveSheet {
-    fn on<F>(
+    pub(super) fn on<F>(
         &self,
         cx: &Context<Self>,
         f: F,
@@ -217,21 +216,17 @@ impl ResolveSheet {
                 }
                 cards.into_any_element()
             }
-            ConflictSet::External(paths) => v_flex()
-                .gap_2()
-                .children(paths.iter().enumerate().map(|(index, path)| {
-                    text(
-                        ("conflict-external", index),
-                        format!("{}: {OUTSIDE}", path.display_path),
-                    )
-                    .text_sm()
-                }))
-                .into_any_element(),
+            ConflictSet::External(paths) => self.external_cards(paths, cx),
+            // B4: Check again found the repair not yet one the library
+            // takes up.
+            ConflictSet::Settled if model.external_repair() && !self.resumable() => {
+                self.repair_not_done(cx)
+            }
             ConflictSet::Settled => {
-                let words = if self.resumable() {
-                    RESUME_LEAD
-                } else {
-                    SETTLED
+                let words = match (self.resumable(), self.outside) {
+                    (true, true) => REPAIRED,
+                    (true, false) => RESUME_LEAD,
+                    (false, _) => SETTLED,
                 };
                 text("conflict-state", words).text_sm().into_any_element()
             }
