@@ -797,6 +797,7 @@ Applied in the approval commit:
 | R-17 | Save first (decision 13) covers a stored or restored draft of the item that has no live session in the tab: it is saved through `flush_now` then `save`, the same as a live session. Unsent comment drafts don't block (decision 14) (Task 6a) | A draft the person has not looked at in this session is saved without being shown again |
 | R-18 | A tab with no item ID (a new item not yet created, or a nonconforming Inspect tab) keeps the lifecycle action visible but disabled, with its reason in `item-lifecycle-note`; pressing it opens nothing (Task 5 review Minor 1, Task 6a) | The action shows where it can't run |
 | R-19 | The dialog's short ID for an item without a slug is the last 8 characters of its ULID (`D/view/lifecycle.rs` `short_id`); Done (Task 8) reuses it (Task 6a review) | Two items may share a short ID; the full ID is in the preview |
+| R-20 | Made-ready (A3) is drawn on any ended closure that reached main, Done or Failed, rather than on Done only. The library never sends `index_pending` or `not_computed` with Done: `index_pending` comes with a Failed `discovery_pending` or `push_rejected` answer, and `not_computed` comes before main. So `current` lists the tickets; `index_pending` adds "The list may be incomplete…"; `index_unavailable_final` says "Could not work out…" with Open ready tickets; `not_computed` and `not_applicable` show nothing (owner, 2026-11-04, Task 8) | A Failed closure shows a made-ready list beside its failure |
 
 ## Known Limits
 

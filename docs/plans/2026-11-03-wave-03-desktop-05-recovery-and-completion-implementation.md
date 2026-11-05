@@ -363,7 +363,8 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
   `done_lists_made_ready_with_slug_and_title`,
   `a_ticket_without_a_slug_shows_its_short_id`,
   `index_pending_says_the_list_may_be_incomplete`,
-  `not_computed_offers_open_ready_tickets`,
+  `index_unavailable_final_offers_open_ready_tickets` (R-20; was
+  `not_computed_offers_open_ready_tickets`),
   `a_promotion_shows_no_made_ready`.
 - [ ] **Code:** `lifecycle/made_ready.rs` (design, A3).
 - [ ] **Verify:** `… made_ready`; the four lines.

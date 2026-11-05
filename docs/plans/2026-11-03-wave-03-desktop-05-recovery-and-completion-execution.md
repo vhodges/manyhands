@@ -39,6 +39,7 @@ is written only by the orchestrator. Implementers never edit it.
   checks it.
   - Removing or weakening an existing assertion, or changing an expected
     behaviour, still stops for the owner.
+- **Task 8 stop, 2026-11-04.** Design A3 put `index_pending` and `not_computed` on Done, but the library never sends either with Done. The owner chose to draw made-ready on any closure that reached main: ruling **R-20**. The plan's test `not_computed_offers_open_ready_tickets` became `index_unavailable_final_offers_open_ready_tickets`.
 - **Carried to Task 6a:** a nonconforming file still offers its kind's
   lifecycle action but has no ID. Task 6a decides what pressing it does.
 
