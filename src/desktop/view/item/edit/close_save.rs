@@ -122,10 +122,13 @@ impl ItemPane {
     /// (Task 18 fix 1, M2).
     pub(in crate::desktop::view) fn close_offers(&self, cx: &App) -> Offers {
         let busy = self.close_busy(cx);
+        // While the item's close or merge is unfinished, Save waits (R-23).
+        let locked = self.edits_wait(cx);
         if self.edit.session.is_none() {
             // D2's dialog of a draft restored here; a new item's is created
             // (R-42).
             let save = !busy
+                && !locked
                 && self.edit_available(cx)
                 && self.restored_unsaved(cx)
                 && self.save_blocked(cx).is_none();
@@ -137,7 +140,7 @@ impl ItemPane {
         }
         Offers {
             keep: self.keep_offer(cx).map(|ready| ready && !busy),
-            save: Some(!busy && self.close_save_offered(cx)),
+            save: Some(!busy && !locked && self.close_save_offered(cx)),
             discard: !busy,
         }
     }
@@ -170,6 +173,11 @@ impl ItemPane {
     /// else blocks it, the empty required field that does (Task 20 fix 1).
     /// `None` when there is nothing to say.
     pub(in crate::desktop::view) fn close_note(&self, cx: &App) -> Option<SaveNote> {
+        // While the item's close or merge is unfinished, Save says why it
+        // waits (R-23).
+        if let Some(words) = self.locked_words(cx) {
+            return Some(SaveNote::says(words));
+        }
         // A prepare waiting for Resume is why D2's Save waits (M2): Resume
         // is the tab's banner's, which Cancel returns to.
         if matches!(self.edit.stopped, Some(Stopped::Pending(_))) {
@@ -275,6 +283,9 @@ impl ItemPane {
     /// Done editing again first, focus left where it is (I2); or a
     /// restored draft is continued, then saved (`restored`).
     fn close_save(&mut self, cx: &mut Context<Self>) {
+        if self.edits_wait(cx) {
+            return;
+        }
         self.edit.closing = true;
         if self.edit.session.is_some() {
             self.unkeep(cx);

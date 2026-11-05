@@ -501,3 +501,7 @@ mod lock_restart_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/after_tests.rs"]
 mod after_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/lock_gates_tests.rs"]
+mod lock_gates_tests;

@@ -190,3 +190,29 @@ fn an_undoable_tidy_up_stop_exempts_its_row_until_it_changes() {
         "a later answer"
     );
 }
+
+/// M-5: any of the item's rows in a locking step locks it, whatever order
+/// the read lists them in.
+#[test]
+fn any_locking_row_of_the_item_locks_it() {
+    let mut locks = LifecycleLocks::default();
+    locks.rows_read(
+        ROOT,
+        &read(vec![
+            row("context_synchronized", "t1"),
+            row("closing", "t1"),
+        ]),
+    );
+    assert_eq!(state(&locks), LockState::Locked(LockSource::Record));
+}
+
+/// M-6: a repository no longer listed is forgotten: listed again, it
+/// awaits its first read.
+#[test]
+fn a_forgotten_repository_awaits_its_first_read_again() {
+    let mut locks = LifecycleLocks::default();
+    locks.rows_read(ROOT, &read(Vec::new()));
+    locks.forget(ROOT);
+    assert!(!locks.read(ROOT));
+    assert_eq!(locks.state(&key(), false, true), LockState::Awaiting);
+}

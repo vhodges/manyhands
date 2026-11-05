@@ -165,8 +165,9 @@ impl ItemPane {
         if self.shown_session().is_none() {
             return false;
         }
-        // A run of the item, or its record, locks it (R-23).
-        if self.run_locks(cx) {
+        // While the item's close or merge is unfinished, or nothing is
+        // known of it yet, Save waits (R-23, R-21).
+        if self.edits_wait(cx) {
             return true;
         }
         if !window.has_active_dialog(cx) {

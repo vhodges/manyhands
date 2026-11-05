@@ -26,7 +26,7 @@ use manyhands::{
 
 use super::{
     confirm_tests::{confirming, worktree},
-    outcome_canned_tests::{answer, finished, intent, reached, reached_effects},
+    outcome_canned_tests::{answer, finished, intent, reached, reached_effects, retry},
     outcome_tests::at_stage,
     tests::{TICKET, closes, code, open, saved_ticket, shell, shown, ticket, until_present},
 };
@@ -387,11 +387,11 @@ async fn after_integration_a_refused_remote_deletion_stays_locked(cx: &mut TestA
     let refused = answer(
         "ticket close",
         &root,
-        ResultCode::RecoveryRequired,
+        ResultCode::PushRejected,
         Outcome::Partial,
         data,
         reached_effects(CleanupEffect::Pending),
-        Vec::new(),
+        vec![retry(request)],
         request,
     );
     finished(
@@ -443,7 +443,14 @@ async fn a_changed_context_cleanup_unlocks_with_check_again(cx: &mut TestAppCont
         shell.label("item-not-tidied", cx).as_deref(),
         Some(NOT_TIDIED)
     );
-    assert!(shell.present("item-not-tidied-open-folder", cx));
+    // Open folder opens the working copy, not main (M-8).
+    shell.click("item-not-tidied-open-folder", cx);
+    let opened = cx.read(|cx| {
+        cx.try_global::<crate::desktop::view::item::OpenedFolders>()
+            .map(|opened| opened.0.clone())
+    });
+    assert_eq!(opened, Some(vec![context.clone()]));
+    assert_ne!(context, root);
 
     shell.click("item-not-tidied-check-again", cx);
     let attempt = |n: u32| {

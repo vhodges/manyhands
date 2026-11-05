@@ -202,7 +202,7 @@ impl LifecycleLocks {
 
     /// The repository at `root` is no longer listed, or does not resolve.
     pub(crate) fn forget(&mut self, root: &str) {
-        self.records.insert(root.to_owned(), Vec::new());
+        self.records.remove(root);
         self.answered.retain(|key| key.root != root);
         self.exemptions.retain(|key, _| key.root != root);
     }
@@ -263,14 +263,13 @@ impl LifecycleLocks {
         if self.answered.contains(key) || (loading && !self.read(&key.root)) {
             return LockState::Awaiting;
         }
-        let Some(row) = self
+        let locks = self
             .records
             .get(&key.root)
-            .and_then(|rows| rows.iter().find(|row| row.item_id == key.id))
-        else {
-            return LockState::Open;
-        };
-        if !step_locks(&row.step) {
+            .into_iter()
+            .flatten()
+            .any(|row| row.item_id == key.id && step_locks(&row.step));
+        if !locks {
             return LockState::Open;
         }
         match self.exemptions.get(key) {

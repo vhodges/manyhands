@@ -58,6 +58,27 @@ pub(crate) fn not_tidied(untidied: Untidied) -> String {
     )
 }
 
+/// Opens `folder` in the system's file manager. A test records it instead:
+/// the test platform opens nothing.
+fn open_folder(folder: &std::path::Path, cx: &mut App) {
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    {
+        cx.default_global::<OpenedFolders>()
+            .0
+            .push(folder.to_owned());
+    }
+    #[cfg(not(all(test, feature = "desktop-test-support")))]
+    cx.open_with_system(folder);
+}
+
+/// The folders the banner's Open folder opened, in a test.
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[derive(Default)]
+pub(crate) struct OpenedFolders(pub(crate) Vec<PathBuf>);
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+impl gpui_kit::Global for OpenedFolders {}
+
 impl ItemPane {
     /// Where the tab's item stands under the lock; `Open` for an Inspect
     /// tab, which has no lifecycle.
@@ -145,7 +166,7 @@ impl ItemPane {
             Button::new("item-not-tidied-open-folder")
                 .label(crate::desktop::view::lifecycle::OPEN_FOLDER)
                 .small()
-                .on_click(move |_: &ClickEvent, _, cx: &mut App| cx.open_with_system(&folder))
+                .on_click(move |_: &ClickEvent, _, cx: &mut App| open_folder(&folder, cx))
         });
         let check = Button::new("item-not-tidied-check-again")
             .label(CHECK_AGAIN)

@@ -312,6 +312,12 @@ impl ItemPane {
         Some(self.edit.session.as_ref()?.host.clone())
     }
 
+    /// Whether the tab keeps a session after Done, or for the lock.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn edit_session_kept(&self) -> bool {
+        self.session_kept()
+    }
+
     /// Where the tab stands.
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn edit_phase(&self) -> Phase {

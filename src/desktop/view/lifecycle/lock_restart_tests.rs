@@ -16,7 +16,7 @@ use manyhands::{
         LifecycleCleanupPendingReason, Mutation, MutationCall, MutationDataDto, NoProgress,
         PrepareDataDto, RepositoryService, RequestId, TicketCloseInput, keys::SessionCredentials,
     },
-    results::{Envelope, RecoveryAction, ResultCode, Scope},
+    results::{Envelope, RecoveryAction, RecoveryActionKind, ResultCode, Scope},
 };
 
 use super::{
@@ -49,7 +49,7 @@ use crate::desktop::{
 };
 
 /// The window loses focus, then takes it again.
-fn focus_again(shell: &Shell, cx: &mut TestAppContext) {
+pub(super) fn focus_again(shell: &Shell, cx: &mut TestAppContext) {
     let mut visual = shell.visual(cx);
     visual.deactivate_window();
     visual.update(|window, _| window.activate_window());
@@ -109,9 +109,10 @@ async fn a_closure_at_closing_stays_locked_after_restart(cx: &mut TestAppContext
 
 /// L-4 after a restart (R-22), real: a merge stopped after it reached main
 /// (`AfterPublication`) with a file left in its working copy is read at
-/// launch as locked, "Merging…": its row carries no reason. Run again from
-/// Approve and merge…, the answer says the working copy changed, and the
-/// document unlocks with "Merged, but not tidied up".
+/// launch as locked, "Merging…": its row carries no reason. Approve and
+/// merge… finds it held and offers Continue; sent again, the answer says the
+/// working copy changed, and the document unlocks with "Merged, but not
+/// tidied up".
 ///
 /// A ticket's close at this point offers no Close ticket…: the ticket reads
 /// closed. Its way on after a restart is Resume on its row (Task 14).
@@ -146,17 +147,13 @@ async fn a_changed_context_after_restart_unlocks_once_answered(cx: &mut TestAppC
     until_lock_of(&shell, &root, DOCUMENT, locked, cx).await;
     assert_edits_wait(&shell, MERGING, cx);
 
+    // A stop at a failure point records no supersedable tidy-up: the
+    // stopped request holds the document, so the prepare offers Continue,
+    // which sends it again.
     shell.click(LIFECYCLE_ACTION, cx);
-    shell
-        .until_drawn(cx, "a way on", |shell, cx| {
-            shell.present("lifecycle-continue", cx) || shell.present("lifecycle-confirm", cx)
-        })
-        .await;
-    if shell.present("lifecycle-continue", cx) {
-        shell.click("lifecycle-continue", cx);
-    } else {
-        shell.click("lifecycle-confirm", cx);
-    }
+    until_present(&shell, "lifecycle-continue", cx).await;
+    assert!(!shell.present("lifecycle-confirm", cx));
+    shell.click("lifecycle-continue", cx);
     let id = shell.requests(cx, |request| {
         matches!(request.intent, Intent::DocumentPromote { .. })
     })[0];
@@ -175,7 +172,10 @@ async fn a_changed_context_after_restart_unlocks_once_answered(cx: &mut TestAppC
 }
 
 /// Prepares and executes a promotion of the document through `service`.
-fn promote_through(service: &RepositoryService, root: &Path) -> Envelope<MutationDataDto> {
+pub(super) fn promote_through(
+    service: &RepositoryService,
+    root: &Path,
+) -> Envelope<MutationDataDto> {
     let mutation = || {
         Mutation::DocumentPromote(DocumentPromoteInput {
             root: root.to_owned(),
@@ -244,6 +244,16 @@ fn refused(
     )
 }
 
+/// A canned `busy` before acceptance, offering a new prepare, as
+/// `c5_lifecycle_busy_with_no_parent_close` answers.
+pub(super) fn refused_busy(root: &Path) -> Envelope<MutationDataDto> {
+    refused(
+        root,
+        ResultCode::Busy,
+        vec![RecoveryAction::new(RecoveryActionKind::RequestPrepare, [])],
+    )
+}
+
 /// L-6, P25: every answer before acceptance leaves no lock once its dialog
 /// closes. Real: a dirty main blocks the prepare, a path added after the
 /// preview refuses the consent (`external_change`), and Cancel. Canned, as
@@ -294,7 +304,10 @@ async fn each_pre_acceptance_answer_unlocks(cx: &mut TestAppContext) {
         .into_iter()
         .enumerate()
     {
-        let answer = refused(&root, code, Vec::new());
+        let answer = match code {
+            ResultCode::Busy => refused_busy(&root),
+            _ => refused(&root, code, Vec::new()),
+        };
         let request = RequestId::new();
         finished(
             &shell,
