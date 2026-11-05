@@ -46,7 +46,7 @@ use crate::desktop::{
 
 /// A canned `conflict resolve` answer with `code` and `effects`, as
 /// `Envelope::classified_mutation` gives the library's.
-fn answer(code: ResultCode, effects: Effects) -> Envelope<MutationDataDto> {
+pub(super) fn answer(code: ResultCode, effects: Effects) -> Envelope<MutationDataDto> {
     Envelope::classified_mutation(
         "conflict resolve",
         Scope::default(),
@@ -58,7 +58,7 @@ fn answer(code: ResultCode, effects: Effects) -> Envelope<MutationDataDto> {
 }
 
 /// A resolution checkpointed, as `bind/conflict.rs` `resolved` reports it.
-fn checkpointed() -> Effects {
+pub(super) fn checkpointed() -> Effects {
     Effects {
         write: WriteEffect::Written,
         checkpoint: CheckpointEffect::Committed,
@@ -73,7 +73,7 @@ fn checkpointed() -> Effects {
 /// Applied and published, as `tests/mutation_remote/resolution.rs`
 /// `c4_resolution_publishes` answers, and as the child's resolution in
 /// `tests/mutation_remote/c5_child_conflict.rs` `resolved_then_the_same_request`.
-fn applied() -> Envelope<MutationDataDto> {
+pub(super) fn applied() -> Envelope<MutationDataDto> {
     answer(
         ResultCode::Ok,
         Effects {
@@ -87,7 +87,7 @@ fn applied() -> Envelope<MutationDataDto> {
 /// Opens the sheet on a canned canonical conflict of a fresh operation,
 /// keeps mine, and presses Save resolution with `canned` standing in place
 /// of the answer. Gives the operation.
-async fn save_answered(
+pub(super) async fn save_answered(
     shell: &Shell,
     source: SheetSource,
     root: &std::path::Path,
@@ -112,7 +112,7 @@ async fn save_answered(
 }
 
 /// The operations a resume of this session names, oldest last.
-fn resumed(shell: &Shell, cx: &mut TestAppContext) -> Vec<OperationId> {
+pub(super) fn resumed(shell: &Shell, cx: &mut TestAppContext) -> Vec<OperationId> {
     let ids = shell.requests(cx, |request| {
         matches!(request.intent, Intent::OperationResume { .. })
     });

@@ -278,6 +278,8 @@ pub(crate) struct Services {
     edit_tabs: Entity<EditTabs>,
     /// The comments this session posted, shared by every item tab.
     submissions: Entity<Submissions>,
+    /// What follows each lifecycle child's resolution once applied (R-10).
+    followups: resolutions::Followups,
     /// Whether the workspace refreshes every listed repository once its
     /// list first loads. Tests that do not wait for the worker turn it
     /// off.
@@ -331,6 +333,9 @@ impl Services {
         let releasing = releases.downgrade();
         let submissions = cx.new(|_| Submissions::new(worker.clone()));
         let posts = submissions.downgrade();
+        let followups = resolutions::Followups::default();
+        let following = followups.clone();
+        let resending = worker.clone();
         cx.spawn(async move |cx| {
             while let Some(event) = events.next().await {
                 let mut batch = vec![event];
@@ -380,6 +385,16 @@ impl Services {
                         if let Some(request) = ended
                             && let Some(source) = resolutions::source_of(&request.intent)
                         {
+                            // A lifecycle child's applied resolution sends
+                            // the lifecycle on, sheet open or not (R-10).
+                            if let WorkerEvent::Finished(_, envelope) = &event {
+                                following.ended(
+                                    request.request_id,
+                                    envelope.code,
+                                    operations,
+                                    &resending,
+                                );
+                            }
                             settled.push(resolutions::Ended {
                                 request: request.request_id,
                                 source,
@@ -504,6 +519,7 @@ impl Services {
             releases,
             edit_tabs: cx.new(|_| EditTabs::default()),
             submissions,
+            followups,
             launch_refresh: true,
         };
         drafts.update(cx, |registry, cx| {
@@ -577,6 +593,11 @@ impl Services {
     /// The comments this session posted.
     pub(crate) fn submissions(&self) -> &Entity<Submissions> {
         &self.submissions
+    }
+
+    /// What follows each lifecycle child's resolution once applied.
+    pub(crate) fn followups(&self) -> &resolutions::Followups {
+        &self.followups
     }
 
     #[cfg(all(test, feature = "desktop-test-support"))]

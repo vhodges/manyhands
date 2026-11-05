@@ -34,8 +34,9 @@ async fn the_note_follows_the_source(cx: &mut TestAppContext) {
 }
 
 /// Decision 19: a set that cannot be kept is not sent. With the
-/// resolutions folder unopenable (a file stands in its place), Save
-/// resolution says why, and nothing reaches the worker.
+/// resolutions folder unopenable (a file stands in its place), the sheet
+/// says why as it opens (review M-4), never as a lost set (K-10), and Save
+/// resolution sends nothing.
 #[gpui_kit::test]
 async fn a_set_that_cannot_be_kept_is_not_sent(cx: &mut TestAppContext) {
     let (shell, root, operation) = local_shell(cx, |fixture, root| {
@@ -44,10 +45,17 @@ async fn a_set_that_cannot_be_kept_is_not_sent(cx: &mut TestAppContext) {
     });
     open_sheet(&shell, SheetSource::Local, &root, operation, cx);
     until_present(&shell, "conflict-save", cx).await;
+    let opened = shell.label("conflict-error", cx);
+    assert!(
+        opened.is_some(),
+        "the store's error shows as the sheet opens"
+    );
+    assert!(!shell.present("conflict-lost", cx));
     shell.click(("conflict-keep-mine", 0usize), cx);
     shell.click("conflict-save", cx);
     until_present(&shell, "conflict-error", cx).await;
     let words = shell.label("conflict-error", cx).unwrap();
+    assert_eq!(Some(&words), opened.as_ref());
     assert!(
         [
             ResolutionStoreError::ProtectionUnavailable,

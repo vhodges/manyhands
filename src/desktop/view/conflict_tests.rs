@@ -24,14 +24,14 @@ use manyhands::{
     repository::{
         ConflictDto, ConflictPathDto, ConflictPathKind, ConflictPathStructure,
         ConflictReadEligibility, ConflictReadNextAction, ConflictStage, ConflictState,
-        ConflictTarget, OperationId,
+        ConflictTarget, ItemDtoKind, OperationId,
     },
     results::ResultCode,
 };
 
 use super::{
-    CHANGED, KEEPING_THEIRS, OpenedSheet, Opening, ResolveSheet, SAVE_RESOLUTION, SheetSource,
-    TAKEN_THEIRS, open,
+    KEEPING_THEIRS, OpenedSheet, Opening, ResolveSheet, SAVE_RESOLUTION, SheetSource, TAKEN_THEIRS,
+    open,
 };
 use crate::desktop::{
     model::conflict::STANDARD_LAYOUT_NOTE,
@@ -40,7 +40,7 @@ use crate::desktop::{
         requests::{DesktopRequest, DesktopRequestId, Intent, RequestState},
     },
     test_support::fixtures::{Fixture, item_id, ticket_path, ticket_source},
-    view::harness::Shell,
+    view::{harness::Shell, lifecycle::Heading},
 };
 
 pub(super) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
@@ -89,7 +89,7 @@ pub(super) fn open_sheet(
         root: root.to_owned(),
         operation_id: operation,
         item: item_id(TICKET),
-        title: Some("Mine".to_owned()),
+        heading: heading(),
         origin: cx.update(|cx| cx.focus_handle()),
     };
     let sheet = shell
@@ -98,6 +98,22 @@ pub(super) fn open_sheet(
         .expect("the sheet opens");
     shell.run(cx);
     sheet
+}
+
+pub(super) const SHORT: &str = "ae-c10s3";
+
+/// Who the sheet speaks of: the ticket, its repository `a`, and the main
+/// branch and remote a reopened lifecycle dialog shows.
+pub(super) fn heading() -> Heading {
+    Heading {
+        kind: ItemDtoKind::Ticket,
+        short: SHORT.to_owned(),
+        title: Some("Mine".to_owned()),
+        repository: "a".to_owned(),
+        branch: None,
+        primary: Some("main".to_owned()),
+        remote: Some(None),
+    }
 }
 
 /// The sheet last opened, while it is open.
@@ -242,9 +258,8 @@ pub(super) fn same_body(source: &str, title: &str) -> String {
 }
 
 /// B3, R-5, real local: progress counts the parts, and Save resolution is
-/// inert until each is chosen (the Kit's button reports no disabled flag,
-/// so a click that sends nothing shows it; the other tests save once every
-/// part is chosen). The body, which only theirs changed, is
+/// disabled until each is chosen: Tab, which a disabled Kit button does not
+/// take, reaches it only then, and a click before sends nothing. The body, which only theirs changed, is
 /// taken from theirs and says so; a chosen merge is saved in the standard
 /// layout (R-9).
 #[gpui_kit::test]
@@ -265,6 +280,7 @@ async fn save_is_disabled_until_every_part_is_chosen(cx: &mut TestAppContext) {
         Some(format!("Description: {TAKEN_THEIRS}"))
     );
     assert!(shell.inert_button("conflict-save", cx));
+    assert!(!shell.tab_reaches("conflict-save", 24, cx), "disabled");
     shell.click("conflict-save", cx);
     assert!(resolves(&shell, cx).is_empty(), "nothing is saved");
 
@@ -281,6 +297,7 @@ async fn save_is_disabled_until_every_part_is_chosen(cx: &mut TestAppContext) {
         shell.label("conflict-save", cx).as_deref(),
         Some(SAVE_RESOLUTION)
     );
+    assert!(shell.tab_reaches("conflict-save", 24, cx), "enabled");
     assert_eq!(
         shell.label(("conflict-layout", 0usize), cx).as_deref(),
         Some(STANDARD_LAYOUT_NOTE)
@@ -427,57 +444,4 @@ async fn a_local_resolution_uses_the_inspections_observation(cx: &mut TestAppCon
         !shell.present("conflict-sheet", cx)
     })
     .await;
-}
-
-/// P11, real local: the work context's conflicted file changes while the
-/// sheet is open, so its observation is stale. Save is answered
-/// `external_change`; the sheet says so and reads the conflict again,
-/// keeping the choice of the part that did not change.
-#[gpui_kit::test]
-async fn a_stale_observation_refreshes_the_comparison(cx: &mut TestAppContext) {
-    let (shell, root, operation) = local_shell(cx, |fixture, root| {
-        fixture.conflict_locally(root, TICKET, "Mine", "Theirs")
-    });
-    let sheet = open_sheet(&shell, SheetSource::Local, &root, operation, cx);
-    until_present(&shell, "conflict-save", cx).await;
-    let first = sheet.read_with(cx, |sheet, _| sheet.observation());
-    shell.click(("conflict-keep-theirs", 0usize), cx);
-
-    // Outside the app, the conflicted file is overwritten with mine.
-    let (_, contents) = shell.fixture.read_local_conflict(&root, operation);
-    let service = shell.fixture.service();
-    let repo = service.resolve_repository(&root).unwrap();
-    let worktree = service
-        .show_item(&repo, &item_id(TICKET))
-        .unwrap()
-        .context
-        .worktree;
-    std::fs::write(
-        Path::new(&worktree).join(ticket_path(TICKET)),
-        contents[0].local.as_deref().unwrap(),
-    )
-    .unwrap();
-
-    shell.click("conflict-save", cx);
-    let sent = resolves(&shell, cx);
-    assert_eq!(sent.len(), 1);
-    until_long(&shell, "the notice", cx, |shell, cx| {
-        shell.present("conflict-notice", cx)
-    })
-    .await;
-    assert_eq!(code(&shell, sent[0], cx), Some(ResultCode::ExternalChange));
-    assert_eq!(shell.label("conflict-notice", cx).as_deref(), Some(CHANGED));
-    until_long(&shell, "the read again", cx, |_, cx| {
-        sheet.read_with(cx, |sheet, _| sheet.observation()) != first
-    })
-    .await;
-    assert_eq!(
-        shell.label("conflict-progress", cx).as_deref(),
-        Some("1 of 1 chosen"),
-        "the unchanged part keeps its choice"
-    );
-    assert_eq!(
-        shell.label(("conflict-choice", 0usize), cx).as_deref(),
-        Some(KEEPING_THEIRS)
-    );
 }

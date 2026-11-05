@@ -16,6 +16,7 @@
 //! Nothing here derives `Debug` or `Display`: every side and result is item
 //! text.
 
+mod lines;
 mod merge;
 
 use std::path::Path;
@@ -31,7 +32,8 @@ use manyhands::{
 
 use crate::desktop::services::requests::PathResolution;
 
-pub(crate) use merge::{BodyChoice, Choice, PathConflict, PathResult};
+pub(crate) use lines::{Mark, marked};
+pub(crate) use merge::{BodyChoice, BodyPart, Choice, PathConflict, PathResult};
 
 /// The card note of a path whose result is written in the standard layout
 /// (R-9).
@@ -89,6 +91,9 @@ pub(crate) struct ConflictModel {
     /// names it: the remote `request_id`, or the local
     /// `required_request_id`.
     attempt: Option<String>,
+    /// Mine's and theirs' commits, for the footer's Git line: the remote
+    /// local and incoming parents, or the local context and primary ones.
+    parents: (String, String),
     set: ConflictSet,
 }
 
@@ -102,12 +107,17 @@ impl ConflictModel {
         let historical = conflict.historical;
         let resume = conflict.next_action == ConflictReadNextAction::Resume;
         let attempt = conflict.request_id.clone();
+        let parents = (
+            conflict.local_parent.clone(),
+            conflict.incoming_parent.clone(),
+        );
         if conflict.paths.is_empty() {
             return Self {
                 observation,
                 historical,
                 resume,
                 attempt,
+                parents,
                 set: ConflictSet::Settled,
             };
         }
@@ -133,6 +143,7 @@ impl ConflictModel {
             historical,
             resume,
             attempt,
+            parents,
             set: ConflictSet::of(read.collect(), external),
         }
     }
@@ -141,7 +152,11 @@ impl ConflictModel {
     /// of its tokens (B1). The observation is the inspection's (R-11). The
     /// set is external when the library says so, or when any entry's path
     /// does not classify as an item's (U-2), or its sides are not given or
-    /// do not parse.
+    /// do not parse. R-26: also when the inspection's way on is
+    /// `external_repair`, or it cannot start a resolution while the read is
+    /// neither historical nor resumable (an active attempt and a prepared
+    /// commit also answer `can_start_resolution: false`; P24's Retry, K-10
+    /// and P15 keep their own ways).
     pub(crate) fn from_local(
         inspection: &LocalContextSyncInspectionDto,
         contents: &[LocalContextConflictContentDto],
@@ -150,16 +165,21 @@ impl ConflictModel {
         let historical = contents.iter().any(|content| content.historical);
         let resume = inspection.next_action == LocalContextSyncNextAction::Resume;
         let attempt = inspection.required_request_id.clone();
+        let parents = (
+            inspection.context_parent.clone(),
+            inspection.primary_parent.clone(),
+        );
         if inspection.paths.is_empty() {
             return Self {
                 observation,
                 historical,
                 resume,
                 attempt,
+                parents,
                 set: ConflictSet::Settled,
             };
         }
-        let whole = whole_local_reason(inspection.reason);
+        let whole = whole_local_reason(inspection);
         let read = inspection.paths.iter().map(|entry| {
             let content = contents.iter().find(|content| content.token == entry.token);
             let parsed = if let Some(reason) = whole {
@@ -180,13 +200,15 @@ impl ConflictModel {
             };
             (entry.display_path.as_str(), parsed)
         });
-        let external =
-            inspection.eligibility == Some(LocalContextSyncEligibility::ExternalResolutionRequired);
+        let external = inspection.eligibility
+            == Some(LocalContextSyncEligibility::ExternalResolutionRequired)
+            || (!inspection.can_start_resolution && !historical && !resume);
         Self {
             observation,
             historical,
             resume,
             attempt,
+            parents,
             set: ConflictSet::of(read.collect(), external),
         }
     }
@@ -207,6 +229,11 @@ impl ConflictModel {
     /// resolution's commit is prepared (P15).
     pub(crate) fn resume(&self) -> bool {
         self.resume
+    }
+
+    /// Mine's and theirs' commits, for the footer's Git line.
+    pub(crate) fn parents(&self) -> (&str, &str) {
+        (&self.parents.0, &self.parents.1)
     }
 
     /// The request whose resolution attempt the read says is unfinished.
@@ -303,20 +330,21 @@ impl ConflictSet {
 }
 
 /// Whether a local inspection's set goes outside whatever its paths hold:
-/// the library says so, or its reason covers the whole set. Its content is
-/// then not read (B1).
+/// the library says so, its reason covers the whole set, or its way on is
+/// `external_repair` (R-26). Its content is then not read (B1).
 pub(crate) fn local_set_is_external(inspection: &LocalContextSyncInspectionDto) -> bool {
     inspection.eligibility == Some(LocalContextSyncEligibility::ExternalResolutionRequired)
-        || whole_local_reason(inspection.reason).is_some()
+        || whole_local_reason(inspection).is_some()
 }
 
-/// The reason a local inspection's reason gives every path, when it covers
-/// the whole set.
-fn whole_local_reason(reason: LocalContextSyncReason) -> Option<ExternalReason> {
-    match reason {
+/// The reason an inspection gives every path, when it covers the whole
+/// set: its reason, or a way on of `external_repair` (R-26).
+fn whole_local_reason(inspection: &LocalContextSyncInspectionDto) -> Option<ExternalReason> {
+    match inspection.reason {
         LocalContextSyncReason::UnsupportedConflict => Some(ExternalReason::Unsupported),
         LocalContextSyncReason::ImmutableClosureDisagreement => Some(ExternalReason::Closures),
-        _ => None,
+        _ => (inspection.next_action == LocalContextSyncNextAction::ExternalRepair)
+            .then_some(ExternalReason::Unsupported),
     }
 }
 

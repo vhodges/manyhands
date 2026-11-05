@@ -55,7 +55,7 @@ use crate::desktop::{
         ReadResult, Services, conflicts::ConflictSource, requests::DesktopRequestId,
         resolutions::KeptSet,
     },
-    view::editor::{read_only::ReadOnly, set_exact},
+    view::{editor::set_exact, lifecycle::Heading},
 };
 
 pub(crate) const SAVE_RESOLUTION: &str = "Save resolution";
@@ -89,9 +89,20 @@ pub(crate) const RESUME_LEAD: &str =
     "The resolution is saved, and what is left of it runs again with Resume.";
 /// Nothing is left to choose.
 pub(crate) const SETTLED: &str = "Nothing is left to choose here.";
-/// K-10: a partial local resolution whose kept set is gone.
+/// The description under the title (handoff 2g), remote and local.
+pub(crate) const DESCRIPTION_REMOTE: &str = "You and someone else both changed this since it \
+     was last shared. Pick a version for each part, or keep both.";
+pub(crate) const DESCRIPTION_LOCAL: &str = "This item and main both changed since they last \
+     met. Pick a version for each part, or keep both.";
+/// The Result's note (handoff 2g).
+pub(crate) const RESULT_NOTE: &str = "Saving keeps the result on this computer. You can \
+     still edit it in the item afterwards, and Share sends it to everyone.";
+/// K-10: a partial local resolution whose kept set is not here. A read is
+/// also historical while another process's attempt is still running, so
+/// the words fit that too.
 pub(crate) const LOST: &str = "This resolution was partly saved, and the choices it was saved \
-     with are no longer kept. Abandon the synchronization to start again.";
+     with are not kept here. If it is still being resolved elsewhere, let that finish; \
+     otherwise abandon the synchronization to start again.";
 
 /// Where the conflict stopped: what the sheet says Saving does, and what
 /// follows an applied resolution.
@@ -137,7 +148,10 @@ pub(crate) struct Opening {
     /// restart the lifecycle row's, which the conflict verbs accept (B1).
     pub operation_id: OperationId,
     pub item: ItemId,
-    pub title: Option<String>,
+    /// Who the sheet speaks of: the item's kind, short code, title and
+    /// repository for its meta line, and the main branch and remote a
+    /// reopened lifecycle dialog shows (review M-2).
+    pub heading: Heading,
     /// Where focus goes back when the sheet closes.
     pub origin: FocusHandle,
 }
@@ -179,11 +193,10 @@ pub(crate) struct OpenedSheet(pub(crate) gpui_kit::WeakEntity<ResolveSheet>);
 #[cfg(all(test, feature = "desktop-test-support"))]
 impl gpui_kit::Global for OpenedSheet {}
 
-/// A canonical path's body editors: Before, Yours and Theirs read-only,
-/// and the Result.
+/// A canonical path's Result editor. Before, Yours and Theirs are drawn
+/// as mono lines, each with its tint and gutter (handoff 2g).
 struct BodyEditors {
     path: usize,
-    columns: [Entity<ReadOnly>; 3],
     result: Entity<EditorState>,
     _changed: Subscription,
 }
@@ -193,7 +206,7 @@ pub(crate) struct ResolveSheet {
     root: PathBuf,
     operation_id: OperationId,
     item: ItemId,
-    title: Option<String>,
+    heading: Heading,
     origin: FocusHandle,
     services: Services,
     generations: Generations,
@@ -214,6 +227,8 @@ pub(crate) struct ResolveSheet {
     answer: Option<(ResultCode, String)>,
     /// Resume is offered: the resolution stopped after its checkpoint.
     stopped: bool,
+    /// A set is being kept, before its request is sent (review I-1).
+    submitting: bool,
     /// The resolve request the sheet follows, and the first attempt of it
     /// whose answer it has not yet taken.
     following: Option<(DesktopRequestId, u32)>,
@@ -241,7 +256,7 @@ impl ResolveSheet {
             root: opening.root,
             operation_id: opening.operation_id,
             item: opening.item,
-            title: opening.title,
+            heading: opening.heading,
             origin: opening.origin,
             services,
             generations: Generations::default(),
@@ -255,11 +270,17 @@ impl ResolveSheet {
             error: None,
             answer: None,
             stopped: false,
+            submitting: false,
             following: None,
             editors: Vec::new(),
             editors_stale: false,
             _subscriptions: subscriptions,
         };
+        // M-4: a store that did not open says so at once; nothing can be
+        // kept, so nothing is sent.
+        if let Err(error) = sheet.services.resolutions() {
+            sheet.error = Some(error.to_string());
+        }
         sheet.read_conflict(cx);
         sheet
     }
@@ -297,7 +318,7 @@ impl ResolveSheet {
                 if let Some(earlier) = &self.model {
                     model.keep_choices(earlier);
                 }
-                self.kept = self.kept_of(&model);
+                self.kept = self.kept_of(&model, cx);
                 self.model = Some(model);
                 self.not_read = None;
                 self.editors_stale = true;
@@ -361,17 +382,9 @@ impl ResolveSheet {
         let bodies: Vec<_> = paths
             .iter()
             .enumerate()
-            .filter_map(|(index, path)| {
-                let body = path.body()?;
-                Some((
-                    index,
-                    [body.base.clone(), body.mine.clone(), body.theirs.clone()],
-                    body.result.clone(),
-                ))
-            })
+            .filter_map(|(index, path)| Some((index, path.body()?.result.clone())))
             .collect();
-        for (path, sides, result) in bodies {
-            let columns = sides.map(|side| cx.new(|cx| ReadOnly::new(&side, window, cx)));
+        for (path, result) in bodies {
             let editor = crate::desktop::view::editor::open_editor(&result, window, cx);
             set_exact(&editor, &result, cx);
             let changed = cx.subscribe(&editor, move |sheet, _, event, cx| {
@@ -381,7 +394,6 @@ impl ResolveSheet {
             });
             self.editors.push(BodyEditors {
                 path,
-                columns,
                 result: editor,
                 _changed: changed,
             });
@@ -419,3 +431,15 @@ mod answer_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "conflict/sheet_tests.rs"]
 mod sheet_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "conflict/handoff_tests.rs"]
+mod handoff_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "conflict/review_tests.rs"]
+mod review_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "conflict/stale_tests.rs"]
+mod stale_tests;

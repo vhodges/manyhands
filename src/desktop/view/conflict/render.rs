@@ -4,27 +4,36 @@
 //! carry their words as labels, for the tests to read.
 
 use gpui_kit::{
-    AnyElement, App, ClickEvent, Context, ElementId, FontWeight, InteractiveElement, IntoElement,
+    AnyElement, App, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement,
     ParentElement, Render, StatefulInteractiveElement, Styled, TestSupportExt, Window,
     component::{
-        ActiveTheme, Disableable, Selectable, Sizable, WindowExt,
+        ActiveTheme, Disableable, Icon, Selectable, Sizable, WindowExt,
         button::{Button, ButtonVariants},
         h_flex, v_flex,
     },
     div, px,
 };
 
+use std::cell::Cell;
+
+use manyhands::repository::ItemDtoKind;
+
 use super::{
-    BodyEditors, CANCEL, CHOOSE_ONE, KEEPING_BOTH, KEEPING_EDITED, KEEPING_MINE, KEEPING_THEIRS,
-    LOST, NOT_READ, READ_AGAIN, READING, RESUME, RESUME_LEAD, RETRY, ResolveSheet, SAVE_RESOLUTION,
-    SETTLED, TAKEN_MINE, TAKEN_THEIRS,
+    BodyEditors, CANCEL, DESCRIPTION_LOCAL, DESCRIPTION_REMOTE, LOST, NOT_READ, READ_AGAIN,
+    READING, RESULT_NOTE, RESUME, RESUME_LEAD, RETRY, ResolveSheet, SAVE_RESOLUTION, SETTLED,
+    SheetSource,
 };
 use crate::desktop::{
+    assets::icon_path,
     keys::{RESOLVE_SHEET_CONTEXT, SaveResolution},
     model::conflict::{
-        BodyChoice, Choice, ConflictSet, PathConflict, PathResult, STANDARD_LAYOUT_NOTE,
+        BodyChoice, BodyPart, Choice, ConflictSet, PathConflict, PathResult, STANDARD_LAYOUT_NOTE,
     },
 };
+
+mod pieces;
+
+use pieces::{body_state, column, field_state, state, taken_words, text};
 
 /// What a part is called in its card: the body is the Description.
 const DESCRIPTION: &str = "Description";
@@ -35,29 +44,8 @@ const BEFORE: &str = "Before";
 const YOURS: &str = "Yours";
 const THEIRS: &str = "Theirs";
 const RESULT: &str = "Result";
-const NONE: &str = "(none)";
 /// An external set's card, until Task 12's guidance.
 const OUTSIDE: &str = "This file needs fixing outside Manyhands";
-
-/// A piece of text a test reads by `id`.
-fn text(
-    id: impl Into<ElementId>,
-    value: impl Into<String>,
-) -> gpui_kit::base::ObservedElement<gpui_kit::Stateful<gpui_kit::Div>> {
-    let value = value.into();
-    div()
-        .id(id)
-        .test_support()
-        .aria_label(value.clone())
-        .child(value)
-}
-
-fn taken_words(from: Choice) -> &'static str {
-    match from {
-        Choice::Mine => TAKEN_MINE,
-        Choice::Theirs => TAKEN_THEIRS,
-    }
-}
 
 impl ResolveSheet {
     fn on<F>(
@@ -76,25 +64,94 @@ impl ResolveSheet {
 
     fn header(&self, cx: &App) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
-        let title = match &self.title {
+        let title = match &self.heading.title {
             Some(title) => format!("Choose what to keep \u{b7} {title}"),
             None => "Choose what to keep".to_owned(),
         };
+        // Amber while parts wait for a choice, green once all are chosen.
         let progress = self.model.as_ref().and_then(|model| {
             matches!(model.set(), ConflictSet::Canonical(_)).then(|| {
                 let (chosen, of) = model.chosen();
-                text("conflict-progress", format!("{chosen} of {of} chosen")).text_sm()
+                let color = if chosen < of {
+                    cx.theme().warning
+                } else {
+                    cx.theme().success
+                };
+                text("conflict-progress", format!("{chosen} of {of} chosen"))
+                    .text_sm()
+                    .text_color(color)
             })
         });
+        let (icon, kind) = match self.heading.kind {
+            ItemDtoKind::Ticket => ("ticket", "ticket"),
+            ItemDtoKind::Document => ("file-text", "document"),
+        };
+        let description = match self.source {
+            SheetSource::Local => DESCRIPTION_LOCAL,
+            _ => DESCRIPTION_REMOTE,
+        };
+        let meta = h_flex()
+            .gap_2()
+            .items_center()
+            .child(
+                div()
+                    .id("conflict-kind")
+                    .test_support()
+                    .aria_label(kind)
+                    .child(Icon::default().path(icon_path(icon)).w(px(16.)).h(px(16.))),
+            )
+            .child(
+                text("conflict-short", self.heading.short.clone())
+                    .text_sm()
+                    .font_family("monospace"),
+            )
+            .child(
+                text("conflict-repository", self.heading.repository.clone())
+                    .text_sm()
+                    .text_color(muted),
+            )
+            .children(progress);
         v_flex()
             .gap_1()
             .child(text("conflict-title", title).font_weight(FontWeight::SEMIBOLD))
+            .child(text("conflict-description", description).text_sm())
+            .child(meta)
             .child(
                 text("conflict-note", self.source.note())
                     .text_sm()
                     .text_color(muted),
             )
-            .children(progress)
+    }
+
+    /// The footer's Git detail (handoff 2g): the conflicted paths and both
+    /// sides' commits, in mono, cut short when long.
+    fn git_line(&self, cx: &App) -> Option<impl IntoElement + use<>> {
+        let model = self.model.as_ref()?;
+        let paths: Vec<&str> = match model.set() {
+            ConflictSet::Canonical(paths) => paths.iter().map(PathConflict::display_path).collect(),
+            ConflictSet::External(paths) => paths
+                .iter()
+                .map(|path| path.display_path.as_str())
+                .collect(),
+            ConflictSet::Settled => return None,
+        };
+        let (ours, theirs) = model.parents();
+        let short = |oid: &str| oid.chars().take(8).collect::<String>();
+        Some(
+            text(
+                "conflict-git",
+                format!(
+                    "Git: conflict in {} \u{b7} ours {} \u{b7} theirs {}",
+                    paths.join(", "),
+                    short(ours),
+                    short(theirs),
+                ),
+            )
+            .text_xs()
+            .font_family("monospace")
+            .text_color(cx.theme().muted_foreground)
+            .truncate(),
+        )
     }
 
     /// The lines that say what happened: a notice, a store's error, an
@@ -152,9 +209,11 @@ impl ResolveSheet {
             ConflictSet::Canonical(paths) => {
                 let mut field = 0;
                 let mut taken = 0;
+                let line = Cell::new(0);
                 let mut cards = v_flex().gap_3();
                 for (index, path) in paths.iter().enumerate() {
-                    cards = cards.child(self.path_card(index, path, &mut field, &mut taken, cx));
+                    cards =
+                        cards.child(self.path_card(index, path, &mut field, &mut taken, &line, cx));
                 }
                 cards.into_any_element()
             }
@@ -185,6 +244,7 @@ impl ResolveSheet {
         path: &PathConflict,
         field: &mut usize,
         taken: &mut usize,
+        line: &Cell<usize>,
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
@@ -249,9 +309,9 @@ impl ResolveSheet {
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(column(("conflict-before", k), BEFORE, &part.base))
-                            .child(column(("conflict-yours", k), YOURS, &part.mine))
-                            .child(column(("conflict-theirs", k), THEIRS, &part.theirs)),
+                            .child(column(BEFORE, &part.base, None, line, cx))
+                            .child(column(YOURS, &part.mine, Some(&part.base), line, cx))
+                            .child(column(THEIRS, &part.theirs, Some(&part.base), line, cx)),
                     ),
             );
         }
@@ -259,7 +319,7 @@ impl ResolveSheet {
             path.body(),
             self.editors.iter().find(|editors| editors.path == index),
         ) {
-            card = card.child(self.body_card(index, body.choice, editors, cx));
+            card = card.child(self.body_card(index, body, editors, line, cx));
         }
         if let PathResult::Ready {
             normalized: true, ..
@@ -277,11 +337,13 @@ impl ResolveSheet {
     fn body_card(
         &self,
         index: usize,
-        choice: Option<BodyChoice>,
+        body: &BodyPart,
         editors: &BodyEditors,
+        line: &Cell<usize>,
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
         let border = cx.theme().border;
+        let choice = body.choice;
         let chooser = |id: &'static str, label: &'static str, kept: BodyChoice| {
             Button::new((id, index))
                 .label(label)
@@ -289,15 +351,7 @@ impl ResolveSheet {
                 .selected(choice == Some(kept))
                 .on_click(self.on(cx, move |sheet, _, cx| sheet.choose_body(index, kept, cx)))
         };
-        let [before, mine, theirs] = editors.columns.clone();
-        let side = |label: &'static str, editor| {
-            v_flex()
-                .flex_1()
-                .min_w_0()
-                .gap_1()
-                .child(div().text_xs().child(label))
-                .child(div().p_1().border_1().border_color(border).child(editor))
-        };
+        let base = Some(body.base.clone());
         v_flex()
             .gap_1()
             .p_2()
@@ -328,9 +382,21 @@ impl ResolveSheet {
             .child(
                 h_flex()
                     .gap_2()
-                    .child(side(BEFORE, before))
-                    .child(side(YOURS, mine))
-                    .child(side(THEIRS, theirs)),
+                    .child(column(BEFORE, &base, None, line, cx))
+                    .child(column(
+                        YOURS,
+                        &Some(body.mine.clone()),
+                        Some(&base),
+                        line,
+                        cx,
+                    ))
+                    .child(column(
+                        THEIRS,
+                        &Some(body.theirs.clone()),
+                        Some(&base),
+                        line,
+                        cx,
+                    )),
             )
             .child(div().text_xs().child(RESULT))
             .child(
@@ -342,6 +408,11 @@ impl ResolveSheet {
                     .border_color(border)
                     .rounded(px(4.))
                     .child(editors.result.clone()),
+            )
+            .child(
+                text(("conflict-result-note", index), RESULT_NOTE)
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground),
             )
     }
 
@@ -398,52 +469,6 @@ impl ResolveSheet {
     }
 }
 
-fn field_state(choice: Option<Choice>) -> &'static str {
-    match choice {
-        None => CHOOSE_ONE,
-        Some(Choice::Mine) => KEEPING_MINE,
-        Some(Choice::Theirs) => KEEPING_THEIRS,
-    }
-}
-
-fn body_state(choice: Option<BodyChoice>) -> &'static str {
-    match choice {
-        None => CHOOSE_ONE,
-        Some(BodyChoice::Mine) => KEEPING_MINE,
-        Some(BodyChoice::Theirs) => KEEPING_THEIRS,
-        Some(BodyChoice::Both) => KEEPING_BOTH,
-        Some(BodyChoice::Edited) => KEEPING_EDITED,
-    }
-}
-
-/// A part's state: amber while it waits for a choice, green once chosen.
-fn state(id: (&'static str, usize), words: &'static str, cx: &App) -> impl IntoElement {
-    let color = if words == CHOOSE_ONE {
-        cx.theme().warning
-    } else {
-        cx.theme().success
-    };
-    text(id, words).text_xs().text_color(color)
-}
-
-/// One side's value of a field, in mono text.
-fn column(
-    id: (&'static str, usize),
-    label: &'static str,
-    value: &Option<String>,
-) -> impl IntoElement {
-    v_flex()
-        .flex_1()
-        .min_w_0()
-        .gap_1()
-        .child(div().text_xs().child(label))
-        .child(
-            text(id, value.clone().unwrap_or_else(|| NONE.to_owned()))
-                .text_sm()
-                .font_family("monospace"),
-        )
-}
-
 impl Render for ResolveSheet {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.make_editors(window, cx);
@@ -458,6 +483,7 @@ impl Render for ResolveSheet {
             .child(self.header(cx))
             .child(self.status(cx))
             .child(self.cards(cx))
+            .children(self.git_line(cx))
             .child(self.buttons(cx))
     }
 }

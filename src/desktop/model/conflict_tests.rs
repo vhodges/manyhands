@@ -516,3 +516,6 @@ fn inspection_with(display_path: &str) -> LocalContextSyncInspectionDto {
 
 #[path = "conflict_parts_tests.rs"]
 mod parts;
+
+#[path = "conflict_local_tests.rs"]
+mod local;

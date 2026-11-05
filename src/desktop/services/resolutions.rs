@@ -26,7 +26,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use gpui_kit::{App, AsyncApp, Task};
 use manyhands::{
     canonical::ItemId,
     drafts::{DraftError, DraftErrorKind, folder::Folder},
@@ -36,9 +35,9 @@ use manyhands::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Backend, Services,
+    Backend,
     conflicts::ConflictSource,
-    requests::{DesktopRequestId, Intent, Lane, PathResolution},
+    requests::{Intent, PathResolution},
 };
 
 /// The folder's name in the data directory.
@@ -491,75 +490,11 @@ impl From<DraftError> for ResolutionStoreError {
     }
 }
 
-impl Services {
-    /// The kept sets' store, when it opened.
-    pub(crate) fn resolutions(&self) -> Option<&ResolutionStore> {
-        self.backend.resolutions().ok()
-    }
+mod submit;
 
-    /// Keeps `set`, then submits it under its own request ID, on the
-    /// background executor: nothing is sent when it could not be kept.
-    /// Dropping the task before it ends may leave the set kept and unsent;
-    /// the launch sweep deletes it, as the library has no record of it.
-    pub(crate) fn submit_resolution(
-        &self,
-        set: KeptSet,
-        cx: &mut App,
-    ) -> Task<Result<DesktopRequestId, ResolutionStoreError>> {
-        let backend = self.backend.clone();
-        let worker = self.worker.clone();
-        cx.background_executor().spawn(async move {
-            backend.resolutions()?.keep(&set)?;
-            Ok(worker.submit_with_request_id(set.intent(), Lane::User, set.request_id))
-        })
-    }
-}
+pub(super) use submit::{Ended, settle_finished, source_of, sweep_at_launch};
+pub(crate) use submit::{Followup, Followups};
 
-/// The launch sweep, on the background executor: `ResolutionStore::sweep`
-/// over the backend's store, when it opened.
-pub(super) fn sweep_at_launch(backend: &Arc<dyn Backend>, cx: &App) {
-    let backend = backend.clone();
-    cx.background_executor()
-        .spawn(async move {
-            if let Ok(store) = backend.resolutions() {
-                store.sweep(backend.as_ref());
-            }
-        })
-        .detach();
-}
-
-/// A resolution's request that has ended in the worker.
-pub(super) struct Ended {
-    pub request: RequestId,
-    pub source: ConflictSource,
-    /// The answer's code and checkpoint effect; `None` when the request
-    /// never reached the library (removed from the queue, or not sent).
-    pub answer: Option<(ResultCode, CheckpointEffect)>,
-}
-
-/// What each of `ended` means for its kept set, on the background
-/// executor.
-pub(super) fn settle_finished(backend: &Arc<dyn Backend>, ended: Vec<Ended>, cx: &AsyncApp) {
-    let backend = backend.clone();
-    cx.background_executor()
-        .spawn(async move {
-            if let Ok(store) = backend.resolutions() {
-                for ended in &ended {
-                    store.ended(backend.as_ref(), ended);
-                }
-            }
-        })
-        .detach();
-}
-
-/// Which kind of set `intent` submits, if it submits one.
-pub(super) fn source_of(intent: &Intent) -> Option<ConflictSource> {
-    match intent {
-        Intent::ConflictResolve { .. } => Some(ConflictSource::Remote),
-        Intent::LocalContextResolve { .. } => Some(ConflictSource::Local),
-        _ => None,
-    }
-}
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "resolutions_tests.rs"]
 mod tests;
@@ -571,3 +506,7 @@ mod answers_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "resolutions_format_tests.rs"]
 mod format_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "resolutions_lookup_tests.rs"]
+mod lookup_tests;
