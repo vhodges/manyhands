@@ -374,13 +374,20 @@ impl Services {
                         {
                             posted.push(PostEvent::ItemShared(root.clone(), item.clone()));
                         }
-                        // A resolution's end: its kept set goes once its
-                        // request is finished (R-12).
-                        if let WorkerEvent::Finished(id, _) = &event
-                            && let Some(request) = operations.request(*id)
-                            && resolutions::submits_a_set(&request.intent)
+                        // A resolution's end, for its kept set (R-12,
+                        // R-25): its answer, or that it never reached the
+                        // library.
+                        if let Some(request) = ended
+                            && let Some(source) = resolutions::source_of(&request.intent)
                         {
-                            settled.push(request.request_id);
+                            settled.push(resolutions::Ended {
+                                request: request.request_id,
+                                source,
+                                code: match &event {
+                                    WorkerEvent::Finished(_, envelope) => Some(envelope.code),
+                                    _ => None,
+                                },
+                            });
                         }
                         // A comment queued again under its own request.
                         if let WorkerEvent::Queued(request) = &event

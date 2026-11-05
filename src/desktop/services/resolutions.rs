@@ -8,10 +8,13 @@
 //! answer, after a restart too, sends the same set under the same request
 //! ID (P24).
 //!
-//! A set is deleted when its request is seen finished: after its answer
-//! (`Services::start`'s drain) and, at launch, by the sweep, which asks
-//! `show_request` of every kept set and deletes the finished ones and
-//! those the library has no record of.
+//! A set is deleted once nothing can finish with it (R-12, R-25): after
+//! its answer (`Services::start`'s drain), when an answer proves it, and,
+//! at launch, by the sweep, which asks `show_request` of every kept set.
+//! A finished request's set goes. One the library has no record of goes
+//! when it is local; a remote one is kept while its conflict still names
+//! its request as the unfinished attempt's (`ResolutionStore::settle`). A
+//! set kept under a request ID is never replaced by a different one.
 //!
 //! Nothing here derives `Debug` or `Display` over a set: it holds item text.
 //! The store's errors carry no path and no text, and say "resolutions
@@ -27,7 +30,7 @@ use gpui_kit::{App, AsyncApp, Task};
 use manyhands::{
     canonical::ItemId,
     drafts::{DraftError, DraftErrorKind, folder::Folder},
-    repository::{OperationId, RepositoryService, RequestId, RequestState},
+    repository::{OperationId, RequestId, RequestState},
     results::ResultCode,
 };
 use serde::{Deserialize, Serialize};
@@ -59,6 +62,9 @@ pub(crate) enum ResolutionStoreError {
     Access,
     /// The disk or the quota is full.
     NoSpace,
+    /// A different set is already kept under the request ID: a request is
+    /// only ever sent again with the set it was first sent with.
+    Differs,
     /// A kept file is not a set this version reads.
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
     Damaged,
@@ -73,6 +79,7 @@ impl fmt::Display for ResolutionStoreError {
             Self::ProtectionUnavailable => "The resolutions folder could not be protected.",
             Self::Access => "Access to the resolutions folder was denied.",
             Self::NoSpace => "There is no space left to keep the resolution.",
+            Self::Differs => "A different resolution is already kept for this request.",
             Self::Damaged => "A kept resolution could not be read.",
             Self::Io => "The resolutions folder could not be read or written.",
         })
@@ -241,12 +248,27 @@ impl ResolutionStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Writes `set` under its request ID, replacing any set kept under it.
+    /// Writes `set` under its request ID. A request is only ever sent
+    /// again with the set it was first sent with (the library answers
+    /// another input under the same ID `request_mismatch`), so keeping the
+    /// same set again changes nothing, and a different one under the same
+    /// ID is refused with `Differs`, the kept one left as it was. The
+    /// folder is held from the look to the write: no two keeps of this
+    /// process interleave.
     #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
     pub(crate) fn keep(&self, set: &KeptSet) -> Result<(), ResolutionStoreError> {
         let bytes = serde_json::to_vec(&Stored::of(set)).map_err(|_| ResolutionStoreError::Io)?;
-        self.folder().replace(&file_name(set.request_id), &bytes)?;
-        Ok(())
+        let name = file_name(set.request_id);
+        let mut folder = self.folder();
+        match folder.read(&name) {
+            Ok(kept) if kept == bytes => Ok(()),
+            Ok(_) => Err(ResolutionStoreError::Differs),
+            Err(error) if error.kind == DraftErrorKind::NotFound => {
+                folder.replace(&name, &bytes)?;
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// The set kept under `request`, if any.
@@ -284,22 +306,112 @@ impl ResolutionStore {
     }
 
     /// Asks `show_request` of `request` and deletes its set when the
-    /// request is finished or the library has no record of it. A failed
-    /// read keeps the set. True when the set was deleted.
-    pub(crate) fn settle(&self, service: &RepositoryService, request: RequestId) -> bool {
-        let shown = service.show_request(request);
+    /// request is finished, or when the library has no record of it and
+    /// nothing else can finish with the set:
+    ///
+    /// - a local set: a local resolution that stops owing keeps its record
+    ///   accepted, so no record means nothing stands;
+    /// - a remote set (R-25): a `conflict resolve` keeps no record on any
+    ///   stop, while its attempt, which only the same input finishes, may
+    ///   stand. Its set is kept while `show_conflict` of its operation names
+    ///   this request as the unfinished attempt's, and deleted once it does
+    ///   not;
+    /// - a set that no longer reads (`Damaged`): no request can be sent
+    ///   with it.
+    ///
+    /// Any failed read keeps the set. True when the set was deleted.
+    pub(crate) fn settle(&self, backend: &dyn Backend, request: RequestId) -> bool {
+        let shown = backend.service().show_request(request);
         let over = match &shown.data {
             Some(record) => record.state == RequestState::Finished,
-            None => shown.code == ResultCode::RequestNotFound,
+            None if shown.code == ResultCode::RequestNotFound => match self.kept(request) {
+                Ok(Some(set)) => match set.source {
+                    ConflictSource::Local => true,
+                    ConflictSource::Remote => !attempt_stands(backend, &set),
+                },
+                Ok(None) | Err(ResolutionStoreError::Damaged) => true,
+                Err(_) => false,
+            },
+            None => false,
         };
         over && self.forget(request).is_ok()
     }
 
     /// The launch sweep: `settle` of every kept set.
-    pub(crate) fn sweep(&self, service: &RepositoryService) {
+    pub(crate) fn sweep(&self, backend: &dyn Backend) {
         for request in self.requests().unwrap_or_default() {
-            self.settle(service, request);
+            self.settle(backend, request);
         }
+    }
+
+    /// What a resolution's end means for its kept set (R-12, R-25).
+    ///
+    /// A remote answer is read as it is, since the request keeps no record
+    /// on any stop (`bind/conflict.rs` `call`): the set goes on an answer
+    /// that ends the attempt or proves this request has none
+    /// (`remote_answer_ends_the_attempt`), and is kept on any other, for
+    /// the launch sweep to settle. A local answer, and a request that
+    /// never reached the library, are settled from the library's state.
+    fn ended(&self, backend: &dyn Backend, ended: &Ended) {
+        match (ended.source, ended.code) {
+            (ConflictSource::Remote, Some(code)) => {
+                if remote_answer_ends_the_attempt(code) {
+                    let _ = self.forget(ended.request);
+                }
+            }
+            _ => {
+                self.settle(backend, ended.request);
+            }
+        }
+    }
+}
+
+/// Whether a remote resolution answered `code` leaves no attempt that this
+/// request's set could still finish (R-25; `bind/conflict.rs`):
+///
+/// - `ok` and `already_applied`: the resolution is checkpointed and
+///   published (`continued`);
+/// - `cancelled`: the call's token stopped it after the checkpoint, the
+///   synchronization left resolved for `operation resume` (`continued`);
+/// - `original_request_required`: another request's attempt stands and
+///   this one has none. It is answered before this request owns an
+///   attempt (`fresh`, step 3), or after a refused supersede, once the
+///   request is disowned of the attempt the domain never recorded.
+///
+/// Every other code is kept: `external_change`, `invalid_input`,
+/// `identity_required` and `recovery_required` are also answered on a
+/// retry whose attempt has written paths and stands (`resolve`, the
+/// `PathsApplying` and `RecoveryRequired` phases, through `reported`),
+/// and a failure's effects show only what that call moved (`effects_of`),
+/// so the answer cannot tell them from a refusal before any write.
+fn remote_answer_ends_the_attempt(code: ResultCode) -> bool {
+    matches!(
+        code,
+        ResultCode::Ok
+            | ResultCode::AlreadyApplied
+            | ResultCode::Cancelled
+            | ResultCode::OriginalRequestRequired
+    )
+}
+
+/// Whether `show_conflict` of the set's operation names the set's request
+/// as the owner of its unfinished attempt. A read that fails, or a
+/// repository that no longer resolves, counts as standing. A test's canned
+/// conflict of that operation stands in place of the library's, as for the
+/// sheet's reads.
+fn attempt_stands(backend: &dyn Backend, set: &KeptSet) -> bool {
+    let service = backend.service();
+    let Ok(repository) = service.resolve_repository(&set.root) else {
+        return true;
+    };
+    let read = service.show_conflict(&repository, set.operation_id);
+    let read = match backend.after_conflict_read(&set.operation_id) {
+        Some(conflict) => Ok(conflict),
+        None => read.map_err(|_| ()),
+    };
+    match read {
+        Ok(conflict) => conflict.request_id.as_deref() == Some(&set.request_id.to_string()),
+        Err(()) => true,
     }
 }
 
@@ -350,35 +462,48 @@ pub(super) fn sweep_at_launch(backend: &Arc<dyn Backend>, cx: &App) {
     cx.background_executor()
         .spawn(async move {
             if let Ok(store) = backend.resolutions() {
-                store.sweep(backend.service());
+                store.sweep(backend.as_ref());
             }
         })
         .detach();
 }
 
-/// `ResolutionStore::settle` of each of `requests`, whose resolutions
-/// have just answered, on the background executor.
-pub(super) fn settle_finished(backend: &Arc<dyn Backend>, requests: Vec<RequestId>, cx: &AsyncApp) {
+/// A resolution's request that has ended in the worker.
+pub(super) struct Ended {
+    pub request: RequestId,
+    pub source: ConflictSource,
+    /// The answer's code; `None` when the request never reached the
+    /// library (removed from the queue, or not sent).
+    pub code: Option<ResultCode>,
+}
+
+/// What each of `ended` means for its kept set, on the background
+/// executor.
+pub(super) fn settle_finished(backend: &Arc<dyn Backend>, ended: Vec<Ended>, cx: &AsyncApp) {
     let backend = backend.clone();
     cx.background_executor()
         .spawn(async move {
             if let Ok(store) = backend.resolutions() {
-                for request in requests {
-                    store.settle(backend.service(), request);
+                for ended in &ended {
+                    store.ended(backend.as_ref(), ended);
                 }
             }
         })
         .detach();
 }
 
-/// Whether `intent` submits a kept set.
-pub(super) fn submits_a_set(intent: &Intent) -> bool {
-    matches!(
-        intent,
-        Intent::ConflictResolve { .. } | Intent::LocalContextResolve { .. }
-    )
+/// Which kind of set `intent` submits, if it submits one.
+pub(super) fn source_of(intent: &Intent) -> Option<ConflictSource> {
+    match intent {
+        Intent::ConflictResolve { .. } => Some(ConflictSource::Remote),
+        Intent::LocalContextResolve { .. } => Some(ConflictSource::Local),
+        _ => None,
+    }
 }
-
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "resolutions_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "resolutions_answers_tests.rs"]
+mod answers_tests;

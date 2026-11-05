@@ -33,10 +33,13 @@ use crate::desktop::{
     },
 };
 
-const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
+pub(super) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
 const SENTINEL: &str = "SENTINEL-D5-RESOLUTION-3b9d";
 
-fn start(fixture: &Fixture, cx: &mut TestAppContext) -> (Arc<DelayingBackend>, Services) {
+pub(super) fn start(
+    fixture: &Fixture,
+    cx: &mut TestAppContext,
+) -> (Arc<DelayingBackend>, Services) {
     cx.executor().allow_parking();
     let backend = fixture.delaying_backend();
     let services = cx.update(|cx| Services::start(backend.clone(), cx).without_launch_refresh());
@@ -46,7 +49,12 @@ fn start(fixture: &Fixture, cx: &mut TestAppContext) -> (Arc<DelayingBackend>, S
 
 /// A set of `source` for `operation` of the ticket `TICKET`, whose one
 /// path's result is `text`.
-fn a_set(root: &Path, operation: OperationId, source: ConflictSource, text: &str) -> KeptSet {
+pub(super) fn a_set(
+    root: &Path,
+    operation: OperationId,
+    source: ConflictSource,
+    text: &str,
+) -> KeptSet {
     KeptSet {
         request_id: RequestId::new(),
         root: root.to_owned(),
@@ -63,7 +71,7 @@ fn a_set(root: &Path, operation: OperationId, source: ConflictSource, text: &str
 
 /// A real local conflict of `TICKET` in `root`, and the set that keeps
 /// mine for its one path, with the inspection's observation (R-11).
-fn a_local_resolution(fixture: &Fixture, root: &Path) -> KeptSet {
+pub(super) fn a_local_resolution(fixture: &Fixture, root: &Path) -> KeptSet {
     let operation = fixture.conflict_locally(root, TICKET, "Mine", "Theirs");
     let (inspection, contents) = fixture.read_local_conflict(root, operation);
     KeptSet {
@@ -84,7 +92,7 @@ fn a_local_resolution(fixture: &Fixture, root: &Path) -> KeptSet {
 }
 
 /// Every field of `set`, as text, for comparing two sets.
-fn fields(set: &KeptSet) -> Vec<String> {
+pub(super) fn fields(set: &KeptSet) -> Vec<String> {
     let mut fields = vec![
         set.request_id.to_string(),
         set.root.display().to_string(),
@@ -100,18 +108,22 @@ fn fields(set: &KeptSet) -> Vec<String> {
     fields
 }
 
-fn kept(store: &ResolutionStore, request: RequestId) -> Option<Vec<String>> {
+pub(super) fn kept(store: &ResolutionStore, request: RequestId) -> Option<Vec<String>> {
     store.kept(request).unwrap().as_ref().map(fields)
 }
 
 /// How long a real resolution may take. Alone it takes half a second;
 /// under the whole desktop suite its writing and indexing have taken
 /// over twenty, past the harness's `WAIT`.
-const RESOLVING: Duration = Duration::from_secs(90);
+pub(super) const RESOLVING: Duration = Duration::from_secs(90);
 
 /// Waits until `done` holds, letting the foreground and the background
 /// run between looks.
-async fn until(cx: &mut TestAppContext, what: &str, done: impl Fn(&TestAppContext) -> bool) {
+pub(super) async fn until(
+    cx: &mut TestAppContext,
+    what: &str,
+    done: impl Fn(&TestAppContext) -> bool,
+) {
     let deadline = Instant::now() + RESOLVING;
     loop {
         cx.run_until_parked();
@@ -125,7 +137,7 @@ async fn until(cx: &mut TestAppContext, what: &str, done: impl Fn(&TestAppContex
 
 /// Waits until the request `id` has its answer, then lets what follows
 /// it run.
-async fn finished(services: &Services, id: DesktopRequestId, cx: &mut TestAppContext) {
+pub(super) async fn finished(services: &Services, id: DesktopRequestId, cx: &mut TestAppContext) {
     until(cx, "the request's answer", |cx| {
         services.operations().read_with(cx, |operations, _| {
             operations
@@ -286,8 +298,8 @@ async fn a_set_is_deleted_when_its_request_finishes(cx: &mut TestAppContext) {
 }
 
 /// Decision 19: two requests for the same operation keep a set each;
-/// keeping again under one ID replaces only that one, and forgetting one
-/// leaves the other.
+/// keeping the same set again changes nothing, a different set is never
+/// kept over it (M-2), and forgetting one leaves the other.
 #[gpui_kit::test]
 fn sets_are_kept_per_request_id(_cx: &mut TestAppContext) {
     let fixture = Fixture::new();
@@ -305,14 +317,22 @@ fn sets_are_kept_per_request_id(_cx: &mut TestAppContext) {
     assert_eq!(kept(&store, first.request_id), Some(fields(&first)));
     assert_eq!(kept(&store, second.request_id), Some(fields(&second)));
 
-    second.resolutions[0].source = "Second, chosen again".to_owned();
+    // M-2: the same set again is kept as it is; a different one under the
+    // same ID is refused, and the kept one stands.
     store.keep(&second).unwrap();
     assert_eq!(kept(&store, second.request_id), Some(fields(&second)));
+    let kept_second = fields(&second);
+    second.resolutions[0].source = "Second, chosen again".to_owned();
+    assert!(matches!(
+        store.keep(&second),
+        Err(ResolutionStoreError::Differs)
+    ));
+    assert_eq!(kept(&store, second.request_id), Some(kept_second.clone()));
     assert_eq!(kept(&store, first.request_id), Some(fields(&first)));
 
     store.forget(first.request_id).unwrap();
     assert_eq!(kept(&store, first.request_id), None);
-    assert_eq!(kept(&store, second.request_id), Some(fields(&second)));
+    assert_eq!(kept(&store, second.request_id), Some(kept_second));
     store.forget(first.request_id).unwrap();
     assert_eq!(store.requests().unwrap(), vec![second.request_id]);
 }
@@ -354,6 +374,7 @@ async fn a_set_has_no_debug_and_never_reaches_a_message(cx: &mut TestAppContext)
         ResolutionStoreError::Access,
         ResolutionStoreError::NoSpace,
         ResolutionStoreError::Damaged,
+        ResolutionStoreError::Differs,
         ResolutionStoreError::Io,
     ] {
         let words = error.to_string();
@@ -383,8 +404,8 @@ async fn a_set_has_no_debug_and_never_reaches_a_message(cx: &mut TestAppContext)
 }
 
 /// R-12's launch sweep: `show_request` of every kept set at start; a
-/// finished request's set and one the library has no record of are
-/// deleted, an accepted one's is kept for its Retry.
+/// finished request's set and a local one the library has no record of
+/// are deleted, an accepted one's is kept for its Retry.
 #[gpui_kit::test]
 async fn the_launch_sweep_deletes_finished_and_unknown_sets(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -414,11 +435,12 @@ async fn the_launch_sweep_deletes_finished_and_unknown_sets(cx: &mut TestAppCont
         shown.data.map(|request| request.state),
         Some(LibraryState::Accepted)
     );
-    // A request the library never saw.
+    // A local request the library never saw. A remote one is kept while
+    // its conflict names it (R-25; `resolutions_answers_tests`).
     let unknown = a_set(
         &nowhere,
         OperationId::new(),
-        ConflictSource::Remote,
+        ConflictSource::Local,
         "Unknown",
     );
     for set in [&done, &accepted, &unknown] {
