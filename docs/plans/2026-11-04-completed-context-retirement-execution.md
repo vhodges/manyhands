@@ -373,6 +373,7 @@ are not authorized; numeric exits must come from existing results registry.
 | Limited branch-only final SPEC pass through `2f06ac72`, increment base `b1a986c2` | Same reviewer `ses_e564dd7a7ffeYzKXesoyVuGJFs` verified S1–S4 and the contention delta: **0 Blocking/0 Important/0 Minor**. Preselection Busy stays retryable; postselection same-live permit loss uses guarded Final ExternalChange with no effects | Limited branch-only SPEC approved; no full Task 2 completion |
 | Limited branch-only final QUALITY pass through `2f06ac72`, same base, after SPEC | Same reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/Blocking/0 Important/0 Minor**. Fresh original authenticated probe confirms uncontended success, contended stable no-effect refusal, completed parent/result and zero residual pins/intents | Limited branch-only QUALITY approved. Controller inspected original probe and final static logs; Windows/native and deferred recovery/instance/source/batch scopes remain unverified |
 | Fresh-present runtime increment, base `7fde7e5f` | Connected durable marker selection/install/verification and guarded W prune → B retirement, with fresh receipt/proof/D14/index/Z; local evidence below | **Limited SPEC then QUALITY pending before further expansion**. Earlier approvals intact; not full Task 2 approval/completion |
+| Limited fresh-present SPEC at `9a932ae4`, same increment base | Controller accepts **2 Important current-producer defects**: P1 selected admin Git operation locks omitted; P2 other/root checkout HEAD syntax/direct-binding/existence not fully checked before W prune | SPEC **failed**, Quality **held**. Retirement-only additive correction and RED→GREEN/local gates below; **same SPEC re-review then Quality pending**, no authority expansion |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -395,9 +396,10 @@ are not authorized; numeric exits must come from existing results registry.
    both passed through `2f06ac72` from base `b1a986c2` with no remaining findings,
    including the cleanup-lease correction and preserved S1–S4 protections.
   Fresh-present selection/install/prune → branch/index is now connected in the
-  next bounded increment from `7fde7e5f`, **limited SPEC/QUALITY not yet run**.
-  Latest gates: **72** context-retirement tests (prior 66 unchanged + 6 private
-  protocol controls), **36** registered retirement SSH cases (prior 24 + 12).
+  next bounded increment from `7fde7e5f`. Limited SPEC at `9a932ae4` failed P1/P2;
+  the locally verified correction awaits **same SPEC re-review then QUALITY**.
+  Latest gates: **73** context-retirement tests and **44** registered retirement
+  SSH cases (prior 72/36 unchanged; +1 root-HEAD unit and +8 P1/P2 SSH cases).
   Authorized executor replacement/recovery and source/batch scopes remain
   unfinished/closed; all 44 matrix obligations stay explicitly tracked.
   Full Task 2 spec/quality review remains owed; no full completion claimed.
@@ -410,8 +412,8 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: controller's limited **SPEC then QUALITY** review of the
-fresh-present reachable producer from `7fde7e5f` before further expansion.
+Immediate next step: controller's **same limited SPEC re-review then QUALITY**
+of the corrected fresh-present producer from `7fde7e5f` before further expansion.
 Authorized replacement/reentry, owned-absence recovery and source/batch work
 remain owed; no such producer is enabled by this increment.
 Prior corrections, design and initial-absence approvals remain intact; no new
@@ -2385,3 +2387,68 @@ there is no unprivileged Windows directory-fsync guarantee or runtime/cross-comp
 evidence here. Linux evidence only; no stronger arbitrary-writer/inode-CAS or
 power-loss claim. No push, agents, status/PR/main integration/closure/native CI,
 other-worktree or real-context/key/profile/draft action; no Task 3/4 behavior.
+
+## Task 2 Correction Delta — Fresh-Present SPEC P1/P2
+
+Parent/source **`9a932ae42eaa278bd417b7fd586d65bba2032e3e`**; increment review
+base remains **`7fde7e5f932481f99db57e6af3008e8f7cda9815`**, full Task 2 base
+`7b1912d1`. Fresh fetch/merge was already up to date at `c69789d9`; no rebase.
+Controller accepted both Important findings as approved-contract defects; Quality
+is held. **Local correction only, same SPEC re-review then QUALITY still pending.**
+
+- **P1:** retirement identity now requires no-follow absence of every `*.lock`
+  slot recursively in the selected admin, including index/HEAD/config/pseudoref
+  and ref/log namespaces. Only names/metadata are inspected; redirects and lock
+  nodes are preserved, never followed/repaired/deleted. Seven regular lock names
+  run at initial selection and after durable W intent, plus symlink/directory slots.
+- **P2:** private retirement-only complete HEAD validator checks syntax, no-follow
+  symbolic-ref storage, direct nonzero binding and existing commit for root and
+  every registration. Only the exact selected admin at the expected direct context
+  binding/tip is exempted from the no-target-checkout rule; malformed or indirect
+  target aliases refuse before W removal. Valid unrelated checkout stays eligible.
+  Both guards flow through `identity` at capture/install/revalidation and the
+  existing **immediate pre-prune callback**. Ordinary cleanup/release is unchanged.
+- New negative journeys compare full resource and non-TF/Z registry images,
+  preserve old materialization, require W/B None and no removed/B intents, release
+  pins and replay stably without advertisement after repair. Initial refusals are
+  Final RecoveryRequired; known-uninvoked final W refusals are Final ExternalChange
+  with exactly one truthful `changed` W intent. Prior post-prune Owed tests pass
+  unchanged; no possible/observed W debt is reset by this correction.
+
+All logs use `/tmp/opencode/task2-present-spec-<suffix>.log`; SSH cases registered
+before filtering. Compile-success behavioral evidence (no expectation rewrites):
+
+| Command suffix after `devenv shell -- cargo test --all-features --locked` | RED suffix/result | GREEN suffix/result |
+| --- | --- | --- |
+| `--test mutation_remote retirement_present_p1_` | `p1-red`: **0 passed / 3 failed SSH**, initial/final resources removed | `p1-green`: **3 SSH passed**, all regular/redirected fixtures |
+| `--test mutation_remote retirement_present_p2_` | `p2-red`: **1 passed / 4 failed SSH**, malformed/actual indirect-target HEADs allowed W prune; valid-other control passed | `p2-green`: **5 SSH passed** |
+| `--lib retirement_instance_p2_` | `p2-root-red`: **0 passed / 1 failed** | `p2-root-green`: **1 passed**, malformed/indirect/missing ref/missing detached commit |
+
+Final source frozen after formatting; all Cargo commands serial through Devenv
+with no deadlines or overlapping test binaries. Only ledger/comment edits follow.
+
+| Final command | Log suffix | Result |
+| --- | --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | `check-final` | exit 0 |
+| `devenv shell -- cargo fmt --check` | `fmt-final` | exit 0 |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy-final` | exit 0 |
+| test prefix above + `--lib context_retirement` | `context-final` | **73 passed** |
+| test prefix above + `--test mutation_remote retirement_` | `ssh-final` | **44 SSH passed**, nonzero registration confirmed |
+| test prefix above + `--lib cleanup` | `cleanup-final` | **50 passed** |
+
+Only `instance.rs`, additive `instance_tests.rs` and SSH retirement tests changed;
+prior 72 units/36 SSH, proof, cleanup/release and existing expectations untouched.
+Frozen correction diff against `9a932ae4`, SHA-256
+`cad4bd43db35e7dc21c6f56a068d8c339b6009e7260d1ec48c8fcc5c235da6b3`.
+Unaffected broad gates were not repeated; their earlier evidence belongs to
+`9a932ae4`. Checkpoint **`01M6NDNZR4XX7J2BQFS25J0M8N`**, parent
+**`01M6NBKGTF0C3A8E7MNCAXCZHX`**, actual UTC **`2026-11-05T08:37:23Z`**.
+
+**All 01–44 acceptance obligations remain tracked**; 44 SSH cases do not complete
+44 matrix rows. Public reentry/request-executor-O replacement, metadata-only
+owned-absence recovery, remaining failure matrices and source/batch mechanisms
+listed above remain owed. No Task 2 completion/independent approval claim or Task
+3/4 expansion. Linux-only evidence: no Windows/native runtime or cross-compilation
+claim; prior durability disclosure/conservative missing-token refusal preserved.
+No agents, push, ticket-status/PR/main integration/closure/native CI, other-worktree
+edits or real-context/key/profile/draft action.

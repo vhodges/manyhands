@@ -153,6 +153,39 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         "retirement_present_incomplete_or_ambiguous_materialization_refuses_before_prune",
         present_materialization_refusal,
     ),
+    (
+        "retirement_present_p1_initial_git_locks_preserve_resources",
+        p1_initial_locks,
+    ),
+    (
+        "retirement_present_p1_final_git_locks_are_no_effect",
+        p1_final_locks,
+    ),
+    #[cfg(unix)]
+    (
+        "retirement_present_p1_redirected_lock_slots_are_preserved",
+        p1_redirected_locks,
+    ),
+    (
+        "retirement_present_p2_initial_malformed_other_head_refuses",
+        p2_initial_malformed,
+    ),
+    (
+        "retirement_present_p2_final_malformed_other_head_refuses",
+        p2_final_malformed,
+    ),
+    (
+        "retirement_present_p2_initial_indirect_target_head_refuses",
+        p2_initial_indirect,
+    ),
+    (
+        "retirement_present_p2_final_indirect_target_head_refuses",
+        p2_final_indirect,
+    ),
+    (
+        "retirement_present_p2_valid_other_checkout_allows_prune",
+        p2_valid_other,
+    ),
 ];
 
 fn setup() -> Result<World, FixtureError> {
@@ -1793,6 +1826,294 @@ fn present_materialization_refusal() -> Result<(), FixtureError> {
         w.privacy()?;
     }
     Ok(())
+}
+
+fn p1_initial_locks() -> Result<(), FixtureError> {
+    p1_locks(false)
+}
+fn p1_final_locks() -> Result<(), FixtureError> {
+    p1_locks(true)
+}
+fn p1_locks(final_boundary: bool) -> Result<(), FixtureError> {
+    for member in [
+        "index.lock",
+        "HEAD.lock",
+        "config.worktree.lock",
+        "ORIG_HEAD.lock",
+        "FETCH_HEAD.lock",
+        "refs/worktree/private.lock",
+        "logs/HEAD.lock",
+    ] {
+        pre_prune_refusal(
+            final_boundary,
+            move |w| {
+                let path = w
+                    .repo()
+                    .unwrap()
+                    .commondir()
+                    .join("worktrees")
+                    .join(ITEM)
+                    .join(member);
+                Box::new(move || {
+                    fs::create_dir_all(path.parent().unwrap()).unwrap();
+                    fs::write(path, b"pending Git writer fixture bytes").unwrap();
+                })
+            },
+            move |w| {
+                let path = w
+                    .repo()
+                    .unwrap()
+                    .commondir()
+                    .join("worktrees")
+                    .join(ITEM)
+                    .join(member);
+                assert_eq!(
+                    fs::read(&path).unwrap(),
+                    b"pending Git writer fixture bytes"
+                );
+                fs::remove_file(path).unwrap();
+            },
+        )?;
+    }
+    Ok(())
+}
+#[cfg(unix)]
+fn p1_redirected_locks() -> Result<(), FixtureError> {
+    for final_boundary in [false, true] {
+        for directory in [false, true] {
+            pre_prune_refusal(
+                final_boundary,
+                move |w| {
+                    let path = w
+                        .repo()
+                        .unwrap()
+                        .commondir()
+                        .join("worktrees")
+                        .join(ITEM)
+                        .join("index.lock");
+                    let backing = w.data().join("foreign-lock-fixture");
+                    fs::write(&backing, b"preserved foreign writer bytes").unwrap();
+                    Box::new(move || {
+                        if directory {
+                            fs::create_dir(path).unwrap();
+                        } else {
+                            std::os::unix::fs::symlink(backing, path).unwrap();
+                        }
+                    })
+                },
+                move |w| {
+                    let path = w
+                        .repo()
+                        .unwrap()
+                        .commondir()
+                        .join("worktrees")
+                        .join(ITEM)
+                        .join("index.lock");
+                    assert_eq!(
+                        fs::read(w.data().join("foreign-lock-fixture")).unwrap(),
+                        b"preserved foreign writer bytes"
+                    );
+                    if directory {
+                        fs::remove_dir(path).unwrap();
+                    } else {
+                        assert!(
+                            fs::symlink_metadata(&path)
+                                .unwrap()
+                                .file_type()
+                                .is_symlink()
+                        );
+                        fs::remove_file(path).unwrap();
+                    }
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+const OTHER_BRANCH: &str = "refs/heads/retirement-other";
+fn add_other_checkout(w: &World) -> (std::path::PathBuf, std::path::PathBuf) {
+    let repo = w.repo().unwrap();
+    let tip = repo.head().unwrap().target().unwrap();
+    let reference = repo
+        .reference(OTHER_BRANCH, tip, false, "unrelated fixture checkout")
+        .unwrap();
+    let path = w.root.join(".manyhands/worktrees/unrelated-checkout");
+    repo.worktree(
+        "retirement-other",
+        &path,
+        Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
+    )
+    .unwrap();
+    (path, repo.commondir().join("worktrees/retirement-other"))
+}
+fn p2_initial_malformed() -> Result<(), FixtureError> {
+    p2_invalid_head(false, false)
+}
+fn p2_final_malformed() -> Result<(), FixtureError> {
+    p2_invalid_head(true, false)
+}
+fn p2_initial_indirect() -> Result<(), FixtureError> {
+    p2_invalid_head(false, true)
+}
+fn p2_final_indirect() -> Result<(), FixtureError> {
+    p2_invalid_head(true, true)
+}
+fn p2_invalid_head(final_boundary: bool, indirect: bool) -> Result<(), FixtureError> {
+    pre_prune_refusal(
+        final_boundary,
+        move |w| {
+            let (_, admin) = add_other_checkout(w);
+            let head = admin.join("HEAD");
+            let root = w.root.clone();
+            Box::new(move || {
+                let data = if indirect {
+                    let git = git2::Repository::open(root).unwrap();
+                    let alias = git
+                        .reference_symbolic(
+                            "refs/heads/retirement-alias",
+                            CONTEXT,
+                            false,
+                            "target alias fixture",
+                        )
+                        .unwrap();
+                    assert_eq!(alias.symbolic_target(), Some(CONTEXT));
+                    b"ref: refs/heads/retirement-alias\n".as_slice()
+                } else {
+                    b"invalid\n".as_slice()
+                };
+                fs::write(head, data).unwrap();
+            })
+        },
+        move |w| {
+            fs::write(
+                w.repo()
+                    .unwrap()
+                    .commondir()
+                    .join("worktrees/retirement-other/HEAD"),
+                format!("ref: {OTHER_BRANCH}\n"),
+            )
+            .unwrap();
+        },
+    )
+}
+fn p2_valid_other() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    let (other, admin) = add_other_checkout(&w);
+    history(&w, true)?;
+    let other_before = resource_image(&other);
+    let admin_before = resource_image(&admin);
+    let tip = fixed(w.repo()?.refname_to_id(OTHER_BRANCH))?;
+    let report = retire(&w, request(&w))?;
+    assert_eq!(report.outcome, RetirementDisposition::Retired);
+    assert_eq!(report.worktree_removal, RetirementRemoval::Observed);
+    assert_eq!(report.branch_removal, RetirementRemoval::Observed);
+    assert!(resource_image(&other) == other_before);
+    assert!(resource_image(&admin) == admin_before);
+    assert_eq!(fixed(w.repo()?.refname_to_id(OTHER_BRANCH))?, tip);
+    w.privacy()
+}
+
+// Shared negative journey: capture all resource and registry rows at the actual
+// initial/final boundary, allowing only the exact metadata-only TF/Z changes.
+fn pre_prune_refusal(
+    final_boundary: bool,
+    make_fault: impl FnOnce(&World) -> Box<dyn FnOnce()>,
+    repair: impl FnOnce(&World),
+) -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let materialization = complete_materialization(&w)?;
+    let request = request(&w);
+    let root = w.root.clone();
+    let data = w.data();
+    let fault = make_fault(&w);
+    let captured = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let snapshot = captured.clone();
+    let fault = move || {
+        fault();
+        let db = rusqlite::Connection::open(data.join(REGISTRY_FILE)).unwrap();
+        *snapshot.borrow_mut() = Some((resource_image(&root), registry_image(&db)));
+    };
+    if final_boundary {
+        RepositoryService::set_retirement_worktree_hook_for_testing(fault);
+    } else {
+        fault();
+    }
+    let outcome = fixed(w.service.retire_context_authenticated(
+        request.clone(),
+        w.primary().approval,
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    let captured = captured.borrow();
+    let (resources, registry) = captured.as_ref().unwrap();
+    ssh_harness::observation(&[
+        501,
+        final_boundary as u128,
+        matches!(&outcome,ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Refused)
+            as u128,
+        (resource_image(&w.root) == *resources) as u128,
+    ]);
+    let expected = if final_boundary {
+        ResultCode::ExternalChange
+    } else {
+        ResultCode::RecoveryRequired
+    };
+    assert!(
+        matches!(&outcome,ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Refused && r.code==expected && r.worktree_removal==RetirementRemoval::None && r.branch_removal==RetirementRemoval::None && !r.materialization_settled)
+    );
+    assert!(
+        resource_image(&w.root) == *resources,
+        "no prune, ref or marker rewrite at a refused boundary"
+    );
+    let after = registry_image(&w.db()?);
+    for (table, rows) in registry {
+        if ![
+            "operation_records",
+            "context_retirement_records",
+            "context_retirement_attempts",
+            "context_retirement_effect_intents",
+            "retirement_observation_pins",
+            "retirement_observation_pin_releases",
+        ]
+        .contains(&table.as_str())
+        {
+            assert!(
+                after.get(table) == Some(rows),
+                "unrelated row image must remain unchanged"
+            );
+        }
+    }
+    let db = w.db()?;
+    assert_eq!(fixed(db.query_row("SELECT count(*) FROM context_retirement_effect_intents WHERE resource='worktree' AND observation='changed'",[],|r|r.get::<_,i64>(0)))?,i64::from(final_boundary));
+    assert_eq!(fixed(db.query_row("SELECT count(*) FROM context_retirement_effect_intents WHERE observation='removed' OR resource='branch'",[],|r|r.get::<_,i64>(0)))?,0);
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT count(*) FROM retirement_observation_pins",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert_materialization(&w, &materialization)?;
+    repair(&w);
+    let resources = resource_image(&w.root);
+    let registry = registry_image(&db);
+    let commands = w.server.commands();
+    assert_eq!(
+        fixed(w.service.retire_context_authenticated(
+            request,
+            w.primary().approval,
+            &mut SessionCredentials::new(Provider)
+        ))?,
+        outcome
+    );
+    assert!(resource_image(&w.root) == resources);
+    assert!(registry_image(&db) == registry);
+    assert_eq!(w.server.commands(), commands);
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
 }
 fn resource_image(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, ResourceNode> {
     fn visit(

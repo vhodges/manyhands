@@ -281,3 +281,38 @@ fn retirement_instance_symlink_directory_and_hardlink_collisions_preserved() {
         });
     }
 }
+
+#[test]
+fn retirement_instance_p2_root_head_requires_valid_direct_existing_binding() {
+    for head in [
+        "invalid\n",
+        "ref: refs/heads/retirement-alias\n",
+        "ref: refs/heads/missing\n",
+        "1111111111111111111111111111111111111111\n",
+    ] {
+        let f = Fixture::new();
+        let git = f.git();
+        let tip = git
+            .refname_to_id(&format!("refs/heads/manyhands/ticket/{ID}"))
+            .unwrap();
+        let cleanup = ContextCleanup::acquire(&f.request.root).unwrap();
+        git.reference_symbolic(
+            "refs/heads/retirement-alias",
+            &format!("refs/heads/manyhands/ticket/{ID}"),
+            false,
+            "root alias fixture",
+        )
+        .unwrap();
+        std::fs::write(git.path().join("HEAD"), head).unwrap();
+        assert!(
+            identity(&git, &f.request, tip).is_err(),
+            "uncertain root HEAD must refuse before pruning"
+        );
+        assert_eq!(
+            std::fs::read_to_string(git.path().join("HEAD")).unwrap(),
+            head
+        );
+        assert!(!admin(&git, &f.request.item_id).join(MARKER).exists());
+        drop(cleanup);
+    }
+}

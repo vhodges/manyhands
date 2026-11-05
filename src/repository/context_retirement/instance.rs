@@ -111,6 +111,104 @@ fn parse(
     }
     Ok(nonce)
 }
+/// Deletion-only admission for the selected admin namespace. Git can leave
+/// index/HEAD/config/pseudoref and per-worktree ref/log lock files here without
+/// setting the worktree's separate `locked` marker. Preserve every *.lock slot
+/// regardless of node type, and never follow a redirected namespace to inspect it.
+fn require_admin_locks_absent(path: &std::path::Path) -> Result<(), RepositoryError> {
+    plain_registration_path(path, true).map_err(|_| recovery_required())?;
+    for entry in std::fs::read_dir(path).map_err(|_| recovery_required())? {
+        let entry = entry.map_err(|_| recovery_required())?;
+        let path = entry.path();
+        if entry
+            .file_name()
+            .to_str()
+            .is_none_or(|name| name.ends_with(".lock"))
+        {
+            return Err(recovery_required());
+        }
+        let metadata = std::fs::symlink_metadata(&path).map_err(|_| recovery_required())?;
+        if metadata.is_dir() {
+            require_admin_locks_absent(&path)?;
+        } else {
+            plain_registration_path(&path, false).map_err(|_| recovery_required())?;
+        }
+    }
+    Ok(())
+}
+/// Retirement needs a COMPLETE inventory before removing W, not just a later
+/// no-checkout proof for B. The only exemption is the exact selected admin's
+/// direct symbolic context binding at its fixed tip. Every other HEAD, including
+/// the main checkout, must be parseable and refer directly to an existing commit.
+/// Keep ordinary cleanup/release's scanner and behavior unchanged.
+fn require_checkout_inventory(
+    git: &git2::Repository,
+    request: &RetireContextRequest,
+    tip: git2::Oid,
+) -> Result<(), RepositoryError> {
+    let selected = admin(git, &request.item_id);
+    let context = item_context(&request.root, request.kind, request.item_id.clone());
+    let target = format!("refs/heads/{}", context.branch);
+    let check = |directory: &std::path::Path, is_selected: bool| -> Result<(), RepositoryError> {
+        plain_registration_path(&directory.join("HEAD"), false).map_err(|_| recovery_required())?;
+        let bytes =
+            std::fs::read_to_string(directory.join("HEAD")).map_err(|_| recovery_required())?;
+        let head = bytes
+            .strip_suffix("\r\n")
+            .or_else(|| bytes.strip_suffix('\n'))
+            .unwrap_or(&bytes);
+        if head.is_empty() || head.contains(['\r', '\n', '\0']) {
+            return Err(recovery_required());
+        }
+        if let Some(reference) = head.strip_prefix("ref: ") {
+            if !git2::Reference::is_valid_name(reference) {
+                return Err(recovery_required());
+            }
+            ref_file_absent(&request.root, &git.commondir().join(reference))?;
+            let actual = git
+                .find_reference(reference)
+                .map_err(|_| recovery_required())?;
+            // Never resolve an indirect alias and mistake it for an unrelated
+            // checkout, including aliases which ultimately name our context.
+            if actual.symbolic_target().is_some() {
+                return Err(recovery_required());
+            }
+            let oid = actual
+                .target()
+                .filter(|oid| !oid.is_zero())
+                .ok_or_else(recovery_required)?;
+            git.find_commit(oid).map_err(|_| recovery_required())?;
+            if is_selected {
+                if reference != target || oid != tip {
+                    return Err(recovery_required());
+                }
+            } else if reference == target {
+                return Err(recovery_required());
+            }
+        } else {
+            let oid = git2::Oid::from_str(head).map_err(|_| recovery_required())?;
+            if is_selected || oid.is_zero() || oid.to_string() != head {
+                return Err(recovery_required());
+            }
+            git.find_commit(oid).map_err(|_| recovery_required())?;
+        }
+        Ok(())
+    };
+    check(git.path(), false)?;
+    let mut found = false;
+    for entry in
+        std::fs::read_dir(git.commondir().join("worktrees")).map_err(|_| recovery_required())?
+    {
+        let path = entry.map_err(|_| recovery_required())?.path();
+        let is_selected = path == selected;
+        check(&path, is_selected)?;
+        found |= is_selected;
+    }
+    if !found {
+        return Err(recovery_required());
+    }
+    Ok(())
+}
 pub(super) fn identity(
     git: &git2::Repository,
     request: &RetireContextRequest,
@@ -131,6 +229,7 @@ pub(super) fn identity(
             return Err(recovery_required());
         }
     }
+    require_admin_locks_absent(&admin(git, &request.item_id))?;
     let branch = git
         .find_reference(&reference)
         .map_err(|_| recovery_required())?;
@@ -153,29 +252,7 @@ pub(super) fn identity(
     {
         return Err(recovery_required());
     }
-    // The complete registration chain was checked above. Only the selected
-    // deterministic admin may have this symbolic HEAD; no hidden second checkout.
-    if std::fs::read_to_string(git.path().join("HEAD"))
-        .map_err(|_| recovery_required())?
-        .trim_end()
-        == format!("ref: {reference}")
-    {
-        return Err(recovery_required());
-    }
-    for entry in
-        std::fs::read_dir(git.commondir().join("worktrees")).map_err(|_| recovery_required())?
-    {
-        let path = entry.map_err(|_| recovery_required())?.path();
-        if path != admin(git, &request.item_id)
-            && std::fs::read_to_string(path.join("HEAD"))
-                .map_err(|_| recovery_required())?
-                .trim_end()
-                == format!("ref: {reference}")
-        {
-            return Err(recovery_required());
-        }
-    }
-    Ok(())
+    require_checkout_inventory(git, request, tip)
 }
 impl Selection {
     pub(super) fn capture(
