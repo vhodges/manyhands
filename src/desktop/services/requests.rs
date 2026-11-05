@@ -502,14 +502,21 @@ impl Intent {
         }
     }
 
-    /// Whether the library honours a cancellation after accepting the
-    /// command, at a synchronization's safe points (fact 9): the comment,
-    /// the two syncs, `operation resume`, a promotion or closure, which
-    /// stops between its steps (D5 fact 2), a local synchronization and its
-    /// resolution, which the library stops at their safe points, and a
-    /// remote resolution, whose continuation honours the call's token as a
-    /// resume's does (`bind/conflict.rs`). Every other command, the saves
-    /// among them, cannot be stopped once accepted.
+    /// Whether the call's cancellation token is honoured after the library
+    /// accepts the command, at a synchronization's safe points (fact 9): the
+    /// comment, the two syncs, `operation resume`, a promotion or closure,
+    /// which stops between its steps (D5 fact 2), a local synchronization
+    /// and its resolution, and a remote resolution. Every other command, the
+    /// saves among them, cannot be stopped once accepted.
+    ///
+    /// This is not the library's `Command::stops_at_safe_points`
+    /// (`R/mutation/command.rs:407-414`), which says whether `request
+    /// cancel` reaches a stopped request between calls. The two disagree
+    /// for `ConflictResolve` (as for `OperationResume`): its continuation
+    /// looks at the call's token (`bind/conflict.rs:877-879`), but `request
+    /// cancel` never reaches it, and its record goes on any stop
+    /// (`bind/conflict.rs:1111-1114`). So it is never given up
+    /// (`can_be_given_up`; R-24).
     pub(crate) fn stops_at_safe_points(&self) -> bool {
         match self {
             Self::OperationResume { .. }
@@ -550,6 +557,14 @@ impl Intent {
             | Self::DocumentRepair { .. }
             | Self::TicketRepair { .. } => false,
         }
+    }
+
+    /// Whether Give up may send the request again (decision 8; R-24): a
+    /// command that stops at safe points, but for a remote resolution. Its
+    /// resend after a stop may checkpoint the resolution and still read as
+    /// already finished, since no record of it stands between calls.
+    pub(crate) fn can_be_given_up(&self) -> bool {
+        self.stops_at_safe_points() && !matches!(self, Self::ConflictResolve { .. })
     }
 
     /// R-78 (owner, 2026-10-26): whether sending this request again, once

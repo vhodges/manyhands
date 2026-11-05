@@ -27,7 +27,10 @@ use crate::desktop::{
     model::operations::Operations,
     services::{
         JobKind,
-        requests::{CommentBody, DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
+        requests::{
+            CommentBody, DesktopRequest, DesktopRequestId, Intent, Lane, PathResolution,
+            RequestState,
+        },
     },
     test_support::{delaying::DelayingBackend, fixtures::Fixture},
 };
@@ -1142,6 +1145,29 @@ fn give_up_and_retry_of_one_request_refuse_each_other() {
         .submit(harness.refresh(), Lane::User, None, None);
     harness.until_end_of(refresh);
     assert!(!harness.worker.give_up(refresh));
+}
+
+/// R-24: a remote resolution stops at safe points, but is never given
+/// up: a resend after a stop may checkpoint the resolution and still read as
+/// already finished. Its retry is still taken.
+#[test]
+fn a_remote_resolution_is_never_given_up() {
+    let mut harness = Harness::new();
+    let intent = Intent::ConflictResolve {
+        root: harness.root.clone(),
+        operation_id: manyhands::repository::OperationId::new(),
+        observation: format!("conflict-v1:{}", "0".repeat(64)),
+        resolutions: vec![PathResolution {
+            token: format!("conflict-path-v1:{}", "1".repeat(64)),
+            source: "source".to_owned(),
+        }],
+    };
+    assert!(intent.stops_at_safe_points());
+    let id = harness.worker.submit(intent, Lane::User, None, None);
+    harness.until_end_of(id);
+    assert!(!harness.worker.give_up(id));
+    assert!(harness.worker.retry(id, None));
+    harness.until_end_of(id);
 }
 
 /// After each finished attempt of a command that stops at safe points,

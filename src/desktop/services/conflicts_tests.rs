@@ -156,9 +156,9 @@ fn a_remote_read_takes_the_conflict_the_library_read(cx: &mut TestAppContext) {
     backend.answer_next_conflict_read(ConflictDto {
         operation_id: operation.to_string(),
         comment_operation_id: None,
-        target: ConflictTarget::Ticket,
-        item_id: Some(TICKET.to_owned()),
-        stage: ConflictStage::Context,
+        target: ConflictTarget::Primary,
+        item_id: None,
+        stage: ConflictStage::Primary,
         state: ConflictState::ConflictPending,
         next_action: ConflictReadNextAction::Resolve,
         request_id: None,

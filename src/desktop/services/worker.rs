@@ -380,7 +380,8 @@ impl WorkerHandle {
     /// request's answer. A finished one is only replayed, and `gave_up`
     /// says it was already finished. Refused, as a retry is, while the
     /// request is queued or running, its Give up or its retry, and for a
-    /// command that does not stop at safe points. True when queued.
+    /// command that cannot be given up (`Intent::can_be_given_up`). True
+    /// when queued.
     pub(crate) fn give_up(&self, id: DesktopRequestId) -> bool {
         self.requeue(id, None, None, true).is_some()
     }
@@ -452,7 +453,7 @@ impl WorkerHandle {
         // unless that later attempt was a release refused with nothing
         // touched (`Intent::kept_from_again_by`).
         let asked = state.submitted.get(&id)?;
-        if give_up && !asked.intent.stops_at_safe_points() {
+        if give_up && !asked.intent.can_be_given_up() {
             return None;
         }
         if state.submitted.values().any(|later| {

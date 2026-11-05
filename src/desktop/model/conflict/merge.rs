@@ -190,6 +190,13 @@ impl PathConflict {
         self.body.as_ref()
     }
 
+    /// Which side the body is taken from when only that side changed it
+    /// (R-5), for the columns; `None` when it is a part, or neither side
+    /// changed it.
+    pub(crate) fn body_taken(&self) -> Option<Choice> {
+        self.body_taken
+    }
+
     pub(crate) fn choose_field(&mut self, index: usize, choice: Choice) {
         if let Some(field) = self.fields.get_mut(index) {
             field.choice = Some(choice);

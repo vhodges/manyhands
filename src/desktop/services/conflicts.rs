@@ -6,7 +6,7 @@
 //!   comment's or a lifecycle's (C5 decision 34).
 //! - Local: `inspect_local_context_sync` for state, eligibility and
 //!   observation, then `read_local_context_conflict` of each token whose
-//!   content is given.
+//!   content is given, unless the set is already external.
 
 // A read closure returns the library's `ReadError`, which carries its whole
 // scope by value, as the library's own read module allows.
@@ -18,7 +18,10 @@ use gpui_kit::{Context, Task};
 use manyhands::repository::{LocalContextConflictContentDto, OperationId};
 
 use super::{ReadKind, ReadResult, Reader, Services};
-use crate::desktop::model::{conflict::ConflictModel, stamp::Stamp};
+use crate::desktop::model::{
+    conflict::{ConflictModel, local_set_is_external},
+    stamp::Stamp,
+};
 
 /// Which synchronization a conflict is of.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -100,11 +103,14 @@ async fn local(
             })
             .await
     );
+    // An external set's content is not read: a failed content read must
+    // not take the place of its guidance.
+    let read = !local_set_is_external(&inspection);
     let mut contents: Vec<LocalContextConflictContentDto> = Vec::new();
     for entry in inspection
         .paths
         .iter()
-        .filter(|entry| entry.content_available)
+        .filter(|entry| read && entry.content_available)
     {
         contents.push(ok_or_return!(
             reader

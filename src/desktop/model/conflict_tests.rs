@@ -13,9 +13,9 @@ use manyhands::{
     repository::{
         ConflictDto, ConflictPathDto, ConflictPathKind, ConflictPathStructure,
         ConflictReadEligibility, ConflictReadNextAction, ConflictStage, ConflictState,
-        ConflictTarget, LocalContextConflictEntryDto, LocalContextSyncEligibility,
-        LocalContextSyncInspectionDto, LocalContextSyncNextAction, LocalContextSyncReason,
-        LocalContextSyncState,
+        ConflictTarget, LocalContextConflictContentDto, LocalContextConflictEntryDto,
+        LocalContextSyncEligibility, LocalContextSyncInspectionDto, LocalContextSyncNextAction,
+        LocalContextSyncReason, LocalContextSyncState,
     },
 };
 
@@ -76,8 +76,8 @@ fn remote(paths: Vec<ConflictPathDto>, eligibility: ConflictReadEligibility) -> 
     ConflictDto {
         operation_id: OPERATION.to_owned(),
         comment_operation_id: None,
-        target: ConflictTarget::Ticket,
-        item_id: Some(TICKET.to_owned()),
+        target: ConflictTarget::Primary,
+        item_id: None,
         stage: ConflictStage::Primary,
         state: ConflictState::ConflictPending,
         next_action: match eligibility {
@@ -308,15 +308,21 @@ fn a_noncanonical_path_makes_the_set_external() {
                 ticket("Incoming", "open", "Body.\n"),
             ),
             path(
-                "src/main.rs",
+                "blob.bin",
                 ConflictPathKind::Noncanonical,
-                ConflictPathStructure::Regular,
+                ConflictPathStructure::Binary,
                 None,
             ),
             path(
-                "docs/image.md",
-                ConflictPathKind::Document,
+                "plain.sh",
+                ConflictPathKind::Noncanonical,
                 ConflictPathStructure::Binary,
+                None,
+            ),
+            path(
+                "tool.sh",
+                ConflictPathKind::Noncanonical,
+                ConflictPathStructure::Executable,
                 None,
             ),
         ],
@@ -326,8 +332,9 @@ fn a_noncanonical_path_makes_the_set_external() {
         external(&model),
         [
             (ticket_path(TICKET), ExternalReason::Waits),
-            ("src/main.rs".to_owned(), ExternalReason::Code),
-            ("docs/image.md".to_owned(), ExternalReason::Binary),
+            ("blob.bin".to_owned(), ExternalReason::Code),
+            ("plain.sh".to_owned(), ExternalReason::Code),
+            ("tool.sh".to_owned(), ExternalReason::Code),
         ]
     );
     assert_eq!(model.chosen(), (0, 0));
@@ -415,32 +422,50 @@ fn entry(display_path: &str, content_available: bool) -> LocalContextConflictEnt
 /// local set the library cannot resolve goes outside, whatever its paths.
 #[test]
 fn a_local_unsupported_reason_is_external() {
+    // A ticket whose sides parse, its eligibility left eligible, so the
+    // reason alone decides.
+    let ticket_entry = entry(&ticket_path(TICKET), true);
+    let contents = [content(&ticket_entry.token, false)];
     let model = ConflictModel::from_local(
         &inspection(
             LocalContextSyncReason::UnsupportedConflict,
-            LocalContextSyncEligibility::ExternalResolutionRequired,
-            vec![entry("ordinary", false)],
+            LocalContextSyncEligibility::EligibleCanonical,
+            vec![ticket_entry.clone()],
         ),
-        &[],
+        &contents,
     );
     assert_eq!(
         external(&model),
-        [("ordinary".to_owned(), ExternalReason::Unsupported)]
+        [(ticket_path(TICKET), ExternalReason::Unsupported)]
     );
 
     // An immutable closure disagreement says so.
     let model = ConflictModel::from_local(
         &inspection(
             LocalContextSyncReason::ImmutableClosureDisagreement,
-            LocalContextSyncEligibility::ExternalResolutionRequired,
-            vec![entry(&ticket_path(TICKET), true)],
+            LocalContextSyncEligibility::EligibleCanonical,
+            vec![ticket_entry],
         ),
-        &[],
+        &contents,
     );
     assert_eq!(
         external(&model),
         [(ticket_path(TICKET), ExternalReason::Closures)]
     );
+}
+
+/// A local content read of `token`, of the shape `tests/cli/local_sync.rs`
+/// `an_eligible_conflict_stops_with_its_operation_and_the_way_on` reads:
+/// three ticket sides that parse.
+fn content(token: &str, historical: bool) -> LocalContextConflictContentDto {
+    LocalContextConflictContentDto {
+        operation_id: OPERATION.to_owned(),
+        token: token.to_owned(),
+        base: Some(ticket("Base", "open", "Body.\n")),
+        local: Some(ticket("Local", "open", "Body.\n")),
+        incoming: Some(ticket("Incoming", "open", "Body.\n")),
+        historical,
+    }
 }
 
 /// U-2. A local entry has no kind: it is classified by its display path.
@@ -488,3 +513,6 @@ fn inspection_with(display_path: &str) -> LocalContextSyncInspectionDto {
     inspection.kind = "document".to_owned();
     inspection
 }
+
+#[path = "conflict_parts_tests.rs"]
+mod parts;

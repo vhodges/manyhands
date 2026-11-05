@@ -58,8 +58,8 @@ pub(crate) enum ExternalReason {
     /// Its sides are not given, or one of them is not an item Manyhands
     /// reads.
     Unreadable,
-    /// The library cannot resolve it here, or a local path does not
-    /// classify as an item's (U-2, K-14).
+    /// The library cannot resolve it here, or the path, local or remote,
+    /// does not classify as an item's (U-2, K-14).
     Unsupported,
     /// The path itself could be resolved here, but another path of its
     /// set cannot, so it waits for the outside repair (R-6).
@@ -86,24 +86,29 @@ pub(crate) enum ConflictSet {
 /// A conflict read, as the sheet shows it.
 pub(crate) struct ConflictModel {
     observation: Option<String>,
+    historical: bool,
     set: ConflictSet,
 }
 
 impl ConflictModel {
     /// A remote conflict, as `show_conflict` read it (B1). The set is
     /// external when the library says so, or when any path is not regular
-    /// canonical content whose three sides are given and parse.
+    /// canonical content at a path that classifies (K-14) whose three sides
+    /// are given and parse.
     pub(crate) fn from_remote(conflict: &ConflictDto) -> Self {
         let observation = conflict.observation.clone();
+        let historical = conflict.historical;
         if conflict.paths.is_empty() {
             return Self {
                 observation,
+                historical,
                 set: ConflictSet::Settled,
             };
         }
         let read = conflict.paths.iter().map(|path| {
             let parsed = match remote_reason(path.kind, path.structure, path.content_available) {
                 Some(reason) => Err(reason),
+                None if !classifies(&path.display_path) => Err(ExternalReason::Unsupported),
                 None => PathConflict::parse(
                     &path.display_path,
                     &path.token,
@@ -119,6 +124,7 @@ impl ConflictModel {
             conflict.eligibility == Some(ConflictReadEligibility::ExternalResolutionRequired);
         Self {
             observation,
+            historical,
             set: ConflictSet::of(read.collect(), external),
         }
     }
@@ -133,22 +139,20 @@ impl ConflictModel {
         contents: &[LocalContextConflictContentDto],
     ) -> Self {
         let observation = inspection.observation.clone();
+        let historical = contents.iter().any(|content| content.historical);
         if inspection.paths.is_empty() {
             return Self {
                 observation,
+                historical,
                 set: ConflictSet::Settled,
             };
         }
-        let whole = match inspection.reason {
-            LocalContextSyncReason::UnsupportedConflict => Some(ExternalReason::Unsupported),
-            LocalContextSyncReason::ImmutableClosureDisagreement => Some(ExternalReason::Closures),
-            _ => None,
-        };
+        let whole = whole_local_reason(inspection.reason);
         let read = inspection.paths.iter().map(|entry| {
             let content = contents.iter().find(|content| content.token == entry.token);
             let parsed = if let Some(reason) = whole {
                 Err(reason)
-            } else if canonical::item_path_kind(Path::new(&entry.display_path)).is_err() {
+            } else if !classifies(&entry.display_path) {
                 Err(ExternalReason::Unsupported)
             } else if let (true, Some(content)) = (entry.content_available, content) {
                 PathConflict::parse(
@@ -168,6 +172,7 @@ impl ConflictModel {
             inspection.eligibility == Some(LocalContextSyncEligibility::ExternalResolutionRequired);
         Self {
             observation,
+            historical,
             set: ConflictSet::of(read.collect(), external),
         }
     }
@@ -175,6 +180,13 @@ impl ConflictModel {
     /// The observation Save resolution presents.
     pub(crate) fn observation(&self) -> Option<&str> {
         self.observation.as_deref()
+    }
+
+    /// Whether a resolution attempt has written paths, so the sides are the
+    /// recorded conflict's and the work context may hold results already
+    /// (C4 R-39): the remote read's `historical`, or any local content's.
+    pub(crate) fn historical(&self) -> bool {
+        self.historical
     }
 
     pub(crate) fn set(&self) -> &ConflictSet {
@@ -246,6 +258,30 @@ impl ConflictSet {
                 .collect(),
         )
     }
+}
+
+/// Whether a local inspection's set goes outside whatever its paths hold:
+/// the library says so, or its reason covers the whole set. Its content is
+/// then not read (B1).
+pub(crate) fn local_set_is_external(inspection: &LocalContextSyncInspectionDto) -> bool {
+    inspection.eligibility == Some(LocalContextSyncEligibility::ExternalResolutionRequired)
+        || whole_local_reason(inspection.reason).is_some()
+}
+
+/// The reason a local inspection's reason gives every path, when it covers
+/// the whole set.
+fn whole_local_reason(reason: LocalContextSyncReason) -> Option<ExternalReason> {
+    match reason {
+        LocalContextSyncReason::UnsupportedConflict => Some(ExternalReason::Unsupported),
+        LocalContextSyncReason::ImmutableClosureDisagreement => Some(ExternalReason::Closures),
+        _ => None,
+    }
+}
+
+/// Whether a display path classifies as an item's (U-2): one with an
+/// escaped byte does not (K-14, local and remote).
+fn classifies(display_path: &str) -> bool {
+    canonical::item_path_kind(Path::new(display_path)).is_ok()
 }
 
 /// Why a remote path cannot be resolved here, by its kind, structure and
