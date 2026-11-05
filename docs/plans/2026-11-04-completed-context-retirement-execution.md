@@ -392,6 +392,9 @@ are not authorized; numeric exits must come from existing results registry.
 | Limited current-request-fence final QUALITY through `c7daad0d`, same base, after SPEC | Reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Original isolated preclaim probe now refuses with no journal/registry changes and same-current private execution succeeds. Fresh 5 Q1 controls passed; prior 18 F2 units/14 F2 SSH retain their earlier source scope | Limited F2 QUALITY approved. Controller inspected original-probe/final-static evidence and verified all 1,707 frozen-input hashes. No full Task 2, native or full-suite claim |
 | Shared-observation continuation preflight, 2026-11-05 | Both checkouts clean; fresh fetch succeeded, main/base remains `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `c7daad0dfd9bd249aa54113b9d2ae75038c8f33c` already up to date | No conflicts/rebase; unrelated remote D5 ref advanced but was not consumed |
 | Limited A0/A1 + unbound-Z SPEC at `ce8db982`, base `d707c2c2` | **1 Medium**, controller-accepted matched-probe finding: CURRENT accepted F2 cancellation incorrectly revoked STOP ownership, retaining the active source and post-A1 pin; remote-only cancellation worked | Correction/evidence below. **Same SPEC re-review then QUALITY required**; no approval recorded |
+| Limited A0/A1 + unbound-Z final SPEC through `a409615e`, same base | Same reviewer `ses_e564dd7a7ffeYzKXesoyVuGJFs`: **0 remaining findings**. Fresh original cancellation counterexample plus all seven new regressions: **8 passed** in isolated unchanged-production copy | Limited private source-contract SPEC approved; no live source-SSH, A2 binding or batch-consumer claim |
+| Limited A0/A1 + unbound-Z final QUALITY through `a409615e`, same base, after SPEC | Reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Fresh isolated headless build: 17 source tests, 1 consumer-Z and 1 integration-window control passed. An initial shared-target run containing an extra reviewer-only test was excluded | Limited private projection adapter/unbound-Z QUALITY approved. Controller inspected fresh isolated results/static logs and verified all 1,710 frozen inputs; no full shared-observation or Task 2 completion |
+| A2 continuation preflight, 2026-11-05 | Both checkouts clean; fresh fetch succeeded, main/base still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `a409615e853ac9447937f1f1f966821d545b178b` already up to date | No conflicts/rebase or unmerged branch consumption |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -423,12 +426,16 @@ are not authorized; numeric exits must come from existing results registry.
   Current accepted-F2/exact request-operation fencing, private request-bound
   execution/reentry and single-use independent index claims are now independently
   SPEC/QUALITY approved through `c7daad0d` from base `597bed6b`.
-  Latest recorded gates: **111** context-retirement tests, **105** registered
-  retirement SSH cases, **60** recovery / **38** refresh / **130** mutation units,
-  **384** replay / **52** foundation / **79** discovery integration tests, and all
-  three static gates. Earlier supporting results retain their source scopes;
-  fresh focused review reruns are listed above. Remaining fault variants and
-  shared source/batch scopes stay owed/closed as recorded; all 44 E/O/D
+  Private A0/A1 source capture and unbound-source Z are now independently
+  SPEC/QUALITY approved through `a409615e` from base `d707c2c2`. These tests use
+  inert contract projections and synthetic advertisement inputs through owned SQL,
+  not live source SSH or batch cleanup. Latest recorded gates: **128** context
+  tests, **105** registered retirement SSH, **17** source units, **58** reservation /
+  **81** poll / **70** persistence, **15** observation / **84** polling SSH controls,
+  **13** reservation / **52** foundation integration controls and all three static
+  gates. Earlier supporting results retain their source scopes; fresh focused
+  review reruns are listed above. Remaining fault variants, A2–A4 and shared
+  consumer/gap/restart/holder scopes stay owed/closed as recorded; all 44 E/O/D
   obligations stay explicitly tracked, not completed by test counts.
   Full Task 2 spec/quality review remains owed; no full completion claimed.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
@@ -446,12 +453,13 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: publish the reviewed current-request-fence increment only
-to this ticket branch, then continue the same Task 2 implementer into the shared
-source/batch provenance, binding, execution-versus-consumption and holder/Z/GC
-mechanisms. Actual Task 3 bindings and Task 4 coordination remain downstream;
-private projection tests must not be represented as those journeys. Remaining
-fault matrices and full Task 2 review are still owed.
+Immediate next step: publish the reviewed A0/A1 + unbound-source Z increment only
+to this ticket branch, then continue the same Task 2 implementer into A2 owned
+preterminal frozen-image binding and A3 handoff eligibility, followed by A4 shared
+consumers/gaps and remaining restart/holder/Z/GC contracts. Actual Task 3 bindings
+and Task 4 coordination remain downstream; private projection tests must not be
+represented as those journeys. Remaining fault matrices and full Task 2 review
+are still owed.
 Prior corrections, design and initial-absence approvals remain intact; no new
 owner-policy decision is required. Full Task 2 and all 44 obligations remain
 tracked/in progress; this is not permission for Task 3/4 or a completion claim.
