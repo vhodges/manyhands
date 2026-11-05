@@ -377,6 +377,26 @@ impl ContextCleanup {
         id: &ItemId,
         oid: Oid,
     ) -> BranchDeletion {
+        self.delete_branch(kind, id, oid, || true)
+    }
+    /// Retirement adds its complete checkout authorization under the ref lock,
+    /// immediately before deletion. Ordinary lifecycle/release guards are intact.
+    pub(super) fn delete_retirement_branch(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+        authorize: impl FnOnce() -> bool,
+    ) -> BranchDeletion {
+        self.delete_branch(kind, id, oid, authorize)
+    }
+    fn delete_branch(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+        authorize: impl FnOnce() -> bool,
+    ) -> BranchDeletion {
         let reference = format!(
             "refs/heads/manyhands/{}/{id}",
             authoring_kind_segment(&kind)
@@ -400,6 +420,9 @@ impl ContextCleanup {
                 return Ok(BranchDeletion::AlreadyAbsent);
             }
             if actual != Some(oid) || self.branch_is_checked_out(&reference)? {
+                return Err(());
+            }
+            if !authorize() {
                 return Err(());
             }
             transaction.remove(&reference).map_err(|_| ())?;

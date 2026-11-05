@@ -225,16 +225,11 @@ pub(super) fn initial_inventory(
         (Ok(true), Ok(true), Ok(true)) if branch_absent => {
             // Deterministic path absence alone misses renamed/external
             // registrations and incomplete entries filtered out by libgit2.
-            if matches!(absent_path(root, &git.path().join("HEAD")), Ok(false))
-                && require_registration_identity(git).is_ok()
-                && matches!(
-                    super::super::cleanup::branch_is_checked_out(
-                        git,
-                        &format!("refs/heads/{}", context.branch)
-                    ),
-                    Ok(false)
-                )
-            {
+            let rooted = RetireContextRequest {
+                root: root.to_owned(),
+                ..request.clone()
+            };
+            if super::instance::require_checkout_inventory(git, &rooted, None).is_ok() {
                 Inventory::Absent
             } else {
                 Inventory::Invalid

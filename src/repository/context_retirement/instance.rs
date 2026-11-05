@@ -137,21 +137,30 @@ fn require_admin_locks_absent(path: &std::path::Path) -> Result<(), RepositoryEr
     }
     Ok(())
 }
-/// Retirement needs a COMPLETE inventory before removing W, not just a later
-/// no-checkout proof for B. The only exemption is the exact selected admin's
-/// direct symbolic context binding at its fixed tip. Every other HEAD, including
-/// the main checkout, must be parseable and refer directly to an existing commit.
+/// One retirement-only checkout authorization for the entire effect chain.
+/// While W is present, the only exemption is the exact selected admin's direct
+/// symbolic context binding at its fixed tip. With no exemption, W/A must be
+/// absent and EVERY checkout must be unrelated, including target case variants.
+/// Every HEAD must be parseable and refer directly to an existing commit.
 /// Symbolic HEADs are supported only for shared refs/heads/* bindings; other
 /// namespaces and pseudorefs may resolve in a different checkout's own admin.
 /// Keep ordinary cleanup/release's scanner and behavior unchanged.
-fn require_checkout_inventory(
+pub(super) fn require_checkout_inventory(
     git: &git2::Repository,
     request: &RetireContextRequest,
-    tip: git2::Oid,
+    selected_tip: Option<git2::Oid>,
 ) -> Result<(), RepositoryError> {
     let selected = admin(git, &request.item_id);
     let context = item_context(&request.root, request.kind, request.item_id.clone());
     let target = format!("refs/heads/{}", context.branch);
+    require_registration_identity(git).map_err(|_| recovery_required())?;
+    ref_file_absent(&request.root, &git.commondir().join("packed-refs"))?;
+    if selected_tip.is_none()
+        && (!absent_path(&request.root, &selected)?
+            || !absent_path(&request.root, &context.worktree)?)
+    {
+        return Err(recovery_required());
+    }
     let check = |directory: &std::path::Path, is_selected: bool| -> Result<(), RepositoryError> {
         plain_registration_path(&directory.join("HEAD"), false).map_err(|_| recovery_required())?;
         let bytes =
@@ -169,6 +178,11 @@ fn require_checkout_inventory(
             if !reference.starts_with("refs/heads/") || !git2::Reference::is_valid_name(reference) {
                 return Err(recovery_required());
             }
+            // Refuse ASCII-equivalent target spellings even on case-sensitive
+            // hosts. A case-preserving volume may map them to the same ref slot.
+            if !is_selected && reference.eq_ignore_ascii_case(&target) {
+                return Err(recovery_required());
+            }
             ref_file_absent(&request.root, &git.commondir().join(reference))?;
             let actual = git
                 .find_reference(reference)
@@ -183,11 +197,7 @@ fn require_checkout_inventory(
                 .filter(|oid| !oid.is_zero())
                 .ok_or_else(recovery_required)?;
             git.find_commit(oid).map_err(|_| recovery_required())?;
-            if is_selected {
-                if reference != target || oid != tip {
-                    return Err(recovery_required());
-                }
-            } else if reference == target {
+            if is_selected && (reference != target || Some(oid) != selected_tip) {
                 return Err(recovery_required());
             }
         } else {
@@ -200,16 +210,22 @@ fn require_checkout_inventory(
         Ok(())
     };
     check(git.path(), false)?;
+    let worktrees = git.commondir().join("worktrees");
+    if absent_path(&request.root, &worktrees)? {
+        return if selected_tip.is_none() {
+            Ok(())
+        } else {
+            Err(recovery_required())
+        };
+    }
     let mut found = false;
-    for entry in
-        std::fs::read_dir(git.commondir().join("worktrees")).map_err(|_| recovery_required())?
-    {
+    for entry in std::fs::read_dir(worktrees).map_err(|_| recovery_required())? {
         let path = entry.map_err(|_| recovery_required())?.path();
-        let is_selected = path == selected;
+        let is_selected = selected_tip.is_some() && path == selected;
         check(&path, is_selected)?;
         found |= is_selected;
     }
-    if !found {
+    if selected_tip.is_some() && !found {
         return Err(recovery_required());
     }
     Ok(())
@@ -257,7 +273,7 @@ pub(super) fn identity(
     {
         return Err(recovery_required());
     }
-    require_checkout_inventory(git, request, tip)
+    require_checkout_inventory(git, request, Some(tip))
 }
 impl Selection {
     pub(super) fn capture(

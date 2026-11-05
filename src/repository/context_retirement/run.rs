@@ -272,14 +272,29 @@ impl RepositoryService {
             {
                 return Err(recovery_required());
             }
-            // From this point even a SQL rollback cannot prove Git had no effect.
-            // Discard the process-only no-effect witness before entering the primitive.
-            let _ = uninvoked.take().ok_or_else(recovery_required)?;
-            let _ = pruned.take();
-            let removal = cleanup.delete_context_branch(request.kind, &request.item_id, tip);
+            let removal =
+                cleanup.delete_retirement_branch(request.kind, &request.item_id, tip, || {
+                    // Same complete authorization, now under the exact ref lock and
+                    // immediately before Git removal. No selected-admin exemption
+                    // or marker read can recreate the consumed W lifetime permit.
+                    if instance::require_checkout_inventory(&git, &request, None).is_err() {
+                        return false;
+                    }
+                    // Only this actual effect boundary spends the no-effect witness.
+                    // Earlier primitive refusals must retain truthful B None.
+                    if uninvoked.take().is_none() {
+                        return false;
+                    }
+                    let _ = pruned.take();
+                    true
+                });
             let (observation, flag) = match removal {
                 BranchDeletion::Deleted => ("removed", "observed"),
-                BranchDeletion::AlreadyAbsent => ("already_absent", "possible"),
+                BranchDeletion::AlreadyAbsent => {
+                    let _ = uninvoked.take();
+                    let _ = pruned.take();
+                    ("already_absent", "possible")
+                }
                 BranchDeletion::Changed => return Err(recovery_required()),
             };
             if tx.execute("UPDATE context_retirement_effect_intents SET observation=?2 WHERE operation_ulid=?1 AND resource='branch' AND observation IS NULL",params![request.operation_id.to_string(),observation]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
@@ -554,14 +569,7 @@ fn branch_only(
             return Ok(None);
         }
     }
-    require_registration_identity(git).map_err(|_| recovery_required())?;
-    if crate::repository::cleanup::branch_is_checked_out(
-        git,
-        &format!("refs/heads/{}", context.branch),
-    ) != Ok(false)
-    {
-        return Ok(None);
-    }
+    instance::require_checkout_inventory(git, request, None)?;
     Ok(tip)
 }
 

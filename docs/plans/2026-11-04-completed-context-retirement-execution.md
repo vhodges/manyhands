@@ -375,6 +375,7 @@ are not authorized; numeric exits must come from existing results registry.
 | Fresh-present runtime increment, base `7fde7e5f` | Connected durable marker selection/install/verification and guarded W prune → B retirement, with fresh receipt/proof/D14/index/Z; local evidence below | **Limited SPEC then QUALITY pending before further expansion**. Earlier approvals intact; not full Task 2 approval/completion |
 | Limited fresh-present SPEC at `9a932ae4`, same increment base | Controller accepts **2 Important current-producer defects**: P1 selected admin Git operation locks omitted; P2 other/root checkout HEAD syntax/direct-binding/existence not fully checked before W prune | SPEC **failed**, Quality **held**. Retirement-only additive correction and RED→GREEN/local gates below; **same SPEC re-review then Quality pending**, no authority expansion |
 | Same fresh-present SPEC re-review at `927de9e3` | Original P1/P2 common cases fixed; **2 Important remaining guard holes** accepted by controller: ASCII-case-equivalent lock suffixes missed, per-worktree HEAD refs looked up in primary namespace | Quality **held**; conservative retirement-only correction and compiled RED→GREEN below. **Same SPEC re-review then Quality pending**, no full Task 2 approval |
+| Same fresh-present SPEC at `c230f811` | P1 case locks and pre-W masked aliases resolved; **2 Important P2 chain holes** remain: late post-W/pre-B checkout uses old scanner; target case-equivalent HEAD is called unrelated | Controller accepts unified retirement-only checkout authorization across W→B; correction/evidence below. **Same SPEC re-review then Quality pending**, Quality still held |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -397,11 +398,11 @@ are not authorized; numeric exits must come from existing results registry.
    both passed through `2f06ac72` from base `b1a986c2` with no remaining findings,
    including the cleanup-lease correction and preserved S1–S4 protections.
   Fresh-present selection/install/prune → branch/index is now connected in the
-  next bounded increment from `7fde7e5f`. Same SPEC at `927de9e3` fixed original
-  P1/P2 common cases but found case/namespace guard holes; their locally verified
-  correction awaits **same SPEC re-review then QUALITY**.
-  Latest gates: **73** context-retirement tests and **49** registered retirement
-  SSH cases (prior 73/44 unchanged; +5 case/namespace SSH cases).
+  next bounded increment from `7fde7e5f`. Same SPEC at `c230f811` resolves P1 and
+  pre-W masked aliases but finds late-B/case-equivalence P2 holes; unified
+  chain correction awaits **same SPEC re-review then QUALITY**.
+  Latest gates: **73** context-retirement tests, **55** registered retirement SSH,
+  **51** cleanup tests (prior 73/49/50 unchanged; +6 SSH and +1 primitive control).
   Authorized executor replacement/recovery and source/batch scopes remain
   unfinished/closed; all 44 matrix obligations stay explicitly tracked.
   Full Task 2 spec/quality review remains owed; no full completion claimed.
@@ -2514,3 +2515,71 @@ re-review then Quality required before expansion; no Task 2 completion/Task 3/4
 claim. Linux evidence only, no Windows/native runtime/cross-compilation claim.
 No agents, push, status/PR/main integration/closure/native CI, other-worktree edits
 or real-context/key/profile/draft action.
+
+## Task 2 Correction Delta — Unified Checkout Authorization Through W→B
+
+Source parent **`c230f811b7030e3c25fb544ca9f4ca4ccbc9dd5b`**; present increment
+base `7fde7e5f`, full Task 2 base `7b1912d1`. Fresh fetch/merge already up to date
+at `c69789d9`, no rebase. Same SPEC resolves P1/pre-W namespace cases but finds
+Important P2a late-B namespace and P2b target-case holes; controller accepts.
+**Quality held; same SPEC re-review then Quality still pending.**
+
+- One retirement-only `require_checkout_inventory` now owns all checkout
+  authorization: initial absence/handoff, present capture/install/W callback,
+  branch-only selection, before B intent, after B intent and **under the exact
+  ref lock immediately before Git removal**. It validates complete plain root/
+  registration links, HEAD syntax, supported shared namespace/direct commit,
+  and ASCII-case-insensitive target equivalence. Optional selected-tip exemption
+  is only for the exact present admin with exact direct target spelling/tip;
+  without it W/A must be absent. Missing admin inventory is valid only without
+  exemption. Retirement no longer directly calls the weaker shared scanner.
+- Narrow `delete_retirement_branch` callback retains ordinary cleanup's original
+  guards and defaults (`delete_context_branch` supplies true). The callback runs
+  after lock/current-tip/checkout checks, before Git removal; no token is read
+  after prune and no saved step mints another B permit. Process no-effect witness
+  remains live until actual authorization, so definite pre-B stops settle B
+  `changed`/None. **After W Observed, the parent stays Owed**, W step/flag and old
+  materialization intact, pin retained; fresh branch-only no-effect ends Final
+  ExternalChange with pin released. No global release/lifecycle behavior change.
+
+Logs `/tmp/opencode/task2-present-spec3-<suffix>.log`; prefix below is
+`devenv shell -- cargo test --all-features --locked`. Registered tests preceded
+filters. `--test mutation_remote retirement_p2_chain_`: compiled behavioral
+**RED `chain-red-2`: 0 passed / 6 failed SSH → GREEN `chain-green`: 6 passed**.
+The 16 fixture journeys cover four actual masked per-worktree aliases at the
+**B-intent hook after settled W removal**, the fresh branch-only late-B path,
+and two case-equivalent bindings at initial, pre-W-final and both late-B paths.
+Aliases assert common direct mask at a different existing OID versus linked
+actual resolution to CONTEXT. Case fixtures assert conservative Linux refusal,
+not native volume equivalence. Full byte/type/resource/non-TF/Z images, preserved
+B/old intent, exact W/B flags/steps, pins and stable no-advertisement replay after
+repair are asserted. Prior ordinary-branch/detached/P1/replay controls unchanged.
+
+Additional `--lib cleanup_retirement_branch_guard_runs_under_ref_lock_before_delete`
+control (`primitive-control`: **1 passed**) checks callback lock ownership,
+refusal without deletion/full image changes, then unchanged default deletion for
+ticket/document. First RED had two missing-parent-directory fixture setup errors;
+fixed before `chain-red-2`. First Clippy (`clippy-first`) requested one collapsed
+if; corrected mechanically, then source refrozen and every final gate rerun.
+
+| Final command | Log suffix | Result |
+| --- | --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | `check-final` | exit 0 |
+| `devenv shell -- cargo fmt --check` | `fmt-final` | exit 0 |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy-final` | exit 0 |
+| test prefix + `--lib context_retirement` | `context-final` | **73 passed** |
+| test prefix + `--test mutation_remote retirement_` | `ssh-final` | **55 registered SSH passed** |
+| test prefix + `--lib cleanup` | `cleanup-final` | **51 passed** |
+
+Serial Devenv, no deadlines/overlapping builds/tests, source frozen; only ledger/
+comment edits afterward. Unaffected broad gates not repeated. Six-code-path diff
+against `c230f811`, SHA-256 `4de5ee2dc0cc7e94fda9add2cf467eb53324254b7753b439d5a9fa6bc4fc6e81`.
+Checkpoint **`01M6NGEXXB2WY6RVPKX23C4DJB`**, parent
+**`01M6NESWSY9BX1ARDJD01R2N2E`**, actual UTC **`2026-11-05T09:25:58Z`**.
+
+**All 01–44 acceptance obligations remain tracked**, not discharged by counts.
+Public reentry/replacement, metadata-only owned-absence recovery, remaining fault
+matrices/source/batch protocols and full Task 2 review remain owed. No Task 2
+completion or Task 3/4 claim. Linux evidence only; no Windows/native runtime or
+cross-compilation claim. No agents, push, status/PR/main integration/closure/native
+CI, other-worktree edits or real-context/key/profile/draft action.

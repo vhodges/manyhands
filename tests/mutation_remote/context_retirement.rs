@@ -206,6 +206,30 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         "retirement_present_p2_namespace_valid_detached_checkout_allows_prune",
         p2_namespace_detached,
     ),
+    (
+        "retirement_p2_chain_present_late_masked_alias_preserves_branch_debt",
+        p2_chain_present_alias,
+    ),
+    (
+        "retirement_p2_chain_branch_only_late_masked_alias_is_no_effect",
+        p2_chain_branch_alias,
+    ),
+    (
+        "retirement_p2_chain_initial_case_equivalent_checkout_refuses",
+        p2_chain_initial_case,
+    ),
+    (
+        "retirement_p2_chain_preworktree_case_equivalent_checkout_is_no_effect",
+        p2_chain_preworktree_case,
+    ),
+    (
+        "retirement_p2_chain_present_late_case_equivalent_checkout_preserves_branch_debt",
+        p2_chain_present_case,
+    ),
+    (
+        "retirement_p2_chain_branch_only_late_case_equivalent_checkout_is_no_effect",
+        p2_chain_branch_case,
+    ),
 ];
 
 fn setup() -> Result<World, FixtureError> {
@@ -2171,6 +2195,254 @@ fn p2_namespace_detached() -> Result<(), FixtureError> {
     assert!(resource_image(&admin) == admin_before);
     assert_eq!(fixed(w.repo()?.refname_to_id(OTHER_BRANCH))?, tip);
     w.privacy()
+}
+
+fn p2_chain_present_alias() -> Result<(), FixtureError> {
+    p2_chain_late(true, false)
+}
+fn p2_chain_branch_alias() -> Result<(), FixtureError> {
+    p2_chain_late(false, false)
+}
+fn p2_chain_present_case() -> Result<(), FixtureError> {
+    p2_chain_late(true, true)
+}
+fn p2_chain_branch_case() -> Result<(), FixtureError> {
+    p2_chain_late(false, true)
+}
+fn p2_chain_initial_case() -> Result<(), FixtureError> {
+    p2_chain_preworktree_case_at(false)
+}
+fn p2_chain_preworktree_case() -> Result<(), FixtureError> {
+    p2_chain_preworktree_case_at(true)
+}
+fn p2_chain_case_reference(upper: bool) -> String {
+    format!(
+        "refs/heads/{}/{ITEM}",
+        if upper {
+            "MANYHANDS/TICKET"
+        } else {
+            "Manyhands/ticket"
+        }
+    )
+}
+fn p2_chain_case_fault(root: &Path, other: &Path, admin: &Path, reference: &str) {
+    let git = git2::Repository::open(root).unwrap();
+    let tip = git.refname_to_id(CONTEXT).unwrap();
+    assert_ne!(reference, CONTEXT);
+    assert!(reference.eq_ignore_ascii_case(CONTEXT));
+    let slot = git.commondir().join(reference);
+    fs::create_dir_all(slot.parent().unwrap()).unwrap();
+    fs::write(slot, format!("{tip}\n")).unwrap();
+    fs::write(admin.join("HEAD"), format!("ref: {reference}\n")).unwrap();
+    let linked = git2::Repository::open(other).unwrap();
+    assert_eq!(
+        linked.find_reference("HEAD").unwrap().symbolic_target(),
+        Some(reference)
+    );
+    assert_eq!(linked.head().unwrap().target(), Some(tip));
+    // Linux has distinct slots here; refusal must be conservative on Linux too.
+    assert_eq!(git.refname_to_id(reference).unwrap(), tip);
+}
+fn p2_chain_alias_fault(root: &Path, other: &Path, admin: &Path, shadow: &str) {
+    let git = git2::Repository::open(root).unwrap();
+    let tip = git.refname_to_id(CONTEXT).unwrap();
+    let other_tip = git.find_commit(tip).unwrap().parent_id(0).unwrap();
+    assert_ne!(other_tip, tip);
+    let slot = git.commondir().join(shadow);
+    fs::create_dir_all(slot.parent().unwrap()).unwrap();
+    fs::write(slot, format!("{other_tip}\n")).unwrap();
+    let slot = admin.join(shadow);
+    fs::create_dir_all(slot.parent().unwrap()).unwrap();
+    fs::write(slot, format!("ref: {CONTEXT}\n")).unwrap();
+    fs::write(admin.join("HEAD"), format!("ref: {shadow}\n")).unwrap();
+    assert_eq!(
+        git.find_reference(shadow).unwrap().target(),
+        Some(other_tip)
+    );
+    let linked = git2::Repository::open(other).unwrap();
+    assert_eq!(
+        linked.find_reference(shadow).unwrap().symbolic_target(),
+        Some(CONTEXT)
+    );
+    let actual = linked.head().unwrap();
+    assert_eq!(actual.name(), Some(CONTEXT));
+    assert_eq!(actual.target(), Some(tip));
+}
+fn p2_chain_preworktree_case_at(final_boundary: bool) -> Result<(), FixtureError> {
+    for upper in [false, true] {
+        pre_prune_refusal(
+            final_boundary,
+            move |w| {
+                let (other, admin) = add_other_checkout(w);
+                let root = w.root.clone();
+                Box::new(move || {
+                    p2_chain_case_fault(&root, &other, &admin, &p2_chain_case_reference(upper))
+                })
+            },
+            |w| {
+                fs::write(
+                    w.repo()
+                        .unwrap()
+                        .commondir()
+                        .join("worktrees/retirement-other/HEAD"),
+                    format!("ref: {OTHER_BRANCH}\n"),
+                )
+                .unwrap();
+            },
+        )?;
+    }
+    Ok(())
+}
+fn p2_chain_late(present: bool, case_equivalent: bool) -> Result<(), FixtureError> {
+    let variants = if case_equivalent {
+        vec![
+            p2_chain_case_reference(false),
+            p2_chain_case_reference(true),
+        ]
+    } else {
+        [
+            "refs/worktree/shadow",
+            "refs/bisect/shadow",
+            "refs/rewritten/shadow",
+            "SHADOW_HEAD",
+        ]
+        .map(str::to_owned)
+        .to_vec()
+    };
+    for variant in variants {
+        let w = setup()?;
+        if present {
+            add_present(&w)?;
+        } else {
+            fixed(fs::create_dir_all(w.root.join(".manyhands/worktrees")))?;
+        }
+        let (other, admin) = add_other_checkout(&w);
+        history(&w, true)?;
+        let materialization = complete_materialization(&w)?;
+        let request = request(&w);
+        let tip = fixed(w.repo()?.refname_to_id(CONTEXT))?;
+        let root = w.root.clone();
+        let data = w.data();
+        let captured = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let snapshot = captured.clone();
+        RepositoryService::set_retirement_intent_hook_for_testing(move || {
+            let db = rusqlite::Connection::open(data.join(REGISTRY_FILE)).unwrap();
+            let (wflag,bstep):(String,Option<String>)=db.query_row("SELECT c.worktree_removal,o.completed_step FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+            assert_eq!(wflag, if present { "observed" } else { "none" });
+            assert_eq!(
+                bstep.as_deref(),
+                if present {
+                    Some("context_worktree_released")
+                } else {
+                    None
+                }
+            );
+            assert!(!root.join(".manyhands/worktrees").join(ITEM).exists());
+            assert_eq!(db.query_row("SELECT count(*) FROM context_retirement_effect_intents WHERE resource='branch' AND observation IS NULL",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+            if case_equivalent {
+                p2_chain_case_fault(&root, &other, &admin, &variant);
+            } else {
+                p2_chain_alias_fault(&root, &other, &admin, &variant);
+            }
+            *snapshot.borrow_mut() = Some((resource_image(&root), registry_image(&db)));
+        });
+        let result = fixed(w.service.retire_context_authenticated(
+            request.clone(),
+            w.primary().approval,
+            &mut SessionCredentials::new(Provider),
+        ))?;
+        let snapshot = captured.borrow();
+        let (resources, registry) = snapshot.as_ref().unwrap();
+        let expected = ContextRetirementOutcome::CleanupPending {
+            worktree_removal: RetirementRemoval::Observed,
+            branch_removal: RetirementRemoval::None,
+        };
+        ssh_harness::observation(&[
+            601,
+            present as u128,
+            case_equivalent as u128,
+            (result == expected) as u128,
+            (resource_image(&w.root) == *resources) as u128,
+        ]);
+        if present {
+            assert_eq!(result, expected);
+        } else {
+            assert!(
+                matches!(&result,ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Refused && r.code==ResultCode::ExternalChange && r.worktree_removal==RetirementRemoval::None && r.branch_removal==RetirementRemoval::None)
+            );
+        }
+        assert!(resource_image(&w.root) == *resources);
+        assert_eq!(fixed(w.repo()?.refname_to_id(CONTEXT))?, tip);
+        assert_materialization(&w, &materialization)?;
+        let db = w.db()?;
+        let after = registry_image(&db);
+        for (table, rows) in registry {
+            if ![
+                "operation_records",
+                "context_retirement_records",
+                "context_retirement_effect_intents",
+                "context_retirement_attempts",
+                "retirement_observation_pins",
+                "retirement_observation_pin_releases",
+            ]
+            .contains(&table.as_str())
+            {
+                assert!(
+                    after.get(table) == Some(rows),
+                    "unrelated row changed after late checkout refusal"
+                );
+            }
+        }
+        assert_eq!(fixed(db.query_row("SELECT count(*) FROM context_retirement_effect_intents WHERE resource='branch' AND observation='changed'",[],|r|r.get::<_,i64>(0)))?,1);
+        assert_eq!(fixed(db.query_row("SELECT count(*) FROM context_retirement_effect_intents WHERE resource='branch' AND observation='removed'",[],|r|r.get::<_,i64>(0)))?,0);
+        assert_eq!(
+            fixed(db.query_row(
+                "SELECT count(*) FROM retirement_observation_pins",
+                [],
+                |r| r.get::<_, i64>(0)
+            ))?,
+            i64::from(present)
+        );
+        if present {
+            let row:(String,String,String,String)=fixed(db.query_row("SELECT c.phase,c.worktree_removal,c.branch_removal,o.completed_step FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))))?;
+            assert_eq!(
+                row,
+                (
+                    "worktree_removed".into(),
+                    "observed".into(),
+                    "none".into(),
+                    "context_worktree_released".into()
+                )
+            );
+        }
+        // Repair removes the current eligibility blocker, never restores the
+        // spent same-live B permit. Owed replay must not advertise or delete.
+        fixed(fs::write(
+            w.repo()?
+                .commondir()
+                .join("worktrees/retirement-other/HEAD"),
+            format!("ref: {OTHER_BRANCH}\n"),
+        ))?;
+        let resources = resource_image(&w.root);
+        let rows = registry_image(&db);
+        let commands = w.server.commands();
+        let replay = w.service.retire_context_authenticated(
+            request,
+            w.primary().approval,
+            &mut SessionCredentials::new(Provider),
+        );
+        if present {
+            assert!(matches!(replay,Err(e) if e.kind==RepositoryErrorKind::RecoveryRequired));
+        } else {
+            assert_eq!(fixed(replay)?, result);
+        }
+        assert!(resource_image(&w.root) == resources);
+        assert!(registry_image(&db) == rows);
+        assert_eq!(w.server.commands(), commands);
+        assert!(RepositoryService::open_at(&w.data()).is_ok());
+        w.privacy()?;
+    }
+    Ok(())
 }
 
 // Shared negative journey: capture all resource and registry rows at the actual
