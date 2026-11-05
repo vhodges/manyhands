@@ -382,15 +382,14 @@ are not authorized; numeric exits must come from existing results registry.
   no remaining findings. Recognition, migration and nested-harness visibility
   corrections verified. All three static gates and targeted evidence recorded.
 - [ ] **2 — Durable single-context retirement.** Checkpoint approved at `66c2ca2b`;
-  the IN-PROGRESS initial-absence code milestone includes the local-only domain
-  path, exact refresh guards, single-consumer Z and stronger audits. Latest
-  context-retirement filter after the quality-Q1/Q2 corrections: **58 passed**
-  (previous 50 + 8 tests, not matrix groups). Limited SPEC and QUALITY reviews
-  passed through `03c0c63b` with no remaining findings, from source base
-  `daab73e7`; all three static gates passed on that source.
-  Live observation/instance/destructive and source/batch capability paths remain
-  unfinished and unexposed. See the latest bounded-increment section below;
-  not complete/review-ready, full Task 2 spec/quality review remains owed.
+  initial absence is independently approved through `03c0c63b`, published with
+  the controller's record at `b1a986c2`. The next IN-PROGRESS increment connects
+  fresh authenticated **branch-only** retirement: claim/O/receipt/proof/guarded
+  branch deletion/D14/index result. Latest gates: **64** context-retirement tests
+  (unchanged 58 + 6 additive), **10** registered retirement SSH cases. Present
+  instances, authorized executor replacement/recovery and source/batch scopes
+  remain unfinished/closed; all 44 matrix obligations stay explicitly tracked.
+  Full Task 2 spec/quality review remains owed; no full completion claimed.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
 - [ ] **5 — CLI command/flag/help/rendering.** Not started.
@@ -400,9 +399,10 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: publish the reviewed limited initial-absence milestone only
-on this ticket branch, then continue the same Task 2 implementer into the deferred
-instance/observation/guarded execution mechanisms. Prior corrections remain
+Immediate next step: continue the same Task 2 implementer from the connected
+branch-only increment into durable present-instance installation and exact
+authorized executor/observer replacement and owned-absence recovery, then the
+remaining source/batch audits and shared stages. Prior corrections remain
 covered; no new policy decision or reapproval is needed. This is not full Task 2
 review/completion or permission for Task 3. The corrected design checkpoint
 and limited initial-absence review checkpoint are both cleared.
@@ -2028,3 +2028,113 @@ Initial-absence core only; **remaining 44 matrix groups/cases and registered non
 `mutation_remote retirement_` coverage remain owed**. No Task 3/4, source/batch or
 destructive producer extension, agents, real-context/key/profile/draft action,
 other-worktree edit, lifecycle closure/main integration or native dispatch.
+
+## Task 2 Progress Delta — Connected Fresh Branch-Only Increment
+
+Entry verified clean/published **`b1a986c2ce45331fb403bec5dc7a521a29506f1a`**;
+controller preflight reused in this phase, main still `c69789d9`. The design and
+limited initial-absence review checkpoints remain **cleared**. Full Task 2 base
+`7b1912d1` and source milestone base `daab73e7` are unchanged. No old 58 tests,
+proof logic, cleanup/release helper, mutation schema/golden or Task 3/4 behavior
+was rewritten.
+
+- New explicit domain entry `retire_context_authenticated` accepts a **fresh
+  branch-only** lifetime. Its lease-held claim atomically freezes local/attempt/
+  old-materialization/configuration identity, allocates/binds read-only O and
+  mints a private non-Clone execution scope stored in `RemoteReservation`.
+  Request-bound and source/batch forms remain closed, not optional exemptions.
+- Every scoped remote `owned` write rechecks local/observer epochs, pending-row
+  exclusion, durable generation and process endpoint/key-source configuration.
+  No Git/SQL/cache guard spans authentication/advertisement. A1 receives the
+  **returned batch ID** in the owned advertisement transaction and atomically
+  inserts standalone provenance/binding/consumer pin. Public reserve/restart/
+  replay cannot mint it; public configuration branches check reserved IDs before
+  writes. Read-only configuration comparison uses the existing transaction, not
+  recursively acquired cache guards.
+- Under the reacquired cleanup lease, C/F require the exact current live receipt,
+  actual Fetch publication/deletion history, fixed direct tip, complete checkout/
+  no-follow inventory, committed local-primary completion/full preservation and
+  matching primary-item disk bytes/mode. Branch intent commits before the guarded
+  exact-ref primitive; only this uninterrupted fresh call carries the permit.
+  M reuses the approved complete absence inventory, compare-consumes the exact
+  captured tuple (including affected-row count), and atomically records settlement
+  plus noncheckpoint branch handoff. Claimed index finalization now constructs the
+  branch-only result and runs the existing single-consumer Z transaction.
+- Stable host/cancel/proof refusals do not remove resources. Ambiguous/effect SQL
+  stops report `CleanupPending` with possible removal and retain the blocker.
+  Existing pending calls never mint a new branch-only permit. Same-OID recreation
+  survives both completed replay and the tested Git/SQL gap; a new same-ID
+  document materialization also survives completed ticket replay. No tracking-ref,
+  lifecycle projection or unrelated-context deletion; SSH controls check no object
+  transfer or push. Present W/A still fail closed before selection/marker/prune.
+
+### TDD Evidence And Final Gates
+
+Raw logs: `/tmp/opencode/`. Behavioral REDs compiled and executed: initial four
+SSH domain cases **0/4** (`task2-live-branch-red-2.log`, numeric `1 0 1` proves the
+old domain returned recovery, not a fixture/watchdog-only inference); reserved-ID
+public configuration **0/1** (`task2-live-public-id-red.log`, generation/O changed
+`(1,reserved)→(2,interrupted)`); ignored D14 delete **0/1 SSH**
+(`task2-live-d14-red.log`); shared M/fresh-invalid inventory **0/2**
+(`task2-live-inventory-red.log`); redirected root HEAD **0/1**
+(`task2-live-primary-head-red.log`). Corresponding GREEN logs are
+`task2-live-branch-green-3.log` (9 SSH before the final positive D14 control),
+`task2-live-authority-green.log` (3), `task2-live-inventory-green.log` (2), and
+`task2-live-primary-head-green.log` (1); final gates below cover the coherent tree.
+Intermediate visibility compilation errors and Clippy's large transport-result/
+scope-size findings are not behavioral REDs; scope storage was boxed without
+widening public reservation enums. The empty observation hook-support filter is
+**not evidence**; replaced by four registered ordinary authenticated SSH controls.
+
+All Cargo commands serial through Devenv, no shell deadlines/pending processes.
+After final formatting, source frozen for the following required Task 2 gates
+(test rows use `devenv shell -- cargo test --all-features --locked <suffix>`):
+
+| Command / suffix | Raw log | Result |
+| --- | --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | `task2-live-check-final-5.log` | exit 0 |
+| `devenv shell -- cargo fmt --check` | `task2-live-fmt-final-5.log` | exit 0 |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | `task2-live-clippy-final-5.log` | exit 0 |
+| `--lib context_retirement` | `task2-live-context-final-5.log` | 64 passed |
+| `--lib cleanup` | `task2-live-cleanup-final-5.log` | 50 passed |
+| `--lib recovery` | `task2-live-recovery-final-5.log` | 60 passed |
+| `--lib read::status` | `task2-live-read-status-final-5.log` | 10 passed |
+| `--test recovery_foundation_gate` | `task2-live-foundation-final-5.log` | 52 passed |
+| `--test mutation_remote retirement_` | `task2-live-ssh-final-5.log` | **10 SSH cases passed** |
+
+Supplemental affected controls: `--lib repository::remote::reservation::tests`
+**58 passed** (`task2-live-reservation-final.log`), and `--test remote_observation
+authenticated_` **4 SSH cases passed** (`task2-live-ordinary-observation-final.log`).
+No failures/ignored cases in claimed gates. Registered module + `CASES` chain
+preceded the first SSH filter. Full fast/changed-path SSH tiers stay Task 8 work;
+no native/Windows runtime/cross-compilation claim or zero-case SSH pass.
+
+### Exact Remaining Work / Handoff
+
+The **01–44 matrix remains the full acceptance checklist**, not 64 or 10 completed
+groups. This increment supplies partial live evidence for 02–05/07 (Fetch,
+branch-only ticket/document, refusals), 20–25 (branch-only SQL/D14/recreation),
+29/31 (owned fences, actual returned batch, no public replay authority), and
+35–38 (Final/Owed/handoff/ID controls). It does **not** discharge a whole matrix
+row beyond its tested scope or replace the prior absence/Z evidence.
+
+Next required mechanisms: present-instance exclusive durable installation and
+restart rules (13–17), full primary/cleanliness and W-prune effect/crash matrices
+(01/05–06/10–11/18–19), exact authorized local/request/observer replacement with
+rollback and tokenless R-7/new-executor behavior (12/20–22/27–30), complete D14/
+commit/index failure variants (23–26/35–38), and source/batch consumers, gap
+ownership, A0–A4 shared pre-terminal seam/projection audits and source/consumer
+Z/GC matrices (32–34/39–44). Actual batch invocation/coordinator/eligibility and
+guarded preserving behavior remain Task 4/3, not implemented here. Pending owned
+all-absent crash recovery is still owed; current incomplete old attempts refuse
+without minting replacement deletion authority. No complexity/policy blocker.
+
+Self-review and whitespace checks passed. Frozen staged **11-code-path diff**
+against `b1a986c2`, SHA-256
+`418025cc11b1f066382f8e1ceb3bae2387c54f8557e393d5c8ee27e7d35ca19d`;
+only this ledger/comment change after source gates. Checkpoint
+**`01M6N3S2C9N0FHW08ACD7PYD37`**, parent **`01M6N079P04TC1Y5J74H87A8T6`**,
+actual UTC **`2026-11-05T05:44:16Z`**. Coherent coauthored commit only, no push,
+agents, other-worktree edits, status/PR/main closure/native CI or real contexts/
+keys/profiles/drafts. Full Task 2 SPEC→QUALITY/adversarial source review remains
+controller-owned after implementation, before Task 3; no new approval hold added.

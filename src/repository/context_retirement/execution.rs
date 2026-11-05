@@ -29,13 +29,19 @@ pub struct RetireContextRequest {
 pub enum ContextRetirementOutcome {
     Final(ContextRetirementReport),
     IndexPending,
+    /// An owned effect may have happened; only this retirement's recovery may
+    /// reconcile it. This is never a Final refusal or an index-only handoff.
+    CleanupPending {
+        worktree_removal: super::RetirementRemoval,
+        branch_removal: super::RetirementRemoval,
+    },
 }
 
 const OP: RepositoryOperation = RepositoryOperation::RetireContext;
 
 /// Inspect every deterministic ancestor without following redirected paths.
 /// Even a dangling symlink is presence, never evidence of absence.
-fn absent_path(root: &Path, path: &Path) -> Result<bool, RepositoryError> {
+pub(super) fn absent_path(root: &Path, path: &Path) -> Result<bool, RepositoryError> {
     let relative = path.strip_prefix(root).map_err(|_| recovery_required())?;
     let mut at = root.to_owned();
     for component in relative.components() {
@@ -65,7 +71,7 @@ fn absent_path(root: &Path, path: &Path) -> Result<bool, RepositoryError> {
     Ok(false)
 }
 
-fn ref_file_absent(root: &Path, path: &Path) -> Result<bool, RepositoryError> {
+pub(super) fn ref_file_absent(root: &Path, path: &Path) -> Result<bool, RepositoryError> {
     let absent = absent_path(root, path)?;
     if !absent && !std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_file()) {
         return Err(recovery_required());
@@ -84,7 +90,7 @@ fn metadata_line(text: &str) -> Result<&str, ()> {
     Ok(line)
 }
 
-fn plain_registration_path(path: &Path, directory: bool) -> Result<(), ()> {
+pub(super) fn plain_registration_path(path: &Path, directory: bool) -> Result<(), ()> {
     let anchor = path
         .ancestors()
         .last()
@@ -103,7 +109,7 @@ fn plain_registration_path(path: &Path, directory: bool) -> Result<(), ()> {
 /// Retirement-only identity-chain proof before cleanup's HEAD inventory reads
 /// any registration links. Canonical equality alone follows redirected targets;
 /// require every traversed component plain before resolving either direction.
-fn require_registration_identity(git: &git2::Repository) -> Result<(), ()> {
+pub(super) fn require_registration_identity(git: &git2::Repository) -> Result<(), ()> {
     plain_registration_path(git.commondir(), true)?;
     let common = git.commondir().canonicalize().map_err(|_| ())?;
     let inventory = common.join("worktrees");
@@ -147,13 +153,13 @@ fn require_registration_identity(git: &git2::Repository) -> Result<(), ()> {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Inventory {
+pub(super) enum Inventory {
     Absent,
     Invalid,
     PresentOrBranchOnly,
 }
 
-fn initial_inventory(
+pub(super) fn initial_inventory(
     git: &git2::Repository,
     root: &Path,
     request: &RetireContextRequest,

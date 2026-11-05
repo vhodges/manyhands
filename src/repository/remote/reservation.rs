@@ -42,6 +42,7 @@ pub struct RemoteReservation {
     repository_id: i64,
     generation: i64,
     epoch: i64,
+    retirement: Option<Box<crate::repository::context_retirement::record::ObserverExecution>>,
 }
 
 impl RemoteReservation {
@@ -214,6 +215,29 @@ fn token(
         repository_id,
         generation: record.generation,
         epoch: record.owner_epoch,
+        retirement: None,
+    }
+}
+
+pub(in super::super) fn retirement_token(
+    service: &RepositoryService,
+    repository_id: i64,
+    record: &state::StoredRemoteOperation,
+    execution: crate::repository::context_retirement::record::ObserverExecution,
+) -> RemoteReservation {
+    let mut owner = token(service, repository_id, record);
+    owner.retirement = Some(Box::new(execution));
+    owner
+}
+
+impl RemoteReservation {
+    pub(in super::super) fn retirement_execution(
+        &self,
+    ) -> Result<&crate::repository::context_retirement::record::ObserverExecution, RepositoryError>
+    {
+        self.retirement
+            .as_deref()
+            .ok_or_else(state::recovery_required)
     }
 }
 
@@ -254,7 +278,15 @@ pub(in super::super) fn owned(
     {
         return Err(state::recovery_required());
     }
-    crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
+    if let Some(execution) = &owner.retirement {
+        execution.validate_observer(service, tx, repository_id, &record)?;
+    } else {
+        crate::repository::context_retirement::record::require_foreign_id_available(
+            tx,
+            owner.operation_id,
+        )?;
+        crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
+    }
     Ok(record)
 }
 
@@ -715,7 +747,7 @@ pub(super) fn commit_observation_batch_with_capture<T>(
         if decision != RemoteSafePointOutcome::Continue {
             return capture(tx, id, decision);
         }
-        if synchronization || record.poll_kind == Some(state::PollKind::Update) {
+        let batch = if synchronization || record.poll_kind == Some(state::PollKind::Update) {
             state::persist_complete_advertisement(
                 tx,
                 id,
@@ -723,9 +755,12 @@ pub(super) fn commit_observation_batch_with_capture<T>(
                 owner.generation,
                 observations,
                 observed_at,
-            )?;
+            )?
         } else {
-            state::complete_batch(tx, id, plan, owner.generation, observations, observed_at)?;
+            state::complete_batch(tx, id, plan, owner.generation, observations, observed_at)?
+        };
+        if let Some(execution) = &owner.retirement {
+            execution.capture_advertisement(service, tx, id, &record, batch)?;
         }
         write(tx, id)?;
         let decision = if synchronization {

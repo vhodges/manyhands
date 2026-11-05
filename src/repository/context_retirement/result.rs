@@ -55,6 +55,20 @@ impl ContextRetirementReport {
         }
     }
 
+    pub(super) fn retired(
+        worktree_removal: RetirementRemoval,
+        branch_removal: RetirementRemoval,
+    ) -> Self {
+        Self {
+            version: 1,
+            code: ResultCode::Ok,
+            outcome: RetirementDisposition::Retired,
+            worktree_removal,
+            branch_removal,
+            materialization_settled: true,
+        }
+    }
+
     pub(super) fn encode(&self) -> Result<String, RepositoryError> {
         serde_json::to_string(self).map_err(|_| recovery_required())
     }

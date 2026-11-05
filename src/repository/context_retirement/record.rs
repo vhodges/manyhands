@@ -7,6 +7,11 @@ use super::super::{RepositoryError, remote::state::recovery_required};
 
 const MARKER: &str = "context_retirement_v1";
 
+#[path = "authority.rs"]
+mod authority;
+pub(in super::super) use authority::ObserverExecution;
+pub(super) use authority::{BranchClaim, claim_branch, refuse_execution};
+
 /// Retirement identities are spent even after their executor ends. Include the
 /// envelope independently of its companion, so companion loss never frees an ID.
 pub(in super::super) fn owned_identity(db: &Connection, id: &str) -> Result<bool, RepositoryError> {
@@ -949,13 +954,22 @@ pub(in super::super) fn finalize_index(
     if !refresh_allowed(tx, &operation, root)? {
         return Err(recovery_required());
     }
-    // Until the destructive/preserving executor is connected, only the
-    // all-absent domain handoff has an implemented final-result constructor.
-    let absent: bool = tx.query_row("SELECT repository_id=?2 AND initial_resources='absent' AND absence_basis='initial' AND request_ulid IS NULL AND batch_operation_ulid IS NULL FROM context_retirement_records WHERE operation_ulid=?1", params![operation,repository_id], |r| r.get(0)).map_err(|_| recovery_required())?;
-    if !absent {
+    // Only implemented standalone handoffs. Preserving/source/batch authority
+    // remains closed; refresh never manufactures an executor or repeats effects.
+    let handoff: Option<(String,String)> = tx.query_row("SELECT absence_basis,branch_removal FROM context_retirement_records WHERE operation_ulid=?1 AND repository_id=?2 AND request_ulid IS NULL AND batch_operation_ulid IS NULL AND worktree_removal='none' AND ((initial_resources='absent' AND absence_basis='initial') OR (initial_resources='branch_only' AND absence_basis='owned_intent'))", params![operation,repository_id], |r| Ok((r.get(0)?,r.get(1)?))).optional().map_err(|_| recovery_required())?;
+    let Some((basis, branch)) = handoff else {
         return Err(recovery_required());
-    }
-    let result = super::ContextRetirementReport::absent();
+    };
+    let result = if basis == "initial" {
+        super::ContextRetirementReport::absent()
+    } else {
+        let branch = match branch.as_str() {
+            "observed" => super::RetirementRemoval::Observed,
+            "possible" => super::RetirementRemoval::Possible,
+            _ => return Err(recovery_required()),
+        };
+        super::ContextRetirementReport::retired(super::RetirementRemoval::None, branch)
+    };
     if tx.execute("UPDATE context_retirement_records SET phase='complete',final_code=?2,final_result=?3 WHERE operation_ulid=?1 AND phase IN ('local_absent','index_pending')", params![operation,result.code.as_str(),result.encode()?]).map_err(RepositoryError::sqlite)? != 1 { return Err(recovery_required()); }
     if tx.execute("UPDATE context_retirement_attempts SET phase='ended' WHERE operation_ulid=?1 AND owner_epoch=(SELECT owner_epoch FROM context_retirement_records WHERE operation_ulid=?1) AND phase='active'", [&operation]).map_err(RepositoryError::sqlite)? != 1 { return Err(recovery_required()); }
     let epoch = tx

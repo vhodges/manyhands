@@ -3,6 +3,7 @@ mod execution;
 pub(super) mod proof;
 pub(super) mod record;
 mod result;
+mod run;
 pub use execution::{ContextRetirementOutcome, RetireContextRequest};
 pub use result::{ContextRetirementReport, RetirementDisposition, RetirementRemoval};
 
