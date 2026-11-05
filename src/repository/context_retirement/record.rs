@@ -595,6 +595,9 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
             }
         }
     }
+    // Retirement owns a closed set of noncheckpoint local steps. A phase and
+    // its effect/settlement evidence must justify the step in both directions;
+    // a foreign lifecycle step is not harmless display metadata.
     let inconsistent: bool = db.query_row("SELECT EXISTS(
       SELECT 1 FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id
       WHERE NOT EXISTS(SELECT 1 FROM context_retirement_attempts a WHERE a.operation_ulid=c.operation_ulid AND a.owner_epoch=c.selection_epoch)
@@ -615,19 +618,34 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
          OR (SELECT count(*) FROM request_operations ro WHERE ro.operation_ulid=c.operation_ulid)!=1))
        OR (o.completed_step='context_retirement_absent' AND (c.absence_basis!='initial' OR c.materialization_settled!=1 OR c.phase NOT IN ('local_absent','index_pending','complete')))
        OR (o.completed_step='context_branch_released' AND (c.absence_basis!='owned_intent' OR c.materialization_settled!=1 OR c.phase NOT IN ('local_absent','index_pending','complete')))
-       OR (o.completed_step='context_worktree_released' AND (c.worktree_removal='none' OR c.phase NOT IN ('worktree_removed','branch_deleting','preserving')))
-       OR (o.completed_step='context_retirement_preserved' AND c.phase NOT IN ('preserving','index_pending','abandoned'))
+        OR (o.completed_step='context_worktree_released' AND (c.worktree_removal='none' OR c.phase NOT IN ('worktree_removed','branch_deleting','preserving')))
+        OR (o.completed_step='context_retirement_preserved' AND c.phase NOT IN ('preserving','index_pending','abandoned'))
+        OR (o.completed_step IS NOT NULL AND o.completed_step NOT IN ('context_retirement_absent','context_worktree_released','context_branch_released'))
+        OR (c.phase='selected' AND (o.completed_step IS NOT NULL OR o.state NOT IN ('created','failed')
+          OR c.worktree_removal!='none' OR c.branch_removal!='none' OR c.absence_basis!='none' OR c.materialization_settled!=0))
+        OR (c.phase='refused' AND o.completed_step IS NOT NULL)
+        OR (c.phase='worktree_removing' AND (o.completed_step IS NOT NULL OR o.state NOT IN ('created','failed')
+          OR c.worktree_removal!='possible' OR c.branch_removal!='none' OR c.absence_basis!='none' OR c.materialization_settled!=0))
+        OR (c.phase='worktree_removed' AND (o.completed_step IS NOT 'context_worktree_released'
+          OR c.branch_removal!='none' OR c.absence_basis!='none' OR c.materialization_settled!=0))
+        OR (o.completed_step='context_worktree_released' AND (c.worktree_removal!='observed'
+          OR o.state NOT IN ('created','context_worktree_released','failed')
+          OR NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.resource='worktree' AND e.observation='removed')))
+        OR (c.phase='branch_deleting' AND (c.branch_removal!='possible' OR c.absence_basis!='none' OR c.materialization_settled!=0
+          OR (c.initial_resources='present' AND o.completed_step IS NOT 'context_worktree_released')
+          OR (c.initial_resources='branch_only' AND (o.completed_step IS NOT NULL OR c.worktree_removal!='none' OR o.state NOT IN ('created','failed')))))
+        OR (c.phase IN ('local_absent','index_pending') AND o.state NOT IN ('authoritative_observed','indexing','failed','observed','persisted','retry','index_invalidated'))
     )", [], |r| r.get(0)).map_err(|_| recovery_required())?;
     if inconsistent {
         return Err(recovery_required());
     }
-    // No batch/source producer is installed by this bounded increment. Do not
-    // silently accept such projections as authority without their schema and
-    // complete worklist/request/eligibility audit (the remaining Task 2 seam).
-    let unsupported_batch: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records WHERE batch_operation_ulid IS NOT NULL)
+    // No batch/source or guarded-preservation producer/correlation is installed
+    // by this bounded increment. Preserve the approved future semantics, but do
+    // not accept placeholder steps/phases without their controlling authority.
+    let unsupported_authority: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records WHERE batch_operation_ulid IS NOT NULL OR phase IN ('preserving','abandoned'))
       OR EXISTS(SELECT 1 FROM retirement_advertisement_provenance WHERE execution_kind!='local_parent' OR execution_batch_operation_ulid IS NOT NULL)
       OR EXISTS(SELECT 1 FROM retirement_observation_receipts WHERE consumer_kind!='single')", [], |r| r.get(0)).map_err(|_| recovery_required())?;
-    if unsupported_batch {
+    if unsupported_authority {
         return Err(recovery_required());
     }
     let identity_collision: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_attempts a WHERE a.observer_operation_ulid=a.operation_ulid
@@ -715,7 +733,7 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
     if bad_release {
         return Err(recovery_required());
     }
-    let mut results = db.prepare("SELECT phase,final_code,final_result,worktree_removal,branch_removal,materialization_settled,absence_basis FROM context_retirement_records WHERE final_result IS NOT NULL").map_err(|_| recovery_required())?;
+    let mut results = db.prepare("SELECT c.phase,c.final_code,c.final_result,c.worktree_removal,c.branch_removal,c.materialization_settled,c.absence_basis,o.completed_step FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id WHERE c.final_result IS NOT NULL").map_err(|_| recovery_required())?;
     let rows = results
         .query_map([], |r| {
             Ok((
@@ -726,11 +744,12 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
                 r.get::<_, String>(4)?,
                 r.get::<_, bool>(5)?,
                 r.get::<_, String>(6)?,
+                r.get::<_, Option<String>>(7)?,
             ))
         })
         .map_err(|_| recovery_required())?;
     for row in rows {
-        let (phase, code, json, worktree, branch, settled, basis) =
+        let (phase, code, json, worktree, branch, settled, basis, step) =
             row.map_err(|_| recovery_required())?;
         let report = super::ContextRetirementReport::decode(&json)?;
         use super::{RetirementDisposition as D, RetirementRemoval as R};
@@ -747,12 +766,14 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
                     && settled
                     && worktree == "none"
                     && branch == "none"
+                    && step.as_deref() == Some("context_retirement_absent")
             }
             D::Retired => {
                 phase == "complete"
                     && report.code == crate::results::ResultCode::Ok
                     && basis == "owned_intent"
                     && settled
+                    && step.as_deref() == Some("context_branch_released")
             }
             D::Refused => {
                 phase == "refused"
@@ -766,9 +787,12 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
                     && branch == "none"
                     && basis == "none"
                     && !settled
+                    && step.is_none()
             }
             D::Preserved => {
-                phase == "abandoned" && report.code == crate::results::ResultCode::ExternalChange
+                phase == "abandoned"
+                    && report.code == crate::results::ResultCode::ExternalChange
+                    && step.as_deref() == Some("context_retirement_preserved")
             }
         };
         if !valid

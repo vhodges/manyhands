@@ -17,6 +17,83 @@ const TABLES: [&str; 7] = [
 ];
 
 #[test]
+fn retirement_quality_q2_partial_worktree_step_requires_correlated_effect() {
+    let mut accepted = Vec::new();
+    for case in [
+        "valid",
+        "foreign_step",
+        "missing_step",
+        "possible_only",
+        "missing_observation",
+    ] {
+        let data = tempfile::tempdir().unwrap();
+        drop(RepositoryService::open_at(data.path()).unwrap());
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let operation = OperationId::new();
+        db.execute("INSERT INTO repositories(id,root_path,enabled_at,accessibility,refresh_required) VALUES(1,?1,1,'accessible',0)", [data.path().to_str()]).unwrap();
+        db.execute("INSERT INTO operation_records(id,repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(1,1,?2,?1,'retire_context','authoring-context-v1/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV/Retire','created',1)", params![operation.to_string(),data.path().to_str()]).unwrap();
+        db.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,expected_tip,instance_nonce,instance_verified,remote_name,primary_branch,configuration_generation,endpoint_digest,selection_epoch,materialization_capture,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis) VALUES(?1,1,1,1,'ticket','01ARZ3NDEKTSV4RRFFQ69G5FAV','present',?2,?3,1,'origin','main',0,zeroblob(32),1,'absent',0,1,'selected','none','none','none')", params![operation.to_string(),"1".repeat(40),OperationId::new().to_string()]).unwrap();
+        db.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase) VALUES(?1,1,1,'active')", [operation.to_string()]).unwrap();
+        bound_observation(&db, operation);
+        assert!(RepositoryService::open_at(data.path()).is_ok());
+        db.execute("UPDATE context_retirement_records SET phase='worktree_removing',worktree_removal='possible'", []).unwrap();
+        db.execute("INSERT INTO context_retirement_effect_intents(operation_ulid,owner_epoch,resource,receipt_id,primary_oid,proof_kind) VALUES(?1,1,'worktree',1,?2,'ancestor')", params![operation.to_string(),"1".repeat(40)]).unwrap();
+        assert!(
+            RepositoryService::open_at(data.path()).is_ok(),
+            "a recorded intent alone remains possible, not a completed worktree release"
+        );
+        if case != "missing_observation" {
+            db.execute(
+                "UPDATE context_retirement_effect_intents SET observation='removed'",
+                [],
+            )
+            .unwrap();
+        }
+        db.execute_batch("UPDATE context_retirement_records SET phase='worktree_removed',worktree_removal='observed'; UPDATE operation_records SET state='context_worktree_released',completed_step='context_worktree_released';").unwrap();
+        match case {
+            "foreign_step" => {
+                db.execute(
+                    "UPDATE operation_records SET completed_step='publication_committed'",
+                    [],
+                )
+                .unwrap();
+            }
+            "missing_step" => {
+                db.execute("UPDATE operation_records SET completed_step=NULL", [])
+                    .unwrap();
+            }
+            "possible_only" => {
+                db.execute(
+                    "UPDATE context_retirement_records SET worktree_removal='possible'",
+                    [],
+                )
+                .unwrap();
+            }
+            _ => {}
+        }
+        let before = super::execution_tests::registry_image(&db);
+        let opened = RepositoryService::open_at(data.path());
+        if case == "valid" {
+            assert!(
+                opened.is_ok(),
+                "a truthful partial removal must retain its noncheckpoint step"
+            );
+        } else if !matches!(opened, Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired) {
+            accepted.push(case);
+        }
+        assert_eq!(
+            super::execution_tests::registry_image(&db),
+            before,
+            "{case}: no repair or schema rewrite"
+        );
+    }
+    assert!(
+        accepted.is_empty(),
+        "uncorrelated partial authority accepted: {accepted:?}"
+    );
+}
+
+#[test]
 fn retirement_registry_installs_the_complete_envelope_once() {
     let data = tempfile::tempdir().unwrap();
     drop(RepositoryService::open_at(data.path()).unwrap());

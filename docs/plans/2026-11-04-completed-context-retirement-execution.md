@@ -363,6 +363,7 @@ are not authorized; numeric exits must come from existing results registry.
 | Task 2 corrected checkpoint, `7b1912d1..66c2ca2b` | Same independent adversarial reviewer, session `ses_e56ce3361ffe0Y48AKdejYpbyv`, verified both corrections and their producer/pin/audit/FK interactions against source: **0 remaining findings** | Mandatory record/reservation checkpoint approved; same implementer may begin Task 2 TDD. This is not runtime evidence or Task 2 completion |
 | Task 2 limited initial-absence SPEC review at `bdfaa98e33f0a0150cf74b48d0c00d5f9b3e7c9e` | Controller relayed and source-verified **3 Important current-behavior findings**: S1 nonstandard registration/HEAD inventory omitted; S2 dangling/nonregular loose-ref slot could become absence; S3 terminal remote index/reconciliation debt did not block fresh retirement | Limited SPEC review **failed**; corrections/evidence below. Same spec reviewer's re-review is required before quality. No full Task 2 or quality pass, new owner-policy question or authority extension |
 | Same limited SPEC re-review at `d11655ea1ab05ccb03d14bd26c6ce5bfcf1fac15` | Controller reports **S2/S3 resolved**, **one Important S1 finding remains**: unrelated registration inventory does not validate the worktree `.git` file's contents/backlink or reject a redirected gitfile | Retirement-only additive S1 correction and RED/GREEN evidence below; same-reviewer S1 re-review still required, quality held. No new policy or authority scope |
+| Limited QUALITY review at `fb18edc1990c03de9fa03dc8ec3f09f1d5b30668` | Controller relayed/agreed **2 Important current defects**: quality-Q1 commondir target redirects still admit absence; quality-Q2 no-effect retirement can carry an unrelated completed-step authority | Separate behavioral RED/GREEN corrections below. Controller's same SPEC delta-check, then **same QUALITY reviewer re-review**, remain pending; no approval inferred from local gates |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -380,9 +381,9 @@ are not authorized; numeric exits must come from existing results registry.
 - [ ] **2 — Durable single-context retirement.** Checkpoint approved at `66c2ca2b`;
   the IN-PROGRESS initial-absence code milestone includes the local-only domain
   path, exact refresh guards, single-consumer Z and stronger audits. Latest
-  context-retirement filter after the remaining S1 backlink correction: **50
-  passed** (previous 45 + 5 Linux tests, not matrix groups). Controller reports
-  S2/S3 resolved; same-reviewer S1 re-review remains pending, quality held.
+  context-retirement filter after the quality-Q1/Q2 corrections: **58 passed**
+  (previous 50 + 8 tests, not matrix groups). Controller's same SPEC delta-check
+  and same QUALITY re-review remain pending; no review pass claimed.
   Live observation/instance/destructive and source/batch capability paths remain
   unfinished and unexposed. See the latest bounded-increment section below;
   not complete/review-ready, full Task 2 spec/quality review remains owed.
@@ -395,9 +396,9 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: controller-owned **same-reviewer limited-milestone SPEC
-re-review of the remaining S1 backlink correction, then quality review** of the
-initial-absence core. S2/S3 are resolved by the controller's prior re-review.
+Immediate next step: controller-owned **same SPEC delta-check, then same QUALITY
+reviewer re-review of quality-Q1/Q2 corrections** in the limited initial-absence
+core. Prior S1/S2/S3 evidence remains intact; no new policy decision is requested.
 Do not extend source/batch/destructive authorities until that review checkpoint.
 This is not full Task 2 review/completion or permission for Task 3. The corrected
 design checkpoint stays cleared, not awaiting reapproval.
@@ -1893,3 +1894,133 @@ or full Task 2 completion is claimed. Initial-absence core only; remaining
 44-matrix cases, registered nonzero `mutation_remote retirement_` coverage and
 full Task 2 still owed. No source/batch/destructive authority, Task 3/4, agent,
 real-context/key/profile/draft action, push or lifecycle/main integration.
+
+## Task 2 — Limited QUALITY Q1/Q2 Corrections (Re-review Pending)
+
+### Authority, Range And Reproduction
+
+Controller relayed/agreed two Important reproduced current defects from the limited
+QUALITY review at **`fb18edc1990c03de9fa03dc8ec3f09f1d5b30668`**. These reviewer
+labels do not revise the approved design's owner Q1/Q2 decisions. They enforce its
+existing no-follow and durable-audit contract, not a new policy. This is an additive
+fix on that parent: full Task 2 base stays
+**`7b1912d152a1ab7440bd17c48a0a544e40e19258`**, source milestone range remains
+**`daab73e70fa9e84ff07a8d1214cda89a7d3766c2..new HEAD`**. No history rewriting.
+
+The reviewer probe log `/tmp/opencode/task2-quality-probe-fb18edc1-locked.log` was
+read: lines 9–10 show ordinary and redirected commondir both consuming D14, and
+15–16 show a no-effect Refused result reopening with an authoring checkpoint under
+RetireContext. These are reviewer probes, not substitutes for the separate new
+compile-success behavioral REDs below. Fresh fetch/merge was already up to date;
+main remains `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`, no main integration/closure.
+
+### Quality-Q1 — Whole Registration Identity Chain Without Redirects
+
+Two new fixtures reproduce the missing guard with a real complete unrelated
+external registration, requested B/W/A absent and the exact old completed intent:
+regular admin `commondir` contents name a symlink to the real common directory, or
+a path traversing a symlinked ancestor before reaching it. Canonical identity is
+equal and the unchanged cleanup inventory returns `Ok(false)`, yet the old
+retirement returned `AlreadyAbsent` and consumed D14. The plain relative target
+`../../worktrees/..` is the independent valid control.
+
+`execution.rs` now validates the identity chain as one retirement-only pass:
+common root → worktrees inventory → admin → regular commondir/gitdir/HEAD files;
+commondir target → exact common; admin gitdir → regular worktree gitfile → exact
+admin. Every traversed component is checked without following symlink/reparse
+redirects **before** canonical identity comparison. The pass now precedes the
+unchanged shared cleanup HEAD inventory rather than trusting its target
+canonicalization as no-follow evidence. Absolute/relative Git metadata semantics
+and valid `..` traversal are retained. No foreign repository/lease is opened.
+
+The refusal helper's checks remain intact and are strengthened to restore both
+original admin links as well as regular gitfile contents only **after** the
+before/after resource checks. The same old request still returns its stored
+no-effect refusal after full fixture repair. Actual admin/worktree bytes, file
+types, link targets, old materialization, remote/repository rows and stable
+local/companion/attempt rows are preserved. Windows uses cfg-gated unprivileged
+junctions and asserts real reparse attributes; these branches are not executed or
+cross-compiled on Linux. No stronger external-writer atomicity promise is made.
+
+**Cleanup/release helpers and contracts are unchanged.** No retirement inventory
+freshness is added to completed replay or already-authoritative index-only retry.
+
+### Quality-Q2 — Closed, Evidence-Correlated Local Step Authority
+
+The old audit only constrained a few retirement-named steps. An ordinary
+`UPDATE operation_records SET completed_step='authoring_checkpoint_observed'`
+on a real stable no-effect refusal therefore passed startup/replay despite the
+stored no-removal result. New matrices vary **only completed_step** across
+`LocalStep::ALL` plus preserving-placeholder/unknown/empty names on a real refusal
+and an inert valid selected record. No constraint/trigger/FK/schema bypass is used.
+
+The audit now admits only the implemented retirement-specific noncheckpoint steps
+(`context_retirement_absent`, `context_worktree_released`,
+`context_branch_released`) or a phase-appropriate null. It correlates selection,
+effect intent/removal, phase, local state, materialization settlement and handoff
+in both directions. Selected/no-effect refused rows cannot borrow any local step;
+an observed worktree release requires the matching positive `removed` effect
+observation rather than possible-only/incomplete evidence. Terminal reports now
+also correlate directly with the joined envelope's completed step.
+
+The valid partial-removal control uses isolated inert registry provenance/receipt/
+intent fixtures, not a live destructive producer. A possible worktree intent with
+null step remains valid; a truthful observed worktree removal retains its release
+step. Foreign/missing step, possible-only flag or missing observation refuse.
+Existing and new valid initial-absence/index-handoff/complete controls still pass.
+`ContextBranchReleased` and `ContextRetirementAbsent` remain **noncheckpoint**;
+`recovery.rs` and the read/status implementation are untouched.
+
+Guarded preservation's step/controlling request correlation is not implemented by
+this milestone. Placeholder preserving/abandoned records now fail closed instead
+of granting generic or foreign-step authority. Their approved future semantics
+remain owed to the Task 3 guarded flow; no preservation, abandonment or authority
+producer is added here. All corruption/startup/replay probes retain full images of
+every registry table, `sqlite_master` objects and schema version, with no auto-fix.
+
+### Separate RED → GREEN And Frozen-Source Gates
+
+All commands ran serially as `devenv shell -- cargo ...`, without shell deadlines
+or pending processes. Raw logs live in **`/tmp/opencode/`**. Both REDs compiled and
+ran; neither is a build/fixture failure. Source was formatted then frozen for all
+final gates; only ledger/comment metadata changed afterward.
+
+| Exact Cargo command (Devenv prefix above) | Raw log / observed result |
+| --- | --- |
+| `test --all-features --locked --lib retirement_quality_q1_` before fix | `task2-quality-q1-red.log`: **1 passed / 2 failed**, incorrect `AlreadyAbsent`, settled flag true and captured intent removed |
+| Same Q1 filter after its fix | `task2-quality-q1-green.log`: **3 passed**, 0 failed |
+| `test --all-features --locked --lib retirement_quality_q2_` before audit fix | `task2-quality-q2-red.log`: **1 passed / 4 failed**; exact accepted foreign-step lists, incomplete partial effects and preserving placeholders recorded |
+| Same Q2 filter after its fix | `task2-quality-q2-green.log`: **5 passed**, 0 failed |
+| `test --all-features --locked --lib retirement_quality_` | `task2-quality-controls-final.log`: **8 passed**, 0 failed |
+| `test --all-features --locked --lib retirement_specfix_` | `task2-quality-specfix-final.log`: **14 passed**, 0 failed, all prior S1/S2/S3 and backlink controls |
+| `test --all-features --locked --lib context_retirement` | `task2-quality-context-final.log`: **58 passed**, 0 failed = previous 50 + 8 tests, **not completed matrix groups** |
+| `test --all-features --locked --lib recovery` | `task2-quality-recovery-final.log`: **60 passed**, 0 failed, affected authority-consumer controls |
+| `test --all-features --locked --test read_status` | `task2-quality-read-status-final.log`: **24 passed**, 0 failed |
+| `check --all-features --locked` | `task2-quality-check-final.log`: exit **0** |
+| `fmt --check` | `task2-quality-fmt-final.log`: exit **0** |
+| `clippy --all-targets --all-features --locked -- -D warnings` | `task2-quality-clippy-final.log`: exit **0** |
+
+No separate unchanged cleanup/proof/foundation/broad baseline or SSH tier rerun;
+cleanup was untouched. The requested context-retirement filter includes its six
+unchanged proof tests. No zero-case pass or native CI is claimed.
+
+Self-review inspected all four owned code/test diffs and the exact registration
+link order, SQL null/closed-set/phase correlations, terminal report steps and
+no-rewrite schema images. Existing assertions were not loosened; the old fixture
+helper's repair phase was strengthened. `git diff --check` passed. Frozen blobs:
+
+- execution: `566e774ba157c693267d12fd09019714da6f93e1`
+- record: `b9cc8b7b1fcc9e9ace25b1cd9e8310b74ae12ab9`
+- execution tests: `52a6f63e0798fc49c33e3bac7e30cec73318126a`
+- store tests: `8604e9cbbf701999022cd92ab4e2244aa564f343`
+- cleanup unchanged: `cd4dc1e8397752aa9fb340d9c02235a3eda74b42`
+
+Canonical checkpoint **`01M6MZSC2KE4STB09402Y48ETD`**, unique existing-CLI ID,
+parent **`01M6MXYMP1EBMM65H2S08T4HPG`**, actual UTC **`2026-11-05T04:34:32Z`**.
+Expected coherent commit scope: four code/test paths, this ledger and new comment,
+required coauthor; no push. Controller's **same SPEC delta-check, then SAME QUALITY
+reviewer re-review** remain pending. No review pass or full Task 2 completion.
+Initial-absence core only; **remaining 44 matrix groups/cases and registered nonzero
+`mutation_remote retirement_` coverage remain owed**. No Task 3/4, source/batch or
+destructive producer extension, agents, real-context/key/profile/draft action,
+other-worktree edit, lifecycle closure/main integration or native dispatch.

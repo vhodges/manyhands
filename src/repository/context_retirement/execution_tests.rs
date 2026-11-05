@@ -51,6 +51,31 @@ fn row_image(db: &Connection, table: &str) -> Vec<Vec<rusqlite::types::Value>> {
         .unwrap()
 }
 
+pub(super) fn registry_image(
+    db: &Connection,
+) -> BTreeMap<String, Vec<Vec<rusqlite::types::Value>>> {
+    let tables = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .unwrap()
+        .query_map([], |r| r.get::<_, String>(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let mut image = BTreeMap::new();
+    image.insert("sqlite_master".into(), row_image(db, "sqlite_master"));
+    for table in tables {
+        image.insert(table.clone(), row_image(db, &table));
+    }
+    image.insert(
+        "schema_version".into(),
+        vec![vec![rusqlite::types::Value::Integer(
+            db.query_row("PRAGMA schema_version", [], |r| r.get(0))
+                .unwrap(),
+        )]],
+    );
+    image
+}
+
 fn assert_inventory_refusal(
     f: &Fixture,
     request: &RetireContextRequest,
@@ -133,6 +158,13 @@ impl Fixture {
         let db = self.db();
         db.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,completed_step,observed_at) SELECT id,root_path,?1,'retire_context',?2,'authoritative_observed','context_retirement_absent',1 FROM repositories", params![operation.to_string(),format!("authoring-context-v1/ticket/{ITEM}/Retire")]).unwrap();
         db.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,selection_epoch,instance_verified,materialization_capture,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis) SELECT operation_ulid,id,repository_id,1,'ticket',?2,'absent',1,0,'absent',1,1,'index_pending','none','none','initial' FROM operation_records WHERE operation_ulid=?1", params![operation.to_string(),ITEM]).unwrap();
+        db.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase) SELECT operation_ulid,1,repository_id,'active' FROM context_retirement_records WHERE operation_ulid=?1", [operation.to_string()]).unwrap();
+    }
+
+    fn inert_selected(&self, operation: OperationId) {
+        let db = self.db();
+        db.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) SELECT id,root_path,?1,'retire_context',?2,'created',1 FROM repositories", params![operation.to_string(),format!("authoring-context-v1/ticket/{ITEM}/Retire")]).unwrap();
+        db.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,selection_epoch,instance_verified,materialization_capture,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis) SELECT operation_ulid,id,repository_id,1,'ticket',?2,'absent',1,0,'absent',0,1,'selected','none','none','none' FROM operation_records WHERE operation_ulid=?1", params![operation.to_string(),ITEM]).unwrap();
         db.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase) SELECT operation_ulid,1,repository_id,'active' FROM context_retirement_records WHERE operation_ulid=?1", [operation.to_string()]).unwrap();
     }
 
@@ -799,6 +831,8 @@ fn assert_backlink_refusal(corrupt: impl FnOnce(&git2::Repository, &Path, &Path,
         .unwrap();
     let admin = git.commondir().join("worktrees/unrelated-registration");
     let original_gitfile = std::fs::read(worktree.join(".git")).unwrap();
+    let original_commondir = std::fs::read(admin.join("commondir")).unwrap();
+    let original_gitdir = std::fs::read(admin.join("gitdir")).unwrap();
     std::fs::write(worktree.join("sentinel"), b"preserve unrelated checkout\n").unwrap();
     corrupt(&git, &admin, &worktree, external.path());
     assert!(!git.commondir().join("worktrees").join(ITEM).exists());
@@ -866,8 +900,10 @@ fn assert_backlink_refusal(corrupt: impl FnOnce(&git2::Repository, &Path, &Path,
         .is_file()
     {
         // Fixture-only repair after proving preservation. A stored refusal must
-        // remain stable even when a regular gitfile's contents become valid.
+        // remain stable even when the gitfile and admin links become valid.
         std::fs::write(worktree.join(".git"), original_gitfile).unwrap();
+        std::fs::write(admin.join("commondir"), original_commondir).unwrap();
+        std::fs::write(admin.join("gitdir"), original_gitdir).unwrap();
         assert_eq!(f.service.retire_context(request).unwrap(), result);
         assert_eq!(
             row_image(&db, "remote_poll_materializations"),
@@ -1064,6 +1100,271 @@ fn retirement_specfix_s1_backlink_relative_gitfile_allows_absence() {
     assert!(row_image(&f.db(), "remote_poll_materializations").is_empty());
     assert_eq!(disk_image(git.commondir()), admin_before);
     assert_eq!(disk_image(&worktree), worktree_before);
+}
+
+#[cfg(any(unix, windows))]
+fn assert_redirected_commondir_refusal(ancestor: bool) {
+    assert_backlink_refusal(|git, admin, _, external| {
+        #[cfg(unix)]
+        let alias = admin.join("common-alias");
+        // Keep a Windows junction outside the admin image to avoid traversing a
+        // recursive common-dir junction in snapshot implementations.
+        #[cfg(windows)]
+        let alias = external.join("common-alias");
+        #[cfg(unix)]
+        let _ = external;
+        let common = git.commondir();
+        let destination = if ancestor {
+            common.parent().unwrap()
+        } else {
+            common
+        };
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(destination, &alias).unwrap();
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            assert!(
+                std::process::Command::new("cmd.exe")
+                    .args(["/C", "mklink", "/J"])
+                    .arg(&alias)
+                    .arg(destination)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert_ne!(
+                std::fs::symlink_metadata(&alias).unwrap().file_attributes() & 0x400,
+                0
+            );
+        }
+        #[cfg(unix)]
+        let target = PathBuf::from("common-alias");
+        #[cfg(windows)]
+        let target = alias.clone();
+        let target = if ancestor {
+            target.join(common.file_name().unwrap())
+        } else {
+            target
+        };
+        std::fs::write(
+            admin.join("commondir"),
+            remote::git_metadata_link_text(&target),
+        )
+        .unwrap();
+        assert_eq!(
+            admin.join(&target).canonicalize().unwrap(),
+            common.canonicalize().unwrap()
+        );
+        assert_eq!(
+            std::fs::read_link(&alias).unwrap().canonicalize().unwrap(),
+            destination.canonicalize().unwrap()
+        );
+    });
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn retirement_quality_q1_redirected_commondir_target_refuses() {
+    assert_redirected_commondir_refusal(false);
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn retirement_quality_q1_redirected_commondir_ancestor_refuses() {
+    assert_redirected_commondir_refusal(true);
+}
+
+#[test]
+fn retirement_quality_q1_plain_relative_commondir_allows_absence() {
+    let f = Fixture::new();
+    f.materialization("complete");
+    let git = git2::Repository::open(f.root.path()).unwrap();
+    let reference = git
+        .branch(
+            "unrelated",
+            &git.head().unwrap().peel_to_commit().unwrap(),
+            false,
+        )
+        .unwrap()
+        .into_reference();
+    let external = tempfile::tempdir().unwrap();
+    let mut options = git2::WorktreeAddOptions::new();
+    options.reference(Some(&reference));
+    git.worktree(
+        "unrelated-registration",
+        &external.path().join("checkout"),
+        Some(&options),
+    )
+    .unwrap();
+    std::fs::write(
+        git.commondir()
+            .join("worktrees/unrelated-registration/commondir"),
+        b"../../worktrees/..\n",
+    )
+    .unwrap();
+    let admin_before = disk_image(git.commondir());
+    let external_before = disk_image(external.path());
+    let result = f
+        .service
+        .retire_context(RetireContextRequest {
+            root: f.root.path().into(),
+            kind: AuthoringKind::Ticket,
+            item_id: ITEM.parse().unwrap(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    assert!(
+        matches!(result, ContextRetirementOutcome::Final(report) if report.outcome==RetirementDisposition::AlreadyAbsent && report.materialization_settled)
+    );
+    assert!(row_image(&f.db(), "remote_poll_materializations").is_empty());
+    assert_eq!(disk_image(git.commondir()), admin_before);
+    assert_eq!(disk_image(external.path()), external_before);
+}
+
+fn assert_foreign_step_matrix(
+    f: &Fixture,
+    operation: OperationId,
+    replay: Option<RetireContextRequest>,
+) {
+    assert!(
+        RepositoryService::open_at(f.data.path()).is_ok(),
+        "uncorrupted fixture must pass startup audit"
+    );
+    let db = f.db();
+    let steps = LocalStep::ALL.into_iter().map(|s| s.as_str()).chain([
+        "context_retirement_preserved",
+        "unregistered_foreign_step",
+        "",
+    ]);
+    let mut accepted = Vec::new();
+    for step in steps {
+        // Ordinary SQL only: no constraint, trigger or schema bypass.
+        assert_eq!(
+            db.execute(
+                "UPDATE operation_records SET completed_step=?1 WHERE operation_ulid=?2",
+                params![step, operation.to_string()]
+            )
+            .unwrap(),
+            1
+        );
+        let before = registry_image(&db);
+        if !matches!(RepositoryService::open_at(f.data.path()), Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+        {
+            accepted.push(format!("startup:{step}"));
+        }
+        if let Some(request) = &replay
+            && !matches!(f.service.retire_context(request.clone()), Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+        {
+            accepted.push(format!("replay:{step}"));
+        }
+        assert_eq!(
+            registry_image(&db),
+            before,
+            "startup/replay must retain every row and schema object for {step:?}"
+        );
+    }
+    assert!(
+        accepted.is_empty(),
+        "contradictory retirement step authority accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn retirement_quality_q2_no_effect_refusal_rejects_other_step_authority() {
+    let f = Fixture::new();
+    f.materialization("complete");
+    std::fs::create_dir_all(f.root.path().join(".manyhands/worktrees").join(ITEM)).unwrap();
+    let request = RetireContextRequest {
+        root: f.root.path().into(),
+        kind: AuthoringKind::Ticket,
+        item_id: ITEM.parse().unwrap(),
+        operation_id: OperationId::new(),
+    };
+    let result = f.service.retire_context(request.clone()).unwrap();
+    assert_inventory_refusal(&f, &request, &result);
+    assert_foreign_step_matrix(&f, request.operation_id, Some(request));
+}
+
+#[test]
+fn retirement_quality_q2_selected_rejects_other_step_authority() {
+    let f = Fixture::new();
+    let operation = OperationId::new();
+    f.inert_selected(operation);
+    assert_foreign_step_matrix(&f, operation, None);
+}
+
+#[test]
+fn retirement_quality_q2_absent_handoff_and_complete_keep_noncheckpoint_step() {
+    for complete in [false, true] {
+        let f = Fixture::new();
+        let operation = OperationId::new();
+        f.inert_absent_handoff(operation);
+        if complete {
+            assert!(matches!(
+                f.service
+                    .retire_context(RetireContextRequest {
+                        root: f.root.path().into(),
+                        kind: AuthoringKind::Ticket,
+                        item_id: ITEM.parse().unwrap(),
+                        operation_id: operation
+                    })
+                    .unwrap(),
+                ContextRetirementOutcome::Final(_)
+            ));
+        }
+        assert!(RepositoryService::open_at(f.data.path()).is_ok());
+        let db = f.db();
+        let step: String = db
+            .query_row(
+                "SELECT completed_step FROM operation_records WHERE operation_ulid=?1",
+                [operation.to_string()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(step, "context_retirement_absent");
+        assert!(!LocalStep::ContextRetirementAbsent.is_checkpoint());
+        assert!(!LocalStep::ContextBranchReleased.is_checkpoint());
+        let before = registry_image(&db);
+        assert!(RepositoryService::open_at(f.data.path()).is_ok());
+        assert_eq!(registry_image(&db), before);
+    }
+}
+
+#[test]
+fn retirement_quality_q2_preserving_placeholder_requires_unimplemented_correlation() {
+    let mut accepted = Vec::new();
+    for terminal in [false, true] {
+        let f = Fixture::new();
+        let operation = OperationId::new();
+        f.inert_selected(operation);
+        let db = f.db();
+        assert!(RepositoryService::open_at(f.data.path()).is_ok());
+        db.execute("UPDATE operation_records SET completed_step='context_retirement_preserved' WHERE operation_ulid=?1", [operation.to_string()]).unwrap();
+        if terminal {
+            db.execute_batch("UPDATE context_retirement_records SET phase='abandoned',final_code='external_change',final_result=json_object('version',1,'code','external_change','outcome','preserved','worktree_removal','none','branch_removal','none','materialization_settled',json('false')); UPDATE context_retirement_attempts SET phase='ended'; UPDATE operation_records SET state='completed' WHERE action='retire_context';").unwrap();
+        } else {
+            db.execute(
+                "UPDATE context_retirement_records SET phase='preserving'",
+                [],
+            )
+            .unwrap();
+        }
+        let before = registry_image(&db);
+        if !matches!(RepositoryService::open_at(f.data.path()), Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+        {
+            accepted.push(terminal);
+        }
+        assert_eq!(
+            registry_image(&db),
+            before,
+            "incomplete preservation authority must not be repaired or erased"
+        );
+    }
+    assert!(
+        accepted.is_empty(),
+        "placeholder preserving authority accepted (terminal): {accepted:?}"
+    );
 }
 
 #[cfg(unix)]

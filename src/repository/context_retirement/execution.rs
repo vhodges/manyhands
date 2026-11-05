@@ -100,19 +100,29 @@ fn plain_registration_path(path: &Path, directory: bool) -> Result<(), ()> {
     Ok(())
 }
 
-/// Retirement-only complement to cleanup's registration/HEAD inventory. Its
-/// common-directory and admin -> gitfile checks do not inspect gitfile contents:
-/// libgit2 derives worktree.path() from that same admin link. Require the reverse
-/// gitfile -> exact admin link too, without opening a foreign repository/lease.
-fn require_registration_backlinks(git: &git2::Repository) -> Result<(), ()> {
-    let inventory = git.commondir().join("worktrees");
-    let entries = match std::fs::read_dir(&inventory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(_) => return Err(()),
-    };
-    for entry in entries {
+/// Retirement-only identity-chain proof before cleanup's HEAD inventory reads
+/// any registration links. Canonical equality alone follows redirected targets;
+/// require every traversed component plain before resolving either direction.
+fn require_registration_identity(git: &git2::Repository) -> Result<(), ()> {
+    plain_registration_path(git.commondir(), true)?;
+    let common = git.commondir().canonicalize().map_err(|_| ())?;
+    let inventory = common.join("worktrees");
+    if absent_path(&common, &inventory).map_err(|_| ())? {
+        return Ok(());
+    }
+    plain_registration_path(&inventory, true)?;
+    for entry in std::fs::read_dir(&inventory).map_err(|_| ())? {
         let admin = entry.map_err(|_| ())?.path();
+        plain_registration_path(&admin, true)?;
+        for member in ["commondir", "gitdir", "HEAD"] {
+            plain_registration_path(&admin.join(member), false)?;
+        }
+        let link = std::fs::read_to_string(admin.join("commondir")).map_err(|_| ())?;
+        let linked_common = admin.join(metadata_line(&link)?);
+        plain_registration_path(&linked_common, true)?;
+        if linked_common.canonicalize().map_err(|_| ())? != common {
+            return Err(());
+        }
         let link = std::fs::read_to_string(admin.join("gitdir")).map_err(|_| ())?;
         // Absolute links remain absolute; Git resolves this admin field at the
         // admin, but relative gitfile targets at the worktree, not the admin.
@@ -130,8 +140,8 @@ fn require_registration_backlinks(git: &git2::Repository) -> Result<(), ()> {
         if linked_admin.canonicalize().map_err(|_| ())? != admin.canonicalize().map_err(|_| ())? {
             return Err(());
         }
-        // The shared inventory has already bound this exact admin's commondir
-        // to git.commondir(); a same-common but different admin is not enough.
+        // Both directions bind this exact admin, whose commondir target was
+        // checked above. No foreign repository is opened or lease acquired.
     }
     Ok(())
 }
@@ -202,6 +212,7 @@ fn initial_inventory(
             // Deterministic path absence alone misses renamed/external
             // registrations and incomplete entries filtered out by libgit2.
             if matches!(absent_path(root, &git.path().join("HEAD")), Ok(false))
+                && require_registration_identity(git).is_ok()
                 && matches!(
                     super::super::cleanup::branch_is_checked_out(
                         git,
@@ -209,7 +220,6 @@ fn initial_inventory(
                     ),
                     Ok(false)
                 )
-                && require_registration_backlinks(git).is_ok()
             {
                 Inventory::Absent
             } else {
