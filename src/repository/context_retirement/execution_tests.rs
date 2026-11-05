@@ -2,6 +2,8 @@ use crate::repository::*;
 use rusqlite::{Connection, params};
 #[path = "index_claim_tests.rs"]
 mod index_claim_tests;
+#[path = "source_contract_tests.rs"]
+mod source_contract_tests;
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},

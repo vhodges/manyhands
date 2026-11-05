@@ -57,6 +57,8 @@ pub(in super::super) fn owned_identity(db: &Connection, id: &str) -> Result<bool
         ),
         ("context_retirement_records", "operation_ulid", ""),
         ("context_retirement_attempts", "observer_operation_ulid", ""),
+        ("poll_retirement_batches", "operation_ulid", ""),
+        ("poll_retirement_attempts", "operation_ulid", ""),
         (
             "retirement_advertisement_provenance",
             "source_operation_ulid",
@@ -1272,15 +1274,15 @@ fn audit_objects(
     if invalid_absence {
         return Err(recovery_required());
     }
-    // No batch/source or guarded-preservation producer/correlation is installed
-    // by this bounded increment. Preserve the approved future semantics, but do
-    // not accept placeholder steps/phases without their controlling authority.
+    // Only the unbound original-P projection contract is supported so far.
+    // Manifest/batch consumption and guarded preservation still fail closed.
     let unsupported_authority: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records WHERE batch_operation_ulid IS NOT NULL OR phase IN ('preserving','abandoned'))
-      OR EXISTS(SELECT 1 FROM retirement_advertisement_provenance WHERE execution_kind!='local_parent' OR execution_batch_operation_ulid IS NOT NULL)
+      OR EXISTS(SELECT 1 FROM retirement_advertisement_provenance WHERE execution_kind='batch_gap' OR (execution_kind='local_parent' AND execution_batch_operation_ulid IS NOT NULL))
       OR EXISTS(SELECT 1 FROM retirement_observation_receipts WHERE consumer_kind!='single')", [], |r| r.get(0)).map_err(|_| recovery_required())?;
     if unsupported_authority {
         return Err(recovery_required());
     }
+    super::source::audit(db)?;
     let identity_collision: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_attempts a WHERE a.observer_operation_ulid=a.operation_ulid
       OR EXISTS(SELECT 1 FROM operation_records o WHERE o.operation_ulid=a.observer_operation_ulid)
       OR EXISTS(SELECT 1 FROM local_context_sync_records s WHERE s.operation_ulid=a.observer_operation_ulid)
@@ -1399,7 +1401,7 @@ fn audit_objects(
         OR (r.pin_kind='source_attempt' AND (p.execution_kind!='poll_parent' OR r.holder_operation_ulid!=p.source_operation_ulid OR r.holder_epoch!=p.source_owner_epoch
           OR r.reason NOT IN ('source_terminal','source_fenced','handoff_decided')
           OR NOT EXISTS(SELECT 1 FROM remote_operation_records o WHERE o.repository_id=p.repository_id AND o.operation_ulid=p.source_operation_ulid
-            AND (o.owner_epoch>p.source_owner_epoch OR o.phase IN ('completed','cancelled','interrupted')))))
+             AND (o.owner_epoch>p.source_owner_epoch OR o.phase IN ('completed','cancelled','interrupted','failed')))))
     )", [], |r| r.get(0)).map_err(|_| recovery_required())?;
     if bad_release {
         return Err(recovery_required());
@@ -1589,8 +1591,67 @@ fn release_consumer(
     let Some((binding, provenance, repository, batch)) = binding else {
         return Ok(());
     };
-    let released: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM retirement_observation_pin_releases WHERE provenance_id=?1 AND pin_kind='consumer_attempt' AND holder_operation_ulid=?2 AND holder_epoch=?3 AND repository_id=?4 AND observation_batch_id=?5 AND binding_id=?6 AND reason=?7)", params![provenance,operation,epoch,repository,batch,binding,reason], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
-    let live: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM retirement_observation_pins WHERE provenance_id=?1 AND pin_kind='consumer_attempt' AND holder_operation_ulid=?2 AND holder_epoch=?3 AND repository_id=?4 AND observation_batch_id=?5 AND binding_id=?6)", params![provenance,operation,epoch,repository,batch,binding], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+    release_pin(
+        tx,
+        PinRelease {
+            provenance,
+            kind: "consumer_attempt",
+            operation,
+            epoch,
+            repository,
+            batch,
+            binding: Some(binding),
+            reason,
+        },
+    )
+}
+
+pub(super) fn release_source_pin(
+    tx: &rusqlite::Transaction<'_>,
+    provenance: i64,
+) -> Result<(), RepositoryError> {
+    super::source::require_ended(tx, provenance)?;
+    let (operation,epoch,repository,batch):(String,i64,i64,i64)=tx.query_row("SELECT source_operation_ulid,source_owner_epoch,repository_id,observation_batch_id FROM retirement_advertisement_provenance WHERE id=?1 AND execution_kind='poll_parent'",[provenance],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|_|recovery_required())?;
+    release_pin(
+        tx,
+        PinRelease {
+            provenance,
+            kind: "source_attempt",
+            operation: &operation,
+            epoch,
+            repository,
+            batch,
+            binding: None,
+            reason: "source_terminal",
+        },
+    )
+}
+
+// Only the separately validated holder transitions above construct this key.
+// Shared Z never accepts an arbitrary batch ID or changes another holder.
+struct PinRelease<'a> {
+    provenance: i64,
+    kind: &'a str,
+    operation: &'a str,
+    epoch: i64,
+    repository: i64,
+    batch: i64,
+    binding: Option<i64>,
+    reason: &'a str,
+}
+fn release_pin(tx: &rusqlite::Transaction<'_>, key: PinRelease<'_>) -> Result<(), RepositoryError> {
+    let PinRelease {
+        provenance,
+        kind,
+        operation,
+        epoch,
+        repository,
+        batch,
+        binding,
+        reason,
+    } = key;
+    let released: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM retirement_observation_pin_releases WHERE provenance_id=?1 AND pin_kind=?8 AND holder_operation_ulid=?2 AND holder_epoch=?3 AND repository_id=?4 AND observation_batch_id=?5 AND binding_id IS ?6 AND reason=?7)", params![provenance,operation,epoch,repository,batch,binding,reason,kind], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
+    let live: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM retirement_observation_pins WHERE provenance_id=?1 AND pin_kind=?7 AND holder_operation_ulid=?2 AND holder_epoch=?3 AND repository_id=?4 AND observation_batch_id=?5 AND binding_id IS ?6)", params![provenance,operation,epoch,repository,batch,binding,kind], |r| r.get(0)).map_err(RepositoryError::sqlite)?;
     if released {
         // Never resolve/collect a historical scalar ID: it may have been reused.
         return if live {
@@ -1613,8 +1674,8 @@ fn release_consumer(
     if set_release_failure(false) {
         return Err(recovery_required());
     }
-    tx.execute("INSERT INTO retirement_observation_pin_releases(provenance_id,pin_kind,holder_operation_ulid,holder_epoch,repository_id,observation_batch_id,binding_id,reason) VALUES(?1,'consumer_attempt',?2,?3,?4,?5,?6,?7)", params![provenance,operation,epoch,repository,batch,binding,reason]).map_err(RepositoryError::sqlite)?;
-    if tx.execute("DELETE FROM retirement_observation_pins WHERE provenance_id=?1 AND pin_kind='consumer_attempt' AND holder_operation_ulid=?2 AND holder_epoch=?3 AND repository_id=?4 AND observation_batch_id=?5 AND binding_id=?6", params![provenance,operation,epoch,repository,batch,binding]).map_err(RepositoryError::sqlite)?!=1 { return Err(recovery_required()); }
+    tx.execute("INSERT INTO retirement_observation_pin_releases(provenance_id,pin_kind,holder_operation_ulid,holder_epoch,repository_id,observation_batch_id,binding_id,reason) VALUES(?1,?8,?2,?3,?4,?5,?6,?7)", params![provenance,operation,epoch,repository,batch,binding,reason,kind]).map_err(RepositoryError::sqlite)?;
+    if tx.execute("DELETE FROM retirement_observation_pins WHERE provenance_id=?1 AND pin_kind=?7 AND holder_operation_ulid=?2 AND holder_epoch=?3 AND repository_id=?4 AND observation_batch_id=?5 AND binding_id IS ?6", params![provenance,operation,epoch,repository,batch,binding,kind]).map_err(RepositoryError::sqlite)?!=1 { return Err(recovery_required()); }
     tx.execute("DELETE FROM remote_observation_batches WHERE repository_id=?1 AND id=?2 AND is_current=0
       AND NOT EXISTS(SELECT 1 FROM remote_integration_windows w WHERE w.observation_batch_id=remote_observation_batches.id)
       AND NOT EXISTS(SELECT 1 FROM retirement_observation_pins pin WHERE pin.repository_id=remote_observation_batches.repository_id AND pin.observation_batch_id=remote_observation_batches.id)", params![repository,batch]).map_err(RepositoryError::sqlite)?;

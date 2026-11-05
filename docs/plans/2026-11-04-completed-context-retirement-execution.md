@@ -2858,22 +2858,22 @@ is unchanged; these are current incremental evidence/remaining-work annotations.
 | 26 | E `d14_exact_completed_intent_settles_atomically_and_incomplete_refusal_is_stable` |
 | 27 | E prior replacement/stale-executor cases plus `specfix_r3_terminal_history_preserved_while_every_old_owner_is_fenced`: active three-phase and four-terminal-phase matrix preserves terminal O projection/all metadata while raising epoch; `f2_held_network_advance_fences_old_return_and_new_reentry` adds validated new-F2 replacement before old transport returns. O remaining positive present after-ad/after-batch interruption windows |
 | 28 | E prior replacement rollback/exclusion cases plus the R3 eight-state matrix and `f2_replacement_failure_rolls_back_scope_epochs_and_pins` whole-transaction rollback/stale-write assertions. O remaining every-write/commit failure points, valid terminal remote debt, foreign-O/action correlation matrix |
-| 29 | E prior all-old-write-boundary/public stale-executor cases plus `f2_all_old_remote_and_local_write_boundaries_require_actual_current_scope`, exact-current identity SSH matrix and held-network advance/finish cases: actual current accepted attempt/exact mapping required, old matching S/O cannot write. O remaining fault combinations and source/batch request fences; D actual Task 3 binding |
+| 29 | E prior current-F2 S/O boundary/SSH controls plus A0 original-P source checks at owned writes (`retirement_source_every_owned_write_rejoins_f2_and_source_scope`). O remaining fault combinations, post-A1 source-fencing and batch-consumer request fences; D actual Task 3 binding |
 | 30 | E `reentry_selected_generation_change_is_final_without_network`, old-generation retention units; O partial-effect generation variant |
-| 31 | E `live_advertisement_captures_exact_batch_and_public_replay_cannot_mint`; O original-P handoff contract; D actual Task 4 producer |
+| 31 | E prior live standalone capture/public replay negative plus A1 exact returned-batch capture through real owned SQL under sealed P (synthetic ad inputs, no source SSH claim). O A2/A3 original-P handoff and source live-transport matrix; D actual Task 4 producer |
 | 32 | O inert batch B-execution/C-consumption seam; D actual Task 4 journey |
-| 33 | O foreign/stale request+batch consumer contract projections; D actual Task 3/4 binding/coordinator |
+| 33 | E A0 source current-F2/exact remote mapping, frozen base/config/generation and local-debt refusal projections only. O foreign/stale ordered batch-consumer/cursor/digest/identity projections; D actual Task 3/4 binding/coordinator |
 | 34 | O no-child gap execution/request+batch fences; D actual Task 4 coordinator |
 | 35 | E prior R7 reports/stops, direct and nonadjacent-lineage changed-W → M truthful Possible/None, R3 terminal-observer outcome preservation; F2 preclaim/selected/new-reentry cancellation Final/no-effect and uncertain/post-prune Owed preserve flags, stale calls cannot acknowledge. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
-| 36 | E prior F2 index SQL/unscoped/orphan/envelope/invalidation/reverse-spend controls plus `f2_qualityfix_*`: pre-envelope ContextRetire request mappings refuse generic refresh inside journal-begin's transaction, with full image unchanged and same-current private completion; ordinary/other-command refresh stays supported. O remaining M/index fault and history variants; Q1 awaits same SPEC delta then QUALITY re-review |
+| 36 | E prior F2 index SQL/unscoped/orphan/envelope/invalidation/reverse-spend controls plus `f2_qualityfix_*`: pre-envelope ContextRetire request mappings refuse generic refresh inside journal-begin's transaction, with full image unchanged and same-current private completion; ordinary/other-command refresh stays supported. Limited request-fence approved at `c7daad0d`. O remaining M/index fault and history variants |
 | 37 | E `generic_abandon_preserves_pending_and_terminal_identity`; D guarded preserving abandon Task 3 |
-| 38 | E prior migration/history/R1/R2/F2/reverse-spend controls plus Q1 pre-request/pre-retirement missing-table and malformed request-map refusal controls. Never-claimed handoffs and DOMAIN history retain their semantics; historical attempts remain audit-only. Catalog pins/schema unchanged. O remaining resumption/M FK/tamper/deletion-order and source/batch inventory variants; Q1 awaits same SPEC delta then QUALITY re-review |
-| 39 | O A0–A4 original-P ordering contract projections; D actual Task 4 producer |
-| 40 | O A1–A3 crash/capability/empty manifest projections; D actual Task 4 producer |
-| 41 | O source/unbound provenance lifecycle and source+consumer pin contracts; D actual Task 4 producer |
-| 42 | E old last-pin refusal/reopen units + public generation-change release; O source and partial-effect G→G+1 contracts |
+| 38 | E prior migration/history/R1/R2/F2/reverse-spend/Q1 controls plus strict A0/A1 unbound-source projection/pin/epoch correlation. Catalog pins/DDL unchanged; no production batch store installed. O remaining resumption/M FK/tamper/deletion-order and full shared-store inventory; Task 4 owns its producer/schema |
+| 39 | E A0 sealed original P/R/attempt/config + A1 immutable provenance/source pin before any manifest, through owned capture. O A2 full image/binding, A3 eligibility and A4 consumption; D actual Task 4 producer |
+| 40 | E A1 transaction rollback, source-stop/Z rollback and refusal of successful P finalization without A2. O full A2/A3 crash/process-token/empty-manifest matrix; D actual Task 4 producer |
+| 41 | E pre-capture cancellation closes source without local debt; post-A1 owned failure atomically ends source/releases its pin. O crash/restart source fencing/fresh-ad retry and ineligible/unconfirmed source+consumer handoff; D actual Task 4 producer |
+| 42 | E old last-pin controls plus source G→G+1 planning-pin retention, exact stopped-source release/collection and successful reopen. O source+consumer overlap and partial-effect generation variants |
 | 43 | E `z_keeps_a_valid_integration_window_and_its_batch`; O shared source+consumer handoff-gap projection; D actual Task 4 journey |
-| 44 | E `release_history_cannot_excuse_live_or_unsettled_debt`, immutable old reentry receipt/provenance checks; O new replacement history/ID-reuse and full shared-source variants |
+| 44 | E prior immutable/release-debt controls plus source missing-pin/projection/terminal-hold refusal, clean FK last-release/reopen and actual SQL batch-ID reuse with idempotent release/no re-collection. O cross-holder ambiguity, source-fence history and full shared-source variants |
 
 ### Exact next work before publication / Task 2 completion
 
@@ -3538,3 +3538,73 @@ source/batch A0–A4, execution-versus-consumption, no-child gaps and source/con
 holders/Z/GC remain open. Task 3 Command/DTO/CLI/guarded abandon and Task 4
 producer/coordinator runtime stay downstream. No review approval or full completion
 is asserted by this checkpoint.
+
+## Shared Source Subincrement — A0/A1 And Unbound Z (Review Pending)
+
+Clean verified base **`d707c2c2ccd298d3ffe912d504bf0237dc1ba377`**, equal to upstream;
+full Task 2 base `7b1912d1`. Review from that base through the commit introducing
+checkpoint **`01M6PVJ81BXJYHC9YAYXMPKFXS`**. Prior limited reviews remain cleared.
+
+- **Connected behavior:** repository-private, non-Clone original-P capability
+  seals an already owned manual update poll against the exact accepted F2/map,
+  A0 attempt/root/base/configuration and no-local-debt predicate. Generic/unsealed
+  owners cannot borrow a projected P. Every owned source write rejoins those
+  predicates. A1's existing owned advertisement transaction supplies the actual
+  returned batch and atomically writes immutable provenance, source pin and exact
+  attempt pointer—no manifest/digest/eligibility is required or minted there.
+- **Z/lifetime:** owned cancellation/failure closes the unplanned source and its
+  exact hold atomically; before-ad cancellation creates no provenance or local
+  debt. Already configuration-stopped sources may settle metadata-only. The same
+  exact-pin kernel now serves existing standalone consumers and sources; newly
+  executed last release collects only noncurrent, otherwise unreferenced batches.
+  Released history never resolves reused scalar IDs. Missing evidence refuses.
+- **Boundary:** `source.rs` reads a private SQL **projection contract**, not a
+  shipped Task 4 store/migration. Tests alone install its inert A0 rows/marker.
+  There is no production batch/target DDL, producer, selection loop or public
+  opt-in API. Missing projections refuse. A1 alone cannot successfully finalize
+  P or bind/consume anything; batch receipts/children/gap authority stay closed.
+  Actual source SSH and B→C cleanup are **not** demonstrated by these new tests.
+- **Files:** new `source.rs`/`source_contract_tests.rs`, module registrations in
+  `mod.rs`/`execution_tests.rs`, `record.rs` audit/shared Z, and reservation token/
+  owned/capture/stop hooks. No dependency, target, catalog pin, old semantic-test
+  expectation, Task 3 interface, default poll output/intent or existing context-
+  release behavior change.
+
+Compiled behavioral RED logs (`/tmp/opencode/task2-shared-source-<suffix>.log`):
+`red` **1 passed/1 failed**, `capture-red` **4/3**, `lifetime-red` **0/2**,
+`public-reservation-red` **0/1**. Preliminary compile/fixture mistakes are retained
+separately (`red-compile`, `red-fixture`, `capture-red-compile`), not counted as RED.
+Final frozen source gates, all foreground `timeout:0`, serial Devenv, exit **0**:
+
+| Arguments after `devenv shell -- cargo test --all-features --locked` | Suffix | Passed |
+| --- | --- | --- |
+| `--lib retirement_source_` | `focused-green` | **10** |
+| `--lib context_retirement` | `context` | **121**, prior 111 retained +10 |
+| `--test mutation_remote retirement_` | `retirement-ssh` | **105 registered SSH** |
+| `--lib remote::reservation::` / `--lib remote::poll` | `reservation` / `poll` | **58 / 81** |
+| `--lib remote::state::persistence_tests` | `state` | **70** |
+| `--test remote_observation` / `--test remote_polling` | `observation-ssh` / `polling-ssh` | **15 / 84 registered SSH** |
+| `--lib cleanup` / `--lib recovery` / `--lib refresh` | `cleanup` / `recovery` / `refresh` | **51 / 60 / 38** |
+| `--lib repository::mutation::` | `request` | **130** |
+| `--test remote_reservation --test mutation_replay --test recovery_foundation_gate --test discovery_rebuild` | `integration` | **13 reservation / 384 replay / 52 foundation / 79 discovery** |
+
+Whole-tree `devenv shell -- cargo check --all-features --locked`, `cargo fmt --check`,
+and `cargo clippy --all-targets --all-features --locked -- -D warnings` pass
+(`check`/`fmt`/`clippy`). Filters overlap. No full-suite/native or broad-six-SSH claim.
+All **1,709** frozen build/source/asset inputs match
+`/tmp/opencode/task2-shared-source-source.sha256`, inventory SHA-256
+**`0eeac91da8c3b7146ad7ba9d9b60433b9e6a62ea4c2735e1a9105156fd785659`**.
+
+**Still owed:** A2 owned preterminal full frozen image/report/binding, A3 process
+capture token + original-wrapper eligibility/ineligible recovery, A4 ordered
+batch C after ended B through real shared cleanup/I and no-child-gap O; source
+crash/restart fencing/fresh-ad/failed-handoff and source+consumer+window Z matrices;
+remaining replacement/M/D14/index/history fault variants, whole 44-row/final Task 2
+SPEC→QUALITY/adversarial gate and Task 8. Task 3/4 actual bindings/producer/coordinator
+remain downstream. E/O/D updates above are partial evidence, not group completion.
+
+Checkpoint parent **`01M6PQWJT3BX91D3W656PE2VBR`**, actual UTC
+**`2026-11-05T21:59:18Z`**; ID only from supported current CLI with isolated
+`MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data` (`comment-id`).
+Main rechecked unchanged `c69789d9`; no agents/push/status/PR/main integration/
+closure/native CI/other-worktree or real-profile/key/context/draft actions.

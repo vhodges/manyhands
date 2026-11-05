@@ -43,6 +43,7 @@ pub struct RemoteReservation {
     generation: i64,
     epoch: i64,
     retirement: Option<Box<crate::repository::context_retirement::record::ObserverExecution>>,
+    original_source: Option<Box<crate::repository::context_retirement::source::OriginalPollSource>>,
 }
 
 impl RemoteReservation {
@@ -216,6 +217,7 @@ fn token(
         generation: record.generation,
         epoch: record.owner_epoch,
         retirement: None,
+        original_source: None,
     }
 }
 
@@ -265,6 +267,29 @@ pub(in super::super) fn owned(
     repository_id: i64,
     owner: &RemoteReservation,
 ) -> Result<state::StoredRemoteOperation, RepositoryError> {
+    let record = owned_record(service, tx, repository_id, owner)?;
+    if let Some(source) = &owner.original_source {
+        source.validate(service, tx, repository_id, &record)?;
+    } else if let Some(execution) = &owner.retirement {
+        execution.validate_observer(service, tx, repository_id, &record)?;
+    } else {
+        crate::repository::context_retirement::record::require_foreign_id_available(
+            tx,
+            owner.operation_id,
+        )?;
+        crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
+    }
+    Ok(record)
+}
+
+// Only verifies the immutable reservation token. The sole additional caller is
+// the private source sealer, which applies the complete A0 predicate itself.
+fn owned_record(
+    service: &RepositoryService,
+    tx: &Transaction<'_>,
+    repository_id: i64,
+    owner: &RemoteReservation,
+) -> Result<state::StoredRemoteOperation, RepositoryError> {
     if !Arc::ptr_eq(&service.remote_reservation_scope, &owner.scope) {
         return Err(state::recovery_required());
     }
@@ -277,15 +302,6 @@ pub(in super::super) fn owned(
         || !active(record.phase)
     {
         return Err(state::recovery_required());
-    }
-    if let Some(execution) = &owner.retirement {
-        execution.validate_observer(service, tx, repository_id, &record)?;
-    } else {
-        crate::repository::context_retirement::record::require_foreign_id_available(
-            tx,
-            owner.operation_id,
-        )?;
-        crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
     }
     Ok(record)
 }
@@ -622,6 +638,9 @@ fn acknowledge(
             .map_err(|_| state::recovery_required())?;
         state::record_poll_completion(tx, id, record.operation_id, now())?;
     }
+    if result != RemoteSafePointOutcome::Continue {
+        crate::repository::context_retirement::source::close_stopped(tx, record)?;
+    }
     Ok(result)
 }
 
@@ -761,6 +780,9 @@ pub(super) fn commit_observation_batch_with_capture<T>(
         };
         if let Some(execution) = &owner.retirement {
             execution.capture_advertisement(service, tx, id, &record, batch)?;
+        }
+        if let Some(source) = &owner.original_source {
+            source.capture(service, tx, id, &record, batch)?;
         }
         write(tx, id)?;
         let decision = if synchronization {
@@ -1551,6 +1573,30 @@ impl RepositoryService {
         })
     }
 
+    /// Private future-producer seam. No public mode/flag or producer is installed.
+    /// A real live P token plus the exact current accepted request AND durable A0
+    /// projection are required; absence is RecoveryRequired, never an opt-in.
+    #[allow(dead_code)] // Task 2 contract exercised without installing Task 4.
+    pub(in super::super) fn seal_original_poll_source(
+        &self,
+        root: &Path,
+        mut owner: RemoteReservation,
+        accepted: &crate::repository::mutation::Accepted,
+    ) -> Result<RemoteReservation, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            if owner.retirement.is_some() || owner.original_source.is_some() {
+                return Err(state::recovery_required());
+            }
+            let record = owned_record(self, tx, id, &owner)?;
+            let source = crate::repository::context_retirement::source::OriginalPollSource::seal(
+                self, tx, id, root, &record, accepted,
+            )?;
+            owner.original_source = Some(Box::new(source));
+            Ok(())
+        })?;
+        Ok(owner)
+    }
+
     /// A transport failure completes only at a previously acknowledged boundary.
     /// Successful polling requires an atomically persisted complete batch.
     pub fn finish_remote_operation(
@@ -1576,6 +1622,10 @@ impl RepositoryService {
         state::with_transaction(self, root, |tx, id| {
             let record = owned(self, tx, id, owner)?;
             let point = record.completed_step.ok_or_else(state::recovery_required)?;
+            // Unbound A1 is not A2 manifest/finalization authority.
+            if owner.original_source.is_some() && category == RemoteOutcomeCategory::Completed {
+                return Err(state::recovery_required());
+            }
             let completion_point = if record.poll_kind == Some(state::PollKind::Update) {
                 RemoteOperationSafePoint::BeforeDiscovery
             } else {
@@ -1592,6 +1642,9 @@ impl RepositoryService {
                 return capture(tx, id, decision);
             }
             finish(tx, id, &record, category)?;
+            if owner.original_source.is_some() {
+                crate::repository::context_retirement::source::close_stopped(tx, &record)?;
+            }
             let decision = if category == RemoteOutcomeCategory::Cancelled {
                 RemoteSafePointOutcome::Cancelled
             } else {

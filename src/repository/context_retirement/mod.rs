@@ -7,6 +7,7 @@ mod reentry;
 pub(super) mod request_scope;
 mod result;
 mod run;
+pub(super) mod source;
 pub use execution::{ContextRetirementOutcome, RetireContextRequest};
 pub use reentry::ReenterContextRetirementRequest;
 pub use result::{ContextRetirementReport, RetirementDisposition, RetirementRemoval};
