@@ -448,6 +448,10 @@ mod no_record_tests;
 #[path = "lifecycle/made_ready_tests.rs"]
 mod made_ready_tests;
 
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/made_ready_review_tests.rs"]
+mod made_ready_review_tests;
+
 #[cfg(test)]
 #[path = "lifecycle/steps_tests.rs"]
 mod steps_tests;

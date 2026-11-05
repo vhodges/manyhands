@@ -46,14 +46,14 @@ use crate::desktop::{
 
 /// A ticket that depends on `TICKET` alone, so closing it makes this one
 /// ready.
-const DEPENDENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5KF0";
-const DEPENDENT_TITLE: &str = "Waits on the close";
+pub(super) const DEPENDENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5KF0";
+pub(super) const DEPENDENT_TITLE: &str = "Waits on the close";
 /// An open ticket that waits on nothing.
-const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5KG0";
+pub(super) const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5KG0";
 
 /// Commits `DEPENDENT` on main, with `extra` front matter, depending on
 /// `TICKET`, then `TICKET` saved once so it has a context to close.
-fn with_dependent(
+pub(super) fn with_dependent(
     fixture: &crate::desktop::test_support::fixtures::Fixture,
     root: &std::path::Path,
     extra: &str,
@@ -87,7 +87,7 @@ async fn closed(
 }
 
 /// The made-ready report of the answer to `id`, as the library gave it.
-fn report(
+pub(super) fn report(
     shell: &Shell,
     id: DesktopRequestId,
     cx: &mut TestAppContext,
@@ -109,7 +109,7 @@ fn report(
 }
 
 /// Waits until the made-ready rows read `expected`.
-async fn until_rows(shell: &Shell, expected: Vec<String>, cx: &mut TestAppContext) {
+pub(super) async fn until_rows(shell: &Shell, expected: Vec<String>, cx: &mut TestAppContext) {
     shell
         .until_drawn(cx, "the made-ready rows", move |shell, cx| {
             shell.rows("lifecycle-made-ready", cx) == expected

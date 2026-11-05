@@ -134,7 +134,7 @@ impl LifecycleDialog {
             stamp,
             move |reader| async move {
                 let repo = match reader
-                    .call(ReadKind::Resolve, |service| {
+                    .call(ReadKind::MadeReady, |service| {
                         service.resolve_repository(&root)
                     })
                     .await
@@ -146,7 +146,9 @@ impl LifecycleDialog {
                 for id in ids {
                     let title = match id.parse::<ItemId>() {
                         Ok(item) => match reader
-                            .call(ReadKind::Item, |service| service.show_item(&repo, &item))
+                            .call(ReadKind::MadeReady, |service| {
+                                service.show_item(&repo, &item)
+                            })
                             .await
                         {
                             ReadResult::Ok(item) => item.title,
@@ -227,5 +229,21 @@ impl LifecycleDialog {
                 )
             }
         }
+    }
+}
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+impl LifecycleDialog {
+    /// The made-ready titles read so far, by ticket ID, in ID order: `None`
+    /// for one read without a title.
+    pub(crate) fn made_ready_titles(&self) -> Vec<(String, Option<String>)> {
+        let mut titles: Vec<_> = self
+            .titles
+            .read
+            .iter()
+            .map(|(id, title)| (id.clone(), title.clone()))
+            .collect();
+        titles.sort();
+        titles
     }
 }

@@ -84,6 +84,10 @@ pub(crate) enum ReadKind {
     /// The registry's re-read of an item after a save, apart from `Item`,
     /// which the repository's tabs reload under at the same time.
     DraftItem,
+    /// The lifecycle dialog's reads of the titles of the tickets a closure
+    /// made ready (D5 A3), apart from `Item`, which the item's tabs reload
+    /// under as the run ends.
+    MadeReady,
     /// `observe_path`: the path a clicked link names, and any other path
     /// the desktop asks the library about.
     ObservePath,
