@@ -5,13 +5,13 @@ use crate::{
 use std::{collections::BTreeMap, path::Path};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::repository) enum PreservationProof {
+pub(in super::super) enum PreservationProof {
     Ancestor,
     Folded,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::repository) enum ProofRefusal {
+pub(in super::super) enum ProofRefusal {
     InvalidPrimaryItem,
     TicketOpen,
     MissingObject,
@@ -21,7 +21,7 @@ pub(in crate::repository) enum ProofRefusal {
     ContentMismatch,
 }
 
-pub(in crate::repository) fn preservation(
+pub(in super::super) fn preservation(
     repository: &git2::Repository,
     local: git2::Oid,
     primary: git2::Oid,
@@ -144,7 +144,7 @@ fn entries(
 /// Positive completion only, independently useful for dirty/unmatched tickets.
 /// All reads are committed Git objects; no discovery scanner or worktree read.
 /// For documents this establishes only presence: callers must also prove preservation.
-pub(in crate::repository) fn completion(
+pub(in super::super) fn completion(
     repository: &git2::Repository,
     primary: git2::Oid,
     kind: AuthoringKind,
