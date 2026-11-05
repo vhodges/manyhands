@@ -752,6 +752,7 @@ and CLI SSH tests, and by the native checklist against a real remote.
 | E-12 | `D/view/keyboard_tests/frame.rs` `the_strip_header_chips_and_page_run_in_tab_order`, the document walk (standing test-expansion approval, 2026-11-04) | `item-lifecycle-action` (Approve and merge…) between `item-share` and `chip-status`, forward and back | A1 |
 | E-13 | `D/view/keyboard_tests/discussion.rs` `tab_order_runs_header_share_chips_page_discussion_composer`, the editing walk (standing test-expansion approval) | `item-lifecycle-action` after Share, before `chip-type`; the action is still drawn while editing | A1 |
 | E-14 | `D/view/lifecycle_tests.rs` `a_blocked_prepare_lists_blockers_and_way_out` (Task 6a's own test; standing test-expansion approval, Task 7) | Also asserts the Open repository details button (`lifecycle-inspect`) beside the guidance row | A3 |
+| E-15 | `D/services/requests_tests.rs` intent tables (standing test-expansion approval, Task 10) | `every_intent` 34 → 37 and `variant` 34–36 for `ConflictResolve`, `LocalContextSync`, `LocalContextResolve`; `every_intent_builds_its_own_command` gains "conflict resolve", "context sync-local", "context resolve-local"; `changes_items_…` range `17..=33` → `17..=36`; `syncs_comments_and_resume_…` set `17 \| 29..=33` → `17 \| 29..=36`. Nothing removed or weakened | B2 |
 
 Task 0's sweep (2026-11-04) confirmed the list against merged C5 and added
 E-8; E-2 found no CLI golden with a lifecycle `next_action` row, so it may
@@ -801,6 +802,7 @@ Applied in the approval commit:
 | R-21 | Lock steps: every non-terminal step from `integrating` on locks, `worktree_removing` and `worktree_removed` included (the closure's `integrating_or_later`); an unknown step locks. The Dialog source holds in every phase before `Submitted` until the dialog is dropped. A Busy row read keeps the last rows for the lock. A gap with nothing known (launch before the first read, or between an answer and its row read) disables Edit with no words (Task 9 checkpoint, orchestrator) | A close that can't be read reads as locked |
 | R-22 | L-4's exemption is keyed by item, kept apart from `Operations::lifecycles`, and ends on a later lifecycle answer, when its row is gone, or when the row's `updated_at` changes. "Check again" reloads the tab and the rows, then retries the same request. Both buttons show for all three reasons. After a restart the row carries no category, so a K-13 item reads "Closing…" until an answer: the lifecycle action, with a confirm that supersedes, now; Resume with Task 14 (Task 9 checkpoint, orchestrator) | After a restart a not-tidied item looks locked until it is run again |
 | R-23 | "Read-only" covers Edit, Continue editing, Save, comment Submit, Share, Move…, Repair… and the Drafts page's Restore of the item's draft. Typing in a composer and the lifecycle action stay available. A live session is ended if clean, kept if dirty (owner 2026-11-05 on scope; Task 9 checkpoint) | A comment can't be posted while a close is unfinished |
+| R-24 | `Intent::ConflictResolve` stops at safe points: the desktop's Stop cancels the call's token, which the resolution honours after its checkpoint and at the publication's safe points (`bind/conflict.rs:877-879`), leaving the synchronization resolved for Resume. Give up is refused for it, since `request cancel` never reaches a `conflict resolve` and its record is gone on any stop (`bind/conflict.rs:1111-1114`). The desktop flag means "the call's token is honoured after acceptance", not the library's `Command::stops_at_safe_points` (Task 10 review) | A resolution's Stop differs from the CLI's, which has none |
 
 ## Known Limits
 
@@ -832,7 +834,10 @@ Applied in the approval commit:
   app; Check again then Retries.
 - **K-14.** A local conflict on a document whose path has non-ASCII bytes
   or a control character goes to the external guidance: its escaped
-  `display_path` does not classify (U-2, decision 23).
+  `display_path` does not classify (U-2, decision 23). The same holds for a
+  remote conflict: `ConflictDto` gives only the escaped `display_path`, so
+  `parse_item` rejects such a side and the set goes outside (owner,
+  2026-11-05, Task 10).
 - **K-15.** A comment post whose item's branch was deleted offers Give up
   only, as before D5; Republish covers shares and lifecycles (decision 24).
 - **K-16.** R-15 holds only where the binding observes the item in the
