@@ -64,7 +64,10 @@ use crate::desktop::{
         ReadResult, Services, conflicts::ConflictSource, requests::DesktopRequestId,
         resolutions::KeptSet,
     },
-    view::{editor::set_exact, lifecycle::Heading},
+    view::{
+        editor::set_exact,
+        lifecycle::{Heading, Reopen},
+    },
 };
 
 pub(crate) const SAVE_RESOLUTION: &str = "Save resolution";
@@ -230,7 +233,7 @@ pub(crate) struct ResolveSheet {
     folder_read: Option<Task<()>>,
     /// The lifecycle dialog whose Repair locally… led here, opened again
     /// once a local resolution applies (B6, P9).
-    reopen: Option<crate::desktop::view::lifecycle::Reopen>,
+    reopen: Option<Reopen>,
     origin: FocusHandle,
     services: Services,
     generations: Generations,
@@ -323,7 +326,7 @@ impl ResolveSheet {
 
     /// Once a local resolution applies, the lifecycle dialog opens again on
     /// `reopen` (P9).
-    pub(crate) fn reopen_after(&mut self, reopen: crate::desktop::view::lifecycle::Reopen) {
+    pub(crate) fn reopen_after(&mut self, reopen: Reopen) {
         self.reopen = Some(reopen);
     }
 

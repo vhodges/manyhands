@@ -28,6 +28,7 @@ use manyhands::{
         ConflictReadNextAction, ItemDtoKind, LocalContextSyncNextAction, OperationAction,
         OperationFamily, OperationId, OperationListDto,
     },
+    results::ResultCode,
 };
 
 use super::{ReadKind, ReadResult, Services, conflicts::worktree};
@@ -136,6 +137,26 @@ pub(crate) fn offered(candidates: &[Candidate], probes: &[Probe]) -> Vec<usize> 
         .collect()
 }
 
+/// What a candidate's read found. A parent with no child conflict answers
+/// `invalid_input` (`Lookup::NoConflict`), and an operation that is gone
+/// `operation_not_found`: neither has a conflict waiting. Busy and any
+/// other failure leave it unread.
+pub(crate) fn probe_of(read: ReadResult<Option<OperationId>>) -> Probe {
+    match read {
+        ReadResult::Ok(Some(conflict)) => Probe::Waits(conflict),
+        ReadResult::Ok(None) => Probe::Settled,
+        ReadResult::Failed(failure)
+            if matches!(
+                failure.code,
+                ResultCode::InvalidInput | ResultCode::OperationNotFound
+            ) =>
+        {
+            Probe::Settled
+        }
+        ReadResult::Busy | ReadResult::Failed(_) => Probe::Unread,
+    }
+}
+
 fn waits_local(next: LocalContextSyncNextAction) -> bool {
     matches!(
         next,
@@ -204,11 +225,7 @@ impl Services {
                                 .await
                         }
                     };
-                    probes.push(match read {
-                        ReadResult::Ok(Some(conflict)) => Probe::Waits(conflict),
-                        ReadResult::Ok(None) => Probe::Settled,
-                        ReadResult::Busy | ReadResult::Failed(_) => Probe::Unread,
-                    });
+                    probes.push(probe_of(read));
                 }
                 let mut conflicts = Vec::new();
                 for index in offered(&candidates, &probes) {

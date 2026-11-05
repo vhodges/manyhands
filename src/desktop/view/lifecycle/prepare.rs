@@ -376,7 +376,8 @@ impl LifecycleDialog {
                     .text_xs()
                     .text_color(muted),
             );
-        let mut actions = self.repair_buttons(way_out, false, cx);
+        // Not while the item's lifecycle is in flight (P22), as for a run.
+        let mut actions = self.repair_buttons(way_out, self.in_flight_with(None), cx);
         if blockers.contains(&LifecycleBlocker::PrimaryDirty)
             && let Some(root) = self.root().map(|root| root.to_path_buf())
         {

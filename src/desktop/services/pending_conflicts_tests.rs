@@ -11,7 +11,10 @@ use manyhands::repository::{
     OperationNextAction, OperationOwner,
 };
 
-use super::{Candidate, PendingSource, Probe, candidates, offered};
+use manyhands::results::ResultCode;
+
+use super::{Candidate, PendingSource, Probe, candidates, offered, probe_of};
+use crate::desktop::services::{ReadFailure, ReadResult};
 
 const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
 const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FH0";
@@ -119,4 +122,34 @@ fn a_child_beside_an_unread_parent_is_left_out_by_its_item() {
         offered(&listed, &[waits, Probe::Settled, Probe::Settled]),
         [0]
     );
+}
+
+fn failed(code: ResultCode) -> ReadResult<Option<OperationId>> {
+    ReadResult::Failed(ReadFailure {
+        code,
+        recovery: Vec::new(),
+    })
+}
+
+/// Re-review 1: a parent with no child conflict answers `invalid_input`
+/// (`remote/conflict_read.rs`, `Lookup::NoConflict`), and one that is
+/// gone `operation_not_found`: both settle it, so a standalone conflicted
+/// synchronization of the same item stays offered. A busy or other failed
+/// read is unread, which still hides it by its item.
+#[test]
+fn a_parent_with_no_conflict_leaves_a_standalone_sync_offered() {
+    let listed = listed();
+    let sync = probe_of(ReadResult::Ok(Some(operation(CHILD))));
+    let local = probe_of(ReadResult::Ok(Some(operation(LOCAL))));
+    for code in [ResultCode::InvalidInput, ResultCode::OperationNotFound] {
+        let parent = probe_of(failed(code));
+        assert_eq!(parent, Probe::Settled, "{code:?}");
+        assert_eq!(
+            offered(&listed, &[sync.clone(), parent, local.clone()]),
+            [0, 2]
+        );
+    }
+    assert_eq!(probe_of(ReadResult::Busy), Probe::Unread);
+    assert_eq!(probe_of(failed(ResultCode::InternalError)), Probe::Unread);
+    assert_eq!(probe_of(ReadResult::Ok(None)), Probe::Settled);
 }

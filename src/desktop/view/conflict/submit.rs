@@ -14,6 +14,7 @@ use crate::desktop::{
         requests::{DesktopRequestId, Intent, Lane, PathResolution, RequestState},
         resolutions::{Followed, Followup, KeptSet, ResolutionStore, ResolutionStoreError},
     },
+    view::lifecycle::reopen_repaired,
 };
 
 impl ResolveSheet {
@@ -303,13 +304,7 @@ impl ResolveSheet {
         // A local resolution its Repair locally… led to: the lifecycle
         // dialog again, on its way on (B6, P9).
         if let (SheetSource::Local, Some(reopen)) = (self.source, self.reopen.take()) {
-            crate::desktop::view::lifecycle::reopen_repaired(
-                reopen,
-                self.origin.clone(),
-                &self.services,
-                window,
-                cx,
-            );
+            reopen_repaired(reopen, self.origin.clone(), &self.services, window, cx);
             return;
         }
         let followed = self.services.followups().take_followed(resolution);

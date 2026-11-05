@@ -56,6 +56,8 @@ impl Workspace {
         };
         let review = operations.review(id)?;
         let root = root.to_str()?;
+        // A lifecycle child's own row offers nothing (I-2): its parent's
+        // row does, so a resume of the child finds none here.
         let conflict = self.pending_conflict(root, &review.operation_id.to_string())?;
         Some(Entry::of_pending(PathBuf::from(root), conflict))
     }

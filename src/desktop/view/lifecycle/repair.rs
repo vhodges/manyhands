@@ -236,6 +236,7 @@ impl LifecycleDialog {
 
     /// The local synchronization's conflict, in the sheet in place of this
     /// dialog.
+    ///
     /// Once its resolution applies, the sheet opens this dialog again on
     /// its way on (P9).
     fn open_local_sheet(

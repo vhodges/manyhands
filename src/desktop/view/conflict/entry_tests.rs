@@ -22,7 +22,10 @@ use manyhands::{
         OperationDto, OperationFamily, OperationId, OperationNextAction, OperationOwner, RequestId,
         SynchronizationConflictMutationDto, SynchronizationConflictType,
     },
-    results::{Effects, Envelope, Outcome, RecoveryAction, RecoveryActionKind, ResultCode, Scope},
+    results::{
+        Effects, Envelope, Outcome, PublicationEffect, RecoveryAction, RecoveryActionKind,
+        ResultCode, Scope,
+    },
 };
 
 use super::{
@@ -485,8 +488,75 @@ async fn an_applied_resolution_clears_the_banner_and_its_review(cx: &mut TestApp
     // Dismissed, an entry offers its conflict no more.
     let again = fabricate(&shell, 5, sync(), share_conflict(), cx);
     until_present(&shell, request_id(again, "review"), cx).await;
+    until_present(&shell, "item-review-changes", cx).await;
     shell.click(request_id(again, "dismiss"), cx);
+    shell
+        .until_drawn(cx, "the banner's Review changes gone", |shell, cx| {
+            !shell.present("item-review-changes", cx)
+        })
+        .await;
     let operations = shell.operations(cx);
     assert!(operations.read_with(cx, |operations, _| operations.review(again).is_none()));
+}
+
+/// Re-review 2, B4 then P15, canned (decision 9): a share stopped on a
+/// conflict (`share_conflict`) that was repaired outside and finished by
+/// Resume of its synchronization, answered ok with no new conflict as
+/// `tests/mutation_remote/conflict_read.rs` `c4_conflict_read_repaired`'s
+/// restart publishes, offers its conflict no more: the banner, its Review
+/// changes and the entry's are gone. A resume of another operation leaves
+/// them.
+#[gpui_kit::test]
+async fn a_resume_that_settles_the_conflict_clears_its_review(cx: &mut TestAppContext) {
+    let (shell, root) = ticket_shell(cx);
+    let share = fabricate(
+        &shell,
+        6,
+        Intent::ItemSync {
+            root: root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: item_id(TICKET),
+        },
+        share_conflict(),
+        cx,
+    );
+    until_present(&shell, "item-review-changes", cx).await;
+    let resume = |operation: &str| Intent::OperationResume {
+        root: root.clone(),
+        operation_id: OperationId::parse(operation).unwrap(),
+    };
+    let published = || {
+        Envelope::classified_mutation(
+            "operation resume",
+            Scope::default(),
+            false,
+            ResultCode::Ok,
+            Effects {
+                publication: PublicationEffect::Published,
+                ..Effects::not_requested()
+            },
+            false,
+        )
+    };
+    fabricate(
+        &shell,
+        7,
+        resume("01ARZ3NDEKTSV4RRFFQ69G5FY9"),
+        published(),
+        cx,
+    );
+    assert!(
+        shell.present("item-review-changes", cx),
+        "another operation"
+    );
+    assert!(shell.present(request_id(share, "review"), cx));
+
+    fabricate(&shell, 8, resume(SYNCHRONIZATION), published(), cx);
+    shell
+        .until_drawn(cx, "the banner's clearing", |shell, cx| {
+            !shell.present("item-conflict", cx)
+        })
+        .await;
     assert!(!shell.present("item-review-changes", cx));
+    assert!(!shell.present(request_id(share, "review"), cx));
 }

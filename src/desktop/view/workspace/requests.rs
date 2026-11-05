@@ -21,7 +21,10 @@ use gpui_kit::{
     App, Context, FocusHandle, Window,
     component::{Root, WindowExt},
 };
-use manyhands::{drafts::DraftId, repository::OperationId};
+use manyhands::{
+    drafts::DraftId,
+    repository::{OperationId, OperationListDto},
+};
 use std::path::PathBuf;
 
 /// `route`, owned, for the window's update that opens it.
@@ -87,7 +90,7 @@ impl Workspace {
     fn read_pending_conflicts(
         &mut self,
         root: RepoKey,
-        list: Option<manyhands::repository::OperationListDto>,
+        list: Option<OperationListDto>,
         cx: &mut Context<Self>,
     ) {
         let stamp = self

@@ -246,7 +246,7 @@ impl Operations {
                 // and the banner clears (B3).
                 if let Some(resolved) = self
                     .request(id)
-                    .and_then(|request| review::resolved_by(&request.intent, envelope.code))
+                    .and_then(|request| review::resolved_by(&request.intent, &envelope))
                 {
                     self.reviews
                         .retain(|_, review| review.operation_id != resolved);

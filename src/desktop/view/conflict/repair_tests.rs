@@ -18,19 +18,19 @@ use super::{
     entry_tests::{opened_on, row_of, ticket_shell},
     tests::{TICKET, code, opened, until_long, until_present},
 };
-/// What the dialog says once main is in a ticket's working copy (B6).
-const REPAIRED_TICKET: &str = "Main is in this ticket's working copy now.";
-
 use crate::desktop::{
     services::{
         JobKind,
-        requests::{DesktopRequestId, Intent},
+        requests::{DesktopRequestId, Intent, Lane},
     },
     test_support::fixtures::item_id,
     view::{
         harness::Shell, item::LIFECYCLE_ACTION, lifecycle::REPAIR_LOCALLY, operations::request_id,
     },
 };
+
+/// What the dialog says once main is in a ticket's working copy (B6).
+const REPAIRED_TICKET: &str = "Main is in this ticket's working copy now.";
 
 /// The sheet once it has opened, past a real synchronization's wait.
 async fn until_opened(shell: &Shell, cx: &mut TestAppContext) -> Entity<ResolveSheet> {
@@ -146,6 +146,10 @@ async fn repair_locally_syncs_and_opens_the_sheet_on_conflict(cx: &mut TestAppCo
         !shell.present("conflict-sheet", cx)
     })
     .await;
+
+    // Re-review 3: the applied local resolution clears the
+    // synchronization's entry's Review changes.
+    assert!(!shell.present(request_id(syncs[0], "review"), cx));
 
     // Then Retry (P9): the dialog again, on the same close.
     until_present(&shell, "lifecycle-retry", cx).await;
@@ -316,4 +320,39 @@ async fn repair_locally_waits_for_a_queued_sync(cx: &mut TestAppContext) {
             shell.fixture.context_worktree(&root, TICKET)
         )
     );
+}
+
+/// Re-review 5 (P22), real, with the close held: a blocked prepare's
+/// Repair locally… is not offered while a close of the item is in flight,
+/// as an ended run's is not.
+#[gpui_kit::test]
+async fn a_blocked_prepares_repair_waits_for_the_lifecycle(cx: &mut TestAppContext) {
+    let (shell, root) = ticket_shell(cx);
+    shell.fixture.commit_ticket(&root, TICKET, "Moved", "");
+    shell.click(LIFECYCLE_ACTION, cx);
+    until_present(&shell, "lifecycle-repair-locally", cx).await;
+
+    let held = shell.backend.hold_job(JobKind::TicketClose);
+    let services = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().clone());
+    services.worker().submit(
+        Intent::TicketClose {
+            root: root.clone(),
+            id: item_id(TICKET),
+        },
+        Lane::User,
+        None,
+        None,
+    );
+    held.wait_reached();
+    shell
+        .until_drawn(cx, "Repair locally… withdrawn", |shell, cx| {
+            !shell.present("lifecycle-repair-locally", cx)
+        })
+        .await;
+    assert!(shell.present("lifecycle-prepare-again", cx));
+    held.release();
+    let close = closes(&shell, cx)[0];
+    shell.until_ended(close, cx).await;
 }
