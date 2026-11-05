@@ -193,7 +193,6 @@ impl DelayingBackend {
     /// A canned conflict read: the next conflict read of
     /// `conflict.operation_id` still calls the library, and `conflict`
     /// stands in place of its answer.
-    #[allow(dead_code)] // Called from Task 10.
     pub(crate) fn answer_next_conflict_read(&self, conflict: ConflictDto) {
         self.conflicts.lock().unwrap().push(conflict);
     }

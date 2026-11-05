@@ -20,6 +20,9 @@ pub(crate) mod drafts;
     allow(dead_code, unused_imports)
 )]
 pub(crate) mod fixtures;
+// Real local conflicts, for the conflict model's and reads' tests.
+#[cfg(test)]
+pub(crate) mod local_conflict;
 pub(crate) mod snapshot;
 
 // The library tests' own isolation, shared rather than copied. Some of

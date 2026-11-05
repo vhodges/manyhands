@@ -15,7 +15,10 @@ use std::{future::Future, sync::Arc};
 
 use gpui_kit::{BackgroundExecutor, Context, Task};
 use manyhands::{
-    repository::{Mutation, PrepareDataDto, ReadError, RepositoryService},
+    repository::{
+        ConflictDto, Mutation, OperationId, PrepareDataDto, ReadError, RepositoryService,
+        ResolvedRepository,
+    },
     results::{Envelope, RecoveryAction, ResultCode},
 };
 
@@ -107,6 +110,26 @@ impl Reader {
             let _ = gate.await;
         }
         retrying(self.backend.service(), &self.timers, f).await
+    }
+
+    /// A remote conflict read (D5 B1): `show_conflict` of `operation_id`,
+    /// a call like any other. A test's canned conflict of that operation
+    /// stands in place of the library's answer (D5 decision 9).
+    #[allow(clippy::result_large_err)] // The library's `ReadError`.
+    pub(crate) async fn show_conflict(
+        &self,
+        repo: &ResolvedRepository,
+        operation_id: OperationId,
+    ) -> ReadResult<ConflictDto> {
+        let read = self
+            .call(ReadKind::Conflict, |service| {
+                service.show_conflict(repo, operation_id)
+            })
+            .await;
+        match self.backend.after_conflict_read(&operation_id) {
+            Some(conflict) => ReadResult::Ok(conflict),
+            None => read,
+        }
     }
 }
 

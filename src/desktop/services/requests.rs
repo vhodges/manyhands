@@ -53,6 +53,15 @@ impl CommentBody {
     }
 }
 
+/// One path's resolution as Save resolution sends it: the token the
+/// conflict read gave the path, and the whole text that is to be its
+/// result. It derives neither `Debug` nor `Display`: it holds item text.
+#[derive(Clone)]
+pub(crate) struct PathResolution {
+    pub token: String,
+    pub source: String,
+}
+
 /// One command the desktop can ask the library for, with the values it
 /// was asked with. One variant per command D1 offers, and the two saves
 /// of a draft.
@@ -273,6 +282,36 @@ pub(crate) enum Intent {
         root: PathBuf,
         id: ItemId,
     },
+    /// Save resolution of a remote synchronization's conflict (D5 B3): the
+    /// synchronization, a comment's operation or a lifecycle's, as the
+    /// read was asked by; the read's observation; and every path's result.
+    /// It holds item text.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
+    ConflictResolve {
+        root: PathBuf,
+        operation_id: OperationId,
+        observation: String,
+        resolutions: Vec<PathResolution>,
+    },
+    /// Repair locally… (D5 B6): main brought into the item's work context,
+    /// from the observation `observe_local_context_sync` gave.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
+    LocalContextSync {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+        observation: String,
+    },
+    /// Save resolution of a local synchronization's conflict (D5 B3), with
+    /// the inspection's observation (R-11) and every path's result. It
+    /// holds item text.
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
+    LocalContextResolve {
+        root: PathBuf,
+        operation_id: OperationId,
+        observation: String,
+        resolutions: Vec<PathResolution>,
+    },
 }
 
 impl Intent {
@@ -314,7 +353,10 @@ impl Intent {
             | Self::FolderCreate { .. }
             | Self::CommentAdd { .. }
             | Self::ItemSync { .. }
-            | Self::RepoSync { .. } => false,
+            | Self::RepoSync { .. }
+            | Self::ConflictResolve { .. }
+            | Self::LocalContextSync { .. }
+            | Self::LocalContextResolve { .. } => false,
         }
     }
 
@@ -356,6 +398,9 @@ impl Intent {
             Self::RepoSync { .. } => "Share main",
             Self::DocumentPromote { .. } => "Approve and merge",
             Self::TicketClose { .. } => "Close ticket",
+            Self::ConflictResolve { .. } => "Resolve conflict",
+            Self::LocalContextSync { .. } => "Repair locally",
+            Self::LocalContextResolve { .. } => "Resolve local conflict",
         }
     }
 
@@ -389,7 +434,10 @@ impl Intent {
             | Self::ItemSync { root, .. }
             | Self::RepoSync { root }
             | Self::DocumentPromote { root, .. }
-            | Self::TicketClose { root, .. } => Some(root),
+            | Self::TicketClose { root, .. }
+            | Self::ConflictResolve { root, .. }
+            | Self::LocalContextSync { root, .. }
+            | Self::LocalContextResolve { root, .. } => Some(root),
             Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -434,7 +482,10 @@ impl Intent {
             | Self::ItemSync { .. }
             | Self::RepoSync { .. }
             | Self::DocumentPromote { .. }
-            | Self::TicketClose { .. } => true,
+            | Self::TicketClose { .. }
+            | Self::ConflictResolve { .. }
+            | Self::LocalContextSync { .. }
+            | Self::LocalContextResolve { .. } => true,
             Self::RepoRemove { .. }
             | Self::RepoIdentitySet { .. }
             | Self::RemoteAdd { .. }
@@ -453,8 +504,11 @@ impl Intent {
 
     /// Whether the library honours a cancellation after accepting the
     /// command, at a synchronization's safe points (fact 9): the comment,
-    /// the two syncs, `operation resume`, and a promotion or closure, which
-    /// stops between its steps (D5 fact 2). Every other command, the saves
+    /// the two syncs, `operation resume`, a promotion or closure, which
+    /// stops between its steps (D5 fact 2), a local synchronization and its
+    /// resolution, which the library stops at their safe points, and a
+    /// remote resolution, whose continuation honours the call's token as a
+    /// resume's does (`bind/conflict.rs`). Every other command, the saves
     /// among them, cannot be stopped once accepted.
     pub(crate) fn stops_at_safe_points(&self) -> bool {
         match self {
@@ -463,7 +517,10 @@ impl Intent {
             | Self::ItemSync { .. }
             | Self::RepoSync { .. }
             | Self::DocumentPromote { .. }
-            | Self::TicketClose { .. } => true,
+            | Self::TicketClose { .. }
+            | Self::ConflictResolve { .. }
+            | Self::LocalContextSync { .. }
+            | Self::LocalContextResolve { .. } => true,
             Self::RepoCreate { .. }
             | Self::RepoEnable { .. }
             | Self::RepoRemove { .. }
@@ -596,6 +653,9 @@ impl Intent {
             Self::RepoSync { .. } => JobKind::SynchronizeRepo,
             Self::DocumentPromote { .. } => JobKind::DocumentPromote,
             Self::TicketClose { .. } => JobKind::TicketClose,
+            Self::ConflictResolve { .. } => JobKind::ConflictResolve,
+            Self::LocalContextSync { .. } => JobKind::LocalContextSync,
+            Self::LocalContextResolve { .. } => JobKind::LocalContextResolve,
         }
     }
 }

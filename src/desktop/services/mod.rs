@@ -6,6 +6,7 @@
 //! fails or fabricates a call. Failures in tests come from the library's
 //! own failure points and hooks.
 
+pub(crate) mod conflicts;
 pub(crate) mod created_contexts;
 pub(crate) mod drafts;
 pub(crate) mod edit_tabs;
@@ -102,6 +103,9 @@ pub(crate) enum ReadKind {
     /// A local image an editor shows, read from the tab's trees and
     /// decoded (`images`): no library call, but held like one.
     Image,
+    /// A conflict's reads (D5 B1): the remote `show_conflict`, or the
+    /// local inspection and its content reads.
+    Conflict,
 }
 
 /// What a worker job does, so the seam can hold one kind and not another.
@@ -142,6 +146,9 @@ pub(crate) enum JobKind {
     SynchronizeRepo,
     DocumentPromote,
     TicketClose,
+    ConflictResolve,
+    LocalContextSync,
+    LocalContextResolve,
     ObserveHost,
 }
 
@@ -197,7 +204,6 @@ pub(crate) trait Backend: Send + Sync + 'static {
     /// Called after a conflict read of `operation_id` returns. A
     /// conflict it gives stands in place of the library's: a test's
     /// canned `ConflictDto` (D5 decision 9).
-    #[allow(dead_code)] // Called from Task 10.
     fn after_conflict_read(&self, _operation_id: &OperationId) -> Option<ConflictDto> {
         None
     }
