@@ -7,6 +7,8 @@ use crate::repository::{
     keys::*,
     request_store::*,
 };
+#[path = "refresh_reservation_tests.rs"]
+mod refresh_reservation_tests;
 
 struct NoCredentials;
 impl SessionCredentialProvider for NoCredentials {

@@ -386,6 +386,8 @@ are not authorized; numeric exits must come from existing results registry.
 | Bounded recovery-core final QUALITY through `fd1549b7`, same base, after SPEC | Reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Fresh 3 closure controls, 1 eight-state O matrix, 1 v1 migration history test and 6 registered lineage SSH cases passed; exact source, tests, raw gates and all source hashes inspected | Limited domain-only recovery QUALITY approved; controller inspected fresh review logs and final static evidence. No full Task 2, native or full-suite claim |
 | Pre-next-increment refresh, 2026-11-05 | Both checkouts clean; fresh fetch succeeded, main/base still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `fd1549b751a6c81eb48b6b1cd0fd2c503d8b81ae` already up to date | No conflicts/rebase, new upstream assumptions or unmerged branch consumption |
 | Limited current-request-fence SPEC at `026f9171`, increment base `597bed6b` | **1 Medium audit/corruption finding** accepted by controller: a deleted spend receipt passed startup and allowed the same current accepted F2 attempt to claim indexing again. Actual private initial-absence probe; not a supported API bypass or new policy | Correction/evidence below; **same SPEC re-review required before QUALITY**. No current-request-fence approval recorded |
+| Limited current-request-fence SPEC re-review at `75ea872c`, same base | Controller reports **0 findings** from the same SPEC reviewer after the missing-spend correction | Historical limited SPEC pass; Q1 correction below still requires **same SPEC delta check then same QUALITY re-review** |
+| Limited current-request-fence QUALITY at `75ea872c`, same base | **1 Important Q1** accepted by controller after inspecting source/raw public probe: generic refresh of a preclaim ContextRetire-mapped operation ID refuses only after committing an ordinary `refresh/created/epoch0` row, poisoning valid current/new-current retirement | Correction/evidence below; no QUALITY approval or full Task 2 completion |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -2856,9 +2858,9 @@ is unchanged; these are current incremental evidence/remaining-work annotations.
 | 33 | O foreign/stale request+batch consumer contract projections; D actual Task 3/4 binding/coordinator |
 | 34 | O no-child gap execution/request+batch fences; D actual Task 4 coordinator |
 | 35 | E prior R7 reports/stops, direct and nonadjacent-lineage changed-W → M truthful Possible/None, R3 terminal-observer outcome preservation; F2 preclaim/selected/new-reentry cancellation Final/no-effect and uncertain/post-prune Owed preserve flags, stale calls cannot acknowledge. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
-| 36 | E prior F2 index SQL/unscoped/orphan/envelope/invalidation controls plus `f2_specfix_missing_spend_*` and intact/takeover controls: claimed live/failed/retry/persisted-cache/completed states and invalidation tombstones require their spend before startup/recovery can proceed; no same-attempt repair. O remaining M/index fault and history variants; SPEC finding awaits same re-review |
+| 36 | E prior F2 index SQL/unscoped/orphan/envelope/invalidation/reverse-spend controls plus `f2_qualityfix_*`: pre-envelope ContextRetire request mappings refuse generic refresh inside journal-begin's transaction, with full image unchanged and same-current private completion; ordinary/other-command refresh stays supported. O remaining M/index fault and history variants; Q1 awaits same SPEC delta then QUALITY re-review |
 | 37 | E `generic_abandon_preserves_pending_and_terminal_identity`; D guarded preserving abandon Task 3 |
-| 38 | E prior migration/history/R1/R2/F2 controls plus reverse spend/epoch-history audit and explicit canonical-guard-restored corruption tests. Never-claimed zero-epoch handoffs and published DOMAIN history retain their semantics; historical attempts remain audit-only. Both catalog pins/old schema unchanged. O remaining resumption/M FK/tamper/deletion-order and source/batch inventory variants; SPEC finding awaits same re-review |
+| 38 | E prior migration/history/R1/R2/F2/reverse-spend controls plus Q1 pre-request/pre-retirement missing-table and malformed request-map refusal controls. Never-claimed handoffs and DOMAIN history retain their semantics; historical attempts remain audit-only. Catalog pins/schema unchanged. O remaining resumption/M FK/tamper/deletion-order and source/batch inventory variants; Q1 awaits same SPEC delta then QUALITY re-review |
 | 39 | O A0–A4 original-P ordering contract projections; D actual Task 4 producer |
 | 40 | O A1–A3 crash/capability/empty manifest projections; D actual Task 4 producer |
 | 41 | O source/unbound provenance lifecycle and source+consumer pin contracts; D actual Task 4 producer |
@@ -3437,3 +3439,95 @@ Same-phase preflight reused; remote main rechecked unchanged at `c69789d9`, clea
 merge-tree. No agents/push/status/PR/main integration/closure/native CI/other-worktree
 edits or default-profile/real-context/key/draft actions. Linux-only; no native,
 Windows/casefold-volume, cross-compilation or full Task 2/Task 8 completion claim.
+
+## Current-Request QUALITY Q1 Correction — Preclaim Refresh Reservation
+
+Entry **`75ea872c79eb74f49d260bcfe25b3a458f24fe24`**, clean/ahead 2. Controller
+reports same SPEC re-review **0 findings**, then accepts QUALITY's **one Important
+Q1**. Original increment range remains
+**`597bed6ba668c8697579c2a79bc4c70ede4548d4..Q1-fix-HEAD`**; Q1-fix-HEAD introduces
+checkpoint **`01M6PQ91SS2KFEJHFPCT2C1EN5`**, subject
+`fix: reserve retirement request IDs before generic refresh`. Prior `026f9171`,
+`75ea872c`, recovery approvals through `fd1549b7` and full Task 2 base `7b1912d1`
+are preserved. No reset/squash/rebase or authority expansion.
+
+**Cause/probe:** `refresh_allowed_scoped` saw no retirement envelope and allowed a
+generic refresh under an already mapped ContextRetire operation ID. The ordinary
+journal begin committed `refresh/created/index_epoch0`; only the later index claim
+recognized the request mapping and refused. Both same-current and advanced-current
+private retirement then refused the foreign-action row. No-generic control completed
+AlreadyAbsent. Controller's original source/raw evidence:
+`/tmp/opencode/quality-f2-75ea-preclaim-probe/{probe.rs,run.log}` (lines 269–276).
+It is a durable refusal-side-effect/liveness bug, not a missing Task 3 binding.
+
+**Correction:** add the narrow request-map reservation test to generic
+`record::refresh_allowed`, already called under the shared cache write lock inside
+journal begin's **IMMEDIATE transaction**, before reconciliation, poll-yield or
+insertion. Look up the exact operation ID through `request_operations` and
+`request_records`, without requiring an envelope, current attempt, valid family,
+ordinal, target or scope. Any ContextRetire mapping reserves the ID; an orphan
+cannot establish a different command. Do not run broad `Scope::Domain.validate`
+against every command. Private current-F2 execution/reentry keeps its separately
+authorized scoped path. No insert-then-delete repair, separate check/BEGIN race,
+new schema/policy, migration pin change or adoption of F2 rows by DOMAIN.
+Both request tables may legitimately be absent before late migration; a partial
+pair or failed query refuses, rather than querying uninstalled tables blindly.
+
+**Tests:** five new lib tests cover same-service/cross-service/reopen/equivalent-root
+public refusal with the full registry/cache/schema and repository disk image
+unchanged, followed by actual same-current private AlreadyAbsent completion. A
+new-current control also completes but is not needed to unblock. Nine malformed
+mapping projections retain canonical CHECKs and FK checks. Ordinary refresh,
+other-request `index refresh`, inert `ticket save` authoritative handoff, and a
+different operation ID equal to the item ID stay allowed. Neither/both uninstalled
+request-table controls remain meaningful; partial table pairs refuse. Fixtures are
+explicitly inert canonical F2 projections, not actual Task 3 journeys. No old
+assertions/pins were replaced or tightened.
+
+Compiled behavioral RED: **2 passed / 3 failed**, `qualityfix-red.log`, before any
+production fix. The initial test-only `OperationId::FromStr` compile mistake is
+retained separately in `qualityfix-red-compile.log`, **not behavioral RED evidence**.
+Final focused GREEN **5 passed**. Logs below all use
+**`/tmp/opencode/task2-request-fence-qualityfix-<suffix>.log`**. Every final command
+was serial foreground `timeout:0` through Devenv, frozen source, exit **0**:
+
+| Exact command after `devenv shell --` | Suffix | Actual result |
+| --- | --- | --- |
+| `cargo check --all-features --locked` | `check` | pass |
+| `cargo fmt --check` | `fmt` | pass |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy` | pass |
+| `cargo test --all-features --locked --lib retirement_f2_qualityfix_` | `focused-green` | **5 passed** |
+| Same test flags, `--lib context_retirement` | `context` | **111 passed**, prior 106 retained +5 |
+| Same test flags, `--test mutation_remote retirement_` | `retirement-ssh` | **105 registered SSH cases passed** |
+| Same test flags, `--lib recovery` / `--lib refresh` | `recovery` / `refresh` | **60 / 38 passed** |
+| Same test flags, `--lib repository::mutation::` | `request` | **130 passed** |
+| Same test flags, `--test mutation_replay --test recovery_foundation_gate --test discovery_rebuild` | `integration` | discovery **79**, replay **384**, foundation **52**, all passed |
+
+Filters overlap; no aggregate count claimed. Previous 75ea 106/105 and supporting
+gates remain historical, not relabelled as Q1 evidence. No unchanged broad six-remote
+SSH/full-suite/native repeats. All gates finished before CLI ID generation/metadata.
+
+Frozen inventory **1,707 files**:
+`/tmp/opencode/task2-request-fence-qualityfix-source.sha256`, SHA-256
+**`50a2e639222bfebe74ee43ebc05d382701cd7173f77609a2ab680cf25ed7ae38`**.
+Includes all src/tests/schemas, new module, embedded assets, examples, scripts,
+packaging and toolchain/build files; expanded from the prior inventory's coverage.
+All hashes rechecked after gates. Only three Rust paths change: `record.rs`,
+`index_claim_tests.rs` registration and new `refresh_reservation_tests.rs`.
+No changes to reverse spends, two-counter CAS/invalidation, R1/R2/R3, final replay,
+default poll or cleanup/release. Only affected E/O/D rows **36/38** updated.
+
+Checkpoint parent **`01M6PKVWHG7R8EJN1Z6S1E0RNR`**, actual UTC
+**`2026-11-05T20:44:22Z`**. Unique ID generated only by supported current CLI with
+`MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data` (`comment-id.log`).
+Same-phase preflight reused; remote main remains `c69789d9`, merge-tree passes.
+No agents, push/status/PR/main integration/closure/native CI/other-worktree edits or
+default-profile/real-context/key/draft actions. No Windows/casefold/cross/native claim.
+
+**Still owed:** same SPEC **delta** check then same QUALITY re-review including the
+original public probe; whole 44-row matrix/final Task 2 review and Task 8 gates.
+Task 2 remaining replacement/M/D14/index/history fault variants and shared
+source/batch A0–A4, execution-versus-consumption, no-child gaps and source/consumer
+holders/Z/GC remain open. Task 3 Command/DTO/CLI/guarded abandon and Task 4
+producer/coordinator runtime stay downstream. No review approval or full completion
+is asserted by this checkpoint.

@@ -111,6 +111,32 @@ pub(in super::super) fn refresh_allowed(
     operation: &str,
     root: &std::path::Path,
 ) -> Result<bool, RepositoryError> {
+    // Called inside generic journal begin's IMMEDIATE transaction (under the
+    // shared cache write lock), before any reconciliation, poll yield or insert.
+    // F2 reserves this operation ID even BEFORE retirement has an envelope.
+    // Do not move Domain.validate here: other commands legitimately map refresh
+    // IDs too. Private current-F2 indexing uses refresh_allowed_scoped directly.
+    let requests = super::super::recovery::has_table(db, "request_records")
+        .map_err(|_| recovery_required())?;
+    let mappings = super::super::recovery::has_table(db, "request_operations")
+        .map_err(|_| recovery_required())?;
+    if requests != mappings {
+        return Err(recovery_required());
+    }
+    // Both may be absent in a pre-request/pre-retirement migration journal.
+    // A malformed family, ordinal, scope or duplicate does not free a reserved
+    // ContextRetire ID. Nor can an orphan mapping prove a different command.
+    if mappings
+        && db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM request_operations m LEFT JOIN request_records r USING(request_ulid) WHERE m.operation_ulid=?1 AND (r.command='context retire' OR r.request_ulid IS NULL))",
+                [operation],
+                |r| r.get::<_, bool>(0),
+            )
+            .map_err(|_| recovery_required())?
+    {
+        return Ok(false);
+    }
     refresh_allowed_scoped(db, operation, root, super::request_scope::Scope::Domain)
 }
 pub(in super::super) fn refresh_allowed_scoped(
