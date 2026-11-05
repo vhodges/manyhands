@@ -104,6 +104,8 @@ gpui_kit::actions!(
         CancelComposer,
         /// Switch a comment composer between Rich text and Markdown.
         ComposerToggleMode,
+        /// Save resolution, in the resolve conflict sheet (D5 B3).
+        SaveResolution,
     ]
 );
 
@@ -184,6 +186,10 @@ pub(crate) const COMMENT_COMPOSER_CONTEXT: &str = "CommentComposer";
 /// composer's cancel is bound here too, as `EDIT_HOST_EDITOR` binds the
 /// edit editor's Escape.
 const COMMENT_COMPOSER_EDITOR: &str = "CommentComposer > Editor";
+
+/// The key context of the resolve conflict sheet (D5 B3): `secondary-enter`
+/// saves, from its Result editor too, where Enter is a newline.
+pub(crate) const RESOLVE_SHEET_CONTEXT: &str = "ResolveSheet";
 
 /// Binds the desktop's keys. Quit now has no key: it is the focused
 /// Quit now button while quitting waits.
@@ -267,6 +273,11 @@ pub(crate) fn bind(cx: &mut App) {
         ),
         KeyBinding::new("escape", CancelComposer, Some(COMMENT_COMPOSER_EDITOR)),
         KeyBinding::new("secondary-k", InsertLink, Some(COMMENT_COMPOSER_EDITOR)),
+        KeyBinding::new(
+            "secondary-enter",
+            SaveResolution,
+            Some(RESOLVE_SHEET_CONTEXT),
+        ),
     ]);
 }
 

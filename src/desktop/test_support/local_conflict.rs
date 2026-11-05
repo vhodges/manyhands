@@ -28,9 +28,27 @@ impl Fixture {
         mine: &str,
         theirs: &str,
     ) -> OperationId {
+        self.conflict_locally_with_body(root, id, mine, None, theirs)
+    }
+
+    /// `conflict_locally`, with the work context's save also giving the
+    /// body `mine_body`, when given. Primary's body follows its title
+    /// ("Body of {theirs}."), so with a body of mine both sides changed it
+    /// too: the conflict has a body part as well as the title.
+    pub(crate) fn conflict_locally_with_body(
+        &self,
+        root: &Path,
+        id: &str,
+        mine: &str,
+        mine_body: Option<&str>,
+        theirs: &str,
+    ) -> OperationId {
         self.commit_ticket(root, id, "Base", "");
         self.refresh(root);
-        self.save_ticket(root, id, mine);
+        match mine_body {
+            Some(body) => self.save_ticket_with_body(root, id, mine, body),
+            None => self.save_ticket(root, id, mine),
+        }
         self.commit_ticket(root, id, theirs, "");
         let service = self.service();
         let repo = service.resolve_repository(root).unwrap();

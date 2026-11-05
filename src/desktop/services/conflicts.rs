@@ -25,7 +25,6 @@ use crate::desktop::model::{
 
 /// Which synchronization a conflict is of.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
 pub(crate) enum ConflictSource {
     /// A share's, a post's or a lifecycle child's, through the remote.
     Remote,
@@ -36,7 +35,6 @@ pub(crate) enum ConflictSource {
 impl Services {
     /// Reads the conflict of `operation_id` in the repository at `root`,
     /// and hands its model to `apply` on the asking entity, with `stamp`.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
     pub(crate) fn read_conflict<V: 'static>(
         &self,
         source: ConflictSource,

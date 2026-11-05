@@ -228,6 +228,27 @@ impl PathConflict {
         }
     }
 
+    /// Takes `earlier`'s choice of each part that has the same three sides
+    /// here, and the body's result with it.
+    pub(crate) fn keep_choices_from(&mut self, earlier: &PathConflict) {
+        for field in &mut self.fields {
+            if let Some(was) = earlier.fields.iter().find(|was| {
+                was.key == field.key
+                    && was.base == field.base
+                    && was.mine == field.mine
+                    && was.theirs == field.theirs
+            }) {
+                field.choice = was.choice;
+            }
+        }
+        if let (Some(body), Some(was)) = (&mut self.body, &earlier.body)
+            && (&was.base, &was.mine, &was.theirs) == (&body.base, &body.mine, &body.theirs)
+        {
+            body.choice = was.choice;
+            body.result = was.result.clone();
+        }
+    }
+
     /// How many of the path's parts are chosen, of how many.
     pub(crate) fn chosen(&self) -> (usize, usize) {
         let fields = self.fields.iter().filter(|f| f.choice.is_some()).count();

@@ -16,9 +16,6 @@
 //! Nothing here derives `Debug` or `Display`: every side and result is item
 //! text.
 
-// The sheet that reads this model is Task 11b's.
-#![cfg_attr(not(test), allow(dead_code))]
-
 mod merge;
 
 use std::path::Path;
@@ -27,17 +24,14 @@ use manyhands::{
     canonical,
     repository::{
         ConflictDto, ConflictPathKind, ConflictPathStructure, ConflictReadEligibility,
-        LocalContextConflictContentDto, LocalContextSyncEligibility, LocalContextSyncInspectionDto,
-        LocalContextSyncReason,
+        ConflictReadNextAction, LocalContextConflictContentDto, LocalContextSyncEligibility,
+        LocalContextSyncInspectionDto, LocalContextSyncNextAction, LocalContextSyncReason,
     },
 };
 
 use crate::desktop::services::requests::PathResolution;
 
-pub(crate) use merge::{PathConflict, PathResult};
-// The parts and choices the sheet draws (Task 11b).
-#[allow(unused_imports)]
-pub(crate) use merge::{BodyChoice, BodyPart, Choice, FieldPart, TakenField};
+pub(crate) use merge::{BodyChoice, Choice, PathConflict, PathResult};
 
 /// The card note of a path whose result is written in the standard layout
 /// (R-9).
@@ -70,6 +64,7 @@ pub(crate) enum ExternalReason {
 #[derive(Clone)]
 pub(crate) struct ExternalPath {
     pub display_path: String,
+    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 12.
     pub reason: ExternalReason,
 }
 
@@ -87,6 +82,13 @@ pub(crate) enum ConflictSet {
 pub(crate) struct ConflictModel {
     observation: Option<String>,
     historical: bool,
+    /// The library says the synchronization is resumed, with no input
+    /// (P15): its resolution's commit is prepared.
+    resume: bool,
+    /// The request whose resolution attempt is unfinished, as the read
+    /// names it: the remote `request_id`, or the local
+    /// `required_request_id`.
+    attempt: Option<String>,
     set: ConflictSet,
 }
 
@@ -98,10 +100,14 @@ impl ConflictModel {
     pub(crate) fn from_remote(conflict: &ConflictDto) -> Self {
         let observation = conflict.observation.clone();
         let historical = conflict.historical;
+        let resume = conflict.next_action == ConflictReadNextAction::Resume;
+        let attempt = conflict.request_id.clone();
         if conflict.paths.is_empty() {
             return Self {
                 observation,
                 historical,
+                resume,
+                attempt,
                 set: ConflictSet::Settled,
             };
         }
@@ -125,6 +131,8 @@ impl ConflictModel {
         Self {
             observation,
             historical,
+            resume,
+            attempt,
             set: ConflictSet::of(read.collect(), external),
         }
     }
@@ -140,10 +148,14 @@ impl ConflictModel {
     ) -> Self {
         let observation = inspection.observation.clone();
         let historical = contents.iter().any(|content| content.historical);
+        let resume = inspection.next_action == LocalContextSyncNextAction::Resume;
+        let attempt = inspection.required_request_id.clone();
         if inspection.paths.is_empty() {
             return Self {
                 observation,
                 historical,
+                resume,
+                attempt,
                 set: ConflictSet::Settled,
             };
         }
@@ -173,6 +185,8 @@ impl ConflictModel {
         Self {
             observation,
             historical,
+            resume,
+            attempt,
             set: ConflictSet::of(read.collect(), external),
         }
     }
@@ -187,6 +201,34 @@ impl ConflictModel {
     /// (C4 R-39): the remote read's `historical`, or any local content's.
     pub(crate) fn historical(&self) -> bool {
         self.historical
+    }
+
+    /// Whether the library resumes the synchronization with no input: its
+    /// resolution's commit is prepared (P15).
+    pub(crate) fn resume(&self) -> bool {
+        self.resume
+    }
+
+    /// The request whose resolution attempt the read says is unfinished.
+    pub(crate) fn attempt(&self) -> Option<&str> {
+        self.attempt.as_deref()
+    }
+
+    /// Keeps the choices made in `earlier`, a read of the same conflict, on
+    /// each part of this one that is unchanged: the same path and field,
+    /// or body, with the same three sides (B3's table, P11).
+    pub(crate) fn keep_choices(&mut self, earlier: &ConflictModel) {
+        let ConflictSet::Canonical(before) = &earlier.set else {
+            return;
+        };
+        for path in self.paths_mut() {
+            if let Some(was) = before
+                .iter()
+                .find(|was| was.display_path() == path.display_path())
+            {
+                path.keep_choices_from(was);
+            }
+        }
     }
 
     pub(crate) fn set(&self) -> &ConflictSet {

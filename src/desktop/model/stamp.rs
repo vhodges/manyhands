@@ -53,6 +53,9 @@ pub(crate) enum ViewScope {
     /// made ready (D5 design, A3). Each dialog keeps its own generations,
     /// so one scope serves them all.
     MadeReady,
+    /// The resolve conflict sheet's reads of its conflict (D5 B1). Each
+    /// sheet keeps its own generations, so one scope serves them all.
+    Conflict,
     /// One Drafts page row's reads of its item. A new listing, or Retry,
     /// moves it on, so a late read never lands on a newer row.
     DraftRow(manyhands::drafts::DraftId),

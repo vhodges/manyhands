@@ -411,6 +411,15 @@ impl Fixture {
     /// ticket that has only its primary copy provisions its own item
     /// context: a branch and a worktree.
     pub(crate) fn save_ticket(&self, root: &Path, id: &str, title: &str) {
+        self.save_ticket_as(root, id, title, None);
+    }
+
+    /// `save_ticket`, with the body `body` in place of the one shown.
+    pub(crate) fn save_ticket_with_body(&self, root: &Path, id: &str, title: &str, body: &str) {
+        self.save_ticket_as(root, id, title, Some(body));
+    }
+
+    fn save_ticket_as(&self, root: &Path, id: &str, title: &str, body: Option<&str>) {
         let repo = self.service.resolve_repository(root).unwrap();
         let shown = self.service.show_item(&repo, &item_id(id)).unwrap();
         let saved = self.execute(
@@ -424,7 +433,7 @@ impl Fixture {
                     status: shown.status.unwrap(),
                     project: shown.project,
                     team: shown.team,
-                    body: shown.body.unwrap_or_default(),
+                    body: body.map_or_else(|| shown.body.unwrap_or_default(), str::to_owned),
                 },
                 deps: RelationshipWrite::Unchanged,
                 parent: RelationshipWrite::Unchanged,

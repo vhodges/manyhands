@@ -48,7 +48,6 @@ const RESOLUTIONS: &str = "resolutions";
 const EXTENSION: &str = ".json";
 
 /// The format a kept file is written in.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
 const VERSION: u32 = 1;
 
 /// Why the resolutions store failed. It carries no path and no text.
@@ -69,7 +68,6 @@ pub(crate) enum ResolutionStoreError {
     /// does not read.
     Newer,
     /// A kept file is not a set this version reads.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
     Damaged,
     /// Anything else.
     Io,
@@ -93,7 +91,6 @@ impl fmt::Display for ResolutionStoreError {
 /// The set a Save resolution submits, kept by its request ID: which
 /// synchronization it resolves, and every path's result. It derives
 /// neither `Debug` nor `Display`.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
 #[derive(Clone)]
 pub(crate) struct KeptSet {
     pub request_id: RequestId,
@@ -107,7 +104,6 @@ pub(crate) struct KeptSet {
     pub resolutions: Vec<PathResolution>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
 impl KeptSet {
     /// The intent that submits this set: `ConflictResolve` for a remote
     /// conflict, `LocalContextResolve` for a local one.
@@ -135,7 +131,6 @@ impl KeptSet {
 
 /// A kept set as it is written: a set of this file's version, its IDs as
 /// their canonical text.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Stored {
@@ -149,7 +144,6 @@ struct Stored {
     paths: Vec<StoredPath>,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum StoredKind {
@@ -157,7 +151,6 @@ enum StoredKind {
     Local,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredPath {
@@ -165,7 +158,6 @@ struct StoredPath {
     source: String,
 }
 
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
 impl Stored {
     fn of(set: &KeptSet) -> Self {
         Self {
@@ -261,7 +253,6 @@ impl ResolutionStore {
     /// (`Damaged` or `Newer`), and left as it was too. The
     /// folder is held from the look to the write: no two keeps of this
     /// process interleave.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
     pub(crate) fn keep(&self, set: &KeptSet) -> Result<(), ResolutionStoreError> {
         let bytes = serde_json::to_vec(&Stored::of(set)).map_err(|_| ResolutionStoreError::Io)?;
         let name = file_name(set.request_id);
@@ -279,7 +270,6 @@ impl ResolutionStore {
     }
 
     /// The set kept under `request`, if any.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
     pub(crate) fn kept(&self, request: RequestId) -> Result<Option<KeptSet>, ResolutionStoreError> {
         let bytes = match self.folder().read(&file_name(request)) {
             Ok(bytes) => bytes,
@@ -287,6 +277,25 @@ impl ResolutionStore {
             Err(error) => return Err(error.into()),
         };
         decode(&bytes, request).map(Some)
+    }
+
+    /// The newest set kept for `operation` in `root` under a request not in
+    /// `except`, if any: one a Save resolution of that conflict sends
+    /// again, under its own request ID (R-12). A file that does not read as
+    /// a set is passed by.
+    pub(crate) fn kept_for(
+        &self,
+        root: &std::path::Path,
+        operation: OperationId,
+        except: &[RequestId],
+    ) -> Result<Option<KeptSet>, ResolutionStoreError> {
+        Ok(self
+            .requests()?
+            .into_iter()
+            .rev()
+            .filter(|request| !except.contains(request))
+            .filter_map(|request| self.kept(request).ok().flatten())
+            .find(|set| set.operation_id == operation && set.root == root))
     }
 
     /// The request IDs of every kept set, in order. A file of any other
@@ -483,11 +492,15 @@ impl From<DraftError> for ResolutionStoreError {
 }
 
 impl Services {
+    /// The kept sets' store, when it opened.
+    pub(crate) fn resolutions(&self) -> Option<&ResolutionStore> {
+        self.backend.resolutions().ok()
+    }
+
     /// Keeps `set`, then submits it under its own request ID, on the
     /// background executor: nothing is sent when it could not be kept.
     /// Dropping the task before it ends may leave the set kept and unsent;
     /// the launch sweep deletes it, as the library has no record of it.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
     pub(crate) fn submit_resolution(
         &self,
         set: KeptSet,

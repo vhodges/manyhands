@@ -286,7 +286,6 @@ pub(crate) enum Intent {
     /// synchronization, a comment's operation or a lifecycle's, as the
     /// read was asked by; the read's observation; and every path's result.
     /// It holds item text.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
     ConflictResolve {
         root: PathBuf,
         operation_id: OperationId,
@@ -305,7 +304,6 @@ pub(crate) enum Intent {
     /// Save resolution of a local synchronization's conflict (D5 B3), with
     /// the inspection's observation (R-11) and every path's result. It
     /// holds item text.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 11b.
     LocalContextResolve {
         root: PathBuf,
         operation_id: OperationId,
