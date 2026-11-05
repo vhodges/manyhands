@@ -214,3 +214,48 @@ async fn a_removed_resolution_leaves_no_followup(cx: &mut TestAppContext) {
     );
     shell.until_ended(close, cx).await;
 }
+
+/// Task 12 review, canned (the refusal `written_failure` gives): the set's
+/// request is named to the sheet before the drain records it in the
+/// request model. The sheet still follows it, and shows its answer once it
+/// lands.
+#[gpui_kit::test]
+async fn a_request_not_yet_recorded_stays_followed(cx: &mut TestAppContext) {
+    let (shell, root) = remote_shell(cx);
+    let operation = OperationId::new();
+    shell
+        .backend
+        .answer_next_conflict_read(canned(operation, vec![canned_path(TICKET, '1')]));
+    let sheet = open_sheet(&shell, SheetSource::Share, &root, operation, cx);
+    until_present(&shell, "conflict-save", cx).await;
+    let held = shell
+        .backend
+        .hold_job_return_answering(JobKind::ConflictResolve, written_failure());
+    let services = services(&shell, cx);
+    let request_id = RequestId::new();
+    shell.visual(cx).update(|window, cx| {
+        let id = services.worker().submit_with_request_id(
+            Intent::ConflictResolve {
+                root: root.clone(),
+                operation_id: operation,
+                observation: format!("conflict-v1:{}", "0".repeat(64)),
+                resolutions: vec![PathResolution {
+                    token: format!("conflict-path-v1:{}", "1".repeat(64)),
+                    source: "x".to_owned(),
+                }],
+            },
+            Lane::User,
+            request_id,
+        );
+        assert!(
+            services.operations().read(cx).request(id).is_none(),
+            "the drain has not recorded it yet"
+        );
+        sheet.update(cx, |sheet, cx| {
+            sheet.submitted(request_id, Ok(id), window, cx)
+        });
+    });
+    assert!(sheet.read_with(cx, |sheet, _| sheet.waiting()), "followed");
+    held.release();
+    until_present(&shell, "conflict-message", cx).await;
+}

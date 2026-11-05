@@ -19,12 +19,15 @@ use manyhands::repository::{
 };
 
 use super::{
-    SheetSource,
-    external::{CLOSURES, CODE, OUTSIDE, REPAIR_NOT_DONE, REPAIRED, WAITS},
-    tests::{TICKET, canned, canned_path, open_sheet_in, remote_shell, until_present},
+    RESUME_LEAD, SheetSource,
+    answer_tests::{answer, checkpointed},
+    external::{
+        CLOSURES, CLOSURES_LEAD, CODE, OUTSIDE, OUTSIDE_LEAD, REPAIR_NOT_DONE, REPAIRED, WAITS,
+    },
+    tests::{TICKET, canned, canned_path, open_sheet_in, remote_shell, resolves, until_present},
 };
 use crate::desktop::{
-    services::requests::Intent,
+    services::{JobKind, ReadKind, requests::Intent},
     test_support::fixtures::{ticket_path, ticket_source},
     view::item::OpenedFolders,
 };
@@ -139,6 +142,14 @@ async fn an_external_set_has_no_save(cx: &mut TestAppContext) {
     assert!(!shell.present(("conflict-keep-mine", 0usize), cx));
     assert!(!shell.present(("conflict-result", 0usize), cx));
     assert!(shell.present("conflict-check-again", cx));
+    assert_eq!(
+        shell.label("conflict-outside-lead", cx).as_deref(),
+        Some(OUTSIDE_LEAD)
+    );
+    assert!(
+        !shell.present("conflict-outside-tidy", cx),
+        "R-26's line is for a work folder changed outside only"
+    );
 
     shell.keys("ctrl-enter", cx);
     assert!(
@@ -255,6 +266,12 @@ async fn incompatible_closures_offer_no_winner(cx: &mut TestAppContext) {
         Some(format!("{}: {OUTSIDE}", ticket_path(TICKET)))
     );
     assert_eq!(shell.rows("conflict-external-reason", cx), [CLOSURES]);
+    // Review minor 4: no commit-and-check-again lead for two closures.
+    assert_eq!(
+        shell.label("conflict-outside-lead", cx).as_deref(),
+        Some(CLOSURES_LEAD)
+    );
+    assert!(!shell.present("conflict-outside-tidy", cx));
     assert!(!shell.present(("conflict-keep-mine", 0usize), cx));
     assert!(!shell.present(("conflict-keep-theirs", 0usize), cx));
     assert!(!shell.present(("conflict-body-mine", 0usize), cx));
@@ -263,4 +280,88 @@ async fn incompatible_closures_offer_no_winner(cx: &mut TestAppContext) {
     assert!(!shell.present("conflict-retry", cx));
     assert!(shell.present("conflict-open-folder", cx));
     assert!(shell.present("conflict-check-again", cx));
+}
+
+/// Task 12 review, canned: Check again is disabled while its read runs,
+/// and offered again once the read lands
+/// (`c4_conflict_read_noncanonical_or_structural` both times). Tab, which a
+/// disabled Kit button does not take, shows it.
+#[gpui_kit::test]
+async fn check_again_waits_for_its_read(cx: &mut TestAppContext) {
+    let (shell, root) = remote_shell(cx);
+    let operation = OperationId::new();
+    shell
+        .backend
+        .answer_next_conflict_read(noncanonical(operation));
+    open_sheet_in(&shell, SheetSource::Share, &root, operation, None, cx);
+    until_present(&shell, "conflict-check-again", cx).await;
+
+    shell
+        .backend
+        .answer_next_conflict_read(noncanonical(operation));
+    let gate = shell.backend.hold_read(ReadKind::Conflict);
+    shell.click("conflict-check-again", cx);
+    assert!(
+        !shell.tab_reaches("conflict-check-again", 12, cx),
+        "disabled while reading"
+    );
+    drop(gate);
+    shell
+        .until_drawn(cx, "the read's end", |shell, cx| {
+            shell.present(("conflict-external", 0usize), cx)
+        })
+        .await;
+    assert!(
+        shell.tab_reaches("conflict-check-again", 12, cx),
+        "offered again"
+    );
+}
+
+/// Task 12 review, canned: a read that brings the set back from outside
+/// clears what the outside read said. External
+/// (`c4_conflict_read_noncanonical_or_structural`), then canonical
+/// (`c4_conflict_read_canonical`), then a Save stopped after its
+/// checkpoint (`tests/mutation_remote/resolution.rs`
+/// `c4_resolution_cancelled_before_publication`), then a read whose commit
+/// is prepared (`c4_conflict_read_commit_prepared`): the sheet speaks of
+/// the resolution, not of a repair.
+#[gpui_kit::test]
+async fn a_canonical_read_after_an_external_one_speaks_of_the_resolution(cx: &mut TestAppContext) {
+    let (shell, root) = remote_shell(cx);
+    let operation = OperationId::new();
+    shell
+        .backend
+        .answer_next_conflict_read(noncanonical(operation));
+    let sheet = open_sheet_in(&shell, SheetSource::Share, &root, operation, None, cx);
+    until_present(&shell, "conflict-check-again", cx).await;
+
+    shell
+        .backend
+        .answer_next_conflict_read(canned(operation, vec![canned_path(TICKET, '1')]));
+    shell.click("conflict-check-again", cx);
+    until_present(&shell, "conflict-save", cx).await;
+    shell.click(("conflict-keep-mine", 0usize), cx);
+    shell
+        .backend
+        .hold_job_return_answering(
+            JobKind::ConflictResolve,
+            answer(manyhands::results::ResultCode::Cancelled, checkpointed()),
+        )
+        .release();
+    shell.click("conflict-save", cx);
+    let sent = resolves(&shell, cx);
+    shell.until_ended(sent[0], cx).await;
+    until_present(&shell, "conflict-resume", cx).await;
+
+    shell.backend.answer_next_conflict_read(settled(
+        operation,
+        ConflictState::ResolutionPrepared,
+        ConflictReadNextAction::Resume,
+    ));
+    sheet.update(cx, |sheet, cx| sheet.read_conflict(cx));
+    until_present(&shell, "conflict-state", cx).await;
+    assert_eq!(
+        shell.label("conflict-state", cx).as_deref(),
+        Some(RESUME_LEAD)
+    );
 }

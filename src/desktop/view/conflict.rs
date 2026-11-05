@@ -339,11 +339,12 @@ impl ResolveSheet {
                     model.keep_choices(earlier);
                 }
                 self.kept = self.kept_of(&model, cx);
-                self.outside |= match model.set() {
-                    ConflictSet::External(_) => true,
-                    ConflictSet::Settled => model.external_repair(),
-                    ConflictSet::Canonical(_) => false,
-                };
+                // A Settled read keeps what the read before it said.
+                match model.set() {
+                    ConflictSet::External(_) => self.outside = true,
+                    ConflictSet::Canonical(_) => self.outside = false,
+                    ConflictSet::Settled => self.outside |= model.external_repair(),
+                }
                 self.model = Some(model);
                 self.not_read = None;
                 self.editors_stale = true;

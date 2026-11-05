@@ -218,8 +218,9 @@ impl ResolveSheet {
         let Some((id, from)) = self.following else {
             return;
         };
+        // A request the drain has not recorded yet stays followed: the
+        // request model never drops one it holds (Task 12 review).
         let Some(request) = self.services.operations().read(cx).request(id).cloned() else {
-            self.following = None;
             return;
         };
         match request.state {

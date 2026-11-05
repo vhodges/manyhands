@@ -14,7 +14,7 @@ use gpui_kit::{
 
 use super::{ResolveSheet, render::text};
 use crate::desktop::{
-    model::conflict::{ExternalPath, ExternalReason},
+    model::conflict::{ConflictModel, ExternalPath, ExternalReason},
     view::{
         item::{CHECK_AGAIN, open_folder},
         lifecycle::OPEN_FOLDER,
@@ -29,7 +29,7 @@ pub(crate) const BINARY: &str = "It holds binary content.";
 pub(crate) const EXECUTABLE: &str = "It is an executable file.";
 pub(crate) const SYMLINK: &str = "It is a symbolic link.";
 pub(crate) const RENAMED_OR_DELETED: &str = "It was renamed or deleted on one side.";
-pub(crate) const CLOSURES: &str = "Both copies record a different closure";
+pub(crate) const CLOSURES: &str = "Both copies record a different closure.";
 pub(crate) const UNREADABLE: &str = "Its copies can't be read as an item.";
 pub(crate) const UNSUPPORTED: &str = "Manyhands can't resolve this conflict itself.";
 pub(crate) const WAITS: &str = "It could be chosen here, but another file of this conflict \
@@ -37,6 +37,13 @@ pub(crate) const WAITS: &str = "It could be chosen here, but another file of thi
 /// B4: how an outside repair goes on.
 pub(crate) const OUTSIDE_LEAD: &str = "Fix these files in the folder, commit the merge, then \
      check again.";
+/// R-26: the work folder was changed outside the app.
+pub(crate) const TIDY_LEAD: &str =
+    "Remove or commit anything else changed in the folder, then press Check again.";
+/// Two closures of one ticket: nothing to commit and check (review minor
+/// 4).
+pub(crate) const CLOSURES_LEAD: &str =
+    "Decide outside Manyhands which closure stands; Manyhands can't merge two closures.";
 /// A read after Check again: the library refuses the repair as it stands.
 pub(crate) const REPAIR_NOT_DONE: &str = "The repair outside Manyhands isn't finished yet. \
      Finish it in the folder, then check again.";
@@ -64,6 +71,20 @@ impl ResolveSheet {
     pub(super) fn external_cards(&self, paths: &[ExternalPath], cx: &Context<Self>) -> AnyElement {
         let border = cx.theme().border;
         let muted = cx.theme().muted_foreground;
+        // Two closures: nothing to commit and check again (local, the
+        // library offers no way on).
+        let lead = if paths
+            .iter()
+            .any(|path| path.reason == ExternalReason::Closures)
+        {
+            CLOSURES_LEAD
+        } else {
+            OUTSIDE_LEAD
+        };
+        let changed_outside = self
+            .model
+            .as_ref()
+            .is_some_and(ConflictModel::changed_outside);
         let cards = paths.iter().enumerate().map(|(index, path)| {
             v_flex()
                 .gap_1()
@@ -91,10 +112,15 @@ impl ResolveSheet {
             .gap_2()
             .children(cards)
             .child(
-                text("conflict-outside-lead", OUTSIDE_LEAD)
+                text("conflict-outside-lead", lead)
                     .text_sm()
                     .text_color(muted),
             )
+            .children(changed_outside.then(|| {
+                text("conflict-outside-tidy", TIDY_LEAD)
+                    .text_sm()
+                    .text_color(muted)
+            }))
             .child(self.outside_actions(cx))
             .into_any_element()
     }

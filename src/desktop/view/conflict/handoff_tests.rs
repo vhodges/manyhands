@@ -7,7 +7,7 @@ use gpui_kit::TestAppContext;
 
 use super::{
     DESCRIPTION_LOCAL, RESULT_NOTE, SheetSource,
-    external::UNSUPPORTED,
+    external::{TIDY_LEAD, UNSUPPORTED},
     tests::{SHORT, TICKET, local_shell, open_sheet, open_sheet_in, until_present},
 };
 use crate::desktop::{test_support::fixtures::ticket_path, view::item::OpenedFolders};
@@ -67,9 +67,10 @@ async fn the_sheet_draws_the_handoffs_elements(cx: &mut TestAppContext) {
 /// R-26, real local: an untracked file in the work context makes the
 /// library's way on `external_repair`, so the sheet shows the outside
 /// guidance and offers no Save resolution. Task 12: the card gives its
-/// reason, and Open folder opens the work folder; Check again is offered.
+/// reason and R-26's line to tidy the folder, and Open folder opens the
+/// work folder; Check again is offered.
 #[gpui_kit::test]
-async fn an_external_repair_shows_the_outside_placeholder(cx: &mut TestAppContext) {
+async fn a_work_folder_changed_outside_shows_the_guidance(cx: &mut TestAppContext) {
     let (shell, root, operation) = local_shell(cx, |fixture, root| {
         let operation = fixture.conflict_locally(root, TICKET, "Mine", "Theirs");
         let worktree = fixture.context_worktree(root, TICKET);
@@ -96,6 +97,11 @@ async fn an_external_repair_shows_the_outside_placeholder(cx: &mut TestAppContex
     assert!(!shell.present("conflict-retry", cx));
     assert_eq!(shell.rows("conflict-external-reason", cx), [UNSUPPORTED]);
     assert!(shell.present("conflict-check-again", cx));
+    // Review minor 3: R-26's own line.
+    assert_eq!(
+        shell.label("conflict-outside-tidy", cx).as_deref(),
+        Some(TIDY_LEAD)
+    );
     shell.click("conflict-open-folder", cx);
     let opened = cx.update(|cx| {
         cx.try_global::<OpenedFolders>()

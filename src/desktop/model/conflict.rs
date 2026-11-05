@@ -91,6 +91,9 @@ pub(crate) struct ConflictModel {
     /// (`external_repair`), whether or not a conflict is live: after Check
     /// again, a repair it refuses as it stands (B4).
     external_repair: bool,
+    /// R-26: a local set sent outside only because its work context was
+    /// changed outside the app, though every path is eligible canonical.
+    changed_outside: bool,
     /// The request whose resolution attempt is unfinished, as the read
     /// names it: the remote `request_id`, or the local
     /// `required_request_id`.
@@ -122,6 +125,7 @@ impl ConflictModel {
                 historical,
                 resume,
                 external_repair,
+                changed_outside: false,
                 attempt,
                 parents,
                 set: ConflictSet::Settled,
@@ -149,6 +153,7 @@ impl ConflictModel {
             historical,
             resume,
             external_repair,
+            changed_outside: false,
             attempt,
             parents,
             set: ConflictSet::of(read.collect(), external),
@@ -184,6 +189,7 @@ impl ConflictModel {
                 historical,
                 resume,
                 external_repair,
+                changed_outside: false,
                 attempt,
                 parents,
                 set: ConflictSet::Settled,
@@ -210,17 +216,29 @@ impl ConflictModel {
             };
             (entry.display_path.as_str(), parsed)
         });
+        let library_external = inspection.eligibility
+            == Some(LocalContextSyncEligibility::ExternalResolutionRequired)
+            || matches!(
+                inspection.reason,
+                LocalContextSyncReason::UnsupportedConflict
+                    | LocalContextSyncReason::ImmutableClosureDisagreement
+            );
+        let cannot_start = !inspection.can_start_resolution
+            && !historical
+            && !resume
+            && inspection.next_action != LocalContextSyncNextAction::SetIdentity;
+        // R-26: the library would let the set be chosen, but the work
+        // context was changed outside the app.
+        let changed_outside = !library_external && (external_repair || cannot_start);
         let external = inspection.eligibility
             == Some(LocalContextSyncEligibility::ExternalResolutionRequired)
-            || (!inspection.can_start_resolution
-                && !historical
-                && !resume
-                && inspection.next_action != LocalContextSyncNextAction::SetIdentity);
+            || cannot_start;
         Self {
             observation,
             historical,
             resume,
             external_repair,
+            changed_outside,
             attempt,
             parents,
             set: ConflictSet::of(read.collect(), external),
@@ -248,6 +266,12 @@ impl ConflictModel {
     /// Whether the library's way on is a repair outside Manyhands (B4).
     pub(crate) fn external_repair(&self) -> bool {
         self.external_repair
+    }
+
+    /// Whether the set goes outside only because the work context was
+    /// changed outside the app (R-26): the sheet asks for it to be tidied.
+    pub(crate) fn changed_outside(&self) -> bool {
+        self.changed_outside
     }
 
     /// Mine's and theirs' commits, for the footer's Git line.
