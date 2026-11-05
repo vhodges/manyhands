@@ -364,6 +364,9 @@ are not authorized; numeric exits must come from existing results registry.
 | Task 2 limited initial-absence SPEC review at `bdfaa98e33f0a0150cf74b48d0c00d5f9b3e7c9e` | Controller relayed and source-verified **3 Important current-behavior findings**: S1 nonstandard registration/HEAD inventory omitted; S2 dangling/nonregular loose-ref slot could become absence; S3 terminal remote index/reconciliation debt did not block fresh retirement | Limited SPEC review **failed**; corrections/evidence below. Same spec reviewer's re-review is required before quality. No full Task 2 or quality pass, new owner-policy question or authority extension |
 | Same limited SPEC re-review at `d11655ea1ab05ccb03d14bd26c6ce5bfcf1fac15` | Controller reports **S2/S3 resolved**, **one Important S1 finding remains**: unrelated registration inventory does not validate the worktree `.git` file's contents/backlink or reject a redirected gitfile | Retirement-only additive S1 correction and RED/GREEN evidence below; same-reviewer S1 re-review still required, quality held. No new policy or authority scope |
 | Limited QUALITY review at `fb18edc1990c03de9fa03dc8ec3f09f1d5b30668` | Controller relayed/agreed **2 Important current defects**: quality-Q1 commondir target redirects still admit absence; quality-Q2 no-effect retirement can carry an unrelated completed-step authority | Separate behavioral RED/GREEN corrections below. Controller's same SPEC delta-check, then **same QUALITY reviewer re-review**, remain pending; no approval inferred from local gates |
+| Limited SPEC final/delta pass through `03c0c63b`, source base `daab73e7` | Session `ses_e564dd7a7ffeYzKXesoyVuGJFs`: S1/S2/S3 and subsequent quality-correction deltas verified; **0 Blocking/0 Important/0 Minor remaining**. Registration identity checks are retirement-only, index-only/replay and shared cleanup remain unchanged | Initial-absence milestone SPEC approved only; full Task 2 obligations remain open |
+| Limited QUALITY final pass through `03c0c63b`, same source base, after SPEC pass | Session `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/Blocking/0 Important/0 Minor remaining**. Fresh original probes now refuse redirected commondir and contradictory checkpoint evidence; valid absence and terminal/pending unregister controls retain their expected outcomes | Initial-absence milestone QUALITY approved only; Windows runtime/cross-compilation and deferred source/batch/destructive authority remain unverified |
+| Next Task 2 continuation preflight, 2026-11-05 | Fresh fetch succeeded; ticket and main checkouts clean. Main/base remains `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `03c0c63b1371fea1b59f46fae6495ef69e39315a` already up to date, no conflicts/rebase | No upstream assumption change or unmerged branch consumption |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -382,8 +385,9 @@ are not authorized; numeric exits must come from existing results registry.
   the IN-PROGRESS initial-absence code milestone includes the local-only domain
   path, exact refresh guards, single-consumer Z and stronger audits. Latest
   context-retirement filter after the quality-Q1/Q2 corrections: **58 passed**
-  (previous 50 + 8 tests, not matrix groups). Controller's same SPEC delta-check
-  and same QUALITY re-review remain pending; no review pass claimed.
+  (previous 50 + 8 tests, not matrix groups). Limited SPEC and QUALITY reviews
+  passed through `03c0c63b` with no remaining findings, from source base
+  `daab73e7`; all three static gates passed on that source.
   Live observation/instance/destructive and source/batch capability paths remain
   unfinished and unexposed. See the latest bounded-increment section below;
   not complete/review-ready, full Task 2 spec/quality review remains owed.
@@ -396,12 +400,12 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: controller-owned **same SPEC delta-check, then same QUALITY
-reviewer re-review of quality-Q1/Q2 corrections** in the limited initial-absence
-core. Prior S1/S2/S3 evidence remains intact; no new policy decision is requested.
-Do not extend source/batch/destructive authorities until that review checkpoint.
-This is not full Task 2 review/completion or permission for Task 3. The corrected
-design checkpoint stays cleared, not awaiting reapproval.
+Immediate next step: publish the reviewed limited initial-absence milestone only
+on this ticket branch, then continue the same Task 2 implementer into the deferred
+instance/observation/guarded execution mechanisms. Prior corrections remain
+covered; no new policy decision or reapproval is needed. This is not full Task 2
+review/completion or permission for Task 3. The corrected design checkpoint
+and limited initial-absence review checkpoint are both cleared.
 Preserve all unchanged assertions/lifecycle cleanup and prior approvals. Final
 fast/SSH tiers and whole-branch review remain owed; this is not feature completion.
 
