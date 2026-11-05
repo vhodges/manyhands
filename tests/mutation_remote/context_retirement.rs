@@ -4,6 +4,30 @@ use std::{fs, path::Path};
 
 pub(crate) const CASES: &[ssh_harness::Case] = &[
     (
+        "retirement_specfix_r2_lineage_zero_preserve",
+        specfix_r2_lineage_zero,
+    ),
+    (
+        "retirement_specfix_r2_lineage_one_preserve",
+        specfix_r2_lineage_one,
+    ),
+    (
+        "retirement_specfix_r2_lineage_multiple_preserve",
+        specfix_r2_lineage_multiple,
+    ),
+    (
+        "retirement_specfix_r2_lineage_repeated_uninvoked_resumptions",
+        specfix_r2_lineage_repeated,
+    ),
+    (
+        "retirement_specfix_r2_lineage_repeated_resumptions_with_preserve_gaps",
+        specfix_r2_lineage_mixed,
+    ),
+    (
+        "retirement_specfix_r2_lineage_corruption_stays_fail_closed",
+        specfix_r2_lineage_corrupt,
+    ),
+    (
         "retirement_specfix_r2_direct_uninvoked_resumption_to_owned_absence",
         specfix_r2_direct_m,
     ),
@@ -624,6 +648,14 @@ fn reentry_resumed_gap_m() -> Result<(), FixtureError> {
 // Actual producer: old crash, new fenced proof/intent, private uninvoked witness.
 // No third resumption is allowed to supply a different lineage for M.
 fn specfix_r2_late_stop(w: &World) -> Result<RetireContextRequest, FixtureError> {
+    specfix_r2_late_stop_gaps(w, &[])
+}
+// false: verification-only preserve; true: restore the original marker then
+// obtain another real proof/intent and known-uninvoked late guard stop.
+fn specfix_r2_late_stop_gaps(
+    w: &World,
+    gaps: &[bool],
+) -> Result<RetireContextRequest, FixtureError> {
     add_present(w)?;
     fixed(w.service.refresh_repository(RefreshRepositoryRequest {
         root: w.root.clone(),
@@ -638,15 +670,17 @@ fn specfix_r2_late_stop(w: &World) -> Result<RetireContextRequest, FixtureError>
         1
     );
     history(w, true)?;
-    complete_materialization(w)?;
+    let materialization = complete_materialization(w)?;
     let request = request(w);
     interrupted_worktree_intent(w, &request, false);
     let marker = w
         .repo()?
         .commondir()
         .join(format!("worktrees/{ITEM}/manyhands-retirement-instance"));
+    let original_marker = fixed(fs::read(&marker))?;
+    let changed_marker = marker.clone();
     RepositoryService::set_retirement_worktree_hook_for_testing(move || {
-        fs::write(marker, b"foreign-marker").unwrap();
+        fs::write(changed_marker, b"foreign-marker").unwrap();
     });
     assert_eq!(
         reentry_call(w, request.clone(), 1)?,
@@ -656,6 +690,68 @@ fn specfix_r2_late_stop(w: &World) -> Result<RetireContextRequest, FixtureError>
         }
     );
     assert!(RepositoryService::open_at(&w.data()).is_ok());
+    for (index, resume) in gaps.iter().enumerate() {
+        let old_epoch = 2 + index as i64;
+        if *resume {
+            fixed(fs::write(&marker, &original_marker))?;
+            let changed_marker = marker.clone();
+            RepositoryService::set_retirement_worktree_hook_for_testing(move || {
+                fs::write(changed_marker, b"foreign-marker").unwrap();
+            });
+        }
+        let before = registry_image(&w.db()?);
+        let resources = resource_image(&w.root);
+        let commands = w.server.commands();
+        let result = if *resume {
+            reentry_call(w, request.clone(), old_epoch)?
+        } else {
+            fixed(w.service.reenter_context_retirement_authenticated(
+                ReenterContextRetirementRequest {
+                    retirement: request.clone(),
+                    expected_owner_epoch: old_epoch,
+                },
+                None,
+                &mut SessionCredentials::new(SpecfixNoCredentials),
+            ))?
+        };
+        assert_eq!(
+            result,
+            ContextRetirementOutcome::CleanupPending {
+                worktree_removal: RetirementRemoval::Possible,
+                branch_removal: RetirementRemoval::None,
+            }
+        );
+        let db = w.db()?;
+        if *resume {
+            assert_eq!(fixed(db.query_row("SELECT observation FROM context_retirement_effect_intents WHERE owner_epoch=?1 AND resource='worktree'", [old_epoch+1], |r| r.get::<_,String>(0)))?, "changed");
+        } else {
+            assert_eq!(fixed(db.query_row("SELECT count(*) FROM context_retirement_reentries rr JOIN context_retirement_attempts a ON a.operation_ulid=rr.operation_ulid AND a.owner_epoch=rr.owner_epoch WHERE rr.owner_epoch=?1 AND rr.purpose='preserve' AND a.observer_operation_ulid IS NULL", [old_epoch+1], |r| r.get::<_,i64>(0)))?, 1);
+            let after = registry_image(&db);
+            for table in [
+                "context_retirement_effect_intents",
+                "context_retirement_worktree_resumptions",
+                "retirement_observation_receipts",
+                "retirement_advertisement_provenance",
+                "remote_observation_batches",
+                "remote_ref_observations",
+            ] {
+                assert_eq!(
+                    before.get(table),
+                    after.get(table),
+                    "preserve gap cannot add proof/effects: {table}"
+                );
+            }
+            assert_eq!(
+                before["remote_operation_records"].len(),
+                after["remote_operation_records"].len(),
+                "only fence an existing observer, never mint one"
+            );
+            assert!(resources == resource_image(&w.root));
+            assert_eq!(commands, w.server.commands());
+        }
+        assert_materialization(w, &materialization)?;
+        assert!(RepositoryService::open_at(&w.data()).is_ok());
+    }
     fixed(w.repo()?.find_worktree(ITEM).and_then(|tree| {
         tree.prune(Some(
             git2::WorktreePruneOptions::new()
@@ -669,6 +765,189 @@ fn specfix_r2_late_stop(w: &World) -> Result<RetireContextRequest, FixtureError>
             .and_then(|mut r| r.delete()),
     )?;
     Ok(request)
+}
+
+fn specfix_r2_lineage_zero() -> Result<(), FixtureError> {
+    specfix_r2_lineage_m(&[])
+}
+fn specfix_r2_lineage_one() -> Result<(), FixtureError> {
+    specfix_r2_lineage_m(&[false])
+}
+fn specfix_r2_lineage_multiple() -> Result<(), FixtureError> {
+    specfix_r2_lineage_m(&[false, false, false])
+}
+fn specfix_r2_lineage_repeated() -> Result<(), FixtureError> {
+    specfix_r2_lineage_m(&[true, true])
+}
+fn specfix_r2_lineage_mixed() -> Result<(), FixtureError> {
+    specfix_r2_lineage_m(&[false, true, false, true, false, false])
+}
+
+fn specfix_r2_lineage_m(gaps: &[bool]) -> Result<(), FixtureError> {
+    let w = setup()?;
+    let request = specfix_r2_late_stop_gaps(&w, gaps)?;
+    let epoch = 2 + gaps.len() as i64;
+    let before = registry_image(&w.db()?);
+    // Stale public epochs are not a lineage capability, even with exact debt.
+    assert!(
+        w.service
+            .reenter_context_retirement_authenticated(
+                ReenterContextRetirementRequest {
+                    retirement: request.clone(),
+                    expected_owner_epoch: epoch - 1
+                },
+                None,
+                &mut SessionCredentials::new(SpecfixNoCredentials)
+            )
+            .is_err()
+    );
+    assert_eq!(before, registry_image(&w.db()?));
+    fixed(fs::write(
+        w.root.join(".manyhands/config.toml"),
+        b"invalid = [",
+    ))?;
+    let resources = resource_image(&w.root);
+    let commands = w.server.commands();
+    let result = w.service.reenter_context_retirement_authenticated(
+        ReenterContextRetirementRequest {
+            retirement: request.clone(),
+            expected_owner_epoch: epoch,
+        },
+        None,
+        &mut SessionCredentials::new(SpecfixNoCredentials),
+    );
+    assert!(
+        result.is_ok(),
+        "valid nonadjacent debt lineage must admit M"
+    );
+    let result = fixed(result)?;
+    assert!(
+        matches!(&result, ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Retired && r.worktree_removal==RetirementRemoval::Possible && r.branch_removal==RetirementRemoval::None && r.materialization_settled)
+    );
+    let db = w.db()?;
+    let after = registry_image(&db);
+    for table in [
+        "context_retirement_effect_intents",
+        "context_retirement_worktree_resumptions",
+        "retirement_advertisement_provenance",
+        "retirement_observation_receipts",
+        "remote_observation_batches",
+        "remote_ref_observations",
+    ] {
+        assert_eq!(
+            before.get(table),
+            after.get(table),
+            "M cannot rewrite/add evidence: {table}"
+        );
+    }
+    assert_eq!(fixed(db.query_row("SELECT count(*) FROM context_retirement_effect_intents WHERE owner_epoch=1 AND resource='worktree' AND observation IS NULL", [], |r| r.get::<_,i64>(0)))?, 1);
+    assert_eq!(fixed(db.query_row("SELECT count(*) FROM context_retirement_effect_intents WHERE resource='worktree' AND observation='changed'", [], |r| r.get::<_,i64>(0)))?, 1+gaps.iter().filter(|resume| **resume).count() as i64);
+    assert_eq!(fixed(db.query_row("SELECT c.owner_epoch,c.phase,c.worktree_removal,c.branch_removal,o.state,o.completed_step,a.phase FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id JOIN context_retirement_attempts a ON a.operation_ulid=c.operation_ulid AND a.owner_epoch=c.owner_epoch", [], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,String>(6)?))))?, (epoch+1,"complete".into(),"possible".into(),"none".into(),"completed".into(),"context_branch_released".into(),"ended".into()));
+    assert_eq!(fixed(db.query_row("SELECT count(*) FROM context_retirement_absence_receipts m JOIN context_retirement_effect_intents e ON e.operation_ulid=m.operation_ulid AND e.owner_epoch=m.intent_owner_epoch AND e.resource=m.intent_resource AND e.receipt_id=m.intent_receipt_id WHERE m.owner_epoch=?1 AND e.owner_epoch=1 AND e.observation IS NULL AND m.inventory='all_absent' AND m.worktree_removal='possible' AND m.branch_removal='none'", [epoch+1], |r| r.get::<_,i64>(0)))?, 1);
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT count(*) FROM remote_poll_materializations",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT count(*) FROM contexts WHERE item_id=?1",
+            [ITEM],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert_eq!(commands, w.server.commands());
+    assert!(resources == resource_image(&w.root));
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    let tip = fixed(db.query_row(
+        "SELECT expected_tip FROM context_retirement_records",
+        [],
+        |r| r.get::<_, String>(0),
+    ))?;
+    fixed(
+        w.repo()?
+            .reference(CONTEXT, fixed(tip.parse())?, false, "new lifetime"),
+    )?;
+    add_present(&w)?;
+    let new_intent = complete_materialization(&w)?;
+    let rows = registry_image(&db);
+    let resources = resource_image(&w.root);
+    assert_eq!(reentry_call(&w, request, epoch)?, result);
+    assert_eq!(rows, registry_image(&db));
+    assert!(resources == resource_image(&w.root));
+    assert_materialization(&w, &new_intent)?;
+    w.privacy()
+}
+
+fn specfix_r2_lineage_corrupt() -> Result<(), FixtureError> {
+    for (trigger, sql) in [
+        (
+            None,
+            "DELETE FROM context_retirement_reentries WHERE owner_epoch=3",
+        ),
+        (
+            None,
+            "DELETE FROM context_retirement_worktree_resumptions WHERE owner_epoch=4",
+        ),
+        (
+            Some("retirement_reentry_immutable"),
+            "UPDATE context_retirement_reentries SET purpose='no_effect' WHERE owner_epoch=3",
+        ),
+        (
+            Some("retirement_worktree_resumption_immutable"),
+            "UPDATE context_retirement_worktree_resumptions SET intent_receipt_id=(SELECT receipt_id FROM context_retirement_effect_intents WHERE owner_epoch=2) WHERE owner_epoch=4",
+        ),
+        (
+            Some("retirement_absence_receipt_immutable"),
+            "UPDATE context_retirement_absence_receipts SET intent_owner_epoch=4,intent_receipt_id=(SELECT receipt_id FROM context_retirement_effect_intents WHERE owner_epoch=4)",
+        ),
+        (
+            None,
+            "UPDATE context_retirement_attempts SET phase='ended' WHERE owner_epoch=3",
+        ),
+    ] {
+        let w = setup()?;
+        let request = specfix_r2_late_stop_gaps(&w, &[false, true, false])?;
+        assert!(matches!(
+            reentry_call(&w, request.clone(), 5)?,
+            ContextRetirementOutcome::Final(_)
+        ));
+        let db = w.db()?;
+        // Explicit tamper fixtures; restore canonical triggers before audit.
+        let restore = if let Some(trigger) = trigger {
+            let ddl = fixed(db.query_row(
+                "SELECT sql FROM sqlite_master WHERE name=?1",
+                [trigger],
+                |r| r.get::<_, String>(0),
+            ))?;
+            fixed(db.execute_batch(&format!("DROP TRIGGER {trigger}")))?;
+            Some(ddl)
+        } else {
+            None
+        };
+        fixed(db.execute_batch(sql))?;
+        if let Some(ddl) = restore {
+            fixed(db.execute_batch(&ddl))?;
+        }
+        let rows = registry_image(&db);
+        let resources = resource_image(&w.root);
+        let commands = w.server.commands();
+        assert!(
+            matches!(RepositoryService::open_at(&w.data()), Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+        );
+        assert!(
+            matches!(w.service.reenter_context_retirement_authenticated(ReenterContextRetirementRequest { retirement: request, expected_owner_epoch: 6 }, None, &mut SessionCredentials::new(SpecfixNoCredentials)), Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+        );
+        assert_eq!(rows, registry_image(&db));
+        assert!(resources == resource_image(&w.root));
+        assert_eq!(commands, w.server.commands());
+        w.privacy()?;
+    }
+    Ok(())
 }
 struct SpecfixNoCredentials;
 impl SessionCredentialProvider for SpecfixNoCredentials {

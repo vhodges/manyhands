@@ -1070,9 +1070,12 @@ fn audit_objects(
     // claim. Settled removal uses this closed mapping; incomplete/owned-absence
     // evidence remains Possible, never Observed. A live pre-Git refusal instead
     // retains the branch intent as changed with no claimed effect.
-    // The direct resumed-W -> M exception below correlates the changed attempt's
-    // own immutable resumption with M's exact older uncertain intent/receipt.
-    // It preserves Possible W debt; changed+Possible or purpose alone is not proof.
+    // A changed resumed W may be historical, not M's immediate predecessor.
+    // Correlate its own immutable resumption to M's exact uncertain source, then
+    // close the entire intervening epoch interval: fenced preserve-only attempts
+    // or validated resumptions of that same debt. The reentry audit above also
+    // forbids observer/receipt/effect evidence on preserve-only attempts. Neither
+    // changed+Possible nor a purpose label alone can justify this exception.
     let invalid_effect: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_effect_intents e
       JOIN context_retirement_records c ON c.operation_ulid=e.operation_ulid
       JOIN retirement_observation_receipts b ON b.id=e.receipt_id
@@ -1090,10 +1093,20 @@ fn audit_objects(
               JOIN context_retirement_worktree_resumptions w ON w.operation_ulid=e.operation_ulid AND w.owner_epoch=e.owner_epoch
               JOIN context_retirement_effect_intents prior ON prior.operation_ulid=w.operation_ulid AND prior.owner_epoch=w.intent_owner_epoch AND prior.resource=w.intent_resource AND prior.receipt_id=w.intent_receipt_id
               JOIN context_retirement_attempts resumed ON resumed.operation_ulid=e.operation_ulid AND resumed.owner_epoch=e.owner_epoch
-              WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch AND mr.purpose='metadata' AND mr.previous_epoch=e.owner_epoch
+              WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch AND mr.purpose='metadata'
+                AND m.intent_owner_epoch<e.owner_epoch AND e.owner_epoch<m.owner_epoch
                 AND m.intent_resource='worktree' AND m.intent_owner_epoch=w.intent_owner_epoch AND m.intent_receipt_id=w.intent_receipt_id
                 AND (prior.observation IS NULL OR prior.observation='incomplete') AND resumed.phase='fenced'
-                AND m.inventory='all_absent' AND m.worktree_removal='possible' AND m.branch_removal='none'))
+                AND m.inventory='all_absent' AND m.worktree_removal='possible' AND m.branch_removal='none'
+                AND m.owner_epoch-m.intent_owner_epoch-1=(SELECT count(*) FROM context_retirement_reentries chain
+                  WHERE chain.operation_ulid=m.operation_ulid AND chain.owner_epoch>m.intent_owner_epoch AND chain.owner_epoch<m.owner_epoch)
+                AND NOT EXISTS(SELECT 1 FROM context_retirement_reentries chain
+                  LEFT JOIN context_retirement_attempts a ON a.operation_ulid=chain.operation_ulid AND a.owner_epoch=chain.owner_epoch
+                  LEFT JOIN context_retirement_worktree_resumptions debt ON debt.operation_ulid=chain.operation_ulid AND debt.owner_epoch=chain.owner_epoch
+                  WHERE chain.operation_ulid=m.operation_ulid AND chain.owner_epoch>m.intent_owner_epoch AND chain.owner_epoch<m.owner_epoch
+                    AND (a.phase IS NOT 'fenced' OR chain.purpose NOT IN ('preserve','resume_worktree')
+                      OR (chain.purpose='resume_worktree' AND (debt.intent_resource IS NOT 'worktree'
+                        OR debt.intent_owner_epoch IS NOT m.intent_owner_epoch OR debt.intent_receipt_id IS NOT m.intent_receipt_id))))))
            OR (e.resource='worktree' AND e.owner_epoch<c.owner_epoch AND EXISTS(SELECT 1 FROM context_retirement_worktree_resumptions w JOIN context_retirement_effect_intents current ON current.operation_ulid=w.operation_ulid AND current.owner_epoch=w.owner_epoch AND current.resource='worktree' JOIN context_retirement_attempts old ON old.operation_ulid=e.operation_ulid AND old.owner_epoch=e.owner_epoch WHERE w.operation_ulid=c.operation_ulid AND w.owner_epoch>e.owner_epoch AND w.owner_epoch<=c.owner_epoch AND old.phase='fenced' AND ((current.observation='removed' AND c.worktree_removal='observed') OR EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch AND m.intent_resource='worktree' AND m.intent_owner_epoch=current.owner_epoch AND m.intent_receipt_id=current.receipt_id AND m.worktree_removal='possible' AND c.worktree_removal='possible')))),0)))", [], |r| r.get(0)).map_err(|_| recovery_required())?;
     if invalid_effect {
         return Err(recovery_required());
