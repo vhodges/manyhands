@@ -23,8 +23,9 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
   those already-approved items is requested.
 - Method: sequential bounded fresh implementers, controller's independent spec
   review, then quality review per task. Tasks 2/4 retain adversarial checkpoints.
-  Task 0's implementer owned **Task 0 only**. A fresh bounded implementer now
-  owns Task 1; neither implementer spawned other agents.
+  Each implementer owns only its dispatched task. Task 1 has passed both
+  independent reviews. Task 2's fresh implementer owns its checkpoint preparation;
+  no implementer spawned other agents.
 - Task 0 is source reconnaissance, three baseline runs, factual planning notes,
   this ledger and a canonical ticket checkpoint. No Rust, test, schema or Cargo
   edits; no Task 1 work. All new interfaces below remain **planned**.
@@ -372,7 +373,9 @@ are not authorized; numeric exits must come from existing results registry.
   independently spec/quality approved through `2f2f9b9d` from base `834415b9`,
   no remaining findings. Recognition, migration and nested-harness visibility
   corrections verified. All three static gates and targeted evidence recorded.
-- [ ] **2 — Durable single-context retirement.** Not started; adversarial gate.
+- [ ] **2 — Durable single-context retirement.** Source-grounded transition/DDL
+  checkpoint prepared below; no Task 2 production changes or tests yet.
+  Independent adversarial review is required before execution continues.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
 - [ ] **5 — CLI command/flag/help/rendering.** Not started.
@@ -382,9 +385,10 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: publish the reviewed Task 1 checkpoint on this ticket
-branch only, then dispatch Task 2's fresh implementer. Task 2 must return at its
-record/reservation adversarial design checkpoint before proceeding past it.
+Immediate next step: independently adversarially review Task 2's concrete
+record/reservation checkpoint below. Its implementer has stopped before production
+changes, using the expressly permitted checkpoint-only path. Task 1's reviewed
+checkpoint was published by the controller before this dispatch.
 Preserve all unchanged assertions/lifecycle cleanup and prior approvals. Final
 fast/SSH tiers and whole-branch review remain owed; this is not feature completion.
 
@@ -677,3 +681,334 @@ Canonical checkpoint: CLI-generated distinct ULID `01M6MHQ56T3SE2QZMH35Q6GXET`,
 parent `01M6MGTPJ2BNNXKN9WZ183RWQA`, actual UTC `2026-11-05T00:28:39Z`.
 Next: controller delta spec then quality re-reviews before push. No new agent,
 push, real-context operation, ticket status/body save, main integration or Task 2.
+
+## Task 2 — Mandatory Record/Reservation Design Checkpoint
+
+### Entry, Boundary And Evidence Standing
+
+- Verified clean entry HEAD **`7b1912d152a1ab7440bd17c48a0a544e40e19258`**,
+  exact ticket branch/worktree above; `origin/main` remains
+  `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`. Controller's just-completed fresh
+  fetch is accepted; this implementer's `git merge origin/main` also answered
+  **Already up to date** without changing HEAD. No redundant fetch, other-worktree
+  edit, unmerged D5 consumption, agent, push, PR, lifecycle or native-CI action.
+- Read the current `AGENTS.md`, approved Cycle D1–D14/R-1–R-8/Q1/Q2/A1–A9,
+  detailed design and the entire existing ledger. Task 1's proof is retained
+  unchanged, including relative `pub(in super::super)` visibility and the
+  independent ticket-completion/document-preservation distinction.
+- **This is Task 2 step 9's first return, not Task 2 completion.** The controller
+  explicitly allowed a code-grounded transition/DDL/ownership/test checkpoint
+  **before production changes** when coherent green execution would require the
+  post-checkpoint replay/index work. That condition applies here: the existing
+  begin/discard helpers reopen rejected IDs, the lifecycle helper has an optional
+  journal fallback, and refresh releases the blocker without a companion result
+  transaction. An executable retirement runner using those unchanged seams would
+  violate stable Final results or leave unrecorded completion. Implementing the
+  corresponding retirement-specific completion/resume path now would cross the
+  mandatory boundary. No scaffold, placeholder runner or deliberately red suite
+  is committed instead.
+- **All new names, DDL and tests in this section are proposed implementation
+  details, not installed schema or runtime evidence.** No Rust/test/schema/Cargo
+  file changed; zero new tests written, zero RED/GREEN tests run. Only this ledger
+  and its canonical checkpoint comment are owned changes. The approved Cycle and
+  design are not amended; no settled policy is reopened.
+
+### Actual-Source Seams That Determine The Transactions
+
+References are at the entry SHA, not anticipated post-edit line numbers.
+
+| Actual seam | Consequence for the proposed implementation |
+| --- | --- |
+| `recovery.rs:752–938`; `repository.rs:3483–3490,3519–3550` | Generic begin owns its own immediate transaction, returns an existing pending row without executor fencing, and resets `rejected` to `created`; optional cache fallback returns record ID 0. Retirement needs its own atomic **local envelope + companion + executor claim** transaction, mandatory registry, and durable terminal result. Do not change release's behavior or call `discard_lifecycle` for a Final retirement refusal. |
+| `recovery.rs:717–728,1448–1508` | Every pending local row blocks remote work; every active observation blocks local begin/reentry. A retirement-specific transaction may exclude **only** its exact bound old read-only observer while claiming/fencing it. Generic `in_the_way` / `require_no_pending_local` must not acquire an item-ID or blanket parent exemption. |
+| `remote/reservation.rs:238–258,1026–1195,1432–1508,1533–1557` | Reserve, restart, every `owned` write and finish need the same bound-parent check. Public restart may finish an after-batch observer without transport; retirement must replace with a **new O**, not call that shortcut. `RemoteReservation` currently holds only service scope, operation, repository, generation, epoch; add an optional sealed retirement execution scope, not a caller-supplied allow-list. |
+| `remote/reservation.rs:680–741`; `remote/state.rs:2531–2614` | Both advertisement branches already return the exact batch ID, discarded at lines 718–729. Add a sibling/internal commit hook receiving that returned ID plus the owned remote record, in **this** transaction. Existing callbacks/public signatures retain their current shape. No `SELECT current batch` after public observation returns. |
+| `remote/observation.rs:145–197,262–307` | Public observation configures before reserve and returns today's snapshot, including completed replay. Private retirement entry must validate the frozen generation/request before configuration writes and carry its scope through safe points, error cleanup and completion; public result/replay supplies no retirement receipt. |
+| `remote/state.rs:2295–2323,2367–2405,6223–6239` | Use **Fetch-only** publication evidence, not public Push-qualified evidence. Configuration fencing currently deletes batches/observations unless an integration window pins them; retention **and historical audit** must recognize exact retirement pins. Retained old-generation rows never pass current authority checks. |
+| `cleanup.rs:147–264,303–348,349–493,673–709` | Existing no-follow presence checks distinguish W/A; deletion repeats full dirt/hidden-bit/submodule checks, then prune, then exact locked direct-ref deletion with complete checkout inventory. Add only narrowly shared guarded inspection/prune seams to repeat the instance check immediately before prune and expose the complete absence/checkout inventory; do not weaken release or change promotion/closure calls. |
+| `repository.rs:9601–9698`; `cleanup.rs:673–688`; `native_resolution` / guarded owned-path code at `repository.rs:7510–7583` | Existing identity/path checking is necessary, not alone a no-follow marker installer. The new instance module must validate both path chains and regular admin files/links, reject Windows reparse points, and anchor marker I/O to the verified admin directory. Existing Unix/Windows native primitives and dependencies suffice; no new dependency or draft/key/profile access. |
+| `remote/state.rs:648–801`; `cleanup.rs:716–780` | Old materialization is keyed by repository/kind/item with immutable owner/OID, steps `intended`, `branch_created`, `complete`. `materialization_intents` reads **all kinds for an item**, allowing ambiguity detection. New D14 compare-delete must be SQL-only and not call lifecycle `cleanup::retire_context`, which deletes context projection / changes the current advertisement. |
+| `recovery.rs:1979–2104`; `repository.rs:3836–3890,6336–6409` | Index ownership is a **different epoch** from destructive execution. Existing `authoritative_observed` preserves an existing completed step; claimed refresh reconciles missing context rows and completes the local row in one transaction. Add a retirement finalizer before that completion; never release its blocker before the immutable result is durable. |
+| `mutation/records.rs:47–109,218–237,790–810,908–929`; `mutation/local_control.rs:17–36,170–182` | Existing request `attempt` is the F2 executor fence; generic owner release **deletes** accepted request identity. A bound retirement capability must join the actual accepted request and its exact local/remote operation mapping at every owned transition, not trust IDs passed by a caller or cache an initial check. Task 3 supplies the binding; Task 2 must already fail closed when a required mapping is missing. |
+| `bridges/abandon.rs:383–419,504–576`; `recovery.rs:1894–1918` | Intercept both a `retire_context` envelope and a retirement companion before generic completed/no-op, owner release or row abandonment. Companion loss is not permission to fall through. Until Task 3, return existing `recovery_required` explaining guarded abandonment is required, without mutation; do not hide partial debt as an ordinary completed operation. |
+| `discovery.rs:1729–1737`; `remote/state.rs:6088–6159` | Remote/lifecycle migration precedes local and F2 schemas. Install retirement schema only **after** request-table migration; then perform cross-table audit. Remote-only early migration must not query not-yet-created retirement/batch/F2 companions. Startup audit may validate historical receipts without granting live ownership. |
+| `registration_removal.rs:347–363` | Explicit guarded unregister deletes all local envelopes, then the repository (and remote history). Blanket NO ACTION FKs from completed retirement history would regress that existing operation. Use terminal-only guarded cascades below, not a new unregister behavior or a cascade that erases pending retirement debt. |
+
+### Concrete Record And DDL Contract For Review
+
+`record.rs` owns the SQL below, typed decoding, transaction-local predicates and
+the sole constructors of execution/consumption capabilities. `instance.rs` owns
+no-follow marker I/O and a non-serializable install permit. `run.rs` composes the
+lease, proof, private observer and `ContextCleanup`, never shell Git or recursive
+filesystem removal. Relative repository-private visibility is used throughout.
+
+The public domain request remains separate from mutation input: root, kind/item,
+operation ID and authenticated session/reentry controls select one standalone
+operation, not a batch or caller-supplied observer/batch ID. Ordinary duplicate
+calls inspect/replay; explicit authorized reentry claims a fresh executor epoch.
+An internal sibling takes a sealed request/consumer fence for Task 3/4, not an
+optional "ignore pending" flag. Domain results distinguish retired/already-absent,
+typed refusal and pending cleanup/indexing with removal evidence and Final/Owed;
+the terminal closed metadata result is persisted before returning a Final result.
+No mutation input, DTO, binding, poll coordinator or CLI verb is added here.
+
+The following **DDL inventory** specifies columns, keys and nullability groups;
+it is not an executable migration pasted into production. Scalar constraints are
+the existing canonical ULID CHECK from `remote/state.rs:652–654`, lowercase
+nonzero 40-hex OIDs (including typed nonzero decoding), integer/nonnegative epochs
+(parent epochs start at 1; remote observer epochs may be 0), and BLOB/32-byte
+digests. Columns not explicitly marked NULL are NOT NULL. Nullable groups are
+all-or-none, not SQL `NULL`-passing partial CHECKs.
+No canonical source, title, raw endpoint, host approval or credential is stored.
+
+| Table / exact proposed columns | Keys, constraints and ownership |
+| --- | --- |
+| `context_retirement_records`: `operation_ulid TEXT`, `local_record_id INTEGER`, `repository_id INTEGER`, `format_version INTEGER=1`, `kind TEXT`, `item_id TEXT`, `initial_resources TEXT`, `expected_tip TEXT NULL`, `selection_epoch INTEGER`, `instance_nonce TEXT NULL`, `instance_verified INTEGER`, `remote_name TEXT NULL`, `primary_branch TEXT NULL`, `configuration_generation INTEGER NULL`, `endpoint_digest BLOB NULL`, `initial_primary_oid TEXT NULL`, `request_ulid TEXT NULL`, `batch_operation_ulid TEXT NULL`, `batch_ordinal INTEGER NULL`, `materialization_capture TEXT`, `materialization_operation_ulid TEXT NULL`, `materialization_oid TEXT NULL`, `materialization_step TEXT NULL`, `materialization_settled INTEGER`, `owner_epoch INTEGER`, `phase TEXT`, `worktree_removal TEXT`, `branch_removal TEXT`, `absence_basis TEXT`, `final_code TEXT NULL`, `final_result TEXT NULL` | PK `operation_ulid`; UNIQUE `local_record_id`, `(repository_id,operation_ulid)`. Local-record/repository FKs CASCADE with a **pending-delete refusal trigger**; optional F2-request FK NO ACTION. Explicit unregister can remove terminal journal history only; configuration fencing cannot erase pending debt. `kind IN ('ticket','document')`; initial resources `present/branch_only/absent/invalid`. Tip required exactly for present/branch-only; nonce required exactly for present; verified 0/1 (0 for non-present). Remote/primary/generation/digest form one nullable group, required for destructive authority; frozen once captured. Batch operation/ordinal paired and require request. Materialization capture `unverified/absent/complete`; complete has the full owner/OID/step group with step exactly `complete`, other captures have none. Unverified permits no effect and only a Final capture refusal. Phase and removal/absence values below are closed enums. Final code/result paired, required exactly in terminal `complete/refused/abandoned`; result is valid JSON decoded as the closed domain metadata result. |
+| `context_retirement_attempts`: `operation_ulid TEXT`, `owner_epoch INTEGER`, `repository_id INTEGER`, `request_attempt INTEGER NULL`, `batch_attempt_epoch INTEGER NULL`, `observer_operation_ulid TEXT NULL`, `observer_owner_epoch INTEGER NULL`, `phase TEXT` | PK `(operation_ulid,owner_epoch)`; FK `(repository_id,operation_ulid)` to record CASCADE; optional `(repository_id,observer_operation_ulid)` remote-journal FK NO ACTION, deferred for explicit terminal unregister. UNIQUE non-null observer ID: one O is never rebound to another attempt. `phase IN ('active','ended','fenced')`; observer ID/epoch paired, allocated/bound once before transport. Required request/batch epochs follow the record's domain/request/batch ownership form, audited against actual controlling rows. This is executor history, **not another local journal or index owner**. |
+| `context_retirement_effect_intents`: `operation_ulid TEXT`, `owner_epoch INTEGER`, `resource TEXT`, `receipt_id INTEGER`, `primary_oid TEXT`, `proof_kind TEXT`, `observation TEXT NULL` | PK `(operation_ulid,owner_epoch,resource)`; attempt FK CASCADE; receipt FK NO ACTION, deferred for explicit terminal unregister. `resource IN ('worktree','branch')`; proof `ancestor/folded`; observation NULL while intended, otherwise `removed/already_absent/not_clean/changed/incomplete`. Frozen tip comes from the immutable record. Input fields immutable; observation set at most once. Each prune/ref attempt has its exact primary/proof/receipt recorded **before** Git. A new attempt appends evidence; it never rewrites the old proof or expected tip. |
+| `retirement_observation_receipts`: `id INTEGER`, `repository_id INTEGER`, `observer_operation_ulid TEXT`, `observer_owner_epoch INTEGER`, `observation_batch_id INTEGER`, `configuration_generation INTEGER`, `remote_name TEXT`, `primary_branch TEXT`, `endpoint_digest BLOB`, `execution_kind TEXT`, `execution_parent_ulid TEXT NULL`, `execution_parent_epoch INTEGER NULL`, `execution_request_attempt INTEGER NULL`, `consumer_kind TEXT`, `consumer_operation_ulid TEXT`, `consumer_request_ulid TEXT NULL`, `consumer_attempt_epoch INTEGER`, `frozen_worklist_digest BLOB NULL` | PK `id`; UNIQUE `(repository_id,observer_operation_ulid,observer_owner_epoch)`. Remote source-operation FK CASCADE, **refuse receipt deletion while pinned**. **Created only in owned live advertisement transaction.** Execution kind `local_parent/batch_gap/poll_parent`: local parent ID/epoch required for local execution; gap has no local parent; original opted-in poll records P and its owned remote epoch. Consumer kind `single/batch`: single operation is S and its attempt; batch operation is P, requires R, batch-attempt epoch, generation and frozen digest. Request-attempt checks are explicit, not inferred from an item. Whole row immutable. Batch ID remains historical scalar evidence after pin release; it cannot be rebound to a replacement row. |
+| `retirement_observation_pins`: `receipt_id INTEGER`, `repository_id INTEGER`, `observation_batch_id INTEGER` | PK/FK receipt and FK `(repository_id,observation_batch_id)` to remote batch, both NO ACTION, deferred. Insert **with** receipt, exact receipt/batch equality audited. Delete only after its single consumer is terminal, or after its whole batch attempt has been durably superseded/finalized and no active child still uses it. Pending destructive receipt always has its pin. This normalized pin permits immutable historical receipts without requiring completed requests to retain advertisement rows forever. |
+
+Additional exact DDL obligations:
+
+1. One marker `context_retirement_v1` covers the complete five-table + index +
+   trigger envelope. Unmarked and none present is the sole additive install;
+   marked/missing, unmarked/partial, substituted CHECK/trigger/index or corrupt
+   rows refuse atomically. Never regenerate authority from current Git or rebuild.
+   Existing SQL strings/enums are not widened except E-2/E-8's new action/steps.
+2. Immutable record trigger covers identity, selection, token nonce, captured
+   generation/configuration and exact materialization tuple; initial primary is
+   NULL-to-first-proof only, immutable thereafter. `instance_verified` and
+   `materialization_settled` are 0-to-1 only. Terminal record/result cannot change.
+   Parent epoch must increase on claim; history/receipt/effect input triggers
+   prevent reassigning their operation, scope, epoch, OID or batch. Pin rows cannot
+   be updated to another batch. All UPDATEs additionally use expected phase/epoch
+   CAS and require exactly one affected row; triggers are not executor authority.
+   Record deletion is refused unless its phase is terminal. A separate BEFORE
+   DELETE guard on a retirement **local envelope** requires a completed envelope
+   plus its exact terminal companion, before the parent's cascade begins; it
+   cannot query an already-deleted parent from a child cascade trigger. Receipt
+   deletion is refused while a pin exists. Finalization
+   releases now-unneeded single-consumer pins in its terminal transaction. The
+   explicit unregister cascade above then retains old behavior without editing
+   `registration_removal.rs`; it never deletes the F2 request/result. Add a new
+   terminal-unregister control and pending-debt refusal to schema tests.
+3. Cross-table audit requires exactly one matching `retire_context` local envelope
+   per companion and vice versa, exact registered root/repository/action/target,
+   no observer/local/reserved-child ID collision, valid phase/intent/step/removal
+   correlation, request mapping where bound, receipt scope and pin consistency.
+   An orphaned retirement envelope alone still reserves its identity and refuses.
+   An absent captured materialization is explicit, not missing columns to repair.
+4. Terminal history allows later new operations on the same item: **no permanent
+   `(repository,kind,item)` uniqueness**. Runtime exclusion remains the actual
+   pending local row. No aggregate batch-local row/index debt is introduced.
+5. `configure`'s two deletion queries retain a batch when an integration window
+   **or retirement pin** references it. Its historical audit has the same exact
+   pin/receipt/observer/configuration correlation alternative. The receipt's
+   current-generation/current-batch checks remain mandatory for consumption.
+   A superseded receipt stays historical; it is never made current again.
+   After exact old-O fencing, a historical receipt keeps its original epoch:
+   audit matches that immutable attempt/receipt and the unchanged remote target,
+   allowing the remote row's raised fence only for that ended/fenced attempt.
+   Live O writes still require exact current epoch equality.
+
+**Task 4 seam, not Task 4 behavior.** The sealed consumer variant is
+`Batch(P,R,batch_attempt_epoch,generation,frozen_worklist_digest)`, distinct from
+the observer execution parent. Its validator's read projection requires the
+approved future `poll_retirement_batches` row (P/R, original eligible handoff,
+active attempt, original generation/digest, ordered cursor, bound observer) and
+the unique frozen target row (ordinal/kind/item/tip/nonce/local K/result/handoff).
+It rejects missing tables/marker/rows rather than accepting caller IDs. Task 2
+does not implement batch planning, eligibility writes, child sequencing, poll
+result copying, cancellation coordination or gap abandonment. Consumer and gap
+authorization tests may use **inert SQL fixtures of that contracted projection**;
+they are not evidence of a working Task 4 coordinator. Task 4 must test the same
+validator against its installed full schema and actual B-handoff/C-begin journey.
+The original P/update-poll capture uses the existing normal remote `owned` guard
+(no pending local row) plus its exact validated P/R/batch-attempt scope. It records
+`execution_kind=poll_parent`; subsequent fresh read-only O captures use
+`local_parent` or `batch_gap`. Only a bound **observe** O may be replaced/fenced by
+retirement: an update poll P is never smuggled through the read-only exception.
+Task 4 owns invoking that poll capture and recording original-handoff eligibility;
+no public ordinary poll or replay acquires a receipt merely by matching its ID.
+
+### Ownership Predicate Table
+
+`E` is the private, non-Clone process execution capability minted by the claim
+transaction; it carries service scope + S/K + parent epoch + optional R/attempt.
+`O` is the exact read-only remote observer and its remote owner epoch. A public
+operation ID, matching item, old report, public replay or retained pin is not E.
+
+| Predicate | Exact checks, in the transaction of the write |
+| --- | --- |
+| **L — local executor** | E's service scope matches; registry root and repository ID match; local envelope has exact S/K, `retire_context`, fixed kind/item target and is pending; companion and active attempt exist; companion owner epoch = E = attempt; phase permits this write; no other pending local row, including completed comment-registration debt. No live unrelated index owner. |
+| **R — controlling request** | For a request-bound record, actual `request_records` is accepted with exact R, scope, command/mode/target and current attempt; exact `request_operations` family/ID mapping agrees. A domain-only record cannot be upgraded to bound authority by passing an R. For batch, require the immutable frozen target/cursor and active batch attempt too. Recheck on **every** owned transition, not only construction. |
+| **G — original configuration** | Current configured primary/publication remote and endpoint/key-selection configuration observation still match the record's original generation/digest/process observation. Generation change cannot update the record/rebind E. An invalid current configuration is refusal, not permission to configure the old record to new inputs. |
+| **O — observer writes** | Remote token service scope/repository/ID/epoch/generation and active phase match; row is exactly `action='poll', poll_kind='observe', priority='manual'` and `RemoteOperationTarget::for_poll(frozen_plan)`, with no sync/publication/integration authority; exact durable bound O of E. Local-parent execution requires L/R/G; batch-gap execution requires its validated batch-attempt/R/G and **no pending local row**, as detailed below. Ordinary owner with no retirement scope keeps `require_no_pending_local`. Unrelated/mutating observer rows never qualify. |
+| **C — receipt consumption** | Immutable receipt + pin + batch metadata agree on repository, O/epoch, remote/primary, digest and generation; exact advertised batch is still current. Single scope requires S and current attempt. Batch scope verifies P/R/current batch and request attempts, fixed worklist digest, current ordered K and its unchanged frozen identity. Does **not** require former execution parent B to remain pending. Grants no O writes. |
+| **F — local deletion proof** | Under lease, direct tip still equals immutable expected tip, primary is checked out at registered root, target primary file is a no-follow regular file byte-matching its committed blob (and expected mode), positive canonical completion + full Task 1 preservation pass; W/A identity and nonce match; all cleanup dirt/hidden/ignored/submodule/checkout/ownership checks pass. Re-read primary/configuration/receipt at each effect boundary. |
+| **M — metadata-only absence** | All B/W/A absent by guarded complete inventory; either initial absence or a persisted owned effect intent exists. Captured complete materialization still matches **all** repository/kind/item/owner/OID/step fields, or captured absence is still absent. No fresh O/C/F is required: this grants no Git deletion. Replacement/missing-without-consumed-receipt authority refuses. |
+| **I — index-only finalization** | Authoritative branch/absent/preserved step and companion phase agree; exact `IndexOwner` record/epoch owns the refresh; destructive authority is already closed. Complete result + companion + local-journal completion commit atomically. No observation, token install, ref/prune call or new target enrollment. |
+
+For observer replacement, the lease-held immediate transaction validates the
+existing parent/attempt/request **before** increasing its epoch. It scans exclusion
+allowing at most its exact currently bound old O, verifies that row is read-only,
+raises O's epoch and terminalizes its reservation (including after-batch states),
+fences the old local attempt, increments the parent's epoch, appends the new attempt,
+allocates/inserts/binds fresh O, and commits. Any failure rolls back **all** of
+that. It does not first run generic begin, which would reject its own old O.
+On request reentry, the claim checks the **new caller's current F2 attempt** and
+unchanged request/operation mapping, compares the exact old parent/attempt epoch,
+then appends the new attempt with that F2 fence. It does not require the old
+executor's F2 attempt still to be current, or accept an old caller merely because
+its stored attempt once matched. All subsequent owned writes use the new fence.
+An already terminal old O is never reopened or relabeled as another public
+outcome; its fence is raised and old attempt ended. An active after-batch O is
+terminalized too, not allowed to finish by public replay as fresh authorization.
+An unbound active observation is unrelated even when its target/remote matches.
+No transport occurs until this transaction has committed and the lease is dropped.
+
+At no-child gaps the distinct batch execution capability verifies R/P/attempt/G
+and the frozen cursor and requires **no pending local row**; no invented parent
+exception. A pending index-only K must finish first. B's completion fences/ends B's
+execution capability; C may consume the still-current shared batch receipt but B
+cannot reserve, acknowledge, write advertisements or finish O afterward.
+
+### Exact Transition And Crash Reconciliation Table
+
+Closed record phases are `selected`, `worktree_removing`, `worktree_removed`,
+`branch_deleting`, `local_absent`, `index_pending`, `complete`, `refused`,
+`preserving`, `abandoned`. Removal evidence is `none/possible/observed`, separately
+for W and B; `absence_basis` is `none/initial/owned_intent`. A persisted Git intent
+means **possible**, not observed removal. A live primitive's definite no-effect
+refusal can settle that intent as such; a crash cannot manufacture that knowledge.
+
+| Transition | Transaction / lease / exact reentry rule |
+| --- | --- |
+| **T0: terminal lookup** | Read stored terminal result and fixed input binding before Git/transport/selection. Return it, even after a new same-tip context or new materialization exists. Missing companion/result is recovery, not run-as-new. |
+| **T1: initial selection + claim** | Under lease + immediate registry transaction, prove full exclusion/foreign-ID availability, create exact local envelope and record together, freeze direct tip/BWA shape and optional complete materialization identity, create active attempt epoch 1. For a new destructive candidate only, initial validated endpoint configuration is admitted before freezing its resulting original generation; later attempts may compare but never rebind it. Invalid/mixed capture can atomically become Final `refused` without destructive authority. All-absent selects the local-only path and does not configure/observe a remote. Never enroll a replacement on reentry. |
+| **T2: instance provisional → verified** | Only a validated clean present W/A may select/read a marker. A new nonce is durable in T1 **before** installation. A private install permit exists only in that uninterrupted selection call; exclusive no-follow create, complete bounded write + file/admin durability, verify exact full bytes and all registration links/tip/ownership, then CAS `instance_verified=1`. Restart may verify an already fully matching marker and finish SQL; missing/partial/malformed/mismatching marker refuses, never installs/repairs/stamps the old nonce. No marker is removed separately on refusal. |
+| **T3: fresh observation** | Atomically reserve/bind O as above, drop lease, authenticate Fetch advertisement only (no objects/refs/primary update), then owned transaction receives the **returned** batch ID and writes immutable receipt + pin. Safe points/error cleanup/finish all check O's bound scope. Crash before advertisement, after advertisement, or after batch commit always leads to replacement fresh O on destructive retry, never public replay. |
+| **T4: proof → worktree intent** | Reacquire lease; L/R/G/C/F + exact old materialization still match. Persist worktree effect intent with current primary/proof/receipt and mark possible removal **before prune**. The shared guarded prune repeats nonce/identity/full deletion-only cleanliness immediately before calling the existing Git worktree primitive. No SQL/cache/Git guard spans authentication or a full refresh. |
+| **T5: worktree outcome** | Live `Removed`: record observation and W observed + `ContextWorktreeReleased` in one transaction, phase `worktree_removed`. `Incomplete` or mixed W/A: preserve actual partial state and Owed recovery, never infer all absent. Definite unchanged primitive refusal before effects can be Final; crash/uncertain outcome retains possible effects. On restart full original W/A+token may reprove/fresh-observe; both absent may reconcile the owned intent, but any surviving branch is tokenless and **cannot** be deleted by this new executor. |
+| **T6: branch intent → deletion** | Only original live branch-only selection permit, or this same uninterrupted executor's successfully guarded W removal, may proceed. Require W/A absent, full checkout inventory, frozen direct tip, current primary proof/G/C; persist branch proof/receipt/intent first, then use existing locked exact-OID branch transaction. No new branch-lifetime token. Same-OID recreated branch on any new executor is preserved, including crash after successful deletion but before SQL. |
+| **T7: all absent + D14** | Under lease + one immediate transaction, M; exact `DELETE ... WHERE repository_id=? AND kind=? AND item_id=? AND operation_ulid=? AND target_oid=? AND step='complete'` must affect exactly one captured complete row, or captured absence must still be absent. Atomically set materialization-settled receipt, absence basis and authoritative local step. Initial absence uses **`ContextRetirementAbsent`**, `already_absent`, no claimed removal. Owned-intent reconciliation uses `ContextBranchReleased` with truthful observed/possible flags. No tracking-ref deletion, context-state deletion or advertisement rewrite. If commit outcome is uncertain, reopen and reconcile this same record; never rerun Git. |
+| **T8: authoritative → index pending** | Same S/K keeps debt; claim index epoch separately and drop lease for ordinary local discovery. Preserve existing authoritative step (`ContextBranchReleased` or `ContextRetirementAbsent`), both noncheckpoint. Failed refresh is Owed `discovery_pending`. Generic refresh must reject borrowing a retirement ID before this exact handoff is due. |
+| **T9: claimed refresh → complete** | Hook in `reconcile_disappeared_contexts` transaction after owner validation, before blocker release: reconcile stale contexts, persist closed retirement result and `phase=complete`, then local `state=completed`, atomically. Any result write/finalization failure rolls back local completion/stale clearing. Same request/index resume is I only; Task 3 adds public routing, never cleanup under an independent resume ID. |
+| **TF: no-effect Final** | Under current L/R (and exact child fence where one exists), persist typed refusal/auth/cancel result, end attempt/observer, terminal `refused`, complete local envelope **without `rejected`**. Preserve old request mapping for stable replay. Busy/yield before selection may retain only bound input; retry of an already selected candidate never substitutes tip/token/configuration. |
+| **TP: partial stop** | Keep local row pending and durable intents/removal flags. Changed primary/tip/remote/generation, missing marker, tokenless surviving branch or partial prune grants no further cleanup. Task 2's interim generic-abandon fence refuses owner release. Task 3's guarded preserving flow will fence, locally refresh and finalize `ContextRetirementPreserved`/abandoned receipt atomically; no such behavior is implemented at this checkpoint. |
+
+**R-7 executable distinction:** a branch-only permit is minted by *selection in
+the current call*, not by reading a saved branch-only record. Similarly, a live
+worktree-removal permit is process-only evidence returned by the guarded primitive,
+not reconstructible from `ContextWorktreeReleased` or an effect-intent row. An
+all-absent retry performs T7/T8/T9 only. A surviving tokenless B performs TP, or TF
+`external_change` when no owned removal was possible; old release's automatic
+branch retry remains untouched.
+
+### Required Outcomes → Proposed Test Rows (No Tests Written/Run Yet)
+
+Every new test function/case will have the `retirement_` prefix. `U` means the library
+context-retirement tests (with direct temporary Git/registry fixtures); `R` the
+recovery/read-status unit tests; `F` the existing `recovery_foundation_gate` target;
+`S` the optional `tests/mutation_remote/context_retirement.rs` domain SSH module.
+The S module declaration **and** `.chain(context_retirement::CASES)` go into
+`tests/mutation_remote.rs` before its first filtered run. Each run must report a
+nonzero executed count. These are test specifications, not fitted passing results.
+
+| ID / required outcome | Exact proposed test and assertions | Transition / finality |
+| --- | --- | --- |
+| 01 fresh known Fetch absence, ticket/document | S `retirement_fresh_fetch_absence_retires_completed_context`: real authenticated advertisement, prior Fetch history, valid closed/promoted committed local primary; W then B gone, index current, server/tracking refs/draft sentinel unchanged, no object transfer/push | T1–T9; Final `ok/retired` |
+| 02 unknown / Push-only history | S `retirement_unknown_or_push_only_history_is_final`: fresh empty ad does not turn either into deletion; no prune/ref effect; stable old result after later history appears | T3/TF; Final `external_change` |
+| 03 remote reappeared / superseded batch | S `retirement_reappeared_or_foreign_current_batch_refuses`: bound exact batch vs another advertisement, including same timestamps/generation; cannot substitute foreign current snapshot; preserve all remaining state | C/T4/TP or TF |
+| 04 unavailable transport/auth/config | S `retirement_observation_failure_finalizes_no_effect`: unavailable server, host/key/unlock/config stops close exact observer/local attempt, retain immutable refusal; repaired credentials/new ad do not rerun old ID | T3/TF; original existing code Final |
+| 05 wrong primary / dirty primary item | U `retirement_primary_checkout_and_item_disk_must_match`: wrong checkout, target file edit/missing/nonregular/redirected/mode mismatch refuse; unrelated primary edits unchanged and allowed when target still matches | F/TF |
+| 06 incomplete/open/malformed primary | U `retirement_requires_positive_primary_completion`: open/missing/duplicate/malformed ticket, tracking-only closure, document presence without preservation refuse; unchanged Task 1 proof invoked, no fallback ancestry/negative-write-guard authority | F/TF |
+| 07 branch-only positive | S `retirement_initial_branch_only_requires_full_fresh_proof`: B only, no W/A or checkout anywhere; one live selection, frozen direct tip, full proof and fresh absence; no fabricated W removal | T1/T3/T6–T9; Final `retired` |
+| 08 all absent / stale own index | U `retirement_initial_absence_settles_stale_index_without_network`: stale context rows removed by local discovery; transport unavailable/not configured is irrelevant; no observer/marker/prune/ref lock, exact absent step, removal flags none | T1/T7–T9; Final `already_applied/already_absent` |
+| 09 all absent discovery failure | U `retirement_initial_absence_index_failure_stays_owed`: exact absent step retained; retry/resume cannot observe/delete even if new same-item context exists before handoff | T8/I; Owed `discovery_pending` |
+| 10 Q2 mixed / invalid identity | U `retirement_initial_resource_matrix_refuses_mixed`: enumerate all 8 B/W/A combinations; W/A without B, mixed W/A, unregistered dir, symbolic B, lock, malformed/redirected admin links, no-follow path errors; no adoption/effect | T1/TF; Final `recovery_required` |
+| 11 cleanliness matrix | U `retirement_all_cleanup_cleanliness_refusals_preserve_bytes`: staged/unstaged/conflict/untracked/ignored, assume-unchanged/skip-worktree, unsafe/dirty/detached/metadata-inside-prune submodule; exact bytes/index/refs/admin unchanged except explicitly installed valid marker where applicable | F/T4; Final `worktree_not_clean` or identity recovery |
+| 12 lifecycle/sync/foreign local ownership | U/F `retirement_unrelated_pending_never_gets_an_exception`: unfinished closure/promotion, conflict/sync, unrelated pending local and completed comment-registration debt; same item or matching remote does not bypass exclusion | L/T1; no effect |
+| 13 provisional missing / recreated admin | U `retirement_restart_missing_intended_token_never_installs`: crash before create, then unchanged or same-tip recreated registration; retry refuses and marker remains absent, old nonce never stamped | T2/TF |
+| 14 installed before SQL | U `retirement_matching_installed_token_finishes_interrupted_selection`: full exact nonce/version/kind/item + intact links/tip may commit verified identity on restart; no reinstall | T2 |
+| 15 partial/collision/corrupt marker | U `retirement_marker_collision_partial_or_corrupt_preserves`: partial/trailing/oversized/foreign-kind/nonce marker, file/dir/symlink/reparse collision; unchanged bytes, no repair/unlink/truncate | T2/TF |
+| 16 selected W replaced/missing | U `retirement_same_tip_registration_replacement_is_not_old_instance`: remove/recreate same OID with missing/different token, moved links/admin, missing worktree or mixed partial; old request never refreshes nonce/identity | T2/T4/TP or TF |
+| 17 ordinary/background no marker | U `retirement_default_poll_installs_no_instance_marker`: ordinary explicit/automatic observation/poll preserve marker absence and old release guard behavior | A9 control; no new selection |
+| 18 proof/receipt/fixed inputs before effect | U `retirement_effect_intent_precedes_git_and_freezes_proof`: hooks immediately before prune/ref inspect durable intent primary/proof/receipt/epoch/tip; changing tip/primary/config after hook prevents next effect | T4/T6 |
+| 19 prune/SQL crash windows | U `retirement_prune_windows_never_guess_mixed_absence`: crash before prune, after prune before W write, after W write; both absent vs W/A mixed vs intact original token; exact removal uncertainty and pending state | T4/T5/TP |
+| 20 R-7 branch recreation | U `retirement_deleted_branch_same_oid_recreation_survives_retry`: W gone/token lost, delete B, crash before SQL receipt, recreate B at same OID; new executor cannot call branch deletion; branch survives | T6/TP; Owed if possible removal |
+| 21 R-7 original branch-only retry | U `retirement_new_executor_cannot_delete_old_branch_only_selection`: crash/return after selection or ad before B deletion; same-OID B survives next call; no removal → stable Final `external_change` | TF, not automatic branch retry |
+| 22 all gone after owned intent | U `retirement_all_absent_after_intent_is_metadata_only`: after actual Git deletion but before SQL, retry without transport/config authority settles exact old metadata/index; zero Git deletion calls | M/T7–T9 |
+| 23 incomplete/ambiguous old materialization | U `retirement_materialization_capture_refuses_incomplete_or_ambiguous`: `intended`, `branch_created`, wrong-kind plus target-kind same ID, malformed owner/OID, ambiguous evidence refuse before prune, including fresh all absent | T1/TF |
+| 24 exact D14 compare-delete / replacement | U `retirement_materialization_compare_consume_is_atomic`: exact complete tuple deleted + settled/absence/authoritative step commit together; failed compare, missing old without receipt, new owner/OID/step or captured-absent now present preserves replacement and pending debt | T7/M |
+| 25 D14 crash/replay/rematerialization | U/S `retirement_old_intent_settlement_survives_git_sql_gap`: Git absent/SQL crash, consumed replay, new same-item document intent Q after old T completion remains untouched; no tracking deletion/projection rewrite/old-OID mutation | T7/T0 |
+| 26 fresh all absent D14 | U `retirement_initial_absence_consumes_only_exact_complete_old_intent`: completed stale row consumed with `absence_basis=initial`, all removal flags none; incomplete/changed row not erased | T7; Final already absent |
+| 27 observer replacement crash matrix | U/S `retirement_replaces_only_bound_readonly_observer`: before ad / after ad / after batch commit; old active reservation fenced atomically, new ID bound before transport, old epoch raised; old receipt remains historical | T3/O |
+| 28 unrelated reservation / rollback | U `retirement_observer_replacement_is_one_transaction`: unrelated read-only or mutating reservation, bad correlation or injected failure at each SQL write rolls back parent claim/old epoch/new binding; unrelated row never terminalized | T3/L/O |
+| 29 stale returning executor | U/S `retirement_stale_observer_cannot_write_at_any_boundary`: returning old O attempts safe point, owned metadata write, batch commit, error/config write and completion; parent ends/epoch changes/request attempt changes mid-transport; all refused, no receipt | O at every write |
+| 30 generation change | U/S `retirement_old_generation_is_pinned_not_rebound`: retain receipt/batch bytes across configure + startup audit; old generation/current false never authorizes prune/B; no silent new-generation adoption, remaining branch preserved | G/C/TP |
+| 31 exact batch capture / public replay negative | U/S `retirement_receipt_uses_live_returned_batch_not_public_snapshot`: replay a completed observer while foreign current ad exists; only live owned commit can create receipt/pin; no snapshot/time/current-ID inference | T3/C |
+| 32 B execution vs C consumption | U `retirement_batch_receipt_outlives_observing_child_execution`: inert durable batch projection, B completes handoff and C becomes exact ordered child; C consumes original current receipt without another ad; B attempts O writes and fails | C distinct from O; Task 4 live journey still owed |
+| 33 foreign/stale batch scope | U `retirement_batch_receipt_rejects_foreign_or_stale_consumer`: wrong P/R/request attempt/batch epoch/generation/digest/cursor, unfrozen sibling, replaced tip/nonce, missing manifest/marker; no borrowed deletion authority | C; inert projection evidence only |
+| 34 no-child gap execution | U `retirement_batch_gap_observation_requires_no_pending_local`: exact validated batch attempt can observe with no local parent; unrelated or index-pending K prevents reserve; returning gap O after request/batch fence cannot write | O gap; no aggregate local row |
+| 35 Final/Owed matrix | U `retirement_outcome_and_recovery_rows`: before-effect proof/dirt/identity/auth/cancel Final and stable; live busy/yield retains input; any possible removal + stop Owed with truthful partial flags; complete cleanup/initial absence index failure Owed I-only | TF/TP/I, Q1; no new code strings |
+| 36 completion/index transaction | U/R `retirement_final_result_and_index_completion_are_atomic`: fail immediately before/after finalizer; no completed local row without result; stale index owner cannot complete companion; absent/branch/preserved steps noncheckpoint and authoritative | T8/T9; post-checkpoint implementation |
+| 37 generic abandon interim fence | U/R `retirement_generic_abandon_never_releases_request_or_hides_debt`: companion present or lost, pending or terminal row; no `release_operation_owner`, row relabel, request deletion or hidden partial record | TP/TF boundary; Task 3 owns guarded abandon |
+| 38 migration/audit/ID/schema inventory | U/R/F `retirement_additive_envelope_and_cross_table_audit`: genuine old registry upgrades once, exact rows preserved; missing/substituted/partial schema/markers/records/ref links/receipts/request mapping roll back/refuse; ID collision matrices and reserved observer/child misuse, action/step schema inventories E-2/E-8 | schema/L/R/O; after all dependencies migrate |
+
+Existing result/exit classes were read, not invented: `results.rs:612–614,630,664,672`
+maps external-change/recovery/dirt to Blocked, discovery pending to Incomplete,
+and transport unavailable to Transient. `manyhands-cli/render.rs:94–103` maps
+success/no-op **0**, Blocked **3**, Incomplete **4**, Transient **5**, Internal **1**,
+Input **2**, Cancelled **130**. `Envelope::failure_class` gives a stopped partial
+durable effect Incomplete except cancellation, which keeps 130. Task 3/5 must
+exercise actual envelope classification, not infer every partial exit from its
+underlying code alone. These reads are no CLI implementation or new result code.
+
+The matrix has been **analytically walked against T0–TP and L/R/G/O/C/F/M/I**.
+Its key counterexamples are 13 (intended nonce is not continuity), 20/21 (intent
+and same OID are not branch lifetime), 29 (initial capability check is insufficient),
+30 (retention is not current authority), 31 (public replay is not fresh), and 32
+(ended observing child is not the receipt's consumer scope). Independent adversarial
+review must test these proposed transitions; this walkthrough is not that review.
+
+### Actual Commands, Remaining Work And First-Return Gate
+
+Executed in this worker: `git status --short --branch` (clean exact branch),
+`git rev-parse HEAD origin/main` (full SHAs above), `git worktree list --porcelain`
+(exact registered worktree), `git merge origin/main` (no-op), the existing CLI
+`id new` (comment ID only) and `date -u` (actual UTC). Source/doc reads and searches
+made no registry or Git-context changes. Whitespace/diff checks are recorded in
+the first-return handoff. **No Cargo, baseline repetition, compilation, SQL/runtime
+probe or retirement test was run. Test counts: written 0, RED 0, GREEN 0.** Earlier
+Task 1 results stay historical and are not represented as Task 2 evidence.
+
+Before continuing: controller dispatches the mandatory independent adversarial
+review of this exact record/transition/capability matrix, resolves findings, then
+returns this same implementer to the task. There is **no identified recovery-policy
+ambiguity** to send to the owner at this point; implementation details above are
+review proposals within the settled contract. Any discovered policy conflict must
+stop for the owner rather than silently changing Q1/Q2/R-7/D14.
+
+After checkpoint approval, still owed within Task 2: write the proposed domain
+outcome/refusal tests first and observe behavioral RED; implement records/instance/
+observer/cleanup and metadata-only paths in coherent increments, then stable
+completed replay, atomic index finalizer/handoff, recovery/read visibility and the
+interim generic-abandon fence, additive migration/audit and E-2/E-8. Producer-bound
+batch interfaces must remain sealed; Task 3/4 mutation/coordinator behavior is not
+this task. No green production commit until the whole single-context path is
+coherent and required tests pass.
+
+Eventual Task 2 commands, **not executed here**: Devenv Cargo `test
+--all-features --locked --lib context_retirement`, `--lib cleanup`, `--lib recovery`,
+`--lib read::status`, `--test recovery_foundation_gate`, and registered `--test
+mutation_remote retirement_`; record actual nonzero counts/reds/greens. Before
+eventual Task 2 publication, run the three full-tree static gates from `AGENTS.md`.
+Task 8's fast/changed-path whole-branch gates, independent spec/quality reviews and
+separately authorized post-merge native CI are not discharged by this checkpoint.
+
+Canonical design-checkpoint comment: `01M6MJDR01K71MT2TKBP560Z8W`, parent
+`01M6MHZCXVGAYVKHRS8JF244QN`, actual UTC `2026-11-05T00:40:59Z`. This record is
+documentation-only and awaits adversarial review; it claims no runtime safety,
+Task 2 completion or authority to proceed past step 9.
