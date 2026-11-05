@@ -360,7 +360,8 @@ are not authorized; numeric exits must come from existing results registry.
 | Task 1 final quality review through `2f2f9b9d`, same base, after spec pass | Session `ses_e56fd2b47ffe124OrJLE2JwpCS`: old-enum evidence laundering resolved; relative visibility preserves repository-private access; 0 Critical/0 Important/0 Minor remaining. Raw logs, exact range whitespace and clean head verified | Task 1 quality approved; performance on large repositories remains unmeasured, not a blocking finding |
 | Pre-Task 2 main refresh, 2026-11-05 | Both checkouts clean before bookkeeping; fresh fetch succeeded; main still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`. Merge before/after `2f2f9b9dc14144d00658c7d2ce2d63b7405281a8`, already up to date; current rules reread. Another unrelated remote ticket ref advanced, not consumed | No conflict, rebase or changed main assumption; no native/real-context/lifecycle action |
 | Task 2 adversarial checkpoint, `7b1912d1..85bc17d7` | Controller relayed and accepted **2 Important internal mechanism defects**: original-P advertisement precedes the frozen digest/eligibility required by the proposed immutable receipt; last-pin release after configuration fencing leaves an unauditable obsolete batch | Concrete proposal corrections below; **same reviewer's re-review required, checkpoint not approved**. No runtime finding or owner-policy change inferred |
-| Task 2 corrected checkpoint and Task 4 adversarial/final whole-range reviews | Task 2 proposal revised after source verification; re-review not yet run. Other reviews not yet run | Mandatory gates remain open; no production execution authorized past Task 2 checkpoint |
+| Task 2 corrected checkpoint, `7b1912d1..66c2ca2b` | Same independent adversarial reviewer, session `ses_e56ce3361ffe0Y48AKdejYpbyv`, verified both corrections and their producer/pin/audit/FK interactions against source: **0 remaining findings** | Mandatory record/reservation checkpoint approved; same implementer may begin Task 2 TDD. This is not runtime evidence or Task 2 completion |
+| Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
 
@@ -375,8 +376,9 @@ are not authorized; numeric exits must come from existing results registry.
   no remaining findings. Recognition, migration and nested-harness visibility
   corrections verified. All three static gates and targeted evidence recorded.
 - [ ] **2 — Durable single-context retirement.** Source-grounded transition/DDL
-  checkpoint prepared below; no Task 2 production changes or tests yet.
-  Independent adversarial review is required before execution continues.
+  checkpoint approved at `66c2ca2b` after resolving two Important findings;
+  no Task 2 production changes or tests yet at this checkpoint. Same implementer
+  continues with TDD; full Task 2 spec/quality review remains owed.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
 - [ ] **5 — CLI command/flag/help/rendering.** Not started.
@@ -386,7 +388,7 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: independently adversarially review Task 2's concrete
+Immediate next step: begin Task 2 TDD using the independently approved concrete
 record/reservation checkpoint below. Its implementer has stopped before production
 changes, using the expressly permitted checkpoint-only path. Task 1's reviewed
 checkpoint was published by the controller before this dispatch.
