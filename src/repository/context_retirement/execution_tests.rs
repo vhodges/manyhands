@@ -779,6 +779,293 @@ fn retirement_specfix_s1_complete_unrelated_registration_does_not_block_absence(
     assert_eq!(disk_image(external.path()), external_before);
 }
 
+fn assert_backlink_refusal(corrupt: impl FnOnce(&git2::Repository, &Path, &Path, &Path)) {
+    let f = Fixture::new();
+    f.materialization("complete");
+    let git = git2::Repository::open(f.root.path()).unwrap();
+    let reference = git
+        .branch(
+            "unrelated",
+            &git.head().unwrap().peel_to_commit().unwrap(),
+            false,
+        )
+        .unwrap()
+        .into_reference();
+    let external = tempfile::tempdir().unwrap();
+    let worktree = external.path().join("checkout");
+    let mut options = git2::WorktreeAddOptions::new();
+    options.reference(Some(&reference));
+    git.worktree("unrelated-registration", &worktree, Some(&options))
+        .unwrap();
+    let admin = git.commondir().join("worktrees/unrelated-registration");
+    let original_gitfile = std::fs::read(worktree.join(".git")).unwrap();
+    std::fs::write(worktree.join("sentinel"), b"preserve unrelated checkout\n").unwrap();
+    corrupt(&git, &admin, &worktree, external.path());
+    assert!(!git.commondir().join("worktrees").join(ITEM).exists());
+    assert!(
+        !f.root
+            .path()
+            .join(".manyhands/worktrees")
+            .join(ITEM)
+            .exists()
+    );
+    assert!(
+        git.find_reference(&format!("refs/heads/manyhands/ticket/{ITEM}"))
+            .is_err()
+    );
+    // The old inventory proves only equal canonical paths, not the backlink.
+    assert!(
+        !crate::repository::cleanup::branch_is_checked_out(
+            &git,
+            &format!("refs/heads/manyhands/ticket/{ITEM}")
+        )
+        .unwrap()
+    );
+    let admin_before = disk_image(git.commondir());
+    let external_before = disk_image(external.path());
+    let db = f.db();
+    let intent_before = row_image(&db, "remote_poll_materializations");
+    let repository_before = row_image(&db, "repositories");
+    let remote_before = row_image(&db, "remote_operation_records");
+    let request = RetireContextRequest {
+        root: f.root.path().into(),
+        kind: AuthoringKind::Ticket,
+        item_id: ITEM.parse().unwrap(),
+        operation_id: OperationId::new(),
+    };
+    let result = f.service.retire_context(request.clone()).unwrap();
+    assert_eq!(
+        row_image(&db, "remote_poll_materializations"),
+        intent_before,
+        "invalid unrelated checkout backlink must not consume D14: {result:?}"
+    );
+    assert_inventory_refusal(&f, &request, &result);
+    let local_before_replay = row_image(&db, "operation_records");
+    let retirement_before_replay = row_image(&db, "context_retirement_records");
+    let attempts_before_replay = row_image(&db, "context_retirement_attempts");
+    assert_eq!(f.service.retire_context(request.clone()).unwrap(), result);
+    assert_eq!(row_image(&db, "operation_records"), local_before_replay);
+    assert_eq!(
+        row_image(&db, "context_retirement_records"),
+        retirement_before_replay
+    );
+    assert_eq!(
+        row_image(&db, "context_retirement_attempts"),
+        attempts_before_replay
+    );
+    assert_eq!(
+        row_image(&db, "remote_poll_materializations"),
+        intent_before
+    );
+    assert_eq!(row_image(&db, "repositories"), repository_before);
+    assert_eq!(row_image(&db, "remote_operation_records"), remote_before);
+    assert_eq!(disk_image(git.commondir()), admin_before);
+    assert_eq!(disk_image(external.path()), external_before);
+    if std::fs::symlink_metadata(worktree.join(".git"))
+        .unwrap()
+        .is_file()
+    {
+        // Fixture-only repair after proving preservation. A stored refusal must
+        // remain stable even when a regular gitfile's contents become valid.
+        std::fs::write(worktree.join(".git"), original_gitfile).unwrap();
+        assert_eq!(f.service.retire_context(request).unwrap(), result);
+        assert_eq!(
+            row_image(&db, "remote_poll_materializations"),
+            intent_before
+        );
+        assert_eq!(
+            row_image(&db, "context_retirement_records"),
+            retirement_before_replay
+        );
+        assert_eq!(row_image(&db, "operation_records"), local_before_replay);
+        assert_eq!(row_image(&db, "repositories"), repository_before);
+    }
+}
+
+#[test]
+fn retirement_specfix_s1_backlink_foreign_gitfile_contents_refuse() {
+    for same_common in [false, true] {
+        assert_backlink_refusal(|git, _, worktree, external| {
+            let foreign = if same_common {
+                let reference = git
+                    .branch(
+                        "another",
+                        &git.head().unwrap().peel_to_commit().unwrap(),
+                        false,
+                    )
+                    .unwrap()
+                    .into_reference();
+                let mut options = git2::WorktreeAddOptions::new();
+                options.reference(Some(&reference));
+                git.worktree(
+                    "another-registration",
+                    &external.join("another"),
+                    Some(&options),
+                )
+                .unwrap();
+                git.commondir().join("worktrees/another-registration")
+            } else {
+                let other = git2::Repository::init(external.join("foreign")).unwrap();
+                other.path().to_owned()
+            };
+            std::fs::write(
+                worktree.join(".git"),
+                format!("gitdir: {}", remote::git_metadata_link_text(&foreign)),
+            )
+            .unwrap();
+        });
+    }
+}
+
+#[test]
+fn retirement_specfix_s1_backlink_malformed_gitfile_refuses() {
+    for defect in [
+        "prefix",
+        "empty",
+        "extra_line",
+        "nul",
+        "invalid_utf8",
+        "directory",
+    ] {
+        assert_backlink_refusal(|_, admin, worktree, _| {
+            let path = worktree.join(".git");
+            let target = remote::git_metadata_link_text(admin);
+            let bytes = match defect {
+                "prefix" => format!("not-gitdir: {target}").into_bytes(),
+                "empty" => b"gitdir: \n".to_vec(),
+                "extra_line" => format!("gitdir: {target}gitdir: {target}").into_bytes(),
+                "nul" => format!("gitdir: {}\0\n", target.trim_end()).into_bytes(),
+                "invalid_utf8" => vec![0xff],
+                "directory" => {
+                    std::fs::remove_file(&path).unwrap();
+                    std::fs::create_dir(&path).unwrap();
+                    return;
+                }
+                _ => unreachable!(),
+            };
+            std::fs::write(path, bytes).unwrap();
+        });
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn retirement_specfix_s1_backlink_redirected_gitfile_refuses() {
+    assert_backlink_refusal(|_, _, worktree, external| {
+        let path = worktree.join(".git");
+        let saved = external.join("saved-gitfile");
+        std::fs::rename(&path, &saved).unwrap();
+        std::os::unix::fs::symlink(&saved, &path).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_link(&path).unwrap(), saved);
+    });
+}
+
+#[cfg(any(unix, windows))]
+#[test]
+fn retirement_specfix_s1_backlink_redirected_gitfile_ancestor_refuses() {
+    assert_backlink_refusal(|_, admin, worktree, external| {
+        let alias = external.join("checkout-alias");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(worktree, &alias).unwrap();
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            assert!(
+                std::process::Command::new("cmd.exe")
+                    .args(["/C", "mklink", "/J"])
+                    .arg(&alias)
+                    .arg(worktree)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            assert_ne!(
+                std::fs::symlink_metadata(&alias).unwrap().file_attributes() & 0x400,
+                0
+            );
+        }
+        std::fs::write(
+            admin.join("gitdir"),
+            remote::git_metadata_link_text(&alias.join(".git")),
+        )
+        .unwrap();
+        assert!(std::fs::metadata(alias.join(".git")).unwrap().is_file());
+    });
+}
+
+#[cfg(windows)]
+#[test]
+fn retirement_specfix_s1_backlink_gitfile_junction_refuses() {
+    use std::os::windows::fs::MetadataExt;
+    assert_backlink_refusal(|_, _, worktree, external| {
+        let path = worktree.join(".git");
+        let destination = external.join("junction-destination");
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::rename(&path, destination.join("saved-gitfile")).unwrap();
+        assert!(
+            std::process::Command::new("cmd.exe")
+                .args(["/C", "mklink", "/J"])
+                .arg(&path)
+                .arg(&destination)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_ne!(
+            std::fs::symlink_metadata(&path).unwrap().file_attributes() & 0x400,
+            0
+        );
+    });
+}
+
+#[test]
+fn retirement_specfix_s1_backlink_relative_gitfile_allows_absence() {
+    let f = Fixture::new();
+    f.materialization("complete");
+    let git = git2::Repository::open(f.root.path()).unwrap();
+    let reference = git
+        .branch(
+            "unrelated",
+            &git.head().unwrap().peel_to_commit().unwrap(),
+            false,
+        )
+        .unwrap()
+        .into_reference();
+    let worktree = f.root.path().join("unrelated-checkout");
+    let mut options = git2::WorktreeAddOptions::new();
+    options.reference(Some(&reference));
+    git.worktree("unrelated-registration", &worktree, Some(&options))
+        .unwrap();
+    std::fs::write(
+        worktree.join(".git"),
+        b"gitdir: ../.git/worktrees/unrelated-registration\r\n",
+    )
+    .unwrap();
+    let admin_before = disk_image(git.commondir());
+    let worktree_before = disk_image(&worktree);
+    let result = f
+        .service
+        .retire_context(RetireContextRequest {
+            root: f.root.path().into(),
+            kind: AuthoringKind::Ticket,
+            item_id: ITEM.parse().unwrap(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    assert!(
+        matches!(result, ContextRetirementOutcome::Final(report) if report.outcome==RetirementDisposition::AlreadyAbsent && report.materialization_settled)
+    );
+    assert!(row_image(&f.db(), "remote_poll_materializations").is_empty());
+    assert_eq!(disk_image(git.commondir()), admin_before);
+    assert_eq!(disk_image(&worktree), worktree_before);
+}
+
 #[cfg(unix)]
 #[test]
 fn retirement_specfix_s2_dangling_loose_ref_slot_is_not_absence() {

@@ -73,6 +73,69 @@ fn ref_file_absent(root: &Path, path: &Path) -> Result<bool, RepositoryError> {
     Ok(absent)
 }
 
+fn metadata_line(text: &str) -> Result<&str, ()> {
+    let line = text
+        .strip_suffix("\r\n")
+        .or_else(|| text.strip_suffix('\n'))
+        .unwrap_or(text);
+    if line.is_empty() || line.contains(['\r', '\n', '\0']) {
+        return Err(());
+    }
+    Ok(line)
+}
+
+fn plain_registration_path(path: &Path, directory: bool) -> Result<(), ()> {
+    let anchor = path
+        .ancestors()
+        .last()
+        .filter(|p| p.is_absolute())
+        .ok_or(())?;
+    if absent_path(anchor, path).map_err(|_| ())? {
+        return Err(());
+    }
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| ())?;
+    if (directory && !metadata.is_dir()) || (!directory && !metadata.is_file()) {
+        return Err(());
+    }
+    Ok(())
+}
+
+/// Retirement-only complement to cleanup's registration/HEAD inventory. Its
+/// common-directory and admin -> gitfile checks do not inspect gitfile contents:
+/// libgit2 derives worktree.path() from that same admin link. Require the reverse
+/// gitfile -> exact admin link too, without opening a foreign repository/lease.
+fn require_registration_backlinks(git: &git2::Repository) -> Result<(), ()> {
+    let inventory = git.commondir().join("worktrees");
+    let entries = match std::fs::read_dir(&inventory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(_) => return Err(()),
+    };
+    for entry in entries {
+        let admin = entry.map_err(|_| ())?.path();
+        let link = std::fs::read_to_string(admin.join("gitdir")).map_err(|_| ())?;
+        // Absolute links remain absolute; Git resolves this admin field at the
+        // admin, but relative gitfile targets at the worktree, not the admin.
+        let gitfile = admin.join(metadata_line(&link)?);
+        plain_registration_path(&gitfile, false)?;
+        let contents = std::fs::read_to_string(&gitfile).map_err(|_| ())?;
+        let target = metadata_line(&contents)?
+            .strip_prefix("gitdir: ")
+            .ok_or(())?;
+        if target.is_empty() {
+            return Err(());
+        }
+        let linked_admin = gitfile.parent().ok_or(())?.join(target);
+        plain_registration_path(&linked_admin, true)?;
+        if linked_admin.canonicalize().map_err(|_| ())? != admin.canonicalize().map_err(|_| ())? {
+            return Err(());
+        }
+        // The shared inventory has already bound this exact admin's commondir
+        // to git.commondir(); a same-common but different admin is not enough.
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Inventory {
     Absent,
@@ -146,6 +209,7 @@ fn initial_inventory(
                     ),
                     Ok(false)
                 )
+                && require_registration_backlinks(git).is_ok()
             {
                 Inventory::Absent
             } else {

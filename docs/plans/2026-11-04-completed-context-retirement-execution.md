@@ -362,6 +362,7 @@ are not authorized; numeric exits must come from existing results registry.
 | Task 2 adversarial checkpoint, `7b1912d1..85bc17d7` | Controller relayed and accepted **2 Important internal mechanism defects**: original-P advertisement precedes the frozen digest/eligibility required by the proposed immutable receipt; last-pin release after configuration fencing leaves an unauditable obsolete batch | Concrete proposal corrections below; **same reviewer's re-review required, checkpoint not approved**. No runtime finding or owner-policy change inferred |
 | Task 2 corrected checkpoint, `7b1912d1..66c2ca2b` | Same independent adversarial reviewer, session `ses_e56ce3361ffe0Y48AKdejYpbyv`, verified both corrections and their producer/pin/audit/FK interactions against source: **0 remaining findings** | Mandatory record/reservation checkpoint approved; same implementer may begin Task 2 TDD. This is not runtime evidence or Task 2 completion |
 | Task 2 limited initial-absence SPEC review at `bdfaa98e33f0a0150cf74b48d0c00d5f9b3e7c9e` | Controller relayed and source-verified **3 Important current-behavior findings**: S1 nonstandard registration/HEAD inventory omitted; S2 dangling/nonregular loose-ref slot could become absence; S3 terminal remote index/reconciliation debt did not block fresh retirement | Limited SPEC review **failed**; corrections/evidence below. Same spec reviewer's re-review is required before quality. No full Task 2 or quality pass, new owner-policy question or authority extension |
+| Same limited SPEC re-review at `d11655ea1ab05ccb03d14bd26c6ce5bfcf1fac15` | Controller reports **S2/S3 resolved**, **one Important S1 finding remains**: unrelated registration inventory does not validate the worktree `.git` file's contents/backlink or reject a redirected gitfile | Retirement-only additive S1 correction and RED/GREEN evidence below; same-reviewer S1 re-review still required, quality held. No new policy or authority scope |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -379,8 +380,9 @@ are not authorized; numeric exits must come from existing results registry.
 - [ ] **2 — Durable single-context retirement.** Checkpoint approved at `66c2ca2b`;
   the IN-PROGRESS initial-absence code milestone includes the local-only domain
   path, exact refresh guards, single-consumer Z and stronger audits. Latest
-  context-retirement filter after limited-SPEC S1–S3 fixes: **45 passed** (39
-  Task 2 tests, 6 unchanged proof). Same-reviewer spec re-review remains pending.
+  context-retirement filter after the remaining S1 backlink correction: **50
+  passed** (previous 45 + 5 Linux tests, not matrix groups). Controller reports
+  S2/S3 resolved; same-reviewer S1 re-review remains pending, quality held.
   Live observation/instance/destructive and source/batch capability paths remain
   unfinished and unexposed. See the latest bounded-increment section below;
   not complete/review-ready, full Task 2 spec/quality review remains owed.
@@ -394,7 +396,8 @@ are not authorized; numeric exits must come from existing results registry.
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
 Immediate next step: controller-owned **same-reviewer limited-milestone SPEC
-re-review of S1–S3 corrections, then quality review** of the initial-absence core.
+re-review of the remaining S1 backlink correction, then quality review** of the
+initial-absence core. S2/S3 are resolved by the controller's prior re-review.
 Do not extend source/batch/destructive authorities until that review checkpoint.
 This is not full Task 2 review/completion or permission for Task 3. The corrected
 design checkpoint stays cleared, not awaiting reapproval.
@@ -1781,3 +1784,112 @@ Canonical checkpoint **`01M6MX09FC0R79VR76JGFA269D`**, unique existing-CLI ID,
 parent **`01M6MTX4MXEB7ZG8X5XT162XGH`**, actual UTC **`2026-11-05T03:45:53Z`**.
 Next is the controller's **same limited SPEC reviewer re-review, then quality**.
 No independent approval/pass or full Task 2 completion is claimed by implementer.
+
+## Task 2 — Remaining S1 Gitfile Backlink Correction (Re-review Pending)
+
+### Review Authority And Source-Grounded Reproduction
+
+The controller's same-reviewer limited SPEC re-review at
+**`d11655ea1ab05ccb03d14bd26c6ce5bfcf1fac15`** resolved S2/S3 but retained **one
+Important current-absence S1 defect**. Quality remains held. This is an additive
+correction on that commit, not a policy change, amended history or authority
+extension. Full Task 2 base stays `7b1912d152a1ab7440bd17c48a0a544e40e19258`;
+original source base stays `daab73e70fa9e84ff07a8d1214cda89a7d3766c2`.
+
+Fresh fetch succeeded; `git merge origin/main` was already up to date, preserving
+HEAD at `d11655ea` and main at `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`.
+No other worktree was edited, no main merge/closure/push/native action performed.
+
+Source check confirmed `cleanup.rs` compares the canonical admin `gitdir` target
+to `worktree.path()/.git`, but never reads that gitfile's contents. Vendored
+libgit2 `worktree.c`'s `open_worktree_dir` derives `worktree_path` with dirname of
+the same admin link; `git_worktree_lookup` does not validate the reverse link.
+Poll's ownership helper is tied to a materialized deterministic target and opens
+repositories, so it was not reused for unrelated inventory under this lease.
+
+New tests start from an actual complete unrelated external registration, requested
+B/W/A absent and the old complete materialization present. They explicitly show
+the unchanged shared cleanup inventory still returns `Ok(false)` after corruption.
+The behavioral RED runs returned `AlreadyAbsent`, `materialization_settled=true`
+and deleted the exact old intent for foreign contents, malformed contents, a
+gitfile symlink and a symlinked gitfile ancestor. The relative-link positive
+control passed before the fix.
+
+### Retirement-Only Correction And Preservation Assertions
+
+`execution.rs` adds a separate backlink pass only after cleanup's existing
+registration/common-directory/HEAD checks and before `Inventory::Absent` can be
+admitted. **`cleanup.rs` and the release/cleanup contract are unchanged.**
+
+- Enumerate every actual registration; resolve its admin `gitdir` at the admin.
+  Require the referenced gitfile and all its ancestors to be present/plain with
+  no symlink or Windows reparse redirect. The leaf must be a regular file.
+- Parse exactly one `gitdir: <nonempty target>` record, allowing no line ending,
+  LF or CRLF; reject malformed prefixes, embedded CR/LF/NUL and invalid UTF-8.
+  Resolve relative gitfile targets at the gitfile's parent, not at the admin.
+- Inspect the target admin path without following redirects and require its
+  canonical identity to equal this **exact registration**, not merely another
+  admin with the same common repository. The existing shared inventory has
+  already bound that exact admin's commondir to the leased common repository.
+  No foreign repository is opened and no additional lease is acquired.
+
+New tests cover a foreign repository and a different admin of this same repository;
+bad prefix/empty/extra-line/NUL/non-UTF-8 gitfiles and a directory leaf; a Unix
+gitfile symlink retaining valid bytes in its target; and redirected ancestors.
+The Windows cfg uses unprivileged junction fixtures at the gitfile leaf and its
+ancestor, asserting the actual `0x400` reparse attribute (not a silent privilege
+skip). Those Windows-specific branches were **not executed or cross-compiled**
+on this Linux host; no Windows/native runtime result is claimed.
+
+Before/after checks preserve the full Git-admin and external-worktree file/type/
+link images, including raw gitfile and symlink-target bytes, all old intent and
+remote rows and repository metadata. Refusals assert the prior exact no-effect
+envelope/companion flags (`invalid`, `refused`, unsettled, no removals, no completed
+step). Repeated old requests preserve complete local/companion/attempt row images;
+regular malformed/foreign gitfiles are then fixture-repaired and the old refusal
+still replays without consuming D14. The valid relative backlink with CRLF and the
+old absolute complete-unrelated-registration control both still admit real absence.
+
+The backlink pass is called only through initial inventory, including its existing
+same-live recheck. Index-only continuation/completed-result replay branches, S2/S3
+guards, proof logic and old assertions are unchanged. This does not strengthen the
+atomicity promise against arbitrary external Git/filesystem writers.
+
+### Test-First And Frozen-Source Verification
+
+All Rust commands ran serially through Devenv, without a shell deadline or pending
+process. Raw logs are in **`/tmp/opencode/`**. Source was formatted/frozen before
+the final gates; only this ledger and the new canonical comment changed afterward.
+
+| Exact command, prefixed with `devenv shell --` | Raw log / observed result |
+| --- | --- |
+| `cargo test --all-features --locked --lib retirement_specfix_s1_backlink_` before the fix | `task2-specfix-s1-backlink-red.log`: **1 passed / 4 failed**, behavioral false absence/D14 consumption, no build/fixture failure |
+| Same backlink filter after the minimal fix | `task2-specfix-s1-backlink-green.log`: **5 passed**, 0 failed; all table subcases run |
+| `cargo check --all-features --locked` | `task2-specfix-s1-backlink-check-final.log`: exit **0** |
+| `cargo fmt --check` | `task2-specfix-s1-backlink-fmt-final.log`: exit **0** |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `task2-specfix-s1-backlink-clippy-final.log`: exit **0** |
+| `cargo test --all-features --locked --lib retirement_specfix_` | `task2-specfix-s1-backlink-controls-final.log`: **14 passed**, 0 failed = prior 9 S1/S2/S3 controls + 5 new Linux tests; includes the complete unrelated registration positive control and fixture-repair replay checks |
+| `cargo test --all-features --locked --lib context_retirement` | `task2-specfix-s1-backlink-context-final.log`: **50 passed**, 0 failed = prior 45 + 5, **not completed matrix groups** |
+
+Cleanup was not touched, so its gates were not rerun. No separate proof, recovery,
+foundation, broad baseline or SSH tier was rerun; the requested context-retirement
+filter naturally includes its six unchanged proof tests. No zero-case filter,
+native dispatch or unchanged broad-test rerun is presented as evidence.
+
+Self-review inspected the complete two-file additive code/test diff, exact prefix
+and relative-link semantics, no-follow-before-read order and exact-admin/common
+composition with the unchanged shared inventory. `git diff --check` and all static
+gates passed. Frozen blobs: execution
+`4788c036340a09c1863e891300e321f6c79bfae8`, execution tests
+`5b588ec25e6add72598324e05400d1c8479e53c9`; cleanup remains
+`cd4dc1e8397752aa9fb340d9c02235a3eda74b42`. Expected owned commit scope is these two
+source/test files, this ledger and the new canonical comment, with the required
+coauthor. No prior source/pins or history were rewritten.
+
+Canonical checkpoint **`01M6MXYMP1EBMM65H2S08T4HPG`**, unique existing-CLI ID,
+parent **`01M6MX09FC0R79VR76JGFA269D`**, actual UTC **`2026-11-05T04:02:27Z`**.
+Next: **same limited SPEC reviewer re-reviews S1, then quality**. No review pass
+or full Task 2 completion is claimed. Initial-absence core only; remaining
+44-matrix cases, registered nonzero `mutation_remote retirement_` coverage and
+full Task 2 still owed. No source/batch/destructive authority, Task 3/4, agent,
+real-context/key/profile/draft action, push or lifecycle/main integration.
