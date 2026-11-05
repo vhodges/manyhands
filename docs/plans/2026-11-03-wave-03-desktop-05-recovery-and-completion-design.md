@@ -597,7 +597,8 @@ directory, in `<data_dir>/resolutions` through L4 (decision 22), with the
 drafts' protection and no `Debug`. Each set records its request ID, root, operation ID, item and
 remote or local kind. It is deleted when its request finishes (applied,
 refused or abandoned), and a **launch sweep** calls `show_request` for every
-kept set and deletes finished and not-found ones. Reopening the sheet for
+kept set and deletes finished and not-found ones, except as R-25 keeps a
+remote set whose attempt still stands. Reopening the sheet for
 an operation with a kept, unfinished set offers Retry with **that** set,
 never a new request; if the user had made different choices (another
 window), the sheet says "An earlier resolution is still being saved; it
@@ -803,6 +804,7 @@ Applied in the approval commit:
 | R-22 | L-4's exemption is keyed by item, kept apart from `Operations::lifecycles`, and ends on a later lifecycle answer, when its row is gone, or when the row's `updated_at` changes. "Check again" reloads the tab and the rows, then retries the same request. Both buttons show for all three reasons. After a restart the row carries no category, so a K-13 item reads "Closing…" until an answer: the lifecycle action, with a confirm that supersedes, now; Resume with Task 14 (Task 9 checkpoint, orchestrator) | After a restart a not-tidied item looks locked until it is run again |
 | R-23 | "Read-only" covers Edit, Continue editing, Save, comment Submit, Share, Move…, Repair… and the Drafts page's Restore of the item's draft. Typing in a composer and the lifecycle action stay available. A live session is ended if clean, kept if dirty (owner 2026-11-05 on scope; Task 9 checkpoint) | A comment can't be posted while a close is unfinished |
 | R-24 | `Intent::ConflictResolve` stops at safe points: the desktop's Stop cancels the call's token, which the resolution honours after its checkpoint and at the publication's safe points (`bind/conflict.rs:877-879`), leaving the synchronization resolved for Resume. Give up is refused for it, since `request cancel` never reaches a `conflict resolve` and its record is gone on any stop (`bind/conflict.rs:1111-1114`). The desktop flag means "the call's token is honoured after acceptance", not the library's `Command::stops_at_safe_points` (Task 10 review) | A resolution's Stop differs from the CLI's, which has none |
+| R-25 | A remote kept set outlives its record while its attempt stands. On a resolve's answer, the set is deleted on success, on a `cancelled` whose checkpoint committed (a `cancelled` before acceptance, `execute.rs:294-295`, settles through `show_conflict` like a not-found set), or on a refusal before any path was written; a failure after a write keeps it, though the library deletes the record (`bind/conflict.rs` `gone()`, the attempt keyed by request ID and input digest). The launch sweep keeps a remote set whose request is not found while `show_conflict` still shows that operation's attempt unfinished. A set whose request was removed or never sent is deleted at once (owner 2026-11-05, Task 11a review I-1) | A remote set may outlive its record until the conflict is gone |
 
 ## Known Limits
 
@@ -856,6 +858,15 @@ Applied in the approval commit:
   closed and offers no Close ticket…, so it stays locked as "Closing…"
   until Task 14's Resume on its row; a document takes R-22's lifecycle
   action path (Task 9).
+- **K-21.** A remote kept set is kept while its attempt cannot be shown
+  ended: a repository that no longer resolves, or a `show_conflict` that keeps
+  failing (a permanent `operation_not_found` included), keeps it on every
+  launch. The drain does not re-check a set kept after an ambiguous answer;
+  the next launch sweep does (R-25, Task 11a).
+- **K-22.** The launch sweep reads a set, then forgets it under a separate
+  folder hold; a Retry that re-keeps the identical set in between does
+  nothing and the set is removed. The Retry's request still runs with its
+  input (Task 11a review).
 
 ## Alternatives Rejected
 
