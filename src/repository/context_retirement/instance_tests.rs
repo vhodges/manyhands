@@ -316,3 +316,74 @@ fn retirement_instance_p2_root_head_requires_valid_direct_existing_binding() {
         drop(cleanup);
     }
 }
+
+#[test]
+fn retirement_quality_unicode_head_is_refused_under_branch_ref_lock() {
+    // Private predicate/primitive control, not a public reentry capability.
+    // ASCII independent branches at the SAME OID and detached HEAD are valid.
+    for mode in ["unicode", "ascii_same_oid", "detached_same_oid"] {
+        let f = Fixture::new();
+        let git = f.git();
+        let cleanup = ContextCleanup::acquire(&f.request.root).unwrap();
+        let tip = git
+            .refname_to_id(&format!("refs/heads/manyhands/ticket/{ID}"))
+            .unwrap();
+        assert_eq!(
+            cleanup.remove_context_worktree(f.request.kind, &f.request.item_id, tip),
+            crate::repository::cleanup::WorktreeRemoval::Removed
+        );
+        let name = if mode == "unicode" {
+            format!("refs/heads/manyhand\u{017f}/ticket/{ID}")
+        } else {
+            "refs/heads/independent-ascii".into()
+        };
+        assert!(git2::Reference::is_valid_name(&name));
+        let reference = git
+            .reference(&name, tip, false, "independent fixture binding")
+            .unwrap();
+        let other = f.request.root.join(".manyhands/worktrees/quality-other");
+        git.worktree(
+            "quality-other",
+            &other,
+            Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
+        )
+        .unwrap();
+        let linked = git2::Repository::open(&other).unwrap();
+        if mode == "detached_same_oid" {
+            linked.set_head_detached(tip).unwrap();
+        }
+        assert_eq!(linked.head().unwrap().target(), Some(tip));
+        let head = std::fs::read(linked.path().join("HEAD")).unwrap();
+        let rows = super::super::execution_tests::registry_image(&f.db());
+        let called = std::cell::Cell::new(false);
+        let result =
+            cleanup.delete_retirement_branch(f.request.kind, &f.request.item_id, tip, || {
+                assert!(
+                    git.commondir()
+                        .join(format!("refs/heads/manyhands/ticket/{ID}.lock"))
+                        .is_file()
+                );
+                called.set(true);
+                require_checkout_inventory(&git, &f.request, None).is_ok()
+            });
+        assert!(called.get());
+        assert_eq!(
+            result,
+            if mode == "unicode" {
+                crate::repository::cleanup::BranchDeletion::Changed
+            } else {
+                crate::repository::cleanup::BranchDeletion::Deleted
+            }
+        );
+        if mode == "unicode" {
+            assert_eq!(
+                git.refname_to_id(&format!("refs/heads/manyhands/ticket/{ID}"))
+                    .unwrap(),
+                tip
+            );
+        }
+        assert_eq!(std::fs::read(linked.path().join("HEAD")).unwrap(), head);
+        assert_eq!(git.refname_to_id(&name).unwrap(), tip);
+        assert_eq!(super::super::execution_tests::registry_image(&f.db()), rows);
+    }
+}

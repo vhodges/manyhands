@@ -376,6 +376,7 @@ are not authorized; numeric exits must come from existing results registry.
 | Limited fresh-present SPEC at `9a932ae4`, same increment base | Controller accepts **2 Important current-producer defects**: P1 selected admin Git operation locks omitted; P2 other/root checkout HEAD syntax/direct-binding/existence not fully checked before W prune | SPEC **failed**, Quality **held**. Retirement-only additive correction and RED→GREEN/local gates below; **same SPEC re-review then Quality pending**, no authority expansion |
 | Same fresh-present SPEC re-review at `927de9e3` | Original P1/P2 common cases fixed; **2 Important remaining guard holes** accepted by controller: ASCII-case-equivalent lock suffixes missed, per-worktree HEAD refs looked up in primary namespace | Quality **held**; conservative retirement-only correction and compiled RED→GREEN below. **Same SPEC re-review then Quality pending**, no full Task 2 approval |
 | Same fresh-present SPEC at `c230f811` | P1 case locks and pre-W masked aliases resolved; **2 Important P2 chain holes** remain: late post-W/pre-B checkout uses old scanner; target case-equivalent HEAD is called unrelated | Controller accepts unified retirement-only checkout authorization across W→B; correction/evidence below. **Same SPEC re-review then Quality pending**, Quality still held |
+| Limited fresh-present SPEC pass through `1ed380c6`; subsequent QUALITY | Controller reports SPEC pass at that source; Quality finds **1 Important** unsupported Unicode filesystem identity alias and **1 Minor** verified-history rollback/audit gap, both accepted | Corrections below; **delta SPEC check then same QUALITY re-review pending**, no expansion/push or full Task 2 approval |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -398,11 +399,12 @@ are not authorized; numeric exits must come from existing results registry.
    both passed through `2f06ac72` from base `b1a986c2` with no remaining findings,
    including the cleanup-lease correction and preserved S1–S4 protections.
   Fresh-present selection/install/prune → branch/index is now connected in the
-  next bounded increment from `7fde7e5f`. Same SPEC at `c230f811` resolves P1 and
-  pre-W masked aliases but finds late-B/case-equivalence P2 holes; unified
-  chain correction awaits **same SPEC re-review then QUALITY**.
-  Latest gates: **73** context-retirement tests, **55** registered retirement SSH,
-  **51** cleanup tests (prior 73/49/50 unchanged; +6 SSH and +1 primitive control).
+  next bounded increment from `7fde7e5f`. Limited SPEC passes through `1ed380c6`;
+  Quality's Unicode identity/verified-history corrections await **delta SPEC
+  check then same QUALITY re-review**.
+  Latest gates: **76** context-retirement tests, **59** registered retirement SSH,
+  **51** cleanup and **52** recovery-foundation tests (+3 units/+4 SSH; earlier
+  cleared-verification corruption fixture strengthened with assertions intact).
   Authorized executor replacement/recovery and source/batch scopes remain
   unfinished/closed; all 44 matrix obligations stay explicitly tracked.
   Full Task 2 spec/quality review remains owed; no full completion claimed.
@@ -411,11 +413,15 @@ are not authorized; numeric exits must come from existing results registry.
 - [ ] **5 — CLI command/flag/help/rendering.** Not started.
 - [ ] **6 — Two-clone/adversarial acceptance.** Not started.
 - [ ] **7 — Governing contracts/downstream amendments.** Not started.
+  Carry forward the conservative retirement-only identity limit: symbolic checkout
+  HEADs require ASCII direct shared `refs/heads/*` bindings; non-ASCII spellings
+  refuse as unsupported filesystem equivalence, not as invalid Git names.
+  Independent ASCII branches and detached checkouts at the same OID remain valid.
 - [ ] **8 — Final local gates/independent reviews/owner handoff.** Controller-owned;
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: controller's **same limited SPEC re-review then QUALITY**
+Immediate next step: controller's **delta SPEC check then same QUALITY re-review**
 of the corrected fresh-present producer from `7fde7e5f` before further expansion.
 Authorized replacement/reentry, owned-absence recovery and source/batch work
 remain owed; no such producer is enabled by this increment.
@@ -2583,3 +2589,74 @@ matrices/source/batch protocols and full Task 2 review remain owed. No Task 2
 completion or Task 3/4 claim. Linux evidence only; no Windows/native runtime or
 cross-compilation claim. No agents, push, status/PR/main integration/closure/native
 CI, other-worktree edits or real-context/key/profile/draft action.
+
+## Task 2 Quality Correction Delta — Unicode Identity And Verified History
+
+Source parent **`1ed380c68038a1f4ced59793b85f400975146fd2`** (limited SPEC pass);
+present base `7fde7e5f`, full Task 2 base `7b1912d1`. Fresh fetch/merge unchanged
+at `c69789d9`, no rebase. Controller accepts Quality's Important Unicode identity
+and Minor history findings; **delta SPEC then same Quality re-review pending**.
+Reviewer probe `/tmp/opencode/task2-present-quality-1ed380c6-probe.log` proves a
+Git-valid U+017F spelling escapes ASCII comparison and completion could erase
+verification; it does **not** claim actual casefold-volume deletion. Reviewer
+could not enable host casefold; no native/casefold runtime evidence is inferred.
+
+- Shared retirement checkout authorization now refuses **all non-ASCII symbolic
+  HEAD spellings** as unsupported folding/normalization identity before declaring
+  them unrelated. The same predicate covers absence, branch-only, present W and
+  under-ref-lock B callback. No Unicode dependency/FS detection, OID-equality
+  substitution, global read/release change or new authority. Task 7 contract
+  follow-up above records this conservative limit. ASCII independent branches
+  and detached HEADs at the **same OID** are explicit positive controls.
+- `instance_verified` has a forward-only canonical trigger (1 cannot become 0).
+  Present-instance advertisement provenance and single-consumer receipts require
+  verified history in cross-audit, including terminal refusals. Legitimate
+  provisional/unverified pre-install/no-ad refusals and branch-only verified=0
+  receipts remain valid. Missing/substituted canonical schema refuses unchanged,
+  never repairs itself. Historical verification remains true after W/terminal.
+- The earlier cleared-verification SSH fixture now explicitly drops/restores the
+  forward trigger's exact DDL only to inject corruption; original no-authority,
+  no-effect and row/resource preservation assertions remain intact. Separate
+  ordinary UPDATE and bound-O-completion tests prove normal writes cannot clear
+  verification. Corruption audit matrix uses isolated metadata insertions, not
+  installed-token/public-reentry evidence, and compares all rows/schema unchanged.
+
+Logs `/tmp/opencode/task2-present-qualityfix-<suffix>.log`; prefix below is
+`devenv shell -- cargo test --all-features --locked`. Registered SSH cases precede
+filters; all RED results compile successfully and fail behaviorally.
+
+| Test suffix | RED suffix/result | GREEN suffix/result |
+| --- | --- | --- |
+| `--test mutation_remote retirement_quality_unicode_` | `unicode-red`: **0 passed / 3 failed SSH**, initial/pre-W/late-B refusal missing | `unicode-green`: **3 passed**, full resource/old-intent/row/flags/pins/replay assertions |
+| `--lib retirement_quality_unicode_` | `unicode-lock-red`: **0/1**, under-ref-lock B returned Deleted, not Changed | `unicode-lock-green`: **1 passed**, Unicode refusal + same-OID ASCII/detached controls |
+| `--lib retirement_quality_verified_history_` | `history-red`: **0/2**, UPDATE clears bit; active/refused unverified ad history accepted | `history-green`: **2 passed**, seven audit/control variants and unchanged schema/rows |
+| `--test mutation_remote retirement_quality_verified_history_` | `completion-red`: **0/1**, bound-O trigger leaves verified=0 | `completion-green`: **1 passed**, stable no-effect refusal with verified history/ad receipt retained |
+
+`--test mutation_remote retirement_present_unverified_` (`corruption-green`):
+**1 SSH passed**, restored-schema corruption still cannot authorize effects.
+Source frozen after formatting/SQL whitespace alignment; serial Devenv without
+deadlines/overlapping builds or tests, only ledger/comment edits afterward.
+
+| Final command | Log suffix | Result |
+| --- | --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | `check-final` | exit 0 |
+| `devenv shell -- cargo fmt --check` | `fmt-final` | exit 0 |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy-final` | exit 0 |
+| test prefix + `--lib context_retirement` | `context-final` | **76 passed** |
+| test prefix + `--test mutation_remote retirement_` | `ssh-final` | **59 registered SSH passed** |
+| test prefix + `--lib cleanup` | `cleanup-final` | **51 passed** |
+| test prefix + `--test recovery_foundation_gate` (startup/schema audit relevance) | `foundation-final` | **52 passed** |
+
+Proof, ordinary cleanup/default callback, live no-effect witnesses and prior
+expectations unchanged except the authorized corruption-injection strengthening.
+Other unaffected broad gates not repeated. Five-code-path diff against `1ed380c6`,
+SHA-256 `bc9f2d8ce3de0d6cc7d14ad3eb6b4b384e191f578addd0c49bc0a8ca94b8f516`.
+Checkpoint **`01M6NK03FP9YVMBWKD8N5YVD1X`**, parent
+**`01M6NGEXXB2WY6RVPKX23C4DJB`**, actual UTC **`2026-11-05T10:10:18Z`**.
+
+**All 01–44 obligations remain tracked**, not discharged by test counts. Public
+reentry/replacement, owned-absence recovery, remaining failure/source/batch
+protocols and full Task 2 review remain owed. No Task 2 completion/Task 3/4 claim,
+no Windows/native/casefold runtime or cross-compilation claim. No agents, push,
+status/PR/main integration/closure/native CI, other-worktree edits or real-context
+key/profile/draft action.

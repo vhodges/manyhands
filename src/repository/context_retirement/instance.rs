@@ -142,8 +142,9 @@ fn require_admin_locks_absent(path: &std::path::Path) -> Result<(), RepositoryEr
 /// symbolic context binding at its fixed tip. With no exemption, W/A must be
 /// absent and EVERY checkout must be unrelated, including target case variants.
 /// Every HEAD must be parseable and refer directly to an existing commit.
-/// Symbolic HEADs are supported only for shared refs/heads/* bindings; other
-/// namespaces and pseudorefs may resolve in a different checkout's own admin.
+/// Symbolic HEADs are supported only for ASCII shared refs/heads/* bindings;
+/// non-ASCII spelling has unsupported filesystem folding/normalization identity,
+/// and other namespaces/pseudorefs may resolve in a checkout's own admin.
 /// Keep ordinary cleanup/release's scanner and behavior unchanged.
 pub(super) fn require_checkout_inventory(
     git: &git2::Repository,
@@ -175,7 +176,10 @@ pub(super) fn require_checkout_inventory(
         if let Some(reference) = head.strip_prefix("ref: ") {
             // Do not resolve a per-worktree name through the primary refdb:
             // a common-dir direct ref could mask a linked admin's target alias.
-            if !reference.starts_with("refs/heads/") || !git2::Reference::is_valid_name(reference) {
+            if !reference.is_ascii()
+                || !reference.starts_with("refs/heads/")
+                || !git2::Reference::is_valid_name(reference)
+            {
                 return Err(recovery_required());
             }
             // Refuse ASCII-equivalent target spellings even on case-sensitive

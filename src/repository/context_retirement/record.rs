@@ -370,6 +370,7 @@ fn objects() -> Vec<(&'static str, &'static str, String)> {
         ("trigger", "retirement_no_repin", "CREATE TRIGGER retirement_no_repin BEFORE INSERT ON retirement_observation_pins WHEN EXISTS(SELECT 1 FROM retirement_observation_pin_releases r WHERE r.provenance_id=NEW.provenance_id AND r.pin_kind=NEW.pin_kind AND r.holder_operation_ulid=NEW.holder_operation_ulid AND r.holder_epoch=NEW.holder_epoch) BEGIN SELECT RAISE(ABORT,'released retirement pin'); END".to_owned()),
         ("trigger", "retirement_pin_release_required", "CREATE TRIGGER retirement_pin_release_required BEFORE DELETE ON retirement_observation_pins WHEN NOT EXISTS(SELECT 1 FROM retirement_observation_pin_releases r WHERE r.provenance_id=OLD.provenance_id AND r.pin_kind=OLD.pin_kind AND r.holder_operation_ulid=OLD.holder_operation_ulid AND r.holder_epoch=OLD.holder_epoch AND r.repository_id=OLD.repository_id AND r.observation_batch_id=OLD.observation_batch_id AND r.binding_id IS OLD.binding_id) BEGIN SELECT RAISE(ABORT,'retirement pin release receipt required'); END".to_owned()),
         ("trigger", "retirement_materialization_forward", "CREATE TRIGGER retirement_materialization_forward BEFORE UPDATE OF materialization_settled ON context_retirement_records WHEN NEW.materialization_settled<OLD.materialization_settled BEGIN SELECT RAISE(ABORT,'settled retirement materialization'); END".to_owned()),
+        ("trigger", "retirement_instance_verified_forward", "CREATE TRIGGER retirement_instance_verified_forward BEFORE UPDATE OF instance_verified ON context_retirement_records WHEN NEW.instance_verified<OLD.instance_verified BEGIN SELECT RAISE(ABORT,'verified retirement instance history'); END".to_owned()),
     ]);
     for (kind, _, sql) in &mut objects {
         if *kind == "table" {
@@ -698,6 +699,7 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
            AND a.observer_owner_epoch=p.source_owner_epoch AND a.request_attempt IS p.execution_request_attempt
            AND c.request_ulid IS p.execution_request_ulid AND c.batch_operation_ulid IS p.execution_batch_operation_ulid
            AND c.initial_resources IN ('present','branch_only')
+           AND (c.initial_resources!='present' OR c.instance_verified=1)
            AND c.configuration_generation=p.configuration_generation AND c.remote_name=p.remote_name
            AND c.primary_branch=p.primary_branch AND c.endpoint_digest=p.endpoint_digest)))
        OR (p.execution_kind='batch_gap' AND o.poll_kind!='observe')
@@ -705,6 +707,8 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
     ) OR EXISTS(
       SELECT 1 FROM retirement_observation_receipts b JOIN retirement_advertisement_provenance p ON p.id=b.provenance_id
       WHERE b.repository_id!=p.repository_id OR b.configuration_generation!=p.configuration_generation
+       OR (b.consumer_kind='single' AND EXISTS(SELECT 1 FROM context_retirement_records c
+         WHERE c.operation_ulid=b.consumer_operation_ulid AND c.initial_resources='present' AND c.instance_verified!=1))
        OR b.consumer_request_ulid IS NOT p.execution_request_ulid OR b.consumer_request_attempt IS NOT p.execution_request_attempt
        OR (b.consumer_kind='single' AND (p.execution_kind!='local_parent' OR p.execution_batch_operation_ulid IS NOT NULL
          OR b.consumer_operation_ulid!=p.execution_parent_ulid OR b.consumer_attempt_epoch!=p.execution_parent_epoch))

@@ -230,6 +230,22 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         "retirement_p2_chain_branch_only_late_case_equivalent_checkout_is_no_effect",
         p2_chain_branch_case,
     ),
+    (
+        "retirement_quality_unicode_initial_head_is_unsupported",
+        quality_unicode_initial,
+    ),
+    (
+        "retirement_quality_unicode_preworktree_head_is_no_effect",
+        quality_unicode_preworktree,
+    ),
+    (
+        "retirement_quality_unicode_late_branch_head_preserves_worktree_debt",
+        quality_unicode_late,
+    ),
+    (
+        "retirement_quality_verified_history_survives_observer_completion_clear_attempt",
+        quality_verified_completion,
+    ),
 ];
 
 fn setup() -> Result<World, FixtureError> {
@@ -1808,11 +1824,24 @@ fn present_unverified_effect() -> Result<(), FixtureError> {
     let captured = snapshot.clone();
     RepositoryService::set_retirement_worktree_hook_for_testing(move || {
         let db = rusqlite::Connection::open(data.join(REGISTRY_FILE)).unwrap();
+        // Isolated corruption injection, not an ordinary producer UPDATE: the
+        // forward-only guard now prevents clearing verified history. Restore
+        // its exact original DDL before snapshot/audit; never weaken assertions.
+        let sql: String = db
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='retirement_instance_verified_forward'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        db.execute_batch("DROP TRIGGER retirement_instance_verified_forward")
+            .unwrap();
         db.execute(
             "UPDATE context_retirement_records SET instance_verified=0",
             [],
         )
         .unwrap();
+        db.execute_batch(&sql).unwrap();
         *captured.borrow_mut() = Some((resource_image(&root), registry_image(&db)));
     });
     let result = w.service.retire_context_authenticated(
@@ -2443,6 +2472,226 @@ fn p2_chain_late(present: bool, case_equivalent: bool) -> Result<(), FixtureErro
         w.privacy()?;
     }
     Ok(())
+}
+
+fn quality_unicode_initial() -> Result<(), FixtureError> {
+    quality_unicode_before_worktree(false)
+}
+fn quality_unicode_preworktree() -> Result<(), FixtureError> {
+    quality_unicode_before_worktree(true)
+}
+fn quality_unicode_reference() -> String {
+    format!("refs/heads/manyhand\u{017f}/ticket/{ITEM}")
+}
+fn quality_unicode_fault(root: &Path, other: &Path, admin: &Path) {
+    let reference = quality_unicode_reference();
+    assert!(git2::Reference::is_valid_name(&reference));
+    assert!(!reference.eq_ignore_ascii_case(CONTEXT));
+    let git = git2::Repository::open(root).unwrap();
+    let tip = git.refname_to_id(CONTEXT).unwrap();
+    let slot = git.commondir().join(&reference);
+    fs::create_dir_all(slot.parent().unwrap()).unwrap();
+    fs::write(slot, format!("{tip}\n")).unwrap();
+    fs::write(admin.join("HEAD"), format!("ref: {reference}\n")).unwrap();
+    let linked = git2::Repository::open(other).unwrap();
+    assert_eq!(
+        linked.find_reference("HEAD").unwrap().symbolic_target(),
+        Some(reference.as_str())
+    );
+    assert_eq!(linked.head().unwrap().target(), Some(tip));
+    assert_eq!(
+        git.find_reference(&reference).unwrap().symbolic_target(),
+        None
+    );
+    // This fixture proves a Git-valid non-ASCII direct binding on Linux. It
+    // does NOT enable casefold or claim these two slots alias on this volume.
+}
+fn quality_unicode_before_worktree(final_boundary: bool) -> Result<(), FixtureError> {
+    pre_prune_refusal(
+        final_boundary,
+        |w| {
+            let (other, admin) = add_other_checkout(w);
+            let root = w.root.clone();
+            Box::new(move || quality_unicode_fault(&root, &other, &admin))
+        },
+        |w| {
+            fs::write(
+                w.repo()
+                    .unwrap()
+                    .commondir()
+                    .join("worktrees/retirement-other/HEAD"),
+                format!("ref: {OTHER_BRANCH}\n"),
+            )
+            .unwrap();
+        },
+    )
+}
+fn quality_unicode_late() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    let (other, admin) = add_other_checkout(&w);
+    history(&w, true)?;
+    let materialization = complete_materialization(&w)?;
+    let request = request(&w);
+    let root = w.root.clone();
+    let data = w.data();
+    let captured = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let snapshot = captured.clone();
+    RepositoryService::set_retirement_intent_hook_for_testing(move || {
+        let db = rusqlite::Connection::open(data.join(REGISTRY_FILE)).unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT worktree_removal FROM context_retirement_records",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "observed"
+        );
+        quality_unicode_fault(&root, &other, &admin);
+        *snapshot.borrow_mut() = Some((resource_image(&root), registry_image(&db)));
+    });
+    let result = fixed(w.service.retire_context_authenticated(
+        request.clone(),
+        w.primary().approval,
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    let snapshot = captured.borrow();
+    let (resources, rows) = snapshot.as_ref().unwrap();
+    assert_eq!(
+        result,
+        ContextRetirementOutcome::CleanupPending {
+            worktree_removal: RetirementRemoval::Observed,
+            branch_removal: RetirementRemoval::None
+        }
+    );
+    assert!(resource_image(&w.root) == *resources);
+    assert_materialization(&w, &materialization)?;
+    let db = w.db()?;
+    let after = registry_image(&db);
+    for (table, image) in rows {
+        if ![
+            "context_retirement_records",
+            "context_retirement_effect_intents",
+        ]
+        .contains(&table.as_str())
+        {
+            assert!(
+                after.get(table) == Some(image),
+                "only uninvoked B intent may settle after W"
+            );
+        }
+    }
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT observation FROM context_retirement_effect_intents WHERE resource='branch'",
+            [],
+            |r| r.get::<_, String>(0)
+        ))?,
+        "changed"
+    );
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT count(*) FROM retirement_observation_pins",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        1
+    );
+    fixed(fs::write(
+        w.repo()?
+            .commondir()
+            .join("worktrees/retirement-other/HEAD"),
+        format!("ref: {OTHER_BRANCH}\n"),
+    ))?;
+    let resources = resource_image(&w.root);
+    let rows = registry_image(&db);
+    let commands = w.server.commands();
+    assert!(
+        matches!(w.service.retire_context_authenticated(request,w.primary().approval,&mut SessionCredentials::new(Provider)),Err(e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+    );
+    assert!(resource_image(&w.root) == resources);
+    assert!(registry_image(&db) == rows);
+    assert_eq!(w.server.commands(), commands);
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
+}
+fn quality_verified_completion() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let materialization = complete_materialization(&w)?;
+    fixed(w.db()?.execute_batch("CREATE TRIGGER quality_clear_verified_at_bound_completion AFTER UPDATE OF phase ON remote_operation_records WHEN NEW.phase='completed' AND NEW.poll_kind='observe' AND EXISTS(SELECT 1 FROM context_retirement_attempts a WHERE a.observer_operation_ulid=NEW.operation_ulid) BEGIN UPDATE context_retirement_records SET instance_verified=0 WHERE operation_ulid IN (SELECT operation_ulid FROM context_retirement_attempts WHERE observer_operation_ulid=NEW.operation_ulid); END;"))?;
+    let resources = resource_image(&w.root);
+    let request = request(&w);
+    let report = retire(&w, request.clone())?;
+    assert_eq!(report.outcome, RetirementDisposition::Refused);
+    assert_eq!(report.code, ResultCode::ExternalChange);
+    assert_eq!(report.worktree_removal, RetirementRemoval::None);
+    assert_eq!(report.branch_removal, RetirementRemoval::None);
+    let db = w.db()?;
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT instance_verified FROM context_retirement_records",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        1,
+        "completed observer cannot erase verified history"
+    );
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT count(*) FROM retirement_advertisement_provenance",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        1
+    );
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT count(*) FROM context_retirement_effect_intents",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert_eq!(
+        fixed(db.query_row(
+            "SELECT count(*) FROM retirement_observation_pins",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert_materialization(&w, &materialization)?;
+    // Fresh installation is the only authorized filesystem delta before this
+    // failed completion: retain its full valid marker rather than roll it back.
+    let marker = marker_path(&w)?;
+    let nonce: String = fixed(db.query_row(
+        "SELECT instance_nonce FROM context_retirement_records",
+        [],
+        |r| r.get(0),
+    ))?;
+    assert_eq!(
+        fixed(fs::read(&marker))?,
+        format!("manyhands-retirement-instance-v1\nticket\n{ITEM}\n{nonce}\n").into_bytes()
+    );
+    let mut after = resource_image(&w.root);
+    assert!(
+        after
+            .remove(marker.strip_prefix(&w.root).unwrap())
+            .is_some()
+    );
+    assert!(after == resources);
+    let resources = resource_image(&w.root);
+    let rows = registry_image(&db);
+    let commands = w.server.commands();
+    assert_eq!(retire(&w, request)?, report);
+    assert!(resource_image(&w.root) == resources);
+    assert!(registry_image(&db) == rows);
+    assert_eq!(w.server.commands(), commands);
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
 }
 
 // Shared negative journey: capture all resource and registry rows at the actual

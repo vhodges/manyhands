@@ -16,6 +16,115 @@ const TABLES: [&str; 7] = [
     "retirement_observation_pin_releases",
 ];
 
+fn quality_verified_schema(db: &Connection) -> Vec<(String, String, Option<String>)> {
+    db.prepare("SELECT type,name,sql FROM sqlite_master ORDER BY type,name")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap()
+}
+fn quality_verified_present(
+    data: &std::path::Path,
+    operation: OperationId,
+    verified: bool,
+) -> Connection {
+    drop(RepositoryService::open_at(data).unwrap());
+    let db = Connection::open(data.join(REGISTRY_FILE)).unwrap();
+    db.execute("INSERT INTO repositories(id,root_path,enabled_at,accessibility,refresh_required) VALUES(1,?1,1,'accessible',0)",[data.to_str()]).unwrap();
+    db.execute("INSERT INTO operation_records(id,repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(1,1,?2,?1,'retire_context','authoring-context-v1/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV/Retire','created',1)",params![operation.to_string(),data.to_str()]).unwrap();
+    db.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,expected_tip,instance_nonce,instance_verified,remote_name,primary_branch,configuration_generation,endpoint_digest,selection_epoch,materialization_capture,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis) VALUES(?1,1,1,1,'ticket','01ARZ3NDEKTSV4RRFFQ69G5FAV','present',?2,?3,?4,'origin','main',0,zeroblob(32),1,'absent',0,1,'selected','none','none','none')",params![operation.to_string(),"1".repeat(40),OperationId::new().to_string(),verified]).unwrap();
+    db.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,phase) VALUES(?1,1,1,'active')",[operation.to_string()]).unwrap();
+    db
+}
+#[test]
+fn retirement_quality_verified_history_cannot_be_cleared_by_update() {
+    let data = tempfile::tempdir().unwrap();
+    let db = quality_verified_present(data.path(), OperationId::new(), true);
+    let rows = super::execution_tests::registry_image(&db);
+    let schema = quality_verified_schema(&db);
+    assert!(
+        db.execute(
+            "UPDATE context_retirement_records SET instance_verified=0",
+            []
+        )
+        .is_err(),
+        "verified history must be forward-only even before W intent/provenance"
+    );
+    assert_eq!(super::execution_tests::registry_image(&db), rows);
+    assert_eq!(quality_verified_schema(&db), schema);
+    assert!(RepositoryService::open_at(data.path()).is_ok());
+}
+#[test]
+fn retirement_quality_verified_history_is_required_by_observation_audit() {
+    let mut accepted = Vec::new();
+    for case in [
+        "provisional",
+        "provisional_refused",
+        "verified_ad",
+        "verified_ad_refused",
+        "unverified_ad",
+        "unverified_ad_refused",
+        "branch_only_ad",
+    ] {
+        let data = tempfile::tempdir().unwrap();
+        let operation = OperationId::new();
+        let verified = case.starts_with("verified_");
+        let observed = case.contains("ad");
+        let refused = case.ends_with("refused");
+        // Isolated metadata-corruption fixture: direct insertion of otherwise
+        // schema-valid unverified history, NOT a producer/installed-token claim.
+        let db = if case == "branch_only_ad" {
+            selected_for(
+                data.path(),
+                &operation.to_string(),
+                "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                true,
+            )
+        } else {
+            quality_verified_present(data.path(), operation, verified)
+        };
+        if observed {
+            bound_observation(&db, operation);
+        }
+        if refused {
+            if observed {
+                db.execute_batch("INSERT INTO retirement_observation_pin_releases SELECT provenance_id,pin_kind,holder_operation_ulid,holder_epoch,repository_id,observation_batch_id,binding_id,'consumer_terminal' FROM retirement_observation_pins; DELETE FROM retirement_observation_pins;").unwrap();
+            }
+            db.execute("UPDATE context_retirement_records SET phase='refused',final_code='external_change',final_result=?1",[REFUSAL]).unwrap();
+            db.execute_batch("UPDATE context_retirement_attempts SET phase='ended'; UPDATE operation_records SET state='completed';").unwrap();
+        }
+        let rows = super::execution_tests::registry_image(&db);
+        let schema = quality_verified_schema(&db);
+        let opened = RepositoryService::open_at(data.path());
+        if case.starts_with("unverified_ad") {
+            if !matches!(opened,Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired) {
+                accepted.push(case);
+            }
+        } else {
+            assert!(
+                opened.is_ok(),
+                "legitimate {case} must remain valid: {:?}",
+                opened.as_ref().err()
+            );
+        }
+        assert_eq!(
+            super::execution_tests::registry_image(&db),
+            rows,
+            "{case}: no row repair"
+        );
+        assert_eq!(
+            quality_verified_schema(&db),
+            schema,
+            "{case}: no schema repair"
+        );
+    }
+    assert!(
+        accepted.is_empty(),
+        "present observation authority accepted without verified history: {accepted:?}"
+    );
+}
+
 #[test]
 fn retirement_quality_q2_partial_worktree_step_requires_correlated_effect() {
     let mut accepted = Vec::new();
