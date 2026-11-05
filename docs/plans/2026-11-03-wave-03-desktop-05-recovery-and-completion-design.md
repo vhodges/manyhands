@@ -844,6 +844,13 @@ Applied in the approval commit:
 - **K-18.** `Folder::open_named` deletes stale temporaries; a `replace` that
   another process runs on the same folder at that moment fails and is
   retried (Task 3b review).
+- **K-19.** Two windows showing the same item share its `TabKey`; with a
+  comment draft on that item they pass the draft back and forth without end.
+  This predates D5, and the app opens one window (Task 9).
+- **K-20.** After a restart, a ticket whose close passed `closing` reads
+  closed and offers no Close ticket…, so it stays locked as "Closing…"
+  until Task 14's Resume on its row; a document takes R-22's lifecycle
+  action path (Task 9).
 
 ## Alternatives Rejected
 
