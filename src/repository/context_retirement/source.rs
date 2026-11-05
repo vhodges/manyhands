@@ -177,6 +177,22 @@ impl OriginalPollSource {
         id: i64,
         record: &state::StoredRemoteOperation,
     ) -> Result<(), RepositoryError> {
+        if self.validate_ownership(service, tx, id, record)? || record.cancel_requested {
+            return Err(recovery_required());
+        }
+        Ok(())
+    }
+
+    /// Exact CURRENT ownership survives cancellation only to acknowledge STOP.
+    /// The returned flag is read from that same accepted F2 row, not supplied by
+    /// a caller. General owned writes/capture still use strict validate above.
+    pub(in super::super) fn validate_ownership(
+        &self,
+        service: &RepositoryService,
+        tx: &Transaction<'_>,
+        id: i64,
+        record: &state::StoredRemoteOperation,
+    ) -> Result<bool, RepositoryError> {
         let p = &self.projection;
         if !Arc::ptr_eq(&self.scope, &service.remote_reservation_scope)
             || id != p.repository
@@ -201,17 +217,15 @@ impl OriginalPollSource {
         if current != *p || current.phase != "active" {
             return Err(recovery_required());
         }
-        let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM request_records WHERE request_ulid=?1 AND attempt=?2 AND state='accepted' AND cancel_requested=0)
-          AND EXISTS(SELECT 1 FROM poll_retirement_batches WHERE operation_ulid=?3 AND owner_epoch=?4)",params![p.request,p.request_attempt,p.operation,p.epoch],|r|r.get(0)).map_err(|_|recovery_required())?;
-        if !live {
-            return Err(recovery_required());
-        }
+        let cancelled:bool=tx.query_row("SELECT cancel_requested FROM request_records WHERE request_ulid=?1 AND attempt=?2 AND state='accepted'
+          AND EXISTS(SELECT 1 FROM poll_retirement_batches WHERE operation_ulid=?3 AND owner_epoch=?4)",params![p.request,p.request_attempt,p.operation,p.epoch],|r|r.get(0)).optional().map_err(|_|recovery_required())?.ok_or_else(recovery_required)?;
         recovery::require_no_pending_local(tx, id)?;
         let other:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND operation_ulid!=?2 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))",params![id,p.operation],|r|r.get(0)).map_err(|_|recovery_required())?;
         if other || record.index_pending || record.reconciliation_required {
             return Err(recovery_required());
         }
-        super::record::audit_connection(tx)
+        super::record::audit_connection(tx)?;
+        Ok(cancelled)
     }
     pub(in super::super) fn capture(
         &self,

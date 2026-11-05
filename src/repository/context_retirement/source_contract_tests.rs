@@ -1,6 +1,8 @@
 //! INERT canonical A0/A1 projection fixtures, NOT Task 4 producer/migration or
 //! coordinator evidence. No worklist/eligibility/child permission exists here.
 use super::*;
+#[path = "source_cancel_tests.rs"]
+mod cancellation;
 use crate::repository::remote::reservation::RemotePollReservationOutcome;
 use crate::repository::{
     context_retirement::record,

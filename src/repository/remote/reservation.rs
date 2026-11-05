@@ -282,8 +282,28 @@ pub(in super::super) fn owned(
     Ok(record)
 }
 
-// Only verifies the immutable reservation token. The sole additional caller is
-// the private source sealer, which applies the complete A0 predicate itself.
+/// Only STOP-aware entry points use this path. It preserves full source ownership
+/// validation, but routes CURRENT-F2 cancellation into normal acknowledgement.
+/// All other owned mutations remain continuation-strict; ordinary owners retain
+/// their existing predicates and request handling unchanged.
+fn owned_for_acknowledgement(
+    service: &RepositoryService,
+    tx: &Transaction<'_>,
+    repository_id: i64,
+    owner: &RemoteReservation,
+) -> Result<state::StoredRemoteOperation, RepositoryError> {
+    if let Some(source) = &owner.original_source {
+        let mut record = owned_record(service, tx, repository_id, owner)?;
+        record.cancel_requested |=
+            source.validate_ownership(service, tx, repository_id, &record)?;
+        Ok(record)
+    } else {
+        owned(service, tx, repository_id, owner)
+    }
+}
+
+// Only verifies the immutable reservation token. Source sealing and the STOP
+// adapter independently apply the complete A0 ownership predicate afterward.
 fn owned_record(
     service: &RepositoryService,
     tx: &Transaction<'_>,
@@ -739,7 +759,7 @@ pub(super) fn commit_observation_batch_with_capture<T>(
     capture: impl FnOnce(&Transaction<'_>, i64, RemoteSafePointOutcome) -> Result<T, RepositoryError>,
 ) -> Result<T, RepositoryError> {
     state::with_transaction(service, root, |tx, id| {
-        let record = owned(service, tx, id, owner)?;
+        let record = owned_for_acknowledgement(service, tx, id, owner)?;
         let synchronization = is_sync(&record.target);
         if synchronization {
             if record.authority.is_some()
@@ -1411,7 +1431,7 @@ impl RepositoryService {
         ) -> Result<T, RepositoryError>,
     ) -> Result<T, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
-            let record = owned(self, tx, id, owner)?;
+            let record = owned_for_acknowledgement(self, tx, id, owner)?;
             if is_sync(&record.target) {
                 if let Some(attempt) = state::latest_publication_attempt(tx, &record)? {
                     // The legacy push checkpoint is frozen behind this attempt
@@ -1620,7 +1640,7 @@ impl RepositoryService {
         ) -> Result<T, RepositoryError>,
     ) -> Result<T, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
-            let record = owned(self, tx, id, owner)?;
+            let record = owned_for_acknowledgement(self, tx, id, owner)?;
             let point = record.completed_step.ok_or_else(state::recovery_required)?;
             // Unbound A1 is not A2 manifest/finalization authority.
             if owner.original_source.is_some() && category == RemoteOutcomeCategory::Completed {
