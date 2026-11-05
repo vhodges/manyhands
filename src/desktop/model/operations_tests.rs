@@ -428,10 +428,10 @@ fn pending_operations_load_per_repository_and_drop_stale_reads() {
 
 /// Resume is offered for a local operation waiting to be resumed, and
 /// for a remote item or repository synchronization (E-10, decision 11);
-/// a local-context synchronization waiting for it shows Resume
-/// unavailable, with why (D5). No local recipe leaves a pending
-/// synchronization waiting to be resumed, so the rows are built here;
-/// production code never builds one.
+/// a local-context synchronization waiting for it offers Resume too (D5
+/// B6, E-5). No local recipe leaves a pending synchronization waiting to
+/// be resumed, so the rows are built here; production code never builds
+/// one.
 #[test]
 fn resume_is_offered_for_a_local_operation_and_not_for_a_synchronization() {
     let local = operation(
@@ -460,10 +460,7 @@ fn resume_is_offered_for_a_local_operation_and_not_for_a_synchronization() {
         OperationAction::SynchronizeContext,
         Some(OperationNextAction::Resume),
     );
-    assert_eq!(
-        resume_offer(&synchronization),
-        ResumeOffer::Unavailable(SYNCHRONIZATION_UNAVAILABLE)
-    );
+    assert_eq!(resume_offer(&synchronization), ResumeOffer::Offered);
     assert_eq!(
         SYNCHRONIZATION_UNAVAILABLE,
         "Synchronization is not available yet"
@@ -515,11 +512,11 @@ fn a_comments_rows_offer_resume_only_for_its_local_work() {
     assert_eq!(resume_offer(&unnamed), ResumeOffer::NotOffered);
 }
 
-/// A synchronization of an item's context with no remote stays
-/// unavailable for Resume (D5), and so does one of the primary branch
-/// with no remote; neither is offered Abandon.
+/// A synchronization of an item's context with no remote offers Resume
+/// (D5 B6, E-5), and so does one of the primary branch with no remote;
+/// neither is offered Abandon.
 #[test]
-fn resume_is_not_offered_for_a_local_context_sync() {
+fn resume_is_offered_for_a_local_context_sync() {
     for action in [
         OperationAction::SynchronizeContext,
         OperationAction::SynchronizePrimary,
@@ -529,10 +526,7 @@ fn resume_is_not_offered_for_a_local_context_sync() {
             action,
             Some(OperationNextAction::Resume),
         );
-        assert_eq!(
-            resume_offer(&local),
-            ResumeOffer::Unavailable(SYNCHRONIZATION_UNAVAILABLE)
-        );
+        assert_eq!(resume_offer(&local), ResumeOffer::Offered);
         assert!(!abandon_offered(&local));
     }
 }

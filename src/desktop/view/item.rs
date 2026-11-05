@@ -37,7 +37,8 @@
 //! confirmation dialog; a repair made, the tab follows the item by its ID.
 //!
 //! D4's slots: `share` the header's Share, `composer` the discussion's
-//! comment composers and `posting` the comments being posted.
+//! comment composers and `posting` the comments being posted. D5's
+//! `review` is the conflict banner's Review changes.
 
 mod banners;
 mod chips;
@@ -55,6 +56,7 @@ mod posting;
 mod reads;
 mod relations_edit;
 mod repair;
+mod review;
 mod share;
 mod sheet;
 mod source;
@@ -188,6 +190,9 @@ pub(crate) struct ItemPane {
     link_focus: FocusHandle,
     /// The header's lifecycle action, where its dialog gives focus back.
     lifecycle_focus: FocusHandle,
+    /// The conflict banner's Review changes, where its sheet gives focus
+    /// back (`review`).
+    review_focus: FocusHandle,
     /// The details sheet's own scroll, where its focused controls are
     /// revealed.
     pub(super) sheet_scroll: ContentScroll,
@@ -302,6 +307,7 @@ impl ItemPane {
             sheet_focus: sheet::sheet_focus(cx),
             link_focus: cx.focus_handle(),
             lifecycle_focus: cx.focus_handle(),
+            review_focus: cx.focus_handle(),
             fields: sheet::SheetFields::default(),
             relations,
             sheet_scroll: scroll.region(),

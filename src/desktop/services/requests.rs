@@ -294,7 +294,6 @@ pub(crate) enum Intent {
     },
     /// Repair locally… (D5 B6): main brought into the item's work context,
     /// from the observation `observe_local_context_sync` gave.
-    #[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
     LocalContextSync {
         root: PathBuf,
         kind: AuthoringKind,

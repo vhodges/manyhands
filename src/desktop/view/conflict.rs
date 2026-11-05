@@ -35,9 +35,12 @@
 //! A resolution is never given up (R-24): the sheet offers no Give up.
 //! The sheet holds item text, and derives no `Debug`.
 
+mod entry;
 mod external;
 mod render;
 mod submit;
+
+pub(crate) use entry::Entry;
 
 use std::path::PathBuf;
 
@@ -65,6 +68,9 @@ use crate::desktop::{
 };
 
 pub(crate) const SAVE_RESOLUTION: &str = "Save resolution";
+/// The sheet's entry points (B5): the conflict banner's, the operation
+/// area's and a pending row's.
+pub(crate) const REVIEW_CHANGES: &str = "Review changes";
 pub(crate) const RETRY: &str = "Retry";
 pub(crate) const RESUME: &str = "Resume";
 pub(crate) const CANCEL: &str = "Cancel";
@@ -115,7 +121,6 @@ pub(crate) const LOST: &str = "This resolution was partly saved, and the choices
 /// Where the conflict stopped: what the sheet says Saving does, and what
 /// follows an applied resolution.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[cfg_attr(not(test), allow(dead_code))] // Constructed from Task 13.
 pub(crate) enum SheetSource {
     /// A share's synchronization.
     Share,
@@ -161,15 +166,15 @@ pub(crate) struct Opening {
     /// reopened lifecycle dialog shows (review M-2).
     pub heading: Heading,
     /// The item's work folder, where a set that goes outside is repaired:
-    /// Open folder opens it (B4), or the repository's when it is not
-    /// known.
+    /// Open folder opens it (B4). With none named, the sheet reads the
+    /// item's (Task 13), and opens the repository's until that read lands
+    /// or when it finds none.
     pub folder: Option<PathBuf>,
     /// Where focus goes back when the sheet closes.
     pub origin: FocusHandle,
 }
 
 /// Opens the sheet. `None` while quitting.
-#[cfg_attr(not(test), allow(dead_code))] // Called from Task 13.
 pub(crate) fn open(
     opening: Opening,
     services: &Services,
@@ -221,6 +226,8 @@ pub(crate) struct ResolveSheet {
     heading: Heading,
     /// The folder Open folder opens (B4).
     folder: PathBuf,
+    /// The read of the item's work folder, when the opening named none.
+    folder_read: Option<Task<()>>,
     origin: FocusHandle,
     services: Services,
     generations: Generations,
@@ -268,6 +275,7 @@ impl ResolveSheet {
                     this.operations_changed(window, cx)
                 }),
             ];
+        let named = opening.folder.is_some();
         let folder = opening.folder.unwrap_or_else(|| opening.root.clone());
         let mut sheet = Self {
             source: opening.source,
@@ -276,6 +284,7 @@ impl ResolveSheet {
             item: opening.item,
             heading: opening.heading,
             folder,
+            folder_read: None,
             origin: opening.origin,
             services,
             generations: Generations::default(),
@@ -301,8 +310,30 @@ impl ResolveSheet {
         if let Err(error) = sheet.services.resolutions() {
             sheet.error = Some(error.to_string());
         }
+        if !named {
+            sheet.read_folder(cx);
+        }
         sheet.read_conflict(cx);
         sheet
+    }
+
+    /// Reads the item's work folder, for Open folder (B4): an entry point
+    /// that does not know it still opens the sheet on the item's work
+    /// context, never the repository's while the item has one.
+    fn read_folder(&mut self, cx: &mut Context<Self>) {
+        let stamp = Generations::default().next(ViewScope::Conflict);
+        self.folder_read = Some(self.services.read_item_folder(
+            self.root.clone(),
+            self.item.clone(),
+            stamp,
+            cx,
+            |sheet, _, result, cx| {
+                if let ReadResult::Ok(Some(folder)) = result {
+                    sheet.folder = folder;
+                    cx.notify();
+                }
+            },
+        ));
     }
 
     /// Reads the conflict, stamped (B1).
@@ -437,6 +468,19 @@ impl ResolveSheet {
             .map(|editors| editors.result.clone())
     }
 
+    pub(crate) fn source(&self) -> SheetSource {
+        self.source
+    }
+
+    pub(crate) fn operation(&self) -> OperationId {
+        self.operation_id
+    }
+
+    /// The folder Open folder opens.
+    pub(crate) fn folder(&self) -> &std::path::Path {
+        &self.folder
+    }
+
     /// The observation of the conflict as last read.
     pub(crate) fn observation(&self) -> Option<String> {
         self.model
@@ -477,3 +521,11 @@ mod followup_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "conflict/external_tests.rs"]
 mod external_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "conflict/entry_tests.rs"]
+mod entry_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "conflict/repair_tests.rs"]
+mod repair_tests;

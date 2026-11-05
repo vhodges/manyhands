@@ -14,9 +14,11 @@
 //!   a new request, where the library deleted the request (P18) or its
 //!   stored answer stands before main; Open repository details; Open
 //!   folder for a dirty main (P19); and D4's credential recovery: Unlock…,
-//!   Open Sharing & keys, Check host. The rest of L1 is guidance, its
-//!   buttons being later tasks'. Retry, Resume and Unlock… wait while the
-//!   item's lifecycle is in flight, which the dialog then says (P22).
+//!   Open Sharing & keys, Check host; and Repair locally… and Resolve
+//!   conflict… beside their guidance (`repair.rs`). The rest of L1 is
+//!   guidance, its buttons being later tasks'. Retry, Resume and Unlock…
+//!   wait while the item's lifecycle is in flight, which the dialog then
+//!   says (P22).
 //!   Enter retries a failed or stopped run, and closes a done one.
 //! - **Made ready.** Below the outcome lines of a closure that reached
 //!   main, `made_ready.rs`'s part, and its Open ready tickets.
@@ -53,7 +55,7 @@ use crate::desktop::{
 };
 
 impl LifecycleDialog {
-    fn item_word(&self) -> &'static str {
+    pub(super) fn item_word(&self) -> &'static str {
         match self.heading.kind {
             ItemDtoKind::Ticket => "ticket",
             ItemDtoKind::Document => "document",
@@ -268,7 +270,7 @@ impl LifecycleDialog {
         offers: &Offers,
         cx: &Context<Self>,
     ) -> Vec<AnyElement> {
-        let mut buttons = Vec::new();
+        let mut buttons = self.repair_buttons(&lifecycle_way_out(envelope), cx);
         if offers.retry && !offers.waiting {
             let retry = self.on(cx, |dialog, _, cx| dialog.resend(cx));
             buttons.push(button("lifecycle-retry", RETRY, true, retry));

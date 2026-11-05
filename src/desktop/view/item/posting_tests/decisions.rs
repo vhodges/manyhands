@@ -93,7 +93,8 @@ async fn a_reopened_tab_shows_an_unsaved_posts_failed_state(cx: &mut TestAppCont
 }
 
 /// The elements drawn inside the frame of the banner whose words are
-/// `words`, besides those words: none when it offers no action.
+/// `words`, besides those words and its Review changes (D5 B5, E-8): none
+/// when it offers no other action.
 fn banner_extras(
     shell: &crate::desktop::view::harness::Shell,
     words: &'static str,
@@ -101,12 +102,20 @@ fn banner_extras(
 ) -> usize {
     shell.frame(cx, |window, _| {
         let words = window.try_find(words).expect("the banner").path().to_vec();
+        let review = window
+            .try_find("item-review-changes")
+            .map(|review| review.path().to_vec());
         let frame = &words[..words.len() - 1];
         gpui_kit::base::test_support::snapshots(window)
             .iter()
             .filter(|element| {
                 let path = element.path();
-                path.starts_with(frame) && path != frame && path != words.as_slice()
+                path.starts_with(frame)
+                    && path != frame
+                    && path != words.as_slice()
+                    && !review
+                        .as_ref()
+                        .is_some_and(|review| path.starts_with(review))
             })
             .count()
     })
@@ -115,7 +124,7 @@ fn banner_extras(
 /// Decision 13 for a post (design, Posting, `SavedConflict`; contract 7,
 /// A10): a comment saved whose synchronization stopped on a conflict is
 /// listed with its chip, which offers nothing, and raises the item's
-/// conflict banner, which offers nothing either. Dismissing the post's
+/// conflict banner, which offers Review changes (D5 B5, E-8). Dismissing the post's
 /// entry ends the banner.
 #[gpui_kit::test]
 async fn a_post_stopped_on_a_conflict_raises_the_items_banner(cx: &mut TestAppContext) {
@@ -143,10 +152,15 @@ async fn a_post_stopped_on_a_conflict_raises_the_items_banner(cx: &mut TestAppCo
         shell.label("item-conflict", cx).as_deref(),
         Some(CONFLICT_BANNER)
     );
+    // D5 B5, E-8: the banner offers Review changes, and nothing else.
+    assert_eq!(
+        shell.label("item-review-changes", cx).as_deref(),
+        Some(crate::desktop::view::conflict::REVIEW_CHANGES)
+    );
     assert_eq!(
         banner_extras(&shell, "item-conflict", cx),
         0,
-        "the banner offers no action"
+        "the banner offers Review changes only"
     );
     assert_eq!(shell.label(chip(&comment), cx).as_deref(), Some(CHIP));
     for control in [

@@ -15,8 +15,9 @@
 //! review, a hand-off owed, a pending checkpoint, the change banner under
 //! the review and a refusal; a kept session raises the kept draft and the
 //! change banner, and a session a discard elsewhere ended says so (`edit`).
-//! A share of the item that stopped on a conflict raises the conflict
-//! banner, which says the work is safe and offers nothing (decision 13).
+//! A share or post of the item that stopped on a conflict raises the
+//! conflict banner, which says the work is safe and offers Review changes
+//! (decision 13; D5 B5, `review`).
 //! The other rows of the design's table are named here for the tasks that
 //! raise them.
 //!
@@ -96,8 +97,8 @@ pub(crate) enum Banner {
     Changed,
     /// A base the save left unverified, with Review… (R-36).
     ReviewBeforeSaving,
-    /// The item's share stopped on a conflict: its work is safe, and it
-    /// offers no action until D5 (decision 13).
+    /// The item's share or post stopped on a conflict: its work is safe,
+    /// and it offers Review changes (decision 13; D5 B5).
     Conflict,
     /// Another refusal, in the library's message.
     Refused,
@@ -221,7 +222,13 @@ impl ItemPane {
             .is_some_and(|outcome| outcome.conflict)
             || self.post_conflict(cx)
         {
-            let conflict = text("item-conflict", CONFLICT_BANNER).into_any_element();
+            let conflict = h_flex()
+                .flex_wrap()
+                .gap_2()
+                .items_center()
+                .child(text("item-conflict", CONFLICT_BANNER))
+                .children(self.review_button(cx))
+                .into_any_element();
             banners.push((Banner::Conflict, conflict));
         }
         banners.extend(self.edit_banners(cx));

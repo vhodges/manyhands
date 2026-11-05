@@ -423,8 +423,9 @@ pub(crate) fn cleanup_reason(reason: Option<LifecycleCleanupPendingReason>) -> &
 
 /// A way out of an execute result in words, for one with no button here;
 /// `None` for one the dialog offers as a button (Retry, Resume, Continue,
-/// Share main). Repair locally… and Resolve conflict… are Task 13's
-/// buttons, Republish… and Stop and republish… Task 14's.
+/// Share main). Repair locally… and Resolve conflict… are buttons beside
+/// their words (`repair.rs`); Republish… and Stop and republish… are Task
+/// 14's.
 pub(crate) fn guidance(way_out: &LifecycleWayOut, item: &'static str) -> Option<String> {
     Some(match way_out {
         LifecycleWayOut::RepairLocally { .. } => {

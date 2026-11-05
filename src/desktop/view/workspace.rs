@@ -38,7 +38,7 @@ use crate::desktop::{
     model::{
         documents::Documents, find::Find, navigation::Navigation, stamp::RepoKey, tickets::Tickets,
     },
-    services::Services,
+    services::{Services, conflicts::PendingConflict},
 };
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use focus::REGIONS;
@@ -115,6 +115,9 @@ pub(crate) struct Workspace {
     /// Launch refreshes are submitted once, after the first repository list.
     launched: bool,
     pending_reads: HashMap<RepoKey, Task<()>>,
+    /// Each repository's pending rows whose conflict waits to be resolved,
+    /// as its last read of them found (D5 B5).
+    pending_conflicts: HashMap<RepoKey, Vec<PendingConflict>>,
     abandon_focus: HashMap<(RepoKey, String), FocusHandle>,
     abandon_drawn: HashSet<(RepoKey, String)>,
     control_focus: HashMap<String, FocusHandle>,
@@ -259,6 +262,7 @@ impl Workspace {
             prompts_held: false,
             launched: false,
             pending_reads: HashMap::new(),
+            pending_conflicts: HashMap::new(),
             abandon_focus: HashMap::new(),
             abandon_drawn: HashSet::new(),
             control_focus: HashMap::new(),
@@ -284,6 +288,18 @@ impl Workspace {
     }
     pub(crate) fn navigation(&self) -> &Navigation {
         &self.navigation
+    }
+    /// The pending row `operation_id` of `root`, when its conflict waits
+    /// to be resolved (D5 B5).
+    pub(in crate::desktop::view) fn pending_conflict(
+        &self,
+        root: &str,
+        operation_id: &str,
+    ) -> Option<&PendingConflict> {
+        self.pending_conflicts
+            .get(root)?
+            .iter()
+            .find(|conflict| conflict.operation_id.to_string() == operation_id)
     }
     pub(crate) fn documents(&self) -> &Documents {
         &self.documents

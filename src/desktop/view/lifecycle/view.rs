@@ -230,6 +230,6 @@ impl Render for LifecycleDialog {
                 buttons = buttons.children(actions).child(self.cancel(CLOSE));
             }
         }
-        body.child(buttons)
+        body.children(self.repair_line(cx)).child(buttons)
     }
 }

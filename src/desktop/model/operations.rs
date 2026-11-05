@@ -30,6 +30,7 @@ use manyhands::{
 };
 
 mod outcomes;
+mod review;
 
 #[cfg(test)]
 pub(crate) use outcomes::{
@@ -52,7 +53,8 @@ use crate::desktop::services::{
     worker::{RecordState, WorkerEvent},
 };
 
-/// Why a local-context synchronization's Resume is unavailable (D5).
+/// Why Resume is unavailable for a pending synchronization that no
+/// `operation resume` here takes up (D5).
 pub(crate) const SYNCHRONIZATION_UNAVAILABLE: &str = "Synchronization is not available yet";
 /// Why a recovery action that names nothing this session can act on is
 /// unavailable.
@@ -135,6 +137,9 @@ pub(crate) struct Operations {
     lifecycles: HashMap<DesktopRequestId, Envelope<MutationDataDto>>,
     /// The lifecycle lock's own state (D5 A2; R-21, R-22).
     locks: LifecycleLocks,
+    /// The operation each finished request's last answer stopped on with a
+    /// conflict, whose sheet its entry offers (D5 B5, `review`).
+    reviews: HashMap<DesktopRequestId, OperationId>,
 }
 
 /// What finished requests may have changed since the views last read.
@@ -200,6 +205,7 @@ impl Operations {
                 self.stopping.remove(&request.id);
                 self.shares.remove(&request.id);
                 self.lifecycles.remove(&request.id);
+                self.reviews.remove(&request.id);
                 self.sends += 1;
                 self.sent.insert(request.id, self.sends);
                 self.answers.entry(request.id).or_default().queued();
@@ -230,6 +236,10 @@ impl Operations {
             WorkerEvent::Finished(id, envelope) => {
                 let envelope = *envelope;
                 self.stopping.remove(&id);
+                match review::conflict_of(&envelope) {
+                    Some(operation) => self.reviews.insert(id, operation),
+                    None => self.reviews.remove(&id),
+                };
                 if self
                     .request(id)
                     .is_some_and(|request| ShareTarget::of(&request.intent).is_some())
@@ -400,6 +410,12 @@ impl Operations {
                 after_give_up,
             },
         ))
+    }
+
+    /// The operation whose conflict the finished request `id` last stopped
+    /// on, which Review changes opens the sheet on (D5 B5).
+    pub(crate) fn review(&self, id: DesktopRequestId) -> Option<OperationId> {
+        self.reviews.get(&id).copied()
     }
 
     /// The last answer of the lifecycle `id`: a promotion's or a closure's,
@@ -986,6 +1002,17 @@ fn takes_up_remote_work(operation: &OperationDto) -> bool {
         )
 }
 
+/// Whether a pending row is a synchronization with no remote to publish
+/// to: the library lists it as a local operation of the remote name
+/// (`OperationDto::action`).
+fn local_synchronization(operation: &OperationDto) -> bool {
+    operation.family == OperationFamily::Local
+        && matches!(
+            operation.action,
+            OperationAction::SynchronizeContext | OperationAction::SynchronizePrimary
+        )
+}
+
 /// What a pending row offers for Resume.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ResumeOffer {
@@ -997,13 +1024,14 @@ pub(crate) enum ResumeOffer {
 }
 
 /// Resume is offered when the row waits to be resumed and is a local
-/// command (a comment's incomplete `submit_comment` among them) or a
-/// remote item or repository synchronization, by its operation ID
-/// (decision 11); a local-context synchronization shows it unavailable
-/// (D5). The library lists no comment publication waiting to be resumed
-/// (`takes_up_remote_work`), so none is offered. A promotion's or
-/// closure's parent (L2) is no synchronization: it is not offered until
-/// Part C sends its resume (D5 design, A1).
+/// command (a comment's incomplete `submit_comment` and a `context
+/// sync-local` among them), a remote item or repository synchronization,
+/// or a local-context or primary synchronization with no remote (D5 B6,
+/// E-5), by its operation ID (decision 11). Any other synchronization
+/// shows it unavailable. The library lists no comment publication waiting
+/// to be resumed (`takes_up_remote_work`), so none is offered. A
+/// promotion's or closure's parent (L2) is no synchronization: it is not
+/// offered until Part C sends its resume (D5 design, A1).
 pub(crate) fn resume_offer(operation: &OperationDto) -> ResumeOffer {
     if operation.next_action != Some(OperationNextAction::Resume) {
         return ResumeOffer::NotOffered;
@@ -1011,7 +1039,7 @@ pub(crate) fn resume_offer(operation: &OperationDto) -> ResumeOffer {
     if is_lifecycle(operation) {
         return ResumeOffer::NotOffered;
     }
-    if takes_up_remote_work(operation) {
+    if takes_up_remote_work(operation) || local_synchronization(operation) {
         return match operation.operation_id {
             Some(_) => ResumeOffer::Offered,
             None => ResumeOffer::NotOffered,

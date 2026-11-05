@@ -39,9 +39,9 @@ pub(crate) const NOWHERE_TO_SHARE: &str = "This repository has nowhere to share 
 pub(crate) const BRANCH_DELETED: &str = "The shared copy of this item was deleted. \
      Republishing it arrives in a later release.";
 /// The item banner of a share or post stopped on a conflict (decision 13):
-/// it offers no action.
+/// it offers Review changes (D5 B5, E-7).
 pub(crate) const CONFLICT_BANNER: &str = "You and someone else both changed this since it \
-     was last shared. Your work is safe. Resolving it in Manyhands arrives in a later release.";
+     was last shared. Your work is safe.";
 
 /// "Check {host} before sharing".
 pub(crate) fn check_host_text(authority: Option<&SshAuthority>) -> String {

@@ -7,7 +7,8 @@ use crate::desktop::{
         stamp::{RepoKey, SettingsPage},
     },
     services::{
-        ReadKind,
+        ReadKind, ReadResult,
+        conflicts::pending_conflicts,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
         worker::CancelResult,
     },
@@ -50,20 +51,35 @@ impl Workspace {
             .operations()
             .update(cx, |operations, _| operations.load_pending(root.clone()));
         let path = PathBuf::from(&root);
+        let read_root = root.clone();
         let read = self.services.read(
             ReadKind::Operations,
             stamp,
             move |service| {
                 let repo = service.resolve_repository(&path)?;
-                service.list_operations(&repo)
+                let list = service.list_operations(&repo)?;
+                // Which rows hold a conflict to review (D5 B5).
+                let conflicts = pending_conflicts(service, &repo, &list);
+                Ok((list, conflicts))
             },
             cx,
-            |this: &mut Self, stamp, result, cx| {
-                this.services.operations().update(cx, |operations, cx| {
-                    if operations.apply_pending(stamp, result) {
+            move |this: &mut Self, stamp, result, cx| {
+                let (result, conflicts) = match result {
+                    ReadResult::Ok((list, conflicts)) => (ReadResult::Ok(list), conflicts),
+                    ReadResult::Busy => (ReadResult::Busy, Vec::new()),
+                    ReadResult::Failed(failure) => (ReadResult::Failed(failure), Vec::new()),
+                };
+                let applied = this.services.operations().update(cx, |operations, cx| {
+                    let applied = operations.apply_pending(stamp, result);
+                    if applied {
                         cx.notify();
                     }
+                    applied
                 });
+                if applied {
+                    this.pending_conflicts.insert(read_root, conflicts);
+                    cx.notify();
+                }
             },
         );
         self.pending_reads.insert(root, read);

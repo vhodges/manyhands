@@ -55,6 +55,7 @@ mod outcome;
 
 pub(crate) use outcome::{cleanup_reason, item_of, progress_words};
 mod prepare;
+mod repair;
 mod running;
 mod view;
 
@@ -92,6 +93,10 @@ pub(crate) const CONTINUE: &str = "Continue";
 pub(crate) const RESUME: &str = "Resume";
 pub(crate) const OPEN_FOLDER: &str = "Open folder";
 pub(crate) const SHARE_MAIN: &str = "Share main";
+/// L1's `RepairLocally` (B6).
+pub(crate) const REPAIR_LOCALLY: &str = "Repair locally\u{2026}";
+/// L1's `ResolveChildConflict` (B5).
+pub(crate) const RESOLVE_CONFLICT: &str = "Resolve conflict\u{2026}";
 /// Continue and Resume wait while the item's lifecycle runs (P22).
 pub(crate) const STILL_RUNNING: &str = "Still running\u{2026}";
 /// A run is sent: it goes on with the dialog hidden.
@@ -336,6 +341,8 @@ pub(crate) struct LifecycleDialog {
     stop_pressed: bool,
     /// The titles of the tickets the shown run made ready (A3).
     titles: made_ready::Titles,
+    /// Repair locally… since the dialog last moved on (B6).
+    repair: repair::Repair,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -389,6 +396,7 @@ impl LifecycleDialog {
             reached: None,
             stop_pressed: false,
             titles: made_ready::Titles::default(),
+            repair: repair::Repair::default(),
             _subscriptions: subscriptions,
         };
         // The dialog locks its item until it is dropped, in every phase
@@ -421,6 +429,7 @@ impl LifecycleDialog {
     /// the item now: in every phase before its run is sent (R-21).
     fn set_phase(&mut self, phase: Phase, cx: &mut Context<Self>) {
         self.phase = phase;
+        self.repair = repair::Repair::default();
         self.sync_lock(cx);
     }
 

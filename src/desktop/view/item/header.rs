@@ -87,7 +87,7 @@ enum LifecycleTarget {
 }
 
 /// The repository's name, as the tab strip names it: its folder.
-fn repository_name(repo: &str) -> String {
+pub(super) fn repository_name(repo: &str) -> String {
     Path::new(repo)
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())

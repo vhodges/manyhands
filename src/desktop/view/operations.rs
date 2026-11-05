@@ -27,13 +27,16 @@
 //!
 //! **Pending in repositories** lists the operations each listed
 //! repository reports with work outstanding: command, scope, operation ID
-//! and what it waits for. A local operation, or a remote item or
-//! repository synchronization, waiting to be resumed offers Resume
-//! (decision 11); a local-context synchronization shows Resume
-//! unavailable (D5). The library lists a comment's publication with
-//! nothing to resume, and its `submit_comment` row only while its local
-//! work waits, so no publication is offered Resume. A pending local
-//! operation offers Abandon, which is confirmed.
+//! and what it waits for. A local operation, a remote item or repository
+//! synchronization, or a local-context synchronization (D5 B6, E-5),
+//! waiting to be resumed offers Resume (decision 11). The library lists a
+//! comment's publication with nothing to resume, and its `submit_comment`
+//! row only while its local work waits, so no publication is offered
+//! Resume. A pending local operation offers Abandon, which is confirmed.
+//!
+//! An entry whose answer stopped on a conflict, and a pending row whose
+//! conflict waits to be resolved, offer Review changes, which opens the
+//! resolve conflict sheet on it (D5 B5, `review`).
 //!
 //! Every recovery action an envelope offers is a control: the ones D1
 //! offers run, the rest are text, unavailable. So is the Retry of a context
@@ -59,6 +62,7 @@ use manyhands::{
 
 mod outcomes;
 mod recovered;
+mod review;
 
 use outcomes::{ALREADY_FINISHED, already_finished};
 pub(crate) use outcomes::{share_result, share_words};
@@ -279,14 +283,7 @@ impl Workspace {
             .intent
             .root()
             .and_then(|root| root.to_str())
-            .and_then(|root| self.navigation().entry(root))
-            .map(|entry| {
-                let configuration = &entry.summary.configuration;
-                (
-                    configuration.primary_branch.clone(),
-                    Some(configuration.publication_remote.clone()),
-                )
-            })
+            .map(|root| self.known(root))
             .unwrap_or_default();
         let origin = self.control_focus_for(request_id(id, "open"), cx);
         let services = self.services().clone();
@@ -400,6 +397,8 @@ impl Workspace {
                         }),
                     ));
                 }
+                // A conflict it stopped on: its sheet (D5 B5).
+                controls = controls.children(self.review_control(id, cx));
                 // A share's outcome offers its own controls in place of
                 // the envelope's recovery actions.
                 if let Some(result) = self.finished_share(id, cx) {
@@ -763,6 +762,12 @@ impl Workspace {
                     }
                     ResumeOffer::NotOffered => {}
                 }
+                controls = controls.children(self.pending_review(
+                    &root,
+                    operation_id.as_deref(),
+                    index,
+                    cx,
+                ));
                 if abandon_offered(&operation)
                     && let Some(operation_id) = operation_id.clone()
                 {

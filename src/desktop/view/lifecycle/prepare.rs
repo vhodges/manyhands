@@ -81,7 +81,7 @@ pub(super) fn guidance(way_out: &LifecycleWayOut, item: &'static str) -> Option<
         LifecycleWayOut::SaveItem { .. } => Some(format!(
             "Edit and save this {item} once to give it a working copy, then prepare again."
         )),
-        // Task 13 makes Repair locally… a button.
+        // Repair locally… is a button too (`repair.rs`).
         LifecycleWayOut::RepairLocally { .. } => Some(format!(
             "Bring main into this {item}'s working copy, then prepare again."
         )),
@@ -340,8 +340,8 @@ impl LifecycleDialog {
     }
 
     /// A blocked prepare's rows: each blocker in words, then each way out
-    /// that is guidance, and its code; and its buttons: Open folder for a dirty main and
-    /// Share main when it is a way out.
+    /// that is guidance, and its code; and its buttons: Repair locally…,
+    /// Open folder for a dirty main and Share main when it is a way out.
     pub(super) fn blocked_body(
         &self,
         code: ResultCode,
@@ -376,7 +376,7 @@ impl LifecycleDialog {
                     .text_xs()
                     .text_color(muted),
             );
-        let mut actions = Vec::new();
+        let mut actions = self.repair_buttons(way_out, cx);
         if blockers.contains(&LifecycleBlocker::PrimaryDirty)
             && let Some(root) = self.root().map(|root| root.to_path_buf())
         {
