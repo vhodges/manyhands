@@ -33,6 +33,7 @@ use manyhands::{
 
 use crate::desktop::services::{
     Backend, DraftStoreUnavailable, JobKind, KeyStoreUnavailable, ReadGate, ReadKind,
+    resolutions::{ResolutionStore, ResolutionStoreError},
 };
 
 /// How many times a test can put another real service in place.
@@ -52,6 +53,9 @@ pub(crate) struct DelayingBackend {
     /// The real store over the fixture's data directory, or why it did
     /// not open.
     drafts: Result<DraftStore, DraftStoreUnavailable>,
+    /// The real resolutions store over the fixture's data directory, or
+    /// why it did not open; unavailable until `with_resolutions`.
+    resolutions: Result<ResolutionStore, ResolutionStoreError>,
     reads: Mutex<HashMap<ReadKind, VecDeque<ReadGate>>>,
     jobs: Mutex<HashMap<JobKind, VecDeque<Arc<Gate>>>>,
     /// Holds taken after a job's library call returns, each with the
@@ -85,6 +89,7 @@ impl DelayingBackend {
             replacements: Default::default(),
             home,
             drafts: drafts.map_err(DraftStoreUnavailable::from),
+            resolutions: Err(ResolutionStoreError::Unavailable),
             reads: Mutex::default(),
             jobs: Mutex::default(),
             returned: Mutex::default(),
@@ -94,6 +99,15 @@ impl DelayingBackend {
             prepares: Mutex::default(),
             conflicts: Mutex::default(),
         }
+    }
+
+    /// The same backend over the resolutions store's open result.
+    pub(crate) fn with_resolutions(
+        mut self,
+        resolutions: Result<ResolutionStore, ResolutionStoreError>,
+    ) -> Self {
+        self.resolutions = resolutions;
+        self
     }
 
     /// Holds the next read of `kind` at its gate until the returned sender
@@ -250,6 +264,10 @@ impl Backend for DelayingBackend {
 
     fn drafts(&self) -> Result<&DraftStore, DraftStoreUnavailable> {
         self.drafts.as_ref().map_err(|unavailable| *unavailable)
+    }
+
+    fn resolutions(&self) -> Result<&ResolutionStore, ResolutionStoreError> {
+        self.resolutions.as_ref().map_err(|error| *error)
     }
 
     fn read_gate(&self, kind: ReadKind) -> Option<ReadGate> {

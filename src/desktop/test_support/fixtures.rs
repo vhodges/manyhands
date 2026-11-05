@@ -32,6 +32,7 @@ use manyhands::{
 };
 
 use super::{delaying::DelayingBackend, git_home};
+use crate::desktop::services::resolutions::{ResolutionStore, ResolutionStoreError};
 
 /// The identity every fixture repository is created and committed as.
 pub(crate) fn identity() -> CommitIdentity {
@@ -61,6 +62,9 @@ pub(crate) struct Fixture {
     /// or test that asks, so a test can change `drafts/` before. Every
     /// backend and the test share it, and so its claims.
     drafts: OnceLock<Result<DraftStore, DraftError>>,
+    /// The kept resolution sets in the data directory, opened as the
+    /// draft store is.
+    resolutions: OnceLock<Result<ResolutionStore, ResolutionStoreError>>,
     data: tempfile::TempDir,
     home: tempfile::TempDir,
     repositories: tempfile::TempDir,
@@ -78,6 +82,7 @@ impl Fixture {
         Self {
             service,
             drafts: OnceLock::new(),
+            resolutions: OnceLock::new(),
             data,
             home,
             repositories,
@@ -88,15 +93,34 @@ impl Fixture {
         &self.service
     }
 
-    /// A delaying backend over this fixture's own service, draft store
-    /// and home: the desktop under test and the fixture see the same
-    /// service and store.
+    /// A delaying backend over this fixture's own service, draft store,
+    /// resolutions store and home: the desktop under test and the fixture
+    /// see the same service and stores.
     pub(crate) fn delaying_backend(&self) -> Arc<DelayingBackend> {
-        Arc::new(DelayingBackend::new(
-            self.service.clone(),
-            self.home().to_owned(),
-            self.drafts_opened(),
-        ))
+        Arc::new(
+            DelayingBackend::new(
+                self.service.clone(),
+                self.home().to_owned(),
+                self.drafts_opened(),
+            )
+            .with_resolutions(self.resolutions_opened()),
+        )
+    }
+
+    /// `ResolutionStore::open_in` of the data directory, the first time.
+    fn resolutions_opened(&self) -> Result<ResolutionStore, ResolutionStoreError> {
+        self.resolutions
+            .get_or_init(|| ResolutionStore::open_in(self.data.path()))
+            .clone()
+    }
+
+    /// The resolutions store the desktop under test shares. Panics if it
+    /// did not open.
+    pub(crate) fn resolution_store(&self) -> ResolutionStore {
+        match self.resolutions_opened() {
+            Ok(store) => store,
+            Err(error) => panic!("the fixture's resolutions store must open: {error}"),
+        }
     }
 
     /// `DraftStore::open_in` of the data directory, the first time.

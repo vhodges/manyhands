@@ -16,6 +16,7 @@ pub(crate) mod prompts;
 mod reads;
 pub(crate) mod release;
 pub(crate) mod requests;
+pub(crate) mod resolutions;
 pub(crate) mod submissions;
 pub(crate) mod worker;
 
@@ -41,6 +42,7 @@ use created_contexts::{ContextKey, CreatedContexts};
 use drafts::DraftRegistry;
 use edit_tabs::EditTabs;
 use release::Releases;
+use resolutions::{ResolutionStore, ResolutionStoreError};
 use submissions::Submissions;
 use worker::{WorkerEvent, WorkerHandle};
 
@@ -172,6 +174,11 @@ pub(crate) trait Backend: Send + Sync + 'static {
     /// open.
     fn drafts(&self) -> Result<&DraftStore, DraftStoreUnavailable>;
 
+    /// The kept resolution sets (D5 B3), in `resolutions` beside the
+    /// draft store's folder: the application data directory's in
+    /// production, the fixture's in tests; otherwise why it did not open.
+    fn resolutions(&self) -> Result<&ResolutionStore, ResolutionStoreError>;
+
     /// Awaited inside the read's future, before the blocking library call.
     fn read_gate(&self, _kind: ReadKind) -> Option<ReadGate> {
         None
@@ -213,15 +220,22 @@ pub(crate) trait Backend: Send + Sync + 'static {
 pub(crate) struct LibraryBackend {
     service: RepositoryService,
     drafts: Result<DraftStore, DraftStoreUnavailable>,
+    resolutions: Result<ResolutionStore, ResolutionStoreError>,
 }
 
 impl LibraryBackend {
-    /// A backend over `service` and the draft store's open result: the
-    /// desktop starts whether or not the store opened.
-    pub(crate) fn new(service: RepositoryService, drafts: Result<DraftStore, DraftError>) -> Self {
+    /// A backend over `service` and the open results of the draft store
+    /// and the resolutions store: the desktop starts whether or not they
+    /// opened.
+    pub(crate) fn new(
+        service: RepositoryService,
+        drafts: Result<DraftStore, DraftError>,
+        resolutions: Result<ResolutionStore, ResolutionStoreError>,
+    ) -> Self {
         Self {
             service,
             drafts: drafts.map_err(DraftStoreUnavailable::from),
+            resolutions,
         }
     }
 }
@@ -237,6 +251,10 @@ impl Backend for LibraryBackend {
 
     fn drafts(&self) -> Result<&DraftStore, DraftStoreUnavailable> {
         self.drafts.as_ref().map_err(|unavailable| *unavailable)
+    }
+
+    fn resolutions(&self) -> Result<&ResolutionStore, ResolutionStoreError> {
+        self.resolutions.as_ref().map_err(|error| *error)
     }
 }
 
@@ -295,8 +313,14 @@ impl Services {
     /// sent from anywhere, the operation area among them, so the post is
     /// posting again and the attempt is a re-send (P10). Each in the order
     /// the worker sent them.
+    ///
+    /// A resolution's end has its kept set deleted once `show_request`
+    /// says its request finished (R-12), and the launch sweep does the same
+    /// for every set kept from before (`resolutions`).
     pub(crate) fn start(backend: Arc<dyn Backend>, cx: &mut App) -> Self {
         let (worker, mut events) = WorkerHandle::spawn(backend.clone());
+        resolutions::sweep_at_launch(&backend, cx);
+        let settling = backend.clone();
         let operations = cx.new(|_| Operations::default());
         let model = operations.downgrade();
         let drafts = cx.new(|_| DraftRegistry::new(backend.clone(), worker.clone()));
@@ -317,6 +341,7 @@ impl Services {
                     let mut finished = Vec::new();
                     let mut prepared = Vec::new();
                     let mut posted = Vec::new();
+                    let mut settled = Vec::new();
                     for event in batch {
                         let ended = match &event {
                             WorkerEvent::Finished(id, _)
@@ -348,6 +373,14 @@ impl Services {
                             )
                         {
                             posted.push(PostEvent::ItemShared(root.clone(), item.clone()));
+                        }
+                        // A resolution's end: its kept set goes once its
+                        // request is finished (R-12).
+                        if let WorkerEvent::Finished(id, _) = &event
+                            && let Some(request) = operations.request(*id)
+                            && resolutions::submits_a_set(&request.intent)
+                        {
+                            settled.push(request.request_id);
                         }
                         // A comment queued again under its own request.
                         if let WorkerEvent::Queued(request) = &event
@@ -382,11 +415,14 @@ impl Services {
                         operations.apply(event);
                     }
                     cx.notify();
-                    (finished, prepared, posted)
+                    (finished, prepared, posted, settled)
                 });
-                let Ok((finished, prepared, posted)) = applied else {
+                let Ok((finished, prepared, posted, settled)) = applied else {
                     break;
                 };
+                if !settled.is_empty() {
+                    resolutions::settle_finished(&settling, settled, cx);
+                }
                 if !posted.is_empty() {
                     let retire = posts
                         .update(cx, |submissions, cx| {
