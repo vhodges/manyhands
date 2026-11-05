@@ -273,7 +273,7 @@ impl ContextCleanup {
             (self.precheck_context(kind, id, oid) != Precheck::Ok)
                 .then_some(WorktreeRelease::NotClean)
         };
-        match self.remove_worktree(kind, id, refusal) {
+        match self.remove_worktree(kind, id, refusal, || true) {
             WorktreeRelease::Removed => WorktreeRemoval::Removed,
             WorktreeRelease::AlreadyAbsent => WorktreeRemoval::AlreadyAbsent,
             WorktreeRelease::NotClean => WorktreeRemoval::Changed,
@@ -296,7 +296,28 @@ impl ContextCleanup {
             ReleaseCheck::NotClean => Some(WorktreeRelease::NotClean),
             ReleaseCheck::RecoveryRequired => Some(WorktreeRelease::RecoveryRequired),
         };
-        self.remove_worktree(kind, id, refusal)
+        self.remove_worktree(kind, id, refusal, || true)
+    }
+    /// Retirement adds a final instance check to the SAME deletion-only
+    /// primitive. Existing release/promotion prechecks and results are unchanged.
+    pub(super) fn remove_retirement_worktree(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+        instance: impl FnOnce() -> bool,
+    ) -> WorktreeRelease {
+        self.remove_worktree(
+            kind,
+            id,
+            || {
+                if self.precheck_context(kind, id, oid) != Precheck::Ok {
+                    return Some(WorktreeRelease::NotClean);
+                }
+                None
+            },
+            instance,
+        )
     }
     /// Prunes the context's worktree once `refusal`, the caller's
     /// precheck, finds nothing to refuse it for.
@@ -305,6 +326,7 @@ impl ContextCleanup {
         kind: AuthoringKind,
         id: &ItemId,
         refusal: impl FnOnce() -> Option<WorktreeRelease>,
+        authorize: impl FnOnce() -> bool,
     ) -> WorktreeRelease {
         let context = item_context(&self.root, kind, id.clone());
         match self.worktree_parts(kind, id) {
@@ -337,6 +359,9 @@ impl ContextCleanup {
         };
         let mut options = git2::WorktreePruneOptions::new();
         options.valid(true).working_tree(true).locked(false);
+        if !authorize() {
+            return WorktreeRelease::RecoveryRequired;
+        }
         if worktree.prune(Some(&mut options)).is_err() {
             return WorktreeRelease::Incomplete;
         }

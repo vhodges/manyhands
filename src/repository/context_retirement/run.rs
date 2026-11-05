@@ -1,7 +1,7 @@
-//! Fresh standalone branch-only execution. Present instances and explicit new
-//! executor recovery remain closed until their complete protocols are connected.
+//! Fresh standalone execution. Explicit new-executor recovery remains closed.
 use super::{
-    ContextRetirementOutcome, RetireContextRequest, RetirementRemoval, execution::*, proof, record,
+    ContextRetirementOutcome, RetireContextRequest, RetirementRemoval, execution::*, instance,
+    proof, record,
 };
 use crate::{
     canonical,
@@ -29,6 +29,8 @@ use std::path::Path;
 // boundary pattern as reservation tests. No runtime/public authority surface.
 #[cfg(test)]
 thread_local! {static INTENT_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);}
+#[cfg(test)]
+thread_local! {static WORKTREE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);}
 
 /// Only this uninterrupted call can prove the primitive was never invoked.
 /// Created after the durable intent and consumed BEFORE calling Git. Neither a
@@ -54,8 +56,32 @@ impl UninvokedBranch {
         Ok(())
     }
 }
+pub(super) struct UninvokedWorktree(UninvokedBranch);
+impl UninvokedWorktree {
+    pub(super) fn settle(
+        self,
+        tx: &Transaction<'_>,
+        operation: crate::repository::OperationId,
+        epoch: i64,
+    ) -> Result<(), RepositoryError> {
+        let witness = self.0;
+        if witness.operation != operation || witness.epoch != epoch {
+            return Err(recovery_required());
+        }
+        if tx.execute("UPDATE context_retirement_effect_intents SET observation='changed' WHERE operation_ulid=?1 AND owner_epoch=?2 AND resource='worktree' AND receipt_id=?3 AND primary_oid=?4 AND proof_kind=?5 AND observation IS NULL",params![operation.to_string(),epoch,witness.receipt,witness.primary.to_string(),proof_name(witness.proof)]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
+        Ok(())
+    }
+}
 
 impl RepositoryService {
+    #[cfg(test)]
+    #[allow(dead_code)] // Source-included SSH fault seam only.
+    pub(crate) fn set_retirement_worktree_hook_for_testing(hook: impl FnOnce() + 'static) {
+        WORKTREE_HOOK.with(|slot| {
+            assert!(slot.borrow().is_none());
+            *slot.borrow_mut() = Some(Box::new(hook));
+        });
+    }
     #[cfg(test)]
     #[allow(dead_code)] // Used by the source-included SSH target, not unit fixtures.
     pub(crate) fn set_retirement_intent_hook_for_testing(hook: impl FnOnce() + 'static) {
@@ -65,7 +91,7 @@ impl RepositoryService {
         });
     }
     /// Explicit authenticated standalone retirement. This increment accepts a
-    /// fresh branch-only lifetime, never a saved branch-only deletion permit.
+    /// fresh lifetime, never a saved branch-only or worktree-removal permit.
     pub fn retire_context_authenticated<P: SessionCredentialProvider>(
         &self,
         mut request: RetireContextRequest,
@@ -93,22 +119,56 @@ impl RepositoryService {
             return self.retire_context(request);
         }
         let lease = repository_lease(&git, &request.root, RepositoryOperation::RetireContext)?;
-        let tip = match branch_only(&git, &request) {
-            Ok(Some(tip)) => tip,
+        let selection_cleanup = ContextCleanup::holding(&request.root, lease)?;
+        let (tip, selection) = match branch_only(&git, &request) {
+            Ok(Some(tip)) => (tip, None),
             _ => {
-                drop(lease);
-                return self.retire_context(request);
+                if initial_inventory(&git, &request.root, &request)
+                    != Inventory::PresentOrBranchOnly
+                {
+                    drop(selection_cleanup);
+                    return self.retire_context(request);
+                }
+                match instance::Selection::capture(&git, &request, &selection_cleanup) {
+                    Ok(selection) => (selection.tip(), Some(selection)),
+                    Err(code) => {
+                        return record::refuse_fresh(self, &request, code)
+                            .map(ContextRetirementOutcome::Final);
+                    }
+                }
             }
         };
         let plan = observation_plan(&request.root).map_err(|_| recovery_required())?;
         let configuration = self.observation_configuration(&request.root, &plan)?;
-        let owner = match record::claim_branch(self, &request, tip, plan, configuration)? {
+        let claimed = if let Some(selection) = &selection {
+            record::claim_present(self, &request, selection, plan, configuration)
+        } else {
+            record::claim_branch(self, &request, tip, plan, configuration)
+        }?;
+        let owner = match claimed {
             record::BranchClaim::Refused(report) => {
                 return Ok(ContextRetirementOutcome::Final(report));
             }
             record::BranchClaim::Execute(owner) => owner,
         };
-        drop(lease);
+        let verified = match selection {
+            Some(selection) => {
+                match selection.install(self, &request, &owner, &selection_cleanup) {
+                    Ok(instance) => Some(instance),
+                    Err(_) => {
+                        return record::refuse_execution(
+                            self,
+                            &request.root,
+                            &owner,
+                            ResultCode::ExternalChange,
+                        )
+                        .map(ContextRetirementOutcome::Final);
+                    }
+                }
+            }
+            None => None,
+        };
+        drop(selection_cleanup);
         // No common Git lease or database guard spans authentication/advertising.
         let observed = observe(self, &request, &owner, approval, session);
         if let Err(code) = observed {
@@ -130,6 +190,22 @@ impl RepositoryService {
                 .map(ContextRetirementOutcome::Final);
             }
         };
+        let mut pruned = None;
+        let mut prior_proof = None;
+        if let Some(verified) = verified {
+            match prune_present(self, &request, &git, &owner, &cleanup, tip, verified)? {
+                PresentPrune::Removed(permit, primary, proof) => {
+                    pruned = Some(permit);
+                    prior_proof = Some((primary, proof));
+                }
+                PresentPrune::Stop(outcome) => return Ok(outcome),
+            }
+        }
+        let worktree = if pruned.is_some() {
+            RetirementRemoval::Observed
+        } else {
+            RetirementRemoval::None
+        };
         let prepared = state::with_transaction(self, &request.root, |tx, id| {
             let execution = owner.retirement_execution()?;
             let receipt = execution.receipt(self, tx, id, request.kind, &request.item_id)?;
@@ -138,16 +214,25 @@ impl RepositoryService {
             }
             let (primary, proof) =
                 local_proof(&git, &request, tip, execution.plan().primary_branch())?;
+            if prior_proof.is_some_and(|prior| prior != (primary, proof)) {
+                return Err(recovery_required());
+            }
             require_materialization(tx, execution.operation(), false)?;
-            if tx.execute("UPDATE context_retirement_records SET initial_primary_oid=?2 WHERE operation_ulid=?1 AND initial_primary_oid IS NULL AND phase='selected' AND owner_epoch=?3",params![request.operation_id.to_string(),primary.to_string(),execution.epoch()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
-            tx.execute("INSERT INTO context_retirement_effect_intents(operation_ulid,owner_epoch,resource,receipt_id,primary_oid,proof_kind) SELECT operation_ulid,owner_epoch,'branch',?2,?3,?4 FROM context_retirement_records WHERE operation_ulid=?1 AND phase='selected'",params![request.operation_id.to_string(),receipt,primary.to_string(),proof_name(proof)]).map_err(RepositoryError::sqlite)?;
-            if tx.execute("UPDATE context_retirement_records SET phase='branch_deleting',branch_removal='possible' WHERE operation_ulid=?1 AND phase='selected' AND owner_epoch=?2",params![request.operation_id.to_string(),execution.epoch()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
+            if pruned.is_none() && tx.execute("UPDATE context_retirement_records SET initial_primary_oid=?2 WHERE operation_ulid=?1 AND initial_primary_oid IS NULL AND phase='selected' AND owner_epoch=?3",params![request.operation_id.to_string(),primary.to_string(),execution.epoch()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
+            tx.execute("INSERT INTO context_retirement_effect_intents(operation_ulid,owner_epoch,resource,receipt_id,primary_oid,proof_kind) SELECT operation_ulid,owner_epoch,'branch',?2,?3,?4 FROM context_retirement_records WHERE operation_ulid=?1 AND phase IN ('selected','worktree_removed')",params![request.operation_id.to_string(),receipt,primary.to_string(),proof_name(proof)]).map_err(RepositoryError::sqlite)?;
+            if tx.execute("UPDATE context_retirement_records SET phase='branch_deleting',branch_removal='possible' WHERE operation_ulid=?1 AND phase IN ('selected','worktree_removed') AND owner_epoch=?2",params![request.operation_id.to_string(),execution.epoch()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
             record::audit_connection(tx)?;
             Ok((primary, proof, receipt))
         });
         let (primary, proof, receipt) = match prepared {
             Ok(value) => value,
             Err(_) => {
+                if pruned.is_some() {
+                    return Ok(ContextRetirementOutcome::CleanupPending {
+                        worktree_removal: worktree,
+                        branch_removal: RetirementRemoval::None,
+                    });
+                }
                 return record::refuse_execution(
                     self,
                     &request.root,
@@ -190,6 +275,7 @@ impl RepositoryService {
             // From this point even a SQL rollback cannot prove Git had no effect.
             // Discard the process-only no-effect witness before entering the primitive.
             let _ = uninvoked.take().ok_or_else(recovery_required)?;
+            let _ = pruned.take();
             let removal = cleanup.delete_context_branch(request.kind, &request.item_id, tip);
             let (observation, flag) = match removal {
                 BranchDeletion::Deleted => ("removed", "observed"),
@@ -200,7 +286,7 @@ impl RepositoryService {
             require_absent(&git, &request)?;
             require_materialization(tx, request.operation_id, true)?;
             if tx.execute("UPDATE context_retirement_records SET phase='index_pending',absence_basis='owned_intent',materialization_settled=1,branch_removal=?2 WHERE operation_ulid=?1 AND phase='branch_deleting' AND owner_epoch=?3 AND materialization_settled=0",params![request.operation_id.to_string(),flag,owner.retirement_execution()?.epoch()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
-            if tx.execute("UPDATE operation_records SET state='authoritative_observed',completed_step='context_branch_released' WHERE operation_ulid=?1 AND action='retire_context' AND state='created'",[request.operation_id.to_string()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
+            if tx.execute("UPDATE operation_records SET state='authoritative_observed',completed_step='context_branch_released' WHERE operation_ulid=?1 AND action='retire_context' AND state IN ('created','context_worktree_released')",[request.operation_id.to_string()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
             tx.execute(
                 "UPDATE repositories SET refresh_required=1 WHERE id=?1",
                 [id],
@@ -211,6 +297,18 @@ impl RepositoryService {
         drop(cleanup);
         if settled.is_err() {
             if let Some(uninvoked) = uninvoked {
+                if worktree == RetirementRemoval::Observed {
+                    let settled =
+                        record::settle_branch_after_prune(self, &request.root, &owner, uninvoked);
+                    return Ok(ContextRetirementOutcome::CleanupPending {
+                        worktree_removal: worktree,
+                        branch_removal: if settled.is_ok() {
+                            RetirementRemoval::None
+                        } else {
+                            RetirementRemoval::Possible
+                        },
+                    });
+                }
                 return record::refuse_before_branch_effect(
                     self,
                     &request.root,
@@ -221,13 +319,117 @@ impl RepositoryService {
                 .map(ContextRetirementOutcome::Final);
             }
             return Ok(ContextRetirementOutcome::CleanupPending {
-                worktree_removal: RetirementRemoval::None,
+                worktree_removal: worktree,
                 branch_removal: RetirementRemoval::Possible,
             });
         }
         // Existing I-only path owns its separate claimed index epoch/finalizer.
         self.retire_context(request)
     }
+}
+
+enum PresentPrune {
+    Removed(instance::Pruned, git2::Oid, proof::PreservationProof),
+    Stop(ContextRetirementOutcome),
+}
+fn prune_present(
+    service: &RepositoryService,
+    request: &RetireContextRequest,
+    git: &git2::Repository,
+    owner: &RemoteReservation,
+    cleanup: &ContextCleanup,
+    tip: git2::Oid,
+    verified: instance::Verified,
+) -> Result<PresentPrune, RepositoryError> {
+    let prepared = state::with_transaction(service, &request.root, |tx, id| {
+        let execution = owner.retirement_execution()?;
+        let receipt = execution.receipt(service, tx, id, request.kind, &request.item_id)?;
+        verified.verify(git, request, cleanup)?;
+        let (primary, proof) = local_proof(git, request, tip, execution.plan().primary_branch())?;
+        require_materialization(tx, request.operation_id, false)?;
+        if tx.execute("UPDATE context_retirement_records SET initial_primary_oid=?2,phase='worktree_removing',worktree_removal='possible' WHERE operation_ulid=?1 AND owner_epoch=?3 AND phase='selected' AND instance_verified=1",params![request.operation_id.to_string(),primary.to_string(),execution.epoch()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
+        tx.execute("INSERT INTO context_retirement_effect_intents(operation_ulid,owner_epoch,resource,receipt_id,primary_oid,proof_kind) SELECT operation_ulid,owner_epoch,'worktree',?2,?3,?4 FROM context_retirement_records WHERE operation_ulid=?1",params![request.operation_id.to_string(),receipt,primary.to_string(),proof_name(proof)]).map_err(RepositoryError::sqlite)?;
+        record::audit_connection(tx)?;
+        Ok((primary, proof, receipt))
+    });
+    let (primary, proof, receipt) = match prepared {
+        Ok(v) => v,
+        Err(_) => {
+            return record::refuse_execution(
+                service,
+                &request.root,
+                owner,
+                ResultCode::ExternalChange,
+            )
+            .map(|r| PresentPrune::Stop(ContextRetirementOutcome::Final(r)));
+        }
+    };
+    let mut uninvoked = Some(UninvokedWorktree(UninvokedBranch {
+        operation: request.operation_id,
+        epoch: owner.retirement_execution()?.epoch(),
+        receipt,
+        primary,
+        proof,
+    }));
+    #[cfg(test)]
+    WORKTREE_HOOK.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().take() {
+            hook();
+        }
+    });
+    let mut permit = None;
+    let settled = state::with_transaction(service, &request.root, |tx, id| {
+        owner
+            .retirement_execution()?
+            .receipt(service, tx, id, request.kind, &request.item_id)?;
+        verified.verify(git, request, cleanup)?;
+        if local_proof(
+            git,
+            request,
+            tip,
+            owner.retirement_execution()?.plan().primary_branch(),
+        )? != (primary, proof)
+        {
+            return Err(recovery_required());
+        }
+        require_materialization(tx, request.operation_id, false)?;
+        match verified.prune(git, request, cleanup) {
+            instance::Prune::Removed(pruned) => {
+                let _ = uninvoked.take();
+                permit = Some(pruned);
+            }
+            instance::Prune::NotInvoked => return Err(recovery_required()),
+            instance::Prune::Uncertain => {
+                let _ = uninvoked.take();
+                return Err(recovery_required());
+            }
+        }
+        if tx.execute("UPDATE context_retirement_effect_intents SET observation='removed' WHERE operation_ulid=?1 AND resource='worktree' AND observation IS NULL",[request.operation_id.to_string()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
+        if tx.execute("UPDATE context_retirement_records SET phase='worktree_removed',worktree_removal='observed' WHERE operation_ulid=?1 AND owner_epoch=?2 AND phase='worktree_removing'",params![request.operation_id.to_string(),owner.retirement_execution()?.epoch()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
+        if tx.execute("UPDATE operation_records SET state='context_worktree_released',completed_step='context_worktree_released' WHERE operation_ulid=?1 AND state='created'",[request.operation_id.to_string()]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
+        record::audit_connection(tx)
+    });
+    if settled.is_err() {
+        if let Some(uninvoked) = uninvoked {
+            return record::refuse_before_worktree_effect(service, &request.root, owner, uninvoked)
+                .map(|report| PresentPrune::Stop(ContextRetirementOutcome::Final(report)));
+        }
+        return Ok(PresentPrune::Stop(
+            ContextRetirementOutcome::CleanupPending {
+                worktree_removal: if permit.is_some() {
+                    RetirementRemoval::Observed
+                } else {
+                    RetirementRemoval::Possible
+                },
+                branch_removal: RetirementRemoval::None,
+            },
+        ));
+    }
+    Ok(PresentPrune::Removed(
+        permit.ok_or_else(recovery_required)?,
+        primary,
+        proof,
+    ))
 }
 
 fn safe(

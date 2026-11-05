@@ -372,6 +372,7 @@ are not authorized; numeric exits must come from existing results registry.
 | Limited branch-only QUALITY at `b4f187e7` | **1 Important reproduced defect**: cleanup-lease contention after successful observation returns Busy, leaving selected/created S, completed O and a live pin; retry cannot recover the same-live branch permit. Controller/reviewer agree Q1/R-7/TF requires Final ExternalChange/no effect for the exact still-owned attempt, not Final Busy or reentry | Test-first correction below; same SPEC delta-check then same QUALITY original-probe re-review pending. No new policy approval or authority extension |
 | Limited branch-only final SPEC pass through `2f06ac72`, increment base `b1a986c2` | Same reviewer `ses_e564dd7a7ffeYzKXesoyVuGJFs` verified S1–S4 and the contention delta: **0 Blocking/0 Important/0 Minor**. Preselection Busy stays retryable; postselection same-live permit loss uses guarded Final ExternalChange with no effects | Limited branch-only SPEC approved; no full Task 2 completion |
 | Limited branch-only final QUALITY pass through `2f06ac72`, same base, after SPEC | Same reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/Blocking/0 Important/0 Minor**. Fresh original authenticated probe confirms uncontended success, contended stable no-effect refusal, completed parent/result and zero residual pins/intents | Limited branch-only QUALITY approved. Controller inspected original probe and final static logs; Windows/native and deferred recovery/instance/source/batch scopes remain unverified |
+| Fresh-present runtime increment, base `7fde7e5f` | Connected durable marker selection/install/verification and guarded W prune → B retirement, with fresh receipt/proof/D14/index/Z; local evidence below | **Limited SPEC then QUALITY pending before further expansion**. Earlier approvals intact; not full Task 2 approval/completion |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -393,10 +394,12 @@ are not authorized; numeric exits must come from existing results registry.
    branch deletion/D14/index result. Independent limited SPEC and QUALITY reviews
    both passed through `2f06ac72` from base `b1a986c2` with no remaining findings,
    including the cleanup-lease correction and preserved S1–S4 protections.
-  Latest gates: **66** context-retirement tests (unchanged 58 + 8 additive),
-  **24** registered retirement SSH cases. Present
-  instances, authorized executor replacement/recovery and source/batch scopes
-  remain unfinished/closed; all 44 matrix obligations stay explicitly tracked.
+  Fresh-present selection/install/prune → branch/index is now connected in the
+  next bounded increment from `7fde7e5f`, **limited SPEC/QUALITY not yet run**.
+  Latest gates: **72** context-retirement tests (prior 66 unchanged + 6 private
+  protocol controls), **36** registered retirement SSH cases (prior 24 + 12).
+  Authorized executor replacement/recovery and source/batch scopes remain
+  unfinished/closed; all 44 matrix obligations stay explicitly tracked.
   Full Task 2 spec/quality review remains owed; no full completion claimed.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
@@ -407,9 +410,10 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: publish the reviewed branch-only increment on this ticket
-branch only, then continue the same Task 2 implementer into present-instance
-installation, guarded worktree pruning and remaining recovery/authority work.
+Immediate next step: controller's limited **SPEC then QUALITY** review of the
+fresh-present reachable producer from `7fde7e5f` before further expansion.
+Authorized replacement/reentry, owned-absence recovery and source/batch work
+remain owed; no such producer is enabled by this increment.
 Prior corrections, design and initial-absence approvals remain intact; no new
 owner-policy decision is required. Full Task 2 and all 44 obligations remain
 tracked/in progress; this is not permission for Task 3/4 or a completion claim.
@@ -2279,3 +2283,105 @@ tracked; full Task 2 is in progress**, with the previously listed mechanisms and
 final broad gates still owed. Linux evidence only, no native/Windows runtime
 claim. Same SPEC delta-check then same QUALITY original-probe re-review before
 continuation; no independent Quality approval inferred from these local passes.
+
+## Task 2 Progress Delta — Connected Fresh-Present Runtime Increment
+
+Entry **`7fde7e5f932481f99db57e6af3008e8f7cda9815`**, verified clean and identical
+to the published ticket branch. Controller's branch-only SPEC+QUALITY approval
+through `2f06ac72` / comment `01M6N8Y9D67RPZKNAB27BFWD9K` is intact; accepted
+same-phase preflight reused, main still `c69789d9`. New review range starts at
+`7fde7e5f`; full Task 2 base `7b1912d1`, absence source base `daab73e7`, prior
+branch-only increment base `b1a986c2` remain unchanged. **Local verification only;
+controller's limited SPEC then QUALITY review of this new producer is pending.**
+
+- Fresh present selection requires fixed direct B, complete no-follow W/A/backlink/
+  common-dir/checkout identity and existing deletion-only cleanliness. It retains
+  the exact admin anchor while the provisional nonce commits. Only that private,
+  non-Clone fresh selection may exclusively create the bounded version/kind/item/
+  ULID marker. Unix uses anchored no-follow openat + file/admin fsync; file/dir/
+  symlink/hardlink/corrupt/trailing/oversized collisions are preserved, not repaired.
+  The separate verification-only phase checks full installed bytes and exact
+  current owner before SQL `instance_verified=1`. Existing valid markers may be
+  reused by fresh requests. No filesystem/cache/Git guard spans the advertisement.
+- Present O uses the existing sealed owner/returned-batch receipt path, with
+  provisional/unverified instances excluded from observer writes. Under cleanup
+  lease, current receipt/config, full committed/disk primary proof, original tip,
+  marker and full cleanup cleanliness are rechecked before durable W intent. A
+  narrow shared primitive callback rechecks nonce/identity immediately before
+  libgit2 prune; release/promotion retain their original checks with a no-op callback.
+  Only successful live prune returns a private B-continuation permit. Matching W
+  observation, W flag and noncheckpoint WorktreeReleased step settle atomically.
+- Fresh B deletion then reuses the proof/intent/exact-ref/D14/index/Z path. A
+  pre-B refusal after W removal stays **Owed**, retaining WorktreeReleased and W
+  Observed; a definite uninvoked B intent may settle `changed`/B None without
+  erasing W debt. Pre-W no-effect has its distinct one-use witness and atomic
+  refusal; any possible prune/post-Git SQL gap stays CleanupPending. No pending
+  request reconstructs install/prune/B authority. Final index results now correlate
+  truthful W+B observations. Completed replay preserves recreated W/A/B and new
+  materialization without marker inspection/install, transport or reconsumption.
+
+### New Behavioral Evidence And Limits
+
+Logs are `/tmp/opencode/task2-present-*.log`. Registered SSH cases preceded all
+filters. Compile-success TDD **RED → GREEN**:
+
+| Boundary | RED | GREEN / final coverage |
+| --- | --- | --- |
+| Fresh present ticket/pristine/foreign marker | `red`: **0/3 SSH**, numeric `1 0 1` confirms old recovery refusal | `green-1`: **3 SSH passed**, extended in final suite |
+| Marker changed after W intent, before primitive | `boundaries-red`: **6 passed / 1 failed SSH**, marker `401 0 1` wrongly Pending | `boundaries-green`: **7 SSH passed**, marker `401 1 0` Final/no effect; post-W B refusal and W/B Git→SQL gaps remain Owed |
+| Exact selected admin / installed-before-SQL protocol | `instance-red`: **1 passed / 2 failed**; missing-marker verification already refused, exact-admin replacement was stamped and installed-token SQL finish was missing | `instance-green`: **3 passed**, extended collision/reuse controls `instance-controls`: **6 passed** |
+| Cleared durable verification bit at W-intent boundary | `verified-red-2`: **0/1 SSH**, marker `402 0 0` (not corruption refusal, resources changed) | `verified-green`: **1 SSH passed**, marker `402 1 1`; worktree intents now require verified instance in audit before any effect |
+
+The six unit tests are **private instance-protocol** evidence: same-owner SQL
+interruption, missing marker with unchanged/same-OID recreated admin, matching
+full marker, anchored replacement and collision/reuse. They are **not** public
+authorized reentry/new-executor or observer-replacement evidence. No fake public
+capability constructor or unused authority scaffold is exposed. Live SSH additionally
+covers ticket/document prune, stale discovery clearing, draft/object/server/tracking
+preservation, no marker in ordinary observation, dirty/staged/ignored/hidden-index
+refusals, marker replacement after transport, partial flags, no surviving-branch
+retry after W/B SQL gaps, corruption preservation, and incomplete/ambiguous D14
+refusal before prune. An intermediate incomplete-intent fixture illegally regressed
+`complete→branch_created`; corrected to supported `intended` restart, without
+weakening its trigger or assertion (`materialization-green`: **1 SSH passed**).
+That setup failure is **not** behavioral RED evidence.
+
+### Frozen-Source Gates
+
+Every command serial through Devenv, no shell deadlines or overlapping Cargo/test
+binaries. Source frozen after formatting; only ledger/comment metadata afterward.
+Test suffixes below use `devenv shell -- cargo test --all-features --locked`.
+
+| Command / suffix | Log suffix | Result |
+| --- | --- | --- |
+| `devenv shell -- cargo check --all-features --locked` | `check-final` | exit 0 |
+| `devenv shell -- cargo fmt --check` | `fmt-final` | exit 0 |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy-final` | exit 0 |
+| `--lib context_retirement` | `context-final` | **72 passed** (prior 66 unchanged + 6) |
+| `--lib cleanup` | `cleanup-final` | **50 passed** |
+| `--lib recovery` | `recovery-final` | **60 passed** |
+| `--lib read::status` | `read-status-final` | **10 passed** |
+| `--test recovery_foundation_gate` | `foundation-final` | **52 passed** |
+| `--test mutation_remote retirement_` | `ssh-final` | **36 SSH passed** (prior 24 unchanged + 12) |
+| `--lib repository::remote::reservation::tests` | `reservation-final` | **58 passed** |
+| `--test remote_observation authenticated_` | `observation-final` | **4 SSH passed** |
+
+Old tests/semantic expectations, proof and release guards are unchanged. Frozen
+eight-code-path diff against `7fde7e5f`, SHA-256
+`c9402b0fe61f2d789057b88c8783fb84b00027f68157d063ffee4a8dccb1c868`.
+Checkpoint **`01M6NBKGTF0C3A8E7MNCAXCZHX`**, parent
+**`01M6N8Y9D67RPZKNAB27BFWD9K`**, actual UTC **`2026-11-05T08:01:03Z`**.
+
+**All 01–44 obligations stay tracked**, not 72/36 completed groups. New evidence
+deepens 01/10–11, 13–16 (private protocol limits above), 18–20/23/26/29/35–38;
+no entire row is inferred complete beyond its tested scope. Still owed: authorized
+request/executor/O replacement and public provisional reentry (12–16/20–22/27–30),
+metadata-only owned-all-absent crash reconciliation and remaining mixed/partial,
+submodule/prune/D14/index fault variants (05–06/10–11/18–26/35–38), complete
+source/batch holder/audit/A0–A4/Z/GC mechanisms (32–34/39–44), and final whole-tree
+fast/changed-path SSH gates. Full Task 2 review remains owed before Task 3.
+Windows uses existing pinned no-reparse Directory/create/file-flush primitives;
+there is no unprivileged Windows directory-fsync guarantee or runtime/cross-compile
+evidence here. Linux evidence only; no stronger arbitrary-writer/inode-CAS or
+power-loss claim. No push, agents, status/PR/main integration/closure/native CI,
+other-worktree or real-context/key/profile/draft action; no Task 3/4 behavior.

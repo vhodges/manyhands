@@ -105,6 +105,54 @@ pub(crate) const CASES: &[ssh_harness::Case] = &[
         "retirement_quality_cleanup_lease_preselection_busy_remains_retryable",
         quality_preselection_busy,
     ),
+    (
+        "retirement_present_fresh_prunes_then_retires_and_replay_preserves_recreation",
+        present_fresh,
+    ),
+    (
+        "retirement_present_dirty_worktree_refuses_before_marker",
+        present_dirty,
+    ),
+    (
+        "retirement_present_foreign_marker_is_preserved",
+        present_foreign_marker,
+    ),
+    (
+        "retirement_present_marker_changed_after_intent_is_final_no_effect",
+        present_marker_after_intent,
+    ),
+    (
+        "retirement_present_after_prune_branch_refusal_remains_owed",
+        present_branch_stop,
+    ),
+    (
+        "retirement_present_prune_sql_gap_preserves_surviving_branch_on_retry",
+        present_prune_sql_gap,
+    ),
+    (
+        "retirement_present_branch_sql_gap_preserves_same_oid_recreation",
+        present_branch_sql_gap,
+    ),
+    (
+        "retirement_present_installed_identity_is_checked_after_network",
+        present_marker_after_network,
+    ),
+    (
+        "retirement_present_cleanup_hidden_and_ignored_matrix",
+        present_cleanup_matrix,
+    ),
+    (
+        "retirement_present_document_prunes_then_retires",
+        present_document,
+    ),
+    (
+        "retirement_present_unverified_effect_evidence_is_preserved_as_corruption",
+        present_unverified_effect,
+    ),
+    (
+        "retirement_present_incomplete_or_ambiguous_materialization_refuses_before_prune",
+        present_materialization_refusal,
+    ),
 ];
 
 fn setup() -> Result<World, FixtureError> {
@@ -1183,6 +1231,568 @@ enum ResourceNode {
     Directory(u32),
     File(u32, Vec<u8>),
     Link(std::path::PathBuf),
+}
+
+const INSTANCE_MARKER: &str = "manyhands-retirement-instance";
+fn add_present(w: &World) -> Result<std::path::PathBuf, FixtureError> {
+    let path = w.root.join(".manyhands/worktrees").join(ITEM);
+    fixed(fs::create_dir_all(fixed(
+        path.parent().ok_or(FixtureError),
+    )?))?;
+    let repo = w.repo()?;
+    let reference = fixed(repo.find_reference(CONTEXT))?;
+    fixed(repo.worktree(
+        ITEM,
+        &path,
+        Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
+    ))?;
+    Ok(path)
+}
+fn marker_path(w: &World) -> Result<std::path::PathBuf, FixtureError> {
+    Ok(w.repo()?
+        .commondir()
+        .join("worktrees")
+        .join(ITEM)
+        .join(INSTANCE_MARKER))
+}
+fn present_fresh() -> Result<(), FixtureError> {
+    let w = setup()?;
+    let path = add_present(&w)?;
+    fixed(w.service.refresh_repository(RefreshRepositoryRequest {
+        root: w.root.clone(),
+        operation_id: OperationId::new(),
+    }))?;
+    assert_eq!(
+        fixed(w.db()?.query_row(
+            "SELECT count(*) FROM contexts WHERE item_id=?1",
+            [ITEM],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        1
+    );
+    history(&w, true)?;
+    let materialization = complete_materialization(&w)?;
+    let tracking = fixed(w.repo()?.refname_to_id("refs/remotes/origin/main"))?;
+    let draft = w.data().join("draft-sentinel");
+    fixed(fs::write(&draft, b"fixture unsaved draft"))?;
+    assert!(!marker_path(&w)?.exists());
+    let objects = resource_image(&w.repo()?.commondir().join("objects"));
+    let server = resource_image(w.bare()?.path());
+    let request = request(&w);
+    let report = retire(&w, request.clone())?;
+    assert_eq!(report.outcome, RetirementDisposition::Retired);
+    assert_eq!(report.worktree_removal, RetirementRemoval::Observed);
+    assert_eq!(report.branch_removal, RetirementRemoval::Observed);
+    assert!(report.materialization_settled);
+    assert!(!path.exists());
+    assert!(!marker_path(&w)?.parent().unwrap().exists());
+    assert!(w.repo()?.find_reference(CONTEXT).is_err());
+    assert_eq!(
+        fixed(w.repo()?.refname_to_id("refs/remotes/origin/main"))?,
+        tracking
+    );
+    assert_eq!(fixed(fs::read(&draft))?, b"fixture unsaved draft");
+    assert_eq!(
+        fixed(w.db()?.query_row(
+            "SELECT count(*) FROM remote_poll_materializations",
+            [],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert_eq!(
+        fixed(w.db()?.query_row(
+            "SELECT count(*) FROM contexts WHERE item_id=?1",
+            [ITEM],
+            |r| r.get::<_, i64>(0)
+        ))?,
+        0
+    );
+    assert!(resource_image(&w.repo()?.commondir().join("objects")) == objects);
+    assert!(resource_image(w.bare()?.path()) == server);
+    fixed(w.repo()?.reference(
+        CONTEXT,
+        fixed(materialization.1.parse())?,
+        false,
+        "new fixture lifetime",
+    ))?;
+    add_present(&w)?;
+    fixed(w.db()?.execute("INSERT INTO remote_poll_materializations SELECT id,'document',?1,?2,?3,'complete' FROM repositories",rusqlite::params![ITEM,materialization.0,materialization.1]))?;
+    let resources = resource_image(&w.root);
+    let db = registry_image(&w.db()?);
+    let commands = w.server.commands();
+    assert_eq!(retire(&w, request)?, report);
+    assert!(resource_image(&w.root) == resources);
+    assert!(registry_image(&w.db()?) == db);
+    assert_eq!(w.server.commands(), commands);
+    assert!(!marker_path(&w)?.exists());
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
+}
+fn present_dirty() -> Result<(), FixtureError> {
+    let w = setup()?;
+    let path = add_present(&w)?;
+    history(&w, true)?;
+    fixed(fs::write(
+        path.join("untracked-fixture"),
+        b"unsaved fixture work",
+    ))?;
+    let before = resource_image(&w.root);
+    let report = retire(&w, request(&w))?;
+    assert_eq!(report.outcome, RetirementDisposition::Refused);
+    assert_eq!(report.code, ResultCode::WorktreeNotClean);
+    assert_eq!(report.worktree_removal, RetirementRemoval::None);
+    assert!(resource_image(&w.root) == before);
+    assert!(!marker_path(&w)?.exists());
+    w.privacy()
+}
+fn present_foreign_marker() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    fixed(fs::write(
+        marker_path(&w)?,
+        b"foreign/partial fixture token",
+    ))?;
+    let before = resource_image(&w.root);
+    let request = request(&w);
+    let report = retire(&w, request.clone())?;
+    assert_eq!(report.outcome, RetirementDisposition::Refused);
+    assert_eq!(report.worktree_removal, RetirementRemoval::None);
+    assert!(resource_image(&w.root) == before);
+    assert_eq!(retire(&w, request)?, report);
+    w.privacy()
+}
+fn present_marker_after_intent() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let marker = marker_path(&w)?;
+    let changed = marker.clone();
+    RepositoryService::set_retirement_worktree_hook_for_testing(move || {
+        fs::write(changed, b"changed fixture marker").unwrap();
+    });
+    let request = request(&w);
+    let result = fixed(w.service.retire_context_authenticated(
+        request.clone(),
+        w.primary().approval,
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    ssh_harness::observation(&[
+        401,
+        matches!(&result, ContextRetirementOutcome::Final(_)) as u128,
+        matches!(&result, ContextRetirementOutcome::CleanupPending { .. }) as u128,
+    ]);
+    assert!(
+        matches!(&result,ContextRetirementOutcome::Final(r) if r.code==ResultCode::ExternalChange && r.outcome==RetirementDisposition::Refused && r.worktree_removal==RetirementRemoval::None && r.branch_removal==RetirementRemoval::None)
+    );
+    assert_eq!(fixed(fs::read(marker))?, b"changed fixture marker");
+    assert!(w.repo()?.find_reference(CONTEXT).is_ok());
+    assert_eq!(
+        fixed(w.db()?.query_row(
+            "SELECT observation FROM context_retirement_effect_intents",
+            [],
+            |r| r.get::<_, String>(0)
+        ))?,
+        "changed"
+    );
+    assert_eq!(
+        fixed(w.service.retire_context_authenticated(
+            request,
+            w.primary().approval,
+            &mut SessionCredentials::new(Provider)
+        ))?,
+        result
+    );
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
+}
+fn present_branch_stop() -> Result<(), FixtureError> {
+    let w = setup()?;
+    let path = add_present(&w)?;
+    history(&w, true)?;
+    let repo = w.repo()?;
+    let old = fixed(repo.refname_to_id(CONTEXT))?;
+    let parent = fixed(repo.find_commit(old))?;
+    let sig = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
+    let next = fixed(repo.commit(
+        None,
+        &sig,
+        &sig,
+        "moved primary after prune",
+        &fixed(parent.tree())?,
+        &[&parent],
+    ))?;
+    let root = w.root.clone();
+    RepositoryService::set_retirement_intent_hook_for_testing(move || {
+        git2::Repository::open(root)
+            .unwrap()
+            .reference("refs/heads/main", next, true, "external primary move")
+            .unwrap();
+    });
+    let request = request(&w);
+    let result = fixed(w.service.retire_context_authenticated(
+        request.clone(),
+        w.primary().approval,
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    assert_eq!(
+        result,
+        ContextRetirementOutcome::CleanupPending {
+            worktree_removal: RetirementRemoval::Observed,
+            branch_removal: RetirementRemoval::None
+        }
+    );
+    assert!(!path.exists());
+    assert_eq!(fixed(repo.refname_to_id(CONTEXT))?, old);
+    assert_eq!(
+        fixed(w.db()?.query_row(
+            "SELECT completed_step FROM operation_records WHERE operation_ulid=?1",
+            [request.operation_id.to_string()],
+            |r| r.get::<_, String>(0)
+        ))?,
+        "context_worktree_released"
+    );
+    assert_eq!(
+        fixed(w.db()?.query_row(
+            "SELECT observation FROM context_retirement_effect_intents WHERE resource='branch'",
+            [],
+            |r| r.get::<_, String>(0)
+        ))?,
+        "changed"
+    );
+    fixed(repo.reference("refs/heads/main", old, true, "repair not new authority"))?;
+    assert!(
+        w.service
+            .retire_context_authenticated(
+                request,
+                w.primary().approval,
+                &mut SessionCredentials::new(Provider)
+            )
+            .is_err()
+    );
+    assert_eq!(fixed(repo.refname_to_id(CONTEXT))?, old);
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
+}
+fn present_prune_sql_gap() -> Result<(), FixtureError> {
+    present_sql_gap(false)
+}
+fn present_branch_sql_gap() -> Result<(), FixtureError> {
+    present_sql_gap(true)
+}
+fn present_sql_gap(branch: bool) -> Result<(), FixtureError> {
+    let w = setup()?;
+    let path = add_present(&w)?;
+    history(&w, true)?;
+    let tuple = complete_materialization(&w)?;
+    if branch {
+        fixed(w.db()?.execute_batch("CREATE TRIGGER retirement_present_ignore_d14 BEFORE DELETE ON remote_poll_materializations BEGIN SELECT RAISE(IGNORE); END;"))?;
+    } else {
+        fixed(w.db()?.execute_batch("CREATE TRIGGER retirement_present_prune_receipt BEFORE UPDATE OF observation ON context_retirement_effect_intents WHEN OLD.resource='worktree' BEGIN SELECT RAISE(ABORT,'fixture'); END;"))?;
+    }
+    let request = request(&w);
+    let result = fixed(w.service.retire_context_authenticated(
+        request.clone(),
+        w.primary().approval,
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    assert_eq!(
+        result,
+        ContextRetirementOutcome::CleanupPending {
+            worktree_removal: RetirementRemoval::Observed,
+            branch_removal: if branch {
+                RetirementRemoval::Possible
+            } else {
+                RetirementRemoval::None
+            }
+        }
+    );
+    assert!(!path.exists());
+    assert_materialization(&w, &tuple)?;
+    if branch {
+        fixed(w.repo()?.reference(
+            CONTEXT,
+            fixed(tuple.1.parse())?,
+            false,
+            "same-OID fixture recreation",
+        ))?;
+    }
+    add_present(&w)?;
+    let resources = resource_image(&w.root);
+    let registry = registry_image(&w.db()?);
+    assert!(
+        w.service
+            .retire_context_authenticated(
+                request,
+                w.primary().approval,
+                &mut SessionCredentials::new(Provider)
+            )
+            .is_err()
+    );
+    assert!(resource_image(&w.root) == resources);
+    assert!(registry_image(&w.db()?) == registry);
+    assert!(!marker_path(&w)?.exists());
+    assert!(RepositoryService::open_at(&w.data()).is_ok());
+    w.privacy()
+}
+fn present_marker_after_network() -> Result<(), FixtureError> {
+    use fs4::fs_std::FileExt;
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let request = request(&w);
+    let hold = w.server.hold_advertisement()?;
+    let root = w.root.clone();
+    let data = w.data();
+    let marker = marker_path(&w)?;
+    let changed = marker.clone();
+    let result = std::thread::scope(|scope| {
+        let controller = scope.spawn(move || {
+            hold.wait_until_held().unwrap();
+            let db = rusqlite::Connection::open(data.join(REGISTRY_FILE)).unwrap();
+            let (nonce, verified): (String, bool) = db
+                .query_row(
+                    "SELECT instance_nonce,instance_verified FROM context_retirement_records",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert!(verified);
+            assert_eq!(
+                fs::read(&changed).unwrap(),
+                format!("manyhands-retirement-instance-v1\nticket\n{ITEM}\n{nonce}\n").into_bytes()
+            );
+            let lease = fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(
+                    git2::Repository::open(root)
+                        .unwrap()
+                        .commondir()
+                        .join("manyhands-operation.lock"),
+                )
+                .unwrap();
+            assert!(FileExt::try_lock_exclusive(&lease).unwrap());
+            FileExt::unlock(&lease).unwrap();
+            fs::write(
+                &changed,
+                format!(
+                    "manyhands-retirement-instance-v1\nticket\n{ITEM}\n{}\n",
+                    OperationId::new()
+                ),
+            )
+            .unwrap();
+            hold.release().unwrap();
+        });
+        let result = w.service.retire_context_authenticated(
+            request.clone(),
+            w.primary().approval,
+            &mut SessionCredentials::new(Provider),
+        );
+        controller.join().unwrap();
+        result
+    });
+    assert!(
+        matches!(&result,Ok(ContextRetirementOutcome::Final(r)) if r.outcome==RetirementDisposition::Refused && r.worktree_removal==RetirementRemoval::None)
+    );
+    let resources = resource_image(&w.root);
+    let registry = registry_image(&w.db()?);
+    let commands = w.server.commands();
+    assert_eq!(
+        fixed(w.service.retire_context_authenticated(
+            request,
+            w.primary().approval,
+            &mut SessionCredentials::new(Provider)
+        ))?,
+        fixed(result)?
+    );
+    assert!(resource_image(&w.root) == resources);
+    assert!(registry_image(&w.db()?) == registry);
+    assert_eq!(w.server.commands(), commands);
+    w.privacy()
+}
+fn present_cleanup_matrix() -> Result<(), FixtureError> {
+    for variant in [
+        "dirty",
+        "staged",
+        "ignored",
+        "--assume-unchanged",
+        "--skip-worktree",
+    ] {
+        let w = setup()?;
+        let path = add_present(&w)?;
+        history(&w, true)?;
+        let relative = format!(".manyhands/tickets/{ITEM}/ticket.md");
+        if variant == "ignored" {
+            let exclude = w.repo()?.commondir().join("info/exclude");
+            let mut bytes = fixed(fs::read(&exclude))?;
+            bytes.extend_from_slice(b"\nignored-retirement-fixture\n");
+            fixed(fs::write(exclude, bytes))?;
+            fixed(fs::write(
+                path.join("ignored-retirement-fixture"),
+                b"unsaved ignored fixture",
+            ))?;
+        } else {
+            if variant.starts_with("--") {
+                let output = fixed(
+                    std::process::Command::new("git")
+                        .arg("-C")
+                        .arg(&path)
+                        .args(["update-index", variant, &relative])
+                        .output(),
+                )?;
+                assert!(output.status.success());
+            }
+            fixed(fs::write(path.join(&relative), b"unsaved hidden fixture"))?;
+            if variant == "staged" {
+                let linked = fixed(git2::Repository::open(&path))?;
+                let mut index = fixed(linked.index())?;
+                fixed(index.add_path(Path::new(&relative)))?;
+                fixed(index.write())?;
+            }
+        }
+        let before = resource_image(&w.root);
+        let report = retire(&w, request(&w))?;
+        assert_eq!(report.code, ResultCode::WorktreeNotClean);
+        assert!(!marker_path(&w)?.exists());
+        assert!(resource_image(&w.root) == before);
+        w.privacy()?;
+    }
+    Ok(())
+}
+fn present_document() -> Result<(), FixtureError> {
+    const DOC: &str = "01ARZ3NDEKTSV4RRFFQ69G5FB1";
+    let w = setup()?;
+    let repo = w.repo()?;
+    fixed(fs::create_dir_all(w.root.join("docs")))?;
+    fixed(fs::write(
+        w.root.join("docs/retirement.md"),
+        format!(
+            "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {DOC}\ntitle: Fixture\n---\nPreserved document\n"
+        ),
+    ))?;
+    let mut index = fixed(repo.index())?;
+    fixed(index.add_path(Path::new("docs/retirement.md")))?;
+    fixed(index.write())?;
+    let tree = fixed(repo.find_tree(fixed(index.write_tree())?))?;
+    let parent = fixed(repo.head().and_then(|h| h.peel_to_commit()))?;
+    let sig = fixed(git2::Signature::now("Fixture", "fixture@example.invalid"))?;
+    let tip = fixed(repo.commit(
+        Some("HEAD"),
+        &sig,
+        &sig,
+        "document fixture",
+        &tree,
+        &[&parent],
+    ))?;
+    let name = format!("refs/heads/manyhands/document/{DOC}");
+    let reference = fixed(repo.reference(&name, tip, false, "document fixture"))?;
+    let path = w.root.join(".manyhands/worktrees").join(DOC);
+    fixed(fs::create_dir_all(path.parent().unwrap()))?;
+    fixed(repo.worktree(
+        DOC,
+        &path,
+        Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
+    ))?;
+    let bare = w.bare()?;
+    fixed(bare.reference(
+        &name,
+        fixed(bare.refname_to_id("refs/heads/main"))?,
+        false,
+        "published fixture",
+    ))?;
+    observe(&w)?;
+    fixed(bare.find_reference(&name).and_then(|mut r| r.delete()))?;
+    let outcome = fixed(w.service.retire_context_authenticated(
+        RetireContextRequest {
+            root: w.root.clone(),
+            kind: AuthoringKind::Document,
+            item_id: fixed(DOC.parse())?,
+            operation_id: OperationId::new(),
+        },
+        w.primary().approval,
+        &mut SessionCredentials::new(Provider),
+    ))?;
+    assert!(
+        matches!(outcome,ContextRetirementOutcome::Final(r) if r.outcome==RetirementDisposition::Retired && r.worktree_removal==RetirementRemoval::Observed && r.branch_removal==RetirementRemoval::Observed)
+    );
+    assert!(!path.exists());
+    assert!(repo.find_reference(CONTEXT).is_ok());
+    w.privacy()
+}
+fn present_unverified_effect() -> Result<(), FixtureError> {
+    let w = setup()?;
+    add_present(&w)?;
+    history(&w, true)?;
+    let root = w.root.clone();
+    let data = w.data();
+    let snapshot = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let captured = snapshot.clone();
+    RepositoryService::set_retirement_worktree_hook_for_testing(move || {
+        let db = rusqlite::Connection::open(data.join(REGISTRY_FILE)).unwrap();
+        db.execute(
+            "UPDATE context_retirement_records SET instance_verified=0",
+            [],
+        )
+        .unwrap();
+        *captured.borrow_mut() = Some((resource_image(&root), registry_image(&db)));
+    });
+    let result = w.service.retire_context_authenticated(
+        request(&w),
+        w.primary().approval,
+        &mut SessionCredentials::new(Provider),
+    );
+    let before = snapshot.borrow();
+    let (resources, registry) = before.as_ref().unwrap();
+    ssh_harness::observation(&[
+        402,
+        matches!(&result,Err(e) if e.kind==RepositoryErrorKind::RecoveryRequired) as u128,
+        (resource_image(&w.root) == *resources) as u128,
+    ]);
+    assert!(matches!(result,Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired));
+    assert!(
+        resource_image(&w.root) == *resources,
+        "unverified durable effect evidence must not authorize pruning"
+    );
+    assert!(registry_image(&w.db()?) == *registry);
+    w.privacy()
+}
+fn present_materialization_refusal() -> Result<(), FixtureError> {
+    for ambiguous in [false, true] {
+        let w = setup()?;
+        add_present(&w)?;
+        history(&w, true)?;
+        let tuple = complete_materialization(&w)?;
+        let db = w.db()?;
+        if ambiguous {
+            fixed(db.execute("INSERT INTO remote_poll_materializations SELECT id,'document',?1,?2,?3,'complete' FROM repositories",rusqlite::params![ITEM,tuple.0,tuple.1]))?;
+        } else {
+            fixed(db.execute(
+                "UPDATE remote_poll_materializations SET step='intended'",
+                [],
+            ))?;
+        }
+        let before = resource_image(&w.root);
+        let commands = w.server.commands();
+        let report = retire(&w, request(&w))?;
+        assert_eq!(report.outcome, RetirementDisposition::Refused);
+        assert_eq!(report.worktree_removal, RetirementRemoval::None);
+        assert!(!report.materialization_settled);
+        assert!(resource_image(&w.root) == before);
+        assert!(!marker_path(&w)?.exists());
+        assert_eq!(w.server.commands(), commands);
+        assert_eq!(
+            fixed(db.query_row(
+                "SELECT count(*) FROM remote_poll_materializations",
+                [],
+                |r| r.get::<_, i64>(0)
+            ))?,
+            if ambiguous { 2 } else { 1 }
+        );
+        w.privacy()?;
+    }
+    Ok(())
 }
 fn resource_image(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf, ResourceNode> {
     fn visit(

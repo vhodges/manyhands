@@ -11,7 +11,8 @@ const MARKER: &str = "context_retirement_v1";
 mod authority;
 pub(in super::super) use authority::ObserverExecution;
 pub(super) use authority::{
-    BranchClaim, claim_branch, refuse_before_branch_effect, refuse_execution,
+    BranchClaim, claim_branch, claim_present, refuse_before_branch_effect,
+    refuse_before_worktree_effect, refuse_execution, refuse_fresh, settle_branch_after_prune,
 };
 
 /// Retirement identities are spent even after their executor ends. Include the
@@ -674,8 +675,8 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
       JOIN retirement_observation_receipts b ON b.id=e.receipt_id
       WHERE b.consumer_kind!='single' OR b.consumer_operation_ulid!=e.operation_ulid OR b.consumer_attempt_epoch!=e.owner_epoch
         OR b.repository_id!=c.repository_id OR c.initial_resources NOT IN ('present','branch_only')
-        OR (e.resource='worktree' AND (c.initial_resources!='present' OR c.worktree_removal='none'))
-        OR (e.resource='branch' AND c.branch_removal='none' AND NOT coalesce(c.phase='refused' AND e.observation='changed',0))
+        OR (e.resource='worktree' AND (c.initial_resources!='present' OR c.instance_verified!=1 OR (c.worktree_removal='none' AND NOT coalesce(c.phase='refused' AND e.observation='changed',0))))
+        OR (e.resource='branch' AND c.branch_removal='none' AND NOT coalesce((c.phase='refused' OR (c.phase='worktree_removed' AND c.worktree_removal='observed')) AND e.observation='changed',0))
         OR (c.phase IN ('local_absent','index_pending','complete') AND c.absence_basis='owned_intent' AND NOT coalesce(
           (e.observation='removed' AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='observed')
           OR (e.observation IN ('already_absent','incomplete') AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='possible'),0)))", [], |r| r.get(0)).map_err(|_| recovery_required())?;
@@ -967,8 +968,8 @@ pub(in super::super) fn finalize_index(
     }
     // Only implemented standalone handoffs. Preserving/source/batch authority
     // remains closed; refresh never manufactures an executor or repeats effects.
-    let handoff: Option<(String,String)> = tx.query_row("SELECT absence_basis,branch_removal FROM context_retirement_records WHERE operation_ulid=?1 AND repository_id=?2 AND request_ulid IS NULL AND batch_operation_ulid IS NULL AND worktree_removal='none' AND ((initial_resources='absent' AND absence_basis='initial') OR (initial_resources='branch_only' AND absence_basis='owned_intent'))", params![operation,repository_id], |r| Ok((r.get(0)?,r.get(1)?))).optional().map_err(|_| recovery_required())?;
-    let Some((basis, branch)) = handoff else {
+    let handoff: Option<(String,String,String)> = tx.query_row("SELECT absence_basis,branch_removal,worktree_removal FROM context_retirement_records WHERE operation_ulid=?1 AND repository_id=?2 AND request_ulid IS NULL AND batch_operation_ulid IS NULL AND ((initial_resources='absent' AND absence_basis='initial' AND worktree_removal='none') OR (initial_resources='branch_only' AND absence_basis='owned_intent' AND worktree_removal='none') OR (initial_resources='present' AND instance_verified=1 AND absence_basis='owned_intent' AND worktree_removal='observed'))", params![operation,repository_id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_| recovery_required())?;
+    let Some((basis, branch, worktree)) = handoff else {
         return Err(recovery_required());
     };
     let result = if basis == "initial" {
@@ -979,7 +980,14 @@ pub(in super::super) fn finalize_index(
             "possible" => super::RetirementRemoval::Possible,
             _ => return Err(recovery_required()),
         };
-        super::ContextRetirementReport::retired(super::RetirementRemoval::None, branch)
+        super::ContextRetirementReport::retired(
+            if worktree == "observed" {
+                super::RetirementRemoval::Observed
+            } else {
+                super::RetirementRemoval::None
+            },
+            branch,
+        )
     };
     if tx.execute("UPDATE context_retirement_records SET phase='complete',final_code=?2,final_result=?3 WHERE operation_ulid=?1 AND phase IN ('local_absent','index_pending')", params![operation,result.code.as_str(),result.encode()?]).map_err(RepositoryError::sqlite)? != 1 { return Err(recovery_required()); }
     if tx.execute("UPDATE context_retirement_attempts SET phase='ended' WHERE operation_ulid=?1 AND owner_epoch=(SELECT owner_epoch FROM context_retirement_records WHERE operation_ulid=?1) AND phase='active'", [&operation]).map_err(RepositoryError::sqlite)? != 1 { return Err(recovery_required()); }
