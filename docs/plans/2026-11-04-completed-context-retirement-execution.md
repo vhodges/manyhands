@@ -354,6 +354,7 @@ are not authorized; numeric exits must come from existing results registry.
 | Task 1 spec correction, `5be0de55..a95f01d3` | Required lookup moved into Document only; missing/symbolic ticket refs and unchanged document refusals covered; focused red **2 passed / 1 failed**, green **3 passed**; frozen-source remote gate **427 passed** | Controller subsequently reports spec pass held; quality then found the separate migration defect below. No quality approval |
 | Task 1 initial quality review, full base through `0698671c` | Controller confirmed **1 Important** source/SQL-reproduced finding: widened CHECK accepted old15-invalid `closed`/`promoted` rows, laundering corrupt evidence | Quality correction below; same reviewer's re-review required. Existing approved corruption-refusal policy applies; no new owner decision |
 | Task 1 quality correction, `0698671c..ed899a00` | Explicit old15-only membership validation before DDL; both laundering cases demonstrated in behavioral red **1 passed / 1 failed**, green **2 passed**; full-row/schema/trigger rollback and current17 reopen/decode controls; frozen-source remote gate **427 passed** | Correction verified, same quality reviewer's re-review pending. No quality pass marked by implementer |
+| Task 1 pre-push visibility correction, `fb7e1d76..baa4153c` | Controller's all-targets Clippy exposed E0433 when `lib.rs` is nested under integration-test `production`; minimal `mutation_remote` check reproduced it. Four proof visibility declarations now use the same relative repository ancestor in both layouts; minimal check, all three full static gates and **6 proof tests** pass | Controller delta spec then quality re-reviews pending before push; no review approval claimed |
 | Tasks 2/4 adversarial reviews, final whole-range reviews | Not yet run | Mandatory future checkpoints |
 
 ## Task Checklist And Next Step
@@ -366,18 +367,20 @@ are not authorized; numeric exits must come from existing results registry.
   `74186d51..6a8b4259`; owner H1–H3 resolution is now recorded, no open holds.
 - [ ] **1 — Shared proof, recognition, disposition upgrade.** Implemented;
   spec pass reported by controller after the `a95f01d3` correction; one Important
-  quality finding corrected and verified at `ed899a00`. Quality re-review pending.
+  quality finding corrected at `ed899a00`; integration visibility corrected at
+  `baa4153c`. Full static gates and focused proof tests green; delta reviews pending.
 - [ ] **2 — Durable single-context retirement.** Not started; adversarial gate.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
 - [ ] **5 — CLI command/flag/help/rendering.** Not started.
 - [ ] **6 — Two-clone/adversarial acceptance.** Not started.
 - [ ] **7 — Governing contracts/downstream amendments.** Not started.
-- [ ] **8 — Final local gates/independent reviews/owner handoff.** Not started;
-  merge/close/native dispatch remain separately authorized.
+- [ ] **8 — Final local gates/independent reviews/owner handoff.** Controller-owned;
+  static gates rerun for Task 1's visibility correction, but whole fast/changed-path
+  SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: return Task 1's full review range, including its migration
-quality correction, to the controller's same quality reviewer.
+Immediate next step: return Task 1's full review range, including its visibility
+correction, for controller delta spec then quality re-reviews before any push.
 Do not start Task 2 before that handoff. Preserve every other assertion and
 existing lifecycle cleanup behavior. No reapproval of the documents, Q1/Q2,
 E-1–E-10, implementation or execution method is needed.
@@ -612,3 +615,62 @@ Canonical quality-correction checkpoint: CLI-generated distinct ULID
 `2026-11-05T00:15:46Z`. Same quality reviewer re-reviews next; no quality approval
 is claimed. No additional agents, push, real-registry change, ticket status/body
 save, main integration or Task 2 work.
+
+### Task 1 Static-Gate Correction — Relative Repository Visibility
+
+- Clean entry HEAD: `fb7e1d761dbe217978f5015190e51d27657b2382`, same ticket
+  branch/worktree. The controller reported whole `cargo check` and format gates
+  passed, but all-targets Clippy failed E0433 in new `context_retirement/proof.rs`
+  when checking `remote_synchronization`, `remote_merge_recovery`, `ssh_transport`,
+  `ssh_fixture`, `mutation_remote` and `comment_publication`.
+- Systematic-debugging verification: `tests/mutation_remote.rs:5–8` embeds
+  `src/lib.rs` as `mod production` and re-exports its ordinary names. Restricted
+  visibility must still name a **lexical ancestor**, not a crate-root alias.
+  The four new `pub(in crate::repository)` declarations assumed the library was
+  always at crate root; adjacent modules already use relative ancestor scopes.
+- Minimal reproduction before any source edit: selected `mutation_remote`
+  compilation failed E0433 at proof functions on lines 24/147, with the compiler
+  suggesting `crate::production::repository`. That hard-coded alternative would
+  break the normal library layout, so it was not used.
+- The only source delta changes **four visibility declarations** (both enums
+  and both proof entry points) to `pub(in super::super)`. From `proof`, the chain
+  `proof → context_retirement → repository` is stable in both root/nested builds.
+  Intended repository-only access is preserved: no `pub(crate)`/public API
+  expansion, import rewrite, harness change, lint suppression, skipped target,
+  algorithm change or Task 2 work. Existing compile failure is the RED regression
+  for this build-only defect; no new business-behavior test was needed.
+
+All commands ran **sequentially through Devenv**, with complete logs under
+`/tmp/opencode/task1-visibility-*.log`:
+
+| Exact command | Evidence |
+| --- | --- |
+| `devenv shell -- cargo check --all-features --locked --test mutation_remote` before fix | RED: exit **101**, two E0433 function-site errors, no test execution. `task1-visibility-check-red.log` |
+| Same selected-target check after fix | GREEN: exit **0**; nested `production` embedding compiles. `task1-visibility-check-green.log` |
+| `devenv shell -- cargo check --all-features --locked` | Full gate exit **0**. `task1-visibility-full-check.log` |
+| `devenv shell -- cargo fmt --check` | Full gate exit **0**, no formatting change needed. `task1-visibility-full-fmt.log` |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | Full gate exit **0**, no additional Clippy issue or source fix required. `task1-visibility-full-clippy.log` |
+| `devenv shell -- cargo test --all-features --locked --lib retirement_proof` after static gates | **6 passed**, 0 failed, 1512 filtered; nonzero behavior regression run. `task1-visibility-proof.log` |
+| `git diff --check`, staged and full `834415b9..baa4153c` range checks | Clean before/after source commit; documentation/full returned-range checks repeated at handoff |
+
+The full Clippy gate checks the integration targets that the earlier ordinary
+Cargo check and narrow behavioral filters did not compile. No test execution is
+claimed for a successful `check`/Clippy command. Per controller scope, remote427,
+read-contract/CLI/H2 and broad fast/SSH tiers were not redundantly executed for
+this visibility-only change. Whole fast/changed-path SSH tests remain Task 8;
+native CI remains post-merge and separately authorized. The proof behavior,
+recognition, SQL migration, old/new enum compatibility and wire shape are unchanged.
+
+Source fix: `baa4153cfcb165b278826f839a87c395cee63bc6`,
+`fix: scope retirement proof visibility by lexical ancestry`, required coauthor
+trailer present. Narrow delta:
+`fb7e1d761dbe217978f5015190e51d27657b2382..baa4153cfcb165b278826f839a87c395cee63bc6`.
+Full Task 1 source-review range:
+`834415b95825f84d15ce00a5586316abcfe1a6f7..baa4153cfcb165b278826f839a87c395cee63bc6`.
+This record follows in a documentation-only commit; review from original
+`834415b9` through returned HEAD, not only `HEAD~1`.
+
+Canonical checkpoint: CLI-generated distinct ULID `01M6MHQ56T3SE2QZMH35Q6GXET`,
+parent `01M6MGTPJ2BNNXKN9WZ183RWQA`, actual UTC `2026-11-05T00:28:39Z`.
+Next: controller delta spec then quality re-reviews before push. No new agent,
+push, real-context operation, ticket status/body save, main integration or Task 2.
