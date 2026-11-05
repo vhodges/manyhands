@@ -359,7 +359,8 @@ are not authorized; numeric exits must come from existing results registry.
 | Task 1 final spec review through `2f2f9b9d`, base `834415b9` | Session `ses_e570cad9fffeIoFuZjIAkxRtBF` re-reviewed recognition, migration and final visibility corrections: 0 Blocking/0 Important/0 Minor remaining; actual source/diff and raw red/green/static logs inspected | Task 1 spec approved at the final source head |
 | Task 1 final quality review through `2f2f9b9d`, same base, after spec pass | Session `ses_e56fd2b47ffe124OrJLE2JwpCS`: old-enum evidence laundering resolved; relative visibility preserves repository-private access; 0 Critical/0 Important/0 Minor remaining. Raw logs, exact range whitespace and clean head verified | Task 1 quality approved; performance on large repositories remains unmeasured, not a blocking finding |
 | Pre-Task 2 main refresh, 2026-11-05 | Both checkouts clean before bookkeeping; fresh fetch succeeded; main still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`. Merge before/after `2f2f9b9dc14144d00658c7d2ce2d63b7405281a8`, already up to date; current rules reread. Another unrelated remote ticket ref advanced, not consumed | No conflict, rebase or changed main assumption; no native/real-context/lifecycle action |
-| Tasks 2/4 adversarial reviews, final whole-range reviews | Not yet run | Mandatory future checkpoints |
+| Task 2 adversarial checkpoint, `7b1912d1..85bc17d7` | Controller relayed and accepted **2 Important internal mechanism defects**: original-P advertisement precedes the frozen digest/eligibility required by the proposed immutable receipt; last-pin release after configuration fencing leaves an unauditable obsolete batch | Concrete proposal corrections below; **same reviewer's re-review required, checkpoint not approved**. No runtime finding or owner-policy change inferred |
+| Task 2 corrected checkpoint and Task 4 adversarial/final whole-range reviews | Task 2 proposal revised after source verification; re-review not yet run. Other reviews not yet run | Mandatory gates remain open; no production execution authorized past Task 2 checkpoint |
 
 ## Task Checklist And Next Step
 
@@ -722,9 +723,11 @@ References are at the entry SHA, not anticipated post-edit line numbers.
 | `recovery.rs:752–938`; `repository.rs:3483–3490,3519–3550` | Generic begin owns its own immediate transaction, returns an existing pending row without executor fencing, and resets `rejected` to `created`; optional cache fallback returns record ID 0. Retirement needs its own atomic **local envelope + companion + executor claim** transaction, mandatory registry, and durable terminal result. Do not change release's behavior or call `discard_lifecycle` for a Final retirement refusal. |
 | `recovery.rs:717–728,1448–1508` | Every pending local row blocks remote work; every active observation blocks local begin/reentry. A retirement-specific transaction may exclude **only** its exact bound old read-only observer while claiming/fencing it. Generic `in_the_way` / `require_no_pending_local` must not acquire an item-ID or blanket parent exemption. |
 | `remote/reservation.rs:238–258,1026–1195,1432–1508,1533–1557` | Reserve, restart, every `owned` write and finish need the same bound-parent check. Public restart may finish an after-batch observer without transport; retirement must replace with a **new O**, not call that shortcut. `RemoteReservation` currently holds only service scope, operation, repository, generation, epoch; add an optional sealed retirement execution scope, not a caller-supplied allow-list. |
-| `remote/reservation.rs:680–741`; `remote/state.rs:2531–2614` | Both advertisement branches already return the exact batch ID, discarded at lines 718–729. Add a sibling/internal commit hook receiving that returned ID plus the owned remote record, in **this** transaction. Existing callbacks/public signatures retain their current shape. No `SELECT current batch` after public observation returns. |
+| `remote/reservation.rs:680–741`; `remote/state.rs:2531–2614` | Both advertisement branches already return the exact batch ID, discarded at lines 718–729. Add a sibling/internal commit hook receiving that returned ID plus the owned remote record, in **this** transaction, to capture immutable **advertisement provenance**, not a not-yet-known original-P worklist digest. Existing callbacks/public signatures retain their current shape. No `SELECT current batch` after public observation returns. |
+| `remote/poll.rs:1673–1696,1888–1957`; `remote/reservation.rs:1533–1557`; design `:516–529` | Original advertisement commits before primary/target processing; owned finalization and immutable candidate selection are later, and original refresh/eligibility later still. The existing finish callback runs **after** terminalization. Add an internal **pre-terminal owned-finalization hook** for manifest + immutable consumption binding, then preserve ordinary finish/capture semantics; never call `owned` on an already terminal P or require eligibility at advertisement capture. |
 | `remote/observation.rs:145–197,262–307` | Public observation configures before reserve and returns today's snapshot, including completed replay. Private retirement entry must validate the frozen generation/request before configuration writes and carry its scope through safe points, error cleanup and completion; public result/replay supplies no retirement receipt. |
-| `remote/state.rs:2295–2323,2367–2405,6223–6239` | Use **Fetch-only** publication evidence, not public Push-qualified evidence. Configuration fencing currently deletes batches/observations unless an integration window pins them; retention **and historical audit** must recognize exact retirement pins. Retained old-generation rows never pass current authority checks. |
+| `remote/state.rs:2295–2323,2367–2405,6193–6239`; `repository.rs:4075–4084` | Use **Fetch-only** publication evidence, not public Push-qualified evidence. Configuration fencing currently deletes batches/observations unless an integration window pins them; retention **and historical audit** must recognize exact retirement provenance pins. Startup audits every historical batch; unchanged configure returns early. Therefore last-pin release must atomically collect an unreferenced **noncurrent** batch, not leave old-generation history that no audit rule accepts. Retention never grants current authority. |
+| `remote/state.rs:67–87,888–901,6088–6159`; `cleanup.rs:758–780` | Batch child observations CASCADE; integration-window batch FK is deferred NO ACTION. Search found no other production batch FK or runtime integration-window deletion path. The new collector deletes only the exact obsolete parent batch when no window or other pin references it; its child observation rows cascade. It never deletes provenance/bindings/results, current batch/context projection, materialization rows, tracking refs or integration history, and never calls lifecycle cleanup. |
 | `cleanup.rs:147–264,303–348,349–493,673–709` | Existing no-follow presence checks distinguish W/A; deletion repeats full dirt/hidden-bit/submodule checks, then prune, then exact locked direct-ref deletion with complete checkout inventory. Add only narrowly shared guarded inspection/prune seams to repeat the instance check immediately before prune and expose the complete absence/checkout inventory; do not weaken release or change promotion/closure calls. |
 | `repository.rs:9601–9698`; `cleanup.rs:673–688`; `native_resolution` / guarded owned-path code at `repository.rs:7510–7583` | Existing identity/path checking is necessary, not alone a no-follow marker installer. The new instance module must validate both path chains and regular admin files/links, reject Windows reparse points, and anchor marker I/O to the verified admin directory. Existing Unix/Windows native primitives and dependencies suffice; no new dependency or draft/key/profile access. |
 | `remote/state.rs:648–801`; `cleanup.rs:716–780` | Old materialization is keyed by repository/kind/item with immutable owner/OID, steps `intended`, `branch_created`, `complete`. `materialization_intents` reads **all kinds for an item**, allowing ambiguity detection. New D14 compare-delete must be SQL-only and not call lifecycle `cleanup::retire_context`, which deletes context projection / changes the current advertisement. |
@@ -766,12 +769,14 @@ No canonical source, title, raw endpoint, host approval or credential is stored.
 | `context_retirement_records`: `operation_ulid TEXT`, `local_record_id INTEGER`, `repository_id INTEGER`, `format_version INTEGER=1`, `kind TEXT`, `item_id TEXT`, `initial_resources TEXT`, `expected_tip TEXT NULL`, `selection_epoch INTEGER`, `instance_nonce TEXT NULL`, `instance_verified INTEGER`, `remote_name TEXT NULL`, `primary_branch TEXT NULL`, `configuration_generation INTEGER NULL`, `endpoint_digest BLOB NULL`, `initial_primary_oid TEXT NULL`, `request_ulid TEXT NULL`, `batch_operation_ulid TEXT NULL`, `batch_ordinal INTEGER NULL`, `materialization_capture TEXT`, `materialization_operation_ulid TEXT NULL`, `materialization_oid TEXT NULL`, `materialization_step TEXT NULL`, `materialization_settled INTEGER`, `owner_epoch INTEGER`, `phase TEXT`, `worktree_removal TEXT`, `branch_removal TEXT`, `absence_basis TEXT`, `final_code TEXT NULL`, `final_result TEXT NULL` | PK `operation_ulid`; UNIQUE `local_record_id`, `(repository_id,operation_ulid)`. Local-record/repository FKs CASCADE with a **pending-delete refusal trigger**; optional F2-request FK NO ACTION. Explicit unregister can remove terminal journal history only; configuration fencing cannot erase pending debt. `kind IN ('ticket','document')`; initial resources `present/branch_only/absent/invalid`. Tip required exactly for present/branch-only; nonce required exactly for present; verified 0/1 (0 for non-present). Remote/primary/generation/digest form one nullable group, required for destructive authority; frozen once captured. Batch operation/ordinal paired and require request. Materialization capture `unverified/absent/complete`; complete has the full owner/OID/step group with step exactly `complete`, other captures have none. Unverified permits no effect and only a Final capture refusal. Phase and removal/absence values below are closed enums. Final code/result paired, required exactly in terminal `complete/refused/abandoned`; result is valid JSON decoded as the closed domain metadata result. |
 | `context_retirement_attempts`: `operation_ulid TEXT`, `owner_epoch INTEGER`, `repository_id INTEGER`, `request_attempt INTEGER NULL`, `batch_attempt_epoch INTEGER NULL`, `observer_operation_ulid TEXT NULL`, `observer_owner_epoch INTEGER NULL`, `phase TEXT` | PK `(operation_ulid,owner_epoch)`; FK `(repository_id,operation_ulid)` to record CASCADE; optional `(repository_id,observer_operation_ulid)` remote-journal FK NO ACTION, deferred for explicit terminal unregister. UNIQUE non-null observer ID: one O is never rebound to another attempt. `phase IN ('active','ended','fenced')`; observer ID/epoch paired, allocated/bound once before transport. Required request/batch epochs follow the record's domain/request/batch ownership form, audited against actual controlling rows. This is executor history, **not another local journal or index owner**. |
 | `context_retirement_effect_intents`: `operation_ulid TEXT`, `owner_epoch INTEGER`, `resource TEXT`, `receipt_id INTEGER`, `primary_oid TEXT`, `proof_kind TEXT`, `observation TEXT NULL` | PK `(operation_ulid,owner_epoch,resource)`; attempt FK CASCADE; receipt FK NO ACTION, deferred for explicit terminal unregister. `resource IN ('worktree','branch')`; proof `ancestor/folded`; observation NULL while intended, otherwise `removed/already_absent/not_clean/changed/incomplete`. Frozen tip comes from the immutable record. Input fields immutable; observation set at most once. Each prune/ref attempt has its exact primary/proof/receipt recorded **before** Git. A new attempt appends evidence; it never rewrites the old proof or expected tip. |
-| `retirement_observation_receipts`: `id INTEGER`, `repository_id INTEGER`, `observer_operation_ulid TEXT`, `observer_owner_epoch INTEGER`, `observation_batch_id INTEGER`, `configuration_generation INTEGER`, `remote_name TEXT`, `primary_branch TEXT`, `endpoint_digest BLOB`, `execution_kind TEXT`, `execution_parent_ulid TEXT NULL`, `execution_parent_epoch INTEGER NULL`, `execution_request_attempt INTEGER NULL`, `consumer_kind TEXT`, `consumer_operation_ulid TEXT`, `consumer_request_ulid TEXT NULL`, `consumer_attempt_epoch INTEGER`, `frozen_worklist_digest BLOB NULL` | PK `id`; UNIQUE `(repository_id,observer_operation_ulid,observer_owner_epoch)`. Remote source-operation FK CASCADE, **refuse receipt deletion while pinned**. **Created only in owned live advertisement transaction.** Execution kind `local_parent/batch_gap/poll_parent`: local parent ID/epoch required for local execution; gap has no local parent; original opted-in poll records P and its owned remote epoch. Consumer kind `single/batch`: single operation is S and its attempt; batch operation is P, requires R, batch-attempt epoch, generation and frozen digest. Request-attempt checks are explicit, not inferred from an item. Whole row immutable. Batch ID remains historical scalar evidence after pin release; it cannot be rebound to a replacement row. |
-| `retirement_observation_pins`: `receipt_id INTEGER`, `repository_id INTEGER`, `observation_batch_id INTEGER` | PK/FK receipt and FK `(repository_id,observation_batch_id)` to remote batch, both NO ACTION, deferred. Insert **with** receipt, exact receipt/batch equality audited. Delete only after its single consumer is terminal, or after its whole batch attempt has been durably superseded/finalized and no active child still uses it. Pending destructive receipt always has its pin. This normalized pin permits immutable historical receipts without requiring completed requests to retain advertisement rows forever. |
+| `retirement_advertisement_provenance`: `id INTEGER`, `repository_id INTEGER`, `source_operation_ulid TEXT`, `source_owner_epoch INTEGER`, `observation_batch_id INTEGER`, `observed_at INTEGER`, `configuration_generation INTEGER`, `remote_name TEXT`, `primary_branch TEXT`, `endpoint_digest BLOB`, `execution_kind TEXT`, `execution_parent_ulid TEXT NULL`, `execution_parent_epoch INTEGER NULL`, `execution_request_ulid TEXT NULL`, `execution_request_attempt INTEGER NULL`, `execution_batch_operation_ulid TEXT NULL`, `execution_batch_attempt_epoch INTEGER NULL` | PK `id`; UNIQUE `(repository_id,source_operation_ulid,source_owner_epoch)`. Remote source-operation FK CASCADE; refuse provenance deletion while pinned. **Entire row immutable, created only in owned live advertisement transaction using the returned batch ID.** Execution kind `local_parent/batch_gap/poll_parent`; exact local/request/batch execution groups follow their validated scope. Original P may be UNPLANNED: no worklist digest, frozen targets or eligibility is required/stored here. Batch ID is scalar history, **not a batch FK**; only a live pin references the batch. Provenance alone never authorizes deletion, later binding or pin reacquisition. |
+| `retirement_observation_receipts`: `id INTEGER`, `provenance_id INTEGER`, `repository_id INTEGER`, `consumer_kind TEXT`, `consumer_operation_ulid TEXT`, `consumer_request_ulid TEXT NULL`, `consumer_request_attempt INTEGER NULL`, `consumer_attempt_epoch INTEGER`, `configuration_generation INTEGER`, `frozen_worklist_digest BLOB NULL` | PK `id`; UNIQUE `provenance_id` (one immutable consumption binding per live advertisement). Provenance FK CASCADE for guarded terminal unregister; request FK NO ACTION. Entire row immutable. Single scope binds S/current local attempt and optional R/attempt; batch scope binds P/R/request attempt/batch-attempt epoch/original generation/**complete frozen digest**. Original P inserts this row only with its frozen manifest in owned finalization, eligibility initially `unconfirmed`; eligibility gates **consumption**, not insertion. Standalone/restarted frozen batch may insert provenance + binding in the same owned advertisement transaction. Effect intents' `receipt_id` refers here, not to unbound provenance. No FK to the eventually collectable advertisement batch. |
+| `retirement_observation_pins`: `provenance_id INTEGER`, `pin_kind TEXT`, `holder_operation_ulid TEXT`, `holder_epoch INTEGER`, `repository_id INTEGER`, `observation_batch_id INTEGER`, `binding_id INTEGER NULL` | PK `(provenance_id,pin_kind,holder_operation_ulid,holder_epoch)`; provenance/binding FKs NO ACTION deferred; `(repository_id,observation_batch_id)` FK NO ACTION deferred. `pin_kind IN ('source_attempt','consumer_attempt')`. Source pin has no binding and exact source operation/epoch; consumer pin requires its exact binding/consumer operation/attempt. UNIQUE non-null `binding_id`. Pin inputs immutable. Original UNPLANNED P inserts a source pin with provenance and later a consumer pin with binding; S/frozen-restart inserts provenance+binding+consumer pin atomically, with no provisional source hold. P's source pin lasts through unconfirmed handoff; consumer pin additionally retains the bound manifest. Release is only the exact transition below; pins are never removed by batch/receipt cascades. |
+| `retirement_observation_pin_releases`: `provenance_id INTEGER`, `pin_kind TEXT`, `holder_operation_ulid TEXT`, `holder_epoch INTEGER`, `repository_id INTEGER`, `observation_batch_id INTEGER`, `binding_id INTEGER NULL`, `reason TEXT` | Same PK and exact copied pin fields; immutable insert-only release receipt, provenance FK CASCADE and optional binding FK NO ACTION deferred for terminal unregister. `reason IN ('source_terminal','source_fenced','handoff_decided','consumer_terminal')`, each with the corresponding durable source/batch/consumer transition. **No batch FK**. A missing live pin requires this exact release receipt; an unexplained loss refuses audit. A released key can never be pinned again. Scalar batch IDs in released history are not resolved/rebound: SQLite's `INTEGER PRIMARY KEY` may reuse collected IDs. |
 
 Additional exact DDL obligations:
 
-1. One marker `context_retirement_v1` covers the complete five-table + index +
+1. One marker `context_retirement_v1` covers the complete **seven-table** + index +
    trigger envelope. Unmarked and none present is the sole additive install;
    marked/missing, unmarked/partial, substituted CHECK/trigger/index or corrupt
    rows refuse atomically. Never regenerate authority from current Git or rebuild.
@@ -781,56 +786,173 @@ Additional exact DDL obligations:
    NULL-to-first-proof only, immutable thereafter. `instance_verified` and
    `materialization_settled` are 0-to-1 only. Terminal record/result cannot change.
    Parent epoch must increase on claim; history/receipt/effect input triggers
-   prevent reassigning their operation, scope, epoch, OID or batch. Pin rows cannot
-   be updated to another batch. All UPDATEs additionally use expected phase/epoch
+   prevent reassigning their operation, scope, epoch, OID or batch. Provenance and
+   consumption-binding inserts are separate guarded stages, never a nullable
+   digest later filled in. Pin rows cannot be updated to another batch or inserted
+   after their key's release receipt. All UPDATEs additionally use expected phase/epoch
    CAS and require exactly one affected row; triggers are not executor authority.
    Record deletion is refused unless its phase is terminal. A separate BEFORE
    DELETE guard on a retirement **local envelope** requires a completed envelope
    plus its exact terminal companion, before the parent's cascade begins; it
-   cannot query an already-deleted parent from a child cascade trigger. Receipt
-   deletion is refused while a pin exists. Finalization
-   releases now-unneeded single-consumer pins in its terminal transaction. The
+   cannot query an already-deleted parent from a child cascade trigger. Provenance
+   or binding deletion is refused while a corresponding pin exists. Finalization
+   runs exact pin release **plus obsolete-batch collection** in its terminal
+   transaction, with immutable release receipts; it never just deletes a pin. The
    explicit unregister cascade above then retains old behavior without editing
    `registration_removal.rs`; it never deletes the F2 request/result. Add a new
    terminal-unregister control and pending-debt refusal to schema tests.
 3. Cross-table audit requires exactly one matching `retire_context` local envelope
    per companion and vice versa, exact registered root/repository/action/target,
    no observer/local/reserved-child ID collision, valid phase/intent/step/removal
-   correlation, request mapping where bound, receipt scope and pin consistency.
+   correlation, request mapping where bound, provenance/binding stage and pin/release
+   consistency. Unbound original-P provenance is valid only in its recorded
+   UNPLANNED/source-attempt lifecycle, never treated as an incomplete binding to repair.
    An orphaned retirement envelope alone still reserves its identity and refuses.
    An absent captured materialization is explicit, not missing columns to repair.
 4. Terminal history allows later new operations on the same item: **no permanent
    `(repository,kind,item)` uniqueness**. Runtime exclusion remains the actual
    pending local row. No aggregate batch-local row/index debt is introduced.
 5. `configure`'s two deletion queries retain a batch when an integration window
-   **or retirement pin** references it. Its historical audit has the same exact
-   pin/receipt/observer/configuration correlation alternative. The receipt's
-   current-generation/current-batch checks remain mandatory for consumption.
-   A superseded receipt stays historical; it is never made current again.
-   After exact old-O fencing, a historical receipt keeps its original epoch:
-   audit matches that immutable attempt/receipt and the unchanged remote target,
-   allowing the remote row's raised fence only for that ended/fenced attempt.
+   **or any live retirement pin** references it. Historical audit accepts exact
+   live-pin/provenance/source/configuration correlation, including an unbound
+   original-P planning pin; it does not demand a future binding/eligible manifest.
+   The last-pin transition below collects only obsolete, otherwise-unreferenced
+   batches in that same transaction. Current-generation/current-batch/eligible
+   checks remain mandatory for consumption. Released scalar provenance/binding
+   history has no batch FK, supplies no historical-batch audit exemption and
+   never makes a batch current. After exact old-O fencing, provenance keeps its
+   original epoch: audit matches immutable execution history and the unchanged
+   remote target, allowing the raised source fence only for its ended/fenced attempt.
    Live O writes still require exact current epoch equality.
 
 **Task 4 seam, not Task 4 behavior.** The sealed consumer variant is
 `Batch(P,R,batch_attempt_epoch,generation,frozen_worklist_digest)`, distinct from
-the observer execution parent. Its validator's read projection requires the
-approved future `poll_retirement_batches` row (P/R, original eligible handoff,
-active attempt, original generation/digest, ordered cursor, bound observer) and
-the unique frozen target row (ordinal/kind/item/tip/nonce/local K/result/handoff).
-It rejects missing tables/marker/rows rather than accepting caller IDs. Task 2
-does not implement batch planning, eligibility writes, child sequencing, poll
-result copying, cancellation coordination or gap abandonment. Consumer and gap
-authorization tests may use **inert SQL fixtures of that contracted projection**;
-they are not evidence of a working Task 4 coordinator. Task 4 must test the same
-validator against its installed full schema and actual B-handoff/C-begin journey.
-The original P/update-poll capture uses the existing normal remote `owned` guard
-(no pending local row) plus its exact validated P/R/batch-attempt scope. It records
-`execution_kind=poll_parent`; subsequent fresh read-only O captures use
-`local_parent` or `batch_gap`. Only a bound **observe** O may be replaced/fenced by
-retirement: an update poll P is never smuggled through the read-only exception.
-Task 4 owns invoking that poll capture and recording original-handoff eligibility;
-no public ordinary poll or replay acquires a receipt merely by matching its ID.
+the observer execution parent. Its **consumption** validator requires the future
+`poll_retirement_batches` row (P/R, eligible original handoff, active attempt,
+original generation/digest, ordered cursor) and unique frozen target row
+(ordinal/kind/item/tip/nonce/local K/result/handoff). Its **original-P source
+execution** validator instead accepts the persisted explicit opt-in P/R/current
+request and source/batch attempts in `UNPLANNED`, before any worklist exists.
+Manifest binding validates the complete frozen image but **not yet eligibility**.
+These are separate sealed stage capabilities, not a Boolean relaxing C.
+
+They reject missing tables/marker/required stage rows rather than caller IDs.
+Task 2 does not implement batch planning, eligibility writes, child sequencing,
+poll result copying, cancellation coordination or gap abandonment. Tests may use
+**inert SQL fixtures of these contracted projections**, not a working Task 4
+coordinator. Task 4 must rerun against its full schema/producer and live one-ad
+UNPLANNED → manifest → eligible → B-handoff/C-begin journeys. Only a bound
+**observe** O may be replaced/fenced through the retirement exception; an update
+poll P keeps normal no-pending-local remote ownership and cannot be smuggled
+through that exception. Ordinary poll/replay creates neither provenance nor binding.
+
+### Corrected Original-P Two-Stage Capture (Adversarial Finding 1)
+
+Names below refer to proposed record interfaces, not implemented producer code.
+The batch projection must durably correlate `active_provenance_id`, the exact
+source operation/remote epoch/request attempt and, once frozen, `binding_id`.
+Historical identities stay in immutable provenance/binding/release rows; a later
+attempt cannot replace their source or digest in place.
+
+| Stage | Exact transaction and capability; what does **not** exist yet |
+| --- | --- |
+| **A0 — UNPLANNED** | Explicit opted-in P/R/source and batch-attempt identities are durable before poll. Original-poll execution capability checks accepted R/current attempt, P's update-poll target/epoch/root/original generation/mode and no pending local row. No selected K, frozen image/digest, binding or eligible handoff is required or invented. |
+| **A1 — owned advertisement provenance** | In `commit_observation_batch_with_capture`'s owned advertisement transaction, the sibling hook receives the **actual returned batch ID**, source record/epoch/generation and validated A0 scope. Insert immutable provenance and exact `source_attempt` pin and record its ID under this source attempt. No consumer scope/digest/eligible assertion is written. This is provenance and temporary retention only, **zero deletion authority**. No second advertisement or public current-snapshot lookup is needed. |
+| **A2 — owned final manifest + consumption binding** | After primary/target processing, in one immediate finalization transaction, independently validate normal remote `owned`, current P/R/source/batch attempts, original generation and A1's exact provenance/live source pin/current batch. The internal pre-terminal hook atomically persists immutable original report, **complete ordered fixed candidate image (including an explicitly frozen empty list)**, its recomputed digest and one immutable binding to that provenance/P/R/request attempt/batch attempt/generation/digest; insert consumer pin; set original eligibility `unconfirmed`. A1 provenance never changes. Source pin remains until original handoff is decided, so both retention holds are audited through the refresh gap. Then normal P completion/result capture occurs in this same transaction. If any manifest/binding write fails, no P terminalization/result handoff commits. |
+| **A3 — original handoff eligibility** | Original refresh runs outside lease. Only the same live original Complete wrapper **and process-only capture token** from A2 may CAS unconfirmed → eligible after checking request/source/batch epochs, provenance/binding, current batch and original configuration. This transaction releases the source pin via Z below; consumer pin remains. Index-pending/failure records ineligible + final no-retirement result and releases both pins via Z; a completed-P restart with unconfirmed eligibility does the same conservatively, even if a later refresh succeeded. No public replay may create A2 or promote eligibility. |
+| **A4 — consumption / child begin** | C requires the immutable A1→A2 chain, live consumer pin, current generation/batch, durable **eligible** handoff, exact current request/batch attempts and ordered frozen K. Before A3 eligible, consumption and K begin refuse despite provenance, binding or pins. Original P's execution authority is ended; later consumers use C, not P/O write authority. |
+
+**Owned finalization seam:** `reservation.rs:1533–1557` checks `owned`, acknowledges
+requests, calls `finish`, then invokes today's capture callback. A2 therefore
+needs a private pre-terminal hook **after successful owned/request checks and
+before `finish`**, with transaction-bound evidence of that exact owner. Existing
+ordinary callbacks/public signatures and finish/result behavior stay unchanged.
+Rechecking `owned` after P became terminal, or freezing in A1 before target work,
+is not an implementation of A2. Task 4 owns invoking these stages, not this worker.
+
+For standalone S or a restarted **already frozen/eligible** batch, the source
+and complete consumer scope already exist: the fresh O's owned advertisement
+transaction may insert A1 provenance, binding and consumer pin together (no
+original-P handoff gap). Execution capability and immutable consumption binding
+remain separate; completed B still cannot write O while authorized C consumes.
+
+**Unbound provenance lifetime:** an interrupted/failed/cancelled P before A2
+freezes no worklist and has no retirement-local debt. In the scoped owned stop
+transaction, or exact old-source fencing transaction on recovery, durably close
+that source attempt and run Z for its source pin (`source_terminal/source_fenced`).
+Configuration fencing may leave a still-pinned source awaiting that owned cleanup;
+startup recognizes the exact planning hold but it grants no cleanup authority.
+A crash with a still-active source leaves a legitimate recoverable planning pin,
+not an independently resumable local cleanup row. Recovery fences the old source
+and releases its hold **before** retry's fresh advertisement/provenance capture.
+There is no "finish old after-batch replay, then bind it" path. A terminal stop
+and its pin release commit together; missing pins without release receipts refuse.
+If A2 exists but original handoff is ineligible/unconfirmed on recovery, A3 stores
+the final no-retirement result and releases all these holds; no later replay,
+index repair or new attempt may bind/repin that settled provenance. An explicitly
+frozen empty eligible list similarly finalizes without creating a local child.
+
+### Exact Last-Pin Release And Collection (Adversarial Finding 2)
+
+**Z — release and collect** runs inside the caller's same immediate transaction
+as terminal refusal/success, source fencing, eligibility decision or batch-attempt
+settlement. Its private input is the exact currently validated holder/key and
+expected provenance/binding, never an arbitrary batch ID:
+
+1. Verify the scope's source/consumer transition permits this release and that no
+   current child's effects/index debt still need that hold. Read the exact live
+   pin; its FK and metadata must still identify the original batch/provenance.
+   Insert its immutable release receipt with the full key/copied pin/reason, then
+   delete **exactly that pin**, requiring one affected row. Preserve every other
+   source/consumer pin, including another holder of the same batch.
+2. Only on this **newly executed** release, collect that exact original batch
+   with the following SQL predicate (all in this transaction):
+
+   ```sql
+   DELETE FROM remote_observation_batches
+   WHERE repository_id = :repository_id AND id = :batch_id AND is_current = 0
+     AND NOT EXISTS (
+       SELECT 1 FROM remote_integration_windows w
+       WHERE w.observation_batch_id = remote_observation_batches.id
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM retirement_observation_pins p
+       WHERE p.repository_id = remote_observation_batches.repository_id
+         AND p.observation_batch_id = remote_observation_batches.id
+     );
+   ```
+
+   Validate the live pin's exact batch metadata before deletion. Zero deleted
+   batches is expected when current, window-referenced or otherwise pinned. No
+   partial child-row pre-deletion: the existing `remote_ref_observations.batch_id`
+   CASCADE removes only this obsolete batch's observations if the parent deletes.
+3. Commit release receipt, pin deletion, conditional collection and holder's
+   result/fence/eligibility transition together. Injected/ambiguous commit errors
+   reopen/reconcile the durable holder/release receipt, never detach these steps.
+   A replay finding the matching release receipt and no live pin does **not**
+   collect again or resolve its historical scalar batch ID; SQLite can reuse IDs.
+   A missing pin without that receipt, or a pin plus contradictory release, is
+   corruption/recovery, never a guess that release already happened.
+
+This closes the concrete G→G+1 counterexample: config makes B noncurrent and
+retains it through its live pin; S's before-effect Final refusal writes its result,
+runs Z and completes its row atomically. If this was B's last reference, B and
+only its child observations are gone before commit; immutable scalar provenance,
+binding, release and terminal result remain. Reopen therefore finds no unsupported
+old-generation B. If another pin or **any** integration window remains, B remains
+and the corresponding exact historical audit alternative still applies. The last
+safe release/collection may remove it only after all those references are gone.
+
+Historical provenance/binding audit checks immutable source/execution/consumer
+correlation and required pin-or-release receipts; **released history never joins
+its scalar ID to a present/reused batch or exempts it from batch audit**. Pending
+destructive consumers and undecided planning sources still require their live
+pins. Retention of an unbound planning source does not require frozen/eligible
+data that is not yet available. No current batch is deleted/rewritten, no old B
+is made current, no generation/endpoint/digest rebound, and no context projection,
+materialization intent, tracking ref, integration window, poll disposition or
+stored result is deleted by Z. This is bounded obsolete observation-history
+collection, **not** D14's forbidden current-projection lifecycle helper.
 
 ### Ownership Predicate Table
 
@@ -842,10 +964,10 @@ operation ID, matching item, old report, public replay or retained pin is not E.
 | Predicate | Exact checks, in the transaction of the write |
 | --- | --- |
 | **L — local executor** | E's service scope matches; registry root and repository ID match; local envelope has exact S/K, `retire_context`, fixed kind/item target and is pending; companion and active attempt exist; companion owner epoch = E = attempt; phase permits this write; no other pending local row, including completed comment-registration debt. No live unrelated index owner. |
-| **R — controlling request** | For a request-bound record, actual `request_records` is accepted with exact R, scope, command/mode/target and current attempt; exact `request_operations` family/ID mapping agrees. A domain-only record cannot be upgraded to bound authority by passing an R. For batch, require the immutable frozen target/cursor and active batch attempt too. Recheck on **every** owned transition, not only construction. |
+| **R — controlling request** | For a request-bound record, actual `request_records` is accepted with exact R, scope, command/mode/target and current attempt; exact `request_operations` family/ID mapping agrees. A domain-only record cannot be upgraded to bound authority by passing an R. Batch **consumption/local child** requires the frozen target/cursor and eligible active attempt; original-P source execution uses A0's UNPLANNED projection, manifest binding uses A2's complete image/unconfirmed eligibility. Those stage checks are not interchangeable. Recheck on **every** owned transition, not only construction. |
 | **G — original configuration** | Current configured primary/publication remote and endpoint/key-selection configuration observation still match the record's original generation/digest/process observation. Generation change cannot update the record/rebind E. An invalid current configuration is refusal, not permission to configure the old record to new inputs. |
 | **O — observer writes** | Remote token service scope/repository/ID/epoch/generation and active phase match; row is exactly `action='poll', poll_kind='observe', priority='manual'` and `RemoteOperationTarget::for_poll(frozen_plan)`, with no sync/publication/integration authority; exact durable bound O of E. Local-parent execution requires L/R/G; batch-gap execution requires its validated batch-attempt/R/G and **no pending local row**, as detailed below. Ordinary owner with no retirement scope keeps `require_no_pending_local`. Unrelated/mutating observer rows never qualify. |
-| **C — receipt consumption** | Immutable receipt + pin + batch metadata agree on repository, O/epoch, remote/primary, digest and generation; exact advertised batch is still current. Single scope requires S and current attempt. Batch scope verifies P/R/current batch and request attempts, fixed worklist digest, current ordered K and its unchanged frozen identity. Does **not** require former execution parent B to remain pending. Grants no O writes. |
+| **C — receipt consumption** | Join immutable **binding → provenance → live consumer pin → exact current batch**, with matching repository/source operation+epoch/remote/primary/generation and immutable consumer scope. Single scope requires S/current attempt and optional R/attempt. Batch scope requires P/R/current request and batch attempts, complete fixed worklist digest, durable **eligible** handoff, ordered K and unchanged frozen identity. Unbound provenance, source pin alone, unconfirmed/ineligible binding or any released pin cannot authorize deletion or child begin. Does **not** require former execution parent B to remain pending. Grants no O writes or post-release pin/binding reconstruction. |
 | **F — local deletion proof** | Under lease, direct tip still equals immutable expected tip, primary is checked out at registered root, target primary file is a no-follow regular file byte-matching its committed blob (and expected mode), positive canonical completion + full Task 1 preservation pass; W/A identity and nonce match; all cleanup dirt/hidden/ignored/submodule/checkout/ownership checks pass. Re-read primary/configuration/receipt at each effect boundary. |
 | **M — metadata-only absence** | All B/W/A absent by guarded complete inventory; either initial absence or a persisted owned effect intent exists. Captured complete materialization still matches **all** repository/kind/item/owner/OID/step fields, or captured absence is still absent. No fresh O/C/F is required: this grants no Git deletion. Replacement/missing-without-consumed-receipt authority refuses. |
 | **I — index-only finalization** | Authoritative branch/absent/preserved step and companion phase agree; exact `IndexOwner` record/epoch owns the refresh; destructive authority is already closed. Complete result + companion + local-journal completion commit atomically. No observation, token install, ref/prune call or new target enrollment. |
@@ -888,14 +1010,14 @@ refusal can settle that intent as such; a crash cannot manufacture that knowledg
 | **T0: terminal lookup** | Read stored terminal result and fixed input binding before Git/transport/selection. Return it, even after a new same-tip context or new materialization exists. Missing companion/result is recovery, not run-as-new. |
 | **T1: initial selection + claim** | Under lease + immediate registry transaction, prove full exclusion/foreign-ID availability, create exact local envelope and record together, freeze direct tip/BWA shape and optional complete materialization identity, create active attempt epoch 1. For a new destructive candidate only, initial validated endpoint configuration is admitted before freezing its resulting original generation; later attempts may compare but never rebind it. Invalid/mixed capture can atomically become Final `refused` without destructive authority. All-absent selects the local-only path and does not configure/observe a remote. Never enroll a replacement on reentry. |
 | **T2: instance provisional → verified** | Only a validated clean present W/A may select/read a marker. A new nonce is durable in T1 **before** installation. A private install permit exists only in that uninterrupted selection call; exclusive no-follow create, complete bounded write + file/admin durability, verify exact full bytes and all registration links/tip/ownership, then CAS `instance_verified=1`. Restart may verify an already fully matching marker and finish SQL; missing/partial/malformed/mismatching marker refuses, never installs/repairs/stamps the old nonce. No marker is removed separately on refusal. |
-| **T3: fresh observation** | Atomically reserve/bind O as above, drop lease, authenticate Fetch advertisement only (no objects/refs/primary update), then owned transaction receives the **returned** batch ID and writes immutable receipt + pin. Safe points/error cleanup/finish all check O's bound scope. Crash before advertisement, after advertisement, or after batch commit always leads to replacement fresh O on destructive retry, never public replay. |
+| **T3: fresh observation** | Atomically reserve/bind O as above, drop lease, authenticate Fetch advertisement only (no objects/refs/primary update), then owned transaction receives the **returned** batch ID and writes immutable provenance. For S or an already frozen resumed batch, insert exact binding + consumer pin in that transaction. Original P instead follows **A0–A4**: provenance/source pin at advertisement, binding only at owned manifest finalization, eligibility only after original handoff. Safe points/error cleanup/finish all check their stage's bound execution scope. Destructive retry uses fresh O; no public replay. |
 | **T4: proof → worktree intent** | Reacquire lease; L/R/G/C/F + exact old materialization still match. Persist worktree effect intent with current primary/proof/receipt and mark possible removal **before prune**. The shared guarded prune repeats nonce/identity/full deletion-only cleanliness immediately before calling the existing Git worktree primitive. No SQL/cache/Git guard spans authentication or a full refresh. |
 | **T5: worktree outcome** | Live `Removed`: record observation and W observed + `ContextWorktreeReleased` in one transaction, phase `worktree_removed`. `Incomplete` or mixed W/A: preserve actual partial state and Owed recovery, never infer all absent. Definite unchanged primitive refusal before effects can be Final; crash/uncertain outcome retains possible effects. On restart full original W/A+token may reprove/fresh-observe; both absent may reconcile the owned intent, but any surviving branch is tokenless and **cannot** be deleted by this new executor. |
 | **T6: branch intent → deletion** | Only original live branch-only selection permit, or this same uninterrupted executor's successfully guarded W removal, may proceed. Require W/A absent, full checkout inventory, frozen direct tip, current primary proof/G/C; persist branch proof/receipt/intent first, then use existing locked exact-OID branch transaction. No new branch-lifetime token. Same-OID recreated branch on any new executor is preserved, including crash after successful deletion but before SQL. |
 | **T7: all absent + D14** | Under lease + one immediate transaction, M; exact `DELETE ... WHERE repository_id=? AND kind=? AND item_id=? AND operation_ulid=? AND target_oid=? AND step='complete'` must affect exactly one captured complete row, or captured absence must still be absent. Atomically set materialization-settled receipt, absence basis and authoritative local step. Initial absence uses **`ContextRetirementAbsent`**, `already_absent`, no claimed removal. Owned-intent reconciliation uses `ContextBranchReleased` with truthful observed/possible flags. No tracking-ref deletion, context-state deletion or advertisement rewrite. If commit outcome is uncertain, reopen and reconcile this same record; never rerun Git. |
 | **T8: authoritative → index pending** | Same S/K keeps debt; claim index epoch separately and drop lease for ordinary local discovery. Preserve existing authoritative step (`ContextBranchReleased` or `ContextRetirementAbsent`), both noncheckpoint. Failed refresh is Owed `discovery_pending`. Generic refresh must reject borrowing a retirement ID before this exact handoff is due. |
-| **T9: claimed refresh → complete** | Hook in `reconcile_disappeared_contexts` transaction after owner validation, before blocker release: reconcile stale contexts, persist closed retirement result and `phase=complete`, then local `state=completed`, atomically. Any result write/finalization failure rolls back local completion/stale clearing. Same request/index resume is I only; Task 3 adds public routing, never cleanup under an independent resume ID. |
-| **TF: no-effect Final** | Under current L/R (and exact child fence where one exists), persist typed refusal/auth/cancel result, end attempt/observer, terminal `refused`, complete local envelope **without `rejected`**. Preserve old request mapping for stable replay. Busy/yield before selection may retain only bound input; retry of an already selected candidate never substitutes tip/token/configuration. |
+| **T9: claimed refresh → complete** | Hook in `reconcile_disappeared_contexts` transaction after owner validation, before blocker release: reconcile stale contexts, persist closed retirement result and `phase=complete`, release now-unneeded pins through **Z (release receipt + conditional obsolete-batch collection)**, then local `state=completed`, atomically. Any result/release/collection/finalization failure rolls back local completion/stale clearing. Same request/index resume is I only; Task 3 adds public routing, never cleanup under an independent resume ID. |
+| **TF: no-effect Final** | Under current L/R (and exact child fence where one exists), persist typed refusal/auth/cancel result, end attempt/observer, terminal `refused`, release its holds through **Z** and complete local envelope **without `rejected`**, all in one transaction. This metadata-only finalization can close old-generation authority without passing destructive G/C. Preserve old request mapping for stable replay. Busy/yield before selection may retain only bound input; retry of an already selected candidate never substitutes tip/token/configuration. |
 | **TP: partial stop** | Keep local row pending and durable intents/removal flags. Changed primary/tip/remote/generation, missing marker, tokenless surviving branch or partial prune grants no further cleanup. Task 2's interim generic-abandon fence refuses owner release. Task 3's guarded preserving flow will fence, locally refresh and finalize `ContextRetirementPreserved`/abandoned receipt atomically; no such behavior is implemented at this checkpoint. |
 
 **R-7 executable distinction:** a branch-only permit is minted by *selection in
@@ -947,8 +1069,8 @@ nonzero executed count. These are test specifications, not fitted passing result
 | 27 observer replacement crash matrix | U/S `retirement_replaces_only_bound_readonly_observer`: before ad / after ad / after batch commit; old active reservation fenced atomically, new ID bound before transport, old epoch raised; old receipt remains historical | T3/O |
 | 28 unrelated reservation / rollback | U `retirement_observer_replacement_is_one_transaction`: unrelated read-only or mutating reservation, bad correlation or injected failure at each SQL write rolls back parent claim/old epoch/new binding; unrelated row never terminalized | T3/L/O |
 | 29 stale returning executor | U/S `retirement_stale_observer_cannot_write_at_any_boundary`: returning old O attempts safe point, owned metadata write, batch commit, error/config write and completion; parent ends/epoch changes/request attempt changes mid-transport; all refused, no receipt | O at every write |
-| 30 generation change | U/S `retirement_old_generation_is_pinned_not_rebound`: retain receipt/batch bytes across configure + startup audit; old generation/current false never authorizes prune/B; no silent new-generation adoption, remaining branch preserved | G/C/TP |
-| 31 exact batch capture / public replay negative | U/S `retirement_receipt_uses_live_returned_batch_not_public_snapshot`: replay a completed observer while foreign current ad exists; only live owned commit can create receipt/pin; no snapshot/time/current-ID inference | T3/C |
+| 30 generation change | U/S `retirement_old_generation_is_pinned_not_rebound`: retain provenance/binding/batch bytes across configure + startup audit **while pinned**; old generation/current false never authorizes prune/B; no silent new-generation adoption, remaining branch preserved. Test 42 separately covers final unpin and successful reopen | G/C/TP/Z |
+| 31 exact batch capture / public replay negative | U/S `retirement_receipt_uses_live_returned_batch_not_public_snapshot`: completed observer replay with foreign current ad creates no provenance/pin/binding; live ad transaction captures returned batch; original P binds that exact provenance only later at owned A2, not from current snapshot/time/ID inference | T3/A1/A2/C |
 | 32 B execution vs C consumption | U `retirement_batch_receipt_outlives_observing_child_execution`: inert durable batch projection, B completes handoff and C becomes exact ordered child; C consumes original current receipt without another ad; B attempts O writes and fails | C distinct from O; Task 4 live journey still owed |
 | 33 foreign/stale batch scope | U `retirement_batch_receipt_rejects_foreign_or_stale_consumer`: wrong P/R/request attempt/batch epoch/generation/digest/cursor, unfrozen sibling, replaced tip/nonce, missing manifest/marker; no borrowed deletion authority | C; inert projection evidence only |
 | 34 no-child gap execution | U `retirement_batch_gap_observation_requires_no_pending_local`: exact validated batch attempt can observe with no local parent; unrelated or index-pending K prevents reserve; returning gap O after request/batch fence cannot write | O gap; no aggregate local row |
@@ -956,6 +1078,12 @@ nonzero executed count. These are test specifications, not fitted passing result
 | 36 completion/index transaction | U/R `retirement_final_result_and_index_completion_are_atomic`: fail immediately before/after finalizer; no completed local row without result; stale index owner cannot complete companion; absent/branch/preserved steps noncheckpoint and authoritative | T8/T9; post-checkpoint implementation |
 | 37 generic abandon interim fence | U/R `retirement_generic_abandon_never_releases_request_or_hides_debt`: companion present or lost, pending or terminal row; no `release_operation_owner`, row relabel, request deletion or hidden partial record | TP/TF boundary; Task 3 owns guarded abandon |
 | 38 migration/audit/ID/schema inventory | U/R/F `retirement_additive_envelope_and_cross_table_audit`: genuine old registry upgrades once, exact rows preserved; missing/substituted/partial schema/markers/records/ref links/receipts/request mapping roll back/refuse; ID collision matrices and reserved observer/child misuse, action/step schema inventories E-2/E-8 | schema/L/R/O; after all dependencies migrate |
+| 39 original-P producer ordering | U `retirement_unplanned_poll_provenance_binds_only_after_owned_manifest`: inert durable P/R UNPLANNED projection → exactly one owned advertisement/provenance/source pin, no digest/binding/eligible fields required → target/primary processing → full frozen manifest + recomputed digest + binding/consumer pin/unconfirmed in owned pre-terminal A2 → original eligible handoff → ordered consumption. No placeholder mutation, second ad, current-snapshot/public-replay authority or child begin before eligible | A0–A4/C; contract-projection test only, Task 4 live producer journey owed |
+| 40 A2/A3 crash/capability matrix | U `retirement_manifest_binding_and_handoff_have_distinct_fences`: crash before/after A1, before/after atomic manifest+binding/P finish, before/after original refresh and eligibility write; binding cannot precede full image, unconfirmed recovery becomes final ineligible, stale R/P/source/batch attempt cannot bind/promote; public completed replay cannot fabricate A2 or capture token; frozen empty list finalizes with no K | A1/A2/A3; inert projection; zero deletion authority before eligible |
+| 41 unbound provenance lifetime | U `retirement_unbound_poll_provenance_releases_without_retirement_debt`: interruption/failure/cancel before A2, live stop vs crash/restart/source fencing/config fence; only legitimate active/awaiting-owned-cleanup planning holds may remain pinned. Owned terminal/fence + exact release receipt + collection commit together, no local cleanup row/worklist/binding; retry captures a **fresh** ad/provenance and never rebinds/re-pins old released provenance. Ineligible handoff releases both source and consumer holds; replay/index repair cannot revive them | A1/A3/Z; inert projection, no Task 4 coordinator claimed |
+| 42 G→G+1 last-pin reopen | U `retirement_last_pin_release_collects_obsolete_batch_before_reopen`: S pins B at G; config advances to G+1 and B noncurrent; before-effect Final config refusal atomically persists stable result, release receipt, last-pin deletion, B/child-observation collection and local completion; **close and reopen service successfully after release**, unchanged configure early-return does not need to repair it. Inject failures around each write/commit: all changes roll back or reconcile together, no unsupported old B | TF/Z; fixes actual counterexample, not merely reopen-while-pinned |
+| 43 other references retain B | U `retirement_pin_release_preserves_shared_and_window_references`: release exact source hold while consumer hold remains, then final consumer release; valid integration-window reference independently keeps B and observations/audit valid even after every retirement hold releases. Same predicate collects only when noncurrent and **all** pin/window references are gone; never deletes another holder, window, current B or newly current projection | Z and historical audit; source+consumer handoff-gap fixture and valid window fixture |
+| 44 released-history/FK/D14 safety | U `retirement_released_provenance_is_history_not_rebindable_authority`: exact release required for absent pin; missing/contradictory receipts refuse; binding/provenance/effect/result history survives obsolete-batch/child-only collection with FK checks clean. Simulate SQLite reuse of collected batch ID; historical audit/replayed release do not resolve/delete/rebind the new batch. No current projection/context-state/materialization/tracking mutation; no re-pin or consumption from released history | Z/C/T0; no lifecycle-helper/D14 semantic change |
 
 Existing result/exit classes were read, not invented: `results.rs:612–614,630,664,672`
 maps external-change/recovery/dirt to Blocked, discovery pending to Incomplete,
@@ -972,6 +1100,10 @@ and same OID are not branch lifetime), 29 (initial capability check is insuffici
 30 (retention is not current authority), 31 (public replay is not fresh), and 32
 (ended observing child is not the receipt's consumer scope). Independent adversarial
 review must test these proposed transitions; this walkthrough is not that review.
+The first adversarial review then found the additional original-P ordering and
+last-pin counterexamples; A0–A4/Z and proposed rows 39–44 correct that proposal.
+They have been analytically checked, **not** runtime tested or independently
+approved; the same reviewer's re-review remains mandatory.
 
 ### Actual Commands, Remaining Work And First-Return Gate
 
@@ -1012,3 +1144,45 @@ Canonical design-checkpoint comment: `01M6MJDR01K71MT2TKBP560Z8W`, parent
 `01M6MHZCXVGAYVKHRS8JF244QN`, actual UTC `2026-11-05T00:40:59Z`. This record is
 documentation-only and awaits adversarial review; it claims no runtime safety,
 Task 2 completion or authority to proceed past step 9.
+
+### Task 2 Adversarial Correction — Separate Capture/Binding And Close Last-Pin Lifetime
+
+- Correction entry clean at **`85bc17d7e9f5ae28c82ecd1f85698a0a030431f8`**,
+  exact ticket branch/worktree, ahead of origin by that unpushed checkpoint.
+  Full Task 2 base remains **`7b1912d152a1ab7440bd17c48a0a544e40e19258`**;
+  `origin/main` is unchanged at `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`.
+  This correction owns only this ledger and its new canonical comment; approved
+  Cycle/design, production source, tests, schemas and Cargo files are unchanged.
+- Controller accepted **two Important internal mechanism findings**, not policy
+  ambiguities or merely missing runtime tests. Both counterexamples verified
+  against source before revision. No checkpoint approval or review pass claimed.
+
+| Finding / verified counterexample | Concrete correction in this proposal | Proposed evidence (none executed) |
+| --- | --- | --- |
+| **F1 — circular original-P receipt production.** At `reservation.rs:690–740`, returned advertisement batch exists; `poll.rs:1673–1696` has not yet processed primary/targets. The original manifest belongs to finalization at `:1916–1931`, original refresh/Complete wrapper to `:1946–1957`; approved design `:516–529` puts eligibility after that. A digest+eligible scope cannot authorize the earlier immutable ad capture. Existing finish capture callback itself follows `finish` (`reservation.rs:1551–1557`). | Immutable **advertisement provenance** captures returned batch/source/epoch/config at A1 under valid UNPLANNED P/R execution, with a source pin but no deletion authority. A2's private **pre-terminal owned-finalization** hook atomically freezes full image/report/digest and inserts a separate immutable consumption binding/consumer pin, eligibility unconfirmed. A3's original wrapper + process token alone can set eligible; A4 consumption/child begin gates on it. S/frozen batch can capture both layers in one owned ad transaction. No placeholder digest edit, second ad, completed replay or current-snapshot inference. Unbound stop/fence and ineligible/unconfirmed handoff have explicit release lifetimes and no local retirement debt. | New **39–41**, strengthened **31–34/38**; UNPLANNED → one ad → complete frozen binding → eligible → consumption; every crash/fence/stop/empty-worklist window. Inert contract projections are allowed for Task 2 but do not prove Task 4's actual producer/coordinator. |
+| **F2 — final unpin strands unsupported history.** Config G→G+1 retains B as noncurrent via S's pin (`state.rs:2389–2396`), but old proposal TF simply released it. `:6193–6238` startup history audit then sees B with no accepted window/pin; `repository.rs:4075–4084` rejects service open. Unchanged configure `:2375–2376` does not collect it later. | Exact **Z** writes immutable pin-release receipt, deletes only that holder's pin and conditionally collects **noncurrent** B with no integration-window or other-pin reference, in the same holder terminal/fence/eligibility transaction. Only child observations cascade (`state.rs:79`); provenance/binding/effect/result/release history has no batch FK and remains scalar/non-authorizing. The existing window FK (`:894`) and exact any-window query protect integration history. Current projection/D14 state are never changed. Replayed release cannot resolve a reused scalar batch ID or repeat collection; missing release evidence refuses audit. | New **42–44**, strengthened **30/36/38**; actual proposed service **close/reopen after last release**, shared source/consumer pins and valid integration window, transaction rollback/commit uncertainty, scalar-ID reuse, clean FK/history retention and no current projection/materialization/tracking changes. |
+
+The source/FK sweep found only observation-child CASCADE and integration-window
+deferred NO ACTION references to the existing batch table, and no production
+runtime window-delete path to modify. The collector respects **any** surviving
+window; tests may remove the final fixture reference and invoke the predicate to
+prove when collection becomes safe, without adding an unrelated integration
+history-cleanup behavior. New live pin FKs protect B; scalar provenance, binding
+and release history must not acquire a batch FK that would defeat safe collection.
+The full seven-table envelope and A0–A4/Z rules supersede the initial five-table
+proposal at `85bc17d7`; the original canonical checkpoint is preserved as history.
+
+**Actual correction evidence:** source/design/ledger reads and targeted FK/delete
+searches; clean SHA/status verification; existing CLI `id new`; actual UTC via
+`date -u`; final diff/staged/full-range whitespace and scope checks at handoff.
+**No Cargo, tests, compilation, SQL probe, runtime implementation or production
+change. Tests written 0; RED 0; GREEN 0.** The matrix now specifies **44 proposed
+test groups**, not 44 passing tests. No agent, push, PR, other-worktree edit,
+real-context action, ticket status save, main integration or native CI.
+
+Canonical correction checkpoint: **`01M6MKMPHJBFGKFGP4QGD9B4R4`**, parent
+`01M6MJDR01K71MT2TKBP560Z8W`, actual UTC **`2026-11-05T01:02:16Z`**. Next gate:
+controller returns this exact corrected proposal to the **same adversarial
+reviewer**, resolves any remaining findings and only then sends this implementer
+past the checkpoint into Task 2 TDD. No new owner-policy ambiguity identified;
+no approval/pass/Task 2 completion is claimed.
