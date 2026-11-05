@@ -412,6 +412,16 @@ fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError
             // The enclosing migration transaction rolls back every DDL/data step.
             let old_schema = POLL_DISPOSITION_SCHEMA.replace("'closed','promoted',", "");
             validate_poll_disposition_envelope(tx, &old_schema)?;
+            // Validate retained evidence against its original enum before the
+            // wider CHECK can legitimize corrupt old `closed`/`promoted` rows.
+            let invalid_old_disposition: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM remote_poll_dispositions WHERE disposition IS NULL OR disposition NOT IN ('current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','history_unknown','not_reached'))",
+                [],
+                |r| r.get(0),
+            ).map_err(|_| recovery_required())?;
+            if invalid_old_disposition {
+                return Err(recovery_required());
+            }
             tx.execute_batch("DROP TRIGGER remote_poll_disposition_owner_immutable; ALTER TABLE remote_poll_dispositions RENAME TO remote_poll_dispositions_old;").map_err(|_|recovery_required())?;
             tx.execute_batch(POLL_DISPOSITION_SCHEMA)
                 .map_err(|_| recovery_required())?;

@@ -691,10 +691,20 @@ fn retirement_disposition_exact_old_enum_upgrade_preserves_evidence_and_owner() 
         rows[1].disposition(),
         super::super::poll::PollDisposition::Promoted
     );
+    // These values are legitimate once the exact current17 envelope exists.
+    // Reopening must not apply the old15 corruption check to the current table.
+    RepositoryService::open_at(data.path()).unwrap();
+    assert_eq!(read_poll_dispositions(&db, 1).unwrap(), rows);
+    assert_eq!(
+        db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        version
+    );
 }
 
 #[test]
 fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
+    let mut accepted = Vec::new();
     for change in [
         "DROP TRIGGER remote_poll_disposition_owner_immutable",
         "DROP TRIGGER remote_poll_disposition_owner_immutable; CREATE TRIGGER remote_poll_disposition_owner_immutable BEFORE UPDATE ON remote_operation_records BEGIN SELECT 1; END;",
@@ -703,6 +713,8 @@ fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
         "ALTER TABLE remote_operation_records DROP COLUMN poll_next_eligible_at",
         "ALTER TABLE remote_operation_records DROP COLUMN poll_completed_at; ALTER TABLE remote_operation_records ADD COLUMN poll_completed_at TEXT",
         "PRAGMA writable_schema=ON; UPDATE sqlite_master SET sql=replace(sql,'''remotely_deleted''','''REMOTELY_DELETED''') WHERE name='remote_poll_dispositions'; PRAGMA writable_schema=OFF",
+        "PRAGMA ignore_check_constraints=ON; UPDATE remote_poll_dispositions SET disposition='closed'",
+        "PRAGMA ignore_check_constraints=ON; UPDATE remote_poll_dispositions SET disposition='promoted'",
         "PRAGMA ignore_check_constraints=ON; UPDATE remote_poll_dispositions SET disposition='substituted'",
     ] {
         let (data, _, service, _) = review_completed_state();
@@ -717,6 +729,20 @@ fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
         // but do not carry the fixture writer's CHECK bypass into migration.
         db.execute_batch("PRAGMA ignore_check_constraints=OFF")
             .unwrap();
+        let corrupt_enum = change.contains("ignore_check_constraints");
+        if corrupt_enum {
+            let integrity: String = db
+                .query_row(
+                    "PRAGMA integrity_check(remote_poll_dispositions)",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert!(
+                integrity.contains("CHECK constraint failed"),
+                "{change}: {integrity}"
+            );
+        }
         let schema = |db: &Connection| {
             db.prepare("SELECT name,sql FROM sqlite_master ORDER BY name")
                 .unwrap()
@@ -727,12 +753,30 @@ fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap()
         };
+        let rows = |db: &Connection, table: &str| {
+            let mut query = db
+                .prepare(&format!("SELECT rowid,* FROM {table} ORDER BY rowid"))
+                .unwrap();
+            let columns = query.column_count();
+            query
+                .query_map([], |r| {
+                    (0..columns)
+                        .map(|column| r.get::<_, rusqlite::types::Value>(column))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        };
         let before = schema(&db);
+        let dispositions_before = rows(&db, "remote_poll_dispositions");
+        let owners_before = rows(&db, "remote_operation_records");
+        assert!(!dispositions_before.is_empty());
         let version: i64 = db
             .query_row("PRAGMA schema_version", [], |r| r.get(0))
             .unwrap();
         let tx = db.transaction().unwrap();
-        assert!(migrate_poll_dispositions(&tx).is_err(), "{change}");
+        let refused = migrate_poll_dispositions(&tx).is_err();
         tx.rollback().unwrap();
         assert_eq!(schema(&db), before, "{change}");
         assert_eq!(
@@ -742,14 +786,38 @@ fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
             "{change}"
         );
         assert_eq!(
-            db.query_row("SELECT count(*) FROM remote_poll_dispositions", [], |r| r
-                .get::<_, i64>(
-                0
-            ))
-            .unwrap(),
-            1
+            rows(&db, "remote_poll_dispositions"),
+            dispositions_before,
+            "{change}"
         );
+        assert_eq!(
+            rows(&db, "remote_operation_records"),
+            owners_before,
+            "{change}"
+        );
+        if corrupt_enum {
+            let owner_update = db.execute(
+                "UPDATE remote_operation_records SET operation_ulid=operation_ulid",
+                [],
+            );
+            assert!(
+                matches!(owner_update, Err(rusqlite::Error::SqliteFailure(_, Some(ref message))) if message == "immutable disposition owner"),
+                "{change}: {owner_update:?}"
+            );
+            assert_eq!(
+                rows(&db, "remote_operation_records"),
+                owners_before,
+                "{change}"
+            );
+        }
+        if !refused {
+            accepted.push(change);
+        }
     }
+    assert!(
+        accepted.is_empty(),
+        "old-schema corruption unexpectedly accepted: {accepted:?}"
+    );
 }
 
 #[test]
