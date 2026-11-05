@@ -11,7 +11,7 @@ use manyhands::repository::{
 
 use super::{TICKET, canonical, content, entry, external, inspection};
 use crate::desktop::{
-    model::conflict::{ConflictModel, ConflictSet, ExternalReason},
+    model::conflict::{ConflictModel, ExternalReason},
     test_support::fixtures::{Fixture, ticket_path},
 };
 
@@ -76,48 +76,61 @@ fn a_local_set_that_cannot_start_goes_outside() {
     );
 }
 
-/// R-26's exceptions: a historical read (an attempt has written paths,
-/// P24 and K-10) and a resumable one (a prepared commit, P15) also answer
-/// `can_start_resolution: false`, and are not sent outside. The partial
-/// resolution is real (`LocalSyncAfterResolutionPath`); the resumable
-/// inspection is canned, of the parent module's shape with the way on
-/// `resume`, as `tests/mutation_replay/local_sync_spec.rs`
-/// `spec_resume_aliases_use_canonical_local_scope` reads one after
-/// `LocalSyncAfterCandidate`.
+/// R-26's exceptions, real: a historical read (an attempt has written
+/// paths, P24 and K-10; `LocalSyncAfterResolutionPath`) and a resumable one
+/// (its commit prepared, P15; `LocalSyncAfterCandidate`, as
+/// `tests/mutation_replay/local_sync_spec.rs`
+/// `spec_resume_aliases_use_canonical_local_scope` stops one) both answer
+/// `can_start_resolution: false`, and are not sent outside. The real
+/// resumable read is historical too (M-g): no fixture reaches a resumable
+/// read that is not, so none is canned.
 #[test]
 fn a_historical_or_resumable_local_read_is_not_sent_outside() {
     let fixture = Fixture::new();
-    let root = fixture.create_repository("a");
-    let operation = fixture.conflict_locally(&root, TICKET, "Mine", "Theirs");
-    fixture.stop_local_resolution(
-        &root,
-        operation,
-        RequestId::new(),
-        FailurePoint::LocalSyncAfterResolutionPath,
-    );
-    let (inspection, contents) = fixture.read_local_conflict(&root, operation);
-    assert!(!inspection.can_start_resolution);
-    let model = ConflictModel::from_local(&inspection, &contents);
-    assert!(model.historical());
-    assert_eq!(canonical(&model).len(), 1, "P24's Retry takes it");
-
-    // Canned: resumable, with the same canonical path.
-    let ticket_entry = entry(&ticket_path(TICKET), true);
-    let mut resumable = inspection_of_resume(ticket_entry.clone());
-    resumable.can_start_resolution = false;
-    let model = ConflictModel::from_local(&resumable, &[content(&ticket_entry.token, false)]);
-    assert!(model.resume());
-    assert!(matches!(model.set(), ConflictSet::Canonical(_)));
+    for (name, failure) in [
+        ("a", FailurePoint::LocalSyncAfterResolutionPath),
+        ("b", FailurePoint::LocalSyncAfterCandidate),
+    ] {
+        let root = fixture.create_repository(name);
+        let operation = fixture.conflict_locally(&root, TICKET, "Mine", "Theirs");
+        fixture.stop_local_resolution(&root, operation, RequestId::new(), failure);
+        let (inspection, contents) = fixture.read_local_conflict(&root, operation);
+        assert!(!inspection.can_start_resolution);
+        let model = ConflictModel::from_local(&inspection, &contents);
+        assert!(model.historical());
+        assert_eq!(
+            model.resume(),
+            failure == FailurePoint::LocalSyncAfterCandidate,
+            "the prepared commit is resumed"
+        );
+        assert_eq!(canonical(&model).len(), 1, "not sent outside");
+    }
 }
 
-fn inspection_of_resume(
-    path: manyhands::repository::LocalContextConflictEntryDto,
-) -> manyhands::repository::LocalContextSyncInspectionDto {
-    let mut resumable = inspection(
-        LocalContextSyncReason::CanonicalConflict,
-        LocalContextSyncEligibility::EligibleCanonical,
-        vec![path],
+/// R-26 as refined (review I-B), real: with no Git identity the library
+/// answers `can_start_resolution: false` and the way on `set_identity`
+/// (`src/repository/local_sync/request.rs`, the `identity_required`
+/// reason). The set stays on the sheet, where the resolution's
+/// `identity_required` answer points to Set identity.
+#[test]
+fn a_missing_identity_keeps_the_local_set_on_the_sheet() {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let operation = fixture.conflict_locally(&root, TICKET, "Mine", "Theirs");
+    let git = git2::Repository::open(&root).unwrap();
+    let mut config = git
+        .config()
+        .unwrap()
+        .open_level(git2::ConfigLevel::Local)
+        .unwrap();
+    config.remove("user.name").unwrap();
+    config.remove("user.email").unwrap();
+    let (inspection, contents) = fixture.read_local_conflict(&root, operation);
+    assert_eq!(
+        inspection.next_action,
+        LocalContextSyncNextAction::SetIdentity
     );
-    resumable.next_action = LocalContextSyncNextAction::Resume;
-    resumable
+    assert!(!inspection.can_start_resolution);
+    let model = ConflictModel::from_local(&inspection, &contents);
+    assert_eq!(canonical(&model).len(), 1);
 }

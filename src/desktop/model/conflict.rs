@@ -32,7 +32,7 @@ use manyhands::{
 
 use crate::desktop::services::requests::PathResolution;
 
-pub(crate) use lines::{Mark, marked};
+pub(crate) use lines::{Mark, Marked};
 pub(crate) use merge::{BodyChoice, BodyPart, Choice, PathConflict, PathResult};
 
 /// The card note of a path whose result is written in the standard layout
@@ -154,9 +154,10 @@ impl ConflictModel {
     /// does not classify as an item's (U-2), or its sides are not given or
     /// do not parse. R-26: also when the inspection's way on is
     /// `external_repair`, or it cannot start a resolution while the read is
-    /// neither historical nor resumable (an active attempt and a prepared
-    /// commit also answer `can_start_resolution: false`; P24's Retry, K-10
-    /// and P15 keep their own ways).
+    /// neither historical nor resumable, nor waiting for a Git identity (an
+    /// active attempt, a prepared commit and a missing identity also answer
+    /// `can_start_resolution: false`; P24's Retry, K-10, P15 and Set
+    /// identity keep their own ways).
     pub(crate) fn from_local(
         inspection: &LocalContextSyncInspectionDto,
         contents: &[LocalContextConflictContentDto],
@@ -202,7 +203,10 @@ impl ConflictModel {
         });
         let external = inspection.eligibility
             == Some(LocalContextSyncEligibility::ExternalResolutionRequired)
-            || (!inspection.can_start_resolution && !historical && !resume);
+            || (!inspection.can_start_resolution
+                && !historical
+                && !resume
+                && inspection.next_action != LocalContextSyncNextAction::SetIdentity);
         Self {
             observation,
             historical,

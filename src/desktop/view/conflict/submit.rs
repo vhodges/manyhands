@@ -7,12 +7,12 @@ use manyhands::{
     results::{CheckpointEffect, Effects, RecoveryAction, ResultCode},
 };
 
-use super::{CHANGED, EARLIER_USED, ResolveSheet, SheetSource};
+use super::{CHANGED, EARLIER_USED, NOT_SENT_AGAIN, ResolveSheet, SheetSource};
 use crate::desktop::{
     model::conflict::ConflictModel,
     services::{
         requests::{DesktopRequestId, Intent, Lane, PathResolution, RequestState},
-        resolutions::{Followup, KeptSet, ResolutionStore},
+        resolutions::{Followed, Followup, KeptSet, ResolutionStore, ResolutionStoreError},
     },
 };
 
@@ -75,14 +75,14 @@ impl ResolveSheet {
     /// Save resolution, by click or Ctrl+Enter: Retry with the kept set
     /// when there is one; another window's set of this conflict, when one
     /// is kept; otherwise a new set, once every part is chosen.
-    pub(super) fn save(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.waiting() || self.resumable() || self.lost() {
             return;
         }
         self.notice = None;
         self.answer = None;
         if let Some(kept) = self.kept.clone() {
-            self.send_kept(kept, cx);
+            self.send_kept(kept, window, cx);
             return;
         }
         let Some(model) = &self.model else {
@@ -98,7 +98,7 @@ impl ResolveSheet {
             if !same(&earlier.resolutions, &resolutions) {
                 self.notice = Some(EARLIER_USED);
             }
-            self.send_kept(earlier, cx);
+            self.send_kept(earlier, window, cx);
             return;
         }
         let set = KeptSet {
@@ -110,13 +110,13 @@ impl ResolveSheet {
             observation,
             resolutions,
         };
-        self.submit(set, cx);
+        self.submit(set, window, cx);
     }
 
     /// Sends `set` again under its own request ID: follows its request
     /// while this session has it out, retries it when it has its answer,
     /// and submits it otherwise (after a restart).
-    pub(super) fn send_kept(&mut self, set: KeptSet, cx: &mut Context<Self>) {
+    pub(super) fn send_kept(&mut self, set: KeptSet, window: &mut Window, cx: &mut Context<Self>) {
         let held = self
             .services
             .operations()
@@ -136,9 +136,13 @@ impl ResolveSheet {
                 self.register(set.request_id);
                 if self.services.worker().retry(id, None) {
                     self.following = Some((id, attempt + 1));
+                } else {
+                    // M-c: quitting closed the queue, or a later request of
+                    // the item stands in its way.
+                    self.error = Some(NOT_SENT_AGAIN.to_owned());
                 }
             }
-            None => self.submit(set, cx),
+            None => self.submit(set, window, cx),
         }
         cx.notify();
     }
@@ -168,26 +172,45 @@ impl ResolveSheet {
     }
 
     /// Keeps `set`, then sends it; one that cannot be kept is not sent.
-    pub(super) fn submit(&mut self, set: KeptSet, cx: &mut Context<Self>) {
+    pub(super) fn submit(&mut self, set: KeptSet, window: &mut Window, cx: &mut Context<Self>) {
         self.error = None;
         self.submitting = true;
         let request = set.request_id;
-        // Registered before it is sent, so no answer comes before it.
+        // Registered before it is sent, so no answer comes before it; a
+        // set that could not be kept takes it away again.
         self.register(request);
         let submitted = self.services.submit_resolution(set, cx);
-        cx.spawn(async move |sheet, cx| {
+        cx.spawn_in(window, async move |sheet, cx| {
             let submitted = submitted.await;
-            let _ = sheet.update(cx, |sheet, cx| {
-                sheet.submitting = false;
-                match submitted {
-                    Ok(id) => sheet.following = Some((id, 1)),
-                    Err(error) => sheet.error = Some(error.to_string()),
-                }
-                // An answer that came while the set was being kept.
-                cx.notify();
+            let _ = sheet.update_in(cx, |sheet, window, cx| {
+                sheet.submitted(request, submitted, window, cx)
             });
         })
         .detach();
+    }
+
+    /// The set of `request` was kept and its request queued, or not. The
+    /// answer may have come already, while the set was being kept: it is
+    /// taken now (review I-A).
+    pub(super) fn submitted(
+        &mut self,
+        request: RequestId,
+        submitted: Result<DesktopRequestId, ResolutionStoreError>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.submitting = false;
+        match submitted {
+            Ok(id) => {
+                self.following = Some((id, 1));
+                self.operations_changed(window, cx);
+            }
+            Err(error) => {
+                self.services.followups().forget(request);
+                self.error = Some(error.to_string());
+            }
+        }
+        cx.notify();
     }
 
     /// The followed request's answer, once per attempt.
@@ -236,7 +259,7 @@ impl ResolveSheet {
         self.spent.push(request);
         self.answer = None;
         match code {
-            ResultCode::Ok | ResultCode::AlreadyApplied => self.applied(window, cx),
+            ResultCode::Ok | ResultCode::AlreadyApplied => self.applied(request, window, cx),
             ResultCode::Cancelled if effects.checkpoint == CheckpointEffect::Committed => {
                 self.stopped = true;
             }
@@ -265,12 +288,22 @@ impl ResolveSheet {
     }
 
     /// Applied (B3's table): the sheet closes. A lifecycle child's is sent
-    /// on by the drain's follow-up (R-10, I-3); the sheet shows the run in
-    /// the lifecycle's dialog when this session holds its request.
-    pub(super) fn applied(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// on by the drain's follow-up (R-10, I-3), which says what it did
+    /// (M-b): the lifecycle's request sent again, whose run its dialog then
+    /// shows; or the operation resumed, which the operation area shows, and
+    /// never the earlier run.
+    pub(super) fn applied(
+        &mut self,
+        resolution: RequestId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.close(window, cx);
-        let (SheetSource::Close(Some(lifecycle)) | SheetSource::Merge(Some(lifecycle))) =
-            self.source
+        let followed = self.services.followups().take_followed(resolution);
+        let (
+            Some(Followed::Resent),
+            SheetSource::Close(Some(lifecycle)) | SheetSource::Merge(Some(lifecycle)),
+        ) = (followed, self.source)
         else {
             return;
         };
@@ -281,9 +314,9 @@ impl ResolveSheet {
             .request(lifecycle)
             .cloned();
         if let Some(request) = request {
-            crate::desktop::view::lifecycle::reopen(
+            crate::desktop::view::lifecycle::reopen_as(
                 &request,
-                (self.heading.primary.clone(), self.heading.remote.clone()),
+                self.heading.clone(),
                 self.origin.clone(),
                 &self.services,
                 window,

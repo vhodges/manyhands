@@ -75,6 +75,8 @@ pub(crate) const CHANGED: &str = "This changed while you were choosing.";
 /// A Save found another window's set of this conflict (R-12).
 pub(crate) const EARLIER_USED: &str =
     "An earlier resolution is still being saved; it is used instead.";
+/// A kept set's request could not be queued again (review M-c).
+pub(crate) const NOT_SENT_AGAIN: &str = "The earlier resolution could not be sent again.";
 /// A part's choice, or that it has none yet.
 pub(crate) const CHOOSE_ONE: &str = "Choose one";
 pub(crate) const KEEPING_MINE: &str = "Keeping yours";
@@ -443,3 +445,7 @@ mod review_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "conflict/stale_tests.rs"]
 mod stale_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "conflict/followup_tests.rs"]
+mod followup_tests;

@@ -33,7 +33,7 @@ use crate::desktop::{
 
 mod pieces;
 
-use pieces::{body_state, column, field_state, state, taken_words, text};
+use pieces::{before_column, body_state, field_state, marked_column, state, taken_words, text};
 
 /// What a part is called in its card: the body is the Description.
 const DESCRIPTION: &str = "Description";
@@ -309,9 +309,9 @@ impl ResolveSheet {
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(column(BEFORE, &part.base, None, line, cx))
-                            .child(column(YOURS, &part.mine, Some(&part.base), line, cx))
-                            .child(column(THEIRS, &part.theirs, Some(&part.base), line, cx)),
+                            .child(before_column(BEFORE, part.base.as_deref()))
+                            .child(marked_column(YOURS, part.lines[0].as_ref(), line, cx))
+                            .child(marked_column(THEIRS, part.lines[1].as_ref(), line, cx)),
                     ),
             );
         }
@@ -351,7 +351,6 @@ impl ResolveSheet {
                 .selected(choice == Some(kept))
                 .on_click(self.on(cx, move |sheet, _, cx| sheet.choose_body(index, kept, cx)))
         };
-        let base = Some(body.base.clone());
         v_flex()
             .gap_1()
             .p_2()
@@ -382,21 +381,9 @@ impl ResolveSheet {
             .child(
                 h_flex()
                     .gap_2()
-                    .child(column(BEFORE, &base, None, line, cx))
-                    .child(column(
-                        YOURS,
-                        &Some(body.mine.clone()),
-                        Some(&base),
-                        line,
-                        cx,
-                    ))
-                    .child(column(
-                        THEIRS,
-                        &Some(body.theirs.clone()),
-                        Some(&base),
-                        line,
-                        cx,
-                    )),
+                    .child(before_column(BEFORE, Some(&body.base)))
+                    .child(marked_column(YOURS, Some(&body.lines[0]), line, cx))
+                    .child(marked_column(THEIRS, Some(&body.lines[1]), line, cx)),
             )
             .child(div().text_xs().child(RESULT))
             .child(
@@ -435,7 +422,7 @@ impl ResolveSheet {
                     .primary()
                     .small()
                     .disabled(self.waiting())
-                    .on_click(self.on(cx, |sheet, _, cx| sheet.save(cx))),
+                    .on_click(self.on(cx, |sheet, window, cx| sheet.save(window, cx))),
             );
         } else if self.lost() {
             row = row.child(text("conflict-lost", LOST).text_sm());
@@ -454,7 +441,7 @@ impl ResolveSheet {
                     .primary()
                     .small()
                     .disabled(!ready)
-                    .on_click(self.on(cx, |sheet, _, cx| sheet.save(cx))),
+                    .on_click(self.on(cx, |sheet, window, cx| sheet.save(window, cx))),
             );
         }
         row.child(
@@ -476,7 +463,7 @@ impl Render for ResolveSheet {
             .id("conflict-sheet")
             .test_support()
             .key_context(RESOLVE_SHEET_CONTEXT)
-            .on_action(cx.listener(|sheet, _: &SaveResolution, _, cx| sheet.save(cx)))
+            .on_action(cx.listener(|sheet, _: &SaveResolution, window, cx| sheet.save(window, cx)))
             .gap_3()
             .max_h(px(720.))
             .overflow_y_scroll()

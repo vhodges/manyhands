@@ -6,6 +6,8 @@ use manyhands::canonical::{CanonicalItem, parse_item, serialize_item};
 use serde_yaml::{Mapping, Value};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
+use super::lines::{Marked, marked};
+
 /// Keep mine or Keep theirs, for a field; also which side a field only one
 /// side changed is taken from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -32,6 +34,9 @@ pub(crate) struct FieldPart {
     pub mine: Option<String>,
     pub theirs: Option<String>,
     pub choice: Option<Choice>,
+    /// Mine's and theirs' lines marked against Before, made once per read
+    /// (handoff 2g; review M-e); `None` for a side with no value.
+    pub lines: [Option<Marked>; 2],
     slot: Slot,
 }
 
@@ -50,6 +55,8 @@ pub(crate) struct BodyPart {
     pub choice: Option<BodyChoice>,
     /// The Result editor's text.
     pub result: String,
+    /// Mine's and theirs' lines marked against Before, made once per read.
+    pub lines: [Marked; 2],
 }
 
 /// A path's result.
@@ -128,14 +135,25 @@ impl PathConflict {
             match three_way(&b, &m, &t) {
                 Merge::Same => {}
                 Merge::Taken(from) => taken.push(TakenField { key, from, slot }),
-                Merge::Choose => fields.push(FieldPart {
-                    key,
-                    base: b.as_ref().map(value_text),
-                    mine: m.as_ref().map(value_text),
-                    theirs: t.as_ref().map(value_text),
-                    choice: None,
-                    slot,
-                }),
+                Merge::Choose => {
+                    let base = b.as_ref().map(value_text);
+                    let mine = m.as_ref().map(value_text);
+                    let theirs = t.as_ref().map(value_text);
+                    let before = base.as_deref().unwrap_or("");
+                    let lines = [
+                        mine.as_deref().map(|side| marked(before, side)),
+                        theirs.as_deref().map(|side| marked(before, side)),
+                    ];
+                    fields.push(FieldPart {
+                        key,
+                        base,
+                        mine,
+                        theirs,
+                        choice: None,
+                        lines,
+                        slot,
+                    })
+                }
             }
         }
         let (b, m, t) = (body(&base_item), body(&mine_item), body(&theirs_item));
@@ -149,6 +167,7 @@ impl PathConflict {
                     theirs: t.to_owned(),
                     choice: None,
                     result: m.to_owned(),
+                    lines: [marked(b, m), marked(b, t)],
                 }),
                 None,
             ),

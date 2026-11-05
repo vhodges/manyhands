@@ -14,7 +14,7 @@ use super::super::{
     CHOOSE_ONE, KEEPING_BOTH, KEEPING_EDITED, KEEPING_MINE, KEEPING_THEIRS, TAKEN_MINE,
     TAKEN_THEIRS,
 };
-use crate::desktop::model::conflict::{BodyChoice, Choice, Mark, marked};
+use crate::desktop::model::conflict::{BodyChoice, Choice, Mark, Marked};
 
 /// A side with no value.
 const NONE: &str = "(none)";
@@ -67,42 +67,52 @@ pub(super) fn state(id: (&'static str, usize), words: &'static str, cx: &App) ->
     text(id, words).text_xs().text_color(color)
 }
 
-/// One side's text in mono lines (handoff 2g). Before's lines are plain.
-/// Against `before`, each of Yours' or Theirs' lines is unchanged, or
-/// tinted amber with `~` where Before's differs, or green with `+` where
-/// Before has none; each such line is a `conflict-line` row, numbered
-/// across the sheet. No side is "(none)".
-pub(super) fn column(
+/// Before's text in plain mono lines (handoff 2g); "(none)" when Before
+/// has no value.
+pub(super) fn before_column(label: &'static str, value: Option<&str>) -> impl IntoElement {
+    let lines = v_flex().min_w_0().font_family("monospace").text_sm();
+    let lines = match value {
+        None => lines.child(div().child(NONE)),
+        Some(value) => lines.children(value.lines().map(|text| div().child(text.to_owned()))),
+    };
+    side(label, lines)
+}
+
+/// Yours' or Theirs' lines, as the model marked them against Before once
+/// per read (R-27; review M-e): unchanged lines muted, changed ones tinted
+/// amber with `~`, added green with `+`, removed red with `-`. Each line is
+/// a `conflict-line` row, numbered across the sheet. A side with no value
+/// reads "(none)".
+pub(super) fn marked_column(
     label: &'static str,
-    value: &Option<String>,
-    before: Option<&Option<String>>,
+    marked: Option<&Marked>,
     line: &Cell<usize>,
     cx: &App,
 ) -> impl IntoElement {
     let mut lines = v_flex().min_w_0().font_family("monospace").text_sm();
-    match (value, before) {
-        (None, _) => lines = lines.child(div().child(NONE)),
-        (Some(value), None) => {
-            lines = lines.children(value.lines().map(|text| div().child(text.to_owned())));
-        }
-        (Some(value), Some(before)) => {
-            let before = before.as_deref().unwrap_or("");
-            for (mark, text) in marked(before, value) {
-                let at = line.get();
-                line.set(at + 1);
-                let row = div()
-                    .id(("conflict-line", at))
-                    .test_support()
-                    .aria_label(format!("{} {text}", mark.gutter()));
-                let row = match mark {
-                    Mark::Same => row.text_color(cx.theme().muted_foreground),
-                    Mark::Changed => row.bg(cx.theme().warning.opacity(0.14)),
-                    Mark::Added => row.bg(cx.theme().success.opacity(0.14)),
-                };
-                lines = lines.child(row.child(format!("{} {text}", mark.gutter())));
-            }
-        }
+    let Some(marked) = marked else {
+        return side(label, lines.child(div().child(NONE)));
+    };
+    for (mark, text) in marked {
+        let at = line.get();
+        line.set(at + 1);
+        let words = format!("{} {text}", mark.gutter());
+        let row = div()
+            .id(("conflict-line", at))
+            .test_support()
+            .aria_label(words.clone());
+        let row = match mark {
+            Mark::Same => row.text_color(cx.theme().muted_foreground),
+            Mark::Changed => row.bg(cx.theme().warning.opacity(0.14)),
+            Mark::Added => row.bg(cx.theme().success.opacity(0.14)),
+            Mark::Removed => row.bg(cx.theme().danger.opacity(0.14)),
+        };
+        lines = lines.child(row.child(words));
     }
+    side(label, lines)
+}
+
+fn side(label: &'static str, lines: gpui_kit::Div) -> impl IntoElement {
     v_flex()
         .flex_1()
         .min_w_0()

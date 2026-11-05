@@ -493,7 +493,7 @@ impl From<DraftError> for ResolutionStoreError {
 mod submit;
 
 pub(super) use submit::{Ended, settle_finished, source_of, sweep_at_launch};
-pub(crate) use submit::{Followup, Followups};
+pub(crate) use submit::{Followed, Followup, Followups};
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "resolutions_tests.rs"]

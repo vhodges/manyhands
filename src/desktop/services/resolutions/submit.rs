@@ -72,18 +72,24 @@ pub(in crate::desktop::services) struct Ended {
 }
 
 /// What each of `ended` means for its kept set, on the background
-/// executor.
+/// executor. A set deleted takes its follow-up with it: nothing can apply
+/// that resolution any more (review M-a).
 pub(in crate::desktop::services) fn settle_finished(
     backend: &Arc<dyn Backend>,
+    followups: &Followups,
     ended: Vec<Ended>,
     cx: &AsyncApp,
 ) {
     let backend = backend.clone();
+    let followups = followups.clone();
     cx.background_executor()
         .spawn(async move {
             if let Ok(store) = backend.resolutions() {
                 for ended in &ended {
                     store.ended(backend.as_ref(), ended);
+                    if matches!(store.kept(ended.request), Ok(None)) {
+                        followups.forget(ended.request);
+                    }
                 }
             }
         })
@@ -110,29 +116,65 @@ pub(crate) struct Followup {
     pub operation_id: OperationId,
 }
 
-/// The follow-ups of resolutions sent, by request ID. The drain takes one
-/// when its resolution ends, so it follows whether or not a sheet is still
-/// open (I-3).
+/// What the drain did for an applied lifecycle child's resolution, for its
+/// sheet to show (review M-b).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Followed {
+    /// The lifecycle's request was sent again, or is still running.
+    Resent,
+    /// It could not be sent again: the operation was resumed instead, by
+    /// this request.
+    Resumed(DesktopRequestId),
+}
+
+#[derive(Default)]
+struct Registry {
+    waiting: HashMap<RequestId, Followup>,
+    followed: HashMap<RequestId, Followed>,
+}
+
+/// The follow-ups of resolutions sent, by request ID. The drain runs one
+/// when its resolution is applied, whether or not a sheet is still open
+/// (I-3). One stays while its resolution's kept set does, so a Retry from
+/// the operation area still sends the lifecycle on (review M-a); it goes
+/// when the resolution is applied or its set is deleted.
 #[derive(Clone, Default)]
-pub(crate) struct Followups(Arc<Mutex<HashMap<RequestId, Followup>>>);
+pub(crate) struct Followups(Arc<Mutex<Registry>>);
 
 impl Followups {
     /// `followup` follows the resolution `request` once it is applied.
     pub(crate) fn register(&self, request: RequestId, followup: Followup) {
-        self.lock().insert(request, followup);
+        self.lock().waiting.insert(request, followup);
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<RequestId, Followup>> {
+    /// The resolution `request` will not be applied: its set is gone, or
+    /// was never kept.
+    pub(crate) fn forget(&self, request: RequestId) {
+        self.lock().waiting.remove(&request);
+    }
+
+    /// What the drain did once `request` was applied, taken once.
+    pub(crate) fn take_followed(&self, request: RequestId) -> Option<Followed> {
+        self.lock().followed.remove(&request)
+    }
+
+    /// Whether a follow-up waits on `request`.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn waits_on(&self, request: RequestId) -> bool {
+        self.lock().waiting.contains_key(&request)
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Registry> {
         self.0
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The resolution `request` ended with `code`: its follow-up runs when
-    /// it was applied, and is forgotten either way (a Retry registers it
-    /// again). While the lifecycle is queued or running nothing is sent:
-    /// it goes on by itself. One that cannot be sent again resumes the
-    /// operation instead (M-3).
+    /// The resolution `request` ended with `code`. Applied, its follow-up
+    /// runs and is recorded: the lifecycle's request sent again, or left
+    /// while it is queued or running, as it goes on by itself; one that
+    /// cannot be sent again resumes the operation instead (M-3). Any other
+    /// answer leaves it waiting while the set is kept.
     pub(in crate::desktop::services) fn ended(
         &self,
         request: RequestId,
@@ -140,12 +182,17 @@ impl Followups {
         operations: &Operations,
         worker: &WorkerHandle,
     ) {
-        let Some(followup) = self.lock().remove(&request) else {
-            return;
-        };
         if !matches!(code, ResultCode::Ok | ResultCode::AlreadyApplied) {
             return;
         }
+        let Some(followup) = self.lock().waiting.remove(&request) else {
+            return;
+        };
+        let followed = Self::follow(followup, operations, worker);
+        self.lock().followed.insert(request, followed);
+    }
+
+    fn follow(followup: Followup, operations: &Operations, worker: &WorkerHandle) -> Followed {
         if let Some(lifecycle) = followup.lifecycle {
             let running = operations.request(lifecycle).is_some_and(|request| {
                 matches!(
@@ -154,10 +201,10 @@ impl Followups {
                 )
             });
             if running || worker.retry(lifecycle, None) {
-                return;
+                return Followed::Resent;
             }
         }
-        worker.submit(
+        Followed::Resumed(worker.submit(
             Intent::OperationResume {
                 root: followup.root,
                 operation_id: followup.operation_id,
@@ -165,6 +212,6 @@ impl Followups {
             Lane::User,
             None,
             None,
-        );
+        ))
     }
 }

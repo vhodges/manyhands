@@ -111,6 +111,7 @@ pub(crate) const NOT_SENT: &str = "This could not be sent.";
 
 /// Who the dialog speaks of (A22): the item, its repository and its context
 /// branch. It holds the item's title, and derives no `Debug`.
+#[derive(Clone)]
 pub(crate) struct Heading {
     pub kind: ItemDtoKind,
     /// The ticket's short code, or the item's short ID.
@@ -238,6 +239,26 @@ pub(crate) fn reopen(
         primary,
         remote,
     };
+    reopen_as(request, heading, origin, services, window, cx)
+}
+
+/// `reopen`, with who the dialog speaks of already known: from the resolve
+/// conflict sheet, its item's short code and title too (Task 11b review).
+/// `None` for a request that is no lifecycle, or while quitting.
+pub(crate) fn reopen_as(
+    request: &crate::desktop::services::requests::DesktopRequest,
+    heading: Heading,
+    origin: FocusHandle,
+    services: &Services,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<Entity<LifecycleDialog>> {
+    if !matches!(
+        request.intent,
+        Intent::TicketClose { .. } | Intent::DocumentPromote { .. }
+    ) {
+        return None;
+    }
     let opening = Opening {
         intent: request.intent.clone(),
         heading,

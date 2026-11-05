@@ -335,6 +335,7 @@ impl Services {
         let posts = submissions.downgrade();
         let followups = resolutions::Followups::default();
         let following = followups.clone();
+        let settled_followups = followups.clone();
         let resending = worker.clone();
         cx.spawn(async move |cx| {
             while let Some(event) = events.next().await {
@@ -445,7 +446,7 @@ impl Services {
                     break;
                 };
                 if !settled.is_empty() {
-                    resolutions::settle_finished(&settling, settled, cx);
+                    resolutions::settle_finished(&settling, &settled_followups, settled, cx);
                 }
                 if !posted.is_empty() {
                     let retire = posts

@@ -379,6 +379,11 @@ async fn a_lifecycle_child_resolution_sends_the_lifecycle_again(cx: &mut TestApp
         Some(close),
         "it shows the run"
     );
+    // Review: the sheet's heading reaches the dialog, its title too.
+    assert_eq!(
+        shell.label("lifecycle-subtitle", cx).as_deref(),
+        Some("ae-c10s3 \u{b7} Mine \u{b7} a")
+    );
     assert!(opened(cx).is_none(), "the sheet closed");
     shell.until_ended(close, cx).await;
 }

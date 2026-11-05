@@ -39,9 +39,11 @@ async fn pressing_save_twice_sends_one_request(cx: &mut TestAppContext) {
     let sheet = open_sheet(&shell, SheetSource::Local, &root, operation, cx);
     until_present(&shell, "conflict-save", cx).await;
     shell.click(("conflict-keep-mine", 0usize), cx);
-    sheet.update(cx, |sheet, cx| {
-        sheet.save(cx);
-        sheet.save(cx);
+    shell.visual(cx).update(|window, cx| {
+        sheet.update(cx, |sheet, cx| {
+            sheet.save(window, cx);
+            sheet.save(window, cx);
+        })
     });
     until_long(&shell, "the resolution's answer", cx, |shell, cx| {
         resolves(shell, cx)
@@ -170,4 +172,13 @@ async fn a_lifecycle_that_cannot_be_sent_again_resumes_its_row(cx: &mut TestAppC
         })
         .await;
     assert_eq!(resumed(&shell, cx), [operation]);
+    // M-b: the sheet shows the resume, not an earlier run's dialog.
+    assert!(
+        cx.update(|cx| cx
+            .try_global::<crate::desktop::view::lifecycle::OpenedLifecycle>()
+            .and_then(|opened| opened.0.upgrade())
+            .is_none()),
+        "no lifecycle dialog"
+    );
+    assert!(!shell.present("conflict-sheet", cx));
 }
