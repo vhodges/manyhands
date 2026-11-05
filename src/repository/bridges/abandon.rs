@@ -238,7 +238,8 @@ fn writes(operation: RepositoryOperation) -> Writes {
         | RepositoryOperation::CreateFolder
         // A release removes a context that holds nothing of anyone's,
         // and writes no file and no remote state.
-        | RepositoryOperation::ReleaseContext => Writes::Nothing,
+        | RepositoryOperation::ReleaseContext
+        | RepositoryOperation::RetireContext => Writes::Nothing,
     }
 }
 
@@ -391,6 +392,17 @@ impl RepositoryService {
         };
         let bound_local = super::super::local_sync::bound_to_request(self, &root, operation_id)?;
         let found = self.read_session(RepositoryOperation::Read, |connection| {
+            if super::super::context_retirement::record::requires_guarded_abandon(
+                connection,
+                operation_id,
+            )
+            .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?
+            {
+                // Task 3 supplies a retirement-specific preserving preview.
+                // Neither a completed/no-op preview nor generic owner release
+                // can safely describe or settle this companion authority.
+                return Err(ReadError::new(ResultCode::RecoveryRequired));
+            }
             // Asked first: such an ID is not a local operation's,
             // whatever the local journal holds under it.
             if !bound_local
@@ -503,6 +515,17 @@ impl RepositoryService {
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(sqlite)?;
+        if super::super::context_retirement::record::requires_guarded_abandon(
+            &transaction,
+            operation_id,
+        )? {
+            return Err(RepositoryError::new(
+                operation,
+                Some(root.clone()),
+                RepositoryErrorKind::RecoveryRequired,
+                "retirement requires guarded preserving abandonment",
+            ));
+        }
         if recovery::held_by_another_journal(&transaction, &operation_id.to_string())
             .map_err(sqlite)?
         {

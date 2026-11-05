@@ -766,7 +766,8 @@ fn begin_or_reconcile(
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(RepositoryError::sqlite)?;
     if action == "refresh"
-        && !super::local_sync::record::refresh_allowed(&transaction, &requested, root)?
+        && (!super::local_sync::record::refresh_allowed(&transaction, &requested, root)?
+            || !super::context_retirement::record::refresh_allowed(&transaction, &requested, root)?)
     {
         return Err(recovery_required(operation, root));
     }
@@ -981,6 +982,8 @@ local_steps! {
     /// and all the release still owes is its index hand-off. It commits
     /// nothing.
     ContextBranchReleased => "context_branch_released";
+    /// Retirement observed initial absence, not an owned removal or checkpoint.
+    ContextRetirementAbsent => "context_retirement_absent";
     /// A comment's creation time is recorded and its file is about to be
     /// written.
     CommentDestinationPrepared => "comment_destination_prepared";
@@ -1056,6 +1059,7 @@ impl LocalStep {
             // A release removes what holds no work, and commits nothing.
             | Self::ContextWorktreeReleased
             | Self::ContextBranchReleased
+            | Self::ContextRetirementAbsent
             | Self::CommentDestinationPrepared
             | Self::AuthoringDestinationObserved
             | Self::DocumentDestinationObserved
@@ -1086,6 +1090,7 @@ impl LocalStep {
         (self.is_checkpoint() && self != Self::CommentCheckpointIntent)
             || self == Self::RemoteChanged
             || self == Self::ContextBranchReleased
+            || self == Self::ContextRetirementAbsent
     }
 
     /// The step as a call under the same ID is told it when the call
@@ -1110,7 +1115,8 @@ impl LocalStep {
             // A release goes on from the removal it recorded: to the
             // branch, or to the hand-off.
             | Self::ContextWorktreeReleased
-            | Self::ContextBranchReleased => Some(self),
+            | Self::ContextBranchReleased
+            | Self::ContextRetirementAbsent => Some(self),
             Self::BranchObserved
             | Self::LocalSyncPrepared
             | Self::WorktreeObserved
@@ -1525,7 +1531,13 @@ pub(super) fn require_refresh_can_begin(
 ) -> Result<(), RepositoryError> {
     let root_path = root.to_str().ok_or_else(|| invalid_path(operation, root))?;
     let refresh = action_name(RepositoryOperation::RefreshRepository);
-    if !super::local_sync::record::refresh_allowed(connection, &operation_id.to_string(), root)? {
+    if !super::local_sync::record::refresh_allowed(connection, &operation_id.to_string(), root)?
+        || !super::context_retirement::record::refresh_allowed(
+            connection,
+            &operation_id.to_string(),
+            root,
+        )?
+    {
         return Err(recovery_required(operation, root));
     }
     super::promotion::record::validate_local_identity(
@@ -2197,6 +2209,7 @@ pub(super) fn action_name(operation: RepositoryOperation) -> &'static str {
         RepositoryOperation::RebuildRepository => "rebuild",
         RepositoryOperation::PrepareContext => "prepare_context",
         RepositoryOperation::ReleaseContext => "release_context",
+        RepositoryOperation::RetireContext => "retire_context",
         RepositoryOperation::SaveDocument => "save_document",
         RepositoryOperation::SaveTicket => "save_ticket",
         RepositoryOperation::SubmitComment => "submit_comment",
@@ -2595,6 +2608,7 @@ mod abandoned_row_tests {
                 "worktree_observed",
                 "context_worktree_released",
                 "context_branch_released",
+                "context_retirement_absent",
                 "comment_destination_prepared",
                 "comment_checkpoint_intent",
                 "comment_registration_pending",

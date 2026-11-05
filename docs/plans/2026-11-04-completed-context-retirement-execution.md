@@ -375,10 +375,13 @@ are not authorized; numeric exits must come from existing results registry.
   independently spec/quality approved through `2f2f9b9d` from base `834415b9`,
   no remaining findings. Recognition, migration and nested-harness visibility
   corrections verified. All three static gates and targeted evidence recorded.
-- [ ] **2 — Durable single-context retirement.** Source-grounded transition/DDL
-  checkpoint approved at `66c2ca2b` after resolving two Important findings;
-  no Task 2 production changes or tests yet at this checkpoint. Same implementer
-  continues with TDD; full Task 2 spec/quality review remains owed.
+- [ ] **2 — Durable single-context retirement.** Checkpoint approved at `66c2ca2b`;
+  the IN-PROGRESS initial-absence code milestone includes the local-only domain
+  path, exact refresh guards, single-consumer Z and stronger audits. Latest
+  context-retirement filter: **36 passed** (30 Task 2 tests, 6 unchanged proof).
+  Live observation/instance/destructive and source/batch capability paths remain
+  unfinished and unexposed. See the latest bounded-increment section below;
+  not complete/review-ready, full Task 2 spec/quality review remains owed.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
 - [ ] **5 — CLI command/flag/help/rendering.** Not started.
@@ -388,10 +391,11 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: begin Task 2 TDD using the independently approved concrete
-record/reservation checkpoint below. Its implementer has stopped before production
-changes, using the expressly permitted checkpoint-only path. Task 1's reviewed
-checkpoint was published by the controller before this dispatch.
+Immediate next step: controller-owned independent **limited-milestone spec
+review, then quality review** of the initial-absence core/code checkpoint below.
+Do not extend source/batch/destructive authorities until that review checkpoint.
+This is not full Task 2 review/completion or permission for Task 3. The corrected
+design checkpoint stays cleared, not awaiting reapproval.
 Preserve all unchanged assertions/lifecycle cleanup and prior approvals. Final
 fast/SSH tiers and whole-branch review remain owed; this is not feature completion.
 
@@ -1030,7 +1034,7 @@ all-absent retry performs T7/T8/T9 only. A surviving tokenless B performs TP, or
 `external_change` when no owned removal was possible; old release's automatic
 branch retry remains untouched.
 
-### Required Outcomes → Proposed Test Rows (No Tests Written/Run Yet)
+### Required Outcomes → Proposed Test Rows (Checkpoint Proposal; Current Evidence Below)
 
 Every new test function/case will have the `retirement_` prefix. `U` means the library
 context-retirement tests (with direct temporary Git/registry fixtures); `R` the
@@ -1188,3 +1192,462 @@ controller returns this exact corrected proposal to the **same adversarial
 reviewer**, resolves any remaining findings and only then sends this implementer
 past the checkpoint into Task 2 TDD. No new owner-policy ambiguity identified;
 no approval/pass/Task 2 completion is claimed.
+
+## Task 2 — Historical Storage/Audit And Interim Abandon Checkpoint
+
+This section records the first storage-only checkpoint. Its then-pending work
+and counts are historical; the bounded-increment section below supersedes its
+current-status statements without erasing its RED/GREEN evidence.
+
+### Exact Entry And Preserved Working State
+
+- Verified clean implementation entry/current committed HEAD
+  **`daab73e70fa9e84ff07a8d1214cda89a7d3766c2`**, exact ticket branch/worktree;
+  this is the controller's committed/pushed checkpoint-clearance record. Full
+  Task 2 review base stays **`7b1912d152a1ab7440bd17c48a0a544e40e19258`**.
+  Same-reviewer checkpoint approval is recorded by the controller at comment
+  `01M6MMBH0625R87S04VJ7P3FCF`; this worker claims no implementation review pass.
+- **No implementation commit yet.** Preserve the owned working tree, including
+  both untracked Rust files. No executor consumes these records yet, so this is
+  not being published as a complete/coherent single-context retirement feature
+  or committed as unused scaffolding. The checkpoint is cleared; this is an
+  implementation-context handoff, not a policy blocker or approval request.
+- Modified: `src/repository.rs`, `src/repository/discovery.rs`,
+  `src/repository/bridges/abandon.rs`, `src/repository/context_retirement/mod.rs`.
+  New: `src/repository/context_retirement/record.rs` and `store_tests.rs`.
+  This ledger and the new progress comment are additional owned metadata edits.
+
+### Actual Implemented Behavior (Bounded, Not Full Task 2)
+
+1. Install the seven-table retirement envelope **after** remote/local/F2 migration,
+   with marker, exact SQL-object validation, canonical scalar CHECKs, immutable
+   input/history triggers, pending-envelope/delete protections, separate immutable
+   provenance/binding/pin/release tables and FK relationships from the approved
+   proposal. No fabricated legacy records or Git-derived authority reconstruction.
+2. Audit schema/FKs/CHECKs and selected identity/executor/phase/observation/pin
+   correlations at service open. Missing companion/executor, malformed identities,
+   zero OID, premature authoritative step, inconsistent source generation, wrong
+   pin batch/consumer and unexplained pin loss now refuse with recovery-required.
+   **This audit is not yet exhaustive** for every approved record transition.
+3. Separate current-envelope schema validation from full retained-row auditing:
+   current migration takes no new write transaction; full rows are read in a
+   deferred startup transaction after all companion migrations. Fresh installation
+   still atomically installs/audits/marks the envelope. The root service initializer
+   calls this audit after the existing remote audit, leaving remote-only fixture
+   audit semantics unchanged.
+4. Interim generic-abandon protection is connected to both existing domain entry
+   points: `abandonable_operation` and `abandon_operation` refuse retirement IDs
+   before generic completed/no-op handling or owner release/relabeling. The
+   envelope's action independently reserves identity after companion loss. No
+   guarded preserving-abandon behavior/DTO/mutation was added (Task 3 remains out).
+
+All new functions have production callers (startup/migration or existing abandon
+entry points); no placeholder deletion runner, network adapter or false-success
+retirement service exists. Task 1 proof and release/lifecycle cleanup are unchanged.
+Fixtures are isolated temporary registries; observation-correlation fixtures use
+explicit SQL metadata and do **not** authenticate, advertise or prove live authority.
+
+### Test-First Evidence And Fixture Investigation
+
+Every command below was `devenv shell -- cargo test --all-features --locked --lib
+context_retirement::store_tests`, run serially with no shell deadline. Log names
+are under `/tmp/opencode/`, and counts are Rust test-function counts, not the
+approved matrix's group count.
+
+| RED → GREEN / logs | Observed behavior |
+| --- | --- |
+| `task2-store-red.log` → `task2-store-green.log` | **0 passed / 2 failed** compiling behavioral RED: seven tables absent; substituted unmarked partial schema accepted. GREEN **2 passed**, full envelope installed/idempotent, partial/orphan authority refused without schema-version change. |
+| `task2-store-audit-behavior-red.log` → `task2-store-audit-green.log` | **2 passed / 1 failed**: six invalid ID/OID/executor/phase cases were all reported accepted; GREEN **3 passed**, valid selection control retained. |
+| `task2-abandon-red.log` → `task2-abandon-green.log` | **3 passed / 1 failed**: existing generic abandon returned `Ok(Abandoned(...))` for pending retirement, changing its local row. GREEN **4 passed**, pending and terminal generic abandon/preview refuse and preserve identity/row. |
+| `task2-observation-audit-red.log` → `task2-observation-audit-green.log` | **4 passed / 1 failed**: source-generation, wrong pinned batch, foreign consumer and missing-pin metadata were accepted. GREEN **5 passed**, plus valid completed-observer/pending-consumer fixture. No live observation or Task 4 coordination is exercised. |
+| `task2-scalar-check-red.log` → `task2-scalar-check-green.log` | **5 passed / 1 failed**: zero OID entered stored record before audit; GREEN **6 passed**, SQL CHECKs also refuse noncanonical capture. Separate startup audit still catches corrupt fixture-writer CHECK bypass. |
+| `task2-migration-lock-red.log` → `task2-migration-lock-green.log` | **6 passed / 1 failed**: current migration tried an immediate write transaction while another writer held it. GREEN **7 passed**, current schema validation succeeds without a write lock; full audit moved to startup's deferred transaction. |
+
+Fixture investigation: the first audit attempt (`task2-store-audit-red.log`) was
+**2 passed / 1 failed due to fixture error**, not a behavioral RED: an immediate
+FK correctly prevented replacing a parent ID before its child. Only the corrupt
+fixture writer now temporarily disables FK/CHECK enforcement, restores it and the
+exact immutable trigger, then opens a separate normally enforcing service
+connection. The subsequent behavioral RED above reports all six intended bad
+cases. No production FK/check/trigger was weakened to make that injection pass.
+
+### Frozen-Source In-Progress Verification
+
+Source was formatted through Devenv, then frozen for the serial runs below. No
+unit executable was replaced during process-spawn tests; no concurrent Devenv
+startup or zero-case run occurred. These are **in-progress** results, not the
+eventual Task 2 gate after the executor is implemented.
+
+| Actual command (all through `devenv shell --`) | Latest log / result |
+| --- | --- |
+| `cargo test --all-features --locked --lib context_retirement` | `task2-context-retirement-final-progress.log`: **13 passed** = 7 new storage/fence tests + 6 unchanged Task 1 proof tests; 0 failed |
+| `cargo test --all-features --locked --lib cleanup` | `task2-cleanup-final-progress.log`: **50 passed**, 0 failed |
+| `cargo test --all-features --locked --lib recovery` | `task2-recovery-final-progress.log`: **60 passed**, 0 failed |
+| `cargo test --all-features --locked --lib read::status` | `task2-read-status-final-progress.log`: **10 passed**, 0 failed; no new action/read routing implemented yet |
+| `cargo test --all-features --locked --test recovery_foundation_gate` | `task2-foundation-final-progress.log`: **52 passed**, 0 failed; process/lease/rebuild controls retained |
+| `cargo check --all-features --locked` | `task2-check-final-progress.log`: exit **0** |
+| `cargo fmt --check` | `task2-fmt-final-progress.log`: exit **0**; formatting applied via Devenv |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `task2-clippy-final-progress.log`: exit **0**, including nested-production integration-target compilation; this is not their runtime execution |
+
+Filters overlap; do not sum them as distinct coverage. Earlier `*-progress.log`
+runs preceded the final scalar/lock hardening; the table above names reruns after
+it. `mutation_remote retirement_` was **not run**: there is no retirement SSH
+module/CASES yet, so no zero-case pass is claimed. Full fast/changed-path tiers and
+native CI were not run. Final Task 2 commands/static gates must run again after
+remaining source changes; Task 8's whole-branch gates remain separate.
+
+### Explicit Remaining Work / Self-Review Risks / Resume Seam
+
+- Matrix **37 is partial** (interim domain generic-abandon fence only), **38 is
+  partial** (storage/schema/some correlation audit); seven actual tests do not
+  discharge those groups. **All other Task 2 domain/runtime groups, including
+  39–44's approved producer/pin-release transitions, remain unimplemented/unproven.**
+  Task 1's existing proof tests are not new retirement-executor evidence.
+- No `RetireContextRequest`/service/result, atomic candidate/executor claim,
+  request/frozen-batch ownership constructors, live observer replacement/capture,
+  no-follow instance token module, effect runner, R-7 live permit, D14 settlement,
+  all-absent discovery, atomic claimed-refresh finalizer, action/step/read/schema
+  additions or resumable stable outcome is implemented yet. No Task 3/4 behavior.
+- **Do not treat presence of these tables/audit as deletion authority.** In
+  particular, common reserved-ID/refresh guards are still missing: ordinary
+  refresh may borrow a selected retirement ID before the new exact handoff gate
+  exists. Add that guard and atomic finalizer before any real retirement producer
+  can enroll a request. The SQL audit cannot substitute for per-write executor,
+  request, phase and generation checks.
+- `remote/state.rs`'s configuration-retention and historical-batch audit queries
+  are still unchanged. They do not yet recognize these new live pins; Z release/
+  obsolete-batch collection and post-ID-reuse release reconciliation are **not
+  implemented**. Wire those seams before exposing a producer, then write/run
+  groups 39–44, especially successful reopen **after** last release.
+- Full request/batch projection correlation, release-reason/terminal-scope audit,
+  exhaustive effect/phase/removal/authoritative-step constraints and closed typed
+  final-result decoding still need implementation/tests. Current `json_valid`
+  and scalar/selected joins alone are not the approved complete audit. Performance
+  with large retained histories is unmeasured.
+- Next concrete step: write the actual domain outcome/Q2 refusal/all-absent tests
+  and common refresh-ID gate test, then implement atomic claim + stable report/
+  handoff/finalizer with new action/steps. Follow with instance and live observer
+  capabilities, guarded cleanup/R-7/D14 and Z. Register an SSH module in both
+  declaration and CASES chain before its first run. Keep Task 4 producer invocation
+  and coordinator out; its inert projection tests remain accurately labeled.
+
+No new policy ambiguity, old semantic-pin change or approval question identified.
+This preserves concrete in-progress work for continuation, not a blocker-by-
+complexity claim. No agents, push, PR, other-worktree edit, main integration,
+closure, native CI or real-context/key/profile/draft change was performed.
+
+Canonical progress comment: **`01M6MP4RMSVDF5BNETYXHGYH1C`**, parent
+`01M6MMBH0625R87S04VJ7P3FCF`, actual UTC **`2026-11-05T01:45:59Z`**. HEAD remains
+`daab73e70fa9e84ff07a8d1214cda89a7d3766c2`; owned implementation/metadata changes
+are deliberately uncommitted. Do not discard either untracked Rust file.
+
+## Task 2 — Bounded Increment: Guards, Single-Consumer Z And All-Absent Domain Core
+
+### Standing, Scope And Preserved Ownership
+
+Continued the same owned **uncommitted** source at
+`daab73e70fa9e84ff07a8d1214cda89a7d3766c2`; full Task 2 review base remains
+`7b1912d152a1ab7440bd17c48a0a544e40e19258`. No source commit/publication or review
+approval is claimed. The approved mechanism checkpoint stays cleared. This is
+a concrete in-progress checkpoint for continuation, not a blocker or approval
+request. The wider authority core is still incomplete, so no scaffolding-only
+commit is made and **no destructive producer is exposed**.
+
+Owned new Rust files, all still untracked and to preserve:
+`src/repository/context_retirement/{record,store_tests,execution,execution_tests,result}.rs`.
+`record.rs`/`store_tests.rs` preserve and extend the previous verified work.
+The other three files add a real, callable metadata-only domain path, its closed
+result type and execution regressions, not a placeholder cleanup runner.
+
+Owned modified existing source: `src/repository.rs`,
+`src/repository/context_retirement/mod.rs`, `discovery.rs`, `recovery.rs`,
+`bridges/abandon.rs`, `local_sync/record.rs`, `remote/{state,reservation}.rs`,
+`read/{dto,status,status_tests}.rs`; all paths in that list are relative to
+`src/repository/` except the explicitly rooted first file. Owned contract edits:
+`schemas/v1/{operation,operation_mutation,operation_abandon_preview}.schema.json`,
+`tests/read_contract.rs`, `tests/recovery_foundation_gate.rs`. These add the new
+local action/absent step to the approved E-2/E-8/H3 inventories; no old action,
+step or assertion was removed or reinterpreted. This ledger and the two
+uncommitted progress comments are owned metadata. Ticket body/status untouched.
+
+### Actual Connected Behavior
+
+1. **Common identity and refresh gates.** Both refresh preflight and transactional
+   begin require the exact still-owed authoritative handoff, intact companion and
+   attempt, correct root and absent/branch step correlation. Selected/terminal
+   identities, wrong roots/steps and missing companions cannot be borrowed.
+   Retirement parent/observer/provenance/consumer identities remain reserved after
+   terminalization in common foreign-ID insertion guards and public remote
+   reserve/restart, including completed observation replay. Private retirement
+   observer exceptions are **not** implemented yet; ordinary calls fail closed.
+2. **Retention and historical audit.** Both configure collection queries honor
+   live pins without deleting pinned child observations first. Historical remote
+   audit accepts an exact noncurrent pin/provenance/configuration/batch tuple,
+   independently of a synchronization window. Retention is not permission to
+   consume an old generation or to rewrite it as current.
+3. **Single-consumer Z.** A selected domain-only no-effect old-generation refusal
+   validates its current local attempt/exclusion and exact bound read-only
+   observer, settles a closed result, ends the attempt, inserts the exact release
+   receipt, deletes only its pin, conditionally collects the noncurrent batch
+   only with no other pin/window, then completes its local envelope in one TX.
+   Five independent SQL failures roll the whole transition back. Successful
+   reopen is tested **after** the last release/collection, and scalar batch-ID
+   reuse cannot cause terminal replay to collect a new batch. A valid independent
+   synchronization window retains its batch/observations and still reopens after
+   final retirement unpin. **Source/batch Z and shared source+consumer holds are
+   still owed**, not inferred from the single-consumer tests.
+4. **Real all-absent domain path.** Exported `RetireContextRequest`,
+   `ContextRetirementOutcome` and the closed `ContextRetirementReport` are used by
+   `RepositoryService::retire_context`. It requires registration, checks no-follow
+   deterministic branch/worktree/admin inventory, and claims exact root/kind/item/
+   operation inputs plus local envelope/attempt/companion atomically under one
+   local lease/TX. It requires **no remote configuration, key, authentication,
+   network, marker or cleanup**. Initial absence reports neither possible nor
+   observed removal. It records authoritative, **noncheckpoint**
+   `ContextRetirementAbsent`, not a fabricated branch deletion. Mixed/redirected
+   resources and incomplete/ambiguous old materialization get stable no-effect
+   Final refusals; a new operation is required after repair.
+5. **D14 in the same authoritative transaction.** Only a canonical exact completed
+   old intent with an actual update-poll owner may be captured/compare-deleted.
+   Captured absence must still be absent. Exact copied owner/OID/step and settled
+   receipt survive; a replacement at the final boundary refuses and rolls back
+   claim/consumption together. No lifecycle retirement helper, current observation,
+   context-state or tracking-ref deletion was added. Incomplete and wrong-owner
+   fixtures are preserved, not "repaired" into authority.
+6. **Index-only continuation and atomic final result.** Claimed refresh finalization
+   runs in `reconcile_disappeared_contexts` before blocker release, atomically with
+   companion/result/attempt/local completion and stale clearing. Result, attempt,
+   journal-completion and stale-clear failures leave the operation owed. Retry
+   keeps the authoritative step and re-enters only local discovery: a recreated
+   same-item/same-OID registered worktree, its dirty new file, branch and newly
+   created materialization intent all survive. Completed result replay performs
+   no context inventory or network and remains bound to the original input.
+7. **Audits strengthened for connected scopes.** Closed JSON decoding rejects
+   missing/unknown fields/codes, invalid versions and outcome/removal/settlement
+   contradictions. Reverse phase/authoritative-step checks, domain/request mapping,
+   observer/local collisions, stale source fences, receipt/pin/release correlation
+   and invented effect/absence evidence now refuse. D14 settlement is forward-only
+   even while indexing is owed. The public domain-only entry cannot adopt a
+   request-bound record. **No full batch/source audit is claimed:** corresponding
+   projections currently explicitly refuse, rather than becoming partial authority.
+
+Present/branch-only fresh execution currently refuses **before claiming a row**;
+there is no installed instance token, live observation capability, preservation
+proof/effect runner or R-7 deletion permit behind that branch. Do not publish the
+service as complete single-context retirement. Task 3 bindings/DTO/CLI/guarded
+abandonment and Task 4 coordinator/producer invocation were not added.
+
+### New Behavioral RED → GREEN Evidence
+
+All Cargo commands ran serially through Devenv with no foreground deadline; raw
+logs are `/tmp/opencode/<name>`. The pending guard tests were run first, before
+production edits. Counts below are test functions, not the 44 matrix groups.
+
+| Raw RED log / actual count | Missing behavior observed / subsequent GREEN |
+| --- | --- |
+| `task2-identity-guards-red.log`: **7 passed, 2 failed** | Selected retirement accepted refresh preflight; public restart adopted its observer. `task2-identity-guards-green-2.log`: **9 passed**. The reserve assertion was subsequently strengthened to exact Manual priority (not an unrelated priority mismatch). |
+| `task2-pin-retention-red.log`: **10 passed, 1 failed** | Configure deleted a pinned batch and failed its deferred FK at commit. `task2-pin-retention-green.log`: **11 passed**, batch + child observation retained and reopen succeeds. |
+| `task2-release-audit-red.log`: **11 passed, 1 failed** | All five contradictory release cases accepted, including pending consumer and pin+release. `task2-release-audit-green.log`: **12 passed**. |
+| `task2-result-audit-red.log`: **12 passed, 1 failed**; `task2-claimed-refresh-red.log`: **0 passed, 1 failed** | JSON-only results accepted; actual claimed refresh completed the local row while companion stayed `index_pending` with no result. `task2-result-and-refresh-green-2.log`: **20 passed**. |
+| `task2-absence-core-behavior-red.log`: **21 passed, 1 failed** | After final-result failure, owed retry remained index-pending instead of finishing. Preserve real SQL errors so the exact owner can rest as failed, and admit failed-but-authoritative handoff. `task2-absence-core-green.log`: **22 passed**. |
+| `task2-d14-replacement-red.log`: **23 passed, 2 failed** | Replacement inserted after exact consume was incorrectly followed by `AlreadyAbsent`. The other failure was the fixture timing error explained below. `task2-d14-replacement-green.log`: **25 passed**. |
+| `task2-stable-refusal-red.log`: **6 passed, 2 failed** | Mixed resources and ambiguous materialization returned unbound errors rather than stable no-effect Final. `task2-stable-refusal-green.log`: **28 passed** in the broader library filter. |
+| `task2-z-release-red.log`: **0 passed, 1 failed** | Old-generation selected consumer had no terminal/release/collection path. `task2-z-release-green.log`: **26 passed** in the broader library filter; current test also covers five rollback injections and reused-ID replay. |
+| `task2-handoff-request-audit-red.log`: **0 passed, 1 failed** | Five bad reverse handoff/request/identity/source-fence cases accepted. `task2-handoff-request-audit-green.log`: **29 passed**. |
+| `task2-effect-audit-red.log`: **0 passed, 1 failed**; `task2-settlement-monotonic-red.log`: **0 passed, 1 failed** | Invented owned absence / impossible branch-only worktree intent accepted; a pending settled D14 receipt could be reset. `task2-effect-settlement-green.log`: **31 passed**. |
+| `task2-d14-owner-red.log`: **0 passed, 1 failed** | A CHECK/FK-valid intent owned by a read-only observation was wrongly consumed as old materialization authority. Final broader `task2-domain-prerequisites-green.log`: **35 passed**, then latest **36 passed** after additional exclusion coverage. |
+
+Additional green controls cover mandatory registration, unrelated pending debt,
+no-follow dangling/redirected ancestors, atomic receipt failure, valid integration
+window retention, exact completed materialization and stable incomplete refusal,
+and four separate index-finalization failures followed by same-OID recreation and
+a new intent. No post-hoc green control is labeled an observed behavioral RED.
+
+Implementation/fixture failures are retained, not presented as successful gates:
+
+- `task2-identity-guards-green.log` was **8 passed / 1 failed**: the first edit
+  landed the second guard in cancellation rather than restart. That unintended
+  cancellation edit was removed; the actual restart insertion was corrected.
+- `task2-result-and-refresh-green.log` was **19 passed / 1 failed**: the new hook
+  incorrectly assumed ordinary enablement's local envelope had `repository_id`.
+  It now first validates ordinary index ownership without imposing a retirement
+  companion or new field requirement on old actions.
+- `task2-absence-core-first.log` was compilation-only (new enum match inventories
+  and private clock helper), **not** a behavioral RED. No compiling failure count
+  is invented for it.
+- The D14 fixture initially omitted the already-required update-poll completion
+  timestamp; startup correctly refused it. Corrected the inert fixture, not the
+  old time audit. Replacement's false success in that same run was a real RED.
+- `task2-recovery-amended.log`: **56 passed / 4 failed**. Two were the approved
+  local-action slice extension (15 → 16); two exposed the guard auditing a genuine
+  pre-retirement journal as if its additive tables already existed. Preserve old
+  busy/mismatch precedence only when the entire envelope/marker/action is absent;
+  marked/partial/orphan retirement still refuses. Rerun **60 passed**.
+- `task2-read-enum-red.log`: **0 passed / 1 failed**, then
+  `task2-read-contract-bounded-final.log`: **71 passed / 1 failed**. Added only the
+  approved retirement action to the three schema inventories and named
+  `LOCAL_ACTIONS`; `task2-read-contract-bounded-green.log`: **72 passed**.
+- An accidental non-SSH `remote::state::tests` filter ran **0 cases** in
+  `task2-remote-state-bounded-final.log`. It is **not passing evidence**. Correct
+  module is `remote::state::persistence_tests`, which ran 70 cases and exposed a
+  real old-migration interaction (**69 passed / 1 failed** in
+  `task2-remote-persistence-bounded-final.log`): SQLite's old-parent RENAME retargeted
+  the new empty envelope FKs to the temporary table. Rebuild now copies into a
+  replacement before dropping/naming the parent; it refuses populated newer
+  retirement authority before rebuilding rather than cascading it. The old
+  migration test/assertions remain unchanged. Rerun **70 passed**, including exact
+  old terminal-row/ID/timestamp/yield/cancel preservation. No schema audit weakened.
+- `task2-clippy-absence.log` found one collapsible conditional and one tuple type
+  complexity warning. Refactored without allowances; final strict Clippy passes.
+
+### Latest Verification And Source Freeze
+
+After the genuine-old migration correction, format/freeze and serial Devenv
+verification produced the following. No Rust compilation ran concurrently with
+process-spawn tests. No full fast/SSH tier or native CI was dispatched.
+
+| Actual command, prefixed with `devenv shell --` | Log / result |
+| --- | --- |
+| `cargo check --all-features --locked` | `task2-check-bounded-final-3.log`: exit **0** |
+| `cargo fmt --check` | `task2-fmt-bounded-final-3.log`: exit **0** |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `task2-clippy-bounded-final-3.log`: exit **0**, including nested-production target compilation, not SSH runtime |
+| `cargo test --all-features --locked --lib context_retirement` | `task2-context-retirement-bounded-final-3.log`: **36 passed**, 0 failed = 30 Task 2 + 6 unchanged proof |
+| `cargo test --all-features --locked --lib cleanup` | `task2-cleanup-bounded-final-3.log`: **50 passed**, 0 failed |
+| `cargo test --all-features --locked --lib recovery` | `task2-recovery-bounded-final-3.log`: **60 passed**, 0 failed |
+| `cargo test --all-features --locked --lib read::status` | `task2-read-status-bounded-final-3.log`: **10 passed**, 0 failed |
+| `cargo test --all-features --locked --test recovery_foundation_gate` | `task2-foundation-bounded-final-3.log`: **52 passed**, 0 failed, including added pending retirement-action case |
+| `cargo test --all-features --locked --lib remote::state::persistence_tests` | `task2-remote-persistence-bounded-final-3.log`: **70 passed**, 0 failed |
+| `cargo test --all-features --locked --test read_contract` | `task2-read-contract-bounded-final-3.log`: **72 passed**, 0 failed |
+
+Additional nonzero controls passed before the last old-migration correction:
+`--lib remote::reservation::tests` **58** (`task2-reservation-bounded-final.log`),
+`--lib remote::poll::tests` **81** (`task2-poll-controls-bounded-final.log`), and
+`--test mutation_contract` **44** (`task2-mutation-contract-bounded-final.log`).
+Do not represent these three earlier runs as reruns after that correction.
+Filters overlap; do not sum them. `git diff --check` passed. The final static
+gates apply to Rust/contracts; only ledger/comment metadata is edited afterward.
+
+`mutation_remote retirement_` remains **not run**: no retirement module/CASES is
+registered, and no zero-case SSH result is claimed. Register declaration and
+CASES before its first actual live domain cases. These are bounded in-progress
+checks, not eventual full Task 2 acceptance or Task 8's branch-wide gates.
+
+### Explicit Remaining Matrix / Self-Review / Next Seam
+
+The unchanged 44-row table above remains the full requirement. **No group is
+declared fully discharged by this increment.** New partial evidence applies to
+08–10, 12, 23–26, 30, 35–38 and 42–44. In particular: 08 still needs an explicit
+stale-own-index fixture; 10 is not the complete eight-state/registration matrix;
+12 is not the full lifecycle/comment-debt matrix; 23–26 do not yet cover owned
+Git-removal crash windows; 36 still needs stale index epoch and branch/preserved
+handoffs; 42 is an inert preselected single-consumer fixture plus real domain
+metadata settlement, not authenticated production; 43 covers valid window
+retention but not two independent source/consumer pins or every current-batch
+case; 44 still needs the complete FK/re-pin/sentinel matrix.
+
+Groups **01–07, 11, 13–22, 27–29, 31–34 and 39–41** remain unimplemented/unproven
+as Task 2 runtime/capability groups. Prior Task 1 proof and old cleanup/poll controls
+are not new executor evidence. Full Task 2 spec/quality/adversarial source reviews
+remain controller-owned and owed.
+
+Concrete continuation, with no new policy question:
+
+1. Complete private request-bound executor construction/revalidation, permanent
+   future reserved-child identities, batch/source projection schema/audits and
+   source/batch Z. Current code **explicitly refuses** these unsupported scopes;
+   that fence is not the approved full shared capability implementation. Complete
+   A1 owned returned-batch capture and A2 preterminal full-manifest binding without
+   conflating eligibility with capture/binding; Task 4 invocation stays excluded.
+2. Connect exact read-only observer replacement and all owned-return boundaries,
+   including source fences/configuration/error completion and request attempts.
+   No public poll signature/eligibility/coordinator behavior changes.
+3. Add no-follow registered-instance/provisional-token semantics, full Q2 states,
+   proof/primary/cleanliness checks, effect intents and shared cleanup/R-7 live
+   permit; then metadata-only post-intent/D14 recovery and partial Owed outcomes.
+   Present/branch-only cleanup remains unexposed until those checks are complete.
+4. Extend typed result/phase/effect/request audits for each newly admitted producer
+   and add branch/preserved/index recovery/status integration without weakening
+   old checks. Current Final/IndexPending domain outcome covers the connected
+   metadata-only path, not the whole Q1 matrix or Task 3's public DTO routing.
+
+Residual quality risks: large retained-history audit cost is unmeasured; generic
+refresh currently performs the complete retirement audit. Full foreign-ID and
+request/batch lifecycle matrices, source+consumer shared holds, no-repin history
+and crash/ambiguous-commit reconciliation beyond the tested atomic transactions
+remain owed. There is no claim that these tables or pins alone authorize deletion.
+
+Canonical checkpoint **`01M6MTDF93JH832NBMSRS2X2QQ`**, unique ID generated by the
+existing CLI, parent **`01M6MP4RMSVDF5BNETYXHGYH1C`**, actual UTC
+**`2026-11-05T03:02:53Z`**. No agents, push, other-worktree edits, main merge/close,
+PR, native CI, real contexts, keys, profiles or drafts were touched. No source
+commit was made; any future coherent commit still requires the specified
+`Co-Authored-By: GPT-6.1 Sol <noreply@openai.com>` trailer. Preserve all owned files.
+
+Final preservation fingerprints (`git hash-object`, **not commits**), in
+`src/repository/context_retirement/`: `record.rs`
+`2e2bba049321913b0a5484b27ecfd256326dcf76`; `store_tests.rs`
+`10781e41e9ed2839846c43886146164fac188716`; `execution.rs`
+`34b7daa21a2411d471ce18e552be0ca034f459bc`; `execution_tests.rs`
+`bf0c4e930300e6cd8f94c815b72ea41274d9bc58`; `result.rs`
+`b4a98ad33bf005cd34aeb7da451c20c416824727`. Final cached diff is empty;
+working diff and all five untracked Rust files remain owned and preserved.
+
+## Task 2 — Initial-Absence Code Milestone For Independent Limited Review
+
+**Task2 initial-absence core only; present/branch-only fail closed before claim;
+remaining 44-matrix cases explicitly owed.** This is an **IN-PROGRESS** code
+checkpoint, not full Task 2 completion, a spec/quality pass, source/batch/deletion
+authority or Task 3 permission. The controller explicitly authorized committing
+the connected green milestone before extending those authorities; independent
+limited spec review then quality review are next and remain controller-owned.
+
+The single commit containing this record has title
+**`feat: settle absent contexts with durable retirement replay`**, parent/source
+base **`daab73e70fa9e84ff07a8d1214cda89a7d3766c2`**, and the required
+`Co-Authored-By: GPT-6.1 Sol <noreply@openai.com>` trailer. Full Task 2 review base
+remains **`7b1912d152a1ab7440bd17c48a0a544e40e19258`**. Its exact final commit ID is
+returned to the controller after commit; no self-referential commit hash is
+invented in the file being committed. All preceding "uncommitted" statements
+describe the earlier preservation checkpoints, not the status after this commit.
+
+Self-review before staging/commit:
+
+- Reviewed current existing-file integrations/diff and new production execution,
+  schema/audit, result, finalizer/Z and test paths. Status matches the previously
+  owned file inventory; all five new Rust blob IDs exactly match the recorded
+  verified-source fingerprints. No accidental/user-owned change identified.
+  No source or test behavior was changed for this commit; only this milestone
+  record, its canonical comment and a ledger indentation correction were added.
+- Scope is precisely the connected initial-absence claim/D14/refusal/replay/index
+  behavior, reserved-ID/refresh fences, additive audited envelope, retention and
+  single-consumer metadata Z described above. Present/branch-only fresh execution
+  returns before enrollment. No new observer/marker/cleanup producer, Task 3
+  binding/DTO/CLI/guarded abandonment or Task 4 invocation was added.
+- Rechecked the old Cycle-04 migration interaction: replacement-first rebuild
+  avoids SQLite retargeting the new empty envelope's FKs to the temporary old
+  parent. Populated newer retirement authority refuses the obsolete-parent path.
+  Existing migration assertions and busy/mismatch controls remain intact; no old
+  semantic check was loosened. The exact observed failure and nonzero 70-case
+  GREEN remain in the preceding evidence section.
+- Existing green gates were **not rerun merely to commit**. Inspected the raw
+  latest `*-bounded-final-3.log` results: context retirement **36**, cleanup **50**,
+  recovery **60**, read status **10**, foundation **52**, remote persistence **70**,
+  read contract **72**, all zero failed; all-feature check, format check and strict
+  all-target/all-feature Clippy exited **0**. Exact commands/log filenames and
+  earlier RED/fixture/zero-filter disclosures remain immediately above.
+- `git diff --check` passed; exact named owned paths are staged, with staged
+  whitespace/content/status checks before commit. No push, broad test rerun,
+  agents, lifecycle/status edit, other-worktree edit, native CI or feature
+  extension is authorized/performed by this milestone operation.
+
+The unchanged 44-row matrix and the explicit remaining-case inventory above
+remain governing; no whole group is claimed discharged. Shared source/batch
+capabilities/audits/Z, live observation/instance/proof/cleanup/R-7/partial-effect
+recovery and nonzero registered SSH retirement cases are still owed. Full Task 2
+spec/quality review is separate from the limited milestone review now requested.
+
+Canonical commit checkpoint **`01M6MTX4MXEB7ZG8X5XT162XGH`**, existing-CLI-generated
+unique ID, parent **`01M6MTDF93JH832NBMSRS2X2QQ`**, actual UTC
+**`2026-11-05T03:09:12Z`**. The commit preserves both earlier canonical progress
+comments as historical evidence. Wait for the controller's limited review before
+continuing authorities; fixes return to this same implementer/session.

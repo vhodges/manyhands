@@ -37,6 +37,10 @@ mod comment_publication;
 mod context_release;
 mod context_retirement;
 pub use context_release::{ContextReleaseOutcome, ReleaseContextRequest};
+pub use context_retirement::{
+    ContextRetirementOutcome, ContextRetirementReport, RetireContextRequest, RetirementDisposition,
+    RetirementRemoval,
+};
 mod coordination;
 pub use comment_publication::*;
 #[cfg(test)]
@@ -1077,6 +1081,7 @@ pub enum RepositoryOperation {
     SetPublicationRemote,
     PrepareContext,
     ReleaseContext,
+    RetireContext,
     SaveDocument,
     SaveTicket,
     SubmitComment,
@@ -3644,6 +3649,7 @@ impl RepositoryService {
             // A release's steps follow a removal, and no write of an item.
             | LocalStep::ContextWorktreeReleased
             | LocalStep::ContextBranchReleased
+            | LocalStep::ContextRetirementAbsent
             | LocalStep::AuthoritativeObserved
             | LocalStep::RemoteChanged
             | LocalStep::PublicationConfigurationWritten
@@ -4075,7 +4081,8 @@ impl RepositoryService {
         let availability =
             match open_registry(&registry_path, &mut observer).and_then(|mut connection| {
                 migrate_registry(&mut connection)?;
-                remote::state::audit_registry(&mut connection)
+                remote::state::audit_registry(&mut connection)?;
+                context_retirement::record::audit_registry(&mut connection)
             }) {
                 Ok(()) => IndexAvailability::Ready,
                 Err(error) if is_structural_sqlite_corruption(&error) => {
@@ -6399,6 +6406,7 @@ fn reconcile_disappeared_contexts(
     // transaction, and records the time from which the refresh observed.
     // A refresh that fails or must be retried never reaches it.
     transaction.execute("UPDATE repositories SET accessibility = 'accessible', refresh_required = 0, refreshed_at = ?2 WHERE id = ?1", params![repository_id, observed_from]).map_err(|error| RepositoryError::sqlite(error).for_operation(RepositoryOperation::RefreshRepository, root))?;
+    context_retirement::record::finalize_index(&transaction, owner, repository_id, root)?;
     if !transition_indexing(&transaction, owner, "completed", None)
         .map_err(|error| error.for_operation(RepositoryOperation::RefreshRepository, root))?
     {

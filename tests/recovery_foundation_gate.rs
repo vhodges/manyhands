@@ -802,6 +802,7 @@ fn pending_lifecycle_records_block_differently_identified_mutations_without_side
         "remove_remote",
         "refresh",
         "rebuild",
+        "retire_context",
     ] {
         let fixture = support::born_repository();
         let data = tempfile::tempdir().unwrap();

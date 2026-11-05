@@ -1040,6 +1040,10 @@ impl RepositoryService {
         #[cfg(test)]
         promotion_reservation_checkpoint(operation_id);
         state::with_transaction(self, root, |tx, repository_id| {
+            crate::repository::context_retirement::record::require_foreign_id_available(
+                tx,
+                operation_id,
+            )?;
             if let Some(execution) = execution {
                 execution.validate(tx, repository_id, operation_id)?;
             }
@@ -1446,6 +1450,10 @@ impl RepositoryService {
         poll_kind: state::PollKind,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
+            crate::repository::context_retirement::record::require_foreign_id_available(
+                tx,
+                operation_id,
+            )?;
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
             if &record.target != target

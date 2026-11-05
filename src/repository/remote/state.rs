@@ -1537,11 +1537,39 @@ fn migrate_synchronization(tx: &Transaction<'_>) -> Result<(), RepositoryError> 
     if count != 0 {
         return Err(recovery_required());
     }
-    // Rebuild CHECK constraints and the active index in this same migration transaction.
-    tx.execute_batch("DROP TRIGGER IF EXISTS remote_operation_target_immutable; DROP INDEX IF EXISTS remote_active_reservation; DROP INDEX IF EXISTS remote_operations_repository; ALTER TABLE remote_operation_records RENAME TO remote_operation_records_cycle04;")
+    // New retirement authority cannot legitimately predate this remote schema.
+    // Do not cascade or reconstruct it if an obsolete parent was substituted.
+    for table in [
+        "context_retirement_records",
+        "context_retirement_attempts",
+        "retirement_advertisement_provenance",
+    ] {
+        if super::super::recovery::has_table(tx, table).map_err(|_| recovery_required())?
+            && tx
+                .query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table})"), [], |r| {
+                    r.get::<_, bool>(0)
+                })
+                .map_err(|_| recovery_required())?
+        {
+            return Err(recovery_required());
+        }
+    }
+    // Rebuild without RENAMING THE OLD PARENT: SQLite would rewrite the FKs
+    // of the empty additive retirement envelope to the old temporary name.
+    // Copy into the replacement first, drop the old parent, then name the new
+    // parent. Genuine old registries keep all rows/IDs and no inferred authority.
+    let partial: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='remote_operation_records_cycle04_upgrade')", [], |r| r.get(0)).map_err(|_| recovery_required())?;
+    if partial {
+        return Err(recovery_required());
+    }
+    tx.execute_batch("DROP TRIGGER IF EXISTS remote_operation_target_immutable; DROP INDEX IF EXISTS remote_active_reservation; DROP INDEX IF EXISTS remote_operations_repository;")
         .map_err(|_| recovery_required())?;
-    tx.execute_batch(REMOTE_OPERATION_SCHEMA)
-        .map_err(|_| recovery_required())?;
+    tx.execute_batch(&REMOTE_OPERATION_SCHEMA.replacen(
+        "CREATE TABLE IF NOT EXISTS remote_operation_records",
+        "CREATE TABLE remote_operation_records_cycle04_upgrade",
+        1,
+    ))
+    .map_err(|_| recovery_required())?;
     for (name, definition) in [
         (
             "yield_requested",
@@ -1557,12 +1585,12 @@ fn migrate_synchronization(tx: &Transaction<'_>) -> Result<(), RepositoryError> 
         ),
     ] {
         tx.execute_batch(&format!(
-            "ALTER TABLE remote_operation_records ADD COLUMN {name} {definition}"
+            "ALTER TABLE remote_operation_records_cycle04_upgrade ADD COLUMN {name} {definition}"
         ))
         .map_err(|_| recovery_required())?;
     }
     let list = columns.join(",");
-    tx.execute_batch(&format!("INSERT INTO remote_operation_records({list}) SELECT {list} FROM remote_operation_records_cycle04; DROP TABLE remote_operation_records_cycle04;"))
+    tx.execute_batch(&format!("INSERT INTO remote_operation_records_cycle04_upgrade({list}) SELECT {list} FROM remote_operation_records; DROP TABLE remote_operation_records; ALTER TABLE remote_operation_records_cycle04_upgrade RENAME TO remote_operation_records;"))
         .map_err(|_| recovery_required())?;
     Ok(())
 }
@@ -2384,13 +2412,26 @@ pub(in super::super) fn configure(
     transaction.execute("UPDATE remote_operation_records SET poll_completed_at=?2,poll_next_eligible_at=(SELECT next_eligible_at FROM remote_polling_state WHERE repository_id=?1) WHERE repository_id=?1 AND poll_kind='update' AND phase IN ('reserved','advertising','persisting','local_prepared')",params![repository_id,OffsetDateTime::now_utc().unix_timestamp().max(0)]).map_err(|_|recovery_required())?;
     transaction.execute("UPDATE remote_operation_records SET phase='interrupted',outcome='configuration_required' WHERE repository_id=?1 AND phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling')",[repository_id]).map_err(|_| recovery_required())?;
     // The mutable current snapshot is invalidated, but a pass referenced by an
-    // immutable window is retained as historical intent. It is never made
+    // immutable window or a live retirement pin is retained as historical
+    // intent. It is never made
     // current again, nor used to authorize effects at the new generation.
     transaction.execute("UPDATE remote_observation_batches SET is_current=0 WHERE repository_id=?1 AND is_current=1", [repository_id]).map_err(|_| recovery_required())?;
-    transaction.execute("DELETE FROM remote_ref_observations WHERE batch_id IN (SELECT batch.id FROM remote_observation_batches batch WHERE batch.repository_id=?1 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=batch.id))",[repository_id]).map_err(|_| recovery_required())?;
+    // Remote-only migrations/fixtures precede the additive retirement envelope.
+    // Once installed, both parent and child collection use the exact same holds.
+    let retirement_hold = if super::super::recovery::has_table(
+        transaction,
+        "retirement_observation_pins",
+    )
+    .map_err(|_| recovery_required())?
+    {
+        " AND NOT EXISTS(SELECT 1 FROM retirement_observation_pins pin WHERE pin.repository_id=batch.repository_id AND pin.observation_batch_id=batch.id)"
+    } else {
+        ""
+    };
+    transaction.execute(&format!("DELETE FROM remote_ref_observations WHERE batch_id IN (SELECT batch.id FROM remote_observation_batches batch WHERE batch.repository_id=?1 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=batch.id){retirement_hold})"),[repository_id]).map_err(|_| recovery_required())?;
     transaction
         .execute(
-            "DELETE FROM remote_observation_batches WHERE repository_id=?1 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=remote_observation_batches.id)",
+            &format!("DELETE FROM remote_observation_batches AS batch WHERE repository_id=?1 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=batch.id){retirement_hold}"),
             [repository_id],
         )
         .map_err(|_| recovery_required())?;
@@ -6233,7 +6274,13 @@ fn read_snapshot_rows(
             } else {
                 false
             };
-            if !historical_pass {
+            let retirement_pass = audit_history && !current
+                && super::super::recovery::has_table(connection, "retirement_observation_pins").map_err(|_| recovery_required())?
+                && connection.query_row("SELECT EXISTS(SELECT 1 FROM retirement_observation_pins pin JOIN retirement_advertisement_provenance p ON p.id=pin.provenance_id
+                  WHERE pin.repository_id=?1 AND pin.observation_batch_id=?2 AND p.repository_id=?1 AND p.observation_batch_id=?2
+                    AND p.configuration_generation=?3 AND p.remote_name=?4 AND p.primary_branch=?5 AND p.observed_at=?6)",
+                  params![repository_id,batch_id,generation,remote,primary,observed_at], |r| r.get::<_, bool>(0)).map_err(|_| recovery_required())?;
+            if !historical_pass && !retirement_pass {
                 return Err(recovery_required());
             }
         }
