@@ -14,23 +14,23 @@
 //!
 //! The stage holds (`hold_at_stage`) park the worker once the stage has
 //! been sent; the library may hold the repository's lease meanwhile, so no
-//! repository is opened while one is parked.
+//! `RepositoryService` call is made while a hold is parked.
 
 use std::path::{Path, PathBuf};
 
 use gpui_kit::TestAppContext;
 use manyhands::{
     repository::{
-        CancellationToken, ConfirmationId, FailurePoint, Mutation, MutationCall, NoProgress,
-        OperationAction, PrepareDataDto, ProgressStage, RepositoryService, RequestId, RequestState,
-        TicketCloseInput, keys::SessionCredentials,
+        CancellationToken, ConfirmationId, FailurePoint, LifecycleCleanupPendingReason, Mutation,
+        MutationCall, NoProgress, OperationAction, PrepareDataDto, ProgressStage,
+        RepositoryService, RequestId, RequestState, TicketCloseInput, keys::SessionCredentials,
     },
     results::ResultCode,
 };
 
 use super::{
     confirm_tests::{confirming, worktree},
-    lock_tests::{step, until_lock},
+    lock_tests::{lock, step, until_lock},
     outcome::{ENDING_DONE, MERGED, SHARING_PENDING, TIDIED_UP},
     outcome_tests::{at_stage, stopped_at_integrating},
     tests::{
@@ -38,13 +38,20 @@ use super::{
     },
 };
 use crate::desktop::{
-    model::lifecycle_lock::{LockSource, LockState},
+    model::{
+        lifecycle_lock::{LockSource, LockState, Untidied},
+        list_state::ListState,
+    },
     services::{
         JobKind,
         requests::{DesktopRequestId, Intent},
     },
     test_support::fixtures::{Fixture, NoPassphrase, item_id},
-    view::{harness::Shell, item::LIFECYCLE_ACTION, operations::RESUME},
+    view::{
+        harness::{Shell, key},
+        item::LIFECYCLE_ACTION,
+        operations::RESUME,
+    },
 };
 
 /// Main and the context before any close.
@@ -121,6 +128,7 @@ fn ticket_shell(cx: &mut TestAppContext, title: &str) -> (Shell, PathBuf, String
 async fn p4_a_stopped_close_retries_with_one_checkpoint_and_one_merge(cx: &mut TestAppContext) {
     let (shell, root, branch) = ticket_shell(cx, "Interrupted");
     let context = worktree(&shell, &root);
+    assert!(context.exists(), "a working copy of its own");
     assert_eq!(counts(&root, &branch), BEFORE, "before");
 
     let stopped = stopped_at_integrating(&shell, &root, cx).await;
@@ -139,6 +147,7 @@ async fn p4_a_stopped_close_retries_with_one_checkpoint_and_one_merge(cx: &mut T
     shell.click("lifecycle-retry", cx);
     let sent = closes(&shell, cx);
     assert_eq!(sent.len(), 2, "Retry sent the close again");
+    assert_eq!(sent[1], stopped, "after the stopped run");
     assert_eq!(request(&shell, sent[0], cx).request_id, request_id);
     shell.until_ended(sent[0], cx).await;
     assert_eq!(code(&shell, sent[0], cx), Some(ResultCode::Ok));
@@ -172,11 +181,16 @@ async fn p4_a_stopped_close_retries_with_one_checkpoint_and_one_merge(cx: &mut T
 /// the file gone, Retry sends the same request, which only tidies up: held
 /// at `cleaning_up`, main is exactly as the first run left it, and once
 /// done main's tip is the same merge commit, with no checkpoint or merge
-/// repeated, and the context branch and working copy are gone.
+/// repeated, and the context branch and working copy are gone. The replay's
+/// stages are not recorded by the desktop (the request model keeps only the
+/// latest), so no `recording` or `integrating` is shown by main's unchanged
+/// tip and counts; the library pins the stage order (`tests/mutation_remote/
+/// d5_progress.rs`).
 #[gpui_kit::test]
 async fn a_cleanup_only_replay_repeats_no_merge_or_checkpoint(cx: &mut TestAppContext) {
     let (shell, root, branch) = ticket_shell(cx, "Untidied");
     let context = worktree(&shell, &root);
+    assert!(context.exists(), "a working copy of its own");
     assert_eq!(counts(&root, &branch), BEFORE, "before");
 
     confirming(&shell, &root, cx).await;
@@ -191,6 +205,12 @@ async fn a_cleanup_only_replay_repeats_no_merge_or_checkpoint(cx: &mut TestAppCo
     let first = closes(&shell, cx)[0];
     shell.until_ended(first, cx).await;
     assert_eq!(code(&shell, first, cx), Some(ResultCode::RecoveryRequired));
+    // Why it stopped: its answer's pending tidy-up is `context_changed`.
+    let untidied = LockState::Untidied(Untidied {
+        reason: LifecycleCleanupPendingReason::ContextChanged,
+        request: first,
+    });
+    until_lock(&shell, &root, untidied, cx).await;
     assert_eq!(
         counts(&root, &branch),
         MERGED_UNTIDIED,
@@ -315,6 +335,8 @@ async fn p5_a_close_stranded_at_closing_resumes_after_relaunch(cx: &mut TestAppC
     let (main, context) = (tip(&root, "main"), tip(&root, &branch));
 
     let shell = Shell::open(fixture, cx);
+    let working_copy = worktree(&shell, &root);
+    assert!(working_copy.exists(), "the context's working copy is kept");
     assert_eq!(step(&shell, &root).as_deref(), Some("closing"));
     until_lock(&shell, &root, LockState::Locked(LockSource::Record), cx).await;
     let close = OperationAction::Close.as_str().to_owned();
@@ -379,15 +401,16 @@ async fn p5_a_close_stranded_at_closing_resumes_after_relaunch(cx: &mut TestAppC
         recorded(shell.fixture.service(), holder),
         RequestState::Finished
     );
+    assert!(!working_copy.exists(), "its working copy is tidied up");
     until_lock(&shell, &root, LockState::Open, cx).await;
 }
 
 /// K-25, R-33, real: a close whose answer was lost before its request
 /// settled (`BeforeRequestSettlement`) had already run to its end: merged,
-/// closed and tidied up. A fresh shell over the same data directory finds
-/// no lifecycle row and no lock; the ticket reads closed and offers no
-/// Close ticket…. The request stays accepted: nothing in the desktop
-/// settles it.
+/// closed and tidied up. A fresh shell over the same data directory, once
+/// it has read the repository's pending operations, lists no lifecycle row
+/// and holds no lock; the ticket reads closed and offers no Close ticket….
+/// The request stays accepted: nothing in the desktop settles it.
 #[gpui_kit::test]
 async fn a_close_lost_before_settlement_is_complete_and_stays_accepted(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -403,14 +426,23 @@ async fn a_close_lost_before_settlement_is_complete_and_stays_accepted(cx: &mut 
         "the ticket reads closed"
     );
     assert_eq!(step(&shell, &root), None, "no lifecycle row");
-    shell.run(cx);
+    let listed = key(&root);
+    shell
+        .until(cx, move |operations| {
+            matches!(
+                operations.pending().get(&listed),
+                Some(ListState::Ready { .. })
+            )
+        })
+        .await;
+    shell.frame(cx, |_, _| ());
     assert!(
         !shell
             .rows("pending-command", cx)
             .contains(&OperationAction::Close.as_str().to_owned()),
         "no Close row"
     );
-    until_lock(&shell, &root, LockState::Open, cx).await;
+    assert_eq!(lock(&shell, &root, cx), LockState::Open, "no lock");
     open(&shell, ticket(&root), cx);
     shell
         .until_drawn(cx, "the ticket's details", |shell, cx| {
@@ -418,6 +450,7 @@ async fn a_close_lost_before_settlement_is_complete_and_stays_accepted(cx: &mut 
         })
         .await;
     shell.click("chip-all", cx);
+    until_present(&shell, "item-lifecycle", cx).await;
     assert_eq!(shell.label("item-lifecycle", cx).as_deref(), Some("Closed"));
     assert!(
         !shell.present(LIFECYCLE_ACTION, cx),
