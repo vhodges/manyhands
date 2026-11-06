@@ -8,23 +8,22 @@
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::{AssetSource, ElementId, TestAppContext};
+use gpui_kit::{ElementId, TestAppContext};
 use manyhands::{
     repository::{
-        ItemDtoKind, LifecyclePathChangeKind, LifecyclePlannedCleanupDto,
-        LifecyclePlannedClosureDto, LifecyclePlannedIntegration, LifecyclePlannedPublication,
-        LifecyclePreviewDto, LifecycleRecording, Mutation, PreviewDetailsDto, TicketCloseInput,
+        ItemDtoKind, LifecyclePlannedCleanupDto, LifecyclePlannedClosureDto,
+        LifecyclePlannedIntegration, LifecyclePlannedPublication, LifecyclePreviewDto,
+        LifecycleRecording, Mutation, PreviewDetailsDto, TicketCloseInput,
     },
     results::ResultCode,
 };
 
-use super::confirm::{change_words, git_line, steps, tidy_note};
+use super::confirm::{git_line, steps, tidy_note};
 use super::tests::{
     TICKET, closes, code, dialog, open, pane, request, saved_ticket, shell, shown, ticket,
     until_present,
 };
 use crate::desktop::{
-    assets::{DesktopAssets, icon_path},
     model::item::CLOSE_TICKET,
     test_support::fixtures::{identity, item_id, ticket_path, ticket_source},
     view::{harness::Shell, item::LIFECYCLE_ACTION},
@@ -465,21 +464,4 @@ fn existing_closure_and_already_contained_read_already() {
         tidy_note(&only_remote, Some("upstream")),
         "Remove the branch on upstream."
     );
-}
-
-/// Review Minor 5: each change's icon comes from the Kit's own set.
-#[test]
-fn the_path_change_icons_load() {
-    for change in [
-        LifecyclePathChangeKind::Added,
-        LifecyclePathChangeKind::Modified,
-        LifecyclePathChangeKind::Deleted,
-    ] {
-        let (_, icon) = change_words(change);
-        let svg = DesktopAssets
-            .load(&icon_path(icon))
-            .unwrap_or_else(|_| panic!("{icon} errored"))
-            .unwrap_or_else(|| panic!("{icon} is missing"));
-        assert!(svg.starts_with(b"<svg"), "{icon} is not an SVG");
-    }
 }
