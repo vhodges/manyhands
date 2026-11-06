@@ -266,14 +266,20 @@ fn retirement_cli_authenticated_live_pass() -> Result<(), FixtureError> {
     );
     let list =
         p.b.json(&["ticket", "list", "--repo", p.b.root()], &[], "ok", 0);
-    assert!(
-        list["data"]["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|i| i["id"] == ITEM || i["id"] == OTHER_ITEM)
-            .all(|i| i["closure"]["state"] == "closed")
+    let matching: Vec<_> = list["data"]["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["id"] == ITEM || i["id"] == OTHER_ITEM)
+        .collect();
+    let mut ids: Vec<_> = matching.iter().map(|i| i["id"].as_str().unwrap()).collect();
+    ids.sort_unstable();
+    assert_eq!(
+        ids,
+        [ITEM, OTHER_ITEM],
+        "both tickets appear exactly once in the list"
     );
+    assert!(matching.iter().all(|i| i["closure"]["state"] == "closed"));
     assert_eq!(
         polling::refs(&p.bare()?)?,
         served,
