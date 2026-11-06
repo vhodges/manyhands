@@ -16,8 +16,8 @@ use gpui_kit::{Entity, TestAppContext};
 use manyhands::{
     repository::{
         CancellationToken, ConfirmationId, FailurePoint, ItemDto, ItemDtoKind, LifecycleBlockedDto,
-        LifecycleBlocker, Mutation, MutationCall, MutationDataDto, NoProgress, PrepareDataDto,
-        RepositoryService, RequestId, TicketCloseInput, keys::SessionCredentials,
+        LifecycleBlocker, Mutation, MutationCall, MutationDataDto, NoProgress, OperationId,
+        PrepareDataDto, RepositoryService, RequestId, TicketCloseInput, keys::SessionCredentials,
     },
     results::{Envelope, RecoveryAction, RecoveryActionKind, ResultCode, Scope},
 };
@@ -30,11 +30,12 @@ use super::{
 use crate::desktop::{
     model::{
         item::{APPROVE_AND_MERGE, CLOSE_TICKET},
+        lifecycle_lock::LockKey,
         navigation::OpenTarget,
     },
     services::{
         JobKind,
-        requests::{DesktopRequest, DesktopRequestId, Intent, RequestState},
+        requests::{DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
     },
     test_support::{
         fixtures::{Fixture, NoPassphrase, item_id},
@@ -394,6 +395,51 @@ async fn continue_is_not_offered_while_the_close_runs(cx: &mut TestAppContext) {
     let sent = closes(&shell, cx);
     assert_eq!(sent.len(), 1, "one close");
     shell.until_ended(sent[0], cx).await;
+}
+
+/// P22, V22: a row's Resume of the item's lifecycle, queued or running, is
+/// the lifecycle in flight too: the dialog of a held item offers no
+/// Continue, which would send the holding request beside it, and says it is
+/// still running.
+#[gpui_kit::test]
+async fn continue_is_not_offered_while_a_row_resume_runs(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    saved_ticket(&fixture, &root, "Held", "");
+    fixture.refresh(&root);
+    strand_close(&fixture, &root);
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&root), cx);
+    let locked = LockKey::new(&key(&root), TICKET);
+    let listed = locked.clone();
+    shell
+        .until(cx, move |operations| {
+            !operations.locks().operations(&listed).is_empty()
+        })
+        .await;
+    let operation = shell
+        .operations(cx)
+        .read_with(cx, |operations, _| operations.locks().operations(&locked))[0]
+        .clone();
+    let held = shell.backend.hold_job(JobKind::OperationResume);
+    shell.workspace.read_with(cx, |workspace, _| {
+        workspace.services().worker().submit(
+            Intent::OperationResume {
+                root: root.clone(),
+                operation_id: OperationId::parse(&operation).unwrap(),
+            },
+            Lane::User,
+            None,
+            None,
+        )
+    });
+    held.wait_reached();
+
+    shell.click(LIFECYCLE_ACTION, cx);
+    until_present(&shell, "lifecycle-still-running", cx).await;
+    assert!(!shell.present("lifecycle-continue", cx));
+    held.release();
 }
 
 /// The first run is sent once, with the confirmation of the preview the

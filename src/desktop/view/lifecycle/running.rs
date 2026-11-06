@@ -185,7 +185,7 @@ impl LifecycleDialog {
         let data = lifecycle_data(envelope);
         let reach = Reach::of(envelope, self.reached);
         let way_out = lifecycle_way_out(envelope);
-        let offers = self.offers(id, envelope, ending, &reach, &way_out);
+        let offers = self.offers(id, envelope, ending, &reach, &way_out, cx);
         let steps = self.shown_steps(data);
         let keys: Vec<_> = steps.iter().map(|step| step.key).collect();
         let local = data.is_some_and(|data| {

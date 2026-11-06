@@ -228,7 +228,7 @@ impl LifecycleDialog {
         let Phase::Submitted(shown) = self.phase else {
             return;
         };
-        if self.in_flight_with(None) {
+        if self.in_flight_with(None, cx) {
             return;
         }
         let Some(target) = self.republishing(Some(AfterRepublish::Retry(shown))) else {

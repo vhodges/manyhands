@@ -244,25 +244,27 @@ impl LifecycleDialog {
     /// Whether the item's lifecycle is queued or running in this process,
     /// or a resume of the operation that holds it: Continue and Resume are
     /// not offered meanwhile (P22).
-    fn in_flight(&self) -> bool {
+    fn in_flight(&self, cx: &App) -> bool {
         let held = match &self.phase {
             Phase::Held {
                 way_out: LifecycleWayOut::ResumeOperation { operation_id },
             } => Some(operation_id.as_str()),
             _ => None,
         };
-        self.in_flight_with(held)
+        self.in_flight_with(held, cx)
     }
 
     /// As `in_flight`, with a resume of `held`, the operation a way out
-    /// names, counted too.
-    pub(super) fn in_flight_with(&self, held: Option<&str>) -> bool {
+    /// names, counted too. So is a resume of any operation the lifecycle
+    /// rows list for the item, which a row's Resume sends (P22).
+    pub(super) fn in_flight_with(&self, held: Option<&str>, cx: &App) -> bool {
         let (Some(root), Some(id)) = (self.root().and_then(|root| root.to_str()), self.item_id())
         else {
             return false;
         };
         let key = LockKey::new(root, &id.to_string());
-        let held: Vec<String> = held.into_iter().map(str::to_owned).collect();
+        let mut held: Vec<String> = held.into_iter().map(str::to_owned).collect();
+        held.extend(self.services.operations().read(cx).locks().operations(&key));
         self.services
             .worker()
             .in_flight(|intent| lifecycle_of(intent, &key, &held))
@@ -278,7 +280,7 @@ impl LifecycleDialog {
     /// Continue: the request holding the item, sent again under its own
     /// request ID, with no confirmation (its accepted record needs none).
     fn continue_held(&mut self, request: &str, cx: &mut Context<Self>) {
-        if self.in_flight() {
+        if self.in_flight(cx) {
             return;
         }
         self.following_anew();
@@ -297,7 +299,7 @@ impl LifecycleDialog {
     /// Resume: the operation holding the item, or the one an outcome's way
     /// out names, resumed.
     pub(super) fn resume_held(&mut self, operation: &str, cx: &mut Context<Self>) {
-        if self.in_flight_with(Some(operation)) {
+        if self.in_flight_with(Some(operation), cx) {
             return;
         }
         self.following_anew();
@@ -342,7 +344,7 @@ impl LifecycleDialog {
         way_out: &LifecycleWayOut,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
-        if self.in_flight() {
+        if self.in_flight(cx) {
             return Some(
                 text("lifecycle-still-running", STILL_RUNNING)
                     .text_sm()
@@ -410,7 +412,7 @@ impl LifecycleDialog {
                     .text_color(muted),
             );
         // Not while the item's lifecycle is in flight (P22), as for a run.
-        let mut actions = self.repair_buttons(way_out, self.in_flight_with(None), cx);
+        let mut actions = self.repair_buttons(way_out, self.in_flight_with(None, cx), cx);
         if blockers.contains(&LifecycleBlocker::PrimaryDirty)
             && let Some(root) = self.root().map(|root| root.to_path_buf())
         {

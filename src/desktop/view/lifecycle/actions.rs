@@ -6,7 +6,7 @@
 //! places the way out opens in the workspace; what an ended run offers;
 //! and Enter.
 
-use gpui_kit::{AnyElement, Context, Window, component::Root};
+use gpui_kit::{AnyElement, App, Context, Window, component::Root};
 use manyhands::{
     repository::{LifecycleBlocker, LifecycleWayOut, MutationDataDto, lifecycle_way_out},
     results::{Envelope, RecoveryActionKind, ResultCode},
@@ -76,7 +76,7 @@ impl LifecycleDialog {
         let Phase::Submitted(shown) = self.phase else {
             return;
         };
-        if self.in_flight_with(None) {
+        if self.in_flight_with(None, cx) {
             return;
         }
         let Some((intent, request_id)) = self
@@ -160,6 +160,7 @@ impl LifecycleDialog {
         ending: Ending,
         reach: &Reach,
         way_out: &[LifecycleWayOut],
+        cx: &App,
     ) -> Offers {
         let offered = |kind| envelope.recovery.iter().any(|action| action.action == kind);
         let record = self.services.worker().record_state(id);
@@ -200,7 +201,7 @@ impl LifecycleDialog {
         // offered, and Retry when it routes neither (review O-4).
         let retry = retry && (resume.is_none() || way_out.contains(&LifecycleWayOut::SendAgain));
         let resume = resume.filter(|_| !retry);
-        let waiting = self.in_flight_with(resume.as_deref());
+        let waiting = self.in_flight_with(resume.as_deref(), cx);
         Offers {
             retry: ending != Ending::Done && retry,
             prepare,
@@ -236,7 +237,14 @@ impl LifecycleDialog {
             return;
         }
         let reach = Reach::of(&envelope, self.reached);
-        let offers = self.offers(id, &envelope, ending, &reach, &lifecycle_way_out(&envelope));
+        let offers = self.offers(
+            id,
+            &envelope,
+            ending,
+            &reach,
+            &lifecycle_way_out(&envelope),
+            cx,
+        );
         if offers.retry && !offers.waiting {
             self.resend(cx);
         } else if offers.credential == Some(Credential::Locked) && !offers.waiting {
