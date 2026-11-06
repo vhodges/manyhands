@@ -339,3 +339,60 @@ fn a_lifecycle_already_out_or_a_closed_queue_sends_no_resume() {
     );
     assert!(!worker.sent_since(mark, is_resume), "nothing once closed");
 }
+
+/// V16, M1: one operation is resumed once, whoever asks. A row Resume (not
+/// gated while a conflict resolution of the item is out) and a drain
+/// follow-up both submit `operation resume`; while the first is queued or
+/// running the second is the first, and a close sent again under a library
+/// request ID already out is that close. Once the first is answered, a new
+/// resume is a new request.
+#[test]
+fn a_resume_or_close_already_out_is_not_queued_twice() {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let backend = fixture.delaying_backend();
+    let held = backend.hold_job(crate::desktop::services::JobKind::OperationResume);
+    let (worker, _events) = WorkerHandle::spawn(backend);
+    let resume = |operation: &OperationId| Intent::OperationResume {
+        root: root.clone(),
+        operation_id: *operation,
+    };
+    let (this, other) = (OperationId::new(), OperationId::new());
+
+    let first = worker.submit(resume(&this), Lane::User, None, None);
+    held.wait_reached();
+    let mark = worker.newest();
+    assert_eq!(
+        worker.submit(resume(&this), Lane::User, None, None),
+        first,
+        "running"
+    );
+    let another = worker.submit(resume(&other), Lane::User, None, None);
+    assert_ne!(another, first, "another operation is another resume");
+    let queued = worker.newest();
+    assert_eq!(
+        worker.submit(resume(&other), Lane::User, None, None),
+        another,
+        "queued"
+    );
+    assert!(worker.sent_since(mark, |_| true), "the other one was sent");
+    assert_eq!(worker.newest(), queued, "and nothing was sent twice");
+
+    let close = |id| Intent::TicketClose {
+        root: root.clone(),
+        id,
+    };
+    let named = RequestId::new();
+    let sent = worker.submit_with_request_id(close(item_id(TICKET)), Lane::User, named);
+    assert_eq!(
+        worker.submit_with_request_id(close(item_id(TICKET)), Lane::User, named),
+        sent,
+        "the same library request"
+    );
+    assert_ne!(
+        worker.submit_with_request_id(close(item_id(TICKET)), Lane::User, RequestId::new()),
+        sent,
+        "another request"
+    );
+    held.release();
+}

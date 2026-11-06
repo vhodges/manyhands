@@ -715,6 +715,11 @@ fn submit(
     request_id: RequestId,
 ) -> DesktopRequestId {
     let mut state = shared.lock();
+    // The same resume, or the same lifecycle request, is never out twice
+    // (V16, M1): the one in flight stands for this call.
+    if let Some(out) = in_flight_twin(&state, &intent, request_id) {
+        return out;
+    }
     let id = next_id(&mut state);
     let sent = state.next_send();
     state.submitted.insert(
@@ -749,6 +754,38 @@ fn submit(
     };
     admit(shared, &mut state, Job::new(id, work, lane));
     id
+}
+
+/// The request in flight that `intent`, under `request_id`, would only
+/// duplicate: a resume of the same operation of the same repository, or a
+/// close or merge under the same library request ID. Queued, waiting out
+/// `busy`, or running; a finished one is no twin.
+fn in_flight_twin(
+    state: &State,
+    intent: &Intent,
+    request_id: RequestId,
+) -> Option<DesktopRequestId> {
+    let twin = |submitted: &Submitted| match (&submitted.intent, intent) {
+        (
+            Intent::OperationResume {
+                root: held,
+                operation_id: held_operation,
+            },
+            Intent::OperationResume { root, operation_id },
+        ) => held == root && held_operation == operation_id,
+        (
+            Intent::TicketClose { .. } | Intent::DocumentPromote { .. },
+            Intent::TicketClose { .. } | Intent::DocumentPromote { .. },
+        ) => submitted.request_id == request_id,
+        _ => false,
+    };
+    state
+        .running
+        .as_ref()
+        .map(|running| running.id)
+        .into_iter()
+        .chain(state.user.iter().chain(&state.background).map(|job| job.id))
+        .find(|id| state.submitted.get(id).is_some_and(twin))
 }
 
 fn next_id(state: &mut State) -> DesktopRequestId {
