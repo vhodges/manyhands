@@ -318,13 +318,23 @@ impl Backend for DelayingBackend {
         Some(prepares.remove(at).1)
     }
 
-    fn after_conflict_read(&self, operation_id: &OperationId) -> Option<ConflictDto> {
+    /// A conflict read takes the canned conflict; the pending rows' probe
+    /// only looks at it, so the sheet that follows still reads it (Task 16
+    /// re-review, M-3).
+    fn after_conflict_read(
+        &self,
+        kind: ReadKind,
+        operation_id: &OperationId,
+    ) -> Option<ConflictDto> {
         let mut conflicts = self.conflicts.lock().unwrap();
         let wanted = operation_id.to_string();
         let at = conflicts
             .iter()
             .position(|conflict| conflict.operation_id == wanted)?;
-        Some(conflicts.remove(at))
+        match kind {
+            ReadKind::PendingConflicts => Some(conflicts[at].clone()),
+            _ => Some(conflicts.remove(at)),
+        }
     }
 }
 

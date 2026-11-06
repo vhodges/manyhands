@@ -21,7 +21,7 @@ use super::{
 use crate::desktop::{
     model::{
         lifecycle_lock::LockKey,
-        operations::primary_subject,
+        operations::{primary_name, primary_subject},
         stamp::{Stamp, ViewScope},
     },
     services::{
@@ -32,16 +32,17 @@ use crate::desktop::{
 };
 
 /// What a dirty primary branch is called, at prepare or in a stop at
-/// execute (A2): `primary` names it (R-35).
-pub(crate) fn primary_dirty(primary: &str) -> String {
+/// execute (A2): `primary` names it, when known (R-35a).
+pub(crate) fn primary_dirty(primary: Option<&str>) -> String {
     format!(
         "{} has unsaved changes outside Manyhands.",
         primary_subject(primary)
     )
 }
 
-/// A blocker in words; `primary` names the primary branch (R-35).
-pub(crate) fn blocker_words(blocker: LifecycleBlocker, primary: &str) -> String {
+/// A blocker in words; `primary` names the primary branch, when known
+/// (R-35, R-35a).
+pub(crate) fn blocker_words(blocker: LifecycleBlocker, known: Option<&str>) -> String {
     use LifecycleBlocker::{
         AlreadyClosed, CommentPublicationPending, ConflictPending, ContextBehindRemote,
         ContextConflicted, ContextDirty, ContextMissing, ContextNonconforming,
@@ -50,7 +51,8 @@ pub(crate) fn blocker_words(blocker: LifecycleBlocker, primary: &str) -> String 
         PrimaryDirty, PrimaryMissing, PrimaryNotCheckedOut, PrimaryReopened, RemoteContextDeleted,
         TicketInvalidAfterClosure,
     };
-    let subject = primary_subject(primary);
+    let subject = primary_subject(known);
+    let primary = primary_name(known);
     let words = match blocker {
         NotADocument => "This item is not a document.",
         NotATicket => "This item is not a ticket.",
@@ -65,7 +67,7 @@ pub(crate) fn blocker_words(blocker: LifecycleBlocker, primary: &str) -> String 
         PrimaryNotCheckedOut => {
             return format!("{subject} is not checked out in the repository's folder.");
         }
-        PrimaryDirty => return primary_dirty(primary),
+        PrimaryDirty => return primary_dirty(known),
         PrimaryConflicted => return format!("{subject} has a conflict to resolve."),
         PrimaryAheadOfRemote => return format!("{subject} has changes that are not shared yet."),
         ContextBehindRemote => "This item's working copy is behind its shared copy.",
@@ -373,6 +375,7 @@ impl LifecycleDialog {
         };
         let muted = cx.theme().muted_foreground;
         let primary = self.primary();
+        let known = self.known_primary();
         let guidance: Vec<String> = way_out
             .iter()
             .filter_map(|step| guidance(step, item, &primary))
@@ -381,7 +384,11 @@ impl LifecycleDialog {
             .gap_1()
             .child(text("lifecycle-lead", super::BLOCKED_LEAD).text_sm())
             .children(blockers.iter().enumerate().map(|(ix, blocker)| {
-                text(("lifecycle-blocker", ix), blocker_words(*blocker, &primary)).text_sm()
+                text(
+                    ("lifecycle-blocker", ix),
+                    blocker_words(*blocker, known.as_deref()),
+                )
+                .text_sm()
             }))
             .children(guidance.into_iter().enumerate().map(|(ix, words)| {
                 text(("lifecycle-way-out", ix), words)

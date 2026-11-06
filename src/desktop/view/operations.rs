@@ -340,7 +340,13 @@ impl Workspace {
         let item = lifecycle::item_of(&request.intent);
         let line = h_flex()
             .gap_2()
-            .child(text(request_id(id, "command"), request.intent.label()).text_sm())
+            .child(
+                text(
+                    request_id(id, "command"),
+                    request.intent.label_in(primary.as_deref()),
+                )
+                .text_sm(),
+            )
             .children(item.map(|item| {
                 text(request_id(id, "item"), item)
                     .text_xs()

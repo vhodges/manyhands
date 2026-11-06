@@ -76,14 +76,17 @@ impl LifecycleDialog {
     }
 
     /// The primary branch's name (R-35): the confirmed preview's, else the
-    /// one the workspace knows, else `PRIMARY_UNKNOWN`'s words.
-    pub(super) fn primary(&self) -> String {
-        let known = self
-            .plan
+    /// one the workspace knows; `None` when neither is.
+    pub(super) fn known_primary(&self) -> Option<String> {
+        self.plan
             .as_ref()
-            .map(|plan| plan.primary_branch.as_str())
-            .or(self.heading.primary.as_deref());
-        primary_name(known).to_owned()
+            .map(|plan| plan.primary_branch.clone())
+            .or_else(|| self.heading.primary.clone())
+    }
+
+    /// `known_primary`, or `PRIMARY_UNKNOWN`'s words.
+    pub(super) fn primary(&self) -> String {
+        primary_name(self.known_primary().as_deref()).to_owned()
     }
 
     /// The body and buttons of a sent run, by where its request stands.
@@ -229,10 +232,14 @@ impl LifecycleDialog {
             body = body.children(part);
             open_ready = button;
         }
-        let primary = self.primary();
+        let (primary, known) = (self.primary(), self.known_primary());
         if let Some(data) = data {
             body = body.children(data.blockers.iter().enumerate().map(|(ix, blocker)| {
-                text(("lifecycle-blocker", ix), blocker_words(*blocker, &primary)).text_sm()
+                text(
+                    ("lifecycle-blocker", ix),
+                    blocker_words(*blocker, known.as_deref()),
+                )
+                .text_sm()
             }));
         }
         if offers.no_record {

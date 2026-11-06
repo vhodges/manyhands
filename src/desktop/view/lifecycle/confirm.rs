@@ -134,7 +134,7 @@ pub(crate) fn steps(details: &LifecyclePreviewDto) -> Vec<Step> {
         LifecyclePlannedIntegration::AlreadyContained => Step::new(
             StepKey::Merge,
             format!("Already in {primary}"),
-            format!("{primary} already holds every change below."),
+            format!("The {primary} branch already holds every change below."),
         ),
     });
     if let Some(remote) = sharing {

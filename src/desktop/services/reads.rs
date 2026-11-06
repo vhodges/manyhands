@@ -137,7 +137,7 @@ impl Reader {
         let read = self
             .call(kind, |service| service.show_conflict(repo, operation_id))
             .await;
-        match self.backend.after_conflict_read(&operation_id) {
+        match self.backend.after_conflict_read(kind, &operation_id) {
             Some(conflict) => ReadResult::Ok(conflict),
             None => read,
         }

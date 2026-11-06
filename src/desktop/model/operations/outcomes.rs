@@ -49,14 +49,12 @@ pub(crate) fn primary_name(primary: Option<&str>) -> &str {
     primary.unwrap_or(PRIMARY_UNKNOWN)
 }
 
-/// `primary`, a name `primary_name` gave, as a sentence's first words: the
-/// branch's name as it is (a branch's name keeps its case), or "The
-/// primary branch".
-pub(crate) fn primary_subject(primary: &str) -> String {
-    if primary == PRIMARY_UNKNOWN {
-        "The primary branch".to_owned()
-    } else {
-        primary.to_owned()
+/// The primary branch as a sentence's first words (R-35a): "The {primary}
+/// branch", its name as it is, or "The primary branch" when not known.
+pub(crate) fn primary_subject(primary: Option<&str>) -> String {
+    match primary {
+        Some(primary) => format!("The {primary} branch"),
+        None => "The primary branch".to_owned(),
     }
 }
 

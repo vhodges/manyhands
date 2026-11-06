@@ -43,7 +43,7 @@ use manyhands::{
 use super::{
     requests::{DesktopRequestId, Intent, Lane, RequestState},
     resolutions::Followed,
-    worker::WorkerHandle,
+    worker::{Retried, WorkerHandle},
 };
 use crate::desktop::model::{lifecycle_lock::LockKey, operations::Operations};
 
@@ -260,17 +260,22 @@ impl Resends {
 }
 
 /// Sends a lifecycle on (R-10; C5 decision 19): its request `lifecycle`
-/// again, or left as it is while queued or running, since it goes on by
-/// itself. When this session holds none, or it cannot be sent again (the
-/// queue closed while quitting, or a later request of the item stands in
-/// its way), `operation resume` of the operation `resume` names is sent
-/// instead. `None` when neither could be sent.
+/// again, or left as it is while queued or running, here or in the worker
+/// before the request model hears of it, since it goes on by itself. When
+/// this session's worker never took it, or there is none, `operation
+/// resume` of the operation `resume` names is sent instead. Nothing is
+/// sent twice (Task 16 re-review, I-1): `None` once quitting has closed
+/// the queue, when the worker holds the request and still leaves it alone,
+/// or when no resume is named.
 pub(in crate::desktop::services) fn send_lifecycle_on(
     lifecycle: Option<DesktopRequestId>,
     resume: Option<(PathBuf, OperationId)>,
     operations: &Operations,
     worker: &WorkerHandle,
 ) -> Option<Followed> {
+    if worker.quitting() {
+        return None;
+    }
     if let Some(lifecycle) = lifecycle {
         let running = operations.request(lifecycle).is_some_and(|request| {
             matches!(
@@ -278,8 +283,13 @@ pub(in crate::desktop::services) fn send_lifecycle_on(
                 RequestState::Queued | RequestState::Running { .. }
             )
         });
-        if running || worker.retry(lifecycle, None) {
+        if running {
             return Some(Followed::Resent);
+        }
+        match worker.retry_as(lifecycle) {
+            Retried::Requeued | Retried::AlreadyOut => return Some(Followed::Resent),
+            Retried::Closed | Retried::Refused => return None,
+            Retried::NotHeld => {}
         }
     }
     let (root, operation_id) = resume?;

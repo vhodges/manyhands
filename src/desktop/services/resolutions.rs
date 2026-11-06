@@ -35,7 +35,7 @@ use manyhands::{
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Backend,
+    Backend, ReadKind,
     conflicts::ConflictSource,
     requests::{Intent, PathResolution},
 };
@@ -441,7 +441,7 @@ fn attempt_stands(backend: &dyn Backend, set: &KeptSet) -> bool {
         return true;
     };
     let read = service.show_conflict(&repository, set.operation_id);
-    let read = match backend.after_conflict_read(&set.operation_id) {
+    let read = match backend.after_conflict_read(ReadKind::Conflict, &set.operation_id) {
         Some(conflict) => Ok(conflict),
         None => read.map_err(|_| ()),
     };

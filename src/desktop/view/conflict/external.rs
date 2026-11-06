@@ -150,7 +150,9 @@ impl ResolveSheet {
                 Button::new("conflict-check-again")
                     .label(CHECK_AGAIN)
                     .small()
-                    .disabled(self.reading)
+                    // Not while a Save's lookup or request is out (Task 16
+                    // re-review, M-1), nor while reading.
+                    .disabled(self.waiting())
                     .on_click(self.on(cx, |sheet, _, cx| sheet.read_conflict(cx))),
             )
     }

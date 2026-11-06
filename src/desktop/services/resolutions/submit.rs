@@ -48,9 +48,7 @@ impl Services {
             Ok(worker.submit_with_request_id(set.intent(), Lane::User, set.request_id))
         })
     }
-}
 
-impl Services {
     /// The kept set a sheet sends again, looked up on the background
     /// executor, off the store's lock on the UI thread (Task 16, fix 2):
     /// the one kept under `named`, when it names a request and one is kept;
@@ -71,6 +69,19 @@ impl Services {
                 .and_then(|named| store.kept(named).ok().flatten())
                 .or_else(|| store.kept_for(&root, operation_id, &except).ok().flatten())
         })
+    }
+
+    /// The set kept under `named`, looked up on the background executor
+    /// (Task 16 re-review, M-2). `None` when it names none, none is kept,
+    /// or the store did not open.
+    pub(crate) fn find_kept_named(
+        &self,
+        named: Option<RequestId>,
+        cx: &App,
+    ) -> Task<Option<KeptSet>> {
+        let backend = self.backend.clone();
+        cx.background_executor()
+            .spawn(async move { backend.resolutions().ok()?.kept(named?).ok().flatten() })
     }
 }
 

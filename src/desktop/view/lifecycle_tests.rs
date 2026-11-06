@@ -176,7 +176,10 @@ async fn a_dirty_primary_blocks_at_prepare(cx: &mut TestAppContext) {
 
     shell.click(LIFECYCLE_ACTION, cx);
     until_present(&shell, "lifecycle-prepare-again", cx).await;
-    assert_eq!(shell.rows("lifecycle-blocker", cx), [primary_dirty("main")]);
+    assert_eq!(
+        shell.rows("lifecycle-blocker", cx),
+        [primary_dirty(Some("main"))]
+    );
     assert_eq!(
         shell.label("lifecycle-open-folder", cx).as_deref(),
         Some(OPEN_FOLDER)
@@ -229,10 +232,13 @@ async fn a_blocked_prepare_lists_blockers_and_way_out(cx: &mut TestAppContext) {
     until_present(&shell, "lifecycle-prepare-again", cx).await;
     let words: Vec<String> = blockers
         .iter()
-        .map(|blocker| blocker_words(*blocker, "trunk"))
+        .map(|blocker| blocker_words(*blocker, Some("trunk")))
         .collect();
     assert_eq!(shell.rows("lifecycle-blocker", cx), words);
-    assert_eq!(words, ["trunk has changes that are not shared yet."]);
+    assert_eq!(
+        words,
+        ["The trunk branch has changes that are not shared yet."]
+    );
     let guidance = shell.rows("lifecycle-way-out", cx);
     assert_eq!(guidance.len(), 2, "the poll and the details: {guidance:?}");
     assert!(guidance[0].contains("Check origin"), "{}", guidance[0]);
@@ -248,6 +254,28 @@ async fn a_blocked_prepare_lists_blockers_and_way_out(cx: &mut TestAppContext) {
     assert!(!shell.present("lifecycle-open-folder", cx));
     assert!(!shell.present("lifecycle-confirm", cx));
     assert!(closes(&shell, cx).is_empty());
+
+    // R-35b: Share sends the share of trunk, which the dialog and its
+    // Activity entry both name.
+    shell.click("lifecycle-share-main", cx);
+    assert_eq!(
+        shell.label("lifecycle-sharing-main", cx).as_deref(),
+        Some("Sharing trunk. Prepare again once it has finished.")
+    );
+    let share = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::RepoSync { .. })
+    });
+    assert_eq!(share.len(), 1);
+    shell.until_ended(share[0], cx).await;
+    assert_eq!(
+        shell
+            .label(
+                crate::desktop::view::operations::request_id(share[0], "command"),
+                cx
+            )
+            .as_deref(),
+        Some("Share trunk")
+    );
 }
 
 /// Prepares and executes a close of the ticket through `service`, under
@@ -436,7 +464,7 @@ async fn already_closed_runs_nothing(cx: &mut TestAppContext) {
     );
     assert_eq!(
         shell.rows("lifecycle-blocker", cx),
-        [blocker_words(LifecycleBlocker::AlreadyClosed, "main")]
+        [blocker_words(LifecycleBlocker::AlreadyClosed, Some("main"))]
     );
     assert!(!shell.present("lifecycle-confirm", cx));
     assert!(!shell.present("lifecycle-prepare-again", cx));

@@ -184,6 +184,8 @@ impl ResolveSheet {
                     Button::new("conflict-read-again")
                         .label(READ_AGAIN)
                         .small()
+                        // Not while a Save's lookup or request is out (M-1).
+                        .disabled(self.waiting())
                         .on_click(self.on(cx, |sheet, _, cx| sheet.read_conflict(cx))),
                 )
         });

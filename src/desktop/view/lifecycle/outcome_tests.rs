@@ -386,7 +386,10 @@ async fn a_dirty_primary_stop_at_execute_merges_nothing(cx: &mut TestAppContext)
         shell.label("lifecycle-ending", cx).as_deref(),
         Some(ENDING_FAILED)
     );
-    assert_eq!(shell.rows("lifecycle-blocker", cx), [primary_dirty("main")]);
+    assert_eq!(
+        shell.rows("lifecycle-blocker", cx),
+        [primary_dirty(Some("main"))]
+    );
     // Review M-1: a dirty main stands in the merge's way.
     assert_eq!(
         shell.rows("lifecycle-step-state", cx),

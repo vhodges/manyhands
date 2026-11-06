@@ -380,7 +380,7 @@ impl LifecycleDialog {
             State::Repaired => (
                 format!(
                     "{} is in this {item}'s working copy now.",
-                    primary_subject(&primary)
+                    primary_subject(self.known_primary().as_deref())
                 ),
                 None,
             ),

@@ -298,10 +298,23 @@ impl ResolveSheet {
                     .iter()
                     .find_map(|action| action.arguments.get("request_id")?.as_str())
                     .and_then(|named| RequestId::parse(named).ok());
-                self.kept = named.and_then(|named| self.store()?.kept(named).ok().flatten());
-                if self.kept.is_none() {
-                    self.answer = Some((code, message));
-                }
+                // Looked up off the UI thread (Task 16 re-review, M-2);
+                // Save waits for it.
+                self.kept = None;
+                self.submitting = true;
+                let found = self.services.find_kept_named(named, cx);
+                cx.spawn(async move |sheet, cx| {
+                    let kept = found.await;
+                    let _ = sheet.update(cx, |sheet, cx| {
+                        sheet.submitting = false;
+                        if kept.is_none() {
+                            sheet.answer = Some((code, message));
+                        }
+                        sheet.kept = kept;
+                        cx.notify();
+                    });
+                })
+                .detach();
             }
             _ => {
                 self.answer = Some((code, message));
