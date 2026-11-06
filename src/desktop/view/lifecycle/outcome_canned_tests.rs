@@ -18,9 +18,9 @@ use manyhands::{
     repository::{
         ItemDtoKind, LifecycleBlocker, LifecycleCleanupPendingReason, LifecycleCleanupState,
         LifecycleIntegrationKind, LifecycleMadeReadyState, LifecycleMutationDto,
-        LifecycleMutationType, LifecyclePlannedPublication, LifecyclePublicationState,
-        LifecycleRecording, Mutation, MutationDataDto, OperationId, PreviewDetailsDto, RequestId,
-        TicketCloseInput,
+        LifecycleMutationType, LifecyclePlannedPublication, LifecyclePublicationPendingReason,
+        LifecyclePublicationState, LifecycleRecording, Mutation, MutationDataDto, OperationId,
+        PreviewDetailsDto, RequestId, TicketCloseInput,
     },
     results::{
         CheckpointEffect, CleanupEffect, DiscoveryEffect, Effects, Envelope, IntegrationEffect,
@@ -521,4 +521,58 @@ async fn cleanup_refused_is_failed_with_retry(cx: &mut TestAppContext) {
         "the same request"
     );
     shell.until_ended(sent[0], cx).await;
+}
+
+/// A3, R-7, canned (the library's: `bind/lifecycle.rs` `reached_code`, a
+/// push to origin refused because another process holds the repository:
+/// `busy`, partial, merged, publication pending `busy`, `request.retry`).
+/// `busy` before main is reached is still running (P22); once the merge
+/// happened the answer is a pending remote publication, so Failed: merged,
+/// not shared, with Retry. Without a merge, `busy` is still running.
+#[gpui_kit::test]
+async fn busy_after_the_merge_is_failed_not_still_running(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| saved_ticket(fixture, root, "Busy", ""));
+    let ticket = ItemDtoKind::Ticket;
+    let request = RequestId::new();
+    let mut after_merge = reached(ticket, TICKET, vec![]);
+    after_merge.publication = Some(LifecyclePublicationState::Pending);
+    after_merge.publication_oid = None;
+    after_merge.publication_pending = Some(LifecyclePublicationPendingReason::Busy);
+    after_merge.cleanup = Some(LifecycleCleanupState::Pending);
+    after_merge.cleanup_pending = Some(LifecycleCleanupPendingReason::AwaitingPublication);
+    let mut effects = reached_effects(CleanupEffect::Pending);
+    effects.publication = PublicationEffect::Pending;
+    let id = finished(
+        &shell,
+        1,
+        intent(&root, ticket),
+        request,
+        answer(
+            "ticket close",
+            &root,
+            ResultCode::Busy,
+            Outcome::Partial,
+            after_merge,
+            effects,
+            vec![retry(request)],
+            request,
+        ),
+        cx,
+    );
+    reopen(&shell, id, cx).await;
+    assert_eq!(
+        shell.label("lifecycle-ending", cx).as_deref(),
+        Some(ENDING_FAILED)
+    );
+    assert!(!shell.present("lifecycle-still-running", cx));
+    assert_eq!(
+        shell.rows("lifecycle-outcome", cx),
+        [
+            merged("main"),
+            "Not shared: another operation holds the repository".to_owned(),
+            "Not tidied up yet: main is not shared yet".to_owned(),
+        ]
+    );
+    assert!(shell.present("lifecycle-retry", cx));
 }

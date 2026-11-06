@@ -13,7 +13,8 @@
 //!   (R-14), so an already-contained merge is done once a later stage comes.
 //! - **Ending.** Success or no change is Done: a local-only run whose
 //!   tidy-up completed among them (R-7). `cancelled` is Stopped, `busy` still
-//!   running (P22), and any other answer Failed: a remote publication or
+//!   running (P22) unless main was already reached with sharing or the
+//!   tidy-up pending (Failed), and any other answer Failed: a remote publication or
 //!   tidy-up left pending among them.
 //! - **Steps at the end.** What the answer reports done is done, and so is
 //!   every step before the last stage this dialog saw. The first step not
@@ -207,9 +208,22 @@ impl Ending {
         match (envelope.outcome, envelope.code) {
             (Outcome::Success | Outcome::Noop, _) => Self::Done,
             (_, ResultCode::Cancelled) => Self::Stopped,
+            (_, ResultCode::Busy) if Self::reached_main_pending(envelope) => Self::Failed,
             (_, ResultCode::Busy) => Self::StillRunning,
             _ => Self::Failed,
         }
+    }
+
+    /// A `busy` answer of a run that already merged into main and left its
+    /// sharing or tidy-up pending (a push refused because another process
+    /// holds the repository): nothing else is running it, and what is
+    /// pending is Failed (A3, R-7), not a run in flight.
+    fn reached_main_pending(envelope: &Envelope<MutationDataDto>) -> bool {
+        lifecycle_data(envelope).is_some_and(|data| {
+            data.integration.is_some()
+                && (data.publication == Some(LifecyclePublicationState::Pending)
+                    || data.cleanup == Some(LifecycleCleanupState::Pending))
+        })
     }
 
     pub(crate) fn words(self) -> &'static str {
