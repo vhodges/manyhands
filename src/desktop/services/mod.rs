@@ -389,11 +389,16 @@ impl Services {
                                 _ => PostEvent::Ended(request.id),
                             });
                         }
-                        // A share of an item that published it: its saved
-                        // comments' chips clear (decision 14).
+                        // A share of an item that published it, whatever
+                        // sent it (a Share, a Republish…, a close or an
+                        // approval that publishes): its saved comments'
+                        // chips clear (decision 14, K-19).
                         if let WorkerEvent::Finished(id, envelope) = &event
                             && let Some(request) = operations.request(*id)
-                            && let requests::Intent::ItemSync { root, id: item, .. } =
+                            && let requests::Intent::ItemSync { root, id: item, .. }
+                            | requests::Intent::ItemRepublish { root, id: item, .. }
+                            | requests::Intent::TicketClose { root, id: item }
+                            | requests::Intent::DocumentPromote { root, id: item } =
                                 &request.intent
                             && matches!(
                                 envelope.effects.publication,
