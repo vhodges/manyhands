@@ -1,7 +1,7 @@
 ---
 title: "Wave 03: Completed-Context Retirement"
 date: 2026-11-04
-status: "approved"
+status: "draft"
 author: "GPT-6.1 Sol"
 manyhands_managed: true
 manyhands_kind: document
@@ -11,6 +11,13 @@ id: "01M6M3B4TF7MQM8QCZAVSZWA6Y"
 # Completed-Context Retirement
 
 ## Status
+
+**2026-11-06 amendment: D15's live-pass-only contract is owner-approved;
+the source-grounded engineering revision is draft, pending fresh read-only
+source/contract review.** Original approvals and limited implementation reviews
+below remain historical facts, not approval of this revision or the unreviewed
+gap code. The ticket remains `implementing`; no full Task 2 readiness is claimed.
+The existing sequential implementation → SPEC → QUALITY method remains approved.
 
 **Approved; implementation authorized (2026-11-04).** The owner said:
 “Docs are approved. Implementation is approved as well. Use subagent-drive
@@ -27,9 +34,10 @@ The mechanism at
 `5a6136e5` passed the third focused source/feasibility and adversarial/contract
 reviews with 0 Blocking, 0 Important and 0 Minor findings in each. Earlier rounds
 and their resolutions are recorded below. These are source-grounded planning
-reviews, not runtime proof. Only this final status/review record and the ticket
-checkpoint were edited after that reviewed revision; those metadata edits have
-no additional independent review.
+reviews, not runtime proof. At that original approval checkpoint, only its final
+status/review record and ticket checkpoint followed the reviewed revision; those
+metadata edits had no additional independent review. D15's substantive amendment
+is separately marked draft above and does not inherit that earlier review.
 
 Approval does not authorize real-context deletion, other-branch pushes, PR
 creation, main merge/closure or native CI. Execution evidence is tracked in the
@@ -122,13 +130,22 @@ That narrow renderer/test scope is D13; implementation itself remains gated.
    does not update primary: if local primary lacks completion, the user must
    poll/synchronize it first. No network or index scan runs under a Git lease.
 5. Default/automatic polling only recognizes. Explicit `--retire-completed`
-   additionally attempts the same guarded retirement against a durable fixed
-   worklist. One pass's observation serves all targets, not one connection each.
+   loops over independently durable ordinary retirements during the original
+   uninterrupted eligible live pass only. One authenticated pass observation
+   serves its fixed initial candidates through a sealed private capability, not
+   caller-supplied receipts or N standalone observations. The captured image/report
+   is reporting/replay evidence, never a durable future deletion worklist. Each
+   attempted item has its own stable request/operation and ordinary recovery;
+   refusals continue, real cleanup/index debt stops the loop. Old-pass retry only
+   settles/replays its stopped summary; a new explicit pass handles the remainder.
 6. Worktree removal precedes branch deletion. Reentry never silently adopts a
    changed tip or enrolls a newly created context. Completed requests replay;
    they do not repeat release's run-as-new behavior.
-7. Refresh follows authoritative local removal. Pending refresh stays distinct
-   from complete cleanup; retries resume only work still owed.
+7. Refresh follows authoritative local removal. Complete each child's ordinary
+   local index handoff before invoking the next. Pending refresh stays distinct
+   from complete cleanup; child retry/resume finishes only that item's owed work.
+   A parent may be Final with a truthful non-success stopped summary referring to
+   an independently Owed child; Final is not batch-wide success or debt release.
 8. The proposed per-target result/exit rules in the design are an explicit
     approved contract, not an unrecorded ruling about external behavior.
 
@@ -136,23 +153,25 @@ That narrow renderer/test scope is D13; implementation itself remains gated.
 
 | ID | Required outcome | Planned evidence |
 | --- | --- | --- |
-| A1 | Clone A closes/deletes; B reports `closed`, preserves by default, retires deliberately, then show/list/ready see primary closure and dependent readiness | `cli_remote` retirement cases using `CliPair`; inspect refs/worktree/index and server |
+| A1 | Clone A closes/deletes; B reports `closed`, preserves by default, retires deliberately, then show/list/ready see primary closure and dependent readiness | local two-clone API/CLI acceptance; one transport-justified SSH E2E connection check; inspect refs/worktree/index and server |
 | A2 | Dirty, ignored/untracked, conflicted, unsafe submodule, mismatched registration and unpublished unmatched content refuse; no removal before refusal | unit cleanup/proof rows plus CLI dirty/unpublished cases |
 | A3 | An unmerged folded ticket with identical carried content except closure fields can retire; unrelated/comment/status/body changes cannot | proof matrix and two-clone folded CLI row |
 | A4 | A document promoted elsewhere reports `promoted` and retires; mere primary document presence is insufficient | document two-clone row and negative content row |
 | A5 | Open primary ticket, malformed closure, unknown deletion history and reappeared remote context do not retire | domain/boundary/CLI negative rows |
 | A6 | Failures before/after each cleanup step, ref movement, configuration change, lost response and index failure are recoverable without removing a later context; guarded abandon preserves residual state and ends the blocker | retirement recovery/abandon tables and mutation replay/resume rows |
-| A7 | Explicit poll flag retires safe targets, preserves/reports unsafe ones, uses one observation and survives interruption with a frozen worklist | batch boundary/SSH rows, advertisement counter and replay assertions |
+| A7 | Explicit poll flag loops over independent retirements with one original observation; safe successes survive refusals/interruption, child debt stops later items, old pass never restarts the loop | table-driven local capture/stop/report/replay and independent child-recovery rows; advertisement counter; new-pass remainder acceptance |
 | A8 | Old registry/report/request fixtures remain readable; new enums and command are fully catalogued | migration/corruption tests, read/mutation/CLI contract inventories and goldens |
 | A9 | No default/background cleanup, remote mutation, or draft deletion; existing release behavior unchanged | negative/control tests; isolated stored-draft sentinel remains readable/exportable after CLI retirement; branch-scope review |
 
-All evidence above is planned, not executed. Real second-machine branches have
+Full acceptance above remains planned; partial implementation evidence is recorded
+at its actual source scope in the ledger, not claimed as end-to-end delivery.
+Real second-machine branches have
 not been inspected here; conservative proof may refuse them if primary omitted
 content, even when the ticket was folded. No claim of real-context safety is made.
 
 ## Product-Owner Decisions
 
-All dated 2026-11-04, recorded from this chat:
+D1–D14 dated 2026-11-04; D15 dated 2026-11-06, recorded from owner chat:
 
 1. **Preservation rule:** owner selected “Content proof (Recommended)”: prove
    local changes represented on primary, allow only the older ticket's narrow
@@ -189,11 +208,13 @@ All dated 2026-11-04, recorded from this chat:
     with remaining branches/resources intact; extend existing confirmed
     `operation abandon` with retirement-specific preserving/index settlement and
     a retained partial receipt. No silent remote/generation rebinding; a later
-    retirement is a new request with fresh proof. For a batch, the draft's
-    preserving-abandon table proposes ending its whole remaining worklist.
+    retirement is a new request with fresh proof. The original batch-wide
+    preserving-stop proposal was approved then; D15 supersedes that part only.
+    Confirmed preserving abandonment of real pending per-item debt remains required.
 12. **Indexing trade-off:** “Existing per-context handoff (Recommended)”. Finish
     each local retirement and its existing index handoff before the next. Reuse
-    one remote observation per live batch attempt, accepting up to N local
+    one remote observation per live batch attempt (now the original uninterrupted
+    pass only, D15), accepting up to N local
     retirement refreshes plus the original poll refresh. Do not introduce an
     aggregate journal/debt-transfer mechanism here.
 13. **Existing abandonment preview:** “Update existing preview (Recommended)”.
@@ -205,6 +226,33 @@ All dated 2026-11-04, recorded from this chat:
     proven local cleanup/absence, with a later same-ID/new-OID document-edit test.
     The same omission in existing promotion/closure cleanup is only a proposed
     follow-up: neither fix those paths nor file a new ticket here.
+15. **Live-pass-only loop; independent retirement durability (2026-11-06).**
+    Owner: “Okay, the live-pass-only batch, but keep in mind the batch doesn't
+    need to succeed as a whole, only each retirement. Which should make
+    checkpointing, recovery and continue much simpler eg if we were do
+    standalone-first, we're just going to have to loop through what the poll
+    brings down anyways, just not built in.” Earlier: “If the constraints are too
+    tight to reach closure, see if there’s a way to loosen them without losing
+    too much safety”. Live-pass-only was selected over standalone-first, with
+    the accepted direction: stop the old loop after interruption, finish only
+    actual per-item debt, and use a new explicit pass for the remainder.
+    Controller interpretation: refusal does not stop later items; prior successes
+    are never rolled back; unresolved child cleanup/index debt stops the loop for
+    repository exclusion. Each item retains its result and ordinary recovery.
+    D10's completed mixed exit 0 is unchanged; stopped/cancelled/partial/index-pending
+    reports remain truthful non-success. No aggregate debt, rollback or batch-wide
+    success prerequisite is introduced.
+
+### D15 Supersession Map
+
+| Earlier operative promise | Current contract / retained safety |
+| --- | --- |
+| R-8 durable `eligible` permits restarted frozen remainder | Original live complete-handoff proof remains necessary, never sufficient to restart; loss after capture means report/settlement only |
+| Q1 parent Owed until children finish; retry R continues K then remainder | Final stopped parent can name Owed child R_i/K_i; retry R only settles/replays summary, child recovery never starts another item |
+| Batch-attempt gap O / current-attempt→original-freeze adapter / resumed C and advancing cursor | Not required; forward-unwire unreviewed `f196dfff` code/catalog/support, preserve history and independently owed debt |
+| D11/Q1 completed-child `K_last` confirmed batch-stop handle | Removed; stop fences live authority and records not-reached items, without reopening A or creating debt. Real pending child's confirmed preserving escape stays mandatory |
+| Batch-specific new-F2 child/index recovery | Independent ordinary `context retire` request fences/reentry/index; pass association is provenance/reporting only |
+| D12 sequential handoff; R-5/R-6/R-7/D14 exact identity and intent | Retained; only current live candidates may run, no enrollment from old selection, no tokenless branch retry, no new intent consumption |
 
 ## Rulings
 
@@ -217,17 +265,17 @@ All dated 2026-11-04, recorded from this chat:
   opted-in mutation variant and private coordinator. Normal poll's digest and
   report shape remain unchanged. Cost: an extra exhaustive mutation arm.
 - **R-3 — Separate durable evidence.** Do not use the repository's latest-only
-  poll-disposition rows as a batch receipt. Persist a per-operation frozen
-  worklist/report and per-context bound cleanup evidence. Cost: additive audited
-  tables and migration/recovery tests.
+  poll-disposition rows as a receipt. Retain the original candidate/report image
+  and independent child identities/results for honest replay, not resumed deletion
+  authority (D15). Cost: small audited report/association storage and migration tests.
 - **R-4 — Strict upgrade.** Recognize exact old/new SQL envelopes; preserve old
   rows atomically and reject substituted/partial schemas. Cost: explicit upgrade
   fixtures rather than deleting/rebuilding evidence.
 - **R-5 — Exact selection and existing debt ownership.** Freeze the full
   candidate image in the owned poll finalization transaction; current reads can
-  refuse but not reselect it. Each local child keeps its own cleanup/index debt
-  until completion (D12). Cost: per-context refreshes and explicit parent/child
-  routing when a poll's remote row is already complete.
+  refuse but not reselect it. Each ordinary child request keeps its own cleanup/index
+  debt independently of the stopped parent (D12/D15). Cost: per-context refreshes
+  and a minimal ordinary-engine initial-observation seam, not batch recovery.
 - **R-6 — Registration lifetime token.** A validated local Git-admin nonce
   distinguishes a selected worktree from a later recreation at the same tip.
   It grants no deletion authority. Cost: local noncanonical marker bookkeeping;
@@ -238,19 +286,40 @@ All dated 2026-11-04, recorded from this chat:
   surviving branch under the old request, even at the same OID. Preserve and
   abandon/reprove instead; local absence can finish metadata/indexing only.
   Cost: an interrupted branch-level cleanup can require two deliberate commands.
-- **R-8 — Original handoff eligibility is durable.** A live original complete
+- **R-8 — Original handoff eligibility is live-only (D15 amendment).** A live original complete
   poll wrapper plus its process-only capture token must record `eligible` before
   any child begins. After a crash, unconfirmed eligibility is a final
   no-retirement `discovery_pending`, never inferred from a later index repair.
-  Cost: even a successful original refresh may require a new request if the
-  eligibility write was lost.
+  Even durable `eligible` cannot recreate live authority: after capture, old-pass
+  reentry only settles/replays a stopped report, never observes or deletes again.
+  Ordinary pre-selection poll recovery remains unchanged. Cost: a new explicit
+  pass after interruption, including success with a lost eligibility write.
+- **R-9 — Ordinary children, sealed initial input.** Use one ordinary request R_i
+  and local K_i per attempted item; keep pass association outside child request
+  identity. Factor initial-observation acquisition from common guarded execution;
+  admit the poll input only from the original live capture. Cost if wrong: refactor
+  the private seam/audits, not a second recovery engine; no shipment until a child
+  can recover without its parent capture (design feasibility table).
+- **R-10 — Stop is reporting, not a new operation.** Fence live child-start authority
+  atomically with not-reached/report settlement; retain actual child obligations.
+  Parent replay is an as-of-pass report with child recovery handles. Cost if wrong:
+  additional metadata settlement retry, never restarted cleanup or silent debt loss.
+- **R-11 — Retire obsolete experiments forward.** Inspect source reachability and
+  exact synthetic schema envelopes, not real profiles. Unwire gap observers and
+  installation; retain only necessary non-authorizing compatibility history.
+  Cost if wrong: explicit fail-closed inspection of unsupported experimental data,
+  not automatic repair or deletion; published standalone history must remain readable.
 
 ## Named Edits To Pre-Existing Tests
 
 See design E-1–E-10 for the bounded list, including output-root additions
-and existing abandon-confirmation rendering.
-Approval must include those named changes. Any additional semantic test change
-stops implementation for the owner; additive new cases are expected.
+and existing abandon-confirmation rendering. D15 specifically revises E-3/E-6/E-7/
+E-9/E-10's newly planned retirement semantics (not pre-feature controls); the design
+names affected branch-era tests and retained assertions.
+Original approval included E-1–E-10; D15 authorizes the specified retirement-only
+semantic amendments, subject to fresh engineering review. An additional external
+contract/safety change stops for the owner; routine internal adaptation is not a
+request to redo unchanged approvals. Additive cases follow AGENTS' test budget.
 
 ## Document Amendments
 
@@ -267,6 +336,10 @@ Historical Cycle decisions remain historical; link the new contract rather than
 rewriting their original approval. No sibling ticket edits without permission.
 
 ## Review Record
+
+Rows through the original round-3 review are historical concerns/resolutions under
+the then-approved contract. D15 supersedes the specific mechanisms mapped above,
+not the fact those reviews and approvals occurred.
 
 | Source | Concern | Classification | Resolution | Evidence or follow-up |
 | --- | --- | --- | --- | --- |
@@ -299,6 +372,8 @@ rewriting their original approval. No sibling ticket edits without permission.
 | Owner after round 2 | Existing generic abandonment safety display | Decision | D13 authorizes E-10's limited display/test scope, not a desktop Retire action | Task 3 |
 | Independent review round 2, `6a6301be` | Source: 0 Blocking, 3 Important, 0 Minor. Adversarial/contract: 1 Blocking, 3 Important, 0 Minor | Findings verified | Addressed and checked in round 3, including D14 and R-7/R-8 | No round-2 finding is left open |
 | Independent review round 3, `5a6136e5` | Source/feasibility: 0 Blocking, 0 Important, 0 Minor. Adversarial/contract: 0 Blocking, 0 Important, 0 Minor | Settled at planning level | Both reviewers verified prior fixes and the new interactions; no repeated blocker remains | No Cargo/native/runtime evidence; Task 2/4 test-first checkpoints remain mandatory |
+| Owner, 2026-11-06 | Complexity of resumed batch lifecycle versus independently durable retirements | Decision | D15 supersedes only the batch continuation/aggregate-finality/gap-handle promises above | Existing proof/standalone/original-live review evidence retained at its actual scope |
+| Source-grounded D15 revision at base `b2fe68c9` | Current batch rows are not ordinary request-owned children; gap migration installs despite absent Task 4 producer | Ruling | R-9–R-11; thin loop plus ordinary-engine refactor and forward unwiring | Fresh read-only source/contract review pending; docs-only, no builds/tests; no full Task 2 pass |
 
 ## Approval And Execution Handoff
 
@@ -307,3 +382,7 @@ authorized implementation, and selected subagent-driven development on
 2026-11-04. No renewed approval of these items is needed. The ticket moves to
 `implementing`; only its branch may be pushed. The broader existing lifecycle
 materialization-intent issue remains a proposed follow-up, not a filed ticket.
+D15 is a subsequent approved contract amendment, not a redo of unchanged approvals.
+This engineering draft needs the controller's fresh read-only source/contract
+review before code resumes. This bounded revision authorizes no push or lifecycle
+action; it changes neither ticket status nor the agreed execution method.
