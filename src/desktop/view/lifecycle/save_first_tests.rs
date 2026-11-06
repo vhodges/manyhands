@@ -295,3 +295,46 @@ async fn escape_before_a_stored_drafts_save_saves_nothing(cx: &mut TestAppContex
     assert!(stored_body(&shell.fixture.draft_store(), draft).is_some());
     assert_eq!(shell.backend.reads_seen(ReadKind::Prepare), 0);
 }
+
+/// Review Vthen: a save first that fails after Continue editing's prepare
+/// answered `discovery_pending` closes the dialog and leaves nothing armed:
+/// the banner's Resume then opens the editor on the draft, which stays
+/// stored, and saves nothing the person has not seen.
+#[gpui_kit::test]
+async fn a_failed_save_first_leaves_no_save_armed(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root, draft) = stored(cx);
+    let branch = shown(&shell, &root, TICKET).context.branch.unwrap();
+    let before = commits(&root, &branch);
+    // The library's own prepare, answered as a hand-off still owed.
+    let owed = manyhands::results::Envelope::failure(
+        "context prepare",
+        manyhands::results::Scope::default(),
+        manyhands::results::ResultCode::DiscoveryPending,
+        vec![],
+    );
+    shell
+        .backend
+        .hold_job_return_answering(JobKind::ContextPrepare, owed)
+        .release();
+
+    shell.click(LIFECYCLE_ACTION, cx);
+    until_closed(&shell, cx).await;
+    shell
+        .until_drawn(cx, "the prepare's Resume", |shell, cx| {
+            shell.present("item-prepare-resume", cx)
+        })
+        .await;
+    assert_eq!(shell.backend.reads_seen(ReadKind::Prepare), 0, "no prepare");
+
+    shell.click("item-prepare-resume", cx);
+    shell.until_editing(cx).await;
+    shell.run(cx);
+
+    assert!(
+        !shell.backend.jobs_seen().contains(&JobKind::TicketSave),
+        "nothing is saved unseen"
+    );
+    assert_eq!(commits(&root, &branch), before);
+    assert!(stored_body(&shell.fixture.draft_store(), draft).is_some());
+}

@@ -167,6 +167,28 @@ pub(super) fn discard_note(
 }
 
 impl ItemPane {
+    /// Whether a post of `composer`'s comment waits for the lock: while the
+    /// item's close or merge is unfinished a comment would change the
+    /// item's working copy (R-23, P23). The composer says so with the
+    /// item's words, and its text stays. Submit, Retry and Post as a new
+    /// comment all ask here before they send.
+    pub(super) fn refused_while_locked(
+        &mut self,
+        composer: EntityId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.edits_wait(cx) {
+            return false;
+        }
+        let words = self.refused_words();
+        if let Some((_, slot)) = self.composers.find(composer) {
+            slot.composer
+                .clone()
+                .update(cx, |composer, cx| composer.say_refused(words, cx));
+        }
+        true
+    }
+
     /// Submit: posts the composer's comment; an adopted draft with no
     /// record after P4's checks. An adopted draft that was submitted
     /// waits for Retry.
@@ -176,22 +198,18 @@ impl ItemPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let waits = self.edits_wait(cx);
-        let words = self.refused_words();
         let Some((_, slot)) = self.composers.find(composer) else {
             return;
         };
         if slot.post.busy || slot.post.resend_pending {
             return;
         }
-        // While the item's close or merge is unfinished, a comment waits:
-        // it would change the item's working copy (R-23). Its text stays.
-        if waits {
-            slot.composer
-                .clone()
-                .update(cx, |composer, cx| composer.say_refused(words, cx));
+        if self.refused_while_locked(composer, cx) {
             return;
         }
+        let Some((_, slot)) = self.composers.find(composer) else {
+            return;
+        };
         let checks = slot.post.unchecked;
         self.start_post(composer, checks, window, cx);
     }

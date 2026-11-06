@@ -3,6 +3,10 @@
 //! unfinished (`model::lifecycle_lock`), the tab is read-only and says
 //! "Closing…" or "Merging…": Edit, Continue editing, Save, Share, Move…,
 //! Repair… and a comment's Submit wait, while typing in a composer goes on.
+//! So do the sends that would commit into the item's context again: a
+//! failed comment's Retry and Post as a new comment, a chip's Retry sharing
+//! and Unlock…, a prepare's Resume and Retry, a checkpoint's Retry and
+//! Resume, and the lifecycle action's save first. All ask `edits_wait`.
 //! While nothing is known yet, they wait with no words.
 //!
 //! A session shown when a run of the item locks it ends if it is clean and

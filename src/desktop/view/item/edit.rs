@@ -447,6 +447,19 @@ impl ItemPane {
         }
         if self.edit_dirty(cx) {
             self.keep_session(cx);
+            return;
+        }
+        // A clean session whose draft D2 still holds discards it, as Done
+        // does (D3 Done, step 5): the closed item must not show "Restored
+        // draft" for text it no longer differs by.
+        let drafted = self.live_draft(cx).is_some()
+            || self
+                .edit
+                .session
+                .as_ref()
+                .is_some_and(|session| session.draft == DraftLink::Beginning);
+        if drafted {
+            self.discard_session(None, cx).detach();
         } else {
             self.end_session(None, cx);
         }

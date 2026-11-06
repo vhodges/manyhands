@@ -397,3 +397,61 @@ async fn p8_occupied_path_keeps_the_text_and_offers_discard(cx: &mut TestAppCont
     assert_eq!(stored[0].0.comment_id, comment);
     assert_eq!(stored[0].1, "Occupied.");
 }
+
+/// Review V5: while the item's close or merge is unfinished, a failed
+/// post's Retry and a saved comment's Retry sharing send nothing: a
+/// comment would be committed into a context the merge has finished with.
+#[gpui_kit::test]
+async fn a_failed_posts_retries_wait_while_the_item_is_locked(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = posting_shell(true, cx, |_, _| {});
+    let (_, owed) = write_new(&shell, "Owed.", cx);
+    let returned = shell.backend.hold_job_return_answering(
+        JobKind::Comment,
+        not_saved(ResultCode::TransportUnavailable),
+    );
+    returned.release();
+    submit(&shell, cx);
+    until_answered(&shell, &root, &owed, cx).await;
+    assert!(failed_actions(&shell, cx).contains(&"composer-retry"));
+    shell.lock_item(&root, super::super::super::discussion_tests::TICKET, cx);
+
+    press(&shell, "composer-retry", cx);
+    shell.run(cx);
+    assert_eq!(
+        comment_posts(&shell, cx)
+            .iter()
+            .map(|post| post.2)
+            .collect::<Vec<_>>(),
+        [1],
+        "Retry sent nothing"
+    );
+    assert!(failed_actions(&shell, cx).contains(&"composer-retry"));
+}
+
+/// Review V5: a saved comment's Retry sharing waits for the lock, too.
+#[gpui_kit::test]
+async fn retry_sharing_waits_while_the_item_is_locked(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = posting_shell(true, cx, |_, _| {});
+    let (_, comment) = write_new(&shell, "Owed publication.", cx);
+    submit(&shell, cx);
+    until_answered(&shell, &root, &comment, cx).await;
+    assert!(shell.present(chip_control(&comment, "retry-sharing"), cx));
+    shell.lock_item(&root, super::super::super::discussion_tests::TICKET, cx);
+
+    assert!(shell.inert_button(
+        format!("{}-button", chip_control(&comment, "retry-sharing")),
+        cx
+    ));
+    press(&shell, chip_control(&comment, "retry-sharing"), cx);
+    shell.run(cx);
+    assert_eq!(
+        comment_posts(&shell, cx)
+            .iter()
+            .map(|post| post.2)
+            .collect::<Vec<_>>(),
+        [1],
+        "Retry sharing sent nothing"
+    );
+}

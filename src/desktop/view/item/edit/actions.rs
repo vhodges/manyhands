@@ -128,6 +128,8 @@ impl ItemPane {
         cx: &mut Context<Self>,
     ) -> Vec<(Banner, AnyElement)> {
         let mut banners = Vec::new();
+        // Resume and Retry of a prepare wait for the lifecycle lock (R-23).
+        let waits = self.edits_wait(cx);
         if self.editing()
             && let Some(reason) = self.services.drafts().read(cx).unavailable()
         {
@@ -149,6 +151,7 @@ impl ItemPane {
                         Button::new("item-prepare-resume")
                             .label(RESUME)
                             .small()
+                            .disabled(waits)
                             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.resume(cx))),
                     )
                     .into_any_element(),
@@ -163,6 +166,7 @@ impl ItemPane {
                     Button::new("item-prepare-retry")
                         .label(RETRY)
                         .small()
+                        .disabled(waits)
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             this.retry_prepare(request, cx)
                         }))

@@ -139,7 +139,13 @@ impl LifecycleDialog {
                 self.prepare(cx);
             }
             SaveFirst::Failed => {
-                self.saving = None;
+                // The dialog is going: a Save armed in Continue editing's
+                // steps goes with it, so a later Resume or Retry of the
+                // prepare opens the editor on the draft and saves nothing
+                // the person has not seen (M-1).
+                if let Some(pane) = self.saving.take().and_then(|pane| pane.upgrade()) {
+                    pane.update(cx, |pane, cx| pane.stop_save_first(cx));
+                }
                 self.close(window, cx);
             }
         }

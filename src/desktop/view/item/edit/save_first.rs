@@ -32,11 +32,18 @@ impl ItemPane {
     /// does. `None` when nothing is unsaved; `Failed` when the save could
     /// not start (an empty required field, a base the review must check
     /// first, or a draft Continue editing cannot take now), the tab saying
-    /// why.
+    /// why. While the item's close or merge is unfinished, or nothing is
+    /// known of it yet, it writes nothing: the lifecycle action stays
+    /// available (R-23), but its edits are not committed into a context
+    /// the merge has finished with (P23); they stay kept, and the dialog
+    /// goes on to prepare.
     pub(in crate::desktop::view) fn start_save_first(
         &mut self,
         cx: &mut Context<Self>,
     ) -> Option<SaveFirst> {
+        if self.edits_wait(cx) {
+            return None;
+        }
         if self.save_in_flight(cx) {
             return Some(SaveFirst::Saving);
         }

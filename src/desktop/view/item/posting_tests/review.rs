@@ -273,3 +273,29 @@ async fn post_as_new_overtaken_during_retirement_sends_nothing_new(cx: &mut Test
     assert_eq!(comment_posts(&shell, cx).len(), 1, "only X was ever sent");
     assert_eq!(comment_files(&root).len(), 2, "A and X: one comment");
 }
+
+/// Review V5: "Post as a new comment" waits while the item's close or merge
+/// is unfinished: nothing is re-targeted, retired or sent, and the text and
+/// its draft stay.
+#[gpui_kit::test]
+async fn post_as_new_waits_while_the_item_is_locked(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = posting_shell(false, cx, |fixture, root| {
+        store_comment(fixture, root, KEPT, None, "Fresh.");
+    });
+    maybe_saved_without_record(&shell, &root, "Fresh.", cx).await;
+    press(&shell, "composer-check-again", cx);
+    shell
+        .until_drawn(cx, "Post as a new comment offered", |shell, cx| {
+            shell.present("composer-post-as-new", cx)
+        })
+        .await;
+    let sent = comment_posts(&shell, cx);
+    shell.lock_item(&root, super::super::super::discussion_tests::TICKET, cx);
+
+    press(&shell, "composer-post-as-new", cx);
+    shell.run(cx);
+    assert_eq!(comment_posts(&shell, cx), sent, "nothing was sent");
+    assert!(shell.present("composer-post-as-new", cx), "still offered");
+    assert_eq!(stored_comments(&shell.fixture).len(), 1, "the draft stays");
+}

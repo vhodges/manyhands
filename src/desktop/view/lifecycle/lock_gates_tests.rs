@@ -27,8 +27,9 @@ use crate::desktop::{
         edit::Phase,
         lifecycle_lock::{LockSource, LockState},
         navigation::OpenTarget,
+        tabs::TabKey,
     },
-    services::{ReadKind, requests::Intent},
+    services::{JobKind, ReadKind, requests::Intent},
     test_support::{
         drafts::store_draft,
         fixtures::{Fixture, item_id},
@@ -36,6 +37,7 @@ use crate::desktop::{
     view::{
         drafts::row_id,
         harness::{Shell, is_save, key},
+        item::LIFECYCLE_ACTION,
     },
 };
 
@@ -236,4 +238,199 @@ async fn move_waits_while_the_merge_is_unfinished(cx: &mut TestAppContext) {
         gpui_kit::component::WindowExt::has_active_dialog(window, cx)
     });
     assert!(!open, "a press opens nothing");
+}
+
+/// Presses the lifecycle action of the locked ticket, and waits for the
+/// held close's own answer in the dialog: the dialog neither saves first
+/// nor closes before that answer is known.
+async fn press_lifecycle_locked(shell: &Shell, cx: &mut TestAppContext) {
+    let sent = edits_sent(shell, cx);
+    shell.click(LIFECYCLE_ACTION, cx);
+    until_present(shell, "lifecycle-continue", cx).await;
+    shell.run(cx);
+    assert_eq!(edits_sent(shell, cx), sent, "no save or prepare of edits");
+    assert!(
+        !shell.backend.jobs_seen().contains(&JobKind::TicketSave),
+        "nothing is saved"
+    );
+    assert!(shell.present("lifecycle-dialog", cx), "the dialog stays");
+}
+
+/// R-23, review V4: the lifecycle action stays available under the lock,
+/// but its save first writes nothing into the merged context: a session
+/// kept with unsaved text is not saved, and the dialog goes on to the
+/// held close's own way on.
+#[gpui_kit::test]
+async fn the_lifecycle_actions_save_first_writes_nothing_while_locked(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| saved_ticket(fixture, root, "Held", ""));
+    dirty_session(&shell, &root, cx).await;
+    locked_from_outside(&shell, &root, cx).await;
+    shell
+        .until_drawn(cx, "the session kept", |shell, cx| {
+            shell.present("item-kept-continue-locked", cx)
+        })
+        .await;
+
+    press_lifecycle_locked(&shell, cx).await;
+    assert!(
+        pane(&shell, cx).read_with(cx, |pane, _| pane.edit_session_kept()),
+        "the unsaved text stays kept"
+    );
+}
+
+/// R-23, review V4: a draft of the ticket stored with no session is not
+/// continued and saved by the lifecycle action while the ticket is locked.
+#[gpui_kit::test]
+async fn a_stored_drafts_save_first_writes_nothing_while_locked(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    saved_ticket(&fixture, &root, "Held", "");
+    fixture.refresh(&root);
+    let draft = store_draft(&fixture, &root, ItemDtoKind::Ticket, TICKET, "Stored body");
+    strand_close(&fixture, &root);
+    let shell = Shell::open(fixture, cx);
+    open(&shell, ticket(&root), cx);
+    until_lock(&shell, &root, LockState::Locked(LockSource::Record), cx).await;
+
+    press_lifecycle_locked(&shell, cx).await;
+    assert!(
+        crate::desktop::test_support::drafts::stored_body(&shell.fixture.draft_store(), draft)
+            .is_some(),
+        "the draft stays stored"
+    );
+}
+
+/// Review V7: the prepare banner's Resume sends nothing while the item is
+/// locked, and says so by waiting.
+#[gpui_kit::test]
+async fn the_prepare_banners_resume_waits_while_locked(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Pending", "");
+    });
+    open(&shell, ticket(&root), cx);
+    shell.backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            shell.fixture.data_dir(),
+            FailurePoint::BeforeIndexTransactionCommit,
+        )
+        .unwrap(),
+    );
+    shell.click("item-edit", cx);
+    let prepare = |shell: &Shell, cx: &mut TestAppContext| {
+        shell.requests(cx, |request| {
+            matches!(request.intent, Intent::ContextPrepare { .. })
+        })
+    };
+    let request = prepare(&shell, cx)[0];
+    shell.until_ended(request, cx).await;
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(shell.present("item-prepare-resume", cx));
+    let attempt = |shell: &Shell, cx: &mut TestAppContext| {
+        shell.operations(cx).read_with(cx, |operations, _| {
+            operations.request(request).unwrap().attempt
+        })
+    };
+    let before = attempt(&shell, cx);
+    shell
+        .backend
+        .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
+
+    shell.lock_item(&root, TICKET, cx);
+    assert!(
+        shell.inert_button("item-prepare-resume", cx),
+        "Resume waits"
+    );
+    shell.click("item-prepare-resume", cx);
+    shell.run(cx);
+    assert_eq!(attempt(&shell, cx), before, "nothing was sent again");
+    assert_eq!(
+        pane(&shell, cx).read_with(cx, |pane, _| pane.edit_phase()),
+        Phase::Loading,
+        "no editor opens on a locked item"
+    );
+    assert!(shell.present("item-prepare-resume", cx), "still owed");
+}
+
+/// Review V6: a pending checkpoint's Retry sends nothing while the item is
+/// locked: it would commit into the merged context.
+#[gpui_kit::test]
+async fn a_pending_checkpoints_retry_waits_while_locked(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| saved_ticket(fixture, root, "Held", ""));
+    dirty_session(&shell, &root, cx).await;
+    shell.backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            shell.fixture.data_dir(),
+            FailurePoint::AfterOwnedWriteBeforeLifecyclePersistence,
+        )
+        .unwrap(),
+    );
+    shell.keys("secondary-s", cx);
+    let saves = |shell: &Shell, cx: &mut TestAppContext| shell.requests(cx, |r| is_save(&r.intent));
+    let request = saves(&shell, cx)[0];
+    shell.until_ended(request, cx).await;
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(shell.present("item-save-retry", cx), "kept for Retry");
+    let attempt = |shell: &Shell, cx: &mut TestAppContext| {
+        shell.operations(cx).read_with(cx, |operations, _| {
+            operations.request(request).unwrap().attempt
+        })
+    };
+    let before = attempt(&shell, cx);
+
+    shell.lock_item(&root, TICKET, cx);
+    assert!(shell.inert_button("item-save-retry", cx), "Retry waits");
+    shell.click("item-save-retry", cx);
+    shell.run(cx);
+    assert_eq!(attempt(&shell, cx), before, "nothing was sent again");
+}
+
+/// Review Vdraft: a clean session whose draft D2 still holds, when the lock
+/// ends the session, discards it, as Done does (D3 Done, step 5), rather than leaving it to
+/// show "Restored draft" on a closed item.
+#[gpui_kit::test]
+async fn a_clean_session_ended_by_the_lock_discards_its_draft(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| saved_ticket(fixture, root, "Held", ""));
+    dirty_session(&shell, &root, cx).await;
+    let tab = TabKey::Item {
+        repo: key(&root),
+        kind: ItemDtoKind::Ticket,
+        id: TICKET.to_owned(),
+    };
+    let drafts = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().drafts().clone());
+    shell
+        .until_drawn(cx, "the draft began", |_, cx| {
+            drafts.read_with(cx, |registry, _| registry.attached(&tab).is_some())
+        })
+        .await;
+    let draft = drafts
+        .read_with(cx, |registry, _| registry.attached(&tab))
+        .unwrap();
+    // The typed text is undone: the session is clean, its draft still held.
+    shell.keys("backspace", cx);
+
+    locked_from_outside(&shell, &root, cx).await;
+    shell
+        .until_drawn(cx, "the session ended", |shell, cx| {
+            !pane(shell, cx).read_with(cx, |pane, _| pane.has_session())
+        })
+        .await;
+    shell
+        .until_drawn(cx, "the draft discarded", |shell, _| {
+            crate::desktop::test_support::drafts::stored_body(&shell.fixture.draft_store(), draft)
+                .is_none()
+        })
+        .await;
+    assert!(
+        drafts.read_with(cx, |registry, _| registry.attached(&tab).is_none()),
+        "no draft stays attached to the closed item's tab"
+    );
 }
