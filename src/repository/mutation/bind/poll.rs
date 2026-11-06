@@ -322,7 +322,7 @@ fn dto_target(target: &PollTargetReport) -> PollTargetDto {
 }
 
 /// The report as the result's data. `None` for a time that cannot be written.
-fn poll_data(report: &RemotePollReport) -> Option<PollMutationDto> {
+pub(crate) fn poll_data(report: &RemotePollReport) -> Option<PollMutationDto> {
     Some(PollMutationDto {
         operation_id: report.operation_id().to_string(),
         completion: match report.completion() {
@@ -403,7 +403,11 @@ impl PollOnceBinding {
 
     /// The domain's report: the authoritative result first, and whether the
     /// index is behind second.
-    fn reported(call: &CallContext<'_>, accepted: &Accepted, result: RemotePollResult) -> Ran {
+    pub(super) fn reported(
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        result: RemotePollResult,
+    ) -> Ran {
         let (outcome, pending) = match result {
             RemotePollResult::Complete(outcome) => (outcome, false),
             RemotePollResult::IndexPending(pending) => (pending.authoritative, true),
@@ -484,7 +488,11 @@ impl PollOnceBinding {
     }
 
     /// The domain returned an error.
-    fn stopped(call: &CallContext<'_>, accepted: &Accepted, error: RemotePollError) -> Ran {
+    pub(super) fn stopped(
+        call: &CallContext<'_>,
+        accepted: &Accepted,
+        error: RemotePollError,
+    ) -> Ran {
         let plain = |code| Self::by_the_row(call, accepted, Answer::stopped(code));
         match error {
             RemotePollError::Transport(error) => {

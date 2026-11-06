@@ -232,7 +232,7 @@ impl Scope {
 
 /// Historical attempts may be older than F2, including after a request finishes.
 /// This validates retained correlation only; it mints no current execution scope.
-/// Batch R maps remote P, not child Ki; its strict history audit is in handoff::batch.
+/// Pass R maps remote P, not child Ki; `pass` audits that separate history.
 pub(super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
     let mut q=db.prepare("SELECT c.operation_ulid,o.root_path,c.kind,c.item_id,c.request_ulid,r.attempt,r.scope_key,r.command,r.target,r.intent_digest FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id JOIN request_records r ON r.request_ulid=c.request_ulid WHERE c.request_ulid IS NOT NULL AND c.batch_operation_ulid IS NULL").map_err(|_|recovery_required())?;
     let rows = q
@@ -361,7 +361,6 @@ impl RepositoryService {
                 record_id: local,
                 epoch: next,
                 retirement_request: Some(fence),
-                retirement_batch: None,
             });
             Ok((id, owner))
         })?;

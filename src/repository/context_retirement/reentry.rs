@@ -298,7 +298,7 @@ impl RepositoryService {
                     reentry.retirement,
                     run::LiveRetirement {
                         git,
-                        owner,
+                        owner: owner.into(),
                         verified: Some(verified),
                         tip,
                     },

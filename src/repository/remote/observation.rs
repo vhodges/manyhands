@@ -48,19 +48,6 @@ impl ObservationConfiguration {
         )
     }
 
-    pub(in super::super) fn matches_owned_at(
-        &self,
-        db: &rusqlite::Connection,
-        root: &std::path::Path,
-        plan: &RemoteRefPlan,
-        data: &std::path::Path,
-    ) -> Result<bool, RepositoryError> {
-        if observation_plan(root).ok().as_ref() != Some(plan) {
-            return Ok(false);
-        }
-        Ok(self == &Self::capture_owned_at(db, root, plan, data)?)
-    }
-
     fn capture_owned_at(
         db: &rusqlite::Connection,
         root: &std::path::Path,

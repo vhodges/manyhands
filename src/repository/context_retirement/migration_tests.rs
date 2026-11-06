@@ -6,6 +6,23 @@ use crate::repository::context_retirement::{
 };
 
 #[test]
+fn consumer_envelope_is_versioned_and_preserves_published_receipts() {
+    let data = tempfile::tempdir().unwrap();
+    drop(RepositoryService::open_at(data.path()).unwrap());
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM registry_migrations WHERE name='context_retirement_consumers_v1'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1,
+        "shared-source consumers need their own published envelope"
+    );
+}
+
+#[test]
 fn retirement_d15_fresh_registry_never_installs_gap_authority() {
     let data = tempfile::tempdir().unwrap();
     drop(RepositoryService::open_at(data.path()).unwrap());
@@ -41,6 +58,7 @@ fn index_v2(data: &std::path::Path) -> Connection {
 }
 
 fn remove_preserving_adapter(db: &Connection) {
+    if db.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='context_retirement_consumers_v1')",[],|r|r.get::<_,bool>(0)).unwrap(){install_published_preserving_fixture(db);}
     for (kind, name, _) in super::super::preserve::objects().into_iter().rev() {
         db.execute_batch(&format!("DROP {kind} IF EXISTS {name}"))
             .unwrap();
@@ -50,6 +68,203 @@ fn remove_preserving_adapter(db: &Connection) {
         [super::super::preserve::MARKER],
     )
     .unwrap();
+}
+
+/// Synthetic profile construction only. Freeze source is the independent
+/// published catalog, not today's receipt builder. Migration itself runs with
+/// FKs ON and never changes this connection setting.
+fn install_published_preserving_fixture(db: &Connection) {
+    db.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+    let old = super::super::historical::catalog("preserving_v2").unwrap();
+    let tables:Vec<String>=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND (name LIKE 'context_retirement_%' OR name LIKE 'retirement_%' OR name LIKE 'poll_retirement_%')").unwrap().query_map([],|r|r.get(0)).unwrap().collect::<Result<_,_>>().unwrap();
+    let mut copies = std::collections::BTreeMap::new();
+    for t in &tables {
+        copies.insert(
+            t.clone(),
+            db.prepare(&format!("SELECT rowid,* FROM {t} ORDER BY rowid"))
+                .unwrap()
+                .query_map([], |r| {
+                    (0..r.as_ref().column_count())
+                        .map(|i| r.get::<_, rusqlite::types::Value>(i))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap(),
+        );
+    }
+    let attachments:Vec<(String,String)>=db.prepare("SELECT type,name FROM sqlite_master WHERE type IN ('trigger','index') AND sql IS NOT NULL AND (name LIKE 'retirement_%' OR name LIKE 'poll_retirement_%')").unwrap().query_map([],|r|Ok((r.get(0)?,r.get(1)?))).unwrap().collect::<Result<_,_>>().unwrap();
+    for (kind, name) in attachments {
+        db.execute_batch(&format!("DROP {kind} {name}")).unwrap();
+    }
+    for t in &tables {
+        db.execute_batch(&format!("DROP TABLE {t}")).unwrap();
+    }
+    for (_, _, sql) in &old {
+        db.execute_batch(sql).unwrap();
+    }
+    for (kind, t, _) in &old {
+        if *kind != "table" {
+            continue;
+        }
+        for row in copies.remove(*t).unwrap_or_default() {
+            let cols: Vec<String> = db
+                .prepare("SELECT name FROM pragma_table_info(?1) ORDER BY cid")
+                .unwrap()
+                .query_map([t], |r| r.get(0))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap();
+            db.execute(
+                &format!(
+                    "INSERT INTO {t}(rowid,{}) VALUES({})",
+                    cols.join(","),
+                    vec!["?"; row.len()].join(",")
+                ),
+                rusqlite::params_from_iter(row),
+            )
+            .unwrap();
+        }
+    }
+    assert!(
+        copies.values().all(Vec::is_empty),
+        "fixtures do not discard experimental or pending data"
+    );
+    db.execute(
+        "DELETE FROM registry_migrations WHERE name LIKE 'context_retirement_%'",
+        [],
+    )
+    .unwrap();
+    for marker in [
+        "context_retirement_v1",
+        "context_retirement_v2",
+        "context_retirement_index_v1",
+        "context_retirement_preserving_v2",
+    ] {
+        db.execute("INSERT INTO registry_migrations VALUES(?1)", [marker])
+            .unwrap();
+    }
+    db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+}
+
+#[test]
+fn consumer_envelope_preserves_receipt_ids_and_rolls_back_dependency_closure() {
+    for history in ["pinned", "possible", "released", "branch_complete"] {
+        for fault in [None, Some(20), Some(21), Some(22), Some(23)] {
+            let data = tempfile::tempdir().unwrap();
+            let (mut db, _) = legacy(data.path(), history);
+            record::migrate(&mut db).unwrap();
+            install_published_preserving_fixture(&db);
+            let before = registry_image(&db);
+            if let Some(point) = fault {
+                record::fail_migration_at(point);
+            }
+            let outcome = record::migrate(&mut db);
+            if fault.is_some() {
+                assert!(outcome.is_err(), "{history}/{fault:?}");
+                assert_eq!(
+                    registry_image(&db),
+                    before,
+                    "atomic rollback includes schema, rows and IDs"
+                );
+            } else {
+                outcome.unwrap();
+                record::audit_connection(&db).unwrap();
+                let after = registry_image(&db);
+                for (table, rows) in before.iter().filter(|(t, _)| {
+                    !matches!(
+                        t.as_str(),
+                        "sqlite_master" | "schema_version" | "registry_migrations"
+                    )
+                }) {
+                    assert_eq!(after.get(table), Some(rows), "{history}/{table}");
+                }
+                assert_eq!(
+                    db.query_row("SELECT id FROM retirement_observation_receipts", [], |r| {
+                        r.get::<_, i64>(0)
+                    })
+                    .unwrap(),
+                    1
+                );
+                assert!(
+                    !db.prepare("PRAGMA foreign_key_check")
+                        .unwrap()
+                        .exists([])
+                        .unwrap()
+                );
+                drop(RepositoryService::open_at(data.path()).unwrap());
+                assert_eq!(registry_image(&db), after);
+            }
+        }
+    }
+}
+
+#[test]
+fn consumer_envelope_unknown_dependencies_and_reserved_catalog_refuse_unchanged() {
+    for current in [false, true] {
+        for case in [
+            "receipt",
+            "effect",
+            "absence",
+            "resumption",
+            "preserving",
+            "attached_trigger",
+            "attached_index",
+            "external_trigger",
+            "view",
+            "reserved_lower",
+            "reserved_upper",
+            "unknown_marker",
+            "missing_marker",
+        ] {
+            let data = tempfile::tempdir().unwrap();
+            let (mut db, _) = legacy(data.path(), "released");
+            record::migrate(&mut db).unwrap();
+            if !current {
+                install_published_preserving_fixture(&db);
+            }
+            match case {
+                "receipt" | "effect" | "absence" | "resumption" | "preserving" => {
+                    let (table, columns) = match case {
+                        "receipt" => ("retirement_observation_receipts", "id"),
+                        "effect" => ("context_retirement_effect_intents", "operation_ulid,owner_epoch,resource"),
+                        "absence" => ("context_retirement_absence_receipts", "operation_ulid,owner_epoch"),
+                        "resumption" => ("context_retirement_worktree_resumptions", "operation_ulid,owner_epoch"),
+                        _ => ("context_retirement_preservations", "operation_ulid"),
+                    };
+                    let locals = columns.split(',').map(|c| format!("{c} TEXT")).collect::<Vec<_>>().join(",");
+                    db.execute_batch(&format!("CREATE TABLE foreign_consumer_history({locals},payload TEXT,FOREIGN KEY({columns}) REFERENCES {table}({columns}) ON DELETE CASCADE); INSERT INTO foreign_consumer_history(payload) VALUES('retained sentinel');")).unwrap();
+                }
+                "attached_trigger" => db.execute_batch("CREATE TRIGGER foreign_consumer_guard BEFORE DELETE ON retirement_observation_receipts BEGIN SELECT 1; END").unwrap(),
+                "attached_index" => db.execute_batch("CREATE INDEX foreign_consumer_index ON retirement_observation_receipts(provenance_id)").unwrap(),
+                "external_trigger" => db.execute_batch("CREATE TABLE unrelated_consumer(payload TEXT); CREATE TRIGGER foreign_consumer_write AFTER INSERT ON unrelated_consumer BEGIN DELETE FROM retirement_observation_receipts; END").unwrap(),
+                "view" => db.execute_batch("CREATE VIEW foreign_consumer_view AS SELECT * FROM retirement_observation_receipts").unwrap(),
+                "reserved_lower" => db.execute_batch("CREATE TABLE poll_retirement_unknown(payload TEXT); INSERT INTO poll_retirement_unknown VALUES('keep')").unwrap(),
+                "reserved_upper" => db.execute_batch("CREATE TABLE POLL_RETIREMENT_UNKNOWN(payload TEXT); INSERT INTO POLL_RETIREMENT_UNKNOWN VALUES('keep')").unwrap(),
+                "unknown_marker" => {db.execute("INSERT INTO registry_migrations VALUES('context_retirement_consumers_v99')", []).unwrap();},
+                _ => {db.execute("DELETE FROM registry_migrations WHERE name='context_retirement_consumers_v1'", []).unwrap();},
+            }
+            // The old envelope legitimately has no consumer marker.
+            if !current && case == "missing_marker" {
+                continue;
+            }
+            let before = specfix_r1_full_image(&db);
+            assert!(
+                record::migrate(&mut db).is_err(),
+                "{current}/{case}: unknown evidence cannot be silently adopted or dropped"
+            );
+            assert_eq!(
+                before,
+                specfix_r1_full_image(&db),
+                "{current}/{case}: migration refusal is atomic"
+            );
+            assert!(
+                RepositoryService::open_at(data.path()).is_err(),
+                "{current}/{case}: startup also refuses"
+            );
+            assert_eq!(before, specfix_r1_full_image(&db));
+        }
+    }
 }
 
 #[test]

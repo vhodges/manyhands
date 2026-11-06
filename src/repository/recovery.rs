@@ -516,21 +516,10 @@ pub(super) struct IndexOwner {
     pub(super) record_id: i64,
     pub(super) epoch: i64,
     pub(super) retirement_request: Option<super::context_retirement::request_scope::RequestFence>,
-    pub(super) retirement_batch: Option<super::context_retirement::handoff::batch::IndexScope>,
 }
 
 impl IndexOwner {
     fn validate(&self, db: &Connection, epoch: Option<i64>) -> Result<(), RepositoryError> {
-        if let Some(scope) = &self.retirement_batch {
-            if self.retirement_request.is_some() {
-                return Err(super::remote::state::recovery_required());
-            }
-            return scope.validate_index(
-                db,
-                self.record_id,
-                epoch.ok_or_else(super::remote::state::recovery_required)?,
-            );
-        }
         super::context_retirement::request_scope::validate_index(
             db,
             self.record_id,
@@ -2049,7 +2038,6 @@ pub(super) fn claim_indexing(
         record_id,
         epoch,
         retirement_request: None,
-        retirement_batch: None,
     }))
 }
 
@@ -2088,7 +2076,7 @@ pub(super) fn reclaim_invalidated_indexing(
     owner: IndexOwner,
     root_key: &str,
 ) -> Result<Option<IndexOwner>, RepositoryError> {
-    if owner.retirement_request.is_some() || owner.retirement_batch.is_some() {
+    if owner.retirement_request.is_some() {
         // A new current F2 call claims request-bound indexing explicitly. Never
         // inflate its index epoch from a stale executor's cached request fence.
         owner.validate(connection, Some(owner.epoch))?;
@@ -2117,7 +2105,6 @@ pub(super) fn reclaim_invalidated_indexing(
         record_id: owner.record_id,
         epoch: next,
         retirement_request: owner.retirement_request,
-        retirement_batch: None,
     }))
 }
 
@@ -2755,7 +2742,6 @@ mod abandoned_row_tests {
             record_id: 1,
             epoch: 0,
             retirement_request: None,
-            retirement_batch: None,
         };
         assert!(!transition_indexing(&connection, owner.clone(), "completed", None).unwrap());
         assert!(!touch_indexing(&connection, owner.clone()).unwrap());

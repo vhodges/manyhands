@@ -30,10 +30,13 @@ pub struct ContextRetireInput {
     pub kind: AuthoringKind,
     pub id: ItemId,
 }
-pub(crate) struct ContextRetireBinding(ContextRetireInput);
+pub(crate) struct ContextRetireBinding(
+    ContextRetireInput,
+    std::cell::RefCell<Option<crate::repository::context_retirement::handoff::InitialInput>>,
+);
 impl From<ContextRetireInput> for ContextRetireBinding {
     fn from(input: ContextRetireInput) -> Self {
-        Self(input)
+        Self(input, std::cell::RefCell::new(None))
     }
 }
 
@@ -48,6 +51,19 @@ pub(crate) fn recorded_change(service: &RepositoryService, accepted: &Accepted) 
 }
 
 impl ContextRetireBinding {
+    pub(super) fn initial(
+        input: crate::repository::context_retirement::handoff::InitialInput,
+    ) -> Result<Self, crate::repository::RepositoryError> {
+        let (kind, id) = input.identity()?;
+        Ok(Self(
+            ContextRetireInput {
+                root: input.root().into(),
+                kind,
+                id,
+            },
+            std::cell::RefCell::new(Some(input)),
+        ))
+    }
     pub(crate) fn call(&self, call: &CallContext<'_>, accepted: &Accepted, reentry: bool) -> Ran {
         let request = RetireContextRequest {
             root: accepted.root(),
@@ -55,9 +71,35 @@ impl ContextRetireBinding {
             item_id: self.0.id.clone(),
             operation_id: accepted.operation_id,
         };
-        let result = call
-            .session
-            .retire_context(call.service, request, accepted, reentry);
+        if reentry {
+            match crate::repository::context_retirement::pass::lost_initial(
+                call.service,
+                &request,
+                accepted,
+            ) {
+                Ok(Some(data)) => {
+                    return Ran {
+                        answer: Answer::stopped(data.code)
+                            .with_data(MutationDataDto::ContextRetirement(data)),
+                        standing: Standing::Final,
+                    };
+                }
+                Err(e) => {
+                    return Ran {
+                        answer: refused(e),
+                        standing: Standing::Owed,
+                    };
+                }
+                Ok(None) => {}
+            }
+        }
+        let result = call.session.retire_context(
+            call.service,
+            request,
+            accepted,
+            reentry,
+            self.1.borrow_mut().take(),
+        );
         let Some(result) = result else {
             return Ran {
                 answer: Answer::stopped(ResultCode::InternalError),
@@ -192,6 +234,26 @@ impl ContextRetireBinding {
     }
 }
 impl Binding for ContextRetireBinding {
+    fn admission_root(&self) -> Option<&std::path::Path> {
+        self.1.borrow().is_some().then_some(self.0.root.as_path())
+    }
+    fn admit(
+        &self,
+        service: &RepositoryService,
+        tx: &rusqlite::Transaction<'_>,
+        accepted: &Accepted,
+    ) -> Result<(), crate::repository::ReadError> {
+        match self.1.borrow().as_ref() {
+            Some(input) => input
+                .admit(service, tx, accepted)
+                .map_err(|_| crate::repository::ReadError::new(ResultCode::RecoveryRequired)),
+            None => crate::repository::context_retirement::pass::require_unreserved(
+                tx,
+                accepted.request_id,
+            )
+            .map_err(|_| crate::repository::ReadError::new(ResultCode::RecoveryRequired)),
+        }
+    }
     fn command(&self) -> Command {
         Command::ContextRetire
     }
@@ -333,7 +395,7 @@ pub(crate) fn resume_handoff(
             if !matches!(state.phase.as_str(), "local_absent" | "index_pending") {
                 return Err(Answer::stopped(ResultCode::RecoveryRequired));
             }
-            let binding = ContextRetireBinding(ContextRetireInput {
+            let binding = ContextRetireBinding::from(ContextRetireInput {
                 root: root.into(),
                 kind: match kind.as_str() {
                     "ticket" => AuthoringKind::Ticket,

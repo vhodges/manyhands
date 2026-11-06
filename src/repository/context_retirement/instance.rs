@@ -333,6 +333,56 @@ pub(super) fn identity(
     require_checkout_inventory(git, request, Some(tip))
 }
 impl Selection {
+    /// Original poll enrollment: intended nonce is already durable. Only this
+    /// live Selection may install it; restart has verification-only authority.
+    pub(super) fn install_for_poll(
+        self,
+        service: &RepositoryService,
+        request: &RetireContextRequest,
+        cleanup: &ContextCleanup,
+        poll: OperationId,
+        ordinal: usize,
+        validate: impl Fn(&rusqlite::Transaction<'_>, i64) -> Result<(), RepositoryError>,
+    ) -> Result<(), RepositoryError> {
+        let expected = &self.identity;
+        state::with_transaction(service, &request.root, |tx, id| {
+            validate(tx, id)?;
+            let json:String=tx.query_row("SELECT candidate FROM poll_retirement_candidates WHERE operation_ulid=?1 AND poll_ordinal=?2 AND verified=0",params![poll.to_string(),ordinal],|r|r.get(0)).map_err(|_|recovery_required())?;
+            let c = super::pass::Candidate::decode(&json)?;
+            if c.nonce.as_deref() != Some(expected.nonce.to_string().as_str())
+                || c.tip.as_deref() != Some(expected.tip.to_string().as_str())
+                || c.item_id != expected.item.to_string()
+            {
+                return Err(recovery_required());
+            }
+            let git = git2::Repository::open(&request.root).map_err(|_| recovery_required())?;
+            identity(&git, request, expected.tip)?;
+            self.anchor.validate().map_err(|_| recovery_required())?;
+            if self.create {
+                #[cfg(test)]
+                bootstrap_hook(false);
+                self.anchor
+                    .create(&bytes(expected.kind, &expected.item, expected.nonce))
+                    .map_err(|_| recovery_required())?;
+            }
+            expected.verify_marker(&git, request)?;
+            self.anchor.sync().map_err(|_| recovery_required())?;
+            Ok(())
+        })?;
+        #[cfg(test)]
+        bootstrap_hook(true);
+        state::with_transaction(service, &request.root, |tx, id| {
+            validate(tx, id)?;
+            let git = git2::Repository::open(&request.root).map_err(|_| recovery_required())?;
+            expected.verify_marker(&git, request)?;
+            if cleanup.precheck_context(expected.kind, &expected.item, expected.tip) != Precheck::Ok
+            {
+                return Err(recovery_required());
+            }
+            if tx.execute("UPDATE poll_retirement_candidates SET verified=1 WHERE operation_ulid=?1 AND poll_ordinal=?2 AND verified=0",params![poll.to_string(),ordinal]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
+            Ok(())
+        })
+    }
     pub(super) fn capture(
         git: &git2::Repository,
         request: &RetireContextRequest,

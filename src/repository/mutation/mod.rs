@@ -27,6 +27,7 @@
 // `ReadError` carries its whole scope by value, as the result contract has it.
 #![allow(clippy::result_large_err)]
 
+use rusqlite::OptionalExtension;
 use std::sync::Arc;
 
 use time::OffsetDateTime;
@@ -66,6 +67,7 @@ pub(super) use bind::comment::comment_synchronization;
 /// source-included test target that plants a row under it.
 #[cfg(test)]
 pub(crate) use bind::conflict::attempt_for as conflict_resolve_attempt;
+pub(in super::super) use bind::poll::poll_data as poll_report_data;
 use bind::{
     Binding, Confirmed,
     abandon::OperationAbandonBinding,
@@ -134,13 +136,14 @@ pub use dto::{
     LifecyclePlannedIntegration, LifecyclePlannedPublication, LifecyclePreviewDto,
     LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
     LocalIdentityDto, MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto,
-    PollMutationCompletion, PollMutationDto, PollPolicyMutationDto, PollTargetDisposition,
-    PollTargetDto, PrepareDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto,
-    PreviewIdentityDto, PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto,
-    RepairMutationDto, RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto,
-    RequestDto, RequestOperationDto, RequestResultDto, RequestState,
-    SynchronizationConflictMutationDto, SynchronizationConflictType, SynchronizationMutationDto,
-    TicketMutationDto,
+    PollMutationCompletion, PollMutationDto, PollPolicyMutationDto, PollRetirementCompletion,
+    PollRetirementDebt, PollRetirementItemDto, PollRetirementItemState, PollRetirementMutationDto,
+    PollRetirementMutationType, PollTargetDisposition, PollTargetDto, PrepareDataDto,
+    PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
+    PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto,
+    RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
+    RequestOperationDto, RequestResultDto, RequestState, SynchronizationConflictMutationDto,
+    SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -151,6 +154,52 @@ pub(crate) use observe::absent_token;
 pub(super) use outcome::repository_error_code;
 pub use progress::{CancellationToken, NoProgress, ProgressEvent, ProgressSink, ProgressStage};
 use records::RequestRecord;
+
+/// Copies only proven durable child outcomes, in metadata reconciliation's TX.
+pub(in super::super) fn finish_recorded_retirement(
+    tx: &rusqlite::Transaction<'_>,
+    id: &str,
+    data: &ContextRetirementMutationDto,
+) -> Result<(), super::RepositoryError> {
+    let attempt: Option<u64> = tx
+        .query_row(
+            "SELECT attempt FROM request_records WHERE request_ulid=?1 AND state='accepted'",
+            [id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|_| super::remote::state::recovery_required())?;
+    if let Some(attempt) = attempt {
+        let answer = bind::Answer {
+            local_change: data.worktree_removal != super::RetirementRemoval::None
+                || data.branch_removal != super::RetirementRemoval::None,
+            effects: crate::results::Effects {
+                discovery: if data.materialization_settled {
+                    crate::results::DiscoveryEffect::Current
+                } else {
+                    crate::results::DiscoveryEffect::NotRequested
+                },
+                ..crate::results::Effects::not_requested()
+            },
+            ..bind::Answer::stopped(data.code)
+        }
+        .with_data(MutationDataDto::ContextRetirement(data.clone()));
+        let result =
+            settle::stored_result(&answer).ok_or_else(super::remote::state::recovery_required)?;
+        if !records::finish_request(
+            tx,
+            RequestId::parse(id).map_err(|_| super::remote::state::recovery_required())?,
+            attempt,
+            &result,
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+        )
+        .map_err(|_| super::remote::state::recovery_required())?
+        {
+            return Err(super::remote::state::recovery_required());
+        }
+    }
+    Ok(())
+}
 pub(super) use records::migrate as migrate_request_tables;
 pub(super) use records::{operation_owner, release_operation_owner};
 
@@ -531,6 +580,8 @@ pub enum Mutation {
     PollPause(PollPauseInput),
     PollResume(PollResumeInput),
     PollOnce(PollOnceInput),
+    /// Explicit, original-live-only retirement after the ordinary poll.
+    PollOnceRetiring(PollOnceInput),
 }
 
 impl Mutation {
@@ -584,7 +635,7 @@ impl Mutation {
             Self::PollConfigure(_) => Command::PollConfigure,
             Self::PollPause(_) => Command::PollPause,
             Self::PollResume(_) => Command::PollResume,
-            Self::PollOnce(_) => Command::PollOnce,
+            Self::PollOnce(_) | Self::PollOnceRetiring(_) => Command::PollOnce,
         }
     }
 
@@ -622,6 +673,7 @@ impl Mutation {
             | Self::PollPause(_)
             | Self::PollResume(_)
             | Self::PollOnce(_)
+            | Self::PollOnceRetiring(_)
             | Self::TicketCreate(_)
             | Self::TicketSave(_)
             | Self::TicketSlugAssign(_)
@@ -690,6 +742,9 @@ impl Mutation {
             Self::PollPause(input) => Box::new(PollPolicyBinding::from(input)),
             Self::PollResume(input) => Box::new(PollPolicyBinding::from(input)),
             Self::PollOnce(input) => Box::new(PollOnceBinding::from(input)),
+            Self::PollOnceRetiring(input) => {
+                Box::new(bind::poll_retirement::PollRetirementBinding::from(input))
+            }
         }
     }
 }

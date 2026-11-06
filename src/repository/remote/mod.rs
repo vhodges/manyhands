@@ -3,6 +3,8 @@ mod merge;
 pub(super) mod observation;
 mod poll;
 pub(super) use poll::OriginalWrapper;
+#[cfg(test)]
+pub(crate) use poll::synthetic_fetch;
 mod refs;
 pub(super) mod sync;
 pub use conflict_read::{

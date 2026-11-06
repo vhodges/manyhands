@@ -583,7 +583,6 @@ fn retirement_preserving_lost_result_and_index_spend_fences_keep_old_identity() 
                 )
                 .unwrap(),
             ),
-            retirement_batch: None,
         };
         assert!(recovery::owns_indexing(&db, owner.clone()).unwrap());
         if case == "advance" {
@@ -808,7 +807,6 @@ impl Fixture {
             record_id,
             epoch,
             retirement_request: Some(fence),
-            retirement_batch: None,
         }
     }
 }

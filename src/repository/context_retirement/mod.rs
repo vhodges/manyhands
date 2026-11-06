@@ -3,6 +3,7 @@ mod execution;
 pub(super) mod handoff;
 mod historical;
 mod instance;
+pub(super) mod pass;
 pub(super) mod preserve;
 pub(super) mod proof;
 pub(super) mod record;

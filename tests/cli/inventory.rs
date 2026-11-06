@@ -217,7 +217,14 @@ const DATA: &[(&str, &[&str])] = &[
         ],
     ),
     // A first call's host stop carries the synchronization's host data.
-    ("poll once", &["poll_mutation", "synchronization_mutation"]),
+    (
+        "poll once",
+        &[
+            "poll_mutation",
+            "poll_retirement_mutation",
+            "synchronization_mutation",
+        ],
+    ),
     ("poll configure", &["poll_policy_mutation"]),
     ("poll pause", &["poll_policy_mutation"]),
     ("poll resume", &["poll_policy_mutation"]),

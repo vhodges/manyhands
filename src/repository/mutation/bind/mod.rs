@@ -45,6 +45,7 @@ pub(crate) mod key;
 pub(crate) mod lifecycle;
 pub(crate) mod local_sync;
 pub(crate) mod poll;
+pub(crate) mod poll_retirement;
 pub(crate) mod remote;
 pub(crate) mod repair;
 pub(crate) mod repo;
@@ -304,7 +305,12 @@ impl Answer {
     pub(crate) fn cancelled_outcome(&self) -> bool {
         self.code == ResultCode::Cancelled
             && !(self.local_change
-                && matches!(self.data, Some(MutationDataDto::ContextRetirement(_))))
+                && matches!(
+                    self.data,
+                    Some(
+                        MutationDataDto::ContextRetirement(_) | MutationDataDto::PollRetirement(_)
+                    )
+                ))
     }
     /// A request that stopped having done nothing.
     pub(crate) fn stopped(code: ResultCode) -> Self {
@@ -801,6 +807,18 @@ pub(crate) trait OneTransaction {
 }
 
 pub(crate) trait Binding {
+    fn admission_root(&self) -> Option<&Path> {
+        None
+    }
+    fn admit(
+        &self,
+        _service: &RepositoryService,
+        tx: &rusqlite::Transaction<'_>,
+        accepted: &Accepted,
+    ) -> Result<(), ReadError> {
+        super::super::context_retirement::pass::require_unreserved(tx, accepted.request_id)
+            .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))
+    }
     /// The command. Its name is what the envelope gives.
     fn command(&self) -> Command;
 

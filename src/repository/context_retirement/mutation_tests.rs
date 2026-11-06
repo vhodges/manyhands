@@ -118,6 +118,1526 @@ fn present(f: &Fixture) -> String {
 }
 
 #[test]
+fn retirement_batch_live_fences_rejoin_at_each_ordinary_effect() {
+    for before_branch in [false, true] {
+        for fault in [
+            "endpoint",
+            "observation",
+            "parent_f2",
+            "child_f2",
+            "materialization",
+        ] {
+            let f = Fixture::new();
+            let branch = present(&f);
+            f.materialization("complete");
+            let git = git2::Repository::open(f.root.path()).unwrap();
+            let primary = git.head().unwrap().target().unwrap();
+            git.reference(
+                "refs/remotes/origin/main",
+                primary,
+                false,
+                "synthetic fetch",
+            )
+            .unwrap();
+            let root = f.root.path().to_owned();
+            let data = f.data.path().to_owned();
+            let change = move || {
+                let db = Connection::open(data.join(REGISTRY_FILE)).unwrap();
+                match fault {
+                    "endpoint" => git2::Repository::open(&root)
+                        .unwrap()
+                        .remote_set_url("origin", "ssh://fixture@127.0.0.1:2/replaced")
+                        .unwrap(),
+                    "parent_f2" => {
+                        db.execute("UPDATE request_records SET attempt=attempt+1 WHERE command='poll once' AND state='accepted'",[]).unwrap();
+                    }
+                    "child_f2" => {
+                        db.execute("UPDATE request_records SET attempt=attempt+1 WHERE command='context retire' AND state='accepted'",[]).unwrap();
+                    }
+                    "materialization" => {
+                        db.execute("DELETE FROM remote_poll_materializations", [])
+                            .unwrap();
+                        db.execute("INSERT INTO remote_poll_materializations SELECT repository_id,'ticket',?1,operation_ulid,?2,'complete' FROM poll_retirement_passes",params![ITEM,primary.to_string()]).unwrap();
+                    }
+                    "observation" => {
+                        let service = RepositoryService::open_at(&data).unwrap();
+                        let plan = crate::repository::remote::observation::observation_plan(&root)
+                            .unwrap();
+                        crate::repository::remote::state::with_transaction(
+                            &service,
+                            &root,
+                            |tx, id| {
+                                crate::repository::remote::state::persist_complete_advertisement(
+                                    tx,
+                                    id,
+                                    &plan,
+                                    crate::repository::remote::state::generation(tx, id)?,
+                                    &[],
+                                    3,
+                                )?;
+                                Ok(())
+                            },
+                        )
+                        .unwrap();
+                    }
+                    _ => unreachable!(),
+                }
+            };
+            if before_branch {
+                RepositoryService::set_retirement_intent_hook_for_testing(change);
+            } else {
+                RepositoryService::set_retirement_worktree_hook_for_testing(change);
+            }
+            let ri = RequestId::new();
+            let mutation = || {
+                Mutation::PollOnceRetiring(PollOnceInput {
+                    root: f.root.path().into(),
+                })
+            };
+            crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+            let mut result = execute(&f.service, ri, mutation());
+            if f.service.request_record(ri).unwrap().unwrap().state == RequestState::Accepted {
+                result = execute(&f.service, ri, mutation());
+            }
+            assert!(
+                git.find_reference(&branch).is_ok(),
+                "{fault}/{before_branch}: no stale B effect"
+            );
+            assert_eq!(
+                f.root
+                    .path()
+                    .join(".manyhands/worktrees")
+                    .join(ITEM)
+                    .exists(),
+                !before_branch,
+                "{fault}: truthful W state"
+            );
+            assert_eq!(
+                f.db()
+                    .query_row(
+                        "SELECT count(*) FROM request_records WHERE command='context retire'",
+                        [],
+                        |r| r.get::<_, usize>(0)
+                    )
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                f.db()
+                    .query_row(
+                        "SELECT count(*) FROM remote_operation_records WHERE poll_kind='observe'",
+                        [],
+                        |r| r.get::<_, usize>(0)
+                    )
+                    .unwrap(),
+                0,
+                "no re-observation in initial executor"
+            );
+            let image = serde_json::to_value(&result.data).unwrap();
+            if before_branch {
+                assert_eq!(image["completion"], "stopped", "{fault}: {result:?}");
+                assert_eq!(image["retirements"][0]["state"], "pending");
+            }
+            assert_eq!(
+                serde_json::to_value(execute(&f.service, ri, mutation()).data).unwrap(),
+                image
+            );
+        }
+    }
+}
+
+#[test]
+fn retirement_batch_history_audits_parent_intent_and_materialization_owner() {
+    for case in ["parent_digest", "materialization_owner"] {
+        let f = Fixture::new();
+        present(&f);
+        if case == "materialization_owner" {
+            let (owner, oid) = f.materialization("complete");
+            let db = f.db();
+            db.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
+            db.execute("DELETE FROM remote_poll_materializations", [])
+                .unwrap();
+            db.execute("INSERT INTO remote_poll_materializations SELECT id,'ticket',?1,?2,?3,'complete' FROM repositories",params![ITEM,OperationId::new().to_string(),oid]).unwrap();
+            let c = super::super::pass::Candidate {
+                poll_ordinal: 0,
+                kind: "ticket".into(),
+                item_id: ITEM.into(),
+                resources: "invalid".into(),
+                tip: None,
+                nonce: None,
+                materialization: None,
+                refusal: Some("recovery_required".into()),
+                child_request: RequestId::new().to_string(),
+            };
+            assert!(
+                super::super::pass::materialization(&db, 1, &c).is_err(),
+                "foreign/missing M owner {owner} is not a complete captured intent"
+            );
+            continue;
+        }
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        let primary = git.head().unwrap().target().unwrap();
+        git.reference(
+            "refs/remotes/origin/main",
+            primary,
+            false,
+            "synthetic fetch",
+        )
+        .unwrap();
+        crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+        let id = RequestId::new();
+        let result = execute(
+            &f.service,
+            id,
+            Mutation::PollOnceRetiring(PollOnceInput {
+                root: f.root.path().into(),
+            }),
+        );
+        assert_eq!(result.code, ResultCode::Ok);
+        use crate::repository::mutation::request_store::{DigestSalt, IntentDigest, ScopeKey};
+        let ordinary = IntentDigest::builder(
+            DigestSalt::Request(id),
+            "poll once",
+            &ScopeKey::for_repository(f.root.path()).unwrap(),
+            "",
+        )
+        .finish();
+        f.db()
+            .execute(
+                "UPDATE request_records SET intent_digest=?2 WHERE request_ulid=?1",
+                params![id.to_string(), ordinary.to_string()],
+            )
+            .unwrap();
+        assert!(
+            super::super::record::audit_connection(&f.db()).is_err(),
+            "captured poll parent must retain opted intent, not merely its IDs"
+        );
+    }
+}
+
+#[test]
+fn retirement_batch_initial_history_requires_exact_membership() {
+    for case in [
+        "missing",
+        "parent_request",
+        "ordinal",
+        "receipt",
+        "candidate",
+    ] {
+        let f = Fixture::new();
+        let branch = present(&f);
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        let primary = git.head().unwrap().target().unwrap();
+        git.reference(
+            "refs/remotes/origin/main",
+            primary,
+            false,
+            "synthetic fetch",
+        )
+        .unwrap();
+        RepositoryService::set_retirement_selected_hook_for_testing(|| {
+            panic!("loss after initial ordinary selection")
+        });
+        crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+        let id = RequestId::new();
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(
+                &f.service,
+                id,
+                Mutation::PollOnceRetiring(PollOnceInput {
+                    root: f.root.path().into()
+                })
+            )))
+            .is_err()
+        );
+        let db = f.db();
+        super::super::record::audit_connection(&db).unwrap();
+        let (ri, ki): (String, String) = db
+            .query_row(
+                "SELECT child_request_ulid,child_operation_ulid FROM poll_retirement_child_sources",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let trigger = if case == "missing" {
+            "poll_retirement_membership_retained"
+        } else {
+            "poll_retirement_membership_immutable"
+        };
+        let sql: String = db
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name=?1",
+                [trigger],
+                |r| r.get(0),
+            )
+            .unwrap();
+        db.execute_batch(&format!("DROP TRIGGER {trigger}"))
+            .unwrap();
+        match case {
+            "missing" => {
+                db.execute("DELETE FROM poll_retirement_child_sources", [])
+                    .unwrap();
+            }
+            "parent_request" => {
+                db.execute("UPDATE poll_retirement_child_sources SET parent_request_ulid=child_request_ulid", []).unwrap();
+            }
+            "ordinal" => {
+                db.execute(
+                    "UPDATE poll_retirement_child_sources SET ordinal=ordinal+1",
+                    [],
+                )
+                .unwrap();
+            }
+            "receipt" => {
+                db.execute("UPDATE poll_retirement_child_sources SET initial_receipt_id=(SELECT binding_id FROM poll_retirement_passes)", []).unwrap();
+            }
+            _ => {
+                db.execute("UPDATE poll_retirement_child_sources SET candidate=json_set(candidate,'$.item_id','01ARZ3NDEKTSV4RRFFQ69G5FAW')", []).unwrap();
+            }
+        }
+        db.execute_batch(&sql).unwrap();
+        let before = registry_image(&db);
+        let disk = disk_image(f.root.path());
+        assert!(
+            super::super::record::audit_connection(&db).is_err(),
+            "{case}: NULL observer alone is not initial lineage"
+        );
+        assert!(
+            RepositoryService::open_at(f.data.path()).is_err(),
+            "{case}: startup cannot reconstruct membership"
+        );
+        assert_eq!(before, registry_image(&db));
+        let refused = execute(&f.service, RequestId::parse(&ri).unwrap(), retire(&f));
+        assert_eq!(
+            refused.code,
+            ResultCode::RecoveryRequired,
+            "{case}: {refused:?}, K={ki}"
+        );
+        assert_eq!(disk, disk_image(f.root.path()));
+        assert!(git.find_reference(&branch).is_ok());
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM remote_operation_records WHERE poll_kind='observe'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
+fn retirement_batch_original_refresh_gap_and_background_poll_cannot_mint_authority() {
+    for case in ["ordinary", "automatic", "endpoint_gap", "advertisement_gap"] {
+        let f = Fixture::new();
+        let branch = present(&f);
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        let primary = git.head().unwrap().target().unwrap();
+        git.reference(
+            "refs/remotes/origin/main",
+            primary,
+            false,
+            "synthetic fetch",
+        )
+        .unwrap();
+        let marker = git
+            .commondir()
+            .join("worktrees")
+            .join(ITEM)
+            .join(super::super::instance::MARKER);
+        if case.ends_with("_gap") {
+            let root = f.root.path().to_owned();
+            let data = f.data.path().to_owned();
+            super::super::handoff::observe_next_settle_for_testing(move || {
+                if case == "endpoint_gap" {
+                    git2::Repository::open(&root)
+                        .unwrap()
+                        .remote_set_url("origin", "ssh://fixture@127.0.0.1:2/changed")
+                        .unwrap();
+                } else {
+                    let service = RepositoryService::open_at(&data).unwrap();
+                    let plan =
+                        crate::repository::remote::observation::observation_plan(&root).unwrap();
+                    crate::repository::remote::state::with_transaction(
+                        &service,
+                        &root,
+                        |tx, id| {
+                            crate::repository::remote::state::persist_complete_advertisement(
+                                tx,
+                                id,
+                                &plan,
+                                crate::repository::remote::state::generation(tx, id)?,
+                                &[],
+                                9,
+                            )?;
+                            Ok(())
+                        },
+                    )
+                    .unwrap();
+                }
+            });
+        }
+        crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+        if case == "automatic" {
+            f.db().execute("UPDATE remote_polling_state SET enabled=1,paused=0,recovery_suspended=0,next_eligible_at=NULL",[]).unwrap();
+            let result = f
+                .service
+                .poll_publication_remote(
+                    PollPublicationRemoteRequest {
+                        root: f.root.path().into(),
+                        operation_id: OperationId::new(),
+                        invocation: RemotePollInvocation::Automatic,
+                        approval: None,
+                        restart: false,
+                    },
+                    &mut SessionCredentials::new(NoCredentials),
+                )
+                .unwrap();
+            assert!(
+                matches!(
+                    result,
+                    RemotePollResult::Complete(RemotePollOutcome::Polled(_))
+                ),
+                "real eligible automatic poll: {result:?}"
+            );
+        } else {
+            let opted = case != "ordinary";
+            let id = RequestId::new();
+            let mutation = || {
+                if opted {
+                    Mutation::PollOnceRetiring(PollOnceInput {
+                        root: f.root.path().into(),
+                    })
+                } else {
+                    Mutation::PollOnce(PollOnceInput {
+                        root: f.root.path().into(),
+                    })
+                }
+            };
+            let result = execute(&f.service, id, mutation());
+            assert_eq!(
+                result.code,
+                if opted {
+                    ResultCode::DiscoveryPending
+                } else {
+                    ResultCode::Ok
+                },
+                "{case}: {result:?}"
+            );
+            if opted {
+                let image = serde_json::to_value(&result.data).unwrap();
+                f.service
+                    .refresh_repository(RefreshRepositoryRequest {
+                        root: f.root.path().into(),
+                        operation_id: OperationId::new(),
+                    })
+                    .unwrap();
+                assert_eq!(
+                    serde_json::to_value(execute(&f.service, id, mutation()).data).unwrap(),
+                    image,
+                    "later repair does not promote original wrapper"
+                );
+            }
+        }
+        assert!(git.find_reference(&branch).is_ok());
+        assert_eq!(
+            marker.exists(),
+            case.ends_with("_gap"),
+            "only opted original capture enrolls"
+        );
+        assert_eq!(
+            f.db()
+                .query_row("SELECT count(*) FROM context_retirement_records", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT count(*) FROM retirement_observation_pins",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+    }
+}
+
+#[test]
+fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    for case in [
+        "empty",
+        "failed",
+        "cancelled",
+        "index_pending",
+        "capture_lost",
+        "preselection_restart",
+        "preselection_fenced",
+        "unconfirmed",
+        "eligible_crash",
+        "accepted_crash",
+        "selected_crash",
+        "nonce_replaced",
+        "request_cancel_cut",
+        "all_absent",
+        "owned_absence_crash",
+        "conflict_gap",
+    ] {
+        let f = Fixture::new();
+        let b = if case == "empty" {
+            let b = branch(&f);
+            git2::Repository::open(f.root.path())
+                .unwrap()
+                .find_reference(&b)
+                .unwrap()
+                .delete()
+                .unwrap();
+            b
+        } else {
+            present(&f)
+        };
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        let primary = git.head().unwrap().target().unwrap();
+        if case == "all_absent" {
+            f.service
+                .refresh_repository(RefreshRepositoryRequest {
+                    root: f.root.path().into(),
+                    operation_id: OperationId::new(),
+                })
+                .unwrap();
+            // External disappearance in an ISOLATED fixture, not owned removal.
+            let path = f.root.path().join(".manyhands/worktrees").join(ITEM);
+            std::fs::remove_dir_all(path).unwrap();
+            git.find_worktree(ITEM)
+                .unwrap()
+                .prune(Some(git2::WorktreePruneOptions::new().valid(true)))
+                .unwrap();
+            git.find_reference(&b).unwrap().delete().unwrap();
+            f.materialization("complete");
+        }
+        git.reference(
+            "refs/remotes/origin/main",
+            primary,
+            false,
+            "synthetic fetch",
+        )
+        .unwrap();
+        let id = RequestId::new();
+        let mutation = || {
+            Mutation::PollOnceRetiring(PollOnceInput {
+                root: f.root.path().into(),
+            })
+        };
+        let producer = match case {
+            "index_pending" => RepositoryService::open_at_with_failure_point_for_testing(
+                f.data.path(),
+                FailurePoint::BeforeIndexTransactionCommit,
+            )
+            .unwrap(),
+            "preselection_restart" | "preselection_fenced" => {
+                RepositoryService::open_at_with_failure_point_for_testing(
+                    f.data.path(),
+                    FailurePoint::PollBeforeDiscovery,
+                )
+                .unwrap()
+            }
+            "unconfirmed" => RepositoryService::open_at_with_failure_point_for_testing(
+                f.data.path(),
+                FailurePoint::PollAfterCompletion,
+            )
+            .unwrap(),
+            _ => RepositoryService::open_at(f.data.path()).unwrap(),
+        };
+        if case == "capture_lost" {
+            super::super::source::fail_capture();
+        }
+        if case == "eligible_crash" {
+            super::super::handoff::observe_eligible(|_| {
+                panic!("simulated process loss after durable eligibility")
+            });
+        }
+        if case == "accepted_crash" {
+            super::super::handoff::observe_eligible(|s| {
+                s.set_request_hook_for_testing(|| {
+                    panic!("simulated accepted child loss before local claim")
+                })
+            });
+        }
+        if case == "selected_crash" {
+            RepositoryService::set_retirement_selected_hook_for_testing(|| {
+                panic!("simulated child loss after ordinary local claim before Git")
+            });
+        }
+        if case == "owned_absence_crash" {
+            RepositoryService::set_retirement_after_branch_hook_for_testing(|| {
+                panic!("simulated SQLite rollback after actual Git absence")
+            });
+            f.materialization("complete");
+        }
+        if case == "conflict_gap" {
+            let root = f.root.path().to_owned();
+            super::super::handoff::observe_eligible(move |s| {
+                let plan = crate::repository::remote::observation::observation_plan(&root).unwrap();
+                let RemoteReservationOutcome::Reserved(owner) = s
+                    .reserve_remote_operation(
+                        &root,
+                        OperationId::new(),
+                        &RemoteOperationTarget::for_primary_synchronization(&plan),
+                    )
+                    .unwrap()
+                else {
+                    panic!("owned foreign integration reserves");
+                };
+                s.retirement_test_conflict(&root, &owner, 1).unwrap();
+            });
+        }
+        if case == "request_cancel_cut" {
+            let data = f.data.path().join(REGISTRY_FILE);
+            super::super::handoff::observe_eligible(move |s| {
+                let response = s.cancel_request(id);
+                assert_eq!(response.code, ResultCode::Ok);
+                let cut: Option<String> = Connection::open(data)
+                    .unwrap()
+                    .query_row(
+                        "SELECT summary FROM poll_retirement_passes WHERE request_ulid=?1",
+                        [id.to_string()],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert!(
+                    cut.is_some(),
+                    "cancellation must revoke starts and persist its exact cut before returning"
+                );
+            });
+        }
+        if case == "nonce_replaced" {
+            let marker = git
+                .commondir()
+                .join("worktrees")
+                .join(ITEM)
+                .join(super::super::instance::MARKER);
+            super::super::handoff::observe_eligible(move |_| {
+                std::fs::write(
+                    marker,
+                    format!(
+                        "manyhands-retirement-instance-v1\nticket\n{ITEM}\n{}\n",
+                        OperationId::new()
+                    ),
+                )
+                .unwrap();
+            });
+        }
+        let cancel = CancellationToken::new();
+        if case == "cancelled" {
+            let token = cancel.clone();
+            producer.set_request_hook_for_testing(move || token.cancel());
+        }
+        if !matches!(case, "failed" | "cancelled") {
+            crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+        }
+        let first = catch_unwind(AssertUnwindSafe(|| {
+            producer.execute(
+                MutationCall {
+                    request_id: id,
+                    confirmation: None,
+                    mutation: mutation(),
+                },
+                &mut SessionCredentials::new(NoCredentials),
+                &mut NoProgress,
+                &cancel,
+            )
+        }));
+        let response = if case == "preselection_fenced" {
+            assert!(first.unwrap().code != ResultCode::Ok);
+            let db = f.db();
+            git.remote_set_url("origin", "ssh://fixture@127.0.0.1:2/fenced")
+                .unwrap();
+            let plan =
+                crate::repository::remote::observation::observation_plan(f.root.path()).unwrap();
+            let config = f
+                .service
+                .observation_configuration(f.root.path(), &plan)
+                .unwrap();
+            crate::repository::remote::state::with_transaction(
+                &f.service,
+                f.root.path(),
+                |tx, repo| {
+                    crate::repository::remote::state::configure_endpoints(
+                        tx,
+                        repo,
+                        &plan,
+                        &config.endpoint_digest(),
+                    )
+                },
+            )
+            .unwrap();
+            let result = execute(&f.service, id, mutation());
+            assert_eq!(
+                f.service.request_record(id).unwrap().unwrap().state,
+                RequestState::Finished,
+                "a fenced old P retains normal finality, not a new observation/loop: {result:?}"
+            );
+            assert_eq!(
+                db.query_row(
+                    "SELECT count(*) FROM retirement_observation_pins",
+                    [],
+                    |r| r.get::<_, usize>(0)
+                )
+                .unwrap(),
+                0,
+                "old source holds end with P, no aggregate debt"
+            );
+            result
+        } else if matches!(case, "capture_lost" | "preselection_restart") {
+            assert!(first.unwrap().code != ResultCode::Ok);
+            crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+            execute(&f.service, id, mutation())
+        } else if matches!(
+            case,
+            "eligible_crash" | "accepted_crash" | "selected_crash" | "owned_absence_crash"
+        ) {
+            assert!(first.is_err());
+            execute(&f.service, id, mutation())
+        } else {
+            first.unwrap()
+        };
+        let data = serde_json::to_value(&response.data).unwrap();
+        assert_eq!(data["type"], "poll_retirement", "{case}: {response:?}");
+        if matches!(case, "empty" | "nonce_replaced" | "all_absent") {
+            assert_eq!(response.code, ResultCode::Ok, "{case}: {response:?}");
+            assert_eq!(data["completion"], "completed");
+            if case == "nonce_replaced" {
+                assert_eq!(data["retirements"][0]["state"], "refused");
+            }
+            if case == "all_absent" {
+                assert_eq!(data["retirements"][0]["state"], "already_absent");
+                assert_eq!(
+                    data["poll"]["targets"][1]["after_oid"],
+                    serde_json::Value::Null
+                );
+            }
+        } else {
+            assert!(
+                !matches!(response.code, ResultCode::Ok | ResultCode::AlreadyApplied),
+                "{case}: {response:?}"
+            );
+            assert_eq!(data["completion"], "stopped");
+        }
+        if !matches!(
+            case,
+            "nonce_replaced"
+                | "accepted_crash"
+                | "selected_crash"
+                | "all_absent"
+                | "owned_absence_crash"
+        ) {
+            assert_eq!(
+                f.db()
+                    .query_row(
+                        "SELECT count(*) FROM request_records WHERE command='context retire'",
+                        [],
+                        |r| r.get::<_, usize>(0)
+                    )
+                    .unwrap(),
+                0,
+                "{case}: no child acceptance from lost/failed wrapper"
+            );
+        }
+        if !matches!(case, "empty" | "all_absent" | "owned_absence_crash") {
+            assert!(git.find_reference(&b).is_ok(), "{case}: context preserved");
+        }
+        assert_eq!(
+            serde_json::to_value(execute(&f.service, id, mutation()).data).unwrap(),
+            data,
+            "{case}: zero-network stable old pass"
+        );
+        if case == "accepted_crash" {
+            assert_eq!(
+                f.db()
+                    .query_row(
+                        "SELECT count(*) FROM operation_records WHERE action='retire_context'",
+                        [],
+                        |r| r.get::<_, usize>(0)
+                    )
+                    .unwrap(),
+                0,
+                "metadata-only no-effect settlement, not run-as-new"
+            );
+            assert_eq!(data["retirements"][0]["state"], "refused");
+        }
+        if case == "selected_crash" {
+            let ri =
+                RequestId::parse(data["retirements"][0]["request_id"].as_str().unwrap()).unwrap();
+            assert_eq!(data["retirements"][0]["state"], "pending");
+            super::super::run::synthetic_advertisement(Ok(Vec::new()));
+            let child = execute(&f.service, ri, retire(&f));
+            assert_eq!(
+                child.code,
+                ResultCode::Ok,
+                "initial NULL O ordinary fresh-O recovery after parent Final: {child:?}"
+            );
+            assert_eq!(
+                serde_json::to_value(execute(&f.service, id, mutation()).data).unwrap(),
+                data
+            );
+        }
+        if case == "owned_absence_crash" {
+            let ri =
+                RequestId::parse(data["retirements"][0]["request_id"].as_str().unwrap()).unwrap();
+            assert_eq!(data["retirements"][0]["state"], "pending");
+            assert_eq!(
+                execute(&f.service, ri, retire(&f)).code,
+                ResultCode::Ok,
+                "M/I-only independent child recovery uses no credentials/advertisement"
+            );
+            assert_eq!(
+                f.db()
+                    .query_row(
+                        "SELECT count(*) FROM context_retirement_absence_receipts",
+                        [],
+                        |r| r.get::<_, usize>(0)
+                    )
+                    .unwrap(),
+                1
+            );
+            assert_eq!(
+                f.db()
+                    .query_row(
+                        "SELECT count(*) FROM remote_poll_materializations",
+                        [],
+                        |r| r.get::<_, usize>(0)
+                    )
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                serde_json::to_value(execute(&f.service, id, mutation()).data).unwrap(),
+                data
+            );
+        }
+        assert_eq!(
+            execute(
+                &f.service,
+                id,
+                Mutation::PollOnce(PollOnceInput {
+                    root: f.root.path().into()
+                })
+            )
+            .code,
+            ResultCode::RequestMismatch
+        );
+    }
+}
+
+#[test]
+fn retirement_batch_preselection_poll_recovery_does_not_free_its_id_for_other_journals() {
+    let f = Fixture::new();
+    present(&f);
+    let git = git2::Repository::open(f.root.path()).unwrap();
+    let primary = git.head().unwrap().target().unwrap();
+    git.reference(
+        "refs/remotes/origin/main",
+        primary,
+        false,
+        "synthetic fetch",
+    )
+    .unwrap();
+    let producer = RepositoryService::open_at_with_failure_point_for_testing(
+        f.data.path(),
+        FailurePoint::PollBeforeDiscovery,
+    )
+    .unwrap();
+    let id = RequestId::new();
+    let mutation = || {
+        Mutation::PollOnceRetiring(PollOnceInput {
+            root: f.root.path().into(),
+        })
+    };
+    crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+    let interrupted = execute(&producer, id, mutation());
+    assert_ne!(interrupted.code, ResultCode::Ok);
+    let p = OperationId::parse(interrupted.operation_id.as_deref().unwrap()).unwrap();
+    assert!(super::super::record::owned_identity(&f.db(), &p.to_string()).unwrap());
+    assert!(
+        super::super::record::require_foreign_id_available(&f.db(), p).is_err(),
+        "normal old-P recovery is not a generic foreign-journal ID exemption"
+    );
+    let config = f.root.path().join(".manyhands/config.toml");
+    let text = std::fs::read(&config).unwrap();
+    std::fs::write(&config, "invalid = [").unwrap();
+    let before = registry_image(&f.db());
+    assert!(
+        f.service
+            .observe_publication_remote(
+                ObservePublicationRemoteRequest {
+                    root: f.root.path().into(),
+                    operation_id: p,
+                    invocation: RemotePollInvocation::Explicit,
+                    approval: None,
+                    restart: true
+                },
+                &mut SessionCredentials::new(NoCredentials)
+            )
+            .is_err()
+    );
+    assert_eq!(
+        before,
+        registry_image(&f.db()),
+        "public observer refuses before configuration writes"
+    );
+    std::fs::write(config, text).unwrap();
+    crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+    let finished = execute(&f.service, id, mutation());
+    assert_eq!(
+        f.service.request_record(id).unwrap().unwrap().state,
+        RequestState::Finished,
+        "normal update-P reentry remains available: {finished:?}"
+    );
+    assert_eq!(
+        f.db()
+            .query_row("SELECT count(*) FROM context_retirement_records", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn retirement_batch_reserved_request_ids_cannot_be_spent_by_public_or_atomic_bindings() {
+    for policy in [false, true] {
+        let f = Fixture::new();
+        present(&f);
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        let primary = git.head().unwrap().target().unwrap();
+        git.reference(
+            "refs/remotes/origin/main",
+            primary,
+            false,
+            "synthetic fetch",
+        )
+        .unwrap();
+        let root = f.root.path().to_owned();
+        let data = f.data.path().join(REGISTRY_FILE);
+        super::super::handoff::observe_eligible(move |s| {
+            let db = Connection::open(data).unwrap();
+            let ri: String = db
+                .query_row(
+                    "SELECT child_request_ulid FROM poll_retirement_targets",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let before = registry_image(&db);
+            let mutation = if policy {
+                Mutation::PollPause(PollPauseInput { root })
+            } else {
+                Mutation::ContextRetire(ContextRetireInput {
+                    root,
+                    kind: AuthoringKind::Ticket,
+                    id: ITEM.parse().unwrap(),
+                })
+            };
+            let refused = execute(s, RequestId::parse(&ri).unwrap(), mutation);
+            assert_eq!(
+                refused.code,
+                ResultCode::RecoveryRequired,
+                "reserved Ri requires the sealed ordinary initial binding, including atomic policy writes: {refused:?}"
+            );
+            assert_eq!(
+                before,
+                registry_image(&db),
+                "public caller cannot poison a reserved child ID"
+            );
+        });
+        crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+        let result = execute(
+            &f.service,
+            RequestId::new(),
+            Mutation::PollOnceRetiring(PollOnceInput {
+                root: f.root.path().into(),
+            }),
+        );
+        assert_eq!(
+            result.code,
+            ResultCode::Ok,
+            "legitimate original child still accepts/settles: {result:?}"
+        );
+        let policy_id = RequestId::new();
+        let policy = || {
+            Mutation::PollPause(PollPauseInput {
+                root: f.root.path().into(),
+            })
+        };
+        let paused = execute(&f.service, policy_id, policy());
+        assert_eq!(
+            paused.code,
+            ResultCode::Ok,
+            "ordinary atomic bindings still work with unreserved IDs"
+        );
+        assert_eq!(execute(&f.service, policy_id, policy()), paused);
+    }
+}
+
+#[test]
+fn retirement_batch_shared_source_ordinary_children_settle_before_next_admission() {
+    const SECOND: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
+    for case in [
+        "two_present",
+        "branch_only",
+        "dirty_first",
+        "unmatched_first",
+        "ordinary",
+        "index_pending",
+        "cancelled",
+        "lost_all",
+        "lost_prefix",
+        "lost_all_mixed",
+        "cancel_at_admission",
+    ] {
+        let f = Fixture::new();
+        let first_branch = present(&f);
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        let doc = format!("docs/{SECOND}.md");
+        std::fs::create_dir_all(f.root.path().join("docs")).unwrap();
+        std::fs::write(f.root.path().join(&doc),format!("---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {SECOND}\ntitle: Second private fixture\n---\nPreserved content\n")).unwrap();
+        let mut idx = git.index().unwrap();
+        idx.add_path(Path::new(&doc)).unwrap();
+        idx.write().unwrap();
+        let tree = git.find_tree(idx.write_tree().unwrap()).unwrap();
+        let parent = git.head().unwrap().peel_to_commit().unwrap();
+        let sig = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
+        let primary = git
+            .commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "second primary",
+                &tree,
+                &[&parent],
+            )
+            .unwrap();
+        let second_branch = format!("refs/heads/manyhands/document/{SECOND}");
+        git.reference(&second_branch, primary, false, "fixture")
+            .unwrap();
+        if case != "branch_only" {
+            let reference = git.find_reference(&second_branch).unwrap();
+            git.worktree(
+                SECOND,
+                &f.root.path().join(".manyhands/worktrees").join(SECOND),
+                Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
+            )
+            .unwrap();
+        }
+        // Sorted ordinary poll order is document first, then ticket.
+        if matches!(case, "dirty_first" | "lost_all_mixed") {
+            std::fs::write(
+                f.root
+                    .path()
+                    .join(".manyhands/worktrees")
+                    .join(SECOND)
+                    .join("private dirt"),
+                "never delete",
+            )
+            .unwrap();
+        }
+        if case == "unmatched_first" {
+            let linked =
+                git2::Repository::open(f.root.path().join(".manyhands/worktrees").join(ITEM))
+                    .unwrap();
+            std::fs::write(
+                linked.workdir().unwrap().join("unique-unpublished"),
+                "not on primary",
+            )
+            .unwrap();
+            let mut i = linked.index().unwrap();
+            i.add_path(Path::new("unique-unpublished")).unwrap();
+            let t = linked.find_tree(i.write_tree().unwrap()).unwrap();
+            let p = linked.head().unwrap().peel_to_commit().unwrap();
+            linked
+                .commit(Some("HEAD"), &sig, &sig, "unmatched", &t, &[&p])
+                .unwrap();
+        }
+        git.reference(
+            "refs/remotes/origin/main",
+            primary,
+            false,
+            "synthetic fetch",
+        )
+        .unwrap();
+        let plan = crate::repository::remote::observation::observation_plan(f.root.path()).unwrap();
+        crate::repository::remote::state::with_transaction(&f.service, f.root.path(), |tx, id| {
+            let refs = [
+                (
+                    first_branch.as_str(),
+                    git.refname_to_id(&first_branch).unwrap(),
+                ),
+                (second_branch.as_str(), primary),
+            ];
+            let observations: Vec<_> = refs
+                .into_iter()
+                .map(|(name, oid)| {
+                    RemoteRefObservation::from_advertisement(&plan, name, oid, Some(oid)).unwrap()
+                })
+                .collect();
+            crate::repository::remote::state::persist_complete_advertisement(
+                tx,
+                id,
+                &plan,
+                crate::repository::remote::state::generation(tx, id)?,
+                &observations,
+                2,
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let (materialization, _) = f.materialization("complete");
+        f.db().execute("INSERT INTO remote_poll_materializations(repository_id,kind,item_id,operation_ulid,target_oid,step) SELECT id,'document',?1,?2,?3,'complete' FROM repositories",params![SECOND,materialization,primary.to_string()]).unwrap();
+        struct Order {
+            db: PathBuf,
+            seen: usize,
+        }
+        impl ProgressSink for Order {
+            fn event(&mut self, e: &ProgressEvent) {
+                if e.command == "context retire" && e.stage == ProgressStage::Accepted {
+                    let db = Connection::open(&self.db).unwrap();
+                    assert_eq!(db.query_row("SELECT count(*) FROM context_retirement_records WHERE phase IN ('complete','refused')",[],|r|r.get::<_,usize>(0)).unwrap(),self.seen,"D12: previous child must settle before next acceptance");
+                    assert_eq!(db.query_row("SELECT count(*) FROM request_records WHERE command='context retire' AND state='finished'",[],|r|r.get::<_,usize>(0)).unwrap(),self.seen);
+                    self.seen += 1;
+                }
+            }
+        }
+        let mut order = Order {
+            db: f.data.path().join(REGISTRY_FILE),
+            seen: 0,
+        };
+        let request_id = RequestId::new();
+        if case == "cancel_at_admission" {
+            let data = f.data.path().to_owned();
+            super::super::handoff::observe_eligible(move |s| {
+                s.set_acceptance_hook_for_testing(move || {
+                    assert_eq!(
+                        RepositoryService::open_at(&data)
+                            .unwrap()
+                            .cancel_request(request_id)
+                            .code,
+                        ResultCode::Ok
+                    );
+                })
+            });
+        }
+        if matches!(case, "lost_all" | "lost_prefix" | "lost_all_mixed") {
+            let after = if case == "lost_prefix" { 0 } else { 1 };
+            super::super::handoff::observe_children(move |ordinal| {
+                if ordinal == after {
+                    panic!("simulated loss after settled ordinary child, before parent copy");
+                }
+            });
+        }
+        if case == "index_pending" {
+            super::super::record::fail_next_child_index();
+        }
+        if case == "cancelled" {
+            let path = f.data.path().join(REGISTRY_FILE);
+            RepositoryService::set_retirement_intent_hook_for_testing(move || {
+                Connection::open(path)
+                    .unwrap()
+                    .execute(
+                        "UPDATE request_records SET cancel_requested=1 WHERE request_ulid=?1",
+                        [request_id.to_string()],
+                    )
+                    .unwrap();
+            });
+        }
+        crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+        let opted = case != "ordinary";
+        let mutation = || {
+            if opted {
+                Mutation::PollOnceRetiring(PollOnceInput {
+                    root: f.root.path().into(),
+                })
+            } else {
+                Mutation::PollOnce(PollOnceInput {
+                    root: f.root.path().into(),
+                })
+            }
+        };
+        let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            f.service.execute(
+                MutationCall {
+                    request_id,
+                    confirmation: None,
+                    mutation: mutation(),
+                },
+                &mut SessionCredentials::new(NoCredentials),
+                &mut order,
+                &CancellationToken::new(),
+            )
+        }));
+        let response = if matches!(case, "lost_all" | "lost_prefix" | "lost_all_mixed") {
+            assert!(response.is_err());
+            execute(&f.service, request_id, mutation())
+        } else {
+            response.unwrap()
+        };
+        if case == "cancel_at_admission" {
+            assert_eq!(response.code, ResultCode::Cancelled, "{response:?}");
+            assert_eq!(order.seen, 0);
+            assert_eq!(
+                f.db()
+                    .query_row(
+                        "SELECT count(*) FROM poll_retirement_targets WHERE admission='reserved'",
+                        [],
+                        |r| r.get::<_, usize>(0)
+                    )
+                    .unwrap(),
+                2,
+                "stale coordinator must not rewrite exact not-reached membership after stop cut"
+            );
+            continue;
+        }
+        if case == "lost_prefix" {
+            assert_eq!(
+                response.code,
+                ResultCode::RecoveryRequired,
+                "settled prefix is not all selected"
+            );
+            let data = serde_json::to_value(&response.data).unwrap();
+            assert_eq!(data["retirements"][0]["state"], "retired");
+            assert_eq!(data["retirements"][1]["state"], "not_reached");
+            assert_eq!(order.seen, 1);
+            assert!(git.find_reference(&first_branch).is_ok());
+            assert_eq!(
+                serde_json::to_value(execute(&f.service, request_id, mutation()).data).unwrap(),
+                data
+            );
+            continue;
+        }
+        if matches!(case, "index_pending" | "cancelled") {
+            assert!(
+                !matches!(response.code, ResultCode::Ok | ResultCode::AlreadyApplied),
+                "{case}: {response:?}"
+            );
+            assert_eq!(
+                response.outcome,
+                crate::results::Outcome::Partial,
+                "owned removals may not be hidden by parent cut: {response:?}"
+            );
+            let data = serde_json::to_value(&response.data).unwrap();
+            assert_eq!(data["completion"], "stopped");
+            assert_eq!(data["retirements"][0]["state"], "pending");
+            assert_eq!(data["retirements"][1]["state"], "not_reached");
+            assert_eq!(order.seen, 1);
+            let ri =
+                RequestId::parse(data["retirements"][0]["request_id"].as_str().unwrap()).unwrap();
+            let ki = OperationId::parse(data["retirements"][0]["operation_id"].as_str().unwrap())
+                .unwrap();
+            for action in &response.recovery {
+                assert_ne!(
+                    action.operation_id.as_deref(),
+                    response.operation_id.as_deref(),
+                    "stopped parent owns no cleanup/index continuation"
+                );
+                assert!(
+                    action.arguments.get("request_id").and_then(|v| v.as_str())
+                        != Some(request_id.to_string().as_str()),
+                    "old parent replay is not recovery work"
+                );
+            }
+            if case == "index_pending" {
+                assert!(
+                    response.recovery.iter().any(|a| a.action
+                        == crate::results::RecoveryActionKind::OperationResume
+                        && a.operation_id.as_deref() == Some(ki.to_string().as_str())),
+                    "offer the actual current child's I recovery: {response:?}"
+                );
+            }
+            assert_eq!(
+                f.service.request_record(request_id).unwrap().unwrap().state,
+                RequestState::Finished
+            );
+            assert_eq!(
+                f.service.request_record(ri).unwrap().unwrap().state,
+                RequestState::Accepted
+            );
+            assert_eq!(
+                serde_json::to_value(execute(&f.service, request_id, mutation()).data).unwrap(),
+                data
+            );
+            if case == "index_pending" {
+                let resumed = execute(
+                    &f.service,
+                    RequestId::new(),
+                    Mutation::OperationResume(OperationResumeInput {
+                        root: f.root.path().into(),
+                        operation_id: ki,
+                    }),
+                );
+                assert_eq!(
+                    resumed.code,
+                    ResultCode::Ok,
+                    "independent child I after parent Final: {resumed:?}"
+                );
+                assert_eq!(
+                    serde_json::to_value(execute(&f.service, request_id, mutation()).data).unwrap(),
+                    data,
+                    "old cut is immutable after independent recovery"
+                );
+            } else {
+                let abandon = Mutation::OperationAbandon(OperationAbandonInput {
+                    root: f.root.path().into(),
+                    operation_id: ki,
+                });
+                let preview = f
+                    .service
+                    .prepare(&abandon)
+                    .data
+                    .unwrap()
+                    .into_preview()
+                    .unwrap();
+                let kept = f.service.execute(
+                    MutationCall {
+                        request_id: RequestId::new(),
+                        confirmation: Some(
+                            ConfirmationId::parse(&preview.confirmation_id).unwrap(),
+                        ),
+                        mutation: abandon,
+                    },
+                    &mut SessionCredentials::new(NoCredentials),
+                    &mut NoProgress,
+                    &CancellationToken::new(),
+                );
+                assert_eq!(
+                    kept.code,
+                    ResultCode::Ok,
+                    "independent child preserving exit after parent Final: {kept:?}"
+                );
+            }
+            let replay = execute(&f.service, request_id, mutation());
+            assert_eq!(serde_json::to_value(&replay.data).unwrap(), data);
+            assert!(
+                !replay.recovery.iter().any(|a| a.operation_id.as_deref()
+                    == Some(ki.to_string().as_str())
+                    || a.arguments.get("request_id").and_then(|v| v.as_str())
+                        == Some(ri.to_string().as_str())),
+                "settled child no longer offers recovery, frozen report is unchanged: {replay:?}"
+            );
+            assert!(
+                git.find_reference(&first_branch).is_ok(),
+                "later ticket was not reached"
+            );
+            crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+            let next = execute(&f.service, RequestId::new(), mutation());
+            assert_eq!(
+                next.code,
+                ResultCode::Ok,
+                "new explicit pass selects current remainder: {next:?}"
+            );
+            assert!(git.find_reference(&first_branch).is_err());
+            assert_eq!(
+                serde_json::to_value(execute(&f.service, request_id, mutation()).data).unwrap(),
+                data
+            );
+            continue;
+        }
+        assert_eq!(response.code, ResultCode::Ok, "{case}: {response:?}");
+        if !opted {
+            assert_eq!(order.seen, 0);
+            assert_eq!(
+                f.db()
+                    .query_row("SELECT count(*) FROM poll_retirement_passes", [], |r| r
+                        .get::<_, usize>(
+                        0
+                    ))
+                    .unwrap(),
+                0
+            );
+            continue;
+        }
+        let data = serde_json::to_value(response.data).unwrap();
+        assert_eq!(data["completion"], "completed", "{case}: {data}");
+        assert_eq!(
+            data["retirements"].as_array().unwrap().len(),
+            2,
+            "{case}: {data}"
+        );
+        let refusals = data["retirements"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["state"] == "refused")
+            .count();
+        assert_eq!(
+            refusals,
+            usize::from(matches!(
+                case,
+                "dirty_first" | "unmatched_first" | "lost_all_mixed"
+            )),
+            "{case}: {data}"
+        );
+        assert_eq!(order.seen, 2);
+        let db = f.db();
+        assert_eq!(db.query_row("SELECT count(*) FROM retirement_advertisement_provenance WHERE execution_kind='poll_parent'",[],|r|r.get::<_,usize>(0)).unwrap(),1,"exactly one source, not one per child");
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM remote_operation_records WHERE poll_kind='observe'",
+                [],
+                |r| r.get::<_, usize>(0)
+            )
+            .unwrap(),
+            0,
+            "no child O or network observation"
+        );
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM retirement_observation_pins",
+                [],
+                |r| r.get::<_, usize>(0)
+            )
+            .unwrap(),
+            0
+        );
+        if refusals == 0 {
+            assert_eq!(db.query_row("SELECT count(*) FROM retirement_observation_receipts WHERE consumer_kind='single'",[],|r|r.get::<_,usize>(0)).unwrap(),2,"K1 immutable receipt survives K2 binding same provenance");
+        }
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM remote_poll_materializations",
+                [],
+                |r| r.get::<_, usize>(0)
+            )
+            .unwrap(),
+            refusals,
+            "D14 settles only each successful child's exact old M"
+        );
+        assert_eq!(git.head().unwrap().target(), Some(primary));
+        assert_eq!(
+            git.refname_to_id("refs/remotes/origin/main").unwrap(),
+            primary
+        );
+        assert_eq!(
+            serde_json::to_value(execute(&f.service, request_id, mutation()).data).unwrap(),
+            data
+        );
+    }
+}
+
+#[test]
+fn retirement_batch_public_live_pass_retires_real_context_and_replays_without_transport() {
+    for lost in [false, true] {
+        let f = Fixture::new();
+        let branch = present(&f);
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        let primary = git.head().unwrap().target().unwrap();
+        git.reference(
+            "refs/remotes/origin/main",
+            primary,
+            false,
+            "synthetic fetch",
+        )
+        .unwrap();
+        let mutation = || {
+            Mutation::PollOnceRetiring(PollOnceInput {
+                root: f.root.path().into(),
+            })
+        };
+        let id = RequestId::new();
+        if lost {
+            super::super::handoff::observe_children(|_| {
+                panic!("loss after last child before parent copy")
+            });
+        }
+        crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+        let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            execute(&f.service, id, mutation())
+        }));
+        if lost {
+            assert!(first.is_err());
+        } else {
+            assert_eq!(first.unwrap().code, ResultCode::Ok);
+        }
+        // Replace the latest ordinary poll image before recovering the parent copy.
+        // Its report comes from original owned capture, not today's projection.
+        crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+        let later = execute(
+            &f.service,
+            RequestId::new(),
+            Mutation::PollOnce(PollOnceInput {
+                root: f.root.path().into(),
+            }),
+        );
+        assert_eq!(later.code, ResultCode::Ok, "{later:?}");
+        let first = execute(&f.service, id, mutation());
+        assert_eq!(first.code, ResultCode::Ok, "{first:?}");
+        let data = serde_json::to_value(&first.data).unwrap();
+        assert_eq!(
+            data["type"], "poll_retirement",
+            "the opted public producer must not fall back to ordinary poll data"
+        );
+        assert_eq!(data["completion"], "completed");
+        assert_eq!(data["retirements"][0]["state"], "retired");
+        assert!(git.find_reference(&branch).is_err());
+        assert_ne!(first.operation_id, later.operation_id);
+        assert_eq!(
+            data["poll"]["operation_id"],
+            first.operation_id.as_deref().unwrap()
+        );
+        // Recreated same-OID resources and a later complete M are a NEW lifetime.
+        git.reference(&branch, primary, false, "new lifetime")
+            .unwrap();
+        let reference = git.find_reference(&branch).unwrap();
+        git.worktree(
+            ITEM,
+            &f.root.path().join(".manyhands/worktrees").join(ITEM),
+            Some(git2::WorktreeAddOptions::new().reference(Some(&reference))),
+        )
+        .unwrap();
+        f.materialization("complete");
+        let disk = disk_image(f.root.path());
+        let materializations = row_image(&f.db(), "remote_poll_materializations");
+        assert_eq!(
+            serde_json::to_value(execute(&f.service, id, mutation()).data).unwrap(),
+            data
+        );
+        assert_eq!(disk, disk_image(f.root.path()));
+        assert_eq!(
+            materializations,
+            row_image(&f.db(), "remote_poll_materializations")
+        );
+        let requests = row_image(&f.db(), "request_records");
+        let maps = row_image(&f.db(), "request_operations");
+        assert_eq!(
+            f.service
+                .remove_registration(RemoveRegistrationRequest {
+                    root: f.root.path().into(),
+                    operation_id: OperationId::new()
+                })
+                .unwrap(),
+            RemoveRegistrationOutcome::Removed
+        );
+        let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+        assert_eq!(
+            serde_json::to_value(execute(&reopened, id, mutation()).data).unwrap(),
+            data,
+            "finished report remains readable after terminal deregistration"
+        );
+        assert_eq!(requests, row_image(&f.db(), "request_records"));
+        assert_eq!(maps, row_image(&f.db(), "request_operations"));
+        assert_eq!(disk, disk_image(f.root.path()));
+        assert!(
+            !f.db()
+                .prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .exists([])
+                .unwrap()
+        );
+    }
+}
+
+#[test]
 fn ordinary_retirement_partial_cancel_has_truthful_flags_and_preserving_escape() {
     let f = Fixture::new();
     let branch = present(&f);

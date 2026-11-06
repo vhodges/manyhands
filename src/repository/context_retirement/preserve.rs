@@ -380,7 +380,6 @@ pub(crate) fn refresh(
                 record_id: local,
                 epoch: next,
                 retirement_request: Some(fence),
-                retirement_batch: None,
             }),
         ))
     })?;

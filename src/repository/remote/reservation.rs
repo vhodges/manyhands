@@ -47,6 +47,19 @@ pub struct RemoteReservation {
 }
 
 impl RemoteReservation {
+    pub(in super::super) fn capture_retirement_target(
+        &self,
+        service: &RepositoryService,
+        git: &git2::Repository,
+        cleanup: &crate::repository::cleanup::ContextCleanup,
+        ordinal: usize,
+        row: &super::PollTargetReport,
+    ) -> Result<(), RepositoryError> {
+        if let Some(source) = &self.original_source {
+            source.capture_target(service, git, cleanup, ordinal, row)?;
+        }
+        Ok(())
+    }
     pub(in super::super) fn set_retirement_cancellation(
         &mut self,
         cancel: crate::repository::CancellationToken,
@@ -283,10 +296,17 @@ pub(in super::super) fn owned(
     } else if let Some(execution) = &owner.retirement {
         execution.validate_observer(service, tx, repository_id, &record)?;
     } else {
-        crate::repository::context_retirement::record::require_foreign_id_available(
-            tx,
-            owner.operation_id,
-        )?;
+        if record.poll_kind == Some(state::PollKind::Update) {
+            crate::repository::context_retirement::record::require_update_poll_id_available(
+                tx,
+                owner.operation_id,
+            )?;
+        } else {
+            crate::repository::context_retirement::record::require_foreign_id_available(
+                tx,
+                owner.operation_id,
+            )?;
+        }
         crate::repository::recovery::require_no_pending_local(tx, repository_id)?;
     }
     Ok(record)
@@ -1140,10 +1160,17 @@ impl RepositoryService {
         #[cfg(test)]
         promotion_reservation_checkpoint(operation_id);
         state::with_transaction(self, root, |tx, repository_id| {
-            crate::repository::context_retirement::record::require_foreign_id_available(
-                tx,
-                operation_id,
-            )?;
+            if poll_kind == Some(state::PollKind::Update) {
+                crate::repository::context_retirement::record::require_update_poll_id_available(
+                    tx,
+                    operation_id,
+                )?;
+            } else {
+                crate::repository::context_retirement::record::require_foreign_id_available(
+                    tx,
+                    operation_id,
+                )?;
+            }
             if let Some(execution) = execution {
                 execution.validate(tx, repository_id, operation_id)?;
             }
@@ -1550,10 +1577,17 @@ impl RepositoryService {
         poll_kind: state::PollKind,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
-            crate::repository::context_retirement::record::require_foreign_id_available(
-                tx,
-                operation_id,
-            )?;
+            if poll_kind == state::PollKind::Update {
+                crate::repository::context_retirement::record::require_update_poll_id_available(
+                    tx,
+                    operation_id,
+                )?;
+            } else {
+                crate::repository::context_retirement::record::require_foreign_id_available(
+                    tx,
+                    operation_id,
+                )?;
+            }
             let record = state::read_operation(tx, id, operation_id)?
                 .ok_or_else(state::recovery_required)?;
             if &record.target != target
@@ -1606,6 +1640,11 @@ impl RepositoryService {
                     params![record.id,epoch,now()]).map_err(|_| state::recovery_required())?;
                 let restarted = state::read_operation(tx, id, operation_id)?
                     .ok_or_else(state::recovery_required)?;
+                // Normal P restart fences only its exact old source hold. It
+                // never reinstalls capture or retirement authority.
+                if poll_kind == state::PollKind::Update {
+                    crate::repository::context_retirement::source::close_stopped(tx, &restarted)?;
+                }
                 return Ok(RemoteReservationOutcome::Reserved(token(
                     self, id, &restarted,
                 )));
@@ -1616,10 +1655,8 @@ impl RepositoryService {
         })
     }
 
-    /// Private future-producer seam. No public mode/flag or producer is installed.
-    /// A real live P token plus the exact current accepted request AND durable A0
-    /// projection are required; absence is RecoveryRequired, never an opt-in.
-    #[allow(dead_code)] // Task 2 contract exercised without installing Task 4.
+    /// Original-live producer seam. A real P token, exact current accepted
+    /// request and durable opted pass are required; public IDs confer no opt-in.
     pub(in super::super) fn seal_original_poll_source(
         &self,
         root: &Path,

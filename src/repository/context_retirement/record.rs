@@ -5,13 +5,24 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use super::super::{RepositoryError, remote::state::recovery_required};
 
+#[path = "consumer_migration.rs"]
+mod consumer_migration;
+use consumer_migration::{consumer_marked, replace_consumer_closure, validate_consumer_closure};
+
 const MARKER: &str = "context_retirement_v1";
 const REENTRY_MARKER: &str = "context_retirement_v2";
 const INDEX_MARKER: &str = "context_retirement_index_v1";
+const CONSUMERS_MARKER: &str = "context_retirement_consumers_v1";
 #[cfg(test)]
 thread_local! {static MIGRATION_FAILURE:std::cell::Cell<Option<u8>>=const {std::cell::Cell::new(None)};}
 #[cfg(test)]
 thread_local! {static RELEASE_FAILURE:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
+#[cfg(test)]
+thread_local! {static INDEX_FAILURE:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
+#[cfg(test)]
+pub(super) fn fail_next_child_index() {
+    INDEX_FAILURE.with(|s| s.set(true));
+}
 #[cfg(test)]
 pub(super) fn set_release_failure(fail: bool) -> bool {
     RELEASE_FAILURE.with(|slot| slot.replace(fail))
@@ -41,9 +52,9 @@ pub(in super::super) use authority::ObserverExecution;
 #[cfg(test)]
 pub(super) use authority::claim_present;
 pub(super) use authority::{
-    BranchClaim, bind_reentry_observer, claim_scoped, preserve_worktree_resumption,
-    refuse_before_branch_effect, refuse_before_worktree_effect, refuse_execution,
-    refuse_fresh_scoped, settle_branch_after_prune,
+    BranchClaim, LocalAuthority, LocalOwner, bind_reentry_observer, claim_initial, claim_scoped,
+    preserve_worktree_resumption, refuse_before_branch_effect, refuse_before_worktree_effect,
+    refuse_execution, refuse_fresh_scoped, settle_branch_after_prune,
 };
 
 /// Retirement identities are spent even after their executor ends. Include the
@@ -57,8 +68,7 @@ pub(in super::super) fn owned_identity(db: &Connection, id: &str) -> Result<bool
         ),
         ("context_retirement_records", "operation_ulid", ""),
         ("context_retirement_attempts", "observer_operation_ulid", ""),
-        ("poll_retirement_batches", "operation_ulid", ""),
-        ("poll_retirement_attempts", "operation_ulid", ""),
+        ("poll_retirement_passes", "operation_ulid", ""),
         (
             "retirement_advertisement_provenance",
             "source_operation_ulid",
@@ -103,6 +113,18 @@ pub(in super::super) fn require_foreign_id_available(
         return Err(recovery_required());
     }
     Ok(())
+}
+
+/// The only ID exception is ordinary UPDATE-P execution before any capture.
+/// It is not available to observation, synchronization, local or key journals.
+pub(in super::super) fn require_update_poll_id_available(
+    db: &Connection,
+    id: super::super::OperationId,
+) -> Result<(), RepositoryError> {
+    if super::pass::ordinary_poll_recovery(db, &id.to_string())? {
+        return Ok(());
+    }
+    require_foreign_id_available(db, id)
 }
 
 /// A generic refresh may borrow only this exact authoritative, still-owed
@@ -310,7 +332,7 @@ const REENTRIES: &str = "CREATE TABLE context_retirement_reentries (
 
 const RECEIPTS: &str = "CREATE TABLE retirement_observation_receipts (
  id INTEGER PRIMARY KEY,
- provenance_id INTEGER NOT NULL UNIQUE REFERENCES retirement_advertisement_provenance(id) ON DELETE CASCADE,
+ provenance_id INTEGER NOT NULL REFERENCES retirement_advertisement_provenance(id) ON DELETE CASCADE,
  repository_id INTEGER NOT NULL,
  consumer_kind TEXT NOT NULL CHECK(consumer_kind IN ('single','batch')),
  consumer_operation_ulid TEXT NOT NULL,
@@ -321,7 +343,8 @@ const RECEIPTS: &str = "CREATE TABLE retirement_observation_receipts (
  frozen_worklist_digest BLOB CHECK(frozen_worklist_digest IS NULL OR (typeof(frozen_worklist_digest)='blob' AND length(frozen_worklist_digest)=32)),
  CHECK((consumer_request_ulid IS NULL)=(consumer_request_attempt IS NULL)),
  CHECK((consumer_kind='batch')=(frozen_worklist_digest IS NOT NULL)),
- CHECK(consumer_kind!='batch' OR consumer_request_ulid IS NOT NULL)
+ CHECK(consumer_kind!='batch' OR consumer_request_ulid IS NOT NULL),
+ UNIQUE(repository_id,consumer_kind,consumer_operation_ulid,consumer_attempt_epoch)
 )";
 
 /// M is an owned all-resource-absence receipt, not a branch-deletion receipt.
@@ -414,6 +437,7 @@ fn objects() -> Vec<(&'static str, &'static str, String)> {
         ("trigger", "retirement_index_claim_delete", "CREATE TRIGGER retirement_index_claim_delete BEFORE DELETE ON context_retirement_index_claims WHEN EXISTS(SELECT 1 FROM context_retirement_records c WHERE c.operation_ulid=OLD.operation_ulid AND c.phase NOT IN ('complete','refused','abandoned')) BEGIN SELECT RAISE(ABORT,'pending retirement index claim'); END".to_owned()),
     ];
     objects.extend(super::preserve::objects());
+    objects.extend(super::pass::objects());
     for (name, table, columns, condition) in [
         (
             "retirement_record_identity",
@@ -549,6 +573,15 @@ fn published_index_objects() -> Result<Vec<(&'static str, &'static str, String)>
 
 #[test]
 fn retirement_catalog_freeze_matches_pinned_history() {
+    let prior = super::historical::catalog("preserving_v2").unwrap();
+    assert!(
+        prior
+            .iter()
+            .find(|(_, n, _)| *n == "retirement_observation_receipts")
+            .unwrap()
+            .2
+            .contains("provenance_id INTEGER NOT NULL UNIQUE")
+    );
     for (name, catalog) in [
         ("v1", published_v1_objects().unwrap()),
         ("v2", published_v2_objects().unwrap()),
@@ -557,7 +590,7 @@ fn retirement_catalog_freeze_matches_pinned_history() {
     ] {
         assert_eq!(catalog, super::historical::catalog(name).unwrap());
     }
-    let current: Vec<_> = objects()
+    let current: Vec<_> = prior
         .into_iter()
         .filter(|(_, n, _)| {
             !n.starts_with("retirement_preservation_")
@@ -651,7 +684,11 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
     if (current && !marked) || (indexed && !current) || ((gapped || preserving) && !indexed) {
         return Err(recovery_required());
     }
-    if marked && current && indexed && !gapped && preserving {
+    let consumers = consumer_marked(db)?;
+    if consumers && (!marked || !current || !indexed || !preserving || gapped) {
+        return Err(recovery_required());
+    }
+    if consumers {
         return validate_schema(db);
     }
     let tx = db
@@ -664,7 +701,13 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
             |r| r.get(0),
         )
         .map_err(|_| recovery_required())?;
-    let definitions = objects();
+    // Every historical transition operates on the independently frozen old
+    // envelope, never the edited receipt builder. Widen only after its audit.
+    let definitions = if marked {
+        super::historical::catalog("preserving_v2")?
+    } else {
+        objects()
+    };
     require_known_markers(&tx)?;
     let current: bool = tx
         .query_row(
@@ -859,6 +902,15 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
         #[cfg(test)]
         migration_checkpoint(17)?;
     }
+    if marked {
+        audit_objects(&tx, &definitions)?;
+        replace_consumer_closure(&tx, &definitions, &objects())?;
+    }
+    tx.execute(
+        "INSERT INTO registry_migrations(name) VALUES(?1)",
+        [CONSUMERS_MARKER],
+    )
+    .map_err(|_| recovery_required())?;
     #[cfg(test)]
     migration_checkpoint(7)?;
     audit(&tx)?;
@@ -1001,6 +1053,7 @@ fn validate_schema_objects(
     validate_index_closure(db, definitions)?;
     validate_gap_closure(db, definitions)?;
     super::preserve::validate_closure(db, definitions)?;
+    validate_consumer_closure(db, definitions)?;
     Ok(())
 }
 
@@ -1108,7 +1161,7 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
             |r| r.get(0),
         )
         .map_err(|_| recovery_required())?;
-    if !marked || gap_marked(db)? || !super::preserve::marked(db)? {
+    if !marked || gap_marked(db)? || !super::preserve::marked(db)? || !consumer_marked(db)? {
         return Err(recovery_required());
     }
     audit_objects(db, &objects())?;
@@ -1160,7 +1213,7 @@ fn audit_index_spends(db: &Connection) -> Result<(), RepositoryError> {
 }
 
 fn require_known_markers(db: &Connection) -> Result<(), RepositoryError> {
-    let unknown:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name LIKE 'context_retirement_%' AND name NOT IN (?1,?2,?3,?4,?5))",params![MARKER,REENTRY_MARKER,INDEX_MARKER,super::historical::GAP_MARKER,super::preserve::MARKER],|r|r.get(0)).map_err(|_|recovery_required())?;
+    let unknown:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name LIKE 'context_retirement_%' AND name NOT IN (?1,?2,?3,?4,?5,?6))",params![MARKER,REENTRY_MARKER,INDEX_MARKER,super::historical::GAP_MARKER,super::preserve::MARKER,CONSUMERS_MARKER],|r|r.get(0)).map_err(|_|recovery_required())?;
     if unknown {
         return Err(recovery_required());
     }
@@ -1333,7 +1386,7 @@ fn audit_objects(
             AND o.owner_epoch=old.observer_owner_epoch+1 AND o.phase IN ('interrupted','completed','cancelled','failed')
             AND o.action='poll' AND o.poll_kind='observe' AND o.priority='manual'
             AND o.configuration_generation=c.configuration_generation AND o.remote_name=c.remote_name AND o.primary_branch=c.primary_branch))
-        OR (old.observer_operation_ulid IS NULL AND NOT EXISTS(SELECT 1 FROM context_retirement_reentries previous WHERE previous.operation_ulid=rr.operation_ulid AND previous.owner_epoch=rr.previous_epoch AND previous.purpose='preserve'))
+        OR (old.observer_operation_ulid IS NULL AND old.owner_epoch!=c.selection_epoch AND NOT EXISTS(SELECT 1 FROM context_retirement_reentries previous WHERE previous.operation_ulid=rr.operation_ulid AND previous.owner_epoch=rr.previous_epoch AND previous.purpose='preserve'))
         OR (rr.purpose='observe' AND (c.initial_resources!='present' OR EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.owner_epoch<rr.owner_epoch)))
         OR (rr.purpose NOT IN ('observe','resume_worktree') AND (EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.owner_epoch=rr.owner_epoch)
           OR EXISTS(SELECT 1 FROM retirement_observation_receipts b WHERE b.consumer_operation_ulid=c.operation_ulid AND b.consumer_attempt_epoch=rr.owner_epoch)))
@@ -1346,6 +1399,7 @@ fn audit_objects(
     if invalid_reentry {
         return Err(recovery_required());
     }
+    super::pass::audit_initial_lineage(db)?;
     let invalid_resumption:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_worktree_resumptions w
       JOIN context_retirement_reentries rr ON rr.operation_ulid=w.operation_ulid AND rr.owner_epoch=w.owner_epoch
       JOIN context_retirement_records c ON c.operation_ulid=w.operation_ulid
@@ -1460,9 +1514,9 @@ fn audit_objects(
       WHERE b.repository_id!=p.repository_id OR b.configuration_generation!=p.configuration_generation
        OR (b.consumer_kind='single' AND EXISTS(SELECT 1 FROM context_retirement_records c
          WHERE c.operation_ulid=b.consumer_operation_ulid AND c.initial_resources='present' AND c.instance_verified!=1))
-       OR b.consumer_request_ulid IS NOT p.execution_request_ulid OR b.consumer_request_attempt IS NOT p.execution_request_attempt
-       OR (b.consumer_kind='single' AND (p.execution_kind!='local_parent' OR p.execution_batch_operation_ulid IS NOT NULL
-         OR b.consumer_operation_ulid!=p.execution_parent_ulid OR b.consumer_attempt_epoch!=p.execution_parent_epoch))
+        OR (p.execution_kind='local_parent' AND (b.consumer_request_ulid IS NOT p.execution_request_ulid OR b.consumer_request_attempt IS NOT p.execution_request_attempt))
+        OR (b.consumer_kind='single' AND ((p.execution_kind NOT IN ('local_parent','poll_parent')) OR (p.execution_kind='local_parent' AND (p.execution_batch_operation_ulid IS NOT NULL
+          OR b.consumer_operation_ulid!=p.execution_parent_ulid OR b.consumer_attempt_epoch!=p.execution_parent_epoch))))
        OR (b.consumer_kind='batch' AND (b.consumer_operation_ulid IS NOT p.execution_batch_operation_ulid OR b.consumer_attempt_epoch IS NOT p.execution_batch_attempt_epoch))
     ) OR EXISTS(
       SELECT 1 FROM retirement_observation_pins pin JOIN retirement_advertisement_provenance p ON p.id=pin.provenance_id
@@ -1590,7 +1644,7 @@ pub(in super::super) fn audit_connection(db: &Connection) -> Result<(), Reposito
 }
 
 /// Shared local-consumer Fetch/absence proof. The caller separately establishes
-/// either the exact standalone observer binding or the original-live batch C.
+/// either the exact standalone observer binding or immutable initial membership.
 pub(super) fn require_fetch_absence(
     db: &Connection,
     receipt: i64,
@@ -1739,6 +1793,13 @@ pub(super) fn release_source_pin(
 ) -> Result<(), RepositoryError> {
     super::source::require_ended(tx, provenance)?;
     let (operation,epoch,repository,batch):(String,i64,i64,i64)=tx.query_row("SELECT source_operation_ulid,source_owner_epoch,repository_id,observation_batch_id FROM retirement_advertisement_provenance WHERE id=?1 AND execution_kind='poll_parent'",[provenance],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|_|recovery_required())?;
+    let replaced: bool = tx
+        .query_row(
+            "SELECT owner_epoch>?2 FROM remote_operation_records WHERE operation_ulid=?1",
+            params![operation, epoch],
+            |r| r.get(0),
+        )
+        .map_err(|_| recovery_required())?;
     release_pin(
         tx,
         PinRelease {
@@ -1749,7 +1810,11 @@ pub(super) fn release_source_pin(
             repository,
             batch,
             binding: None,
-            reason: "source_terminal",
+            reason: if replaced {
+                "source_fenced"
+            } else {
+                "source_terminal"
+            },
         },
     )
 }
@@ -1860,9 +1925,6 @@ pub(in super::super) fn finalize_index(
         super::preserve::finalize(tx, &owner)?;
         return Ok(true);
     }
-    if let Some(scope) = &owner.retirement_batch {
-        return scope.finalize(tx, &owner, repository_id, root);
-    }
     super::request_scope::validate_index(
         tx,
         owner.record_id,
@@ -1882,6 +1944,10 @@ pub(in super::super) fn finalize_index(
             return Err(recovery_required());
         }
         return Ok(false);
+    }
+    #[cfg(test)]
+    if INDEX_FAILURE.with(|s| s.replace(false)) {
+        return Err(recovery_required());
     }
     let operation = operation.ok_or_else(recovery_required)?;
     let scope = owner.retirement_request.map_or(

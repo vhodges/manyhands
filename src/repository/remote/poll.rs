@@ -1403,6 +1403,15 @@ impl FullPass<'_> {
     }
 }
 
+// Replaces transport ONLY; all reservation, observation, target, capture,
+// refresh and mutation-binding code is production code. No SSH claim.
+#[cfg(test)]
+thread_local! {static SYNTHETIC_FETCH:std::cell::RefCell<Option<Vec<(String,git2::Oid)>>>=const {std::cell::RefCell::new(None)};}
+#[cfg(test)]
+pub(crate) fn synthetic_fetch(advertisement: Vec<(String, git2::Oid)>) {
+    SYNTHETIC_FETCH.with(|s| assert!(s.borrow_mut().replace(advertisement).is_none()));
+}
+
 /// Only the live completion continuation below can construct this wrapper.
 /// Public/reconstructed Complete and today's refresh flag cannot construct one.
 pub(in super::super) struct OriginalWrapper {
@@ -1411,7 +1420,7 @@ pub(in super::super) struct OriginalWrapper {
 }
 struct OriginalContinuation<'a> {
     probe: Option<&'a CancellationProbe>,
-    live: &'a mut Option<crate::repository::context_retirement::handoff::batch::Live>,
+    live: &'a mut Option<crate::repository::context_retirement::handoff::Live>,
 }
 impl OriginalWrapper {
     pub(in super::super) fn report(&self) -> &str {
@@ -1458,7 +1467,7 @@ impl RepositoryService {
         request: PollPublicationRemoteRequest,
         session: &mut crate::repository::keys::SessionCredentials<P>,
     ) -> Result<RemotePollResult, RemotePollError> {
-        self.poll_probed(request, session, None)
+        self.poll_probed(request, session, None, None, &mut None)
     }
 
     /// `poll_publication_remote`, stopped by `probe` as well: a request's token
@@ -1472,7 +1481,27 @@ impl RepositoryService {
         session: &mut crate::repository::keys::SessionCredentials<P>,
         probe: CancellationProbe,
     ) -> Result<RemotePollResult, RemotePollError> {
-        self.poll_probed(request, session, Some(&probe))
+        self.poll_probed(request, session, Some(&probe), None, &mut None)
+    }
+
+    pub(in super::super) fn poll_original_retirement<
+        P: crate::repository::keys::SessionCredentialProvider,
+    >(
+        &self,
+        request: PollPublicationRemoteRequest,
+        session: &mut crate::repository::keys::SessionCredentials<P>,
+        probe: CancellationProbe,
+        accepted: &crate::repository::mutation::Accepted,
+    ) -> Result<
+        (
+            RemotePollResult,
+            Option<crate::repository::context_retirement::handoff::Live>,
+        ),
+        RemotePollError,
+    > {
+        let mut live = None;
+        let result = self.poll_probed(request, session, Some(&probe), Some(accepted), &mut live)?;
+        Ok((result, live))
     }
 
     fn poll_probed<P: crate::repository::keys::SessionCredentialProvider>(
@@ -1480,6 +1509,8 @@ impl RepositoryService {
         request: PollPublicationRemoteRequest,
         session: &mut crate::repository::keys::SessionCredentials<P>,
         probe: Option<&CancellationProbe>,
+        original: Option<&crate::repository::mutation::Accepted>,
+        live: &mut Option<crate::repository::context_retirement::handoff::Live>,
     ) -> Result<RemotePollResult, RemotePollError> {
         use super::{
             RemoteOperationPriority, RemoteOperationTarget, RemoteReservationOutcome as R,
@@ -1516,7 +1547,7 @@ impl RepositoryService {
         };
         // Terminal replay is checked before policy/endpoint/authentication work.
         let existing = state::with_transaction(self, &root, |tx, id| {
-            crate::repository::context_retirement::record::require_foreign_id_available(
+            crate::repository::context_retirement::record::require_update_poll_id_available(
                 tx,
                 request.operation_id,
             )?;
@@ -1562,7 +1593,7 @@ impl RepositoryService {
             Err(error) => {
                 session.clear_cached_passphrase();
                 state::with_transaction(self, &root, |tx, id| {
-                    crate::repository::context_retirement::record::require_foreign_id_available(
+                    crate::repository::context_retirement::record::require_update_poll_id_available(
                         tx,
                         request.operation_id,
                     )?;
@@ -1602,7 +1633,7 @@ impl RepositoryService {
         }
         let configuration = self.observation_configuration(&root, &plan)?;
         let may_reserve = state::with_transaction(self, &root, |tx, id| {
-            crate::repository::context_retirement::record::require_foreign_id_available(
+            crate::repository::context_retirement::record::require_update_poll_id_available(
                 tx,
                 request.operation_id,
             )?;
@@ -1630,6 +1661,10 @@ impl RepositoryService {
             R::PollYielding => return Err(RemotePollError::PollYielding),
             R::Replay(_) => return self.poll_stored_result(&root, request.operation_id),
         };
+        let owner = match original {
+            Some(accepted) => self.seal_original_poll_source(&root, owner, accepted)?,
+            None => owner,
+        };
         if let Some(result) = self.poll_safe_point(
             &root,
             &owner,
@@ -1641,48 +1676,57 @@ impl RepositoryService {
         let mut stopped = None;
         let mut last = None;
         let lease_busy = std::cell::Cell::new(false);
-        let fetched = self.with_authenticated_remote_policy_expected(
-            VerifySshTransportRequest {
-                root: root.clone(),
-                direction: SshDirection::Fetch,
-                approval: request.approval,
-            },
-            session,
-            request.invocation == RemotePollInvocation::Automatic,
-            configuration
-                .transport_expectation(SshDirection::Fetch)
-                .as_ref(),
-            |remote| {
-                remote.fetch_poll_set_noting_lease(&plan, &lease_busy, |_| {
-                    if stopped.is_some() {
-                        return false;
-                    }
-                    let now = std::time::Instant::now();
-                    if last.is_some_and(|at: std::time::Instant| {
-                        now.duration_since(at) < POLL_PROGRESS_THROTTLE
-                    }) {
-                        return true;
-                    }
-                    last = Some(now);
-                    // The registry's flag isn't read here: a cache lock someone
-                    // holds would abort a healthy fetch. `request cancel` sets the
-                    // row's flag too, which `poll_progress` reads on a connection
-                    // of its own. The next safe point acknowledges either.
-                    let decision = if probe.is_some_and(CancellationProbe::token_asked) {
-                        super::RemoteSafePointOutcome::Cancelled
-                    } else {
-                        super::reservation::poll_progress(self, &owner)
-                            .unwrap_or(super::RemoteSafePointOutcome::Interrupted)
-                    };
-                    if decision != super::RemoteSafePointOutcome::Continue {
-                        stopped = Some(decision);
-                        false
-                    } else {
-                        true
-                    }
-                })
-            },
-        );
+        let fetch = || {
+            self.with_authenticated_remote_policy_expected(
+                VerifySshTransportRequest {
+                    root: root.clone(),
+                    direction: SshDirection::Fetch,
+                    approval: request.approval,
+                },
+                session,
+                request.invocation == RemotePollInvocation::Automatic,
+                configuration
+                    .transport_expectation(SshDirection::Fetch)
+                    .as_ref(),
+                |remote| {
+                    remote.fetch_poll_set_noting_lease(&plan, &lease_busy, |_| {
+                        if stopped.is_some() {
+                            return false;
+                        }
+                        let now = std::time::Instant::now();
+                        if last.is_some_and(|at: std::time::Instant| {
+                            now.duration_since(at) < POLL_PROGRESS_THROTTLE
+                        }) {
+                            return true;
+                        }
+                        last = Some(now);
+                        // The registry's flag isn't read here: a cache lock someone
+                        // holds would abort a healthy fetch. `request cancel` sets the
+                        // row's flag too, which `poll_progress` reads on a connection
+                        // of its own. The next safe point acknowledges either.
+                        let decision = if probe.is_some_and(CancellationProbe::token_asked) {
+                            super::RemoteSafePointOutcome::Cancelled
+                        } else {
+                            super::reservation::poll_progress(self, &owner)
+                                .unwrap_or(super::RemoteSafePointOutcome::Interrupted)
+                        };
+                        if decision != super::RemoteSafePointOutcome::Continue {
+                            stopped = Some(decision);
+                            false
+                        } else {
+                            true
+                        }
+                    })
+                },
+            )
+        };
+        #[cfg(not(test))]
+        let fetched = fetch();
+        #[cfg(test)]
+        let fetched = match SYNTHETIC_FETCH.with(|s| s.borrow_mut().take()) {
+            Some(advertisement) => Ok(advertisement),
+            None => fetch(),
+        };
         // Captured callback intent wins over libgit2's platform-specific abort code.
         if let Some(decision) = stopped {
             if let Some(result) = self.poll_safe_point(
@@ -1701,13 +1745,13 @@ impl RepositoryService {
             };
         }
         match fetched {
-            Ok(advertised) => self.poll_after_fetch_observed(
+            Ok(advertised) => self.poll_after_fetch_into(
                 &root,
                 &owner,
                 &plan,
                 &configuration,
                 advertised,
-                probe,
+                OriginalContinuation { probe, live },
             ),
             Err(error) => {
                 if let Some(result) = self.poll_safe_point(
@@ -1755,38 +1799,7 @@ impl RepositoryService {
         self.poll_after_fetch_observed(root, owner, plan, configuration, advertised, None)
     }
 
-    /// Private original-call continuation; public polling never returns a live C.
-    /// Missing producer projections and reconstructed terminal wrappers stay closed.
-    #[allow(dead_code)] // Task 4 consumes this private continuation, not a flag.
-    pub(in super::super) fn poll_after_fetch_with_handoff(
-        &self,
-        root: &Path,
-        owner: &super::RemoteReservation,
-        plan: &RemoteRefPlan,
-        configuration: &super::observation::ObservationConfiguration,
-        advertised: Vec<(String, git2::Oid)>,
-    ) -> Result<
-        (
-            RemotePollResult,
-            Option<crate::repository::context_retirement::handoff::batch::Live>,
-        ),
-        RemotePollError,
-    > {
-        let mut live = None;
-        let result = self.poll_after_fetch_into(
-            root,
-            owner,
-            plan,
-            configuration,
-            advertised,
-            OriginalContinuation {
-                probe: None,
-                live: &mut live,
-            },
-        )?;
-        Ok((result, live))
-    }
-
+    #[cfg(test)]
     fn poll_after_fetch_observed(
         &self,
         root: &Path,
@@ -1981,8 +1994,9 @@ impl RepositoryService {
                 root,
             )?;
             let result = (|| -> Result<(), RemotePollError> {
-                let _lease =
+                let lease =
                     repository_lease(&repository, root, RepositoryOperation::RepositorySnapshot)?;
+                let cleanup = crate::repository::cleanup::ContextCleanup::holding(root, lease)?;
                 if !self.poll_configuration_matches(root, plan, configuration)? {
                     return Err(RemotePollError::Interrupted);
                 }
@@ -2113,6 +2127,7 @@ impl RepositoryService {
                         };
                     }
                     row.after_oid = direct_oid(&repository, reference.remote_ref());
+                    owner.capture_retirement_target(self, &repository, &cleanup, ordinal, &row)?;
                     let changed = newly_materialized
                         || row.before_oid != row.after_oid
                         || path.as_ref().is_some_and(|p| poll_entry_present(p)) != before_present
@@ -2385,7 +2400,7 @@ impl RepositoryService {
             },
         ))
     }
-    fn poll_stored_result(
+    pub(in super::super) fn poll_stored_result(
         &self,
         root: &Path,
         op: crate::repository::OperationId,

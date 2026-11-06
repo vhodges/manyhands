@@ -596,7 +596,9 @@ impl World {
 pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
     match envelope.data.as_ref().expect("ticket data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
-        MutationDataDto::PollPolicy(_) | MutationDataDto::Poll(_) => {
+        MutationDataDto::PollPolicy(_)
+        | MutationDataDto::Poll(_)
+        | MutationDataDto::PollRetirement(_) => {
             panic!("a polling policy's data")
         }
         MutationDataDto::Comment(_) => panic!("a comment's data"),
@@ -623,7 +625,9 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
 pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationDto {
     match envelope.data.as_ref().expect("document data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
-        MutationDataDto::PollPolicy(_) | MutationDataDto::Poll(_) => {
+        MutationDataDto::PollPolicy(_)
+        | MutationDataDto::Poll(_)
+        | MutationDataDto::PollRetirement(_) => {
             panic!("a polling policy's data")
         }
         MutationDataDto::Comment(_) => panic!("a comment's data"),
@@ -754,7 +758,9 @@ impl World {
 pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
     match envelope.data.as_ref().expect("remote data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
-        MutationDataDto::PollPolicy(_) | MutationDataDto::Poll(_) => {
+        MutationDataDto::PollPolicy(_)
+        | MutationDataDto::Poll(_)
+        | MutationDataDto::PollRetirement(_) => {
             panic!("a polling policy's data")
         }
         MutationDataDto::Comment(_) => panic!("a comment's data"),
@@ -781,7 +787,9 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
 pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutationDto {
     match envelope.data.as_ref().expect("operation data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
-        MutationDataDto::PollPolicy(_) | MutationDataDto::Poll(_) => {
+        MutationDataDto::PollPolicy(_)
+        | MutationDataDto::Poll(_)
+        | MutationDataDto::PollRetirement(_) => {
             panic!("a polling policy's data")
         }
         MutationDataDto::Comment(_) => panic!("a comment's data"),
@@ -808,7 +816,9 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
 pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
     match envelope.data.as_ref().expect("key data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
-        MutationDataDto::PollPolicy(_) | MutationDataDto::Poll(_) => {
+        MutationDataDto::PollPolicy(_)
+        | MutationDataDto::Poll(_)
+        | MutationDataDto::PollRetirement(_) => {
             panic!("a polling policy's data")
         }
         MutationDataDto::Comment(_) => panic!("a comment's data"),
@@ -835,7 +845,9 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
 pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationDto {
     match envelope.data.as_ref().expect("identity data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
-        MutationDataDto::PollPolicy(_) | MutationDataDto::Poll(_) => {
+        MutationDataDto::PollPolicy(_)
+        | MutationDataDto::Poll(_)
+        | MutationDataDto::PollRetirement(_) => {
             panic!("a polling policy's data")
         }
         MutationDataDto::Comment(_) => panic!("a comment's data"),

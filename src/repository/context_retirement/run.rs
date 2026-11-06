@@ -21,6 +21,7 @@ use crate::{
     },
     results::ResultCode,
 };
+use record::LocalAuthority;
 use rusqlite::{Transaction, params};
 use state::recovery_required;
 use std::path::Path;
@@ -31,6 +32,8 @@ use std::path::Path;
 thread_local! {static INTENT_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);}
 #[cfg(test)]
 thread_local! {static WORKTREE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);}
+#[cfg(test)]
+thread_local! {static AFTER_BRANCH_HOOK:std::cell::RefCell<Option<Box<dyn FnOnce()>>>=const{std::cell::RefCell::new(None)};}
 #[cfg(test)]
 thread_local! {static SELECTED_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);static OBSERVED_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);}
 #[cfg(test)]
@@ -79,7 +82,7 @@ impl UninvokedBranch {
 pub(super) struct UninvokedWorktree(UninvokedBranch);
 pub(super) struct LiveRetirement {
     pub(super) git: git2::Repository,
-    pub(super) owner: Box<RemoteReservation>,
+    pub(super) owner: record::LocalOwner,
     pub(super) verified: Option<instance::Verified>,
     pub(super) tip: git2::Oid,
 }
@@ -100,6 +103,85 @@ impl UninvokedWorktree {
 }
 
 impl RepositoryService {
+    #[cfg(test)]
+    pub(crate) fn set_retirement_after_branch_hook_for_testing(f: impl FnOnce() + 'static) {
+        AFTER_BRANCH_HOOK.with(|s| assert!(s.borrow_mut().replace(Box::new(f)).is_none()));
+    }
+    pub(in super::super) fn retire_context_initial<P: SessionCredentialProvider>(
+        &self,
+        request: RetireContextRequest,
+        accepted: &crate::repository::mutation::Accepted,
+        input: super::handoff::InitialInput,
+        session: &mut SessionCredentials<P>,
+        cancel: crate::repository::CancellationToken,
+    ) -> Result<ContextRetirementOutcome, RepositoryError> {
+        let scope = super::request_scope::Scope::capture(self, &request, accepted)?;
+        let (git, root) =
+            canonical_repository_root(&request.root, RepositoryOperation::RetireContext)?;
+        if root != request.root || git.is_worktree() {
+            return Err(recovery_required());
+        }
+        let cleanup = ContextCleanup::acquire(&root)?;
+        let c = &input.candidate;
+        if c.kind != crate::repository::authoring_kind_segment(&request.kind)
+            || c.item_id != request.item_id.to_string()
+        {
+            return Err(recovery_required());
+        }
+        let current = state::with_transaction(self, &root, |tx, id| input.validate(self, tx, id));
+        let refusal = c
+            .refusal
+            .as_deref()
+            .and_then(|s| ResultCode::ALL.into_iter().find(|c| c.as_str() == s));
+        let tip = c.tip.as_deref().and_then(|s| git2::Oid::from_str(s).ok());
+        let identity = tip
+            .map(|tip| instance::compare_frozen(&git, &request, tip, c.nonce.as_deref()))
+            .transpose();
+        let changed = matches!(identity, Ok(Some(instance::FrozenComparison::Changed)));
+        if current.is_err() || refusal.is_some() || identity.is_err() || changed {
+            return record::refuse_fresh_scoped(
+                self,
+                &request,
+                if cancel.is_cancelled() {
+                    ResultCode::Cancelled
+                } else {
+                    refusal.unwrap_or(if identity.is_err() {
+                        ResultCode::RecoveryRequired
+                    } else {
+                        ResultCode::ExternalChange
+                    })
+                },
+                scope,
+            )
+            .map(ContextRetirementOutcome::Final);
+        }
+        if c.resources == "absent" {
+            require_absent(&git, &request)?;
+            let _owner = record::claim_initial(self, &request, input, scope, cancel)?;
+            drop(cleanup);
+            return self.retire_context_scoped(request, scope);
+        }
+        let tip = tip.ok_or_else(recovery_required)?;
+        let verified = match c.nonce.as_deref() {
+            Some(n) => Some(instance::Verified::enrolled(
+                &git, &request, &cleanup, tip, n,
+            )?),
+            None => None,
+        };
+        let owner = record::claim_initial(self, &request, input, scope, cancel)?;
+        drop(cleanup);
+        self.continue_context_retirement(
+            request,
+            LiveRetirement {
+                git,
+                owner,
+                verified,
+                tip,
+            },
+            None,
+            session,
+        )
+    }
     #[cfg(test)]
     #[allow(dead_code)]
     pub(crate) fn set_retirement_selected_hook_for_testing(hook: impl FnOnce() + 'static) {
@@ -257,7 +339,7 @@ impl RepositoryService {
             request,
             LiveRetirement {
                 git,
-                owner,
+                owner: owner.into(),
                 verified,
                 tip,
             },
@@ -281,7 +363,10 @@ impl RepositoryService {
         #[cfg(test)]
         selected_hook();
         // No common Git lease or database guard spans authentication/advertising.
-        let observed = observe(self, &request, &owner, approval, session);
+        let observed = match owner.observer() {
+            Some(observer) => observe(self, &request, observer, approval, session),
+            None => Ok(()),
+        };
         if let Err(code) = observed {
             return stop_execution(self, &request.root, &owner, code);
         }
@@ -413,6 +498,10 @@ impl RepositoryService {
                 }
                 BranchDeletion::Changed => return Err(recovery_required()),
             };
+            #[cfg(test)]
+            if let Some(hook) = AFTER_BRANCH_HOOK.with(|s| s.borrow_mut().take()) {
+                hook();
+            }
             if tx.execute("UPDATE context_retirement_effect_intents SET observation=?2 WHERE operation_ulid=?1 AND resource='branch' AND observation IS NULL",params![request.operation_id.to_string(),observation]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
             require_absent(&git, &request)?;
             require_materialization(tx, request.operation_id, true)?;
@@ -467,7 +556,7 @@ fn prune_present(
     service: &RepositoryService,
     request: &RetireContextRequest,
     git: &git2::Repository,
-    owner: &RemoteReservation,
+    owner: &impl record::LocalAuthority,
     cleanup: &ContextCleanup,
     tip: git2::Oid,
     verified: instance::Verified,
@@ -577,7 +666,7 @@ fn prune_present(
 pub(super) fn stop_execution(
     service: &RepositoryService,
     root: &Path,
-    owner: &RemoteReservation,
+    owner: &impl record::LocalAuthority,
     code: ResultCode,
 ) -> Result<ContextRetirementOutcome, RepositoryError> {
     if let Some(outcome) = record::preserve_worktree_resumption(service, root, owner, &mut None)? {

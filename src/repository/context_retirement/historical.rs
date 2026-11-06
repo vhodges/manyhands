@@ -20,6 +20,15 @@ struct Frozen<'a> {
 }
 
 pub(super) fn catalog(version: &str) -> Result<Objects, RepositoryError> {
+    if version == "preserving_v2" {
+        // Independently frozen at published 0c1be623, before consumer DDL edits.
+        let mut objects = catalog("index")?;
+        let additions: Objects = serde_json::from_str(include_str!("preserving_v2_catalog.json"))
+            .map_err(|_| recovery_required())?;
+        objects.splice(15..15, additions);
+        verify(&objects, "6b68f9cff715887a64a261c361da93c1f2f79e3c")?;
+        return Ok(objects);
+    }
     let frozen: Frozen<'static> = serde_json::from_str(include_str!("historical_catalogs.json"))
         .map_err(|_| recovery_required())?;
     let objects: Objects = frozen
@@ -39,8 +48,13 @@ pub(super) fn catalog(version: &str) -> Result<Objects, RepositoryError> {
         "gap" => "754b4df04a2d604c88e596e627daba7da840a8aa",
         _ => return Err(recovery_required()),
     };
+    verify(&objects, expected)?;
+    Ok(objects)
+}
+
+fn verify(objects: &Objects, expected: &str) -> Result<(), RepositoryError> {
     let mut bytes = Vec::new();
-    for (kind, name, sql) in &objects {
+    for (kind, name, sql) in objects {
         for field in [*kind, *name, &super::record::normalized(sql)] {
             bytes.extend_from_slice(field.as_bytes());
             bytes.push(0);
@@ -53,5 +67,5 @@ pub(super) fn catalog(version: &str) -> Result<Objects, RepositoryError> {
     {
         return Err(recovery_required());
     }
-    Ok(objects)
+    Ok(())
 }

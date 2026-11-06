@@ -30,9 +30,9 @@ use super::{
     super::{
         CloseTicketRequest, DocumentPromotionError, DocumentPromotionResult, OperationFamily,
         PollPublicationRemoteRequest, PromoteDocumentRequest, ReadError, RemotePollError,
-        RemotePollResult, RepositoryError, RepositoryService, SynchronizationError,
-        SynchronizationObserver, SynchronizationResult, SynchronizationSettings,
-        SynchronizeRemoteRequest, TicketClosureError, TicketClosureResult,
+        RemotePollResult, RepositoryError, RepositoryOperation, RepositoryService,
+        SynchronizationError, SynchronizationObserver, SynchronizationResult,
+        SynchronizationSettings, SynchronizeRemoteRequest, TicketClosureError, TicketClosureResult,
         keys::{SessionCredentialProvider, SessionCredentials},
         promotion::lifecycle::CancellationProbe,
         recovery::{FinalKind, JournalRow, PendingOperation},
@@ -197,6 +197,7 @@ pub(crate) trait Session {
         request: crate::repository::RetireContextRequest,
         accepted: &Accepted,
         reentry: bool,
+        initial: Option<crate::repository::context_retirement::handoff::InitialInput>,
     ) -> Option<Result<crate::repository::ContextRetirementOutcome, RepositoryError>>;
 
     /// Synchronizes with the session's credentials; see
@@ -255,6 +256,20 @@ pub(crate) trait Session {
         request: PollPublicationRemoteRequest,
         asked_of: RequestId,
     ) -> Option<Result<RemotePollResult, RemotePollError>>;
+    fn poll_once_retiring(
+        &self,
+        service: &RepositoryService,
+        request: PollPublicationRemoteRequest,
+        accepted: &Accepted,
+    ) -> Option<
+        Result<
+            (
+                RemotePollResult,
+                Option<crate::repository::context_retirement::handoff::Live>,
+            ),
+            RemotePollError,
+        >,
+    >;
 
     /// Connects to the host of the publication remote with the session's
     /// credentials and sees the key it presents; see
@@ -315,11 +330,21 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         request: crate::repository::RetireContextRequest,
         accepted: &Accepted,
         reentry: bool,
+        initial: Option<crate::repository::context_retirement::handoff::InitialInput>,
     ) -> Option<Result<crate::repository::ContextRetirementOutcome, RepositoryError>> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
         if self.cancelled() {
             // Persist consent withdrawal before entering any domain safe point.
             let _ = service.request_cancellation(accepted.request_id);
+        }
+        if let Some(initial) = initial {
+            return Some(service.retire_context_initial(
+                request,
+                accepted,
+                initial,
+                &mut credentials,
+                self.cancel.clone(),
+            ));
         }
         Some(service.execute_retirement_request(
             request,
@@ -410,6 +435,28 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
         Some(service.verify_ssh_transport(request, &mut credentials))
     }
+    fn poll_once_retiring(
+        &self,
+        service: &RepositoryService,
+        request: PollPublicationRemoteRequest,
+        accepted: &Accepted,
+    ) -> Option<
+        Result<
+            (
+                RemotePollResult,
+                Option<crate::repository::context_retirement::handoff::Live>,
+            ),
+            RemotePollError,
+        >,
+    > {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        Some(service.poll_original_retirement(
+            request,
+            &mut credentials,
+            CancellationProbe::new(self.cancel.clone(), accepted.request_id),
+            accepted,
+        ))
+    }
 }
 
 /// What `prepare` gives a binding in place of a call's session: a
@@ -430,6 +477,7 @@ impl Session for NoSession {
         _request: crate::repository::RetireContextRequest,
         _accepted: &Accepted,
         _reentry: bool,
+        _initial: Option<crate::repository::context_retirement::handoff::InitialInput>,
     ) -> Option<Result<crate::repository::ContextRetirementOutcome, RepositoryError>> {
         None
     }
@@ -488,6 +536,22 @@ impl Session for NoSession {
     ) -> Option<Result<SshTransportVerified, SshTransportError>> {
         None
     }
+    fn poll_once_retiring(
+        &self,
+        _service: &RepositoryService,
+        _request: PollPublicationRemoteRequest,
+        _accepted: &Accepted,
+    ) -> Option<
+        Result<
+            (
+                RemotePollResult,
+                Option<crate::repository::context_retirement::handoff::Live>,
+            ),
+            RemotePollError,
+        >,
+    > {
+        None
+    }
 }
 
 impl RepositoryService {
@@ -498,6 +562,16 @@ impl RepositoryService {
     /// attempt it was read at, as every settlement is.
     fn finish_fenced(&self, record: &RequestRecord) -> Option<Result<(), ReadError>> {
         if Command::parse(&record.command) == Some(Command::ContextRetire) {
+            return None;
+        }
+        if Command::parse(&record.command) == Some(Command::PollOnce)
+            && self
+                .read_session(RepositoryOperation::Read, |db| {
+                    super::super::context_retirement::pass::is_parent(db, record.request_id)
+                        .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))
+                })
+                .unwrap_or(false)
+        {
             return None;
         }
         let accepted = Accepted::of_record(record, record.attempt)?;
@@ -600,6 +674,63 @@ impl RepositoryService {
             requested,
             acknowledged,
         };
+        if record.state == RequestState::Accepted
+            && Command::parse(&record.command) == Some(Command::PollOnce)
+            && super::super::context_retirement::pass::has_capture(
+                self,
+                Path::new(record.scope.as_str()),
+                record
+                    .operations
+                    .first()
+                    .map(|o| o.operation_id)
+                    .unwrap_or_else(super::super::OperationId::new),
+            )
+            .unwrap_or(false)
+        {
+            // Only opted, already captured passes use this route. The common
+            // lease serializes the immutable cut with normal child admission
+            // and guarded effects. No Git transaction is interrupted.
+            if let Err(e) = self.request_cancellation(request_id) {
+                return e.to_envelope(REQUEST_CANCEL);
+            }
+            let Some(accepted) = Accepted::of_record(&record, record.attempt) else {
+                return Envelope::failure(
+                    REQUEST_CANCEL,
+                    scope,
+                    ResultCode::RecoveryRequired,
+                    Vec::new(),
+                );
+            };
+            return match super::super::context_retirement::pass::finish(
+                self,
+                &accepted,
+                None,
+                Some(ResultCode::Cancelled),
+            ) {
+                Ok(cut) => {
+                    for child in cut
+                        .retirements
+                        .iter()
+                        .filter(|r| r.state == super::dto::PollRetirementItemState::Pending)
+                    {
+                        if let Ok(id) = RequestId::parse(&child.request_id) {
+                            let _ = self.cancel_request(id);
+                        }
+                    }
+                    Envelope::read_success(
+                        REQUEST_CANCEL,
+                        scope,
+                        dto(true, cut.stop_code == Some(ResultCode::Cancelled)),
+                    )
+                }
+                Err(_) => Envelope::failure(
+                    REQUEST_CANCEL,
+                    scope,
+                    ResultCode::RecoveryRequired,
+                    Vec::new(),
+                ),
+            };
+        }
         let data = match (record.state, stops) {
             // What the request came to is its stored result.
             (RequestState::Finished, _) => dto(

@@ -721,7 +721,18 @@ pub(in super::super) fn validate_remote_identity(
     target: &RemoteOperationTarget,
     priority: RemoteOperationPriority,
 ) -> Result<(), RepositoryError> {
-    crate::repository::local_sync::record::require_foreign_id_available(db, op)?;
+    // Only ordinary UPDATE-P recovery before retirement capture may use the
+    // opted pass's ID. All lifecycle/synchronization targets keep the strict
+    // foreign-journal check; their parent/child correlation below is unchanged.
+    if target.action() == RemoteOperationAction::Poll
+        && crate::repository::context_retirement::pass::ordinary_poll_recovery(db, &op.to_string())?
+    {
+        if crate::repository::local_sync::record::owned_identity(db, &op.to_string())? {
+            return Err(state::recovery_required());
+        }
+    } else {
+        crate::repository::local_sync::record::require_foreign_id_available(db, op)?;
+    }
     remote_identity_of::<PromotionRecord>(db, id, op, target, priority)?;
     crate::repository::closure::record::validate_remote_identity(db, id, op, target, priority)
 }
