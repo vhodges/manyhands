@@ -2,6 +2,8 @@
 //! Actual original A3, guarded branch deletion, discovery and index finalization;
 //! NOT live SSH advertisement or Task 4 producer/coordinator evidence.
 use super::*;
+#[path = "batch_present_tests.rs"]
+mod present;
 #[path = "batch_positive_primary_tests.rs"]
 mod primary;
 #[path = "batch_positive_specfix_tests.rs"]
@@ -284,9 +286,13 @@ fn retirement_batch_positive_missing_companion_claim_or_map_never_reconstructs_i
 }
 
 #[test]
-fn retirement_batch_positive_present_path_stays_closed_without_any_new_rows_or_effects() {
+fn retirement_batch_positive_missing_present_nonce_stays_closed_without_any_new_rows_or_effects() {
     let s = prepared_batch();
     let live = run_original(&s);
+    std::fs::remove_file(s.f.root.path().join(format!(
+        ".git/worktrees/{ITEM}/manyhands-retirement-instance"
+    )))
+    .unwrap();
     let before = registry_image(&s.f.db());
     let disk = disk_image(s.f.root.path());
     assert!(

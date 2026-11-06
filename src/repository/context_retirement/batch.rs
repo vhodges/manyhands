@@ -1,5 +1,5 @@
-//! Original same-call C: ordered refusal or original branch-only cleanup/index.
-//! Present worktrees, gap observers and resumed cleanup remain closed.
+//! Original same-call C: ordered refusal or original guarded W/B cleanup/index.
+//! Gap observers and resumed cleanup remain closed.
 use super::*;
 use crate::repository::{RepositoryOperation, repository_lease};
 
@@ -7,6 +7,8 @@ const CONTRACT: &str = "poll_retirement_consumption_contract_v1";
 
 #[path = "batch_execution.rs"]
 mod execution;
+#[path = "batch_present_history.rs"]
+mod present_history;
 pub(in super::super::super) use execution::IndexScope;
 #[cfg(test)]
 pub(in super::super::super) use execution::{Boundary, observe, observe_claim};
@@ -28,8 +30,8 @@ impl BranchLifetime {
 /// Closed positive history, distinct from the unchanged strict refusal history.
 /// No current config/exclusion gate here: history cannot create an executor.
 fn positive_row(db: &Connection, p: &Projection, k: &Candidate) -> Result<bool, RepositoryError> {
-    if k.initial_resources != "branch_only" {
-        return Ok(false);
+    if k.initial_resources == "present" {
+        return present_history::positive_row(db, p, k);
     }
     let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id JOIN context_retirement_attempts a ON a.operation_ulid=c.operation_ulid AND a.owner_epoch=c.owner_epoch WHERE
       c.operation_ulid=?1 AND c.repository_id=?2 AND o.repository_id=?2 AND o.root_path=?3 AND o.operation_ulid=?1 AND o.action='retire_context' AND o.target='authoring-context-v1/'||c.kind||'/'||c.item_id||'/Retire'

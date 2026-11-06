@@ -320,6 +320,13 @@ All decisions are from 2026-11-04 and retained as approved in the Cycle.
 | D13 | Only existing generic CLI/desktop abandon-preview safety display | 3/5 |
 | D14 | Exact captured old materialization intent settled only in this retirement path; no existing promotion/closure fix or follow-up filing | 2/6 |
 
+**Verification timing — owner steering, 2026-11-06:** between increments and
+corrections run relevant fast/unit/regression checks plus whole-tree check/fmt/
+strict Clippy. Defer retirement SSH, remote SSH and other slow/full-suite gates
+to **end-of-cycle verification**; do not repeat unchanged broad evidence at each
+checkpoint. This supersedes earlier per-milestone SSH timing, not the final
+obligations or native-CI authorization. No slow/SSH job was active when received.
+
 ## Ruling Register
 
 | ID | Approved constraint | Owning tasks |
@@ -469,8 +476,12 @@ are not authorized; numeric exits must come from existing results registry.
   Latest recorded gates: **56 batch / 203 context / 105 retirement SSH** and all
   three statics, with supporting checks below. Independent fresh reruns are listed
   above. Historical six-target remote SSH results retain their `3d0a36e4` scope.
-  Present W, gap O, resumed consumption and active-source restart remain closed/
-  owed; there is no full A4 or Task 2 readiness claim.
+  The next bounded **original-live present W→B→D14→index/result→C** increment is
+  connected below from `18c18949`: **70 batch /217 context**, including 14 new
+  present tests, and all three statics. **LIMITED SPEC then QUALITY pending.**
+  Gap O, resumed consumption/new-F2 batch recovery and active-source restart remain
+  closed/owed; there is no full A4 or Task 2 readiness claim. SSH/slow gates are
+  deferred to end-of-cycle under the owner's 2026-11-06 steering, not counted fresh.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
 - [ ] **5 — CLI command/flag/help/rendering.** Not started.
@@ -486,10 +497,10 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: publish the reviewed original-live branch-only A4 core only
-to this ticket branch, then continue the same Task 2 implementer into verified
-present-worktree pruning through branch/D14/per-child index and ordered next-child
-consumption. No-child-gap/R8 observation, resumed consumption, active-source
+Immediate next step: controller **LIMITED SPEC then QUALITY** of the bounded
+original-live present increment; no push or expansion before that review.
+The branch-only approval/publication at `18c18949` is preserved, not reopened.
+No-child-gap/R8 observation, resumed consumption, active-source
 restart/fresh-ad fencing, shared-holder/Z fault variants and full Task 2 review
 remain owed. Actual Task 3 bindings and Task 4 coordination remain downstream;
 private projection tests must not be represented as those journeys.
@@ -2903,8 +2914,8 @@ is unchanged; these are current incremental evidence/remaining-work annotations.
 | 29 | E prior current-F2 S/O/source controls and `source_cancelfix_*`, plus `source_handoff_current_cancel_*` / `source_handoff_capture_nonce_*`: current cancellation settles only no-retirement metadata after P; stale F2/map/batch attempt cannot promote or acknowledge through the capture. A4 `batch_every_refusal_*` revalidates current scope after obtaining a child handle, before the single no-effect result transaction; stale handles write nothing. O effect/index/gap consumer fences, remaining fault combinations and post-A1 source-fencing; D actual Task 3 binding |
 | 30 | E `reentry_selected_generation_change_is_final_without_network`, old-generation retention units; O partial-effect generation variant |
 | 31 | E prior standalone/A1 evidence plus `source_handoff_*`: real complete poll processing, preterminal A2 SQL and original refresh/A3 handoff with inert producer projections/synthetic advertisements. Public replay cannot create eligibility. O source live-transport/full producer matrix; D actual Task 4 producer/selection/enrollment |
-| 32 | E prior refusal-only evidence retained. `batch_positive_original_branch_*` and `batch_positive_ticket_then_document_*`: original A3 C→real guarded branch B deletion→ordinary discovery/index/result→C deletion/index/result, same receipt/no new ad, B durable/completed before C, P terminal history unchanged. Old B handle/index owner cannot write after completion. O present-W positive journey and remaining stale-observer combinations; D actual Task 4 journey |
-| 33 | E prior A0/A2/A3/refusal-S1/Q1 evidence retained. Positive-A4 S1 corrects stage predicates: fresh cleanup retains full C/G/F/current-config/cancel/debt checks; I/no-effect metadata retains exact current L/R/batch/K/cursor/attempt and immutable original history, not deletion eligibility. Wrong F2/map/epoch/cursor/envelope/spend/registry still refuses before writes. Only unreviewed 3d0 assertions changed to distinguish stages; approved prefeature assertions remain. O present-W/IMMEDIATE-prune, gap/resumed C and remaining foreign-token/fault variants; D actual Task 3/4 binding/coordinator |
+| 32 | E prior refusal/branch-only evidence retained. Present increment adds original A3→real verified-nonce W/admin prune→B→D14→ordinary discovery/index/result before next present C, including ticket→promoted document, same exact receipt/no new ad, P unchanged, shared hold outliving B. LIMITED reviews pending. O remaining stale-observer combinations; D actual Task 4 journey |
+| 33 | E prior A0/A2/A3/refusal-S1/Q1 and positive S1 ownership separation retained. Present increment adds exact F2/map/cursor/batch-attempt/G/current-ad/comment-debt fences at IMMEDIATE W, after W, locked B and D14, plus original key-source fences at W/B but not authorized I. Original nonce/registration checks never install/repair. LIMITED reviews pending. O remaining foreign-token/fault variants, gap/resumed C; D actual Task 3/4 binding/coordinator |
 | 34 | O no-child gap execution/request+batch fences; D actual Task 4 coordinator |
 | 35 | E prior R7/F2/typed refusal/Q1 history evidence retained. Positive-A4 S2 covers successful primary-byte/mode mismatch AND successfully Preserved but different primary/proof pair before Git → current-owned no-effect Final, None/None, M untouched, attempt/local/target/cursor atomic. Same-tree real primary commits at preinvoke and locked-B boundaries preserve the OLD intent pair/receipt and mark observation changed, never authorize deletion under the new pair. Uninvoked witness is spent only at actual Git; post-invocation pair change stays Owed/Possible. Current-cancel I/stale-owner rules retained. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
 | 36 | E prior F2 index/request-fence controls (approved at `c7daad0d`) plus `source_handoff_nonempty_*`: frozen child IDs refuse generic refresh and standalone retirement begin before any child row; ordinary/other-command controls retained. O remaining M/index fault and history variants |
@@ -4607,3 +4618,99 @@ history faults, full-44 Task 2 review/Task 8 and actual Tasks 3/4. No agents/pus
 status/PR/main-close/native/other-worktree/real-profile-key-context-draft actions.
 Supported isolated CLI ID only; unsupported default profile never opened/repaired.
 Main rechecked unchanged **`c69789d9`**; controller merge phase reused, no rebase.
+
+## Bounded original-live present A4 — W→B→D14→each index/result→C
+
+Base **`18c189492fd2d5112fb16ef146dbab3bbc2c1cbf`**, full Task 2 base
+**`7b1912d152a1ab7440bd17c48a0a544e40e19258`**. Prior branch-only LIMITED SPEC+
+QUALITY approval through `c3f88091`, controller checkpoint `01M6R6GSNC68161B35S13M4V0R`
+and all earlier approvals stand. Controller fetch/merge preflight reused; remote
+main rechecked unchanged `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`. No rebase.
+**This increment needs controller LIMITED SPEC then QUALITY, not full A4 readiness.**
+
+### Connected mechanism and bounded evidence
+
+- Exact original C/current Ki begin accepts already-verified present identities.
+  `Verified::enrolled` only verifies the frozen original nonce; no Selection,
+  install, stamp repair, enrollment, refreshed tip or fake O. Freeze still creates
+  branch permits **only for branch-only** entries. Neither permit enters Arc/index.
+- `batch_present.rs` persists exact W primary/proof/receipt before Git, then uses
+  the existing `Verified::prune`/shared cleanup primitive. IMMEDIATE callback checks
+  full receipt/ownership/M/nonce and exact original proof pair. The shared callback
+  also repeats complete nonce/identity/cleanliness after authorization. Only its
+  actual successful `Pruned` value, retained in this uninterrupted call, admits B.
+- W outcome/local step commit together. Lost/uncertain SQL outcome drops that
+  permit and remains Possible debt; no new executor reconstructs B authority.
+  Known uninvoked W changes may settle None/None; unknown inspection stays Owed.
+  After W, B/proof/config refusal stays partial Owed. A retained uninvoked B witness
+  may record B=None/changed while keeping W=Observed, active child/cursor/hold.
+- Existing exact M compare/delete/count and atomic D14/authoritative step feed the
+  corrected metadata-only ordinary index finalizer. Typed W/B result, child/attempt/
+  target/cursor/last Z commit with ordinary discovery completion; no cleanup/proof/M
+  work or next-child begin from index-only continuation. Exact-holder Z is unchanged.
+  `batch_present_history.rs` recognizes only exact supported original histories;
+  DDL/catalog/FK/reentry/gap rules are unchanged.
+- Actual journeys: two present tickets; present ticket→promoted document; real
+  W/admin/B removal, exact complete-M consumption, primary closed item persisted,
+  B fully complete before C, same receipt/ad/P history, tracking/primary/draft
+  sentinel preserved. **Synthetic ads/inert canonical producer and pre-enrollment**;
+  not actual Task 4 enrollment/coordinator or live source/server SSH evidence.
+
+Compiled RED **0/1** (`red`): eligible original C rejects present begin. First real
+GREEN **1/1** (`green-3`). Additional compiled nonce-boundary RED **4 pass/1 fail**
+(`boundary-red`)→**5/5** (`boundary-green`): successful nonce difference before W
+retains the original no-effect witness. Intermediate SQL syntax and fixture FK/
+immutable-M/borrow failures are retained in logs, not counted as behavioral REDs.
+The prior unreviewed "all present stays closed" stage test now tests **missing nonce
+remains closed with zero writes/effects**; no prefeature assertion weakened.
+
+**14 registered present tests** additionally cover missing/partial/foreign nonce,
+same-OID recreated admin/new nonce, recursive ASCII locks, locked/redirected/mixed W,
+ignored files/hidden-index flags/gitlink submodule/other checkout; proof-byte and
+same-tree-primary differences before W versus partial after W; stale scope at W/B/
+D14; prune interruption/SQL gap and surviving tokenless B; metadata-only W/partial-B
+witness retry; M replacement/D14 SQL fault; failed/unspent/spent index claims,
+cursor/last-Z rollback and read-only replay preserving recreated W/B/nonce/M.
+Affected E/O/D, **partial evidence only**: 18–20/24–25/32–33/35–36/40; all 44 remain tracked.
+
+### Frozen fast/static verification and deferred gates
+
+Owner steering **fast until end-of-cycle** applied before launching any SSH job.
+All final commands below completed serial foreground Devenv, `timeout:0`, exit 0.
+Logs **`/tmp/opencode/task2-batch-present-<suffix>.log`**:
+
+| Command after `devenv shell --` | Suffix | Result |
+| --- | --- | --- |
+| `cargo check --all-features --locked` | `check` | pass |
+| `cargo fmt --check` | `fmt` | pass |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy` | pass |
+| `cargo test --all-features --locked --lib retirement_batch_present_` | `focused` | **14** |
+| Same test flags, `--lib batch_tests::` / `--lib context_retirement` | `batch` / `context` | **70 /217**, includes retained 56/203 and all 36 source controls |
+| Same test flags, `--lib cleanup` / `--lib retirement_f2_` | `cleanup` / `f2-index` | **57 /23** |
+| Same test flags, `--lib recovery` / `--lib refresh` | `recovery` / `refresh` | **63 /39** |
+| Same test flags, `--test recovery_foundation_gate` | `foundation` | **52** |
+
+Counts overlap (cleanup includes three new present-name matches); no separate
+retained/source rerun claimed. **No new SSH/slow/full suite**: 105 retirement SSH,
+applicable changed-path SSH/ordinary remote controls, full fast tier and remaining
+Task 8/final gates stay deferred, not waived. No remote production path changed;
+historical 203/105 and `3d0` six-target evidence retain their actual source scopes.
+No native/Windows/casefold-volume/cross-compile/full-suite claim.
+
+**1,733-input** inventory `/tmp/opencode/task2-batch-present-source.sha256`, including
+three new modules and all document compile inputs, SHA-256
+**`53d6aed5c7360d7baf7c1efc1525ff1a864b0d9d596a74a7308ab6c9b95da4f4`**.
+**24-log** inventory `task2-batch-present-evidence.sha256`, includes failed interim
+diagnostics/fixtures/preflights and final gates, SHA-256
+**`5862b8f3e3083abb420aa081d824052b8e9a442b635337000ba012922dde4e7a`**.
+
+Checkpoint **`01M6R9Q0FFCCR9JN019SGMMBW7`**, parent **`01M6R6GSNC68161B35S13M4V0R`**,
+actual UTC **`2026-11-06T11:25:48Z`**, supported current isolated CLI ID only.
+Commit subject `feat: execute original-live present batch retirement`.
+Self-review risk: narrow original-process/inert-producer histories, not exhaustive
+every-write/ambiguous-commit/platform/lifetime/holder fault proof. Still closed/owed:
+gap O/R8/resumed C/new-F2 batch recovery/active-source restart; remaining combined
+holder/window/Z, A2/A3/replacement/M-D14/index/history variants, full-44 Task 2 review,
+Task 8 end-of-cycle fast/SSH gates and actual Tasks 3/4 Command/DTO/CLI/cancel/guarded
+abandon/store/selection/enrollment/cursor producer/coordinator/final DTO. No agents,
+push/status/PR/main-close/native/other-worktree/real-profile-key-context-draft actions.

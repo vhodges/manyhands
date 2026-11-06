@@ -1,6 +1,7 @@
 //! Local consumer execution, deliberately not a remote observer reservation.
-//! The original freeze's one-use branch lifetime never enters the index scope.
+//! Neither the frozen branch lifetime nor a live Pruned permit enters index scope.
 use super::*;
+use crate::repository::context_retirement::instance;
 use crate::repository::{
     RefreshOutcome,
     cleanup::{BranchDeletion, ContextCleanup},
@@ -10,6 +11,8 @@ use crate::repository::{
     },
     recovery::IndexOwner,
 };
+#[path = "batch_present.rs"]
+mod present;
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +25,10 @@ pub(in super::super::super::super) enum Boundary {
     BeforeClaim,
     Finalizer,
     NoEffect,
+    WorktreeIntentCommitted,
+    ImmediatePrune,
+    Pruned,
+    WorktreeCommitted,
 }
 #[cfg(test)]
 type Hook = Box<dyn FnOnce(&Connection)>;
@@ -72,16 +79,18 @@ pub(in super::super::super::super) struct IndexScope {
 
 // Non-Clone process witnesses. Created only by this live begin/intent chain,
 // never from a persisted intent, result, candidate or new executor.
-struct UninvokedBranch {
+struct UninvokedEffect {
     operation: OperationId,
     epoch: i64,
     receipt: i64,
     primary: git2::Oid,
     proof: crate::repository::context_retirement::proof::PreservationProof,
+    resource: &'static str,
 }
 pub(super) struct RefusalWitness {
     scope: IndexScope,
-    intent: Option<UninvokedBranch>,
+    intent: Option<UninvokedEffect>,
+    worktree: RetirementRemoval,
 }
 
 impl RefusalWitness {
@@ -100,7 +109,9 @@ impl RefusalWitness {
             #[cfg(test)]
             boundary(Boundary::NoEffect, tx);
             let (f, k, count) = scope.current(tx)?;
-            let safe:bool=tx.query_row("SELECT absence_basis='none' AND materialization_settled=0 AND worktree_removal='none' AND ((?2=0 AND phase='selected' AND branch_removal='none' AND initial_primary_oid IS NULL AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid)) OR (?2=1 AND phase='branch_deleting' AND branch_removal='possible' AND (SELECT count(*) FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid)=1)) FROM context_retirement_records c WHERE operation_ulid=?1 AND owner_epoch=1",params![k.child_operation_id,self.intent.is_some()],|r|r.get(0)).map_err(|_|recovery_required())?;
+            let partial = self.worktree == RetirementRemoval::Observed;
+            let resource = self.intent.as_ref().map(|w| w.resource);
+            let safe:bool=tx.query_row("SELECT absence_basis='none' AND materialization_settled=0 AND ((?2 IS NULL AND phase='selected' AND worktree_removal='none' AND branch_removal='none' AND initial_primary_oid IS NULL AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid)) OR (?2='worktree' AND phase='worktree_removing' AND worktree_removal='possible' AND branch_removal='none' AND ?3=0 AND (SELECT count(*) FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid)=1) OR (?2='branch' AND phase='branch_deleting' AND branch_removal='possible' AND ((?3=0 AND initial_resources='branch_only' AND worktree_removal='none' AND (SELECT count(*) FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid)=1) OR (?3=1 AND initial_resources='present' AND worktree_removal='observed' AND (SELECT count(*) FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid)=2)))) FROM context_retirement_records c WHERE operation_ulid=?1 AND owner_epoch=1",params![k.child_operation_id,resource,partial],|r|r.get(0)).map_err(|_|recovery_required())?;
             if !safe {
                 return Err(recovery_required());
             }
@@ -111,12 +122,20 @@ impl RefusalWitness {
                 {
                     return Err(recovery_required());
                 }
-                if tx.execute("UPDATE context_retirement_effect_intents SET observation='changed' WHERE operation_ulid=?1 AND owner_epoch=?5 AND resource='branch' AND receipt_id=?2 AND primary_oid=?3 AND proof_kind=?4 AND observation IS NULL",params![k.child_operation_id,w.receipt,w.primary.to_string(),run::proof_name(w.proof),w.epoch]).map_err(|_|recovery_required())?!=1 {return Err(recovery_required());}
+                if tx.execute("UPDATE context_retirement_effect_intents SET observation='changed' WHERE operation_ulid=?1 AND owner_epoch=?5 AND resource=?6 AND receipt_id=?2 AND primary_oid=?3 AND proof_kind=?4 AND observation IS NULL",params![k.child_operation_id,w.receipt,w.primary.to_string(),run::proof_name(w.proof),w.epoch,w.resource]).map_err(|_|recovery_required())?!=1 {return Err(recovery_required());}
+            }
+            if partial {
+                if tx.execute("UPDATE context_retirement_records SET phase='worktree_removed',branch_removal='none' WHERE operation_ulid=?1 AND owner_epoch=1 AND phase='branch_deleting' AND worktree_removal='observed'",[&k.child_operation_id]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
+                record::audit_connection(tx)?;
+                return Ok(ContextRetirementOutcome::CleanupPending {
+                    worktree_removal: RetirementRemoval::Observed,
+                    branch_removal: RetirementRemoval::None,
+                });
             }
             let report =
                 ContextRetirementReport::refused(crate::results::ResultCode::ExternalChange);
             let result = report.encode()?;
-            if tx.execute("UPDATE context_retirement_records SET phase='refused',branch_removal='none',worktree_removal='none',final_code='external_change',final_result=?2 WHERE operation_ulid=?1 AND owner_epoch=1 AND phase IN ('selected','branch_deleting')",params![k.child_operation_id,result]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
+            if tx.execute("UPDATE context_retirement_records SET phase='refused',branch_removal='none',worktree_removal='none',final_code='external_change',final_result=?2 WHERE operation_ulid=?1 AND owner_epoch=1 AND phase IN ('selected','worktree_removing','branch_deleting')",params![k.child_operation_id,result]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
             if tx.execute("UPDATE context_retirement_attempts SET phase='ended' WHERE operation_ulid=?1 AND owner_epoch=1 AND phase='active'",[&k.child_operation_id]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
             if tx.execute("UPDATE operation_records SET state='completed' WHERE id=?1 AND action='retire_context' AND state='created' AND completed_step IS NULL AND index_owner_epoch=0",[scope.local]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
             if tx.execute("UPDATE poll_retirement_targets SET state='refused',handoff='final',final_result=?4 WHERE operation_ulid=?1 AND owner_epoch=?2 AND ordinal=?3 AND state='running' AND handoff='cleanup' AND final_result IS NULL",params![p.operation,p.epoch,scope.ordinal as i64,result]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
@@ -149,7 +168,7 @@ impl IndexScope {
         if !positive_row(db, p, &k)? {
             return Err(recovery_required());
         }
-        let own: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id JOIN context_retirement_attempts a ON a.operation_ulid=c.operation_ulid AND a.owner_epoch=c.owner_epoch WHERE c.local_record_id=?1 AND c.operation_ulid=?2 AND c.phase IN ('selected','branch_deleting','index_pending') AND a.phase='active' AND o.state!='completed')",params![self.local,k.child_operation_id],|r|r.get(0)).map_err(|_|recovery_required())?;
+        let own: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id JOIN context_retirement_attempts a ON a.operation_ulid=c.operation_ulid AND a.owner_epoch=c.owner_epoch WHERE c.local_record_id=?1 AND c.operation_ulid=?2 AND c.phase IN ('selected','worktree_removing','worktree_removed','branch_deleting','index_pending') AND a.phase='active' AND o.state!='completed')",params![self.local,k.child_operation_id],|r|r.get(0)).map_err(|_|recovery_required())?;
         if !own {
             return Err(recovery_required());
         }
@@ -223,8 +242,14 @@ impl IndexScope {
             return Err(recovery_required());
         }
         let (f, k, count) = self.current(tx)?;
-        let report =
-            ContextRetirementReport::retired(RetirementRemoval::None, RetirementRemoval::Observed);
+        let report = ContextRetirementReport::retired(
+            if k.initial_resources == "present" {
+                RetirementRemoval::Observed
+            } else {
+                RetirementRemoval::None
+            },
+            RetirementRemoval::Observed,
+        );
         let result = report.encode()?;
         if tx.execute("UPDATE context_retirement_records SET phase='complete',final_code='ok',final_result=?2 WHERE operation_ulid=?1 AND phase='index_pending' AND owner_epoch=1 AND branch_removal='observed'",params![k.child_operation_id,result]).map_err(|_|recovery_required())?!=1 { return Err(recovery_required()); }
         if tx.execute("UPDATE context_retirement_attempts SET phase='ended' WHERE operation_ulid=?1 AND owner_epoch=1 AND phase='active'",[&k.child_operation_id]).map_err(|_|recovery_required())?!=1 { return Err(recovery_required()); }
@@ -343,32 +368,11 @@ impl Child<'_> {
                 return Err(recovery_required());
             }
             let k = entries.get(cursor).ok_or_else(recovery_required)?;
-            if k.initial_resources != "branch_only"
-                || compare_candidate(tx, p, k)?
-                    != super::super::super::instance::FrozenComparison::Unchanged
+            if compare_candidate(tx, p, k)?
+                != super::super::super::instance::FrozenComparison::Unchanged
             {
                 return Err(recovery_required());
             }
-            let permit = self
-                .live
-                .branches
-                .lock()
-                .map_err(|_| recovery_required())?
-                .get_mut(cursor)
-                .ok_or_else(recovery_required)?
-                .take()
-                .ok_or_else(recovery_required)?;
-            if permit.child != k.child_operation_id || permit.tip != k.expected_tip {
-                return Err(recovery_required());
-            }
-            // No generic journal begin/collision exemption: the entire C scope
-            // and exact current reserved Ki were validated in this IMMEDIATE tx.
-            tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,'retire_context',?4,'created',?5)",params![id,p.root,k.child_operation_id,format!("authoring-context-v1/{}/{}/Retire",k.kind,k.item_id),service.clock.now().unix_timestamp()]).map_err(|_|recovery_required())?;
-            let local = tx.last_insert_rowid();
-            tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,expected_tip,selection_epoch,instance_verified,remote_name,primary_branch,configuration_generation,endpoint_digest,request_ulid,batch_operation_ulid,batch_ordinal,materialization_capture,materialization_operation_ulid,materialization_oid,materialization_step,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis) VALUES(?1,?2,?3,1,?4,?5,'branch_only',?6,1,0,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,0,1,'selected','none','none','none')",params![k.child_operation_id,local,id,k.kind,k.item_id,k.expected_tip,p.remote,p.primary,p.generation,p.endpoint,p.request,p.operation,cursor as i64,k.materialization_capture,k.materialization_operation_id,k.materialization_oid,k.materialization_step]).map_err(|_|recovery_required())?;
-            tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,request_attempt,batch_attempt_epoch,phase) VALUES(?1,1,?2,?3,?4,'active')",params![k.child_operation_id,id,p.request_attempt,p.epoch]).map_err(|_|recovery_required())?;
-            if tx.execute("UPDATE poll_retirement_targets SET state='running',handoff='cleanup' WHERE operation_ulid=?1 AND owner_epoch=?2 AND ordinal=?3 AND state='waiting' AND handoff='not_started' AND final_result IS NULL",params![p.operation,p.epoch,cursor as i64]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
-            record::audit_connection(tx)?;
             let request = RetireContextRequest {
                 root: root.into(),
                 kind: if k.kind == "ticket" {
@@ -380,6 +384,38 @@ impl Child<'_> {
                 operation_id: OperationId::parse(&k.child_operation_id)
                     .map_err(|_| recovery_required())?,
             };
+            let tip = git2::Oid::from_str(&k.expected_tip).map_err(|_| recovery_required())?;
+            let permit = if k.initial_resources == "present" {
+                present::Selected::Present(instance::Verified::enrolled(
+                    &git,
+                    &request,
+                    &cleanup,
+                    tip,
+                    k.instance_nonce.as_deref().ok_or_else(recovery_required)?,
+                )?)
+            } else {
+                let permit = self
+                    .live
+                    .branches
+                    .lock()
+                    .map_err(|_| recovery_required())?
+                    .get_mut(cursor)
+                    .ok_or_else(recovery_required)?
+                    .take()
+                    .ok_or_else(recovery_required)?;
+                if permit.child != k.child_operation_id || permit.tip != k.expected_tip {
+                    return Err(recovery_required());
+                }
+                present::Selected::Branch(permit)
+            };
+            // No generic journal begin/collision exemption: the entire C scope
+            // and exact current reserved Ki were validated in this IMMEDIATE tx.
+            tx.execute("INSERT INTO operation_records(repository_id,root_path,operation_ulid,action,target,state,observed_at) VALUES(?1,?2,?3,'retire_context',?4,'created',?5)",params![id,p.root,k.child_operation_id,format!("authoring-context-v1/{}/{}/Retire",k.kind,k.item_id),service.clock.now().unix_timestamp()]).map_err(|_|recovery_required())?;
+            let local = tx.last_insert_rowid();
+            tx.execute("INSERT INTO context_retirement_records(operation_ulid,local_record_id,repository_id,format_version,kind,item_id,initial_resources,expected_tip,selection_epoch,instance_verified,remote_name,primary_branch,configuration_generation,endpoint_digest,request_ulid,batch_operation_ulid,batch_ordinal,materialization_capture,materialization_operation_ulid,materialization_oid,materialization_step,materialization_settled,owner_epoch,phase,worktree_removal,branch_removal,absence_basis,instance_nonce) VALUES(?1,?2,?3,1,?4,?5,?18,?6,1,?19,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,0,1,'selected','none','none','none',?20)",params![k.child_operation_id,local,id,k.kind,k.item_id,k.expected_tip,p.remote,p.primary,p.generation,p.endpoint,p.request,p.operation,cursor as i64,k.materialization_capture,k.materialization_operation_id,k.materialization_oid,k.materialization_step,k.initial_resources,k.instance_verified,k.instance_nonce]).map_err(|_|recovery_required())?;
+            tx.execute("INSERT INTO context_retirement_attempts(operation_ulid,owner_epoch,repository_id,request_attempt,batch_attempt_epoch,phase) VALUES(?1,1,?2,?3,?4,'active')",params![k.child_operation_id,id,p.request_attempt,p.epoch]).map_err(|_|recovery_required())?;
+            if tx.execute("UPDATE poll_retirement_targets SET state='running',handoff='cleanup' WHERE operation_ulid=?1 AND owner_epoch=?2 AND ordinal=?3 AND state='waiting' AND handoff='not_started' AND final_result IS NULL",params![p.operation,p.epoch,cursor as i64]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
+            record::audit_connection(tx)?;
             Ok((
                 IndexScope {
                     capture: Arc::clone(c),
@@ -387,10 +423,27 @@ impl Child<'_> {
                     local,
                 },
                 request,
-                permit,
+                (tip, permit),
             ))
         })?;
-        let tip = git2::Oid::from_str(&permit.tip).map_err(|_| recovery_required())?;
+        let (tip, selected) = permit;
+        let (permit, worktree, pair) = match selected {
+            present::Selected::Branch(permit) => (
+                present::BranchPermit::Frozen(permit),
+                RetirementRemoval::None,
+                None,
+            ),
+            present::Selected::Present(verified) => match present::prune(
+                self.live, service, &scope, &request, &git, &cleanup, tip, verified,
+            )? {
+                present::Pruned::Removed(permit, pair) => (
+                    present::BranchPermit::Pruned(permit),
+                    RetirementRemoval::Observed,
+                    Some(pair),
+                ),
+                present::Pruned::Stop(outcome) => return Ok(outcome),
+            },
+        };
         let prepared = state::with_transaction(service, root, |tx, _| {
             #[cfg(test)]
             boundary(Boundary::Begin, tx);
@@ -404,7 +457,17 @@ impl Child<'_> {
                 run::LocalProofComparison::Changed => return Ok(None),
             };
             run::require_materialization(tx, request.operation_id, false)?;
-            if tx.execute("UPDATE context_retirement_records SET initial_primary_oid=?2,phase='branch_deleting',branch_removal='possible' WHERE operation_ulid=?1 AND owner_epoch=1 AND phase='selected'",params![request.operation_id.to_string(),primary.to_string()]).map_err(|_|recovery_required())?!=1 {return Err(recovery_required());}
+            if pair.is_some_and(|expected| expected != (primary, proof)) {
+                return Err(recovery_required());
+            }
+            let updated=if pair.is_some(){
+                tx.execute("UPDATE context_retirement_records SET phase='branch_deleting',branch_removal='possible' WHERE operation_ulid=?1 AND owner_epoch=1 AND phase='worktree_removed' AND initial_primary_oid=?2",params![request.operation_id.to_string(),primary.to_string()])
+            }else{
+                tx.execute("UPDATE context_retirement_records SET initial_primary_oid=?2,phase='branch_deleting',branch_removal='possible' WHERE operation_ulid=?1 AND owner_epoch=1 AND phase='selected'",params![request.operation_id.to_string(),primary.to_string()])
+            }.map_err(|_|recovery_required())?;
+            if updated != 1 {
+                return Err(recovery_required());
+            }
             tx.execute("INSERT INTO context_retirement_effect_intents(operation_ulid,owner_epoch,resource,receipt_id,primary_oid,proof_kind) VALUES(?1,1,'branch',?2,?3,?4)",params![request.operation_id.to_string(),receipt,primary.to_string(),run::proof_name(proof)]).map_err(|_|recovery_required())?;
             record::audit_connection(tx)?;
             Ok(Some((primary, proof, receipt)))
@@ -412,17 +475,24 @@ impl Child<'_> {
         let (primary, proof, receipt) = match prepared {
             Ok(Some(ready)) => ready,
             Ok(None) => {
+                if worktree == RetirementRemoval::Observed {
+                    return Ok(ContextRetirementOutcome::CleanupPending {
+                        worktree_removal: worktree,
+                        branch_removal: RetirementRemoval::None,
+                    });
+                }
                 return self.live.finish_no_effect(
                     service,
                     RefusalWitness {
                         scope,
                         intent: None,
+                        worktree,
                     },
                 );
             }
             Err(_) => {
                 return Ok(ContextRetirementOutcome::CleanupPending {
-                    worktree_removal: RetirementRemoval::None,
+                    worktree_removal: worktree,
                     branch_removal: RetirementRemoval::None,
                 });
             }
@@ -432,15 +502,17 @@ impl Child<'_> {
             let db = Connection::open(&service.registry_path).map_err(|_| recovery_required())?;
             boundary(Boundary::IntentCommitted, &db);
         }
-        let mut uninvoked = Some(UninvokedBranch {
+        let mut uninvoked = Some(UninvokedEffect {
             operation: request.operation_id,
             epoch: 1,
             receipt,
             primary,
             proof,
+            resource: "branch",
         });
         let mut changed = false;
         let mut invoked = false;
+        let mut permit = Some(permit);
         let settled = state::with_transaction(service, root, |tx, _| {
             #[cfg(test)]
             boundary(Boundary::Intent, tx);
@@ -474,7 +546,11 @@ impl Child<'_> {
                     Err(_)=>return false,
                 }
                 // Consumes only the original in-process permit, never a saved K.
-                if permit.child!=request.operation_id.to_string(){return false;}
+                match permit.take(){
+                    Some(present::BranchPermit::Frozen(permit)) if permit.child==request.operation_id.to_string()=>{},
+                    Some(present::BranchPermit::Pruned(_permit))=>{},
+                    _=>return false,
+                }
                 if uninvoked.take().is_none(){return false;}
                 invoked=true;
                 true
@@ -509,11 +585,12 @@ impl Child<'_> {
                     RefusalWitness {
                         scope,
                         intent: Some(witness),
+                        worktree,
                     },
                 );
             }
             return Ok(ContextRetirementOutcome::CleanupPending {
-                worktree_removal: RetirementRemoval::None,
+                worktree_removal: worktree,
                 branch_removal: if invoked {
                     RetirementRemoval::Possible
                 } else {
@@ -539,12 +616,13 @@ impl Live {
             Ok(result) => Ok(result),
             Err(_) => {
                 let ordinal = witness.scope.ordinal;
+                let worktree = witness.worktree;
                 self.refusals
                     .lock()
                     .map_err(|_| recovery_required())?
                     .insert(ordinal, witness);
                 Ok(ContextRetirementOutcome::CleanupPending {
-                    worktree_removal: RetirementRemoval::None,
+                    worktree_removal: worktree,
                     branch_removal: RetirementRemoval::None,
                 })
             }

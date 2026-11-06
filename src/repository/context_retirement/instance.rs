@@ -537,6 +537,25 @@ pub(super) fn compare_frozen(
     })
 }
 impl Verified {
+    /// Already-enrolled batch identity, verification ONLY. No installation,
+    /// provisional settlement or nonce generation is possible through this seam.
+    pub(super) fn enrolled(
+        git: &git2::Repository,
+        request: &RetireContextRequest,
+        cleanup: &ContextCleanup,
+        tip: git2::Oid,
+        nonce: &str,
+    ) -> Result<Self, RepositoryError> {
+        let verified = Self(Identity {
+            root: request.root.clone(),
+            kind: request.kind,
+            item: request.item_id.clone(),
+            tip,
+            nonce: OperationId::parse(nonce).map_err(|_| recovery_required())?,
+        });
+        verified.verify(git, request, cleanup)?;
+        Ok(verified)
+    }
     pub(super) fn matches_stored(
         tx: &rusqlite::Transaction<'_>,
         git: &git2::Repository,
@@ -617,7 +636,7 @@ impl Verified {
                         hook();
                     }
                 }
-                authorize() && self.0.verify_marker(git, request).is_ok()
+                authorize() && self.verify(git, request, cleanup).is_ok()
             });
         match result {
             WorktreeRelease::Removed => Prune::Removed(Pruned { _private: () }),
