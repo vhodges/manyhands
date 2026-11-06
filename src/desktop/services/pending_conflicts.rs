@@ -214,16 +214,19 @@ impl Services {
                                 })
                                 .await
                         }
-                        _ => {
-                            reader
-                                .call(kind, |service| {
-                                    let conflict = service.show_conflict(&repo, operation)?;
-                                    let named = OperationId::parse(&conflict.operation_id).ok();
-                                    Ok(waits_remote(conflict.next_action)
-                                        .then_some(named.unwrap_or(operation)))
-                                })
-                                .await
-                        }
+                        // Through the reader, as the sheet's read is, so a
+                        // test's canned conflict reaches it (Task 16, fix 5).
+                        _ => match reader.show_conflict_as(kind, &repo, operation).await {
+                            ReadResult::Ok(conflict) => {
+                                let named = OperationId::parse(&conflict.operation_id).ok();
+                                ReadResult::Ok(
+                                    waits_remote(conflict.next_action)
+                                        .then_some(named.unwrap_or(operation)),
+                                )
+                            }
+                            ReadResult::Busy => ReadResult::Busy,
+                            ReadResult::Failed(failure) => ReadResult::Failed(failure),
+                        },
                     };
                     probes.push(probe_of(read));
                 }

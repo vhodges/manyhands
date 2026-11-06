@@ -22,20 +22,10 @@ impl ResolveSheet {
         self.services.resolutions().ok()
     }
 
-    /// The kept set Retry sends: the one of the request the read names as
-    /// its unfinished attempt's, or else another of this conflict.
-    pub(super) fn kept_of(&self, model: &ConflictModel, cx: &App) -> Option<KeptSet> {
-        let named = model
-            .attempt()
-            .and_then(|attempt| RequestId::parse(attempt).ok())
-            .and_then(|request| self.store()?.kept(request).ok().flatten());
-        named.or_else(|| self.kept_elsewhere(cx))
-    }
-
-    /// Another set of this conflict, kept and not yet seen answered: none
-    /// this sheet saw answered, and none whose request this session holds
+    /// The requests whose sets are not another window's of this conflict:
+    /// those this sheet saw answered, and those this session holds
     /// finished (review I-2), as R-25 may keep a refused set.
-    fn kept_elsewhere(&self, cx: &App) -> Option<KeptSet> {
+    pub(super) fn except(&self, cx: &App) -> Vec<RequestId> {
         let mut except = self.spent.clone();
         except.extend(
             self.services
@@ -46,10 +36,7 @@ impl ResolveSheet {
                 .filter(|request| matches!(request.state, RequestState::Finished(..)))
                 .map(|request| request.request_id),
         );
-        self.store()?
-            .kept_for(&self.root, self.operation_id, &except)
-            .ok()
-            .flatten()
+        except
     }
 
     /// K-10: a local attempt has written paths, and no set of it is kept,
@@ -94,7 +81,38 @@ impl ResolveSheet {
             return;
         };
         let observation = observation.to_owned();
-        let earlier = self.kept_elsewhere(cx);
+        // Another window's set of this conflict, looked up off the UI
+        // thread (Task 16, fix 2); Save waits meanwhile.
+        self.submitting = true;
+        let found = self.services.find_kept(
+            None,
+            self.root.clone(),
+            self.operation_id,
+            self.except(cx),
+            cx,
+        );
+        cx.spawn_in(window, async move |sheet, cx| {
+            let earlier = found.await;
+            let _ = sheet.update_in(cx, |sheet, window, cx| {
+                sheet.earlier_found(earlier, resolutions, observation, window, cx)
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Save's lookup of another window's set landed: that set is sent
+    /// again, saying so when its choices differ; with none, a new set of
+    /// `resolutions` over `observation`.
+    fn earlier_found(
+        &mut self,
+        earlier: Option<KeptSet>,
+        resolutions: Vec<PathResolution>,
+        observation: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.submitting = false;
         if let Some(earlier) = earlier {
             if !same(&earlier.resolutions, &resolutions) {
                 self.notice = Some(EARLIER_USED);
@@ -157,11 +175,16 @@ impl ResolveSheet {
     /// A lifecycle child's resolution `request` sends the lifecycle on once
     /// applied, whether or not this sheet is still open (R-10, I-3): the
     /// drain runs it.
-    fn register(&self, request: RequestId) {
+    fn register(&mut self, request: RequestId) {
         let lifecycle = match self.source {
             SheetSource::Close(lifecycle) | SheetSource::Merge(lifecycle) => lifecycle,
             SheetSource::Share | SheetSource::Post | SheetSource::Local => return,
         };
+        // Watched until the sheet closes (`ResolveSheet::new`).
+        if !self.watching.contains(&request) {
+            self.watching.push(request);
+            self.services.followups().watch(request);
+        }
         self.services.followups().register(
             request,
             Followup {
@@ -275,10 +298,23 @@ impl ResolveSheet {
                     .iter()
                     .find_map(|action| action.arguments.get("request_id")?.as_str())
                     .and_then(|named| RequestId::parse(named).ok());
-                self.kept = named.and_then(|named| self.store()?.kept(named).ok().flatten());
-                if self.kept.is_none() {
-                    self.answer = Some((code, message));
-                }
+                // Looked up off the UI thread (Task 16 re-review, M-2);
+                // Save waits for it.
+                self.kept = None;
+                self.submitting = true;
+                let found = self.services.find_kept_named(named, cx);
+                cx.spawn(async move |sheet, cx| {
+                    let kept = found.await;
+                    let _ = sheet.update(cx, |sheet, cx| {
+                        sheet.submitting = false;
+                        if kept.is_none() {
+                            sheet.answer = Some((code, message));
+                        }
+                        sheet.kept = kept;
+                        cx.notify();
+                    });
+                })
+                .detach();
             }
             _ => {
                 self.answer = Some((code, message));

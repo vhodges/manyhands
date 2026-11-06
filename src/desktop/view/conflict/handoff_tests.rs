@@ -6,7 +6,7 @@
 use gpui_kit::TestAppContext;
 
 use super::{
-    DESCRIPTION_LOCAL, RESULT_NOTE, SheetSource,
+    RESULT_NOTE, SheetSource, description_local,
     external::{TIDY_LEAD, UNSUPPORTED},
     tests::{SHORT, TICKET, local_shell, open_sheet, open_sheet_in, until_present},
 };
@@ -36,7 +36,7 @@ async fn the_sheet_draws_the_handoffs_elements(cx: &mut TestAppContext) {
     assert_eq!(shell.label("conflict-repository", cx).as_deref(), Some("a"));
     assert_eq!(
         shell.label("conflict-description", cx).as_deref(),
-        Some(DESCRIPTION_LOCAL)
+        Some(description_local("main").as_str())
     );
     assert_eq!(
         shell.rows("conflict-line", cx),

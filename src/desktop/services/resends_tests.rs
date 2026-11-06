@@ -180,6 +180,29 @@ fn a_republishs_answer_keeps_or_ends_what_waits_on_it() {
     assert!(resends.follow(run).is_some());
     resends.forget(run);
     assert_eq!(resends.follow(run), None, "dismissed");
+
+    // Task 16, fix 1: a republish done whose lifecycle cannot be sent
+    // again (a run this worker never took) resumes the lifecycle's
+    // operation, which the rows name, instead; that resume follows the run.
+    rows(&mut operations, &root, OperationId::new());
+    let refused = finished(&mut operations, 13, republish(&root), RequestId::new());
+    resends.after_republish(
+        refused,
+        AfterRepublish::Retry(run),
+        root.clone(),
+        item_id(TICKET),
+    );
+    resends.ended(
+        refused,
+        &answer("item republish", ResultCode::Ok, Vec::new()),
+        &operations,
+        &worker,
+    );
+    assert!(!resends.pending_for(run), "done");
+    assert!(
+        resends.follow(run).is_some(),
+        "a refused retry resumes the operation instead"
+    );
 }
 
 /// The rows of `root`: one closure parent of `operation`, of the ticket.
@@ -267,4 +290,52 @@ fn a_resumes_answer_sends_the_named_request_or_nothing() {
         None,
         "the resume's answer stays shown"
     );
+}
+
+/// Task 16 re-review, I-1: sending a lifecycle on never sends it twice. A
+/// run the worker holds queued or running, though the request model has
+/// not heard of it yet, counts as sent, and no resume goes with it; once
+/// quitting has closed the queue, nothing is sent at all, not even a
+/// resume.
+#[test]
+fn a_lifecycle_already_out_or_a_closed_queue_sends_no_resume() {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let backend = fixture.delaying_backend();
+    let held = backend.hold_job(crate::desktop::services::JobKind::TicketClose);
+    let (worker, _events) = WorkerHandle::spawn(backend);
+    let operations = Operations::default();
+    let resume = || Some((root.clone(), OperationId::new()));
+    let is_resume = |intent: &Intent| matches!(intent, Intent::OperationResume { .. });
+
+    let close = worker.submit(
+        Intent::TicketClose {
+            root: root.clone(),
+            id: item_id(TICKET),
+        },
+        Lane::User,
+        None,
+        None,
+    );
+    let mark = worker.newest();
+    assert_eq!(
+        super::send_lifecycle_on(Some(close), resume(), &operations, &worker),
+        Some(super::Followed::Resent),
+        "already out"
+    );
+    assert!(!worker.sent_since(mark, is_resume), "no resume with it");
+
+    worker.quit();
+    held.release();
+    let mark = worker.newest();
+    let unknown = DesktopRequestId(77);
+    assert_eq!(
+        super::send_lifecycle_on(Some(unknown), resume(), &operations, &worker),
+        None
+    );
+    assert_eq!(
+        super::send_lifecycle_on(None, resume(), &operations, &worker),
+        None
+    );
+    assert!(!worker.sent_since(mark, is_resume), "nothing once closed");
 }

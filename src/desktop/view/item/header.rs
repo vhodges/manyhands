@@ -361,13 +361,16 @@ impl ItemPane {
             ItemDtoKind::Ticket => Intent::TicketClose { root, id },
             ItemDtoKind::Document => Intent::DocumentPromote { root, id },
         };
+        let mut heading = Heading::of(
+            item,
+            item.id.as_deref().unwrap_or_default(),
+            repository_name(self.repo()),
+        );
+        // R-35: the dialog names the primary branch before a preview does.
+        heading.primary = self.primary_branch().map(str::to_owned);
         LifecycleTarget::Ready {
             intent: Box::new(intent),
-            heading: Heading::of(
-                item,
-                item.id.as_deref().unwrap_or_default(),
-                repository_name(self.repo()),
-            ),
+            heading,
         }
     }
 

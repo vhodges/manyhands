@@ -5,7 +5,7 @@
 //!   deleted shared branch): the run is given up, its record cancelled and
 //!   the same request sent again (`Worker::give_up`), and the dialog follows
 //!   that attempt. Only a Give up sent on an accepted record and answered
-//!   `cancelled` goes on: the dialog says "Stopped; ready to republish", and
+//!   `cancelled` goes on: the dialog says "Stopped; ready to republish.", and
 //!   Republish… opens over it. Any other answer is shown and ends there.
 //! - **Republish…** (`Republish`, with no cancellation to ask for, as under
 //!   a resume; or once stopped): the confirmation dialog on `item

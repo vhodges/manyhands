@@ -31,7 +31,9 @@ use manyhands::{
 use super::{
     REVIEW_CHANGES, ResolveSheet, SheetSource,
     answer_tests::applied,
-    tests::{TICKET, canned, canned_path, local_shell, open_sheet, opened, until_present},
+    tests::{
+        TICKET, canned, canned_path, local_shell, local_shell_on, open_sheet, opened, until_present,
+    },
 };
 use crate::desktop::{
     model::{
@@ -288,9 +290,11 @@ async fn the_banner_offers_review_changes(cx: &mut TestAppContext) {
 /// synchronization that stopped on a conflict, and its pending row, whose
 /// conflict waits to be resolved, offers Review changes. Pressed, it opens
 /// the sheet on that synchronization, its folder the item's work context.
+/// The repository's primary branch is `trunk`: the sheet's note names it,
+/// as navigation lists it (R-35).
 #[gpui_kit::test]
 async fn a_pending_resolve_row_offers_review_changes_after_restart(cx: &mut TestAppContext) {
-    let (shell, root, operation) = local_shell(cx, |fixture, root| {
+    let (shell, root, operation) = local_shell_on(cx, "trunk", |fixture, root| {
         fixture.conflict_locally(root, TICKET, "Mine", "Theirs")
     });
     let row = row_of(&shell, "context_sync_local", cx).await;
@@ -310,6 +314,10 @@ async fn a_pending_resolve_row_offers_review_changes_after_restart(cx: &mut Test
             operation,
             shell.fixture.context_worktree(&root, TICKET)
         )
+    );
+    assert_eq!(
+        shell.label("conflict-note", cx).as_deref(),
+        Some("Saving finishes bringing trunk into this item.")
     );
 }
 

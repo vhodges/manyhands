@@ -56,7 +56,7 @@ mod outcome;
 #[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use confirm::KEEP_LOCAL;
 #[cfg(all(test, feature = "desktop-test-support"))]
-pub(crate) use outcome::{ENDING_DONE, ENDING_STOPPED, MERGED, SHARING_PENDING, TIDIED_UP};
+pub(crate) use outcome::{ENDING_DONE, ENDING_STOPPED, SHARING_PENDING, TIDIED_UP, merged};
 pub(crate) use outcome::{cleanup_reason, item_of, progress_words};
 pub(crate) use repair::{Reopen, reopen_repaired};
 #[cfg(all(test, feature = "desktop-test-support"))]
@@ -102,7 +102,11 @@ pub(crate) const RETRY: &str = "Retry";
 pub(crate) const CONTINUE: &str = "Continue";
 pub(crate) const RESUME: &str = "Resume";
 pub(crate) const OPEN_FOLDER: &str = "Open folder";
-pub(crate) const SHARE_MAIN: &str = "Share main";
+/// L1's `SharePrimary`: Share, naming the primary branch `primary`
+/// (R-35).
+pub(crate) fn share_main(primary: &str) -> String {
+    format!("Share {primary}")
+}
 /// L1's `RepairLocally` (B6).
 pub(crate) const REPAIR_LOCALLY: &str = "Repair locally\u{2026}";
 /// L1's `ResolveChildConflict` (B5).
@@ -118,8 +122,11 @@ pub(crate) const BLOCKED_LEAD: &str =
 /// A held item's lead.
 pub(crate) const HELD_LEAD: &str =
     "An earlier run of this is not finished, and it holds the item. Nothing new was started.";
-/// Share main was sent from a blocked prepare.
-pub(crate) const SHARING_MAIN: &str = "Sharing main. Prepare again once it has finished.";
+/// Share main was sent from a blocked prepare, sharing the primary branch
+/// `primary`.
+pub(crate) fn sharing_main(primary: &str) -> String {
+    format!("Sharing {primary}. Prepare again once it has finished.")
+}
 /// The request could not be made: no command could be built, or a held
 /// request's ID could not be read.
 pub(crate) const NOT_SENT: &str = "This could not be sent.";

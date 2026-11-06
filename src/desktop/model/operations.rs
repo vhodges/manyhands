@@ -35,11 +35,13 @@ mod review;
 pub(crate) use review::{Review, ReviewOf};
 
 #[cfg(test)]
+pub(crate) use outcomes::main_branch_deleted;
+#[cfg(test)]
 pub(crate) use outcomes::{
-    ANOTHER_SHARE_HOLDS, BRANCH_DELETED, CHOOSE_A_KEY, CURRENT, KEY_LOCKED, MAIN_BRANCH_DELETED,
-    NEEDS_ATTENTION, NEEDS_IDENTITY, NOWHERE_TO_SHARE, SHARED, check_host_text, may_be_waiting_for,
+    ANOTHER_SHARE_HOLDS, BRANCH_DELETED, CHOOSE_A_KEY, CURRENT, KEY_LOCKED, NEEDS_ATTENTION,
+    NEEDS_IDENTITY, NOWHERE_TO_SHARE, SHARED, check_host_text, may_be_waiting_for,
 };
-pub(crate) use outcomes::{CONFLICT_BANNER, share_text};
+pub(crate) use outcomes::{CONFLICT_BANNER, primary_name, primary_subject, share_text};
 
 use super::{
     lifecycle_lock::{LifecycleLocks, LockKey},
@@ -677,11 +679,13 @@ impl ShareTarget {
 
 /// A stage's words for a share or a post (design, Stage text), naming the
 /// publication remote `remote` while connecting. `None` for a stage the
-/// design gives no words: a share does not write.
+/// design gives no words: a share does not write. A lifecycle's merge and
+/// sharing name the primary branch, `primary` when known (R-35).
 pub(crate) fn stage_text(
     kind: Progressing,
     stage: ProgressStage,
     remote: Option<&str>,
+    primary: Option<&str>,
 ) -> Option<String> {
     let words = match (stage, kind) {
         (ProgressStage::Accepted | ProgressStage::Observing, Progressing::Share) => {
@@ -704,8 +708,12 @@ pub(crate) fn stage_text(
         (ProgressStage::Verifying, _) => "Checking it arrived…",
         (ProgressStage::Indexing, _) => "Updating the list…",
         (ProgressStage::Recording, _) => "Marking it closed…",
-        (ProgressStage::Integrating, _) => "Merging into main…",
-        (ProgressStage::Publishing, _) => "Sharing main…",
+        (ProgressStage::Integrating, _) => {
+            return Some(format!("Merging into {}…", primary_name(primary)));
+        }
+        (ProgressStage::Publishing, _) => {
+            return Some(format!("Sharing {}…", primary_name(primary)));
+        }
         (ProgressStage::CleaningUp, _) => "Tidying up…",
         (ProgressStage::Stopping, _) => "Stopping at a safe point…",
     };
@@ -725,8 +733,8 @@ pub(crate) fn progress_words(
         Progressing::Post => "Posting",
     };
     let words = stage
-        .and_then(|stage| stage_text(kind, stage, remote))
-        .or_else(|| stage_text(kind, ProgressStage::Accepted, remote))
+        .and_then(|stage| stage_text(kind, stage, remote, None))
+        .or_else(|| stage_text(kind, ProgressStage::Accepted, remote, None))
         .unwrap_or_default();
     format!("{prefix} · {words}")
 }

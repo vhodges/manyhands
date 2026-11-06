@@ -154,6 +154,10 @@ async fn a_retry_from_activity_after_a_refusal_resends_the_lifecycle(cx: &mut Te
     until_attempt(&shell, close, 2, cx).await;
     assert_eq!(request(&shell, close, cx).attempt, 2, "sent again");
     shell.until_ended(close, cx).await;
+    // Task 16, fix 3: with no sheet open to take it, what the drain did is
+    // not recorded.
+    let request_id = request(&shell, resolution, cx).request_id;
+    assert!(!services(&shell, cx).followups().records(request_id));
 }
 
 /// M-a, canned: a resolution removed from the queue before it ran has its

@@ -95,12 +95,15 @@ impl ItemPane {
             return;
         };
         let folder = &item.context.worktree;
+        let mut heading = Heading::of(item, id, repository_name(self.repo()));
+        // R-35: a local sheet names the primary branch.
+        heading.primary = self.primary_branch().map(str::to_owned);
         let opening = Opening {
             source,
             root: PathBuf::from(self.repo()),
             operation_id,
             item: parsed,
-            heading: Heading::of(item, id, repository_name(self.repo())),
+            heading,
             folder: (!folder.is_empty()).then(|| PathBuf::from(folder)),
             origin: self.review_focus.clone(),
         };

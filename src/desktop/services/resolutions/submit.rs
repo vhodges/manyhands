@@ -20,7 +20,8 @@ use crate::desktop::{
     services::{
         Backend, Services,
         conflicts::ConflictSource,
-        requests::{DesktopRequestId, Intent, Lane, RequestState},
+        requests::{DesktopRequestId, Intent, Lane},
+        resends::send_lifecycle_on,
         worker::WorkerHandle,
     },
 };
@@ -46,6 +47,41 @@ impl Services {
             backend.resolutions()?.keep(&set)?;
             Ok(worker.submit_with_request_id(set.intent(), Lane::User, set.request_id))
         })
+    }
+
+    /// The kept set a sheet sends again, looked up on the background
+    /// executor, off the store's lock on the UI thread (Task 16, fix 2):
+    /// the one kept under `named`, when it names a request and one is kept;
+    /// else the newest one kept for `operation_id` of `root` under a request
+    /// not in `except`. `None` when none is, or the store did not open.
+    pub(crate) fn find_kept(
+        &self,
+        named: Option<RequestId>,
+        root: PathBuf,
+        operation_id: OperationId,
+        except: Vec<RequestId>,
+        cx: &App,
+    ) -> Task<Option<KeptSet>> {
+        let backend = self.backend.clone();
+        cx.background_executor().spawn(async move {
+            let store = backend.resolutions().ok()?;
+            named
+                .and_then(|named| store.kept(named).ok().flatten())
+                .or_else(|| store.kept_for(&root, operation_id, &except).ok().flatten())
+        })
+    }
+
+    /// The set kept under `named`, looked up on the background executor
+    /// (Task 16 re-review, M-2). `None` when it names none, none is kept,
+    /// or the store did not open.
+    pub(crate) fn find_kept_named(
+        &self,
+        named: Option<RequestId>,
+        cx: &App,
+    ) -> Task<Option<KeptSet>> {
+        let backend = self.backend.clone();
+        cx.background_executor()
+            .spawn(async move { backend.resolutions().ok()?.kept(named?).ok().flatten() })
     }
 }
 
@@ -86,7 +122,12 @@ pub(in crate::desktop::services) fn settle_finished(
         .spawn(async move {
             if let Ok(store) = backend.resolutions() {
                 for ended in &ended {
-                    store.ended(backend.as_ref(), ended);
+                    // A set that could not be deleted stays kept, with its
+                    // follow-up: the launch sweep settles it. Nothing is
+                    // logged.
+                    if store.ended(backend.as_ref(), ended).is_err() {
+                        continue;
+                    }
                     if matches!(store.kept(ended.request), Ok(None)) {
                         followups.forget(ended.request);
                     }
@@ -130,7 +171,12 @@ pub(crate) enum Followed {
 #[derive(Default)]
 struct Registry {
     waiting: HashMap<RequestId, Followup>,
+    /// What the drain did, for an open sheet to take.
     followed: HashMap<RequestId, Followed>,
+    /// How many open sheets watch each request: what the drain did is
+    /// recorded only while one does, and goes when the last closes (Task
+    /// 16, fix 3).
+    watched: HashMap<RequestId, usize>,
 }
 
 /// The follow-ups of resolutions sent, by request ID. The drain runs one
@@ -145,6 +191,26 @@ impl Followups {
     /// `followup` follows the resolution `request` once it is applied.
     pub(crate) fn register(&self, request: RequestId, followup: Followup) {
         self.lock().waiting.insert(request, followup);
+    }
+
+    /// An open sheet watches `request`: what the drain does once it is
+    /// applied is recorded for it to take.
+    pub(crate) fn watch(&self, request: RequestId) {
+        *self.lock().watched.entry(request).or_default() += 1;
+    }
+
+    /// A sheet that watched `request` closed: once none does, what the
+    /// drain did for it goes, and nothing more is recorded.
+    pub(crate) fn unwatch(&self, request: RequestId) {
+        let mut registry = self.lock();
+        let Some(count) = registry.watched.get_mut(&request) else {
+            return;
+        };
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            registry.watched.remove(&request);
+            registry.followed.remove(&request);
+        }
     }
 
     /// The resolution `request` will not be applied: its set is gone, or
@@ -164,6 +230,12 @@ impl Followups {
         self.lock().waiting.contains_key(&request)
     }
 
+    /// Whether what the drain did for `request` is recorded, untaken.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn records(&self, request: RequestId) -> bool {
+        self.lock().followed.contains_key(&request)
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, Registry> {
         self.0
             .lock()
@@ -173,7 +245,8 @@ impl Followups {
     /// The resolution `request` ended with `code`. Applied, its follow-up
     /// runs and is recorded: the lifecycle's request sent again, or left
     /// while it is queued or running, as it goes on by itself; one that
-    /// cannot be sent again resumes the operation instead (M-3). Any other
+    /// cannot be sent again resumes the operation instead (M-3). What was
+    /// done is recorded only while a sheet watches `request`. Any other
     /// answer leaves it waiting while the set is kept.
     pub(in crate::desktop::services) fn ended(
         &self,
@@ -188,30 +261,13 @@ impl Followups {
         let Some(followup) = self.lock().waiting.remove(&request) else {
             return;
         };
-        let followed = Self::follow(followup, operations, worker);
-        self.lock().followed.insert(request, followed);
-    }
-
-    fn follow(followup: Followup, operations: &Operations, worker: &WorkerHandle) -> Followed {
-        if let Some(lifecycle) = followup.lifecycle {
-            let running = operations.request(lifecycle).is_some_and(|request| {
-                matches!(
-                    request.state,
-                    RequestState::Queued | RequestState::Running { .. }
-                )
-            });
-            if running || worker.retry(lifecycle, None) {
-                return Followed::Resent;
-            }
+        let resume = Some((followup.root, followup.operation_id));
+        let followed = send_lifecycle_on(followup.lifecycle, resume, operations, worker);
+        let mut registry = self.lock();
+        if let Some(followed) = followed
+            && registry.watched.contains_key(&request)
+        {
+            registry.followed.insert(request, followed);
         }
-        Followed::Resumed(worker.submit(
-            Intent::OperationResume {
-                root: followup.root,
-                operation_id: followup.operation_id,
-            },
-            Lane::User,
-            None,
-            None,
-        ))
     }
 }

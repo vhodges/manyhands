@@ -17,15 +17,19 @@ use gpui_kit::{
 use manyhands::repository::ItemDtoKind;
 
 use super::{
-    BodyEditors, CANCEL, DESCRIPTION_LOCAL, DESCRIPTION_REMOTE, LOST, NOT_READ, READ_AGAIN,
-    READING, RESULT_NOTE, RESUME, RESUME_LEAD, RETRY, ResolveSheet, SAVE_RESOLUTION, SETTLED,
-    SheetSource, external::REPAIRED,
+    BodyEditors, CANCEL, DESCRIPTION_REMOTE, LOST, NOT_READ, READ_AGAIN, READING, RESULT_NOTE,
+    RESUME, RESUME_LEAD, RETRY, ResolveSheet, SAVE_RESOLUTION, SETTLED, SheetSource,
+    description_local, external::REPAIRED,
 };
 use crate::desktop::{
     assets::icon_path,
     keys::{LeaveResult, RESOLVE_SHEET_CONTEXT, SaveResolution},
-    model::conflict::{
-        BodyChoice, BodyPart, Choice, ConflictSet, PathConflict, PathResult, STANDARD_LAYOUT_NOTE,
+    model::{
+        conflict::{
+            BodyChoice, BodyPart, Choice, ConflictSet, PathConflict, PathResult,
+            STANDARD_LAYOUT_NOTE,
+        },
+        operations::primary_name,
     },
 };
 
@@ -83,9 +87,11 @@ impl ResolveSheet {
             ItemDtoKind::Ticket => ("ticket", "ticket"),
             ItemDtoKind::Document => ("file-text", "document"),
         };
+        // The primary branch, as the sheet's heading knows it (R-35).
+        let primary = primary_name(self.heading.primary.as_deref()).to_owned();
         let description = match self.source {
-            SheetSource::Local => DESCRIPTION_LOCAL,
-            _ => DESCRIPTION_REMOTE,
+            SheetSource::Local => description_local(&primary),
+            _ => DESCRIPTION_REMOTE.to_owned(),
         };
         let meta = h_flex()
             .gap_2()
@@ -114,7 +120,7 @@ impl ResolveSheet {
             .child(text("conflict-description", description).text_sm())
             .child(meta)
             .child(
-                text("conflict-note", self.source.note())
+                text("conflict-note", self.source.note(&primary))
                     .text_sm()
                     .text_color(muted),
             )
@@ -178,6 +184,8 @@ impl ResolveSheet {
                     Button::new("conflict-read-again")
                         .label(READ_AGAIN)
                         .small()
+                        // Not while a Save's lookup or request is out (M-1).
+                        .disabled(self.waiting())
                         .on_click(self.on(cx, |sheet, _, cx| sheet.read_conflict(cx))),
                 )
         });

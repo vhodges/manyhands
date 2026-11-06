@@ -16,7 +16,7 @@
 //!   preview's confirmation. When the library refuses that consent (an
 //!   answer `offers_prepare_again` takes: a stale confirmation, or
 //!   `external_change` offering `request.prepare`), nothing ran: the
-//!   dialog says "Something changed since you confirmed" and offers Prepare
+//!   dialog says "Something changed since you confirmed." and offers Prepare
 //!   again, which shows the new summary. Confirm then queues the same
 //!   request again with the new confirmation (`Worker::reconfirm`) (P2, P3).
 //!
@@ -134,7 +134,7 @@ pub(crate) fn steps(details: &LifecyclePreviewDto) -> Vec<Step> {
         LifecyclePlannedIntegration::AlreadyContained => Step::new(
             StepKey::Merge,
             format!("Already in {primary}"),
-            format!("{primary} already holds every change below."),
+            format!("The {primary} branch already holds every change below."),
         ),
     });
     if let Some(remote) = sharing {

@@ -217,10 +217,14 @@ pub(crate) trait Backend: Send + Sync + 'static {
         None
     }
 
-    /// Called after a conflict read of `operation_id` returns. A
-    /// conflict it gives stands in place of the library's: a test's
-    /// canned `ConflictDto` (D5 decision 9).
-    fn after_conflict_read(&self, _operation_id: &OperationId) -> Option<ConflictDto> {
+    /// Called after a conflict read of `operation_id`, of the read kind
+    /// `kind`, returns. A conflict it gives stands in place of the
+    /// library's: a test's canned `ConflictDto` (D5 decision 9).
+    fn after_conflict_read(
+        &self,
+        _kind: ReadKind,
+        _operation_id: &OperationId,
+    ) -> Option<ConflictDto> {
         None
     }
 }

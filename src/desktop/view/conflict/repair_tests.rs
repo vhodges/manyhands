@@ -30,7 +30,8 @@ use crate::desktop::{
 };
 
 /// What the dialog says once main is in a ticket's working copy (B6).
-const REPAIRED_TICKET: &str = "Main is in this ticket's working copy now.";
+/// The primary branch is named as the repository names it (R-35a).
+const REPAIRED_TICKET: &str = "The main branch is in this ticket's working copy now.";
 
 /// The sheet once it has opened, past a real synchronization's wait.
 async fn until_opened(shell: &Shell, cx: &mut TestAppContext) -> Entity<ResolveSheet> {

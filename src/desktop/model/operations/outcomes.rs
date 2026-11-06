@@ -38,9 +38,31 @@ pub(crate) const ANOTHER_SHARE_HOLDS: &str = "Another share may be holding this 
 pub(crate) const NOWHERE_TO_SHARE: &str = "This repository has nowhere to share to";
 pub(crate) const BRANCH_DELETED: &str = "The shared copy of this item was deleted. \
      Republish it to share it again.";
-/// A share of main whose shared copy was deleted: main has nothing to
-/// republish, so no Republish… is promised (review M3).
-pub(crate) const MAIN_BRANCH_DELETED: &str = "The shared copy of main was deleted.";
+/// What the texts call the repository's primary branch while its name is
+/// not known: before navigation lists the repository, or when its
+/// configuration names none (R-35).
+pub(crate) const PRIMARY_UNKNOWN: &str = "the primary branch";
+
+/// The primary branch's name, `primary` as the repository names it, or
+/// `PRIMARY_UNKNOWN` (R-35).
+pub(crate) fn primary_name(primary: Option<&str>) -> &str {
+    primary.unwrap_or(PRIMARY_UNKNOWN)
+}
+
+/// The primary branch as a sentence's first words (R-35a): "The {primary}
+/// branch", its name as it is, or "The primary branch" when not known.
+pub(crate) fn primary_subject(primary: Option<&str>) -> String {
+    match primary {
+        Some(primary) => format!("The {primary} branch"),
+        None => "The primary branch".to_owned(),
+    }
+}
+
+/// A share of the primary branch `primary` whose shared copy was deleted:
+/// it has nothing to republish, so no Republish… is promised (review M3).
+pub(crate) fn main_branch_deleted(primary: &str) -> String {
+    format!("The shared copy of {primary} was deleted.")
+}
 /// The item banner of a share or post stopped on a conflict (decision 13):
 /// it offers Review changes (D5 B5, E-7).
 pub(crate) const CONFLICT_BANNER: &str = "You and someone else both changed this since it \
@@ -85,14 +107,18 @@ pub(crate) fn sync_text(outcome: &SyncOutcome, holder: Option<&str>) -> Option<S
 }
 
 /// What a share's outcome says, as `sync_text` does, of the share `target`:
-/// a deleted branch of main has its own words.
+/// a deleted branch of the primary branch, named `primary` when known, has
+/// its own words.
 pub(crate) fn share_text(
     outcome: &SyncOutcome,
     target: ShareTarget,
     holder: Option<&str>,
+    primary: Option<&str>,
 ) -> Option<String> {
     match (outcome, target) {
-        (SyncOutcome::BranchDeleted, ShareTarget::Main) => Some(MAIN_BRANCH_DELETED.to_owned()),
+        (SyncOutcome::BranchDeleted, ShareTarget::Main) => {
+            Some(main_branch_deleted(primary_name(primary)))
+        }
         _ => sync_text(outcome, holder),
     }
 }

@@ -366,6 +366,19 @@ impl Intent {
         }
     }
 
+    /// What Activity calls the command, in a repository whose primary
+    /// branch is `primary` when known: a share of it names it (R-35b), as
+    /// the lifecycle dialog does; every other command is its `label`.
+    pub(crate) fn label_in(&self, primary: Option<&str>) -> String {
+        match self {
+            Self::RepoSync { .. } => format!(
+                "Share {}",
+                crate::desktop::model::operations::primary_name(primary)
+            ),
+            _ => self.label().to_owned(),
+        }
+    }
+
     /// What the operation area calls the command. Fixed text: no value
     /// the user typed.
     pub(crate) fn label(&self) -> &'static str {

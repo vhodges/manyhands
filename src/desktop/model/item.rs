@@ -40,11 +40,6 @@ pub(crate) const REPAIR: &str = "Repair…";
 /// An unmanaged document's banner's action: a repair with adoption.
 pub(crate) const ADOPT: &str = "Adopt…";
 
-/// The actions the item view shows that are not available yet: none. The
-/// header's primary action, Approve and merge… or Close ticket…, is live
-/// (D5, A1); Edit and Repair were made available before it.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) const LATER: [&str; 0] = [];
 /// What a control not available yet says: the close-draft dialog's still.
 pub(crate) const LATER_NOTE: &str = "Available in a later release";
 

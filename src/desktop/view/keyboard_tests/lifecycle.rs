@@ -35,7 +35,7 @@ use crate::desktop::{
     view::{
         harness::{Shell, key},
         item::LIFECYCLE_ACTION,
-        lifecycle::{ENDING_DONE, ENDING_STOPPED, KEEP_LOCAL, MERGED, SHARING_PENDING, TIDIED_UP},
+        lifecycle::{ENDING_DONE, ENDING_STOPPED, KEEP_LOCAL, SHARING_PENDING, TIDIED_UP, merged},
         passphrase::open_dialog,
         workspace::Region,
     },
@@ -266,7 +266,7 @@ async fn close_a_ticket_by_keyboard(cx: &mut TestAppContext) {
         })
         .await;
     let outcomes = walk.shell.rows("lifecycle-outcome", cx);
-    for line in [MERGED, SHARING_PENDING, TIDIED_UP] {
+    for line in [merged("main").as_str(), SHARING_PENDING, TIDIED_UP] {
         assert!(
             outcomes.iter().any(|shown| shown == line),
             "{line}: {outcomes:?}"

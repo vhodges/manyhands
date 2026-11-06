@@ -30,7 +30,7 @@ use manyhands::{
 };
 
 use super::{
-    outcome::{ENDING_FAILED, MERGED, OPEN_REPOSITORY_DETAILS, SHARED, STATE_DONE, STATE_FAILED},
+    outcome::{ENDING_FAILED, OPEN_REPOSITORY_DETAILS, SHARED, STATE_DONE, STATE_FAILED, merged},
     tests::{DOCUMENT, TICKET, closes, request, saved_ticket, shell, ticket, until_present},
 };
 use crate::desktop::{
@@ -505,7 +505,7 @@ async fn cleanup_refused_is_failed_with_retry(cx: &mut TestAppContext) {
     assert_eq!(
         shell.rows("lifecycle-outcome", cx),
         [
-            MERGED.to_owned(),
+            merged("main"),
             SHARED.to_owned(),
             "Not tidied up yet: the remote refused to delete the shared branch".to_owned(),
         ]

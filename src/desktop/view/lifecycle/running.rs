@@ -49,7 +49,7 @@ use super::{
     text,
 };
 use crate::desktop::{
-    model::publication::host_authority,
+    model::{operations::primary_name, publication::host_authority},
     services::requests::{DesktopRequestId, RequestState},
     view::item::ItemRoute,
 };
@@ -75,13 +75,18 @@ impl LifecycleDialog {
         }
     }
 
-    fn primary(&self) -> String {
-        // The confirmed preview's, else the one the workspace knows.
+    /// The primary branch's name (R-35): the confirmed preview's, else the
+    /// one the workspace knows; `None` when neither is.
+    pub(super) fn known_primary(&self) -> Option<String> {
         self.plan
             .as_ref()
             .map(|plan| plan.primary_branch.clone())
             .or_else(|| self.heading.primary.clone())
-            .unwrap_or_else(|| "main".to_owned())
+    }
+
+    /// `known_primary`, or `PRIMARY_UNKNOWN`'s words.
+    pub(super) fn primary(&self) -> String {
+        primary_name(self.known_primary().as_deref()).to_owned()
     }
 
     /// The body and buttons of a sent run, by where its request stands.
@@ -227,9 +232,14 @@ impl LifecycleDialog {
             body = body.children(part);
             open_ready = button;
         }
+        let (primary, known) = (self.primary(), self.known_primary());
         if let Some(data) = data {
             body = body.children(data.blockers.iter().enumerate().map(|(ix, blocker)| {
-                text(("lifecycle-blocker", ix), blocker_words(*blocker)).text_sm()
+                text(
+                    ("lifecycle-blocker", ix),
+                    blocker_words(*blocker, known.as_deref()),
+                )
+                .text_sm()
             }));
         }
         if offers.no_record {
@@ -240,7 +250,7 @@ impl LifecycleDialog {
         body = body.children(
             way_out
                 .iter()
-                .filter_map(|step| guidance(step, item))
+                .filter_map(|step| guidance(step, item, &primary))
                 .enumerate()
                 .map(|(ix, words)| {
                     text(("lifecycle-way-out", ix), words)

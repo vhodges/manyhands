@@ -42,9 +42,10 @@ use manyhands::{
 
 use super::{
     requests::{DesktopRequestId, Intent, Lane, RequestState},
-    worker::WorkerHandle,
+    resolutions::Followed,
+    worker::{Retried, WorkerHandle},
 };
-use crate::desktop::model::operations::Operations;
+use crate::desktop::model::{lifecycle_lock::LockKey, operations::Operations};
 
 /// How a lifecycle goes on once the republish its way out asked for is
 /// done.
@@ -224,12 +225,19 @@ impl Resends {
                     }
                     return;
                 }
-                let Some(Waiting { after, .. }) = registry.republishes.remove(&id) else {
+                let Some(Waiting { after, root, item }) = registry.republishes.remove(&id) else {
                     return;
                 };
                 match after {
                     AfterRepublish::Retry(lifecycle) => {
-                        worker.retry(lifecycle, None);
+                        // Its operation, by its last answer or the rows.
+                        let resume = lifecycle_operation(lifecycle, &root, &item, operations)
+                            .map(|operation_id| (root, operation_id));
+                        if let Some(Followed::Resumed(resume)) =
+                            send_lifecycle_on(Some(lifecycle), resume, operations, worker)
+                        {
+                            registry.resent.insert(lifecycle, resume);
+                        }
                     }
                     AfterRepublish::Resume {
                         shown,
@@ -249,6 +257,70 @@ impl Resends {
             _ => {}
         }
     }
+}
+
+/// Sends a lifecycle on (R-10; C5 decision 19): its request `lifecycle`
+/// again, or left as it is while queued or running, here or in the worker
+/// before the request model hears of it, since it goes on by itself. When
+/// this session's worker never took it, or there is none, `operation
+/// resume` of the operation `resume` names is sent instead. Nothing is
+/// sent twice (Task 16 re-review, I-1): `None` once quitting has closed
+/// the queue, when the worker holds the request and still leaves it alone,
+/// or when no resume is named.
+pub(in crate::desktop::services) fn send_lifecycle_on(
+    lifecycle: Option<DesktopRequestId>,
+    resume: Option<(PathBuf, OperationId)>,
+    operations: &Operations,
+    worker: &WorkerHandle,
+) -> Option<Followed> {
+    if worker.quitting() {
+        return None;
+    }
+    if let Some(lifecycle) = lifecycle {
+        let running = operations.request(lifecycle).is_some_and(|request| {
+            matches!(
+                request.state,
+                RequestState::Queued | RequestState::Running { .. }
+            )
+        });
+        if running {
+            return Some(Followed::Resent);
+        }
+        match worker.retry_as(lifecycle) {
+            Retried::Requeued | Retried::AlreadyOut => return Some(Followed::Resent),
+            Retried::Closed | Retried::Refused => return None,
+            Retried::NotHeld => {}
+        }
+    }
+    let (root, operation_id) = resume?;
+    Some(Followed::Resumed(worker.submit(
+        Intent::OperationResume { root, operation_id },
+        Lane::User,
+        None,
+        None,
+    )))
+}
+
+/// The lifecycle operation of the run `lifecycle`, of the item `item` of
+/// `root`: its last answer's, or else the one the rows list for the item.
+fn lifecycle_operation(
+    lifecycle: DesktopRequestId,
+    root: &Path,
+    item: &ItemId,
+    operations: &Operations,
+) -> Option<OperationId> {
+    let answered = operations
+        .lifecycle_answer(lifecycle)
+        .and_then(|envelope| envelope.operation_id.as_deref())
+        .and_then(|operation| OperationId::parse(operation).ok());
+    answered.or_else(|| {
+        let key = LockKey::new(root.to_str()?, &item.to_string());
+        let listed = operations.locks().operations(&key);
+        match listed.as_slice() {
+            [only] => OperationId::parse(only).ok(),
+            _ => None,
+        }
+    })
 }
 
 /// The close or merge of the lifecycle `operation_id` of `root`, sent again

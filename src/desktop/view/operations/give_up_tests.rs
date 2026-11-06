@@ -28,8 +28,8 @@ use super::{
 use crate::desktop::{
     model::{
         operations::{
-            CHOOSE_A_KEY, KEY_LOCKED, MAIN_BRANCH_DELETED, NEEDS_IDENTITY, STOPPED_AFTER_PART,
-            STOPPED_BEFORE_SENDING, check_host_text,
+            CHOOSE_A_KEY, KEY_LOCKED, NEEDS_IDENTITY, STOPPED_AFTER_PART, STOPPED_BEFORE_SENDING,
+            check_host_text, main_branch_deleted,
         },
         publication::SyncOffer,
     },
@@ -184,7 +184,7 @@ async fn give_up(shell: &Shell, id: DesktopRequestId, cx: &mut TestAppContext) {
 fn words_of(code: ResultCode) -> Option<String> {
     match code {
         // These shares are of main (E-6; review M3).
-        ResultCode::RemoteBranchDeleted => Some(MAIN_BRANCH_DELETED.to_owned()),
+        ResultCode::RemoteBranchDeleted => Some(main_branch_deleted("main")),
         ResultCode::UnlockRequired => Some(KEY_LOCKED.to_owned()),
         ResultCode::NoSelectedKey => Some(CHOOSE_A_KEY.to_owned()),
         ResultCode::HostApprovalRequired => Some(check_host_text(None)),

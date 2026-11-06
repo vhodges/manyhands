@@ -111,6 +111,22 @@ pub(crate) enum RecordState {
     Unknown,
 }
 
+/// Why a request was, or was not, queued again (`WorkerHandle::retry_as`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Retried {
+    /// Queued again.
+    Requeued,
+    /// The worker holds it queued or running already.
+    AlreadyOut,
+    /// Quitting closed the queue.
+    Closed,
+    /// This worker never took it.
+    NotHeld,
+    /// Held and finished, and still left alone (R-78, or a Give up of a
+    /// command that cannot be given up).
+    Refused,
+}
+
 /// What a Give up found.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GaveUp {
@@ -370,7 +386,16 @@ impl WorkerHandle {
     /// nothing (owner, 2026-10-28). "After" is the order attempts were
     /// queued in. True when it was queued again.
     pub(crate) fn retry(&self, id: DesktopRequestId, secret: Option<SecretPassphrase>) -> bool {
-        self.requeue(id, None, secret, false).is_some()
+        self.requeue(id, None, secret, false).is_ok()
+    }
+
+    /// `retry`, saying why it queued the request `id` again or did not
+    /// (Task 16 re-review, I-1).
+    pub(crate) fn retry_as(&self, id: DesktopRequestId) -> Retried {
+        match self.requeue(id, None, None, false) {
+            Ok(_) => Retried::Requeued,
+            Err(why) => why,
+        }
     }
 
     /// Gives up the request `id` (decision 8): queues a job, on its lane
@@ -383,7 +408,7 @@ impl WorkerHandle {
     /// command that cannot be given up (`Intent::can_be_given_up`). True
     /// when queued.
     pub(crate) fn give_up(&self, id: DesktopRequestId) -> bool {
-        self.requeue(id, None, None, true).is_some()
+        self.requeue(id, None, None, true).is_ok()
     }
 
     /// Where the request `id`'s record stood after its last finished
@@ -427,7 +452,7 @@ impl WorkerHandle {
         id: DesktopRequestId,
         confirmation: ConfirmationId,
     ) -> Option<u32> {
-        self.requeue(id, Some(confirmation), None, false)
+        self.requeue(id, Some(confirmation), None, false).ok()
     }
 
     fn requeue(
@@ -436,25 +461,27 @@ impl WorkerHandle {
         confirmation: Option<ConfirmationId>,
         secret: Option<SecretPassphrase>,
         give_up: bool,
-    ) -> Option<u32> {
+    ) -> Result<u32, Retried> {
         let shared = self.shared();
         let mut state = shared.lock();
-        if state.closed
-            || state.queued(id)
+        if state.closed {
+            return Err(Retried::Closed);
+        }
+        if state.queued(id)
             || state
                 .running
                 .as_ref()
                 .is_some_and(|running| running.id == id)
         {
-            return None;
+            return Err(Retried::AlreadyOut);
         }
         // R-78, as the owner narrowed it (2026-10-28): a request is not sent
         // again once a later attempt of its item would be undone by it,
         // unless that later attempt was a release refused with nothing
         // touched (`Intent::kept_from_again_by`).
-        let asked = state.submitted.get(&id)?;
+        let asked = state.submitted.get(&id).ok_or(Retried::NotHeld)?;
         if give_up && !asked.intent.can_be_given_up() {
-            return None;
+            return Err(Retried::Refused);
         }
         if state.submitted.values().any(|later| {
             later.sent > asked.sent
@@ -462,10 +489,10 @@ impl WorkerHandle {
                     .intent
                     .kept_from_again_by(&later.intent, later.answers.all_refused())
         }) {
-            return None;
+            return Err(Retried::Refused);
         }
         let sent = state.next_send();
-        let submitted = state.submitted.get_mut(&id)?;
+        let submitted = state.submitted.get_mut(&id).ok_or(Retried::NotHeld)?;
         submitted.attempt += 1;
         submitted.sent = sent;
         submitted.answers.queued();
@@ -507,7 +534,7 @@ impl WorkerHandle {
             }
         };
         admit(shared, &mut state, Job::new(id, work, lane));
-        Some(attempt)
+        Ok(attempt)
     }
 
     /// The mark of the newest attempt queued so far: one `sent_since`

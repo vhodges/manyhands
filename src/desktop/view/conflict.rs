@@ -82,7 +82,10 @@ pub(crate) const READING: &str = "Reading the conflict\u{2026}";
 pub(crate) const NOT_READ: &str = "The conflict could not be read.";
 /// The note under the title, by where the conflict stopped (decision 15).
 pub(crate) const NOTE_SHARE: &str = "Saving finishes the share that stopped.";
-pub(crate) const NOTE_LOCAL: &str = "Saving finishes bringing main into this item.";
+/// A local synchronization's, naming the primary branch `primary` (R-35).
+pub(crate) fn note_local(primary: &str) -> String {
+    format!("Saving finishes bringing {primary} into this item.")
+}
 pub(crate) const NOTE_CLOSE: &str = "Saving lets the close continue.";
 pub(crate) const NOTE_MERGE: &str = "Saving lets the merge continue.";
 /// `external_change`: the comparison was read again (P11).
@@ -109,11 +112,16 @@ pub(crate) const SETTLED: &str = "Nothing is left to choose here.";
 /// The description under the title (handoff 2g), remote and local.
 pub(crate) const DESCRIPTION_REMOTE: &str = "You and someone else both changed this since it \
      was last shared. Pick a version for each part, or keep both.";
-pub(crate) const DESCRIPTION_LOCAL: &str = "This item and main both changed since they last \
-     met. Pick a version for each part, or keep both.";
-/// The Result's note (handoff 2g).
-pub(crate) const RESULT_NOTE: &str = "Saving keeps the result on this computer. You can \
-     still edit it in the item afterwards, and Share sends it to everyone.";
+/// A local synchronization's, naming the primary branch `primary`.
+pub(crate) fn description_local(primary: &str) -> String {
+    format!(
+        "This item and {primary} both changed since they last met. Pick a version for each \
+         part, or keep both."
+    )
+}
+/// The Result's note (handoff 2g). What Saving does is the source note's
+/// alone (decision 15; owner ruling R-34).
+pub(crate) const RESULT_NOTE: &str = "You can still edit it in the item afterwards.";
 /// K-10: a partial local resolution whose kept set is not here. A read is
 /// also historical while another process's attempt is still running, so
 /// the words fit that too.
@@ -139,12 +147,13 @@ pub(crate) enum SheetSource {
 }
 
 impl SheetSource {
-    fn note(self) -> &'static str {
+    /// What Saving does (decision 15); `primary` names the primary branch.
+    fn note(self, primary: &str) -> String {
         match self {
-            Self::Share | Self::Post => NOTE_SHARE,
-            Self::Local => NOTE_LOCAL,
-            Self::Close(_) => NOTE_CLOSE,
-            Self::Merge(_) => NOTE_MERGE,
+            Self::Share | Self::Post => NOTE_SHARE.to_owned(),
+            Self::Local => note_local(primary),
+            Self::Close(_) => NOTE_CLOSE.to_owned(),
+            Self::Merge(_) => NOTE_MERGE.to_owned(),
         }
     }
 
@@ -247,6 +256,8 @@ pub(crate) struct ResolveSheet {
     services: Services,
     generations: Generations,
     read: Option<Task<()>>,
+    /// The lookup of a landed read's kept set (`kept_landed`).
+    kept_lookup: Option<Task<()>>,
     reading: bool,
     model: Option<ConflictModel>,
     /// The last read failed, with this code.
@@ -271,6 +282,9 @@ pub(crate) struct ResolveSheet {
     /// The resolve request the sheet follows, and the first attempt of it
     /// whose answer it has not yet taken.
     following: Option<(DesktopRequestId, u32)>,
+    /// The lifecycle children's resolutions this sheet registered: what
+    /// the drain does once one is applied is kept for it until it closes.
+    watching: Vec<RequestId>,
     /// The body editors, made as the next frame is drawn after a read.
     editors: Vec<BodyEditors>,
     editors_stale: bool,
@@ -284,12 +298,17 @@ impl ResolveSheet {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let subscriptions =
-            vec![
-                cx.observe_in(services.operations(), window, |this, _, window, cx| {
-                    this.operations_changed(window, cx)
-                }),
-            ];
+        let subscriptions = vec![
+            cx.observe_in(services.operations(), window, |this, _, window, cx| {
+                this.operations_changed(window, cx)
+            }),
+            // Closed, it takes nothing more from the drain (Task 16, fix 3).
+            cx.on_release(|sheet: &mut Self, _| {
+                for request in sheet.watching.drain(..) {
+                    sheet.services.followups().unwatch(request);
+                }
+            }),
+        ];
         let named = opening.folder.is_some();
         let folder = opening.folder.unwrap_or_else(|| opening.root.clone());
         let mut sheet = Self {
@@ -306,6 +325,7 @@ impl ResolveSheet {
             services,
             generations: Generations::default(),
             read: None,
+            kept_lookup: None,
             reading: false,
             model: None,
             not_read: None,
@@ -318,6 +338,7 @@ impl ResolveSheet {
             outside: false,
             submitting: false,
             following: None,
+            watching: Vec::new(),
             editors: Vec::new(),
             editors_stale: false,
             _subscriptions: subscriptions,
@@ -378,8 +399,8 @@ impl ResolveSheet {
     }
 
     /// A read's answer. A late one, asked before a newer read, is dropped.
-    /// A new model keeps the earlier one's choices where its parts are
-    /// unchanged.
+    /// A model read waits for its kept set, looked up off the UI thread
+    /// (`kept_landed`): the sheet reads on until then, so Save waits too.
     fn read_landed(
         &mut self,
         stamp: Stamp,
@@ -389,26 +410,57 @@ impl ResolveSheet {
         if !self.generations.is_current(&stamp) {
             return;
         }
-        self.reading = false;
         match result {
-            ReadResult::Ok(mut model) => {
-                if let Some(earlier) = &self.model {
-                    model.keep_choices(earlier);
-                }
-                self.kept = self.kept_of(&model, cx);
-                // A Settled read keeps what the read before it said.
-                match model.set() {
-                    ConflictSet::External(_) => self.outside = true,
-                    ConflictSet::Canonical(_) => self.outside = false,
-                    ConflictSet::Settled => self.outside |= model.external_repair(),
-                }
-                self.model = Some(model);
-                self.not_read = None;
-                self.editors_stale = true;
+            ReadResult::Ok(model) => {
+                let named = model
+                    .attempt()
+                    .and_then(|attempt| RequestId::parse(attempt).ok());
+                let found = self.services.find_kept(
+                    named,
+                    self.root.clone(),
+                    self.operation_id,
+                    self.except(cx),
+                    cx,
+                );
+                self.kept_lookup = Some(cx.spawn(async move |sheet, cx| {
+                    let kept = found.await;
+                    let _ = sheet.update(cx, |sheet, cx| sheet.kept_landed(stamp, model, kept, cx));
+                }));
+                return;
             }
             ReadResult::Busy => self.not_read = Some(ResultCode::Busy),
             ReadResult::Failed(failure) => self.not_read = Some(failure.code),
         }
+        self.reading = false;
+        cx.notify();
+    }
+
+    /// A read's model, with the kept set Retry sends (`find_kept`). A new
+    /// model keeps the earlier one's choices where its parts are unchanged.
+    fn kept_landed(
+        &mut self,
+        stamp: Stamp,
+        mut model: ConflictModel,
+        kept: Option<KeptSet>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.generations.is_current(&stamp) {
+            return;
+        }
+        self.reading = false;
+        if let Some(earlier) = &self.model {
+            model.keep_choices(earlier);
+        }
+        self.kept = kept;
+        // A Settled read keeps what the read before it said.
+        match model.set() {
+            ConflictSet::External(_) => self.outside = true,
+            ConflictSet::Canonical(_) => self.outside = false,
+            ConflictSet::Settled => self.outside |= model.external_repair(),
+        }
+        self.model = Some(model);
+        self.not_read = None;
+        self.editors_stale = true;
         cx.notify();
     }
 

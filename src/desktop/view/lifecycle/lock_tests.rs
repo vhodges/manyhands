@@ -182,7 +182,7 @@ async fn every_tab_and_window_of_the_item_is_read_only(cx: &mut TestAppContext) 
     let services = shell
         .workspace
         .read_with(cx, |workspace, _| workspace.services().clone());
-    let second = cx.update(|cx| crate::desktop::open_window_over_services(services, cx));
+    let second = cx.update(|cx| crate::desktop::open_main_window(services, cx));
     let other: Entity<Workspace> = second
         .update(cx, |root, _, _| root.view().clone().downcast().unwrap())
         .unwrap();

@@ -232,6 +232,49 @@ async fn stop_and_republish_stops_unless_give_up_resent_and_cancelled(cx: &mut T
     assert_eq!(worker.gave_up(close), Some(GaveUp::AlreadyFinished));
     assert!(!shell.present("confirm-ok", cx), "no Republish…");
     assert!(requests_of(&shell, cx, is_republish).is_empty());
+
+    // Task 16, P21: the Give up's resend answered `busy`, offering the same
+    // request again, as `tests/mutation_remote/c5_lifecycle.rs`
+    // `c5_lifecycle_busy_lease_on_reentry_close` answers a re-entry while
+    // the repository's lease is held. The sequence stops there: one
+    // request, sent once by the Give up and never again by itself.
+    let (shell, root) = ticket_shell(cx);
+    let close = close_on_a_deleted_branch(&shell, &root, cx).await;
+    let asked = requests_of(&shell, cx, |intent| {
+        matches!(intent, Intent::TicketClose { .. })
+    })[0]
+        .request_id;
+    shell
+        .backend
+        .hold_job_return_answering(
+            JobKind::TicketClose,
+            close_answer(
+                &root,
+                ResultCode::Busy,
+                Outcome::Blocked,
+                vec![RecoveryAction::new(RecoveryActionKind::RequestRetry, [])],
+                asked,
+            ),
+        )
+        .release();
+    shell.click("lifecycle-stop-and-republish", cx);
+    shell
+        .until(cx, move |operations| {
+            operations.request(close).is_some_and(|request| {
+                request.attempt == 2 && matches!(request.state, RequestState::Finished(..))
+            })
+        })
+        .await;
+    shell.run(cx);
+    let sent = requests_of(&shell, cx, |intent| {
+        matches!(intent, Intent::TicketClose { .. })
+    });
+    assert_eq!(sent.len(), 1, "one request");
+    assert_eq!(sent[0].attempt, 2, "no resend after busy");
+    assert!(matches!(sent[0].state, RequestState::Finished(..)));
+    assert!(!shell.present("confirm-ok", cx), "no Republish…");
+    assert!(!shell.present("lifecycle-stopped-ready", cx));
+    assert!(requests_of(&shell, cx, is_republish).is_empty());
 }
 
 /// A close answered `remote_branch_deleted` under a resume, put in the

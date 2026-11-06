@@ -218,6 +218,9 @@ pub(crate) struct ItemPane {
     /// The repository's publication remote, which the workspace sets from
     /// its navigation as the tab opens and as the list changes.
     publication_remote: PublicationRemote,
+    /// The repository's primary branch, as navigation last gave it (R-35):
+    /// what the lifecycle dialog and the sheet name before a preview does.
+    primary_branch: Option<String>,
     /// The discussion's new-comment and reply composers (`composer`).
     composers: composer::Composers,
     /// The comments being posted, drawn pending in their threads
@@ -319,6 +322,7 @@ impl ItemPane {
             discussion: discussion::Discussion::new(cx),
             share: share::ShareState::default(),
             publication_remote: PublicationRemote::Unknown,
+            primary_branch: None,
             composers: composer::Composers::default(),
             posting,
             region_end: None,
@@ -413,6 +417,20 @@ impl ItemPane {
     /// The repository's publication remote, as navigation last gave it.
     pub(crate) fn publication_remote(&self) -> &PublicationRemote {
         &self.publication_remote
+    }
+
+    /// The repository's primary branch, as navigation last gave it.
+    pub(crate) fn primary_branch(&self) -> Option<&str> {
+        self.primary_branch.as_deref()
+    }
+
+    /// The workspace's navigation gives the repository's primary branch
+    /// (R-35).
+    pub(crate) fn set_primary_branch(&mut self, primary: Option<String>, cx: &mut Context<Self>) {
+        if self.primary_branch != primary {
+            self.primary_branch = primary;
+            cx.notify();
+        }
     }
 
     /// The workspace's navigation gives the repository's publication

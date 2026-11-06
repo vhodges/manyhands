@@ -56,9 +56,18 @@ pub(super) fn local_shell(
     cx: &mut TestAppContext,
     build: impl FnOnce(&Fixture, &Path) -> OperationId,
 ) -> (Shell, PathBuf, OperationId) {
+    local_shell_on(cx, "main", build)
+}
+
+/// `local_shell`, the repository's primary branch named `primary` (R-35).
+pub(super) fn local_shell_on(
+    cx: &mut TestAppContext,
+    primary: &str,
+    build: impl FnOnce(&Fixture, &Path) -> OperationId,
+) -> (Shell, PathBuf, OperationId) {
     cx.executor().allow_parking();
     let fixture = Fixture::new();
-    let root = fixture.create_repository("a");
+    let root = fixture.create_repository_on("a", primary);
     let operation = build(&fixture, &root);
     (Shell::open(fixture, cx), root, operation)
 }

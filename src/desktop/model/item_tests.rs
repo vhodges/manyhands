@@ -12,8 +12,7 @@ use serde_json::json;
 
 use super::{
     APPROVE_AND_MERGE, CLOSE_TICKET, ItemReads, ItemView, KIND_ACTIVE, KIND_PRIMARY,
-    KIND_UNVERIFIED, LATER, NO_BRANCH, comment_author, context_problems, metadata_value,
-    provenance_label,
+    KIND_UNVERIFIED, NO_BRANCH, comment_author, context_problems, metadata_value, provenance_label,
 };
 use crate::desktop::{
     model::{
@@ -65,7 +64,6 @@ fn provenance_names_the_context_kind_its_branch_and_worktree() {
 /// are live, with the design's labels (E-4).
 #[test]
 fn the_unavailable_actions_are_the_designs() {
-    assert!(LATER.is_empty());
     assert_eq!(APPROVE_AND_MERGE, "Approve and merge…");
     assert_eq!(CLOSE_TICKET, "Close ticket…");
 }
