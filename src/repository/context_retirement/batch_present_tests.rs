@@ -1089,3 +1089,190 @@ fn retirement_batch_present_ticket_then_promoted_document_reuses_same_receipt() 
     assert_eq!(counts(&db), (1, 0, 2));
     record::audit_connection(&db).unwrap();
 }
+
+// Inert original source projection at F2 > 1, followed by REAL present cleanup,
+// D14 and index claim. F2 is not the independent first index executor epoch.
+fn present_claim_history(stage: &str, original_attempt: i64) -> (SourceFixture, batch::Live) {
+    let mut s = SourceFixture::new();
+    for _ in 1..original_attempt {
+        s.f.service.enter_request(s.request_id).unwrap().unwrap();
+    }
+    s.f.db()
+        .execute(
+            "UPDATE poll_retirement_attempts SET request_attempt=?1",
+            [original_attempt],
+        )
+        .unwrap();
+    a2_projections(&s.f.db());
+    let entry = candidate_id(&s, true, ITEM);
+    input(&s, &serde_json::to_string(&vec![entry.clone()]).unwrap(), 1);
+    projections(&s, &[entry]);
+    s.seal().unwrap();
+    let live = run_original(&s);
+    if stage == "complete" {
+        assert!(matches!(
+            live.next(&s.f.service, s.f.root.path())
+                .unwrap()
+                .execute_branch_only(&s.f.service)
+                .unwrap(),
+            ContextRetirementOutcome::Final(_)
+        ));
+    } else {
+        let saved = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let slot = std::sync::Arc::clone(&saved);
+        // Stop after the real committed claim, outside the service hook mutex.
+        batch::observe_claim(move |owner| {
+            *slot.lock().unwrap() = Some(owner);
+            std::panic::resume_unwind(Box::new(()));
+        });
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                live.next(&s.f.service, s.f.root.path())
+                    .unwrap()
+                    .execute_branch_only(&s.f.service)
+            }))
+            .is_err()
+        );
+        let owner = saved.lock().unwrap().take().unwrap();
+        if stage == "index_invalidated" {
+            state::with_transaction(&s.f.service, s.f.root.path(), |tx, id| {
+                crate::repository::recovery::invalidate_index_observations(tx, id)
+            })
+            .unwrap();
+        } else if stage != "indexing" {
+            // Existing guarded journal states; not a claim that the interrupted
+            // fresh index emitted every one of these states by itself.
+            assert!(
+                crate::repository::recovery::transition_indexing(&s.f.db(), owner, stage, None)
+                    .unwrap()
+            );
+        }
+    }
+    let db = s.f.db();
+    let counters: (i64, i64, i64, i64) = db.query_row(
+        "SELECT a.request_attempt,i.request_attempt,i.index_owner_epoch,o.index_owner_epoch FROM context_retirement_records c JOIN context_retirement_attempts a USING(operation_ulid) JOIN context_retirement_index_claims i USING(operation_ulid) JOIN operation_records o ON o.id=c.local_record_id",
+        [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)),
+    ).unwrap();
+    assert_eq!(
+        counters,
+        (
+            original_attempt,
+            original_attempt,
+            1,
+            if stage == "index_invalidated" { 2 } else { 1 }
+        )
+    );
+    record::audit_connection(&db).unwrap();
+    (s, live)
+}
+
+#[test]
+fn retirement_batch_present_claim_history_wrong_original_attempt_is_not_spend_evidence() {
+    let mut accepted = Vec::new();
+    for stage in [
+        "complete",
+        "indexing",
+        "observed",
+        "persisted",
+        "failed",
+        "retry",
+        "index_invalidated",
+    ] {
+        let (s, _live) = present_claim_history(stage, 2);
+        let db = s.f.db();
+        let claim: (String, i64, String, i64) = db.query_row(
+            "SELECT operation_ulid,repository_id,request_ulid,index_owner_epoch FROM context_retirement_index_claims",
+            [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)),
+        ).unwrap();
+        let delete_guard: String = db
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name='retirement_index_claim_delete'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        // Completed spends are deletable under the real catalog. Pending cases
+        // are explicit corruption fixtures: restore the EXACT canonical trigger
+        // before auditing, with FK/CHECK constraints continuously enabled.
+        if stage != "complete" {
+            db.execute_batch("DROP TRIGGER retirement_index_claim_delete")
+                .unwrap();
+        }
+        assert_eq!(
+            db.execute("DELETE FROM context_retirement_index_claims", [])
+                .unwrap(),
+            1
+        );
+        if stage != "complete" {
+            db.execute_batch(&delete_guard).unwrap();
+        }
+        db.execute(
+            "INSERT INTO context_retirement_index_claims VALUES(?1,?2,?3,1,?4)",
+            params![claim.0, claim.1, claim.2, claim.3],
+        )
+        .unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT sql FROM sqlite_master WHERE name='retirement_index_claim_delete'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            delete_guard
+        );
+        assert!(
+            !db.prepare("PRAGMA foreign_key_check")
+                .unwrap()
+                .exists([])
+                .unwrap()
+        );
+        let before = registry_image(&db);
+        let disk = disk_image(s.f.root.path());
+        if record::audit_connection(&db).is_ok() {
+            accepted.push(stage);
+        }
+        if stage == "complete" {
+            assert!(
+                batch::read_final(&s.f.service, s.f.root.path(), s.operation, 0).is_err(),
+                "wrong original-attempt claim must not authorize historical replay"
+            );
+        }
+        assert_eq!(before, registry_image(&db));
+        assert_eq!(disk, disk_image(s.f.root.path()));
+    }
+    assert!(
+        accepted.is_empty(),
+        "wrong-attempt original present spends accepted: {accepted:?}"
+    );
+}
+
+#[test]
+fn retirement_batch_present_claim_history_replay_uses_original_not_current_attempt_or_epoch() {
+    for original_attempt in [2, 3] {
+        for stage in ["complete", "index_invalidated"] {
+            let (s, live) = present_claim_history(stage, original_attempt);
+            let old = batch::read_final(&s.f.service, s.f.root.path(), s.operation, 0).unwrap();
+            s.f.service.enter_request(s.request_id).unwrap().unwrap();
+            let db = s.f.db();
+            assert_eq!(
+                db.query_row("SELECT attempt FROM request_records", [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                original_attempt + 1
+            );
+            let before = registry_image(&db);
+            let disk = disk_image(s.f.root.path());
+            record::audit_connection(&db).unwrap();
+            assert!(RepositoryService::open_at(s.f.data.path()).is_ok());
+            assert_eq!(
+                batch::read_final(&s.f.service, s.f.root.path(), s.operation, 0).unwrap(),
+                old
+            );
+            assert_eq!(old.is_some(), stage == "complete");
+            // Historical acceptance cannot restore the old executor's authority.
+            assert!(live.continue_index(&s.f.service, s.f.root.path()).is_err());
+            assert_eq!(before, registry_image(&db));
+            assert_eq!(disk, disk_image(s.f.root.path()));
+        }
+    }
+}
