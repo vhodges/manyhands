@@ -453,6 +453,10 @@ are not authorized; numeric exits must come from existing results registry.
   LIMITED SPEC at `a562bac8` found one Medium S1 (inspection error is not positive
   change evidence). The correction below has **166 context / 105 retirement SSH**
   and **9 focused** green cases; **same SPEC re-review then QUALITY remain pending**.
+  Controller now reports S1's same SPEC pass at `15cf9399`; LIMITED QUALITY found
+  one Important Q1 (retained integration debt absent from C's live exclusion).
+  Q1's correction below has **172 context / 105 retirement SSH / 25 batch** green
+  cases. **Same SPEC delta, then same QUALITY original-probe re-review pending.**
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
 - [ ] **5 — CLI command/flag/help/rendering.** Not started.
@@ -2864,7 +2868,7 @@ is unchanged; these are current incremental evidence/remaining-work annotations.
 | 09 | E `absence_index_retry_does_not_reselect_or_touch_new_worktree`, `f2_index_handoff_rejects_stale_and_accepts_new_current_request` (I-only new-context/new-intent preservation); O remaining M index-failure variants |
 | 10 | E `mixed_initial_resources_refuse_stably_without_adopting_user_content`; O exhaustive public reentry mixed/inventory variants |
 | 11 | E `present_cleanup_hidden_and_ignored_matrix`; O remaining submodule/deletion fault variants |
-| 12 | E `reentry_exclusions_and_fixed_inputs_cannot_replace_an_owner`; O valid terminal remote index/reconciliation debt during replacement |
+| 12 | E `reentry_exclusions_and_fixed_inputs_cannot_replace_an_owner`; Q1 `batch_qualityfix_*` adds C exclusion for real foreign legacy/pinned conflict release with inactive envelope/zero flags, resolution-stage and unreleased-artifact debt. O valid terminal remote index/reconciliation debt during replacement and remaining non-batch variants |
 | 13 | E `reentry_public_provisional_bootstrap_matrix`: actual before-create missing and same-tip recreated admin |
 | 14 | E same public bootstrap matrix: actual installed-before-SQL verification-only completion |
 | 15 | E same public bootstrap matrix partial/nonce collision; old instance collision units preserved; O remaining public marker shape/platform variants |
@@ -2885,9 +2889,9 @@ is unchanged; these are current incremental evidence/remaining-work annotations.
 | 30 | E `reentry_selected_generation_change_is_final_without_network`, old-generation retention units; O partial-effect generation variant |
 | 31 | E prior standalone/A1 evidence plus `source_handoff_*`: real complete poll processing, preterminal A2 SQL and original refresh/A3 handoff with inert producer projections/synthetic advertisements. Public replay cannot create eligibility. O source live-transport/full producer matrix; D actual Task 4 producer/selection/enrollment |
 | 32 | E `batch_original_live_refusals_*`: original A3 returns non-Clone C, distinct from ended P execution; real no-effect Final B→C transitions use the same current receipt, retain the consumer hold after B and settle it only after C. Stale ordinal handles and ended-P capture/finish refuse. O the entire positive real B-cleanup/index→C-cleanup/index journey and child stale-O write matrix; D actual Task 4 journey |
-| 33 | E prior A0/A2/A3 and exact original process-configuration controls retained. `batch_every_refusal_*` and `batch_current_advertisement_*` cover 17 F2/map/source/batch/projection/debt mutations plus current-ad/G/original-process changes. S1 `batch_specfix_*` distinguishes fully inspected positive tip/nonce/exact-M mismatch from unchanged and unknown: ref/admin/packed locks, SQL preparation/decoding failure, missing/malformed/redirected marker and incomplete/ambiguous M refuse without any registry/schema/resource write, even combined with another real mismatch. O destructive/index/gap/resumed C admission and remaining foreign-token/fault variants; D actual Task 3/4 binding/coordinator |
+| 33 | E prior A0/A2/A3/current-process and 17 scope/projection controls retained; S1 positive/unchanged/unknown distinction retained. Q1 adds shared Live::validate exclusion at next and actual result write for retained integration/resolution/artifact debt, independent of envelope flags; genuine candidate change is explicitly verified, full post-fixture images preserved, missing required integration tables fail closed. Resolution inactive envelopes are labeled compatibility projections after real owned journal transitions, not live resolve journeys. O destructive/index/gap/resumed C admission and remaining foreign-token/fault variants; D actual Task 3/4 binding/coordinator |
 | 34 | O no-child gap execution/request+batch fences; D actual Task 4 coordinator |
-| 35 | E prior R7 reports/stops, direct and nonadjacent-lineage changed-W → M truthful Possible/None, R3 terminal-observer outcome preservation; F2 preclaim/selected/new-reentry cancellation Final/no-effect and uncertain/post-prune Owed preserve flags, stale calls cannot acknowledge. `batch_final_replay_*` adds real once-only ExternalChange/no-removal Finals and read-only replay preserving new same-item instance/materialization. S1 now requires positive inspected mismatch for those Finals; unknown evidence never creates child/result/cursor/terminal/Z metadata. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
+| 35 | E prior R7 reports/stops, direct and nonadjacent-lineage changed-W → M truthful Possible/None, R3 terminal-observer outcome preservation; F2 preclaim/selected/new-reentry cancellation Final/no-effect and uncertain/post-prune Owed preserve flags, stale calls cannot acknowledge. `batch_final_replay_*` and S1 positive-only Finals retained. Q1 proves historical Final reads remain available/unchanged after later foreign conflict, for active-remaining and fully completed batches, without reactivating C. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
 | 36 | E prior F2 index/request-fence controls (approved at `c7daad0d`) plus `source_handoff_nonempty_*`: frozen child IDs refuse generic refresh and standalone retirement begin before any child row; ordinary/other-command controls retained. O remaining M/index fault and history variants |
 | 37 | E `generic_abandon_preserves_pending_and_terminal_identity`; D guarded preserving abandon Task 3 |
 | 38 | E prior migration/history controls plus strict A0/A1/A2/A3 correlations retained. New batch history audit accepts only exact frozen epoch-1 no-effect refused children with exact target/cursor/result correlation and no effect/index/request-child claims; `batch_audit_refuses_an_unfrozen_extra_child_*` catches copied ordinal/Final under a foreign ID. Catalog pins/DDL unchanged; consumption projection marker/tables installed only by tests. O remaining FK/tamper/deletion-order/full inventory variants; Task 4 owns producer/schema |
@@ -2895,7 +2899,7 @@ is unchanged; these are current incremental evidence/remaining-work annotations.
 | 40 | E prior A1/A2/A3 faults retained. `batch_each_refusal_write_*` covers seven child/result/cursor/terminal/Z rollback boundaries; `batch_empty_original_*` and `batch_empty_cursor_settlement_*` add explicit-empty success plus atomic empty-cursor A3 rollback/conservative ineligible recovery, no K or C. S1 adds already-held/new-handle SQL-evidence faults: the two-child batch stays at cursor 0/active with both targets waiting and consumer hold retained, no false terminal `ok`. O remaining every-write/ambiguous-commit and second-release fault variants; D actual Task 4 producer |
 | 41 | E prior current-cancel/index-failure controls plus `source_handoff_specfix_r2_*`: completed-P lost capture settles ineligible/discovery_pending under BOTH restart spellings, before/after unrelated repair; immutable original report survives later ordinary poll replacement. Exact recovery-only writes; P outcome/epoch unchanged. Automatic, active-source and foreign root/child-source controls refuse without writes. O active-source crash fencing/fresh-ad retry and remaining source failure variants; D actual Task 4 producer |
 | 42 | E prior planning-pin controls plus both pins across refresh, source-only release on nonempty eligible handoff, retained consumer after source end and bound ineligible last-pin G→G+1 collection/reopen. O full cross-holder/window and partial-effect generation variants |
-| 43 | E `z_keeps_a_valid_integration_window_and_its_batch` retained; original-live C now holds through B's durable no-effect Final and releases at exact last C Final, with result/Z rollback and reopen controls. This does not substitute for the still-O combined source+consumer+other-holder+window matrix; D actual Task 4 journey |
+| 43 | E `z_keeps_a_valid_integration_window_and_its_batch` retained; original-live C holds through B's no-effect Final and releases at exact last C Final. Q1 prevents first/last-child result, cursor/terminal `ok` and consumer release while foreign integration debt remains; applied/released journal history and retained pinned windows do not themselves block valid original C or reactivate ended C. This does not substitute for the still-O combined source+consumer+other-holder+window matrix; D actual Task 4 journey |
 | 44 | E prior immutable/release-debt controls retained; `batch_terminal_release_replay_*` completes both real refusals, advances G, actually reuses the old scalar batch ID through bounded store writes, then proves exact consumer-release replay and historical read do not change/collect the new batch. `batch_final_replay_*` preserves new same-item M/resources. O cross-holder ambiguity, source-fence history and remaining shared-source variants |
 
 ### Exact next work before publication / Task 2 completion
@@ -4161,3 +4165,135 @@ Main rechecked unchanged **`c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`**; same fr
 controller fetch+merge phase reused, no rebase/D5 consumption. No agents, push,
 status/PR/main integration/closure/native CI/other-worktree edits or real-profile/
 key/context/draft actions; default unsupported profile never opened or repaired.
+
+## A4 LIMITED QUALITY Q1 Correction — Retained Integration Debt Is Live Exclusion
+
+Entry **`15cf93998446df9bd334219a37b6b7b4f8be9a7a`**, clean/ahead 2/unpushed;
+preserved with `a562bac8` and all prior history. Controller reports the same SPEC
+S1 re-review passed at that entry, then accepts QUALITY's **one Important Q1**.
+Review remains **`5c9b53aa2691036a2add0ee3f8fb44e41ccc6981..fix-HEAD`**; full Task 2
+base **`7b1912d152a1ab7440bd17c48a0a544e40e19258`**. Fix-HEAD introduces checkpoint
+**`01M6QKCMVNVJHCCRF2EPBWBQ6Z`**, subject
+`fix: exclude retained integration debt from live batch consumption`.
+**Same SPEC delta, then same QUALITY original-probe re-review are pending.**
+
+### Counterexample, cause and narrow correction
+
+Reviewer `/tmp/opencode/quality-batch-15cf-4p_4cjnv/`
+`integration-debt-probe-pinned.log:12–18` demonstrates four violating owned-journal
+compositions (fresh/retained/last child, legacy/pinned forms). Real original A3 C
+remains current; a foreign owned primary integration prepare/effect/conflict release
+leaves `interrupted`, both envelope debt flags zero, but `conflict_pending` retained.
+Ordinary update poll returns ConflictPending on that same image. C admitted results
+and could terminalize/release the consumer while the foreign conflict remained.
+
+Cause: `Live::validate` checked only active envelope phases/index/reconciliation
+flags. Those do not encode retained child integration or native artifact debt.
+
+`batch::require_no_retained_integration` now applies only to **live C** through its
+existing common validation at both `next` and the actual result transaction. Its
+`Result<(), RepositoryError>` exclusion matches the existing prerequisites in
+`state::prepare_integration_window`: any integration stage not `applied`, or any
+resolution attempt not `applied`, missing artifact, artifact not `released`, or
+unobserved ref release remains debt. Required-table/inspection errors propagate;
+no error becomes change evidence or a Final. Existing scope/no-local/envelope/S1
+guards remain unchanged. No ordinary poll/reservation policy was refactored.
+
+Historical audit/read/release paths do **not** invoke this live exclusion. Applied
+and released resolution history (ref observed) and pinned window retention alone
+are not debt or fresh C authority. They cannot reconstruct/reactivate C. The
+unchanged original process capability and every other current guard still apply.
+
+### Test-first composition and coverage boundaries
+
+New `batch_debt_tests.rs` registers six cases in the existing library test target.
+New `remote/retirement_batch_test_support.rs` is entirely `cfg(test)` and repository-
+private; it forwards to the **real owned** integration/window/conflict/reacquire/
+resolution/artifact methods. No SQL write/ownership bypass or public unsafe test API
+exists in the forwarding helper. Synthetic ad/native-artifact evidence proves
+journal composition, **not live SSH synchronization or filesystem resolution**.
+
+- Real foreign conflict release has inactive envelope/zero flags naturally, in
+  both legacy window 0 and pinned window 1. Fresh and retained handles, first and
+  last-child settlement are refused at both admission/write. A full typed Git
+  comparison independently confirms a genuine candidate change, not S1 uncertainty.
+- Actual owned resolution journal APIs produce `resolution_prepared` (artifact
+  `intent` and `published`), `commit_prepared`, and `applied` with `published` or
+  `release_intent` artifacts. Their envelope is **explicitly compatibility-projected
+  inactive/zero flags** afterward solely to isolate child-debt exclusion; that
+  projection is not claimed as the supported resolve/re-fetch/finalization journey.
+  Every expected step/attempt/artifact/ref/envelope phase is asserted.
+- Actual journal release to `applied`/`released`/ref-observed is a positive control
+  under that same envelope projection: retained original C can finish B then C,
+  without changing foreign history/window rows. Historical Final reads remain
+  available after later real conflict; ended C never reactivates. Missing required
+  tables are separately labeled isolated corruption, with no disabled CHECK/trigger.
+- All error controls preserve full **schema/all registry rows/refs/disk** images,
+  cursor, child histories, P/R, conflict debt, batch final code and exact consumer
+  pin/release state. No old 19 batch/166 context/105 SSH assertion was weakened.
+
+Compiled matched RED **1 passed / 5 failed**, `red-matched.log`; pre-fix released-
+history positive passed. Initial `red.log` **0/6** included two test-fixture failures
+(baseline provenance was attempted before index-artifact publication); those and
+`red-resolution-fixture.log` are not counted as production defects. Correcting only
+the helper sequence to the existing producer contract yielded the matched RED.
+Pre-freeze `green-1.log` **6 passed**; final frozen evidence follows.
+
+### Completed frozen-source verification
+
+Logs **`/tmp/opencode/task2-batch-consumption-qualityfix-<suffix>.log`**. Every final
+command completed serial foreground Devenv, **`timeout:0`**, frozen source, exit
+**0**; no copied-probe/shared-target contamination, detached batch or zero-case gate.
+
+| Exact command after `devenv shell --` | Suffix | Passed/result |
+| --- | --- | --- |
+| `cargo check --all-features --locked` | `check` | pass |
+| `cargo fmt --check` | `fmt` | pass |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy` | pass |
+| `cargo test --all-features --locked --lib batch_tests::` | `batch` | **25 = retained 19 +6 Q1** |
+| Same test flags, `--lib retirement_source_` | `source-units` | **36**; source R1/R2 retained |
+| Same test flags, `--lib context_retirement` | `context` | **172 = retained 166 +6** |
+| Same test flags, `--test mutation_remote retirement_` | `retirement-ssh` | **105 registered SSH** |
+| Same test flags, `--lib remote::reservation::` / `--lib remote::state::persistence_tests` | `reservation` / `state` | **58 / 70** |
+| Same test flags, `--lib synchronization_handoff_refuses_unreleased_resolution_artifacts` | `resolution-artifacts` | **1** real filesystem-resolution regression |
+| Same test flags, `--lib remote::poll` | `poll` | **81** |
+| Same test flags, `--lib cleanup` / `--lib recovery` / `--lib refresh` | `cleanup` / `recovery` / `refresh` | **52 / 63 / 39** |
+| Same test flags, `--test recovery_foundation_gate` | `foundation` | **52** |
+
+Counts overlap. **1,726** frozen build/dependency/test/asset/document compile inputs,
+including both new modules, all rechecked after gates:
+`task2-batch-consumption-qualityfix-source.sha256`, SHA-256
+**`6ccef83b7800046adb33675bd186bf342bea0e09abb6f45a8e1db6af10f6c0dc`**.
+**22-log** inventory includes labeled preliminary/RED runs, not 22 passing gates:
+`task2-batch-consumption-qualityfix-evidence.sha256`, SHA-256
+**`50453ad2924fb95094c47041d72f464079b28467c407054bef927f471ac20ec7`**.
+Prior 15cf 166/105 evidence retains its original source scope. No unchanged 384-
+replay/broad-six-SSH/full-fast/full-suite/native/Windows/casefold/cross-compile claim.
+
+### Scope, self-review limits and remaining duties
+
+Five Rust paths: `context_retirement/{batch,batch_contract_tests,batch_debt_tests}.rs`
+and `remote/{mod,retirement_batch_test_support}.rs`; only batch C has a production
+behavior change. No dependency/lockfile/shared DDL/catalog pin/target or actual
+integration producer/ordinary poll/release/promotion/closure change. Only affected
+E/O/D rows **12/33/35/43** updated. The narrow C predicate deliberately uses the
+existing next-window debt contract; it is not a replacement for canonical journal
+validation or a new ordinary-policy decision. Compatibility and synthetic evidence
+limits above remain explicit; real network/native artifact journeys are not newly
+demonstrated by these Q1 compositions.
+
+Still owed: same SPEC delta **then same QUALITY original-probe re-review**; positive
+A4 real cleanup/index/result B→C with every-write authority, gap O/R8/resumed C,
+active-source restart/fencing, full shared-holder/window/ambiguous-commit/A2/A3 fault
+matrices, replacement/M/D14/index/history variants, full-44 final Task 2 adversarial
+review and Task 8 final fast/changed-path gates. Actual Tasks 3 Command/DTO/CLI/
+cancellation/guarded abandon and 4 production schema/selection/enrollment/loop/
+coordinator/final reports remain downstream. No approval or full A4/Task 2 claim.
+
+Checkpoint parent **`01M6QF9DTHJADRY6P4C1VYHDYB`**, actual UTC
+**`2026-11-06T04:55:41Z`**. ID only from supported current CLI with isolated
+`MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data` (`comment-id`).
+Main rechecked unchanged **`c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`**; fresh
+controller fetch+merge phase reused, no rebase/D5 consumption. No agents/push/status/
+PR/main integration/closure/native CI/other-worktree edits or real-profile/key/
+context/draft actions; unsupported default profile never opened or repaired.

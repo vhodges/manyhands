@@ -4,6 +4,8 @@
 use super::*;
 use crate::repository::context_retirement::handoff::batch;
 
+#[path = "batch_debt_tests.rs"]
+mod debt;
 #[path = "batch_inspection_tests.rs"]
 mod inspection;
 

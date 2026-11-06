@@ -31,6 +31,8 @@ pub use sync::{
 #[cfg(test)]
 pub(crate) mod observation_tests;
 pub(super) mod reservation;
+#[cfg(test)]
+pub(super) mod retirement_batch_test_support;
 pub(super) mod state;
 
 pub use reservation::{

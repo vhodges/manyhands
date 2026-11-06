@@ -5,6 +5,24 @@ use crate::repository::{RepositoryOperation, repository_lease};
 
 const CONTRACT: &str = "poll_retirement_consumption_contract_v1";
 
+/// Live C exclusion, not historical correlation. A released remote slot does
+/// not settle its integration stages or native resolution artifacts. Match the
+/// existing next-window prerequisites in state::prepare_integration_window;
+/// applied/released history and window retention alone are not live debt.
+fn require_no_retained_integration(
+    db: &Connection,
+    repository: i64,
+) -> Result<(), RepositoryError> {
+    let pending: bool = db.query_row("SELECT
+      EXISTS(SELECT 1 FROM remote_integration_steps step JOIN remote_operation_records operation ON operation.id=step.operation_record_id WHERE operation.repository_id=?1 AND step.phase!='applied')
+      OR EXISTS(SELECT 1 FROM remote_resolution_attempts attempt JOIN remote_operation_records operation ON operation.id=attempt.operation_record_id LEFT JOIN remote_resolution_index_artifacts artifact ON artifact.attempt_id=attempt.id WHERE operation.repository_id=?1 AND (attempt.phase!='applied' OR artifact.phase IS NULL OR artifact.phase!='released' OR artifact.ref_phase!='observed'))",
+      [repository], |r| r.get(0)).map_err(|_| recovery_required())?;
+    if pending {
+        return Err(recovery_required());
+    }
+    Ok(())
+}
+
 fn contract(db: &Connection) -> Result<(), RepositoryError> {
     for table in ["poll_retirement_cursors", "poll_retirement_targets"] {
         if !crate::repository::recovery::has_table(db, table).map_err(|_| recovery_required())? {
@@ -274,6 +292,7 @@ impl Live {
             return Err(recovery_required());
         }
         crate::repository::recovery::require_no_pending_local(tx, id)?;
+        require_no_retained_integration(tx, id)?;
         let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))",[id],|r|r.get(0)).map_err(|_|recovery_required())?;
         let plan = crate::repository::RemoteRefPlan::from_configuration(&p.remote, &p.primary)
             .map_err(|_| recovery_required())?;
