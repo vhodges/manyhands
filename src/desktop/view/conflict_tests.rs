@@ -30,13 +30,13 @@ use manyhands::{
 };
 
 use super::{
-    KEEPING_THEIRS, OpenedSheet, Opening, ResolveSheet, SAVE_RESOLUTION, SheetSource, TAKEN_THEIRS,
-    open,
+    CHANGED, KEEPING_MINE, KEEPING_THEIRS, OpenedSheet, Opening, ResolveSheet, SAVE_RESOLUTION,
+    SheetSource, TAKEN_THEIRS, open,
 };
 use crate::desktop::{
-    model::conflict::STANDARD_LAYOUT_NOTE,
+    model::conflict::{BodyChoice, Choice, STANDARD_LAYOUT_NOTE},
     services::{
-        Services,
+        JobKind, Services,
         requests::{DesktopRequest, DesktopRequestId, Intent, RequestState},
     },
     test_support::fixtures::{Fixture, item_id, ticket_path, ticket_source},
@@ -290,7 +290,7 @@ async fn save_is_disabled_until_every_part_is_chosen(cx: &mut TestAppContext) {
     let (shell, root, operation) = local_shell(cx, |fixture, root| {
         fixture.conflict_locally(root, TICKET, "Mine", "Theirs")
     });
-    open_sheet(&shell, SheetSource::Local, &root, operation, cx);
+    let sheet = open_sheet(&shell, SheetSource::Local, &root, operation, cx);
     until_present(&shell, "conflict-save", cx).await;
 
     assert_eq!(
@@ -306,6 +306,18 @@ async fn save_is_disabled_until_every_part_is_chosen(cx: &mut TestAppContext) {
     assert!(!shell.tab_reaches("conflict-save", 24, cx), "disabled");
     shell.click("conflict-save", cx);
     assert!(resolves(&shell, cx).is_empty(), "nothing is saved");
+    // A Save that has nothing to send (Ctrl+Enter) leaves the notice.
+    sheet.update(cx, |sheet, _| sheet.notice = Some(CHANGED));
+    shell.visual(cx).update(|window, cx| {
+        sheet.update(cx, |sheet, cx| sheet.save(window, cx));
+    });
+    shell.run(cx);
+    assert_eq!(
+        shell.label("conflict-notice", cx).as_deref(),
+        Some(CHANGED),
+        "the notice stays"
+    );
+    sheet.update(cx, |sheet, _| sheet.notice = None);
 
     shell.click(("conflict-keep-theirs", 0usize), cx);
     assert_eq!(
@@ -467,4 +479,146 @@ async fn a_local_resolution_uses_the_inspections_observation(cx: &mut TestAppCon
         !shell.present("conflict-sheet", cx)
     })
     .await;
+}
+
+fn editor_text(editor: &Entity<zorite_editor::EditorState>, cx: &mut TestAppContext) -> String {
+    editor.read_with(cx, |editor, _| editor.text().to_owned())
+}
+
+/// Focuses the Result editor of path 0 and puts the caret at its end.
+fn focus_result(
+    shell: &Shell,
+    editor: &Entity<zorite_editor::EditorState>,
+    cx: &mut TestAppContext,
+) {
+    let end = editor.read_with(cx, |editor, _| editor.text().len());
+    editor.update(cx, |editor, cx| editor.set_cursor(end, cx));
+    let handle = editor.read_with(cx, |editor, cx| editor.focus_handle(cx));
+    shell.frame(cx, |window, cx| window.focus(&handle, cx));
+    shell.frame(cx, |_, _| ());
+}
+
+/// A sheet over a real local conflict of the title and the body, both
+/// chosen, its Result editor focused.
+async fn sheet_with_result(
+    cx: &mut TestAppContext,
+) -> (
+    Shell,
+    Entity<ResolveSheet>,
+    Entity<zorite_editor::EditorState>,
+) {
+    let (shell, root, operation) = local_shell(cx, |fixture, root| {
+        fixture.conflict_locally_with_body(root, TICKET, "Mine", Some("Mine body.\n"), "Theirs")
+    });
+    let sheet = open_sheet(&shell, SheetSource::Local, &root, operation, cx);
+    until_present(&shell, "conflict-save", cx).await;
+    shell.click(("conflict-keep-mine", 0usize), cx);
+    shell.click(("conflict-body-mine", 0usize), cx);
+    let editor = sheet
+        .read_with(cx, |sheet, _| sheet.result_editor(0))
+        .expect("the Result editor");
+    focus_result(&shell, &editor, cx);
+    (shell, sheet, editor)
+}
+
+/// V1: undo and redo in the Result editor emit no `Changed`, and the
+/// sheet read only that: Save resolution wrote the text the person had
+/// undone. The sheet follows the editor's text, however it changed.
+#[gpui_kit::test]
+async fn save_writes_the_text_after_an_undo(cx: &mut TestAppContext) {
+    let (shell, _sheet, editor) = sheet_with_result(cx).await;
+    let before = editor_text(&editor, cx);
+    shell.visual(cx).simulate_input("Added");
+    shell.run(cx);
+    assert!(editor_text(&editor, cx).contains("Added"));
+    for _ in 0..10 {
+        if editor_text(&editor, cx) == before {
+            break;
+        }
+        shell.keys("ctrl-z", cx);
+    }
+    assert_eq!(editor_text(&editor, cx), before, "the typing is undone");
+
+    shell.keys("ctrl-enter", cx);
+    let sent = resolves(&shell, cx);
+    assert_eq!(sent.len(), 1);
+    let (_, paths) = submitted(&request(&shell, sent[0], cx).intent);
+    assert!(!paths[0].1.contains("Added"), "the undone text is saved");
+    shell.until_ended(sent[0], cx).await;
+}
+
+/// Veditors: a landed re-read rebuilt every Result editor, so a focused
+/// one lost its caret, focus and undo history. A part whose three sides
+/// are as they were keeps its editor: the same entity, focused, with its
+/// text and history.
+#[gpui_kit::test]
+async fn a_read_again_keeps_an_unchanged_result_editor(cx: &mut TestAppContext) {
+    let (shell, sheet, editor) = sheet_with_result(cx).await;
+    let before = editor_text(&editor, cx);
+    shell.visual(cx).simulate_input("Added");
+    shell.run(cx);
+    let typed = editor_text(&editor, cx);
+    assert_ne!(typed, before);
+
+    sheet.update(cx, |sheet, cx| sheet.read_conflict(cx));
+    until_long(&shell, "the read", cx, |_, cx| {
+        !sheet.read_with(cx, |sheet, _| sheet.reading)
+    })
+    .await;
+    shell.frame(cx, |_, _| ());
+
+    let again = sheet
+        .read_with(cx, |sheet, _| sheet.result_editor(0))
+        .expect("the Result editor");
+    assert_eq!(again.entity_id(), editor.entity_id(), "the same editor");
+    assert_eq!(editor_text(&again, cx), typed);
+    let handle = again.read_with(cx, |editor, cx| editor.focus_handle(cx));
+    assert!(shell.frame(cx, |window, _| handle.is_focused(window)));
+    for _ in 0..10 {
+        if editor_text(&again, cx) == before {
+            break;
+        }
+        shell.keys("ctrl-z", cx);
+    }
+    assert_eq!(editor_text(&again, cx), before, "its history is kept");
+}
+
+/// V3: the choosers and the Result editor stayed live while Save
+/// resolution was out. The request carries the choices at the click; a
+/// later choice was shown and then lost as the sheet closed. While the
+/// request is out, they do nothing, and the editor shows what was sent.
+#[gpui_kit::test]
+async fn choices_wait_while_a_save_is_out(cx: &mut TestAppContext) {
+    let (shell, sheet, editor) = sheet_with_result(cx).await;
+    let held = shell.backend.hold_job(JobKind::LocalContextResolve);
+    shell.click("conflict-save", cx);
+    held.wait_reached();
+    let sent = resolves(&shell, cx);
+    assert_eq!(sent.len(), 1);
+    let sent_text = editor_text(&editor, cx);
+    let progress = shell.label("conflict-progress", cx);
+
+    shell.click(("conflict-keep-theirs", 0usize), cx);
+    shell.click(("conflict-body-theirs", 0usize), cx);
+    sheet.update(cx, |sheet, cx| {
+        sheet.choose_field(0, 0, Choice::Theirs, cx);
+        sheet.choose_body(0, BodyChoice::Both, cx);
+    });
+    shell.visual(cx).simulate_input("Late");
+    shell.run(cx);
+    assert_eq!(
+        shell.label(("conflict-choice", 0usize), cx).as_deref(),
+        Some(KEEPING_MINE),
+        "the title is as it was sent"
+    );
+    assert_eq!(
+        shell.label(("conflict-body-choice", 0usize), cx).as_deref(),
+        Some(KEEPING_MINE),
+        "the body is as it was sent"
+    );
+    assert_eq!(editor_text(&editor, cx), sent_text, "the Result is as sent");
+    assert_eq!(shell.label("conflict-progress", cx), progress);
+
+    held.release();
+    shell.until_ended(sent[0], cx).await;
 }

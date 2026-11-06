@@ -63,7 +63,13 @@ impl ResolveSheet {
     /// Whether a request the sheet sent is still out, or the conflict is
     /// being read again: Save waits for either.
     pub(super) fn waiting(&self) -> bool {
-        self.following.is_some() || self.reading || self.submitting
+        self.saving() || self.reading
+    }
+
+    /// Whether a Save resolution is out: its set is being kept, or its
+    /// request is out. The choices are then as they were sent.
+    pub(super) fn saving(&self) -> bool {
+        self.following.is_some() || self.submitting
     }
 
     /// Save resolution, by click or Ctrl+Enter: Retry with the kept set
@@ -73,20 +79,23 @@ impl ResolveSheet {
         if self.waiting() || self.resumable() || self.lost() {
             return;
         }
+        // Nothing to send leaves the notice and the answer as they are.
+        let new_set = self
+            .model
+            .as_ref()
+            .and_then(|model| Some((model.resolutions()?, model.observation()?.to_owned())));
+        if self.kept.is_none() && new_set.is_none() {
+            return;
+        }
         self.notice = None;
         self.answer = None;
         if let Some(kept) = self.kept.clone() {
             self.send_kept(kept, window, cx);
             return;
         }
-        let Some(model) = &self.model else {
+        let Some((resolutions, observation)) = new_set else {
             return;
         };
-        let (Some(resolutions), Some(observation)) = (model.resolutions(), model.observation())
-        else {
-            return;
-        };
-        let observation = observation.to_owned();
         // Another window's set of this conflict, looked up off the UI
         // thread (Task 16, fix 2); Save waits meanwhile.
         self.submitting = true;

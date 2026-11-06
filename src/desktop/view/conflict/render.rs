@@ -284,6 +284,7 @@ impl ResolveSheet {
                     .label(label)
                     .small()
                     .selected(part.choice == Some(choice))
+                    .disabled(self.saving())
                     .on_click(self.on(cx, move |sheet, _, cx| {
                         sheet.choose_field(index, at, choice, cx)
                     }))
@@ -392,6 +393,7 @@ impl ResolveSheet {
                 .label(label)
                 .small()
                 .selected(choice == Some(kept))
+                .disabled(self.saving())
                 .on_click(self.on(cx, move |sheet, _, cx| sheet.choose_body(index, kept, cx)))
         };
         v_flex()

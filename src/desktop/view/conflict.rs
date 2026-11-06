@@ -45,8 +45,8 @@ pub(crate) use entry::Entry;
 use std::path::PathBuf;
 
 use gpui_kit::{
-    App, AppContext, Context, Entity, FocusHandle, ParentElement, Subscription, Task, Window,
-    component::WindowExt, px,
+    App, AppContext, Context, Entity, EntityId, FocusHandle, ParentElement, Subscription, Task,
+    Window, component::WindowExt, px,
 };
 use manyhands::{
     canonical::ItemId,
@@ -227,6 +227,9 @@ impl gpui_kit::Global for OpenedSheet {}
 /// as mono lines, each with its tint and gutter (handoff 2g).
 struct BodyEditors {
     path: usize,
+    /// The part's token and three sides: a read that gives the same ones
+    /// keeps this editor, with its focus and history.
+    part: (String, [String; 3]),
     result: Entity<EditorState>,
     /// The Result's tab stop, after the part's choices: Enter on it puts
     /// focus in the editor, and Escape there comes back to it (R-31).
@@ -466,6 +469,10 @@ impl ResolveSheet {
     }
 
     fn choose_field(&mut self, path: usize, field: usize, choice: Choice, cx: &mut Context<Self>) {
+        // Out with Save resolution, the choices are as they were sent.
+        if self.saving() {
+            return;
+        }
         if let Some(model) = &mut self.model
             && let Some(path) = model.paths_mut().get_mut(path)
         {
@@ -476,6 +483,9 @@ impl ResolveSheet {
 
     /// Keep mine, theirs or both: the Result editor shows it.
     fn choose_body(&mut self, path: usize, choice: BodyChoice, cx: &mut Context<Self>) {
+        if self.saving() {
+            return;
+        }
         let Some(result) = self.model.as_mut().and_then(|model| {
             let conflict = model.paths_mut().get_mut(path)?;
             conflict.choose_body(choice);
@@ -489,28 +499,51 @@ impl ResolveSheet {
         cx.notify();
     }
 
-    /// The Result editor of `path` changed by the user's hand.
-    fn result_edited(&mut self, path: usize, cx: &mut Context<Self>) {
-        let Some(editors) = self.editors.iter().find(|editors| editors.path == path) else {
+    /// The Result editor `editor` changed: by typing, or by undo or redo,
+    /// which emit no event. Its text is then the Result. A change while
+    /// Save resolution is out is put back: the request has the text sent.
+    fn result_edited(&mut self, editor: EntityId, cx: &mut Context<Self>) {
+        let Some((path, result)) = self
+            .editors
+            .iter()
+            .find(|editors| editors.result.entity_id() == editor)
+            .map(|editors| (editors.path, editors.result.clone()))
+        else {
             return;
         };
-        let text = editors.result.read(cx).text().to_owned();
-        if let Some(conflict) = self
+        let text = result.read(cx).text().to_owned();
+        let saving = self.saving();
+        let Some(conflict) = self
             .model
             .as_mut()
             .and_then(|model| model.paths_mut().get_mut(path))
-        {
-            conflict.edit_body(text);
+        else {
+            return;
+        };
+        let Some(body) = conflict.body() else {
+            return;
+        };
+        if text == body.result {
+            return;
         }
+        if saving {
+            let sent = body.result.clone();
+            set_exact(&result, &sent, cx);
+            return;
+        }
+        conflict.edit_body(text);
         cx.notify();
     }
 
-    /// Makes the body editors of the model just read.
+    /// Makes the body editors of the model just read. A part whose token
+    /// and sides are as they were keeps its editor, and with it focus,
+    /// caret and history (R-31): the model took its Result from the
+    /// earlier read, which the editor holds.
     fn make_editors(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !std::mem::take(&mut self.editors_stale) {
             return;
         }
-        self.editors.clear();
+        let mut earlier = std::mem::take(&mut self.editors);
         let Some(ConflictSet::Canonical(paths)) = self.model.as_ref().map(ConflictModel::set)
         else {
             return;
@@ -518,18 +551,35 @@ impl ResolveSheet {
         let bodies: Vec<_> = paths
             .iter()
             .enumerate()
-            .filter_map(|(index, path)| Some((index, path.body()?.result.clone())))
+            .filter_map(|(index, path)| {
+                let body = path.body()?;
+                let part = (
+                    path.token().to_owned(),
+                    [body.base.clone(), body.mine.clone(), body.theirs.clone()],
+                );
+                Some((index, part, body.result.clone()))
+            })
             .collect();
-        for (path, result) in bodies {
+        for (path, part, result) in bodies {
+            if let Some(at) = earlier.iter().position(|editors| editors.part == part) {
+                let mut kept = earlier.swap_remove(at);
+                kept.path = path;
+                if kept.result.read(cx).text() != result {
+                    set_exact(&kept.result, &result, cx);
+                }
+                self.editors.push(kept);
+                continue;
+            }
             let editor = crate::desktop::view::editor::open_editor(&result, window, cx);
             set_exact(&editor, &result, cx);
-            let changed = cx.subscribe(&editor, move |sheet, _, event, cx| {
-                if matches!(event, zorite_editor::EditorEvent::Changed) {
-                    sheet.result_edited(path, cx);
-                }
+            // Observed, not subscribed to `Changed`: undo and redo only
+            // notify.
+            let changed = cx.observe(&editor, |sheet, editor, cx| {
+                sheet.result_edited(editor.entity_id(), cx)
             });
             self.editors.push(BodyEditors {
                 path,
+                part,
                 result: editor,
                 stop: cx.focus_handle().tab_stop(true),
                 _changed: changed,
