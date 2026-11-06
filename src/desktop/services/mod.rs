@@ -32,7 +32,7 @@ use manyhands::{
         ConflictDto, ContextPrepareIntent, Mutation, MutationDataDto, OperationId, PrepareDataDto,
         ProgressStage, RepositoryService, keys::KeyStore,
     },
-    results::{Envelope, Outcome, PublicationEffect, ResultCode},
+    results::{Envelope, Outcome, PublicationEffect, RecoveryActionKind, ResultCode},
 };
 
 use crate::desktop::model::{
@@ -427,6 +427,13 @@ impl Services {
                                     }
                                     _ => None,
                                 },
+                                retry: matches!(
+                                    &event,
+                                    WorkerEvent::Finished(_, envelope)
+                                        if envelope.recovery.iter().any(|action| {
+                                            action.action == RecoveryActionKind::RequestRetry
+                                        })
+                                ),
                             });
                         }
                         // A run queued again leads on from here afresh.

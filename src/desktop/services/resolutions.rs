@@ -362,6 +362,16 @@ impl ResolutionStore {
     /// A set whose delete failed is still kept, and the error is returned
     /// (Task 16, fix 4): the launch sweep settles it again.
     fn ended(&self, backend: &dyn Backend, ended: &Ended) -> Result<(), ResolutionStoreError> {
+        // A local resolution refused `busy` before the library accepted it
+        // has no record, yet its Retry sends the same request again, and
+        // only the kept set carries the paths it sends (V12). The retry's
+        // own end settles the set; the launch sweep does, if there is none.
+        if ended.source == ConflictSource::Local
+            && ended.retry
+            && matches!(ended.answer, Some((ResultCode::Busy, _)))
+        {
+            return Ok(());
+        }
         let remote = match (ended.source, ended.answer) {
             (ConflictSource::Remote, Some((code, checkpoint))) => remote_answer(code, checkpoint),
             _ => RemoteAnswer::Settle,

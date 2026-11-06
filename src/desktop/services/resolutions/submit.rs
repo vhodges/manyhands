@@ -105,6 +105,9 @@ pub(in crate::desktop::services) struct Ended {
     /// The answer's code and checkpoint effect; `None` when the request
     /// never reached the library (removed from the queue, or not sent).
     pub answer: Option<(ResultCode, CheckpointEffect)>,
+    /// Whether the answer offered `request.retry`: the same request goes on
+    /// from where it stopped, and sending it again needs its set.
+    pub retry: bool,
 }
 
 /// What each of `ended` means for its kept set, on the background

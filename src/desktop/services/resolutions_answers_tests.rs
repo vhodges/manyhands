@@ -27,7 +27,7 @@ use manyhands::{
 use super::tests::{a_local_resolution, a_set, fields, finished, kept, start, until};
 use crate::desktop::{
     services::{
-        JobKind, Services,
+        BUSY_RETRY_DELAYS, JobKind, Services,
         conflicts::ConflictSource,
         requests::{DesktopRequestId, RequestState},
     },
@@ -83,10 +83,22 @@ async fn answered_set(
     canned: Envelope<MutationDataDto>,
     cx: &mut TestAppContext,
 ) -> RequestId {
+    let kind = match set.source {
+        ConflictSource::Remote => JobKind::ConflictResolve,
+        ConflictSource::Local => JobKind::LocalContextResolve,
+    };
     let request = set.request_id;
-    backend
-        .hold_job_return_answering(JobKind::ConflictResolve, canned)
-        .release();
+    // The worker takes a `busy` job again before its answer stands.
+    let attempts = if canned.code == ResultCode::Busy {
+        BUSY_RETRY_DELAYS.len() + 1
+    } else {
+        1
+    };
+    for _ in 0..attempts {
+        backend
+            .hold_job_return_answering(kind, canned.clone())
+            .release();
+    }
     let submitted = cx.update(|cx| services.submit_resolution(set, cx));
     cx.run_until_parked();
     let id = submitted.await.expect("kept");
@@ -161,6 +173,47 @@ async fn a_remote_refusal_before_a_write_deletes_its_set(cx: &mut TestAppContext
     )]);
     let request = answered(&backend, &services, &root, canned, cx).await;
     assert!(store.kept(request).unwrap().is_none());
+}
+
+/// A local resolution refused `busy` before the library accepted it left no
+/// record, yet its Retry sends the same request again, and only a set kept
+/// under that request carries the paths the sheet chose (V12): the set stays
+/// until the retry's own answer settles it. A busy answer that offers no
+/// Retry has nothing to send again, and a set no record stands behind goes.
+///
+/// Canned: `busy` is what a local resolution is answered while another
+/// holder has the repository (`tests/local_sync` `busy`), with
+/// `request.retry` naming the request.
+#[gpui_kit::test]
+async fn a_busy_local_refusal_that_offers_retry_keeps_its_set(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let (backend, services) = start(&fixture, cx);
+    let store = fixture.resolution_store();
+    let busy = |request: Option<RequestId>| {
+        let answer = answer(ResultCode::Busy, Effects::not_requested());
+        match request {
+            Some(request) => answer.with_recovery(vec![RecoveryAction::new(
+                RecoveryActionKind::RequestRetry,
+                [("request_id", request.to_string().into())],
+            )]),
+            None => answer,
+        }
+    };
+    let set = a_set(&root, OperationId::new(), ConflictSource::Local, "Mine");
+    let offered = busy(Some(set.request_id));
+    let request = answered_set(&backend, &services, set, offered, cx).await;
+    assert!(
+        store.kept(request).unwrap().is_some(),
+        "busy with Retry keeps the set"
+    );
+
+    let set = a_set(&root, OperationId::new(), ConflictSource::Local, "Mine");
+    let request = answered_set(&backend, &services, set, busy(None), cx).await;
+    assert!(
+        store.kept(request).unwrap().is_none(),
+        "busy with nothing to retry settles as before"
+    );
 }
 
 /// R-25: an answer that ends the attempt deletes its set: applied,
