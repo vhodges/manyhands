@@ -21,6 +21,7 @@ pub(in super::super::super::super) enum Boundary {
     Deleted,
     BeforeClaim,
     Finalizer,
+    NoEffect,
 }
 #[cfg(test)]
 type Hook = Box<dyn FnOnce(&Connection)>;
@@ -69,16 +70,74 @@ pub(in super::super::super::super) struct IndexScope {
     local: i64,
 }
 
+// Non-Clone process witnesses. Created only by this live begin/intent chain,
+// never from a persisted intent, result, candidate or new executor.
+struct UninvokedBranch {
+    operation: OperationId,
+    epoch: i64,
+    receipt: i64,
+    primary: git2::Oid,
+    proof: crate::repository::context_retirement::proof::PreservationProof,
+}
+pub(super) struct RefusalWitness {
+    scope: IndexScope,
+    intent: Option<UninvokedBranch>,
+}
+
+impl RefusalWitness {
+    fn settle(
+        &self,
+        service: &RepositoryService,
+    ) -> Result<ContextRetirementOutcome, RepositoryError> {
+        let scope = &self.scope;
+        let p = &scope.capture.p;
+        if !Arc::ptr_eq(&scope.capture.scope, &service.remote_reservation_scope)
+            || scope.capture.registry != service.registry_path
+        {
+            return Err(recovery_required());
+        }
+        state::with_transaction(service, Path::new(&p.root), |tx, _| {
+            #[cfg(test)]
+            boundary(Boundary::NoEffect, tx);
+            let (f, k, count) = scope.current(tx)?;
+            let safe:bool=tx.query_row("SELECT absence_basis='none' AND materialization_settled=0 AND worktree_removal='none' AND ((?2=0 AND phase='selected' AND branch_removal='none' AND initial_primary_oid IS NULL AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid)) OR (?2=1 AND phase='branch_deleting' AND branch_removal='possible' AND (SELECT count(*) FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid)=1)) FROM context_retirement_records c WHERE operation_ulid=?1 AND owner_epoch=1",params![k.child_operation_id,self.intent.is_some()],|r|r.get(0)).map_err(|_|recovery_required())?;
+            if !safe {
+                return Err(recovery_required());
+            }
+            if let Some(w) = &self.intent {
+                if w.operation.to_string() != k.child_operation_id
+                    || w.epoch != k.selection_epoch
+                    || w.receipt != f.binding
+                {
+                    return Err(recovery_required());
+                }
+                if tx.execute("UPDATE context_retirement_effect_intents SET observation='changed' WHERE operation_ulid=?1 AND owner_epoch=?5 AND resource='branch' AND receipt_id=?2 AND primary_oid=?3 AND proof_kind=?4 AND observation IS NULL",params![k.child_operation_id,w.receipt,w.primary.to_string(),run::proof_name(w.proof),w.epoch]).map_err(|_|recovery_required())?!=1 {return Err(recovery_required());}
+            }
+            let report =
+                ContextRetirementReport::refused(crate::results::ResultCode::ExternalChange);
+            let result = report.encode()?;
+            if tx.execute("UPDATE context_retirement_records SET phase='refused',branch_removal='none',worktree_removal='none',final_code='external_change',final_result=?2 WHERE operation_ulid=?1 AND owner_epoch=1 AND phase IN ('selected','branch_deleting')",params![k.child_operation_id,result]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
+            if tx.execute("UPDATE context_retirement_attempts SET phase='ended' WHERE operation_ulid=?1 AND owner_epoch=1 AND phase='active'",[&k.child_operation_id]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
+            if tx.execute("UPDATE operation_records SET state='completed' WHERE id=?1 AND action='retire_context' AND state='created' AND completed_step IS NULL AND index_owner_epoch=0",[scope.local]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
+            if tx.execute("UPDATE poll_retirement_targets SET state='refused',handoff='final',final_result=?4 WHERE operation_ulid=?1 AND owner_epoch=?2 AND ordinal=?3 AND state='running' AND handoff='cleanup' AND final_result IS NULL",params![p.operation,p.epoch,scope.ordinal as i64,result]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
+            let last = scope.ordinal + 1 == count;
+            if tx.execute("UPDATE poll_retirement_cursors SET next_ordinal=next_ordinal+1,stage=?4 WHERE operation_ulid=?1 AND owner_epoch=?2 AND next_ordinal=?3 AND stage='active'",params![p.operation,p.epoch,scope.ordinal as i64,if last{"complete"}else{"active"}]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
+            if last {
+                if tx.execute("UPDATE poll_retirement_freezes SET final_code='ok' WHERE operation_ulid=?1 AND owner_epoch=?2 AND final_code IS NULL AND eligibility='eligible'",params![p.operation,p.epoch]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
+                if tx.execute("UPDATE poll_retirement_attempts SET phase='ended' WHERE operation_ulid=?1 AND owner_epoch=?2 AND phase='active'",params![p.operation,p.epoch]).map_err(|_|recovery_required())?!=1{return Err(recovery_required());}
+                record::release_bound_source(tx, f.provenance, f.binding, true)?;
+            }
+            record::audit_connection(tx)?;
+            Ok(ContextRetirementOutcome::Final(report))
+        })
+    }
+}
+
 impl IndexScope {
     fn current(&self, db: &Connection) -> Result<(Frozen, Candidate, usize), RepositoryError> {
         let p = &self.capture.p;
-        let (f, entries, cursor) = Live::validate_capture(
-            &self.capture,
-            db,
-            p.repository,
-            Path::new(&p.root),
-            Some(self.local),
-        )?;
+        let (f, entries, cursor) =
+            Live::validate_metadata(&self.capture, db, p.repository, Path::new(&p.root))?;
         if cursor != self.ordinal {
             return Err(recovery_required());
         }
@@ -107,7 +166,6 @@ impl IndexScope {
             return Err(recovery_required());
         }
         let (_, k, _) = self.current(db)?;
-        self.receipt(db)?;
         let p = &self.capture.p;
         let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id JOIN context_retirement_index_claims i ON i.operation_ulid=c.operation_ulid WHERE c.operation_ulid=?1 AND c.phase='index_pending' AND c.absence_basis='owned_intent' AND c.materialization_settled=1 AND o.completed_step='context_branch_released' AND o.state='indexing' AND o.index_owner_epoch=?2 AND i.repository_id=c.repository_id AND i.request_ulid=?3 AND i.request_attempt=?4 AND i.index_owner_epoch=?2)",params![k.child_operation_id,epoch,p.request,p.request_attempt],|r|r.get(0)).map_err(|_|recovery_required())?;
         if !valid {
@@ -117,6 +175,16 @@ impl IndexScope {
     }
 
     fn receipt(&self, db: &Connection) -> Result<(i64, Candidate), RepositoryError> {
+        // Fresh cleanup alone requires C/G/F and original process configuration.
+        // Index and known-no-effect metadata settlement use current() instead.
+        let p = &self.capture.p;
+        Live::validate_capture(
+            &self.capture,
+            db,
+            p.repository,
+            Path::new(&p.root),
+            Some(self.local),
+        )?;
         let (f, k, _) = self.current(db)?;
         let p = &self.capture.p;
         let plan = crate::repository::RemoteRefPlan::from_configuration(&p.remote, &p.primary)
@@ -330,40 +398,77 @@ impl Child<'_> {
             if run::branch_only(&git, &request)? != Some(tip) {
                 return Err(recovery_required());
             }
-            let (primary, proof) = run::local_proof(&git, &request, tip, &p.primary)?;
+            let (primary, proof) = match run::compare_local_proof(&git, &request, tip, &p.primary)?
+            {
+                run::LocalProofComparison::Preserved(primary, proof) => (primary, proof),
+                run::LocalProofComparison::Changed => return Ok(None),
+            };
             run::require_materialization(tx, request.operation_id, false)?;
             if tx.execute("UPDATE context_retirement_records SET initial_primary_oid=?2,phase='branch_deleting',branch_removal='possible' WHERE operation_ulid=?1 AND owner_epoch=1 AND phase='selected'",params![request.operation_id.to_string(),primary.to_string()]).map_err(|_|recovery_required())?!=1 {return Err(recovery_required());}
             tx.execute("INSERT INTO context_retirement_effect_intents(operation_ulid,owner_epoch,resource,receipt_id,primary_oid,proof_kind) VALUES(?1,1,'branch',?2,?3,?4)",params![request.operation_id.to_string(),receipt,primary.to_string(),run::proof_name(proof)]).map_err(|_|recovery_required())?;
             record::audit_connection(tx)?;
-            Ok((primary, proof))
+            Ok(Some((primary, proof, receipt)))
         });
-        let Ok((primary, proof)) = prepared else {
-            return Ok(ContextRetirementOutcome::CleanupPending {
-                worktree_removal: RetirementRemoval::None,
-                branch_removal: RetirementRemoval::None,
-            });
+        let (primary, proof, receipt) = match prepared {
+            Ok(Some(ready)) => ready,
+            Ok(None) => {
+                return self.live.finish_no_effect(
+                    service,
+                    RefusalWitness {
+                        scope,
+                        intent: None,
+                    },
+                );
+            }
+            Err(_) => {
+                return Ok(ContextRetirementOutcome::CleanupPending {
+                    worktree_removal: RetirementRemoval::None,
+                    branch_removal: RetirementRemoval::None,
+                });
+            }
         };
         #[cfg(test)]
         {
             let db = Connection::open(&service.registry_path).map_err(|_| recovery_required())?;
             boundary(Boundary::IntentCommitted, &db);
         }
+        let mut uninvoked = Some(UninvokedBranch {
+            operation: request.operation_id,
+            epoch: 1,
+            receipt,
+            primary,
+            proof,
+        });
+        let mut changed = false;
         let mut invoked = false;
         let settled = state::with_transaction(service, root, |tx, _| {
             #[cfg(test)]
             boundary(Boundary::Intent, tx);
             scope.receipt(tx)?;
             run::require_materialization(tx, request.operation_id, false)?;
-            if run::branch_only(&git, &request)? != Some(tip)
-                || run::local_proof(&git, &request, tip, &p.primary)? != (primary, proof)
-            {
+            if run::branch_only(&git, &request)? != Some(tip) {
                 return Err(recovery_required());
+            }
+            match run::compare_local_proof(&git, &request, tip, &p.primary)? {
+                run::LocalProofComparison::Changed => {
+                    changed = true;
+                    return Err(recovery_required());
+                }
+                run::LocalProofComparison::Preserved(now, kind)
+                    if (now, kind) == (primary, proof) => {}
+                _ => return Err(recovery_required()),
             }
             let removal=cleanup.delete_retirement_branch(request.kind,&request.item_id,tip,||{
                 #[cfg(test)] boundary(Boundary::LockedBranch,tx);
-                if scope.receipt(tx).is_err() || run::require_materialization(tx,request.operation_id,false).is_err() || run::local_proof(&git,&request,tip,&p.primary).ok()!=Some((primary,proof)) || crate::repository::context_retirement::instance::require_checkout_inventory(&git,&request,None).is_err() {return false;}
+                if scope.receipt(tx).is_err() || run::require_materialization(tx,request.operation_id,false).is_err() || crate::repository::context_retirement::instance::require_checkout_inventory(&git,&request,None).is_err() {return false;}
+                match run::compare_local_proof(&git,&request,tip,&p.primary) {
+                    Ok(run::LocalProofComparison::Changed)=>{changed=true;return false;},
+                    Ok(run::LocalProofComparison::Preserved(now,kind)) if (now,kind)==(primary,proof)=>{},
+                    _=>return false,
+                }
                 // Consumes only the original in-process permit, never a saved K.
                 if permit.child!=request.operation_id.to_string(){return false;}
+                if uninvoked.take().is_none(){return false;}
                 invoked=true;
                 true
             });
@@ -391,6 +496,15 @@ impl Child<'_> {
         });
         drop(cleanup);
         if settled.is_err() {
+            if changed && let Some(witness) = uninvoked {
+                return self.live.finish_no_effect(
+                    service,
+                    RefusalWitness {
+                        scope,
+                        intent: Some(witness),
+                    },
+                );
+            }
             return Ok(ContextRetirementOutcome::CleanupPending {
                 worktree_removal: RetirementRemoval::None,
                 branch_removal: if invoked {
@@ -409,6 +523,50 @@ impl Child<'_> {
 }
 
 impl Live {
+    fn finish_no_effect(
+        &self,
+        service: &RepositoryService,
+        witness: RefusalWitness,
+    ) -> Result<ContextRetirementOutcome, RepositoryError> {
+        match witness.settle(service) {
+            Ok(result) => Ok(result),
+            Err(_) => {
+                let ordinal = witness.scope.ordinal;
+                self.refusals
+                    .lock()
+                    .map_err(|_| recovery_required())?
+                    .insert(ordinal, witness);
+                Ok(ContextRetirementOutcome::CleanupPending {
+                    worktree_removal: RetirementRemoval::None,
+                    branch_removal: RetirementRemoval::None,
+                })
+            }
+        }
+    }
+
+    /// Metadata-only retry retains the original known-change/uninvoked witness;
+    /// it never recreates it from SQL or invokes Git/proof/cleanup again.
+    #[allow(dead_code)]
+    pub(in super::super::super::super) fn continue_no_effect(
+        &self,
+        service: &RepositoryService,
+        root: &Path,
+    ) -> Result<ContextRetirementOutcome, RepositoryError> {
+        if !Arc::ptr_eq(&self.capture.scope, &service.remote_reservation_scope)
+            || self.capture.registry != service.registry_path
+            || root.to_str() != Some(self.capture.p.root.as_str())
+        {
+            return Err(recovery_required());
+        }
+        let witness = self
+            .refusals
+            .lock()
+            .map_err(|_| recovery_required())?
+            .pop_first()
+            .map(|(_, w)| w)
+            .ok_or_else(recovery_required)?;
+        self.finish_no_effect(service, witness)
+    }
     /// Same original C, index-only. Does not spend another cleanup permit, prove
     /// resources, consume M, advertise, or start the next Ki. Same-F2 spends are
     /// deliberately not reclaimable, even after failed/invalidation history.

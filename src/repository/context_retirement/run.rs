@@ -702,6 +702,25 @@ pub(super) fn local_proof(
     tip: git2::Oid,
     primary: &str,
 ) -> Result<(git2::Oid, proof::PreservationProof), RepositoryError> {
+    match compare_local_proof(git, request, tip, primary)? {
+        LocalProofComparison::Preserved(primary, proof) => Ok((primary, proof)),
+        LocalProofComparison::Changed => Err(recovery_required()),
+    }
+}
+
+pub(super) enum LocalProofComparison {
+    Preserved(git2::Oid, proof::PreservationProof),
+    Changed,
+}
+
+/// Only a successfully inspected disk-byte/mode mismatch is positive change.
+/// Missing/redirected/locked/malformed proof inputs remain inspection errors.
+pub(super) fn compare_local_proof(
+    git: &git2::Repository,
+    request: &RetireContextRequest,
+    tip: git2::Oid,
+    primary: &str,
+) -> Result<LocalProofComparison, RepositoryError> {
     // libgit2 follows loose-ref symlinks (including ancestors). Trust the
     // configured primary's actual storage, not just HEAD's resolved name/OID or
     // matching item bytes. Repeat on each proof, including immediately before
@@ -771,7 +790,7 @@ pub(super) fn local_proof(
             .map_err(|_| recovery_required())?
             .content()
     {
-        return Err(recovery_required());
+        return Ok(LocalProofComparison::Changed);
     }
     #[cfg(unix)]
     {
@@ -783,13 +802,13 @@ pub(super) fn local_proof(
             & 0o111
             != 0;
         if executable != (mode == 0o100755) {
-            return Err(recovery_required());
+            return Ok(LocalProofComparison::Changed);
         }
     }
     if !matches!(mode, 0o100644 | 0o100755) {
         return Err(recovery_required());
     }
-    Ok((primary, proof))
+    Ok(LocalProofComparison::Preserved(primary, proof))
 }
 pub(super) fn proof_name(proof: proof::PreservationProof) -> &'static str {
     match proof {

@@ -2,6 +2,8 @@
 //! Actual original A3, guarded branch deletion, discovery and index finalization;
 //! NOT live SSH advertisement or Task 4 producer/coordinator evidence.
 use super::*;
+#[path = "batch_positive_specfix_tests.rs"]
+mod specfix;
 
 const SECOND: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAW";
 
@@ -113,17 +115,37 @@ fn retirement_batch_positive_late_materialization_replacement_and_proof_change_p
                 .unwrap();
             }
         });
-        assert_eq!(
-            live.next(&s.f.service, s.f.root.path())
-                .unwrap()
-                .execute_branch_only(&s.f.service)
-                .unwrap(),
-            ContextRetirementOutcome::CleanupPending {
-                worktree_removal: RetirementRemoval::None,
-                branch_removal: RetirementRemoval::None
-            }
-        );
-        assert_owed(&s, 0, false);
+        let result = live
+            .next(&s.f.service, s.f.root.path())
+            .unwrap()
+            .execute_branch_only(&s.f.service)
+            .unwrap();
+        if replace_m {
+            assert_eq!(
+                result,
+                ContextRetirementOutcome::CleanupPending {
+                    worktree_removal: RetirementRemoval::None,
+                    branch_removal: RetirementRemoval::None
+                }
+            );
+            assert_owed(&s, 0, false);
+            assert!(live.next(&s.f.service, s.f.root.path()).is_err());
+        } else {
+            assert!(
+                matches!(result,ContextRetirementOutcome::Final(ref report) if report.code==crate::results::ResultCode::ExternalChange)
+            );
+            assert_eq!(
+                s.f.db()
+                    .query_row(
+                        "SELECT next_ordinal FROM poll_retirement_cursors",
+                        [],
+                        |r| r.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                1
+            );
+            assert!(live.next(&s.f.service, s.f.root.path()).is_ok());
+        }
         assert_eq!(
             s.f.db()
                 .query_row(
@@ -134,12 +156,11 @@ fn retirement_batch_positive_late_materialization_replacement_and_proof_change_p
                 .unwrap(),
             i64::from(replace_m)
         );
-        assert!(live.next(&s.f.service, s.f.root.path()).is_err());
     }
 }
 
 #[test]
-fn retirement_batch_positive_selected_key_source_changes_fence_locked_b_and_cache_write() {
+fn retirement_batch_positive_selected_key_source_fences_cleanup_not_authorized_index() {
     for locked in [true, false] {
         let s = branches_with_setup(|f| {
             let path = f.data.path().join("positive-synthetic-key-source");
@@ -172,13 +193,17 @@ fn retirement_batch_positive_selected_key_source_changes_fence_locked_b_and_cach
         } else {
             s.f.service.set_refresh_persist_hook_for_testing(change);
         }
-        assert!(!matches!(
-            live.next(&s.f.service, s.f.root.path())
-                .unwrap()
-                .execute_branch_only(&s.f.service),
-            Ok(ContextRetirementOutcome::Final(_))
-        ));
-        assert_owed(&s, 0, !locked);
+        let result = live
+            .next(&s.f.service, s.f.root.path())
+            .unwrap()
+            .execute_branch_only(&s.f.service);
+        if locked {
+            assert!(!matches!(result, Ok(ContextRetirementOutcome::Final(_))));
+            assert_owed(&s, 0, false);
+        } else {
+            assert!(matches!(result, Ok(ContextRetirementOutcome::Final(_))));
+            assert!(live.next(&s.f.service, s.f.root.path()).is_err());
+        }
     }
 }
 
@@ -913,7 +938,7 @@ fn retirement_batch_positive_each_actual_write_boundary_rejoins_full_current_sco
             "UPDATE request_operations SET family='local'",
             "UPDATE poll_retirement_batches SET owner_epoch=owner_epoch+1",
             "UPDATE poll_retirement_cursors SET next_ordinal=1",
-            "UPDATE remote_polling_state SET configuration_generation=configuration_generation+1",
+            "UPDATE remote_polling_state SET configuration_generation=configuration_generation+1,history_unknown=1; UPDATE remote_observation_batches SET is_current=0; DELETE FROM remote_context_states;",
             "UPDATE remote_observation_batches SET is_current=0",
             "UPDATE remote_operation_records SET owner_epoch=owner_epoch+1 WHERE poll_kind='update'",
         ] {
@@ -927,27 +952,55 @@ fn retirement_batch_positive_each_actual_write_boundary_rejoins_full_current_sco
                 .next(&s.f.service, s.f.root.path())
                 .unwrap()
                 .execute_branch_only(&s.f.service);
-            assert!(
-                !matches!(result, Ok(ContextRetirementOutcome::Final(_))),
-                "{point:?}: {sql}"
+            let index_stage = matches!(
+                point,
+                batch::Boundary::BeforeClaim | batch::Boundary::Finalizer
             );
-            assert_owed(
-                &s,
-                0,
-                matches!(
-                    point,
-                    batch::Boundary::Deleted
-                        | batch::Boundary::BeforeClaim
-                        | batch::Boundary::Finalizer
-                ),
-            );
+            // The G case is an explicitly compatible in-transaction projection
+            // including invalidation, not a bare generation edit that leaves a
+            // current batch at the wrong G. Real configure runs in specfix tests.
+            let deletion_only = sql.contains("cancel_requested")
+                || sql.contains("UPDATE remote_observation_batches");
+            if index_stage && deletion_only {
+                assert!(
+                    matches!(result, Ok(ContextRetirementOutcome::Final(_))),
+                    "{point:?}: {sql}: {result:?}"
+                );
+                assert_eq!(
+                    s.f.db()
+                        .query_row(
+                            "SELECT next_ordinal FROM poll_retirement_cursors",
+                            [],
+                            |r| r.get::<_, i64>(0)
+                        )
+                        .unwrap(),
+                    1
+                );
+                assert_eq!(counts(&s.f.db()), (1, 1, 1));
+                assert!(live.next(&s.f.service, s.f.root.path()).is_err());
+            } else {
+                assert!(
+                    !matches!(result, Ok(ContextRetirementOutcome::Final(_))),
+                    "{point:?}: {sql}"
+                );
+                assert_owed(
+                    &s,
+                    0,
+                    matches!(
+                        point,
+                        batch::Boundary::Deleted
+                            | batch::Boundary::BeforeClaim
+                            | batch::Boundary::Finalizer
+                    ),
+                );
+            }
             assert_eq!(terminal(&s.f.db()), p);
         }
     }
 }
 
 #[test]
-fn retirement_batch_positive_under_ref_lock_and_index_persist_recheck_original_process_config() {
+fn retirement_batch_positive_config_fences_locked_b_not_authorized_index() {
     for locked in [true, false] {
         let s = branches();
         let live = run_original(&s);
@@ -973,8 +1026,13 @@ fn retirement_batch_positive_under_ref_lock_and_index_persist_recheck_original_p
             .next(&s.f.service, s.f.root.path())
             .unwrap()
             .execute_branch_only(&s.f.service);
-        assert!(!matches!(result, Ok(ContextRetirementOutcome::Final(_))));
-        assert_owed(&s, 0, !locked);
+        if locked {
+            assert!(!matches!(result, Ok(ContextRetirementOutcome::Final(_))));
+            assert_owed(&s, 0, false);
+        } else {
+            assert!(matches!(result, Ok(ContextRetirementOutcome::Final(_))));
+            assert!(live.next(&s.f.service, s.f.root.path()).is_err());
+        }
     }
 }
 

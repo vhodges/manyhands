@@ -43,7 +43,8 @@ fn positive_row(db: &Connection, p: &Projection, k: &Candidate) -> Result<bool, 
       AND ((c.phase='selected' AND a.phase='active' AND o.state='created' AND o.index_owner_epoch=0 AND c.initial_primary_oid IS NULL AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents WHERE operation_ulid=c.operation_ulid))
         OR (c.phase='branch_deleting' AND a.phase='active' AND o.state='created' AND o.index_owner_epoch=0 AND c.initial_primary_oid IS NOT NULL AND EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.observation IS NULL))
         OR (c.phase='index_pending' AND a.phase='active' AND o.state IN ('authoritative_observed','indexing','failed','observed','persisted','retry','index_invalidated') AND c.materialization_settled=1 AND c.absence_basis='owned_intent' AND c.branch_removal='observed' AND EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.observation='removed'))
-        OR (c.phase='complete' AND a.phase='ended' AND o.state='completed' AND o.index_owner_epoch>0 AND c.materialization_settled=1 AND c.absence_basis='owned_intent' AND c.final_code='ok' AND c.branch_removal='observed' AND EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.observation='removed')))
+        OR (c.phase='complete' AND a.phase='ended' AND o.state='completed' AND o.index_owner_epoch>0 AND c.materialization_settled=1 AND c.absence_basis='owned_intent' AND c.final_code='ok' AND c.branch_removal='observed' AND EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.observation='removed'))
+        OR (c.phase='refused' AND a.phase='ended' AND o.state='completed' AND o.completed_step IS NULL AND o.index_owner_epoch=0 AND o.persisted_context_count=0 AND o.context_path IS NULL AND c.materialization_settled=0 AND c.absence_basis='none' AND c.final_code='external_change' AND c.branch_removal='none' AND c.initial_primary_oid IS NOT NULL AND EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.observation='changed')))
       AND (c.phase='selected' OR EXISTS(SELECT 1 FROM context_retirement_effect_intents e JOIN poll_retirement_freezes f ON f.binding_id=e.receipt_id WHERE e.operation_ulid=c.operation_ulid AND e.owner_epoch=1 AND e.resource='branch' AND e.primary_oid=c.initial_primary_oid AND f.operation_ulid=?12 AND f.owner_epoch=?19))
       AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND (e.resource!='branch' OR e.owner_epoch!=1)))", params![k.child_operation_id,p.repository,p.root,k.kind,k.item_id,k.expected_tip,p.remote,p.primary,p.generation,p.endpoint,p.request,p.operation,k.ordinal as i64,k.materialization_capture,k.materialization_operation_id,k.materialization_oid,k.materialization_step,p.request_attempt,p.epoch], |r|r.get(0)).map_err(|_|recovery_required())?;
     if !valid {
@@ -58,12 +59,24 @@ fn positive_row(db: &Connection, p: &Projection, k: &Candidate) -> Result<bool, 
         .map_err(|_| recovery_required())?;
     if let Some(result) = result {
         let report = super::super::ContextRetirementReport::decode(&result)?;
-        if report
-            != super::super::ContextRetirementReport::retired(
+        let refused: bool = db
+            .query_row(
+                "SELECT phase='refused' FROM context_retirement_records WHERE operation_ulid=?1",
+                [&k.child_operation_id],
+                |r| r.get(0),
+            )
+            .map_err(|_| recovery_required())?;
+        let expected = if refused {
+            super::super::ContextRetirementReport::refused(
+                crate::results::ResultCode::ExternalChange,
+            )
+        } else {
+            super::super::ContextRetirementReport::retired(
                 super::super::RetirementRemoval::None,
                 super::super::RetirementRemoval::Observed,
             )
-        {
+        };
+        if report != expected {
             return Ok(false);
         }
     }
@@ -174,7 +187,7 @@ fn projected(
         if i < cursor {
             let result = result.as_deref().ok_or_else(recovery_required)?;
             let final_ok = match state.as_str() {
-                "refused" => refused_row(db,p,k,result)?,
+                "refused" => refused_row(db,p,k,result)? || (positive_row(db,p,k)? && db.query_row("SELECT phase='refused' AND final_result=?2 FROM context_retirement_records WHERE operation_ulid=?1",params![k.child_operation_id,result],|r|r.get::<_,bool>(0)).map_err(|_|recovery_required())?),
                 "complete" => positive_row(db,p,k)? && db.query_row("SELECT phase='complete' AND final_result=?2 FROM context_retirement_records WHERE operation_ulid=?1",params![k.child_operation_id,result],|r|r.get::<_,bool>(0)).map_err(|_|recovery_required())?,
                 _ => false,
             };
@@ -326,6 +339,7 @@ pub(super) fn require_completed_release(
 pub(in super::super::super) struct Live {
     capture: Arc<OriginalCapture>,
     branches: std::sync::Mutex<Vec<Option<BranchLifetime>>>,
+    refusals: std::sync::Mutex<std::collections::BTreeMap<usize, execution::RefusalWitness>>,
 }
 pub(in super::super::super) struct Child<'a> {
     live: &'a Live,
@@ -336,6 +350,7 @@ impl Live {
         Self {
             capture: Arc::new(capture.evidence),
             branches: std::sync::Mutex::new(capture.branches),
+            refusals: std::sync::Mutex::new(std::collections::BTreeMap::new()),
         }
     }
     #[allow(dead_code)] // Task 4 owns invoking individual private transitions.
@@ -384,34 +399,10 @@ impl Live {
         root: &Path,
         own: Option<i64>,
     ) -> Result<(Frozen, Vec<Candidate>, usize), RepositoryError> {
-        if tx.path() != c.registry.to_str() {
-            return Err(recovery_required());
-        }
+        let (f, entries, cursor) = Self::validate_metadata(c, tx, id, root)?;
         let p = &c.p;
-        if root.to_str() != Some(p.root.as_str()) || id != p.repository {
-            return Err(recovery_required());
-        }
-        record::audit_connection(tx)?;
-        let mut current = source::projection(tx, &p.operation, p.epoch)?;
-        current.stage = "unplanned".into();
-        if current != *p || state::generation(tx, id)? != p.generation {
-            return Err(recovery_required());
-        }
-        let f = read(tx, p)?;
-        if f.eligibility != "eligible"
-            || f.code.is_some()
-            || f.nonce != c.nonce
-            || f.report != c.report
-            || f.digest != c.digest
-        {
-            return Err(recovery_required());
-        }
-        let (entries, cursor, stage) = projected(tx, p, &f)?;
-        if stage != "active" {
-            return Err(recovery_required());
-        }
-        let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM request_records WHERE request_ulid=?1 AND attempt=?2 AND state='accepted' AND cancel_requested=0) AND EXISTS(SELECT 1 FROM poll_retirement_batches WHERE operation_ulid=?3 AND owner_epoch=?4) AND EXISTS(SELECT 1 FROM retirement_observation_receipts b JOIN retirement_advertisement_provenance provenance ON provenance.id=b.provenance_id JOIN retirement_observation_pins pin ON pin.binding_id=b.id AND pin.pin_kind='consumer_attempt' JOIN remote_observation_batches batch ON batch.id=pin.observation_batch_id WHERE b.id=?5 AND provenance.id=?6 AND batch.repository_id=?7 AND batch.is_current=1 AND batch.configuration_generation=?8 AND pin.holder_operation_ulid=?3 AND pin.holder_epoch=?4)",params![p.request,p.request_attempt,p.operation,p.epoch,f.binding,f.provenance,p.repository,p.generation],|r|r.get(0)).map_err(|_|recovery_required())?;
-        if !live {
+        let deletion:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM request_records WHERE request_ulid=?1 AND attempt=?2 AND state='accepted' AND cancel_requested=0) AND EXISTS(SELECT 1 FROM retirement_observation_pins pin JOIN remote_observation_batches batch ON batch.id=pin.observation_batch_id WHERE pin.binding_id=?3 AND pin.pin_kind='consumer_attempt' AND batch.is_current=1 AND batch.configuration_generation=?4)",params![p.request,p.request_attempt,f.binding,p.generation],|r|r.get(0)).map_err(|_|recovery_required())?;
+        if !deletion || state::generation(tx, id)? != p.generation {
             return Err(recovery_required());
         }
         if let Some(local) = own {
@@ -436,6 +427,48 @@ impl Live {
                 c.registry.parent().ok_or_else(recovery_required)?,
             )?
         {
+            return Err(recovery_required());
+        }
+        Ok((f, entries, cursor))
+    }
+
+    /// Exact current L/R/batch ownership and immutable original binding history.
+    /// This is NOT C/G/F deletion eligibility: authorized index/no-effect
+    /// settlement must survive endpoint/key/G/ad changes and current cancellation.
+    fn validate_metadata(
+        c: &OriginalCapture,
+        tx: &Connection,
+        id: i64,
+        root: &Path,
+    ) -> Result<(Frozen, Vec<Candidate>, usize), RepositoryError> {
+        if tx.path() != c.registry.to_str() {
+            return Err(recovery_required());
+        }
+        let p = &c.p;
+        if root.to_str() != Some(p.root.as_str()) || id != p.repository {
+            return Err(recovery_required());
+        }
+        record::audit_connection(tx)?;
+        let mut current = source::projection(tx, &p.operation, p.epoch)?;
+        current.stage = "unplanned".into();
+        if current != *p {
+            return Err(recovery_required());
+        }
+        let f = read(tx, p)?;
+        if f.eligibility != "eligible"
+            || f.code.is_some()
+            || f.nonce != c.nonce
+            || f.report != c.report
+            || f.digest != c.digest
+        {
+            return Err(recovery_required());
+        }
+        let (entries, cursor, stage) = projected(tx, p, &f)?;
+        if stage != "active" {
+            return Err(recovery_required());
+        }
+        let live:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM request_records WHERE request_ulid=?1 AND attempt=?2 AND state='accepted') AND EXISTS(SELECT 1 FROM poll_retirement_batches WHERE operation_ulid=?3 AND owner_epoch=?4) AND EXISTS(SELECT 1 FROM retirement_observation_receipts b JOIN retirement_advertisement_provenance provenance ON provenance.id=b.provenance_id JOIN retirement_observation_pins pin ON pin.binding_id=b.id AND pin.pin_kind='consumer_attempt' JOIN remote_observation_batches batch ON batch.id=pin.observation_batch_id WHERE b.id=?5 AND provenance.id=?6 AND batch.id=provenance.observation_batch_id AND batch.repository_id=?7 AND batch.configuration_generation=?8 AND pin.holder_operation_ulid=?3 AND pin.holder_epoch=?4)",params![p.request,p.request_attempt,p.operation,p.epoch,f.binding,f.provenance,p.repository,p.generation],|r|r.get(0)).map_err(|_|recovery_required())?;
+        if !live {
             return Err(recovery_required());
         }
         Ok((f, entries, cursor))
