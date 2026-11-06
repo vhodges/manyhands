@@ -116,3 +116,42 @@ gated on that pass.** No independent pass or full-feature completion claimed.
 Task 7/8 remain owed. This appends the existing checkpoint without changing its
 identity/parent/time. No agents, push, main/other-worktree/profile/key/context/draft
 mutation, PR/closure/native action or owned background process.
+
+## SPEC S3 correction — preserve boundary recovery order, 2026-11-06
+
+Same reviewer **`ses_e4d1d87e4ffeVpP18HBE3BO07B`** cleared S1/S2 through
+`867b90e5de54826cd0faa16df63a6dad33673782`, but found one new Important S3 in the
+new helper: partitioning operation actions into the earlier `after` section
+moved inspection and a leading request retry behind preserving abandon. The
+controller verified this rendering-order regression; no authority/JSON corruption
+or new policy decision is involved.
+
+Source correction **`618eab4600138823d4e4b02e721a36f097650be9`** emits every recovery
+action once in the **boundary's original sequence**, formatting operation-owned
+X/root in place and keeping every generic action/argument in position. No sorting
+or regrouping; the generic compact renderer gets an empty recovery list to avoid
+duplication. Generic/default-poll rendering, `render.rs`, JSON, all goldens and
+domain policy remain unchanged.
+
+Both existing render tables produced meaningful compiled ordering REDs before
+the fix and each now passes exactly **1 nonzero case**. They pin the full
+resume/inspect/abandon sequence, leading retry, intervening host guidance and
+arguments, while retaining distinct P/K/current X, root precedence, escaping,
+immutable JSON and the ordinary-default negative control. Exact logs:
+`/tmp/opencode/task56-spec-s3-{poll,single}-{red,green}.log`.
+Strict all-target/all-feature Clippy and fmt-check pass. All Devenv setup was
+serialized and clean; no SSH/19-case/PRESERVE/no-GPUI/broad/full/native rerun or
+real waits. Exact commands/results and source scopes are in the appended ledger.
+
+New delta manifest: **3 inputs**, SHA-256
+`57d775ffbf77ca518fb38c6b18383fb822d6b49d363f836d418111aa7bc7de3f`.
+New raw artifact manifest: **10 artifacts**, SHA-256
+`0caf56a80dea0ef56d955f28041520a9006ff297cc765cf22c6f94b48baf1f5a`.
+Paths are `/tmp/opencode/task56-spec-s3-*.sha256`. Earlier evidence retains its
+original source scopes; this append preserves the checkpoint identity/parent/time.
+
+**Same SPEC reviews the bounded delta with prior full-range analysis retained,
+THEN fresh QUALITY.** Original review base is still
+`e79ab8e61b0682eb0f224d36dee5d67ef51aa4c9`; no whole-chunk approval or feature
+completion claimed. Tasks 7–8 remain owed. No agents, push, main/other-worktree/
+profile/key/context/draft mutation, PR/closure/native action or owned process.

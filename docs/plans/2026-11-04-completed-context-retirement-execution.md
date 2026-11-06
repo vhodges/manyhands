@@ -29,9 +29,11 @@ The original 39 results and correction tables retain their actual source scopes;
 final whole-feature gates remain outstanding. Tasks 5–6's CLI/acceptance chunk is
 locally delivered at `c0ff11af`. Fresh SPEC `ses_e4d1d87e4ffeVpP18HBE3BO07B`
 found S1 Important (missing current action-owned operation ID in human recovery)
-and S2 Minor (working-image permission evidence overclaim). Both are locally
-corrected through `dac9f766`; **same SPEC re-review of the entire original
-`e79ab8e6..returned-HEAD` range plus correction, THEN fresh QUALITY, are owed**.
+and S2 Minor (working-image permission evidence overclaim). The same SPEC
+re-review cleared S1/S2 through `867b90e5`, but found one new Important S3:
+the new helper regrouped recovery actions, moving inspection/retry after abandon.
+S3 is locally corrected through `618eab46`; **same SPEC delta re-review retaining
+the prior full `e79ab8e6..returned-HEAD` analysis, THEN fresh QUALITY, are owed**.
 No independent approval of this chunk is claimed. Its bounded evidence,
 retained-44/acceptance delta and correction record are appended below. Task 7 governing
 amendments and Task 8 final tiers/whole-feature reviews remain owed. Ticket remains
@@ -6746,3 +6748,79 @@ original `e79ab8e61b0682eb0f224d36dee5d67ef51aa4c9..returned-HEAD` range and thi
 delta; only after that passes, fresh QUALITY.** No approval or feature completion
 is claimed. Task 7 governing amendments and Task 8 final whole-feature gates remain
 owed. Metadata-only checkpoint bookkeeping needs no repeat of green Rust gates.
+
+## Tasks 5–6 SPEC Correction — S3 Ordered Recovery Guidance, 2026-11-06
+
+Same SPEC reviewer **`ses_e4d1d87e4ffeVpP18HBE3BO07B`** re-reviewed through
+`867b90e5de54826cd0faa16df63a6dad33673782` and resolved S1/S2, then found one new
+**Important S3 ordering regression in the S1 helper**. The controller verified
+the partition plus `render::compact`'s output order against the boundary's
+way-on/inspect-before-abandon policy. This is not a new product decision or domain
+change. **Original full review base remains
+`e79ab8e61b0682eb0f224d36dee5d67ef51aa4c9`**, with all original delivery and
+correction history preserved.
+
+**Correction source:** `618eab4600138823d4e4b02e721a36f097650be9`, with coauthor.
+The retirement-only helper no longer partitions operation actions into `after`
+and other actions into a later generic section. It emits **one ordered recovery
+section**, formatting each boundary action exactly where supplied. Operation
+resume/abandon retain S1's action-owned X and established root; other actions use
+the existing generic name/argument/control-escaping format in place. The generic
+compact renderer receives an empty recovery list, so no action is duplicated.
+No kind-based sorting or preferred ordering is inferred. `render.rs`, ordinary/
+default polling, JSON/DTOs, domain policy/authority, all goldens and dependencies
+are unchanged; only the helper and its two existing render tables change.
+
+Both tables now compare the complete sequence of `next:` lines, not just the
+presence of individual actions. They cover `[resume, inspect, abandon]` and a
+leading request retry; the poll table also retains an intervening host-replace
+action with escaped authority/root arguments. The trailing-retry control is kept
+in its supplied position too, rather than normalized by kind. Exact distinct
+P/historical K/current X, action-root precedence, immutable JSON, no raw controls,
+no-report/no-root and ordinary-default negative controls remain in the same tests.
+
+### Exact Serialized RED → GREEN And Gates
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands-cli polling::tests::retirement_report_distinguishes_as_of_cut_from_current_child_actions -- --exact
+devenv shell -- cargo test --all-features --locked --bin manyhands-cli retirement::tests::removal_flags_are_evidence_not_an_all_removed_claim -- --exact
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo fmt --check
+```
+
+| Log under `/tmp/opencode/` | Actual result / source scope |
+| --- | --- |
+| `task56-spec-s3-poll-red.log` | Meaningful compiled RED before production fix: **0 passed/1 failed**, 3.12 s build, 0.00 s tests; actual next lines put abandon before inspection. Original production base `867b90e5`. |
+| `task56-spec-s3-single-red.log` | Meaningful compiled RED before production fix: **0 passed/1 failed**, 0.35 s build, 0.00 s tests; the standalone canonical sequence was reordered identically. |
+| `task56-spec-s3-poll-green.log` | Final **1 passed/0 failed**, 306 filtered, 2.12 s build, 0.00 s tests, at correction source `618eab46`. |
+| `task56-spec-s3-single-green.log` | Final **1 passed/0 failed**, 306 filtered, 0.39 s build, 0.00 s tests, at the same source. |
+| `task56-spec-s3-clippy.log` | Strict all-target/all-feature Clippy **exit 0**, 1.15 s compiler work. No redundant `cargo check`. |
+| `task56-spec-s3-fmt-check.log` | Format check **exit 0**, clean setup. Formatting itself also used Devenv (`task56-spec-s3-format.log`). |
+
+All Devenv invocations were **serialized**; no load-exports/setup race or other
+diagnostic occurred. Only the two changed exact render names ran, each nonzero.
+No unchanged green rerun, SSH/19-case/PRESERVE/no-GPUI/broad/full/native run, real
+wait or command approaching 15 minutes. Prior results/manifests retain their
+original source SHAs/scopes and were not overwritten or relabeled.
+
+- Delta source manifest `/tmp/opencode/task56-spec-s3-sources.sha256`: **3 changed
+  CLI/render-test files**, SHA-256
+  **`57d775ffbf77ca518fb38c6b18383fb822d6b49d363f836d418111aa7bc7de3f`**.
+- `/tmp/opencode/task56-spec-s3-results.json` records literal RED/GREEN commands,
+  exits/counts/source scopes; `task56-spec-s3-green-results.json` retains the
+  serialized command durations and clean setup checks.
+- New artifact manifest `/tmp/opencode/task56-spec-s3-evidence.sha256`: **10
+  artifacts** (7 logs, 2 results JSON, 1 source manifest), SHA-256
+  **`0caf56a80dea0ef56d955f28041520a9006ff297cc765cf22c6f94b48baf1f5a`**.
+  Both failed RED logs are explicitly failure evidence, not passing claims.
+- Existing canonical comment `01M6SDJK2RM3GNP0YANZYS404Q` appended, with original
+  ID/parent/creator/time intact. No ID generation, ticket status/body save, agent,
+  other-worktree/main/profile/key/context/draft action, push/PR/close/native or
+  owned background job. Linux-local compilation/render evidence only.
+
+**Next:** same SPEC reviewer re-reviews this bounded S3 delta with the prior
+full-original-range analysis retained, against
+**`e79ab8e61b0682eb0f224d36dee5d67ef51aa4c9..returned-HEAD`**. Fresh QUALITY follows
+only after SPEC passes. No whole-chunk approval or feature completion claimed;
+Tasks 7–8 remain owed. Metadata-only evidence bookkeeping requires no repeated
+Rust gates.
