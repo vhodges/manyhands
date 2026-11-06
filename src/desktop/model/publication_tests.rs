@@ -778,10 +778,10 @@ fn sync_a_deleted_branch_offers_give_up_and_no_share() {
         sync_offers(&envelope, ShareTarget::Item, RecordState::Finished),
         [S::Republish]
     );
-    assert_eq!(
-        sync_offers(&envelope, ShareTarget::Item, RecordState::Unknown),
-        [S::Republish]
-    );
+    // R-30: an unreadable record is neither accepted nor finished, so
+    // neither Stop and republish… (it would need Give up) nor Republish…
+    // (it answers `busy` while the share holds the reservation) is offered.
+    assert!(sync_offers(&envelope, ShareTarget::Item, RecordState::Unknown).is_empty());
     assert_eq!(
         sync_offers(&envelope, ShareTarget::Main, RecordState::Accepted),
         [S::GiveUp]

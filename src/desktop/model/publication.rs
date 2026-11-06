@@ -426,14 +426,20 @@ impl SyncResult {
                 .collect()
         };
         let mut offers = match &self.outcome {
+            // R-30: Stop and republish… while the record is accepted,
+            // Republish… once it is finished. A record that could not be
+            // read (Unknown) is neither: it is in practice still accepted,
+            // so a republish answers `busy` while the share holds the
+            // reservation, and Give up cannot be offered on a guess. Nothing
+            // is offered until a later attempt reads the record.
             SyncOutcome::BranchDeleted if self.attempt.target == ShareTarget::Item => {
-                let held =
-                    self.attempt.record == RecordState::Accepted && !self.attempt.after_give_up;
-                vec![if held {
-                    O::StopAndRepublish
-                } else {
-                    O::Republish
-                }]
+                match self.attempt.record {
+                    RecordState::Accepted if !self.attempt.after_give_up => {
+                        vec![O::StopAndRepublish]
+                    }
+                    RecordState::Unknown => Vec::new(),
+                    _ => vec![O::Republish],
+                }
             }
             SyncOutcome::Published
             | SyncOutcome::Current
