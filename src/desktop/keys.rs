@@ -106,6 +106,9 @@ gpui_kit::actions!(
         ComposerToggleMode,
         /// Save resolution, in the resolve conflict sheet (D5 B3).
         SaveResolution,
+        /// Escape in the sheet's Result editor: back to its tab stop, the
+        /// sheet left open (R-31).
+        LeaveResult,
     ]
 );
 
@@ -190,6 +193,10 @@ const COMMENT_COMPOSER_EDITOR: &str = "CommentComposer > Editor";
 /// The key context of the resolve conflict sheet (D5 B3): `secondary-enter`
 /// saves, from its Result editor too, where Enter is a newline.
 pub(crate) const RESOLVE_SHEET_CONTEXT: &str = "ResolveSheet";
+
+/// The sheet's Result editor, inside the sheet: its Escape goes back to the
+/// editor's tab stop rather than closing the sheet (R-31).
+const RESOLVE_SHEET_EDITOR: &str = "ResolveSheet > Editor";
 
 /// Binds the desktop's keys. Quit now has no key: it is the focused
 /// Quit now button while quitting waits.
@@ -283,6 +290,7 @@ pub(crate) fn bind(cx: &mut App) {
         // as Space does (A21); the Result editor's Enter, bound deeper, is
         // still its newline.
         KeyBinding::new("enter", NoAction, Some(RESOLVE_SHEET_CONTEXT)),
+        KeyBinding::new("escape", LeaveResult, Some(RESOLVE_SHEET_EDITOR)),
     ]);
 }
 

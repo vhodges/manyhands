@@ -218,6 +218,9 @@ impl gpui_kit::Global for OpenedSheet {}
 struct BodyEditors {
     path: usize,
     result: Entity<EditorState>,
+    /// The Result's tab stop, after the part's choices: Enter on it puts
+    /// focus in the editor, and Escape there comes back to it (R-31).
+    stop: FocusHandle,
     _changed: Subscription,
 }
 
@@ -475,6 +478,7 @@ impl ResolveSheet {
             self.editors.push(BodyEditors {
                 path,
                 result: editor,
+                stop: cx.focus_handle().tab_stop(true),
                 _changed: changed,
             });
         }

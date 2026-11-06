@@ -25,7 +25,7 @@ use super::{
 };
 use crate::desktop::{
     assets::icon_path,
-    keys::{RESOLVE_SHEET_CONTEXT, SaveResolution},
+    keys::{LeaveResult, RESOLVE_SHEET_CONTEXT, SaveResolution},
     model::conflict::{
         BodyChoice, BodyPart, Choice, ConflictSet, PathConflict, PathResult, STANDARD_LAYOUT_NOTE,
     },
@@ -329,6 +329,37 @@ impl ResolveSheet {
         card
     }
 
+    /// The Result editor in its tab stop (R-31): Tab reaches the stop, which
+    /// shows a ring; Enter on it puts focus in the editor, where Tab indents,
+    /// Enter is a newline and Ctrl+Enter saves; Escape there comes back to
+    /// the stop, and Escape on the stop closes the sheet.
+    fn result_stop(
+        &self,
+        index: usize,
+        editors: &BodyEditors,
+        cx: &Context<Self>,
+    ) -> impl IntoElement + use<> {
+        let (border, ring) = (cx.theme().border, cx.theme().ring);
+        let (enter, leave) = (editors.result.clone(), editors.stop.clone());
+        let stop = editors.stop.clone();
+        div()
+            .id(("conflict-result", index))
+            .test_support()
+            .track_focus(&editors.stop)
+            .p_2()
+            .border_1()
+            .border_color(border)
+            .rounded(px(4.))
+            .focus(move |style| style.border_2().border_color(ring))
+            .on_click(move |event, window, cx| {
+                if event.is_keyboard() && stop.is_focused(window) {
+                    enter.update(cx, |editor, cx| editor.focus(window, cx));
+                }
+            })
+            .on_action(move |_: &LeaveResult, window, cx| window.focus(&leave, cx))
+            .child(editors.result.clone())
+    }
+
     fn body_card(
         &self,
         index: usize,
@@ -381,16 +412,7 @@ impl ResolveSheet {
                     .child(marked_column(THEIRS, Some(&body.lines[1]), line, cx)),
             )
             .child(div().text_xs().child(RESULT))
-            .child(
-                div()
-                    .id(("conflict-result", index))
-                    .test_support()
-                    .p_2()
-                    .border_1()
-                    .border_color(border)
-                    .rounded(px(4.))
-                    .child(editors.result.clone()),
-            )
+            .child(self.result_stop(index, editors, cx))
             .child(
                 text(("conflict-result-note", index), RESULT_NOTE)
                     .text_xs()
