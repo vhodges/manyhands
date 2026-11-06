@@ -4861,3 +4861,46 @@ for the changed test file. Correction commit subject:
 claimed.** Controller's main `79c3931b` preflight/merge is reused, no history rewrite.
 No new checkpoint ID/status/profile/key/context/draft/other-worktree/PR/closure/
 native actions, agents or push. All prior stage limits and remaining duties stand.
+
+## Controller approval — bounded original-live present milestone
+
+Canonical checkpoint **`01M6RBXXQ3TNF8Q6SHDEQ0Q4Y9`**, parent
+**`01M6R9Q0FFCCR9JN019SGMMBW7`**, actual UTC **`2026-11-06T12:04:33Z`**.
+Original review base **`18c189492fd2d5112fb16ef146dbab3bbc2c1cbf`** is retained;
+approved source through **`4fb2073d22d3cffd1a9913ee7ec50d7e68b63d6f`** includes
+`add1d2ba` present execution, `744ab1a2` exact original claim-history binding,
+and the test-only Unix correction. Full Task 2 base remains `7b1912d1`.
+
+- Independent LIMITED SPEC reviewer **`ses_e4f5c673dffe7xsyS2NM1oQO1b`** approved
+  after re-review of its original-attempt spend finding. The correction binds
+  historical spend to the original attempt/applicable index epoch, not today's
+  request attempt. Subsequent source change is test-only Unix case gating.
+- Fresh independent LIMITED QUALITY reviewer **`ses_e4f49ec50ffewfrthj2VMoPkKi`**
+  approved the original bounded range through `4fb2073d` after its same-reviewer
+  re-review. Its sole Important portability finding is resolved; no remaining
+  Critical/Important/Minor findings in this limited range. No reviewer rebuilds
+  or test reruns; source and existing evidence were inspected independently.
+- Controller inspected both corrections, the raw narrow GREEN/Clippy and exact
+  changed-test logs, and reverified all **1,733 current source inputs** and all
+  **6 claim-fix / 3 platform-fix evidence logs**, zero mismatches. Current source
+  inventory **`a31fb1a9a446a946397462075cee6afbc97e06654e369763b839540a3a2b06f0`**;
+  platform log inventory **`fa090a23a836e15a763b193406ab522b72278d666f0274656ae8977a239c6a93`**.
+  Earlier source/log inventories keep their exact recorded scopes; no broad
+  final verification claim. Whitespace and merge-tree checks passed.
+- Supported existing CLI `id new` ran under Devenv with isolated
+  `MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data`; the already
+  built binary was reused without a compile. No default-profile access/repair.
+
+Main **`79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`** is merged into the ticket
+branch, without rebase. New agents must follow the merged Testing Strategy,
+which overrides older broader task commands. This controller checkpoint changes
+only ledger/comment metadata and needs no rebuild. Ticket-branch publication is
+authorized; no other-branch push, PR, real-context retirement, native CI, main
+integration or closure is authorized or performed.
+
+**This is bounded present-milestone approval, not full A4/Task 2 completion.**
+Next is gap O/R8 and resumed C/new-F2 batch recovery, active-source restart/fresh
+observation, remaining holder/window/Z/fault matrices and full-44 Task 2 review.
+Tasks 3–8 and final review-ready static/fast/selected-SSH gates remain owed.
+No standalone retirement-filter/full-suite duplicate is added to the final
+selected-target gate; the bare full suite remains post-merge under current rules.
