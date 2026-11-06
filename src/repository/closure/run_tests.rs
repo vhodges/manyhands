@@ -22,7 +22,7 @@ use crate::repository::{
         lifecycle::LifecycleError,
         record::ChildExecution,
         run::{self, PromotionIo},
-        run_tests::{COMMIT_HOOKS, FakeIo, HOOKS, NoCredentials, TRACKING_HOOKS},
+        run_tests::{COMMIT_HOOKS, FakeIo, HOOKS, NoCredentials, TRACKING_HOOKS, Told},
     },
     remote::{observation::ObservationConfiguration, reservation::RemoteReservation, state},
     transport::{DeleteObservation, VerifySshTransportRequest},
@@ -727,14 +727,6 @@ fn checkpoint_seams_finish_once_with_the_same_id_and_a_new_id_is_busy() {
         assert_eq!(f.commits_in_odb(&merge_subject()), 1, "{point:?}");
         assert_eq!(f.primary_ticket().closed_at, stopped.closed_at, "{point:?}");
         assert_eq!(result.cleanup(), PromotionCleanup::Complete, "{point:?}");
-    }
-}
-
-/// What a run tells its observer, in order.
-struct Told(Vec<run::RunEvent>);
-impl run::RunObserver for Told {
-    fn event(&mut self, event: run::RunEvent) {
-        self.0.push(event);
     }
 }
 
@@ -2228,4 +2220,61 @@ fn a_closed_ticket_with_its_context_kept_lists_one_closed_copy() {
     let primary = f.primary_ticket();
     assert!(primary.closed_at.is_some());
     assert_eq!(primary.status, "open");
+}
+
+/// D5 decision 11, R-16: a closure tells its observer only the steps that
+/// run, in the order they run, `recording` before the merge. With no
+/// publication remote nothing is synchronized or published; a request sent
+/// again past its context's synchronization starts no context child but
+/// still writes the checkpoint it has not written. (Promotion's own order,
+/// and a context primary already holds, are
+/// `promotion::run_tests::a_promotion_tells_its_observer_only_the_steps_that_run`;
+/// a closure already recorded is told as `recording` and not reported as one
+/// at the boundary, `a_runs_steps_are_reported_as_stages`.)
+#[test]
+fn a_closure_tells_its_observer_only_the_steps_that_run() {
+    use run::RunEvent as E;
+    let told = |service: &RepositoryService, request: CloseTicketRequest| {
+        let mut told = Told(Vec::new());
+        run::run_with_io_observed(
+            &TicketClosureLifecycle,
+            service,
+            lifecycle_request(request),
+            &mut FakeIo::default(),
+            &mut told,
+        )
+        .unwrap();
+        told.0
+    };
+    let context =
+        E::ChildStarting(crate::repository::promotion::lifecycle_record::ChildRole::Context);
+    let primary =
+        E::ChildStarting(crate::repository::promotion::lifecycle_record::ChildRole::Primary);
+    let f = Fixture::new();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [E::Recording, E::Integrating, E::CleaningUp]
+    );
+    let f = Fixture::remote();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [
+            context,
+            E::Recording,
+            E::Integrating,
+            primary,
+            E::CleaningUp
+        ]
+    );
+    let f = Fixture::remote();
+    let request = f.request();
+    let _ = f.run_io(
+        &f.failing(FailurePoint::AfterContextSync),
+        request.clone(),
+        &mut FakeIo::default(),
+    );
+    assert_eq!(
+        told(&f.reopened(), request),
+        [E::Recording, E::Integrating, primary, E::CleaningUp]
+    );
 }

@@ -408,3 +408,150 @@ fn a_transient_stop_entered_again_with_no_parent_leaves_the_record() {
         }
     ));
 }
+
+/// What a run's observer is told, as the progress stages a request reports
+/// (D5 decision 11): a session that only records the stages sent.
+struct Recorder(std::cell::RefCell<Vec<ProgressStage>>);
+
+impl Session for Recorder {
+    fn cancelled(&self) -> bool {
+        false
+    }
+
+    fn report(&self, event: &crate::repository::ProgressEvent) {
+        assert_eq!(event.request_id, "request");
+        self.0.borrow_mut().push(event.stage);
+    }
+
+    fn synchronize(
+        &self,
+        _: &RepositoryService,
+        _: crate::repository::SynchronizeRemoteRequest,
+        _: crate::repository::SynchronizationSettings,
+        _: &mut dyn crate::repository::SynchronizationObserver,
+    ) -> Option<
+        Result<crate::repository::SynchronizationResult, crate::repository::SynchronizationError>,
+    > {
+        None
+    }
+
+    fn republish(
+        &self,
+        _: &RepositoryService,
+        _: crate::repository::SynchronizeRemoteRequest,
+        _: &crate::repository::remote::sync::RepublishConsent,
+        _: &mut dyn crate::repository::SynchronizationObserver,
+    ) -> Option<
+        Result<crate::repository::SynchronizationResult, crate::repository::SynchronizationError>,
+    > {
+        None
+    }
+
+    fn promote_document(
+        &self,
+        _: &RepositoryService,
+        _: crate::repository::PromoteDocumentRequest,
+        _: RequestId,
+        _: &mut dyn RunObserver,
+    ) -> Option<
+        Result<
+            crate::repository::DocumentPromotionResult,
+            crate::repository::DocumentPromotionError,
+        >,
+    > {
+        None
+    }
+
+    fn close_ticket(
+        &self,
+        _: &RepositoryService,
+        _: crate::repository::CloseTicketRequest,
+        _: RequestId,
+        _: &mut dyn RunObserver,
+    ) -> Option<Result<crate::repository::TicketClosureResult, crate::repository::TicketClosureError>>
+    {
+        None
+    }
+
+    fn poll_once(
+        &self,
+        _: &RepositoryService,
+        _: crate::repository::PollPublicationRemoteRequest,
+        _: RequestId,
+    ) -> Option<Result<crate::repository::RemotePollResult, crate::repository::RemotePollError>>
+    {
+        None
+    }
+
+    fn verify_transport(
+        &self,
+        _: &RepositoryService,
+        _: crate::repository::transport::VerifySshTransportRequest,
+    ) -> Option<
+        Result<
+            crate::repository::transport::SshTransportVerified,
+            crate::repository::transport::SshTransportError,
+        >,
+    > {
+        None
+    }
+}
+
+/// D5 decision 11, L3, R-15: each step a run tells of is a stage. The
+/// context's synchronization reports `connecting`, then its fetch, local
+/// update and push as a share's do (U-4), and none of its other safe
+/// points; the primary's reports `publishing` once and none of its safe
+/// points; a closure the ticket already holds is not recorded again.
+#[test]
+fn a_runs_steps_are_reported_as_stages() {
+    use ChildRole::{Context, Primary};
+    use ProgressStage as S;
+    use RemoteOperationSafePoint as Point;
+    use RunEvent as E;
+    let stages_of = |closure_exists: bool, events: &[RunEvent]| {
+        let session = Recorder(Default::default());
+        let mut stages = Stages {
+            session: &session,
+            subject: Subject::for_testing("request", "ticket close"),
+            closure_exists,
+        };
+        for event in events {
+            stages.event(*event);
+        }
+        session.0.into_inner()
+    };
+    assert_eq!(
+        stages_of(
+            false,
+            &[
+                E::ChildStarting(Context),
+                E::ChildSafePoint(Context, Point::BeforeFetch),
+                E::ChildSafePoint(Context, Point::AfterFetch),
+                E::ChildSafePoint(Context, Point::BeforeLocalUpdate),
+                E::ChildSafePoint(Context, Point::BeforePush),
+                E::ChildSafePoint(Context, Point::AfterPushReturn),
+                E::Recording,
+                E::Integrating,
+                E::ChildStarting(Primary),
+                E::ChildSafePoint(Primary, Point::BeforeFetch),
+                E::ChildSafePoint(Primary, Point::BeforePush),
+                E::CleaningUp,
+            ]
+        ),
+        [
+            S::Connecting,
+            S::Fetching,
+            S::UpdatingLocal,
+            S::Pushing,
+            S::Recording,
+            S::Integrating,
+            S::Publishing,
+            S::CleaningUp,
+        ]
+    );
+    // R-15: a closure the ticket already holds is not recorded again.
+    assert_eq!(
+        stages_of(true, &[E::Recording, E::Integrating, E::CleaningUp]),
+        [S::Integrating, S::CleaningUp]
+    );
+}

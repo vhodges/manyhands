@@ -180,6 +180,18 @@ impl Subject {
         }
     }
 
+    /// A subject of the request `request_id` of `command`, for a test that
+    /// has no binding or accepted request.
+    #[cfg(test)]
+    pub(crate) fn for_testing(request_id: &str, command: &'static str) -> Self {
+        Self {
+            request_id: request_id.to_owned(),
+            operation_id: None,
+            command,
+            scope: Scope::default(),
+        }
+    }
+
     pub(crate) fn event(&self, stage: ProgressStage, effects: Effects) -> ProgressEvent {
         ProgressEvent {
             request_id: self.request_id.clone(),
