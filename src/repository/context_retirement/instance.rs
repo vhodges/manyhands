@@ -434,6 +434,43 @@ impl Identity {
         Ok(())
     }
 }
+
+/// Verification-only A2/A3 identity check. No Selection/install permit and no
+/// journal/enrollment is produced from a frozen projection.
+pub(super) fn verify_frozen(
+    git: &git2::Repository,
+    request: &RetireContextRequest,
+    tip: git2::Oid,
+    nonce: Option<&str>,
+) -> Result<(), RepositoryError> {
+    if let Some(nonce) = nonce {
+        Identity {
+            root: request.root.clone(),
+            kind: request.kind,
+            item: request.item_id.clone(),
+            tip,
+            nonce: OperationId::parse(nonce).map_err(|_| recovery_required())?,
+        }
+        .verify_marker(git, request)
+    } else {
+        let context = item_context(&request.root, request.kind, request.item_id.clone());
+        if !absent_path(&request.root, &context.worktree)?
+            || !absent_path(&request.root, &admin(git, &request.item_id))?
+        {
+            return Err(recovery_required());
+        }
+        let branch = format!("refs/heads/{}", context.branch);
+        ref_file_absent(&request.root, &git.commondir().join(&branch))?;
+        ref_file_absent(&request.root, &git.commondir().join("packed-refs"))?;
+        let reference = git
+            .find_reference(&branch)
+            .map_err(|_| recovery_required())?;
+        if reference.symbolic_target().is_some() || reference.target() != Some(tip) {
+            return Err(recovery_required());
+        }
+        require_checkout_inventory(git, request, None)
+    }
+}
 impl Verified {
     pub(super) fn matches_stored(
         tx: &rusqlite::Transaction<'_>,

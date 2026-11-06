@@ -2867,22 +2867,22 @@ is unchanged; these are current incremental evidence/remaining-work annotations.
 | 26 | E `d14_exact_completed_intent_settles_atomically_and_incomplete_refusal_is_stable` |
 | 27 | E prior replacement/stale-executor cases plus `specfix_r3_terminal_history_preserved_while_every_old_owner_is_fenced`: active three-phase and four-terminal-phase matrix preserves terminal O projection/all metadata while raising epoch; `f2_held_network_advance_fences_old_return_and_new_reentry` adds validated new-F2 replacement before old transport returns. O remaining positive present after-ad/after-batch interruption windows |
 | 28 | E prior replacement rollback/exclusion cases plus the R3 eight-state matrix and `f2_replacement_failure_rolls_back_scope_epochs_and_pins` whole-transaction rollback/stale-write assertions. O remaining every-write/commit failure points, valid terminal remote debt, foreign-O/action correlation matrix |
-| 29 | E prior current-F2 S/O/source boundary controls plus `source_cancelfix_*`: current cancellation grants STOP only, while stale/finished/foreign/map/epoch/config/debt cases retain full-image no-write refusal. O remaining fault combinations, post-A1 source-fencing and batch-consumer request fences; D actual Task 3 binding |
+| 29 | E prior current-F2 S/O/source controls and `source_cancelfix_*`, plus `source_handoff_current_cancel_*` / `source_handoff_capture_nonce_*`: current cancellation settles only no-retirement metadata after P; stale F2/map/batch attempt cannot promote or acknowledge through the capture. O remaining fault combinations, post-A1 source-fencing and A4 consumer fences; D actual Task 3 binding |
 | 30 | E `reentry_selected_generation_change_is_final_without_network`, old-generation retention units; O partial-effect generation variant |
-| 31 | E prior live standalone capture/public replay negative plus A1 exact returned-batch capture through real owned SQL under sealed P (synthetic ad inputs, no source SSH claim). O A2/A3 original-P handoff and source live-transport matrix; D actual Task 4 producer |
+| 31 | E prior standalone/A1 evidence plus `source_handoff_*`: real complete poll processing, preterminal A2 SQL and original refresh/A3 handoff with inert producer projections/synthetic advertisements. Public replay cannot create eligibility. O source live-transport/full producer matrix; D actual Task 4 producer/selection/enrollment |
 | 32 | O inert batch B-execution/C-consumption seam; D actual Task 4 journey |
-| 33 | E A0 source current-F2/exact remote mapping, frozen base/config/generation and local-debt refusal projections only. O foreign/stale ordered batch-consumer/cursor/digest/identity projections; D actual Task 3/4 binding/coordinator |
+| 33 | E A0 checks plus A2 whole counted/ordered image, canonical digest/report/binding, child-ID reservation and A3 current request/batch/config/nonce/tip refusal. O A4 ordered consumer/cursor admission and remaining foreign-token/fault variants; D actual Task 3/4 binding/coordinator |
 | 34 | O no-child gap execution/request+batch fences; D actual Task 4 coordinator |
 | 35 | E prior R7 reports/stops, direct and nonadjacent-lineage changed-W → M truthful Possible/None, R3 terminal-observer outcome preservation; F2 preclaim/selected/new-reentry cancellation Final/no-effect and uncertain/post-prune Owed preserve flags, stale calls cannot acknowledge. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
-| 36 | E prior F2 index SQL/unscoped/orphan/envelope/invalidation/reverse-spend controls plus `f2_qualityfix_*`: pre-envelope ContextRetire request mappings refuse generic refresh inside journal-begin's transaction, with full image unchanged and same-current private completion; ordinary/other-command refresh stays supported. Limited request-fence approved at `c7daad0d`. O remaining M/index fault and history variants |
+| 36 | E prior F2 index/request-fence controls (approved at `c7daad0d`) plus `source_handoff_nonempty_*`: frozen child IDs refuse generic refresh and standalone retirement begin before any child row; ordinary/other-command controls retained. O remaining M/index fault and history variants |
 | 37 | E `generic_abandon_preserves_pending_and_terminal_identity`; D guarded preserving abandon Task 3 |
-| 38 | E prior migration/history/R1/R2/F2/reverse-spend/Q1 controls plus strict A0/A1 unbound-source projection/pin/epoch correlation. Catalog pins/DDL unchanged; no production batch store installed. O remaining resumption/M FK/tamper/deletion-order and full shared-store inventory; Task 4 owns its producer/schema |
-| 39 | E A0 sealed original P/R/attempt/config + A1 immutable provenance/source pin before any manifest, through owned capture. O A2 full image/binding, A3 eligibility and A4 consumption; D actual Task 4 producer |
-| 40 | E A1 transaction rollback, current-cancel STOP/Z rollback and retry, and no normal P completion/capture permission from cancellation. O full A2/A3 crash/process-token/empty-manifest matrix; D actual Task 4 producer |
-| 41 | E CURRENT-R-only/remote-only/both cancellation before ad and after A1 through safe points and supported finish; commit-boundary cancellation creates no ad/provenance/pin, exact source release/reopen/replay verified. Configuration-stopped metadata release remains separate. O crash/restart source fencing/fresh-ad retry and ineligible/unconfirmed source+consumer handoff; D actual Task 4 producer |
-| 42 | E old last-pin controls plus source G→G+1 planning-pin retention, exact stopped-source release/collection and successful reopen. O source+consumer overlap and partial-effect generation variants |
-| 43 | E `z_keeps_a_valid_integration_window_and_its_batch`; O shared source+consumer handoff-gap projection; D actual Task 4 journey |
-| 44 | E prior immutable/release-debt controls plus source missing-pin/projection/terminal-hold refusal, clean FK last-release/reopen and actual SQL batch-ID reuse with idempotent release/no re-collection. O cross-holder ambiguity, source-fence history and full shared-source variants |
+| 38 | E prior migration/history controls plus strict A0/A1 and bound A2/A3 report/image/provenance/receipt/pin/reason correlation; orphan freeze and wrong bound release reasons refuse. Catalog pins/DDL unchanged; no production batch store installed. O remaining FK/tamper/deletion-order/full inventory variants; Task 4 owns producer/schema |
+| 39 | E A0→A1 remains unplanned; real preterminal A2 capture of complete image/report/digest/binding, including explicit empty; A3 original wrapper + one-use non-Clone capture settles eligibility without reopening P. O A4 consumption and remaining token/fault matrix; D actual Task 4 producer/enrollment |
+| 40 | E A1/STOP rollback plus `source_handoff_preterminal_*` binding/pin/image/stage/P-finish rollback, postterminal handoff/Z rollback, counted/truncated/duplicate input refusal and explicit-empty success. O remaining every-write/ambiguous-commit and second-release fault variants; D actual Task 4 producer |
+| 41 | E prior current-cancel controls plus original index failure→ineligible, later repair/public Complete never upgrades; completed-P lost capture and successful-refresh/failed-handoff recovery conservatively release both holders. P terminal outcome/epoch unchanged. O active-source crash fencing/fresh-ad retry and remaining source failure variants; D actual Task 4 producer |
+| 42 | E prior planning-pin controls plus both pins across refresh, source-only release on nonempty eligible handoff, retained consumer after source end and bound ineligible last-pin G→G+1 collection/reopen. O full cross-holder/window and partial-effect generation variants |
+| 43 | E `z_keeps_a_valid_integration_window_and_its_batch` retained; new two-holder handoff/consumer retention controls do not substitute for the still-O combined source+consumer+window matrix; D actual Task 4 journey |
+| 44 | E prior immutable/release-debt controls plus bound rollback/reopen, exact holder-specific reasons, orphan refusal, actual reused batch ID and idempotent no-lookup/no-collection replay. O cross-holder ambiguity, source-fence history and remaining shared-source variants |
 
 ### Exact next work before publication / Task 2 completion
 
@@ -3681,3 +3681,118 @@ Checkpoint parent **`01M6PVJ81BXJYHC9YAYXMPKFXS`**, actual UTC
 `MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data` (`comment-id`).
 Main unchanged `c69789d9`; same-phase preflight reused. No agents/push/status/PR/
 main integration/closure/native CI/other-worktree/real-profile/key/context/draft actions.
+
+## A2/A3 Bounded Milestone — Owned Frozen Image And Original Handoff
+
+Entry/review base **`fae6a78faac0ffff2d3cb7071adbd9303b6ff73f`** verified equal to
+HEAD/upstream, clean. Prior A0/A1/unbound-Z LIMITED SPEC+QUALITY approval through
+`a409615e853ac9447937f1f1f966821d545b178b` remains intact; reviewer-only shared-target
+test evidence stays excluded. Full Task 2 base remains
+**`7b1912d152a1ab7440bd17c48a0a544e40e19258`**. New milestone HEAD is the commit
+introducing checkpoint **`01M6Q3KFBMDH8NA4FXCME1T0A6`**, subject
+`feat: capture owned poll images and settle original handoffs`.
+**Controller LIMITED SPEC then QUALITY are pending**, before push/expansion.
+
+### Connected mechanism, not a Task 4 producer
+
+- `reservation.rs` now has a private preterminal continuation after exact owned/
+  request acknowledgement and before P's terminal write. Only `poll.rs`'s completed
+  full-pass capability can enter A2; the existing postterminal callback cannot.
+  A1 stays independent of all image/eligibility tables and retains its STOP-only
+  current-cancel boundary. Normal public finish still cannot complete a sealed P.
+- `handoff.rs` strictly reads inert future-producer projections, validates the
+  whole counted/ordered image (kind/item, resource state, fixed tip, original
+  verified nonce, selection epoch, unique child IDs and captured materialization),
+  checks actual current identities without installing/enrolling anything, then
+  copies the whole image and immutable full original report. Canonical versioned
+  bytes/digest, exact A1 binding, consumer pin, capture nonce and `unconfirmed`
+  eligibility persist atomically before P completion. Explicit `[]` is frozen,
+  not unplanned. No K row or aggregate retirement-local debt is created.
+- One-use **non-Clone `Capture`** escapes only after transaction commit. It binds
+  the service process scope, P/R/F2/source/batch/configuration identity, capture
+  nonce, digest and exact report. Only this live poll continuation constructs the
+  private original wrapper after its actual refresh. A3 revalidates current fences
+  and identities; success releases the source hold, retaining the nonempty
+  consumer hold. Empty success settles both with `ok`, without children.
+- Original index failure/current cancellation and conservative completed-P
+  unconfirmed recovery durably record an ineligible no-retirement projection
+  (`discovery_pending`/`cancelled`), end the consumer attempt and release both
+  exact holders. Negative metadata settlement does not borrow cleanup authority
+  or require an unrelated index debt to vanish. Stale-token/fence refusal leaves
+  legitimate unconfirmed holds for the separate audited recovery path. P's public
+  terminal outcome/epoch is never reopened/rewritten.
+- Explicit public replay reads the immutable original report even after latest
+  poll rows change, and atomically closes any unconfirmed handoff first. Today's
+  public Complete/refresh flags, unrelated repair or a changed capture nonce cannot
+  promote eligibility. Source writes/ack/finish remain ended-P strict. Frozen
+  child IDs are globally reserved; generic refresh and standalone child begin
+  refuse. **Batch begin/consumption, gap O and Task 3 DTO/CLI remain closed.**
+- Bound-source audit now correlates frozen image/report/digest/receipt and exact
+  source/consumer pin-or-release state, rejecting orphan freezes and wrong bound
+  release reasons. The new holder-specific release adapter uses the **unchanged Z
+  kernel**; replay does not resolve reused historical scalar batch IDs. No shared
+  DDL/catalog pin/dependency/lockfile change and no production Task 4 tables/marker.
+
+### TDD and completed frozen-source verification
+
+Logs: **`/tmp/opencode/task2-source-handoff-<suffix>.log`**. Compiled behavioral
+REDs: `red-empty` **0/1**, `red-nonempty` **0/1**; original-index negative/public
+replay counterexamples in `red-lifetimes-compiled-2`; wrong active-consumer release
+in `red-fencing-z`; orphan freeze in `red-audit`. These draft runs also exposed
+fixture errors (repeating acknowledged BeforeDiscovery and an unexpired index
+claim); the fixtures were corrected to supported finish/retry sequences, not
+counted as production defects. Compilation/preflight/draft logs are not final gates.
+
+Every final command below completed serially, foreground Devenv, `timeout:0`,
+exit **0**. Test counts overlap; earlier 128/105/source17 evidence is historical
+and the original assertions remain intact (only fixture stage/registration adapted).
+
+| Arguments after `devenv shell -- cargo test --all-features --locked` | Suffix | Passed |
+| --- | --- | --- |
+| `--lib retirement_source_handoff_` | `focused` | **15** |
+| `--lib retirement_source_` | `source-units` | **32 = 17 retained +15** |
+| `--lib context_retirement` | `context` | **143 = 128 retained +15** |
+| `--test mutation_remote retirement_` | `retirement-ssh` | **105 registered SSH cases** |
+| `--lib remote::reservation::` / `--lib remote::poll` | `reservation` / `poll` | **58 / 81** |
+| `--lib remote::state::persistence_tests` | `state` | **70** |
+| `--test remote_observation` / `--test remote_polling` | `observation-ssh` / `polling-ssh` | **15 / 84 registered SSH cases** |
+| `--test remote_reservation --test recovery_foundation_gate --test mutation_contract` | `integration` | **13 / 52 / 44** |
+| `--lib repository::recovery::` | `recovery` | **12** |
+
+Whole-tree `devenv shell -- cargo check --all-features --locked`,
+`devenv shell -- cargo fmt --check` and `devenv shell -- cargo clippy --all-targets
+--all-features --locked -- -D warnings` pass (`check`/`fmt`/`clippy`). No zero-case,
+detached or copied-probe build is included; no native/platform/full-suite claim.
+All **1,720** frozen build/dependency/test inputs, including both new modules and
+literal document compile inputs, match `task2-source-handoff-source.sha256`, SHA-256
+**`a41ce9d949e38744f60a8c59942fa9e3031826df84066e38769586687a298506`**.
+
+Ten Rust paths: new `context_retirement/{handoff,source_handoff_tests}.rs`, existing
+`context_retirement/{mod,instance,source,source_contract_tests,record}.rs`, and
+`remote/{mod,poll,reservation}.rs`. Only affected E/O/D rows updated above.
+
+### Self-review limits and exact next obligations
+
+This is real poll processing/owned SQL/original refresh behind **inert canonical
+A0/A2 projections and synthetic advertisement inputs**, with fixtures supplying
+pre-enrolled instances. It does **not** prove Task 4's candidate enumeration,
+enrollment, complete producer schema, report DTOs or live source-SSH journey.
+The private versioned report codec must preserve its names/fields or version on
+future changes; whole-image decode/audit is explicit cost, not a performance claim.
+Eligible nonempty consumer holds intentionally await A4, not an implicit cleanup.
+
+Still owed: controller LIMITED SPEC→QUALITY; remaining A2/A3 foreign-token,
+every-write/ambiguous-commit/second-release and source failure variants; A4 ordered
+B→C cleanup/I and no-child-gap O; active-source crash/restart fencing/fresh-ad retry;
+full source+consumer+other-holder+window Z matrix; remaining replacement/M/D14/
+index/history faults, whole 44-row/final Task 2 adversarial review and Task 8.
+Task 3 Command/DTO/CLI/guarded abandon and Task 4 stores/selection/enrollment/
+coordinator/final reports remain downstream. No row/group/full Task 2 approval or
+completion claim is made.
+
+Checkpoint parent **`01M6PZGTN82BR8HB9J4Q1W6STJ`**, actual UTC
+**`2026-11-06T00:19:47Z`**; ID from supported current CLI only with isolated
+`MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data` (`comment-id`).
+Main remained `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; controller preflight phase
+reused, no rebase/other-ref consumption. No agents/push/status/PR/main integration/
+closure/native CI/other-worktree or real-profile/key/context/draft actions.

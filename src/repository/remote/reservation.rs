@@ -824,6 +824,21 @@ fn finish(
     record: &state::StoredRemoteOperation,
     category: RemoteOutcomeCategory,
 ) -> Result<(), RepositoryError> {
+    finish_at(
+        tx,
+        id,
+        record,
+        category,
+        time::OffsetDateTime::from_unix_timestamp(now()).map_err(|_| state::recovery_required())?,
+    )
+}
+fn finish_at(
+    tx: &Transaction<'_>,
+    id: i64,
+    record: &state::StoredRemoteOperation,
+    category: RemoteOutcomeCategory,
+    completed_at: time::OffsetDateTime,
+) -> Result<(), RepositoryError> {
     let phase = match category {
         RemoteOutcomeCategory::Completed => "completed",
         RemoteOutcomeCategory::Cancelled => "cancelled",
@@ -831,8 +846,6 @@ fn finish(
     };
     // Persist future automatic retry policy, without scheduling or delaying this
     // call. Attention states and explicit failures retain the existing policy.
-    let completed_at =
-        time::OffsetDateTime::from_unix_timestamp(now()).map_err(|_| state::recovery_required())?;
     if !is_sync(&record.target) {
         let snapshot = state::read_snapshot(tx, id)?;
         let policy = snapshot.polling();
@@ -1639,11 +1652,36 @@ impl RepositoryService {
             RemoteSafePointOutcome,
         ) -> Result<T, RepositoryError>,
     ) -> Result<T, RepositoryError> {
+        self.finish_remote_operation_capturing(root, owner, category, None, capture)
+            .map(|(result, _)| result)
+    }
+
+    pub(super) fn finish_remote_operation_capturing<T>(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        category: RemoteOutcomeCategory,
+        pass: Option<&super::poll::FullPass<'_>>,
+        capture: impl FnOnce(
+            &Transaction<'_>,
+            i64,
+            RemoteSafePointOutcome,
+        ) -> Result<T, RepositoryError>,
+    ) -> Result<
+        (
+            T,
+            Option<crate::repository::context_retirement::handoff::Capture>,
+        ),
+        RepositoryError,
+    > {
         state::with_transaction(self, root, |tx, id| {
             let record = owned_for_acknowledgement(self, tx, id, owner)?;
             let point = record.completed_step.ok_or_else(state::recovery_required)?;
             // Unbound A1 is not A2 manifest/finalization authority.
-            if owner.original_source.is_some() && category == RemoteOutcomeCategory::Completed {
+            if owner.original_source.is_some()
+                && category == RemoteOutcomeCategory::Completed
+                && pass.is_none()
+            {
                 return Err(state::recovery_required());
             }
             let completion_point = if record.poll_kind == Some(state::PollKind::Update) {
@@ -1659,10 +1697,27 @@ impl RepositoryService {
             }
             let decision = acknowledge(tx, &record, point)?;
             if decision != RemoteSafePointOutcome::Continue {
-                return capture(tx, id, decision);
+                return Ok((capture(tx, id, decision)?, None));
             }
-            finish(tx, id, &record, category)?;
-            if owner.original_source.is_some() {
+            let at = time::OffsetDateTime::from_unix_timestamp(now())
+                .map_err(|_| state::recovery_required())?;
+            let token = if let Some(source) = &owner.original_source {
+                if category == RemoteOutcomeCategory::Completed {
+                    let report = pass.ok_or_else(state::recovery_required)?.report(
+                        tx,
+                        id,
+                        owner.operation_id,
+                        at,
+                    )?;
+                    Some(source.freeze(self, tx, id, &record, &report)?)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            finish_at(tx, id, &record, category, at)?;
+            if owner.original_source.is_some() && token.is_none() {
                 crate::repository::context_retirement::source::close_stopped(tx, &record)?;
             }
             let decision = if category == RemoteOutcomeCategory::Cancelled {
@@ -1670,7 +1725,11 @@ impl RepositoryService {
             } else {
                 RemoteSafePointOutcome::Continue
             };
-            capture(tx, id, decision)
+            let result = capture(tx, id, decision)?;
+            if token.is_some() {
+                crate::repository::context_retirement::record::audit_connection(tx)?;
+            }
+            Ok((result, token))
         })
     }
 }

@@ -92,7 +92,7 @@ pub(in super::super) fn owned_identity(db: &Connection, id: &str) -> Result<bool
             return Ok(true);
         }
     }
-    Ok(false)
+    super::handoff::reserved_child(db, id)
 }
 
 pub(in super::super) fn require_foreign_id_available(
@@ -1274,11 +1274,11 @@ fn audit_objects(
     if invalid_absence {
         return Err(recovery_required());
     }
-    // Only the unbound original-P projection contract is supported so far.
-    // Manifest/batch consumption and guarded preservation still fail closed.
+    // Original-P binding is supported only through the strict A2/A3 projection
+    // audit below. Batch children/gap consumption and preservation stay closed.
     let unsupported_authority: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records WHERE batch_operation_ulid IS NOT NULL OR phase IN ('preserving','abandoned'))
       OR EXISTS(SELECT 1 FROM retirement_advertisement_provenance WHERE execution_kind='batch_gap' OR (execution_kind='local_parent' AND execution_batch_operation_ulid IS NOT NULL))
-      OR EXISTS(SELECT 1 FROM retirement_observation_receipts WHERE consumer_kind!='single')", [], |r| r.get(0)).map_err(|_| recovery_required())?;
+       OR EXISTS(SELECT 1 FROM retirement_observation_receipts b JOIN retirement_advertisement_provenance p ON p.id=b.provenance_id WHERE b.consumer_kind='batch' AND p.execution_kind!='poll_parent')", [], |r| r.get(0)).map_err(|_| recovery_required())?;
     if unsupported_authority {
         return Err(recovery_required());
     }
@@ -1480,7 +1480,7 @@ fn audit_objects(
     Ok(())
 }
 
-pub(super) fn audit_connection(db: &Connection) -> Result<(), RepositoryError> {
+pub(in super::super) fn audit_connection(db: &Connection) -> Result<(), RepositoryError> {
     audit(db)
 }
 
@@ -1625,6 +1625,45 @@ pub(super) fn release_source_pin(
             reason: "source_terminal",
         },
     )
+}
+
+pub(super) fn release_bound_source(
+    tx: &rusqlite::Transaction<'_>,
+    provenance: i64,
+    binding: i64,
+    consumer_terminal: bool,
+) -> Result<(), RepositoryError> {
+    super::handoff::require_release(tx, provenance, binding, consumer_terminal)?;
+    let (operation,source_epoch,consumer_epoch,repository,batch):(String,i64,i64,i64,i64)=tx.query_row("SELECT p.source_operation_ulid,p.source_owner_epoch,b.consumer_attempt_epoch,p.repository_id,p.observation_batch_id FROM retirement_advertisement_provenance p JOIN retirement_observation_receipts b ON b.provenance_id=p.id WHERE p.id=?1 AND b.id=?2",params![provenance,binding],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(|_|recovery_required())?;
+    release_pin(
+        tx,
+        PinRelease {
+            provenance,
+            kind: "source_attempt",
+            operation: &operation,
+            epoch: source_epoch,
+            repository,
+            batch,
+            binding: None,
+            reason: "handoff_decided",
+        },
+    )?;
+    if consumer_terminal {
+        release_pin(
+            tx,
+            PinRelease {
+                provenance,
+                kind: "consumer_attempt",
+                operation: &operation,
+                epoch: consumer_epoch,
+                repository,
+                batch,
+                binding: Some(binding),
+                reason: "consumer_terminal",
+            },
+        )?;
+    }
+    Ok(())
 }
 
 // Only the separately validated holder transitions above construct this key.

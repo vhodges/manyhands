@@ -1,5 +1,6 @@
 //! Tree-only completion and preservation evidence, shared by poll and retirement.
 mod execution;
+pub(super) mod handoff;
 mod instance;
 pub(super) mod proof;
 pub(super) mod record;

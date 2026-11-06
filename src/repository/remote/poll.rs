@@ -1204,6 +1204,129 @@ impl PartialEq for RemotePollReport {
 }
 impl Eq for RemotePollReport {}
 impl RemotePollReport {
+    pub(in super::super) fn decode_frozen(
+        bytes: &str,
+        plan: &RemoteRefPlan,
+    ) -> Result<Self, RepositoryError> {
+        let value: serde_json::Value =
+            serde_json::from_str(bytes).map_err(|_| state::recovery_required())?;
+        if value["version"] != 1
+            || value["completion"] != "Completed"
+            || value["outcome"] != "Completed"
+        {
+            return Err(state::recovery_required());
+        }
+        let string = |v: &serde_json::Value| {
+            v.as_str()
+                .map(str::to_owned)
+                .ok_or_else(state::recovery_required)
+        };
+        let oid = |v: &serde_json::Value| -> Result<Option<git2::Oid>, RepositoryError> {
+            if v.is_null() {
+                return Ok(None);
+            }
+            let text = string(v)?;
+            let oid = git2::Oid::from_str(&text).map_err(|_| state::recovery_required())?;
+            if oid.is_zero() || oid.to_string() != text {
+                return Err(state::recovery_required());
+            }
+            Ok(Some(oid))
+        };
+        let time = |v: &serde_json::Value| {
+            OffsetDateTime::from_unix_timestamp(
+                v.as_i64()
+                    .filter(|at| *at >= 0)
+                    .ok_or_else(state::recovery_required)?,
+            )
+            .map_err(|_| state::recovery_required())
+        };
+        let mut targets = Vec::new();
+        for row in value["targets"]
+            .as_array()
+            .ok_or_else(state::recovery_required)?
+        {
+            let kind = match row["kind"].as_str() {
+                Some("Ticket") => Some(AuthoringKind::Ticket),
+                Some("Document") => Some(AuthoringKind::Document),
+                None if row["kind"].is_null() => None,
+                _ => return Err(state::recovery_required()),
+            };
+            let item_id = if row["item_id"].is_null() {
+                None
+            } else {
+                Some(
+                    string(&row["item_id"])?
+                        .parse::<canonical::ItemId>()
+                        .map_err(|_| state::recovery_required())?,
+                )
+            };
+            let target = if row["target"].is_null() {
+                None
+            } else {
+                Some(match (kind, item_id.as_ref()) {
+                    (Some(kind), Some(item)) => plan.context(kind, item),
+                    (None, None) => plan.primary().clone(),
+                    _ => return Err(state::recovery_required()),
+                })
+            };
+            if target
+                .as_ref()
+                .map(|t| serde_json::Value::String(t.remote_ref().into()))
+                .unwrap_or(serde_json::Value::Null)
+                != row["target"]
+            {
+                return Err(state::recovery_required());
+            }
+            let disposition = [
+                PollDisposition::Current,
+                PollDisposition::FastForwarded,
+                PollDisposition::LocalAhead,
+                PollDisposition::Diverged,
+                PollDisposition::Dirty,
+                PollDisposition::Conflicted,
+                PollDisposition::Inaccessible,
+                PollDisposition::Materialized,
+                PollDisposition::Nonconforming,
+                PollDisposition::BlockedByLocalState,
+                PollDisposition::Malformed,
+                PollDisposition::RemotelyDeleted,
+                PollDisposition::Closed,
+                PollDisposition::Promoted,
+                PollDisposition::HistoryUnknown,
+            ]
+            .into_iter()
+            .find(|d| row["disposition"] == format!("{d:?}"))
+            .ok_or_else(state::recovery_required)?;
+            targets.push(PollTargetReport {
+                target,
+                kind,
+                item_id,
+                disposition,
+                before_oid: oid(&row["before_oid"])?,
+                after_oid: oid(&row["after_oid"])?,
+            });
+        }
+        let report = Self {
+            operation_id: crate::repository::OperationId::parse(&string(&value["operation_id"])?)
+                .map_err(|_| state::recovery_required())?,
+            completion: PollCompletion::Completed,
+            completed_at: time(&value["completed_at"])?,
+            next_eligible_at: if value["next_eligible_at"].is_null() {
+                None
+            } else {
+                Some(time(&value["next_eligible_at"])?)
+            },
+            targets,
+            outcome: Some(RemoteOutcomeCategory::Completed),
+            local_changes: value["local_changes"]
+                .as_bool()
+                .ok_or_else(state::recovery_required)?,
+        };
+        if crate::repository::context_retirement::handoff::report_image(&report)? != bytes {
+            return Err(state::recovery_required());
+        }
+        Ok(report)
+    }
     pub(in super::super) fn local_changes(&self) -> bool {
         self.local_changes
     }
@@ -1238,6 +1361,61 @@ pub enum RemotePollOutcome {
 pub enum RemotePollResult {
     Complete(RemotePollOutcome),
     IndexPending(crate::repository::IndexPending<RemotePollOutcome>),
+}
+
+// Constructed only at the end of this call's complete primary/target pass.
+// It is not a public report, replay wrapper or caller-set eligibility flag.
+pub(super) struct FullPass<'a> {
+    targets: &'a [PollTargetReport],
+    local_changes: bool,
+}
+impl FullPass<'_> {
+    pub(super) fn report(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        id: i64,
+        operation_id: crate::repository::OperationId,
+        at: OffsetDateTime,
+    ) -> Result<RemotePollReport, RepositoryError> {
+        if self.targets.iter().any(|r| {
+            matches!(
+                r.disposition,
+                PollDisposition::NotReached | PollDisposition::MaterializationIncomplete
+            )
+        }) {
+            return Err(state::recovery_required());
+        }
+        let snapshot = state::read_snapshot(tx, id)?;
+        Ok(RemotePollReport {
+            operation_id,
+            completion: PollCompletion::Completed,
+            completed_at: at,
+            next_eligible_at: next_eligible(
+                RemoteOutcomeCategory::Completed,
+                RemotePollInvocation::Explicit,
+                at,
+                snapshot.polling(),
+            ),
+            targets: self.targets.to_vec(),
+            outcome: Some(RemoteOutcomeCategory::Completed),
+            local_changes: self.local_changes,
+        })
+    }
+}
+
+/// Only the live completion continuation below can construct this wrapper.
+/// Public/reconstructed Complete and today's refresh flag cannot construct one.
+pub(in super::super) struct OriginalWrapper {
+    report: String,
+    complete: bool,
+}
+impl OriginalWrapper {
+    pub(in super::super) fn report(&self) -> &str {
+        &self.report
+    }
+    pub(in super::super) fn complete(&self) -> bool {
+        self.complete
+    }
 }
 pub enum RemotePollError {
     Repository(RepositoryError),
@@ -1308,6 +1486,23 @@ impl RepositoryService {
             &request.root,
             RepositoryOperation::RepositorySnapshot,
         )?;
+        if request.invocation == RemotePollInvocation::Explicit
+            && !request.restart
+            && let Some((mut report, pending)) =
+                crate::repository::context_retirement::handoff::replay_report(
+                    self,
+                    &root,
+                    request.operation_id,
+                )?
+        {
+            report.local_changes = false;
+            let outcome = RemotePollOutcome::Polled(report);
+            return Ok(if pending {
+                RemotePollResult::IndexPending(crate::repository::IndexPending::new(outcome))
+            } else {
+                RemotePollResult::Complete(outcome)
+            });
+        }
         let priority = if request.invocation == RemotePollInvocation::Automatic {
             RemoteOperationPriority::Poll
         } else {
@@ -1925,10 +2120,14 @@ impl RepositoryService {
             .map_err(|_| state::recovery_required())?;
             Ok(())
         })?;
-        let (decision, captured) = self.finish_remote_operation_with(
+        let ((decision, captured), capture) = self.finish_remote_operation_capturing(
             root,
             owner,
             RemoteOutcomeCategory::Completed,
+            Some(&FullPass {
+                targets: &targets,
+                local_changes,
+            }),
             |tx, id, decision| {
                 Ok((
                     decision,
@@ -1959,22 +2158,40 @@ impl RepositoryService {
             root: root.to_owned(),
             operation_id: crate::repository::OperationId::new(),
         });
-        if matches!(
+        let result = if matches!(
             refreshed,
             Ok(crate::repository::RefreshOutcome::Refreshed { .. })
         ) {
-            Ok(match result {
+            match result {
                 RemotePollResult::IndexPending(p) => RemotePollResult::Complete(p.authoritative),
                 other => other,
-            })
+            }
         } else {
-            Ok(match result {
+            match result {
                 RemotePollResult::Complete(o) => {
                     RemotePollResult::IndexPending(crate::repository::IndexPending::new(o))
                 }
                 other => other,
-            })
+            }
+        };
+        if let Some(capture) = capture {
+            let (complete, outcome) = match &result {
+                RemotePollResult::Complete(outcome) => (true, outcome),
+                RemotePollResult::IndexPending(p) => (false, &p.authoritative),
+            };
+            let RemotePollOutcome::Polled(report) = outcome else {
+                return Err(state::recovery_required().into());
+            };
+            capture.settle(
+                self,
+                root,
+                OriginalWrapper {
+                    report: crate::repository::context_retirement::handoff::report_image(report)?,
+                    complete,
+                },
+            )?;
         }
+        Ok(result)
     }
     fn poll_prepare_local_effect(
         &self,
@@ -2111,6 +2328,7 @@ impl RepositoryService {
         root: &Path,
         op: crate::repository::OperationId,
     ) -> Result<RemotePollResult, RemotePollError> {
+        crate::repository::context_retirement::handoff::recover_unconfirmed(self, root, op)?;
         state::with_transaction(self, root, |tx, id| {
             self.poll_result_in_transaction(tx, id, op, None)
         })?

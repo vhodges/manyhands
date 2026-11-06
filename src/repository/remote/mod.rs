@@ -2,6 +2,7 @@ pub(super) mod conflict_read;
 mod merge;
 pub(super) mod observation;
 mod poll;
+pub(super) use poll::OriginalWrapper;
 mod refs;
 pub(super) mod sync;
 pub use conflict_read::{

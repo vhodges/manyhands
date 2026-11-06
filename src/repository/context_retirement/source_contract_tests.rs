@@ -1,8 +1,11 @@
 //! INERT canonical A0/A1 projection fixtures, NOT Task 4 producer/migration or
-//! coordinator evidence. No worklist/eligibility/child permission exists here.
+//! coordinator evidence. The sibling handoff tests install inert A2 projections;
+//! these A0/A1 controls never require a worklist or eligibility/child permission.
 use super::*;
 #[path = "source_cancel_tests.rs"]
 mod cancellation;
+#[path = "source_handoff_tests.rs"]
+mod handoff;
 use crate::repository::remote::reservation::RemotePollReservationOutcome;
 use crate::repository::{
     context_retirement::record,
@@ -19,7 +22,7 @@ fn projections(db: &Connection) {
       configuration_generation INTEGER NOT NULL, remote_name TEXT NOT NULL,
       primary_branch TEXT NOT NULL, endpoint_digest BLOB NOT NULL CHECK(length(endpoint_digest)=32),
       base_oid TEXT NOT NULL, owner_epoch INTEGER NOT NULL CHECK(owner_epoch>0),
-      stage TEXT NOT NULL CHECK(stage='unplanned'));
+      stage TEXT NOT NULL CHECK(stage IN ('unplanned','frozen')));
       CREATE TABLE poll_retirement_attempts (
       operation_ulid TEXT NOT NULL REFERENCES poll_retirement_batches(operation_ulid),
       owner_epoch INTEGER NOT NULL CHECK(owner_epoch>0), request_attempt INTEGER NOT NULL CHECK(request_attempt>0),

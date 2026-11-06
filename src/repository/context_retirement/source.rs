@@ -1,5 +1,5 @@
-//! Private A0/A1 original-P contract adapter. No batch store, manifest producer,
-//! eligibility writer or coordinator is installed here. Absent future canonical
+//! Private A0/A1 original-P adapter and the owned A2 capture boundary. No batch
+//! store, manifest producer or coordinator is installed here. Absent canonical
 //! projections refuse; tests install explicitly INERT contract projections.
 use crate::repository::{
     OperationFamily, OperationId, RemoteOperationPhase, RemoteOperationPriority,
@@ -26,24 +26,29 @@ pub(super) fn fail_capture() {
     FAIL_CAPTURE.with(|slot| slot.set(true));
 }
 
-#[derive(PartialEq, Eq)]
-struct Projection {
-    operation: String,
-    repository: i64,
-    root: String,
-    request: String,
-    request_attempt: i64,
-    epoch: i64,
-    source_epoch: i64,
-    generation: i64,
-    remote: String,
-    primary: String,
-    endpoint: Vec<u8>,
-    base: String,
-    phase: String,
+#[derive(Clone, PartialEq, Eq)]
+pub(super) struct Projection {
+    pub(super) operation: String,
+    pub(super) repository: i64,
+    pub(super) root: String,
+    pub(super) request: String,
+    pub(super) request_attempt: i64,
+    pub(super) epoch: i64,
+    pub(super) source_epoch: i64,
+    pub(super) generation: i64,
+    pub(super) remote: String,
+    pub(super) primary: String,
+    pub(super) endpoint: Vec<u8>,
+    pub(super) base: String,
+    pub(super) phase: String,
+    pub(super) stage: String,
 }
 
-fn projection(db: &Connection, operation: &str, epoch: i64) -> Result<Projection, RepositoryError> {
+pub(super) fn projection(
+    db: &Connection,
+    operation: &str,
+    epoch: i64,
+) -> Result<Projection, RepositoryError> {
     for table in [
         "poll_retirement_batches",
         "poll_retirement_attempts",
@@ -64,7 +69,7 @@ fn projection(db: &Connection, operation: &str, epoch: i64) -> Result<Projection
     if !marked {
         return Err(recovery_required());
     }
-    let p=db.query_row("SELECT b.operation_ulid,b.repository_id,repo.root_path,b.request_ulid,a.request_attempt,a.owner_epoch,a.source_owner_epoch,b.configuration_generation,b.remote_name,b.primary_branch,b.endpoint_digest,b.base_oid,a.phase
+    let p=db.query_row("SELECT b.operation_ulid,b.repository_id,repo.root_path,b.request_ulid,a.request_attempt,a.owner_epoch,a.source_owner_epoch,b.configuration_generation,b.remote_name,b.primary_branch,b.endpoint_digest,b.base_oid,a.phase,b.stage
       FROM poll_retirement_batches b JOIN poll_retirement_attempts a USING(operation_ulid)
       JOIN repositories repo ON repo.id=b.repository_id
       WHERE b.operation_ulid=?1 AND a.owner_epoch=?2 AND typeof(a.owner_epoch)='integer' AND a.owner_epoch>0
@@ -73,9 +78,9 @@ fn projection(db: &Connection, operation: &str, epoch: i64) -> Result<Projection
         AND typeof(a.source_owner_epoch)='integer' AND a.source_owner_epoch>=0
         AND (SELECT count(*) FROM poll_retirement_attempts same_source WHERE same_source.operation_ulid=a.operation_ulid AND same_source.source_owner_epoch=a.source_owner_epoch)=1
         AND typeof(b.configuration_generation)='integer' AND b.configuration_generation>=0
-        AND b.mode='retire_completed' AND b.stage='unplanned'
+         AND b.mode='retire_completed' AND b.stage IN ('unplanned','frozen')
         AND a.phase IN ('active','ended','fenced') AND typeof(b.endpoint_digest)='blob' AND length(b.endpoint_digest)=32",
-      params![operation,epoch],|r|Ok(Projection{operation:r.get(0)?,repository:r.get(1)?,root:r.get(2)?,request:r.get(3)?,request_attempt:r.get(4)?,epoch:r.get(5)?,source_epoch:r.get(6)?,generation:r.get(7)?,remote:r.get(8)?,primary:r.get(9)?,endpoint:r.get(10)?,base:r.get(11)?,phase:r.get(12)?})).map_err(|_|recovery_required())?;
+      params![operation,epoch],|r|Ok(Projection{operation:r.get(0)?,repository:r.get(1)?,root:r.get(2)?,request:r.get(3)?,request_attempt:r.get(4)?,epoch:r.get(5)?,source_epoch:r.get(6)?,generation:r.get(7)?,remote:r.get(8)?,primary:r.get(9)?,endpoint:r.get(10)?,base:r.get(11)?,phase:r.get(12)?,stage:r.get(13)?})).map_err(|_|recovery_required())?;
     let request = RequestId::parse(&p.request).map_err(|_| recovery_required())?;
     if request.to_string() != p.request
         || !OperationId::parse(&p.operation).is_ok_and(|id| id.to_string() == p.operation)
@@ -132,7 +137,8 @@ impl OriginalPollSource {
             )
             .map_err(|_| recovery_required())?;
         let p = projection(tx, &record.operation_id.to_string(), epoch)?;
-        if record.phase != RemoteOperationPhase::Reserved
+        if p.stage != "unplanned"
+            || record.phase != RemoteOperationPhase::Reserved
             || record.completed_step.is_some()
             || accepted.request_id.to_string() != p.request
             || i64::try_from(accepted.attempt).ok() != Some(p.request_attempt)
@@ -248,9 +254,24 @@ impl OriginalPollSource {
         }
         super::record::audit_connection(tx)
     }
+
+    /// Only reservation's preterminal successful-pass continuation calls this.
+    /// A public terminal replay cannot revalidate this ended P execution.
+    pub(in super::super) fn freeze(
+        &self,
+        service: &RepositoryService,
+        tx: &Transaction<'_>,
+        id: i64,
+        record: &state::StoredRemoteOperation,
+        report: &super::super::remote::RemotePollReport,
+    ) -> Result<super::handoff::Capture, RepositoryError> {
+        self.validate(service, tx, id, record)?;
+        super::handoff::freeze(service, tx, &self.projection, report)
+    }
 }
 
 pub(super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
+    super::handoff::audit_correlations(db)?;
     if recovery::has_table(db, "poll_retirement_attempts").map_err(|_| recovery_required())? {
         let orphan:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM poll_retirement_attempts a LEFT JOIN retirement_advertisement_provenance p ON p.id=a.active_provenance_id WHERE a.active_provenance_id IS NOT NULL AND (p.id IS NULL OR p.execution_kind!='poll_parent' OR p.source_operation_ulid!=a.operation_ulid OR p.source_owner_epoch!=a.source_owner_epoch OR p.execution_batch_attempt_epoch!=a.owner_epoch OR p.execution_request_attempt!=a.request_attempt))",[],|r|r.get(0)).map_err(|_|recovery_required())?;
         if orphan {
@@ -270,6 +291,10 @@ pub(super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
     for row in rows {
         let (provenance, operation, epoch) = row.map_err(|_| recovery_required())?;
         let p = projection(db, &operation, epoch)?;
+        if p.stage == "frozen" {
+            super::handoff::audit_source(db, &p, provenance)?;
+            continue;
+        }
         let valid:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM retirement_advertisement_provenance p JOIN remote_operation_records o ON o.repository_id=p.repository_id AND o.operation_ulid=p.source_operation_ulid JOIN poll_retirement_attempts a ON a.operation_ulid=p.execution_batch_operation_ulid AND a.owner_epoch=p.execution_batch_attempt_epoch
           WHERE p.id=?1 AND p.repository_id=?2 AND p.source_operation_ulid=?3 AND p.source_owner_epoch=?4
           AND p.execution_parent_ulid=?3 AND p.execution_parent_epoch=?4 AND p.execution_batch_operation_ulid=?3
@@ -321,6 +346,9 @@ pub(in super::super) fn close_stopped(
         return Ok(());
     };
     let p = projection(tx, &record.operation_id.to_string(), epoch)?;
+    if p.stage != "unplanned" {
+        return Err(recovery_required());
+    }
     let stopped:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE operation_ulid=?1 AND repository_id=?2 AND owner_epoch=?3 AND phase IN ('failed','cancelled','interrupted'))",params![p.operation,p.repository,p.source_epoch],|r|r.get(0)).map_err(|_|recovery_required())?;
     if !stopped {
         return Err(recovery_required());
