@@ -322,3 +322,129 @@ fn a_stop_with_a_report_prints_its_targets_on_stderr() {
     assert!(stderr(&output).contains("disposition=malformed"));
     assert_eq!(output.status, 4);
 }
+
+#[test]
+fn retirement_report_distinguishes_as_of_cut_from_current_child_actions() {
+    use manyhands::repository::{
+        ContextRetirementMutationDto, ContextRetirementMutationType, ContextRetirementState,
+        PollRetirementCompletion, PollRetirementDebt, PollRetirementItemDto,
+        PollRetirementItemState, PollRetirementMutationDto, PollRetirementMutationType,
+        RetirementRemoval,
+    };
+    let mut e = poll_envelope(ResultCode::RecoveryRequired, vec![]);
+    let Some(MutationDataDto::Poll(poll)) = e.data.take() else {
+        unreachable!()
+    };
+    let states = [
+        PollRetirementItemState::Retired,
+        PollRetirementItemState::Refused,
+        PollRetirementItemState::Pending,
+        PollRetirementItemState::NotReached,
+    ];
+    e.data = Some(MutationDataDto::PollRetirement(PollRetirementMutationDto {
+        r#type: PollRetirementMutationType::PollRetirement,
+        poll,
+        completion: PollRetirementCompletion::Stopped,
+        stop_code: Some(ResultCode::RecoveryRequired),
+        retirements: states
+            .into_iter()
+            .enumerate()
+            .map(|(i, state)| PollRetirementItemDto {
+                kind: ItemDtoKind::Ticket,
+                item_id: format!("item-{i}\n"),
+                request_id: REQUEST.into(),
+                operation_id: Some(REQUEST.into()),
+                state,
+                code: Some(ResultCode::RecoveryRequired),
+                debt: (state == PollRetirementItemState::Pending)
+                    .then_some(PollRetirementDebt::Discovery),
+                result: Some(ContextRetirementMutationDto {
+                    r#type: ContextRetirementMutationType::ContextRetirement,
+                    kind: ItemDtoKind::Ticket,
+                    item_id: format!("item-{i}"),
+                    operation_id: REQUEST.into(),
+                    state: ContextRetirementState::Pending,
+                    code: ResultCode::DiscoveryPending,
+                    worktree_removal: RetirementRemoval::Observed,
+                    branch_removal: RetirementRemoval::Possible,
+                    materialization_settled: false,
+                }),
+            })
+            .collect(),
+    }));
+    let out = once_output(&e, false, ROOT);
+    assert!(out.stdout.is_empty());
+    let text = stderr(&out);
+    for state in ["retired", "refused", "pending", "not_reached"] {
+        assert!(text.contains(&format!("state={state}")), "{text}");
+    }
+    assert!(text.contains("as-of-pass"), "{text}");
+    assert!(text.contains("current child"), "{text}");
+    assert!(
+        text.contains(
+            "worktree_removal=observed branch_removal=possible materialization_settled=false"
+        ),
+        "{text}"
+    );
+    assert!(text.contains("debt=discovery"), "{text}");
+    assert!(text.contains("never resumes the loop"), "{text}");
+    no_raw_control(text);
+
+    // Completed mixed passes are exit 0, not a claim that every item retired.
+    // Empty, cancelled and index-pending reports retain their actual code/exit.
+    use manyhands::results::Outcome;
+    for (code, outcome, status, completion, empty) in [
+        (
+            ResultCode::Ok,
+            Outcome::Success,
+            0,
+            PollRetirementCompletion::Completed,
+            false,
+        ),
+        (
+            ResultCode::Ok,
+            Outcome::Success,
+            0,
+            PollRetirementCompletion::Completed,
+            true,
+        ),
+        (
+            ResultCode::DiscoveryPending,
+            Outcome::Partial,
+            4,
+            PollRetirementCompletion::Stopped,
+            false,
+        ),
+        (
+            ResultCode::Cancelled,
+            Outcome::Cancelled,
+            130,
+            PollRetirementCompletion::Stopped,
+            false,
+        ),
+    ] {
+        let mut row = e.clone();
+        row.code = code;
+        row.outcome = outcome;
+        row.message = code.message().into();
+        let Some(MutationDataDto::PollRetirement(data)) = &mut row.data else {
+            unreachable!()
+        };
+        data.completion = completion;
+        if empty {
+            data.retirements.clear();
+        } else if completion == PollRetirementCompletion::Completed {
+            data.retirements.truncate(2);
+        }
+        let out = once_output(&row, false, ROOT);
+        assert_eq!(out.status, status);
+        let text = format!("{}{}", stdout(&out), stderr(&out));
+        assert!(text.contains("poll (original observation report):"));
+        if empty {
+            assert!(text.contains("retirements: none"));
+        } else {
+            assert!(text.contains("state=refused"));
+        }
+        assert!(!text.contains("all contexts retired"));
+    }
+}

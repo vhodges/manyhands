@@ -57,6 +57,8 @@ mod progress;
 mod prompt;
 #[path = "manyhands-cli/render.rs"]
 mod render;
+#[path = "manyhands-cli/retirement.rs"]
+mod retirement;
 #[path = "manyhands-cli/startup.rs"]
 mod startup;
 #[path = "manyhands-cli/terminal.rs"]

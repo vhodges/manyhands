@@ -99,6 +99,7 @@ Command catalog:
   poll configure  Configure polling. Available now.
   poll pause  Pause polling. Available now.
   poll resume  Resume polling. Available now.
+  context retire  Retire a proven-safe completed local context, after a fresh remote observation. Available now.
   context observe-local  Observe an item's context for a local synchronization. Available now.
   context show-local  Show a local synchronization, or a conflict's sides with --token and --json. Available now.
   context sync-local  Bring primary into an item's context, locally. Available now.

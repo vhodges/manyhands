@@ -44,6 +44,8 @@ mod polling;
 #[allow(dead_code, unused_imports)]
 #[path = "../src/bin/manyhands-cli/render.rs"]
 mod render;
+#[path = "cli_remote/retirement.rs"]
+mod retirement;
 #[path = "cli_remote/unlock.rs"]
 mod unlock;
 
@@ -108,6 +110,7 @@ fn main() {
         .chain(collaboration::CASES)
         .chain(conflicts::CASES)
         .chain(polling::CASES)
+        .chain(retirement::CASES)
         .chain(lifecycle::BOTH)
         .chain(lifecycle::ONE)
         .chain(journeys_c5::CASES)

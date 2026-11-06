@@ -1,0 +1,15 @@
+--- stderr
+error: No key is selected.
+code: no_selected_key
+request: <request-id>
+operation: <id>
+poll (original observation report):
+Completed at: <time>
+Completion: completed
+Next eligible at: none
+Operation id: <id>
+targets: none
+retirements (as-of-pass): completion=stopped stop_code=no_selected_key
+retirements: none
+note: as-of-pass results stay unchanged; recovery actions describe current child standing. Replaying this pass never resumes the loop; a new explicit pass selects the remainder.
+--- exit 3

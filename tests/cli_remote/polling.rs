@@ -140,7 +140,7 @@ fn json_once(env: &CliEnv, root: &str, request: &str, code: &str, status: i32) -
     value
 }
 
-fn polled(clone: &CliClone, request: &str) -> Value {
+pub(super) fn polled(clone: &CliClone, request: &str) -> Value {
     json_once(&clone.env, clone.root(), request, "ok", 0)
 }
 
@@ -264,12 +264,19 @@ fn sync_item(clone: &CliClone, request: &str) -> Value {
 }
 
 /// `clone`'s save of `ITEM`, published on the remote.
-fn published(clone: &CliClone, save_request: &str, sync_request: &str, body: &str) -> Value {
+pub(super) fn published(
+    clone: &CliClone,
+    save_request: &str,
+    sync_request: &str,
+    body: &str,
+) -> Value {
     save(clone, save_request, body);
     sync_item(clone, sync_request)
 }
 
-fn refs(repository: &git2::Repository) -> Result<BTreeMap<String, git2::Oid>, FixtureError> {
+pub(super) fn refs(
+    repository: &git2::Repository,
+) -> Result<BTreeMap<String, git2::Oid>, FixtureError> {
     let mut found = BTreeMap::new();
     for reference in fixed(repository.references())? {
         let reference = fixed(reference)?;
@@ -625,7 +632,7 @@ fn commit_on_primary(p: &CliPair, path: &str, bytes: &[u8]) -> Result<git2::Oid,
 }
 
 /// `OTHER_ITEM` depends on `ITEM`, on primary, in both clones.
-fn a_dependent(p: &CliPair) -> Result<(), FixtureError> {
+pub(super) fn a_dependent(p: &CliPair) -> Result<(), FixtureError> {
     let source = format!(
         "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {OTHER_ITEM}\ntitle: Other\n\
          type: task\nstatus: open\ndeps: [{ITEM}]\n---\nBody of Other.\n"
@@ -643,7 +650,7 @@ fn a_dependent(p: &CliPair) -> Result<(), FixtureError> {
 }
 
 /// `ITEM` closed by clone A through the binary.
-fn close_in_a(p: &CliPair, request: &str) -> Result<(), FixtureError> {
+pub(super) fn close_in_a(p: &CliPair, request: &str) -> Result<(), FixtureError> {
     let a = &p.a;
     let args = ["ticket", "close", "--repo", a.root(), "--id", ITEM];
     let mut prepare = args.to_vec();

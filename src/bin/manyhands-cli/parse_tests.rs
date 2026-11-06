@@ -235,6 +235,14 @@ fn planned_verbs_accept_future_options_and_trailing_words() {
 
 #[test]
 fn the_poll_verbs_take_only_their_own_options() {
+    assert!(!run(&["poll", "once", "--repo", "r"]).get_flag("retire-completed"));
+    assert!(
+        run(&["poll", "once", "--repo", "r", "--retire-completed"]).get_flag("retire-completed")
+    );
+    usage(
+        &["poll", "pause", "--repo", "r", "--retire-completed"],
+        Some(("poll", "pause")),
+    );
     usage(&["poll", "once", "--id", "X"], Some(("poll", "once")));
     usage(&["poll", "once", "--input", "-"], Some(("poll", "once")));
     usage(&["poll", "pause", "--id", "X"], Some(("poll", "pause")));

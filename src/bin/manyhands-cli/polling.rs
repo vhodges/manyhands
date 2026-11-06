@@ -16,7 +16,7 @@ use clap::ArgMatches;
 use manyhands::{
     repository::{
         Mutation, MutationDataDto, PollConfigureInput, PollMutationDto, PollOnceInput,
-        PollPauseInput, PollResumeInput, RepositoryService,
+        PollPauseInput, PollResumeInput, PollRetirementMutationDto, RepositoryService,
     },
     results::{Envelope, RecoveryActionKind, ResultCode},
 };
@@ -76,7 +76,14 @@ pub fn once(
         spec,
         flags,
         mutate::RETRYING,
-        &mut |_| Mutation::PollOnce(PollOnceInput { root: root.clone() }),
+        &mut |_| {
+            let input = PollOnceInput { root: root.clone() };
+            if args.get_flag("retire-completed") {
+                Mutation::PollOnceRetiring(input)
+            } else {
+                Mutation::PollOnce(input)
+            }
+        },
         &mut std::thread::sleep,
     );
     mutate::finish(
@@ -111,6 +118,38 @@ fn report(data: &PollMutationDto) -> String {
             target.disposition.guidance(),
         ));
     }
+    out
+}
+
+/// Historical results are immutable. Only the envelope's ordinary child
+/// recovery actions describe what can be done now; never reconstruct a loop.
+fn retirement_report(data: &PollRetirementMutationDto) -> String {
+    let mut out = String::from("poll (original observation report):\n");
+    out.push_str(&report(&data.poll));
+    out.push_str(&format!(
+        "retirements (as-of-pass): completion={} stop_code={}\n",
+        data.completion.as_str(),
+        data.stop_code.map_or("none", ResultCode::as_str)
+    ));
+    if data.retirements.is_empty() {
+        out.push_str("retirements: none\n");
+    }
+    for target in &data.retirements {
+        out.push_str(&format!(
+            "retirement: kind={} item={} state={} code={} debt={} request={} operation={}\n",
+            target.kind.as_str(),
+            field(&target.item_id),
+            target.state.as_str(),
+            target.code.map_or("none", ResultCode::as_str),
+            target.debt.map_or("none", |d| d.as_str()),
+            field(&target.request_id),
+            shown(target.operation_id.as_deref())
+        ));
+        if let Some(result) = &target.result {
+            out.push_str(&format!("  {}\n", crate::retirement::removal(result)));
+        }
+    }
+    out.push_str("note: as-of-pass results stay unchanged; recovery actions describe current child standing. Replaying this pass never resumes the loop; a new explicit pass selects the remainder.\n");
     out
 }
 
@@ -171,6 +210,10 @@ fn once_output(envelope: &Envelope<MutationDataDto>, supplied: bool, root: &str)
             plain.data = None;
             report(data)
         }
+        Some(MutationDataDto::PollRetirement(data)) => {
+            plain.data = None;
+            retirement_report(data)
+        }
         _ => String::new(),
     };
     // C2's hint says to run the command again, which a request ID only replays.
@@ -187,7 +230,9 @@ fn once_output(envelope: &Envelope<MutationDataDto>, supplied: bool, root: &str)
             .stderr
             .extend(render::note_line(BUSY_NOTE).into_bytes());
     }
-    if let Some(note) = final_note(envelope) {
+    if !matches!(envelope.data, Some(MutationDataDto::PollRetirement(_)))
+        && let Some(note) = final_note(envelope)
+    {
         output.stderr.extend(render::note_line(note).into_bytes());
     }
     output

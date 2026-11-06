@@ -104,6 +104,7 @@ const DESIGN: &[(&str, &[&str])] = &[
             "context show-local",
             "context sync-local",
             "context resolve-local",
+            "context retire",
         ],
     ),
 ];

@@ -82,6 +82,7 @@ fn verb_command(spec: &CommandSpec) -> Command {
                     arg = arg.action(ArgAction::SetTrue);
                 }
                 arg = match name {
+                    "kind" => arg.value_parser(["ticket", "document"]),
                     "closure" => arg
                         .value_parser(["open", "closed", "all"])
                         .default_value("all"),

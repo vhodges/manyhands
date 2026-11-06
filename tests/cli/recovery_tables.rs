@@ -422,6 +422,29 @@ fn every_row_names_a_golden_that_holds_its_code_next_action_and_exit() {
     }
 }
 
+/// C5 follow-up: the ordinary item is the sole continuation owner. The broad
+/// governing tables are amended in Task 7; pin these delivered binary fixtures
+/// here without inventing a parent resume/abandon or an aggregate local journal.
+#[test]
+fn retirement_recovery_is_item_owned_and_stopped_pass_is_only_a_summary() {
+    let row = Row {
+        family: "Retirement".into(),
+        verbs: vec!["context retire".into()],
+        code: "discovery_pending".into(),
+        next: "operation.resume".into(),
+        exit: 4,
+        golden: "cli_v1/context_retire_index_pending.json".into(),
+    };
+    check_golden(&row);
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/cli_v1");
+    let stopped = fs::read_to_string(root.join("poll_once_retirement_stopped_text.txt")).unwrap();
+    assert!(stopped.contains("as-of-pass"));
+    assert!(stopped.contains("never resumes the loop"));
+    assert!(!stopped.contains("operation.resume"));
+    assert!(!stopped.contains("operation.abandon"));
+    assert!(stopped.contains("--- exit 3"));
+}
+
 /// The codes the audit's `#### <cycle> exit-coverage union` block holds.
 fn union(cycle: &str) -> BTreeSet<&'static str> {
     AUDIT

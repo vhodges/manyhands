@@ -4,6 +4,9 @@ use super::*;
 use crate::repository::keys::*;
 use crate::results::{DiscoveryEffect, ResultCode};
 
+#[path = "acceptance_tests.rs"]
+mod acceptance_tests;
+
 struct NoCredentials;
 impl SessionCredentialProvider for NoCredentials {
     fn request_passphrase(&mut self, _: &UnlockRequest) -> PassphraseResponse {
