@@ -132,7 +132,7 @@ async fn until_lock(shell: &Shell, root: &Path, expected: LockState, cx: &mut Te
 
 /// Draws frames until `done` holds, for up to thirty seconds: for answers whose
 /// retries outlast the harness's own wait under the whole suite.
-async fn until_long(
+pub(in crate::desktop::view::operations) async fn until_long(
     shell: &Shell,
     what: &str,
     cx: &mut TestAppContext,

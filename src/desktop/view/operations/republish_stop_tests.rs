@@ -25,7 +25,7 @@ use super::{
 };
 use crate::desktop::{
     services::{
-        JobKind,
+        BUSY_RETRY_DELAYS, JobKind,
         requests::{DesktopRequestId, Intent, RequestState},
         worker::GaveUp,
     },
@@ -34,7 +34,7 @@ use crate::desktop::{
         harness::Shell,
         item::LIFECYCLE_ACTION,
         lifecycle::{NOT_STOPPED, OpenedLifecycle},
-        operations::request_id,
+        operations::{request_id, resume::tests::until_long},
     },
 };
 
@@ -244,43 +244,34 @@ async fn stop_and_republish_stops_unless_give_up_resent_and_cancelled(cx: &mut T
         matches!(intent, Intent::TicketClose { .. })
     })[0]
         .request_id;
-    shell
-        .backend
-        .hold_job_return_answering(
-            JobKind::TicketClose,
-            close_answer(
-                &root,
-                ResultCode::Busy,
-                Outcome::Blocked,
-                vec![RecoveryAction::new(RecoveryActionKind::RequestRetry, [])],
-                asked,
-            ),
-        )
-        .release();
+    // The Give up's re-send is answered `busy` on every take: the first
+    // and each of the worker's retries, so the real call never runs and
+    // the request ends with `busy` once the delays are used up.
+    let busy = close_answer(
+        &root,
+        ResultCode::Busy,
+        Outcome::Blocked,
+        vec![RecoveryAction::new(RecoveryActionKind::RequestRetry, [])],
+        asked,
+    );
+    for _ in 0..=BUSY_RETRY_DELAYS.len() {
+        shell
+            .backend
+            .hold_job_return_answering(JobKind::TicketClose, busy.clone())
+            .release();
+    }
     shell.click("lifecycle-stop-and-republish", cx);
-    // The worker retries a `busy` answer after its own delays, which can
-    // outlast the harness's wait under the whole suite: wait up to thirty
-    // seconds, as `resume_tests` does for its busy answers.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    loop {
-        shell.run(cx);
-        let operations = shell.operations(cx);
-        let finished = operations.read_with(cx, |operations, _| {
+    // The worker's retry delays are real time (`BUSY_RETRY_DELAYS`, 0.7 s
+    // in all) and have no seam to inject, so this waits with the shared
+    // `until_long`, as `resume_tests` does for its busy answers.
+    until_long(&shell, "the busy resend's end", cx, |shell, cx| {
+        shell.operations(cx).read_with(cx, |operations, _| {
             operations.request(close).is_some_and(|request| {
                 request.attempt == 2 && matches!(request.state, RequestState::Finished(..))
             })
-        });
-        if finished {
-            break;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the busy resend did not finish"
-        );
-        cx.executor()
-            .timer(std::time::Duration::from_millis(10))
-            .await;
-    }
+        })
+    })
+    .await;
     let sent = requests_of(&shell, cx, |intent| {
         matches!(intent, Intent::TicketClose { .. })
     });
