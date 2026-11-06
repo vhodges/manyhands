@@ -94,9 +94,11 @@ pub(crate) fn conflict_of(envelope: &Envelope<MutationDataDto>) -> Option<Review
 }
 
 /// The operation whose conflict `intent`, answered `envelope`, settled: a
-/// resolution applied, or found already applied (B3: the banner clears);
-/// or a resume answered ok that stopped on no conflict, which took up a
-/// repair made outside (B4, P15).
+/// resolution applied, found already applied, or applied with its hand-off
+/// owed (`discovery_pending`: a Resume on the row finishes it, and nothing
+/// is left to choose) (B3: the banner clears); or a resume answered ok, or
+/// already applied (the repair was pushed outside), that stopped on no
+/// conflict, which took up a repair made outside (B4, P15).
 pub(crate) fn resolved_by(
     intent: &Intent,
     envelope: &Envelope<MutationDataDto>,
@@ -104,12 +106,16 @@ pub(crate) fn resolved_by(
     match intent {
         Intent::ConflictResolve { operation_id, .. }
         | Intent::LocalContextResolve { operation_id, .. }
-            if matches!(envelope.code, ResultCode::Ok | ResultCode::AlreadyApplied) =>
+            if matches!(
+                envelope.code,
+                ResultCode::Ok | ResultCode::AlreadyApplied | ResultCode::DiscoveryPending
+            ) =>
         {
             Some(*operation_id)
         }
         Intent::OperationResume { operation_id, .. }
-            if envelope.code == ResultCode::Ok && conflict_of(envelope).is_none() =>
+            if matches!(envelope.code, ResultCode::Ok | ResultCode::AlreadyApplied)
+                && conflict_of(envelope).is_none() =>
         {
             Some(*operation_id)
         }

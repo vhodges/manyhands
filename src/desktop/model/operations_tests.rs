@@ -2,8 +2,10 @@ use std::path::PathBuf;
 
 use manyhands::{
     repository::{
-        OperationAction, OperationDto, OperationFamily, OperationId, OperationListDto,
-        OperationNextAction, OperationOwner, ProgressEvent, ProgressStage, RequestId,
+        AuthoringKind, ConflictNextAction, ConflictNextDto, MutationDataDto, OperationAction,
+        OperationDto, OperationFamily, OperationId, OperationListDto, OperationNextAction,
+        OperationOwner, ProgressEvent, ProgressStage, RequestId,
+        SynchronizationConflictMutationDto, SynchronizationConflictType,
     },
     results::{Effects, Envelope, Outcome, RecoveryActionKind, ResultCode, Scope},
 };
@@ -861,5 +863,92 @@ fn a_lifecycle_row_is_not_a_synchronization() {
 
         row.next_action = None;
         assert_eq!(resume_offer(&row), ResumeOffer::NotOffered, "{action:?}");
+    }
+}
+
+/// B3, B4: what settles a conflict clears its review, the banner's and the
+/// entries': a resolution applied, found already applied, or applied with
+/// its hand-off owed (`discovery_pending`, a Resume on the row away from
+/// done: nothing is left to choose); a resume that finds the repair made
+/// outside already in place (`already_applied`) as one answered ok does.
+/// Another operation's answer, or a resolution that did not apply, leaves it.
+#[test]
+fn what_settles_a_conflict_clears_its_review() {
+    const SYNCHRONIZATION: &str = "01M4CC0VN1KTQFSVR99378TDHV";
+    const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FY9";
+    let root = || PathBuf::from("/fixture/a");
+    let operation = |text: &str| OperationId::parse(text).unwrap();
+    let resolve = || Intent::ConflictResolve {
+        root: root(),
+        operation_id: operation(SYNCHRONIZATION),
+        observation: String::new(),
+        resolutions: Vec::new(),
+    };
+    let resume = |text: &str| Intent::OperationResume {
+        root: root(),
+        operation_id: operation(text),
+    };
+    let answer = |code| {
+        Envelope::<MutationDataDto>::classified_mutation(
+            "conflict resolve",
+            Scope::default(),
+            false,
+            code,
+            Effects::not_requested(),
+            false,
+        )
+    };
+    let conflicted = answer(ResultCode::RecoveryRequired).with_data(
+        MutationDataDto::SynchronizationConflict(SynchronizationConflictMutationDto {
+            r#type: SynchronizationConflictType::SynchronizationConflict,
+            conflict: ConflictNextDto {
+                operation_id: SYNCHRONIZATION.to_owned(),
+                next_action: ConflictNextAction::Resolve,
+            },
+        }),
+    );
+    for (intent, code, settled) in [
+        (resolve(), ResultCode::Ok, true),
+        (resolve(), ResultCode::AlreadyApplied, true),
+        (resolve(), ResultCode::DiscoveryPending, true),
+        (resolve(), ResultCode::ExternalChange, false),
+        (resume(SYNCHRONIZATION), ResultCode::Ok, true),
+        (resume(SYNCHRONIZATION), ResultCode::AlreadyApplied, true),
+        (resume(SYNCHRONIZATION), ResultCode::RecoveryRequired, false),
+        (resume(OTHER), ResultCode::AlreadyApplied, false),
+    ] {
+        let mut operations = Operations::default();
+        let share = DesktopRequest {
+            intent: Intent::ItemSync {
+                root: root(),
+                kind: AuthoringKind::Ticket,
+                id: "01M4CC0VN2K8DBHNMZ46NTX5JJ".parse().unwrap(),
+            },
+            ..request(1)
+        };
+        operations.apply(WorkerEvent::Queued(share));
+        operations.apply(WorkerEvent::Started(DesktopRequestId(1)));
+        operations.apply(WorkerEvent::Finished(
+            DesktopRequestId(1),
+            Box::new(conflicted.clone()),
+        ));
+        assert!(operations.review(DesktopRequestId(1)).is_some());
+        let settling = DesktopRequest {
+            intent: intent.clone(),
+            ..request(2)
+        };
+        operations.apply(WorkerEvent::Queued(settling));
+        operations.apply(WorkerEvent::Started(DesktopRequestId(2)));
+        operations.apply(WorkerEvent::Finished(
+            DesktopRequestId(2),
+            Box::new(answer(code)),
+        ));
+        assert_eq!(
+            operations.review(DesktopRequestId(1)).is_none(),
+            settled,
+            "{} answered {}",
+            intent.label(),
+            code.as_str()
+        );
     }
 }
