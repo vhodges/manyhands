@@ -946,7 +946,7 @@ fn validate_gap_closure(
 ) -> Result<(), RepositoryError> {
     let table = super::historical::GAP_TABLE;
     let mut names = db
-        .prepare("SELECT name FROM sqlite_master WHERE name=?1 OR name LIKE 'retirement_gap_%'")
+        .prepare("SELECT name FROM sqlite_master WHERE name=?1 COLLATE NOCASE OR name LIKE 'retirement_gap_%'")
         .map_err(|_| recovery_required())?;
     for name in names
         .query_map([table], |r| r.get::<_, String>(0))

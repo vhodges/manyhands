@@ -120,6 +120,8 @@ fn retirement_d15_empty_gap_unwiring_is_atomic_and_unknown_or_nonempty_is_unchan
         "fault13",
         "fault14",
         "partial",
+        "partial_uppercase",
+        "partial_mixed_case",
         "missing_marker",
         "missing_table",
         "substituted",
@@ -133,7 +135,7 @@ fn retirement_d15_empty_gap_unwiring_is_atomic_and_unknown_or_nonempty_is_unchan
         let (mut db, _) = legacy(data.path(), "released");
         record::migrate(&mut db).unwrap();
         remove_preserving_adapter(&db);
-        if kind != "partial" {
+        if !kind.starts_with("partial") {
             for (_, _, sql) in historical::catalog("gap")
                 .unwrap()
                 .into_iter()
@@ -149,6 +151,8 @@ fn retirement_d15_empty_gap_unwiring_is_atomic_and_unknown_or_nonempty_is_unchan
         }
         match kind {
             "partial"=>db.execute_batch("CREATE TABLE retirement_batch_gap_attempts(payload TEXT);INSERT INTO retirement_batch_gap_attempts VALUES('must keep');").unwrap(),
+            "partial_uppercase"=>db.execute_batch("CREATE TABLE RETIREMENT_BATCH_GAP_ATTEMPTS(payload TEXT);INSERT INTO RETIREMENT_BATCH_GAP_ATTEMPTS VALUES('must keep');").unwrap(),
+            "partial_mixed_case"=>db.execute_batch("CREATE TABLE Retirement_Batch_Gap_Attempts(payload TEXT);INSERT INTO Retirement_Batch_Gap_Attempts VALUES('must keep');").unwrap(),
             "missing_marker"=>{db.execute("DELETE FROM registry_migrations WHERE name=?1",[historical::GAP_MARKER]).unwrap();},
             "missing_table"=>{db.execute_batch("DROP TABLE retirement_batch_gap_attempts").unwrap();},
             "substituted"=>db.execute_batch("DROP TRIGGER retirement_gap_identity;CREATE TRIGGER retirement_gap_identity BEFORE UPDATE ON retirement_batch_gap_attempts BEGIN SELECT 1;END").unwrap(),
@@ -161,21 +165,23 @@ fn retirement_d15_empty_gap_unwiring_is_atomic_and_unknown_or_nonempty_is_unchan
             "unknown_marker"=>{db.execute("INSERT INTO registry_migrations VALUES('context_retirement_gap_v99')",[]).unwrap();},
             _=>{},
         }
-        let before = registry_image(&db);
+        let before = specfix_r1_full_image(&db);
         if let Some(point) = kind.strip_prefix("fault") {
             record::fail_migration_at(point.parse().unwrap());
         }
         let result = record::migrate(&mut db);
         if kind == "success" {
             result.unwrap();
-            let after = registry_image(&db);
+            let after = specfix_r1_full_image(&db);
             for (table, rows) in &before {
                 if !matches!(
                     table.as_str(),
                     "sqlite_master"
                         | "schema_version"
                         | "registry_migrations"
+                        | "rowids/registry_migrations"
                         | "retirement_batch_gap_attempts"
+                        | "rowids/retirement_batch_gap_attempts"
                 ) {
                     assert_eq!(
                         Some(rows),
@@ -205,9 +211,11 @@ fn retirement_d15_empty_gap_unwiring_is_atomic_and_unknown_or_nonempty_is_unchan
             assert!(result.is_err(), "{kind}");
             assert_eq!(
                 before,
-                registry_image(&db),
+                specfix_r1_full_image(&db),
                 "{kind}: no repair, partial DDL/marker, cascade or evidence loss"
             );
+            assert!(!super::super::preserve::marked(&db).unwrap());
+            assert_eq!(db.query_row("SELECT count(*) FROM sqlite_master WHERE name LIKE 'context_retirement_preserv%' OR name LIKE 'retirement_preservation_%'", [], |r|r.get::<_, i64>(0)).unwrap(), 0, "{kind}: no preserving catalog installed");
         }
     }
 }
