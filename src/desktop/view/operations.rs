@@ -456,7 +456,10 @@ impl Workspace {
                     for offer in outcomes::shown_offers(self.services(), id, &result, cx) {
                         controls = controls.child(self.share_offer(id, offer, cx));
                     }
-                } else {
+                } else if lifecycle::item_of(&request.intent).is_none() {
+                    // A lifecycle's way out is its dialog's (Open… above):
+                    // the raw actions would reconfirm through the generic
+                    // ConfirmDialog, with no merge summary and no lock (R-1).
                     for (n, action) in recovery.iter().enumerate() {
                         // Decision 26: no re-send of an unsaved post here.
                         if self

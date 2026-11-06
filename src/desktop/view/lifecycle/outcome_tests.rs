@@ -37,7 +37,7 @@ use crate::desktop::{
     services::{JobKind, requests::DesktopRequestId},
     view::{
         harness::Shell,
-        operations::{OPEN_LIFECYCLE, request_id},
+        operations::{OPEN_LIFECYCLE, recovery_id, request_id},
     },
 };
 
@@ -455,6 +455,14 @@ async fn the_operation_entry_reopens_the_dialog(cx: &mut TestAppContext) {
         shell.label(request_id(id, "open"), cx).as_deref(),
         Some(OPEN_LIFECYCLE)
     );
+    // R-1: a lifecycle's recovery is its dialog's, never the raw recovery
+    // actions: Prepare again here would be the generic ConfirmDialog.
+    for n in 0..4 {
+        assert!(
+            !shell.present(recovery_id(id, n), cx),
+            "the entry has no raw recovery action {n}"
+        );
+    }
     shell.click(request_id(id, "open"), cx);
     until_present(&shell, "lifecycle-ending", cx).await;
     assert_eq!(
