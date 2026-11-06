@@ -396,6 +396,9 @@ are not authorized; numeric exits must come from existing results registry.
 | Limited A0/A1 + unbound-Z final QUALITY through `a409615e`, same base, after SPEC | Reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Fresh isolated headless build: 17 source tests, 1 consumer-Z and 1 integration-window control passed. An initial shared-target run containing an extra reviewer-only test was excluded | Limited private projection adapter/unbound-Z QUALITY approved. Controller inspected fresh isolated results/static logs and verified all 1,710 frozen inputs; no full shared-observation or Task 2 completion |
 | A2 continuation preflight, 2026-11-05 | Both checkouts clean; fresh fetch succeeded, main/base still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `a409615e853ac9447937f1f1f966821d545b178b` already up to date | No conflicts/rebase or unmerged branch consumption |
 | Limited A2/A3 SPEC at `47614e5f`, base `fae6a78f` | **2 Medium**, controller-accepted: R1 original process configuration lost at A3 (same endpoint/G, changed selected key source still eligible); R2 completed-P conservative recovery skipped with `restart=true` | Same bounded correction below; **same SPEC re-review then QUALITY pending**, no A4/push/approval or new policy |
+| Limited A2/A3 final SPEC through `12337b12`, same base | Same reviewer `ses_e564dd7a7ffeYzKXesoyVuGJFs`: **0 remaining findings**. Fresh isolated original matched probes plus all four correction regressions: **6 passed**. Original process identity and both completed-P restart spellings verified | Limited owned frozen-image/original-handoff SPEC approved; A4 and full Task 2 remain owed |
+| Limited A2/A3 final QUALITY through `12337b12`, same base, after SPEC | Reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Fresh isolated headless runs: **36 source**, **3 ordinary report/stop** and **1 ordinary finish atomicity** controls passed | Limited A2/A3 QUALITY approved. Controller inspected raw independent/static evidence and verified all 1,721 frozen inputs; no live source-SSH, full Task 2 or Task 4 claim |
+| A4 continuation preflight, 2026-11-06 | Both checkouts clean; fresh fetch succeeded, main/base still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `12337b122eda65e215da87fcf00d67c3f146f774` already up to date | No conflicts/rebase or unmerged branch consumption |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -427,16 +430,19 @@ are not authorized; numeric exits must come from existing results registry.
   Current accepted-F2/exact request-operation fencing, private request-bound
   execution/reentry and single-use independent index claims are now independently
   SPEC/QUALITY approved through `c7daad0d` from base `597bed6b`.
-  Private A0/A1 source capture and unbound-source Z are now independently
-  SPEC/QUALITY approved through `a409615e` from base `d707c2c2`. These tests use
-  inert contract projections and synthetic advertisement inputs through owned SQL,
-  not live source SSH or batch cleanup. Latest recorded gates: **128** context
-  tests, **105** registered retirement SSH, **17** source units, **58** reservation /
+  Private A0/A1 source capture and unbound-source Z are independently approved
+  through `a409615e` from base `d707c2c2`; A2 owned frozen-image capture and A3
+  original-handoff eligibility are now SPEC/QUALITY approved through `12337b12`
+  from base `fae6a78f`. Tests use inert producer projections, synthetic advertisement
+  inputs and pre-enrolled instances, then real poll processing/owned SQL/refresh,
+  not live source SSH or batch cleanup. Latest recorded gates: **147** context
+  tests, **105** registered retirement SSH, **36** source units, **58** reservation /
   **81** poll / **70** persistence, **15** observation / **84** polling SSH controls,
-  **13** reservation / **52** foundation integration controls and all three static
-  gates. Earlier supporting results retain their source scopes; fresh focused
-  review reruns are listed above. Remaining fault variants, A2–A4 and shared
-  consumer/gap/restart/holder scopes stay owed/closed as recorded; all 44 E/O/D
+  **13** reservation / **52** foundation / **44** mutation contract integration,
+  **12** exact repository recovery tests and all three static gates. Earlier
+  supporting results retain their source scopes; fresh focused review reruns are
+  listed above. Remaining fault variants and A4 consumer/gap/restart/holder scopes
+  stay owed/closed as recorded; all 44 E/O/D
   obligations stay explicitly tracked, not completed by test counts.
   Full Task 2 spec/quality review remains owed; no full completion claimed.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
@@ -454,13 +460,12 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: publish the reviewed A0/A1 + unbound-source Z increment only
-to this ticket branch, then continue the same Task 2 implementer into A2 owned
-preterminal frozen-image binding and A3 handoff eligibility, followed by A4 shared
-consumers/gaps and remaining restart/holder/Z/GC contracts. Actual Task 3 bindings
-and Task 4 coordination remain downstream; private projection tests must not be
-represented as those journeys. Remaining fault matrices and full Task 2 review
-are still owed.
+Immediate next step: publish the reviewed A2/A3 increment only to this ticket
+branch, then continue the same Task 2 implementer into A4 ordered shared-receipt
+consumption through cleanup/index and no-child-gap observation. Active-source
+restart/fresh-ad fencing, shared-holder/Z fault variants and full Task 2 review
+remain owed. Actual Task 3 bindings and Task 4 coordination remain downstream;
+private projection tests must not be represented as those journeys.
 Prior corrections, design and initial-absence approvals remain intact; no new
 owner-policy decision is required. Full Task 2 and all 44 obligations remain
 tracked/in progress; this is not permission for Task 3/4 or a completion claim.
