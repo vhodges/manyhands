@@ -42,6 +42,10 @@ fn removal_flags_are_evidence_not_an_all_removed_claim() {
         }
         envelope.recovery = vec![
             RecoveryAction::for_operation(RecoveryActionKind::OperationResume, CURRENT, []),
+            RecoveryAction::new(
+                RecoveryActionKind::RepoInspect,
+                [("root", serde_json::Value::from(ROOT))],
+            ),
             RecoveryAction::for_operation(
                 RecoveryActionKind::OperationAbandon,
                 CURRENT,
@@ -59,7 +63,48 @@ fn removal_flags_are_evidence_not_an_all_removed_claim() {
             "{text}"
         );
         assert!(text.contains(&format!("next: manyhands-cli operation abandon --repo {} --operation-id '{CURRENT}' --prepare\n", render::quoted(ROOT))), "{text}");
+        let expected = vec![
+            format!(
+                "next: manyhands-cli operation resume --repo {} --operation-id '{CURRENT}'",
+                render::quoted(ROOT)
+            ),
+            format!("next: repo.inspect root={}", render::field(ROOT)),
+            format!(
+                "next: manyhands-cli operation abandon --repo {} --operation-id '{CURRENT}' --prepare",
+                render::quoted(ROOT)
+            ),
+        ];
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.starts_with("next:"))
+                .collect::<Vec<_>>(),
+            expected,
+            "the canonical resume/inspect/abandon sequence is not regrouped"
+        );
         assert_eq!(serde_json::to_value(&envelope).unwrap(), before);
+        no_raw_control(text);
+
+        let mut leading_retry = envelope.clone();
+        leading_retry.recovery.insert(
+            0,
+            RecoveryAction::new(
+                RecoveryActionKind::RequestRetry,
+                [("request_id", serde_json::Value::from("current-request"))],
+            ),
+        );
+        let before_retry = serde_json::to_value(&leading_retry).unwrap();
+        let out = output(&leading_retry, false);
+        let text = stderr(&out);
+        let mut expected_retry = expected.clone();
+        expected_retry.insert(0, "next: request.retry request_id=current-request".into());
+        assert_eq!(
+            text.lines()
+                .filter(|line| line.starts_with("next:"))
+                .collect::<Vec<_>>(),
+            expected_retry,
+            "a leading request retry stays before inspection and preserving abandon"
+        );
+        assert_eq!(serde_json::to_value(&leading_retry).unwrap(), before_retry);
         no_raw_control(text);
 
         envelope.scope.repository = None;

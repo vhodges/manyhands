@@ -89,6 +89,8 @@ fn output(envelope: &Envelope<MutationDataDto>, supplied: bool) -> Output {
 /// Only the new retirement human paths use this formatter. Current recovery
 /// can name an operation absent from the historical report; neither the report
 /// nor the envelope's own operation ID supplies a continuation target.
+/// Every action keeps its original boundary position, including inspection and
+/// retry guidance between operation-bearing actions.
 pub(crate) fn compact(
     envelope: &Envelope<MutationDataDto>,
     supplied: bool,
@@ -96,47 +98,55 @@ pub(crate) fn compact(
     after: &str,
 ) -> Output {
     let mut next = after.to_owned();
-    let mut remaining = Vec::new();
     for action in &envelope.recovery {
         let verb = match action.action {
-            RecoveryActionKind::OperationResume => "resume",
-            RecoveryActionKind::OperationAbandon => "abandon",
-            _ => {
-                remaining.push(action.clone());
-                continue;
-            }
+            RecoveryActionKind::OperationResume => Some("resume"),
+            RecoveryActionKind::OperationAbandon => Some("abandon"),
+            _ => None,
         };
-        let Some(operation) = action.operation_id.as_deref() else {
-            remaining.push(action.clone());
-            continue;
-        };
-        let root = action
-            .arguments
-            .get("root")
-            .and_then(serde_json::Value::as_str)
-            .or(envelope.scope.repository.as_deref());
-        if let Some(root) = root {
-            let prepare = if action.action == RecoveryActionKind::OperationAbandon {
-                " --prepare"
+        if let Some(verb) = verb
+            && let Some(operation) = action.operation_id.as_deref()
+        {
+            let root = action
+                .arguments
+                .get("root")
+                .and_then(serde_json::Value::as_str)
+                .or(envelope.scope.repository.as_deref());
+            if let Some(root) = root {
+                let prepare = if action.action == RecoveryActionKind::OperationAbandon {
+                    " --prepare"
+                } else {
+                    ""
+                };
+                next.push_str(&format!(
+                    "next: manyhands-cli operation {verb} --repo {} --operation-id {}{prepare}\n",
+                    render::quoted(root),
+                    render::quoted(operation)
+                ));
             } else {
-                ""
-            };
-            next.push_str(&format!(
-                "next: manyhands-cli operation {verb} --repo {} --operation-id {}{prepare}\n",
-                render::quoted(root),
-                render::quoted(operation)
-            ));
+                // No established root: retain the exact action-owned ID without
+                // inventing a repository from an invocation or a frozen target.
+                next.push_str(&format!(
+                    "next: {} operation_id={}\n",
+                    action.action.as_str(),
+                    field(operation)
+                ));
+            }
         } else {
-            // No established root: retain the exact action-owned ID without
-            // inventing a repository from an invocation or a frozen target.
-            next.push_str(&format!(
-                "next: {} operation_id={}\n",
-                action.action.as_str(),
-                field(operation)
-            ));
+            next.push_str("next: ");
+            next.push_str(action.action.as_str());
+            for (key, value) in &action.arguments {
+                next.push_str(&format!(" {key}="));
+                match value.as_str() {
+                    Some(text) => next.push_str(&field(text)),
+                    None => next.push_str(&value.to_string()),
+                }
+            }
+            next.push('\n');
         }
     }
-    render::compact(envelope, supplied, body, &next, remaining, "")
+    // The one ordered section above already renders every recovery action.
+    render::compact(envelope, supplied, body, &next, Vec::new(), "")
 }
 
 #[cfg(test)]

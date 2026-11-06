@@ -342,6 +342,10 @@ fn retirement_report_distinguishes_as_of_cut_from_current_child_actions() {
     e.scope.repository = Some(SCOPE_ROOT.into());
     e.recovery = vec![
         RecoveryAction::for_operation(RecoveryActionKind::OperationResume, CURRENT_OPERATION, []),
+        RecoveryAction::new(
+            RecoveryActionKind::RepoInspect,
+            [("root", serde_json::Value::from(SCOPE_ROOT))],
+        ),
         RecoveryAction::for_operation(
             RecoveryActionKind::OperationAbandon,
             CURRENT_OPERATION,
@@ -441,6 +445,25 @@ fn retirement_report_distinguishes_as_of_cut_from_current_child_actions() {
         )),
         "{text}"
     );
+    let expected = vec![
+        format!(
+            "next: manyhands-cli operation resume --repo {} --operation-id '{CURRENT_OPERATION}'",
+            quoted(SCOPE_ROOT)
+        ),
+        format!("next: repo.inspect root={}", field(SCOPE_ROOT)),
+        format!(
+            "next: manyhands-cli operation abandon --repo {} --operation-id '{CURRENT_OPERATION}' --prepare",
+            quoted(ACTION_ROOT)
+        ),
+        format!("next: request.retry request_id={CURRENT_REQUEST}"),
+    ];
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("next:"))
+            .collect::<Vec<_>>(),
+        expected,
+        "preserve the boundary's resume/inspect/abandon order, without grouping action kinds"
+    );
     for line in text.lines().filter(|line| line.starts_with("next:")) {
         assert!(
             !line.contains(PARENT) && !line.contains(HISTORICAL_CHILD),
@@ -452,6 +475,41 @@ fn retirement_report_distinguishes_as_of_cut_from_current_child_actions() {
         before,
         "human formatting never changes JSON"
     );
+    no_raw_control(text);
+
+    let mut leading_retry = e.clone();
+    leading_retry.recovery.rotate_right(1);
+    leading_retry.recovery.insert(
+        3,
+        RecoveryAction::new(
+            RecoveryActionKind::HostReplace,
+            [
+                ("authority", serde_json::Value::from("host\t:22\n")),
+                ("root", serde_json::Value::from(ACTION_ROOT)),
+            ],
+        ),
+    );
+    let before_retry = serde_json::to_value(&leading_retry).unwrap();
+    let out = once_output_in_mode(&leading_retry, false, ROOT, true);
+    let text = stderr(&out);
+    let mut expected_retry = expected.clone();
+    expected_retry.rotate_right(1);
+    expected_retry.insert(
+        3,
+        format!(
+            "next: host.replace authority={} root={}",
+            field("host\t:22\n"),
+            field(ACTION_ROOT)
+        ),
+    );
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("next:"))
+            .collect::<Vec<_>>(),
+        expected_retry,
+        "leading retry and intervening host guidance keep their original positions and arguments"
+    );
+    assert_eq!(serde_json::to_value(&leading_retry).unwrap(), before_retry);
     no_raw_control(text);
 
     // An opted-in refusal may precede a tagged report. The explicit mode still
