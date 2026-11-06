@@ -9,11 +9,16 @@ submitting Rust changes, require success from:
 devenv shell -- cargo check --all-features --locked
 devenv shell -- cargo fmt --check
 devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
-devenv shell -- cargo test --all-features --locked
 ```
 
-Use focused checks during each task. Run the full gates on the final amended
-Rust tree; do not repeat them for unchanged code or ticket-only bookkeeping.
+Then run AGENTS.md's local test gate: the fast tier, plus the SSH-harness
+targets its table selects for the changed paths. Don't run a bare full
+`cargo test`; the full suite runs after merge.
+
+Follow AGENTS.md's Testing Strategy. During each task, run only the tests you
+changed, by exact name, and never a whole SSH target. Run the test gate once,
+on the final amended Rust tree. Don't repeat it for unchanged code or for
+ticket-only bookkeeping.
 Commit lockfiles when their dependencies change. Preserve the library/desktop
 boundary and GPUI toolchain rules in `AGENTS.md`.
 

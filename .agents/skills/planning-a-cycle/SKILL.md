@@ -93,7 +93,11 @@ layout differ, follow the repo. The plan needs:
 
 - **Global Constraints:**
   - Cargo through Devenv;
-  - targeted tests between tasks, and the full suite once at the end;
+  - AGENTS.md's Testing Strategy: between tasks, only the tests a task
+    changed, by exact name; AGENTS.md's local test gate (fast tier plus the
+    SSH targets its table selects) once at the end, never the full suite;
+  - each new test at the cheapest layer that catches the regression, with
+    the reason recorded for any new SSH-harness case;
   - `--features desktop` on its own for desktop work;
   - named test edits only.
 - **Task 0:** merge main, re-check the plan's references, and start the
