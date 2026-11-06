@@ -31,7 +31,7 @@ use manyhands::{
 use super::{
     confirm_tests::{confirming, worktree},
     lock_tests::{lock, step, until_lock},
-    outcome::{ENDING_DONE, MERGED, SHARING_PENDING, TIDIED_UP},
+    outcome::{ENDING_DONE, SHARING_PENDING, TIDIED_UP, merged},
     outcome_tests::{at_stage, stopped_at_integrating},
     tests::{
         TICKET, closes, code, open, request, saved_ticket, shell, shown, ticket, until_present,
@@ -249,7 +249,7 @@ async fn a_cleanup_only_replay_repeats_no_merge_or_checkpoint(cx: &mut TestAppCo
     );
     assert_eq!(
         shell.rows("lifecycle-outcome", cx),
-        [MERGED, SHARING_PENDING, TIDIED_UP]
+        [merged("main").as_str(), SHARING_PENDING, TIDIED_UP]
     );
 }
 

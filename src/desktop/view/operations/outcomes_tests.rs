@@ -32,9 +32,9 @@ use super::{offer_label, offer_part};
 use crate::desktop::{
     model::{
         operations::{
-            ANOTHER_SHARE_HOLDS, CHOOSE_A_KEY, CURRENT, KEY_LOCKED, MAIN_BRANCH_DELETED,
-            NEEDS_ATTENTION, NEEDS_IDENTITY, NOWHERE_TO_SHARE, SHARED, STOPPED_BEFORE_SENDING,
-            check_host_text,
+            ANOTHER_SHARE_HOLDS, CHOOSE_A_KEY, CURRENT, KEY_LOCKED, NEEDS_ATTENTION,
+            NEEDS_IDENTITY, NOWHERE_TO_SHARE, SHARED, STOPPED_BEFORE_SENDING, check_host_text,
+            main_branch_deleted,
         },
         publication::{NOTHING_TO_SHARE, SyncOffer},
         stamp::SettingsPage,
@@ -444,7 +444,7 @@ async fn a_deleted_branch_offers_give_up_and_no_share(cx: &mut TestAppContext) {
     assert_row(
         &shell,
         id,
-        Some(MAIN_BRANCH_DELETED),
+        Some(main_branch_deleted("main").as_str()),
         &[SyncOffer::GiveUp],
         cx,
     );

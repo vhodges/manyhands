@@ -267,16 +267,33 @@ impl Workspace {
             .clone()
     }
 
+    /// The primary branch navigation lists for the repository of
+    /// `request`, if it lists one (R-35).
+    fn primary_of(&self, request: &DesktopRequest) -> Option<String> {
+        let root = request.intent.root()?.to_str()?;
+        self.navigation()
+            .entry(root)?
+            .summary
+            .configuration
+            .primary_branch
+            .clone()
+    }
+
     /// A request's state in words: a running share or post by its stage,
     /// naming the publication remote `remote`, and a running lifecycle by
-    /// its latest stage (D5, A3); any other as `state_label`.
-    fn entry_state(request: &DesktopRequest, remote: Option<&str>) -> String {
+    /// its latest stage (D5, A3), naming the primary branch `primary`; any
+    /// other as `state_label`.
+    fn entry_state(
+        request: &DesktopRequest,
+        remote: Option<&str>,
+        primary: Option<&str>,
+    ) -> String {
         match (&request.state, Progressing::of(&request.intent)) {
             (RequestState::Running { stage, .. }, Some(kind)) => {
                 progress_words(kind, *stage, remote)
             }
             (RequestState::Running { stage, .. }, None) => {
-                lifecycle::progress_words(&request.intent, *stage)
+                lifecycle::progress_words(&request.intent, *stage, primary)
                     .unwrap_or_else(|| state_label(&request.state))
             }
             (state, _) => state_label(state),
@@ -318,6 +335,7 @@ impl Workspace {
         let id = request.id;
         let muted = cx.theme().muted_foreground;
         let remote = self.publication_remote_of(request);
+        let primary = self.primary_of(request);
         // A lifecycle names its item by its short ID: never its title.
         let item = lifecycle::item_of(&request.intent);
         let line = h_flex()
@@ -336,7 +354,7 @@ impl Workspace {
             .child(
                 text(
                     request_id(id, "state"),
-                    Self::entry_state(request, remote.as_deref()),
+                    Self::entry_state(request, remote.as_deref(), primary.as_deref()),
                 )
                 .text_xs(),
             );
@@ -382,7 +400,8 @@ impl Workspace {
             RequestState::Finished(Outcome::Success | Outcome::Noop, _, _, _, _) => {
                 // A share says its outcome on its one line.
                 if let Some(result) = self.finished_share(id, cx)
-                    && let Some(words) = share_words(self.services(), id, &result, cx)
+                    && let Some(words) =
+                        share_words(self.services(), id, &result, primary.as_deref(), cx)
                 {
                     entry = entry.child(text(request_id(id, "outcome"), words).text_sm());
                 }
@@ -423,7 +442,9 @@ impl Workspace {
                 // A share's outcome offers its own controls in place of
                 // the envelope's recovery actions.
                 if let Some(result) = self.finished_share(id, cx) {
-                    if let Some(words) = share_words(self.services(), id, &result, cx) {
+                    if let Some(words) =
+                        share_words(self.services(), id, &result, primary.as_deref(), cx)
+                    {
                         entry = entry.child(text(request_id(id, "outcome"), words).text_sm());
                     }
                     for offer in outcomes::shown_offers(self.services(), id, &result, cx) {

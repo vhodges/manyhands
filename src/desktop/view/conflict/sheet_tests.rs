@@ -6,7 +6,7 @@ use gpui_kit::TestAppContext;
 use manyhands::repository::OperationId;
 
 use super::{
-    NOTE_CLOSE, NOTE_LOCAL, NOTE_MERGE, NOTE_SHARE, SheetSource,
+    NOTE_CLOSE, NOTE_MERGE, NOTE_SHARE, SheetSource, note_local,
     tests::{TICKET, local_shell, open_sheet, remote_shell, resolves, until_present},
 };
 use crate::desktop::services::{JobKind, resolutions::ResolutionStoreError};
@@ -17,14 +17,14 @@ use crate::desktop::services::{JobKind, resolutions::ResolutionStoreError};
 async fn the_note_follows_the_source(cx: &mut TestAppContext) {
     let (shell, root) = remote_shell(cx);
     for (source, note) in [
-        (SheetSource::Share, NOTE_SHARE),
-        (SheetSource::Post, NOTE_SHARE),
-        (SheetSource::Local, NOTE_LOCAL),
-        (SheetSource::Close(None), NOTE_CLOSE),
-        (SheetSource::Merge(None), NOTE_MERGE),
+        (SheetSource::Share, NOTE_SHARE.to_owned()),
+        (SheetSource::Post, NOTE_SHARE.to_owned()),
+        (SheetSource::Local, note_local("main")),
+        (SheetSource::Close(None), NOTE_CLOSE.to_owned()),
+        (SheetSource::Merge(None), NOTE_MERGE.to_owned()),
     ] {
         open_sheet(&shell, source, &root, OperationId::new(), cx);
-        assert_eq!(shell.label("conflict-note", cx).as_deref(), Some(note));
+        assert_eq!(shell.label("conflict-note", cx), Some(note));
         shell
             .visual(cx)
             .update(gpui_kit::component::WindowExt::close_dialog);

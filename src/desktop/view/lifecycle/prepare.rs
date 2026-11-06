@@ -15,12 +15,13 @@ use manyhands::{
 };
 
 use super::{
-    CONTINUE, LifecycleDialog, NOT_SENT, OPEN_FOLDER, Phase, RESUME, SHARE_MAIN, SHARING_MAIN,
-    STILL_RUNNING, button, text,
+    CONTINUE, LifecycleDialog, NOT_SENT, OPEN_FOLDER, Phase, RESUME, STILL_RUNNING, button,
+    share_main, sharing_main, text,
 };
 use crate::desktop::{
     model::{
         lifecycle_lock::LockKey,
+        operations::primary_subject,
         stamp::{Stamp, ViewScope},
     },
     services::{
@@ -30,11 +31,17 @@ use crate::desktop::{
     view::{confirm::SECRET_REQUIRED, item::SaveFirst},
 };
 
-/// What a dirty main is called, at prepare or in a stop at execute (A2).
-pub(crate) const PRIMARY_DIRTY: &str = "Main has unsaved changes outside Manyhands.";
+/// What a dirty primary branch is called, at prepare or in a stop at
+/// execute (A2): `primary` names it (R-35).
+pub(crate) fn primary_dirty(primary: &str) -> String {
+    format!(
+        "{} has unsaved changes outside Manyhands.",
+        primary_subject(primary)
+    )
+}
 
-/// A blocker in words.
-pub(crate) fn blocker_words(blocker: LifecycleBlocker) -> &'static str {
+/// A blocker in words; `primary` names the primary branch (R-35).
+pub(crate) fn blocker_words(blocker: LifecycleBlocker, primary: &str) -> String {
     use LifecycleBlocker::{
         AlreadyClosed, CommentPublicationPending, ConflictPending, ContextBehindRemote,
         ContextConflicted, ContextDirty, ContextMissing, ContextNonconforming,
@@ -43,7 +50,8 @@ pub(crate) fn blocker_words(blocker: LifecycleBlocker) -> &'static str {
         PrimaryDirty, PrimaryMissing, PrimaryNotCheckedOut, PrimaryReopened, RemoteContextDeleted,
         TicketInvalidAfterClosure,
     };
-    match blocker {
+    let subject = primary_subject(primary);
+    let words = match blocker {
         NotADocument => "This item is not a document.",
         NotATicket => "This item is not a ticket.",
         ContextMissing => "This item has no working copy of its own yet.",
@@ -53,27 +61,36 @@ pub(crate) fn blocker_words(blocker: LifecycleBlocker) -> &'static str {
         ConflictPending => "A conflict on this item is waiting to be resolved.",
         LocalOperationPending => "Another change to this item has not finished.",
         CommentPublicationPending => "A comment on this item has not finished posting.",
-        PrimaryMissing => "Main is not known on this computer yet.",
-        PrimaryNotCheckedOut => "Main is not checked out in the repository's folder.",
-        PrimaryDirty => PRIMARY_DIRTY,
-        PrimaryConflicted => "Main has a conflict to resolve.",
-        PrimaryAheadOfRemote => "Main has changes that are not shared yet.",
+        PrimaryMissing => return format!("{subject} is not known on this computer yet."),
+        PrimaryNotCheckedOut => {
+            return format!("{subject} is not checked out in the repository's folder.");
+        }
+        PrimaryDirty => return primary_dirty(primary),
+        PrimaryConflicted => return format!("{subject} has a conflict to resolve."),
+        PrimaryAheadOfRemote => return format!("{subject} has changes that are not shared yet."),
         ContextBehindRemote => "This item's working copy is behind its shared copy.",
-        IntegrationConflict => "This item's changes conflict with main.",
+        IntegrationConflict => return format!("This item's changes conflict with {primary}."),
         RemoteContextDeleted => "This item's shared copy was deleted.",
         HistoryUnknown => "Whether this item's shared copy still stands is not known.",
         AlreadyClosed => "This ticket is already closed.",
-        PrimaryReopened => "Main has reopened this ticket.",
-        DocumentInvalidAfterIntegration => "The document would not be valid once merged into main.",
+        PrimaryReopened => return format!("{subject} has reopened this ticket."),
+        DocumentInvalidAfterIntegration => {
+            return format!("The document would not be valid once merged into {primary}.");
+        }
         TicketInvalidAfterClosure => "The ticket would not be valid once closed.",
         IdentityRequired => "Your name and email are not set for this repository.",
-    }
+    };
+    words.to_owned()
 }
 
 /// A way out that is guidance, not a button, in words; `None` for one the
 /// dialog offers as a button. The repository's details are both: these
 /// words, and Open repository details.
-pub(super) fn guidance(way_out: &LifecycleWayOut, item: &'static str) -> Option<String> {
+pub(super) fn guidance(
+    way_out: &LifecycleWayOut,
+    item: &'static str,
+    primary: &str,
+) -> Option<String> {
     match way_out {
         LifecycleWayOut::PollOnce => {
             Some("Check origin for others' changes, then prepare again.".to_owned())
@@ -83,11 +100,11 @@ pub(super) fn guidance(way_out: &LifecycleWayOut, item: &'static str) -> Option<
         )),
         // Repair locally… is a button too (`repair.rs`).
         LifecycleWayOut::RepairLocally { .. } => Some(format!(
-            "Bring main into this {item}'s working copy, then prepare again."
+            "Bring {primary} into this {item}'s working copy, then prepare again."
         )),
-        LifecycleWayOut::RepairOutside => {
-            Some("Fix the conflict with main outside Manyhands, then prepare again.".to_owned())
-        }
+        LifecycleWayOut::RepairOutside => Some(format!(
+            "Fix the conflict with {primary} outside Manyhands, then prepare again."
+        )),
         LifecycleWayOut::Inspect => {
             Some("The repository's details in Repositories say more.".to_owned())
         }
@@ -355,22 +372,25 @@ impl LifecycleDialog {
             manyhands::repository::ItemDtoKind::Document => "document",
         };
         let muted = cx.theme().muted_foreground;
+        let primary = self.primary();
         let guidance: Vec<String> = way_out
             .iter()
-            .filter_map(|step| guidance(step, item))
+            .filter_map(|step| guidance(step, item, &primary))
             .collect();
         let rows = v_flex()
             .gap_1()
             .child(text("lifecycle-lead", super::BLOCKED_LEAD).text_sm())
             .children(blockers.iter().enumerate().map(|(ix, blocker)| {
-                text(("lifecycle-blocker", ix), blocker_words(*blocker)).text_sm()
+                text(("lifecycle-blocker", ix), blocker_words(*blocker, &primary)).text_sm()
             }))
             .children(guidance.into_iter().enumerate().map(|(ix, words)| {
                 text(("lifecycle-way-out", ix), words)
                     .text_sm()
                     .text_color(muted)
             }))
-            .children(shared.then(|| text("lifecycle-sharing-main", SHARING_MAIN).text_sm()))
+            .children(
+                shared.then(|| text("lifecycle-sharing-main", sharing_main(&primary)).text_sm()),
+            )
             .child(
                 text("lifecycle-code", code.as_str())
                     .text_xs()
@@ -390,7 +410,12 @@ impl LifecycleDialog {
         }
         if way_out.contains(&LifecycleWayOut::SharePrimary) && !shared {
             let share = self.on(cx, |dialog, _, cx| dialog.share_main(cx));
-            actions.push(button("lifecycle-share-main", SHARE_MAIN, false, share));
+            actions.push(button(
+                "lifecycle-share-main",
+                share_main(&primary),
+                false,
+                share,
+            ));
         }
         if way_out.contains(&LifecycleWayOut::Inspect) {
             actions.push(self.inspect_button(cx));

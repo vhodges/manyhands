@@ -23,11 +23,11 @@ use super::{
     confirm::{KEEP_LOCAL, MARK_CLOSED, SAVE_STEP, TIDY_UP},
     confirm_tests::{confirming, paths, row, worktree},
     outcome::{
-        CANCELLATION_FINISHED, ENDING_DONE, ENDING_FAILED, ENDING_STOPPED, MERGED, NO_RECORD,
-        NOT_MERGED, OPEN_REPOSITORY_DETAILS, SHARING_PENDING, STATE_DONE, STATE_FAILED,
-        STATE_NOT_DONE, STATE_NOT_STARTED, STATE_RUNNING, STOP, STOPPING, TIDIED_UP,
+        CANCELLATION_FINISHED, ENDING_DONE, ENDING_FAILED, ENDING_STOPPED, NO_RECORD,
+        OPEN_REPOSITORY_DETAILS, SHARING_PENDING, STATE_DONE, STATE_FAILED, STATE_NOT_DONE,
+        STATE_NOT_STARTED, STATE_RUNNING, STOP, STOPPING, TIDIED_UP, merged, not_merged,
     },
-    prepare::PRIMARY_DIRTY,
+    prepare::primary_dirty,
     short_id,
     tests::{
         TICKET, closes, code, commits, dialog, request, saved_ticket, shell, shown, until_present,
@@ -211,7 +211,7 @@ async fn stop_at_a_safe_point_names_completed_steps(cx: &mut TestAppContext) {
             STATE_NOT_DONE
         ]
     );
-    assert_eq!(shell.rows("lifecycle-outcome", cx), [NOT_MERGED]);
+    assert_eq!(shell.rows("lifecycle-outcome", cx), [not_merged("main")]);
     assert!(shell.present("lifecycle-retry", cx));
     assert_eq!(
         shell.label("lifecycle-subtitle", cx),
@@ -240,7 +240,7 @@ async fn local_only_with_cleanup_complete_is_done(cx: &mut TestAppContext) {
     );
     assert_eq!(
         shell.rows("lifecycle-outcome", cx),
-        [MERGED, SHARING_PENDING, TIDIED_UP]
+        [merged("main").as_str(), SHARING_PENDING, TIDIED_UP]
     );
     assert_eq!(shell.rows("lifecycle-step", cx), local_steps());
     assert_eq!(shell.rows("lifecycle-step-state", cx), [STATE_DONE; 5]);
@@ -386,7 +386,7 @@ async fn a_dirty_primary_stop_at_execute_merges_nothing(cx: &mut TestAppContext)
         shell.label("lifecycle-ending", cx).as_deref(),
         Some(ENDING_FAILED)
     );
-    assert_eq!(shell.rows("lifecycle-blocker", cx), [PRIMARY_DIRTY]);
+    assert_eq!(shell.rows("lifecycle-blocker", cx), [primary_dirty("main")]);
     // Review M-1: a dirty main stands in the merge's way.
     assert_eq!(
         shell.rows("lifecycle-step-state", cx),
@@ -403,7 +403,7 @@ async fn a_dirty_primary_stop_at_execute_merges_nothing(cx: &mut TestAppContext)
         shell.label("lifecycle-inspect", cx).as_deref(),
         Some(OPEN_REPOSITORY_DETAILS)
     );
-    assert_eq!(shell.rows("lifecycle-outcome", cx), [NOT_MERGED]);
+    assert_eq!(shell.rows("lifecycle-outcome", cx), [not_merged("main")]);
     assert!(!shell.present("lifecycle-retry", cx));
     assert!(shell.present("lifecycle-prepare-again", cx));
     assert_eq!(commits(&root, "main"), main, "nothing is merged");

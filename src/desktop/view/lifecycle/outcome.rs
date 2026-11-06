@@ -57,8 +57,14 @@ pub(crate) const CANCELLATION_FINISHED: &str =
     "The cancellation finished: nothing after the completed steps ran.";
 /// Stop was pressed, and the run finished first.
 pub(crate) const FINISHED_BEFORE_STOP: &str = "It finished before it could stop.";
-pub(crate) const MERGED: &str = "Merged into main";
-pub(crate) const NOT_MERGED: &str = "Nothing was merged into main.";
+/// The merge into the primary branch, named `primary` (R-35).
+pub(crate) fn merged(primary: &str) -> String {
+    format!("Merged into {primary}")
+}
+/// Nothing reached the primary branch, named `primary`.
+pub(crate) fn not_merged(primary: &str) -> String {
+    format!("Nothing was merged into {primary}.")
+}
 pub(crate) const SHARED: &str = "Shared";
 pub(crate) const ALREADY_SHARED: &str = "Already shared";
 pub(crate) const SHARING_PENDING: &str = "Sharing pending (no remote)";
@@ -344,13 +350,13 @@ pub(crate) fn outcome_lines(
     primary: &str,
 ) -> Vec<String> {
     if !reach.integrated {
-        return vec![NOT_MERGED.replace("main", primary)];
+        return vec![not_merged(primary)];
     }
     let data = lifecycle_data(envelope);
     let effects: &Effects = &envelope.effects;
     let mut lines = vec![match data.and_then(|data| data.integration) {
         Some(LifecycleIntegrationKind::AlreadyContained) => format!("Already in {primary}"),
-        _ => MERGED.replace("main", primary),
+        _ => merged(primary),
     }];
     let publication = match data.and_then(|data| data.publication) {
         Some(LifecyclePublicationState::Published) => Some(SHARED.to_owned()),
@@ -360,7 +366,10 @@ pub(crate) fn outcome_lines(
                 Some(LifecyclePublicationPendingReason::NoPublicationRemote) => {
                     Some(SHARING_PENDING.to_owned())
                 }
-                reason => Some(format!("Not shared: {}", publication_reason(reason))),
+                reason => Some(format!(
+                    "Not shared: {}",
+                    publication_reason(reason, primary)
+                )),
             }
         }
         None => match effects.publication {
@@ -374,7 +383,7 @@ pub(crate) fn outcome_lines(
         Some(LifecycleCleanupState::Complete) => Some(TIDIED_UP.to_owned()),
         Some(LifecycleCleanupState::Pending) => Some(format!(
             "Not tidied up yet: {}",
-            cleanup_reason(data.and_then(|data| data.cleanup_pending))
+            cleanup_reason(data.and_then(|data| data.cleanup_pending), primary)
         )),
         None => match effects.cleanup {
             CleanupEffect::Complete => Some(TIDIED_UP.to_owned()),
@@ -386,11 +395,12 @@ pub(crate) fn outcome_lines(
     lines
 }
 
-fn publication_reason(reason: Option<LifecyclePublicationPendingReason>) -> &'static str {
+/// Why sharing is pending, in words; `primary` names the primary branch.
+fn publication_reason(reason: Option<LifecyclePublicationPendingReason>, primary: &str) -> String {
     use LifecyclePublicationPendingReason as R;
-    match reason {
+    let words = match reason {
         Some(R::NoPublicationRemote) => "this repository has no remote",
-        Some(R::Conflict) => "main on the remote has changes that conflict",
+        Some(R::Conflict) => return format!("{primary} on the remote has changes that conflict"),
         Some(R::Rejected) => "the remote refused it",
         Some(R::Transport) => "the remote could not be reached",
         Some(R::Identity) => "your name and email are not set",
@@ -399,13 +409,18 @@ fn publication_reason(reason: Option<LifecyclePublicationPendingReason>) -> &'st
         Some(R::RecoveryRequired) => "the repository needs attention",
         Some(R::Cancelled) => "it was stopped",
         None => "it did not finish",
-    }
+    };
+    words.to_owned()
 }
 
-pub(crate) fn cleanup_reason(reason: Option<LifecycleCleanupPendingReason>) -> &'static str {
+/// Why tidying up is pending, in words; `primary` names the primary branch.
+pub(crate) fn cleanup_reason(
+    reason: Option<LifecycleCleanupPendingReason>,
+    primary: &str,
+) -> String {
     use LifecycleCleanupPendingReason as R;
-    match reason {
-        Some(R::AwaitingPublication) => "main is not shared yet",
+    let words = match reason {
+        Some(R::AwaitingPublication) => return format!("{primary} is not shared yet"),
         Some(R::ContextChanged) => "the working copy changed",
         Some(R::IgnoredFiles) => "the working copy holds ignored files",
         Some(R::RemoteContextChanged) => "the shared branch changed",
@@ -418,7 +433,8 @@ pub(crate) fn cleanup_reason(reason: Option<LifecycleCleanupPendingReason>) -> &
         Some(R::RecoveryRequired) => "the repository needs attention",
         Some(R::Cancelled) => "it was stopped",
         None => "it did not finish",
-    }
+    };
+    words.to_owned()
 }
 
 /// A way out of an execute result in words, for one with no button here;
@@ -426,10 +442,14 @@ pub(crate) fn cleanup_reason(reason: Option<LifecycleCleanupPendingReason>) -> &
 /// Share main). Repair locally… and Resolve conflict… are buttons beside
 /// their words (`repair.rs`), and so are Republish… and Stop and
 /// republish… (`republish.rs`).
-pub(crate) fn guidance(way_out: &LifecycleWayOut, item: &'static str) -> Option<String> {
+pub(crate) fn guidance(
+    way_out: &LifecycleWayOut,
+    item: &'static str,
+    primary: &str,
+) -> Option<String> {
     Some(match way_out {
         LifecycleWayOut::RepairLocally { .. } => {
-            format!("Bring main into this {item}'s working copy, then retry.")
+            format!("Bring {primary} into this {item}'s working copy, then retry.")
         }
         LifecycleWayOut::ResolveChildConflict { .. } => {
             format!("This {item}'s shared copy has a conflict to resolve first, then retry.")
@@ -441,10 +461,10 @@ pub(crate) fn guidance(way_out: &LifecycleWayOut, item: &'static str) -> Option<
             format!("Stop this run first, then share this {item} again.")
         }
         LifecycleWayOut::RepairOutside => {
-            "Fix the conflict with main outside Manyhands, then retry.".to_owned()
+            format!("Fix the conflict with {primary} outside Manyhands, then retry.")
         }
         LifecycleWayOut::PollOnce | LifecycleWayOut::SaveItem { .. } | LifecycleWayOut::Inspect => {
-            return super::prepare::guidance(way_out, item);
+            return super::prepare::guidance(way_out, item, primary);
         }
         LifecycleWayOut::SendAgain
         | LifecycleWayOut::RetryRequest { .. }
@@ -477,8 +497,13 @@ impl Credential {
 }
 
 /// What a running lifecycle's operation area entry says: "Closing · …" or
-/// "Merging · …", by its latest stage. `None` for any other request.
-pub(crate) fn progress_words(intent: &Intent, stage: Option<ProgressStage>) -> Option<String> {
+/// "Merging · …", by its latest stage, naming the primary branch `primary`
+/// when known. `None` for any other request.
+pub(crate) fn progress_words(
+    intent: &Intent,
+    stage: Option<ProgressStage>,
+    primary: Option<&str>,
+) -> Option<String> {
     let prefix = match intent {
         Intent::TicketClose { .. } => "Closing",
         Intent::DocumentPromote { .. } => "Merging",
@@ -486,8 +511,8 @@ pub(crate) fn progress_words(intent: &Intent, stage: Option<ProgressStage>) -> O
     };
     // A lifecycle's stages have the words a share's have.
     let words = stage
-        .and_then(|stage| stage_text(Progressing::Share, stage, None))
-        .or_else(|| stage_text(Progressing::Share, ProgressStage::Accepted, None))
+        .and_then(|stage| stage_text(Progressing::Share, stage, None, primary))
+        .or_else(|| stage_text(Progressing::Share, ProgressStage::Accepted, None, primary))
         .unwrap_or_default();
     Some(format!("{prefix} \u{b7} {words}"))
 }

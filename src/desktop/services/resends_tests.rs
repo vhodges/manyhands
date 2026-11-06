@@ -180,6 +180,29 @@ fn a_republishs_answer_keeps_or_ends_what_waits_on_it() {
     assert!(resends.follow(run).is_some());
     resends.forget(run);
     assert_eq!(resends.follow(run), None, "dismissed");
+
+    // Task 16, fix 1: a republish done whose lifecycle cannot be sent
+    // again (a run this worker never took) resumes the lifecycle's
+    // operation, which the rows name, instead; that resume follows the run.
+    rows(&mut operations, &root, OperationId::new());
+    let refused = finished(&mut operations, 13, republish(&root), RequestId::new());
+    resends.after_republish(
+        refused,
+        AfterRepublish::Retry(run),
+        root.clone(),
+        item_id(TICKET),
+    );
+    resends.ended(
+        refused,
+        &answer("item republish", ResultCode::Ok, Vec::new()),
+        &operations,
+        &worker,
+    );
+    assert!(!resends.pending_for(run), "done");
+    assert!(
+        resends.follow(run).is_some(),
+        "a refused retry resumes the operation instead"
+    );
 }
 
 /// The rows of `root`: one closure parent of `operation`, of the ticket.

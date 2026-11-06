@@ -42,9 +42,10 @@ use manyhands::{
 
 use super::{
     requests::{DesktopRequestId, Intent, Lane, RequestState},
+    resolutions::Followed,
     worker::WorkerHandle,
 };
-use crate::desktop::model::operations::Operations;
+use crate::desktop::model::{lifecycle_lock::LockKey, operations::Operations};
 
 /// How a lifecycle goes on once the republish its way out asked for is
 /// done.
@@ -224,12 +225,19 @@ impl Resends {
                     }
                     return;
                 }
-                let Some(Waiting { after, .. }) = registry.republishes.remove(&id) else {
+                let Some(Waiting { after, root, item }) = registry.republishes.remove(&id) else {
                     return;
                 };
                 match after {
                     AfterRepublish::Retry(lifecycle) => {
-                        worker.retry(lifecycle, None);
+                        // Its operation, by its last answer or the rows.
+                        let resume = lifecycle_operation(lifecycle, &root, &item, operations)
+                            .map(|operation_id| (root, operation_id));
+                        if let Some(Followed::Resumed(resume)) =
+                            send_lifecycle_on(Some(lifecycle), resume, operations, worker)
+                        {
+                            registry.resent.insert(lifecycle, resume);
+                        }
                     }
                     AfterRepublish::Resume {
                         shown,
@@ -249,6 +257,60 @@ impl Resends {
             _ => {}
         }
     }
+}
+
+/// Sends a lifecycle on (R-10; C5 decision 19): its request `lifecycle`
+/// again, or left as it is while queued or running, since it goes on by
+/// itself. When this session holds none, or it cannot be sent again (the
+/// queue closed while quitting, or a later request of the item stands in
+/// its way), `operation resume` of the operation `resume` names is sent
+/// instead. `None` when neither could be sent.
+pub(in crate::desktop::services) fn send_lifecycle_on(
+    lifecycle: Option<DesktopRequestId>,
+    resume: Option<(PathBuf, OperationId)>,
+    operations: &Operations,
+    worker: &WorkerHandle,
+) -> Option<Followed> {
+    if let Some(lifecycle) = lifecycle {
+        let running = operations.request(lifecycle).is_some_and(|request| {
+            matches!(
+                request.state,
+                RequestState::Queued | RequestState::Running { .. }
+            )
+        });
+        if running || worker.retry(lifecycle, None) {
+            return Some(Followed::Resent);
+        }
+    }
+    let (root, operation_id) = resume?;
+    Some(Followed::Resumed(worker.submit(
+        Intent::OperationResume { root, operation_id },
+        Lane::User,
+        None,
+        None,
+    )))
+}
+
+/// The lifecycle operation of the run `lifecycle`, of the item `item` of
+/// `root`: its last answer's, or else the one the rows list for the item.
+fn lifecycle_operation(
+    lifecycle: DesktopRequestId,
+    root: &Path,
+    item: &ItemId,
+    operations: &Operations,
+) -> Option<OperationId> {
+    let answered = operations
+        .lifecycle_answer(lifecycle)
+        .and_then(|envelope| envelope.operation_id.as_deref())
+        .and_then(|operation| OperationId::parse(operation).ok());
+    answered.or_else(|| {
+        let key = LockKey::new(root.to_str()?, &item.to_string());
+        let listed = operations.locks().operations(&key);
+        match listed.as_slice() {
+            [only] => OperationId::parse(only).ok(),
+            _ => None,
+        }
+    })
 }
 
 /// The close or merge of the lifecycle `operation_id` of `root`, sent again

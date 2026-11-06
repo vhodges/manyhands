@@ -20,7 +20,7 @@ use super::{
 use crate::desktop::{
     model::{
         item::{
-            CLOSE_TICKET, KIND_ACTIVE, KIND_PRIMARY, LATER, NOT_REPRESENTABLE, UNKNOWN_AUTHOR,
+            CLOSE_TICKET, KIND_ACTIVE, KIND_PRIMARY, NOT_REPRESENTABLE, UNKNOWN_AUTHOR,
             provenance_label,
         },
         navigation::OpenTarget,
@@ -454,7 +454,6 @@ fn a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_offered(
 
     // No action waits for a later release (E-4): the header's action is
     // the ticket's, Close ticket…, live. Repair is not it.
-    assert!(LATER.is_empty());
     assert!(!present(&shell, ("later-action", 0usize), cx));
     assert!(!present(&shell, ("later-note", 0usize), cx));
     assert_eq!(

@@ -167,11 +167,13 @@ pub(crate) fn shown_offers(
 /// What the finished share `id`, of outcome `result`, says; `None` for a
 /// failure, whose message and code the entry shows. A deleted branch
 /// whose republish is queued or running says so, on the entry and the
-/// item's pill.
+/// item's pill. A share of the primary branch names it `primary`, when
+/// known (R-35).
 pub(crate) fn share_words(
     services: &Services,
     id: DesktopRequestId,
     result: &SyncResult,
+    primary: Option<&str>,
     cx: &App,
 ) -> Option<String> {
     if result.outcome == SyncOutcome::BranchDeleted && republishing(services, id, false, cx) {
@@ -182,7 +184,7 @@ pub(crate) fn share_words(
         .flatten()
         .and_then(|holder| services.operations().read(cx).request(holder))
         .map(|holder| holder.intent.label());
-    share_text(&result.outcome, result.attempt.target, holder)
+    share_text(&result.outcome, result.attempt.target, holder, primary)
 }
 
 /// Where the offer `offer` of the finished share `id` goes in the

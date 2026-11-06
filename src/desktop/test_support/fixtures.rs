@@ -151,10 +151,15 @@ impl Fixture {
     /// `prepare` and `execute` of `repo create`, and gives its canonical
     /// root.
     pub(crate) fn create_repository(&self, name: &str) -> PathBuf {
+        self.create_repository_on(name, "main")
+    }
+
+    /// `create_repository`, its primary branch named `primary` (R-35).
+    pub(crate) fn create_repository_on(&self, name: &str, primary: &str) -> PathBuf {
         let root = self.repositories.path().canonicalize().unwrap().join(name);
         let input = || RepoCreateInput {
             root: root.clone(),
-            primary_branch: "main".to_owned(),
+            primary_branch: primary.to_owned(),
             identity: Some(identity()),
             slug_prefix: None,
         };

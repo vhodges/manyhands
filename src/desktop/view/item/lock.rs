@@ -27,6 +27,7 @@ use super::{ItemPane, banners::Banner, text};
 use crate::desktop::{
     model::{
         lifecycle_lock::{LockSource, LockState, Untidied},
+        operations::primary_name,
         tabs::TabKey,
     },
     view::lifecycle::cleanup_reason,
@@ -50,11 +51,12 @@ pub(crate) fn lock_words(kind: ItemDtoKind) -> &'static str {
     }
 }
 
-/// "Merged, but not tidied up: {reason}".
-pub(crate) fn not_tidied(untidied: Untidied) -> String {
+/// "Merged, but not tidied up: {reason}", naming the primary branch
+/// `primary` (R-35).
+pub(crate) fn not_tidied(untidied: Untidied, primary: &str) -> String {
     format!(
         "Merged, but not tidied up: {}",
-        cleanup_reason(Some(untidied.reason))
+        cleanup_reason(Some(untidied.reason), primary)
     )
 }
 
@@ -179,7 +181,10 @@ impl ItemPane {
             .flex_wrap()
             .gap_2()
             .items_center()
-            .child(text("item-not-tidied", not_tidied(untidied)))
+            .child(text(
+                "item-not-tidied",
+                not_tidied(untidied, primary_name(self.primary_branch())),
+            ))
             .children(open)
             .child(check)
             .into_any_element();

@@ -49,7 +49,7 @@ use super::{
     text,
 };
 use crate::desktop::{
-    model::publication::host_authority,
+    model::{operations::primary_name, publication::host_authority},
     services::requests::{DesktopRequestId, RequestState},
     view::item::ItemRoute,
 };
@@ -75,13 +75,15 @@ impl LifecycleDialog {
         }
     }
 
-    fn primary(&self) -> String {
-        // The confirmed preview's, else the one the workspace knows.
-        self.plan
+    /// The primary branch's name (R-35): the confirmed preview's, else the
+    /// one the workspace knows, else `PRIMARY_UNKNOWN`'s words.
+    pub(super) fn primary(&self) -> String {
+        let known = self
+            .plan
             .as_ref()
-            .map(|plan| plan.primary_branch.clone())
-            .or_else(|| self.heading.primary.clone())
-            .unwrap_or_else(|| "main".to_owned())
+            .map(|plan| plan.primary_branch.as_str())
+            .or(self.heading.primary.as_deref());
+        primary_name(known).to_owned()
     }
 
     /// The body and buttons of a sent run, by where its request stands.
@@ -227,9 +229,10 @@ impl LifecycleDialog {
             body = body.children(part);
             open_ready = button;
         }
+        let primary = self.primary();
         if let Some(data) = data {
             body = body.children(data.blockers.iter().enumerate().map(|(ix, blocker)| {
-                text(("lifecycle-blocker", ix), blocker_words(*blocker)).text_sm()
+                text(("lifecycle-blocker", ix), blocker_words(*blocker, &primary)).text_sm()
             }));
         }
         if offers.no_record {
@@ -240,7 +243,7 @@ impl LifecycleDialog {
         body = body.children(
             way_out
                 .iter()
-                .filter_map(|step| guidance(step, item))
+                .filter_map(|step| guidance(step, item, &primary))
                 .enumerate()
                 .map(|(ix, words)| {
                     text(("lifecycle-way-out", ix), words)

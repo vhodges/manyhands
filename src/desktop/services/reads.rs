@@ -121,10 +121,21 @@ impl Reader {
         repo: &ResolvedRepository,
         operation_id: OperationId,
     ) -> ReadResult<ConflictDto> {
+        self.show_conflict_as(ReadKind::Conflict, repo, operation_id)
+            .await
+    }
+
+    /// `show_conflict`, as a call of the read kind `kind`: the pending
+    /// rows' probe is a `PendingConflicts` read (Task 16, fix 5).
+    #[allow(clippy::result_large_err)] // The library's `ReadError`.
+    pub(crate) async fn show_conflict_as(
+        &self,
+        kind: ReadKind,
+        repo: &ResolvedRepository,
+        operation_id: OperationId,
+    ) -> ReadResult<ConflictDto> {
         let read = self
-            .call(ReadKind::Conflict, |service| {
-                service.show_conflict(repo, operation_id)
-            })
+            .call(kind, |service| service.show_conflict(repo, operation_id))
             .await;
         match self.backend.after_conflict_read(&operation_id) {
             Some(conflict) => ReadResult::Ok(conflict),

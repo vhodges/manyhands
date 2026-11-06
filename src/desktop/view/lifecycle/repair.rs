@@ -38,7 +38,10 @@ use super::{
     Heading, LifecycleDialog, NOT_SENT, Phase, REPAIR_LOCALLY, RESOLVE_CONFLICT, button, text,
 };
 use crate::desktop::{
-    model::stamp::{Stamp, ViewScope},
+    model::{
+        operations::primary_subject,
+        stamp::{Stamp, ViewScope},
+    },
     services::{
         ReadResult, Services,
         conflicts::LocalObservation,
@@ -306,12 +309,17 @@ impl LifecycleDialog {
         else {
             return None;
         };
+        // The sheet names the primary branch as this dialog does (R-35).
+        let mut heading = self.heading.clone();
+        if let Some(plan) = &self.plan {
+            heading.primary = Some(plan.primary_branch.clone());
+        }
         let opening = Opening {
             source,
             root,
             operation_id,
             item,
-            heading: self.heading.clone(),
+            heading,
             folder,
             origin: self.origin.clone(),
         };
@@ -363,12 +371,19 @@ impl LifecycleDialog {
     /// Where Repair locally… stands, in words; its answer's code too.
     pub(super) fn repair_line(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let item = self.item_word();
+        let primary = self.primary();
         let (words, code) = match self.repair.state.as_ref()? {
             State::Observing | State::Syncing(_) => (
-                format!("Bringing main into this {item}'s working copy\u{2026}"),
+                format!("Bringing {primary} into this {item}'s working copy\u{2026}"),
                 None,
             ),
-            State::Repaired => (format!("Main is in this {item}'s working copy now."), None),
+            State::Repaired => (
+                format!(
+                    "{} is in this {item}'s working copy now.",
+                    primary_subject(&primary)
+                ),
+                None,
+            ),
             State::Answered(code, message) => (message.clone(), Some(*code)),
         };
         let muted = cx.theme().muted_foreground;

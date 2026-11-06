@@ -227,7 +227,8 @@ impl ItemPane {
         let result = share_result(&self.services, latest, cx)?;
         Some(ShareOutcome {
             request: latest,
-            words: share_words(&self.services, latest, &result, cx)?,
+            // An item's share: it names no primary branch.
+            words: share_words(&self.services, latest, &result, None, cx)?,
             // Until a resolution of it applies (D5 B3: the banner clears).
             conflict: matches!(result.outcome, SyncOutcome::Conflict { .. })
                 && self.services.operations().read(cx).review(latest).is_some(),

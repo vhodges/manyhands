@@ -365,19 +365,21 @@ impl ResolutionStore {
     /// the launch sweep to settle (`remote_answer`). A local answer, and a
     /// request that never reached the library, are settled from the
     /// library's state.
-    fn ended(&self, backend: &dyn Backend, ended: &Ended) {
+    ///
+    /// A set whose delete failed is still kept, and the error is returned
+    /// (Task 16, fix 4): the launch sweep settles it again.
+    fn ended(&self, backend: &dyn Backend, ended: &Ended) -> Result<(), ResolutionStoreError> {
         let remote = match (ended.source, ended.answer) {
             (ConflictSource::Remote, Some((code, checkpoint))) => remote_answer(code, checkpoint),
             _ => RemoteAnswer::Settle,
         };
         match remote {
-            RemoteAnswer::Ends => {
-                let _ = self.forget(ended.request);
-            }
+            RemoteAnswer::Ends => self.forget(ended.request),
             RemoteAnswer::Settle => {
                 self.settle(backend, ended.request);
+                Ok(())
             }
-            RemoteAnswer::Keep => {}
+            RemoteAnswer::Keep => Ok(()),
         }
     }
 }
