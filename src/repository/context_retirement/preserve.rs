@@ -201,15 +201,32 @@ pub(crate) fn owner(
     .map(|id| mutation::RequestId::parse(&id).map_err(|_| recovery_required()))
     .transpose()
 }
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
 pub(crate) fn owns(
     service: &RepositoryService,
     root: &Path,
     operation: OperationId,
-    request: mutation::RequestId,
-) -> Result<bool, RepositoryError> {
-    state::with_transaction(service, root, |tx, _| {
-        record::audit_connection(tx)?;
-        Ok(owner(tx, operation)? == Some(request))
+    request: &mutation::Accepted,
+) -> Result<bool, crate::repository::ReadError> {
+    // Generic creation abandonment is valid before registration and after its
+    // directory disappears. This ownership probe needs only the registry, not
+    // Git or a repositories row. Audit before absence can mean generic fallback:
+    // a lost retirement companion must never free its guarded identity.
+    service.read_session(RepositoryOperation::AbandonOperation, |db| {
+        let invalid = || crate::repository::ReadError::new(crate::results::ResultCode::RecoveryRequired);
+        record::audit_connection(db).map_err(|_| invalid())?;
+        let Some(owner) = owner(db, operation).map_err(|_| invalid())? else {
+            return Ok(false);
+        };
+        let scoped: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_preservations p JOIN context_retirement_records c ON c.operation_ulid=p.operation_ulid JOIN operation_records o ON o.id=c.local_record_id WHERE p.operation_ulid=?1 AND o.operation_ulid=?1 AND o.root_path=?2)", params![operation.to_string(), root.to_str()], |r| r.get(0)).map_err(|_| invalid())?;
+        if !scoped {
+            return Err(invalid());
+        }
+        if owner != request.request_id {
+            return Ok(false);
+        }
+        accepted(db, root, operation, request.request_id, i64::try_from(request.attempt).map_err(|_| invalid())?).map_err(|_| invalid())?;
+        Ok(true)
     })
 }
 

@@ -230,7 +230,7 @@ impl OperationAbandonBinding {
                         service,
                         &accepted.root(),
                         self.operation_id,
-                        accepted.request_id,
+                        accepted,
                     ) {
                         Ok(false) => Standing::Stopped {
                             journal: Some(NO_ROW),
@@ -357,12 +357,12 @@ impl Binding for OperationAbandonBinding {
     /// a preview: no preview is given of one. It is refused here as the
     /// input it is.
     fn prepare(&mut self, call: &CallContext<'_>) -> Result<Prepared, Answer> {
-        let (_, found) = self.observe(call.service)?;
+        let (scope, found) = self.observe(call.service)?;
         if found == AbandonableOperation::AnotherJournal {
             return Err(Answer::stopped(ResultCode::InvalidInput));
         }
         self.retirement = if matches!(found, AbandonableOperation::Pending(_)) {
-            retirement_metadata(call.service, &self.root, self.operation_id)?
+            retirement_metadata(call.service, &scope, self.operation_id)?
         } else {
             None
         };
@@ -424,7 +424,7 @@ impl Confirmed for OperationAbandonBinding {
             call.service,
             &accepted.root(),
             self.operation_id,
-            accepted.request_id,
+            accepted,
         ) {
             Ok(true) => {
                 self.retirement = match crate::repository::context_retirement::preserve::snapshot(
@@ -447,7 +447,7 @@ impl Confirmed for OperationAbandonBinding {
             Ok(false) => {}
             Err(error) => {
                 return Row::answers(Ran {
-                    answer: refused(error),
+                    answer: Answer::of_read(&error),
                     standing: Standing::Owed,
                 });
             }
@@ -465,8 +465,8 @@ impl Confirmed for OperationAbandonBinding {
         _accepted: &Accepted,
         _journal: &JournalRow,
     ) -> Result<Seen, Ran> {
-        let found = match self.observe(call.service) {
-            Ok((_, found)) => found,
+        let (scope, found) = match self.observe(call.service) {
+            Ok(observed) => observed,
             // Nothing is known of the row: the record is kept.
             Err(answer) => {
                 return Err(Ran {
@@ -487,7 +487,7 @@ impl Confirmed for OperationAbandonBinding {
                 // What the domain call is told the row was seen as. It
                 // is made only when the row is the one that was shown.
                 self.seen = Some(remains.standing.clone());
-                self.retirement = retirement_metadata(call.service, &self.root, self.operation_id)
+                self.retirement = retirement_metadata(call.service, &scope, self.operation_id)
                     .map_err(|answer| Ran {
                         answer,
                         standing: Standing::Owed,
@@ -516,7 +516,7 @@ impl Confirmed for OperationAbandonBinding {
     fn preview(&mut self, call: &CallContext<'_>) -> Result<Previewed, Answer> {
         let (scope, found) = self.observe(call.service)?;
         self.retirement = if matches!(found, AbandonableOperation::Pending(_)) {
-            retirement_metadata(call.service, &self.root, self.operation_id)?
+            retirement_metadata(call.service, &scope, self.operation_id)?
         } else {
             None
         };
@@ -590,11 +590,9 @@ impl Confirmed for OperationAbandonBinding {
 
 fn retirement_metadata(
     service: &RepositoryService,
-    root: &Path,
+    scope: &ScopeKey,
     operation: OperationId,
 ) -> Result<Option<crate::repository::RetirementAbandonMetadata>, Answer> {
-    let scope =
-        ScopeKey::for_repository(root).ok_or_else(|| Answer::stopped(ResultCode::InvalidPath))?;
     service
         .read_session(crate::repository::RepositoryOperation::Read, |db| {
             crate::repository::context_retirement::preserve::metadata(
