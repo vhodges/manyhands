@@ -20,7 +20,8 @@ confirmed per-item preserving/index recovery and forward gap unwiring are locall
 implemented at `9864c2b2`; Task 3 SPEC and QUALITY are now independently approved
 through `989a5807`, including P1/P2 and Q1–Q3 corrections. The same SPEC reviewer
 approved the compatibility delta before the same QUALITY reviewer approved the
-whole original Task 3 range. Next is Task 4's thin original-live pass. Ticket remains
+whole original Task 3 range. Task 4's production original-live pass is locally
+delivered at `01a386ee`, with independent SPEC then QUALITY pending. Ticket remains
 `implementing`, not full Task 2 or feature review-ready.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
 [the delivery checkpoint](#task-3--ordinary-binding-and-guarded-preserving-recovery).
@@ -119,9 +120,12 @@ Neither recovery route advances parent. Both corrections are internal under D15.
   receipt/index finalizer, independent old-catalog freeze and forward unwiring of
   superseded gap installation/support are implemented. No full-feature approval.
 - [ ] Task 4: production original capture/selection, thin sealed-input live loop,
-  R-12 versioned one-to-many consumer/initial-membership migration, per-holder
-  audits/exact no-observer lineage and stable cut/completed-all-selected report. Replace
-  parent-capture-bound batch execution/index paths, not merely disable resume.
+   R-12 versioned one-to-many consumer/initial-membership migration, per-holder
+   audits/exact no-observer lineage and stable cut/completed-all-selected report. Replace
+   parent-capture-bound batch execution/index paths, not merely disable resume.
+   **Implemented at `01a386ee`; 39 distinct exact local tests and strict Clippy/fmt
+   pass at the recorded source scopes below. Independent SPEC then QUALITY remain
+   pending, so this delivery/review gate is not checked complete.**
 - [ ] Tasks 5–6: CLI + relevant local acceptance and at most one new justified
   SSH connection E2E; no new SSH edge-case matrix. Existing 105 SSH cases are
   legacy evidence; review coverage mapping before any forward consolidation/rehome.
@@ -5751,3 +5755,250 @@ capture, R-12 consumer/membership migration and lineage, thin live loop using
 ordinary child requests, immutable stop cut/report. Tasks 5–8 and final whole-tree
 static/fast/changed-path SSH gates remain owed once at review-ready. No PR, native
 CI, main integration/closure, real-context retirement or real-profile/key/draft action.
+
+## Task 4 — Production Original-Live Loop (2026-11-06)
+
+### Scope And Review Boundary
+
+Task base is **`0c1be623487f6634187a0ed031ce518a47b8c16f`**. The controller's
+fresh main merge at that base is accepted for this dispatch; this worker did not
+fetch/merge again, inspect or edit another worktree, push, spawn agents or run
+native/SSH/broad test gates. Task 3's approvals through `989a5807` stand. This is
+one Task 4 production delivery for independent **SPEC, then QUALITY**, not feature
+review-ready status. Tasks 5–8 and final fast/changed-path SSH gates remain owed.
+
+The public `PollOnceRetiring(PollOnceInput)` uses the ordinary request boundary
+and the same session for every child. Its private admission callback associates
+the ordinary accepted Ri/Ki in the same transaction under the common Git lease;
+there are no fabricated accepted requests, batch local/index owners, durable
+cursor, aggregate journal or resumed cleanup loop. The source freezes the original
+report/selection before P finishes; only its process capability plus its original
+successful refresh wrapper can enable the initial inputs. Each child finishes
+its ordinary discovery handoff before the next is admitted. Refusals continue;
+real local/index/integration debt stops admission. Parent reconciliation is
+metadata only, and its stopped/completed image is immutable before Final.
+
+R-12 uses the new exact `context_retirement_consumers_v1` envelope and immutable
+`poll_retirement_child_sources`. The independent preserving-v2 catalog was frozen
+BEFORE receipt DDL changed (normalized fingerprint
+`6b68f9cff715887a64a261c361da93c1f2f79e3c`). The migration copies all known retirement
+tables with original rowids in one immediate transaction, drops children before
+parents with FKs enabled, restores parents before children, audits rows/FKs/history,
+and only then commits the consumer marker. It does not rename a live parent,
+disable FKs, synthesize O, duplicate P provenance or operate on real profiles.
+Unknown incoming FKs, attachments, referencing triggers/views and reserved
+case-variant `poll_retirement_*` objects refuse unchanged.
+
+### D15 Test Rehoming / Supersession
+
+The disconnected branch-era `source_contract_tests.rs` tree has **108 tests in
+11 files**. Those tests constructed hypothetical `retirement_poll_*` projections
+and invoked the now-deleted capture-bound batch executor/index driver; they did
+not invoke the shipping public producer. They are removed with that obsolete
+engine, not left silently uncompiled, resurrected as a second engine, or counted
+as current passing coverage. Their historical source remains at the Task 4 base
+and their earlier approvals/logs retain their actual scope.
+
+The following aliases are current, compiled tests in
+`repository::context_retirement::execution_tests::mutation_tests` (full names are
+the alias expansion, not broad filters):
+
+| Alias | Full test suffix |
+| --- | --- |
+| LIVE | `retirement_batch_public_live_pass_retires_real_context_and_replays_without_transport` |
+| SHARE | `retirement_batch_shared_source_ordinary_children_settle_before_next_admission` |
+| CUT | `retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup` |
+| FENCE | `retirement_batch_live_fences_rejoin_at_each_ordinary_effect` |
+| MEMBER | `retirement_batch_initial_history_requires_exact_membership` |
+| GAP | `retirement_batch_original_refresh_gap_and_background_poll_cannot_mint_authority` |
+| AUDIT | `retirement_batch_history_audits_parent_intent_and_materialization_owner` |
+| ID | `retirement_batch_preselection_poll_recovery_does_not_free_its_id_for_other_journals` |
+| RESERVED | `retirement_batch_reserved_request_ids_cannot_be_spent_by_public_or_atomic_bindings` |
+
+`COMMON` below means retained ordinary tests in `authority_tests.rs`,
+`index_claim_tests.rs`, `instance_tests.rs`, `store_tests.rs`, `execution_tests.rs`
+and the existing source-included standalone SSH cases. These assertions stay
+compiled/registered, but an unrun SSH case is NOT fresh evidence. Shared W/B,
+proof, nonce, D14, R7, index, refusal-witness and Z behavior now has one executor.
+
+| Removed module / tests | Retained safety assertions and current home | Superseded mechanism / explicit remaining coverage |
+| --- | --- | --- |
+| `source_contract_tests.rs` / 10 | AUDIT, FENCE, MEMBER, GAP, CUT: opted digest/current mapping, source identity, exact original ad, no public/default capability, no-debt exclusion, cancellation/source release. COMMON source/receipt/Z audits retain absent-pin/released-history refusal | Inert projection sealing replaced by real public capture. Every original-P owned-write/fault permutation and scalar-ID reuse at pass-source Z remain Task 6 variants, not claimed from these tables |
+| `source_cancel_tests.rs` / 7 | CUT/SHARE: accepted-parent cancellation cut before return, stop/admission race, child cancellation and no later acceptance; FENCE: parent/child F2 at both W/B boundaries; COMMON old O cancellation/fencing | Projected batch STOP ownership removed; no batch-attempt acknowledgement or resumed source. Detailed pre-capture remote-signal/SQL-rollback combinations remain acceptance variants |
+| `source_handoff_tests.rs` / 15 | CUT/GAP/LIVE/SHARE: failed/index-pending/unconfirmed/lost-capture/eligible-crash/empty wrappers, repair negative, one original report despite later poll overwrite, whole selection, per-holder release; MEMBER/AUDIT exact lineage/history | Hypothetical A2 producer replaced. Additional malformed full-image, capture/finish fault and exact source-release corruption permutations remain Task 6, not all marked covered |
+| `source_handoff_specfix_tests.rs` / 4 | GAP: original endpoint/current-ad refresh gap, eligible automatic/default no-marker; CUT: completed/interrupted/fenced P reentry; LIVE immutable replay; COMMON exact observer scope | Projected completed-P restart adapters removed. Original selected-key-source refresh-gap and foreign-root forged-capture variants remain acceptance debt |
+| `batch_contract_tests.rs` / 10 | SHARE mixed refusal/success, fixed child IDs/selection, empty/no-effect/all-selected-vs-prefix/cancel cuts; LIVE later lifetime/report preservation; FENCE/MEMBER stale/foreign scope refusal; COMMON conditional Z/scalar history | Cursor advance and batch-consumer capability replaced by ordinary acceptance/settlement. Remaining pass-summary corruption and per-write rollback permutations not claimed |
+| `batch_debt_tests.rs` / 6 | CUT retains a real owned integration-conflict fixture; source/initial validation uses the existing full retained-conflict/resolution-debt predicate. COMMON no-pending-local/remote-debt checks remain; immutable report replay is separate from live admission | Old C/last-cursor settlement removed. Remaining resolution-stage/unreleased-artifact/valid-window combinations at the new admission seam stay Task 6 variants |
+| `batch_inspection_tests.rs` / 9 | COMMON full no-follow nonce/lock/checkout/unknown-inspection rules, incomplete/ambiguous M refusal and no-effect witness tests remain; CUT changed nonce and AUDIT foreign M owner; FENCE M replacement | No batch-specific inspection/finality driver. Cross-product unknown-marker-plus-positive-M/fault combinations at initial input stay acceptance variants |
+| `batch_positive_tests.rs` / 17 | SHARE branch/present/document children, D12, D14, pending I, exact independent receipts; CUT independent fresh-O/M recovery; FENCE before/after effects; LIVE new W/B/M preserved; COMMON copied-registry/F2/spend/missing-evidence/Z tests | Batch index claim, same-parent new-F2/C takeover and cursor result writes removed. Remaining ordinary initial-child copied-registry/fault variants tracked below |
+| `batch_present_tests.rs` / 16 | SHARE real W→B→M→I before next Ri, two receipts/one provenance; CUT selected and owned-absence crash, nonce replacement; FENCE exact effect boundaries; LIVE recreated W/B/M; COMMON full cleanliness/registration/nonce/R7 and original-attempt spend audits | Parent capture/index dependence replaced by exact immutable initial membership and ordinary request recovery. Extra public initial-child lock/platform/prune fault combinations remain Task 6 |
+| `batch_positive_primary_tests.rs` / 4 | COMMON `run.rs` retains the original pre-invocation witness, frozen primary/proof pair and possible-removal distinction for BOTH observer and initial owners; FENCE/CUT cover stopped/partial state | Duplicate batch-only witness driver removed, not weakened. Explicit different-primary/proof-pair initial-input permutations remain Task 6 |
+| `batch_positive_specfix_tests.rs` / 10 | COMMON ordinary index owners require current child F2 but not deletion configuration; SHARE independent I and confirmed preserving after parent Final; FENCE stale/deletion configuration/M; COMMON no-effect witness/Z rollback tests | Aggregate cursor/new-F2 index continuation and parent-derived index scope removed. Additional initial-child key/G/ad/index-fault combinations remain acceptance variants |
+
+### Retained-44 Coverage Delta
+
+This table amends, rather than erases, the historical All-44 register above.
+`E` is implemented/covered at its stated scope; `O` remains open acceptance work;
+`S` is only the named D15-obsolete mechanism. No test count completes an O row.
+
+| Row | Task 4 mapping / remaining obligation |
+| --- | --- |
+| 01 | E LIVE/SHARE real local ticket/document W/B retirement through public boundary. O live-transport two-clone connection and remaining fault variants (Task 6) |
+| 02 | E ordinary unknown-Fetch control retained; O Push-only variant unchanged |
+| 03 | E GAP/FENCE current-ad supersession forbids old initial authority; ordinary reappearance controls retained. O remaining foreign-current variants |
+| 04 | E CUT/contract golden failed original transport is tagged, final and non-cleanup; ordinary Task 3 host/key/privacy table retained. O real transport acceptance |
+| 05 | E common proof/dirty-primary guards unchanged. O remaining primary/disk runtime variants |
+| 06 | E common proof positive-completion/preservation tests unchanged. O complete runtime refusal journeys |
+| 07 | E SHARE branch-only second child; ordinary branch-only controls retained |
+| 08 | E CUT all-absent selection settles exact M with no child observation; ordinary local-only/replay controls retained |
+| 09 | E SHARE genuine I failure then independent child resume after parent Final, with later target unreached. O extra M-fault variants |
+| 10 | E common invalid/mixed identity controls retained; O exhaustive public reentry variants |
+| 11 | E SHARE dirty/unmatched refusals preserve resources while later legitimate child succeeds; common hidden/submodule guards retained. O remaining fault combinations |
+| 12 | E CUT owned foreign conflict stops before acceptance; exact ordinary no-local/remote debt checks reused. O resolution/window cross-products at new seam |
+| 13 | E intended nonce durable before original installer; no installer exists on parent replay. Common missing provisional bootstrap controls retained; O original-capture bootstrap fault variants |
+| 14 | E common matching-installed verification-only recovery retained; O explicit original poll enrollment SQL-gap variant |
+| 15 | E common no-repair collision/shape tests retained; O additional public marker/platform variants |
+| 16 | E CUT replaced nonce refuses; LIVE same-OID recreated W/B/M survives old replay. O remaining link/admin variants |
+| 17 | E GAP executes ordinary explicit AND eligible automatic full polls: neither installs a marker/retirement record or deletes context |
+| 18 | E FENCE current parent/child F2, endpoint/ad/M at both W/B intents; CUT selected-before-Git initial NULL-observer → ordinary fresh O/proof succeeds after parent Final. COMMON witness tests retained |
+| 19 | E CUT actual Git-absence/SQL rollback → ordinary M only; COMMON prune/R7 controls retained. O remaining mixed prune windows |
+| 20 | E ordinary R7 same-OID surviving branch controls retained; LIVE old completed pass preserves new same-OID branch. O initial-child-specific branch-recreation crash variant |
+| 21 | E original-live branch permit process-only; no replay constructor. Ordinary old branch-only selection test retained; O extra initial-branch crash permutations |
+| 22 | E CUT independent NULL-observer M/I settles exact old intent after parent Final, with zero new ad. Ordinary direct/preserve-gap lineage controls retained |
+| 23 | E AUDIT rejects foreign/missing M owner; common incomplete/ambiguous capture retained. O remaining malformed owner/OID cases |
+| 24 | E FENCE rejects changed exact M before W/B; SHARE settles only successful child's captured M. Common compare-delete/rollback controls retained; O remaining M step/absence variants |
+| 25 | E CUT independent M/I and SHARE independent I/preserving; LIVE recreated W/B/M untouched by old report after later poll overwrite. S batch-index takeover/resumed C |
+| 26 | E CUT fresh all-absent consumes exact complete M with None removals; ordinary fresh-absence D14 controls retained |
+| 27 | E initial NULL lineage uses ordinary exact old-O replacement only on child reentry; COMMON replacement history tests retained. O remaining after-ad/batch windows |
+| 28 | E common replacement atomicity/exclusions retained. O remaining every-write/commit/correlation variants |
+| 29 | E FENCE actual parent/child epoch boundaries; SHARE request-cancel/admission race leaves exact not-reached set, no stale target rewrite; CUT source release/recovery. S gap/resumed-batch fences |
+| 30 | E GAP/FENCE configuration/ad refusal; common old-generation pin tests retained. O partial-generation variants |
+| 31 | E production source captures actual returned P batch; GAP public/default/automatic/repaired wrapper negative; CUT failure/lost-capture recovery. O one justified live-transport E2E |
+| 32 | E SHARE K1 settles/releases own hold while pass holder survives; K2 binds distinct retained receipt to SAME provenance, no child O; D12 asserted at ordinary Accepted events |
+| 33 | E MEMBER missing/foreign membership refuses startup/reentry without new O/effects; FENCE ordinary exact scopes. O copied-registry/additional fault permutations. S batch-cursor scope |
+| 34 | S gap driver remains unwired; existing strict empty-gap removal/refusal matrix retained and rerun at Task 4. No revived gap observer/adapter |
+| 35 | E SHARE mixed settled outcomes complete, pending/prefix stop non-success; CUT accepted-never-claimed is metadata-only stopped refusal; truthful partial flags/cancellation preserved. O extra outcomes |
+| 36 | E ordinary child F2/index spends reused, SHARE resumes only child's I after R Final; MEMBER rejects absent/wrong source evidence. O additional M/index transaction faults |
+| 37 | E SHARE real confirmed child preserving after stopped parent Final; no completed-child/whole-pass abandon handle. Task 3 terminal/missing/unregistered-root compatibility retained |
+| 38 | E independently frozen preserving-v2 + versioned whole-closure migration preserves receipt IDs/history/FKs, rollback20–23, idempotent reopen, strict unknown dependency/catalog refusal. ID proves preselection P remains spent for foreign journals/public observers while normal update-P restart remains available; its narrow identity check in `promotion/lifecycle_record.rs` does not change any lifecycle target/cleanup. RESERVED prevents both ordinary public retirement and atomic poll-policy binding from spending reserved Ri, while normal unreserved policy/replay still works. O remaining consumer history shapes beyond the pinned/possible/released/branch-complete table. S gap architecture |
+| 39 | E real production original selection/enrollment/sealed input, ordinary acceptance callback; no public receipt/fabricated O/parent-owned child. S resumed C |
+| 40 | E SHARE immutable cut/pending removals/not-reached; independent recovery cannot rewrite it. All-selected lost-copy (including refusal) completes, settled prefix does not. LIVE later poll overwrite/lost-copy preserves original report. O extra cut-transaction faults |
+| 41 | E CUT preselection crash/restart/fenced P finishes ordinary poll only, releases exact source holds; no captured-parent retry accepts another child. GAP failed wrapper/later repair negative |
+| 42 | E per-holder source/pass/child releases in SHARE/CUT; common window/obsolete-batch collection retained. O extra original-source generation/rollback variants |
+| 43 | E SHARE parent Final leaves genuine child hold/recovery independent; exact per-holder audits, no aggregate counts; CUT fresh-O/M lineage; dynamic actions name current child and disappear after child settles, report stays frozen. O window cross-products |
+| 44 | E retained receipts/member/result/release history, clean FKs; LIVE terminal unregister preserves finished requests/maps/reports and new resources. Common scalar-ID reuse remains compiled historical coverage, not a fresh pass-source reuse proof. O that additional pass-specific case |
+
+### Verification And Delivery Record
+
+**Code commit:** `01a386eee699117ad6bae9822bb3f62865bbf23d`, subject
+`feat: opt explicit polls into safe context retirement`, with the required coauthor
+trailer. Review the complete range from
+**`0c1be623487f6634187a0ed031ce518a47b8c16f`**, including this ledger/checkpoint
+commit, not `HEAD~1`. Author self-review is not independent approval.
+
+All tests below ran as separate full-name commands with `-- --exact`; each
+reported **1 passed, 0 failed**, no zero-match result. The command prefix is
+`devenv shell -- cargo test --all-features --locked`; the flags and exact full
+names are also recorded literally in `/tmp/opencode/task4-final-results.json`
+(34 commands) and `/tmp/opencode/task4-admission-final-results.json` (5 commands).
+No broad filter, SSH case, full target/tier/suite or native run was used. No
+between-step command approached the 15-minute limit.
+
+The initial 34-command freeze is the 43-input manifest
+`/tmp/opencode/task4-final-sources.sha256`, SHA-256
+**`b044e31ea35ab54b55e8e115ecf2e54a315939b6fb0e0482cf40fb30b9cedac6`**.
+The later two-file correction (`mutation/records.rs`, `context_retirement/mutation_tests.rs`)
+only closes atomic-policy admission under reserved Ri and adds its table/normal
+policy control. Its manifest `/tmp/opencode/task4-admission-correction-sources.sha256`
+hashes to **`195868c2d0fa50eccc31d74201883d713a4cab6978247631f2e1297c558b5bec`**.
+These scopes are layered, not relabeled as a whole-suite rerun. The other 41
+inputs remained byte-identical. The following names use `CTX` =
+`repository::context_retirement::`, `MUT` = `CTX` + `execution_tests::mutation_tests::`;
+the aliases above expand only under `MUT`.
+
+| Log (`/tmp/opencode/`) | Exact selection after the common command prefix | Result |
+| --- | --- | --- |
+| `task4-final-01.log` | `--lib MUT` + FENCE | 1 passed |
+| `task4-final-02.log` | `--lib MUT` + AUDIT | 1 passed |
+| `task4-final-03.log` | `--lib MUT` + MEMBER | 1 passed |
+| `task4-final-04.log` | `--lib MUT` + GAP | 1 passed |
+| `task4-final-05.log` | `--lib MUT` + CUT | 1 passed |
+| `task4-final-06.log` | `--lib MUT` + ID | 1 passed |
+| `task4-final-07.log` | `--lib MUT` + SHARE | 1 passed |
+| `task4-final-08.log` | `--lib MUT` + LIVE | 1 passed |
+| `task4-final-09.log` | `--lib MUTordinary_retirement_partial_cancel_has_truthful_flags_and_preserving_escape` | 1 passed |
+| `task4-final-10.log` | `--lib MUTordinary_retirement_final_and_lost_result_replay_preserve_new_context_and_mismatches` | 1 passed |
+| `task4-final-11.log` | `--lib MUTordinary_retirement_accepted_but_never_claimed_settles_without_selection_or_observation` | 1 passed |
+| `task4-final-12.log` | `--lib MUTordinary_retirement_index_only_resume_spends_own_request_and_preserves_recreation` | 1 passed |
+| `task4-final-13.log` | `--lib CTXrecord::authority::tests::retirement_preserving_receipt_index_and_exact_z_finalize_atomically_then_resume_only_preserves` | 1 passed |
+| `task4-final-14.log` | `--lib CTXrecord::authority::tests::retirement_f2_index_sql_rejoins_current_request_at_every_write_and_finalizer` | 1 passed |
+| `task4-final-15.log` | `--lib CTXrecord::authority::tests::retirement_live_advertisement_captures_exact_batch_and_public_replay_cannot_mint` | 1 passed |
+| `task4-final-16.log` | `--lib CTXstore_tests::migration_tests::consumer_envelope_preserves_receipt_ids_and_rolls_back_dependency_closure` | 1 passed |
+| `task4-final-17.log` | `--lib CTXstore_tests::migration_tests::consumer_envelope_unknown_dependencies_and_reserved_catalog_refuse_unchanged` | 1 passed |
+| `task4-final-18.log` | `--lib CTXstore_tests::migration_tests::retirement_d15_empty_gap_unwiring_is_atomic_and_unknown_or_nonempty_is_unchanged` | 1 passed |
+| `task4-final-19.log` | `--lib CTXstore_tests::migration_tests::retirement_preserving_catalog_upgrade_rolls_back_and_rejects_unknown_closure` | 1 passed |
+| `task4-final-20.log` | `--lib CTXstore_tests::migration_tests::retirement_migration_published_v1_histories_upgrade_once_without_rewriting_rows` | 1 passed |
+| `task4-final-21.log` | `--lib CTXstore_tests::retirement_old_generation_pin_retains_exact_batch_and_children_through_reopen` | 1 passed |
+| `task4-final-22.log` | `--lib CTXstore_tests::retirement_release_history_cannot_excuse_live_or_unsettled_debt` | 1 passed |
+| `task4-final-23.log` | `--lib CTXstore_tests::retirement_z_keeps_a_valid_integration_window_and_its_batch` | 1 passed |
+| `task4-final-24.log` | `--lib CTXrecord::retirement_catalog_freeze_matches_pinned_history` | 1 passed |
+| `task4-final-25.log` | `--lib repository::mutation::dto::poll_retirement_stored_contract_is_closed_and_cannot_complete_a_not_reached_prefix` | 1 passed |
+| `task4-final-26.log` | `--lib repository::mutation::dto::poll_retirement_recognition_tests::ordinary_poll_stored_reports_keep_their_untagged_shape_and_all_old_values` | 1 passed |
+| `task4-final-27.log` | `--lib repository::remote::poll::tests::review_original_report_survives_second_poll_before_refresh_return` | 1 passed |
+| `task4-final-28.log` | `--lib repository::remote::poll::tests::task6_batch_completion_once_and_older_replay_keeps_its_times_but_no_targets` | 1 passed |
+| `task4-final-29.log` | `--test mutation_contract an_opted_poll_matches_its_distinct_closed_schema_and_golden` | 1 passed; real public failed-transport producer, not fitted DTO |
+| `task4-final-30.log` | `--test mutation_contract the_fixture_directories_are_exactly_the_registered_cases` | 1 passed |
+| `task4-final-31.log` | `--test mutation_contract every_bound_command_has_a_golden` | 1 passed |
+| `task4-final-32.log` | `--test mutation_contract every_schema_is_reachable_from_a_published_root` | 1 passed |
+| `task4-final-33.log` | `--test mutation_contract every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root` | 1 passed |
+| `task4-final-34.log` | `--test cli inventory::every_verb_s_data_has_an_output_schema_and_its_goldens_match_it` | 1 passed; root registration only, no Task 5 flag/renderer |
+| `task4-admission-final-01.log` | `--lib MUT` + RESERVED | 1 passed; both public/atomic misuse refuse unchanged, ordinary unreserved policy/replay succeeds |
+| `task4-admission-final-02.log` | `--test mutation_confirmation the_confirmation_and_the_request_record_are_written_in_one_transaction` | 1 passed |
+| `task4-admission-final-03.log` | `--test mutation_confirmation retirement::ordinary_preserving_preview_binds_retained_resources_and_keeps_old_request` | 1 passed |
+| `task4-admission-final-04.log` | `--lib repository::context_release::tests::neither_release_step_is_a_checkpoint_and_the_branch_step_owes_only_its_hand_off` | 1 passed; old release meaning unchanged |
+| `task4-admission-final-05.log` | `--test mutation_bridges context::release_lost_before_settlement_then_an_edit_then_the_same_request_releases_the_new_context` | 1 passed; old release run-as-new unchanged |
+
+| Final gate | Exact command / evidence |
+| --- | --- |
+| Strict whole-tree compilation/lint | `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`, exit 0, `task4-clippy-admission-verified.log`, 16.10 s. Chosen instead of a redundant separate `cargo check`, per dispatch |
+| Format | `devenv shell -- cargo fmt --check`, exit 0, `task4-fmt-admission-verified.log`; formatting also through Devenv |
+| Whitespace/range | `git diff --check`, staged check before source commit, and `git diff --check 0c1be623487f6634187a0ed031ce518a47b8c16f HEAD`: clean; no unrelated changes reverted |
+| Merge compatibility | `git merge-tree --write-tree HEAD origin/main`, exit 0 at source commit; tree `36847f5debd9e4c24c0077d8a529bd7237fa90ef`. No fetch/rebase/main/worktree operation |
+| Current source integrity | 43 present changed inputs + 15 explicit deletions = 58 source/schema/test paths. Layered current manifest `/tmp/opencode/task4-current-sources.sha256` hashes to **`5b88d2c233047a00340773472990eeda95849032d6d4d1a9454b72f8b2c7ffce`**, zero mismatches against the code commit |
+| Raw evidence integrity | `/tmp/opencode/task4-evidence.sha256` contains 104 files (98 logs INCLUDING REDs/diagnostics, 6 manifests/result/deletion records); inventory SHA-256 **`2c045a67e787b69d0bb3505c68afe15dc54c69bc88515ebb95666a092744c3b5`**. Not every log is a passing run; only the explicit rows above are final green claims |
+
+Meaningful compiled RED→GREEN evidence includes the earlier missing public tag,
+consumer marker, pending removal snapshots, stale post-cut target rewrite,
+retained integration conflict, parent intent/M-owner correlation, reached-prefix
+decoder and failed-wrapper reporting. Resumed self-review additionally exposed
+unknown referencing views/reserved catalog (consumer-closure red/green), bypassed
+confirmation-fault acceptance (existing confirmation compatibility red/green),
+missing current-child I actions (child-actions red/green), a too-broad preselection
+P foreign-ID exemption (preselection-id red → green2), and atomic policy spending
+reserved Ri (reserved-request red/green and correction final table). Raw logs use
+those names under `/tmp/opencode/task4-*`. Private-visibility/exhaustive-match
+build failures, the first strict-Clippy type/collapse diagnostics, source-included
+`pub(in crate::repository)` visibility errors, ineffective test faults and a
+leftover synthetic-fetch fixture after an initially blocked P are **diagnostics,
+not behavioral RED evidence**. The final relative visibility works in both normal
+and source-included builds; no test assertion or production guard was weakened.
+
+Checkpoint **`01M6S5GS8CV2W6083N1CJHTKET`**, parent
+**`01M6RY2M7QPFKETJ3BAP5M4XSS`**, UTC **`2026-11-06T19:31:45Z`**. It records
+local delivery/review-pending only; no ticket-body/status save. ID generation used
+the existing CLI through Devenv with exactly
+`MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data`. The old ID-only
+scratch registry had unsupported preserving-v1: two CLI attempts refused, even
+after rebuilding the current default-feature CLI. Read-only inspection proved
+quick_check OK and EVERY non-migration application table empty. It was preserved
+INTACT at `/tmp/opencode/task4-preserving-v1-id-sandbox-preserved`; a fresh directory
+at the approved path then produced the ID successfully (`task4-checkpoint-id-fresh.log`).
+This is disposable sandbox isolation, not an unsupported-schema conversion or
+default-profile repair; no real repository/profile/context/key/draft was touched.
+
+**Next:** controller independent SPEC of the full base-to-returned-HEAD range,
+then independent QUALITY if SPEC passes. No approval is claimed. Task 5 owns CLI
+parsing/help/rendering; Task 6 owns remaining mapped acceptance variants and at
+most one justified SSH E2E; Tasks 7–8/final local tiers and whole-feature review
+remain outstanding. No push, PR, closure/main merge, native dispatch or background
+job occurred. No extra Rust run is needed for this metadata-only checkpoint.
