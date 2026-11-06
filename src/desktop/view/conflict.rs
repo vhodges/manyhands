@@ -235,6 +235,10 @@ pub(crate) struct ResolveSheet {
     /// once a local resolution applies (B6, P9).
     reopen: Option<Reopen>,
     origin: FocusHandle,
+    /// The sheet's own focus: Save resolution or Retry, pressed, is
+    /// disabled while its request waits, and focus moves here first, so
+    /// it stays in the sheet (A21).
+    focus: FocusHandle,
     services: Services,
     generations: Generations,
     read: Option<Task<()>>,
@@ -293,6 +297,7 @@ impl ResolveSheet {
             folder_read: None,
             reopen: None,
             origin: opening.origin,
+            focus: cx.focus_handle(),
             services,
             generations: Generations::default(),
             read: None,

@@ -53,6 +53,10 @@ mod confirm;
 mod made_ready;
 mod outcome;
 
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use confirm::KEEP_LOCAL;
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use outcome::{ENDING_DONE, ENDING_STOPPED, MERGED, SHARING_PENDING, TIDIED_UP};
 pub(crate) use outcome::{cleanup_reason, item_of, progress_words};
 pub(crate) use repair::{Reopen, reopen_repaired};
 #[cfg(all(test, feature = "desktop-test-support"))]

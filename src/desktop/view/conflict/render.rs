@@ -457,6 +457,7 @@ impl Render for ResolveSheet {
         v_flex()
             .id("conflict-sheet")
             .test_support()
+            .track_focus(&self.focus)
             .key_context(RESOLVE_SHEET_CONTEXT)
             .on_action(cx.listener(|sheet, _: &SaveResolution, window, cx| sheet.save(window, cx)))
             .gap_3()

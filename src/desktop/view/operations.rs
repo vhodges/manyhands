@@ -207,7 +207,9 @@ fn text(id: impl Into<ElementId>, value: impl Into<String>) -> Text {
 
 /// A Kit button in a wrapper a test reads by `id`. With `focus`, the
 /// wrapper tracks it, so a dialog the button opens can give focus back
-/// there, and a test can see the button hold it.
+/// there, and a test can see the button hold it. Enter or Space on the
+/// wrapper, where that focus lands, presses the button too (A21), as
+/// Abandon's wrapper does; a pointer's click is the button's.
 fn button(
     id: impl Into<ElementId>,
     label: &'static str,
@@ -215,9 +217,17 @@ fn button(
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let id = id.into();
+    let on_click = std::rc::Rc::new(on_click);
     let mut wrapper = div().id(id.clone()).test_support().aria_label(label);
     if let Some(focus) = focus {
-        wrapper = wrapper.track_focus(focus);
+        let pressed = on_click.clone();
+        wrapper = wrapper
+            .track_focus(focus)
+            .on_click(move |event, window, cx| {
+                if event.is_keyboard() {
+                    pressed(event, window, cx);
+                }
+            });
     }
     wrapper
         .child(
@@ -226,7 +236,7 @@ fn button(
                 "button".into(),
             ))
             .label(label)
-            .on_click(on_click),
+            .on_click(move |event, window, cx| on_click(event, window, cx)),
         )
         .into_any_element()
 }

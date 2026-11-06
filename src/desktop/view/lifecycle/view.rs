@@ -128,7 +128,14 @@ impl LifecycleDialog {
     {
         let entity = cx.entity().downgrade();
         move |_, window, cx| {
-            let _ = entity.update(cx, |dialog, cx| f(dialog, window, cx));
+            let _ = entity.update(cx, |dialog, cx| {
+                // The pressed control may go with its stage (Confirm, Stop,
+                // Retry): focus stays in the dialog, where Tab, Enter and
+                // Escape still reach it (A21). A dialog the press opens
+                // takes focus after.
+                window.focus(&dialog.focus, cx);
+                f(dialog, window, cx)
+            });
         }
     }
 
