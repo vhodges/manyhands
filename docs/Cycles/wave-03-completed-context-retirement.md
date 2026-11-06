@@ -1,7 +1,7 @@
 ---
 title: "Wave 03: Completed-Context Retirement"
 date: 2026-11-04
-status: "draft"
+status: "approved"
 author: "GPT-6.1 Sol"
 manyhands_managed: true
 manyhands_kind: document
@@ -13,10 +13,10 @@ id: "01M6M3B4TF7MQM8QCZAVSZWA6Y"
 ## Status
 
 **2026-11-06 amendment: D15's live-pass-only contract is owner-approved;
-the source-grounded engineering revision is draft, pending the same independent
-source/contract reviewers' re-review after findings against `43214ff7`.** Original approvals and limited implementation reviews
-below remain historical facts, not approval of this revision or the unreviewed
-gap code. The ticket remains `implementing`; no full Task 2 readiness is claimed.
+independent source/feasibility and contract re-reviews passed through `08aa5465`,
+with no remaining findings.** Original approvals and limited implementation reviews
+below retain their historical scope; no approval of the superseded unreviewed
+gap code is inferred. The ticket remains `implementing`; no full Task 2 readiness is claimed.
 The existing sequential implementation → SPEC → QUALITY method remains approved.
 
 **Approved; implementation authorized (2026-11-04).** The owner said:
@@ -37,7 +37,7 @@ and their resolutions are recorded below. These are source-grounded planning
 reviews, not runtime proof. At that original approval checkpoint, only its final
 status/review record and ticket checkpoint followed the reviewed revision; those
 metadata edits had no additional independent review. D15's substantive amendment
-is separately marked draft above and does not inherit that earlier review.
+has its own source/contract review above and does not inherit that earlier review.
 
 Approval does not authorize real-context deletion, other-branch pushes, PR
 creation, main merge/closure or native CI. Execution evidence is tracked in the
@@ -402,6 +402,7 @@ not the fact those reviews and approvals occurred.
 | Source-grounded D15 revision at base `b2fe68c9` | Current batch rows are not ordinary request-owned children; gap migration installs despite absent Task 4 producer | Ruling | R-9–R-11; thin loop plus ordinary-engine refactor and forward unwiring | Fresh read-only source/contract review pending; docs-only, no builds/tests; no full Task 2 pass |
 | D15 source review of `43214ff7`, `ses_e4ecf24b9ffeEuiFGI34Nf4fmm` | 0 Blocking, 1 Important: provenance UNIQUE and source/consumer/history/catalog assumptions make the promised sharing unexecutable | Internal ruling R-12 | Explicit one-to-many schema/versioned closure migration, immutable membership, per-holder auditing and exact initial-poll→O/M/I recovery | Corrected docs only; same source reviewer re-review required, not a runtime/spec pass |
 | D15 contract review of `43214ff7`, `ses_e4ecf24b3ffeJBNQqLYF0ceEPn` | 0 Blocking, 2 Important, 1 Minor: reached-prefix completion, pre-effect recovery conflation, and mutable stop snapshots | Internal corrections C1–C3 | Every selected outcome required; never-claimed versus selected present-W recovery split; immutable cut + first reconciliation + all-selected lost-copy rule | Corrected docs only; same contract reviewer re-review required; D15 approval/method unchanged |
+| D15 same-reviewer re-reviews through `08aa5465` | Source and contract: each 0 Blocking, 0 Important, 0 Minor | Settled at engineering-plan level | R-12 and C1–C3 resolved; independent child recovery and live-only loop are consistent and feasible | Read-only, no builds/tests; not runtime or full-feature approval |
 
 ## Approval And Execution Handoff
 
@@ -411,6 +412,7 @@ authorized implementation, and selected subagent-driven development on
 `implementing`; only its branch may be pushed. The broader existing lifecycle
 materialization-intent issue remains a proposed follow-up, not a filed ticket.
 D15 is a subsequent approved contract amendment, not a redo of unchanged approvals.
-This engineering draft needs the same independent source/contract reviewers'
-read-only re-review before code resumes. This bounded revision authorizes no push or lifecycle
-action; it changes neither ticket status nor the agreed execution method.
+The engineering revision passed both same-reviewer read-only re-reviews through
+`08aa5465`; implementation resumes under the existing authorization and method.
+Ticket-branch publication authority is unchanged; no PR, main integration/closure,
+real-context deletion or native CI is authorized by this status update.

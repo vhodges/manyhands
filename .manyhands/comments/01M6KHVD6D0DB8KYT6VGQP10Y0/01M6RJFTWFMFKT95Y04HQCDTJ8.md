@@ -100,3 +100,14 @@ Engineering draft awaits the SAME reviewers' re-review; no pass/full Task 2
 readiness or renewed owner approval claimed. This correction uses source/doc grep
 and whitespace checks only; no builds/Cargo/tests/new agents/push/profile/CLI or
 lifecycle actions. Original status remains implementing; existing approvals stand.
+
+## Controller engineering-plan review closure — 2026-11-06
+
+Both same-reviewer re-reviews passed through `08aa5465`: source/feasibility
+`ses_e4ecf24b9ffeEuiFGI34Nf4fmm` and contract/consistency
+`ses_e4ecf24b3ffeJBNQqLYF0ceEPn`, each with 0 Blocking/Important/Minor findings.
+R-12 and C1–C3 are resolved at plan level; no runtime/gap/full-feature approval
+is inferred. The approved D15/implementation/method require no renewed owner
+decision. Proceed with ordinary per-item binding and confirmed preserving/index
+recovery, then the thin original-live poll loop. No Cargo/build/test rerun for
+these documents. No publication of superseded gap code or lifecycle action.

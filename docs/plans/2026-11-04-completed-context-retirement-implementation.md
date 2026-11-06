@@ -1,7 +1,7 @@
 ---
 title: "Completed-Context Retirement Implementation Plan"
 date: 2026-11-04
-status: "draft"
+status: "approved"
 author: "GPT-6.1 Sol"
 manyhands_managed: true
 manyhands_kind: document
@@ -14,10 +14,9 @@ id: "01M6M3B4V4GJQZJ82CS32N4W0V"
 > on 2026-11-04 and selected `subagent-driven-development`: sequential task
 > ownership, spec review, then quality review, with the named adversarial checks.
 > D15, 2026-11-06, approves the simpler live-pass-only contract. This engineering
-> revision is draft pending the same source/contract reviewers' re-review after
-> findings against `43214ff7`; unchanged
-> approvals/method stand. No code or verification execution is authorized by this
-> documents-only revision.
+> revision passed both same-reviewer source/contract re-reviews through `08aa5465`
+> after correction of findings against `43214ff7`; unchanged approvals/method stand.
+> Implementation resumes under that existing authorization, not new lifecycle authority.
 
 **Goal:** recognize completed peer contexts and retire only proven-safe local
 copies through `context retire` and explicit `poll once --retire-completed`.
@@ -56,7 +55,7 @@ plan or a request to redo unchanged approvals.
   full suite premerge. Full suite/native CI after merge; native dispatch separately
   authorized. This docs-only revision runs no Cargo/build/tests.
 - Owner has approved implementation/method and D15. The same source/contract
-  reviewers' re-review precedes resumption; routine internal representations
+  reviewers' re-review through `08aa5465` passed; routine internal representations
   do not require another product approval. Stop for a genuine policy change.
 - Tests first: introduce each observable row, run it and see the behavioral
   failure, then implement minimally and rerun. A compile failure alone is not
@@ -555,8 +554,9 @@ git merge-tree --write-tree HEAD origin/main
 Remaining commands/outcomes above are planned. Earlier Task 0–2 executions and
 approvals are preserved in the ledger at their actual source scope. This D15
 revision is documents-only: no Cargo/build/test, Rust/schema change, native CI,
-real deletion, push, merge or close. Read-only re-review by
-`ses_e4ecf24b9ffeEuiFGI34Nf4fmm` (source: 0 Blocking/1 Important)
-and `ses_e4ecf24b3ffeJBNQqLYF0ceEPn` (contract: 0 Blocking/2 Important/1 Minor)
-remains pending before implementation resumes. Corrections above are internal
-under approved D15; no renewed owner question or full Task 2 readiness claim.
+real deletion, push, merge or close. Read-only re-reviews by
+`ses_e4ecf24b9ffeEuiFGI34Nf4fmm` (source) and
+`ses_e4ecf24b3ffeJBNQqLYF0ceEPn` (contract) both passed through `08aa5465`,
+each with 0 Blocking/Important/Minor findings. Corrections above are internal
+under approved D15; implementation resumes without a renewed owner question or
+full Task 2 readiness claim. Final implementation verification remains owed.

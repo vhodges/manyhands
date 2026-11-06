@@ -14,8 +14,9 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ### Current D15 Amendment — 2026-11-06
 
-**Owner-approved contract; engineering draft awaiting the same source/contract
-reviewers' re-review after findings on `43214ff7`. Ticket remains `implementing`,
+**Owner-approved contract; both same-reviewer source/contract re-reviews passed
+through `08aa5465`, each with no remaining findings. Implementation resumes with
+Task 3's ordinary binding and safe per-item recovery. Ticket remains `implementing`,
 not full Task 2 review-ready.**
 Owner: “Okay, the live-pass-only batch, but keep in mind the batch doesn't need
 to succeed as a whole, only each retirement. Which should make checkpointing,
@@ -551,6 +552,7 @@ result-code constants; numeric exits come from the existing results registry.
 | D15 documents-only amendment, 2026-11-06, base `b2fe68c9` | Owner explicitly approved simpler contract; source-grounded private ordinary-engine/admission ruling and supersession map recorded in existing governing documents | Engineering draft, fresh read-only source/contract review pending; no builds/tests or full Task 2 readiness claimed. Prior limited approvals preserved; `f196dfff` remains unreviewed/superseded |
 | D15 source review of `43214ff7`, `ses_e4ecf24b9ffeEuiFGI34Nf4fmm` | 0 Blocking/1 Important: actual receipt provenance UNIQUE, source/request equality, aggregate pin counts, no-observer lineage and current-derived old catalogs invalidate the promised ordinary-child sharing | Source-verified; R-12 one-to-many representation/versioned full dependency-closure migration/immutable membership/per-holder and exact lineage corrections recorded; SAME reviewer re-review pending, not a pass |
 | D15 contract review of `43214ff7`, `ses_e4ecf24b3ffeJBNQqLYF0ceEPn` | 0 Blocking/2 Important/1 Minor: C1 reached-prefix could exit 0, C2 never-claimed and selected-before-Git conflated, C3 stop-cut snapshots not explicitly immutable before independent recovery | Source/table-verified; every-selected result rule, normal selected-W recovery and immutable cut/first-reconcile/all-selected lost-copy cases corrected; SAME reviewer re-review pending; owner D15/method unchanged |
+| D15 same-reviewer source/contract re-reviews through `08aa5465` | Both PASS, each 0 Blocking/Important/Minor; R-12 and C1–C3 verified | Engineering-plan readiness only; proceed with ordinary per-item binding/recovery, not obsolete gap review or resumed batch expansion |
 
 ## Historical Pre-D15 Task Checklist And Next Step
 
@@ -5289,3 +5291,28 @@ canonical comment. No code/schema/test edits, Cargo/build/tests, CLI/profile acc
 agents, push, other-worktree, native or lifecycle action. Same source and contract
 reviewers' read-only re-review remains REQUIRED; no pass or full Task 2 readiness
 is inferred from these text corrections. Ticket remains `implementing`.
+
+## Controller D15 Engineering-Plan Review Closure — 2026-11-06
+
+Both independent same-reviewer re-reviews passed the original amendment range
+`b2fe68c9..08aa546580aac372a3aedaae93aff17d60e632b7`, each with zero remaining
+Blocking/Important/Minor findings. Source reviewer `ses_e4ecf24b9ffeEuiFGI34Nf4fmm`
+verified R-12's explicit one-to-many consumer envelope, historical catalog freeze,
+dependency-closure migration, per-holder release and exact initial-source lineage.
+Contract reviewer `ses_e4ecf24b3ffeJBNQqLYF0ceEPn` verified every-selected outcome
+completion, never-claimed versus selected ordinary recovery, and immutable stop
+cuts/first reconciliation. Controller inspected the source cardinality constraint
+and conflicting table/stop rows before sending corrections to the same author.
+
+The Cycle/design/plan status is approved under the owner's D15 and existing
+implementation/method approval; this status-only record adds no new policy or
+lifecycle authority. Canonical comment `01M6RJFTWFMFKT95Y04HQCDTJ8` is appended.
+Next is a fresh sequential Task 3 implementer delivering the ordinary retirement
+binding plus confirmed preserving/index recovery and required forward unwiring,
+then independent SPEC and QUALITY. Task 4 is the thin original-live loop using
+those ordinary per-item requests, not a resumed batch lifecycle.
+
+No Cargo/build/test rerun for this documents-only revision. Source/contract
+inspection and whitespace checks are its evidence; all runtime/final gates remain
+owed at their defined checkpoints. Superseded unreviewed gap code is not approved
+or published by this review closure, and no code has been removed here.

@@ -1,7 +1,7 @@
 ---
 title: "Completed-Context Retirement Design"
 date: 2026-11-04
-status: "draft"
+status: "approved"
 author: "GPT-6.1 Sol"
 manyhands_managed: true
 manyhands_kind: document
@@ -16,9 +16,10 @@ Original design/implementation/method approval, 2026-11-04, including Q1/Q2 and
 E-1–E-10, remains recorded in the [Cycle](../Cycles/wave-03-completed-context-retirement.md).
 **D15 (2026-11-06) approves a live-pass-only loop of independent retirements.**
 D1–D14/R-1–R-8 remain except for D15's explicit supersessions; R-9–R-12 record
-internal engineering choices. This engineering amendment is **draft, fresh read-only
-source/contract re-review pending** after the findings against `43214ff7`, not
-approval of `f196dfff` or full Task 2 readiness. The review/correction record is below.
+internal engineering choices. This engineering amendment **passed independent
+source/feasibility and contract re-reviews through `08aa5465`**, after correction
+of the findings against `43214ff7`. This is not approval of `f196dfff` or full
+Task 2 readiness. The review/correction record is below.
 The [plan](2026-11-04-completed-context-retirement-implementation.md) gives the
 consolidated remaining delivery sequence. Proposed seam/type names below are not
 claims of existing APIs. Historical limited approvals remain at their actual scope.
@@ -824,8 +825,8 @@ times as observations, not a fabricated latency guarantee. Shared cleanup retain
 its existing external-writer limitations. Independent review must test the new
 ordinary-child/initial-input and stop/replay seams adversarially at the existing
 sequential SPEC then QUALITY checkpoints. D15 has owner approval; this engineering
-draft has source/contract findings corrected in text but awaits the same reviewers'
-re-review; no runtime verification was run for these documents.
+revision passed both same-reviewer source/contract re-reviews through `08aa5465`.
+No runtime verification was run for these documents.
 
 ### D15 Revision Review And Correction Record (2026-11-06)
 
@@ -837,3 +838,4 @@ not new owner decisions or implementation evidence.
 | --- | --- | --- |
 | Source `ses_e4ecf24b9ffeEuiFGI34Nf4fmm`: 0 Blocking, 1 Important | Provenance UNIQUE prevents K2; source/consumer equality, fixed pin counts, NULL-observer lineage and current-derived old catalogs also conflict. R-12 explicitly chooses one-to-many bindings, immutable membership, per-holder audits, strict versioned dependency-closure migration and exact initial-poll→ordinary O/M/I lineage | Text corrected; same source reviewer re-review required |
 | Contract `ses_e4ecf24b3ffeJBNQqLYF0ceEPn`: 0 Blocking, 2 Important, 1 Minor | C1 requires every selected outcome, not just reached prefix; C2 separates never-claimed acceptance from selected original present-W recovery; C3 atomically freezes stop-cut snapshots, defines no-cut reconciliation and all-selected lost-copy completion | Text corrected; same contract reviewer re-review required |
+| Same reviewers at `08aa5465`: each 0 Blocking, 0 Important, 0 Minor | Source verified the explicit consumer cardinality/migration/holder/lineage amendment; contract verified C1–C3 and cross-document consistency | Both PASS, engineering-plan scope only; no code/runtime approval |
