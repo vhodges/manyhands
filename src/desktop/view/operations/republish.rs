@@ -18,7 +18,7 @@
 
 use std::{path::PathBuf, rc::Rc};
 
-use gpui_kit::{Context, FocusHandle, WeakEntity, Window};
+use gpui_kit::{Context, FocusHandle, WeakEntity, Window, component::WindowExt};
 use manyhands::{canonical::ItemId, repository::AuthoringKind, results::ResultCode};
 
 use crate::desktop::{
@@ -172,18 +172,65 @@ impl Workspace {
                     if *code == ResultCode::Cancelled
                         && worker.gave_up(waiting.request) == Some(GaveUp::Resent)
                     {
-                        ready.push((waiting.target.clone(), waiting.origin.clone()));
+                        ready.push((
+                            waiting.target.clone(),
+                            waiting.origin.clone(),
+                            waiting.dialog.is_some(),
+                        ));
                     }
                     false
                 }
                 RequestState::Removed | RequestState::Dismissed | RequestState::NotSent(_) => false,
             }
         });
-        for (target, origin) in ready {
+        for (target, origin, over_dialog) in ready {
             cx.defer_in(window, move |this, window, cx| {
-                this.republish(target, origin, window, cx)
+                this.republish_once_stopped(target, origin, over_dialog, window, cx)
             });
         }
+    }
+
+    /// Republish… after a Stop and republish…: over the lifecycle dialog
+    /// that asked for it (`over_dialog`), as its own button does; from a
+    /// share's entry, only with no dialog open. Another dialog's answer
+    /// closes the top dialog, which would then be this one (R-32), so it
+    /// waits in `republish_deferred` until they have closed
+    /// (`open_deferred_republish`). One of the item already queued, running
+    /// or waiting to send its lifecycle on is not asked for again.
+    fn republish_once_stopped(
+        &mut self,
+        target: Republishing,
+        origin: FocusHandle,
+        over_dialog: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.services().republishing(&target.root, &target.id) {
+            return;
+        }
+        if !over_dialog && window.has_active_dialog(cx) {
+            self.republish_deferred.push((target, origin));
+            cx.notify();
+            return;
+        }
+        self.republish(target, origin, window, cx);
+    }
+
+    /// Each Republish… that waited for a dialog opens once none is open.
+    pub(in crate::desktop::view) fn open_deferred_republish(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.republish_deferred.is_empty() || window.has_active_dialog(cx) {
+            return;
+        }
+        let (target, origin) = self.republish_deferred.remove(0);
+        cx.defer_in(window, move |this, window, cx| {
+            this.republish_once_stopped(target, origin, false, window, cx);
+            // The next waits for this one's dialog.
+            cx.notify();
+        });
     }
 }
 

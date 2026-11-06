@@ -426,21 +426,24 @@ async fn a_stopped_republish_sends_the_same_request(cx: &mut TestAppContext) {
     shell.until_ended(id, cx).await;
 }
 
-/// R-30 (orchestrator), review M8: a real share of the item, run against
-/// an SSH remote whose transport the test binary never initializes, so no
-/// host is contacted: the library accepts it, and its record stays
-/// accepted. Its answer is canned as its deleted branch
-/// (`tests/mutation_remote.rs` `a_remotely_deleted_item_branch_is_remote_
-/// branch_deleted_and_holds_its_reservation`). It offers Stop and
-/// republish… beside Give up. Pressed, it gives the share up; the Give up's
-/// answer canned `cancelled` (`c4_republish_busy`: the republish waits for
-/// the share's reservation, which a cancellation lets go), Republish…
-/// opens.
-#[gpui_kit::test]
-async fn an_item_shares_stop_and_republish_opens_republish(cx: &mut TestAppContext) {
+/// An item's share, run against an SSH remote whose transport the test
+/// binary never initializes, so the library accepts it and its record stays
+/// accepted, its answer canned as its deleted branch. A second repository,
+/// `b`, is registered too. Gives the shell, the repositories, the worker
+/// and the share.
+async fn accepted_deleted_share(
+    cx: &mut TestAppContext,
+) -> (
+    Shell,
+    PathBuf,
+    PathBuf,
+    crate::desktop::services::worker::WorkerHandle,
+    DesktopRequestId,
+) {
     cx.executor().allow_parking();
     let fixture = Fixture::new();
     let root = fixture.create_repository("a");
+    let other = fixture.create_repository("b");
     fixture.commit_ticket(&root, TICKET, "Untitled", "");
     fixture.publish_over_ssh(&root);
     let config = std::fs::read(root.join(CONFIG_PATH)).unwrap();
@@ -449,7 +452,6 @@ async fn an_item_shares_stop_and_republish_opens_republish(cx: &mut TestAppConte
     fixture.save_ticket(&root, TICKET, "Shared");
     fixture.refresh(&root);
     let shell = Shell::open(fixture, cx);
-    let preview = republish_preview(&shell, &root);
     let share = Intent::ItemSync {
         root: root.clone(),
         kind: AuthoringKind::Ticket,
@@ -473,6 +475,23 @@ async fn an_item_shares_stop_and_republish_opens_republish(cx: &mut TestAppConte
     let id = worker.submit(share, Lane::User, None, None);
     shell.until_ended(id, cx).await;
     assert_eq!(worker.record_state(id), Some(RecordState::Accepted));
+    (shell, root, other, worker, id)
+}
+
+/// R-30 (orchestrator), review M8: a real share of the item, run against
+/// an SSH remote whose transport the test binary never initializes, so no
+/// host is contacted: the library accepts it, and its record stays
+/// accepted. Its answer is canned as its deleted branch
+/// (`tests/mutation_remote.rs` `a_remotely_deleted_item_branch_is_remote_
+/// branch_deleted_and_holds_its_reservation`). It offers Stop and
+/// republish… beside Give up. Pressed, it gives the share up; the Give up's
+/// answer canned `cancelled` (`c4_republish_busy`: the republish waits for
+/// the share's reservation, which a cancellation lets go), Republish…
+/// opens.
+#[gpui_kit::test]
+async fn an_item_shares_stop_and_republish_opens_republish(cx: &mut TestAppContext) {
+    let (shell, root, _, worker, id) = accepted_deleted_share(cx).await;
+    let preview = republish_preview(&shell, &root);
     shell
         .until_drawn(cx, "the share's offers", |shell, cx| {
             shell.present(request_id(id, "stop-and-republish"), cx)
@@ -503,6 +522,84 @@ async fn an_item_shares_stop_and_republish_opens_republish(cx: &mut TestAppConte
     shell.click(request_id(id, "stop-and-republish"), cx);
     until_present(&shell, "confirm-ok", cx).await;
     assert_eq!(worker.gave_up(id), Some(GaveUp::Resent));
+    assert!(
+        requests_of(&shell, cx, is_republish).is_empty(),
+        "not sent yet"
+    );
+}
+
+/// The command of each confirmation dialog open, the oldest first.
+fn commands(shell: &Shell, cx: &mut TestAppContext) -> Vec<String> {
+    let command = gpui_kit::ElementId::from("confirm-command");
+    shell.frame(cx, |window, _| {
+        gpui_kit::base::test_support::snapshots(window)
+            .iter()
+            .filter(|snapshot| snapshot.path().last() == Some(&command))
+            .filter_map(|snapshot| snapshot.label().map(str::to_owned))
+            .collect()
+    })
+}
+
+/// R-32: a Stop and republish… from a share's entry, whose Give up answers
+/// `cancelled` while another confirmation is submitted and waiting, opens
+/// Republish… only once that dialog has closed: stacked over it, the other
+/// dialog's answer would close Republish… instead of itself and lose the
+/// step. The removal of the second repository stands for that dialog; its
+/// job is held, so it is still open when the Give up's answer lands.
+#[gpui_kit::test]
+async fn republish_waits_for_another_dialog_to_close(cx: &mut TestAppContext) {
+    let (shell, root, other, worker, id) = accepted_deleted_share(cx).await;
+    let preview = republish_preview(&shell, &root);
+    shell.backend.answer_next_prepare("item republish", preview);
+    shell
+        .until_drawn(cx, "the share's offers", |shell, cx| {
+            shell.present(request_id(id, "stop-and-republish"), cx)
+        })
+        .await;
+    let cancelled = Envelope::classified_mutation(
+        "item sync",
+        Scope::default(),
+        true,
+        ResultCode::Cancelled,
+        Effects::not_requested(),
+        false,
+    );
+    let give_up = shell
+        .backend
+        .hold_job_return_answering(JobKind::SynchronizeItem, cancelled);
+    shell.click(request_id(id, "stop-and-republish"), cx);
+    give_up.wait_reached();
+
+    // The removal asked for behind the Give up, and left running.
+    shell.frame(cx, |window, cx| {
+        shell.workspace.update(cx, |workspace, cx| {
+            workspace.remove_repository(key(&other), window, cx)
+        })
+    });
+    shell
+        .until_drawn(cx, "the removal's preview", |shell, cx| {
+            shell.present("confirm-expires", cx)
+        })
+        .await;
+    let removal = shell.backend.hold_job(JobKind::RepoRemove);
+    shell.click("confirm-ok", cx);
+    give_up.release();
+    removal.wait_reached();
+    assert_eq!(worker.gave_up(id), Some(GaveUp::Resent));
+    shell.run(cx);
+    assert_eq!(
+        commands(&shell, cx),
+        ["Remove repository"],
+        "Republish… waits"
+    );
+    assert!(requests_of(&shell, cx, is_republish).is_empty());
+
+    removal.release();
+    shell
+        .until_drawn(cx, "Republish…", |shell, cx| {
+            commands(shell, cx) == ["Republish"]
+        })
+        .await;
     assert!(
         requests_of(&shell, cx, is_republish).is_empty(),
         "not sent yet"

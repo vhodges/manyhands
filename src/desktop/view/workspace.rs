@@ -148,6 +148,10 @@ pub(crate) struct Workspace {
     /// Each Stop and republish… waiting for its Give up's answer (D5 A3).
     pub(in crate::desktop::view) stopping_to_republish:
         Vec<super::operations::republish::StopThenRepublish>,
+    /// Each Republish… that stopped sequence opened while another dialog
+    /// was open, waiting for it to close (R-32).
+    pub(in crate::desktop::view) republish_deferred:
+        Vec<(super::operations::republish::Republishing, FocusHandle)>,
 }
 
 impl Workspace {
@@ -291,6 +295,7 @@ impl Workspace {
             _remotes: cx
                 .observe_self(|this, cx| this.content.tabs.share_remotes(&this.navigation, cx)),
             stopping_to_republish: Vec::new(),
+            republish_deferred: Vec::new(),
         };
         workspace.load_repositories(cx);
         workspace
