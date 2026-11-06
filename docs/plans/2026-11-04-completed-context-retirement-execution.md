@@ -399,6 +399,11 @@ are not authorized; numeric exits must come from existing results registry.
 | Limited A2/A3 final SPEC through `12337b12`, same base | Same reviewer `ses_e564dd7a7ffeYzKXesoyVuGJFs`: **0 remaining findings**. Fresh isolated original matched probes plus all four correction regressions: **6 passed**. Original process identity and both completed-P restart spellings verified | Limited owned frozen-image/original-handoff SPEC approved; A4 and full Task 2 remain owed |
 | Limited A2/A3 final QUALITY through `12337b12`, same base, after SPEC | Reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Fresh isolated headless runs: **36 source**, **3 ordinary report/stop** and **1 ordinary finish atomicity** controls passed | Limited A2/A3 QUALITY approved. Controller inspected raw independent/static evidence and verified all 1,721 frozen inputs; no live source-SSH, full Task 2 or Task 4 claim |
 | A4 continuation preflight, 2026-11-06 | Both checkouts clean; fresh fetch succeeded, main/base still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `12337b122eda65e215da87fcf00d67c3f146f774` already up to date | No conflicts/rebase or unmerged branch consumption |
+| Limited refusal-only A4 SPEC, base `5c9b53aa` | At `a562bac8`, one Medium S1: inspection failures incorrectly authorized positive-change Finals. Same reviewer cleared S1 at `15cf9399`; original probes plus all 19 batch controls/regressions: **21 passed** | Historical SPEC pass; following QUALITY Q1 required correction and delta review |
+| Limited refusal-only A4 QUALITY at `15cf9399`, same base | One Important Q1: retained integration conflict/resolution debt escaped the live-C exclusion after the remote slot was released. Controller verified the owned-journal counterexample | Corrected at `9fa1e9b2`; no destructive cleanup bypass or live SSH synchronization claim |
+| Limited refusal-only A4 final SPEC through `9fa1e9b2`, same base | Reviewer `ses_e564dd7a7ffeYzKXesoyVuGJFs`: **0 remaining findings**, prior S1 pass preserved. Fresh isolated six Q1 regressions passed; live exclusion matches existing next-window debt prerequisites, historical reads stay separate | Limited original-live no-effect-result/C/Z SPEC approved; positive cleanup/index and gap paths remain owed |
+| Limited refusal-only A4 final QUALITY through `9fa1e9b2`, same base, after SPEC | Reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Fresh verbatim original four-variant probe passed, preserving all post-fixture rows/cursors/pins; six Q1 regressions passed independently | Limited refusal/result/Z QUALITY approved. Controller inspected raw independent/static logs and reverified all 1,726 input and 22 evidence hashes. No full A4/Task 2 claim |
+| Positive A4 continuation preflight, 2026-11-06 | Both checkouts clean; fresh fetch succeeded, main/base still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `9fa1e9b21485fdc3624661a4edb5487440b3f033` already up to date | No conflicts/rebase or unmerged branch consumption |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -445,18 +450,14 @@ are not authorized; numeric exits must come from existing results registry.
   stay owed/closed as recorded; all 44 E/O/D
   obligations stay explicitly tracked, not completed by test counts.
   Full Task 2 spec/quality review remains owed; no full completion claimed.
-  The new **unreviewed refusal-only A4** increment connects original-live C to
-  ordered durable no-effect child Finals and last-holder settlement. Its frozen
-  gates are **157 context (147 retained +10 new)** and **105 retirement SSH**,
-  with supporting gates below. Real B-cleanup/index→C-cleanup/index, gap O and
-  resumed consumption remain closed/owed; this is not full A4 or Task 2 readiness.
-  LIMITED SPEC at `a562bac8` found one Medium S1 (inspection error is not positive
-  change evidence). The correction below has **166 context / 105 retirement SSH**
-  and **9 focused** green cases; **same SPEC re-review then QUALITY remain pending**.
-  Controller now reports S1's same SPEC pass at `15cf9399`; LIMITED QUALITY found
-  one Important Q1 (retained integration debt absent from C's live exclusion).
-  Q1's correction below has **172 context / 105 retirement SSH / 25 batch** green
-  cases. **Same SPEC delta, then same QUALITY original-probe re-review pending.**
+  **Refusal-only A4** is now independently SPEC/QUALITY approved through
+  `9fa1e9b2` from base `5c9b53aa`: original-live C can record positively established
+  changed-target no-effect Finals in order and settle the last hold. Unknown
+  inspection evidence and retained integration debt cause preserving errors, not
+  progress. Latest recorded gates are **172 context / 105 retirement SSH / 25 batch**,
+  supporting checks below and all three static gates. Fresh independent reruns are
+  listed above. Real B-cleanup/index→C-cleanup/index, gap O and resumed consumption
+  remain closed/owed; this is not full A4 or Task 2 readiness.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
 - [ ] **5 — CLI command/flag/help/rendering.** Not started.
@@ -472,9 +473,10 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: publish the reviewed A2/A3 increment only to this ticket
-branch, then continue the same Task 2 implementer into A4 ordered shared-receipt
-consumption through cleanup/index and no-child-gap observation. Active-source
+Immediate next step: publish the reviewed refusal-only A4 increment only to this
+ticket branch, then continue the same Task 2 implementer into the still-missing
+positive A4 shared-receipt cleanup and each child's atomic local-index/result
+completion before the next child. No-child-gap observation, active-source
 restart/fresh-ad fencing, shared-holder/Z fault variants and full Task 2 review
 remain owed. Actual Task 3 bindings and Task 4 coordination remain downstream;
 private projection tests must not be represented as those journeys.
