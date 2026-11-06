@@ -4776,3 +4776,38 @@ No new checkpoint ID/profile access/status change. Original checkpoint remains
 unreviewed. **Ready for same SPEC reviewer re-review; QUALITY stays gated.**
 All previous approvals and full-44/Task 2/Task 8/downstream duties remain unchanged;
 no agents/push/PR/main/other-worktree/native/real-context/key/draft actions.
+
+## Controller merge — current testing strategy before present re-review
+
+Owner steering, 2026-11-06: merge main's clarified testing strategy so subsequent
+workers follow it. Both checkouts were clean; the ticket worktree was verified
+on its own branch. Fetched `origin/main` from `c69789d9` to
+**`79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`**,
+then merged, never rebased. Ticket HEAD before merge was
+**`c6af79b76e8ba2f036bd9ab86c2c1e8214572c37`**; merge HEAD is
+**`4ae33a5b68c14eb7b49cbfa82e630d0b01c1d187`**. No conflicts; main ancestry and
+whitespace checks passed. The registered main checkout was not changed.
+
+The upstream change touches only `AGENTS.md`, planning-skill guidance and the
+implementation skill's verification reference, not Rust/build/test inputs. The
+controller reloaded the implementation skill and read its revised reference and
+`AGENTS.md` Testing Strategy. The corrected 1,733-input inventory still verifies
+with zero mismatches; no build or test was repeated for this guidance-only merge.
+Prior source-scoped evidence and review bases remain intact.
+
+**The new Testing Strategy overrides broader commands in older plans/skills:**
+between steps, check (or Clippy) plus only just-written/changed tests by exact
+name; no whole SSH target, no unchanged-green reruns, and a roughly 15-minute
+between-step command budget. Use table-driven local library tests by default,
+local/file remotes for public/CLI contracts, no real waits, and at most one new
+SSH end-to-end case per feature with its transport rationale recorded. Do not
+add SSH edge-case matrices from older task text. The fast tier and changed-path
+SSH tier run once at final review-ready; rerun only targets changed afterward.
+Do not add a separate full-suite or overlapping retirement-filter rerun to those
+gates; the bare full suite remains post-merge. Existing evidence is historical
+where its source differs, not silently promoted to final coverage.
+
+Next: same independent SPEC reviewer rechecks the bounded present milestone and
+claim correction from original base **`18c18949`** through merged HEAD; QUALITY
+remains gated. No ticket status/PR/main integration/closure/native CI authority
+is added by this merge.
