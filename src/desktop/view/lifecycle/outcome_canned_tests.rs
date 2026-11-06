@@ -44,7 +44,7 @@ use crate::desktop::{
     view::{
         harness::{Shell, key},
         item::LIFECYCLE_ACTION,
-        operations::request_id,
+        operations::{recovery_id, request_id},
         settings::Shown,
     },
 };
@@ -575,4 +575,45 @@ async fn busy_after_the_merge_is_failed_not_still_running(cx: &mut TestAppContex
         ]
     );
     assert!(shell.present("lifecycle-retry", cx));
+}
+
+/// R-1, V8, canned (`identity_required` of a lifecycle run carries only
+/// `repo.identity_set`): the operation area's entry of a close leaves Retry
+/// and Prepare again to its dialog, and keeps drawing what the dialog does
+/// not own, Set identity.
+#[gpui_kit::test]
+async fn a_lifecycle_entry_keeps_the_recovery_its_dialog_does_not_own(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| saved_ticket(fixture, root, "Who", ""));
+    let ticket = ItemDtoKind::Ticket;
+    let request = RequestId::new();
+    let identity = RecoveryAction::new(
+        RecoveryActionKind::RepoIdentitySet,
+        [("root", key(&root).into())],
+    );
+    let prepare = RecoveryAction::new(RecoveryActionKind::RequestPrepare, []);
+    let id = finished(
+        &shell,
+        1,
+        intent(&root, ticket),
+        request,
+        answer(
+            "ticket close",
+            &root,
+            ResultCode::IdentityRequired,
+            Outcome::Blocked,
+            short_of_main(ticket, TICKET, vec![]),
+            Effects::not_requested(),
+            vec![identity, retry(request), prepare],
+            request,
+        ),
+        cx,
+    );
+    assert!(shell.present(request_id(id, "open"), cx));
+    assert!(shell.present(recovery_id(id, 0), cx), "Set identity");
+    assert!(!shell.present(recovery_id(id, 1), cx), "no raw Retry");
+    assert!(
+        !shell.present(recovery_id(id, 2), cx),
+        "no raw Prepare again"
+    );
 }

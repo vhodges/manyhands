@@ -76,8 +76,9 @@ use crate::desktop::{
     model::{
         list_state::ListState,
         operations::{
-            NOT_AVAILABLE_YET, NOT_SENT_AGAIN, Progressing, ResumeOffer, StopOffer,
-            abandon_offered, draft_flush_failed, drafts_unavailable, progress_words, resume_offer,
+            NOT_AVAILABLE_YET, NOT_SENT_AGAIN, Progressing, RecoveryControl, ResumeOffer,
+            StopOffer, abandon_offered, draft_flush_failed, drafts_unavailable, progress_words,
+            recovery_control, resume_offer,
         },
         stamp::RepoKey,
     },
@@ -177,6 +178,21 @@ pub(crate) fn effects_text(effects: &Effects) -> String {
     } else {
         shown.join(", ")
     }
+}
+
+/// Whether the lifecycle dialog carries a recovery control as its own
+/// button or guidance (Retry, Prepare again, Resume, Cancel, Inspect,
+/// Check host): the entry of a close or merge leaves it to the dialog.
+fn dialog_owns(control: RecoveryControl) -> bool {
+    matches!(
+        control,
+        RecoveryControl::Retry
+            | RecoveryControl::Prepare
+            | RecoveryControl::Cancel
+            | RecoveryControl::Resume
+            | RecoveryControl::Inspect
+            | RecoveryControl::CheckHost
+    )
 }
 
 /// The element ids of a request's parts: stable across reorders, since
@@ -456,11 +472,17 @@ impl Workspace {
                     for offer in outcomes::shown_offers(self.services(), id, &result, cx) {
                         controls = controls.child(self.share_offer(id, offer, cx));
                     }
-                } else if lifecycle::item_of(&request.intent).is_none() {
-                    // A lifecycle's way out is its dialog's (Open… above):
-                    // the raw actions would reconfirm through the generic
-                    // ConfirmDialog, with no merge summary and no lock (R-1).
+                } else {
+                    let lifecycle = lifecycle::item_of(&request.intent).is_some();
                     for (n, action) in recovery.iter().enumerate() {
+                        // A lifecycle's way out is its dialog's (Open…
+                        // above): these raw actions would reconfirm through
+                        // the generic ConfirmDialog, with no merge summary
+                        // and no lock (R-1). What the dialog does not own
+                        // stays: Set identity, Abandon, the index actions.
+                        if lifecycle && dialog_owns(recovery_control(action.action)) {
+                            continue;
+                        }
                         // Decision 26: no re-send of an unsaved post here.
                         if self
                             .services()
