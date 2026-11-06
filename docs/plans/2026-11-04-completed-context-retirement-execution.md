@@ -17,10 +17,11 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 **Owner-approved contract; both same-reviewer source/contract re-reviews passed
 through `08aa5465`, each with no remaining findings. Task 3's ordinary binding,
 confirmed per-item preserving/index recovery and forward gap unwiring are locally
-implemented at `9864c2b2`. Independent Task 3 SPEC found P1/P2; bounded corrections
-`2e44212b`/`ed556010` are locally verified, awaiting the SAME SPEC reviewer's
-full-range re-review. QUALITY stays gated. Ticket remains `implementing`, not full
-Task 2 or feature review-ready.**
+implemented at `9864c2b2`; controller reports Task 3 SPEC passed through `8b6d5b40`,
+including P1/P2. Subsequent QUALITY found Q1–Q3. Bounded corrections `8fa14ad8` /
+`50dc81f2` are locally verified, awaiting controller SPEC correction-delta review,
+THEN the SAME QUALITY reviewer's whole-Task-3 re-review. Ticket remains
+`implementing`, not full Task 2 or feature review-ready.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
 [the delivery checkpoint](#task-3--ordinary-binding-and-guarded-preserving-recovery).
 Owner: “Okay, the live-pass-only batch, but keep in mind the batch doesn't need
@@ -112,8 +113,9 @@ Neither recovery route advances parent. Both corrections are internal under D15.
   reviews, with all historical counts/logs at their actual SHAs.
 - [x] Same independent source/contract reviewers' read-only re-review before code:
   both passed through `08aa5465`.
-- [ ] Task 3: implementation delivered at `9864c2b2`; SPEC corrections P1/P2 at
-  `2e44212b`/`ed556010` are locally verified, SAME SPEC re-review then QUALITY pending.
+- [ ] Task 3: implementation delivered at `9864c2b2`; SPEC passed through
+  `8b6d5b40`. QUALITY Q1–Q3 corrections at `8fa14ad8`/`50dc81f2` are locally
+  verified; SPEC correction delta THEN SAME QUALITY whole-range re-review pending.
   Ordinary binding/DTO/replay/resume, confirmed preserving
   receipt/index finalizer, independent old-catalog freeze and forward unwiring of
   superseded gap installation/support are implemented. No full-feature approval.
@@ -562,6 +564,8 @@ result-code constants; numeric exits come from the existing results registry.
 | D15 contract review of `43214ff7`, `ses_e4ecf24b3ffeJBNQqLYF0ceEPn` | 0 Blocking/2 Important/1 Minor: C1 reached-prefix could exit 0, C2 never-claimed and selected-before-Git conflated, C3 stop-cut snapshots not explicitly immutable before independent recovery | Source/table-verified; every-selected result rule, normal selected-W recovery and immutable cut/first-reconcile/all-selected lost-copy cases corrected; SAME reviewer re-review pending; owner D15/method unchanged |
 | D15 same-reviewer source/contract re-reviews through `08aa5465` | Both PASS, each 0 Blocking/Important/Minor; R-12 and C1–C3 verified | Engineering-plan readiness only; proceed with ordinary per-item binding/recovery, not obsolete gap review or resumed batch expansion |
 | Task 3 independent SPEC of `d801d4ab..799edcf8`, reviewer `ses_e4e547d4bffeWoH5PROiKyb8GW` | Two controller-verified findings: P1 valid request-bound invalidated index debt could not enter preserving; P2 case-aliased unmarked reserved gap table escaped fail-closed detection. Review was read-only source/evidence, not a new runtime probe | Bounded corrections `2e44212b`/`ed556010` and exact local RED→GREEN below; SAME SPEC reviewer must re-review full original Task 3 range plus corrections. QUALITY gated; no approval assumed |
+| Task 3 SPEC re-review through `8b6d5b40a7e43aae0061e0e931db80008ef91405` | Controller reports PASS, including P1/P2 | Preserve that approval at its actual SHA; later QUALITY corrections require SPEC delta review, not a new product-policy decision |
+| Task 3 fresh QUALITY, reviewer `ses_e4e40a874ffejNEnuP7pxvcZ9S`, after that SPEC pass | Three Important source-traced regressions, controller verified: Q1 missing-root generic abandon; Q2 unregistered-root generic reentry; Q3 terminal preserving dependents block deregistration. Reviewer ran zero Rust probes | Local compiled RED→GREEN and corrections `8fa14ad8`/`50dc81f2` below; controller SPEC correction delta THEN SAME QUALITY full `d801d4ab..returned-HEAD` re-review. No author approval or Task 4 start |
 
 ## Historical Pre-D15 Task Checklist And Next Step
 
@@ -3100,11 +3104,11 @@ new-F2-batch-only combinations are S wherever older annotations mention them.
 | 31 | E prior standalone/A1 evidence plus `source_handoff_*`: real complete poll processing, preterminal A2 SQL and original refresh/A3 handoff with inert producer projections/synthetic advertisements. Public replay cannot create eligibility. O source live-transport/full producer matrix; D actual Task 4 producer/selection/enrollment |
 | 32 | E reviewed original-live sharing/proof/W→B→D14→index/result-before-C and P unchanged through `8e960885`, at its historical shared-receipt representation. O R-12 LOCAL K1 completes/releases while pass hold stays valid, K2 binds distinct receipt to SAME provenance; immutable K1 receipt remains. D production thin loop/ordinary children; no resumed C |
 | 33 | E reviewed A0/A2/A3/refusal/proof/positive ownership separation and present exact F2/map/G/current-ad/comment-debt/nonce/key-source guards retained, including cleanup-versus-I separation. O equivalent ordinary R_i and live initial-admission/stop fences, foreign-token/fault variants; D Task 3/4 binding. S batch-attempt cursor/gap/resumed-C mechanism |
-| 34 | E historical `f196dfff` gap claim/ad/receipt/pin/replacement local tests/statics only, NOT SPEC/QUALITY approved. S gap observers/current-attempt→original-freeze adapter/resumed consumption/advancing history and associated coordinator delivery. T3 forward-removes module/reservation hooks/ID reservations/support and auto-installing gap catalog; independently frozen exact installed-empty-gap upgrades atomically, nonempty/partial/substituted/unknown dependency histories refuse unchanged. P2 correction extends the same local matrix to populated upper/mixed-case unmarked reserved tables with full image/rowid rollback and no new preserving catalog. O SAME SPEC re-review and retained live-stop/source assertions in Task 4; historical gap code is not approved |
+| 34 | E historical `f196dfff` gap claim/ad/receipt/pin/replacement local tests/statics only, NOT SPEC/QUALITY approved. S gap observers/current-attempt→original-freeze adapter/resumed consumption/advancing history and associated coordinator delivery. T3 forward-removes module/reservation hooks/ID reservations/support and auto-installing gap catalog; independently frozen exact installed-empty-gap upgrades atomically, nonempty/partial/substituted/unknown dependency histories refuse unchanged. P2 correction extends the same local matrix to populated upper/mixed-case unmarked reserved tables with full image/rowid rollback and no new preserving catalog; SPEC passed through `8b6d5b40`. O current correction-delta SPEC then SAME QUALITY and retained live-stop/source assertions in Task 4; historical gap code is not approved |
 | 35 | E prior R7/F2/typed refusal/Q1 history evidence retained. Positive-A4 S2 covers successful primary-byte/mode mismatch AND successfully Preserved but different primary/proof pair before Git → current-owned no-effect Final, None/None, M untouched, attempt/local/target/cursor atomic. Same-tree real primary commits at preinvoke and locked-B boundaries preserve the OLD intent pair/receipt and mark observation changed, never authorize deletion under the new pair. Uninvoked witness is spent only at actual Git; post-invocation pair change stays Owed/Possible. Current-cancel I/stale-owner rules retained. T3 adds closed mutation envelopes, stable refusal/finished replay and truthful partial cancellation after W with preserving escape. O remaining cancellation/outcome variants and Task 4 parent summary |
 | 36 | E ordinary F2 index/request-fence controls (`c7daad0d`) and `source_handoff_nonempty_*` reserved-ID controls retained. T3 ordinary binding fixes independent R_s→S at acceptance, reuses current-F2 claims/finalizer and routes only item I through resume; preserving has independent append-only spends and stale/missing-spend refusal. O initial-poll child correlation after R ends and remaining M/I faults in Task 4. No parent-capture/new-F2 batch driver |
-| 37 | E `generic_abandon_preserves_pending_and_terminal_identity` now follows approved D11 previewability/terminal-noop semantics without weakening identity retention. T3 `retirement_confirmed_preserve_*`, `retirement_preserving_*` and public `ordinary_preserving_preview_*` deliver confirmed ordinary preserving/index recovery, atomic old-Ri external_change/receipt/journal/Z, no deletion or release, index-fault/lost-result/stale consent/F2/spend and legacy-domain-history rows. P1 correction extends the atomic table with genuine request-bound spend1→invalidation tombstone2→preserving claims3/4, audit/reopen and stale original executor/index no-write assertions, without fabricating spend2 or weakening audits. O SAME SPEC re-review then QUALITY; no completed-child whole-pass handle |
-| 38 | E strict migration/history/missing companion/map/claim/spend and immutable witness safety retained. T3 freezes independent v1/v2/pre-gap/gap catalogs before DDL edits; exact pre-gap/installed-empty-gap removal, preserving-addition rollback/closure refusal and published history reopen tests pass. O R-12 `context_retirement_consumers_v1` one-to-many receipt/initial-membership dependency-closure migration preserving ALL IDs/intent/M/absence/resumption/pin/release references; exact old/new markers, unknown incoming-FK/catalog refusal and LOCAL whole-closure fault rollback/idempotent reopen in Task 4. Current provenance UNIQUE is NOT reusable. S gap/advancing-cursor architecture |
+| 37 | E `generic_abandon_preserves_pending_and_terminal_identity` now follows approved D11 previewability/terminal-noop semantics without weakening identity retention. T3 `retirement_confirmed_preserve_*`, `retirement_preserving_*` and public `ordinary_preserving_preview_*` deliver confirmed ordinary preserving/index recovery, atomic old-Ri external_change/receipt/journal/Z, no deletion or release, index-fault/lost-result/stale consent/F2/spend and legacy-domain-history rows. P1 correction extends the atomic table with genuine request-bound spend1→invalidation tombstone2→preserving claims3/4, audit/reopen and stale original executor/index no-write assertions, without fabricating spend2 or weakening audits; SPEC passed through `8b6d5b40`. QUALITY corrections Q1/Q2 restore missing-root preview/prepare/re-observation and unregistered-root interrupted/lost-result generic reentry; Q3 local journey retains pending debt, permits terminal deregistration and replays finished Ri/abandon results/maps unchanged. O SPEC correction delta then SAME QUALITY; no completed-child whole-pass handle |
+| 38 | E strict migration/history/missing companion/map/claim/spend and immutable witness safety retained. T3 freezes independent v1/v2/pre-gap/gap catalogs before DDL edits; exact pre-gap/installed-empty-gap removal, preserving-addition rollback/closure refusal and published history reopen tests pass. Q3 introduces exact `context_retirement_preserving_v2` with terminal cascades/pending-only delete guards and unchanged update immutability; independently pinned unpublished preserving-v1 refuses unchanged, including empty, unmarked or falsely v2-marked envelopes. Current v2 reopen and substitution/closure/fault rollback pass in the extended existing matrix. Published frozen catalogs untouched. O SPEC delta/SAME QUALITY, and R-12 `context_retirement_consumers_v1` one-to-many receipt/initial-membership dependency-closure migration preserving ALL IDs/intent/M/absence/resumption/pin/release references; exact old/new markers, unknown incoming-FK/catalog refusal and LOCAL whole-closure fault rollback/idempotent reopen in Task 4. Current provenance UNIQUE is NOT reusable. S gap/advancing-cursor architecture |
 | 39 | E reviewed A0/A1/A2/A3 and original-live branch/present proof/one-use lifetime permits retained: public Complete/eligibility/IDs/new executor/history cannot mint C. O production original live capability with ordinary initial input; D Task 4 selection/enrollment. S R8-authorized resumed C/frozen remainder; R8 now explicitly forbids that restart |
 | 40 | E original-handoff/refusal/empty/I/no-effect/proof-pair/Z and Possible-debt evidence retained. O immutable cut/result/debt snapshots/not-reached set in same transaction BEFORE stopped-parent Final; replay cannot read today's child status. No-cut first metadata reconcile snapshots states durably known THEN. EVERY SELECTED same-pass settled outcome + only report-copy lost completes at exit 0 (original R-8 handoff still required); settled prefix/not-reached is non-success. LOCAL recovery races/copy loss never create requests/ad/effects or count other-pass child IDs. D thin producer; S aggregate cursor/resumed history |
 | 41 | E `source_handoff_specfix_r2_*` no eligible recovery from completed-P/later repair under both restart spellings, immutable report/P history and automatic/foreign-source refusal retained. O ordinary pre-selection poll/materialization restart + exact old source-hold settlement only; D Task 4 production integration. S separate active-source-gap restart/fresh-ad coordinator; after capture no restarted retirement loop |
@@ -5600,3 +5604,115 @@ invocation or ticket status save. Correction note timestamp
 evidence follows separately. No push, agents, other worktrees/main edits, real
 profile/keys/contexts/drafts, Task 4 implementation, PR, merge/closure or native
 action. All invoked commands have completed; no owned background process remains.
+
+## Task 3 QUALITY Corrections — Q1/Q2/Q3, 2026-11-06
+
+Controller reports **Task 3 SPEC PASS through
+`8b6d5b40a7e43aae0061e0e931db80008ef91405`**. Fresh QUALITY reviewer
+**`ses_e4e40a874ffejNEnuP7pxvcZ9S`** then found three Important regressions by
+source tracing, with **zero reviewer Rust probes**. Controller checked the actual
+binding, ownership read, preserving DDL and registration removal and verified all
+three. These corrections do not reopen owner/D15 policy or authorize Task 4.
+
+Original Task 3 base **`d801d4ab82573ccec6e39b33e48191447a905dfb`**, initial
+**`9864c2b2a151c6e2ff7c25178c3aaa4c6118a1ea`** /
+**`799edcf8cc62495459a69222ab42ed68f07a2cf8`**, P1/P2 corrections and all earlier
+approvals/history remain. Clean entry was `8b6d5b40`; correction source HEAD is
+**`50dc81f272df8f8e0ee94923c87af0fdb8d9e5fe`**. This evidence checkpoint follows
+separately, so the returned full HEAD includes both source and evidence.
+
+### Root causes and bounded corrections
+
+| Finding / reproduced counterexample | Correction |
+| --- | --- |
+| **Q1:** the new retirement metadata helper re-resolved EVERY pending abandon root with `ScopeKey::for_repository`, even though generic failed-creation abandonment intentionally supports a removed root through `Place::NewRepository` / `for_new_repository`. The existing removed-root creation test failed preview with `InvalidPath` | **`8fa14ad80e3b7b83e126f05909880e8c70b4a52d`** passes the scope ALREADY returned by `observe` into metadata lookup in prepare, preview and re-observation. No independent path acceptance rule is widened. The real retirement journey also executes through a noncanonical `root/.` alias |
+| **Q2:** `Confirmed::row` probes preserving ownership for every generic abandon, but `state::with_transaction` requires a `repositories` row. A real interrupted pre-initialization creation leaves its root unregistered, so accepted abandon reentry failed with `RepositoryNotRegistered`, both before its domain call and after losing its result | Same **`8fa14ad8`** moves only the ownership probe to a guarded, read-only registry session. Full retirement audit precedes any absent-owner/generic fallback; missing companions are not authority. Real preservation requires exact root/operation correlation and the current accepted request/attempt/confirmation/digest/scope checks. A non-owner gets no preserving authority. The helper now accepts the actual `Accepted`, not only its ID. Existing interrupted/lost-result tests add present/unregistered AND removed-root creation variants, verifying old-request release, finished abandon, zero pending rows, no registration and unchanged files |
+| **Q3:** both new dependent FKs used `NO ACTION` and both delete guards aborted unconditionally. A real initial-absence retirement → index fault → confirmed preservation → finished Ri/abandon made normal registration removal fail `FOREIGN KEY constraint failed` | **`50dc81f272df8f8e0ee94923c87af0fdb8d9e5fe`** uses dependent `ON DELETE CASCADE` and the existing retirement/index-claim pattern of pending-only retention triggers. Update immutability stays unconditional. Registration-removal code, general guards and durable ordinary request/result/map retention are unchanged. The extended existing I-only recovery test proves pending removal/direct deletes refuse unchanged, ownership rejects wrong root/non-current attempt, updates refuse both pending and terminal, terminal deregistration succeeds, reopen audits, and both finished original request/result/map replays remain byte-identical. No observer or transport is needed |
+
+### Exact preserving catalog/version policy
+
+- New current marker: **`context_retirement_preserving_v2`**, exact six-object
+  additions from `preserve::objects`, after the existing scalar constraint pass.
+  Only the two dependent FKs and two delete-trigger conditions differ from v1;
+  both immutable-update triggers, the request FK and all data constraints remain.
+- Fresh registries and otherwise exact supported pre-preserving catalogs install
+  v2 through the existing atomic installer/failure checkpoints. An exact marked
+  v2 reopens unchanged. No `CREATE IF NOT EXISTS`, relaxed normalization or
+  substituted-envelope blessing is introduced.
+- **No automatic upgrade from the unpublished Task 3 preserving-v1 envelope.**
+  Its marker is no longer known; even an exact empty marked v1 is refused
+  unchanged. Unmarked v1 objects, v1 DDL carrying a v2 marker, v2 carrying a v1
+  marker, partial/substituted/attached/incoming-FK closures likewise refuse
+  unchanged, at direct migration and service-open boundaries. No real profile is
+  inspected, rewritten or deleted; this is an explicit fail-closed choice, not a
+  destructive migration or a claim that v1 data can be discarded.
+- Before DDL edits, froze the six v1 additions independently from `8b6d5b40` into
+  test-only **`src/repository/context_retirement/preserving_v1_catalog.json`**,
+  normalized Git-blob fingerprint **`5efcbbfd50e9dbe691bf1dd141267302d3ff4c36`**.
+  The existing migration table pins that fingerprint, so its old-envelope refusal
+  fixture is not derived from the current builder. Independently frozen published
+  retirement v1/v2/index/gap files and their fingerprints are UNCHANGED. This v2
+  is unrelated to Task 4's future consumer migration.
+
+### Actual commands, RED→GREEN and scope
+
+All Rust ran through Devenv, foreground, locked and below the approximately
+15-minute command budget. Logs below are under **`/tmp/opencode/`**. Exact commands:
+
+```sh
+devenv shell -- cargo test --all-features --locked --test mutation_confirmation -- --exact \
+  abandon::a_create_that_cannot_go_on_is_abandoned_by_the_action_its_refusal_offers \
+  abandon::an_abandon_interrupted_before_its_transaction_is_completed_by_its_retry \
+  abandon::an_abandon_whose_result_was_lost_is_a_no_op_and_not_external_change
+
+devenv shell -- cargo test --all-features --locked --lib -- --exact \
+  repository::context_retirement::execution_tests::mutation_tests::ordinary_retirement_index_only_resume_spends_own_request_and_preserves_recreation
+
+devenv shell -- cargo test --all-features --locked --lib -- --exact \
+  repository::context_retirement::store_tests::migration_tests::retirement_preserving_catalog_upgrade_rolls_back_and_rejects_unknown_closure
+```
+
+| Log | Actual result and tree scope |
+| --- | --- |
+| `task3-quality-q1-q2-red.log` | Compiled **0 passed / 3 failed**, 2.51s; no QUALITY-round production edits yet. Missing-root preview `InvalidPath`; existing/unregistered interrupted and lost-result retries `RepositoryNotRegistered`, expected Ok/AlreadyApplied |
+| `task3-quality-q3-red.log` | Compiled **0 passed / 1 failed**, 2.29s; public retirement/preservation journey reaches terminal normal deregistration, then fails FK. Earlier pending removal/direct-delete guards passed |
+| `task3-quality-q1-q2-green.log` | **3 passed**, 3.63s, after Q1/Q2 corrections and before preserving DDL edits. Each new creation reentry helper covers present/unregistered and removed roots. No unrelated green tests reran |
+| `task3-quality-q3-catalog-red.log` | Compiled **0 passed / 1 failed**, 0.86s, before DDL/version edits; independently frozen exact marked v1 was wrongly accepted under the newly specified refusal policy |
+| `task3-quality-q3-green.log` | Combined the last TWO full libtest names above in ONE invocation: **2 passed**, 4.30s, after terminal cleanup/catalog correction. Includes real pending→terminal→deregister/replay journey and exact new/old/substituted catalog matrix |
+| `task3-quality-q3-boundary-green.log` | Reran ONLY the changed I-only recovery full name after adding canonical-root alias, direct wrong-root/non-current-attempt ownership, and pending/terminal update-immutability assertions: **1 passed**, 2.40s. No unchanged migration-table or generic-abandon rerun |
+| `task3-quality-clippy.log` | First coherent strict all-target/all-feature Clippy failed only `result_large_err` on the new registry-read helper returning scoped `ReadError` by value. Added the same narrowly documented allow used by surrounding read APIs; no runtime or test expectation changed |
+| `task3-quality-clippy-green.log` | `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`: **exit 0**, 17.28s, final source inputs |
+| `task3-quality-fmt-check-final.log` | `devenv shell -- cargo fmt --check`: **exit 0**, final source. Earlier format apply/check logs retained as `task3-quality-fmt-apply.log` / `task3-quality-fmt-check.log` |
+
+Only five Rust inputs and one test-only frozen JSON fixture changed. No new
+standalone test target/case, SSH matrix, real wait, production test hook, dependency
+or Task 4 implementation. The post-green edits were formatting and the documented
+lint attribute, not production semantics; no redundant runtime rerun for those.
+No extra Cargo check overlapping Clippy, old 41-test rerun, broad prefix,
+whole SSH/slow/full suite, or native run. Earlier green evidence remains valid at
+its actual recorded scope, not re-labelled as fresh final-tree execution.
+
+Narrow six-input manifest **`/tmp/opencode/task3-quality-source.sha256`**, SHA-256
+**`ebadc2c4dd2ec3dea936308aef0fa48e526944e1707cfabb1e1a3f707f85a026`**;
+eleven-log manifest **`/tmp/opencode/task3-quality-evidence.sha256`**, SHA-256
+**`e39f619debf20370d0a06f51cb81eaf3238fd1c03142c16c34e5b41051d33fe2`**.
+No whole-tree/old-evidence re-inventory. Whitespace checks passed; original-history,
+cleanliness, merge-tree and no-owned-process checks accompany returned HEAD.
+
+### Next gates and limits
+
+**Controller SPEC correction-delta review of `8b6d5b40..returned-HEAD` FIRST**, then
+**SAME QUALITY reviewer `ses_e4e40a874ffejNEnuP7pxvcZ9S` re-reviews the WHOLE
+original `d801d4ab..returned-HEAD` Task 3 range**, not only these fixes. No review
+approval is assumed. Original base and every old commit/approval remain intact.
+Task 4 has not started. Final whole-feature static/fast/selected-SSH gates remain
+owed once at review-ready; this bounded checkpoint is not that gate or a full
+Task 2/A4/feature, native/platform or transport claim.
+
+Existing canonical Task 3 comment is appended without changing its header, parent
+`01M6RJFTWFMFKT95Y04HQCDTJ8`, timestamp or identity; no new ID, default-profile
+invocation or ticket status save. Note timestamp **`2026-11-06T17:10:17Z`**. Both
+correction commits carry the required coauthor, with evidence in a separate commit.
+No agents, push/PR/main integration/closure, native dispatch, other worktree,
+real key/context/draft/profile operation or owner-policy question. All commands
+completed; final process check must find no owned build/test/CLI process.

@@ -101,3 +101,55 @@ No Task 4 work, broad/SSH/slow/full gate, new profile/ID invocation, agents, pus
 other-worktree/main edits, real key/context/draft operations, native CI, PR or
 lifecycle action. Controller's already-current main merge was reused. No owned
 background process remains; remaining gates and historical evidence scopes stand.
+
+## QUALITY Q1/Q2/Q3 corrections — 2026-11-06T17:10:17Z
+
+Controller reports **Task 3 SPEC passed through
+`8b6d5b40a7e43aae0061e0e931db80008ef91405`**. Subsequent QUALITY reviewer
+**`ses_e4e40a874ffejNEnuP7pxvcZ9S`** source-traced three Important regressions;
+controller verified actual binding/ownership/DDL/removal paths. Reviewer ran zero
+Rust probes. Original `d801d4ab` base, initial commits, approvals and this comment's
+parent/metadata remain unchanged; no Task 4 or policy change is inferred.
+
+- **Q1/Q2 — `8fa14ad80e3b7b83e126f05909880e8c70b4a52d`:** retirement metadata
+  reuses the scope already resolved by observation, preserving removed creation
+  roots without weakening unrelated path rules. Preservation ownership is a
+  guarded registry-only read, not a registration-requiring transaction. Audits
+  precede generic fallback; real ownership checks exact root/operation and current
+  accepted request/attempt/confirmation/digest/scope. Existing interrupted and
+  lost-result tests now cover present/unregistered and removed creation roots.
+- **Q3 — `50dc81f272df8f8e0ee94923c87af0fdb8d9e5fe`:** terminal dependents
+  cascade with normal retirement-envelope deregistration; pending-only retention
+  triggers and unconditional update immutability remain. Existing local I-only
+  recovery journey proves pending removal refuses unchanged, canonical alias and
+  scoped/current ownership behavior, terminal deregistration/reopen and finished
+  original Ri/abandon result/map replay. Registration-removal/general guards are
+  untouched; no observer or transport used.
+- **Explicit catalog choice:** exact **`context_retirement_preserving_v2`**;
+  unpublished preserving-v1 is **refused unchanged even when empty**, not silently
+  upgraded. Independent pre-edit v1 JSON fixture pins fingerprint
+  `5efcbbfd50e9dbe691bf1dd141267302d3ff4c36`. Existing migration matrix covers
+  v2 install/reopen/fault rollback and old/unmarked/false-marker/substituted/unknown
+  closure refusal at migration/service-open boundaries. Frozen published
+  retirement v1/v2/index/gap catalogs remain untouched; no real profile inspected.
+
+**Actual local evidence** (logs under `/tmp/opencode/`; full exact commands in
+the ledger): Q1/Q2 compiled RED **0/3**, then GREEN **3/3**
+(`task3-quality-q1-q2-{red,green}.log`); Q3 public-journey compiled RED **0/1**
+(`task3-quality-q3-red.log`); catalog-policy compiled RED **0/1**
+(`task3-quality-q3-catalog-red.log`); combined two changed lib tests GREEN **2/2**
+(`task3-quality-q3-green.log`). After expanding only the boundary/immutability
+assertions, reran only that changed full name GREEN **1/1**
+(`task3-quality-q3-boundary-green.log`). Final strict Clippy/fmt passed
+(`task3-quality-clippy-green.log`, `task3-quality-fmt-check-final.log`); first Clippy
+found only scoped `ReadError` size lint, addressed using the surrounding read-API
+convention, not by changing runtime behavior. No redundant old-green/broad/SSH run.
+
+Ready for **controller SPEC correction delta `8b6d5b40..returned-HEAD`, THEN SAME
+QUALITY whole original Task 3 `d801d4ab..returned-HEAD` re-review**. Source HEAD is
+the full `50dc81f2` SHA above; a separate evidence commit follows. No self-approval,
+full-feature claim or Task 4 implementation. Final review-ready whole-feature
+static/fast/selected-SSH tiers remain owed. No agents, push, PR/main integration/
+closure, native dispatch, other worktree, default-profile/real key/context/draft
+operation or new owner question. Final clean/history/merge-tree/process checks
+accompany returned HEAD; all invoked commands have completed.
