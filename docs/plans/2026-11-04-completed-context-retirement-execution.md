@@ -20,8 +20,11 @@ confirmed per-item preserving/index recovery and forward gap unwiring are locall
 implemented at `9864c2b2`; Task 3 SPEC and QUALITY are now independently approved
 through `989a5807`, including P1/P2 and Q1–Q3 corrections. The same SPEC reviewer
 approved the compatibility delta before the same QUALITY reviewer approved the
-whole original Task 3 range. Task 4's production original-live pass is locally
-delivered at `01a386ee`, with independent SPEC then QUALITY pending. Ticket remains
+whole original Task 3 range. Task 4's production original-live pass was delivered
+at `01a386ee` with checkpoint `9b6e4527`. Independent SPEC found four Important
+gaps (S1–S4); corrections are locally committed at `6400fe26` with three changed
+exact tables and strict Clippy/fmt passing. The same SPEC reviewer's re-review
+is pending; QUALITY has not started and remains gated. Ticket remains
 `implementing`, not full Task 2 or feature review-ready.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
 [the delivery checkpoint](#task-3--ordinary-binding-and-guarded-preserving-recovery).
@@ -123,9 +126,11 @@ Neither recovery route advances parent. Both corrections are internal under D15.
    R-12 versioned one-to-many consumer/initial-membership migration, per-holder
    audits/exact no-observer lineage and stable cut/completed-all-selected report. Replace
    parent-capture-bound batch execution/index paths, not merely disable resume.
-   **Implemented at `01a386ee`; 39 distinct exact local tests and strict Clippy/fmt
-   pass at the recorded source scopes below. Independent SPEC then QUALITY remain
-   pending, so this delivery/review gate is not checked complete.**
+   **Implemented at `01a386ee`; the original 39 exact local tests/statics retain
+   only their recorded source scopes below. SPEC's S1–S4 corrections are committed
+   at `6400fe26`; three changed exact tables and strict Clippy/fmt pass for that
+   delta. Same-reviewer SPEC re-review, then QUALITY, remain pending, so this
+   delivery/review gate is not checked complete.**
 - [ ] Tasks 5–6: CLI + relevant local acceptance and at most one new justified
   SSH connection E2E; no new SSH edge-case matrix. Existing 105 SSH cases are
   legacy evidence; review coverage mapping before any forward consolidation/rehome.
@@ -6002,3 +6007,109 @@ parsing/help/rendering; Task 6 owns remaining mapped acceptance variants and at
 most one justified SSH E2E; Tasks 7–8/final local tiers and whole-feature review
 remain outstanding. No push, PR, closure/main merge, native dispatch or background
 job occurred. No extra Rust run is needed for this metadata-only checkpoint.
+
+### Task 4 SPEC S1–S4 Corrections — 2026-11-06
+
+**Correction source commit:** `6400fe267743594dbc6fdcb38d3722a82b5d8450`,
+`fix: close Task 4 recovery and authority gaps`, with
+`Co-Authored-By: GPT-6.1 Sol <noreply@openai.com>`.
+The original Task 4 review base remains
+**`0c1be623487f6634187a0ed031ce518a47b8c16f`**; initial implementation
+**`01a386eee699117ad6bae9822bb3f62865bbf23d`** and evidence checkpoint
+**`9b6e4527adac5b0bfc25ab9fda6e034e82492207`** are preserved unchanged. This
+forward correction starts from that checkpoint, not a new Task 4 review base.
+
+Independent SPEC reviewer **`ses_e4d9ed4e6ffeSwu9GiwqH5QMvl`** reported **four
+Important findings**, source-traced and verified by the controller. The reviewer
+ran no tests/builds/probes. These corrections have local author evidence only:
+the **same SPEC reviewer must re-review the full original base-to-returned-HEAD
+range before QUALITY starts**. No approval, whole-feature completion or final
+review-ready standing is claimed. The earlier Task 4 “Next” is historical; this
+same-reviewer correction gate is now the next action.
+
+The controller already fetched/merged unchanged main
+`79c3931b01d225ddf3434ae9cd4fc51eb607fd2e` after the previous return. That preflight
+was accepted without another fetch/merge per fix. All work stayed in this ticket
+worktree/branch. There are exactly **10 changed Rust inputs** in the correction
+delta; no immutable catalog, receipt migration, dependency, schema, DTO, external
+contract, lifecycle cleanup or Task 5 code changed. Common identity dispatch in
+`promotion/lifecycle_record.rs` is narrowed, not promotion/closure behavior widened.
+
+#### Findings, Root Mechanisms And Bounded Corrections
+
+| Finding | Verified gap and correction | Extended existing table / controls |
+| --- | --- | --- |
+| **S1 — accepted parent before initializer** | Ordinary acceptance could commit R/P and die at `BeforeRequestDomainCall` before `run -> pass::begin`; reentry finished P but could never create its required summary. `PollRetirementBinding::admit` now calls transaction-scoped `pass::begin`, atomically inserting initial pass metadata with R/P. Reserved-Ri protection remains in that callback. Reentry never initializes metadata or reconstructs a live capability. `has_capture` audits and requires the exact repository-scoped companion: a missing/corrupt row is not proof of a new preselection invocation. | **CUT** adds actual `parent_accepted_crash`: Accepted before P exists, then ordinary-P-only retry reaches Finished with no child, instance nonce, retirement provenance or hold, and stable replay. `parent_companion_lost` refuses RecoveryRequired without creating P, pass metadata or children. |
+| **S2 — foreign repository borrowed preselection P** | `ordinary_poll_recovery` previously depended only on historical P. It now requires the incoming registered repository, exact request/repository scope and manual priority. All UPDATE availability calls carry those inputs before configuration writes/reservation. Generic remote identity dispatch stays strict; the specialized poll dispatcher additionally requires the actual UPDATE kind. The captured-report replay shortcut also filters by incoming repository, so it cannot bypass the corrected guards. | **ID** adds two registered repositories in one registry; invalid and valid B configurations preserve both registry images and both disks, with no B owner/reservation. Direct reservation, strict generic identity, own/foreign × absent/Observe/Update kind × manual/automatic priority, and automatic public calls refuse except exact own/manual/UPDATE. Own P recovery and a new own original-live pass succeed. A foreign captured-report replay is separately rejected unchanged. |
+| **S3 — final-child/empty-image cancellation became Ok** | The live loop checked cancellation only before each child; exhaustion lost the last token signal, while `pass::finish` discarded durable parent cancellation. Central binding `finish` now rechecks the caller token, and the lease/transaction creating the **first** cut honors `validate_parent`'s durable cancellation flag. Existing immutable cuts return before later cancellation can alter them. An independently cancelled child is not interpreted as parent cancellation. | **FENCE** adds `last_token`, `last_flag`, `empty_token`, `empty_flag` and `child_only`. Token cancellation at the ordinary pre-W primitive and durable flags before W/during original refresh produce a Finished, stopped Cancelled parent with preserved resources/M and no leaked holds. Independent child cancellation remains a settled refusal with parent Ok. Every cut replays unchanged. |
+| **S4 — terminal preselection refusal could not settle Ri alone** | `lost_initial` tested never-claimed before allowing the ordinary terminal reader, so an audited invalid/refused local record with a lost boundary copy remained Owed until its parent reconciled. After record/candidate/repository/current-F2 checks, an exactly correlated durable preselection refusal now passes through to the existing ordinary terminal reader. No membership, observation receipt or selection authority is fabricated. | **CUT** adds `refused_copy_lost`: actual refusal commit, existing `BeforeRequestSettlement` copy loss, then test-only parent loss **before any reconciliation**. Ri-only retry/replay settles ExternalChange/Finished without changing pass/targets, captured M, receipts/pins or disk/changed nonce; no O or child-source membership is created. Parent later copies that result. `refused_copy_missing` refuses missing terminal-companion evidence without treating it as never-claimed. |
+
+S4 reuses the existing boundary fault and existing test-only child checkpoint;
+that checkpoint now runs immediately after the child answer, before the parent
+can reconcile it. There is no new fault/batch framework, journal or cleanup path.
+The same three existing local production-path tables carry all new variations.
+
+#### Meaningful Compiled RED → GREEN, With Scope Limits
+
+`CUT`, `ID` and `FENCE` expand to the full library names in the Task 4 alias table
+above. Every individual test command was exactly
+`devenv shell -- cargo test --all-features --locked --lib FULL_NAME -- --exact`.
+Literal expanded commands, results and incremental source-scope annotations are
+preserved in **`/tmp/opencode/task4-spec-results.json`**. The logs below are all
+under `/tmp/opencode/`. REDs compiled and executed **one** selected test each;
+GREENs likewise executed one, not zero matches. No compilation/fixture diagnostic
+is counted as a behavioral reproduction.
+
+| Logs | Table | Observed evidence and precise limit |
+| --- | --- | --- |
+| `task4-spec-s1-red.log` → `task4-spec-s1-green.log` | CUT | RED: parent remained Accepted/Owed after ordinary P retry, expected Finished. GREEN: 1 passed after atomic admission initialization; this is the earlier S1 correction stage, not final-tree evidence. |
+| `task4-spec-s2-red.log` → `task4-spec-s2-green.log` | ID | RED: invalid registered B configuration changed the full registry despite refusal. GREEN: 1 passed after incoming-scope/kind/priority dispatch correction, before the later captured-report replay addition. |
+| `task4-spec-s3-red.log` → `task4-spec-s3-green.log` | FENCE | RED: `last_token` parent Ok although its sole child durably refused Cancelled. GREEN: 1 passed with all five terminal/empty/independent-child rows. |
+| `task4-spec-s4-red.log` → `task4-spec-s4-green.log` | CUT | RED: Ri-only retry returned RecoveryRequired rather than the durable ExternalChange refusal, with no parent cut. The caught crash messages are intentional fixture loss points; the uncaught Ri-only assertion is the regression. GREEN: 1 passed after allowing the audited ordinary terminal reader. |
+| `task4-spec-s1-missing-companion-red.log` → `task4-spec-s1-s4-negative-green.log` | CUT | Compiled **code-result RED only**: missing parent companion returned InternalError versus expected RecoveryRequired. It stopped before later no-P assertions, so the RED does **not** prove that a new observation occurred. GREEN: 1 passed including no-new-P/no-recreated-companion assertions and S4's missing-terminal-companion negative. S4's extra negative has no separately claimed RED. |
+| `task4-spec-s2-replay-scope-red.log` → `task4-spec-final-exact.log` | ID | Compiled behavioral RED: the expanded incoming-scope/kind/priority matrix reached the final assertion, where foreign captured-report replay succeeded. Final GREEN includes the incoming-repository replay predicate and every preceding control. |
+
+All intermediate passes keep their actual incremental working-tree scope. The
+earlier **39** distinct exact tests, original source manifests and raw-evidence
+inventory above are unchanged historical evidence, **not** rerun or relabeled as
+verification of `6400fe26`.
+
+#### Coherent Correction-Source Verification And Integrity
+
+The final corrected/Devenv-formatted source, byte-identical to `6400fe26`, ran only
+the three changed exact names in one supported libtest invocation:
+
+```sh
+devenv shell -- cargo test --all-features --locked --lib -- repository::context_retirement::execution_tests::mutation_tests::retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup repository::context_retirement::execution_tests::mutation_tests::retirement_batch_preselection_poll_recovery_does_not_free_its_id_for_other_journals repository::context_retirement::execution_tests::mutation_tests::retirement_batch_live_fences_rejoin_at_each_ordinary_effect --exact
+```
+
+Result: **3 passed, 0 failed/ignored/measured, 1651 filtered out**, test runtime
+**33.68 s**, build **15.40 s**, exit 0 (`task4-spec-final-exact.log`). This is the
+final-source GREEN for all S1–S4 changes and controls, not an unchanged-green rerun.
+There were no commands near the 15-minute budget and no real waits.
+
+| Check / inventory | Exact evidence |
+| --- | --- |
+| Whole-tree compilation/lint | `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`, exit 0, 16.12 s, `task4-spec-clippy.log`. Chosen instead of redundant separate `cargo check`. |
+| Formatting | `devenv shell -- cargo fmt` then `devenv shell -- cargo fmt --check`, both exit 0; `task4-spec-format.log` / `task4-spec-fmt-check.log`. No source edits followed verification. |
+| Whitespace | `git diff --check`, `git diff --cached --check` and `git diff --check 0c1be623487f6634187a0ed031ce518a47b8c16f HEAD` through correction source commit: exit 0, `task4-spec-{delta,staged,source-range}-whitespace.log`. |
+| Merge compatibility | `git merge-tree --write-tree HEAD origin/main` at source commit, exit 0; tree `76b691df136574405273e3736547869a68bde91d` in `task4-spec-source-merge-tree.log`. Existing origin/main remains `79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`; no fetch/merge/rebase. |
+| Correction source manifest | `/tmp/opencode/task4-spec-sources.sha256`: **10 delta inputs only**, zero mismatches against source commit/current source; SHA-256 **`0dd992546b8cc3cd5f95e35c409fb8480eee24353276d60cc35dad084bf013f0`**. No whole-tree or old-evidence rehash. |
+| Correction raw logs | `/tmp/opencode/task4-spec-logs.sha256`: **19 new logs** (12 test runs including REDs, 3 formatting/lint runs, 4 source Git checks); manifest SHA-256 **`3e83f53be5effb69e6d7cf3a418c11b21445055fc8c0b517fbe5b5d58b7fab9c`**. Only explicitly identified GREENs are passing claims. |
+| Command/result summary | `/tmp/opencode/task4-spec-results.json`, SHA-256 **`11a1bcf4ead59a2997632d281faf959b57647f41b286a0950b11afa6ff6916b9`**; records literal commands, RED/result-only distinctions, source commit and remaining gates. |
+
+Author self-review inspected the combined code delta, ordinary admission/default
+reserved-ID guard, strict/specialized identity callers, terminal-reader/current-F2
+correlation, cut immutability and changed table assertions. It is not independent
+SPEC or QUALITY approval. Immutable catalogs and receipt migration were not edited;
+the original review range, contract and Task 3 approvals remain intact.
+
+This evidence is appended to existing canonical checkpoint
+**`01M6S5GS8CV2W6083N1CJHTKET`**, without allocating a new ID or changing its
+front matter, ticket body or status. **Next: same SPEC reviewer re-review of
+`0c1be623487f6634187a0ed031ce518a47b8c16f..returned-HEAD`; QUALITY only after that
+passes.** Tasks 5–8, remaining mapped acceptance and final three static/fast/
+changed-path SSH gates remain owed later. No agents, push, PR, other-worktree
+edits, main/closure/native action or real profile/key/context/draft operation.
+No owned jobs remain. This ledger/comment-only follow-up needs no further Rust
+rerun on the unchanged corrected source.
