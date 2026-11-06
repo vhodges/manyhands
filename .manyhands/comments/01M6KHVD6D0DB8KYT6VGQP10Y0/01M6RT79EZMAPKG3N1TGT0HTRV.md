@@ -63,3 +63,41 @@ Task 4 still owns one-to-many consumer/initial-membership migration, exact
 NULL-observer lineage/per-holder audits, thin original-live loop and immutable
 stopped report. Tasks 5–8 and final once-at-review-ready static/fast/changed-path SSH
 gates remain. Preserve all historical approvals/logs at their actual source SHAs.
+
+## SPEC P1/P2 corrections — 2026-11-06T16:37:27Z
+
+Independent Task 3 SPEC reviewer **`ses_e4e547d4bffeWoH5PROiKyb8GW`** found two
+controller-verified contract defects through initial `799edcf8`. Its review was
+read-only source/evidence, not a new Rust probe. Original Task 3 base `d801d4ab`,
+initial `9864c2b2`/`799edcf8` and this comment's parent/metadata remain unchanged.
+
+- **P1 — `2e44212b88112630c268b0cb2e92f050f33e3271`:** preserving admission now
+  retains a valid `index_invalidated` tombstone instead of relabeling its unspent
+  epoch as authoritative/spent. Existing request-bound atomic finalization table
+  now covers real ordinary spend1→invalidation2→genuine preserving claims3/4,
+  receipt fault and pin retention, exact finalization/Z, audit/reopen and stale
+  original executor/index no-write checks. No fake spend2, F2/index equality or
+  weakened missing-spend audit.
+- **P2 — `ed55601073455cb6384e0babbe62f99e9295d99b`:** reserved gap-table lookup
+  uses `COLLATE NOCASE`, matching SQLite identifier semantics. Existing migration
+  refusal matrix now includes populated upper/mixed-case unmarked reserved tables,
+  full registry/rowid unchanged-image checks and no installed preserving catalog/
+  marker. Exact approved-catalog validation and unrelated schema tolerance stay.
+
+**Actual verification:** one combined exact-name local RED command reproduced
+both failures (**0 pass/2 fail**, `task3-specfix-p1-p2-red.log`). After production
+fixes, P2 passed; P1 encountered a fixture hook-mutex poison (**1 pass/1 fail**,
+`task3-specfix-p1-p2-green.log`, not an all-green result). The existing process-loss
+fixture now uses a fresh continuation service, preserving the original service/
+token for real stale-owner checks. Only P1's changed exact name reran and passed
+(**1/1**, `task3-specfix-p1-green.log`); no redundant P2/41-test rerun. Final strict
+all-target/all-feature Clippy and fmt check passed (`task3-specfix-clippy.log`,
+`task3-specfix-fmt-check.log`). Full commands/evidence are appended to the execution
+ledger. Four changed Rust inputs, no new standalone cases or production test hooks.
+
+Ready for **SAME SPEC review of the full `d801d4ab..returned-HEAD` range**.
+**QUALITY stays gated until SPEC passes**; no self-approval/full-feature claim.
+No Task 4 work, broad/SSH/slow/full gate, new profile/ID invocation, agents, push,
+other-worktree/main edits, real key/context/draft operations, native CI, PR or
+lifecycle action. Controller's already-current main merge was reused. No owned
+background process remains; remaining gates and historical evidence scopes stand.
