@@ -94,21 +94,29 @@ async fn stop_and_republish_cancels_republishes_then_resends(cx: &mut TestAppCon
     })[0]
         .request_id;
 
-    shell
-        .backend
-        .hold_job_return_answering(
-            JobKind::TicketClose,
-            close_answer(
-                &root,
-                ResultCode::Cancelled,
-                Outcome::Cancelled,
-                Vec::new(),
-                asked,
-            ),
-        )
-        .release();
+    // Stop is pressed on the Give up's attempt before it is answered: the
+    // dialog says nothing of that Stop once the close is sent again.
+    let give_up = shell.backend.hold_job_return_answering(
+        JobKind::TicketClose,
+        close_answer(
+            &root,
+            ResultCode::Cancelled,
+            Outcome::Cancelled,
+            Vec::new(),
+            asked,
+        ),
+    );
     shell.backend.answer_next_prepare("item republish", preview);
     shell.click("lifecycle-stop-and-republish", cx);
+    give_up.wait_reached();
+    shell
+        .until_drawn(cx, "Stop on the Give up", |shell, cx| {
+            shell.present("lifecycle-stop", cx)
+        })
+        .await;
+    shell.click("lifecycle-stop", cx);
+    assert!(shell.present("lifecycle-stopping", cx));
+    give_up.release();
     until_present(&shell, "confirm-ok", cx).await;
     let worker = shell
         .workspace
@@ -121,6 +129,8 @@ async fn stop_and_republish_cancels_republishes_then_resends(cx: &mut TestAppCon
         .hold_job_return_answering(JobKind::ItemRepublish, republished())
         .release();
     let running = shell.backend.hold_job(JobKind::ItemRepublish);
+    // The close's third attempt is held, to see it run.
+    let third = shell.backend.hold_job(JobKind::TicketClose);
     shell.click("confirm-ok", cx);
     running.wait_reached();
     // The re-review's UX: the stopped run now points at the republish.
@@ -161,12 +171,30 @@ async fn stop_and_republish_cancels_republishes_then_resends(cx: &mut TestAppCon
                 .is_some_and(|request| request.attempt == 3)
         })
         .await;
+    // The third attempt is a new run: it has its own Stop, and the Stop
+    // pressed on the Give up's attempt is not carried over to it.
+    third.wait_reached();
+    shell
+        .until_drawn(cx, "Stop on the third attempt", |shell, cx| {
+            shell.present("lifecycle-stop", cx) || shell.present("lifecycle-stopping", cx)
+        })
+        .await;
+    assert!(
+        !shell.present("lifecycle-stopping", cx),
+        "Stopping\u{2026} with no Stop button"
+    );
+    third.release();
     let sent = requests_of(&shell, cx, |intent| {
         matches!(intent, Intent::TicketClose { .. })
     });
     assert_eq!(sent.len(), 1, "the same desktop request");
     assert_eq!(sent[0].request_id, asked, "the same request ID");
     shell.until_ended(close, cx).await;
+    shell.run(cx);
+    assert!(
+        !shell.present("lifecycle-stop-late", cx),
+        "no stale 'finished before it could stop'"
+    );
 }
 
 /// P21, canned: the sequence goes on only from a Give up sent on an

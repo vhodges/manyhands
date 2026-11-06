@@ -288,6 +288,24 @@ impl LifecycleDialog {
         let Phase::Submitted(shown) = self.phase else {
             return;
         };
+        let attempt = self
+            .services
+            .operations()
+            .read(cx)
+            .request(shown)
+            .map(|request| request.attempt);
+        // The shown request sent again under its own ID (a republish's
+        // follow-on, which this dialog did not send): a new run, with its
+        // own Stop and none of the last one's progress.
+        if let Some(attempt) = attempt {
+            if self
+                .attempt_seen
+                .is_some_and(|(id, seen)| id == shown && attempt > seen)
+            {
+                self.following_anew();
+            }
+            self.attempt_seen = Some((shown, attempt));
+        }
         let stage = match self
             .services
             .operations()

@@ -364,6 +364,10 @@ pub(crate) struct LifecycleDialog {
     reached: Option<outcome::StepKey>,
     /// Stop at a safe point was pressed on the shown run.
     stop_pressed: bool,
+    /// The shown request and the attempt last seen of it: the same request
+    /// sent again, by a republish's follow-on for one, is a new run
+    /// (`following_anew`).
+    attempt_seen: Option<(DesktopRequestId, u32)>,
     /// The titles of the tickets the shown run made ready (A3).
     titles: made_ready::Titles,
     /// Repair locally… since the dialog last moved on (B6).
@@ -431,6 +435,7 @@ impl LifecycleDialog {
             plan: None,
             reached: None,
             stop_pressed: false,
+            attempt_seen: None,
             titles: made_ready::Titles::default(),
             repair: repair::Repair::repaired(repaired),
             stop_refused: None,
