@@ -258,14 +258,29 @@ async fn stop_and_republish_stops_unless_give_up_resent_and_cancelled(cx: &mut T
         )
         .release();
     shell.click("lifecycle-stop-and-republish", cx);
-    shell
-        .until(cx, move |operations| {
+    // The worker retries a `busy` answer after its own delays, which can
+    // outlast the harness's wait under the whole suite: wait up to thirty
+    // seconds, as `resume_tests` does for its busy answers.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        shell.run(cx);
+        let operations = shell.operations(cx);
+        let finished = operations.read_with(cx, |operations, _| {
             operations.request(close).is_some_and(|request| {
                 request.attempt == 2 && matches!(request.state, RequestState::Finished(..))
             })
-        })
-        .await;
-    shell.run(cx);
+        });
+        if finished {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the busy resend did not finish"
+        );
+        cx.executor()
+            .timer(std::time::Duration::from_millis(10))
+            .await;
+    }
     let sent = requests_of(&shell, cx, |intent| {
         matches!(intent, Intent::TicketClose { .. })
     });
