@@ -295,7 +295,10 @@ pub(crate) fn begin(
             tx.execute("UPDATE request_records SET attempt=attempt+1 WHERE request_ulid=?1 AND state='accepted'",[old]).map_err(|_|recovery_required())?;
         }
         tx.execute("UPDATE context_retirement_records SET phase='preserving' WHERE operation_ulid=?1 AND final_result IS NULL",[operation.to_string()]).map_err(|_|recovery_required())?;
-        tx.execute("UPDATE operation_records SET state='authoritative_observed',completed_step='context_retirement_preserved' WHERE id=?1",[row.id]).map_err(|_|recovery_required())?;
+        // Invalidation advanced the index epoch without spending it. Preserve
+        // that tombstone until refresh makes the abandon request's real claim;
+        // relabeling it here would falsely require a spend at the fenced epoch.
+        tx.execute("UPDATE operation_records SET state=CASE WHEN state='index_invalidated' THEN state ELSE 'authoritative_observed' END,completed_step='context_retirement_preserved' WHERE id=?1",[row.id]).map_err(|_|recovery_required())?;
         tx.execute(
             "UPDATE repositories SET refresh_required=1 WHERE id=?1",
             [id],

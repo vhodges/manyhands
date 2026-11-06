@@ -235,9 +235,37 @@ fn retirement_preserving_domain_index_history_needs_no_fabricated_ordinary_spend
 #[test]
 fn retirement_preserving_receipt_index_and_exact_z_finalize_atomically_then_resume_only_preserves()
 {
-    for fault in ["receipt", "release", "request"] {
+    for fault in ["receipt", "release", "request", "index_invalidated"] {
         let f = Fixture::with_request(true);
-        f.branch_intent(); // Synthetic Possible B debt over a real O/receipt.
+        let old_index = if fault == "index_invalidated" {
+            // Real request-bound spend at epoch 1, then the ordinary explicit
+            // invalidation producer: epoch 2 is a tombstone, not another spend.
+            let owner = f.index_owner();
+            assert_eq!(owner.epoch, 1);
+            state::with_transaction(&f.service, &f.request.root, |tx, id| {
+                recovery::invalidate_index_observations(tx, id)
+            })
+            .unwrap();
+            let standing: (String, i64) = f
+                .db()
+                .query_row(
+                    "SELECT state,index_owner_epoch FROM operation_records WHERE id=?1",
+                    [owner.record_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(standing, ("index_invalidated".into(), 2));
+            super::super::audit_connection(&f.db()).unwrap();
+            drop(RepositoryService::open_at(f._data.path()).unwrap());
+            Some(owner)
+        } else {
+            f.branch_intent(); // Synthetic Possible B debt over a real O/receipt.
+            None
+        };
+        // index_owner() models process loss by unwinding its claim hook. Use a
+        // fresh service for continuation, keeping the original service/token
+        // together below to prove the old executor itself is fenced.
+        let continuation = RepositoryService::open_at(f._data.path()).unwrap();
         let old: String = f
             .db()
             .query_row(
@@ -253,20 +281,19 @@ fn retirement_preserving_receipt_index_and_exact_z_finalize_atomically_then_resu
                 operation_id: f.request.operation_id,
             })
         };
-        let preview = f
-            .service
+        let preview = continuation
             .prepare(&mutation())
             .data
             .unwrap()
             .into_preview()
             .unwrap();
         match fault {
-            "receipt"=>f.db().execute_batch("CREATE TRIGGER retirement_fixture_fail_preserved BEFORE UPDATE OF phase ON context_retirement_records WHEN NEW.phase='abandoned' BEGIN SELECT RAISE(ABORT,'isolated finalizer fault'); END").unwrap(),
+            "receipt"|"index_invalidated"=>f.db().execute_batch("CREATE TRIGGER retirement_fixture_fail_preserved BEFORE UPDATE OF phase ON context_retirement_records WHEN NEW.phase='abandoned' BEGIN SELECT RAISE(ABORT,'isolated finalizer fault'); END").unwrap(),
             "request"=>f.db().execute_batch("CREATE TRIGGER retirement_fixture_fail_old_request BEFORE UPDATE OF state ON request_records WHEN NEW.code='external_change' BEGIN SELECT RAISE(ABORT,'isolated old result fault'); END").unwrap(),
             _=>{assert!(!super::super::set_release_failure(true));},
         }
         let abandon = RequestId::new();
-        let pending = f.service.execute(
+        let pending = continuation.execute(
             MutationCall {
                 request_id: abandon,
                 confirmation: Some(ConfirmationId::parse(&preview.confirmation_id).unwrap()),
@@ -292,6 +319,55 @@ fn retirement_preserving_receipt_index_and_exact_z_finalize_atomically_then_resu
         assert_eq!(standing.0, "preserving");
         assert_ne!(standing.1, "completed");
         assert!(standing.2.is_none());
+        if let Some(owner) = &old_index {
+            let db = f.db();
+            assert_eq!(db.query_row("SELECT json_extract(snapshot,'$.index_owner_epoch') FROM context_retirement_preservations", [], |r|r.get::<_, i64>(0)).unwrap(), 2);
+            let claims: Vec<i64> = db.prepare("SELECT index_owner_epoch FROM context_retirement_index_claims ORDER BY index_owner_epoch").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<Result<_,_>>().unwrap();
+            assert_eq!(claims, [1], "no fabricated ordinary spend at tombstone 2");
+            assert_eq!(
+                db.query_row(
+                    "SELECT index_owner_epoch FROM context_retirement_preservation_claims",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+                3,
+                "the abandon request makes the first genuine post-invalidation claim"
+            );
+            super::super::audit_connection(&db).unwrap();
+            drop(RepositoryService::open_at(f._data.path()).unwrap());
+            let before = registry_image(&db);
+            assert!(recovery::owns_indexing(&db, owner.clone()).is_err());
+            assert!(recovery::touch_indexing(&db, owner.clone()).is_err());
+            assert!(
+                recovery::record_owned_persisted_context(&db, owner.clone(), &f.request.root)
+                    .is_err()
+            );
+            assert!(recovery::transition_indexing(&db, owner.clone(), "failed", None).is_err());
+            assert!(
+                f.service
+                    .remote_safe_point(
+                        &f.request.root,
+                        &f.owner,
+                        RemoteOperationSafePoint::BeforeTransport
+                    )
+                    .is_err()
+            );
+            assert!(
+                refuse_execution(
+                    &f.service,
+                    &f.request.root,
+                    &f.owner,
+                    crate::results::ResultCode::ExternalChange
+                )
+                .is_err()
+            );
+            assert_eq!(
+                before,
+                registry_image(&db),
+                "old executor/index cannot write during preservation"
+            );
+        }
         assert_eq!(
             f.service.show_request(old).data.unwrap().state,
             RequestState::Accepted
@@ -306,7 +382,7 @@ fn retirement_preserving_receipt_index_and_exact_z_finalize_atomically_then_resu
                 .unwrap(),
             1
         );
-        let retried = f.service.execute(
+        let retried = continuation.execute(
             MutationCall {
                 request_id: old,
                 confirmation: None,
@@ -371,7 +447,7 @@ fn retirement_preserving_receipt_index_and_exact_z_finalize_atomically_then_resu
             Ok(())
         })
         .unwrap();
-        let resumed = f.service.execute(
+        let resumed = continuation.execute(
             MutationCall {
                 request_id: RequestId::new(),
                 confirmation: None,
@@ -410,6 +486,19 @@ fn retirement_preserving_receipt_index_and_exact_z_finalize_atomically_then_resu
         );
         assert_eq!(f.db().query_row("SELECT count(*) FROM retirement_observation_pin_releases WHERE reason='consumer_terminal'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
         super::super::audit_connection(&f.db()).unwrap();
+        if let Some(owner) = old_index {
+            let db = f.db();
+            let claims: Vec<i64> = db.prepare("SELECT index_owner_epoch FROM context_retirement_preservation_claims ORDER BY index_owner_epoch").unwrap().query_map([], |r|r.get(0)).unwrap().collect::<Result<_,_>>().unwrap();
+            assert_eq!(claims, [3, 4]);
+            let before = registry_image(&db);
+            assert!(recovery::touch_indexing(&db, owner).is_err());
+            drop(RepositoryService::open_at(f._data.path()).unwrap());
+            assert_eq!(
+                before,
+                registry_image(&db),
+                "settled preserving history reopens unchanged"
+            );
+        }
     }
 }
 
