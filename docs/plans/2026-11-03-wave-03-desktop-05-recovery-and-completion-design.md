@@ -891,6 +891,15 @@ Applied in the approval commit:
   ticket reads closed with no row and no lock, but its request stays
   `accepted`, and nothing in the desktop settles it. A resend of the same
   request ID answers `Ok` with no commits (owner 2026-11-05, Task 15b).
+- **K-26.** A close or promote stopped at `integrating`, then retried after
+  main has moved, answers `recovery_required` with integration Complete and
+  the `commit_oid` of a candidate merge that main never reached; the dialog
+  shows "Merged into main" and "Not tidied up yet" with no Repair
+  locally…. The library records the candidate before the cancel check
+  (`promotion/run.rs:765-783`) and builds the outcome from it on the
+  reconcile's RecoveryRequired (`:617-620`, `make_outcome`). The CLI
+  reports the same. Fixed in the library under ticket
+  `01M6R79XHD9MTQCBDF27JAC351`, not in D5 (owner 2026-11-06, Task 15c).
 
 ## Alternatives Rejected
 
