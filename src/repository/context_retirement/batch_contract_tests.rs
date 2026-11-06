@@ -1,6 +1,7 @@
 //! Inert producer/target/cursor projections, synthetic ads and pre-enrolled
-//! identities. Actual owned poll, A3, C decisions/results/Z; NOT cleanup/index,
-//! source SSH, Task 4 selection/enrollment or coordinator evidence.
+//! identities. Actual owned poll, A3, C decisions/results/Z; positive submodule
+//! additionally runs branch cleanup/index. NOT source SSH, Task 4 selection,
+//! enrollment or coordinator evidence.
 use super::*;
 use crate::repository::context_retirement::handoff::batch;
 
@@ -8,6 +9,8 @@ use crate::repository::context_retirement::handoff::batch;
 mod debt;
 #[path = "batch_inspection_tests.rs"]
 mod inspection;
+#[path = "batch_positive_tests.rs"]
+mod positive;
 
 fn projections(s: &SourceFixture, entries: &[serde_json::Value]) {
     let db = s.f.db();
@@ -15,7 +18,7 @@ fn projections(s: &SourceFixture, entries: &[serde_json::Value]) {
       CREATE TRIGGER inert_frozen_decision BEFORE UPDATE OF eligibility ON poll_retirement_freezes WHEN OLD.eligibility!='unconfirmed' BEGIN SELECT RAISE(ABORT,'immutable handoff'); END;
       CREATE TRIGGER inert_batch_final BEFORE UPDATE OF final_code ON poll_retirement_freezes WHEN OLD.final_code IS NOT NULL BEGIN SELECT RAISE(ABORT,'immutable batch final'); END;
       CREATE TABLE poll_retirement_cursors(operation_ulid TEXT NOT NULL,owner_epoch INTEGER NOT NULL,next_ordinal INTEGER NOT NULL CHECK(next_ordinal>=0),stage TEXT NOT NULL CHECK(stage IN ('active','complete')),PRIMARY KEY(operation_ulid,owner_epoch));
-      CREATE TABLE poll_retirement_targets(operation_ulid TEXT NOT NULL,owner_epoch INTEGER NOT NULL,ordinal INTEGER NOT NULL CHECK(ordinal>=0),candidate TEXT NOT NULL CHECK(json_valid(candidate)),state TEXT NOT NULL CHECK(state IN ('waiting','refused')),final_result TEXT CHECK(final_result IS NULL OR json_valid(final_result)),handoff TEXT NOT NULL CHECK(handoff IN ('not_started','final')),PRIMARY KEY(operation_ulid,owner_epoch,ordinal),CHECK((state='waiting' AND final_result IS NULL AND handoff='not_started') OR (state='refused' AND final_result IS NOT NULL AND handoff='final')));
+      CREATE TABLE poll_retirement_targets(operation_ulid TEXT NOT NULL,owner_epoch INTEGER NOT NULL,ordinal INTEGER NOT NULL CHECK(ordinal>=0),candidate TEXT NOT NULL CHECK(json_valid(candidate)),state TEXT NOT NULL CHECK(state IN ('waiting','running','complete','refused')),final_result TEXT CHECK(final_result IS NULL OR json_valid(final_result)),handoff TEXT NOT NULL CHECK(handoff IN ('not_started','cleanup','index_pending','final')),PRIMARY KEY(operation_ulid,owner_epoch,ordinal),CHECK((state='waiting' AND final_result IS NULL AND handoff='not_started') OR (state='running' AND final_result IS NULL AND handoff IN ('cleanup','index_pending')) OR (state IN ('refused','complete') AND final_result IS NOT NULL AND handoff='final')));
       CREATE TRIGGER inert_target_identity BEFORE UPDATE OF operation_ulid,owner_epoch,ordinal,candidate ON poll_retirement_targets BEGIN SELECT RAISE(ABORT,'immutable target'); END;
       CREATE TRIGGER inert_target_final BEFORE UPDATE ON poll_retirement_targets WHEN OLD.final_result IS NOT NULL BEGIN SELECT RAISE(ABORT,'immutable target final'); END;
       INSERT INTO registry_migrations(name) VALUES('poll_retirement_consumption_contract_v1');").unwrap();

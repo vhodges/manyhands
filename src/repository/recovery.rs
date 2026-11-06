@@ -511,11 +511,33 @@ pub(super) struct RecoveryRecord {
     pub(super) completed_step: Option<LocalStep>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct IndexOwner {
     pub(super) record_id: i64,
     pub(super) epoch: i64,
     pub(super) retirement_request: Option<super::context_retirement::request_scope::RequestFence>,
+    pub(super) retirement_batch: Option<super::context_retirement::handoff::batch::IndexScope>,
+}
+
+impl IndexOwner {
+    fn validate(&self, db: &Connection, epoch: Option<i64>) -> Result<(), RepositoryError> {
+        if let Some(scope) = &self.retirement_batch {
+            if self.retirement_request.is_some() {
+                return Err(super::remote::state::recovery_required());
+            }
+            return scope.validate_index(
+                db,
+                self.record_id,
+                epoch.ok_or_else(super::remote::state::recovery_required)?,
+            );
+        }
+        super::context_retirement::request_scope::validate_index(
+            db,
+            self.record_id,
+            self.retirement_request,
+            epoch,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -2022,6 +2044,7 @@ pub(super) fn claim_indexing(
         record_id,
         epoch,
         retirement_request: None,
+        retirement_batch: None,
     }))
 }
 
@@ -2060,15 +2083,10 @@ pub(super) fn reclaim_invalidated_indexing(
     owner: IndexOwner,
     root_key: &str,
 ) -> Result<Option<IndexOwner>, RepositoryError> {
-    if owner.retirement_request.is_some() {
+    if owner.retirement_request.is_some() || owner.retirement_batch.is_some() {
         // A new current F2 call claims request-bound indexing explicitly. Never
         // inflate its index epoch from a stale executor's cached request fence.
-        super::context_retirement::request_scope::validate_index(
-            connection,
-            owner.record_id,
-            owner.retirement_request,
-            Some(owner.epoch),
-        )?;
+        owner.validate(connection, Some(owner.epoch))?;
         return Ok(None);
     }
     let fenced = owner
@@ -2094,6 +2112,7 @@ pub(super) fn reclaim_invalidated_indexing(
         record_id: owner.record_id,
         epoch: next,
         retirement_request: owner.retirement_request,
+        retirement_batch: None,
     }))
 }
 
@@ -2103,12 +2122,7 @@ pub(super) fn transition_indexing(
     state: &str,
     context: Option<&Path>,
 ) -> Result<bool, RepositoryError> {
-    super::context_retirement::request_scope::validate_index(
-        connection,
-        owner.record_id,
-        owner.retirement_request,
-        Some(owner.epoch),
-    )?;
+    owner.validate(connection, Some(owner.epoch))?;
     Ok(connection
         .execute(
             "UPDATE operation_records SET state = ?2, context_path = ?3, observed_at = ?4
@@ -2129,12 +2143,7 @@ pub(super) fn touch_indexing(
     connection: &Connection,
     owner: IndexOwner,
 ) -> Result<bool, RepositoryError> {
-    super::context_retirement::request_scope::validate_index(
-        connection,
-        owner.record_id,
-        owner.retirement_request,
-        Some(owner.epoch),
-    )?;
+    owner.validate(connection, Some(owner.epoch))?;
     Ok(connection
         .execute(
             "UPDATE operation_records SET observed_at = ?2 WHERE id = ?1 AND state = 'indexing' AND index_owner_epoch = ?3",
@@ -2148,12 +2157,7 @@ pub(super) fn owns_indexing(
     connection: &Connection,
     owner: IndexOwner,
 ) -> Result<bool, RepositoryError> {
-    super::context_retirement::request_scope::validate_index(
-        connection,
-        owner.record_id,
-        owner.retirement_request,
-        Some(owner.epoch),
-    )?;
+    owner.validate(connection, Some(owner.epoch))?;
     connection
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM operation_records WHERE id = ?1 AND state = 'indexing' AND index_owner_epoch = ?2)",
@@ -2184,12 +2188,7 @@ pub(super) fn record_owned_persisted_context(
     owner: IndexOwner,
     context: &Path,
 ) -> Result<bool, RepositoryError> {
-    super::context_retirement::request_scope::validate_index(
-        connection,
-        owner.record_id,
-        owner.retirement_request,
-        Some(owner.epoch),
-    )?;
+    owner.validate(connection, Some(owner.epoch))?;
     Ok(connection
         .execute(
             "UPDATE operation_records
@@ -2750,9 +2749,10 @@ mod abandoned_row_tests {
             record_id: 1,
             epoch: 0,
             retirement_request: None,
+            retirement_batch: None,
         };
-        assert!(!transition_indexing(&connection, owner, "completed", None).unwrap());
-        assert!(!touch_indexing(&connection, owner).unwrap());
+        assert!(!transition_indexing(&connection, owner.clone(), "completed", None).unwrap());
+        assert!(!touch_indexing(&connection, owner.clone()).unwrap());
         assert!(
             !record_owned_persisted_context(&connection, owner, Path::new("/context")).unwrap()
         );

@@ -1,9 +1,74 @@
-//! Original same-call batch C. Destructive child/index/gap/restart admission is
-//! deliberately closed in this first, before-effect-refusal-only increment.
+//! Original same-call C: ordered refusal or original branch-only cleanup/index.
+//! Present worktrees, gap observers and resumed cleanup remain closed.
 use super::*;
 use crate::repository::{RepositoryOperation, repository_lease};
 
 const CONTRACT: &str = "poll_retirement_consumption_contract_v1";
+
+#[path = "batch_execution.rs"]
+mod execution;
+pub(in super::super::super) use execution::IndexScope;
+#[cfg(test)]
+pub(in super::super::super) use execution::{Boundary, observe, observe_claim};
+
+pub(super) struct BranchLifetime {
+    child: String,
+    tip: String,
+}
+impl BranchLifetime {
+    // Only handoff::freeze calls this, after full original selection validation.
+    pub(super) fn from_freeze(k: &Candidate) -> Self {
+        Self {
+            child: k.child_operation_id.clone(),
+            tip: k.expected_tip.clone(),
+        }
+    }
+}
+
+/// Closed positive history, distinct from the unchanged strict refusal history.
+/// No current config/exclusion gate here: history cannot create an executor.
+fn positive_row(db: &Connection, p: &Projection, k: &Candidate) -> Result<bool, RepositoryError> {
+    if k.initial_resources != "branch_only" {
+        return Ok(false);
+    }
+    let valid: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id JOIN context_retirement_attempts a ON a.operation_ulid=c.operation_ulid AND a.owner_epoch=c.owner_epoch WHERE
+      c.operation_ulid=?1 AND c.repository_id=?2 AND o.repository_id=?2 AND o.root_path=?3 AND o.operation_ulid=?1 AND o.action='retire_context' AND o.target='authoring-context-v1/'||c.kind||'/'||c.item_id||'/Retire'
+      AND c.kind=?4 AND c.item_id=?5 AND c.initial_resources='branch_only' AND c.expected_tip=?6 AND c.selection_epoch=1 AND c.owner_epoch=1 AND c.instance_nonce IS NULL AND c.instance_verified=0
+      AND c.remote_name=?7 AND c.primary_branch=?8 AND c.configuration_generation=?9 AND c.endpoint_digest=?10 AND c.request_ulid=?11 AND c.batch_operation_ulid=?12 AND c.batch_ordinal=?13
+      AND c.materialization_capture=?14 AND c.materialization_operation_ulid IS ?15 AND c.materialization_oid IS ?16 AND c.materialization_step IS ?17 AND c.worktree_removal='none'
+      AND a.repository_id=?2 AND a.request_attempt=?18 AND a.batch_attempt_epoch=?19 AND a.observer_operation_ulid IS NULL AND a.observer_owner_epoch IS NULL
+      AND (SELECT count(*) FROM context_retirement_attempts WHERE operation_ulid=c.operation_ulid)=1
+      AND NOT EXISTS(SELECT 1 FROM context_retirement_reentries WHERE operation_ulid=c.operation_ulid)
+      AND NOT EXISTS(SELECT 1 FROM request_operations WHERE operation_ulid=c.operation_ulid)
+      AND ((c.phase='selected' AND a.phase='active' AND o.state='created' AND o.index_owner_epoch=0 AND c.initial_primary_oid IS NULL AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents WHERE operation_ulid=c.operation_ulid))
+        OR (c.phase='branch_deleting' AND a.phase='active' AND o.state='created' AND o.index_owner_epoch=0 AND c.initial_primary_oid IS NOT NULL AND EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.observation IS NULL))
+        OR (c.phase='index_pending' AND a.phase='active' AND o.state IN ('authoritative_observed','indexing','failed','observed','persisted','retry','index_invalidated') AND c.materialization_settled=1 AND c.absence_basis='owned_intent' AND c.branch_removal='observed' AND EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.observation='removed'))
+        OR (c.phase='complete' AND a.phase='ended' AND o.state='completed' AND o.index_owner_epoch>0 AND c.materialization_settled=1 AND c.absence_basis='owned_intent' AND c.final_code='ok' AND c.branch_removal='observed' AND EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.observation='removed')))
+      AND (c.phase='selected' OR EXISTS(SELECT 1 FROM context_retirement_effect_intents e JOIN poll_retirement_freezes f ON f.binding_id=e.receipt_id WHERE e.operation_ulid=c.operation_ulid AND e.owner_epoch=1 AND e.resource='branch' AND e.primary_oid=c.initial_primary_oid AND f.operation_ulid=?12 AND f.owner_epoch=?19))
+      AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND (e.resource!='branch' OR e.owner_epoch!=1)))", params![k.child_operation_id,p.repository,p.root,k.kind,k.item_id,k.expected_tip,p.remote,p.primary,p.generation,p.endpoint,p.request,p.operation,k.ordinal as i64,k.materialization_capture,k.materialization_operation_id,k.materialization_oid,k.materialization_step,p.request_attempt,p.epoch], |r|r.get(0)).map_err(|_|recovery_required())?;
+    if !valid {
+        return Ok(false);
+    }
+    let result: Option<String> = db
+        .query_row(
+            "SELECT final_result FROM context_retirement_records WHERE operation_ulid=?1",
+            [&k.child_operation_id],
+            |r| r.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    if let Some(result) = result {
+        let report = super::super::ContextRetirementReport::decode(&result)?;
+        if report
+            != super::super::ContextRetirementReport::retired(
+                super::super::RetirementRemoval::None,
+                super::super::RetirementRemoval::Observed,
+            )
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
 
 /// Live C exclusion, not historical correlation. A released remote slot does
 /// not settle its integration stages or native resolution artifacts. Match the
@@ -67,7 +132,7 @@ fn refused_row(
 
 /// Historical recognition only. It cannot produce any live C or child permit.
 pub(super) fn admitted(db: &Connection, child: &str) -> Result<bool, RepositoryError> {
-    let row:Option<(String,i64,String)>=db.query_row("SELECT c.batch_operation_ulid,a.batch_attempt_epoch,c.final_result FROM context_retirement_records c JOIN context_retirement_attempts a ON a.operation_ulid=c.operation_ulid AND a.owner_epoch=c.owner_epoch WHERE c.operation_ulid=?1 AND c.batch_operation_ulid IS NOT NULL",[child],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|recovery_required())?;
+    let row:Option<(String,i64,Option<String>)>=db.query_row("SELECT c.batch_operation_ulid,a.batch_attempt_epoch,c.final_result FROM context_retirement_records c JOIN context_retirement_attempts a ON a.operation_ulid=c.operation_ulid AND a.owner_epoch=c.owner_epoch WHERE c.operation_ulid=?1 AND c.batch_operation_ulid IS NOT NULL",[child],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|recovery_required())?;
     let Some((operation, epoch, result)) = row else {
         return Ok(false);
     };
@@ -78,7 +143,12 @@ pub(super) fn admitted(db: &Connection, child: &str) -> Result<bool, RepositoryE
     let Some(k) = entries.iter().find(|k| k.child_operation_id == child) else {
         return Err(recovery_required());
     };
-    refused_row(db, &p, k, &result)
+    if let Some(result) = result.as_deref()
+        && refused_row(db, &p, k, result)?
+    {
+        return Ok(true);
+    }
+    positive_row(db, &p, k)
 }
 
 fn projected(
@@ -102,13 +172,38 @@ fn projected(
             return Err(recovery_required());
         }
         if i < cursor {
-            if state != "refused"
-                || handoff != "final"
-                || !refused_row(db, p, k, result.as_deref().ok_or_else(recovery_required)?)?
-            {
+            let result = result.as_deref().ok_or_else(recovery_required)?;
+            let final_ok = match state.as_str() {
+                "refused" => refused_row(db,p,k,result)?,
+                "complete" => positive_row(db,p,k)? && db.query_row("SELECT phase='complete' AND final_result=?2 FROM context_retirement_records WHERE operation_ulid=?1",params![k.child_operation_id,result],|r|r.get::<_,bool>(0)).map_err(|_|recovery_required())?,
+                _ => false,
+            };
+            if handoff != "final" || !final_ok {
                 return Err(recovery_required());
             }
         } else {
+            if i == cursor
+                && matches!(
+                    (state.as_str(), handoff.as_str()),
+                    ("running", "cleanup") | ("running", "index_pending")
+                )
+            {
+                let phase: String = db
+                    .query_row(
+                        "SELECT phase FROM context_retirement_records WHERE operation_ulid=?1",
+                        [&k.child_operation_id],
+                        |r| r.get(0),
+                    )
+                    .map_err(|_| recovery_required())?;
+                if result.is_some()
+                    || !positive_row(db, p, k)?
+                    || (phase == "index_pending") != (handoff == "index_pending")
+                    || phase == "complete"
+                {
+                    return Err(recovery_required());
+                }
+                continue;
+            }
             if state != "waiting" || result.is_some() || handoff != "not_started" {
                 return Err(recovery_required());
             }
@@ -165,7 +260,7 @@ pub(in super::super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
         };
     }
     contract(db)?;
-    let orphan:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM poll_retirement_targets t LEFT JOIN poll_retirement_cursors c USING(operation_ulid,owner_epoch) WHERE c.operation_ulid IS NULL) OR EXISTS(SELECT 1 FROM context_retirement_records c WHERE c.batch_operation_ulid IS NOT NULL AND NOT EXISTS(SELECT 1 FROM poll_retirement_targets t JOIN poll_retirement_cursors cursor USING(operation_ulid,owner_epoch) WHERE t.operation_ulid=c.batch_operation_ulid AND t.ordinal=c.batch_ordinal AND t.ordinal<cursor.next_ordinal AND t.state='refused' AND t.final_result=c.final_result AND json_extract(t.candidate,'$.child_operation_id')=c.operation_ulid))",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+    let orphan:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM poll_retirement_targets t LEFT JOIN poll_retirement_cursors c USING(operation_ulid,owner_epoch) WHERE c.operation_ulid IS NULL) OR EXISTS(SELECT 1 FROM context_retirement_records c WHERE c.batch_operation_ulid IS NOT NULL AND NOT EXISTS(SELECT 1 FROM poll_retirement_targets t JOIN poll_retirement_cursors cursor USING(operation_ulid,owner_epoch) WHERE t.operation_ulid=c.batch_operation_ulid AND t.ordinal=c.batch_ordinal AND ((t.ordinal<cursor.next_ordinal AND t.state IN ('refused','complete') AND t.final_result=c.final_result) OR (t.ordinal=cursor.next_ordinal AND t.state='running' AND t.final_result IS NULL AND c.final_result IS NULL)) AND json_extract(t.candidate,'$.child_operation_id')=c.operation_ulid))",[],|r|r.get(0)).map_err(|_|recovery_required())?;
     if orphan {
         return Err(recovery_required());
     }
@@ -229,7 +324,8 @@ pub(super) fn require_completed_release(
 }
 
 pub(in super::super::super) struct Live {
-    capture: Capture,
+    capture: Arc<OriginalCapture>,
+    branches: std::sync::Mutex<Vec<Option<BranchLifetime>>>,
 }
 pub(in super::super::super) struct Child<'a> {
     live: &'a Live,
@@ -237,7 +333,10 @@ pub(in super::super::super) struct Child<'a> {
 }
 impl Live {
     pub(super) fn from_original(capture: Capture) -> Self {
-        Self { capture }
+        Self {
+            capture: Arc::new(capture.evidence),
+            branches: std::sync::Mutex::new(capture.branches),
+        }
     }
     #[allow(dead_code)] // Task 4 owns invoking individual private transitions.
     pub(in super::super::super) fn next<'a>(
@@ -260,12 +359,36 @@ impl Live {
         id: i64,
         root: &Path,
     ) -> Result<(Frozen, Vec<Candidate>, usize), RepositoryError> {
-        let c = &self.capture;
-        let p = &c.p;
-        if !Arc::ptr_eq(&c.scope, &service.remote_reservation_scope)
-            || root.to_str() != Some(p.root.as_str())
-            || id != p.repository
+        if !Arc::ptr_eq(&self.capture.scope, &service.remote_reservation_scope)
+            || self.capture.registry != service.registry_path
         {
+            return Err(recovery_required());
+        }
+        self.validate_owned(tx, id, root, None)
+    }
+
+    fn validate_owned(
+        &self,
+        tx: &Connection,
+        id: i64,
+        root: &Path,
+        own: Option<i64>,
+    ) -> Result<(Frozen, Vec<Candidate>, usize), RepositoryError> {
+        Self::validate_capture(&self.capture, tx, id, root, own)
+    }
+
+    fn validate_capture(
+        c: &OriginalCapture,
+        tx: &Connection,
+        id: i64,
+        root: &Path,
+        own: Option<i64>,
+    ) -> Result<(Frozen, Vec<Candidate>, usize), RepositoryError> {
+        if tx.path() != c.registry.to_str() {
+            return Err(recovery_required());
+        }
+        let p = &c.p;
+        if root.to_str() != Some(p.root.as_str()) || id != p.repository {
             return Err(recovery_required());
         }
         record::audit_connection(tx)?;
@@ -291,18 +414,42 @@ impl Live {
         if !live {
             return Err(recovery_required());
         }
-        crate::repository::recovery::require_no_pending_local(tx, id)?;
+        if let Some(local) = own {
+            // The validated exact current Ki is the ONLY pending exemption.
+            let foreign: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM operation_records WHERE root_path=?1 AND (state!='completed' OR completed_step='comment_registration_pending') AND id!=?2)",params![p.root,local],|r|r.get(0)).map_err(|_|recovery_required())?;
+            if foreign {
+                return Err(recovery_required());
+            }
+            crate::repository::local_sync::record::require_no_pending(tx, id)?;
+        } else {
+            crate::repository::recovery::require_no_pending_local(tx, id)?;
+        }
         require_no_retained_integration(tx, id)?;
         let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND (phase IN ('reserved','advertising','persisting','fetch_prepared','fetch_observed','local_prepared','local_fast_forwarded','push_prepared','push_returned','push_verified','reconciling') OR index_pending!=0 OR reconciliation_required!=0))",[id],|r|r.get(0)).map_err(|_|recovery_required())?;
         let plan = crate::repository::RemoteRefPlan::from_configuration(&p.remote, &p.primary)
             .map_err(|_| recovery_required())?;
-        if blocked || !c.configuration.matches_owned(service, tx, root, &plan)? {
+        if blocked
+            || !c.configuration.matches_owned_at(
+                tx,
+                root,
+                &plan,
+                c.registry.parent().ok_or_else(recovery_required)?,
+            )?
+        {
             return Err(recovery_required());
         }
         Ok((f, entries, cursor))
     }
 }
 impl Child<'_> {
+    #[allow(dead_code)]
+    pub(in super::super::super) fn execute_branch_only(
+        self,
+        service: &RepositoryService,
+    ) -> Result<super::super::ContextRetirementOutcome, RepositoryError> {
+        self.execute(service)
+    }
+
     #[allow(dead_code)] // No public command/coordinator is installed.
     pub(in super::super::super) fn refuse_if_changed(
         self,
@@ -355,6 +502,26 @@ pub(in super::super::super) fn read_refusal(
     operation: OperationId,
     ordinal: usize,
 ) -> Result<Option<super::super::ContextRetirementReport>, RepositoryError> {
+    read_final_kind(service, root, operation, ordinal, true)
+}
+
+#[allow(dead_code)]
+pub(in super::super::super) fn read_final(
+    service: &RepositoryService,
+    root: &Path,
+    operation: OperationId,
+    ordinal: usize,
+) -> Result<Option<super::super::ContextRetirementReport>, RepositoryError> {
+    read_final_kind(service, root, operation, ordinal, false)
+}
+
+fn read_final_kind(
+    service: &RepositoryService,
+    root: &Path,
+    operation: OperationId,
+    ordinal: usize,
+    refusal: bool,
+) -> Result<Option<super::super::ContextRetirementReport>, RepositoryError> {
     state::with_transaction(service, root, |tx, id| {
         contract(tx)?;
         record::audit_connection(tx)?;
@@ -377,7 +544,7 @@ pub(in super::super::super) fn read_refusal(
         if ordinal >= cursor {
             return Ok(None);
         }
-        let result:String=tx.query_row("SELECT final_result FROM poll_retirement_targets WHERE operation_ulid=?1 AND owner_epoch=?2 AND ordinal=?3 AND state='refused' AND handoff='final'",params![p.operation,p.epoch,ordinal as i64],|r|r.get(0)).map_err(|_|recovery_required())?;
+        let result:String=tx.query_row("SELECT final_result FROM poll_retirement_targets WHERE operation_ulid=?1 AND owner_epoch=?2 AND ordinal=?3 AND (state='refused' OR (?4=0 AND state='complete')) AND handoff='final'",params![p.operation,p.epoch,ordinal as i64,refusal],|r|r.get(0)).map_err(|_|recovery_required())?;
         Ok(Some(super::super::ContextRetirementReport::decode(
             &result,
         )?))

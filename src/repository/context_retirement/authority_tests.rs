@@ -201,6 +201,7 @@ impl Fixture {
             record_id,
             epoch,
             retirement_request: Some(fence),
+            retirement_batch: None,
         }
     }
 }
@@ -218,19 +219,19 @@ fn retirement_f2_index_envelope_is_checked_before_every_owned_write() {
         let f = Fixture::with_request(true);
         let owner = f.index_owner();
         let db = f.db();
-        assert!(recovery::owns_indexing(&db, owner).unwrap());
+        assert!(recovery::owns_indexing(&db, owner.clone()).unwrap());
         db.execute_batch(sql).unwrap();
         let before = registry_image(&db);
-        if recovery::owns_indexing(&db, owner).is_ok() {
+        if recovery::owns_indexing(&db, owner.clone()).is_ok() {
             failures.push((sql, "ownership"));
         }
-        if recovery::touch_indexing(&db, owner).is_ok() {
+        if recovery::touch_indexing(&db, owner.clone()).is_ok() {
             failures.push((sql, "heartbeat"));
         }
-        if recovery::record_owned_persisted_context(&db, owner, &f.request.root).is_ok() {
+        if recovery::record_owned_persisted_context(&db, owner.clone(), &f.request.root).is_ok() {
             failures.push((sql, "persistence"));
         }
-        if recovery::transition_indexing(&db, owner, "failed", None).is_ok() {
+        if recovery::transition_indexing(&db, owner.clone(), "failed", None).is_ok() {
             failures.push((sql, "error"));
         }
         if before != registry_image(&db) {
@@ -253,7 +254,7 @@ fn retirement_f2_index_guard_keeps_ordinary_nullable_target_claim_semantics() {
         .expect("ordinary refresh may have a NULL target")
         .unwrap();
     assert!(owner.retirement_request.is_none());
-    assert!(recovery::owns_indexing(&db, owner).unwrap());
+    assert!(recovery::owns_indexing(&db, owner.clone()).unwrap());
     assert!(recovery::touch_indexing(&db, owner).unwrap());
 }
 
@@ -267,9 +268,10 @@ fn retirement_f2_index_guard_preserves_domain_only_explicit_invalidation_reclaim
         recovery::invalidate_index_observations(tx, id)
     })
     .unwrap();
-    let new = recovery::reclaim_invalidated_indexing(&db, old, f.request.root.to_str().unwrap())
-        .expect("existing domain-only reclaim remains valid")
-        .unwrap();
+    let new =
+        recovery::reclaim_invalidated_indexing(&db, old.clone(), f.request.root.to_str().unwrap())
+            .expect("existing domain-only reclaim remains valid")
+            .unwrap();
     assert_eq!(new.epoch, old.epoch + 2);
     assert!(new.retirement_request.is_none());
     assert!(recovery::owns_indexing(&db, new).unwrap());
@@ -314,7 +316,7 @@ fn retirement_f2_index_sql_rejoins_current_request_at_every_write_and_finalizer(
         let f = Fixture::with_request(true);
         let mut owner = f.index_owner();
         let db = f.db();
-        assert!(recovery::owns_indexing(&db, owner).unwrap());
+        assert!(recovery::owns_indexing(&db, owner.clone()).unwrap());
         let id: String = db
             .query_row("SELECT request_ulid FROM request_records", [], |r| r.get(0))
             .unwrap();
@@ -372,24 +374,34 @@ fn retirement_f2_index_sql_rejoins_current_request_at_every_write_and_finalizer(
             }
         }
         let before = registry_image(&db);
-        assert!(recovery::owns_indexing(&db, owner).is_err(), "{case}");
-        assert!(recovery::touch_indexing(&db, owner).is_err(), "{case}");
         assert!(
-            recovery::transition_indexing(&db, owner, "failed", None).is_err(),
+            recovery::owns_indexing(&db, owner.clone()).is_err(),
             "{case}"
         );
         assert!(
-            recovery::record_owned_persisted_context(&db, owner, &f.request.root).is_err(),
+            recovery::touch_indexing(&db, owner.clone()).is_err(),
             "{case}"
         );
         assert!(
-            recovery::reclaim_invalidated_indexing(&db, owner, f.request.root.to_str().unwrap())
-                .is_err(),
+            recovery::transition_indexing(&db, owner.clone(), "failed", None).is_err(),
+            "{case}"
+        );
+        assert!(
+            recovery::record_owned_persisted_context(&db, owner.clone(), &f.request.root).is_err(),
+            "{case}"
+        );
+        assert!(
+            recovery::reclaim_invalidated_indexing(
+                &db,
+                owner.clone(),
+                f.request.root.to_str().unwrap()
+            )
+            .is_err(),
             "{case}"
         );
         assert!(
             state::with_transaction(&f.service, &f.request.root, |tx, id| {
-                super::super::finalize_index(tx, owner, id, &f.request.root)
+                super::super::finalize_index(tx, owner.clone(), id, &f.request.root)
             })
             .is_err(),
             "{case}"
@@ -480,8 +492,8 @@ fn retirement_f2_orphaned_companion_never_becomes_unfenced_generic_index_authori
             db.execute("DELETE FROM request_operations", []).unwrap();
         }
         let before = registry_image(&db);
-        assert!(recovery::owns_indexing(&db, owner).is_err());
-        assert!(recovery::touch_indexing(&db, owner).is_err());
+        assert!(recovery::owns_indexing(&db, owner.clone()).is_err());
+        assert!(recovery::touch_indexing(&db, owner.clone()).is_err());
         assert!(recovery::claim_indexing(&db, owner.record_id, i64::MAX).is_err());
         assert!(
             f.service

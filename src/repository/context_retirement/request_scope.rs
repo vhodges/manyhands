@@ -316,6 +316,7 @@ impl RepositoryService {
                 record_id: local,
                 epoch: next,
                 retirement_request: Some(fence),
+                retirement_batch: None,
             });
             Ok((id, owner))
         })?;
@@ -324,7 +325,7 @@ impl RepositoryService {
         };
         let heartbeat = crate::repository::IndexOwnerHeartbeat::start(
             self.registry_path.clone(),
-            owner,
+            owner.clone(),
             root.clone(),
             self.take_index_owner_heartbeat_hook(),
         );

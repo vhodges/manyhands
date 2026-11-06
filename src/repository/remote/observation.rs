@@ -37,14 +37,41 @@ impl ObservationConfiguration {
         root: &std::path::Path,
         plan: &RemoteRefPlan,
     ) -> Result<Self, RepositoryError> {
-        let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
-        let selected = crate::repository::keys::stored_shared_key_registrations(
+        Self::capture_owned_at(
             db,
-            crate::repository::RepositoryOperation::RepositorySnapshot,
+            root,
+            plan,
             service
                 .registry_path
                 .parent()
                 .ok_or_else(state::recovery_required)?,
+        )
+    }
+
+    pub(in super::super) fn matches_owned_at(
+        &self,
+        db: &rusqlite::Connection,
+        root: &std::path::Path,
+        plan: &RemoteRefPlan,
+        data: &std::path::Path,
+    ) -> Result<bool, RepositoryError> {
+        if observation_plan(root).ok().as_ref() != Some(plan) {
+            return Ok(false);
+        }
+        Ok(self == &Self::capture_owned_at(db, root, plan, data)?)
+    }
+
+    fn capture_owned_at(
+        db: &rusqlite::Connection,
+        root: &std::path::Path,
+        plan: &RemoteRefPlan,
+        data: &std::path::Path,
+    ) -> Result<Self, RepositoryError> {
+        let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
+        let selected = crate::repository::keys::stored_shared_key_registrations(
+            db,
+            crate::repository::RepositoryOperation::RepositorySnapshot,
+            data,
         )
         .map_err(|_| state::recovery_required())?
         .into_iter()

@@ -134,6 +134,7 @@ fn claimed(f: &Fixture, stage: &str) -> (RetireContextRequest, RetirementAccepte
             record_id: local,
             epoch: 1,
             retirement_request: Some(fence),
+            retirement_batch: None,
         };
         if stage == "index_invalidated" {
             crate::repository::remote::state::with_transaction(&f.service, &r.root, |tx, id| {

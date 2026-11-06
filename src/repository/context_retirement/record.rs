@@ -1274,8 +1274,8 @@ fn audit_objects(
     if invalid_absence {
         return Err(recovery_required());
     }
-    // Original-P binding and no-effect batch refusals have distinct strict
-    // historical audits below. Destructive/index/gap/preservation scopes stay closed.
+    // Original-P binding, no-effect refusals and the supported original branch-
+    // only child histories have separate strict audits. Gap/preservation stay closed.
     let unsupported_authority: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records WHERE phase IN ('preserving','abandoned'))
       OR EXISTS(SELECT 1 FROM retirement_advertisement_provenance WHERE execution_kind='batch_gap' OR (execution_kind='local_parent' AND execution_batch_operation_ulid IS NOT NULL))
        OR EXISTS(SELECT 1 FROM retirement_observation_receipts b JOIN retirement_advertisement_provenance p ON p.id=b.provenance_id WHERE b.consumer_kind='batch' AND p.execution_kind!='poll_parent')", [], |r| r.get(0)).map_err(|_| recovery_required())?;
@@ -1304,7 +1304,8 @@ fn audit_objects(
     let invalid_effect: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_effect_intents e
       JOIN context_retirement_records c ON c.operation_ulid=e.operation_ulid
       JOIN retirement_observation_receipts b ON b.id=e.receipt_id
-      WHERE b.consumer_kind!='single' OR b.consumer_operation_ulid!=e.operation_ulid OR b.consumer_attempt_epoch!=e.owner_epoch
+      WHERE NOT coalesce((b.consumer_kind='single' AND c.batch_operation_ulid IS NULL AND b.consumer_operation_ulid=e.operation_ulid AND b.consumer_attempt_epoch=e.owner_epoch)
+        OR (b.consumer_kind='batch' AND c.batch_operation_ulid IS NOT NULL AND b.consumer_operation_ulid=c.batch_operation_ulid AND EXISTS(SELECT 1 FROM context_retirement_attempts a WHERE a.operation_ulid=c.operation_ulid AND a.owner_epoch=e.owner_epoch AND a.request_attempt=b.consumer_request_attempt AND c.request_ulid=b.consumer_request_ulid AND a.batch_attempt_epoch=b.consumer_attempt_epoch)),0)
         OR b.repository_id!=c.repository_id OR c.initial_resources NOT IN ('present','branch_only')
         OR (e.resource='worktree' AND (c.initial_resources!='present' OR c.instance_verified!=1 OR (c.worktree_removal='none' AND NOT coalesce(c.phase='refused' AND e.observation='changed',0))))
         OR (e.resource='branch' AND c.branch_removal='none' AND NOT coalesce((c.phase='refused' OR (c.phase='worktree_removed' AND c.worktree_removal='observed') OR EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch)) AND e.observation='changed',0))
@@ -1482,6 +1483,28 @@ fn audit_objects(
 
 pub(in super::super) fn audit_connection(db: &Connection) -> Result<(), RepositoryError> {
     audit(db)
+}
+
+/// Shared local-consumer Fetch/absence proof. The caller separately establishes
+/// either the exact standalone observer binding or the original-live batch C.
+pub(super) fn require_fetch_absence(
+    db: &Connection,
+    receipt: i64,
+    repository: i64,
+    kind: crate::repository::AuthoringKind,
+    item: &crate::canonical::ItemId,
+    plan: &crate::repository::RemoteRefPlan,
+) -> Result<(), RepositoryError> {
+    let snapshot = super::super::remote::state::read_snapshot(db, repository)?;
+    let advertised:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM remote_ref_observations o JOIN retirement_advertisement_provenance p ON p.observation_batch_id=o.batch_id JOIN retirement_observation_receipts b ON b.provenance_id=p.id WHERE b.id=?1 AND o.remote_ref=?2)",params![receipt,plan.context(kind,item).remote_ref()],|r|r.get(0)).map_err(|_|recovery_required())?;
+    if advertised
+        || snapshot.fetch_publication_evidence_for(kind, item)
+            != crate::repository::RemotePublicationEvidence::ObservedPublished
+        || !snapshot.context_deletion_observed(kind, item)
+    {
+        return Err(recovery_required());
+    }
+    Ok(())
 }
 
 /// Metadata-only Final for a selected, no-effect domain attempt whose original
@@ -1729,6 +1752,9 @@ pub(in super::super) fn finalize_index(
     repository_id: i64,
     root: &std::path::Path,
 ) -> Result<bool, RepositoryError> {
+    if let Some(scope) = &owner.retirement_batch {
+        return scope.finalize(tx, &owner, repository_id, root);
+    }
     super::request_scope::validate_index(
         tx,
         owner.record_id,

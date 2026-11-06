@@ -1,5 +1,6 @@
 //! Private A2/A3 projection adapter. No Task 4 schema/producer, target selection,
-//! enrollment, child begin or batch consumption is installed by this module.
+//! enrollment or coordinator is installed here; the original Capture supplies
+//! the sealed private batch-consumption transitions in batch.rs.
 use super::{
     record,
     source::{self, Projection},
@@ -324,6 +325,19 @@ fn digest(p: &Projection, image: &str, report: &str) -> Vec<u8> {
 // Non-Clone and one-use. It escapes only after the owned transaction commits.
 // Its constructor is the preterminal freeze, never a result/replay callback.
 pub(in super::super) struct Capture {
+    evidence: OriginalCapture,
+    // Kept outside shared evidence, so index-only scopes cannot retain or
+    // reconstruct branch deletion permits for this or another frozen child.
+    branches: Vec<Option<batch::BranchLifetime>>,
+}
+impl std::ops::Deref for Capture {
+    type Target = OriginalCapture;
+    fn deref(&self) -> &Self::Target {
+        &self.evidence
+    }
+}
+
+pub(in super::super) struct OriginalCapture {
     scope: Arc<()>,
     p: Projection,
     // Exact sealed source configuration, including selected key/source identity.
@@ -332,6 +346,7 @@ pub(in super::super) struct Capture {
     nonce: String,
     digest: Vec<u8>,
     report: String,
+    registry: std::path::PathBuf,
 }
 
 pub(super) fn freeze(
@@ -351,6 +366,12 @@ pub(super) fn freeze(
     let (count,image):(i64,String)=tx.query_row("SELECT candidate_count,image FROM poll_retirement_freeze_inputs WHERE operation_ulid=?1 AND owner_epoch=?2 AND request_attempt=?3 AND source_owner_epoch=?4 AND configuration_generation=?5",params![p.operation,p.epoch,p.request_attempt,p.source_epoch,p.generation],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|_|recovery_required())?;
     let entries = decode_image(&image, count)?;
     verify_candidates(tx, p, &entries)?;
+    let branches = entries
+        .iter()
+        .map(|k| {
+            (k.initial_resources == "branch_only").then(|| batch::BranchLifetime::from_freeze(k))
+        })
+        .collect();
     for k in &entries {
         if reserved_child(tx, &k.child_operation_id)?
             || k.child_operation_id == p.operation
@@ -382,12 +403,16 @@ pub(super) fn freeze(
     tx.execute("INSERT INTO poll_retirement_freezes(operation_ulid,owner_epoch,provenance_id,binding_id,capture_nonce,candidate_count,image,original_report,digest,eligibility,final_code) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,'unconfirmed',NULL)",params![p.operation,p.epoch,provenance,binding,nonce,count,image,report,digest]).map_err(|_|recovery_required())?;
     if tx.execute("UPDATE poll_retirement_batches SET stage='frozen' WHERE operation_ulid=?1 AND owner_epoch=?2 AND stage='unplanned'",params![p.operation,p.epoch]).map_err(|_|recovery_required())?!=1 {return Err(recovery_required());}
     Ok(Capture {
-        scope: Arc::clone(&service.remote_reservation_scope),
-        p: p.clone(),
-        configuration,
-        nonce,
-        digest,
-        report,
+        evidence: OriginalCapture {
+            scope: Arc::clone(&service.remote_reservation_scope),
+            p: p.clone(),
+            configuration,
+            nonce,
+            digest,
+            report,
+            registry: service.registry_path.clone(),
+        },
+        branches,
     })
 }
 

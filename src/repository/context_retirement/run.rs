@@ -648,7 +648,7 @@ fn observe<P: SessionCredentialProvider>(
     Ok(())
 }
 
-fn branch_only(
+pub(super) fn branch_only(
     git: &git2::Repository,
     request: &RetireContextRequest,
 ) -> Result<Option<git2::Oid>, RepositoryError> {
@@ -685,7 +685,7 @@ fn branch_only(
     Ok(tip)
 }
 
-fn require_absent(
+pub(super) fn require_absent(
     git: &git2::Repository,
     request: &RetireContextRequest,
 ) -> Result<(), RepositoryError> {
@@ -696,7 +696,7 @@ fn require_absent(
     }
 }
 
-fn local_proof(
+pub(super) fn local_proof(
     git: &git2::Repository,
     request: &RetireContextRequest,
     tip: git2::Oid,
@@ -791,7 +791,7 @@ fn local_proof(
     }
     Ok((primary, proof))
 }
-fn proof_name(proof: proof::PreservationProof) -> &'static str {
+pub(super) fn proof_name(proof: proof::PreservationProof) -> &'static str {
     match proof {
         proof::PreservationProof::Ancestor => "ancestor",
         proof::PreservationProof::Folded => "folded",

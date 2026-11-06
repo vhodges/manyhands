@@ -1,5 +1,5 @@
-//! Standalone execution only. Source/batch scopes stay closed until their full
-//! holder/projection audits and release transitions are installed.
+//! Standalone remote-observer execution. Batch local consumers use their own
+//! sealed original-C scope, never a fabricated reservation or observer identity.
 use super::super::request_scope::Scope;
 use super::super::{ContextRetirementReport, RetireContextRequest};
 use crate::repository::{
@@ -177,15 +177,7 @@ impl ObserverExecution {
           AND p.source_operation_ulid=?4 AND p.source_owner_epoch=?5 AND b.configuration_generation=?6
           AND batch.is_current=1 AND batch.configuration_generation=?6 AND batch.repository_id=?3
           AND p.observation_batch_id=batch.id AND pin.holder_operation_ulid=?1 AND pin.holder_epoch=?2", params![self.operation.to_string(),self.epoch,id,self.observer.to_string(),self.observer_epoch,self.generation], |r|r.get(0)).map_err(RepositoryError::sqlite)?;
-        let snapshot = state::read_snapshot(tx, id)?;
-        let advertised:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM remote_ref_observations o JOIN retirement_advertisement_provenance p ON p.observation_batch_id=o.batch_id JOIN retirement_observation_receipts b ON b.provenance_id=p.id WHERE b.id=?1 AND o.remote_ref=?2)",params![receipt,self.plan.context(kind,item).remote_ref()],|r|r.get(0)).map_err(RepositoryError::sqlite)?;
-        if advertised
-            || snapshot.fetch_publication_evidence_for(kind, item)
-                != crate::repository::RemotePublicationEvidence::ObservedPublished
-            || !snapshot.context_deletion_observed(kind, item)
-        {
-            return Err(recovery_required());
-        }
+        super::require_fetch_absence(tx, receipt, id, kind, item, &self.plan)?;
         Ok(receipt)
     }
 }
