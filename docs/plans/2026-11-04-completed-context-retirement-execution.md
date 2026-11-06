@@ -22,11 +22,13 @@ through `989a5807`, including P1/P2 and Q1–Q3 corrections. The same SPEC revie
 approved the compatibility delta before the same QUALITY reviewer approved the
 whole original Task 3 range. Task 4's production original-live pass was delivered
 at `01a386ee` with checkpoint `9b6e4527`. Same-reviewer SPEC passed through
-`126c2d72`, resolving S1–S4. Fresh QUALITY found only one Important finding, I1:
-live transport stops were replaced by coarse journal reconstruction. I1 is locally
-corrected at `6dc056b7`; the extended CUT table, existing producer contract/golden
-test and strict Clippy/fmt pass at their recorded scopes. Same SPEC delta review,
-then same QUALITY full-range re-review, remain pending. Ticket remains
+`126c2d72`, resolving S1–S4. Fresh QUALITY found only I1 (live transport stops
+replaced by coarse journal reconstruction), corrected at `6dc056b7`. Same SPEC
+delta review accepted I1's live codes, host route and strict copy audit, but found
+one Important lost-copy discovery-effect regression. Its bounded correction is
+locally committed at `269567b2`; the extended exact CUT table and strict Clippy/fmt
+pass at that source. Same SPEC delta pass, then same QUALITY full-range re-review,
+remain pending. Ticket remains
 `implementing`, not full Task 2 or feature review-ready.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
 [the delivery checkpoint](#task-3--ordinary-binding-and-guarded-preserving-recovery).
@@ -130,10 +132,11 @@ Neither recovery route advances parent. Both corrections are internal under D15.
    parent-capture-bound batch execution/index paths, not merely disable resume.
    **Implemented at `01a386ee`; the original 39 exact local tests/statics retain
    only their recorded source scopes below. SPEC passed through `126c2d72`,
-   including S1–S4. Fresh QUALITY's sole Important I1 is locally corrected at
-   `6dc056b7`, with the exact CUT/producer-contract tests and strict Clippy/fmt
-   evidence below. Same SPEC delta, then same QUALITY full-range re-review, remain
-   pending, so this delivery/review gate is not checked complete.**
+   including S1–S4. Fresh QUALITY's sole I1 correction at `6dc056b7` retains its
+   exact CUT/producer-contract evidence. Same SPEC delta found one Important
+   after-cut lost-copy effect regression, locally corrected at `269567b2` with
+   exact CUT and strict Clippy/fmt evidence. Same SPEC delta pass, then same
+   QUALITY full-range re-review, remain pending; this gate is not complete.**
 - [ ] Tasks 5–6: CLI + relevant local acceptance and at most one new justified
   SSH connection E2E; no new SSH edge-case matrix. Existing 105 SSH cases are
   legacy evidence; review coverage mapping before any forward consolidation/rehome.
@@ -6250,3 +6253,129 @@ remain outstanding. No agents, new batch framework, push, PR, other-worktree,
 main/closure/native or real-profile/key/context/draft action. No owned jobs remain.
 This is local I1 correction evidence, not full-feature completion; metadata-only
 ledger/comment bookkeeping does not call for another unchanged-source Rust run.
+
+### Task 4 I1 SPEC Delta — Truthful Discovery After Cut-Copy Loss (2026-11-06)
+
+**Review standing:** same SPEC reviewer **`ses_e4d9ed4e6ffeSwu9GiwqH5QMvl`**
+judged the I1 live codes, safe host route and strict host-copy audit correct, but
+found **one Important correction regression**: reconstructing a precise
+RecoveryRequired cut after boundary-copy loss falsely claimed discovery Current
+for an original P that failed before any refresh. The controller traced and
+verified `answer()` and `pass_report::finish`'s existing-cut return. S1–S4 remain
+resolved. **QUALITY is still gated on a passing SPEC delta**, not approved by
+this local correction or by acceptance of the other I1 mechanisms.
+
+**Correction source commit:** **`269567b244a74407a7b284353b3fe313bc5944f6`**,
+`fix: derive recovered pass effects from original poll`, with the required
+`Co-Authored-By: GPT-6.1 Sol <noreply@openai.com>`. This delta starts from
+**`e3109b9729c68757f9955eab8b98acdbf9cd5191`**. Initial I1 source
+**`6dc056b7d7d39056bc0ddf40ee3496898b5d75b1`** and all older commits/evidence
+remain intact. The **original Task 4 review base is still
+`0c1be623487f6634187a0ed031ce518a47b8c16f`**, not this worker's delta base.
+Existing origin/main remains `79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`; no new
+fetch/merge/rebase or other-worktree action occurred.
+
+#### Root Mechanism And Minimal Private Correction
+
+The wire poll completion `Completed` means terminal, including terminal failure.
+I1 correctly preserved a live HostVerificationUnavailable answer as
+RecoveryRequired / NotRequested and committed that precise stopped cut. When
+`BeforeRequestSettlement` lost the ordinary boundary copy **after** the cut,
+retry read the immutable report but `answer(cut)` inferred Current merely from
+wire Completed + RecoveryRequired. The previous I1 lost-original controls lost
+the answer **before** a cut existed, so did not exercise this route.
+
+Only two production files and the existing
+`src/repository/context_retirement/mutation_tests.rs` table change:
+
+- `src/repository/context_retirement/pass.rs`: private
+  `original_poll_completed` audits the retirement metadata, validates the current
+  accepted parent/request mapping and reads the **exact repository-scoped
+  original manual UPDATE-P** through the typed journal reader. Only phase
+  Completed **and** outcome Completed qualify as successful original P evidence.
+  Missing/malformed/wrong-kind evidence refuses; it is never reconstructed or
+  treated as success. This is a read, not poll replay, refresh or transport.
+- `src/repository/mutation/bind/poll_retirement.rs`: `finish` reads that evidence
+  before composing the new answer. The existing Current inference is gated by
+  durable original-P success. Existing child Discovery debt / DiscoveryPending
+  priority remains unchanged, before that gate. A failed original P therefore
+  recovers NotRequested, while positive successful-original Current and pending
+  discovery cases keep their meanings.
+- `pass::has_cut` plus binding reentry routes **any existing cut** straight to
+  metadata reconciliation, even when no candidate image was captured. The
+  missing-P negative exposed that checking only `has_capture` could otherwise
+  start an ordinary P before the effect read. With cut-first dispatch, missing
+  or corrupt P remains Owed/RecoveryRequired without a replacement P or registry/
+  disk effects beyond request-attempt bookkeeping.
+
+No DTO, cut bytes, closed shape, schema, golden, catalog, receipt migration or
+external contract changes. `pass_report::finish` still returns the existing cut
+unchanged; no journal/effect data is synthesized or silently repaired. Already
+finished requests continue to replay their saved code/effects; this does **not**
+rewrite historical finished results, including any earlier incorrect effect.
+Original live codes, host routes/audit, genuine pre-cut coarse fallback, shared
+token/durable cancellation and cut immutability are preserved.
+
+#### Exact Local RED → GREEN And Controls
+
+Extended only the existing CUT table. All three test invocations used exactly:
+
+```sh
+devenv shell -- cargo test --all-features --locked --lib repository::context_retirement::execution_tests::mutation_tests::retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup -- --exact
+```
+
+The new `copy_lost_host_verify` row uses the **actual existing
+BeforeRequestSettlement fault**, after the public opted producer has committed
+its precise stopped cut. Before retry it proves the parent is still Accepted
+with no stored result, summary is present with RecoveryRequired and nested
+Completed, and index rows are unchanged. Retry must finish with
+RecoveryRequired / discovery NotRequested; full finished replay after reopen is
+identical. Cut bytes, disk and **every non-request registry table** remain
+unchanged across retry: no refresh, child admission, nonce, prune or P execution.
+
+Two companion rows remove P or corrupt its outcome **only in isolated fixture
+registries after the cut**. Both must refuse with NotRequested, keep the parent
+Accepted/Owed, preserve the same cut and all non-request history, and never
+restart P. Existing successful `empty` and `request_cancel_cut` rows now
+explicitly assert Current; existing `index_pending` explicitly asserts Pending.
+The child Discovery-debt priority is unchanged in source; no additional unrun
+child-debt matrix is claimed as new runtime evidence.
+
+| Log (`/tmp/opencode/`) | Actual result / evidence |
+| --- | --- |
+| `task4-i1-cut-effects-red.log` | **Meaningful compiled RED before production fix**, 0 passed / 1 failed, 30.62 s tests / 17.17 s build: valid after-cut retry returned Current instead of NotRequested. It reached the precise loss/cut assertions before failing. Intentional caught crash messages from earlier CUT rows are not separate failures. |
+| `task4-i1-cut-effects-green.log` | **Compiled secondary RED despite filename**, 0 passed / 1 failed, 30.77 s tests / 17.97 s build. The main effect case passed, then the missing-P control found a newly created remote P row and changed polling state. This was a genuine missing-cut-dispatch issue, not a fixture/compile diagnostic or proof of actual SSH traffic. |
+| `task4-i1-cut-effects-green-reentry.log` | **Final GREEN**, 1 passed / 0 failed/ignored/measured, 1653 filtered; **33.98 s tests / 15.93 s build**. Covers the three new after-cut rows, positive Current/Pending controls, and the retained existing CUT/I1 cases. No source edits followed this green run. |
+
+No other test name ran: no original 39-/three-table green rerun, contract rerun,
+broad filter, SSH, fast/full or native tier. All Rust through Devenv; no real
+waits or command near the 15-minute budget. Earlier passing counts/logs keep
+their actual source scopes, not the new correction's scope.
+
+#### Final Static, Integrity And Review Handoff
+
+| Check / artifact | Exact evidence |
+| --- | --- |
+| Strict compilation/lint | `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`, exit 0, **29.40 s**, `task4-i1-cut-effects-clippy.log`. Chosen instead of redundant check. |
+| Format | `devenv shell -- cargo fmt --check`, exit 0, `task4-i1-cut-effects-fmt-check.log`; both formatting passes also used Devenv. |
+| Source whitespace | `git diff --check`, `git diff --cached --check`, and `git diff --check 0c1be623487f6634187a0ed031ce518a47b8c16f HEAD`, exit 0; `task4-i1-cut-effects-{whitespace,staged-whitespace,source-range-whitespace}.log`. |
+| Source merge compatibility | `git merge-tree --write-tree HEAD origin/main`, exit 0, tree **`690c6516b352815a57fa1cd61089f7dddfe3d47a`**, `task4-i1-cut-effects-source-merge-tree.log`. Existing main only; no fetch/rebase/main edit. |
+| Delta source inventory | `/tmp/opencode/task4-i1-cut-effects-sources.sha256`, **3 Rust inputs**, zero mismatches against source commit/current inputs; SHA-256 **`a77bccfdb755268b4cad5f9da81d7d3b563a03f7cffe2c0cd2f9e7087213efee`**. |
+| New raw-log inventory | `/tmp/opencode/task4-i1-cut-effects-logs.sha256`, **11 new logs** (3 test runs, 2 formatting runs, Clippy, fmt check, 4 source Git checks); SHA-256 **`9ab15cd25ef860880a26e395ae38d2acecd9337434d706fb078aef42825dceae`**. Both failed test logs are preserved and explicitly not passing claims. |
+| Literal commands/results | `/tmp/opencode/task4-i1-cut-effects-results.json`, SHA-256 **`056bb39756079b4872d8591daff589364008621a73a1008d4c9816b27e56f332`**. Records stage source scopes, actual SHAs, REDs, final result and review limits. |
+
+Self-review inspected the exact accepted-parent/P correlation, both cut/new-cut
+answer paths, pending-before-current ordering, cut-first reentry, journal
+missing/corruption refusal and immutable finished replay. This is local author
+evidence only. Only this three-input delta/new logs were hashed; all older
+manifests and history are preserved without scope relabeling.
+
+Evidence is appended to existing canonical Task 4 comment
+**`01M6S5GS8CV2W6083N1CJHTKET`**, preserving ID, parent and created timestamp;
+no new comment or ticket-body/status save. **Next: same SPEC reviewer re-reviews
+the I1 delta from `126c2d72` through returned HEAD; only after that passes may
+same QUALITY reviewer `ses_e4d718d13ffe8hzc1y32YLWx3J` re-review the whole original
+`0c1be623487f6634187a0ed031ce518a47b8c16f..returned-HEAD` range.** Tasks 5–8 and
+final gates remain outstanding. No agents, new framework, other-worktree edit,
+push, PR, main/closure/native or real-profile/key/context/draft action. No owned
+jobs remain. Metadata-only ledger/comment bookkeeping needs no further Rust run.

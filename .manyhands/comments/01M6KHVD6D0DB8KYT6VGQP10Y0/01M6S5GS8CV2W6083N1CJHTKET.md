@@ -205,3 +205,64 @@ final gates remain outstanding; ticket stays implementing/open. No agents, new
 batch framework, broad/fast/full/SSH/native tests, real waits, push/PR/main/closure,
 other-worktree edit or real-profile/key/context/draft action. No owned jobs remain.
 This append preserves the existing comment ID, parent and created timestamp.
+
+## Task 4 I1 SPEC delta — lost-copy discovery effects corrected locally
+
+Same SPEC reviewer **`ses_e4d9ed4e6ffeSwu9GiwqH5QMvl`** judged I1's precise live
+codes, host route and strict host-copy audit correct, but found **one Important
+after-cut lost-copy effect regression**, verified by the controller. S1–S4 remain
+resolved; **QUALITY remains gated on SPEC delta pass**.
+
+Correction source **`269567b244a74407a7b284353b3fe313bc5944f6`**, with the required
+coauthor, starts from `e3109b9729c68757f9955eab8b98acdbf9cd5191`. Initial I1
+source `6dc056b7d7d39056bc0ddf40ee3496898b5d75b1` and all earlier commits/evidence
+remain intact. Original Task 4 base is still
+**`0c1be623487f6634187a0ed031ce518a47b8c16f`**.
+
+After a live HostVerificationUnavailable failure, I1 stored a precise
+RecoveryRequired cut. Losing the boundary copy after that commit made retry
+interpret wire Completed as successful discovery and report Current despite no
+refresh. The earlier lost-original controls lost the answer before a cut existed.
+
+The bounded correction requires **audited exact original manual UPDATE-P phase
+Completed and outcome Completed** before deriving Current from a cut. Missing,
+malformed or wrong-kind journal evidence refuses; the read cannot refresh or
+execute P. Existing Pending/child Discovery-debt priority is unchanged. Reentry
+also routes any existing cut directly to metadata reconciliation, including a
+failed preselection pass with no image, so a missing P cannot be restarted first.
+
+Only `context_retirement/pass.rs`, `mutation/bind/poll_retirement.rs` and the
+existing CUT table change under `src/repository/`. No DTO/schema/golden/catalog/
+migration changes or new framework. Cut bytes and already finished code/effects
+are never repaired or rewritten. Precise live codes, host routes, pre-cut coarse
+fallback and cancellation/cut immutability remain intact.
+
+Compiled RED reproduced **after-cut** retry falsely reporting Current. The first
+effect correction then exposed a secondary RED: the missing-P control attempted
+ordinary P execution before reconciliation. Both are preserved in
+`task4-i1-cut-effects-{red,green}.log`; `green.log` is a failure despite its name,
+not a passing or actual-SSH claim. Final `green-reentry.log`: **1 exact CUT test
+passed, 0 failed**, 33.98 s tests / 15.93 s build. It covers actual
+BeforeRequestSettlement loss after cut commit, correct NotRequested settlement
+and stable finished replay, missing/corrupt-P refusal with no non-request
+registry/disk changes, and existing positive Current/Pending controls. No other
+test name, contract, 39-/three-table, SSH/broad/full/native run occurred.
+
+Final strict all-target/all-feature Clippy (**29.40 s**) and format check passed
+through Devenv; no redundant check or real waits. Exact commands and scopes are
+in the execution ledger and `/tmp/opencode/task4-i1-cut-effects-results.json`,
+SHA-256 `056bb39756079b4872d8591daff589364008621a73a1008d4c9816b27e56f332`.
+Only **3 delta Rust inputs** are hashed in `task4-i1-cut-effects-sources.sha256`,
+SHA-256 `a77bccfdb755268b4cad5f9da81d7d3b563a03f7cffe2c0cd2f9e7087213efee`;
+**11 new logs** in `task4-i1-cut-effects-logs.sha256`, SHA-256
+`9ab15cd25ef860880a26e395ae38d2acecd9337434d706fb078aef42825dceae`. All artifacts
+are under `/tmp/opencode/`; source inventory has zero mismatches. Older evidence
+retains its original scope. Source whitespace/full-original-range and merge-tree
+against existing origin/main `79c3931b` are clean.
+
+**Next: same SPEC delta re-review from `126c2d72` through returned HEAD, then same
+QUALITY reviewer `ses_e4d718d13ffe8hzc1y32YLWx3J` on the entire original Task 4
+base-to-returned-HEAD range, only after SPEC passes.** No new approval or feature
+completion claim. Tasks 5–8 and final gates remain outstanding. No agents,
+other-worktree edits, push/PR/main/closure/native or real-profile/key/context/draft
+action. No owned jobs remain. Existing comment ID/parent/timestamp are unchanged.
