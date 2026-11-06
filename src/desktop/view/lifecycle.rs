@@ -576,3 +576,7 @@ mod after_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/lock_gates_tests.rs"]
 mod lock_gates_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/interruption_tests.rs"]
+mod interruption_tests;
