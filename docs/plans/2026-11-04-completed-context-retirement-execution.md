@@ -404,6 +404,11 @@ are not authorized; numeric exits must come from existing results registry.
 | Limited refusal-only A4 final SPEC through `9fa1e9b2`, same base | Reviewer `ses_e564dd7a7ffeYzKXesoyVuGJFs`: **0 remaining findings**, prior S1 pass preserved. Fresh isolated six Q1 regressions passed; live exclusion matches existing next-window debt prerequisites, historical reads stay separate | Limited original-live no-effect-result/C/Z SPEC approved; positive cleanup/index and gap paths remain owed |
 | Limited refusal-only A4 final QUALITY through `9fa1e9b2`, same base, after SPEC | Reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Fresh verbatim original four-variant probe passed, preserving all post-fixture rows/cursors/pins; six Q1 regressions passed independently | Limited refusal/result/Z QUALITY approved. Controller inspected raw independent/static logs and reverified all 1,726 input and 22 evidence hashes. No full A4/Task 2 claim |
 | Positive A4 continuation preflight, 2026-11-06 | Both checkouts clean; fresh fetch succeeded, main/base still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `9fa1e9b21485fdc3624661a4edb5487440b3f033` already up to date | No conflicts/rebase or unmerged branch consumption |
+| Limited positive branch-only A4 SPEC at `3d0a36e4`, base `f82cc04d` | Two Important findings: S1 index-only ownership reused fresh deletion eligibility; S2 known no-effect proof failure stranded the current child. Controller verified both real cleanup/index/no-effect counterexamples | Corrections at `4116187f`; no permission to reconstruct cleanup authority or change approved stage contracts |
+| Limited positive branch-only A4 SPEC re-review at `4116187f`, same base | S1 and dirty-primary S2 cleared; one Important S2 case remained: successfully inspected but different primary/proof pair lost its uninvoked witness | Narrow two-match-arm correction at `c3f88091`; immutable intent pair retained, no new primary adopted for deletion |
+| Limited positive branch-only A4 final SPEC through `c3f88091`, same base | Reviewer `ses_e564dd7a7ffeYzKXesoyVuGJFs`: **0 remaining findings**. Fresh verbatim original probes **5 passed**, primary-pair regressions **4 passed**, retained correction/inspection controls **19 passed** | Limited original-process branch-only cleanup/D14/index/result SPEC approved; full A4/Task 2 still owed |
+| Limited positive branch-only A4 final QUALITY through `c3f88091`, same base, after SPEC | Reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Fresh isolated **56 batch**, **5 original probes**, **23 F2/index** and **1 counter-separation probe** passed; F2=3 with index epoch=1 for both children | Limited branch-only QUALITY approved. Controller inspected raw independent/static evidence and reverified all 1,730 source and 19 log hashes. Synthetic ads/inert producer boundary remains; no full A4/native claim |
+| Present-worktree A4 continuation preflight, 2026-11-06 | Both checkouts clean; fresh fetch succeeded, main/base still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `c3f8809122acd8701668fa7538c18897c85a50e9` already up to date | No conflicts/rebase or unmerged branch consumption |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -456,21 +461,16 @@ are not authorized; numeric exits must come from existing results registry.
   inspection evidence and retained integration debt cause preserving errors, not
   progress. Latest recorded gates are **172 context / 105 retirement SSH / 25 batch**,
   supporting checks below and all three static gates. Fresh independent reruns are
-  listed above. The subsequent **bounded original-live branch-only** checkpoint
-  below connects real B-cleanup/index/result→C-cleanup/index/result, with **42 batch
-  /189 context/105 retirement SSH** and all three statics. It is **pending LIMITED
-  SPEC then QUALITY**, not covered by the refusal-only approval. Present W, gap O,
-  resumed consumption and active-source restart remain closed/owed; no full A4 or
-  Task 2 readiness claim.
-  LIMITED SPEC at `3d0a36e4` found two Important contract violations: I reused fresh
-  deletion gates, and live known-no-effect refusals stranded the child. The same
-  bounded increment's correction below has **52 batch/199 context/105 retirement
-  SSH**, ten new cases and all three statics. **Same SPEC re-review then QUALITY
-  remain pending.** Historical 3d0 evidence is not relabeled as corrected evidence.
-  Same SPEC cleared S1 and original dirty-primary S2 cases at `4116187f`, but found
-  one remaining Important S2: successful **different** primary/proof pairs lost
-  the uninvoked witness. The narrow correction below has **56 batch/203 context/
-  105 retirement SSH**, four new cases and all statics; same SPEC→QUALITY pending.
+  listed above. The **bounded original-live positive branch-only** core is now
+  independently SPEC/QUALITY approved through `c3f88091` from base `f82cc04d`:
+  real B cleanup/D14/discovery/index/result completes before C begins, using the
+  same receipt. I-only ownership is separate from deletion eligibility; known
+  pre-invocation proof changes settle through the original process witness.
+  Latest recorded gates: **56 batch / 203 context / 105 retirement SSH** and all
+  three statics, with supporting checks below. Independent fresh reruns are listed
+  above. Historical six-target remote SSH results retain their `3d0a36e4` scope.
+  Present W, gap O, resumed consumption and active-source restart remain closed/
+  owed; there is no full A4 or Task 2 readiness claim.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
 - [ ] **5 — CLI command/flag/help/rendering.** Not started.
@@ -486,10 +486,10 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: publish the reviewed refusal-only A4 increment only to this
-ticket branch, then continue the same Task 2 implementer into the still-missing
-positive A4 shared-receipt cleanup and each child's atomic local-index/result
-completion before the next child. No-child-gap observation, active-source
+Immediate next step: publish the reviewed original-live branch-only A4 core only
+to this ticket branch, then continue the same Task 2 implementer into verified
+present-worktree pruning through branch/D14/per-child index and ordered next-child
+consumption. No-child-gap/R8 observation, resumed consumption, active-source
 restart/fresh-ad fencing, shared-holder/Z fault variants and full Task 2 review
 remain owed. Actual Task 3 bindings and Task 4 coordination remain downstream;
 private projection tests must not be represented as those journeys.
