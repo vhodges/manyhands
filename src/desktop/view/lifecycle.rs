@@ -580,3 +580,19 @@ mod lock_gates_tests;
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "lifecycle/interruption_tests.rs"]
 mod interruption_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/privacy_tests.rs"]
+mod privacy_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/privacy_promote_tests.rs"]
+mod privacy_promote_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/privacy_remote_tests.rs"]
+mod privacy_remote_tests;
+
+#[cfg(all(test, feature = "desktop-test-support"))]
+#[path = "lifecycle/privacy_consent_tests.rs"]
+mod privacy_consent_tests;
