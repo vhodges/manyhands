@@ -38,6 +38,39 @@ promises only; Q2, D1–D14 and proof/standalone safety remain. R-9–R-12 groun
 private seams/forward unwiring. This is the existing plan refreshed, not a fourth
 plan or a request to redo unchanged approvals.
 
+## Delivered Checkpoints And Remaining Work — 2026-11-06
+
+Source-grounded at clean Task 7 base
+`76a852a7d5d4fcd757a95451601cdbb407b99bcc`; controller's fresh fetch/merge of
+main `79c3931b01d225ddf3434ae9cd4fc51eb607fd2e` was already up to date.
+Accepted without another fetch, worktree or main edit. Existing approval/method
+stands; recording delivered contract is not a new owner decision round.
+
+| Task | Current bounded delivery / exact names | Review and next gate |
+| --- | --- | --- |
+| 3 | Ordinary `Mutation::ContextRetire(ContextRetireInput)`, `ContextRetirementMutationDto`, item-owned reentry/resume, confirmed preserving/index settlement; forward obsolete-gap unwiring and independently frozen old catalogs | SPEC/QUALITY through `989a5807`; no whole-feature pass implied |
+| 4 | `Mutation::PollOnceRetiring(PollOnceInput)`, `bind/poll_retirement.rs`, private original-live initial input, production `poll_retirement_passes`/`targets`, exact child-source membership, consumers-v1 migration and immutable cut | SPEC/QUALITY through `c514d160`; old selected-pass reentry is report-only, no loop |
+| 5–6 | CLI `context retire --repo --kind ticket\|document --id ULID`, explicit poll flag; closed roots, ordered current-action rendering and bounded local/binary/one-new-SSH acceptance | SPEC through `1619e100`, QUALITY through `37b64d17`; latest changed SSH assertion at `4df41831` (1 case, 42.31 s total) |
+| 7 | Existing governing contracts amended against those actual APIs, DTOs, schemas and `src/results.rs`; canonical checkpoint and scoped prose/inventory checks | Locally delivered, **independent SPEC then QUALITY pending** on the full Task 7 range from `76a852a7` |
+| 8 | Final whole-tree static/fast/changed-path SSH gates once at review-ready, actual retained-44 coverage classification, whole-feature reviews and owner handoff | **Not started by Task 7; still owed**, not waived or replaced by bounded approvals |
+
+The Task 3–6 checklists/commands below retain the **approved delivery and test
+scope**, including originally proposed exact test names; they are not claims
+that the mapped APIs remain missing, new execution instructions, or an assertion
+that every retained fault/platform permutation has evidence. The ledger supplies
+actual names/SHAs/results and remaining E/O/D/S rows. Task 8 must classify
+essential uncovered behavior against actual coverage; this amendment authorizes
+neither a broad new matrix nor a waiver. Historical source-feasibility and review
+records keep their original dates/SHAs. No new plan/document is introduced.
+
+The [API audit](../research/wave-03-api-audit.md#completed-context-retirement-delivery-2026-11-06)
+and [CLI contract](../RFC/cli-contract.md#completed-context-retirement) are the
+current delivered-name/wire/result references. One shared authoritative Fetch
+input is not one total wire connection; ordinary Fetch authentication/reconnect
+uses two upload-pack commands for both default and the measured two-child pass.
+D6's explicit desktop Retire/editor/draft/keyboard/recovery journeys remain owed;
+only the existing generic abandon-preview metadata display is delivered here.
+
 ## Global Constraints
 
 - All owned edits stay in the specified ticket worktree/branch. Fetch and merge
@@ -53,7 +86,8 @@ plan or a request to redo unchanged approvals.
   rerun thereafter only targets whose code/tests changed. No whole SSH target,
   broad retirement filter or overlapping repeated matrix between steps. No bare
   full suite premerge. Full suite/native CI after merge; native dispatch separately
-  authorized. This docs-only revision runs no Cargo/build/tests.
+  authorized. The D15 docs-only revision ran no Cargo/build/tests; Task 7 runs
+  only an existing exact inventory/recovery parser case when its text pin changes.
 - Owner has approved implementation/method and D15. The same source/contract
   reviewers' re-review through `08aa5465` passed; routine internal representations
   do not require another product approval. Stop for a genuine policy change.
@@ -97,9 +131,10 @@ with R_i Owed, but replay never observes, allocates children or starts cleanup.
 Pending child debt blocks next item; refusals do not; no earlier success rolls back.
 Standard preserving receipt/index finalization must ship with the bindings.
 
-Remaining delivery is consolidated into **Task 3 ordinary binding + safe recovery,
+Delivery is consolidated into **Task 3 ordinary binding + safe recovery,
 Task 4 thin live loop/report, Tasks 5–6 CLI + acceptance, Tasks 7–8 contracts/final
-gates**. Tasks 0–2 below are history/reuse boundaries, not a prerequisite ladder
+gates**. Tasks 3–6 are now bounded-approved at the checkpoints above; Task 7 is
+locally delivered/review pending and Task 8 still owed. Tasks 0–2 below are history/reuse boundaries, not a prerequisite ladder
 of resumed-C/gap/new-F2 batch frameworks. SPEC then QUALITY review follows each
 coherent delivery chunk; adversarial focus remains in the ordinary/shared-input
 and live-loop checkpoints. Test exact new names, not the old command blocks.
@@ -113,8 +148,8 @@ are recorded in the ledger. Do not rerun those unchanged baselines.
 **D15 re-grounding:** clean entry `b2fe68c93580a85ec8c41768a79fcc535e1fdc1e`;
 controller has just fetched/merged main `79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`,
 already up to date. No new fetch/merge or other-worktree inspection here. Current
-source feasibility is in the design table; this docs-only amendment awaits fresh
-read-only source/contract review. Recheck main only if it moves before code resumes.
+source feasibility is the design's dated historical table; its read-only
+source/contract re-reviews passed through `08aa5465`. Recheck main when it moves.
 
 ## Task 1: Shared Proof, Poll Recognition And Disposition Upgrade
 
@@ -142,6 +177,10 @@ its caller is insufficient. Ordinary poll pre-selection recovery and all retaine
 proof/identity/M/Z safety still require coverage and final review.
 
 ## Task 3: Shared Mutation, DTOs, Replay And Resume
+
+**Bounded implementation delivered and independently approved through `989a5807`.**
+The original scope below is retained for traceability/Task 8 coverage review;
+the delivery map above and ledger name current interfaces and exact evidence.
 
 **Create:** `src/repository/mutation/bind/retire.rs`,
 `schemas/v1/context_retirement_mutation.schema.json` and new golden cases.
@@ -222,6 +261,11 @@ devenv shell -- cargo fmt --check
 ```
 
 ## Task 4: Thin Original-Live Poll Retirement Loop And Report
+
+**Bounded production delivery and corrections independently approved through
+`c514d160`.** `PollOnceRetiring`, its ordinary-child producer/migration and
+report-only recovery are implemented; proposed names below record approved
+planning scope, not still-missing APIs or fresh test executions.
 
 **Create:** `src/repository/mutation/bind/poll_retirement.rs` (proposed),
 `schemas/v1/poll_retirement_mutation.schema.json`.
@@ -378,6 +422,9 @@ devenv shell -- cargo test --all-features --locked --test mutation_contract ever
 
 ## Task 5: CLI Command, Flag, Help And Rendering
 
+**Delivered with Task 6; bounded SPEC/QUALITY approval through `37b64d17`.**
+Actual grammar, required fields and numerical recovery are in the CLI contract.
+
 **Create:** `src/bin/manyhands-cli/retirement.rs` and unit tests in the usual
 path-module pattern. **Modify:** CLI entrypoint module list,
 `manyhands-cli/{catalog,dispatch,polling,human_admin}.rs` as needed;
@@ -408,6 +455,11 @@ The `retirement::` table name is proposed; add its module to `tests/cli.rs`.
 Run only new/changed full-name cases at each step, not an entire CLI target.
 
 ## Task 6: Local Acceptance And One Transport Connection Check
+
+**Delivered useful CLI/acceptance chunk, not a full A1–A9/fault/platform gate.**
+The ledger records the original 19 distinct exact results, source scopes and
+changed-case reruns, including one new SSH case. Task 8 still classifies essential
+remaining permutations; no blanket all-green retained-44 claim is made here.
 
 **Extend:** local `context_retirement` unit tables and non-SSH
 `tests/{mutation_replay,mutation_confirmation,cli}/retirement.rs` (proposed
@@ -472,7 +524,7 @@ not both automatically at every checkpoint. No real waits; injected clocks/durat
 `docs/Waves/wave-03-dogfooding.md`, `docs/research/wave-03-api-audit.md`, the three
 planning documents and execution ledger.
 
-- [ ] Apply the Cycle's Document Amendments, with dated owner decision references.
+- [x] Apply the Cycle's Document Amendments, with dated owner decision references.
   Document exact result/exit/recovery rows and delivered interfaces, explicit-only
   flag versus background prohibition, conservative proof limits and extra
   standalone round trip. Note D6 desktop action/draft obligations and unchanged
@@ -480,10 +532,18 @@ planning documents and execution ledger.
   exception to Wave track rule 5. Include the existing abandon-preview renderer
   scope without treating it as a desktop Retire action. Do not edit D6 or
   latest-copy tickets without permission.
-- [ ] Run only just-changed taxonomy/recovery-table/schema full-name tests; grep old blanket
+- [x] Check the amended relative links, whitespace, source/schema/result consistency
+  and old blanket cleanup claims; run only the existing exact taxonomy/recovery
+  parsing test whose text pin actually changed. No schema/fixture/code changes
+  or broad Rust/GPUI/SSH/fast/native reruns for prose. Exact taxonomy pin: 1 passed;
+  357 relative link occurrences, no issues; frontmatter/history/scope and actual
+  schema/result/source consistency checked. Original instruction:
+  run only just-changed taxonomy/recovery-table/schema full-name tests; grep old blanket
   cleanup claims and update only governing current contract text, not historical
   approval records. Commit `docs: specify completed-context retirement contract`;
   checkpoint.
+- [ ] Independent SPEC then QUALITY of the **full** Task 7 range from `76a852a7`
+  before controller publication; Task 8 is not started by this documentation task.
 
 ## Task 8: Final Gates, Review And Owner Handoff
 

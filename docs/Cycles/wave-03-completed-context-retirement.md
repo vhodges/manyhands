@@ -19,6 +19,20 @@ below retain their historical scope; no approval of the superseded unreviewed
 gap code is inferred. The ticket remains `implementing`; no full Task 2 readiness is claimed.
 The existing sequential implementation → SPEC → QUALITY method remains approved.
 
+**Task 7 source-grounded delivery update, 2026-11-06:** ordinary binding and
+confirmed preserving recovery (Task 3) have bounded SPEC/QUALITY approval through
+`989a5807`; the thin production live pass/migration/cut (Task 4) through
+`c514d160`; CLI/acceptance (Tasks 5–6) through `37b64d17`, published checkpoint
+`76a852a7d5d4fcd757a95451601cdbb407b99bcc`. The governing amendments are now
+locally applied, **Task 7 independent SPEC then QUALITY pending**. Actual APIs,
+closed schemas, numeric exits and recovery are in the
+[CLI contract](../RFC/cli-contract.md#completed-context-retirement) and
+[current API audit](../research/wave-03-api-audit.md#completed-context-retirement-delivery-2026-11-06).
+Historical decisions/reviews below keep their actual SHAs and scope. Task 8
+final local tiers, whole-feature reviews and essential remaining fault/platform
+coverage classification are still owed; no retained-44 blanket completion,
+full Task 2/feature readiness, owner final acceptance or merge is claimed.
+
 **Approved; implementation authorized (2026-11-04).** The owner said:
 “Docs are approved. Implementation is approved as well. Use subagent-drive
 development”. This approves the Cycle, design and implementation plan, including
@@ -113,7 +127,8 @@ journeys. This ticket does not edit D6's worktree or silently mark that work don
 Until retirement, an old own-worktree row can still mask primary's closure.
 The only desktop edit authorized for this plan is rendering the added safety details in
 the **existing** generic operation-abandon confirmation; it adds no Retire action.
-That narrow renderer/test scope is D13; implementation itself remains gated.
+That narrow renderer/test scope is D13 and is delivered with Task 3; it does
+not satisfy D6's explicit Retire/editor/draft/keyboard/recovery journeys.
 
 ## Required Contract
 
@@ -132,8 +147,11 @@ That narrow renderer/test scope is D13; implementation itself remains gated.
 5. Default/automatic polling only recognizes. Explicit `--retire-completed`
    loops over independently durable ordinary retirements during the original
    uninterrupted eligible live pass only. One authenticated pass observation
-   serves its fixed initial candidates through a sealed private capability, not
-   caller-supplied receipts or N standalone observations. The captured image/report
+    serves its fixed initial candidates through a sealed private capability, not
+    caller-supplied receipts or N standalone observations. This is one authoritative
+    Fetch input/provenance, not one literal wire connection: current ordinary Fetch
+    authentication/reconnect uses two upload-pack commands for default and the
+    measured two-child opted-in pass. The captured image/report
    is reporting/replay evidence, never a durable future deletion worklist. Each
    attempted item has its own stable request/operation and ordinary recovery;
     refusals continue, real cleanup/index debt stops the loop. Old-pass retry only
@@ -157,8 +175,14 @@ That narrow renderer/test scope is D13; implementation itself remains gated.
     Accepted-but-never-claimed children settle metadata only; a durably selected
     original present worktree retains ordinary fresh-O/proof/nonce reentry even
     before a Git effect. Neither route advances the parent; R-7 is unchanged.
-8. The proposed per-target result/exit rules in the design are an explicit
-    approved contract, not an unrecorded ruling about external behavior.
+8. The per-target result/exit rules in the design are an explicit approved
+   contract. The delivered [Q1 numeric/recovery table](../RFC/cli-contract.md#request-finality-numeric-exits-and-current-recovery)
+   is checked against actual bindings, DTOs and `src/results.rs`, not proposed
+   names or new policy. Missing/corrupt pass companions fail closed; a wire
+   `completed` poll report alone does not prove successful discovery after copy
+   loss. Cancellation of the parent shared token/durable flag is honored even
+   after the final child/empty image; a child-only cancellation is not parent
+   cancellation.
 
 ## Acceptance And Exit Evidence
 
@@ -174,8 +198,12 @@ That narrow renderer/test scope is D13; implementation itself remains gated.
 | A8 | Old registry/report/request fixtures remain readable; new enums and command are fully catalogued | migration/corruption tests, read/mutation/CLI contract inventories and goldens |
 | A9 | No default/background cleanup, remote mutation, or draft deletion; existing release behavior unchanged | negative/control tests; isolated stored-draft sentinel remains readable/exportable after CLI retirement; branch-scope review |
 
-Full acceptance above remains planned; partial implementation evidence is recorded
-at its actual source scope in the ledger, not claimed as end-to-end delivery.
+The acceptance rows above are requirements, not an all-green checklist. Bounded
+Task 3/4 and Tasks 5–6 evidence is recorded at its actual source scope in the
+ledger, including local acceptance and one new authenticated SSH E2E, not a
+whole-feature/final-tier pass. Task 8 must classify essential remaining retained
+fault/platform permutations against actual existing coverage; no required
+uncovered behavior is waived or broad new matrix authorized by this prose.
 Real second-machine branches have
 not been inspected here; conservative proof may refuse them if primary omitted
 content, even when the ticket was folded. No claim of real-context safety is made.
@@ -327,7 +355,7 @@ D1–D14 dated 2026-11-04; D15 dated 2026-11-06, recorded from owner chat:
 - **R-12 — One provenance, many exact consumer bindings (2026-11-06).** Keep source
   P/epoch unique; replace receipt provenance uniqueness with
   `UNIQUE(repository_id, consumer_kind, consumer_operation_ulid, consumer_attempt_epoch)`.
-  Proposed `context_retirement_consumers_v1` envelope preserves receipt IDs/FKs;
+  The delivered `context_retirement_consumers_v1` envelope preserves receipt IDs/FKs;
   immutable `poll_retirement_child_sources` binds exact pass/image membership to
   independent R_i/K_i and its first receipt/epoch. Audit source R and child R_i
   separately, each holder's pin/release independently, and only exact initial-poll
@@ -349,7 +377,12 @@ request to redo unchanged approvals. Additive cases follow AGENTS' test budget.
 
 ## Document Amendments
 
-At implementation Task 7, amend PRD `MH-COLLAB-006`'s exclusive confirmed-lifecycle
+**Task 7 locally applied, 2026-11-06; independent SPEC/QUALITY pending.** These
+are the original approved amendments, now grounded in source at `76a852a7`, not
+new product decisions. The current clauses and API reconciliation are linked
+above; the ledger records exact changed-document checks and remaining gates.
+
+Amend PRD `MH-COLLAB-006`'s exclusive confirmed-lifecycle
 cleanup rules for deliberate peer-context retirement, preserving its background
 ban. Amend the Git-workflow RFC's unconditional poll cleanup
 ban with the explicit-only option; retain the prohibition for default/automatic

@@ -36,7 +36,10 @@ both final ticket-list IDs exactly once before checking both closed. Same QUALIT
 approved that bounded delta through `37b64d17`, with no remaining findings;
 original SPEC approval carries over this assertion-only change. Its bounded evidence,
 retained-44/acceptance delta and correction record are appended below. Task 7 governing
-amendments and Task 8 final tiers/whole-feature reviews remain owed. Ticket remains
+amendments are now locally delivered from base `76a852a7`, **independent SPEC then
+QUALITY pending** on the full Task 7 range; its source/contract checks and limits
+are in the new checkpoint below. Task 8 final tiers/whole-feature reviews and
+essential remaining retained-44 fault/platform classification remain owed. Ticket remains
 `implementing`, not full Task 2 or feature review-ready.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
 [the delivery checkpoint](#task-3--ordinary-binding-and-guarded-preserving-recovery).
@@ -73,12 +76,15 @@ No code is reset, removed or implicitly approved by this amendment.
 | Superseded requirement | Current D15 requirement / evidence still relevant |
 | --- | --- |
 | Resumed C/frozen remainder; fresh batch-attempt gap O; current-attempt→original-freeze adapter and advancing resumed cursor | Old R never observes/starts another item after capture interruption; new explicit pass selects current remainder. Original capture, fixed identity, R-8 fail-closed handoff and current-proof safety retained |
-| New-F2 batch child/index takeover; parent R owns every child | Ordinary stable R_i→K_i acceptance/fences/reentry/index; pass association is report/provenance only. Current batch rows do **not** satisfy this yet |
+| New-F2 batch child/index takeover; parent R owns every child | Ordinary stable R_i→K_i acceptance/fences/reentry/index; pass association is report/provenance only. The historical batch rows did not satisfy this; Tasks 3/4 delivered the ordinary engine/producer at the bounded checkpoints above |
 | Parent Owed until all children complete; aggregate continuation | Final stopped parent may point to Owed child, with truthful partial/index-pending non-success and child-only handles; lost result-copy is metadata settlement |
 | Completed A as confirmed `K_last` whole-batch abandon handle | Stop atomically fences live authority, preserves A, marks B/C not reached, no new local row/refresh/debt. Real pending child's confirmed preserving receipt/index finalization still required |
 | Gap catalog retained because unused/tested | Forward-unwire runtime/catalog/support. `record.rs:422,682–709,773–803,880–885` installs it even without Task 4 producer. Exact isolated-envelope assessment/strict compatibility needed; no real profiles opened or repaired |
 
-**Internal rulings (current; source grounding in design feasibility table):**
+**Internal rulings (current policy; historical pre-refactor source grounding in
+the design feasibility table):** the old source limitations/proposed names below
+explain R-9–R-12, not claims that approved Tasks 3/4 are still undelivered. The
+current API audit and Task 7 checkpoint give delivered names/catalogs.
 
 - **R-9:** factor fresh observation acquisition from ordinary guarded execution;
   sealed private original-live input supplies initial poll provenance/candidate
@@ -149,8 +155,11 @@ Neither recovery route advances parent. Both corrections are internal under D15.
   **SPEC and fresh QUALITY passed through `1619e100`; QUALITY's one Minor Q1 is
   corrected at `4df41831` and same-QUALITY approved through `37b64d17`.
   No remaining findings at this bounded CLI/acceptance gate.**
-- [ ] Tasks 7–8: governing docs, final static/fast/changed-path SSH tiers once at
-  review-ready, then whole-range SPEC/QUALITY and owner handoff. No bare full suite
+- [ ] Task 7: governing amendments locally delivered at the new checkpoint below;
+  independent SPEC then QUALITY pending on `76a852a7..Task-7-HEAD`.
+- [ ] Task 8: final static/fast/changed-path SSH tiers once at review-ready,
+  classify essential remaining fault/platform permutations using actual existing
+  retained-44 coverage, then whole-range SPEC/QUALITY and owner handoff. No bare full suite
   premerge or repeated green gates. Ticket-branch publication remains authorized;
   PR, native CI and main integration/closure remain separately gated.
 
@@ -6926,3 +6935,100 @@ reviews. Shared-library plus CLI delivery does not authorize a desktop Retire ac
 read-ranking change, real-context cleanup, PR, main integration/closure or native CI.
 Ticket remains `implementing`; remaining retained-44 fault/platform O rows are
 explicit final-review obligations, not silently marked complete by these approvals.
+
+## Task 7 — Source-Grounded Governing Amendments, 2026-11-06
+
+**Locally delivered; independent SPEC then QUALITY pending.** Original Task 7
+base **`76a852a7d5d4fcd757a95451601cdbb407b99bcc`**, not `HEAD~1`. Controller's
+fresh fetch/merge of main **`79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`** was
+already up to date; accepted without another fetch/merge, main or other-worktree
+edit. `git rev-parse HEAD origin/main` reconfirmed those refs before the task
+commit. Existing owner D1–D14 (2026-11-04), D15 (2026-11-06), document/
+implementation and sequential review authorization stand. No new product
+decision, fourth plan or external artifact was requested/created.
+
+### Applied Contract And Delivered-API Reconciliation
+
+| Owned document(s) | Amendment grounded in actual delivered source |
+| --- | --- |
+| `docs/PRD/mvp.md` | v0.7/changelog; `MH-COLLAB-006` exclusive lifecycle rule gains only deliberate guarded local peer retirement. Fresh complete authenticated Fetch-known absence, same-ID committed-primary completion, content/cleanliness/lifetime proof; no background cleanup, unmatched work/draft loss or release change. Poll/index clauses reconcile the same exception. |
+| `docs/RFC/git-workflow-and-conflict-recovery.md` | Explicit-only poll option; standalone extra read-only observation without primary update; one authoritative Fetch input, **not one total wire connection**. Recognition versus permission, full changed-entry proof/equal mode/narrow closure exception, current authority/nonce/R-7 limits, exact old M and no remote mutation. |
+| `docs/RFC/mvp-rfc.md` | Promotion-only cleanup wording qualified for deliberate peer retirement without document closure. Existing navigation/release/draft consumers/read precedence unchanged; latest-copy and remote-deletion gaps remain separate. |
+| `docs/RFC/cli-contract.md` | Actual grammar/no-input/prepare-confirm rule, flag default false/root-only legacy digest, tagged closed new roots versus unchanged untagged five-field poll, precise live-host root/route, numeric exits/finality/removal/M/discovery semantics, ordinary R_i/K_i recovery, preserving preview/atomic finalizer, frozen parent cut and actual ordered current actions. Six-family historical golden parser remains unchanged; separate Q1 delivery table does not invent new binary goldens. |
+| `docs/Waves/wave-03-dogfooding.md` | This ticket's owner-approved library-plus-CLI rule-5 exception, not a numbered Cycle. D6 explicit Retire/editor/draft/keyboard/recovery journeys remain **owed**; existing generic abandon metadata display is not that action. |
+| `docs/research/wave-03-api-audit.md` | Actual exported inputs/domain methods/DTOs/mutation variants, CLI/schema roots, ordinary recovery/private producer and strict consumers-v1/preserving-v2 catalog migration. Supported frozen history is distinct from unsupported unpublished preserving-v1/nonempty obsolete gap; no real-profile repair. Source/platform/final-gate limits explicit. |
+| Existing Cycle/design/implementation plan | Current delivered-name/review map at actual source checkpoints, historical grounding/reviews preserved, Task 7 local/review-pending standing and Task 8 retained-44 essential-coverage classification still owed. No checklist conversion of remaining O rows to green. |
+
+Source inspection covered actual exports, `context_retirement/{proof,execution,
+run,reentry,request_scope,record,consumer_migration,instance,preserve,pass,
+pass_report}.rs`, source/handoff ownership and current mutation bindings/DTOs/
+progress/resume/abandon/result registry, CLI/catalog/rendering, schemas and
+existing test/fixture pins. This is **inspection**, not another runtime run.
+No actual policy conflict requiring owner reapproval was identified. An old
+selected parent cannot observe/reselect/accept/resume; reserved/never-claimed/
+selected-present/M/I paths remain distinct. Every selected legitimate same-pass
+settled success/refusal plus settled handoffs completes; not-reached prefix does
+not. Metadata-only never-claimed settlement is not an invented completed attempt.
+Original P's durable phase/outcome, not wire `completed` alone, supports Current
+after cut loss; parent cancellation covers final/empty boundary and stays distinct
+from child-only cancellation. No batch abandon handle or aggregate debt.
+
+### Exact Checks And Evidence
+
+The RFC taxonomy text changed, so **only this existing exact Rust case ran**:
+
+```sh
+devenv shell -- cargo test --all-features --locked --test cli inventory::the_catalog_and_the_rfc_taxonomies_name_the_same_verbs -- --exact
+```
+
+`/tmp/opencode/task7-cli-taxonomy.log`: exit **0**, **1 passed / 0 failed /
+476 filtered**, **0.02 s** tests, **2.67 s** compilation. Clean serialized
+Devenv setup. This is not a no-build claim: the documentation `include_str!`
+consumer recompiled. The six historical recovery tables, their golden pins and
+the separate existing retirement-fixture test were not changed or rerun; no
+schema/fixture/source code changed and no schema/full-inventory target ran.
+
+The read-only inline Python source/contract check is recorded in
+`/tmp/opencode/task7-doc-checks.{log,json}`. It checked:
+
+- **357 relative Markdown link occurrences**, target existence and Markdown
+  heading anchors: **0 new broken links, 0 inherited issues**. Historical source
+  `#L` links are path-checked, not semantically revalidated at their old line numbers.
+- All **10 existing managed-document frontmatters byte-identical** to base;
+  IDs/dates/statuses preserved. Exactly those 10 Markdown files plus one new
+  canonical comment, no Rust/schema/fixture/dependency/workflow/other-file delta.
+- Cycle historical Review Record, design D15 correction/re-review record and
+  the entire pre-existing ledger history after current standing remain unchanged.
+- New DTO root field sets, closed required-nullable abandon metadata and the
+  unchanged five-field untagged poll match actual schemas; documented base
+  numeric classes match `src/results.rs`. Partial/cancel precedence and current
+  recovery ordering/identity were source-reviewed, not newly runtime-proven.
+- Delivered public input/DTO/metadata/domain names and consumers-v1/preserving-v2/
+  nonce markers exist in source; canonical comment metadata matches requested
+  parent. Governing-text grep/self-review checked old blanket cleanup claims,
+  no renewed observer/cursor/parent-abandon policy and no all-success requirement.
+
+`git diff --check` passed before this checkpoint; final staged whitespace and
+scope/status checks accompany the commit. Canonical comment
+**`01M6SHEHSJYNH371M4TY9GMAV9`**, parent
+**`01M6SGHZZ0VK1DB35FFKQZ8MFV`**, timestamp **`2026-11-06T23:00:09Z`**. Its ID
+came only from the existing built supported CLI, no Cargo run:
+
+```sh
+devenv shell -- env MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data target/debug/manyhands-cli id new --json
+```
+
+Exit 0/`ok` in `/tmp/opencode/task7-checkpoint-id.log`; no default profile or
+unsupported conversion/repair, real contexts/keys/drafts, ticket status/body
+save, other-worktree/main edit, agents, push/PR/close/native action or owned job.
+
+**Next: controller obtains fresh independent SPEC then QUALITY over the full
+`76a852a7..Task-7-HEAD` doc range before publication.** No Task 8 gates were run.
+Original Task 3/4 and 19 Tasks 5–6 results, their correction runs, latest SSH
+`4df41831` (1 case, 42.31 s total + Clippy/fmt) and original-scope headless check
+retain only their recorded SHAs/scopes; none was rerun/promoted. Final local tiers,
+whole-feature review and essential remaining fault/platform classification from
+actual retained-44 coverage are owed, without blanket waiver or a broad new
+matrix. D6/read precedence/remote deletion and existing lifecycle M omission
+remain outside delivered scope. Ticket stays `implementing`; not full Task 2,
+feature review-ready, native Windows/macOS or real-context completion evidence.

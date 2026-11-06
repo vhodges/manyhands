@@ -21,12 +21,27 @@ source/feasibility and contract re-reviews through `08aa5465`**, after correctio
 of the findings against `43214ff7`. This is not approval of `f196dfff` or full
 Task 2 readiness. The review/correction record is below.
 The [plan](2026-11-04-completed-context-retirement-implementation.md) gives the
-consolidated remaining delivery sequence. Proposed seam/type names below are not
-claims of existing APIs. Historical limited approvals remain at their actual scope.
+delivery sequence. **Delivery refresh, 2026-11-06, source `76a852a7`:** Task 3
+ordinary/preserving recovery is bounded SPEC/QUALITY approved through `989a5807`,
+Task 4 live producer/migration/cut through `c514d160`, and Tasks 5–6 CLI/acceptance
+through `37b64d17`. Task 7 amendments are local, independent SPEC then QUALITY
+pending; Task 8 final gates/whole-feature review remain owed. Historical limited
+approvals and source-feasibility tables retain their actual scope/SHAs below.
+
+Actual shipping names are `Mutation::ContextRetire(ContextRetireInput)`,
+`Mutation::PollOnceRetiring(PollOnceInput)`, `ContextRetirementMutationDto` and
+`PollRetirementMutationDto`. `OperationAbandonPreviewDto.retirement` is delivered
+required-nullable metadata in the existing preview, not a desktop Retire action.
+The [API audit](../research/wave-03-api-audit.md#completed-context-retirement-delivery-2026-11-06)
+maps current exports/private seams/catalogs, and the
+[CLI contract](../RFC/cli-contract.md#completed-context-retirement) records exact
+wire fields, effects, numeric exits and recovery. They supersede provisional API
+status below, not approved proof/consent policy or historical review results.
 
 ## Baseline Facts
 
-Verified at `c0e93f87`, with implementation source equal to planning-base main:
+**Historical planning grounding**, verified at `c0e93f87`, with implementation
+source equal to planning-base main. These are not claims about current source:
 
 Task 0 rechecked these facts at `74186d51` against main `c69789d9`; source,
 tests and schemas are unchanged from that planning revision. The execution
@@ -99,7 +114,8 @@ Keep the headless `context_retirement` proof/ordinary cleanup/reentry engine and
 `RetireContextRequest`; keep release unchanged. Use `ContextCleanup`, never direct
 filesystem deletion/shell Git. `RetireContext` / `retire_context` and the ordinary
 local removal/absence/index records already exist on this branch. The public
-mutation/DTO/CLI bindings and confirmed preserving escape are still undelivered.
+mutation/DTO/CLI bindings and confirmed preserving escape are now delivered at
+the bounded checkpoints above; source and field mapping are in the API audit.
 
 **D15 ownership:** standalone request `R_s` owns local operation `S`; an opted-in
 request `R` owns ordinary poll `P` and its pass report. Each attempted retirement
@@ -137,7 +153,7 @@ only what durable admission/result records prove, never invent a refusal/success
 or rerun the child to recover the missing answer. Missing/contradictory accepted
 identity fails closed. This is report settlement, not new cleanup debt.
 
-Opted-in coordination stays above the non-destructive poll. Proposed
+Opted-in coordination stays above the non-destructive poll. Delivered
 `Mutation::PollOnceRetiring(PollOnceInput)` publishes the same `poll once` command;
 the opted-in digest adds `retire_completed=true`. Ordinary input, digest, output
 and `PollPublicationRemoteRequest` remain unchanged. Default/background never
@@ -145,8 +161,10 @@ receives a live retirement capability.
 
 ### Current Source Feasibility And Minimal Refactor (R-9)
 
+**Historical pre-refactor feasibility, not current implementation status.**
 Re-grounded at clean `b2fe68c9`, with main `79c3931b` already merged by the
-controller. These are source facts, not tested delivery claims:
+controller. These were source facts, not tested delivery claims; Tasks 3/4
+subsequently delivered the bounded changes, as recorded above and in the ledger:
 
 | Actual source | Consequence / proposed bounded change |
 | --- | --- |
@@ -170,7 +188,9 @@ is identified by this source inspection.
 
 ### One Source, Independent Consumer Bindings (R-12)
 
-**Chosen representation, not implemented:** retain ONE original
+**Chosen representation, now delivered by Task 4** (`c514d160` reviewed range):
+the following records the approved representation/migration requirements, not
+a still-missing producer. Retain ONE original
 `retirement_advertisement_provenance` row for `(repository_id, P, source_owner_epoch)`
 and its existing UNIQUE source key (`record.rs:298`). In
 `retirement_observation_receipts`, keep `id INTEGER PRIMARY KEY` and the provenance
@@ -183,7 +203,7 @@ pass ownership, child-local epoch, F2 and index epoch are never equated. K1's
 immutable terminal receipt remains after release; K2 inserts a distinct binding
 to the same provenance, not fake additional P provenance or a rebound old request.
 
-Use proposed immutable `poll_retirement_child_sources` membership metadata: one
+Use delivered immutable `poll_retirement_child_sources` membership metadata: one
 row per `(repository_id, child_operation_ulid)`, unique `child_request_ulid` and
 `initial_receipt_id`. Bind R/P, selected ordinal/image digest and exact selected
 kind/item/tip/nonce/M identity to ordinary R_i/K_i, initial child-local epoch/F2,
@@ -197,21 +217,22 @@ Audit source and consumer separately. For `poll_parent`→initial `single`, sour
 execution R/F2 belongs to original P; consumer R_i/F2 belongs to ordinary K_i and
 must match this exact immutable membership, not source R. Keep the old R/F2
 equality and `local_parent`/O correlation for ordinary standalone-observer sources.
-`authority.rs:175–179` and `record.rs:1474–1477` need these exact distinct cases,
-not blanket permission for a `single` receipt to consume any poll provenance.
+The historical `authority.rs:175–179` and `record.rs:1474–1477` gaps were replaced
+with these exact distinct cases, not blanket permission for a `single` receipt
+to consume any poll provenance.
 
 Keep the pass's source/report-consumer holds and every child's consumer hold
 separate. Audit each `(provenance_id, pin_kind, holder_operation_ulid, holder_epoch)`
 and exact `binding_id` against its own live obligation **or** immutable release
-receipt. Replace `handoff.rs:505–532`'s provenance-wide fixed counts/reason checks
-with per-holder validation; completing/releasing K1 cannot release the still-live
+receipt. Task 4 replaced the historical `handoff.rs:505–532` provenance-wide
+fixed counts/reason checks with per-holder validation; completing/releasing K1 cannot release the still-live
 pass hold, prevent K2 binding, or release another child's debt. Existing Z retains
 exact release/no-repin and conditional collection only when all holders/windows
 are gone. A stopped parent releases its holds, not a pending child's.
 
-**Initial poll/no-observer → ordinary recovery:** `record.rs:1331–1349` currently
-accepts an old NULL observer only after a preserve reentry. Add exactly the first
-initial-poll attempt case proved by `poll_retirement_child_sources`, its matching
+**Initial poll/no-observer → ordinary recovery:** historical `record.rs:1331–1349`
+accepted an old NULL observer only after a preserve reentry. Task 4 added exactly
+the first initial-poll attempt case proved by `poll_retirement_child_sources`, its matching
 initial single receipt/provenance, local epoch/F2, frozen identity and normal
 effect/M lineage. No generic NULL-observer allowance. Reentry fences that old
 child attempt and releases only its hold; never fences/reopens P. A durably
@@ -221,17 +242,17 @@ continues without new ad. Later O/preserve histories use existing ordinary rules
 This history check needs no current parent authority after R is Final; it cannot
 recreate the original input or permit a surviving tokenless/branch-only deletion.
 
-**Version/migration choice:** proposed marker `context_retirement_consumers_v1`
+**Version/migration choice:** marker `context_retirement_consumers_v1`
 identifies the new exact receipt/membership envelope, alongside the existing
 `context_retirement_v1`, `context_retirement_v2`, `context_retirement_index_v1`.
-Before any current DDL constant/catalog changes, freeze independent old catalog
+Before changing DDL, Task 3 froze independent old catalog
 definitions/fingerprints: v1 `b8ac7ae7201e6182a91d1a8546e63ad518dc9701`, v2
 `7f82f75dbd4ea313b8e291c0849a1b7dc763fe4a`, pre-gap index
 `c8da3934cfa9085a681420ef19097d5dc01fd42e` (`record.rs:534–628`), plus the exact
 `b2fe68c9` installed-gap envelope. Do not derive a supposedly old receipt table
 from edited `objects()`/`RECEIPTS`, or silently change a pinned fingerprint.
 
-Task 3 freezes those old definitions before forward unwiring; Task 4 delivers
+Task 3 froze those old definitions before forward unwiring; Task 4 delivered
 the coherent one-to-many migration with the production initial-source binding.
 Recognize exact old/new marker/catalog pairs, audit supported old histories
 before widening and copy every existing receipt **with its original ID**. Preserve
@@ -250,7 +271,10 @@ commit; any fault rolls the whole closure/markers back, reopen is idempotent.
 Synthetic pre-gap and exact installed-empty-gap upgrades must work; retire only
 the empty obsolete gap objects/marker via that explicit forward transition, never
 nonempty experimental authority. Unsupported nonempty gap data refuses unchanged.
-No profile access/repair is needed. Cost if wrong: revise the private schema/
+The current envelope also requires `context_retirement_preserving_v2`; exact
+supported historical catalogs remain independently frozen. Unsupported unpublished
+preserving-v1 and nonempty obsolete-gap authority refuse unchanged. No profile
+access/repair is needed. Cost if wrong: revise the private schema/
 closure before shipping, not reconstruct authority or expand batch recovery.
 
 ## Primary And Deletion Authority
@@ -335,11 +359,11 @@ must not become `closed`. Poll performs no cleanup without explicit opt-in.
 
 ## Initial Resource-State Matrix (Approval Item Q2)
 
-These proposed states are checked using no-follow path/registration inspection;
+These states are checked using no-follow path/registration inspection;
 an error or redirected path is not absence. `B`, `W`, `A` mean the deterministic
 branch, worktree directory and Git admin registration, respectively.
 
-| Initial state | Proposed behavior | Index / settlement |
+| Initial state | Delivered behavior | Index / settlement |
 | --- | --- | --- |
 | B/W/A all present and valid | Fresh deletion/completion/content proof plus exact registered clean worktree; guarded cleanup | Refresh under this local operation after removal; complete only when handed off |
 | B only; W/A both absent | Full fresh deletion/completion/content proof of the direct branch tip; validate path absence and no checkout anywhere; delete only that frozen tip | Same refresh/handoff; no invented worktree-removal claim |
@@ -354,13 +378,13 @@ All-absent settlement may consume the exact captured **completed** old
 materialization intent as stale bookkeeping, with an `absence_observed` receipt,
 not a claim that this request removed anything. An incomplete or ambiguous
 provisioning intent is a refusal; it is not erased by this no-op path.
-Use proposed noncheckpoint authoritative `LocalStep::ContextRetirementAbsent`
+Use noncheckpoint authoritative `LocalStep::ContextRetirementAbsent`
 for this index-only no-op, not a fabricated `ContextBranchReleased`. Its final
 receipt is `already_absent`, not a preserving-abandon result.
 
 ## Durable Records And Cleanup
 
-Proposed additive audited records (metadata/OIDs only, no canonical source,
+Delivered additive audited records (metadata/OIDs only, no canonical source,
 title, passphrase, raw endpoint or host approval):
 
 - `context_retirement_records`: parent/local-operation identity, repository,
@@ -379,7 +403,7 @@ title, passphrase, raw endpoint or host approval):
   transaction, using R-12's one-to-many key/version, not today's provenance UNIQUE.
   Pin retained observations while genuinely owed; exact Z release/
   conditional collection keeps history without resolving scalar IDs as authority.
-- Pass report/target associations (proposed production store): R/P/mode, immutable
+- `poll_retirement_passes`/`poll_retirement_targets` report associations: R/P/mode, immutable
   original report and fixed candidate image, original-handoff eligibility,
   live-start fence, preallocated R_i, accepted K_i via its ordinary mapping,
   terminal results and a single immutable `stop_cut` payload when stopped, binding
@@ -409,10 +433,11 @@ own K_i. Reserved IDs cannot be borrowed by foreign operations; stopped unstarte
 associations are report-only and cannot later become deletion work. Cross-table
 audits run only after remote/local/request dependencies migrate.
 
-**Obsolete experimental envelopes (R-11):** forward commits must remove gap
-observation/start paths and stop installing their catalog/marker; preserve published
-standalone migrations and reviewed safety history. Source shows registry opening
-can install the gap catalog even without a production pass store. Test exact
+**Obsolete experimental envelopes (R-11):** Task 3 forward-unwired gap
+observation/start paths and automatic catalog/marker installation, retaining
+published standalone migrations and reviewed safety history. At the historical
+pre-refactor base, registry opening could install the gap catalog without a
+production pass store. Compatibility tests use exact
 pre-gap and installed-empty-gap envelopes in isolated temp registries, plus
 fail-closed unsupported nonempty experimental data. Do not silently discard,
 auto-convert or release experimental child debt. Any supported data transition
@@ -431,7 +456,7 @@ No identity-limit relaxation is part of the ordinary-engine refactor.
 Tip equality alone cannot distinguish a worktree removed and recreated at the
 same commit between capture and cleanup. For explicit retirement candidates only,
 obtain a versioned opaque lifetime token in the validated worktree's Git admin
-directory, at proposed filename `manyhands-retirement-instance`. It contains only
+directory, at filename `manyhands-retirement-instance`. It contains only
 version, kind/item and a generated ULID nonce; it is identity, not deletion
 authority. A valid existing token can be reused for a new request against the
 same registration. If absent, persist a **provisional**, non-authorizing intended
@@ -573,7 +598,7 @@ the preview names the local operation and its ordinary request R_s/R_i, recorded
 removed resources, retained branch/worktree and owed index work. Pass association
 may be shown as provenance, never a whole-batch recovery owner. It contains no
 file bodies. Use a closed retirement-specific
-details object in the existing abandon-preview variant. Proposed field
+details object in the existing abandon-preview variant. Delivered field
 `OperationAbandonPreviewDto.retirement` is required-nullable: null for ordinary
 abandon, a closed metadata object for retirement (ordinary controlling request,
 target phase, removed/retained resources and index work).
@@ -586,7 +611,7 @@ action. Preserve generic abandonment behavior and never advertise
 | Lease-held local effect, live index heartbeat or unrelated reservation | Busy; no abandonment | Preserve all records/resources; a bound read-only observer may be fenced through its exact parent, not an unrelated operation |
 | No retirement removal yet | Fence the bound executor/observer, mark preserving intent; do not delete anything | Settle discovery locally; terminal abandoned receipt, old request cannot run as new |
 | Partial or ambiguous prune, worktree removed, changed generation, or remote reappearance | Same preserving transition; retain every remaining resource exactly as found, including the branch; do not finish deletion | Persist partial effects and residual-state metadata, not a claim of successful retirement |
-| Preserving, index pending | New proposed noncheckpoint authoritative `LocalStep::ContextRetirementPreserved` means no further deletion is authorized, not that branch is absent | `discovery_pending`; only the abandon request or index-only `operation resume <local-id>` continues |
+| Preserving, index pending | Noncheckpoint authoritative `LocalStep::ContextRetirementPreserved` means no further deletion is authorized, not that branch is absent | `discovery_pending`; only the abandon request or index-only `operation resume <local-id>` continues |
 | Discovery settled | Atomically finalize the retirement's preserving receipt and local journal as abandoned in the claimed-refresh completion transaction | Release blockers only here; old child request finishes/replays `external_change` with truthful partial data, never free its request ID |
 | Between children: A complete, B not started | Stop/cancel fences the live loop and records later items not reached | Keep A's successful row/result unchanged; no `K_last` abandon handle, reopened row, new refresh or debt |
 | Complete / already abandoned | Replay/no-op; inspect nothing for deletion | Never remove a subsequently recreated context |
@@ -594,7 +619,7 @@ action. Preserve generic abandonment behavior and never advertise
 Persist abandon request/epoch correlation before dropping the lease; revoke old
 destructive authority immediately. If indexing/finalization fails, retain the
 preserving obligation and request mapping. The existing generic refresh-completion
-write needs a narrow retirement finalization hook so it cannot release the local
+write has a narrow retirement finalization hook so it cannot release the local
 blocker before the preserving receipt is durable. Do not mark
 `ContextBranchReleased` merely to make a preserved branch indexable.
 
@@ -653,8 +678,11 @@ not a new lifecycle/journal engine.
    handoff means no retirement; later index repair cannot infer eligibility.
 3. Only that uninterrupted opted-in live pass may consume the initial input.
    Recheck current observation/configuration/ownership per item, plus ordinary
-   proof/M/nonce/cleanliness and immediate pre-effect guards. One authenticated
-   observation total, no N fresh child observations or public supplied receipt.
+   proof/M/nonce/cleanliness and immediate pre-effect guards. One authoritative
+   authenticated Fetch input, no N fresh child observations or public supplied
+   receipt. This is not a total wire-connection promise: current Fetch's
+   authentication/reconnect costs two upload-pack commands in both the measured
+   default and two-child opted-in pass; no transport refactor is included.
 4. Invoke each R_i through ordinary retirement acceptance/execution. Capture its
    stable terminal outcome; settled before-effect refusal continues. Finish its
    existing local index handoff before invoking the next. Unknown inspection is
@@ -671,6 +699,7 @@ not a new lifecycle/journal engine.
    use the same R_i/K_i; missing evidence fails closed, not a replacement request.
    Parent may finish stopped while a child stays Owed. Never restart/observe on R
    replay, even after durable eligibility; no resumed-C/gap-O/cursor-history engine.
+   Missing/corrupt companion authority fails closed, not into a new P execution.
 6. A new explicit pass observes/reproves current remaining contexts. Completed
    contexts are absent/already settled and cannot repeat owned cleanup. Recovery
    of an old R_i/K_i finishes only that item under ordinary rules; it never runs
@@ -735,19 +764,28 @@ as-of-cut report is never rebuilt from later child standing; handles supply
 current child status. No-cut first reconciliation and completed-all-selected
 lost-copy cases follow the reconstruction rule above, without new work.
 
-Reuse existing exit classes; verify exact numeric non-success exits from the
-current result-code registry rather than inventing constants. Add a proposed
-`ContextRetirementMutationDto` tagged `context_retirement` and output schema;
-report kind/item, operation ID, state and typed refusal reason/code, no source.
-Opted-in poll data uses proposed `MutationDataDto::PollRetirement` /
-`PollRetirementMutationDto`, tagged `poll_retirement`, with the ordinary poll
-report fields plus a required `retirements` array using those per-target states,
-including `refused`, `pending`, `not_reached`.
+Reuse existing exit classes. The delivered [Q1 numeric/recovery table](../RFC/cli-contract.md#request-finality-numeric-exits-and-current-recovery)
+is grounded in `src/results.rs` and current bindings: success/no-op **0**,
+input **2**, blocked **3**, partial/discovery-pending **4**, no-effect transient
+**5**, unexpected internal **1**, cancellation **130**. Cancellation takes
+precedence over partial; non-none removal flags set `local_change`. Generic
+write/checkpoint/integration/publication/cleanup remain `not_requested`, OID null;
+discovery is independently observed. `materialization_settled` is not index
+freshness or an invented removal.
+
+Delivered `ContextRetirementMutationDto` is tagged `context_retirement`, with
+kind/item, operation ID, state, registered code, both `none`/`possible`/`observed`
+removal flags and `materialization_settled`, no source or separate refusal-reason
+field. `MutationDataDto::PollRetirement` / `PollRetirementMutationDto` is tagged
+`poll_retirement`, with required **nested `poll: PollMutationDto`**, `completion`,
+nullable `stop_code` and `retirements`. Per-target rows require kind/item/request,
+nullable operation, state/code/debt/result, with `refused`, `pending`,
+`not_reached` distinguished. Exact closed fields are in the linked CLI table.
 Keep `closed`/`promoted` as observation dispositions, distinct from retirement
 outcomes. Do not label a dirty closed context `retired`.
 
 Publish two closed **separate roots**: existing `poll_mutation.schema.json`
-with its unchanged untagged wire shape, and proposed `poll_retirement_mutation.schema.json` with tag
+with its unchanged untagged wire shape, and `poll_retirement_mutation.schema.json` with tag
 `poll_retirement`. Each requires all its properties and rejects additional
 properties. Keep ordinary `PollMutationDto` unchanged: no optional-field schema
 exception or old-literal edits. The CLI inventory already supports several data
@@ -757,6 +795,17 @@ keyword or enlarge that interpreter for this feature. Historical ordinary output
 and stored replay remain byte-compatible. Test both valid roots and invalid
 missing/mixed fields; an opted-in boundary call must return its new tag, not
 silently fall back to an ordinary poll report.
+
+The existing `SynchronizationMutationDto` host root remains valid on a live
+failed-host poll. Preserve its precise error and sanitized Approve/Replace
+route; use a coarse journal category only when the original boundary answer
+was genuinely lost. Parent report replay and current actions are separate:
+never infer operation/root from frozen report IDs or reorder inspection/retry
+behind preserving abandonment. After cut/copy loss, nested poll `completed`
+alone is not successful discovery evidence; exact durable original P phase and
+outcome decide it. Shared-token/durable parent cancellation is checked after
+the last child and on empty images too; child-only cancellation is not parent
+cancellation. No final feature/platform gate is discharged by this clarification.
 
 Old stored poll results without `retirements` remain valid. Add the two poll
 dispositions to Rust/DTO/schema/SQL mappings with an explicit atomic old-schema
@@ -819,14 +868,16 @@ observation and effect; lost result after each destructive effect; another poll
 overwriting latest rows; cancellation during batch; nested leases/reservations;
 refresh failure after all deletion; old request mode/digest/report compatibility.
 
-No native result, performance measurement or real second-machine cleanup is
-claimed. Use an advertisement-call counter to prove one pass, and record elapsed
+No native result or real second-machine cleanup is claimed. At the historical
+D15 engineering-plan revision no performance/runtime measurement was claimed;
+current bounded Tasks 3–6 evidence is in the ledger, not inferred from that review.
+Use an advertisement-call counter to prove one authoritative input, and record elapsed
 times as observations, not a fabricated latency guarantee. Shared cleanup retains
 its existing external-writer limitations. Independent review must test the new
 ordinary-child/initial-input and stop/replay seams adversarially at the existing
 sequential SPEC then QUALITY checkpoints. D15 has owner approval; this engineering
 revision passed both same-reviewer source/contract re-reviews through `08aa5465`.
-No runtime verification was run for these documents.
+No runtime verification was run for that historical D15 document revision.
 
 ### D15 Revision Review And Correction Record (2026-11-06)
 
