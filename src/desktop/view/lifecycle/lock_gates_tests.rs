@@ -29,7 +29,7 @@ use crate::desktop::{
         navigation::OpenTarget,
         tabs::TabKey,
     },
-    services::{JobKind, ReadKind, requests::Intent},
+    services::{JobKind, ReadKind, created_contexts::ContextKey, requests::Intent},
     test_support::{
         drafts::store_draft,
         fixtures::{Fixture, item_id},
@@ -240,6 +240,12 @@ async fn move_waits_while_the_merge_is_unfinished(cx: &mut TestAppContext) {
     assert!(!open, "a press opens nothing");
 }
 
+/// Presses what the banners' Resume and Retry do, past their disabled
+/// buttons, in the handlers themselves.
+fn press_owed(shell: &Shell, cx: &mut TestAppContext) {
+    pane(shell, cx).update(cx, |pane, cx| pane.press_owed_for_test(cx));
+}
+
 /// Presses the lifecycle action of the locked ticket, and waits for the
 /// held close's own answer in the dialog: the dialog neither saves first
 /// nor closes before that answer is known.
@@ -345,6 +351,7 @@ async fn the_prepare_banners_resume_waits_while_locked(cx: &mut TestAppContext) 
         "Resume waits"
     );
     shell.click("item-prepare-resume", cx);
+    press_owed(&shell, cx);
     shell.run(cx);
     assert_eq!(attempt(&shell, cx), before, "nothing was sent again");
     assert_eq!(
@@ -386,18 +393,31 @@ async fn a_pending_checkpoints_retry_waits_while_locked(cx: &mut TestAppContext)
     shell.lock_item(&root, TICKET, cx);
     assert!(shell.inert_button("item-save-retry", cx), "Retry waits");
     shell.click("item-save-retry", cx);
+    press_owed(&shell, cx);
     shell.run(cx);
     assert_eq!(attempt(&shell, cx), before, "nothing was sent again");
 }
 
 /// Review Vdraft: a clean session whose draft D2 still holds, when the lock
-/// ends the session, discards it, as Done does (D3 Done, step 5), rather than leaving it to
-/// show "Restored draft" on a closed item.
+/// ends the session, discards it, as Done does (D3 Done, step 5), rather
+/// than leaving it to show "Restored draft" on a closed item. Review F1:
+/// the context Edit made here is left as it is: release on leave is told
+/// nothing, so no release of the locked item is sent.
 #[gpui_kit::test]
 async fn a_clean_session_ended_by_the_lock_discards_its_draft(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
-    let (shell, root) = shell(cx, |fixture, root| saved_ticket(fixture, root, "Held", ""));
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Held", "")
+    });
     dirty_session(&shell, &root, cx).await;
+    let created = shell.workspace.read_with(cx, |workspace, _| {
+        workspace.services().created_contexts().clone()
+    });
+    let context = ContextKey::new(&key(&root), ItemDtoKind::Ticket, TICKET);
+    assert!(
+        created.read_with(cx, |created, _| created.contains(&context)),
+        "Edit made the context here"
+    );
     let tab = TabKey::Item {
         repo: key(&root),
         kind: ItemDtoKind::Ticket,
@@ -433,4 +453,93 @@ async fn a_clean_session_ended_by_the_lock_discards_its_draft(cx: &mut TestAppCo
         drafts.read_with(cx, |registry, _| registry.attached(&tab).is_none()),
         "no draft stays attached to the closed item's tab"
     );
+    // Release on leave would be decided once the store is listed again.
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    shell.run(cx);
+    let releases = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::ContextRelease { .. })
+    });
+    assert!(releases.is_empty(), "no release of the locked item");
+}
+
+/// Review F4: the prepare banner's Retry, offered by a refused prepare,
+/// sends nothing while the item is locked, as Resume does not.
+#[gpui_kit::test]
+async fn the_prepare_banners_retry_waits_while_locked(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| {
+        fixture.commit_ticket(root, TICKET, "Refused", "");
+    });
+    open(&shell, ticket(&root), cx);
+    let refused = manyhands::results::Envelope::failure(
+        "context prepare",
+        manyhands::results::Scope::default(),
+        ResultCode::InternalError,
+        vec![manyhands::results::RecoveryAction {
+            action: manyhands::results::RecoveryActionKind::RequestRetry,
+            operation_id: None,
+            arguments: serde_json::Map::new(),
+        }],
+    );
+    shell
+        .backend
+        .hold_job_return_answering(JobKind::ContextPrepare, refused)
+        .release();
+    shell.click("item-edit", cx);
+    let request = shell.requests(cx, |request| {
+        matches!(request.intent, Intent::ContextPrepare { .. })
+    })[0];
+    shell.until_ended(request, cx).await;
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(shell.present("item-prepare-retry", cx));
+    let attempt = |shell: &Shell, cx: &mut TestAppContext| {
+        shell.operations(cx).read_with(cx, |operations, _| {
+            operations.request(request).unwrap().attempt
+        })
+    };
+    let before = attempt(&shell, cx);
+
+    shell.lock_item(&root, TICKET, cx);
+    assert!(shell.inert_button("item-prepare-retry", cx), "Retry waits");
+    shell.click("item-prepare-retry", cx);
+    press_owed(&shell, cx);
+    shell.run(cx);
+    assert_eq!(attempt(&shell, cx), before, "nothing was sent again");
+}
+
+/// Review F4: a save's Resume, owed after its hand-off to the index failed,
+/// resumes nothing while the item is locked.
+#[gpui_kit::test]
+async fn a_save_banners_resume_waits_while_locked(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = shell(cx, |fixture, root| saved_ticket(fixture, root, "Held", ""));
+    dirty_session(&shell, &root, cx).await;
+    shell.backend.replace_service(
+        RepositoryService::open_at_with_failure_point_for_testing(
+            shell.fixture.data_dir(),
+            FailurePoint::BeforeIndexTransactionCommit,
+        )
+        .unwrap(),
+    );
+    shell.keys("secondary-s", cx);
+    let request = shell.requests(cx, |r| is_save(&r.intent))[0];
+    shell.until_ended(request, cx).await;
+    shell.run(cx);
+    shell.frame(cx, |_, _| ());
+    assert!(shell.present("item-save-resume", cx), "Resume is offered");
+    let resumes = |shell: &Shell, cx: &mut TestAppContext| {
+        shell
+            .requests(cx, |r| matches!(r.intent, Intent::OperationResume { .. }))
+            .len()
+    };
+    let before = resumes(&shell, cx);
+
+    shell.lock_item(&root, TICKET, cx);
+    assert!(shell.inert_button("item-save-resume", cx), "Resume waits");
+    shell.click("item-save-resume", cx);
+    press_owed(&shell, cx);
+    shell.run(cx);
+    assert_eq!(resumes(&shell, cx), before, "nothing was resumed");
 }

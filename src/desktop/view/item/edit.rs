@@ -318,6 +318,24 @@ impl ItemPane {
         self.session_kept()
     }
 
+    /// Presses what the banners' Resume and Retry do, past their buttons:
+    /// a prepare's Resume or Retry, a checkpoint's Retry and a save's
+    /// Resume, whichever is owed. For a test of the lock's gate in the
+    /// handlers themselves, which a disabled button never reaches.
+    #[cfg(all(test, feature = "desktop-test-support"))]
+    pub(crate) fn press_owed_for_test(&mut self, cx: &mut Context<Self>) {
+        self.resume(cx);
+        if let Some(Stopped::Refused {
+            retry: Some(request),
+            ..
+        }) = self.edit.stopped
+        {
+            self.retry_prepare(request, cx);
+        }
+        self.retry_save(cx);
+        self.resume_save(cx);
+    }
+
     /// Where the tab stands.
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn edit_phase(&self) -> Phase {
@@ -436,6 +454,8 @@ impl ItemPane {
     /// session shown ends if clean, its context left as it is, and is kept
     /// if it holds unsaved text. Nothing happens while a save, a claim, a
     /// prepare or the review runs; the next change of the lock tries again.
+    /// The ended session's draft is discarded without telling release on
+    /// leave, so the context stays as it is.
     pub(super) fn lock_session(&mut self, cx: &mut Context<Self>) {
         if self.edit.phase != Phase::Editing
             || self.shown_session().is_none()
@@ -451,17 +471,20 @@ impl ItemPane {
         }
         // A clean session whose draft D2 still holds discards it, as Done
         // does (D3 Done, step 5): the closed item must not show "Restored
-        // draft" for text it no longer differs by.
-        let drafted = self.live_draft(cx).is_some()
-            || self
-                .edit
-                .session
-                .as_ref()
-                .is_some_and(|session| session.draft == DraftLink::Beginning);
-        if drafted {
-            self.discard_session(None, cx).detach();
-        } else {
-            self.end_session(None, cx);
+        // draft" for text it no longer differs by. Release on leave is told
+        // nothing. A draft still beginning waits: the next change of the
+        // lock, or its landing, tries again.
+        if self
+            .edit
+            .session
+            .as_ref()
+            .is_some_and(|session| session.draft == DraftLink::Beginning)
+        {
+            return;
+        }
+        match self.live_draft(cx) {
+            Some(draft) => self.end_locked_session(draft, cx),
+            None => self.end_session(None, cx),
         }
     }
 

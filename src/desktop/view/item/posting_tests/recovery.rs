@@ -16,14 +16,14 @@ use manyhands::{
 };
 
 use super::super::super::discussion_tests::{
-    composer_target, composer_text, flushed, new_composer, stored_comments, type_into,
+    TICKET, composer_target, composer_text, flushed, new_composer, stored_comments, type_into,
 };
 use super::support::{
     CHIP, KEPT, MAY_STILL_BE_SAVED, MAYBE_SAVED, checkpoints, chip, chip_control, comment_files,
     comment_posts, comment_source, composer_state, failed_actions, focus_end,
     hold_after_acceptance, internal_error, listed, not_saved, outcome, pending_row, post_request,
-    posting_shell, press, reserved, shared, shares, store_comment, submit, until_adopted,
-    until_answered, until_attempt, write_new,
+    posting_shell, press, reserved, saved_needs_unlock, shared, shares, store_comment, submit,
+    until_adopted, until_answered, until_attempt, write_new,
 };
 use crate::desktop::{
     model::publication::CommentOutcome,
@@ -414,7 +414,7 @@ async fn a_failed_posts_retries_wait_while_the_item_is_locked(cx: &mut TestAppCo
     submit(&shell, cx);
     until_answered(&shell, &root, &owed, cx).await;
     assert!(failed_actions(&shell, cx).contains(&"composer-retry"));
-    shell.lock_item(&root, super::super::super::discussion_tests::TICKET, cx);
+    shell.lock_item(&root, TICKET, cx);
 
     press(&shell, "composer-retry", cx);
     shell.run(cx);
@@ -438,7 +438,7 @@ async fn retry_sharing_waits_while_the_item_is_locked(cx: &mut TestAppContext) {
     submit(&shell, cx);
     until_answered(&shell, &root, &comment, cx).await;
     assert!(shell.present(chip_control(&comment, "retry-sharing"), cx));
-    shell.lock_item(&root, super::super::super::discussion_tests::TICKET, cx);
+    shell.lock_item(&root, TICKET, cx);
 
     assert!(shell.inert_button(
         format!("{}-button", chip_control(&comment, "retry-sharing")),
@@ -446,6 +446,12 @@ async fn retry_sharing_waits_while_the_item_is_locked(cx: &mut TestAppContext) {
     ));
     press(&shell, chip_control(&comment, "retry-sharing"), cx);
     shell.run(cx);
+    press_chip(
+        &shell,
+        &comment,
+        crate::desktop::model::publication::CommentOffer::RetrySharing,
+        cx,
+    );
     assert_eq!(
         comment_posts(&shell, cx)
             .iter()
@@ -454,4 +460,54 @@ async fn retry_sharing_waits_while_the_item_is_locked(cx: &mut TestAppContext) {
         [1],
         "Retry sharing sent nothing"
     );
+}
+
+/// Review V5: a saved comment's Unlock… waits for the lock, too: it would
+/// clear the declined key and send the post again.
+#[gpui_kit::test]
+async fn unlock_waits_while_the_item_is_locked(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let (shell, root) = posting_shell(true, cx, |_, _| {});
+    let (_, comment) = write_new(&shell, "Needs the key.", cx);
+    shell
+        .backend
+        .hold_job_return_answering(JobKind::Comment, saved_needs_unlock())
+        .release();
+    submit(&shell, cx);
+    until_answered(&shell, &root, &comment, cx).await;
+    assert!(shell.present(chip_control(&comment, "unlock"), cx));
+    shell.lock_item(&root, TICKET, cx);
+
+    assert!(shell.inert_button(format!("{}-button", chip_control(&comment, "unlock")), cx));
+    press(&shell, chip_control(&comment, "unlock"), cx);
+    shell.run(cx);
+    press_chip(
+        &shell,
+        &comment,
+        crate::desktop::model::publication::CommentOffer::Unlock,
+        cx,
+    );
+    assert_eq!(
+        comment_posts(&shell, cx)
+            .iter()
+            .map(|post| post.2)
+            .collect::<Vec<_>>(),
+        [1],
+        "Unlock sent nothing"
+    );
+}
+
+/// Presses the chip's `offer` of `comment` past its disabled button, in
+/// `chip_pressed` itself.
+fn press_chip(
+    shell: &crate::desktop::view::harness::Shell,
+    comment: &manyhands::canonical::ItemId,
+    offer: crate::desktop::model::publication::CommentOffer,
+    cx: &mut TestAppContext,
+) {
+    let pane = super::super::super::discussion_tests::pane(shell, cx);
+    shell.frame(cx, |window, cx| {
+        pane.update(cx, |pane, cx| pane.chip_pressed(comment, offer, window, cx))
+    });
+    shell.run(cx);
 }

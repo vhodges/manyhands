@@ -244,6 +244,25 @@ impl ItemPane {
         })
     }
 
+    /// The lifecycle lock ends a clean session whose draft D2 holds
+    /// (R-23): the session ends and its draft is discarded, as Done's step
+    /// 5 rules, but release on leave is told nothing: the item's context
+    /// is left as it is while its close or merge is unfinished. A failed
+    /// discard is shown as any is.
+    pub(super) fn end_locked_session(&mut self, draft: DraftId, cx: &mut Context<Self>) {
+        self.end_session(None, cx);
+        let discard = self
+            .services
+            .drafts()
+            .update(cx, |registry, cx| registry.discard_quietly(draft, cx));
+        cx.spawn(async move |pane, cx| {
+            if let Err(kind) = discard.await {
+                let _ = pane.update(cx, |pane, cx| pane.discard_failed(kind, cx));
+            }
+        })
+        .detach();
+    }
+
     /// M4: the begin a Discard waited for landed, the session already
     /// ended. A draft it stored is discarded, and the registry reports the
     /// discard to release on leave; with none stored, the tab leaves clean

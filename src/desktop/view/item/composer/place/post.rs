@@ -171,7 +171,9 @@ impl ItemPane {
     /// item's close or merge is unfinished a comment would change the
     /// item's working copy (R-23, P23). The composer says so with the
     /// item's words, and its text stays. Submit, Retry and Post as a new
-    /// comment all ask here before they send.
+    /// comment all ask here before they send. The ask is made when the
+    /// action is pressed: a lock that arrives while Post as a new comment
+    /// re-targets its text (`retarget`) does not stop that post.
     pub(super) fn refused_while_locked(
         &mut self,
         composer: EntityId,

@@ -7,7 +7,7 @@ use gpui_kit::TestAppContext;
 use manyhands::results::{Envelope, ResultCode, Scope};
 
 use super::super::super::discussion_tests::{
-    A, commit_comment, new_composer, reply_composer, stored_comments,
+    A, TICKET, commit_comment, new_composer, reply_composer, stored_comments,
 };
 use super::support::{
     KEPT, KEPT_REPLY, MAY_STILL_BE_SAVED, comment_files, comment_posts, composer_state,
@@ -291,7 +291,7 @@ async fn post_as_new_waits_while_the_item_is_locked(cx: &mut TestAppContext) {
         })
         .await;
     let sent = comment_posts(&shell, cx);
-    shell.lock_item(&root, super::super::super::discussion_tests::TICKET, cx);
+    shell.lock_item(&root, TICKET, cx);
 
     press(&shell, "composer-post-as-new", cx);
     shell.run(cx);

@@ -36,7 +36,9 @@ impl ItemPane {
     /// known of it yet, it writes nothing: the lifecycle action stays
     /// available (R-23), but its edits are not committed into a context
     /// the merge has finished with (P23); they stay kept, and the dialog
-    /// goes on to prepare.
+    /// goes on to prepare. The same holds while nothing is known of the
+    /// item yet (`Awaiting`): the edits are then skipped, not saved, and
+    /// stay unsaved in the tab.
     pub(in crate::desktop::view) fn start_save_first(
         &mut self,
         cx: &mut Context<Self>,
