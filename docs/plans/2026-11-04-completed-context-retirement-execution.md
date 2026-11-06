@@ -17,10 +17,10 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 **Owner-approved contract; both same-reviewer source/contract re-reviews passed
 through `08aa5465`, each with no remaining findings. Task 3's ordinary binding,
 confirmed per-item preserving/index recovery and forward gap unwiring are locally
-implemented at `9864c2b2`; controller reports Task 3 SPEC passed through `8b6d5b40`,
-including P1/P2. Subsequent QUALITY found Q1–Q3. Bounded corrections `8fa14ad8` /
-`50dc81f2` are locally verified, awaiting controller SPEC correction-delta review,
-THEN the SAME QUALITY reviewer's whole-Task-3 re-review. Ticket remains
+implemented at `9864c2b2`; Task 3 SPEC and QUALITY are now independently approved
+through `989a5807`, including P1/P2 and Q1–Q3 corrections. The same SPEC reviewer
+approved the compatibility delta before the same QUALITY reviewer approved the
+whole original Task 3 range. Next is Task 4's thin original-live pass. Ticket remains
 `implementing`, not full Task 2 or feature review-ready.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
 [the delivery checkpoint](#task-3--ordinary-binding-and-guarded-preserving-recovery).
@@ -113,9 +113,8 @@ Neither recovery route advances parent. Both corrections are internal under D15.
   reviews, with all historical counts/logs at their actual SHAs.
 - [x] Same independent source/contract reviewers' read-only re-review before code:
   both passed through `08aa5465`.
-- [ ] Task 3: implementation delivered at `9864c2b2`; SPEC passed through
-  `8b6d5b40`. QUALITY Q1–Q3 corrections at `8fa14ad8`/`50dc81f2` are locally
-  verified; SPEC correction delta THEN SAME QUALITY whole-range re-review pending.
+- [x] Task 3: implementation delivered at `9864c2b2`; independent SPEC and QUALITY
+  passed the original `d801d4ab..989a5807` range after P1/P2 and Q1–Q3 corrections.
   Ordinary binding/DTO/replay/resume, confirmed preserving
   receipt/index finalizer, independent old-catalog freeze and forward unwiring of
   superseded gap installation/support are implemented. No full-feature approval.
@@ -128,7 +127,8 @@ Neither recovery route advances parent. Both corrections are internal under D15.
   legacy evidence; review coverage mapping before any forward consolidation/rehome.
 - [ ] Tasks 7–8: governing docs, final static/fast/changed-path SSH tiers once at
   review-ready, then whole-range SPEC/QUALITY and owner handoff. No bare full suite
-  premerge, repeated green gates, push/native/lifecycle action in this revision.
+  premerge or repeated green gates. Ticket-branch publication remains authorized;
+  PR, native CI and main integration/closure remain separately gated.
 
 The amended 44-row E/O/D/S register below distinguishes retained safety from
 obsolete mechanism work. Earlier checkpoint proposals, approvals, commands and
@@ -5716,3 +5716,38 @@ correction commits carry the required coauthor, with evidence in a separate comm
 No agents, push/PR/main integration/closure, native dispatch, other worktree,
 real key/context/draft/profile operation or owner-policy question. All commands
 completed; final process check must find no owned build/test/CLI process.
+
+## Controller Task 3 Approval And Publication Checkpoint — 2026-11-06
+
+Canonical checkpoint **`01M6RY2M7QPFKETJ3BAP5M4XSS`**, parent
+**`01M6RT79EZMAPKG3N1TGT0HTRV`**, actual UTC **`2026-11-06T17:21:56Z`**.
+Original Task 3 range **`d801d4ab82573ccec6e39b33e48191447a905dfb..989a5807776f876b5738490189f17168b1bdeb76`**
+is independently SPEC and QUALITY approved; no full Task 2/A4/feature claim.
+
+- SPEC **`ses_e4e547d4bffeWoH5PROiKyb8GW`** approved the full Task 3 range after
+  P1/P2 corrections, then checked Q1–Q3's compatibility delta through `989a5807`:
+  PASS, no new findings. Invalidation tombstones and case-insensitive gap detection
+  remain intact; terminal cleanup does not release request identity or pending debt.
+- QUALITY **`ses_e4e40a874ffejNEnuP7pxvcZ9S`** re-reviewed the whole original
+  Task 3 range through `989a5807`: PASS, all three Important findings resolved,
+  no remaining Critical/Important/Minor findings. No reviewer builds/test reruns.
+- Controller checked production fixes and raw exact-test/static evidence. The
+  initial 50-source/87-log, SPEC 4-source/7-log and QUALITY 6-source/11-log manifests
+  verified at their proper scopes. Layering the source inventories verifies all
+  **52 current changed inputs**, zero mismatches. Final QUALITY source/evidence
+  inventory hashes remain **`ebadc2c4dd2ec3dea936308aef0fa48e526944e1707cfabb1e1a3f707f85a026`**
+  / **`e39f619debf20370d0a06f51cb81eaf3238fd1c03142c16c34e5b41051d33fe2`**.
+  Earlier test logs retain their actual source SHAs; no broad/final/native claim.
+- Fresh fetch and merge reconfirm main **`79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`**,
+  already up to date in this branch. Registered main is clean but one guidance
+  commit behind origin; it was not edited. This metadata-only checkpoint needs no
+  Rust rebuild. Comment ID used the already-built supported isolated CLI under
+  Devenv; no default-profile access/repair or compilation.
+
+Only ticket-branch publication is authorized. Superseded gap code is removed from
+the current tree by the reviewed forward changes, not separately approved as a
+historical implementation. Next is a fresh Task 4 implementer: production initial
+capture, R-12 consumer/membership migration and lineage, thin live loop using
+ordinary child requests, immutable stop cut/report. Tasks 5–8 and final whole-tree
+static/fast/changed-path SSH gates remain owed once at review-ready. No PR, native
+CI, main integration/closure, real-context retirement or real-profile/key/draft action.
