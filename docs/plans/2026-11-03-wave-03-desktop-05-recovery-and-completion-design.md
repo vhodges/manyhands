@@ -816,6 +816,8 @@ Applied in the approval commit:
 | R-31 | The sheet's Result editor has a tab stop after the choices and before Cancel · Save, as the read-only editors and the composer do: Enter on it goes into the editor; inside, Tab indents, Enter is a newline, Ctrl+Enter saves, and Escape returns to the tab stop without closing the sheet (owner 2026-11-05, Task 15a) | Escape needs two presses to close the sheet from inside the editor |
 | R-32 | Focus lost inside an open dialog or sheet returns to that dialog's or sheet's own focus (`focus_lost_restore_target`), so a control that goes by itself (Stop, Read again, Check again) never drops focus out of the modal. A lifecycle-dialog press also moves focus to the dialog first, so a prompt opened before the next frame (the passphrase dialog) takes the dialog as its origin. A modal handing focus back to an origin that is gone lands on the last region (orchestrator, Task 15a review and re-review) | — |
 | R-33 | P5 strands the close at `ClosureAfterClosingRecorded` (after `closing` is recorded, before the merge), not at `BeforeRequestSettlement`, which fires only after a local close has finished (`execute.rs:437-441`): a fresh shell, Resume → `original_request_required` → the resend finishes, with commit counts. A9's cleanup-only replay is a same-ID replay that only tidies up (owner 2026-11-05 on P5; orchestrator on A9; Task 15b) | `BeforeRequestSettlement` is covered only as K-25 |
+| R-34 | The sheet's Result note is only "You can still edit it in the item afterwards."; decision 15's source note is the only statement of what Saving does. R-27's handoff wording ("Saving keeps the result on this computer… Share sends it to everyone") contradicted decision 15 for shares and lifecycles (owner 2026-11-06, whole-branch spec review) | — |
+| R-35 | Every D5 text that names the primary branch uses the repository's real primary name, built with `format!`, as the confirmation's steps already do; the pre-D5 sidebar's "Share main" is out of scope (owner 2026-11-06, whole-branch quality review) | — |
 
 ## Known Limits
 
@@ -900,6 +902,10 @@ Applied in the approval commit:
   reconcile's RecoveryRequired (`:617-620`, `make_outcome`). The CLI
   reports the same. Fixed in the library under ticket
   `01M6R79XHD9MTQCBDF27JAC351`, not in D5 (owner 2026-11-06, Task 15c).
+- **K-27.** A3 and P11 (a stale resolution) are proven by a canned remote
+  case (`c4_resolution_another_observation`), not by a second actor changing
+  a local side: under R-26 any change in the work folder sends a local set
+  outside, so no tidy real local stale trigger exists (Task 11b review).
 
 ## Alternatives Rejected
 

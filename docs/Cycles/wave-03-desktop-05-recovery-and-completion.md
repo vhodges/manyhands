@@ -29,8 +29,16 @@ the ticket branch) and against C5's branch tip `f59aceb6` (decision 1).
 this branch merged as `cd2e922e` (origin had not yet updated; the owner
 directed proceeding on local main). C5's changes after `f59aceb6` touch D5
 only through decision 35 and the CLI's way-out text (design, Re-grounding).
-Nothing has been built or run. Task 0 runs the baseline gates and settles
-U-1 to U-5.
+**Built 2026-11-04 to 2026-11-06** (Tasks 0–16; execution ledger:
+[2026-11-03-wave-03-desktop-05-recovery-and-completion-execution.md](../plans/2026-11-03-wave-03-desktop-05-recovery-and-completion-execution.md)).
+Rulings grew to R-1–R-35, named edits to E-1–E-16 and known limits to
+K-1–K-27 during execution, each recorded in the design with its source.
+Two departures from decision 8: Task 5 ran in a side worktree merged back,
+never rebased (owner, 2026-11-04), and Task 16's review fixes were made in a
+detached worktree while the gates ran on the ticket worktree. Part 0 added L4
+(decision 22) to L1–L3; the Wave's D5 amendment names only L1–L3. A library
+bug found in Task 15c (K-26) is deferred to ticket
+`01M6R79XHD9MTQCBDF27JAC351`.
 
 ## Purpose And Authority
 
@@ -161,7 +169,7 @@ D5.
 - Scheduled polling, launch polls and shutdown: D6.
 - CLI-against-desktop scenarios: G1 (track rule 4).
 - Windows and macOS native evidence: G1 (decision 7).
-- Known limits K-1 to K-13 (design Known Limits).
+- Known limits K-1 to K-27 (design Known Limits).
 
 ## Required Contract
 
@@ -194,30 +202,30 @@ D5.
 
 | # | Wave exit evidence / contract | Proof | Status |
 | --- | --- | --- | --- |
-| A1 | Native keyboard conflict journey | Desktop keyboard test (local conflict real; remote canned); native §3 | Planned |
-| A2 | Native keyboard completion journeys | Desktop keyboard tests for close and promote (local-only real); native §2 | Planned |
-| A3 | Stale resolution | Desktop test: a second actor changes a local side; refreshed comparison | Planned |
-| A4 | Stale confirmation | Desktop test: a new path after prepare; the library refuses; Prepare again shows it | Planned |
-| A5 | Dirty primary | Desktop tests: blocked at prepare (real) and stopped at execute (canned) (P19) | Planned |
-| A6 | Local-only close and promotion | Desktop tests (real); native §2 | Planned |
-| A7 | Remote cleanup rejection | Canned desktop test (P6); C5 library SSH tests; native §4 | Planned |
-| A8 | Interruption | Stop at a safe point (P4); relaunch, Resume, resend (P5, real, fresh shell over the data directory); C5 library tests; native §4 | Planned |
-| A9 | Cleanup-only replay; no repeated merge or checkpoint | Commit counts after Retry and Resume (local-only, real); L3 cleanup-only stages; C5 library tests | Planned |
-| A10 | Preserved drafts and contexts inspectable | Desktop tests: failed close keeps context and drafts; other drafts on the Drafts page | Planned |
-| A11 | Made-ready list | Desktop test: Done lists dependents with slug and title; index pending says so | Planned |
-| A12 | External guidance for unsupported conflicts | Desktop tests: noncanonical path, incompatible closures (P10) | Planned |
-| A13 | Refused closure checkpoint merge repaired in the app | Desktop test through Repair locally… (P9, P16) | Planned |
-| A14 | Republish after a deleted shared branch | Canned desktop test (P17); library tests on main; native §5 | Planned |
-| A15 | Resume after restart | Lifecycle rows (L2) and local synchronizations offer Resume (P5, P16, P22, P24) | Planned |
-| A16 | Privacy (contract 10) | Sentinel tests | Planned |
-| A17 | Nothing lifecycle without consent (contract 1) | Desktop test over navigation, Save, Done, close and quit | Planned |
-| A18 | Library part | L1: CLI renderer tests and goldens unchanged; L2 and L3: library tests and named edits | Planned |
-| A19 | Whole branch and exact confirmation (contracts 2, 3) | Desktop tests: every path, code note, refused consent | Planned |
-| A20 | Closure apart from status (contract 8) | Characterization test of the closure display; P13 | Planned |
-| A21 | Keyboard and focus (contract 9) | Keyboard tests; focus returns to the header action | Planned |
-| A22 | Item, repository and context named; cancellation reported (MH-COLLAB-006) | Desktop tests of the dialog header and the stopped outcome | Planned |
-| A23 | Read-only while unfinished (decisions 12, 18, 20, 21) | Desktop tests of L-1–L-6 (P20, P23, P25, P26) | Planned |
-| A24 | Deleted branch mid-lifecycle | Desktop test of Stop and republish… (P21) | Planned |
+| A1 | Native keyboard conflict journey | Desktop keyboard test (local conflict real; remote canned); native §3 | Met (desktop keyboard tests); native §3 pending |
+| A2 | Native keyboard completion journeys | Desktop keyboard tests for close and promote (local-only real); native §2 | Met (desktop keyboard tests); native §2 pending |
+| A3 | Stale resolution | Desktop test: a second actor changes a local side; refreshed comparison | Met, canned remote case (K-27) |
+| A4 | Stale confirmation | Desktop test: a new path after prepare; the library refuses; Prepare again shows it | Met |
+| A5 | Dirty primary | Desktop tests: blocked at prepare (real) and stopped at execute (canned) (P19) | Met (both cases real) |
+| A6 | Local-only close and promotion | Desktop tests (real); native §2 | Met (desktop tests); native §2 pending |
+| A7 | Remote cleanup rejection | Canned desktop test (P6); C5 library SSH tests; native §4 | Met, canned (decision 9); native §4 pending |
+| A8 | Interruption | Stop at a safe point (P4); relaunch, Resume, resend (P5, real, fresh shell over the data directory); C5 library tests; native §4 | Met (R-33; K-25, K-26); native §4 pending |
+| A9 | Cleanup-only replay; no repeated merge or checkpoint | Commit counts after Retry and Resume (local-only, real); L3 cleanup-only stages; C5 library tests | Met |
+| A10 | Preserved drafts and contexts inspectable | Desktop tests: failed close keeps context and drafts; other drafts on the Drafts page | Met |
+| A11 | Made-ready list | Desktop test: Done lists dependents with slug and title; index pending says so | Met (R-20; K-8) |
+| A12 | External guidance for unsupported conflicts | Desktop tests: noncanonical path, incompatible closures (P10) | Met (K-4, K-14, K-23) |
+| A13 | Refused closure checkpoint merge repaired in the app | Desktop test through Repair locally… (P9, P16) | Met (real) |
+| A14 | Republish after a deleted shared branch | Canned desktop test (P17); library tests on main; native §5 | Met, canned (K-15); native §5 pending |
+| A15 | Resume after restart | Lifecycle rows (L2) and local synchronizations offer Resume (P5, P16, P22, P24) | Met |
+| A16 | Privacy (contract 10) | Sentinel tests | Met |
+| A17 | Nothing lifecycle without consent (contract 1) | Desktop test over navigation, Save, Done, close and quit | Met |
+| A18 | Library part | L1: CLI renderer tests and goldens unchanged; L2 and L3: library tests and named edits | Met |
+| A19 | Whole branch and exact confirmation (contracts 2, 3) | Desktop tests: every path, code note, refused consent | Met |
+| A20 | Closure apart from status (contract 8) | Characterization test of the closure display; P13 | Met |
+| A21 | Keyboard and focus (contract 9) | Keyboard tests; focus returns to the header action | Met (R-31, R-32) |
+| A22 | Item, repository and context named; cancellation reported (MH-COLLAB-006) | Desktop tests of the dialog header and the stopped outcome | Met |
+| A23 | Read-only while unfinished (decisions 12, 18, 20, 21) | Desktop tests of L-1–L-6 (P20, P23, P25, P26) | Met (K-13, K-19, K-20, K-25) |
+| A24 | Deleted branch mid-lifecycle | Desktop test of Stop and republish… (P21) | Met, canned (R-30) |
 
 Native evidence: Linux (Wayland), release build, against a real SSH
 remote, run by the product owner from the checklist written in the final
