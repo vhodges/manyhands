@@ -1,8 +1,8 @@
 //! D5's privacy sweep (A16) over an approve and merge, over a real
 //! local-only repository: a document whose title, body and comment hold
 //! sentinels is stopped at a safe point, refused at its tidy-up with its
-//! banner, and finished. `privacy_tests.rs` holds the sentinels and the
-//! sweep (`Seen`).
+//! banner, then reopened from its entry and finished: Done.
+//! `privacy_tests.rs` holds the sentinels and the sweep (`Seen`).
 
 use std::path::{Path, PathBuf};
 
@@ -16,12 +16,12 @@ use manyhands::{
 };
 
 use super::{
-    outcome::{ENDING_FAILED, ENDING_STOPPED},
+    outcome::{ENDING_DONE, ENDING_FAILED, ENDING_STOPPED},
     outcome_tests::at_stage,
     privacy_tests::{
         BODY, Seen, TITLE, commit_sentinel_comment, shows_body_and_comment, until_long,
     },
-    tests::{DOCUMENT, code, open, request, shell, shown, until_present},
+    tests::{DOCUMENT, code, open, shell, shown, until_present},
 };
 use crate::desktop::{
     model::navigation::OpenTarget,
@@ -33,6 +33,7 @@ use crate::desktop::{
     view::{
         harness::{Shell, key},
         item::LIFECYCLE_ACTION,
+        operations::request_id,
     },
 };
 
@@ -83,9 +84,10 @@ fn promotes(shell: &Shell, cx: &mut TestAppContext) -> Vec<DesktopRequestId> {
 /// working copy while it tidies up stops the tidy-up (`context_changed`,
 /// the recipe of `lock_tests.rs`
 /// `a_changed_context_cleanup_unlocks_with_check_again`), which raises the
-/// "Merged, but not tidied up" banner; with the file gone, the banner's
-/// Check again finishes it. No sentinel reaches an entry, an answer, the
-/// operation area, the banner or the dialog's messages and outcome.
+/// "Merged, but not tidied up" banner; with the file gone, the run's entry
+/// reopens the dialog, whose Retry tidies up to Done, and the banner goes.
+/// No sentinel reaches an entry, an answer, the operation area, the banner or
+/// the dialog's messages and outcome.
 #[gpui_kit::test]
 async fn a16_a_promotion_stopped_untidied_and_done_shows_no_item_text(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -135,6 +137,7 @@ async fn a16_a_promotion_stopped_untidied_and_done_shows_no_item_text(cx: &mut T
     let gate = shell
         .backend
         .hold_at_stage(JobKind::DocumentPromote, ProgressStage::CleaningUp);
+    until_present(&shell, "lifecycle-retry", cx).await;
     shell.click("lifecycle-retry", cx);
     gate.wait_reached();
     let left = context.join("untracked.txt");
@@ -157,19 +160,37 @@ async fn a16_a_promotion_stopped_untidied_and_done_shows_no_item_text(cx: &mut T
     seen.window(&shell, cx);
     assert!(seen.read_at("banner", "Merged, but not tidied up"));
 
-    // Check again, with the file gone, finishes it.
+    // With the file gone, the failed run's entry reopens the dialog, whose
+    // Retry tidies up: Done. (A finished-ok entry offers no Open…, so the
+    // dialog is reopened while the run is still failed.)
     std::fs::remove_file(&left).unwrap();
-    shell.click("item-not-tidied-check-again", cx);
-    until_long(&shell, "the tidy-up", cx, |shell, cx| {
-        request(shell, retried, cx).attempt == 2 && code(shell, retried, cx).is_some()
-    })
-    .await;
-    assert_eq!(code(&shell, retried, cx), Some(ResultCode::Ok));
-    until_long(&shell, "the banner's clearing", cx, |shell, cx| {
-        !shell.present("item-not-tidied", cx)
-    })
-    .await;
+    shell.click(request_id(retried, "open"), cx);
+    until_present(&shell, "lifecycle-retry", cx).await;
     seen.window(&shell, cx);
+    shell.click("lifecycle-retry", cx);
+    let tidied = promotes(&shell, cx)[0];
+    assert_ne!(tidied, retried, "Retry sends the run again");
+    until_long(&shell, "the tidy-up", &mut seen, cx, |shell, cx| {
+        code(shell, tidied, cx).is_some()
+    })
+    .await;
+    assert_eq!(code(&shell, tidied, cx), Some(ResultCode::Ok));
+    until_present(&shell, "lifecycle-ending", cx).await;
+    assert_eq!(
+        shell.label("lifecycle-ending", cx).as_deref(),
+        Some(ENDING_DONE)
+    );
+    seen.window(&shell, cx);
+    assert!(seen.read_at("dialog message", ENDING_DONE));
+    shell.keys("escape", cx);
+    until_long(
+        &shell,
+        "the banner's clearing",
+        &mut seen,
+        cx,
+        |shell, cx| !shell.present("item-not-tidied", cx),
+    )
+    .await;
 
     seen.holds_none(&[
         "operation entry",

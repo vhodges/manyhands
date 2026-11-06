@@ -67,13 +67,34 @@ pub(super) fn state(id: (&'static str, usize), words: &'static str, cx: &App) ->
     text(id, words).text_xs().text_color(color)
 }
 
+/// The sheet's line counts: Yours' and Theirs' `conflict-line` rows and
+/// Before's `conflict-before` rows, each numbered across the sheet.
+#[derive(Default)]
+pub(super) struct Lines {
+    pub(super) marked: Cell<usize>,
+    pub(super) before: Cell<usize>,
+}
+
 /// Before's text in plain mono lines (handoff 2g); "(none)" when Before
-/// has no value.
-pub(super) fn before_column(label: &'static str, value: Option<&str>) -> impl IntoElement {
+/// has no value. Each line is a `conflict-before` row, numbered across the
+/// sheet by `line`, so a test reads it.
+pub(super) fn before_column(
+    label: &'static str,
+    value: Option<&str>,
+    line: &Cell<usize>,
+) -> impl IntoElement {
     let lines = v_flex().min_w_0().font_family("monospace").text_sm();
     let lines = match value {
         None => lines.child(div().child(NONE)),
-        Some(value) => lines.children(value.lines().map(|text| div().child(text.to_owned()))),
+        Some(value) => lines.children(value.lines().map(|text| {
+            let at = line.get();
+            line.set(at + 1);
+            div()
+                .id(("conflict-before", at))
+                .test_support()
+                .aria_label(text.to_owned())
+                .child(text.to_owned())
+        })),
     };
     side(label, lines)
 }

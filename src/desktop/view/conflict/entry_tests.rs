@@ -84,7 +84,7 @@ pub(super) fn ticket_shell(cx: &mut TestAppContext) -> (Shell, PathBuf) {
 
 /// The request `n` of `intent`, fabricated, queued, started and finished
 /// with `envelope`.
-fn fabricate(
+pub(crate) fn fabricate(
     shell: &Shell,
     n: u64,
     intent: Intent,
@@ -114,7 +114,7 @@ fn fabricate(
 /// A share stopped on a conflict of `SYNCHRONIZATION`, as
 /// `tests/mutation_remote/merging.rs` `c4_merging_canonical_conflict`
 /// answers.
-fn share_conflict() -> Envelope<MutationDataDto> {
+pub(crate) fn share_conflict() -> Envelope<MutationDataDto> {
     Envelope::classified_mutation(
         "item sync",
         Scope::default(),

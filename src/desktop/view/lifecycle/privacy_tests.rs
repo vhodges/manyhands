@@ -18,7 +18,9 @@
 //!   recovery and message;
 //! - every label and value the window draws outside the places the design
 //!   puts that text (`ALLOWED`), by where it is drawn: the operation area,
-//!   the item's banners, the lifecycle dialog (its messages and outcome),
+//!   the item's banners and its lifecycle lock (the pill and the notes
+//!   beside its locked actions), the lifecycle dialog (its messages and
+//!   outcome),
 //!   the conflict sheet (its own words) and a confirmation; and no
 //!   notification.
 //!
@@ -27,6 +29,7 @@
 //! is no log to read.
 
 use std::{
+    collections::BTreeSet,
     path::Path,
     time::{Duration, Instant},
 };
@@ -53,30 +56,41 @@ pub(super) const BODY: &str = "SENTINEL-D5-BODY-71c4";
 pub(super) const COMMENT_TEXT: &str = "SENTINEL-D5-COMMENT-a0f2";
 pub(super) const BASE: &str = "SENTINEL-D5-BASE-5d18";
 pub(super) const THEIRS: &str = "SENTINEL-D5-THEIRS-c6b7";
-pub(super) const SENTINELS: [&str; 5] = [TITLE, BODY, COMMENT_TEXT, BASE, THEIRS];
+/// The title of a ticket that depends on the closed one: the close makes it
+/// ready, and the dialog lists it (A3).
+pub(super) const READY: &str = "SENTINEL-D5-READY-9b21";
+pub(super) const SENTINELS: [&str; 6] = [TITLE, BODY, COMMENT_TEXT, BASE, THEIRS, READY];
 
 const COMMENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5KP0";
+const DEPENDENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5KQ0";
 
 /// Where the design puts an item's text, so a sentinel may show there: the
 /// tab strip and the header's title; the read view and a comment's read
 /// editor; the lifecycle dialog's subtitle ("{short} · {title} ·
-/// {repository}", A2); and the conflict sheet's title ("Choose what to
-/// keep · {title}"), each side's lines and the Result editor (B3).
-const ALLOWED: [&str; 8] = [
+/// {repository}", A2) and its made-ready rows, each a ticket's short code
+/// and title (A3); and the conflict sheet's title ("Choose what to keep ·
+/// {title}"), Before's lines, Yours' and Theirs' lines and the Result editor
+/// (B3).
+const ALLOWED: [&str; 10] = [
     "tab-strip",
     "item-title",
     "item-read",
     "comment-body",
     "lifecycle-subtitle",
+    "lifecycle-made-ready",
     "conflict-title",
+    "conflict-before",
     "conflict-line",
     "conflict-result",
 ];
 
 /// Where a drawn text is read, by the container it is drawn in.
-const SURFACES: [(&str, &str); 5] = [
+const SURFACES: [(&str, &str); 8] = [
     ("operation-area", "operation area"),
     ("item-banners", "banner"),
+    ("item-pill", "lock"),
+    ("item-share-locked", "lock"),
+    ("item-locked-note", "lock"),
     ("lifecycle-dialog", "dialog message"),
     ("conflict-sheet", "sheet message"),
     ("confirm-dialog", "confirmation message"),
@@ -123,13 +137,13 @@ fn inside(
         .find_map(|at| names.clone().into_iter().find(|allowed| *allowed == at))
 }
 
-/// Everything the sweep read, by where it was read, and where inside
-/// `ALLOWED` a sentinel showed.
+/// Everything the sweep read, by where it was read, and which sentinel
+/// showed where inside `ALLOWED`. Sets, since a long wait sweeps often.
 #[derive(Default)]
 pub(super) struct Seen {
-    read: Vec<(&'static str, String)>,
-    allowed: Vec<(&'static str, String)>,
-    answers: Vec<String>,
+    read: BTreeSet<(&'static str, String)>,
+    allowed: BTreeSet<(&'static str, &'static str)>,
+    answers: BTreeSet<String>,
 }
 
 impl Seen {
@@ -184,12 +198,15 @@ impl Seen {
             });
         for (at, surface, text) in drawn {
             match at {
-                Some(at) => {
-                    if SENTINELS.iter().any(|sentinel| text.contains(sentinel)) {
-                        self.allowed.push((at, text));
-                    }
+                Some(at) => self.allowed.extend(
+                    SENTINELS
+                        .into_iter()
+                        .filter(|sentinel| text.contains(sentinel))
+                        .map(|sentinel| (at, sentinel)),
+                ),
+                None => {
+                    self.read.insert((surface, text));
                 }
-                None => self.read.push((surface, text)),
             }
         }
         let notifications = shell.frame(cx, |window, cx| window.notifications(cx).len());
@@ -206,6 +223,13 @@ impl Seen {
     /// Whether a sentinel showed inside the allowed place `at`.
     pub(super) fn allowed_at(&self, at: &str) -> bool {
         self.allowed.iter().any(|(allowed, _)| *allowed == at)
+    }
+
+    /// Whether `sentinel` showed inside the allowed place `at`.
+    pub(super) fn allowed_holding(&self, at: &str, sentinel: &str) -> bool {
+        self.allowed
+            .iter()
+            .any(|(allowed, held)| *allowed == at && *held == sentinel)
     }
 
     /// Each of `surfaces` was read, and no surface read holds a sentinel,
@@ -246,10 +270,13 @@ pub(super) fn shows_body_and_comment(shell: &Shell, cx: &mut TestAppContext) {
     }
 }
 
-/// Waits, past the harness's `WAIT`, until `done` holds of the window.
+/// Waits, past the harness's `WAIT`, until `done` holds of the window,
+/// sweeping it into `seen` each time it looks, so the progress shown
+/// meanwhile is read too.
 pub(super) async fn until_long(
     shell: &Shell,
     what: &str,
+    seen: &mut Seen,
     cx: &mut TestAppContext,
     done: impl Fn(&Shell, &mut TestAppContext) -> bool,
 ) {
@@ -257,6 +284,7 @@ pub(super) async fn until_long(
     loop {
         shell.frame(cx, |_, _| ());
         shell.run(cx);
+        seen.window(shell, cx);
         if done(shell, cx) {
             shell.frame(cx, |_, _| ());
             return;
@@ -271,10 +299,12 @@ pub(super) async fn until_long(
 /// `recording`, and broken after its closure checkpoint
 /// (`FailurePoint::AfterClosureCheckpoint`); main then moves on the ticket
 /// (theirs), so Retry is refused at the merge and offers Repair locally…
-/// (P9, as `conflict/repair_tests.rs` `to_the_repair` drives it); the repair's local
-/// synchronization stops on a real conflict of the ticket's file, whose
-/// sheet shows the three sides; mine is kept and saved; the dialog comes
-/// back and Retry finishes the close. No sentinel reaches an entry, an
+/// (P9, as `conflict/repair_tests.rs` `to_the_repair` drives it); the
+/// repair's local synchronization stops on a real conflict of the ticket's
+/// file, whose sheet shows the three sides (Before holds `BASE`, Yours
+/// `TITLE` and Theirs `THEIRS`); mine is kept and saved; the dialog comes
+/// back and Retry finishes the close, which makes a dependent ticket titled
+/// `READY` ready, listed in the dialog. No sentinel reaches an entry, an
 /// answer, the operation area, a banner, the dialog's messages and outcome
 /// or the sheet's own words.
 #[gpui_kit::test]
@@ -283,6 +313,7 @@ async fn a16_a_close_broken_refused_repaired_and_done_shows_no_item_text(cx: &mu
     let (shell, root) = shell(cx, |fixture, root| {
         fixture.commit_ticket(root, TICKET, BASE, "");
         commit_sentinel_comment(fixture, root, TICKET);
+        fixture.commit_ticket(root, DEPENDENT, READY, &format!("deps:\n  - {TICKET}\n"));
         fixture.refresh(root);
         fixture.save_ticket_with_body(root, TICKET, TITLE, &format!("{BODY} is the body.\n"));
     });
@@ -320,6 +351,10 @@ async fn a16_a_close_broken_refused_repaired_and_done_shows_no_item_text(cx: &mu
     assert_ne!(code(&shell, first, cx), Some(ResultCode::Ok), "broken");
     until_present(&shell, "lifecycle-ending", cx).await;
     seen.window(&shell, cx);
+    assert!(
+        seen.read_at("lock", super::lock_tests::CLOSING),
+        "the lock is shown"
+    );
     shell
         .backend
         .replace_service(RepositoryService::open_at(shell.fixture.data_dir()).unwrap());
@@ -347,14 +382,22 @@ async fn a16_a_close_broken_refused_repaired_and_done_shows_no_item_text(cx: &mu
 
     // Repair locally…: the sheet on the real conflict, its sides shown.
     shell.click("lifecycle-repair-locally", cx);
-    until_long(&shell, "the sheet's opening", cx, |shell, cx| {
+    until_long(&shell, "the sheet's opening", &mut seen, cx, |shell, cx| {
         shell.present("conflict-save", cx)
     })
     .await;
     seen.window(&shell, cx);
-    for at in ["conflict-title", "conflict-line"] {
-        assert!(seen.allowed_at(at), "a sentinel is drawn in {at}");
+    assert!(seen.allowed_holding("conflict-title", TITLE));
+    for sentinel in [TITLE, THEIRS] {
+        assert!(
+            seen.allowed_holding("conflict-line", sentinel),
+            "{sentinel}"
+        );
     }
+    assert!(
+        seen.allowed_holding("conflict-before", BASE),
+        "Before's lines"
+    );
     let mut part = 0usize;
     while shell.present(("conflict-keep-mine", part), cx) {
         shell.click(("conflict-keep-mine", part), cx);
@@ -369,9 +412,13 @@ async fn a16_a_close_broken_refused_repaired_and_done_shows_no_item_text(cx: &mu
     seen.window(&shell, cx);
     shell.click("conflict-save", cx);
     seen.window(&shell, cx);
-    until_long(&shell, "the resolution's answer", cx, |shell, cx| {
-        !shell.present("conflict-sheet", cx)
-    })
+    until_long(
+        &shell,
+        "the resolution's answer",
+        &mut seen,
+        cx,
+        |shell, cx| !shell.present("conflict-sheet", cx),
+    )
     .await;
     seen.window(&shell, cx);
 
@@ -380,7 +427,7 @@ async fn a16_a_close_broken_refused_repaired_and_done_shows_no_item_text(cx: &mu
     seen.window(&shell, cx);
     shell.click("lifecycle-retry", cx);
     let retried = closes(&shell, cx)[0];
-    until_long(&shell, "the close's answer", cx, |shell, cx| {
+    until_long(&shell, "the close's answer", &mut seen, cx, |shell, cx| {
         code(shell, retried, cx).is_some()
     })
     .await;
@@ -390,13 +437,24 @@ async fn a16_a_close_broken_refused_repaired_and_done_shows_no_item_text(cx: &mu
         shell.label("lifecycle-ending", cx).as_deref(),
         Some(ENDING_DONE)
     );
+    shell
+        .until_drawn(cx, "the made-ready list", |shell, cx| {
+            shell.present(("lifecycle-made-ready", 0usize), cx)
+        })
+        .await;
     seen.window(&shell, cx);
+    assert!(
+        seen.allowed_holding("lifecycle-made-ready", READY),
+        "the made-ready list names the dependent"
+    );
     shell.keys("escape", cx);
     seen.window(&shell, cx);
 
     seen.holds_none(&[
         "operation entry",
         "operation area",
+        "lock",
+        "banner",
         "dialog message",
         "sheet message",
         "drawn",

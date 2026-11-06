@@ -43,7 +43,7 @@ use crate::desktop::{
     view::{harness::Shell, lifecycle::Heading},
 };
 
-pub(super) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
+pub(crate) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FG0";
 pub(super) const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FH0";
 
 /// How long a real resolution may take under the whole suite, as
@@ -231,7 +231,7 @@ pub(super) fn submitted(intent: &Intent) -> (String, Vec<(String, String)>) {
 /// A canned remote conflict of `operation` over `paths`, live and to be
 /// resolved, of the shape `tests/mutation_remote/conflict_read.rs`
 /// `c4_conflict_read_canonical` reads.
-pub(super) fn canned(operation: OperationId, paths: Vec<ConflictPathDto>) -> ConflictDto {
+pub(crate) fn canned(operation: OperationId, paths: Vec<ConflictPathDto>) -> ConflictDto {
     ConflictDto {
         operation_id: operation.to_string(),
         comment_operation_id: None,

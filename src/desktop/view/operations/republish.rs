@@ -189,7 +189,7 @@ impl Workspace {
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "republish_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "republish_stop_tests.rs"]

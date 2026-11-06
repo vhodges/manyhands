@@ -519,11 +519,11 @@ impl ResolveSheet {
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "conflict_tests.rs"]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "conflict/answer_tests.rs"]
-mod answer_tests;
+pub(crate) mod answer_tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "conflict/sheet_tests.rs"]
@@ -551,7 +551,7 @@ mod external_tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "conflict/entry_tests.rs"]
-mod entry_tests;
+pub(crate) mod entry_tests;
 
 #[cfg(all(test, feature = "desktop-test-support"))]
 #[path = "conflict/repair_tests.rs"]

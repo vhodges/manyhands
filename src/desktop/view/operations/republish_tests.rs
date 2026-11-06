@@ -40,7 +40,7 @@ use crate::desktop::{
     },
 };
 
-pub(super) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5KR0";
+pub(crate) const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5KR0";
 pub(super) const OPERATION: &str = "01ARZ3NDEKTSV4RRFFQ69G5KR1";
 const OID: &str = "0123456789012345678901234567890123456789";
 /// Fabricated requests stand far above the worker's own numbering.
@@ -82,7 +82,7 @@ fn republish_of(root: &Path) -> Intent {
 /// removal preview, which every registered repository gives, for a
 /// confirmation of the right form, with the republish's command and
 /// details.
-pub(super) fn republish_preview(shell: &Shell, root: &Path) -> Envelope<PrepareDataDto> {
+pub(crate) fn republish_preview(shell: &Shell, root: &Path) -> Envelope<PrepareDataDto> {
     let mut prepared = shell
         .fixture
         .service()
@@ -107,7 +107,7 @@ pub(super) fn republish_preview(shell: &Shell, root: &Path) -> Envelope<PrepareD
 }
 
 /// A republish answered `ok`, published, as `c4_republish_confirmed` ends.
-pub(super) fn republished() -> Envelope<MutationDataDto> {
+pub(crate) fn republished() -> Envelope<MutationDataDto> {
     Envelope::classified_mutation(
         "item republish",
         Scope::default(),
@@ -144,7 +144,7 @@ fn short_of_main() -> LifecycleMutationDto {
 
 /// A close answered `code` as `outcome`, offering `recovery`, under
 /// `request`.
-pub(super) fn close_answer(
+pub(crate) fn close_answer(
     root: &Path,
     code: ResultCode,
     outcome: Outcome,
@@ -175,7 +175,7 @@ pub(super) fn close_answer(
 /// cancel` of the close and the repository's details, as
 /// `tests/mutation_remote/c5_lifecycle.rs` `child_remote_branch_deleted`
 /// answers (its record stays accepted).
-pub(super) fn branch_deleted(root: &Path, request: RequestId) -> Envelope<MutationDataDto> {
+pub(crate) fn branch_deleted(root: &Path, request: RequestId) -> Envelope<MutationDataDto> {
     let cancel = RecoveryAction::new(
         RecoveryActionKind::RequestCancel,
         [("request_id", request.to_string().into())],

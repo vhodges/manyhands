@@ -14,8 +14,6 @@ use gpui_kit::{
     div, px,
 };
 
-use std::cell::Cell;
-
 use manyhands::repository::ItemDtoKind;
 
 use super::{
@@ -34,7 +32,7 @@ use crate::desktop::{
 mod pieces;
 
 pub(super) use pieces::text;
-use pieces::{before_column, body_state, field_state, marked_column, state, taken_words};
+use pieces::{Lines, before_column, body_state, field_state, marked_column, state, taken_words};
 
 /// What a part is called in its card: the body is the Description.
 const DESCRIPTION: &str = "Description";
@@ -208,7 +206,7 @@ impl ResolveSheet {
             ConflictSet::Canonical(paths) => {
                 let mut field = 0;
                 let mut taken = 0;
-                let line = Cell::new(0);
+                let line = Lines::default();
                 let mut cards = v_flex().gap_3();
                 for (index, path) in paths.iter().enumerate() {
                     cards =
@@ -239,7 +237,7 @@ impl ResolveSheet {
         path: &PathConflict,
         field: &mut usize,
         taken: &mut usize,
-        line: &Cell<usize>,
+        line: &Lines,
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
         let muted = cx.theme().muted_foreground;
@@ -304,9 +302,19 @@ impl ResolveSheet {
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(before_column(BEFORE, part.base.as_deref()))
-                            .child(marked_column(YOURS, part.lines[0].as_ref(), line, cx))
-                            .child(marked_column(THEIRS, part.lines[1].as_ref(), line, cx)),
+                            .child(before_column(BEFORE, part.base.as_deref(), &line.before))
+                            .child(marked_column(
+                                YOURS,
+                                part.lines[0].as_ref(),
+                                &line.marked,
+                                cx,
+                            ))
+                            .child(marked_column(
+                                THEIRS,
+                                part.lines[1].as_ref(),
+                                &line.marked,
+                                cx,
+                            )),
                     ),
             );
         }
@@ -366,7 +374,7 @@ impl ResolveSheet {
         index: usize,
         body: &BodyPart,
         editors: &BodyEditors,
-        line: &Cell<usize>,
+        line: &Lines,
         cx: &Context<Self>,
     ) -> impl IntoElement + use<> {
         let border = cx.theme().border;
@@ -408,9 +416,14 @@ impl ResolveSheet {
             .child(
                 h_flex()
                     .gap_2()
-                    .child(before_column(BEFORE, Some(&body.base)))
-                    .child(marked_column(YOURS, Some(&body.lines[0]), line, cx))
-                    .child(marked_column(THEIRS, Some(&body.lines[1]), line, cx)),
+                    .child(before_column(BEFORE, Some(&body.base), &line.before))
+                    .child(marked_column(YOURS, Some(&body.lines[0]), &line.marked, cx))
+                    .child(marked_column(
+                        THEIRS,
+                        Some(&body.lines[1]),
+                        &line.marked,
+                        cx,
+                    )),
             )
             .child(div().text_xs().child(RESULT))
             .child(self.result_stop(index, editors, cx))

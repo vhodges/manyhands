@@ -73,7 +73,7 @@ pub(super) fn checkpointed() -> Effects {
 /// Applied and published, as `tests/mutation_remote/resolution.rs`
 /// `c4_resolution_publishes` answers, and as the child's resolution in
 /// `tests/mutation_remote/c5_child_conflict.rs` `resolved_then_the_same_request`.
-pub(super) fn applied() -> Envelope<MutationDataDto> {
+pub(crate) fn applied() -> Envelope<MutationDataDto> {
     answer(
         ResultCode::Ok,
         Effects {
