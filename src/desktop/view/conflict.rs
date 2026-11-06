@@ -227,8 +227,10 @@ impl gpui_kit::Global for OpenedSheet {}
 /// as mono lines, each with its tint and gutter (handoff 2g).
 struct BodyEditors {
     path: usize,
-    /// The part's token and three sides: a read that gives the same ones
-    /// keeps this editor, with its focus and history.
+    /// The part's path and three sides, as `ConflictModel::keep_choices`
+    /// matches them: a read that gives the same ones keeps this editor,
+    /// with its focus and history. The path's token is not part of it, as
+    /// it changes with every observation.
     part: (String, [String; 3]),
     result: Entity<EditorState>,
     /// The Result's tab stop, after the part's choices: Enter on it puts
@@ -511,7 +513,6 @@ impl ResolveSheet {
         else {
             return;
         };
-        let text = result.read(cx).text().to_owned();
         let saving = self.saving();
         let Some(conflict) = self
             .model
@@ -523,6 +524,8 @@ impl ResolveSheet {
         let Some(body) = conflict.body() else {
             return;
         };
+        // Any change of the editor notifies, the caret's and focus too.
+        let text = result.read(cx).text();
         if text == body.result {
             return;
         }
@@ -531,11 +534,11 @@ impl ResolveSheet {
             set_exact(&result, &sent, cx);
             return;
         }
-        conflict.edit_body(text);
+        conflict.edit_body(text.to_owned());
         cx.notify();
     }
 
-    /// Makes the body editors of the model just read. A part whose token
+    /// Makes the body editors of the model just read. A part whose path
     /// and sides are as they were keeps its editor, and with it focus,
     /// caret and history (R-31): the model took its Result from the
     /// earlier read, which the editor holds.
@@ -554,7 +557,7 @@ impl ResolveSheet {
             .filter_map(|(index, path)| {
                 let body = path.body()?;
                 let part = (
-                    path.token().to_owned(),
+                    path.display_path().to_owned(),
                     [body.base.clone(), body.mine.clone(), body.theirs.clone()],
                 );
                 Some((index, part, body.result.clone()))

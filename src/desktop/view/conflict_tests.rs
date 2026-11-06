@@ -547,25 +547,67 @@ async fn save_writes_the_text_after_an_undo(cx: &mut TestAppContext) {
     shell.until_ended(sent[0], cx).await;
 }
 
+/// A canned conflict of the ticket's title and body, both changed by both
+/// sides, under `token` and `observation`, with theirs titled `theirs`.
+fn canned_body(
+    operation: OperationId,
+    token: char,
+    observation: &str,
+    theirs: &str,
+) -> ConflictDto {
+    let mut path = canned_path(TICKET, token);
+    path.base = Some(ticket_source(TICKET, "Base", ""));
+    path.local = Some(ticket_source(TICKET, "Local", ""));
+    path.incoming = Some(ticket_source(TICKET, theirs, ""));
+    let mut conflict = canned(operation, vec![path]);
+    conflict.observation = Some(format!("conflict-v1:{}", observation.repeat(64)));
+    conflict
+}
+
 /// Veditors: a landed re-read rebuilt every Result editor, so a focused
 /// one lost its caret, focus and undo history. A part whose three sides
 /// are as they were keeps its editor: the same entity, focused, with its
-/// text and history.
+/// text and history, even when the read is of another observation and its
+/// path has another token, as after `external_change`. A part whose sides
+/// changed gets a new editor, showing the new Result.
 #[gpui_kit::test]
 async fn a_read_again_keeps_an_unchanged_result_editor(cx: &mut TestAppContext) {
-    let (shell, sheet, editor) = sheet_with_result(cx).await;
+    let (shell, root) = remote_shell(cx);
+    let operation = OperationId::new();
+    shell
+        .backend
+        .answer_next_conflict_read(canned_body(operation, '1', "0", "Incoming"));
+    let sheet = open_sheet(&shell, SheetSource::Share, &root, operation, cx);
+    until_present(&shell, "conflict-save", cx).await;
+    shell.click(("conflict-keep-mine", 0usize), cx);
+    shell.click(("conflict-body-mine", 0usize), cx);
+    let editor = sheet
+        .read_with(cx, |sheet, _| sheet.result_editor(0))
+        .expect("the Result editor");
+    focus_result(&shell, &editor, cx);
     let before = editor_text(&editor, cx);
     shell.visual(cx).simulate_input("Added");
     shell.run(cx);
     let typed = editor_text(&editor, cx);
     assert_ne!(typed, before);
 
-    sheet.update(cx, |sheet, cx| sheet.read_conflict(cx));
+    let read_again = |conflict: ConflictDto, cx: &mut TestAppContext| {
+        shell.backend.answer_next_conflict_read(conflict);
+        sheet.update(cx, |sheet, cx| sheet.read_conflict(cx));
+        cx.executor().allow_parking();
+    };
+    // Another observation, another token, the same sides.
+    read_again(canned_body(operation, '2', "3", "Incoming"), cx);
     until_long(&shell, "the read", cx, |_, cx| {
         !sheet.read_with(cx, |sheet, _| sheet.reading)
     })
     .await;
     shell.frame(cx, |_, _| ());
+    assert_eq!(
+        sheet.read_with(cx, |sheet, _| sheet.observation()),
+        Some(format!("conflict-v1:{}", "3".repeat(64))),
+        "the second read landed"
+    );
 
     let again = sheet
         .read_with(cx, |sheet, _| sheet.result_editor(0))
@@ -581,6 +623,18 @@ async fn a_read_again_keeps_an_unchanged_result_editor(cx: &mut TestAppContext) 
         shell.keys("ctrl-z", cx);
     }
     assert_eq!(editor_text(&again, cx), before, "its history is kept");
+
+    // Theirs changed the body again: the part is new.
+    read_again(canned_body(operation, '4', "5", "Another"), cx);
+    until_long(&shell, "the read", cx, |_, cx| {
+        !sheet.read_with(cx, |sheet, _| sheet.reading)
+    })
+    .await;
+    shell.frame(cx, |_, _| ());
+    let rebuilt = sheet
+        .read_with(cx, |sheet, _| sheet.result_editor(0))
+        .expect("the Result editor");
+    assert_ne!(rebuilt.entity_id(), editor.entity_id(), "a new editor");
 }
 
 /// V3: the choosers and the Result editor stayed live while Save

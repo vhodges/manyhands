@@ -79,23 +79,22 @@ impl ResolveSheet {
         if self.waiting() || self.resumable() || self.lost() {
             return;
         }
-        // Nothing to send leaves the notice and the answer as they are.
-        let new_set = self
-            .model
-            .as_ref()
-            .and_then(|model| Some((model.resolutions()?, model.observation()?.to_owned())));
-        if self.kept.is_none() && new_set.is_none() {
-            return;
-        }
-        self.notice = None;
-        self.answer = None;
         if let Some(kept) = self.kept.clone() {
+            self.notice = None;
+            self.answer = None;
             self.send_kept(kept, window, cx);
             return;
         }
-        let Some((resolutions, observation)) = new_set else {
+        // Nothing to send leaves the notice and the answer as they are.
+        let Some((resolutions, observation)) = self
+            .model
+            .as_ref()
+            .and_then(|model| Some((model.resolutions()?, model.observation()?.to_owned())))
+        else {
             return;
         };
+        self.notice = None;
+        self.answer = None;
         // Another window's set of this conflict, looked up off the UI
         // thread (Task 16, fix 2); Save waits meanwhile.
         self.submitting = true;
