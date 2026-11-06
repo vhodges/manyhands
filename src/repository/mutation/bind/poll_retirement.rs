@@ -129,6 +129,13 @@ impl PollRetirementBinding {
         fallback: Option<super::super::dto::PollMutationDto>,
         forced: Option<ResultCode>,
     ) -> Ran {
+        // Includes exhaustion after the final child and an empty image. A
+        // settled child refusal does not consume cancellation of this caller.
+        let forced = if call.session.cancelled() {
+            Some(ResultCode::Cancelled)
+        } else {
+            forced
+        };
         match pass::finish(call.service, a, fallback, forced) {
             Ok(data) => answer(data),
             Err(e) => Ran {
@@ -173,6 +180,13 @@ impl PollRetirementBinding {
             let child = call
                 .service
                 .execute_binding(ri, None, Box::new(binding), call.session);
+            #[cfg(test)]
+            {
+                // A returned child answer may have lost its boundary copy.
+                // Tests can lose the parent BEFORE any cut reconciles that Ri.
+                handoff::child_checkpoint(ordinal);
+                ordinal += 1;
+            }
             match call.service.request_record(ri) {
                 Ok(Some(row)) if row.state == RequestState::Finished => {}
                 Ok(None) => {
@@ -203,11 +217,6 @@ impl PollRetirementBinding {
                     );
                 }
                 Err(_) => return self.finish(call, a, None, Some(ResultCode::RecoveryRequired)),
-            }
-            #[cfg(test)]
-            {
-                handoff::child_checkpoint(ordinal);
-                ordinal += 1;
             }
         }
         self.finish(call, a, None, None)
@@ -242,6 +251,14 @@ impl PollRetirementBinding {
     }
 }
 impl Binding for PollRetirementBinding {
+    fn admit(
+        &self,
+        _service: &RepositoryService,
+        tx: &rusqlite::Transaction<'_>,
+        a: &Accepted,
+    ) -> Result<(), repository::ReadError> {
+        pass::begin(tx, a).map_err(|_| repository::ReadError::new(ResultCode::RecoveryRequired))
+    }
     fn command(&self) -> Command {
         Command::PollOnce
     }
@@ -271,12 +288,6 @@ impl Binding for PollRetirementBinding {
         .prepare(call)
     }
     fn run(&self, call: &CallContext<'_>, a: &Accepted) -> Ran {
-        if let Err(e) = pass::begin(call.service, a) {
-            return Ran {
-                answer: refused(e),
-                standing: Standing::Owed,
-            };
-        }
         let request = PollPublicationRemoteRequest {
             root: a.root(),
             operation_id: a.operation_id,

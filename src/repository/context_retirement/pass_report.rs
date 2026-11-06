@@ -51,21 +51,39 @@ pub(in super::super::super) fn lost_initial(
     a: &Accepted,
 ) -> Result<Option<ContextRetirementMutationDto>, RepositoryError> {
     let scope = request_scope::Scope::capture(service, request, a)?;
-    state::with_transaction(service, &request.root, |tx, _| {
+    state::with_transaction(service, &request.root, |tx, id| {
         record::audit_connection(tx)?;
-        let row:Option<(String,String)>=tx.query_row("SELECT candidate,admission FROM poll_retirement_targets WHERE child_request_ulid=?1 AND child_operation_ulid=?2",params![a.request_id.to_string(),a.operation_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?))).optional().map_err(|_|recovery_required())?;
-        let Some((json, status)) = row else {
+        let row:Option<(String,String,i64)>=tx.query_row("SELECT t.candidate,t.admission,p.repository_id FROM poll_retirement_targets t JOIN poll_retirement_passes p USING(operation_ulid) WHERE t.child_request_ulid=?1 AND t.child_operation_ulid=?2",params![a.request_id.to_string(),a.operation_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|recovery_required())?;
+        let Some((json, status, repository)) = row else {
             return Ok(None);
         };
+        let candidate = Candidate::decode(&json)?;
+        if repository != id
+            || candidate.child_request != a.request_id.to_string()
+            || candidate.kind()? != request.kind
+            || candidate.item_id != request.item_id.to_string()
+        {
+            return Err(recovery_required());
+        }
+        scope.validate(tx, &request.operation_id.to_string(), &request.root)?;
         if !matches!(status.as_str(), "accepted" | "no_effect") {
             return Ok(None);
         }
-        if status == "accepted" && !unclaimed(tx, &request.operation_id.to_string(), scope)? {
-            return Err(recovery_required());
+        if status == "accepted" {
+            // A preselection refusal may be durable even when its ordinary
+            // boundary copy was lost. Leave it to the audited ORDINARY terminal
+            // reader; it is not never-claimed and needs no invented membership.
+            let terminal:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id WHERE c.operation_ulid=?1 AND c.request_ulid=?2 AND c.repository_id=?3 AND c.kind=?4 AND c.item_id=?5 AND o.root_path=?6 AND o.state='completed' AND c.initial_resources='invalid' AND c.materialization_capture='unverified' AND c.phase='refused' AND c.final_result IS NOT NULL)",params![request.operation_id.to_string(),a.request_id.to_string(),id,candidate.kind,candidate.item_id,request.root.to_str()],|r|r.get(0)).map_err(|_|recovery_required())?;
+            if terminal {
+                return Ok(None);
+            }
+            if !unclaimed(tx, &request.operation_id.to_string(), scope)? {
+                return Err(recovery_required());
+            }
         }
         tx.execute("UPDATE poll_retirement_targets SET admission='no_effect' WHERE child_request_ulid=?1 AND admission='accepted'",[a.request_id.to_string()]).map_err(|_|recovery_required())?;
         child_data(
-            &Candidate::decode(&json)?,
+            &candidate,
             &request.operation_id.to_string(),
             super::ContextRetirementReport::refused(ResultCode::ExternalChange),
         )
@@ -217,7 +235,7 @@ pub(in super::super::super) fn finish(
     let _lease =
         repository::repository_lease(&git, &root, repository::RepositoryOperation::RetireContext)?;
     state::with_transaction(service, &root, |tx, id| {
-        validate_parent(tx, a, false)?;
+        let cancelled = validate_parent(tx, a, false)?;
         let (summary,report,remote,primary,handoff,provenance,binding):PassSnapshotRow=tx.query_row("SELECT summary,original_report,remote_name,primary_branch,handoff,provenance_id,binding_id FROM poll_retirement_passes WHERE operation_ulid=?1 AND request_ulid=?2",params![a.operation_id.to_string(),a.request_id.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?,r.get(6)?))).map_err(|_|recovery_required())?;
         if let Some(summary) = summary {
             return PollRetirementMutationDto::from_stored(
@@ -225,6 +243,13 @@ pub(in super::super::super) fn finish(
             )
             .ok_or_else(recovery_required);
         }
+        // Decide cancellation in the same lease/TX as the FIRST immutable cut.
+        // An existing cut above is historical, never rewritten by later flags.
+        let forced = if cancelled {
+            Some(ResultCode::Cancelled)
+        } else {
+            forced
+        };
         record::audit_connection(tx)?;
         let poll = if let Some(report) = report {
             let plan = repository::RemoteRefPlan::from_configuration(

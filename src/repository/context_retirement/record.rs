@@ -119,9 +119,11 @@ pub(in super::super) fn require_foreign_id_available(
 /// It is not available to observation, synchronization, local or key journals.
 pub(in super::super) fn require_update_poll_id_available(
     db: &Connection,
+    repository: i64,
     id: super::super::OperationId,
+    priority: super::super::RemoteOperationPriority,
 ) -> Result<(), RepositoryError> {
-    if super::pass::ordinary_poll_recovery(db, &id.to_string())? {
+    if super::pass::ordinary_poll_recovery(db, repository, &id.to_string(), priority)? {
         return Ok(());
     }
     require_foreign_id_available(db, id)

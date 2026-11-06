@@ -1549,7 +1549,9 @@ impl RepositoryService {
         let existing = state::with_transaction(self, &root, |tx, id| {
             crate::repository::context_retirement::record::require_update_poll_id_available(
                 tx,
+                id,
                 request.operation_id,
+                priority,
             )?;
             state::read_operation(tx, id, request.operation_id)
         })?;
@@ -1595,7 +1597,9 @@ impl RepositoryService {
                 state::with_transaction(self, &root, |tx, id| {
                     crate::repository::context_retirement::record::require_update_poll_id_available(
                         tx,
+                        id,
                         request.operation_id,
+                        priority,
                     )?;
                     let policy = state::read_snapshot(tx, id)?.polling().clone();
                     // Configuration fencing clears observer retry state. Full
@@ -1635,7 +1639,9 @@ impl RepositoryService {
         let may_reserve = state::with_transaction(self, &root, |tx, id| {
             crate::repository::context_retirement::record::require_update_poll_id_available(
                 tx,
+                id,
                 request.operation_id,
+                priority,
             )?;
             crate::repository::recovery::require_no_pending_local(tx, id)?;
             if state::has_pending_conflict(tx, id)? {

@@ -172,14 +172,22 @@ impl Candidate {
 }
 
 pub(in super::super) fn begin(
-    service: &RepositoryService,
+    tx: &Transaction<'_>,
     accepted: &Accepted,
 ) -> Result<(), RepositoryError> {
-    state::with_transaction(service, &accepted.root(), |tx, id| {
-        validate_parent(tx, accepted, false)?;
-        tx.execute("INSERT INTO poll_retirement_passes(operation_ulid,repository_id,request_ulid,request_attempt,live_nonce,live,handoff) VALUES(?1,?2,?3,?4,?5,1,'unconfirmed')",params![accepted.operation_id.to_string(),id,accepted.request_id.to_string(),accepted.attempt,OperationId::new().to_string()]).map_err(|_|recovery_required())?;
-        Ok(())
-    })
+    // Ordinary request insertion and initial metadata are one atomic admission.
+    // Reentry never calls this initializer or recreates a missing companion.
+    require_unreserved(tx, accepted.request_id)?;
+    validate_parent(tx, accepted, false)?;
+    let id: i64 = tx
+        .query_row(
+            "SELECT id FROM repositories WHERE root_path=?1",
+            [accepted.scope.as_str()],
+            |r| r.get(0),
+        )
+        .map_err(|_| recovery_required())?;
+    tx.execute("INSERT INTO poll_retirement_passes(operation_ulid,repository_id,request_ulid,request_attempt,live_nonce,live,handoff) VALUES(?1,?2,?3,?4,?5,1,'unconfirmed')",params![accepted.operation_id.to_string(),id,accepted.request_id.to_string(),accepted.attempt,OperationId::new().to_string()]).map_err(|_|recovery_required())?;
+    Ok(())
 }
 pub(super) fn validate_parent(
     db: &Connection,
@@ -258,14 +266,19 @@ pub(in super::super) fn require_unreserved(
 }
 pub(in super::super) fn ordinary_poll_recovery(
     db: &Connection,
+    repository: i64,
     operation: &str,
+    priority: repository::RemoteOperationPriority,
 ) -> Result<bool, RepositoryError> {
+    if priority != repository::RemoteOperationPriority::Manual {
+        return Ok(false);
+    }
     if !repository::recovery::has_table(db, "poll_retirement_passes")
         .map_err(|_| recovery_required())?
     {
         return Ok(false);
     }
-    let yes = db.query_row("SELECT EXISTS(SELECT 1 FROM poll_retirement_passes p JOIN request_operations m ON m.request_ulid=p.request_ulid AND m.operation_ulid=p.operation_ulid WHERE p.operation_ulid=?1 AND p.image IS NULL AND m.family='remote')",[operation],|r|r.get(0)).map_err(|_|recovery_required())?;
+    let yes = db.query_row("SELECT EXISTS(SELECT 1 FROM poll_retirement_passes p JOIN repositories repo ON repo.id=p.repository_id JOIN request_records r ON r.request_ulid=p.request_ulid AND r.scope_key=repo.root_path JOIN request_operations m ON m.request_ulid=p.request_ulid AND m.operation_ulid=p.operation_ulid WHERE p.operation_ulid=?1 AND p.repository_id=?2 AND p.image IS NULL AND m.family='remote')",params![operation,repository],|r|r.get(0)).map_err(|_|recovery_required())?;
     if yes {
         audit_parents(db)?;
     }
@@ -276,8 +289,11 @@ pub(in super::super) fn has_capture(
     root: &Path,
     op: OperationId,
 ) -> Result<bool, RepositoryError> {
-    state::with_transaction(service, root, |tx, _| {
-        tx.query_row("SELECT EXISTS(SELECT 1 FROM poll_retirement_passes WHERE operation_ulid=?1 AND image IS NOT NULL)",[op.to_string()],|r|r.get(0)).map_err(|_|recovery_required())
+    state::with_transaction(service, root, |tx, id| {
+        record::audit_connection(tx)?;
+        // Initial metadata is atomic with acceptance. Missing is corruption,
+        // not evidence that this accepted invocation never began capture.
+        tx.query_row("SELECT image IS NOT NULL FROM poll_retirement_passes WHERE operation_ulid=?1 AND repository_id=?2",params![op.to_string(),id],|r|r.get(0)).map_err(|_|recovery_required())
     })
 }
 pub(in super::super) fn is_parent(db: &Connection, ri: RequestId) -> Result<bool, RepositoryError> {

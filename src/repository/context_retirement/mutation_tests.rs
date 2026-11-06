@@ -244,6 +244,157 @@ fn retirement_batch_live_fences_rejoin_at_each_ordinary_effect() {
             );
         }
     }
+    for fault in [
+        "last_token",
+        "last_flag",
+        "empty_token",
+        "empty_flag",
+        "child_only",
+    ] {
+        let f = Fixture::new();
+        let empty = fault.starts_with("empty_");
+        let branch = if empty {
+            let b = branch(&f);
+            git2::Repository::open(f.root.path())
+                .unwrap()
+                .find_reference(&b)
+                .unwrap()
+                .delete()
+                .unwrap();
+            b
+        } else {
+            let b = present(&f);
+            f.materialization("complete");
+            b
+        };
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        let primary = git.head().unwrap().target().unwrap();
+        git.reference(
+            "refs/remotes/origin/main",
+            primary,
+            false,
+            "synthetic fetch",
+        )
+        .unwrap();
+        let id = RequestId::new();
+        let cancel = CancellationToken::new();
+        let token = cancel.clone();
+        let data = f.data.path().join(REGISTRY_FILE);
+        if empty {
+            super::super::handoff::observe_next_settle_for_testing(move || {
+                if fault == "empty_token" {
+                    token.cancel();
+                } else {
+                    Connection::open(data)
+                        .unwrap()
+                        .execute(
+                            "UPDATE request_records SET cancel_requested=1 WHERE request_ulid=?1",
+                            [id.to_string()],
+                        )
+                        .unwrap();
+                }
+            });
+        } else if fault == "last_token" {
+            RepositoryService::set_retirement_prune_entry_hook_for_testing(move || token.cancel());
+        } else {
+            RepositoryService::set_retirement_worktree_hook_for_testing(move || {
+                let db = Connection::open(data).unwrap();
+                if fault == "child_only" {
+                    db.execute("UPDATE request_records SET cancel_requested=1 WHERE command='context retire' AND state='accepted'",[]).unwrap();
+                } else {
+                    db.execute(
+                        "UPDATE request_records SET cancel_requested=1 WHERE request_ulid=?1",
+                        [id.to_string()],
+                    )
+                    .unwrap();
+                }
+            });
+        }
+        crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+        let mutation = || {
+            Mutation::PollOnceRetiring(PollOnceInput {
+                root: f.root.path().into(),
+            })
+        };
+        let result = f.service.execute(
+            MutationCall {
+                request_id: id,
+                confirmation: None,
+                mutation: mutation(),
+            },
+            &mut SessionCredentials::new(NoCredentials),
+            &mut NoProgress,
+            &cancel,
+        );
+        let expected = if fault == "child_only" {
+            ResultCode::Ok
+        } else {
+            ResultCode::Cancelled
+        };
+        assert_eq!(
+            result.code, expected,
+            "S3 parent cancellation must survive the last child/empty image, but independent child refusal is still settled: {fault}: {result:?}"
+        );
+        let image = serde_json::to_value(&result.data).unwrap();
+        assert_eq!(
+            image["completion"],
+            if fault == "child_only" {
+                "completed"
+            } else {
+                "stopped"
+            }
+        );
+        assert_eq!(
+            f.service.request_record(id).unwrap().unwrap().state,
+            RequestState::Finished
+        );
+        if !empty {
+            assert!(git.find_reference(&branch).is_ok());
+            assert!(
+                f.root
+                    .path()
+                    .join(".manyhands/worktrees")
+                    .join(ITEM)
+                    .exists()
+            );
+            assert_eq!(image["retirements"][0]["state"], "refused");
+            assert_eq!(
+                image["retirements"][0]["result"]["worktree_removal"],
+                "none"
+            );
+            assert_eq!(image["retirements"][0]["result"]["branch_removal"], "none");
+            if fault == "last_token" || fault == "child_only" {
+                assert_eq!(image["retirements"][0]["code"], "cancelled");
+            }
+            assert_eq!(
+                f.db()
+                    .query_row(
+                        "SELECT count(*) FROM remote_poll_materializations",
+                        [],
+                        |r| r.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                1
+            );
+        } else {
+            assert_eq!(image["retirements"].as_array().unwrap().len(), 0);
+        }
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT count(*) FROM retirement_observation_pins",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            serde_json::to_value(execute(&f.service, id, mutation()).data).unwrap(),
+            image,
+            "immutable first cut"
+        );
+    }
 }
 
 #[test]
@@ -575,6 +726,8 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
         "cancelled",
         "index_pending",
         "capture_lost",
+        "parent_accepted_crash",
+        "parent_companion_lost",
         "preselection_restart",
         "preselection_fenced",
         "unconfirmed",
@@ -582,6 +735,8 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
         "accepted_crash",
         "selected_crash",
         "nonce_replaced",
+        "refused_copy_lost",
+        "refused_copy_missing",
         "request_cancel_cut",
         "all_absent",
         "owned_absence_crash",
@@ -633,6 +788,13 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
             })
         };
         let producer = match case {
+            "parent_accepted_crash" | "parent_companion_lost" => {
+                RepositoryService::open_at_with_failure_point_for_testing(
+                    f.data.path(),
+                    FailurePoint::BeforeRequestDomainCall,
+                )
+                .unwrap()
+            }
             "index_pending" => RepositoryService::open_at_with_failure_point_for_testing(
                 f.data.path(),
                 FailurePoint::BeforeIndexTransactionCommit,
@@ -714,13 +876,16 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
                 );
             });
         }
-        if case == "nonce_replaced" {
+        if matches!(
+            case,
+            "nonce_replaced" | "refused_copy_lost" | "refused_copy_missing"
+        ) {
             let marker = git
                 .commondir()
                 .join("worktrees")
                 .join(ITEM)
                 .join(super::super::instance::MARKER);
-            super::super::handoff::observe_eligible(move |_| {
+            super::super::handoff::observe_eligible(move |s| {
                 std::fs::write(
                     marker,
                     format!(
@@ -729,6 +894,17 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
                     ),
                 )
                 .unwrap();
+                if case.starts_with("refused_copy_") {
+                    *s.failure_point.lock().unwrap() = Some(FailurePoint::BeforeRequestSettlement);
+                }
+            });
+        }
+        if case.starts_with("refused_copy_") {
+            f.materialization("complete");
+            super::super::handoff::observe_children(|_| {
+                panic!(
+                    "loss after committed refusal/ordinary copy fault, BEFORE parent reconciliation"
+                )
             });
         }
         let cancel = CancellationToken::new();
@@ -736,7 +912,10 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
             let token = cancel.clone();
             producer.set_request_hook_for_testing(move || token.cancel());
         }
-        if !matches!(case, "failed" | "cancelled") {
+        if !matches!(
+            case,
+            "failed" | "cancelled" | "parent_accepted_crash" | "parent_companion_lost"
+        ) {
             crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
         }
         let first = catch_unwind(AssertUnwindSafe(|| {
@@ -751,7 +930,127 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
                 &cancel,
             )
         }));
-        let response = if case == "preselection_fenced" {
+        let response = if case.starts_with("refused_copy_") {
+            assert!(first.is_err());
+            let db = f.db();
+            let (ri,ki):(String,String)=db.query_row("SELECT child_request_ulid,child_operation_ulid FROM poll_retirement_targets WHERE admission='accepted'",[],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
+            assert_eq!(
+                db.query_row(
+                    "SELECT phase FROM context_retirement_records WHERE operation_ulid=?1",
+                    [&ki],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+                "refused",
+                "actual durable refusal precedes both copy losses"
+            );
+            assert_eq!(
+                f.service.request_record(id).unwrap().unwrap().state,
+                RequestState::Accepted
+            );
+            assert!(
+                db.query_row(
+                    "SELECT summary IS NULL FROM poll_retirement_passes",
+                    [],
+                    |r| r.get::<_, bool>(0)
+                )
+                .unwrap()
+            );
+            if case == "refused_copy_missing" {
+                db.execute(
+                    "DELETE FROM context_retirement_records WHERE operation_ulid=?1",
+                    [&ki],
+                )
+                .unwrap();
+            }
+            let disk = disk_image(f.root.path());
+            let tables = [
+                "poll_retirement_passes",
+                "poll_retirement_targets",
+                "remote_poll_materializations",
+                "retirement_observation_receipts",
+                "retirement_observation_pins",
+            ];
+            let before: Vec<_> = tables.iter().map(|t| row_image(&db, t)).collect();
+            let child = execute(&f.service, RequestId::parse(&ri).unwrap(), retire(&f));
+            if case == "refused_copy_missing" {
+                assert_eq!(
+                    child.code,
+                    ResultCode::RecoveryRequired,
+                    "S4 missing terminal companion is not never-claimed proof"
+                );
+                assert_eq!(
+                    f.service
+                        .request_record(RequestId::parse(&ri).unwrap())
+                        .unwrap()
+                        .unwrap()
+                        .state,
+                    RequestState::Accepted
+                );
+                assert_eq!(disk, disk_image(f.root.path()));
+                assert_eq!(
+                    before,
+                    tables.iter().map(|t| row_image(&db, t)).collect::<Vec<_>>()
+                );
+                assert_eq!(
+                    db.query_row(
+                        "SELECT count(*) FROM remote_operation_records WHERE poll_kind='observe'",
+                        [],
+                        |r| r.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                    0
+                );
+                continue;
+            }
+            assert_eq!(
+                child.code,
+                ResultCode::ExternalChange,
+                "S4 Ri-only retry must read its exact durable terminal refusal before never-claimed logic: {child:?}"
+            );
+            assert_eq!(
+                f.service
+                    .request_record(RequestId::parse(&ri).unwrap())
+                    .unwrap()
+                    .unwrap()
+                    .state,
+                RequestState::Finished
+            );
+            assert_eq!(
+                serde_json::to_value(&child.data).unwrap()["state"],
+                "refused"
+            );
+            assert_eq!(
+                child,
+                execute(&f.service, RequestId::parse(&ri).unwrap(), retire(&f))
+            );
+            assert_eq!(
+                before,
+                tables.iter().map(|t| row_image(&db, t)).collect::<Vec<_>>(),
+                "child settlement cannot reconcile or depend on its parent"
+            );
+            assert_eq!(disk, disk_image(f.root.path()));
+            assert_eq!(
+                db.query_row(
+                    "SELECT count(*) FROM remote_operation_records WHERE poll_kind='observe'",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+                0
+            );
+            assert_eq!(
+                db.query_row(
+                    "SELECT count(*) FROM poll_retirement_child_sources",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+                0,
+                "preselection refusal needs no fabricated receipt/member"
+            );
+            execute(&f.service, id, mutation())
+        } else if case == "preselection_fenced" {
             assert!(first.unwrap().code != ResultCode::Ok);
             let db = f.db();
             git.remote_set_url("origin", "ssh://fixture@127.0.0.1:2/fenced")
@@ -792,6 +1091,99 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
                 "old source holds end with P, no aggregate debt"
             );
             result
+        } else if matches!(case, "parent_accepted_crash" | "parent_companion_lost") {
+            assert_eq!(first.unwrap().code, ResultCode::InternalError);
+            assert_eq!(
+                f.service.request_record(id).unwrap().unwrap().state,
+                RequestState::Accepted
+            );
+            assert_eq!(
+                f.db()
+                    .query_row("SELECT count(*) FROM remote_operation_records", [], |r| r
+                        .get::<_, i64>(
+                        0
+                    ))
+                    .unwrap(),
+                0,
+                "actual acceptance loss is before P begins"
+            );
+            if case == "parent_companion_lost" {
+                f.db()
+                    .execute("DELETE FROM poll_retirement_passes", [])
+                    .unwrap();
+                let refused = execute(&f.service, id, mutation());
+                assert_eq!(
+                    refused.code,
+                    ResultCode::RecoveryRequired,
+                    "S1 missing atomic companion is not a new preselection invocation"
+                );
+                assert_eq!(
+                    f.db()
+                        .query_row("SELECT count(*) FROM remote_operation_records", [], |r| r
+                            .get::<_, i64>(
+                            0
+                        ))
+                        .unwrap(),
+                    0,
+                    "no ordinary P is started from lost initializer evidence"
+                );
+                assert_eq!(
+                    f.db()
+                        .query_row("SELECT count(*) FROM poll_retirement_passes", [], |r| r
+                            .get::<_, i64>(0))
+                        .unwrap(),
+                    0,
+                    "never recreate the missing companion on reentry"
+                );
+                assert_eq!(
+                    f.db()
+                        .query_row(
+                            "SELECT count(*) FROM request_records WHERE command='context retire'",
+                            [],
+                            |r| r.get::<_, i64>(0)
+                        )
+                        .unwrap(),
+                    0
+                );
+                assert!(git.find_reference(&b).is_ok());
+                continue;
+            }
+            crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+            let result = execute(&f.service, id, mutation());
+            assert_eq!(
+                f.service.request_record(id).unwrap().unwrap().state,
+                RequestState::Finished,
+                "S1: accepted-before-initializer recovery must settle ordinary P, not remain Owed: {result:?}"
+            );
+            assert_eq!(
+                f.db()
+                    .query_row(
+                        "SELECT count(*) FROM retirement_advertisement_provenance",
+                        [],
+                        |r| r.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                f.db()
+                    .query_row(
+                        "SELECT count(*) FROM retirement_observation_pins",
+                        [],
+                        |r| r.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                0
+            );
+            assert!(
+                !git.commondir()
+                    .join("worktrees")
+                    .join(ITEM)
+                    .join(super::super::instance::MARKER)
+                    .exists(),
+                "retry mints no instance nonce"
+            );
+            result
         } else if matches!(case, "capture_lost" | "preselection_restart") {
             assert!(first.unwrap().code != ResultCode::Ok);
             crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
@@ -807,10 +1199,13 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
         };
         let data = serde_json::to_value(&response.data).unwrap();
         assert_eq!(data["type"], "poll_retirement", "{case}: {response:?}");
-        if matches!(case, "empty" | "nonce_replaced" | "all_absent") {
+        if matches!(
+            case,
+            "empty" | "nonce_replaced" | "refused_copy_lost" | "all_absent"
+        ) {
             assert_eq!(response.code, ResultCode::Ok, "{case}: {response:?}");
             assert_eq!(data["completion"], "completed");
-            if case == "nonce_replaced" {
+            if matches!(case, "nonce_replaced" | "refused_copy_lost") {
                 assert_eq!(data["retirements"][0]["state"], "refused");
             }
             if case == "all_absent" {
@@ -830,6 +1225,7 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
         if !matches!(
             case,
             "nonce_replaced"
+                | "refused_copy_lost"
                 | "accepted_crash"
                 | "selected_crash"
                 | "all_absent"
@@ -990,6 +1386,143 @@ fn retirement_batch_preselection_poll_recovery_does_not_free_its_id_for_other_jo
         "public observer refuses before configuration writes"
     );
     std::fs::write(config, text).unwrap();
+    // A second REGISTERED repository in the SAME application registry cannot
+    // borrow A's preselection P, even before B's invalid-config attention writes.
+    let other = Fixture::new();
+    present(&other);
+    f.service
+        .enable(EnableRepositoryRequest {
+            root: other.root.path().into(),
+            primary_branch: "main".into(),
+            identity: None,
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    let b_id = f
+        .service
+        .resolve_repository(other.root.path())
+        .unwrap()
+        .registration_id();
+    assert_eq!(
+        f.db()
+            .query_row("SELECT count(*) FROM repositories", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    let bconfig = other.root.path().join(".manyhands/config.toml");
+    let btext = std::fs::read(&bconfig).unwrap();
+    for valid in [false, true] {
+        if !valid {
+            std::fs::write(&bconfig, "invalid = [").unwrap();
+        }
+        let registry = registry_image(&f.db());
+        let other_registry = registry_image(&other.db());
+        let a_disk = disk_image(f.root.path());
+        let b_disk = disk_image(other.root.path());
+        let foreign = f.service.poll_publication_remote(
+            PollPublicationRemoteRequest {
+                root: other.root.path().into(),
+                operation_id: p,
+                invocation: RemotePollInvocation::Explicit,
+                approval: None,
+                restart: true,
+            },
+            &mut SessionCredentials::new(NoCredentials),
+        );
+        assert!(
+            foreign.is_err(),
+            "S2 foreign P is not B's UPDATE-P authority: {foreign:?}"
+        );
+        assert_eq!(
+            registry,
+            registry_image(&f.db()),
+            "S2 foreign P must refuse BEFORE all B config/attention/reservation writes, valid={valid}"
+        );
+        assert_eq!(other_registry, registry_image(&other.db()));
+        assert_eq!(a_disk, disk_image(f.root.path()));
+        assert_eq!(b_disk, disk_image(other.root.path()));
+        if valid {
+            let plan = crate::repository::remote::observation::observation_plan(other.root.path())
+                .unwrap();
+            let target = RemoteOperationTarget::for_poll(&plan);
+            assert!(
+                f.service
+                    .reserve_remote_poll(
+                        other.root.path(),
+                        p,
+                        &target,
+                        RemoteOperationPriority::Manual
+                    )
+                    .is_err(),
+                "S2 valid B cannot reserve A's P"
+            );
+            assert!(
+                crate::repository::promotion::record::validate_remote_identity(
+                    &f.db(),
+                    b_id,
+                    p,
+                    &target,
+                    RemoteOperationPriority::Manual
+                )
+                .is_err(),
+                "S2 common identity dispatcher also requires incoming scope/kind"
+            );
+            let a_id = f
+                .service
+                .resolve_repository(f.root.path())
+                .unwrap()
+                .registration_id();
+            for repo in [a_id, b_id] {
+                for kind in [
+                    None,
+                    Some(crate::repository::remote::state::PollKind::Observe),
+                    Some(crate::repository::remote::state::PollKind::Update),
+                ] {
+                    for priority in [
+                        RemoteOperationPriority::Manual,
+                        RemoteOperationPriority::Poll,
+                    ] {
+                        let allowed = crate::repository::promotion::record::validate_poll_identity(
+                            &f.db(),
+                            repo,
+                            p,
+                            &target,
+                            priority,
+                            kind,
+                        )
+                        .is_ok();
+                        assert_eq!(
+                            allowed,
+                            repo == a_id
+                                && kind == Some(crate::repository::remote::state::PollKind::Update)
+                                && priority == RemoteOperationPriority::Manual,
+                            "S2 BOTH identity checks use exact incoming repository, UPDATE kind and manual priority"
+                        );
+                    }
+                }
+            }
+            for root in [f.root.path(), other.root.path()] {
+                assert!(
+                    f.service
+                        .poll_publication_remote(
+                            PollPublicationRemoteRequest {
+                                root: root.into(),
+                                operation_id: p,
+                                invocation: RemotePollInvocation::Automatic,
+                                approval: None,
+                                restart: true
+                            },
+                            &mut SessionCredentials::new(NoCredentials)
+                        )
+                        .is_err(),
+                    "S2 automatic calls cannot borrow a manual preselection P"
+                );
+            }
+            assert_eq!(registry, registry_image(&f.db()));
+        }
+        std::fs::write(&bconfig, &btext).unwrap();
+    }
     crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
     let finished = execute(&f.service, id, mutation());
     assert_eq!(
@@ -1004,6 +1537,37 @@ fn retirement_batch_preselection_poll_recovery_does_not_free_its_id_for_other_jo
             .unwrap(),
         0
     );
+    // The original report replay shortcut must use the incoming repository too,
+    // rather than bypass the scoped ID checks once a later pass has captured.
+    crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+    let captured = execute(&f.service, RequestId::new(), mutation());
+    assert_eq!(
+        captured.code,
+        ResultCode::Ok,
+        "own original-live pass remains valid: {captured:?}"
+    );
+    let captured_p = OperationId::parse(captured.operation_id.as_deref().unwrap()).unwrap();
+    let registry = registry_image(&f.db());
+    let a_disk = disk_image(f.root.path());
+    let b_disk = disk_image(other.root.path());
+    assert!(
+        f.service
+            .poll_publication_remote(
+                PollPublicationRemoteRequest {
+                    root: other.root.path().into(),
+                    operation_id: captured_p,
+                    invocation: RemotePollInvocation::Explicit,
+                    approval: None,
+                    restart: true
+                },
+                &mut SessionCredentials::new(NoCredentials)
+            )
+            .is_err(),
+        "S2 foreign root cannot bypass scoped identity dispatch through captured-report replay"
+    );
+    assert_eq!(registry, registry_image(&f.db()));
+    assert_eq!(a_disk, disk_image(f.root.path()));
+    assert_eq!(b_disk, disk_image(other.root.path()));
 }
 
 #[test]

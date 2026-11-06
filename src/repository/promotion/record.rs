@@ -18,7 +18,7 @@ use git2::Oid;
 use rusqlite::{Connection, Transaction, params};
 
 pub(in super::super) use super::lifecycle_record::{
-    ChildExecution, ChildRole, ChildState, validate_remote_identity,
+    ChildExecution, ChildRole, ChildState, validate_poll_identity, validate_remote_identity,
 };
 
 const KIND: LifecycleKind = LifecycleKind::DocumentPromotion;

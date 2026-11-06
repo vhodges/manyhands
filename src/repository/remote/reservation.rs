@@ -299,7 +299,9 @@ pub(in super::super) fn owned(
         if record.poll_kind == Some(state::PollKind::Update) {
             crate::repository::context_retirement::record::require_update_poll_id_available(
                 tx,
+                repository_id,
                 owner.operation_id,
+                record.priority,
             )?;
         } else {
             crate::repository::context_retirement::record::require_foreign_id_available(
@@ -1163,7 +1165,9 @@ impl RepositoryService {
             if poll_kind == Some(state::PollKind::Update) {
                 crate::repository::context_retirement::record::require_update_poll_id_available(
                     tx,
+                    repository_id,
                     operation_id,
+                    priority,
                 )?;
             } else {
                 crate::repository::context_retirement::record::require_foreign_id_available(
@@ -1174,12 +1178,13 @@ impl RepositoryService {
             if let Some(execution) = execution {
                 execution.validate(tx, repository_id, operation_id)?;
             }
-            crate::repository::promotion::record::validate_remote_identity(
+            crate::repository::promotion::record::validate_poll_identity(
                 tx,
                 repository_id,
                 operation_id,
                 target,
                 priority,
+                poll_kind,
             )?;
             let binding = tx.query_row("SELECT b.kind,b.item_ulid,b.checkpoint_oid,o.root_path,o.state,o.completed_step FROM comment_publication_bindings b
                 JOIN operation_records o ON o.id=b.local_record_id WHERE b.synchronization_ulid=?1", [operation_id.to_string()],
@@ -1577,10 +1582,14 @@ impl RepositoryService {
         poll_kind: state::PollKind,
     ) -> Result<RemoteReservationOutcome, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
+            let record = state::read_operation(tx, id, operation_id)?
+                .ok_or_else(state::recovery_required)?;
             if poll_kind == state::PollKind::Update {
                 crate::repository::context_retirement::record::require_update_poll_id_available(
                     tx,
+                    id,
                     operation_id,
+                    record.priority,
                 )?;
             } else {
                 crate::repository::context_retirement::record::require_foreign_id_available(
@@ -1588,8 +1597,6 @@ impl RepositoryService {
                     operation_id,
                 )?;
             }
-            let record = state::read_operation(tx, id, operation_id)?
-                .ok_or_else(state::recovery_required)?;
             if &record.target != target
                 || target.action() == RemoteOperationAction::Poll
                     && record.poll_kind != Some(poll_kind)

@@ -515,7 +515,7 @@ pub(in super::super) fn replay_report(
     op: OperationId,
 ) -> Result<Option<(RemotePollReport, bool)>, RepositoryError> {
     state::with_transaction(service, root, |tx, id| {
-        let row:Option<(String,String,String)>=tx.query_row("SELECT original_report,remote_name,primary_branch FROM poll_retirement_passes WHERE operation_ulid=?1 AND image IS NOT NULL",[op.to_string()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|recovery_required())?;
+        let row:Option<(String,String,String)>=tx.query_row("SELECT original_report,remote_name,primary_branch FROM poll_retirement_passes WHERE operation_ulid=?1 AND repository_id=?2 AND image IS NOT NULL",params![op.to_string(),id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|recovery_required())?;
         let Some((json, remote, primary)) = row else {
             return Ok(None);
         };
