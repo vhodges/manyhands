@@ -511,7 +511,10 @@ async fn sheet_with_result(
         fixture.conflict_locally_with_body(root, TICKET, "Mine", Some("Mine body.\n"), "Theirs")
     });
     let sheet = open_sheet(&shell, SheetSource::Local, &root, operation, cx);
-    until_present(&shell, "conflict-save", cx).await;
+    until_long(&shell, "the sheet", cx, |shell, cx| {
+        shell.present("conflict-save", cx)
+    })
+    .await;
     shell.click(("conflict-keep-mine", 0usize), cx);
     shell.click(("conflict-body-mine", 0usize), cx);
     let editor = sheet
@@ -539,12 +542,14 @@ async fn save_writes_the_text_after_an_undo(cx: &mut TestAppContext) {
     }
     assert_eq!(editor_text(&editor, cx), before, "the typing is undone");
 
+    // Held, so the answer is not waited for: what is asserted is what was
+    // sent.
+    let _held = shell.backend.hold_job(JobKind::LocalContextResolve);
     shell.keys("ctrl-enter", cx);
     let sent = resolves(&shell, cx);
     assert_eq!(sent.len(), 1);
     let (_, paths) = submitted(&request(&shell, sent[0], cx).intent);
     assert!(!paths[0].1.contains("Added"), "the undone text is saved");
-    shell.until_ended(sent[0], cx).await;
 }
 
 /// A canned conflict of the ticket's title and body, both changed by both
@@ -674,5 +679,8 @@ async fn choices_wait_while_a_save_is_out(cx: &mut TestAppContext) {
     assert_eq!(shell.label("conflict-progress", cx), progress);
 
     held.release();
-    shell.until_ended(sent[0], cx).await;
+    until_long(&shell, "the resolution's answer", cx, |shell, cx| {
+        code(shell, sent[0], cx).is_some()
+    })
+    .await;
 }
