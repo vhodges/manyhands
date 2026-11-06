@@ -26,8 +26,11 @@ the original Task 4 range through `c514d160`, including S1–S4, precise live
 transport-stop/host recovery, and truthful discovery after lost boundary copies.
 Both same reviewers found no remaining findings at their respective gates.
 The original 39 results and correction tables retain their actual source scopes;
-final whole-feature gates remain outstanding. Next is the planned Tasks 5–6
-CLI/acceptance delivery chunk. Ticket remains
+final whole-feature gates remain outstanding. Tasks 5–6's CLI/acceptance chunk is
+locally delivered at `c0ff11af`, awaiting the controller's independent SPEC then
+QUALITY review of the entire original `e79ab8e6..returned-HEAD` range. Its bounded
+evidence and retained-44/acceptance delta are appended below. Task 7 governing
+amendments and Task 8 final tiers/whole-feature reviews remain owed. Ticket remains
 `implementing`, not full Task 2 or feature review-ready.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
 [the delivery checkpoint](#task-3--ordinary-binding-and-guarded-preserving-recovery).
@@ -137,6 +140,7 @@ Neither recovery route advances parent. Both corrections are internal under D15.
 - [ ] Tasks 5–6: CLI + relevant local acceptance and at most one new justified
   SSH connection E2E; no new SSH edge-case matrix. Existing 105 SSH cases are
   legacy evidence; review coverage mapping before any forward consolidation/rehome.
+  **Locally delivered at `c0ff11af`; independent SPEC then QUALITY still pending.**
 - [ ] Tasks 7–8: governing docs, final static/fast/changed-path SSH tiers once at
   review-ready, then whole-range SPEC/QUALITY and owner handoff. No bare full suite
   premerge or repeated green gates. Ticket-branch publication remains authorized;
@@ -6411,3 +6415,246 @@ Task 7 contract amendments and Task 8 final static/fast/changed-path SSH gates a
 whole-feature reviews remain outstanding. No aggregate batch lifecycle, PR, native
 CI, main integration/closure, real-context retirement or real-profile/key/draft action
 is authorized by this approval. Ticket remains `implementing`.
+
+## Tasks 5–6 — CLI And Bounded Acceptance Delivery (2026-11-06)
+
+### Authority, Source And Review Boundary
+
+- Clean original base **`e79ab8e61b0682eb0f224d36dee5d67ef51aa4c9`**; source commit
+  **`c0ff11afd53ffdb8969794f238564d6abad14e7a`**, with the required coauthor trailer.
+  Review this **whole original range**, including the checkpoint commit, not
+  `HEAD~1`. Sole implementer; no spawned agents or publication. The controller's
+  just-completed fetch/merge of main `79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`
+  was accepted as instructed; no redundant fetch/merge or other-worktree access.
+- Task 3 approvals through `989a5807` and Task 4's whole-range SPEC
+  `ses_e4d9ed4e6ffeSwu9GiwqH5QMvl` / QUALITY `ses_e4d718d13ffe8hzc1y32YLWx3J`
+  through `c514d160` remain intact. **Every older result and manifest retains its
+  recorded source SHA/scope**; none is relabeled as a fresh run of this chunk.
+- Current AGENTS Testing Strategy governed: exact changed names only; no broad
+  retirement filter, entire fast/SSH target, full suite, native CI or real waits.
+  Clippy + fmt, rather than redundant check + Clippy, at coherent checkpoints.
+  No test command approached 15 minutes. Failures were narrowed within the same
+  exact case, never by expanding an SSH matrix or loosening production guards.
+
+### Delivered CLI Contract
+
+`context retire --repo <root> --kind <ticket|document> --id <ULID>` is a C5 follow-up
+using `admin` selection, the ordinary mutation driver, CallSession credentials and
+the existing transport initializer. Startup already initializes transport before
+**every** dispatch, so there is no separate allowlist/initializer to bypass. Both
+new mutation variants enter the existing safe-point Ctrl-C window. No `--input`,
+force, new confirmation, implicit host approval, key unlock or identity write.
+Common `--prepare` / `--confirm` remain declared and answer `not_confirmable`.
+Missing selectors/wrong kind/invalid ID follow standard parser/boundary rules;
+duplicate flags retain the established last-value-wins behavior.
+
+`poll once --retire-completed` alone builds `PollOnceRetiring`; false/default
+still builds the original root-only `PollOnce`. The ordinary five-field untagged
+data, digest and replay stay unchanged. JSON remains exactly one envelope.
+Human opted-in output explicitly labels the original poll report and immutable
+**as-of-pass** retirement states, per-target codes/debt, Ri/Ki and truthful
+none/possible/observed removal flags. Current child recovery is distinguished from
+historical results; a parent replay never resumes the loop. Existing safe Sync
+host-data fallback remains generic and intact. No slug is invented: ordinary poll
+and the approved retirement DTO have none; existing ticket previews/read outputs
+retain their established slug rendering.
+
+Inventory is **42 mutating / 78 total**, still **24 input-taking** and both
+`context prepare` / `context release` exemptions. Added the no-input/output roots,
+including retirement data returned by ordinary `operation resume`. Only the
+minimal new taxonomy row is added to the RFC here; Task 7 owns the broad governing
+amendments and audit/recovery taxonomy expansion. The additive recovery-table test
+pins delivered item-only index continuation and summary-only stopped pass.
+
+All four affected/new goldens were read: root JSON adds only the flag and C5 verb;
+root text adds only that verb; the single new retirement JSON representative is
+the ordinary index-pending contract; the new text representative is an actual
+stopped opted-in binary result. No scenario-per-golden matrix, unrelated fixture
+loosening, ordinary poll literal change or pre-feature expectation change.
+
+### Acceptance Mapping And Evidence Limits
+
+Aliases below are actual compiled tests, not planned APIs:
+
+- **PRESERVE**, **DRAFT**, **D14** are under
+  `repository::context_retirement::execution_tests::mutation_tests::acceptance_tests::`:
+  `retirement_guarded_folded_and_refusal_table_preserves_full_resources_and_index`,
+  `retirement_preserves_recoverable_item_and_comment_drafts`, and
+  `retirement_d14_two_clone_new_same_id_edit_gets_a_new_materialization_intent`.
+- **CLI** / **BINARY** are `--test cli retirement::` followed by
+  `retirement_command_flag_and_stopped_report_contract` /
+  `retirement_replay_index_and_preserving_binary_contract`.
+- **SSH** is the one new registered `--test cli_remote`
+  `retirement_cli_authenticated_live_pass` case; **RENDER** is
+  `--bin manyhands-cli polling::tests::retirement_report_distinguishes_as_of_cut_from_current_child_actions`.
+- **T4 LIVE/SHARE/CUT/FENCE/GAP/MEMBER/AUDIT** retain their full names, original
+  SHA/log scopes and approvals in Task 4's delivery/correction tables above. They
+  were inspected/reused, **not rerun**. Existing non-SSH mutation replay/confirmation
+  and ordinary release tests already pin their deeper cases; no redundant new
+  module/matrix was added merely to repeat them. New binary acceptance uses their
+  same actual public boundary/failure-point pattern.
+
+| Acceptance | Delivered/reused evidence and exact boundary |
+| --- | --- |
+| A1 | SSH: A publishes two tickets; B materializes; A closes/deletes; B DEFAULT poll reports two `closed` yet keeps old open own-worktree reads/dependent blocked. Standalone removes ITEM; the still-open dependent becomes ready. Explicit two-child pass removes remaining/recreated copies; final show/list/readiness agree with primary. Real binary + disposable authenticated SSH, no read-ranking edit |
+| A2 | PRESERVE compares full working byte/mode/link image, **every local/tracking ref**, worktree registration and indexed ticket DTOs across dirty/unmatched/open/unknown refusals. Deeper ignored/submodule/no-follow/platform permutations retain ordinary proof/cleanup evidence, not a new SSH matrix |
+| A3 | PRESERVE's positive folded row asserts non-ancestry before guarded public retirement; full changed work is represented on primary. The existing all-entry/mode/canonical closure-exception proof matrix stays unchanged; no second proof implementation |
+| A4 | D14 uses a distinct peer clone plus disposable bare/local Git transfers for setup. Public DEFAULT poll materializes document T, peer folds/promotes content/deletes the edit, default preserves T, guarded retirement removes it, and later same-ID Q default-materializes with a **different intent and Q OID/body**. Primary document content/read is correct. The peer's promotion is fixture Git history, not a claim of exercising production promotion over file transport |
+| A5 | PRESERVE adds actual guarded open/unknown/unmatched negative journeys, beyond code-only checks. T4 FENCE/GAP and ordinary proof/current-ad/config/nonce controls retain their approved scope; no new transport edge matrix or weakened current-authority fence |
+| A6 | BINARY starts from genuine public all-absent retirement with an injected index-commit failure, then actual CLI `operation resume`, or actual prepare/confirm preserving abandon. Recreated branch/registration/full untracked bytes survive; old Ri replays stable `already_absent`/`preserved`, blocker settles. D14's after-Git/before-M loss reenters M-only, with unchanged observation batches, remote projection and tracking refs. Partial-W/branch R7/F2/preserving fault matrices remain T3/T4 library evidence, not new binary crash evidence |
+| A7 | SSH connects both shipping entrypoints and two live children with one retained original Fetch provenance/no child O. RENDER pins mixed-completed exit 0, empty/stopped/cancelled/index-pending text and per-target debt/flags. Actual mixed/refusal continuation, child-only recovery after parent Final, no rollback, new-pass remainder, frozen identity/cut and lost-copy behavior remain T4 SHARE/CUT/LIVE—not inferred from built renderer envelopes |
+| A8 | CLI mode mismatch after actual accepted ordinary poll; distinct opted-in schema/tag and stopped replay; exact inventory counts, no-input map, output schemas, fixture registry and root help. Ordinary wire remains five untagged fields in SSH. Earlier migrations/history approvals retain their SHAs; this chunk changes no SQL/DTO/schema envelope |
+| A9 | DRAFT directly opens an **isolated acceptance data directory**, creates item and comment drafts with body/base/observation/context and revision 2, releases claims, retires the registered context, reopens/lists and compares complete Draft values (ID/revision/full body/base/timestamps), and exports equal Markdown. SSH verifies server refs and accepted-push count unchanged. Default/no-marker/background/release controls retain T4 GAP and earlier ordinary evidence. No developer draft/profile/identity touched |
+
+**Count, not time:** production's existing Fetch adapter first authenticates,
+then reconnects for the authoritative download advertisement. SSH measured two
+upload-pack commands for the DEFAULT Fetch and **the same two** for a two-child
+opted-in pass, one durable `poll_parent` provenance, and no extra `observe` row
+beyond the earlier standalone. Standalone performs one fresh authenticated
+observation; its finished replay performs zero. This proves one **authoritative
+Fetch input / ordinary Fetch cost**, not literally one total SSH connection/wire
+advertisement. The unused initial authentication advertisement is existing
+transport behavior; no transport refactor or latency claim is introduced.
+
+### Retained-44 Delta (Earlier E/O/S Standing Preserved)
+
+This amends the Task 4 delta, not its source/evidence history. **No O permutation
+is silently declared complete.** Ordinary/common and T4 entries are retained
+evidence at their old SHAs, not fresh test runs. New entries below are bounded
+acceptance; exhaustive every-write/platform/cross-product fault coverage remains
+as explicitly open in the older register, for final review selection.
+
+| Row | Tasks 5–6 addition or retained standing |
+| --- | --- |
+| 01 | SSH/PRESERVE real shipping ticket retirement; D14 real local promoted-document lifecycle. Extra fault variants remain O |
+| 02 | PRESERVE unknown Fetch-history public refusal/full-resource comparison; explicit Push-only variation remains O |
+| 03 | T4 current-ad/reappearance fences retained; no foreign-current substitution claim added |
+| 04 | CLI absent-key final stopped root + real authenticated SSH connection/privacy. Existing precise host/key/unavailable error tables retained |
+| 05 | PRESERVE committed-primary open/closed/folded cases; additional disk/primary fault variants remain O |
+| 06 | PRESERVE positive folded and runtime open/unmatched/unknown negatives; existing deep proof matrix retained |
+| 07 | Ordinary/T4 branch-only safety and second-child evidence retained unchanged |
+| 08 | CLI/BINARY actual absent result/replay and preservation of recreated resources; ordinary lost-copy table retained |
+| 09 | BINARY independent item I/preserving paths and new-context bytes; extra M/index fault permutations remain O |
+| 10 | Ordinary mixed-resource/foreign-inventory standing retained, no broader public reentry claim |
+| 11 | PRESERVE full dirty working image/registration/refs/index; deeper submodule/platform faults remain O |
+| 12 | T4 CUT real integration debt/admission exclusion retained; resolution/window cross-products remain O |
+| 13 | Ordinary nonce bootstrap safety retained; no parent-replay enrollment introduced |
+| 14 | Ordinary installed-before-SQL verification-only recovery retained; original enrollment SQL-gap variant remains O |
+| 15 | Ordinary no-repair collision/shape tests retained; platform variants remain O |
+| 16 | SSH same-ID/same-tip recreated lifetime survives finished standalone replay; deep link/admin replacement variants remain O |
+| 17 | SSH actual default preserve/read-precedence control; T4 GAP explicit/automatic no-marker controls retained |
+| 18 | PRESERVE folded guarded executor uses ordinary proof; T4 effect F2/config/ad/M fences and selected-W reentry retained |
+| 19 | D14 real after-Git/before-M loss, ordinary M recovery; mixed prune/branch R7 permutations retained/O as before |
+| 20 | SSH same-OID new context survives old Final; ordinary surviving-branch/R7 crash controls retained |
+| 21 | Ordinary branch-only lifetime/process permit limits retained; no resumed-parent constructor |
+| 22 | D14 M-only retry asserts zero observation/projection/tracking changes; T4 independent NULL-source lineage retained |
+| 23 | Ordinary/T4 foreign/missing/ambiguous M-owner audits retained; malformed owner/OID variants remain O |
+| 24 | D14 consumes exact T then later poll creates distinct Q owner/OID; ordinary foreign/new-M compare-and-consume refusal tests retained |
+| 25 | BINARY I-only/preserving keeps recreated W/B/full bytes; D14 old Final keeps Q; T4 child-after-parent recovery retained. Batch takeover remains S |
+| 26 | CLI/BINARY true local-only initial absence and settled discovery; ordinary exact-complete-M initial-absence test retained |
+| 27 | Ordinary observer replacement/history lineage and T4 exact initial association retained; after-ad variants remain O |
+| 28 | Ordinary exact replacement/rollback/exclusion controls retained; every-write/correlation variants remain O |
+| 29 | CLI Ctrl-C window now includes both shipping variants; actual cancellation/admission/current-F2 domain tables retained, not reimplemented |
+| 30 | T4 config/current-ad fences and common old-generation pin controls retained; partial-generation variant remains O |
+| 31 | SSH actual authenticated Fetch/session/dispatch for both entrypoints; one authoritative source plus unchanged ordinary Fetch wire cost |
+| 32 | SSH two targets/one retained source/no child O; T4 SHARE retains independent K1/K2 receipts, per-holder Z and D12 index-before-next assertions |
+| 33 | T4 MEMBER/FENCE exact initial membership/ordinary scope retained; copied-registry/additional fault variations remain O |
+| 34 | Superseded gap machinery remains S/unwired; no gap/resumed-loop support added |
+| 35 | RENDER explicitly shows settled refusal vs pending/not-reached and actual exit classes; T4 SHARE actual mixed-completion/prefix/cancellation results retained |
+| 36 | BINARY real ordinary item index-only resume; T4 current-child F2/spend/correlation/atomic finalizer evidence retained |
+| 37 | BINARY real prepared/confirmed preserving receipt and stable old Ri, retaining new resources; T3/T4 deeper partial/index/F2 faults retained |
+| 38 | No new schema migration or runtime authority write; strict supported/unsupported history and consumer-closure evidence/approvals retained |
+| 39 | Both CLI parser/driver entrypoints now call the shipping producer/binding; no direct-domain shortcut, fabricated receipt or public capability |
+| 40 | Human output distinguishes immutable as-of-pass snapshots from current child actions; T4 stable cut/all-selected-vs-prefix/lost-copy evidence retained |
+| 41 | T4 preselection-only poll recovery/no post-capture restart retained; CLI parent note never suggests loop continuation |
+| 42 | T4 exact holder release/window/collection evidence retained; original-source rollback/generation permutations remain O |
+| 43 | T4 parent Final/independent child debt and dynamic actions retained; no aggregate continuation or completed-child stop handle |
+| 44 | SSH old standalone replay preserves recreated lifetime; D14 old result preserves new Q; pass-specific scalar-ID reuse variation remains O |
+
+### Exact Verification, Failure Classification And Integrity
+
+Every runtime command used `devenv shell -- cargo test --all-features --locked`
+plus the target and full test name, ending `-- --exact`. Each final command ran
+**one nonzero case, zero failures**. No broad target/tier invocation is hidden by
+the table. There are **19 distinct exact cases** across bin/CLI/local library/SSH,
+including the root-help golden run. Earlier green checkpoints were reused rather
+than rerun on an unchanged tree; final additions reran only the changed D14/SSH
+case and static lint/format, not the already-green inventories or other tables.
+
+| Log under `/tmp/opencode/` | Exact target/name after common prefix; observed result |
+| --- | --- |
+| `task56-final-01.log` | `--bin manyhands-cli catalog::tests::catalog_matches_every_command_and_delivering_cycle_without_duplicates`; 1 passed |
+| `task56-final-02.log` | `--bin manyhands-cli catalog::tests::catalog_lookup_and_resource_selection_are_exact`; 1 passed |
+| `task56-final-03.log` | `--bin manyhands-cli collaboration::tests::the_window_covers_exactly_the_stoppable_verbs`; 1 passed |
+| `task56-final-04.log` | `--bin manyhands-cli parse::tests::the_poll_verbs_take_only_their_own_options`; 1 passed |
+| `task56-final-05.log` | RENDER; 1 passed |
+| `task56-final-06.log` | `--bin manyhands-cli retirement::tests::removal_flags_are_evidence_not_an_all_removed_claim`; 1 passed |
+| `task56-final-07.log` | CLI; 1 passed |
+| `task56-final-08.log` | BINARY; 1 passed |
+| `task56-final-09.log` | `--test cli inventory::every_bound_mutation_is_a_catalogued_mutating_verb_less_the_two_exempt`; 1 passed |
+| `task56-final-10.log` | `--test cli inventory::the_catalog_and_the_rfc_taxonomies_name_the_same_verbs`; 1 passed |
+| `task56-final-11.log` | `--test cli inventory::every_input_taking_verb_has_one_schema_and_one_example_and_every_other_takes_none`; 1 passed |
+| `task56-final-12.log` | `--test cli inventory::every_verb_s_data_has_an_output_schema_and_its_goldens_match_it`; 1 passed |
+| `task56-final-13.log` | `--test cli recovery_tables::retirement_recovery_is_item_owned_and_stopped_pass_is_only_a_summary`; 1 passed |
+| `task56-final-14.log` | `--test cli fixture_directory_is_exactly_the_registered_cases`; 1 passed |
+| `task56-help-golden.log` | `--test cli help::root_help_and_bare_call_match_in_both_modes_without_data`; 1 passed; explicit `MANYHANDS_UPDATE_GOLDEN=1`, resulting JSON/text diff inspected |
+| `task56-local-final-01.log` | DRAFT; 1 passed, 2 direct draft sentinels |
+| `task56-local-final-02.log` | PRESERVE; 1 passed, 6 rows |
+| `task56-d14-final.log` | D14; 1 passed, 2 lifecycle rows including after-Git loss + metadata-only no-observation/projection/tracking assertions; 7.02 s test runtime |
+| `task56-ssh-final.log` | SSH; **1 SSH case passed**, real runner registration and disposable isolation, no other SSH case run |
+
+Literal 14-command results and durations are in `task56-final-results.json`;
+the three-table checkpoint is in `task56-local-final-results.json`. The later
+`task56-d14-final.log` supersedes only D14's earlier green after adding the
+no-observation/projection/tracking assertions. The final SSH run supersedes its
+earlier green after adding the initial read-precedence/readiness transition.
+
+Meaningful compiled **RED before production wiring**: `task56-cli-red.log`
+(`context retire` unknown/usage instead of `not_confirmable`),
+`task56-render-red2.log` (generic data instead of the per-target/as-of-pass
+contract), and `task56-window-red.log` (new mutation missing safe-point window).
+The first renderer run's wrong `Removed` test enum and first local acceptance
+compile's Option body access are **compile diagnostics, not behavioral REDs**.
+Missing golden registration, no-remote pre-acceptance mismatch assumption, and
+the peer's undeleted local branch at Q creation were **fixture diagnostics**;
+the corrected fixture pins an accepted ordinary digest and a genuinely new Q
+branch. No production guard was changed to accommodate them. SSH attempts 1–4
+found closure's expected history-unknown refusal after latest ad replacement;
+the fixture now does a fresh ordinary poll in A before each closure. Attempt 5
+exposed the incorrect *total wire* one-command assertion; source inspection and
+actual default cost established the authoritative-Fetch distinction above.
+Only the specified final logs are passing claims. Acceptance rows that already
+passed the approved engine needed no new production implementation.
+
+| Gate / artifact | Evidence |
+| --- | --- |
+| Strict whole-tree compilation/lint | `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`, exit 0, `task56-clippy-final.log`, 9.74 s compiler work after lock waits; no separate redundant check |
+| Format | `devenv shell -- cargo fmt --check`, exit 0, `task56-fmt-final.log`; all formatting used Devenv |
+| Headless boundary, once | `devenv shell -- sh scripts/check-cli-no-gpui.sh`, exit 0, `task56-no-gpui.log` |
+| Whitespace/staging | `git diff --check`, `git diff --cached --check`, source commit clean; metadata/range checks before final return |
+| Merge compatibility at source commit | `git merge-tree --write-tree HEAD origin/main`, exit 0, tree `f23f36c32ba99b3bf584a99333f82be634e17025`; no main/worktree change |
+| Current changed-input manifest | `task56-sources.sha256`: **27 source/test/golden/minimal-RFC files**, manifest SHA-256 **`8e6f07ceb9573b7123b84dbc9c1ed95ee6af9f5f340fe5a7e430ec8ee18ce577`**; all match `c0ff11af`. Unchanged earlier source is not inventoried again |
+| Raw evidence manifest | `task56-evidence.sha256`: **55 logs/result/manifest artifacts**, including failed diagnostics, SHA-256 **`a07c802c710ac5cd1ce995cae8146c04a34ca60fe518cc04f1f16cf068540585`**. Not a claim that every listed log passed |
+
+Self-review inspected the entire source delta, all four golden diffs, standard
+driver/session/transport/safe-point routing, ordinary untagged/default path,
+source privacy and no extra approval, test isolation and native cfg boundaries.
+New code introduces no platform-specific runtime assumption; Linux evidence is
+**not** Windows/macOS runtime verification. Only test helpers in existing polling
+module gained sibling visibility; `tests/support/ssh_*`, dependencies/targets,
+desktop/runtime/domain proof/recovery engines and unrelated fixtures are untouched.
+
+Canonical checkpoint **`01M6SDJK2RM3GNP0YANZYS404Q`**, parent
+**`01M6SBZ17GGDV0027MQVG93K95`**, actual UTC **`2026-11-06T21:56:55Z`**.
+ID generation used the **already-built binary**, no Cargo build/run:
+`devenv shell -- env MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data target/debug/manyhands-cli id new --json`
+(`task56-checkpoint-id.log`). No default-profile access, repair/conversion, real
+repository/context/key/draft/identity mutation or ticket-body/status save.
+
+**Next: controller independent SPEC, then QUALITY, for the full original
+`e79ab8e61b0682eb0f224d36dee5d67ef51aa4c9..returned-HEAD` chunk, before any push.**
+Task 7 broad governing amendments and Task 8 final three static gates,
+fast/selected-SSH tiers **once at review-ready** and whole-feature reviews remain
+owed. Ticket stays implementing; no full-feature/real-context completion, PR,
+main integration/closure or native CI claim. No owned process remains. Metadata-only
+checkpoint bookkeeping does not require repeating green Rust/test gates.
