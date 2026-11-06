@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use gpui_kit::{Entity, TestAppContext};
 use manyhands::{
     repository::{
-        CancellationToken, ConfirmationId, FailurePoint, Mutation, MutationCall, MutationDataDto,
+        CancellationToken, ConfirmationId, FailurePoint, ItemDtoKind, LifecycleBlocker,
+        LifecycleMutationDto, LifecycleMutationType, Mutation, MutationCall, MutationDataDto,
         NoProgress, OperationAction, PrepareDataDto, RepositoryService, RequestId,
         TicketCloseInput, keys::SessionCredentials,
     },
@@ -487,4 +488,61 @@ async fn a_resume_naming_an_unknown_lifecycle_sends_nothing(cx: &mut TestAppCont
     ] {
         assert!(!shell.present(button, cx), "{button}");
     }
+}
+
+/// V17, canned: a resume's answer has no operation ID of its own, and its
+/// child's conflict is named by the parent the resume action names. The
+/// dialog on the resume offers Resolve conflict… and Resume, not Inspect
+/// alone. The answer is `tests/mutation_remote/c5_child_conflict.rs`'s under
+/// a resume (`operation resume`, `recovery_required`, `conflict_pending` and
+/// `context_conflicted`, `operation.resume` naming the parent).
+#[gpui_kit::test]
+async fn a_resumed_child_conflict_offers_resolve_and_resume(cx: &mut TestAppContext) {
+    let (shell, _, _) = stranded(cx);
+    let row = close_row(&shell, cx).await;
+    let mut conflicted = Envelope::<MutationDataDto>::failure(
+        "operation resume",
+        Scope::default(),
+        ResultCode::RecoveryRequired,
+        vec![RecoveryAction::for_operation(
+            RecoveryActionKind::OperationResume,
+            "01ARZ3NDEKTSV4RRFFQ69G5FY1",
+            [],
+        )],
+    );
+    conflicted.operation_id = None;
+    conflicted.data = Some(MutationDataDto::Lifecycle(Box::new(LifecycleMutationDto {
+        r#type: LifecycleMutationType::Lifecycle,
+        kind: ItemDtoKind::Ticket,
+        item_id: TICKET.to_owned(),
+        recording: None,
+        checkpoint_oid: None,
+        integration: None,
+        integration_oid: None,
+        publication: None,
+        publication_oid: None,
+        publication_pending: None,
+        cleanup: None,
+        cleanup_pending: None,
+        blockers: vec![
+            LifecycleBlocker::ContextConflicted,
+            LifecycleBlocker::ConflictPending,
+        ],
+        made_ready: None,
+        made_ready_state: None,
+    })));
+    shell
+        .backend
+        .hold_job_return_answering(JobKind::OperationResume, conflicted)
+        .release();
+    shell.click(("pending-resume", row), cx);
+    shell
+        .until_drawn(
+            cx,
+            "the dialog shows the conflict's way out",
+            |shell, cx| shell.present("lifecycle-ending", cx),
+        )
+        .await;
+    assert!(shell.present("lifecycle-resolve-conflict", cx));
+    assert!(shell.present("lifecycle-resume", cx));
 }
