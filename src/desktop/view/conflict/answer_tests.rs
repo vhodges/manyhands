@@ -447,3 +447,49 @@ async fn an_interrupted_remote_resolution_resumes(cx: &mut TestAppContext) {
     shell.click("conflict-resume", cx);
     assert_eq!(resumed(&shell, cx), [stopped, prepared]);
 }
+
+/// R-12, R-25, canned: a refused resolution whose set stays kept, then
+/// dismissed from the operation area, is not another window's set: a new
+/// sheet over the same conflict starts afresh, with Save resolution for
+/// the choices on its screen, and does not send the old set again.
+///
+/// Canned: the refusal `invalid_input`, which `remote_answer` keeps; the
+/// conflict as `c4_conflict_read_canonical` reads it.
+#[gpui_kit::test]
+async fn a_dismissed_refusal_is_not_another_windows_set(cx: &mut TestAppContext) {
+    let (shell, root) = remote_shell(cx);
+    let operation = save_answered(
+        &shell,
+        SheetSource::Share,
+        &root,
+        answer(ResultCode::InvalidInput, Effects::not_requested()),
+        cx,
+    )
+    .await;
+    let refused = resolves(&shell, cx)[0];
+    let kept = request(&shell, refused, cx).request_id;
+    assert!(
+        shell
+            .fixture
+            .resolution_store()
+            .kept(kept)
+            .unwrap()
+            .is_some(),
+        "the refused set stays kept"
+    );
+    shell
+        .visual(cx)
+        .update(gpui_kit::component::WindowExt::close_dialog);
+    shell.run(cx);
+    shell
+        .operations(cx)
+        .update(cx, |operations, _| operations.dismiss(refused));
+
+    shell
+        .backend
+        .answer_next_conflict_read(canned(operation, vec![canned_path(TICKET, '1')]));
+    open_sheet(&shell, SheetSource::Share, &root, operation, cx);
+    until_present(&shell, "conflict-progress", cx).await;
+    assert!(!shell.present("conflict-retry", cx), "no old set to retry");
+    assert!(shell.present("conflict-save", cx), "a new Save resolution");
+}

@@ -24,7 +24,8 @@ impl ResolveSheet {
 
     /// The requests whose sets are not another window's of this conflict:
     /// those this sheet saw answered, and those this session holds
-    /// finished (review I-2), as R-25 may keep a refused set.
+    /// finished or dismissed from the operation area (review I-2), as R-25
+    /// may keep a refused set.
     pub(super) fn except(&self, cx: &App) -> Vec<RequestId> {
         let mut except = self.spent.clone();
         except.extend(
@@ -33,7 +34,12 @@ impl ResolveSheet {
                 .read(cx)
                 .requests()
                 .iter()
-                .filter(|request| matches!(request.state, RequestState::Finished(..)))
+                .filter(|request| {
+                    matches!(
+                        request.state,
+                        RequestState::Finished(..) | RequestState::Dismissed
+                    )
+                })
                 .map(|request| request.request_id),
         );
         except
