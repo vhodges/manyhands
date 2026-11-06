@@ -59,6 +59,12 @@ pub(in super::super) fn owned_identity(db: &Connection, id: &str) -> Result<bool
         ("context_retirement_attempts", "observer_operation_ulid", ""),
         ("poll_retirement_batches", "operation_ulid", ""),
         ("poll_retirement_attempts", "operation_ulid", ""),
+        ("retirement_batch_gap_attempts", "operation_ulid", ""),
+        (
+            "retirement_batch_gap_attempts",
+            "observer_operation_ulid",
+            "",
+        ),
         (
             "retirement_advertisement_provenance",
             "source_operation_ulid",
@@ -413,6 +419,7 @@ fn objects() -> Vec<(&'static str, &'static str, String)> {
         ("trigger", "retirement_index_claim_immutable", "CREATE TRIGGER retirement_index_claim_immutable BEFORE UPDATE ON context_retirement_index_claims BEGIN SELECT RAISE(ABORT,'immutable retirement index claim'); END".to_owned()),
         ("trigger", "retirement_index_claim_delete", "CREATE TRIGGER retirement_index_claim_delete BEFORE DELETE ON context_retirement_index_claims WHEN EXISTS(SELECT 1 FROM context_retirement_records c WHERE c.operation_ulid=OLD.operation_ulid AND c.phase NOT IN ('complete','refused','abandoned')) BEGIN SELECT RAISE(ABORT,'pending retirement index claim'); END".to_owned()),
     ];
+    objects.extend(super::handoff::gap::objects());
     for (name, table, columns, condition) in [
         (
             "retirement_record_identity",
@@ -577,7 +584,7 @@ fn index_object(name: &str) -> bool {
 
 fn published_v2_objects() -> Result<Vec<(&'static str, &'static str, String)>, RepositoryError> {
     let mut prior = objects();
-    prior.retain(|(_, name, _)| !index_object(name));
+    prior.retain(|(_, name, _)| !index_object(name) && !super::handoff::gap::object(name));
     let mut bytes = Vec::new();
     for (kind, name, sql) in &prior {
         for field in [*kind, *name, &normalized(sql)] {
@@ -591,6 +598,30 @@ fn published_v2_objects() -> Result<Vec<(&'static str, &'static str, String)>, R
         .map_err(|_| recovery_required())?
         .to_string()
         != "7f82f75dbd4ea313b8e291c0849a1b7dc763fe4a"
+    {
+        return Err(recovery_required());
+    }
+    Ok(prior)
+}
+
+fn published_index_objects() -> Result<Vec<(&'static str, &'static str, String)>, RepositoryError> {
+    let prior: Vec<_> = objects()
+        .into_iter()
+        .filter(|(_, name, _)| !super::handoff::gap::object(name))
+        .collect();
+    let mut bytes = Vec::new();
+    for (kind, name, sql) in &prior {
+        for field in [*kind, *name, &normalized(sql)] {
+            bytes.extend_from_slice(field.as_bytes());
+            bytes.push(0);
+        }
+    }
+    // Independently extracted from entry 2acac179's 37-object catalog. The
+    // extractor also reproduced the pinned published-v2 digest above.
+    if git2::Oid::hash_object(git2::ObjectType::Blob, &bytes)
+        .map_err(|_| recovery_required())?
+        .to_string()
+        != "c8da3934cfa9085a681420ef19097d5dc01fd42e"
     {
         return Err(recovery_required());
     }
@@ -671,10 +702,11 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
             |r| r.get(0),
         )
         .map_err(|_| recovery_required())?;
-    if (current && !marked) || (indexed && !current) {
+    let gapped = gap_marked(db)?;
+    if (current && !marked) || (indexed && !current) || (gapped && !indexed) {
         return Err(recovery_required());
     }
-    if marked && current && indexed {
+    if marked && current && indexed && gapped {
         return validate_schema(db);
     }
     let tx = db
@@ -703,7 +735,8 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
             |r| r.get(0),
         )
         .map_err(|_| recovery_required())?;
-    if (current && !marked) || (indexed && !current) {
+    let gapped = gap_marked(&tx)?;
+    if (current && !marked) || (indexed && !current) || (gapped && !indexed) {
         return Err(recovery_required());
     }
     if marked && current && !indexed {
@@ -736,6 +769,37 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
         }
         #[cfg(test)]
         migration_checkpoint(10)?;
+    }
+    if marked && current && !gapped {
+        // The gap adapter is additive. Validate the exact prior catalog/history
+        // before installing it; a partial or substituted adapter is not repaired.
+        let prior = published_index_objects()?;
+        audit_objects(&tx, &prior)?;
+        for (_, name, _) in definitions
+            .iter()
+            .filter(|(_, name, _)| super::handoff::gap::object(name))
+        {
+            let present: bool = tx
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name=?1)",
+                    [name],
+                    |r| r.get(0),
+                )
+                .map_err(|_| recovery_required())?;
+            if present {
+                return Err(recovery_required());
+            }
+        }
+        #[cfg(test)]
+        migration_checkpoint(12)?;
+        for (_, _, sql) in definitions
+            .iter()
+            .filter(|(_, name, _)| super::handoff::gap::object(name))
+        {
+            tx.execute_batch(sql).map_err(|_| recovery_required())?;
+        }
+        #[cfg(test)]
+        migration_checkpoint(13)?;
     }
     if marked && !current {
         let prior = published_v1_objects()?;
@@ -813,6 +877,15 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
         #[cfg(test)]
         migration_checkpoint(11)?;
     }
+    if !gapped {
+        tx.execute(
+            "INSERT INTO registry_migrations(name) VALUES(?1)",
+            [super::handoff::gap::MARKER],
+        )
+        .map_err(|_| recovery_required())?;
+        #[cfg(test)]
+        migration_checkpoint(14)?;
+    }
     #[cfg(test)]
     migration_checkpoint(7)?;
     audit(&tx)?;
@@ -885,6 +958,40 @@ fn validate_schema(db: &Connection) -> Result<(), RepositoryError> {
     validate_schema_objects(db, &objects())
 }
 
+fn gap_marked(db: &Connection) -> Result<bool, RepositoryError> {
+    db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
+        [super::handoff::gap::MARKER],
+        |r| r.get(0),
+    )
+    .map_err(|_| recovery_required())
+}
+
+fn validate_gap_closure(
+    db: &Connection,
+    definitions: &[(&str, &str, String)],
+) -> Result<(), RepositoryError> {
+    let table = super::handoff::gap::TABLE;
+    let attached=db.prepare("SELECT type,name,sql FROM sqlite_master WHERE tbl_name=?1 COLLATE NOCASE AND type IN ('index','trigger')").and_then(|mut q|q.query_map([table],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_|recovery_required())?;
+    for (kind, name, sql) in attached {
+        let implicit = kind == "index"
+            && sql.is_none()
+            && (1..=5).any(|n| name.eq_ignore_ascii_case(&format!("sqlite_autoindex_{table}_{n}")));
+        if !implicit
+            && !definitions
+                .iter()
+                .any(|(k, n, _)| kind == *k && name.eq_ignore_ascii_case(n))
+        {
+            return Err(recovery_required());
+        }
+    }
+    let unknown:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) fk WHERE m.type='table' AND fk.\"table\"=?1 COLLATE NOCASE)",[table],|r|r.get(0)).map_err(|_|recovery_required())?;
+    if unknown {
+        return Err(recovery_required());
+    }
+    Ok(())
+}
+
 fn validate_schema_objects(
     db: &Connection,
     definitions: &[(&str, &str, String)],
@@ -904,6 +1011,7 @@ fn validate_schema_objects(
     }
     validate_release_closure(db, definitions)?;
     validate_index_closure(db, definitions)?;
+    validate_gap_closure(db, definitions)?;
     Ok(())
 }
 
@@ -1011,7 +1119,7 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
             |r| r.get(0),
         )
         .map_err(|_| recovery_required())?;
-    if !marked {
+    if !marked || !gap_marked(db)? {
         return Err(recovery_required());
     }
     audit_objects(db, &objects())?;
@@ -1062,7 +1170,7 @@ fn audit_index_spends(db: &Connection) -> Result<(), RepositoryError> {
 }
 
 fn require_known_markers(db: &Connection) -> Result<(), RepositoryError> {
-    let unknown:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name LIKE 'context_retirement_%' AND name NOT IN (?1,?2,?3))",params![MARKER,REENTRY_MARKER,INDEX_MARKER],|r|r.get(0)).map_err(|_|recovery_required())?;
+    let unknown:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name LIKE 'context_retirement_%' AND name NOT IN (?1,?2,?3,?4))",params![MARKER,REENTRY_MARKER,INDEX_MARKER,super::handoff::gap::MARKER],|r|r.get(0)).map_err(|_|recovery_required())?;
     if unknown {
         return Err(recovery_required());
     }
@@ -1275,10 +1383,11 @@ fn audit_objects(
         return Err(recovery_required());
     }
     // Original-P binding, no-effect refusals and the supported original branch-
-    // only child histories have separate strict audits. Gap/preservation stay closed.
+    // only child histories have separate strict audits. Gap has its own closed
+    // original-freeze/current-attempt lineage; batch-local/preservation stay closed.
     let unsupported_authority: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records WHERE phase IN ('preserving','abandoned'))
-      OR EXISTS(SELECT 1 FROM retirement_advertisement_provenance WHERE execution_kind='batch_gap' OR (execution_kind='local_parent' AND execution_batch_operation_ulid IS NOT NULL))
-       OR EXISTS(SELECT 1 FROM retirement_observation_receipts b JOIN retirement_advertisement_provenance p ON p.id=b.provenance_id WHERE b.consumer_kind='batch' AND p.execution_kind!='poll_parent')", [], |r| r.get(0)).map_err(|_| recovery_required())?;
+      OR EXISTS(SELECT 1 FROM retirement_advertisement_provenance WHERE execution_kind='local_parent' AND execution_batch_operation_ulid IS NOT NULL)
+       OR EXISTS(SELECT 1 FROM retirement_observation_receipts b JOIN retirement_advertisement_provenance p ON p.id=b.provenance_id WHERE b.consumer_kind='batch' AND p.execution_kind NOT IN ('poll_parent','batch_gap'))", [], |r| r.get(0)).map_err(|_| recovery_required())?;
     if unsupported_authority {
         return Err(recovery_required());
     }
@@ -1687,6 +1796,30 @@ pub(super) fn release_bound_source(
         )?;
     }
     Ok(())
+}
+
+/// Exact batch consumer release for the separately audited gap lineage. No
+/// public scalar batch ID, pin reacquisition or original source release here.
+pub(super) fn release_gap_consumer(
+    tx: &rusqlite::Transaction<'_>,
+    binding: i64,
+    reason: &str,
+) -> Result<(), RepositoryError> {
+    super::handoff::gap::require_release(tx, binding, reason)?;
+    let (provenance,operation,epoch,repository,batch):(i64,String,i64,i64,i64)=tx.query_row("SELECT p.id,b.consumer_operation_ulid,b.consumer_attempt_epoch,p.repository_id,p.observation_batch_id FROM retirement_observation_receipts b JOIN retirement_advertisement_provenance p ON p.id=b.provenance_id WHERE b.id=?1 AND b.consumer_kind='batch'",[binding],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(|_|recovery_required())?;
+    release_pin(
+        tx,
+        PinRelease {
+            provenance,
+            kind: "consumer_attempt",
+            operation: &operation,
+            epoch,
+            repository,
+            batch,
+            binding: Some(binding),
+            reason,
+        },
+    )
 }
 
 // Only the separately validated holder transitions above construct this key.

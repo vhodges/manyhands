@@ -1,5 +1,5 @@
 //! Original same-call C: ordered refusal or original guarded W/B cleanup/index.
-//! Gap observers and resumed cleanup remain closed.
+//! Gap observers use a separate execution scope; resumed cleanup remains closed.
 use super::*;
 use crate::repository::{RepositoryOperation, repository_lease};
 
@@ -89,7 +89,7 @@ fn positive_row(db: &Connection, p: &Projection, k: &Candidate) -> Result<bool, 
 /// not settle its integration stages or native resolution artifacts. Match the
 /// existing next-window prerequisites in state::prepare_integration_window;
 /// applied/released history and window retention alone are not live debt.
-fn require_no_retained_integration(
+pub(super) fn require_no_retained_integration(
     db: &Connection,
     repository: i64,
 ) -> Result<(), RepositoryError> {
@@ -166,7 +166,7 @@ pub(super) fn admitted(db: &Connection, child: &str) -> Result<bool, RepositoryE
     positive_row(db, &p, k)
 }
 
-fn projected(
+pub(super) fn projected(
     db: &Connection,
     p: &Projection,
     f: &Frozen,

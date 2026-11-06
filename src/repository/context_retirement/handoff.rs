@@ -17,6 +17,8 @@ const CONTRACT: &str = "poll_retirement_handoff_contract_v1";
 
 #[path = "batch.rs"]
 pub(in super::super) mod batch;
+#[path = "gap.rs"]
+pub(in super::super) mod gap;
 
 // Read-only test observation at the actual A3 entry, after original refresh.
 // No runtime API, authority replacement or guard bypass is provided.
@@ -495,7 +497,8 @@ pub(super) fn audit_source(
     if !valid {
         return Err(recovery_required());
     }
-    let bad_reason:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM retirement_observation_pin_releases WHERE provenance_id=?1 AND reason!=CASE pin_kind WHEN 'source_attempt' THEN 'handoff_decided' ELSE 'consumer_terminal' END)",[provenance],|r|r.get(0)).map_err(|_|recovery_required())?;
+    let gap_fenced = gap::original_fenced(db, p, &f)?;
+    let bad_reason:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM retirement_observation_pin_releases WHERE provenance_id=?1 AND reason!=CASE pin_kind WHEN 'source_attempt' THEN 'handoff_decided' ELSE CASE WHEN ?2 THEN 'consumer_fenced' ELSE 'consumer_terminal' END END)",params![provenance,gap_fenced],|r|r.get(0)).map_err(|_|recovery_required())?;
     if bad_reason {
         return Err(recovery_required());
     }
@@ -513,6 +516,10 @@ pub(super) fn audit_source(
                 (p.phase == "active"
                     && f.code.is_none()
                     && (source, consumer, releases) == (0, 1, 1))
+                    || (gap_fenced
+                        && p.phase == "fenced"
+                        && f.code.is_none()
+                        && (source, consumer, releases) == (0, 0, 2))
                     || (p.phase == "ended"
                         && f.code.as_deref() == Some("ok")
                         && (source, consumer, releases) == (0, 0, 2)

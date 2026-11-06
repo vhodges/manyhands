@@ -4,7 +4,7 @@
 use super::*;
 use crate::repository::remote::retirement_batch_test_support::ResolutionStage;
 
-fn foreign_conflict(s: &SourceFixture, window: u32) -> OperationId {
+pub(super) fn foreign_conflict(s: &SourceFixture, window: u32) -> OperationId {
     let before: i64 =
         s.f.db()
             .query_row(
@@ -108,7 +108,7 @@ fn assert_positive_git_change(s: &SourceFixture, ordinal: usize) {
     ));
 }
 
-fn project_inactive_resolution_envelope(s: &SourceFixture, operation: OperationId) {
+pub(super) fn project_inactive_resolution_envelope(s: &SourceFixture, operation: OperationId) {
     // Explicit compatibility projection ONLY: real resolution reacquisition sets
     // reconciliation_required. Zeroing it isolates child-journal exclusion; this
     // is not represented as the real resolve/re-fetch/finalization journey.

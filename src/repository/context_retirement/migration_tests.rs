@@ -8,6 +8,7 @@ use crate::repository::context_retirement::{
 fn index_v2(data: &std::path::Path) -> Connection {
     let (mut db, _) = legacy(data, "released");
     record::migrate(&mut db).unwrap();
+    remove_gap_adapter(&db);
     // Build the exact pre-index v2 catalog, retaining every old history row.
     // Fresh fixture only; these objects/rows never exist in published v2.
     if recovery::has_table(&db, "context_retirement_index_claims").unwrap() {
@@ -19,6 +20,103 @@ fn index_v2(data: &std::path::Path) -> Connection {
     )
     .unwrap();
     db
+}
+
+fn remove_gap_adapter(db: &Connection) {
+    // Empty, isolated migration fixture only: build the exact previous catalog.
+    use crate::repository::context_retirement::handoff::gap;
+    for (kind, name, _) in gap::objects().into_iter().rev() {
+        db.execute_batch(&format!("DROP {kind} {name}")).unwrap();
+    }
+    db.execute(
+        "DELETE FROM registry_migrations WHERE name=?1",
+        [gap::MARKER],
+    )
+    .unwrap();
+}
+
+#[test]
+fn retirement_batch_gap_migration_is_additive_atomic_and_rejects_unknown_catalog() {
+    use crate::repository::context_retirement::handoff::gap;
+    for kind in [
+        "success",
+        "fault12",
+        "fault13",
+        "fault14",
+        "partial",
+        "missing_marker",
+        "missing_table",
+        "substituted",
+        "attachment",
+        "incoming_fk",
+        "unknown_marker",
+    ] {
+        let data = tempfile::tempdir().unwrap();
+        let (mut db, _) = legacy(data.path(), "released");
+        record::migrate(&mut db).unwrap();
+        remove_gap_adapter(&db);
+        if matches!(
+            kind,
+            "missing_marker" | "missing_table" | "substituted" | "attachment" | "incoming_fk"
+        ) {
+            record::migrate(&mut db).unwrap();
+        }
+        match kind {
+            "partial"=>db.execute_batch("CREATE TABLE retirement_batch_gap_attempts(payload TEXT);INSERT INTO retirement_batch_gap_attempts VALUES('must keep');").unwrap(),
+            "missing_marker"=>{db.execute("DELETE FROM registry_migrations WHERE name=?1",[gap::MARKER]).unwrap();},
+            "missing_table"=>{db.execute_batch("DROP TABLE retirement_batch_gap_attempts").unwrap();},
+            "substituted"=>db.execute_batch("DROP TRIGGER retirement_gap_identity;CREATE TRIGGER retirement_gap_identity BEFORE UPDATE ON retirement_batch_gap_attempts BEGIN SELECT 1;END").unwrap(),
+            "attachment"=>db.execute_batch("CREATE TRIGGER foreign_gap_history BEFORE DELETE ON retirement_batch_gap_attempts BEGIN SELECT 1;END").unwrap(),
+            "incoming_fk"=>db.execute_batch("CREATE TABLE foreign_gap_payload(op TEXT,epoch INTEGER,payload TEXT,FOREIGN KEY(op,epoch) REFERENCES retirement_batch_gap_attempts(operation_ulid,owner_epoch));INSERT INTO foreign_gap_payload VALUES(NULL,NULL,'must keep');").unwrap(),
+            "unknown_marker"=>{db.execute("INSERT INTO registry_migrations VALUES('context_retirement_gap_v99')",[]).unwrap();},
+            _=>{},
+        }
+        let before = registry_image(&db);
+        if let Some(point) = kind.strip_prefix("fault") {
+            record::fail_migration_at(point.parse().unwrap());
+        }
+        let result = record::migrate(&mut db);
+        if kind == "success" {
+            result.unwrap();
+            let after = registry_image(&db);
+            for (table, rows) in &before {
+                if !matches!(
+                    table.as_str(),
+                    "sqlite_master" | "schema_version" | "registry_migrations"
+                ) {
+                    assert_eq!(
+                        Some(rows),
+                        after.get(table),
+                        "{table}: no old history rewrites"
+                    );
+                }
+            }
+            assert_eq!(
+                db.query_row(
+                    "SELECT count(*) FROM retirement_batch_gap_attempts",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+                0
+            );
+            record::audit_connection(&db).unwrap();
+            let image = registry_image(&db);
+            drop(RepositoryService::open_at(data.path()).unwrap());
+            assert_eq!(
+                image,
+                registry_image(&db),
+                "already-current open is read-only"
+            );
+        } else {
+            assert!(result.is_err(), "{kind}");
+            assert_eq!(
+                before,
+                registry_image(&db),
+                "{kind}: no repair, partial DDL/marker, cascade or evidence loss"
+            );
+        }
+    }
 }
 
 #[test]
@@ -136,6 +234,7 @@ fn legacy(data: &std::path::Path, case: &str) -> (Connection, OperationId) {
         db.execute_batch(&format!("DROP TRIGGER {name}")).unwrap();
     }
     for name in [
+        "retirement_batch_gap_attempts",
         "context_retirement_index_claims",
         "context_retirement_absence_receipts",
         "context_retirement_worktree_resumptions",
