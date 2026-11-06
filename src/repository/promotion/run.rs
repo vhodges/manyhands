@@ -326,6 +326,17 @@ pub(in super::super) fn run_with_io<L: Lifecycle>(
 ) -> Result<L::Output, L::Error> {
     run_observed(lifecycle, service, request, io, &mut Unobserved)
 }
+/// `run_with_io`, telling `progress` of the steps that run.
+#[cfg(test)]
+pub(in super::super) fn run_with_io_observed<L: Lifecycle>(
+    lifecycle: &L,
+    service: &RepositoryService,
+    request: LifecycleRequest<L::Expectation>,
+    io: &mut impl PromotionIo,
+    progress: &mut dyn RunObserver,
+) -> Result<L::Output, L::Error> {
+    run_observed(lifecycle, service, request, io, progress)
+}
 fn run_observed<L: Lifecycle>(
     lifecycle: &L,
     service: &RepositoryService,
@@ -718,8 +729,14 @@ fn promote_inner<L: Lifecycle>(
     };
     // A closure's checkpoint is written in the integration's hook, unless an
     // earlier run wrote it. Whether the closure is new is the boundary's to
-    // say: it knows what the request consented to (R-15).
-    if L::KIND == LifecycleKind::TicketClosure && !r.effect_written() {
+    // say: it knows what the request consented to (R-15). A record whose
+    // `closing` was recorded by an earlier run (it reads as
+    // `context_synchronized`, with its checkpoint named) has the hook write
+    // the checkpoint in this call, so this call reports it; one at
+    // `integrating` or later wrote it long ago.
+    if L::KIND == LifecycleKind::TicketClosure
+        && (!r.effect_written() || r.step() == Step::ContextSynchronized)
+    {
         progress.event(RunEvent::Recording);
     }
     let prepared = match lifecycle.prepare_integration(

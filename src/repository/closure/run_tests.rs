@@ -730,6 +730,59 @@ fn checkpoint_seams_finish_once_with_the_same_id_and_a_new_id_is_busy() {
     }
 }
 
+/// What a run tells its observer, in order.
+struct Told(Vec<run::RunEvent>);
+impl run::RunObserver for Told {
+    fn event(&mut self, event: run::RunEvent) {
+        self.0.push(event);
+    }
+}
+
+/// A closure's checkpoint is reported as `recording` by every call that
+/// writes it: the first, and the resend of a request another process broke
+/// after recording `closing` (the record then names its checkpoint, so the
+/// run cannot tell a new closure by that alone). A resend past the
+/// checkpoint's write reports the integration only.
+#[test]
+fn a_resend_that_writes_the_checkpoint_reports_recording() {
+    let told = |service: &RepositoryService, req: &CloseTicketRequest| {
+        let mut told = Told(Vec::new());
+        run::run_with_io_observed(
+            &TicketClosureLifecycle,
+            service,
+            lifecycle_request(req.clone()),
+            &mut FakeIo::default(),
+            &mut told,
+        )
+        .unwrap();
+        told.0
+    };
+    let writing = [run::RunEvent::Recording, run::RunEvent::Integrating];
+    // The first call writes the checkpoint.
+    let f = Fixture::new();
+    let first = told(&f.service, &f.request());
+    assert_eq!(&first[..2], writing, "{first:?}");
+    // Broken after `closing` was recorded, nothing yet moved: the resend
+    // writes the checkpoint.
+    let f = Fixture::new();
+    let req = f.request();
+    let _ = f.close(
+        &f.failing(FailurePoint::ClosureAfterClosingRecorded),
+        req.clone(),
+    );
+    assert!(f.stored(req.operation_id).closure_oid.is_some());
+    let resent = told(&f.reopened(), &req);
+    assert_eq!(&resent[..2], writing, "{resent:?}");
+    // Broken at `integrating`, the checkpoint long written: nothing is
+    // recorded again.
+    let f = Fixture::new();
+    let req = f.request();
+    let _ = f.close(&f.failing(FailurePoint::BeforeIntegrationRef), req.clone());
+    assert_eq!(f.stored(req.operation_id).step, ClosureStep::Integrating);
+    let resent = told(&f.reopened(), &req);
+    assert!(!resent.contains(&run::RunEvent::Recording), "{resent:?}");
+}
+
 /// "Exit after `closing` recorded, before checkout": consent is re-checked
 /// and a refusal abandons, with nothing referenced. Collaborator content on
 /// the primary changes the consent (no remote: the local OIDs are bound).
