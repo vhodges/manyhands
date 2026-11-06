@@ -416,6 +416,7 @@ are not authorized; numeric exits must come from existing results registry.
 | Limited positive branch-only A4 final SPEC through `c3f88091`, same base | Reviewer `ses_e564dd7a7ffeYzKXesoyVuGJFs`: **0 remaining findings**. Fresh verbatim original probes **5 passed**, primary-pair regressions **4 passed**, retained correction/inspection controls **19 passed** | Limited original-process branch-only cleanup/D14/index/result SPEC approved; full A4/Task 2 still owed |
 | Limited positive branch-only A4 final QUALITY through `c3f88091`, same base, after SPEC | Reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Fresh isolated **56 batch**, **5 original probes**, **23 F2/index** and **1 counter-separation probe** passed; F2=3 with index epoch=1 for both children | Limited branch-only QUALITY approved. Controller inspected raw independent/static evidence and reverified all 1,730 source and 19 log hashes. Synthetic ads/inert producer boundary remains; no full A4/native claim |
 | Present-worktree A4 continuation preflight, 2026-11-06 | Both checkouts clean; fresh fetch succeeded, main/base still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `c3f8809122acd8701668fa7538c18897c85a50e9` already up to date | No conflicts/rebase or unmerged branch consumption |
+| Present A4 LIMITED SPEC at `add1d2ba`, base `18c18949` | Reviewer `ses_e4f5c673dffe7xsyS2NM1oQO1b` found one Medium/spec-blocking missing original request-attempt correlation on present index spends; controller verified the source and actual-SQL counterexample | Correction `744ab1a2` below; **same SPEC re-review required, QUALITY gated**. No prior approval reopened or full A4 claim |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -479,6 +480,10 @@ are not authorized; numeric exits must come from existing results registry.
   The next bounded **original-live present W→B→D14→index/result→C** increment is
   connected below from `18c18949`: **70 batch /217 context**, including 14 new
   present tests, and all three statics. **LIMITED SPEC then QUALITY pending.**
+  Present SPEC found missing original-attempt spend correlation at `add1d2ba`;
+  the narrow correction `744ab1a2` has **4 focused history/counter tests** and all
+  statics green. **Same SPEC re-review pending; QUALITY remains gated.** Earlier
+  70/217 results retain their milestone source scope, not relabeled as corrected.
   Gap O, resumed consumption/new-F2 batch recovery and active-source restart remain
   closed/owed; there is no full A4 or Task 2 readiness claim. SSH/slow gates are
   deferred to end-of-cycle under the owner's 2026-11-06 steering, not counted fresh.
@@ -4714,3 +4719,60 @@ holder/window/Z, A2/A3/replacement/M-D14/index/history variants, full-44 Task 2 
 Task 8 end-of-cycle fast/SSH gates and actual Tasks 3/4 Command/DTO/CLI/cancel/guarded
 abandon/store/selection/enrollment/cursor producer/coordinator/final DTO. No agents,
 push/status/PR/main-close/native/other-worktree/real-profile-key-context-draft actions.
+
+## Present LIMITED SPEC correction — original index spend history
+
+Finding from **`ses_e4f5c673dffe7xsyS2NM1oQO1b`**, controller verified: at original
+milestone **`add1d2ba0776ad01508555d08ab1dd2b345c8e16`**, a completed original-present
+child at F2=2/indexEpoch=1 accepted replacement of its claim with attempt=1 at
+the same epoch. Present history bound child attempt to original P but never bound
+the index spend to it. Shared `record.rs:1018,1029–1057` intentionally permits older
+historical request attempts for standalone resumption; branch-only history also
+relies on that shared audit and is **not** a template for the missing exact binding.
+
+Code correction **`744ab1a2f43deb699aeefd42012a42dc6b065b54`** adds one predicate in
+`batch_present_history.rs`: when an original-present child is spent, require its
+exact operation/repository/request ULID/**original** `a.request_attempt` claim at
+the applicable index epoch. `index_invalidated` uses `o.index_owner_epoch-1`;
+other spent states use the current index epoch. Unspent epoch-zero handoff remains
+valid. No comparison to today's request attempt, counter equality, cleanup
+reconstruction, shared/standalone audit tightening, DDL or execution change.
+
+Two new tests in `batch_present_tests.rs` use inert original-source projection at
+F2>1 followed by real original C/W/B/D14/index claim. Wrong attempt=1 at original
+attempt=2/epoch=1 is rejected in **complete/indexing/observed/persisted/failed/retry/
+index_invalidated**. Completed-claim deletion uses the real catalog; pending
+corruption fixtures restore the exact delete trigger before audit, without FK or
+CHECK bypass. Valid complete/invalidated histories at original F2=2 and 3 preserve
+first claim epoch=1 (invalidated tombstone=2), survive current request advancement
+to 3/4 and replay read-only, without reviving old execution authority.
+
+Review range remains **`18c189492fd2d5112fb16ef146dbab3bbc2c1cbf..744ab1a2f43deb699aeefd42012a42dc6b065b54`**,
+plus the following evidence-only ledger commit. Full Task 2 base remains `7b1912d1`.
+All commands serial foreground Devenv, `timeout:0`; logs
+**`/tmp/opencode/task2-batch-present-claimfix-<suffix>.log`**:
+
+| Exact command after `devenv shell --` | Suffix | Result |
+| --- | --- | --- |
+| `cargo test --all-features --locked --lib retirement_batch_present_claim_history_` | `red` | **1 pass/1 fail**, compiled behavioral RED: wrong-attempt completed history still replayed; legitimate-advance control passed |
+| `cargo test --all-features --locked --lib -- retirement_batch_present_claim_history_ retirement_f2_specfix_intact_spends_keep_duplicates_nonowning_and_new_f2_takeover_valid retirement_batch_positive_original_branch_b_index_then_c_same_receipt` | `green` | **4 passed**, one narrow invocation; all seven wrong-spend states and four valid-history counter controls exercised |
+| `cargo check --all-features --locked` | `check` | pass |
+| `cargo fmt --check` | `fmt` | pass |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy` | pass |
+
+`format-preflight` is formatting diff output, **not** a behavioral RED. No failed
+compile/fixture diagnostic in this correction. No present14/batch70/context217/
+cleanup/recovery or SSH/slow/full suite rerun. Valid milestone evidence remains at
+its actual `add1d2ba` source scope; final SSH/slow/full-fast obligations remain
+deferred to end-of-cycle under owner steering, not waived.
+
+Corrected **1,733-input** inventory `/tmp/opencode/task2-batch-present-claimfix-source.sha256`,
+only those two Rust inputs changed; SHA-256
+**`9e811be97c7db8ad8a2c9227d73e55afbe9d9c9551515ba393da742b211795a6`**.
+**6-log** inventory `task2-batch-present-claimfix-evidence.sha256`, SHA-256
+**`e50a8442d502ac2a27bf3d9c8ebb2c736da7136b22b8ee277c5431af42daa701`**.
+Original hashes are retained as historical, not current for changed files.
+No new checkpoint ID/profile access/status change. Original checkpoint remains
+unreviewed. **Ready for same SPEC reviewer re-review; QUALITY stays gated.**
+All previous approvals and full-44/Task 2/Task 8/downstream duties remain unchanged;
+no agents/push/PR/main/other-worktree/native/real-context/key/draft actions.
