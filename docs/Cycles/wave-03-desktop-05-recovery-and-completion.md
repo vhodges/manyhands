@@ -32,7 +32,7 @@ only through decision 35 and the CLI's way-out text (design, Re-grounding).
 **Built 2026-11-04 to 2026-11-06** (Tasks 0–16; execution ledger:
 [2026-11-03-wave-03-desktop-05-recovery-and-completion-execution.md](../plans/2026-11-03-wave-03-desktop-05-recovery-and-completion-execution.md)).
 Rulings grew to R-1–R-35, named edits to E-1–E-16 and known limits to
-K-1–K-27 during execution, each recorded in the design with its source.
+K-1–K-33 during execution, each recorded in the design with its source.
 Two departures from decision 8: Task 5 ran in a side worktree merged back,
 never rebased (owner, 2026-11-04), and Task 16's review fixes were made in a
 detached worktree while the gates ran on the ticket worktree. Part 0 added L4
@@ -169,7 +169,7 @@ D5.
 - Scheduled polling, launch polls and shutdown: D6.
 - CLI-against-desktop scenarios: G1 (track rule 4).
 - Windows and macOS native evidence: G1 (decision 7).
-- Known limits K-1 to K-27 (design Known Limits).
+- Known limits K-1 to K-33 (design Known Limits).
 
 ## Required Contract
 

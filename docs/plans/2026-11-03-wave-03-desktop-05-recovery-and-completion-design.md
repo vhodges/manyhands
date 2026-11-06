@@ -907,6 +907,51 @@ Applied in the approval commit:
   a local side: under R-26 any change in the work folder sends a local set
   outside, so no tidy real local stale trigger exists (Task 11b review).
 
+From the max-effort review after review-ready (owner 2026-11-06, "list it as
+known for now" for K-28; the rest accepted by the orchestrator as rare or
+cosmetic, to be revisited in the follow-ups ticket):
+
+- **K-28.** The Activity area's Retry of a failed plain item save or comment
+  request resubmits it without the lifecycle-lock check. R-29 exempts the
+  operation area; the entry points on the item pane are gated (owner:
+  "most users won't use the operations panel very often").
+- **K-29.** Save-first skips unsaved edits while the lock is `Awaiting` (the
+  first read, or an answer whose rows are not read yet); the edits stay in the
+  tab. A lock that arrives during "Post as a new comment"'s re-target does not
+  stop that post (a window of milliseconds).
+- **K-30.** An edit typed in the Result editor while a save is out is
+  reverted with `set_text`, which drops that editor's undo history and moves
+  the caret. A closure pinned from the ancestor (both sides reopened, or one
+  side reopened and the other left closed) is not named on the sheet, and the
+  saved file can differ from both sides. A comment whose immutable fields
+  differ goes outside as "unreadable".
+- **K-31.** A resend of a close at `closing` whose checkpoint ref has already
+  moved also reports `recording` (the run cannot tell it from "nothing
+  written"); progress only. `ResolutionStore` keeps a local set after a busy
+  refusal that offers Retry; if the person never retries it stays until the
+  next launch sweep.
+- **K-32.** Rare or narrow, not fixed: a store read error shown as a lost set
+  (V14); the launch sweep across two processes (V13); Enter auto-repeat
+  confirming a Stale preview on Wayland (V15); Stop pressed in the ~0.7 s busy
+  retry window says nothing changed (Vstop); a Busy rows read leaving the lock
+  `Awaiting` or `Open` for about 1.7 s (Vawait, Vbusy1); a stale mouse closure
+  after a model swap (V2); Share main queued twice (Vshare); the closed dialog
+  popped by a later one (Vpop); a Stop and republish… asked by a lifecycle
+  dialog still stacks over it, and a deferred Republish… is not re-validated
+  against the item still existing.
+- **K-33.** Library and CLI contract, not visible in the desktop: resume
+  events carry the inner binding's subject (Vsubj); a lifecycle cancel never
+  reports `stopping` (Vstopping). Wording: Keep both's blank lines (V10), a
+  modify/delete card saying "code" (Vrr), an outside repair shown as saved
+  (Vrep), "Closing…" while the lock is `Awaiting` (Vwords), the blocked step's
+  label (Vblk), and a worker thread leaked per desktop test (Vcycle).
+- **Part 0 note.** `RepositoryService::data_directory()` was made public so the
+  desktop opens its stores beside the service (fix for tests sweeping the real
+  data directory); the Part 0 library changes also include `way_out.rs`
+  (`child_conflict` falls back to the `operation.resume` action's id) and
+  `promotion/run.rs` (`recording` reported when a resend writes the
+  checkpoint), both approved by the owner 2026-11-06.
+
 ## Alternatives Rejected
 
 - A separate library ticket for L1–L3 (decision 2).
