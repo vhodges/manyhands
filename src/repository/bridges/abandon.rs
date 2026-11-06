@@ -398,10 +398,8 @@ impl RepositoryService {
             )
             .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?
             {
-                // Task 3 supplies a retirement-specific preserving preview.
-                // Neither a completed/no-op preview nor generic owner release
-                // can safely describe or settle this companion authority.
-                return Err(ReadError::new(ResultCode::RecoveryRequired));
+                super::super::context_retirement::record::audit_connection(connection)
+                    .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?;
             }
             // Asked first: such an ID is not a local operation's,
             // whatever the local journal holds under it.
@@ -519,6 +517,19 @@ impl RepositoryService {
             &transaction,
             operation_id,
         )? {
+            super::super::context_retirement::record::audit_connection(&transaction)?;
+            if let Some(row) =
+                recovery::local_row(&transaction, root_key, operation_id).map_err(sqlite)?
+            {
+                match row.standing() {
+                    LocalStanding::Completed => return Ok(AbandonOperationOutcome::Completed),
+                    LocalStanding::Rejected => return Ok(AbandonOperationOutcome::Rejected),
+                    LocalStanding::Abandoned => {
+                        return Ok(AbandonOperationOutcome::AlreadyAbandoned);
+                    }
+                    LocalStanding::Pending => {}
+                }
+            }
             return Err(RepositoryError::new(
                 operation,
                 Some(root.clone()),

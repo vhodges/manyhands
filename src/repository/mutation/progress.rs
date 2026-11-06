@@ -191,6 +191,14 @@ pub(crate) trait Session {
     /// Sends `event` to the call's sink.
     fn report(&self, event: &ProgressEvent);
 
+    fn retire_context(
+        &self,
+        service: &RepositoryService,
+        request: crate::repository::RetireContextRequest,
+        accepted: &Accepted,
+        reentry: bool,
+    ) -> Option<Result<crate::repository::ContextRetirementOutcome, RepositoryError>>;
+
     /// Synchronizes with the session's credentials; see
     /// `RepositoryService::synchronize_remote_observed`. `None` when the
     /// session has no credentials, or they are in use: nothing was
@@ -301,6 +309,27 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         self.cancel.is_cancelled()
     }
 
+    fn retire_context(
+        &self,
+        service: &RepositoryService,
+        request: crate::repository::RetireContextRequest,
+        accepted: &Accepted,
+        reentry: bool,
+    ) -> Option<Result<crate::repository::ContextRetirementOutcome, RepositoryError>> {
+        let mut credentials = self.credentials.try_borrow_mut().ok()?;
+        if self.cancelled() {
+            // Persist consent withdrawal before entering any domain safe point.
+            let _ = service.request_cancellation(accepted.request_id);
+        }
+        Some(service.execute_retirement_request(
+            request,
+            accepted,
+            reentry,
+            &mut credentials,
+            self.cancel.clone(),
+        ))
+    }
+
     /// A sink that panics is the caller's fault and not the request's:
     /// the panic is caught here, the sink is sent nothing more, and the
     /// request goes on. A sink that is already being written to, which
@@ -395,6 +424,16 @@ impl Session for NoSession {
 
     fn report(&self, _event: &ProgressEvent) {}
 
+    fn retire_context(
+        &self,
+        _service: &RepositoryService,
+        _request: crate::repository::RetireContextRequest,
+        _accepted: &Accepted,
+        _reentry: bool,
+    ) -> Option<Result<crate::repository::ContextRetirementOutcome, RepositoryError>> {
+        None
+    }
+
     fn synchronize(
         &self,
         _service: &RepositoryService,
@@ -458,6 +497,9 @@ impl RepositoryService {
     /// The record is changed only if it is still accepted at the
     /// attempt it was read at, as every settlement is.
     fn finish_fenced(&self, record: &RequestRecord) -> Option<Result<(), ReadError>> {
+        if Command::parse(&record.command) == Some(Command::ContextRetire) {
+            return None;
+        }
         let accepted = Accepted::of_record(record, record.attempt)?;
         let journal = accepted.journal_row(self);
         // A poll's row that ended `failed` is read by its next call, whatever

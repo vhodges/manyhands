@@ -37,6 +37,40 @@ const PROGRESS_SCHEMA: &str = "progress_event.schema.json";
 const TICKET_SCHEMA: &str = "ticket_mutation.schema.json";
 const DOCUMENT_SCHEMA: &str = "document_mutation.schema.json";
 
+#[test]
+fn a_context_retirement_matches_its_closed_schema_and_golden() {
+    let world = World::new();
+    let mutation = || {
+        Mutation::ContextRetire(manyhands::repository::ContextRetireInput {
+            root: world.root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: TICKET_NEW.parse().unwrap(),
+        })
+    };
+    let envelope = world.execute(REQUEST_1, mutation());
+    assert_eq!(envelope.code, ResultCode::AlreadyApplied);
+    assert_data_contract(
+        "context_retirement",
+        "context_retirement_mutation.schema.json",
+        &world,
+        &envelope,
+    );
+    let data = serde_json::to_value(envelope.data.as_ref().unwrap()).unwrap();
+    for key in data.as_object().unwrap().keys() {
+        let mut missing = data.clone();
+        missing.as_object_mut().unwrap().remove(key);
+        assert!(
+            schema::check_published("context_retirement_mutation.schema.json", &missing).is_err(),
+            "missing {key}"
+        );
+    }
+    let mut mixed = data.clone();
+    mixed["completion"] = "completed".into();
+    assert!(schema::check_published("context_retirement_mutation.schema.json", &mixed).is_err());
+    assert!(schema::check_published("poll_mutation.schema.json", &data).is_err());
+    assert_eq!(envelope, world.execute(REQUEST_1, mutation()));
+}
+
 /// Checks a ticket envelope against its fixture, with what differs from
 /// run to run replaced: the repository's path, the commit and the
 /// operation ID the boundary allocated.
@@ -1507,7 +1541,7 @@ fn every_bound_command_has_a_golden() {
 /// The schemas that describe the `data` of an answer: a read's, a
 /// command's, a preview's. With the envelope and the progress event they are
 /// the roots the contract publishes; every other schema is a part of one.
-const DATA_ROOTS: [&str; 61] = [
+const DATA_ROOTS: [&str; 62] = [
     "local_context_sync_mutation.schema.json",
     "local_context_sync_inspection.schema.json",
     "local_context_conflict_content.schema.json",
@@ -1520,6 +1554,7 @@ const DATA_ROOTS: [&str; 61] = [
     "conflict.schema.json",
     "conflict_resolution_mutation.schema.json",
     "context_mutation.schema.json",
+    "context_retirement_mutation.schema.json",
     "cycle_list.schema.json",
     "dependency_tree.schema.json",
     "document_folder_list.schema.json",

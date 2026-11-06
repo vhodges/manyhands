@@ -59,12 +59,6 @@ pub(in super::super) fn owned_identity(db: &Connection, id: &str) -> Result<bool
         ("context_retirement_attempts", "observer_operation_ulid", ""),
         ("poll_retirement_batches", "operation_ulid", ""),
         ("poll_retirement_attempts", "operation_ulid", ""),
-        ("retirement_batch_gap_attempts", "operation_ulid", ""),
-        (
-            "retirement_batch_gap_attempts",
-            "observer_operation_ulid",
-            "",
-        ),
         (
             "retirement_advertisement_provenance",
             "source_operation_ulid",
@@ -419,7 +413,7 @@ fn objects() -> Vec<(&'static str, &'static str, String)> {
         ("trigger", "retirement_index_claim_immutable", "CREATE TRIGGER retirement_index_claim_immutable BEFORE UPDATE ON context_retirement_index_claims BEGIN SELECT RAISE(ABORT,'immutable retirement index claim'); END".to_owned()),
         ("trigger", "retirement_index_claim_delete", "CREATE TRIGGER retirement_index_claim_delete BEFORE DELETE ON context_retirement_index_claims WHEN EXISTS(SELECT 1 FROM context_retirement_records c WHERE c.operation_ulid=OLD.operation_ulid AND c.phase NOT IN ('complete','refused','abandoned')) BEGIN SELECT RAISE(ABORT,'pending retirement index claim'); END".to_owned()),
     ];
-    objects.extend(super::handoff::gap::objects());
+    objects.extend(super::preserve::objects());
     for (name, table, columns, condition) in [
         (
             "retirement_record_identity",
@@ -533,44 +527,7 @@ fn objects() -> Vec<(&'static str, &'static str, String)> {
 
 pub(super) fn published_v1_objects()
 -> Result<Vec<(&'static str, &'static str, String)>, RepositoryError> {
-    let mut objects = published_v2_objects()?;
-    objects.retain(|(_, name, _)| {
-        !matches!(
-            *name,
-            "context_retirement_reentries"
-                | "context_retirement_absence_receipts"
-                | "context_retirement_worktree_resumptions"
-                | "retirement_reentry_immutable"
-                | "retirement_absence_receipt_immutable"
-                | "retirement_worktree_resumption_immutable"
-        )
-    });
-    for (_, name, sql) in &mut objects {
-        if *name == "retirement_observation_pin_releases" {
-            *sql = sql.replace(",'consumer_fenced'", "").replace(
-                "CREATE TABLE \"retirement_observation_pin_releases\"",
-                "CREATE TABLE retirement_observation_pin_releases",
-            );
-        }
-    }
-    let mut bytes = Vec::new();
-    for (kind, name, sql) in &objects {
-        for field in [*kind, *name, &normalized(sql)] {
-            bytes.extend_from_slice(field.as_bytes());
-            bytes.push(0);
-        }
-    }
-    // Independently extracted from 7b153deb9ed829c948092f6a855acbf2819612a0:
-    // kind NUL name NUL normalized-SQL NUL, in published object order. This
-    // prevents a later edit of the current envelope silently redefining v1.
-    if git2::Oid::hash_object(git2::ObjectType::Blob, &bytes)
-        .map_err(|_| recovery_required())?
-        .to_string()
-        != "b8ac7ae7201e6182a91d1a8546e63ad518dc9701"
-    {
-        return Err(recovery_required());
-    }
-    Ok(objects)
+    super::historical::catalog("v1")
 }
 
 fn index_object(name: &str) -> bool {
@@ -583,49 +540,35 @@ fn index_object(name: &str) -> bool {
 }
 
 fn published_v2_objects() -> Result<Vec<(&'static str, &'static str, String)>, RepositoryError> {
-    let mut prior = objects();
-    prior.retain(|(_, name, _)| !index_object(name) && !super::handoff::gap::object(name));
-    let mut bytes = Vec::new();
-    for (kind, name, sql) in &prior {
-        for field in [*kind, *name, &normalized(sql)] {
-            bytes.extend_from_slice(field.as_bytes());
-            bytes.push(0);
-        }
-    }
-    // Independently extracted from 597bed6b's ordered catalog; extraction also
-    // reproduced the already-pinned published-v1 digest before this addition.
-    if git2::Oid::hash_object(git2::ObjectType::Blob, &bytes)
-        .map_err(|_| recovery_required())?
-        .to_string()
-        != "7f82f75dbd4ea313b8e291c0849a1b7dc763fe4a"
-    {
-        return Err(recovery_required());
-    }
-    Ok(prior)
+    super::historical::catalog("v2")
 }
 
 fn published_index_objects() -> Result<Vec<(&'static str, &'static str, String)>, RepositoryError> {
-    let prior: Vec<_> = objects()
+    super::historical::catalog("index")
+}
+
+#[test]
+fn retirement_catalog_freeze_matches_pinned_history() {
+    for (name, catalog) in [
+        ("v1", published_v1_objects().unwrap()),
+        ("v2", published_v2_objects().unwrap()),
+        ("index", published_index_objects().unwrap()),
+        ("gap", super::historical::catalog("gap").unwrap()),
+    ] {
+        assert_eq!(catalog, super::historical::catalog(name).unwrap());
+    }
+    let current: Vec<_> = objects()
         .into_iter()
-        .filter(|(_, name, _)| !super::handoff::gap::object(name))
+        .filter(|(_, n, _)| {
+            !n.starts_with("retirement_preservation_")
+                && !n.starts_with("context_retirement_preserv")
+        })
         .collect();
-    let mut bytes = Vec::new();
-    for (kind, name, sql) in &prior {
-        for field in [*kind, *name, &normalized(sql)] {
-            bytes.extend_from_slice(field.as_bytes());
-            bytes.push(0);
-        }
-    }
-    // Independently extracted from entry 2acac179's 37-object catalog. The
-    // extractor also reproduced the pinned published-v2 digest above.
-    if git2::Oid::hash_object(git2::ObjectType::Blob, &bytes)
-        .map_err(|_| recovery_required())?
-        .to_string()
-        != "c8da3934cfa9085a681420ef19097d5dc01fd42e"
-    {
-        return Err(recovery_required());
-    }
-    Ok(prior)
+    assert_eq!(
+        current,
+        super::historical::catalog("index").unwrap(),
+        "ordinary pre-consumer schema must still match its published catalog"
+    );
 }
 
 /// Expand the same canonical scalar constraints at each statically declared
@@ -648,6 +591,7 @@ fn scalar_constraints(sql: &str) -> String {
         "consumer_operation_ulid",
         "consumer_request_ulid",
         "holder_operation_ulid",
+        "abandon_request_ulid",
     ] {
         let declaration = format!(" {column} TEXT");
         sql = sql.replace(&declaration, &format!("{declaration} CHECK({column} IS NULL OR (typeof({column})='text' AND length({column})=26 AND substr({column},1,1) BETWEEN '0' AND '7' AND {column} NOT GLOB '*[^0123456789ABCDEFGHJKMNPQRSTVWXYZ]*'))"));
@@ -666,7 +610,7 @@ fn scalar_constraints(sql: &str) -> String {
 
 // SQL's quoted literals are case/whitespace-sensitive evidence. Do not use the
 // old general schema normalizer that folds literals as well as SQL keywords.
-fn normalized(sql: &str) -> String {
+pub(super) fn normalized(sql: &str) -> String {
     let mut quoted = false;
     sql.trim_end_matches(';')
         .chars()
@@ -703,10 +647,11 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
         )
         .map_err(|_| recovery_required())?;
     let gapped = gap_marked(db)?;
-    if (current && !marked) || (indexed && !current) || (gapped && !indexed) {
+    let preserving = super::preserve::marked(db)?;
+    if (current && !marked) || (indexed && !current) || ((gapped || preserving) && !indexed) {
         return Err(recovery_required());
     }
-    if marked && current && indexed && gapped {
+    if marked && current && indexed && !gapped && preserving {
         return validate_schema(db);
     }
     let tx = db
@@ -736,8 +681,41 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
         )
         .map_err(|_| recovery_required())?;
     let gapped = gap_marked(&tx)?;
-    if (current && !marked) || (indexed && !current) || (gapped && !indexed) {
+    let preserving = super::preserve::marked(&tx)?;
+    if (current && !marked) || (indexed && !current) || ((gapped || preserving) && !indexed) {
         return Err(recovery_required());
+    }
+    if gapped {
+        // D15 supports only the exact EMPTY experimental catalog. Validate its
+        // entire old history and dependency closure BEFORE dropping anything.
+        let prior = super::historical::catalog("gap")?;
+        validate_schema_objects(&tx, &prior)?;
+        let nonempty: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM retirement_batch_gap_attempts) OR EXISTS(SELECT 1 FROM retirement_advertisement_provenance WHERE execution_kind='batch_gap')",
+            [], |r| r.get(0)).map_err(|_| recovery_required())?;
+        if nonempty {
+            return Err(recovery_required());
+        }
+        audit_objects(&tx, &prior)?;
+        #[cfg(test)]
+        migration_checkpoint(12)?;
+        for (kind, name, _) in prior
+            .iter()
+            .rev()
+            .filter(|(_, n, _)| super::historical::gap_object(n))
+        {
+            tx.execute_batch(&format!("DROP {kind} {name}"))
+                .map_err(|_| recovery_required())?;
+        }
+        #[cfg(test)]
+        migration_checkpoint(13)?;
+        tx.execute(
+            "DELETE FROM registry_migrations WHERE name=?1",
+            [super::historical::GAP_MARKER],
+        )
+        .map_err(|_| recovery_required())?;
+        #[cfg(test)]
+        migration_checkpoint(14)?;
     }
     if marked && current && !indexed {
         // No reinterpretation of an intermediate/private profile: only the
@@ -770,14 +748,14 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
         #[cfg(test)]
         migration_checkpoint(10)?;
     }
-    if marked && current && !gapped {
-        // The gap adapter is additive. Validate the exact prior catalog/history
-        // before installing it; a partial or substituted adapter is not repaired.
-        let prior = published_index_objects()?;
-        audit_objects(&tx, &prior)?;
-        for (_, name, _) in definitions
+    if marked && current && !preserving {
+        audit_objects(&tx, &published_index_objects()?)?;
+        #[cfg(test)]
+        migration_checkpoint(15)?;
+        let additions = super::preserve::objects();
+        for (_, name, sql) in definitions
             .iter()
-            .filter(|(_, name, _)| super::handoff::gap::object(name))
+            .filter(|(_, n, _)| additions.iter().any(|(_, a, _)| n == a))
         {
             let present: bool = tx
                 .query_row(
@@ -789,17 +767,12 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
             if present {
                 return Err(recovery_required());
             }
-        }
-        #[cfg(test)]
-        migration_checkpoint(12)?;
-        for (_, _, sql) in definitions
-            .iter()
-            .filter(|(_, name, _)| super::handoff::gap::object(name))
-        {
             tx.execute_batch(sql).map_err(|_| recovery_required())?;
+            #[cfg(test)]
+            if *name == "context_retirement_preservations" {
+                migration_checkpoint(16)?;
+            }
         }
-        #[cfg(test)]
-        migration_checkpoint(13)?;
     }
     if marked && !current {
         let prior = published_v1_objects()?;
@@ -877,14 +850,14 @@ pub(in super::super) fn migrate(db: &mut Connection) -> Result<(), RepositoryErr
         #[cfg(test)]
         migration_checkpoint(11)?;
     }
-    if !gapped {
+    if !preserving {
         tx.execute(
-            "INSERT INTO registry_migrations(name) VALUES(?1)",
-            [super::handoff::gap::MARKER],
+            "INSERT INTO registry_migrations VALUES(?1)",
+            [super::preserve::MARKER],
         )
         .map_err(|_| recovery_required())?;
         #[cfg(test)]
-        migration_checkpoint(14)?;
+        migration_checkpoint(17)?;
     }
     #[cfg(test)]
     migration_checkpoint(7)?;
@@ -961,7 +934,7 @@ fn validate_schema(db: &Connection) -> Result<(), RepositoryError> {
 fn gap_marked(db: &Connection) -> Result<bool, RepositoryError> {
     db.query_row(
         "SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name=?1)",
-        [super::handoff::gap::MARKER],
+        [super::historical::GAP_MARKER],
         |r| r.get(0),
     )
     .map_err(|_| recovery_required())
@@ -971,7 +944,22 @@ fn validate_gap_closure(
     db: &Connection,
     definitions: &[(&str, &str, String)],
 ) -> Result<(), RepositoryError> {
-    let table = super::handoff::gap::TABLE;
+    let table = super::historical::GAP_TABLE;
+    let mut names = db
+        .prepare("SELECT name FROM sqlite_master WHERE name=?1 OR name LIKE 'retirement_gap_%'")
+        .map_err(|_| recovery_required())?;
+    for name in names
+        .query_map([table], |r| r.get::<_, String>(0))
+        .map_err(|_| recovery_required())?
+    {
+        let name = name.map_err(|_| recovery_required())?;
+        if !definitions
+            .iter()
+            .any(|(_, n, _)| name.eq_ignore_ascii_case(n))
+        {
+            return Err(recovery_required());
+        }
+    }
     let attached=db.prepare("SELECT type,name,sql FROM sqlite_master WHERE tbl_name=?1 COLLATE NOCASE AND type IN ('index','trigger')").and_then(|mut q|q.query_map([table],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_|recovery_required())?;
     for (kind, name, sql) in attached {
         let implicit = kind == "index"
@@ -1012,6 +1000,7 @@ fn validate_schema_objects(
     validate_release_closure(db, definitions)?;
     validate_index_closure(db, definitions)?;
     validate_gap_closure(db, definitions)?;
+    super::preserve::validate_closure(db, definitions)?;
     Ok(())
 }
 
@@ -1119,11 +1108,11 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
             |r| r.get(0),
         )
         .map_err(|_| recovery_required())?;
-    if !marked || !gap_marked(db)? {
+    if !marked || gap_marked(db)? || !super::preserve::marked(db)? {
         return Err(recovery_required());
     }
     audit_objects(db, &objects())?;
-    let invalid:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_index_claims i LEFT JOIN context_retirement_records c ON c.operation_ulid=i.operation_ulid LEFT JOIN operation_records o ON o.id=c.local_record_id LEFT JOIN request_records r ON r.request_ulid=i.request_ulid WHERE c.operation_ulid IS NULL OR c.request_ulid IS NOT i.request_ulid OR c.repository_id!=i.repository_id OR r.request_ulid IS NULL OR i.request_attempt>r.attempt OR i.index_owner_epoch>o.index_owner_epoch OR c.phase NOT IN ('local_absent','index_pending','complete') OR EXISTS(SELECT 1 FROM context_retirement_index_claims old WHERE old.operation_ulid=i.operation_ulid AND old.request_attempt<i.request_attempt AND old.index_owner_epoch>=i.index_owner_epoch))",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+    let invalid:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_index_claims i LEFT JOIN context_retirement_records c ON c.operation_ulid=i.operation_ulid LEFT JOIN operation_records o ON o.id=c.local_record_id LEFT JOIN request_records r ON r.request_ulid=i.request_ulid WHERE c.operation_ulid IS NULL OR c.request_ulid IS NOT i.request_ulid OR c.repository_id!=i.repository_id OR r.request_ulid IS NULL OR i.request_attempt>r.attempt OR i.index_owner_epoch>o.index_owner_epoch OR c.phase NOT IN ('local_absent','index_pending','complete','preserving','abandoned') OR EXISTS(SELECT 1 FROM context_retirement_index_claims old WHERE old.operation_ulid=i.operation_ulid AND old.request_attempt<i.request_attempt AND old.index_owner_epoch>=i.index_owner_epoch))",[],|r|r.get(0)).map_err(|_|recovery_required())?;
     if invalid {
         return Err(recovery_required());
     }
@@ -1135,7 +1124,7 @@ fn audit(db: &Connection) -> Result<(), RepositoryError> {
 /// This is history validation only; current F2 is independently rejoined before
 /// every claim/write. No F2 attempt is equated with an index executor epoch.
 fn audit_index_spends(db: &Connection) -> Result<(), RepositoryError> {
-    let missing: bool = db.query_row("SELECT EXISTS(
+    let missing: bool = db.query_row("WITH claims AS (SELECT operation_ulid,index_owner_epoch FROM context_retirement_index_claims UNION ALL SELECT operation_ulid,index_owner_epoch FROM context_retirement_preservation_claims) SELECT EXISTS(
       SELECT 1 FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id
       WHERE c.request_ulid IS NOT NULL AND (
         typeof(o.index_owner_epoch)!='integer' OR o.index_owner_epoch<0
@@ -1144,25 +1133,26 @@ fn audit_index_spends(db: &Connection) -> Result<(), RepositoryError> {
           OR (c.phase IN ('local_absent','index_pending') AND
             (o.state!='authoritative_observed' OR o.persisted_context_count!=0 OR o.context_path IS NOT NULL))))
         OR (o.index_owner_epoch>0 AND (
-          c.phase NOT IN ('local_absent','index_pending','complete')
-          OR o.state NOT IN ('indexing','observed','persisted','failed','retry','index_invalidated','completed')
-          OR NOT EXISTS(SELECT 1 FROM context_retirement_index_claims i
-            WHERE i.operation_ulid=c.operation_ulid AND i.request_ulid=c.request_ulid AND i.repository_id=c.repository_id
+           c.phase NOT IN ('local_absent','index_pending','complete','preserving','abandoned')
+           OR (o.state NOT IN ('indexing','observed','persisted','failed','retry','index_invalidated','completed') AND NOT(o.state='authoritative_observed' AND c.phase='preserving'))
+           OR NOT EXISTS(SELECT 1 FROM claims i
+             WHERE i.operation_ulid=c.operation_ulid
               AND i.index_owner_epoch=CASE WHEN o.state='index_invalidated' THEN o.index_owner_epoch-1 ELSE o.index_owner_epoch END)
-          OR (o.state='index_invalidated' AND EXISTS(SELECT 1 FROM context_retirement_index_claims i
+           OR (o.state='index_invalidated' AND EXISTS(SELECT 1 FROM claims i
             WHERE i.operation_ulid=c.operation_ulid AND i.index_owner_epoch>=o.index_owner_epoch))))))",
         [], |r| r.get(0)).map_err(|_| recovery_required())?;
     // Request-bound indexing starts at zero and each successful claim advances
     // by one. A live owner may be invalidated once (+1) before the next claim;
     // invalidation cannot advance a tombstone, and F2 auto-reclaim is closed.
-    // Thus first spend is epoch 1; later spends differ by 1 or 2. Reject losses
-    // that this retained history can prove, without fabricating missing rows or
-    // pretending every unknown corruption is distinguishable from a tombstone.
-    let gap: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_index_claims i WHERE
-      (NOT EXISTS(SELECT 1 FROM context_retirement_index_claims p WHERE p.operation_ulid=i.operation_ulid AND p.index_owner_epoch<i.index_owner_epoch)
-        AND i.index_owner_epoch!=1)
-      OR i.index_owner_epoch>(SELECT max(p.index_owner_epoch)+2 FROM context_retirement_index_claims p
-        WHERE p.operation_ulid=i.operation_ulid AND p.index_owner_epoch<i.index_owner_epoch))", [], |r| r.get(0)).map_err(|_| recovery_required())?;
+    // Thus first spend is epoch 1; later spends differ by 1 or 2. An unbound
+    // domain operation has no ordinary request spends: preserving consent fixes
+    // its prior index epoch, and only subsequent claims have spend receipts.
+    // Reject provable losses without inventing receipts for that older history.
+    let gap: bool = db.query_row("WITH claims AS (SELECT operation_ulid,index_owner_epoch FROM context_retirement_index_claims UNION ALL SELECT operation_ulid,index_owner_epoch FROM context_retirement_preservation_claims) SELECT EXISTS(SELECT 1 FROM claims i JOIN context_retirement_records c ON c.operation_ulid=i.operation_ulid LEFT JOIN context_retirement_preservations s ON s.operation_ulid=c.operation_ulid WHERE
+      (NOT EXISTS(SELECT 1 FROM claims p WHERE p.operation_ulid=i.operation_ulid AND p.index_owner_epoch<i.index_owner_epoch)
+        AND i.index_owner_epoch!=CASE WHEN c.request_ulid IS NULL THEN json_extract(s.snapshot,'$.index_owner_epoch')+1 ELSE 1 END)
+      OR i.index_owner_epoch>(SELECT max(p.index_owner_epoch)+2 FROM claims p
+        WHERE p.operation_ulid=i.operation_ulid AND p.index_owner_epoch<i.index_owner_epoch)) OR EXISTS(SELECT 1 FROM claims GROUP BY operation_ulid,index_owner_epoch HAVING count(*)!=1)", [], |r| r.get(0)).map_err(|_| recovery_required())?;
     if missing || gap {
         return Err(recovery_required());
     }
@@ -1170,7 +1160,7 @@ fn audit_index_spends(db: &Connection) -> Result<(), RepositoryError> {
 }
 
 fn require_known_markers(db: &Connection) -> Result<(), RepositoryError> {
-    let unknown:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name LIKE 'context_retirement_%' AND name NOT IN (?1,?2,?3,?4))",params![MARKER,REENTRY_MARKER,INDEX_MARKER,super::handoff::gap::MARKER],|r|r.get(0)).map_err(|_|recovery_required())?;
+    let unknown:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name LIKE 'context_retirement_%' AND name NOT IN (?1,?2,?3,?4,?5))",params![MARKER,REENTRY_MARKER,INDEX_MARKER,super::historical::GAP_MARKER,super::preserve::MARKER],|r|r.get(0)).map_err(|_|recovery_required())?;
     if unknown {
         return Err(recovery_required());
     }
@@ -1287,7 +1277,7 @@ fn audit_objects(
     let inconsistent: bool = db.query_row("SELECT EXISTS(
       SELECT 1 FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id
       WHERE NOT EXISTS(SELECT 1 FROM context_retirement_attempts a WHERE a.operation_ulid=c.operation_ulid AND a.owner_epoch=c.selection_epoch)
-       OR NOT EXISTS(SELECT 1 FROM context_retirement_attempts a WHERE a.operation_ulid=c.operation_ulid AND a.repository_id=c.repository_id AND a.owner_epoch=c.owner_epoch AND ((c.phase IN ('complete','refused','abandoned') AND a.phase IN ('ended','fenced')) OR (c.phase NOT IN ('complete','refused','abandoned') AND a.phase='active')))
+        OR NOT EXISTS(SELECT 1 FROM context_retirement_attempts a WHERE a.operation_ulid=c.operation_ulid AND a.repository_id=c.repository_id AND a.owner_epoch=c.owner_epoch AND ((c.phase IN ('complete','refused','abandoned') AND a.phase IN ('ended','fenced')) OR (c.phase='preserving' AND a.phase='fenced') OR (c.phase NOT IN ('complete','refused','abandoned','preserving') AND a.phase='active')))
        OR (c.phase IN ('complete','refused','abandoned')) != (o.state='completed')
        OR (c.absence_basis='owned_intent' AND NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid))
        OR (c.worktree_removal!='none' AND (c.initial_resources!='present' OR NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.resource='worktree')))
@@ -1308,7 +1298,8 @@ fn audit_objects(
        OR (o.completed_step='context_branch_released' AND (c.absence_basis!='owned_intent' OR c.materialization_settled!=1 OR c.phase NOT IN ('local_absent','index_pending','complete')))
         OR (o.completed_step='context_worktree_released' AND (c.worktree_removal='none' OR c.phase NOT IN ('worktree_removed','branch_deleting','preserving')))
         OR (o.completed_step='context_retirement_preserved' AND c.phase NOT IN ('preserving','index_pending','abandoned'))
-        OR (o.completed_step IS NOT NULL AND o.completed_step NOT IN ('context_retirement_absent','context_worktree_released','context_branch_released'))
+         OR (o.completed_step='abandoned' AND c.phase!='abandoned')
+         OR (o.completed_step IS NOT NULL AND o.completed_step NOT IN ('context_retirement_absent','context_worktree_released','context_branch_released','context_retirement_preserved','abandoned'))
         OR (c.phase='selected' AND (o.completed_step IS NOT NULL OR o.state NOT IN ('created','failed')
           OR c.worktree_removal!='none' OR c.branch_removal!='none' OR c.absence_basis!='none' OR c.materialization_settled!=0))
         OR (c.phase='refused' AND o.completed_step IS NOT NULL)
@@ -1350,8 +1341,8 @@ fn audit_objects(
         OR (rr.purpose='no_effect' AND EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid))
         OR (rr.purpose='resume_worktree' AND NOT EXISTS(SELECT 1 FROM context_retirement_worktree_resumptions w WHERE w.operation_ulid=rr.operation_ulid AND w.owner_epoch=rr.owner_epoch))
         OR (rr.owner_epoch=c.owner_epoch AND rr.purpose='no_effect' AND (c.phase!='refused' OR (c.final_code!='external_change' AND NOT(c.request_ulid IS NOT NULL AND c.final_code='cancelled')) OR c.worktree_removal!='none' OR c.branch_removal!='none'))
-        OR (rr.owner_epoch=c.owner_epoch AND rr.purpose='preserve' AND (c.phase NOT IN ('worktree_removing','worktree_removed','branch_deleting') OR (c.worktree_removal='none' AND c.branch_removal='none')))
-        OR (rr.owner_epoch=c.owner_epoch AND rr.purpose='metadata' AND (c.phase NOT IN ('index_pending','local_absent','complete') OR c.absence_basis!='owned_intent' OR c.materialization_settled!=1 OR NOT EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch))))",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+         OR (rr.owner_epoch=c.owner_epoch AND rr.purpose='preserve' AND (c.phase NOT IN ('worktree_removing','worktree_removed','branch_deleting','preserving','abandoned') OR (c.worktree_removal='none' AND c.branch_removal='none')))
+         OR (rr.owner_epoch=c.owner_epoch AND rr.purpose='metadata' AND (c.phase NOT IN ('index_pending','local_absent','complete','preserving','abandoned') OR c.absence_basis!='owned_intent' OR c.materialization_settled!=1 OR NOT EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch))))",[],|r|r.get(0)).map_err(|_|recovery_required())?;
     if invalid_reentry {
         return Err(recovery_required());
     }
@@ -1376,18 +1367,17 @@ fn audit_objects(
       WHERE c.owner_epoch!=m.owner_epoch OR rr.purpose!='metadata' OR old.phase!='fenced'
         OR e.receipt_id!=m.intent_receipt_id OR b.consumer_operation_ulid!=c.operation_ulid OR b.consumer_attempt_epoch!=e.owner_epoch OR b.repository_id!=c.repository_id
         OR (e.observation IS NOT NULL AND e.observation NOT IN ('removed','already_absent','incomplete'))
-        OR c.absence_basis!='owned_intent' OR c.materialization_settled!=1 OR c.phase NOT IN ('index_pending','local_absent','complete')
+         OR c.absence_basis!='owned_intent' OR c.materialization_settled!=1 OR c.phase NOT IN ('index_pending','local_absent','complete','preserving','abandoned')
         OR m.worktree_removal!=c.worktree_removal OR m.branch_removal!=c.branch_removal
         OR EXISTS(SELECT 1 FROM context_retirement_effect_intents current WHERE current.operation_ulid=c.operation_ulid AND current.owner_epoch=m.owner_epoch))",[],|r|r.get(0)).map_err(|_|recovery_required())?;
     if invalid_absence {
         return Err(recovery_required());
     }
     // Original-P binding, no-effect refusals and the supported original branch-
-    // only child histories have separate strict audits. Gap has its own closed
-    // original-freeze/current-attempt lineage; batch-local/preservation stay closed.
-    let unsupported_authority: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records WHERE phase IN ('preserving','abandoned'))
-      OR EXISTS(SELECT 1 FROM retirement_advertisement_provenance WHERE execution_kind='local_parent' AND execution_batch_operation_ulid IS NOT NULL)
-       OR EXISTS(SELECT 1 FROM retirement_observation_receipts b JOIN retirement_advertisement_provenance p ON p.id=b.provenance_id WHERE b.consumer_kind='batch' AND p.execution_kind NOT IN ('poll_parent','batch_gap'))", [], |r| r.get(0)).map_err(|_| recovery_required())?;
+    // only child histories have separate strict audits. D15 rejects all obsolete
+    // gap provenance; its enum spelling remains only for exact catalog migration.
+    let unsupported_authority: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM retirement_advertisement_provenance WHERE execution_kind='batch_gap' OR (execution_kind='local_parent' AND execution_batch_operation_ulid IS NOT NULL))
+       OR EXISTS(SELECT 1 FROM retirement_observation_receipts b JOIN retirement_advertisement_provenance p ON p.id=b.provenance_id WHERE b.consumer_kind='batch' AND p.execution_kind!='poll_parent')", [], |r| r.get(0)).map_err(|_| recovery_required())?;
     if unsupported_authority {
         return Err(recovery_required());
     }
@@ -1416,8 +1406,8 @@ fn audit_objects(
       WHERE NOT coalesce((b.consumer_kind='single' AND c.batch_operation_ulid IS NULL AND b.consumer_operation_ulid=e.operation_ulid AND b.consumer_attempt_epoch=e.owner_epoch)
         OR (b.consumer_kind='batch' AND c.batch_operation_ulid IS NOT NULL AND b.consumer_operation_ulid=c.batch_operation_ulid AND EXISTS(SELECT 1 FROM context_retirement_attempts a WHERE a.operation_ulid=c.operation_ulid AND a.owner_epoch=e.owner_epoch AND a.request_attempt=b.consumer_request_attempt AND c.request_ulid=b.consumer_request_ulid AND a.batch_attempt_epoch=b.consumer_attempt_epoch)),0)
         OR b.repository_id!=c.repository_id OR c.initial_resources NOT IN ('present','branch_only')
-        OR (e.resource='worktree' AND (c.initial_resources!='present' OR c.instance_verified!=1 OR (c.worktree_removal='none' AND NOT coalesce(c.phase='refused' AND e.observation='changed',0))))
-        OR (e.resource='branch' AND c.branch_removal='none' AND NOT coalesce((c.phase='refused' OR (c.phase='worktree_removed' AND c.worktree_removal='observed') OR EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch)) AND e.observation='changed',0))
+         OR (e.resource='worktree' AND (c.initial_resources!='present' OR c.instance_verified!=1 OR (c.worktree_removal='none' AND NOT coalesce(c.phase IN ('refused','preserving','abandoned') AND e.observation='changed',0))))
+         OR (e.resource='branch' AND c.branch_removal='none' AND NOT coalesce((c.phase IN ('refused','preserving','abandoned') OR (c.phase='worktree_removed' AND c.worktree_removal='observed') OR EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch)) AND e.observation='changed',0))
         OR (c.phase IN ('local_absent','index_pending','complete') AND c.absence_basis='owned_intent' AND NOT coalesce(
           (e.observation='removed' AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='observed')
            OR (e.observation IN ('already_absent','incomplete') AND CASE e.resource WHEN 'branch' THEN c.branch_removal ELSE c.worktree_removal END='possible')
@@ -1464,7 +1454,6 @@ fn audit_objects(
            AND (c.initial_resources!='present' OR c.instance_verified=1)
            AND c.configuration_generation=p.configuration_generation AND c.remote_name=p.remote_name
            AND c.primary_branch=p.primary_branch AND c.endpoint_digest=p.endpoint_digest)))
-       OR (p.execution_kind='batch_gap' AND o.poll_kind!='observe')
        OR (p.execution_kind='poll_parent' AND (o.poll_kind!='update' OR p.execution_parent_ulid!=p.source_operation_ulid OR p.execution_parent_epoch!=p.source_owner_epoch))
     ) OR EXISTS(
       SELECT 1 FROM retirement_observation_receipts b JOIN retirement_advertisement_provenance p ON p.id=b.provenance_id
@@ -1575,7 +1564,7 @@ fn audit_objects(
             D::Preserved => {
                 phase == "abandoned"
                     && report.code == crate::results::ResultCode::ExternalChange
-                    && step.as_deref() == Some("context_retirement_preserved")
+                    && step.as_deref() == Some("abandoned")
             }
         };
         if !valid
@@ -1586,6 +1575,12 @@ fn audit_objects(
         {
             return Err(recovery_required());
         }
+    }
+    if definitions
+        .iter()
+        .any(|(_, n, _)| *n == "context_retirement_preservations")
+    {
+        super::preserve::audit(db)?;
     }
     Ok(())
 }
@@ -1687,7 +1682,7 @@ pub(super) fn finish_configuration_refusal(
 
 /// Z for an exact single consumer, inside its holder's settlement transaction.
 /// Batch/source scopes are deliberately not admitted by this capability.
-fn release_single_consumer(
+pub(super) fn release_single_consumer(
     tx: &rusqlite::Transaction<'_>,
     operation: &str,
     epoch: i64,
@@ -1798,30 +1793,6 @@ pub(super) fn release_bound_source(
     Ok(())
 }
 
-/// Exact batch consumer release for the separately audited gap lineage. No
-/// public scalar batch ID, pin reacquisition or original source release here.
-pub(super) fn release_gap_consumer(
-    tx: &rusqlite::Transaction<'_>,
-    binding: i64,
-    reason: &str,
-) -> Result<(), RepositoryError> {
-    super::handoff::gap::require_release(tx, binding, reason)?;
-    let (provenance,operation,epoch,repository,batch):(i64,String,i64,i64,i64)=tx.query_row("SELECT p.id,b.consumer_operation_ulid,b.consumer_attempt_epoch,p.repository_id,p.observation_batch_id FROM retirement_observation_receipts b JOIN retirement_advertisement_provenance p ON p.id=b.provenance_id WHERE b.id=?1 AND b.consumer_kind='batch'",[binding],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(|_|recovery_required())?;
-    release_pin(
-        tx,
-        PinRelease {
-            provenance,
-            kind: "consumer_attempt",
-            operation: &operation,
-            epoch,
-            repository,
-            batch,
-            binding: Some(binding),
-            reason,
-        },
-    )
-}
-
 // Only the separately validated holder transitions above construct this key.
 // Shared Z never accepts an arbitrary batch ID or changes another holder.
 struct PinRelease<'a> {
@@ -1885,6 +1856,10 @@ pub(in super::super) fn finalize_index(
     repository_id: i64,
     root: &std::path::Path,
 ) -> Result<bool, RepositoryError> {
+    if owner.retirement_request.is_some_and(|f| f.is_preserving()) {
+        super::preserve::finalize(tx, &owner)?;
+        return Ok(true);
+    }
     if let Some(scope) = &owner.retirement_batch {
         return scope.finalize(tx, &owner, repository_id, root);
     }

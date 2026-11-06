@@ -39,7 +39,7 @@ mod context_retirement;
 pub use context_release::{ContextReleaseOutcome, ReleaseContextRequest};
 pub use context_retirement::{
     ContextRetirementOutcome, ContextRetirementReport, ReenterContextRetirementRequest,
-    RetireContextRequest, RetirementDisposition, RetirementRemoval,
+    RetireContextRequest, RetirementAbandonMetadata, RetirementDisposition, RetirementRemoval,
 };
 mod coordination;
 pub use comment_publication::*;
@@ -3670,6 +3670,7 @@ impl RepositoryService {
             | LocalStep::ContextWorktreeReleased
             | LocalStep::ContextBranchReleased
             | LocalStep::ContextRetirementAbsent
+            | LocalStep::ContextRetirementPreserved
             | LocalStep::AuthoritativeObserved
             | LocalStep::RemoteChanged
             | LocalStep::PublicationConfigurationWritten

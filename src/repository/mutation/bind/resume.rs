@@ -704,6 +704,10 @@ fn found_local(
     let Some(row) = recovery::local_row(connection, root, operation_id)? else {
         return Ok(Named::NotFound);
     };
+    if row.action == "retire_context" {
+        super::super::super::context_retirement::record::audit_connection(connection)
+            .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))?;
+    }
     if !row.is_well_formed() {
         return Err(unreadable());
     }
@@ -1023,6 +1027,10 @@ impl OperationResumeBinding {
     /// all the row owes.
     fn hand_off(&self, call: &CallContext<'_>, accepted: &Accepted) -> Ran {
         let service = call.service;
+        if let Some(ran) = super::retire::resume_handoff(call, &accepted.root(), self.operation_id)
+        {
+            return self.kept(ran);
+        }
         if let Err(answer) = Self::owner(
             service,
             &accepted.scope,

@@ -668,6 +668,24 @@ pub(crate) fn detail_fields(details: &PreviewDetailsDto) -> Vec<(&'static str, S
             put("Committed", Some(flag(operation.committed)));
             put("Files changed", Some(flag(operation.files_changed)));
             put("Git changed", Some(flag(operation.git_state_changed)));
+            if let Some(retirement) = &operation.retirement {
+                put("Request retained", retirement.request_id.clone());
+                put("Retirement phase", Some(retirement.phase.clone()));
+                put(
+                    "Worktree removal",
+                    Some(retirement.worktree_removal.as_str().into()),
+                );
+                put(
+                    "Branch removal",
+                    Some(retirement.branch_removal.as_str().into()),
+                );
+                put(
+                    "Worktree retained",
+                    Some(flag(retirement.worktree_retained)),
+                );
+                put("Branch retained", Some(flag(retirement.branch_retained)));
+                put("Discovery pending", Some(flag(retirement.index_pending)));
+            }
         }
         PreviewDetailsDto::Identity(identity) => {
             put("Root", Some(identity.root.clone()));

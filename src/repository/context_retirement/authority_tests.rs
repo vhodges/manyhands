@@ -3,6 +3,524 @@ use crate::repository::context_retirement::execution_tests::registry_image;
 use crate::repository::keys::*;
 use crate::repository::*;
 
+#[test]
+fn retirement_confirmed_preserve_keeps_request_identity_and_fences_old_observer() {
+    let f = Fixture::with_request(true);
+    let mutation = || {
+        Mutation::OperationAbandon(OperationAbandonInput {
+            root: f.request.root.clone(),
+            operation_id: f.request.operation_id,
+        })
+    };
+    let preview = f.service.prepare(&mutation());
+    assert_eq!(
+        preview.code,
+        crate::results::ResultCode::Ok,
+        "a pending retirement must have a shipping safe exit"
+    );
+    let preview = preview.data.unwrap().into_preview().unwrap();
+    let metadata = serde_json::to_value(&preview).unwrap();
+    assert_eq!(metadata["details"]["retirement"]["phase"], "selected");
+    assert!(!metadata["effects"].to_string().contains("request_released"));
+    let owner: String = f
+        .db()
+        .query_row(
+            "SELECT request_ulid FROM context_retirement_records",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let abandon = f.service.execute(
+        MutationCall {
+            request_id: RequestId::new(),
+            confirmation: Some(ConfirmationId::parse(&preview.confirmation_id).unwrap()),
+            mutation: mutation(),
+        },
+        &mut SessionCredentials::new(NoPassphrase),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(abandon.code, crate::results::ResultCode::Ok, "{abandon:?}");
+    assert!(
+        f.service
+            .request_record(RequestId::parse(&owner).unwrap())
+            .unwrap()
+            .is_some(),
+        "old Ri is retained, never released"
+    );
+    assert!(
+        f.service
+            .remote_safe_point(
+                &f.request.root,
+                &f.owner,
+                RemoteOperationSafePoint::BeforeTransport
+            )
+            .is_err(),
+        "stale O cannot return"
+    );
+    assert!(
+        git2::Repository::open(&f.request.root)
+            .unwrap()
+            .find_reference(&format!(
+                "refs/heads/manyhands/ticket/{}",
+                f.request.item_id
+            ))
+            .is_ok()
+    );
+    let replay = f.service.execute(
+        MutationCall {
+            request_id: RequestId::parse(&owner).unwrap(),
+            confirmation: None,
+            mutation: Mutation::ContextRetire(ContextRetireInput {
+                root: f.request.root.clone(),
+                kind: f.request.kind,
+                id: f.request.item_id.clone(),
+            }),
+        },
+        &mut SessionCredentials::new(NoPassphrase),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(replay.code, crate::results::ResultCode::ExternalChange);
+}
+
+struct NoPassphrase;
+impl SessionCredentialProvider for NoPassphrase {
+    fn request_passphrase(&mut self, _: &UnlockRequest) -> PassphraseResponse {
+        panic!("preservation must not authenticate")
+    }
+}
+
+#[test]
+fn retirement_preserving_admission_refuses_live_or_unrelated_owners_and_stale_abandon_f2() {
+    for case in ["lease", "index", "unrelated", "stale_f2"] {
+        let f = Fixture::with_request(true);
+        if case == "index" {
+            let _ = f.index_owner();
+        }
+        if case == "unrelated" {
+            f.branch_intent(); // End our O before reserving a different active O.
+            f.db().execute("INSERT INTO remote_operation_records(repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,action,priority,phase,created_at,updated_at,poll_kind) SELECT repository_id,?1,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,action,priority,'reserved',1,1,'observe' FROM remote_operation_records LIMIT 1",[OperationId::new().to_string()]).unwrap();
+        }
+        let mutation = || {
+            Mutation::OperationAbandon(OperationAbandonInput {
+                root: f.request.root.clone(),
+                operation_id: f.request.operation_id,
+            })
+        };
+        let preview = f
+            .service
+            .prepare(&mutation())
+            .data
+            .unwrap()
+            .into_preview()
+            .unwrap();
+        let git = git2::Repository::open(&f.request.root).unwrap();
+        let lease = if case == "lease" {
+            Some(
+                repository_lease(&git, &f.request.root, RepositoryOperation::RetireContext)
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+        let abandon = RequestId::new();
+        if case == "stale_f2" {
+            let data = f._data.path().to_owned();
+            f.service.set_request_hook_for_testing(move || {
+                assert_eq!(
+                    RepositoryService::open_at(&data)
+                        .unwrap()
+                        .enter_request(abandon)
+                        .unwrap(),
+                    Some(2)
+                );
+            });
+        }
+        let before = registry_image(&f.db());
+        let result = f.service.execute(
+            MutationCall {
+                request_id: abandon,
+                confirmation: Some(ConfirmationId::parse(&preview.confirmation_id).unwrap()),
+                mutation: mutation(),
+            },
+            &mut SessionCredentials::new(NoPassphrase),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        );
+        assert_eq!(
+            result.code,
+            if case == "stale_f2" {
+                crate::results::ResultCode::RecoveryRequired
+            } else {
+                crate::results::ResultCode::Busy
+            },
+            "{case}: {result:?}"
+        );
+        let after = registry_image(&f.db());
+        for table in [
+            "operation_records",
+            "context_retirement_records",
+            "context_retirement_attempts",
+            "remote_operation_records",
+            "retirement_observation_pins",
+            "retirement_observation_pin_releases",
+            "context_retirement_preservations",
+            "context_retirement_preservation_claims",
+        ] {
+            assert_eq!(
+                before.get(table),
+                after.get(table),
+                "{case}/{table}: no fence, release, claim or receipt"
+            );
+        }
+        drop(lease);
+    }
+}
+
+#[test]
+fn retirement_preserving_domain_index_history_needs_no_fabricated_ordinary_spend() {
+    let f = Fixture::new();
+    let local = f.index_handoff();
+    let owner = recovery::claim_indexing(&f.db(), local, 0)
+        .unwrap()
+        .unwrap();
+    recovery::transition_indexing(&f.db(), owner, "failed", None).unwrap();
+    let mutation = Mutation::OperationAbandon(OperationAbandonInput {
+        root: f.request.root.clone(),
+        operation_id: f.request.operation_id,
+    });
+    let preview = f
+        .service
+        .prepare(&mutation)
+        .data
+        .unwrap()
+        .into_preview()
+        .unwrap();
+    let result = f.service.execute(
+        MutationCall {
+            request_id: RequestId::new(),
+            confirmation: Some(ConfirmationId::parse(&preview.confirmation_id).unwrap()),
+            mutation,
+        },
+        &mut SessionCredentials::new(NoPassphrase),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(result.code, crate::results::ResultCode::Ok, "{result:?}");
+    assert_eq!(
+        f.db()
+            .query_row(
+                "SELECT count(*) FROM context_retirement_index_claims",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        f.db()
+            .query_row(
+                "SELECT index_owner_epoch FROM context_retirement_preservation_claims",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+        2
+    );
+    super::super::audit_connection(&f.db()).unwrap();
+    drop(RepositoryService::open_at(f._data.path()).unwrap());
+}
+
+#[test]
+fn retirement_preserving_receipt_index_and_exact_z_finalize_atomically_then_resume_only_preserves()
+{
+    for fault in ["receipt", "release", "request"] {
+        let f = Fixture::with_request(true);
+        f.branch_intent(); // Synthetic Possible B debt over a real O/receipt.
+        let old: String = f
+            .db()
+            .query_row(
+                "SELECT request_ulid FROM context_retirement_records",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let old = RequestId::parse(&old).unwrap();
+        let mutation = || {
+            Mutation::OperationAbandon(OperationAbandonInput {
+                root: f.request.root.clone(),
+                operation_id: f.request.operation_id,
+            })
+        };
+        let preview = f
+            .service
+            .prepare(&mutation())
+            .data
+            .unwrap()
+            .into_preview()
+            .unwrap();
+        match fault {
+            "receipt"=>f.db().execute_batch("CREATE TRIGGER retirement_fixture_fail_preserved BEFORE UPDATE OF phase ON context_retirement_records WHEN NEW.phase='abandoned' BEGIN SELECT RAISE(ABORT,'isolated finalizer fault'); END").unwrap(),
+            "request"=>f.db().execute_batch("CREATE TRIGGER retirement_fixture_fail_old_request BEFORE UPDATE OF state ON request_records WHEN NEW.code='external_change' BEGIN SELECT RAISE(ABORT,'isolated old result fault'); END").unwrap(),
+            _=>{assert!(!super::super::set_release_failure(true));},
+        }
+        let abandon = RequestId::new();
+        let pending = f.service.execute(
+            MutationCall {
+                request_id: abandon,
+                confirmation: Some(ConfirmationId::parse(&preview.confirmation_id).unwrap()),
+                mutation: mutation(),
+            },
+            &mut SessionCredentials::new(NoPassphrase),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        );
+        assert_eq!(
+            pending.code,
+            crate::results::ResultCode::DiscoveryPending,
+            "{fault}: {pending:?}"
+        );
+        assert!(
+            pending.recovery.iter().any(|action| action.action
+                == crate::results::RecoveryActionKind::OperationResume
+                && action.operation_id.as_deref()
+                    == Some(f.request.operation_id.to_string().as_str())),
+            "{pending:?}"
+        );
+        let standing:(String,String,Option<String>)=f.db().query_row("SELECT c.phase,o.state,c.final_result FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id",[],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        assert_eq!(standing.0, "preserving");
+        assert_ne!(standing.1, "completed");
+        assert!(standing.2.is_none());
+        assert_eq!(
+            f.service.show_request(old).data.unwrap().state,
+            RequestState::Accepted
+        );
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT count(*) FROM retirement_observation_pins",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        let retried = f.service.execute(
+            MutationCall {
+                request_id: old,
+                confirmation: None,
+                mutation: Mutation::ContextRetire(ContextRetireInput {
+                    root: f.request.root.clone(),
+                    kind: f.request.kind,
+                    id: f.request.item_id.clone(),
+                }),
+            },
+            &mut SessionCredentials::new(NoPassphrase),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        );
+        assert_eq!(
+            retried.code,
+            crate::results::ResultCode::DiscoveryPending,
+            "old Ri cannot restart cleanup or drive preserving I"
+        );
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT count(*) FROM context_retirement_preservation_claims",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            1
+        );
+        f.db().execute_batch("DROP TRIGGER IF EXISTS retirement_fixture_fail_preserved; DROP TRIGGER IF EXISTS retirement_fixture_fail_old_request").unwrap();
+        assert!(!super::super::set_release_failure(false));
+        // Configuration changes and remote reappearance cannot reauthorize B;
+        // this continuation settles local discovery only.
+        let path = f.request.root.join(".manyhands/config.toml");
+        let text = std::fs::read_to_string(&path).unwrap().replace(
+            "publication_remote = \"origin\"",
+            "publication_remote = \"elsewhere\"",
+        );
+        std::fs::write(path, text).unwrap();
+        let git = git2::Repository::open(&f.request.root).unwrap();
+        let branch = format!("refs/heads/manyhands/ticket/{}", f.request.item_id);
+        let tip = git.refname_to_id(&branch).unwrap();
+        // Synthetic new advertisement, through actual observation-store SQL;
+        // not a live transport claim. The old pinned batch becomes obsolete.
+        state::with_transaction(&f.service, &f.request.root, |tx, id| {
+            let plan = f.owner.retirement_execution()?.plan();
+            let row = RemoteRefObservation::from_advertisement(
+                plan,
+                plan.context(f.request.kind, &f.request.item_id)
+                    .remote_ref(),
+                tip,
+                Some(tip),
+            )
+            .unwrap();
+            state::persist_complete_advertisement(
+                tx,
+                id,
+                plan,
+                state::generation(tx, id)?,
+                &[row],
+                3,
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let resumed = f.service.execute(
+            MutationCall {
+                request_id: RequestId::new(),
+                confirmation: None,
+                mutation: Mutation::OperationResume(OperationResumeInput {
+                    root: f.request.root.clone(),
+                    operation_id: f.request.operation_id,
+                }),
+            },
+            &mut SessionCredentials::new(NoPassphrase),
+            &mut NoProgress,
+            &CancellationToken::new(),
+        );
+        assert_eq!(
+            resumed.code,
+            crate::results::ResultCode::Ok,
+            "{fault}: {resumed:?}"
+        );
+        assert_eq!(git.refname_to_id(&branch).unwrap(), tip);
+        assert_eq!(
+            f.service.show_request(old).data.unwrap().state,
+            RequestState::Finished
+        );
+        assert_eq!(
+            f.service.show_request(abandon).data.unwrap().state,
+            RequestState::Finished
+        );
+        assert_eq!(
+            f.db()
+                .query_row(
+                    "SELECT count(*) FROM retirement_observation_pins",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(f.db().query_row("SELECT count(*) FROM retirement_observation_pin_releases WHERE reason='consumer_terminal'",[],|r|r.get::<_,i64>(0)).unwrap(),1);
+        super::super::audit_connection(&f.db()).unwrap();
+    }
+}
+
+#[test]
+fn retirement_preserving_lost_result_and_index_spend_fences_keep_old_identity() {
+    for case in ["lost_result", "advance", "missing_spend"] {
+        let f = Fixture::with_request(true);
+        let mutation = || {
+            Mutation::OperationAbandon(OperationAbandonInput {
+                root: f.request.root.clone(),
+                operation_id: f.request.operation_id,
+            })
+        };
+        let preview = f
+            .service
+            .prepare(&mutation())
+            .data
+            .unwrap()
+            .into_preview()
+            .unwrap();
+        let id = RequestId::new();
+        let call = || MutationCall {
+            request_id: id,
+            confirmation: Some(ConfirmationId::parse(&preview.confirmation_id).unwrap()),
+            mutation: mutation(),
+        };
+        if case == "lost_result" {
+            let producer = RepositoryService::open_at_with_failure_point_for_testing(
+                f._data.path(),
+                FailurePoint::BeforeRequestSettlement,
+            )
+            .unwrap();
+            let first = producer.execute(
+                call(),
+                &mut SessionCredentials::new(NoPassphrase),
+                &mut NoProgress,
+                &CancellationToken::new(),
+            );
+            assert_eq!(first.code, crate::results::ResultCode::InternalError);
+            let replay = f.service.execute(
+                call(),
+                &mut SessionCredentials::new(NoPassphrase),
+                &mut NoProgress,
+                &CancellationToken::new(),
+            );
+            assert_eq!(replay.code, crate::results::ResultCode::Ok, "{replay:?}");
+            assert_eq!(
+                f.db()
+                    .query_row(
+                        "SELECT count(*) FROM context_retirement_preservation_claims",
+                        [],
+                        |r| r.get::<_, i64>(0)
+                    )
+                    .unwrap(),
+                1
+            );
+            drop(RepositoryService::open_at(f._data.path()).unwrap());
+            continue;
+        }
+        f.service
+            .set_refresh_claim_hook_for_testing(|| std::panic::resume_unwind(Box::new(())));
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f.service.execute(
+                call(),
+                &mut SessionCredentials::new(NoPassphrase),
+                &mut NoProgress,
+                &CancellationToken::new()
+            )))
+            .is_err()
+        );
+        let row = f.service.request_record(id).unwrap().unwrap();
+        let accepted = RetirementAccepted::of_record(&row, row.attempt).unwrap();
+        let db = f.db();
+        let (record_id, epoch) = db.query_row("SELECT local_record_id,index_owner_epoch FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id", [], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
+        let owner = recovery::IndexOwner {
+            record_id,
+            epoch,
+            retirement_request: Some(
+                super::super::super::request_scope::RequestFence::preserving(
+                    &accepted,
+                    f.request.operation_id,
+                )
+                .unwrap(),
+            ),
+            retirement_batch: None,
+        };
+        assert!(recovery::owns_indexing(&db, owner.clone()).unwrap());
+        if case == "advance" {
+            assert_eq!(f.service.enter_request(id).unwrap(), Some(2));
+        } else {
+            // Explicit isolated corruption: restore exact trigger before auditing.
+            let sql: String = db.query_row("SELECT sql FROM sqlite_master WHERE name='retirement_preservation_claim_retained'", [], |r|r.get(0)).unwrap();
+            db.execute_batch("DROP TRIGGER retirement_preservation_claim_retained; DELETE FROM context_retirement_preservation_claims;").unwrap();
+            db.execute_batch(&sql).unwrap();
+        }
+        let before = registry_image(&db);
+        assert!(recovery::owns_indexing(&db, owner.clone()).is_err());
+        assert!(recovery::touch_indexing(&db, owner.clone()).is_err());
+        assert!(
+            recovery::record_owned_persisted_context(&db, owner.clone(), &f.request.root).is_err()
+        );
+        assert!(recovery::transition_indexing(&db, owner, "failed", None).is_err());
+        if case == "missing_spend" {
+            assert!(RepositoryService::open_at(f._data.path()).is_err());
+        } else {
+            drop(RepositoryService::open_at(f._data.path()).unwrap());
+        }
+        assert_eq!(before, registry_image(&db));
+    }
+}
+
 struct Fixture {
     _root: tempfile::TempDir,
     _data: tempfile::TempDir,

@@ -33,6 +33,16 @@ thread_local! {static INTENT_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>>
 thread_local! {static WORKTREE_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);}
 #[cfg(test)]
 thread_local! {static SELECTED_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);static OBSERVED_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);}
+#[cfg(test)]
+type SyntheticAdvertisement = Result<Vec<(String, git2::Oid)>, SshTransportErrorKind>;
+#[cfg(test)]
+thread_local! {static ADVERTISEMENT:std::cell::RefCell<Option<SyntheticAdvertisement>>=const {std::cell::RefCell::new(None)};}
+#[cfg(test)]
+pub(super) fn synthetic_advertisement(
+    result: Result<Vec<(String, git2::Oid)>, SshTransportErrorKind>,
+) {
+    ADVERTISEMENT.with(|s| assert!(s.borrow_mut().replace(result).is_none()));
+}
 
 #[cfg(test)]
 pub(super) fn selected_hook() {
@@ -139,10 +149,26 @@ impl RepositoryService {
     }
     pub(super) fn retire_context_authenticated_scoped<P: SessionCredentialProvider>(
         &self,
+        request: RetireContextRequest,
+        approval: Option<HostApproval>,
+        session: &mut SessionCredentials<P>,
+        scope: super::request_scope::Scope,
+    ) -> Result<ContextRetirementOutcome, RepositoryError> {
+        self.retire_context_authenticated_cancellable(
+            request,
+            approval,
+            session,
+            scope,
+            crate::repository::CancellationToken::new(),
+        )
+    }
+    pub(super) fn retire_context_authenticated_cancellable<P: SessionCredentialProvider>(
+        &self,
         mut request: RetireContextRequest,
         approval: Option<HostApproval>,
         session: &mut SessionCredentials<P>,
         scope: super::request_scope::Scope,
+        cancel: crate::repository::CancellationToken,
     ) -> Result<ContextRetirementOutcome, RepositoryError> {
         self.require_index_available(RepositoryOperation::RetireContext, Some(&request.root))?;
         let (git, root) =
@@ -202,12 +228,13 @@ impl RepositoryService {
             selection.as_ref().map(|s| s.nonce()),
             scope,
         )?;
-        let owner = match claimed {
+        let mut owner = match claimed {
             record::BranchClaim::Refused(report) => {
                 return Ok(ContextRetirementOutcome::Final(report));
             }
             record::BranchClaim::Execute(owner) => owner,
         };
+        owner.set_retirement_cancellation(cancel)?;
         let verified = match selection {
             Some(selection) => {
                 match selection.install(self, &request, &owner, &selection_cleanup) {
@@ -565,6 +592,9 @@ fn safe(
     owner: &RemoteReservation,
     point: Point,
 ) -> Result<(), ResultCode> {
+    if owner.retirement_execution().is_ok_and(|e| e.cancelled()) {
+        return Err(ResultCode::Cancelled);
+    }
     match service.remote_safe_point(root, owner, point) {
         Ok(RemoteSafePointOutcome::Continue) => Ok(()),
         Ok(RemoteSafePointOutcome::Cancelled) => Err(ResultCode::Cancelled),
@@ -587,16 +617,32 @@ fn observe<P: SessionCredentialProvider>(
     let expectation = execution
         .expectation()
         .map_err(|_| ResultCode::InvalidRemote)?;
-    let advertised = service.with_authenticated_remote_expected(
-        VerifySshTransportRequest {
+    let advertise = || {
+        service.with_authenticated_remote_expected(
+            VerifySshTransportRequest {
+                root: request.root.clone(),
+                direction: SshDirection::Fetch,
+                approval,
+            },
+            session,
+            &expectation,
+            |remote| remote.advertisement(),
+        )
+    };
+    #[cfg(not(test))]
+    let advertised = advertise();
+    #[cfg(test)]
+    let advertised = match ADVERTISEMENT.with(|s| s.borrow_mut().take()) {
+        Some(result) => result.map_err(|kind| SshTransportError {
             root: request.root.clone(),
+            remote_name: execution.plan().remote_name().into(),
             direction: SshDirection::Fetch,
-            approval,
-        },
-        session,
-        &expectation,
-        |remote| remote.advertisement(),
-    );
+            selected_key_id: None,
+            authority: None,
+            kind,
+        }),
+        None => advertise(),
+    };
     safe(service, &request.root, owner, Point::AfterAdvertisement)?;
     let advertised = match advertised {
         Ok(value) => value,

@@ -318,7 +318,7 @@ pub(super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
         }
     }
     super::handoff::batch::audit(db)?;
-    super::handoff::gap::audit(db)
+    Ok(())
 }
 
 pub(super) fn require_ended(db: &Connection, provenance: i64) -> Result<(), RepositoryError> {

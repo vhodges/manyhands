@@ -22,6 +22,7 @@ pub const CASES: &[&str] = &[
     "context_prepare",
     "context_prepare_discovery_pending",
     "context_release",
+    "context_retirement",
     "local_sync_noop",
     "local_sync_partial",
     "local_sync_refused",

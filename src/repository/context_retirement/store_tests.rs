@@ -1,6 +1,7 @@
 use crate::repository::{
-    AbandonOperationRequest, OperationId, REGISTRY_FILE, RemoteOperationTarget, RemoteRefPlan,
-    RepositoryErrorKind, RepositoryOperation, RepositoryService, recovery,
+    AbandonOperationOutcome, AbandonOperationRequest, AbandonableOperation, OperationId,
+    REGISTRY_FILE, RemoteOperationTarget, RemoteRefPlan, RepositoryErrorKind, RepositoryOperation,
+    RepositoryService, recovery,
 };
 use rusqlite::{Connection, params};
 
@@ -410,7 +411,11 @@ fn retirement_generic_abandon_preserves_pending_and_terminal_identity() {
             expected: None,
         });
         assert!(
-            matches!(outcome, Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired),
+            if terminal {
+                matches!(outcome, Ok(AbandonOperationOutcome::Completed))
+            } else {
+                matches!(outcome, Err(ref e) if e.kind==RepositoryErrorKind::RecoveryRequired)
+            },
             "terminal={terminal}: generic abandon must not release or relabel retirement identity: {outcome:?}"
         );
         let after = db
@@ -421,11 +426,16 @@ fn retirement_generic_abandon_preserves_pending_and_terminal_identity() {
             )
             .unwrap();
         assert_eq!(before, after);
+        let preview = service
+            .abandonable_operation(data.path(), operation)
+            .unwrap();
         assert!(
-            service
-                .abandonable_operation(data.path(), operation)
-                .is_err(),
-            "retirement needs its guarded preview, not ordinary completed/no-op handling"
+            if terminal {
+                matches!(preview, AbandonableOperation::Completed)
+            } else {
+                matches!(preview, AbandonableOperation::Pending(_))
+            },
+            "D11 pending metadata is previewable, completed operations remain no-ops"
         );
     }
 }

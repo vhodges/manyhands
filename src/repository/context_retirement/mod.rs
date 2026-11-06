@@ -1,7 +1,9 @@
 //! Tree-only completion and preservation evidence, shared by poll and retirement.
 mod execution;
 pub(super) mod handoff;
+mod historical;
 mod instance;
+pub(super) mod preserve;
 pub(super) mod proof;
 pub(super) mod record;
 mod reentry;
@@ -10,6 +12,7 @@ mod result;
 mod run;
 pub(super) mod source;
 pub use execution::{ContextRetirementOutcome, RetireContextRequest};
+pub use preserve::RetirementAbandonMetadata;
 pub use reentry::ReenterContextRetirementRequest;
 pub use result::{ContextRetirementReport, RetirementDisposition, RetirementRemoval};
 

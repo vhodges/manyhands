@@ -34,6 +34,7 @@ pub(in super::super::super) struct ObserverExecution {
     plan: crate::repository::RemoteRefPlan,
     configuration: ObservationConfiguration,
     request_scope: Scope,
+    cancellation: crate::repository::CancellationToken,
 }
 impl std::fmt::Debug for ObserverExecution {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -44,6 +45,15 @@ impl std::fmt::Debug for ObserverExecution {
     }
 }
 impl ObserverExecution {
+    pub(in super::super::super) fn set_cancellation(
+        &mut self,
+        cancellation: crate::repository::CancellationToken,
+    ) {
+        self.cancellation = cancellation;
+    }
+    pub(in super::super) fn cancelled(&self) -> bool {
+        self.cancellation.is_cancelled()
+    }
     pub(in super::super) fn request_scope(&self) -> Scope {
         self.request_scope
     }
@@ -97,6 +107,9 @@ impl ObserverExecution {
         id: i64,
     ) -> Result<(), RepositoryError> {
         self.local_owner(service, tx, id)?;
+        if self.cancelled() {
+            return Err(recovery_required());
+        }
         self.request_scope
             .effect(tx, &self.operation.to_string(), &self.root)?;
         if state::generation(tx, id)? != self.generation
@@ -294,6 +307,7 @@ pub(in super::super) fn claim_scoped(
             plan,
             configuration,
             request_scope: scope,
+            cancellation: crate::repository::CancellationToken::new(),
         };
         if nonce.is_some() {
             execution.validate_install(service, tx, id)?;
@@ -347,6 +361,7 @@ pub(in super::super) fn bind_reentry_observer(
         plan,
         configuration,
         request_scope: scope,
+        cancellation: crate::repository::CancellationToken::new(),
     };
     execution.validate_install(service, tx, id)?;
     Ok(Box::new(reservation::retirement_token(
@@ -445,10 +460,11 @@ fn refuse(
     let execution = owner.retirement_execution()?;
     state::with_transaction(service, root, |tx, id| {
         execution.local_owner(service, tx, id)?;
-        let cancelled =
+        let saved_cancelled =
             execution
                 .request_scope
                 .validate(tx, &execution.operation.to_string(), root)?;
+        let cancelled = saved_cancelled || execution.cancelled();
         let kind = match &uninvoked {
             None => 0,
             Some(NoEffect::Branch(_)) => 1,
@@ -483,7 +499,7 @@ fn refuse(
         } else {
             code
         });
-        if cancelled && tx.execute("UPDATE request_records SET cancel_requested=0 WHERE request_ulid=?1 AND attempt=?2 AND state='accepted' AND cancel_requested=1",params![execution.request_scope.request_id(),execution.request_scope.attempt()]).map_err(RepositoryError::sqlite)?!=1 {return Err(recovery_required());}
+        if saved_cancelled && tx.execute("UPDATE request_records SET cancel_requested=0 WHERE request_ulid=?1 AND attempt=?2 AND state='accepted' AND cancel_requested=1",params![execution.request_scope.request_id(),execution.request_scope.attempt()]).map_err(RepositoryError::sqlite)?!=1 {return Err(recovery_required());}
         if tx.execute("UPDATE context_retirement_records SET phase='refused',worktree_removal='none',branch_removal='none',final_code=?2,final_result=?3 WHERE operation_ulid=?1 AND owner_epoch=?4 AND phase IN ('selected','branch_deleting','worktree_removing')",params![execution.operation.to_string(),report.code.as_str(),report.encode()?,execution.epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
         if tx.execute("UPDATE context_retirement_attempts SET phase='ended' WHERE operation_ulid=?1 AND owner_epoch=?2 AND phase='active'",params![execution.operation.to_string(),execution.epoch]).map_err(RepositoryError::sqlite)?!=1{return Err(recovery_required());}
         super::release_single_consumer(tx, &execution.operation.to_string(), execution.epoch)?;

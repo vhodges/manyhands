@@ -1,4 +1,4 @@
-//! Private current-F2 seam. No ContextRetire mutation binding is published here.
+//! Private current-F2 seam shared by ordinary retirement and its binding.
 use super::*;
 use crate::repository::{
     AuthoringKind, OperationFamily, OperationId, RepositoryError, RepositoryService,
@@ -20,8 +20,9 @@ pub(in super::super) struct RequestFence {
     attempt: i64,
     operation: OperationId,
     kind: AuthoringKind,
-    item: [u8; 26],
+    item: Option<[u8; 26]>,
     digest: IntentDigest,
+    preserving: bool,
 }
 #[derive(Clone, Copy, Debug)]
 pub(in super::super) enum Scope {
@@ -43,8 +44,45 @@ fn digest(
     )
 }
 impl RequestFence {
+    pub(super) fn preserving(
+        accepted: &mutation::Accepted,
+        operation: OperationId,
+    ) -> Result<Self, RepositoryError> {
+        if accepted.family.is_some()
+            || accepted.position.base_ref.is_some()
+            || accepted.position.base_oid.is_some()
+            || accepted.expected.is_some()
+        {
+            return Err(recovery_required());
+        }
+        Ok(Self {
+            request: accepted.request_id,
+            attempt: i64::try_from(accepted.attempt).map_err(|_| recovery_required())?,
+            operation,
+            kind: AuthoringKind::Ticket,
+            item: None,
+            digest: IntentDigest::builder(
+                DigestSalt::Request(accepted.request_id),
+                "operation abandon",
+                &accepted.scope,
+                &operation.to_string(),
+            )
+            .finish(),
+            preserving: true,
+        })
+    }
+    pub(super) fn is_preserving(self) -> bool {
+        self.preserving
+    }
+    pub(super) fn is_preserving_for(self, operation: &str) -> bool {
+        self.preserving && self.operation.to_string() == operation
+    }
+    pub(super) fn request(self) -> RequestId {
+        self.request
+    }
     fn item(&self) -> &str {
-        std::str::from_utf8(&self.item).expect("canonical ItemId bytes")
+        std::str::from_utf8(self.item.as_ref().expect("ordinary retirement fence"))
+            .expect("canonical ItemId bytes")
     }
     pub(super) fn id(&self) -> String {
         self.request.to_string()
@@ -58,7 +96,8 @@ impl RequestFence {
         operation: &str,
         root: &std::path::Path,
     ) -> Result<bool, RepositoryError> {
-        if operation != self.operation.to_string()
+        if self.preserving
+            || operation != self.operation.to_string()
             || digest(self.request, root, self.kind, self.item())? != self.digest
         {
             return Err(recovery_required());
@@ -87,18 +126,21 @@ impl Scope {
             attempt: i64::try_from(accepted.attempt).map_err(|_| recovery_required())?,
             operation: request.operation_id,
             kind: request.kind,
-            item: request
-                .item_id
-                .to_string()
-                .as_bytes()
-                .try_into()
-                .map_err(|_| recovery_required())?,
+            item: Some(
+                request
+                    .item_id
+                    .to_string()
+                    .as_bytes()
+                    .try_into()
+                    .map_err(|_| recovery_required())?,
+            ),
             digest: digest(
                 accepted.request_id,
                 &request.root,
                 request.kind,
                 &request.item_id.to_string(),
             )?,
+            preserving: false,
         };
         Ok(fence)
     }
@@ -240,6 +282,9 @@ pub(in super::super) fn validate_index(
     fence: Option<RequestFence>,
     epoch: Option<i64>,
 ) -> Result<(), RepositoryError> {
+    if let Some(f) = fence.filter(|f| f.is_preserving()) {
+        return super::preserve::validate_index(db, record, f, epoch);
+    }
     if !crate::repository::recovery::has_table(db, "context_retirement_records")
         .map_err(|_| recovery_required())?
     {
@@ -337,7 +382,7 @@ impl RepositoryService {
 }
 
 impl RepositoryService {
-    #[allow(dead_code)] // Private Task 2 seam; Task 3 publishes no binding yet.
+    #[allow(dead_code)] // Direct fence regression seam; binding supplies its token below.
     pub(crate) fn retire_context_for_request<P: SessionCredentialProvider>(
         &self,
         request: RetireContextRequest,
@@ -345,13 +390,29 @@ impl RepositoryService {
         approval: Option<HostApproval>,
         session: &mut SessionCredentials<P>,
     ) -> Result<ContextRetirementOutcome, RepositoryError> {
+        self.retire_context_for_request_cancellable(
+            request,
+            accepted,
+            approval,
+            session,
+            mutation::CancellationToken::new(),
+        )
+    }
+    fn retire_context_for_request_cancellable<P: SessionCredentialProvider>(
+        &self,
+        request: RetireContextRequest,
+        accepted: &mutation::Accepted,
+        approval: Option<HostApproval>,
+        session: &mut SessionCredentials<P>,
+        cancel: mutation::CancellationToken,
+    ) -> Result<ContextRetirementOutcome, RepositoryError> {
         if let Some(result) = Scope::finished(self, &request, accepted)? {
             return Ok(result);
         }
         let scope = Scope::capture(self, &request, accepted)?;
-        self.retire_context_authenticated_scoped(request, approval, session, scope)
+        self.retire_context_authenticated_cancellable(request, approval, session, scope, cancel)
     }
-    #[allow(dead_code)] // Private Task 2 seam; no Task 3 mutation binding.
+    #[allow(dead_code)] // Source-included direct fence tests retain this default-token entry.
     pub(crate) fn reenter_context_for_request<P: SessionCredentialProvider>(
         &self,
         request: ReenterContextRetirementRequest,
@@ -359,10 +420,95 @@ impl RepositoryService {
         approval: Option<HostApproval>,
         session: &mut SessionCredentials<P>,
     ) -> Result<ContextRetirementOutcome, RepositoryError> {
+        self.reenter_context_for_request_cancellable(
+            request,
+            accepted,
+            approval,
+            session,
+            mutation::CancellationToken::new(),
+        )
+    }
+    fn reenter_context_for_request_cancellable<P: SessionCredentialProvider>(
+        &self,
+        request: ReenterContextRetirementRequest,
+        accepted: &mutation::Accepted,
+        approval: Option<HostApproval>,
+        session: &mut SessionCredentials<P>,
+        cancel: mutation::CancellationToken,
+    ) -> Result<ContextRetirementOutcome, RepositoryError> {
         if let Some(result) = Scope::finished(self, &request.retirement, accepted)? {
             return Ok(result);
         }
         let scope = Scope::capture(self, &request.retirement, accepted)?;
-        self.reenter_context_retirement_scoped(request, approval, session, scope)
+        self.reenter_context_retirement_cancellable(request, approval, session, scope, cancel)
+    }
+}
+
+pub(crate) struct MutationState {
+    pub epoch: i64,
+    pub phase: String,
+    pub worktree: RetirementRemoval,
+    pub branch: RetirementRemoval,
+    pub materialization: bool,
+}
+impl RepositoryService {
+    pub(crate) fn retirement_mutation_state(
+        &self,
+        root: &std::path::Path,
+        operation: OperationId,
+    ) -> Result<Option<MutationState>, RepositoryError> {
+        state::with_transaction(self, root, |tx, _| {
+            record::audit_connection(tx)?;
+            tx.query_row("SELECT owner_epoch,phase,worktree_removal,branch_removal,materialization_settled FROM context_retirement_records c JOIN operation_records o ON o.id=c.local_record_id WHERE c.operation_ulid=?1 AND o.root_path=?2", params![operation.to_string(),root.to_str()], |r| {
+                let removal = |text: String| match text.as_str() { "observed" => RetirementRemoval::Observed, "possible" => RetirementRemoval::Possible, _ => RetirementRemoval::None };
+                Ok(MutationState { epoch:r.get(0)?,phase:r.get(1)?,worktree:removal(r.get(2)?),branch:removal(r.get(3)?),materialization:r.get(4)? })
+            }).optional().map_err(|_| recovery_required())
+        })
+    }
+    pub(crate) fn execute_retirement_request<P: SessionCredentialProvider>(
+        &self,
+        request: RetireContextRequest,
+        accepted: &mutation::Accepted,
+        reentry: bool,
+        session: &mut SessionCredentials<P>,
+        cancel: crate::repository::CancellationToken,
+    ) -> Result<ContextRetirementOutcome, RepositoryError> {
+        let existing = self.retirement_mutation_state(&request.root, request.operation_id)?;
+        if let Some(s) = existing {
+            if s.phase == "preserving" {
+                return Ok(ContextRetirementOutcome::IndexPending);
+            }
+            self.reenter_context_for_request_cancellable(
+                ReenterContextRetirementRequest {
+                    retirement: request,
+                    expected_owner_epoch: s.epoch,
+                },
+                accepted,
+                None,
+                session,
+                cancel,
+            )
+        } else if reentry {
+            // A current accepted request with no local envelope is provably
+            // never claimed (the audit rejects missing companions). Fence the
+            // old F2 and settle metadata only, never select today's context.
+            let scope = Scope::capture(self, &request, accepted)?;
+            record::refuse_fresh_scoped(
+                self,
+                &request,
+                if self
+                    .cancellation_requested(accepted.request_id)
+                    .unwrap_or(false)
+                {
+                    crate::results::ResultCode::Cancelled
+                } else {
+                    crate::results::ResultCode::ExternalChange
+                },
+                scope,
+            )
+            .map(ContextRetirementOutcome::Final)
+        } else {
+            self.retire_context_for_request_cancellable(request, accepted, None, session, cancel)
+        }
     }
 }

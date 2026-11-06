@@ -64,10 +64,26 @@ impl RepositoryService {
     }
     pub(super) fn reenter_context_retirement_scoped<P: SessionCredentialProvider>(
         &self,
+        reentry: ReenterContextRetirementRequest,
+        approval: Option<HostApproval>,
+        session: &mut SessionCredentials<P>,
+        scope: super::request_scope::Scope,
+    ) -> Result<ContextRetirementOutcome, RepositoryError> {
+        self.reenter_context_retirement_cancellable(
+            reentry,
+            approval,
+            session,
+            scope,
+            crate::repository::CancellationToken::new(),
+        )
+    }
+    pub(super) fn reenter_context_retirement_cancellable<P: SessionCredentialProvider>(
+        &self,
         mut reentry: ReenterContextRetirementRequest,
         approval: Option<HostApproval>,
         session: &mut SessionCredentials<P>,
         scope: super::request_scope::Scope,
+        cancel: crate::repository::CancellationToken,
     ) -> Result<ContextRetirementOutcome, RepositoryError> {
         let request = &mut reentry.retirement;
         self.require_index_available(RepositoryOperation::RetireContext, Some(&request.root))?;
@@ -264,7 +280,8 @@ impl RepositoryService {
                 drop(cleanup);
                 self.retire_context_scoped(reentry.retirement, scope)
             }
-            Claim::Observe(owner, tip) => {
+            Claim::Observe(mut owner, tip) => {
+                owner.set_retirement_cancellation(cancel)?;
                 let verified = match instance::Verified::resume(self, request, &owner, &cleanup) {
                     Ok(verified) => verified,
                     Err(_) => {

@@ -28,6 +28,58 @@ use crate::desktop::{
 
 const TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FH0";
 
+/// This is consent data, not a layout/font/rendering assertion. The existing
+/// generic confirmation must tell the user what remains and retains old Ri.
+#[test]
+fn preserving_abandon_confirmation_names_retained_resources_and_request() {
+    use manyhands::repository::{
+        OperationAbandonPreviewDto, PreviewDetailsDto, RetirementAbandonMetadata, RetirementRemoval,
+    };
+    let details = PreviewDetailsDto::OperationAbandon(OperationAbandonPreviewDto {
+        root: "root".into(),
+        operation_id: "operation".into(),
+        action: None,
+        state: "authoritative_observed".into(),
+        step: Some("context_retirement_preserved".into()),
+        item_id: None,
+        worktree: None,
+        paths: Vec::new(),
+        paths_complete: true,
+        committed: false,
+        request_id: Some("old-request".into()),
+        files_changed: false,
+        git_state_changed: false,
+        retirement: Some(RetirementAbandonMetadata {
+            request_id: Some("old-request".into()),
+            phase: "preserving".into(),
+            owner_epoch: 3,
+            index_owner_epoch: 2,
+            worktree_removal: RetirementRemoval::Observed,
+            branch_removal: RetirementRemoval::Possible,
+            worktree_retained: false,
+            branch_retained: true,
+            index_pending: true,
+        }),
+    });
+    let fields = super::detail_fields(&details);
+    for pair in [
+        ("Request retained", "old-request"),
+        ("Retirement phase", "preserving"),
+        ("Worktree removal", "observed"),
+        ("Branch removal", "possible"),
+        ("Worktree retained", "no"),
+        ("Branch retained", "yes"),
+        ("Discovery pending", "yes"),
+    ] {
+        assert!(
+            fields
+                .iter()
+                .any(|(key, value)| *key == pair.0 && value == pair.1),
+            "missing {pair:?}: {fields:?}"
+        );
+    }
+}
+
 /// A ticket save whose index hand-off failed, pending in `a`, with the
 /// window open: its operation ID.
 fn stranded(cx: &mut TestAppContext) -> (Shell, PathBuf, String) {

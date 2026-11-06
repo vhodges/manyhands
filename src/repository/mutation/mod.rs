@@ -87,6 +87,7 @@ use bind::{
     repo_remove::RepoRemoveBinding,
     republish::ItemRepublishBinding,
     resume::OperationResumeBinding,
+    retire::ContextRetireBinding,
     sync::SyncBinding,
     ticket::{SlugAssignBinding, TicketBinding},
 };
@@ -113,6 +114,7 @@ pub use bind::{
     repo_remove::RepoRemoveInput,
     republish::ItemRepublishInput,
     resume::OperationResumeInput,
+    retire::ContextRetireInput,
     sync::{ItemSyncInput, RepoSyncInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
 };
@@ -121,22 +123,24 @@ pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
     CancelDto, CommentMutationDto, CommentMutationType, CommentPendingReason, ConflictNextAction,
     ConflictNextDto, ConflictResolutionMutationDto, ConflictResolutionMutationType,
-    ContextMutationDto, DocumentMutationDto, HostMutationDto, HostObservationDto, HostPreviewDto,
-    HostReplacementDto, IdentityMutationDto, IdentityPreviewDto, ItemRepublishPreviewDto,
-    KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState, KeyMutationDto,
-    LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupPendingReason, LifecycleCleanupState,
-    LifecycleIntegrationKind, LifecycleMadeReadyDto, LifecycleMadeReadyState, LifecycleMutationDto,
-    LifecycleMutationType, LifecyclePathChangeDto, LifecyclePathChangeKind,
-    LifecyclePlannedCleanupDto, LifecyclePlannedClosureDto, LifecyclePlannedIntegration,
-    LifecyclePlannedPublication, LifecyclePreviewDto, LifecyclePublicationPendingReason,
-    LifecyclePublicationState, LifecycleRecording, LocalIdentityDto, MutationDataDto,
-    OperationAbandonPreviewDto, OperationMutationDto, PollMutationCompletion, PollMutationDto,
-    PollPolicyMutationDto, PollTargetDisposition, PollTargetDto, PrepareDataDto, PreviewDetailsDto,
-    PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
-    RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto, RepairPreviewDto,
-    RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
-    RequestResultDto, RequestState, SynchronizationConflictMutationDto,
-    SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
+    ContextMutationDto, ContextRetirementMutationDto, ContextRetirementMutationType,
+    ContextRetirementState, DocumentMutationDto, HostMutationDto, HostObservationDto,
+    HostPreviewDto, HostReplacementDto, IdentityMutationDto, IdentityPreviewDto,
+    ItemRepublishPreviewDto, KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState,
+    KeyMutationDto, LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupPendingReason,
+    LifecycleCleanupState, LifecycleIntegrationKind, LifecycleMadeReadyDto,
+    LifecycleMadeReadyState, LifecycleMutationDto, LifecycleMutationType, LifecyclePathChangeDto,
+    LifecyclePathChangeKind, LifecyclePlannedCleanupDto, LifecyclePlannedClosureDto,
+    LifecyclePlannedIntegration, LifecyclePlannedPublication, LifecyclePreviewDto,
+    LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
+    LocalIdentityDto, MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto,
+    PollMutationCompletion, PollMutationDto, PollPolicyMutationDto, PollTargetDisposition,
+    PollTargetDto, PrepareDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto,
+    PreviewIdentityDto, PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto,
+    RepairMutationDto, RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto,
+    RequestDto, RequestOperationDto, RequestResultDto, RequestState,
+    SynchronizationConflictMutationDto, SynchronizationConflictType, SynchronizationMutationDto,
+    TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -149,6 +153,59 @@ pub use progress::{CancellationToken, NoProgress, ProgressEvent, ProgressSink, P
 use records::RequestRecord;
 pub(super) use records::migrate as migrate_request_tables;
 pub(super) use records::{operation_owner, release_operation_owner};
+
+/// Retirement's claimed refresh completes the old request without releasing its
+/// identity, in the receipt/journal/Z transaction. A stale executor cannot settle.
+pub(in super::super) fn finish_preserved_request(
+    tx: &rusqlite::Transaction<'_>,
+    operation: &str,
+    report: &super::ContextRetirementReport,
+) -> Result<(), super::RepositoryError> {
+    use rusqlite::OptionalExtension;
+    let row:Option<(String,u64,String,String)>=tx.query_row("SELECT r.request_ulid,r.attempt,c.kind,c.item_id FROM context_retirement_records c JOIN request_records r ON r.request_ulid=c.request_ulid WHERE c.operation_ulid=?1 AND r.state='accepted'",[operation],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional().map_err(|_|super::remote::state::recovery_required())?;
+    if let Some((id, attempt, kind, item)) = row {
+        let answer = bind::Answer {
+            effects: crate::results::Effects {
+                discovery: crate::results::DiscoveryEffect::Current,
+                ..crate::results::Effects::not_requested()
+            },
+            local_change: report.worktree_removal != super::RetirementRemoval::None
+                || report.branch_removal != super::RetirementRemoval::None,
+            ..bind::Answer::stopped(ResultCode::ExternalChange)
+        }
+        .with_data(MutationDataDto::ContextRetirement(
+            ContextRetirementMutationDto {
+                r#type: ContextRetirementMutationType::ContextRetirement,
+                kind: if kind == "ticket" {
+                    super::ItemDtoKind::Ticket
+                } else {
+                    super::ItemDtoKind::Document
+                },
+                item_id: item,
+                operation_id: operation.into(),
+                state: ContextRetirementState::Preserved,
+                code: ResultCode::ExternalChange,
+                worktree_removal: report.worktree_removal,
+                branch_removal: report.branch_removal,
+                materialization_settled: report.materialization_settled,
+            },
+        ));
+        let result =
+            settle::stored_result(&answer).ok_or_else(super::remote::state::recovery_required)?;
+        if !records::finish_request(
+            tx,
+            RequestId::parse(&id).map_err(|_| super::remote::state::recovery_required())?,
+            attempt,
+            &result,
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+        )
+        .map_err(|_| super::remote::state::recovery_required())?
+        {
+            return Err(super::remote::state::recovery_required());
+        }
+    }
+    Ok(())
+}
 
 /// What the service reads the time from when it times a record. Tests
 /// inject one to move time; everything else uses `SystemClock`.
@@ -467,6 +524,7 @@ pub enum Mutation {
     TicketRepair(TicketRepairInput),
     ContextPrepare(ContextPrepareInput),
     ContextRelease(ContextReleaseInput),
+    ContextRetire(ContextRetireInput),
     DocumentPromote(DocumentPromoteInput),
     TicketClose(TicketCloseInput),
     PollConfigure(PollConfigureInput),
@@ -520,6 +578,7 @@ impl Mutation {
             Self::TicketRepair(_) => Command::TicketRepair,
             Self::ContextPrepare(_) => Command::ContextPrepare,
             Self::ContextRelease(_) => Command::ContextRelease,
+            Self::ContextRetire(_) => Command::ContextRetire,
             Self::DocumentPromote(_) => Command::DocumentPromote,
             Self::TicketClose(_) => Command::TicketClose,
             Self::PollConfigure(_) => Command::PollConfigure,
@@ -580,7 +639,8 @@ impl Mutation {
             | Self::OperationResume(_)
             | Self::FolderCreate(_)
             | Self::ContextPrepare(_)
-            | Self::ContextRelease(_) => None,
+            | Self::ContextRelease(_)
+            | Self::ContextRetire(_) => None,
         }
     }
 
@@ -623,6 +683,7 @@ impl Mutation {
             Self::TicketRepair(input) => Box::new(RepairBinding::from(input)),
             Self::ContextPrepare(input) => Box::new(ContextPrepareBinding::from(input)),
             Self::ContextRelease(input) => Box::new(ContextReleaseBinding::from(input)),
+            Self::ContextRetire(input) => Box::new(ContextRetireBinding::from(input)),
             Self::DocumentPromote(input) => Box::new(LifecycleBinding::from(input)),
             Self::TicketClose(input) => Box::new(LifecycleBinding::from(input)),
             Self::PollConfigure(input) => Box::new(PollPolicyBinding::from(input)),

@@ -615,7 +615,7 @@ fn insert_request(
     Ok(InsertRequestOutcome::Inserted)
 }
 
-fn finish_request(
+pub(super) fn finish_request(
     transaction: &Transaction<'_>,
     request_id: RequestId,
     attempt: u64,

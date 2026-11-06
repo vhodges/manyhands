@@ -44,15 +44,18 @@ pub struct RemoteReservation {
     epoch: i64,
     retirement: Option<Box<crate::repository::context_retirement::record::ObserverExecution>>,
     original_source: Option<Box<crate::repository::context_retirement::source::OriginalPollSource>>,
-    gap: Option<Box<crate::repository::context_retirement::handoff::gap::Execution>>,
 }
 
 impl RemoteReservation {
-    pub(in super::super) fn gap_execution(
-        &self,
-    ) -> Result<&crate::repository::context_retirement::handoff::gap::Execution, RepositoryError>
-    {
-        self.gap.as_deref().ok_or_else(state::recovery_required)
+    pub(in super::super) fn set_retirement_cancellation(
+        &mut self,
+        cancel: crate::repository::CancellationToken,
+    ) -> Result<(), RepositoryError> {
+        self.retirement
+            .as_deref_mut()
+            .ok_or_else(state::recovery_required)?
+            .set_cancellation(cancel);
+        Ok(())
     }
     pub fn operation_id(&self) -> OperationId {
         self.operation_id
@@ -225,7 +228,6 @@ fn token(
         epoch: record.owner_epoch,
         retirement: None,
         original_source: None,
-        gap: None,
     }
 }
 
@@ -237,17 +239,6 @@ pub(in super::super) fn retirement_token(
 ) -> RemoteReservation {
     let mut owner = token(service, repository_id, record);
     owner.retirement = Some(Box::new(execution));
-    owner
-}
-
-pub(in super::super) fn gap_token(
-    service: &RepositoryService,
-    id: i64,
-    record: &state::StoredRemoteOperation,
-    execution: crate::repository::context_retirement::handoff::gap::Execution,
-) -> RemoteReservation {
-    let mut owner = token(service, id, record);
-    owner.gap = Some(Box::new(execution));
     owner
 }
 
@@ -287,9 +278,7 @@ pub(in super::super) fn owned(
     owner: &RemoteReservation,
 ) -> Result<state::StoredRemoteOperation, RepositoryError> {
     let record = owned_record(service, tx, repository_id, owner)?;
-    if let Some(gap) = &owner.gap {
-        gap.validate(service, tx, repository_id, &record)?;
-    } else if let Some(source) = &owner.original_source {
+    if let Some(source) = &owner.original_source {
         source.validate(service, tx, repository_id, &record)?;
     } else if let Some(execution) = &owner.retirement {
         execution.validate_observer(service, tx, repository_id, &record)?;
@@ -313,14 +302,7 @@ fn owned_for_acknowledgement(
     repository_id: i64,
     owner: &RemoteReservation,
 ) -> Result<state::StoredRemoteOperation, RepositoryError> {
-    if let Some(gap) = &owner.gap {
-        let mut record = owned_record(service, tx, repository_id, owner)?;
-        record.cancel_requested |= gap.validate_ownership(service, tx, repository_id, &record)?;
-        if !record.cancel_requested {
-            gap.validate(service, tx, repository_id, &record)?;
-        }
-        Ok(record)
-    } else if let Some(source) = &owner.original_source {
+    if let Some(source) = &owner.original_source {
         let mut record = owned_record(service, tx, repository_id, owner)?;
         record.cancel_requested |=
             source.validate_ownership(service, tx, repository_id, &record)?;
@@ -348,28 +330,6 @@ fn owned_record(
         || state::generation(tx, repository_id)? != owner.generation
         || record.owner_epoch != owner.epoch
         || !active(record.phase)
-    {
-        return Err(state::recovery_required());
-    }
-    Ok(record)
-}
-
-pub(in super::super) fn gap_record_for_stop(
-    service: &RepositoryService,
-    tx: &Transaction<'_>,
-    id: i64,
-    owner: &RemoteReservation,
-) -> Result<state::StoredRemoteOperation, RepositoryError> {
-    let record =
-        state::read_operation(tx, id, owner.operation_id)?.ok_or_else(state::recovery_required)?;
-    if owner.gap.is_none()
-        || !Arc::ptr_eq(&service.remote_reservation_scope, &owner.scope)
-        || id != owner.repository_id
-        || record.generation != owner.generation
-        || record.owner_epoch != owner.epoch
-        || !(active(record.phase)
-            || record.phase == RemoteOperationPhase::Interrupted
-                && record.outcome == Some(RemoteOutcomeCategory::ConfigurationRequired))
     {
         return Err(state::recovery_required());
     }
@@ -834,9 +794,6 @@ pub(super) fn commit_observation_batch_with_capture<T>(
             },
         )?;
         if decision != RemoteSafePointOutcome::Continue {
-            if let Some(gap) = &owner.gap {
-                gap.transition(tx, decision)?;
-            }
             return capture(tx, id, decision);
         }
         let batch = if synchronization || record.poll_kind == Some(state::PollKind::Update) {
@@ -857,9 +814,6 @@ pub(super) fn commit_observation_batch_with_capture<T>(
         if let Some(source) = &owner.original_source {
             source.capture(service, tx, id, &record, batch)?;
         }
-        if let Some(gap) = &owner.gap {
-            gap.capture(service, tx, id, &record, batch)?;
-        }
         write(tx, id)?;
         let decision = if synchronization {
             // Fresh Fetch evidence cannot erase an unresolved local/push checkpoint.
@@ -870,10 +824,6 @@ pub(super) fn commit_observation_batch_with_capture<T>(
         } else {
             acknowledge(tx, &record, RemoteOperationSafePoint::AfterBatchCommit)
         }?;
-        if let Some(gap) = &owner.gap {
-            gap.transition(tx, decision)?;
-            crate::repository::context_retirement::record::audit_connection(tx)?;
-        }
         capture(tx, id, decision)
     })
 }
@@ -1505,18 +1455,6 @@ impl RepositoryService {
     ) -> Result<T, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
             let record = owned_for_acknowledgement(self, tx, id, owner)?;
-            if owner.gap.is_some()
-                && !matches!(
-                    point,
-                    RemoteOperationSafePoint::BeforeTransport
-                        | RemoteOperationSafePoint::AfterAdvertisement
-                        | RemoteOperationSafePoint::BetweenObservations
-                        | RemoteOperationSafePoint::BeforeBatchCommit
-                        | RemoteOperationSafePoint::AfterBatchCommit
-                )
-            {
-                return Err(state::recovery_required());
-            }
             if is_sync(&record.target) {
                 if let Some(attempt) = state::latest_publication_attempt(tx, &record)? {
                     // The legacy push checkpoint is frozen behind this attempt
@@ -1589,9 +1527,6 @@ impl RepositoryService {
                 return Err(state::recovery_required());
             }
             let decision = acknowledge(tx, &record, point)?;
-            if let Some(gap) = &owner.gap {
-                gap.transition(tx, decision)?;
-            }
             capture(tx, id, decision)
         })
     }
@@ -1692,8 +1627,7 @@ impl RepositoryService {
         accepted: &crate::repository::mutation::Accepted,
     ) -> Result<RemoteReservation, RepositoryError> {
         state::with_transaction(self, root, |tx, id| {
-            if owner.retirement.is_some() || owner.original_source.is_some() || owner.gap.is_some()
-            {
+            if owner.retirement.is_some() || owner.original_source.is_some() {
                 return Err(state::recovery_required());
             }
             let record = owned_record(self, tx, id, &owner)?;
@@ -1773,9 +1707,6 @@ impl RepositoryService {
             }
             let decision = acknowledge(tx, &record, point)?;
             if decision != RemoteSafePointOutcome::Continue {
-                if let Some(gap) = &owner.gap {
-                    gap.transition(tx, decision)?;
-                }
                 return Ok((capture(tx, id, decision)?, None));
             }
             let at = time::OffsetDateTime::from_unix_timestamp(now())
@@ -1796,9 +1727,6 @@ impl RepositoryService {
                 None
             };
             finish_at(tx, id, &record, category, at)?;
-            if let Some(gap) = &owner.gap {
-                gap.end(tx, category == RemoteOutcomeCategory::Completed)?;
-            }
             if owner.original_source.is_some() && token.is_none() {
                 crate::repository::context_retirement::source::close_stopped(tx, &record)?;
             }

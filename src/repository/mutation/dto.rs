@@ -517,6 +517,8 @@ pub struct IdentityPreviewDto {
 /// leaves as it is. It holds names and paths and no content.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct OperationAbandonPreviewDto {
+    /// Required-nullable; an ordinary retirement retains its controlling request.
+    pub retirement: Option<crate::repository::RetirementAbandonMetadata>,
     /// The repository's root, as the operation's journal names it.
     pub root: String,
     /// The operation that will be closed.
@@ -723,9 +725,76 @@ pub enum MutationDataDto {
     Host(HostMutationDto),
     Repair(RepairMutationDto),
     Context(ContextMutationDto),
+    ContextRetirement(ContextRetirementMutationDto),
     Lifecycle(Box<LifecycleMutationDto>),
     PollPolicy(PollPolicyMutationDto),
     Poll(PollMutationDto),
+}
+
+contract_enum!(
+    /// The closed tag of an ordinary retirement result.
+    ContextRetirementMutationType { ContextRetirement => "context_retirement", }
+);
+contract_enum!(
+    /// Retirement state, distinct from observation's closed/promoted guidance.
+    ContextRetirementState {
+        Retired => "retired",
+        AlreadyAbsent => "already_absent",
+        Refused => "refused",
+        Pending => "pending",
+        Preserved => "preserved",
+    }
+);
+
+/// Metadata only: never source, title, endpoint, key or backend diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct ContextRetirementMutationDto {
+    pub r#type: ContextRetirementMutationType,
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    pub operation_id: String,
+    pub state: ContextRetirementState,
+    pub code: ResultCode,
+    pub worktree_removal: crate::repository::RetirementRemoval,
+    pub branch_removal: crate::repository::RetirementRemoval,
+    pub materialization_settled: bool,
+}
+
+impl ContextRetirementMutationDto {
+    pub(crate) fn from_stored(stored: &serde_json::Value) -> Option<Self> {
+        fn known<T: Copy>(values: &[T], name: impl Fn(T) -> &'static str, text: &str) -> Option<T> {
+            values.iter().copied().find(|&value| name(value) == text)
+        }
+        // A closed root: a mixed legacy/new payload is not retirement evidence.
+        let object = stored.as_object()?;
+        if object.len() != 9 || stored.get("type")?.as_str()? != "context_retirement" {
+            return None;
+        }
+        Some(Self {
+            r#type: ContextRetirementMutationType::ContextRetirement,
+            kind: known(
+                &ItemDtoKind::ALL,
+                ItemDtoKind::as_str,
+                stored.get("kind")?.as_str()?,
+            )?,
+            item_id: stored.get("item_id")?.as_str()?.to_owned(),
+            operation_id: stored.get("operation_id")?.as_str()?.to_owned(),
+            state: known(
+                &ContextRetirementState::ALL,
+                ContextRetirementState::as_str,
+                stored.get("state")?.as_str()?,
+            )?,
+            code: known(
+                &ResultCode::ALL,
+                ResultCode::as_str,
+                stored.get("code")?.as_str()?,
+            )?,
+            worktree_removal: serde_json::from_value(stored.get("worktree_removal")?.clone())
+                .ok()?,
+            branch_removal: serde_json::from_value(stored.get("branch_removal")?.clone()).ok()?,
+            materialization_settled: stored.get("materialization_settled")?.as_bool()?,
+        })
+    }
 }
 
 contract_enum!(
@@ -1819,7 +1888,8 @@ impl MutationDataDto {
             | Self::PollPolicy(_)
             // A poll's report names no host; a host it stopped for is reported
             // as a synchronization's is.
-            | Self::Poll(_) => None,
+            | Self::Poll(_)
+            | Self::ContextRetirement(_) => None,
         }
     }
 
@@ -1895,6 +1965,9 @@ impl MutationDataDto {
                 SynchronizationConflictMutationDto::from_stored(stored)
                     .map(Self::SynchronizationConflict)
             }
+            Command::ContextRetire => {
+                ContextRetirementMutationDto::from_stored(stored).map(Self::ContextRetirement)
+            }
             Command::ContextPrepare => ContextMutationDto::from_stored(stored).map(Self::Context),
             Command::DocumentPromote | Command::TicketClose => {
                 LifecycleMutationDto::from_stored(stored)
@@ -1936,6 +2009,38 @@ impl MutationDataDto {
 #[cfg(test)]
 mod poll_retirement_recognition_tests {
     use super::*;
+
+    #[test]
+    fn ordinary_retirement_stored_data_is_closed_and_typed() {
+        let valid = serde_json::json!({"type":"context_retirement","kind":"ticket","item_id":"01ARZ3NDEKTSV4RRFFQ69G5FAV","operation_id":"01ARZ3NDEKTSV4RRFFQ69G5FAW","state":"preserved","code":"external_change","worktree_removal":"observed","branch_removal":"possible","materialization_settled":false});
+        assert!(ContextRetirementMutationDto::from_stored(&valid).is_some());
+        for (key, bad) in [
+            ("type", "poll"),
+            ("kind", "unknown"),
+            ("state", "closed"),
+            ("code", "unknown"),
+            ("worktree_removal", "removed"),
+            ("branch_removal", "true"),
+        ] {
+            let mut changed = valid.clone();
+            changed[key] = bad.into();
+            assert!(
+                ContextRetirementMutationDto::from_stored(&changed).is_none(),
+                "{key}"
+            );
+        }
+        for key in valid.as_object().unwrap().keys() {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(key);
+            assert!(
+                ContextRetirementMutationDto::from_stored(&missing).is_none(),
+                "{key}"
+            );
+        }
+        let mut extra = valid;
+        extra["source"] = "private".into();
+        assert!(ContextRetirementMutationDto::from_stored(&extra).is_none());
+    }
 
     #[test]
     fn ordinary_poll_stored_reports_keep_their_untagged_shape_and_all_old_values() {

@@ -1007,6 +1007,8 @@ local_steps! {
     ContextBranchReleased => "context_branch_released";
     /// Retirement observed initial absence, not an owned removal or checkpoint.
     ContextRetirementAbsent => "context_retirement_absent";
+    /// Confirmed preservation forbids further removal and owes local discovery.
+    ContextRetirementPreserved => "context_retirement_preserved";
     /// A comment's creation time is recorded and its file is about to be
     /// written.
     CommentDestinationPrepared => "comment_destination_prepared";
@@ -1083,6 +1085,7 @@ impl LocalStep {
             | Self::ContextWorktreeReleased
             | Self::ContextBranchReleased
             | Self::ContextRetirementAbsent
+            | Self::ContextRetirementPreserved
             | Self::CommentDestinationPrepared
             | Self::AuthoringDestinationObserved
             | Self::DocumentDestinationObserved
@@ -1114,6 +1117,7 @@ impl LocalStep {
             || self == Self::RemoteChanged
             || self == Self::ContextBranchReleased
             || self == Self::ContextRetirementAbsent
+            || self == Self::ContextRetirementPreserved
     }
 
     /// The step as a call under the same ID is told it when the call
@@ -1139,7 +1143,8 @@ impl LocalStep {
             // branch, or to the hand-off.
             | Self::ContextWorktreeReleased
             | Self::ContextBranchReleased
-            | Self::ContextRetirementAbsent => Some(self),
+            | Self::ContextRetirementAbsent
+            | Self::ContextRetirementPreserved => Some(self),
             Self::BranchObserved
             | Self::LocalSyncPrepared
             | Self::WorktreeObserved
@@ -2661,6 +2666,7 @@ mod abandoned_row_tests {
                 "context_worktree_released",
                 "context_branch_released",
                 "context_retirement_absent",
+                "context_retirement_preserved",
                 "comment_destination_prepared",
                 "comment_checkpoint_intent",
                 "comment_registration_pending",

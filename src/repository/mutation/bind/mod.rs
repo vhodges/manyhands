@@ -52,6 +52,7 @@ pub(crate) mod repo_identity;
 pub(crate) mod repo_remove;
 pub(crate) mod republish;
 pub(crate) mod resume;
+pub(crate) mod retire;
 pub(crate) mod save;
 pub(crate) mod sync;
 pub(crate) mod ticket;
@@ -298,6 +299,13 @@ pub(crate) struct Answer {
 }
 
 impl Answer {
+    /// Retirement cancellation after an owned/possible removal is partial,
+    /// not an empty cancelled refusal. Other commands retain their old rule.
+    pub(crate) fn cancelled_outcome(&self) -> bool {
+        self.code == ResultCode::Cancelled
+            && !(self.local_change
+                && matches!(self.data, Some(MutationDataDto::ContextRetirement(_))))
+    }
     /// A request that stopped having done nothing.
     pub(crate) fn stopped(code: ResultCode) -> Self {
         Self {
@@ -1085,6 +1093,10 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::ContextRelease) => Recorded {
             effects: Effects::not_requested(),
             local_change: context::released_and_unfinished(journal.as_ref()),
+        },
+        Some(Command::ContextRetire) => Recorded {
+            effects: Effects::not_requested(),
+            local_change: retire::recorded_change(service, &accepted),
         },
         Some(Command::DocumentRepair | Command::TicketRepair) => {
             Recorded::of(repair::recorded_effects(record, &accepted))

@@ -1,0 +1,37 @@
+{
+  "code": "already_applied",
+  "command": "context retire",
+  "data": {
+    "branch_removal": "none",
+    "code": "already_applied",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FCN",
+    "kind": "ticket",
+    "materialization_settled": true,
+    "operation_id": "<operation>",
+    "state": "already_absent",
+    "type": "context_retirement",
+    "worktree_removal": "none"
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "current",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request was already applied; nothing changed.",
+  "operation_id": "<operation>",
+  "outcome": "noop",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FCN",
+    "remote": null,
+    "repository": "<root>",
+    "worktree": "<root>/.manyhands/worktrees/01ARZ3NDEKTSV4RRFFQ69G5FCN"
+  }
+}

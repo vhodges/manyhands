@@ -19,6 +19,15 @@ pub enum RetirementRemoval {
     Possible,
     Observed,
 }
+impl RetirementRemoval {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Possible => "possible",
+            Self::Observed => "observed",
+        }
+    }
+}
 
 /// A closed metadata-only report. No source bytes, paths or endpoint/key data.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +43,20 @@ pub struct ContextRetirementReport {
 }
 
 impl ContextRetirementReport {
+    pub(super) fn preserved(
+        worktree_removal: RetirementRemoval,
+        branch_removal: RetirementRemoval,
+        materialization_settled: bool,
+    ) -> Self {
+        Self {
+            version: 1,
+            code: ResultCode::ExternalChange,
+            outcome: RetirementDisposition::Preserved,
+            worktree_removal,
+            branch_removal,
+            materialization_settled,
+        }
+    }
     pub(super) fn refused(code: ResultCode) -> Self {
         Self {
             version: 1,
