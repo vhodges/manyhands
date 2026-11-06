@@ -706,12 +706,14 @@ conflicts. **Interruption is real:**
   close at `integrating`. L3 emits `integrating` before the cancel check
   that precedes the merge (`run.rs:715-716`) and outside any transaction,
   so Stop lands before the merge.
-- P5: following `view/item/posting_tests/relaunch.rs`, a close is broken
-  by the library failure point `BeforeRequestSettlement`
-  (`execute.rs:425`, through `open_at_with_failure_point_for_testing`, as
+- P5 (R-33): following `view/item/posting_tests/relaunch.rs`, a close is
+  broken by the library failure point `ClosureAfterClosingRecorded`
+  (through `open_at_with_failure_point_for_testing`, as
   `move_document_tests.rs:283` does); the test asserts `request_show` is
   `accepted`, then opens a fresh shell over the same data directory and
   drives Resume → `original_request_required` → resend.
+  `BeforeRequestSettlement` (`execute.rs:438`) fires after a local close
+  has finished, and is tested as K-25.
 - Commits are counted on the real repositories (A8, A9).
 **Canned answers** (`hold_job_return_answering`, a canned prepare, a
 canned `ConflictDto`) are used only where the real call is refused with no
@@ -813,6 +815,7 @@ Applied in the approval commit:
 | R-30 | An item share stopped on `remote_branch_deleted` while its record is accepted offers Stop and republish… and Give up, as A3's lifecycle path does; once finished, Republish…. A share of main offers Give up only, with wording that promises no republish. Republish… and Stop and republish… are hidden, in the dialog, on the share entry and on the item banner, while a republish of the item runs or waits to send its lifecycle on. A republish's follow-on lasts until the republish succeeds, ends with an answer offering neither Retry nor Prepare again, is removed or not sent, or its own entry is dismissed; dismissing the lifecycle run keeps it. Stop and republish… waits for the Give up's answer only while the asking dialog is open; the run's Open… still offers Republish… (orchestrator, Task 14 review and re-review) | Main's deleted branch is shared again outside Manyhands or by Share main |
 | R-31 | The sheet's Result editor has a tab stop after the choices and before Cancel · Save, as the read-only editors and the composer do: Enter on it goes into the editor; inside, Tab indents, Enter is a newline, Ctrl+Enter saves, and Escape returns to the tab stop without closing the sheet (owner 2026-11-05, Task 15a) | Escape needs two presses to close the sheet from inside the editor |
 | R-32 | Focus lost inside an open dialog or sheet returns to that dialog's or sheet's own focus (`focus_lost_restore_target`), so a control that goes by itself (Stop, Read again, Check again) never drops focus out of the modal. A lifecycle-dialog press also moves focus to the dialog first, so a prompt opened before the next frame (the passphrase dialog) takes the dialog as its origin. A modal handing focus back to an origin that is gone lands on the last region (orchestrator, Task 15a review and re-review) | — |
+| R-33 | P5 strands the close at `ClosureAfterClosingRecorded` (after `closing` is recorded, before the merge), not at `BeforeRequestSettlement`, which fires only after a local close has finished (`execute.rs:437-441`): a fresh shell, Resume → `original_request_required` → the resend finishes, with commit counts. A9's cleanup-only replay is a same-ID replay that only tidies up (owner 2026-11-05 on P5; orchestrator on A9; Task 15b) | `BeforeRequestSettlement` is covered only as K-25 |
 
 ## Known Limits
 
@@ -884,6 +887,10 @@ Applied in the approval commit:
   with no item) offers no Review changes: the sheet and kept sets are built
   around an item. It is resolved outside Manyhands (owner 2026-11-05,
   Task 13).
+- **K-25.** A close broken at `BeforeRequestSettlement` has finished: the
+  ticket reads closed with no row and no lock, but its request stays
+  `accepted`, and nothing in the desktop settles it. A resend of the same
+  request ID answers `Ok` with no commits (owner 2026-11-05, Task 15b).
 
 ## Alternatives Rejected
 

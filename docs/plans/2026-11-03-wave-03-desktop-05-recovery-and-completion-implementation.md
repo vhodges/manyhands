@@ -521,7 +521,8 @@ devenv shell -- sh scripts/check-cli-no-gpui.sh
 - [ ] **Tests** (`view/lifecycle/interruption_tests.rs`, real local-only
   repositories; design, Testing): a close held at `integrating` by the
   progress-sink seam, stopped before the merge, then Retry (P4); a close
-  broken at `BeforeRequestSettlement`, `request_show` asserted `accepted`,
+  broken at `ClosureAfterClosingRecorded` (R-33; `BeforeRequestSettlement`
+  is K-25's test), `request_show` asserted `accepted`,
   a fresh shell opened over the same data directory (as
   `posting_tests/relaunch.rs`), then Resume → `original_request_required`
   → resend (P5); a cleanup-only replay. Commits on primary and context are
