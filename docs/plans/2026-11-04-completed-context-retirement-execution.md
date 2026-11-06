@@ -7071,3 +7071,32 @@ unchanged; no new ID or ticket-body/status save. **No Cargo/build/test/static/SS
 fast/full/native command or prior-green rerun** for this prose clarification.
 Task 8 and whole-feature gates remain owed. No agents, other-worktree/main/profile/
 key/context/draft action, push/PR/close/native dispatch or owned background job.
+
+## Task 7 Review Passes And QUALITY Minor Nullability Clarification — 2026-11-06
+
+Controller reports **SPEC PASS** by `ses_e4ce0d5ddffeieNVsaSxi7UkAX` through
+**`19f51f50c4723d38624c85961a3c440102c49cdd`**, and fresh **QUALITY PASS** by
+**`ses_e4cd8261cffeK50w4NumlAXvPV`**, with **zero Critical/Important findings
+and one Minor wording finding**. Original Task 7 review base remains
+`76a852a7d5d4fcd757a95451601cdbb407b99bcc`; initial `eaeabbf9` and subsequent
+correction history are preserved. These are bounded Task 7 reviews, not Task 8
+or whole-feature approval. Earlier pending-review notes retain their dated scope.
+
+The `PollMutationDto` field-table grammar could make target `disposition` read
+as nullable. Actual `PollTargetDto` (`mutation/dto.rs:1726–1732`) has five
+`Option` fields and non-Option `disposition: PollTargetDisposition`;
+`schemas/v1/poll_mutation.schema.json` requires all six, with only those five
+nullable and disposition a non-null string enum. The single RFC row now says
+**five required-nullable fields plus required non-null disposition** explicitly.
+No wire shape, policy, schema, code, fixture, taxonomy or recovery semantics change.
+
+Source/docs, relative links, append-only metadata/history, whitespace and exact
+three-file delta checks are in `/tmp/opencode/task7-quality-nullability-checks.{log,json}`;
+delta-only manifest `task7-quality-nullability-sources.sha256` and diff
+`task7-quality-nullability.diff` remain separate from earlier evidence. Existing
+canonical comment `01M6SHEHSJYNH371M4TY9GMAV9` is appended without changing its
+ID, parent, creator or timestamp. **No Cargo/build/test/taxonomy/static/SSH rerun**;
+unchanged earlier evidence retains its original scope. **SPEC approval carries
+over this wording-only correction; SAME QUALITY's bounded delta check is pending
+before publication.** Task 8/final gates remain owed. No agents, other-worktree/
+main/profile/key/context/draft action, push/PR/close/native dispatch or owned job.

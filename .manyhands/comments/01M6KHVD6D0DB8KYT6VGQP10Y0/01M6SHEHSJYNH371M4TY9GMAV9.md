@@ -74,3 +74,23 @@ the existing checkpoint without changing its ID/parent/creator/timestamp.
 **Correction pending the SAME SPEC review, then fresh QUALITY, before publication.**
 Task 8/whole-feature gates remain owed; no agents, push/PR/main/closure/native,
 real profile/key/context/draft action or owned background job.
+
+## Task 7 reviews passed; QUALITY minor wording correction
+
+Controller reports SPEC `ses_e4ce0d5ddffeieNVsaSxi7UkAX` PASS through
+`19f51f50c4723d38624c85961a3c440102c49cdd`; fresh QUALITY
+`ses_e4cd8261cffeK50w4NumlAXvPV` PASS with zero Critical/Important findings and
+one Minor wording finding. Original Task 7 base remains
+`76a852a7d5d4fcd757a95451601cdbb407b99bcc`; previous history is unchanged.
+
+The RFC's poll-target field row now explicitly separates five required-nullable
+fields from the required **non-null** `disposition` enum, matching actual DTO and
+schema. No code/schema/fixture/policy or taxonomy/recovery change. Quick source/
+docs, links, metadata/history and whitespace checks are recorded in
+`/tmp/opencode/task7-quality-nullability-checks.{log,json}`; no Cargo/test/static/
+SSH rerun. This checkpoint's ID/parent/creator/timestamp and prior body remain intact.
+
+**SPEC carries over the wording-only delta; SAME QUALITY bounded check pending
+before publication.** Task 8/whole-feature gates remain owed. No agents, other
+worktree/main/profile/key/context/draft action, push/PR/close/native dispatch or
+owned job.
