@@ -549,4 +549,182 @@ fn ordinary_retirement_index_only_resume_spends_own_request_and_preserves_recrea
             .unwrap(),
         2
     );
+
+    // The other supported exit from initial-absence I is confirmed preserving
+    // abandonment. Its terminal local metadata must not prevent deregistration.
+    let f = Fixture::new();
+    let id = RequestId::new();
+    let producer = RepositoryService::open_at_with_failure_point_for_testing(
+        f.data.path(),
+        FailurePoint::BeforeIndexTransactionCommit,
+    )
+    .unwrap();
+    let pending = execute(&producer, id, retire(&f));
+    assert_eq!(pending.code, ResultCode::DiscoveryPending, "{pending:?}");
+    let operation = OperationId::parse(pending.operation_id.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        f.db()
+            .query_row("SELECT count(*) FROM remote_operation_records", [], |r| r
+                .get::<_, i64>(
+                0
+            ))
+            .unwrap(),
+        0
+    );
+    let abandon = RequestId::new();
+    // The public boundary must keep accepting a retirement root alias while
+    // binding metadata/ownership to the already-canonical scope.
+    let mutation = || {
+        Mutation::OperationAbandon(OperationAbandonInput {
+            root: f.root.path().join("."),
+            operation_id: operation,
+        })
+    };
+    let preview = f
+        .service
+        .prepare(&mutation())
+        .data
+        .unwrap()
+        .into_preview()
+        .unwrap();
+    let call = || MutationCall {
+        request_id: abandon,
+        confirmation: Some(ConfirmationId::parse(&preview.confirmation_id).unwrap()),
+        mutation: mutation(),
+    };
+    f.db().execute_batch("CREATE TRIGGER retirement_fixture_fail_preserved BEFORE UPDATE OF phase ON context_retirement_records WHEN NEW.phase='abandoned' BEGIN SELECT RAISE(ABORT,'isolated finalizer fault'); END").unwrap();
+    let pending = f.service.execute(
+        call(),
+        &mut SessionCredentials::new(NoCredentials),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(pending.code, ResultCode::DiscoveryPending, "{pending:?}");
+    let row = f.service.request_record(abandon).unwrap().unwrap();
+    let accepted = mutation::Accepted::of_record(&row, row.attempt).unwrap();
+    assert!(
+        context_retirement::preserve::owns(&f.service, f.root.path(), operation, &accepted)
+            .unwrap()
+    );
+    let wrong_root = f.root.path().join("unrelated");
+    assert_eq!(
+        context_retirement::preserve::owns(&f.service, &wrong_root, operation, &accepted)
+            .unwrap_err()
+            .code(),
+        ResultCode::RecoveryRequired
+    );
+    let stale = mutation::Accepted::of_record(&row, row.attempt + 1).unwrap();
+    assert_eq!(
+        context_retirement::preserve::owns(&f.service, f.root.path(), operation, &stale)
+            .unwrap_err()
+            .code(),
+        ResultCode::RecoveryRequired
+    );
+    let before = registry_image(&f.db());
+    let refused = f
+        .service
+        .remove_registration(RemoveRegistrationRequest {
+            root: f.root.path().into(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap_err();
+    assert_eq!(refused.kind, RepositoryErrorKind::RecoveryRequired);
+    for table in [
+        "context_retirement_preservations",
+        "context_retirement_preservation_claims",
+    ] {
+        assert!(
+            f.db().execute(&format!("DELETE FROM {table}"), []).is_err(),
+            "pending {table} is retained"
+        );
+        assert!(
+            f.db()
+                .execute(
+                    &format!("UPDATE {table} SET operation_ulid=operation_ulid"),
+                    []
+                )
+                .is_err(),
+            "pending {table} stays immutable"
+        );
+    }
+    assert_eq!(
+        before,
+        registry_image(&f.db()),
+        "pending preserving debt blocks removal unchanged"
+    );
+    f.db()
+        .execute_batch("DROP TRIGGER retirement_fixture_fail_preserved")
+        .unwrap();
+    let abandoned = f.service.execute(
+        call(),
+        &mut SessionCredentials::new(NoCredentials),
+        &mut NoProgress,
+        &CancellationToken::new(),
+    );
+    assert_eq!(abandoned.code, ResultCode::Ok, "{abandoned:?}");
+    let retired = execute(&f.service, id, retire(&f));
+    assert_eq!(retired.code, ResultCode::ExternalChange);
+    for table in [
+        "context_retirement_preservations",
+        "context_retirement_preservation_claims",
+    ] {
+        assert!(
+            f.db()
+                .execute(
+                    &format!("UPDATE {table} SET operation_ulid=operation_ulid"),
+                    []
+                )
+                .is_err(),
+            "terminal {table} stays immutable until cleanup"
+        );
+    }
+    let requests = row_image(&f.db(), "request_records");
+    let mappings = row_image(&f.db(), "request_operations");
+    let disk = disk_image(f.root.path());
+    assert_eq!(
+        f.service
+            .remove_registration(RemoveRegistrationRequest {
+                root: f.root.path().into(),
+                operation_id: OperationId::new()
+            })
+            .unwrap(),
+        RemoveRegistrationOutcome::Removed
+    );
+    let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+    assert_eq!(execute(&reopened, id, retire(&f)), retired);
+    assert_eq!(
+        reopened.execute(
+            call(),
+            &mut SessionCredentials::new(NoCredentials),
+            &mut NoProgress,
+            &CancellationToken::new()
+        ),
+        abandoned
+    );
+    assert_eq!(requests, row_image(&f.db(), "request_records"));
+    assert_eq!(mappings, row_image(&f.db(), "request_operations"));
+    assert_eq!(disk, disk_image(f.root.path()));
+    for table in [
+        "repositories",
+        "operation_records",
+        "context_retirement_records",
+        "context_retirement_preservations",
+        "context_retirement_preservation_claims",
+    ] {
+        assert_eq!(
+            f.db()
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "terminal {table} follows registration cleanup"
+        );
+    }
+    assert!(
+        !f.db()
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .exists([])
+            .unwrap()
+    );
 }

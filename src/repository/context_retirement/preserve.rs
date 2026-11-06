@@ -10,26 +10,30 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use state::recovery_required;
 use std::path::Path;
 
-pub(super) const MARKER: &str = "context_retirement_preserving_v1";
+// v2 allows terminal local metadata to follow the retirement envelope's normal
+// registration cleanup. The unpublished Task 3 v1 catalog is NOT auto-upgraded:
+// its old marker (even with empty tables) is refused unchanged by record's known
+// marker check. Only an exact pre-preserving catalog may install these additions.
+pub(super) const MARKER: &str = "context_retirement_preserving_v2";
 pub(super) fn objects() -> Vec<(&'static str, &'static str, String)> {
     vec![
         ("table", "context_retirement_preservations", "CREATE TABLE context_retirement_preservations (
- operation_ulid TEXT PRIMARY KEY NOT NULL REFERENCES context_retirement_records(operation_ulid) ON DELETE NO ACTION,
+ operation_ulid TEXT PRIMARY KEY NOT NULL REFERENCES context_retirement_records(operation_ulid) ON DELETE CASCADE,
  abandon_request_ulid TEXT NOT NULL UNIQUE REFERENCES request_records(request_ulid) ON DELETE NO ACTION,
  accepted_attempt INTEGER NOT NULL CHECK(typeof(accepted_attempt)='integer' AND accepted_attempt>0),
  owner_epoch INTEGER NOT NULL CHECK(typeof(owner_epoch)='integer' AND owner_epoch>0),
  snapshot TEXT NOT NULL CHECK(json_valid(snapshot))
 )".into()),
         ("table", "context_retirement_preservation_claims", "CREATE TABLE context_retirement_preservation_claims (
- operation_ulid TEXT NOT NULL REFERENCES context_retirement_preservations(operation_ulid) ON DELETE NO ACTION,
+ operation_ulid TEXT NOT NULL REFERENCES context_retirement_preservations(operation_ulid) ON DELETE CASCADE,
  request_attempt INTEGER NOT NULL CHECK(typeof(request_attempt)='integer' AND request_attempt>0),
  index_owner_epoch INTEGER NOT NULL CHECK(typeof(index_owner_epoch)='integer' AND index_owner_epoch>0),
  PRIMARY KEY(operation_ulid,request_attempt), UNIQUE(operation_ulid,index_owner_epoch)
 )".into()),
         ("trigger", "retirement_preservation_immutable", "CREATE TRIGGER retirement_preservation_immutable BEFORE UPDATE ON context_retirement_preservations BEGIN SELECT RAISE(ABORT,'immutable preserving consent'); END".into()),
-        ("trigger", "retirement_preservation_retained", "CREATE TRIGGER retirement_preservation_retained BEFORE DELETE ON context_retirement_preservations BEGIN SELECT RAISE(ABORT,'retained preserving consent'); END".into()),
+        ("trigger", "retirement_preservation_retained", "CREATE TRIGGER retirement_preservation_retained BEFORE DELETE ON context_retirement_preservations WHEN EXISTS(SELECT 1 FROM context_retirement_records c WHERE c.operation_ulid=OLD.operation_ulid AND c.phase NOT IN ('complete','refused','abandoned')) BEGIN SELECT RAISE(ABORT,'retained preserving consent'); END".into()),
         ("trigger", "retirement_preservation_claim_immutable", "CREATE TRIGGER retirement_preservation_claim_immutable BEFORE UPDATE ON context_retirement_preservation_claims BEGIN SELECT RAISE(ABORT,'immutable preserving spend'); END".into()),
-        ("trigger", "retirement_preservation_claim_retained", "CREATE TRIGGER retirement_preservation_claim_retained BEFORE DELETE ON context_retirement_preservation_claims BEGIN SELECT RAISE(ABORT,'retained preserving spend'); END".into()),
+        ("trigger", "retirement_preservation_claim_retained", "CREATE TRIGGER retirement_preservation_claim_retained BEFORE DELETE ON context_retirement_preservation_claims WHEN EXISTS(SELECT 1 FROM context_retirement_records c WHERE c.operation_ulid=OLD.operation_ulid AND c.phase NOT IN ('complete','refused','abandoned')) BEGIN SELECT RAISE(ABORT,'retained preserving spend'); END".into()),
     ]
 }
 pub(super) fn marked(db: &Connection) -> Result<bool, RepositoryError> {

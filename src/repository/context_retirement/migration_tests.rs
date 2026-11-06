@@ -54,8 +54,32 @@ fn remove_preserving_adapter(db: &Connection) {
 
 #[test]
 fn retirement_preserving_catalog_upgrade_rolls_back_and_rejects_unknown_closure() {
+    // Independently frozen from 8b6d5b40's unpublished preserving-v1 additions,
+    // including scalar constraints. Never derive this refusal fixture from the
+    // current builder: v1 remains unsupported, not a permissive v2 upgrade path.
+    let old: Vec<(&str, &str, String)> =
+        serde_json::from_str(include_str!("preserving_v1_catalog.json")).unwrap();
+    let mut bytes = Vec::new();
+    for (kind, name, sql) in &old {
+        for field in [*kind, *name, record::normalized(sql).as_str()] {
+            bytes.extend_from_slice(field.as_bytes());
+            bytes.push(0);
+        }
+    }
+    assert_eq!(
+        git2::Oid::hash_object(git2::ObjectType::Blob, &bytes)
+            .unwrap()
+            .to_string(),
+        "5efcbbfd50e9dbe691bf1dd141267302d3ff4c36"
+    );
     for case in [
         "success",
+        "reopen",
+        "v1",
+        "v1_unmarked",
+        "v1_as_v2",
+        "v2_as_v1",
+        "substituted",
         "fault15",
         "fault16",
         "fault17",
@@ -67,10 +91,29 @@ fn retirement_preserving_catalog_upgrade_rolls_back_and_rejects_unknown_closure(
         let data = tempfile::tempdir().unwrap();
         let (mut db, _) = legacy(data.path(), "released");
         record::migrate(&mut db).unwrap();
-        if !matches!(case, "attachment" | "missing_marker") {
+        if !matches!(
+            case,
+            "reopen" | "v2_as_v1" | "substituted" | "attachment" | "missing_marker"
+        ) {
             remove_preserving_adapter(&db);
         }
+        if matches!(case, "v1" | "v1_unmarked" | "v1_as_v2") {
+            for (_, _, sql) in &old {
+                db.execute_batch(sql).unwrap();
+            }
+            if case != "v1_unmarked" {
+                let marker = if case == "v1" {
+                    "context_retirement_preserving_v1"
+                } else {
+                    "context_retirement_preserving_v2"
+                };
+                db.execute("INSERT INTO registry_migrations VALUES(?1)", [marker])
+                    .unwrap();
+            }
+        }
         match case {
+            "v2_as_v1"=>{db.execute("DELETE FROM registry_migrations WHERE name=?1",[super::super::preserve::MARKER]).unwrap();db.execute("INSERT INTO registry_migrations VALUES('context_retirement_preserving_v1')", []).unwrap();},
+            "substituted"=>db.execute_batch("DROP TRIGGER retirement_preservation_retained; CREATE TRIGGER retirement_preservation_retained BEFORE DELETE ON context_retirement_preservations BEGIN SELECT 1; END").unwrap(),
             "partial"=>db.execute_batch("CREATE TABLE context_retirement_preservations(payload TEXT); INSERT INTO context_retirement_preservations VALUES('must keep');").unwrap(),
             "attachment"=>db.execute_batch("CREATE TRIGGER foreign_preserving_guard BEFORE DELETE ON context_retirement_preservations BEGIN SELECT 1;END").unwrap(),
             "incoming"=>db.execute_batch("CREATE TABLE foreign_preserving_child(op TEXT REFERENCES context_retirement_preservations(operation_ulid));").unwrap(),
@@ -82,14 +125,39 @@ fn retirement_preserving_catalog_upgrade_rolls_back_and_rejects_unknown_closure(
         }
         let before = specfix_r1_full_image(&db);
         let result = record::migrate(&mut db);
-        if case == "success" {
+        if matches!(case, "success" | "reopen") {
             result.unwrap();
             record::audit_connection(&db).unwrap();
+            if case == "reopen" {
+                assert_eq!(before, specfix_r1_full_image(&db));
+            }
+            let after = specfix_r1_full_image(&db);
+            drop(RepositoryService::open_at(data.path()).unwrap());
+            assert_eq!(
+                after,
+                specfix_r1_full_image(&db),
+                "{case}: current exact catalog reopens unchanged"
+            );
         } else {
             assert!(result.is_err(), "{case}");
             assert_eq!(before, specfix_r1_full_image(&db), "{case}");
+            if !case.starts_with("fault") {
+                assert!(
+                    matches!(RepositoryService::open_at(data.path()), Err(ref e) if e.kind == RepositoryErrorKind::RecoveryRequired),
+                    "{case}: refusal also holds at service open"
+                );
+                assert_eq!(
+                    before,
+                    specfix_r1_full_image(&db),
+                    "{case}: open refusal is unchanged"
+                );
+            }
         }
     }
+    assert_eq!(
+        super::super::preserve::MARKER,
+        "context_retirement_preserving_v2"
+    );
 }
 
 fn remove_gap_adapter(db: &Connection) {
