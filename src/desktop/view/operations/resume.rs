@@ -100,6 +100,7 @@ impl Workspace {
             ("pending-resume", index),
             RESUME,
             Some(&focus),
+            cx,
             cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.resume_lifecycle(&root, &row, origin.clone(), window, cx)
             }),

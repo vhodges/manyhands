@@ -208,12 +208,14 @@ fn text(id: impl Into<ElementId>, value: impl Into<String>) -> Text {
 /// A Kit button in a wrapper a test reads by `id`. With `focus`, the
 /// wrapper tracks it, so a dialog the button opens can give focus back
 /// there, and a test can see the button hold it. Enter or Space on the
-/// wrapper, where that focus lands, presses the button too (A21), as
-/// Abandon's wrapper does; a pointer's click is the button's.
+/// wrapper, where that focus lands, presses the button too (A21), and the
+/// wrapper shows a ring while it holds focus, as Abandon's does; a
+/// pointer's click is the button's.
 fn button(
     id: impl Into<ElementId>,
     label: &'static str,
     focus: Option<&FocusHandle>,
+    cx: &App,
     on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
 ) -> AnyElement {
     let id = id.into();
@@ -221,8 +223,11 @@ fn button(
     let mut wrapper = div().id(id.clone()).test_support().aria_label(label);
     if let Some(focus) = focus {
         let pressed = on_click.clone();
+        let ring = cx.theme().ring;
         wrapper = wrapper
             .track_focus(focus)
+            .rounded_sm()
+            .focus(move |style| style.border_2().border_color(ring))
             .on_click(move |event, window, cx| {
                 if event.is_keyboard() {
                     pressed(event, window, cx);
@@ -362,6 +367,7 @@ impl Workspace {
                     request_id(id, "cancel"),
                     CANCEL,
                     Some(&focus),
+                    cx,
                     cx.listener(move |this, _: &ClickEvent, _, cx| this.cancel_request(id, cx)),
                 ));
             }
@@ -406,6 +412,7 @@ impl Workspace {
                         request_id(id, "open"),
                         OPEN_LIFECYCLE,
                         Some(&focus),
+                        cx,
                         cx.listener(move |this, _: &ClickEvent, window, cx| {
                             this.open_lifecycle(id, window, cx)
                         }),
@@ -461,6 +468,7 @@ impl Workspace {
                     request_id(id, "stop"),
                     STOP,
                     Some(&focus),
+                    cx,
                     cx.listener(move |this, _: &ClickEvent, _, cx| this.stop_request(id, cx)),
                 )
             }
@@ -490,6 +498,7 @@ impl Workspace {
             request_id(id, "dismiss"),
             DISMISS,
             Some(&focus),
+            cx,
             cx.listener(move |this, _: &ClickEvent, _, cx| this.dismiss_request(id, cx)),
         )
     }
@@ -517,6 +526,7 @@ impl Workspace {
                 recovery_id(id, n),
                 label,
                 Some(&focus),
+                cx,
                 cx.listener(move |this, _: &ClickEvent, window, cx| {
                     this.run_recovery(id, n, window, cx)
                 }),
@@ -677,6 +687,7 @@ impl Workspace {
                                             ("pending-repository-retry", n),
                                             super::sidebar::RETRY,
                                             None,
+                                            cx,
                                             cx.listener(move |this, _: &ClickEvent, _, cx| {
                                                 this.load_pending(reload.clone(), cx)
                                             }),
@@ -753,6 +764,7 @@ impl Workspace {
                             ("pending-resume", index),
                             RESUME,
                             Some(&focus),
+                            cx,
                             cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 if let Some(operation_id) = &operation_id {
                                     this.resume(root.clone(), operation_id, cx);

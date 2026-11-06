@@ -256,6 +256,7 @@ impl Workspace {
             part,
             offer_label(offer),
             Some(&focus),
+            cx,
             cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.run_share_offer(id, offer, window, cx)
             }),

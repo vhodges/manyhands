@@ -235,9 +235,11 @@ pub(crate) struct ResolveSheet {
     /// once a local resolution applies (B6, P9).
     reopen: Option<Reopen>,
     origin: FocusHandle,
-    /// The sheet's own focus: Save resolution or Retry, pressed, is
-    /// disabled while its request waits, and focus moves here first, so
-    /// it stays in the sheet (A21).
+    /// The sheet's own focus: a control that goes or is disabled while it
+    /// holds focus (Save resolution while its request waits, Read again
+    /// once its read lands) gives focus back here, the nearest focusable
+    /// that held it (`Workspace::focus_lost`), so it stays in the sheet
+    /// (A21).
     focus: FocusHandle,
     services: Services,
     generations: Generations,

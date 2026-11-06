@@ -294,7 +294,8 @@ async fn close_a_ticket_by_keyboard(cx: &mut TestAppContext) {
 /// Find, its action reached by Tab after Share; Enter opens the dialog,
 /// and Enter, the dialog's default, confirms. Held at `integrating`,
 /// Escape hides the dialog and gives focus back to the action while the
-/// merge goes on; it finishes, and the document is on main.
+/// merge goes on; it finishes, the document is on main, and focus is
+/// still in the content region (review M-6).
 #[gpui_kit::test]
 async fn approve_and_merge_a_document_by_keyboard(cx: &mut TestAppContext) {
     cx.executor().allow_parking();
@@ -331,4 +332,46 @@ async fn approve_and_merge_a_document_by_keyboard(cx: &mut TestAppContext) {
     );
     assert_eq!(walk.lifecycles(cx), sent, "sent once");
     assert!(on_main(&walk.a, "docs/plan.md"), "merged into main");
+    walk.shell.run(cx);
+    walk.region(Region::Content, cx);
+}
+
+/// Review I-1 (A21), real local-only: Stop at a safe point holds focus,
+/// reached by Tab, when the close finishes by itself. Stop goes with the
+/// running stage, and focus stays in the dialog, so Enter closes Done and
+/// focus is back in the content region.
+#[gpui_kit::test]
+async fn focus_stays_in_the_dialog_when_stop_goes_by_itself(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let walk = walk(cx, |fixture, a| {
+        fixture.commit_ticket(a, TICKET, "Untitled", "");
+        fixture.refresh(a);
+        fixture.save_ticket(a, TICKET, "Finishing");
+    });
+    walk.reach_the_action(TICKET, CLOSE_TICKET, cx);
+    walk.open_the_dialog(cx).await;
+    let gate = walk
+        .shell
+        .backend
+        .hold_at_stage(JobKind::TicketClose, ProgressStage::Integrating);
+    walk.enter(cx);
+    let sent = walk.lifecycles(cx);
+    gate.wait_reached();
+    walk.until_drawn(kit("lifecycle-stop"), cx).await;
+    walk.tab_to_control("lifecycle-stop", cx);
+    gate.release();
+    walk.shell.until_ended(sent[0], cx).await;
+    walk.shell
+        .until_drawn(cx, "Done", |shell, cx| {
+            shell.label("lifecycle-ending", cx).as_deref() == Some(ENDING_DONE)
+        })
+        .await;
+    assert!(!walk.shell.present("lifecycle-stop", cx), "Stop went");
+    walk.in_dialog("lifecycle-dialog", cx);
+    walk.enter(cx);
+    assert!(
+        !walk.shell.present("lifecycle-dialog", cx),
+        "Enter closes Done"
+    );
+    walk.region(Region::Content, cx);
 }

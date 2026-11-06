@@ -16,18 +16,7 @@
 use std::time::{Duration, Instant};
 
 use gpui_kit::{ElementId, TestAppContext};
-use manyhands::{
-    repository::{
-        ConflictDto, ConflictNextAction, ConflictNextDto, ConflictPathDto, ConflictPathKind,
-        ConflictPathStructure, ConflictReadEligibility, ConflictReadNextAction, ConflictStage,
-        ConflictState, ConflictTarget, MutationDataDto, SynchronizationConflictMutationDto,
-        SynchronizationConflictType,
-    },
-    results::{
-        CheckpointEffect, DiscoveryEffect, Effects, Envelope, IntegrationEffect, Outcome,
-        PublicationEffect, ResultCode, Scope, WriteEffect,
-    },
-};
+use manyhands::results::{Outcome, ResultCode};
 
 use super::{Walk, drafts::kit_button};
 use crate::desktop::{
@@ -36,7 +25,7 @@ use crate::desktop::{
         JobKind,
         requests::{Intent, RequestState},
     },
-    test_support::fixtures::{Fixture, ticket_path, ticket_source},
+    test_support::fixtures::{Fixture, ticket_path},
     view::{
         conflict::{KEEPING_MINE, KEEPING_THEIRS, REVIEW_CHANGES},
         harness::Shell,
@@ -53,87 +42,10 @@ const PENDING_REVIEW: &str = "pending-review";
 /// `view/conflict_tests.rs`'s `RESOLVING`.
 const RESOLVING: Duration = Duration::from_secs(90);
 
-/// A share stopped on a conflict of `SYNCHRONIZATION`, as
-/// `tests/mutation_remote/merging.rs` `c4_merging_canonical_conflict`
-/// answers.
-fn share_conflict() -> Envelope<MutationDataDto> {
-    Envelope::classified_mutation(
-        "item sync",
-        Scope::default(),
-        false,
-        ResultCode::RecoveryRequired,
-        Effects::not_requested(),
-        false,
-    )
-    .with_data(MutationDataDto::SynchronizationConflict(
-        SynchronizationConflictMutationDto {
-            r#type: SynchronizationConflictType::SynchronizationConflict,
-            conflict: ConflictNextDto {
-                operation_id: SYNCHRONIZATION.to_owned(),
-                next_action: ConflictNextAction::Resolve,
-            },
-        },
-    ))
-}
+mod canned;
+mod sheet;
 
-/// The ticket's source titled `title`, with the body every side shares.
-fn side(title: &str) -> String {
-    ticket_source(TICKET, title, "").replace(&format!("Body of {title}."), "Body.")
-}
-
-/// The share's conflict, live and to be resolved, whose one path is the
-/// ticket with its title changed on both sides: the shape
-/// `tests/mutation_remote/conflict_read.rs` `c4_conflict_read_canonical`
-/// reads.
-fn conflict_read() -> ConflictDto {
-    ConflictDto {
-        operation_id: SYNCHRONIZATION.to_owned(),
-        comment_operation_id: None,
-        target: ConflictTarget::Primary,
-        item_id: None,
-        stage: ConflictStage::Primary,
-        state: ConflictState::ConflictPending,
-        next_action: ConflictReadNextAction::Resolve,
-        request_id: None,
-        eligibility: Some(ConflictReadEligibility::EligibleCanonical),
-        local_parent: "1".repeat(40),
-        incoming_parent: "2".repeat(40),
-        observation: Some(format!("conflict-v1:{}", "0".repeat(64))),
-        historical: false,
-        paths: vec![ConflictPathDto {
-            display_path: ticket_path(TICKET),
-            token: format!("conflict-path-v1:{}", "1".repeat(64)),
-            kind: ConflictPathKind::Ticket,
-            structure: ConflictPathStructure::Regular,
-            content_available: true,
-            base: Some(side("Base")),
-            local: Some(side("Local")),
-            incoming: Some(side("Incoming")),
-        }],
-    }
-}
-
-/// The resolution applied and published, as
-/// `tests/mutation_remote/resolution.rs` `c4_resolution_publishes`
-/// answers.
-fn applied() -> Envelope<MutationDataDto> {
-    Envelope::classified_mutation(
-        "conflict resolve",
-        Scope::default(),
-        false,
-        ResultCode::Ok,
-        Effects {
-            write: WriteEffect::Written,
-            checkpoint: CheckpointEffect::Committed,
-            integration: IntegrationEffect::Complete,
-            publication: PublicationEffect::Published,
-            discovery: DiscoveryEffect::Current,
-            commit_oid: Some("3".repeat(40)),
-            ..Effects::not_requested()
-        },
-        false,
-    )
-}
+use canned::{applied, conflict_read, share_conflict};
 
 /// The Kit button of part `k`'s choice `id`.
 fn choice(id: &'static str, k: usize) -> ElementId {
@@ -185,6 +97,12 @@ impl Walk {
             )
         });
         assert_eq!(sent.len(), 1, "Save resolution sent one resolve");
+    }
+
+    /// Waits until the open sheet has drawn `id`.
+    async fn sheet_drawn(&self, id: &'static str, cx: &mut TestAppContext) {
+        self.until_drawn(id, cx).await;
+        assert!(self.shell.present("conflict-sheet", cx));
     }
 
     /// Waits, past the harness's wait, until the sheet has closed.
@@ -272,15 +190,12 @@ async fn resolve_a_local_conflict_by_keyboard(cx: &mut TestAppContext) {
     assert!(file.contains("title: Theirs"), "theirs is kept: {file}");
 }
 
-/// A1, A21, canned (decision 9): a share stopped on a conflict, by
-/// keyboard. Found by Find, the ticket's Share is reached by Tab after
-/// Edit and pressed by Enter; the share is answered as `share_conflict`.
-/// The banner says the work is safe, and Tab reaches its Review changes;
-/// Enter opens the sheet on the conflict as `conflict_read` reads it. Tab
-/// and Enter keep mine, then Save resolution, answered as `applied`: the
-/// sheet closes and the banner clears.
-#[gpui_kit::test]
-async fn resolve_a_shared_conflict_by_keyboard(cx: &mut TestAppContext) {
+/// A window over `a`, whose ticket has a work context and whose `origin`
+/// is selected for publication. Found by Find, the ticket's Share is
+/// reached by Tab after Edit and pressed by Enter; the share runs and is
+/// answered as `share_conflict`. The banner says the work is safe, and
+/// Tab reaches its Review changes, which then holds focus.
+async fn shared_banner(cx: &mut TestAppContext) -> Walk {
     cx.executor().allow_parking();
     let fixture = Fixture::new();
     let a = fixture.create_repository("a");
@@ -313,12 +228,33 @@ async fn resolve_a_shared_conflict_by_keyboard(cx: &mut TestAppContext) {
     );
     let review = kit_button("item-review-changes".to_owned());
     walk.tab_to("tab", review.clone(), cx);
-    walk.on(review.clone(), Region::Content, cx);
+    walk.on(review, Region::Content, cx);
+    walk
+}
 
+/// A1, A21, canned (decision 9): a share stopped on a conflict, by
+/// keyboard (`shared_banner`). Enter on Review changes opens the sheet,
+/// whose first read fails, as the library answers for an operation the
+/// repository does not hold: Tab and Enter on Read again read it again,
+/// as `conflict_read`. Read again goes once the read lands, and focus
+/// stays in the sheet. Tab and Enter keep mine, then Save resolution,
+/// answered as `applied`: the sheet closes, the banner clears, and focus
+/// is back in the content region, though the Review changes it came from
+/// has gone.
+#[gpui_kit::test]
+async fn resolve_a_shared_conflict_by_keyboard(cx: &mut TestAppContext) {
+    let walk = shared_banner(cx).await;
+    walk.enter(cx);
+    walk.sheet_drawn("conflict-read-again", cx).await;
+    walk.tab_in_sheet("conflict-read-again".into(), cx);
     walk.shell
         .backend
         .answer_next_conflict_read(conflict_read());
     walk.enter(cx);
+    walk.sheet_drawn("conflict-save", cx).await;
+    assert!(!walk.shell.present("conflict-read-again", cx));
+    walk.in_dialog("conflict-sheet", cx);
+
     walk.choose_by_keyboard("conflict-keep-mine", KEEPING_MINE, cx)
         .await;
     let gate = walk

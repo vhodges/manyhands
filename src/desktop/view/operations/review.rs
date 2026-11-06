@@ -75,6 +75,7 @@ impl Workspace {
             request_id(id, "review"),
             REVIEW_CHANGES,
             Some(&focus),
+            cx,
             cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.review_request(id, window, cx)
             }),
@@ -120,6 +121,7 @@ impl Workspace {
             (PENDING_REVIEW, index),
             REVIEW_CHANGES,
             Some(&focus),
+            cx,
             cx.listener(move |this, _: &ClickEvent, window, cx| {
                 this.review_pending(&root, &operation, window, cx)
             }),

@@ -80,9 +80,6 @@ impl ResolveSheet {
         if self.waiting() || self.resumable() || self.lost() {
             return;
         }
-        // The pressed button is disabled while the request waits: focus
-        // stays in the sheet (A21).
-        window.focus(&self.focus, cx);
         self.notice = None;
         self.answer = None;
         if let Some(kept) = self.kept.clone() {
