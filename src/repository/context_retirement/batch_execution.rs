@@ -454,17 +454,24 @@ impl Child<'_> {
                     changed = true;
                     return Err(recovery_required());
                 }
-                run::LocalProofComparison::Preserved(now, kind)
-                    if (now, kind) == (primary, proof) => {}
-                _ => return Err(recovery_required()),
+                run::LocalProofComparison::Preserved(now, kind) => {
+                    // Successful inspection at a different pair cannot spend
+                    // this immutable intent, but is not an unknown error.
+                    if (now, kind) != (primary, proof) {
+                        changed = true;
+                        return Err(recovery_required());
+                    }
+                }
             }
             let removal=cleanup.delete_retirement_branch(request.kind,&request.item_id,tip,||{
                 #[cfg(test)] boundary(Boundary::LockedBranch,tx);
                 if scope.receipt(tx).is_err() || run::require_materialization(tx,request.operation_id,false).is_err() || crate::repository::context_retirement::instance::require_checkout_inventory(&git,&request,None).is_err() {return false;}
                 match run::compare_local_proof(&git,&request,tip,&p.primary) {
                     Ok(run::LocalProofComparison::Changed)=>{changed=true;return false;},
-                    Ok(run::LocalProofComparison::Preserved(now,kind)) if (now,kind)==(primary,proof)=>{},
-                    _=>return false,
+                    Ok(run::LocalProofComparison::Preserved(now,kind))=>{
+                        if (now,kind)!=(primary,proof){changed=true;return false;}
+                    },
+                    Err(_)=>return false,
                 }
                 // Consumes only the original in-process permit, never a saved K.
                 if permit.child!=request.operation_id.to_string(){return false;}

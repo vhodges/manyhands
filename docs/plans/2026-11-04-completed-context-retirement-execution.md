@@ -467,6 +467,10 @@ are not authorized; numeric exits must come from existing results registry.
   bounded increment's correction below has **52 batch/199 context/105 retirement
   SSH**, ten new cases and all three statics. **Same SPEC re-review then QUALITY
   remain pending.** Historical 3d0 evidence is not relabeled as corrected evidence.
+  Same SPEC cleared S1 and original dirty-primary S2 cases at `4116187f`, but found
+  one remaining Important S2: successful **different** primary/proof pairs lost
+  the uninvoked witness. The narrow correction below has **56 batch/203 context/
+  105 retirement SSH**, four new cases and all statics; same SPEC→QUALITY pending.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
 - [ ] **5 — CLI command/flag/help/rendering.** Not started.
@@ -2902,12 +2906,12 @@ is unchanged; these are current incremental evidence/remaining-work annotations.
 | 32 | E prior refusal-only evidence retained. `batch_positive_original_branch_*` and `batch_positive_ticket_then_document_*`: original A3 C→real guarded branch B deletion→ordinary discovery/index/result→C deletion/index/result, same receipt/no new ad, B durable/completed before C, P terminal history unchanged. Old B handle/index owner cannot write after completion. O present-W positive journey and remaining stale-observer combinations; D actual Task 4 journey |
 | 33 | E prior A0/A2/A3/refusal-S1/Q1 evidence retained. Positive-A4 S1 corrects stage predicates: fresh cleanup retains full C/G/F/current-config/cancel/debt checks; I/no-effect metadata retains exact current L/R/batch/K/cursor/attempt and immutable original history, not deletion eligibility. Wrong F2/map/epoch/cursor/envelope/spend/registry still refuses before writes. Only unreviewed 3d0 assertions changed to distinguish stages; approved prefeature assertions remain. O present-W/IMMEDIATE-prune, gap/resumed C and remaining foreign-token/fault variants; D actual Task 3/4 binding/coordinator |
 | 34 | O no-child gap execution/request+batch fences; D actual Task 4 coordinator |
-| 35 | E prior R7/F2/typed refusal/Q1 history evidence retained. Positive-A4 S2 adds typed successfully inspected primary-byte/mode mismatch before intent/after intent/under locked B → current-owned no-effect Final, both removal flags None, M untouched, attempt/local/target/cursor atomic. Original uninvoked witness is consumed only at actual Git boundary; post-Git D14 failure remains Owed/Possible. Current-cancel I can finish without acknowledgment or starting C; stale ownership cannot settle/ack. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
+| 35 | E prior R7/F2/typed refusal/Q1 history evidence retained. Positive-A4 S2 covers successful primary-byte/mode mismatch AND successfully Preserved but different primary/proof pair before Git → current-owned no-effect Final, None/None, M untouched, attempt/local/target/cursor atomic. Same-tree real primary commits at preinvoke and locked-B boundaries preserve the OLD intent pair/receipt and mark observation changed, never authorize deletion under the new pair. Uninvoked witness is spent only at actual Git; post-invocation pair change stays Owed/Possible. Current-cancel I/stale-owner rules retained. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
 | 36 | E prior F2 index/request-fence controls (approved at `c7daad0d`) plus `source_handoff_nonempty_*`: frozen child IDs refuse generic refresh and standalone retirement begin before any child row; ordinary/other-command controls retained. O remaining M/index fault and history variants |
 | 37 | E `generic_abandon_preserves_pending_and_terminal_identity`; D guarded preserving abandon Task 3 |
 | 38 | E prior migration/history and strict pre-begin refusal audit retained unchanged. Separate positive history now also recognizes exact post-intent no-effect refusal: epoch-1 branch-only, original receipt/primary/proof intent marked changed, no removals/M settlement/index spend, ended attempt/completed local and exact target/result/cursor. It cannot mint a live witness. Reverse index-spend/missing companion/map/claim guards remain mandatory. Catalog DDL/pins unchanged; inert projections remain test-only. O remaining FK/tamper/deletion-order/full inventory variants; Task 4 owns producer/schema |
 | 39 | E A0→A1 remains unplanned; A2/A3 original authority retained. Branch-only one-use permits are minted solely by original validated freeze, carried through Capture into non-Clone Live and spent by exact current Ki; they are physically separate from shared index-only evidence. Private original C now drives real branch cleanup/index/result, never fake O/P. Public Complete/persisted eligibility/IDs/new executor/history cannot mint C or a permit. O present-W, R8/resumed C and remaining token/fault matrix; D actual Task 4 producer/enrollment |
-| 40 | E prior A1/A2/A3/refusal/empty/positive index faults retained. Positive-A4 S2 tests eight no-effect settlement faults at intent/companion/attempt/local/target/cursor/last batch/Z: full pre-settlement registry/disk restored, original process witness retained for metadata-only retry, never repeated Git/proof. Lost current F2/map/process cannot reconstruct or spend it. Unknown inspection has no witness/Final; post-Git D14 remains Possible. O remaining every-write/ambiguous-commit/second-release and present-W faults; D actual Task 4 producer |
+| 40 | E prior A1/A2/A3/refusal/empty/positive index and eight S2 no-effect faults retained. Remaining-S2 primary-pair correction adds first/last cursor/Z rollback after same-tree primary advancement at both boundaries: original witness/pair retained, metadata retry succeeds even when proof file is then missing, M/disk/ad unchanged. Known pair difference cannot override stale F2/map/cursor or acknowledge cancellation. Actual post-Git pair change preserves Possible debt/unobserved intent and cannot mint a retry witness. O remaining every-write/ambiguous-commit/second-release and present-W faults; D actual Task 4 producer |
 | 41 | E prior current-cancel/index-failure controls plus `source_handoff_specfix_r2_*`: completed-P lost capture settles ineligible/discovery_pending under BOTH restart spellings, before/after unrelated repair; immutable original report survives later ordinary poll replacement. Exact recovery-only writes; P outcome/epoch unchanged. Automatic, active-source and foreign root/child-source controls refuse without writes. O active-source crash fencing/fresh-ad retry and remaining source failure variants; D actual Task 4 producer |
 | 42 | E prior planning-pin controls plus both pins across refresh, source-only release on nonempty eligible handoff, retained consumer after source end and bound ineligible last-pin G→G+1 collection/reopen. O full cross-holder/window and partial-effect generation variants |
 | 43 | E prior Z/Q1/positive atomic settlement retained. Positive-A4 S1/S2 show valid I or retained original no-effect metadata can finish after G/ad supersession/current cancellation and release the exact old holder, collecting only its now-obsolete unheld batch. No current-batch rebinding; current cancel stays set and next destructive C remains blocked. Shared Z/history/conditional GC code unchanged. O combined source+consumer+other-holder+window/ambiguity matrix; D actual Task 4 journey |
@@ -4528,3 +4532,78 @@ context/draft actions. ID only through supported current CLI with isolated
 `MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data`; unsupported
 default profile never opened/repaired. Main rechecked unchanged **`c69789d9`**;
 controller merge phase reused, no reset/squash/rebase or unrelated history consumed.
+
+## Remaining S2 SPEC correction — successful but different intent pair
+
+Entry **`4116187fa5b1f62ed77a7680f7c3bd7c073677bf`** preserved, clean/ahead 2/unpushed.
+Same bounded review **`f82cc04d42af336d83e01af539837f64dd39d726..fix-HEAD`**; full Task 2
+base **`7b1912d152a1ab7440bd17c48a0a544e40e19258`**. Same reviewer cleared S1/original
+dirty-primary S2 cases, but retained one Important S2 invariant finding. Controller
+verified source and `/tmp/opencode/spec-batch-positive-4116-bys56wxf/`
+`primary-change-probe.log:12–18`: both preinvoke boundaries successfully returned
+`Preserved(new_primary, Ancestor)` after a real same-tree primary commit, yet left
+CleanupPending None/None and dropped the witness. This was known mismatch, not an
+inspection error. Controller's other original probes/19 controls remain cleared.
+
+At **both** comparisons in `batch_execution.rs`, exhaustive typed matches now
+distinguish unchanged Preserved, different Preserved, and inspection Err. A
+different successful pair routes only to the existing exact-current-owner/original
+uninvoked-witness no-effect settlement. No old primary/proof/receipt rewrite, new
+cleanup permission, new boolean authority, SQL witness reconstruction or retry Git.
+Generic errors stay unknown; post-invocation changes stay Owed/Possible. Only these
+two production match arms changed; S1, run/proof, schema/DDL, ordinary CAS and remote
+production paths are unchanged. No prefeature or existing stage assertion changed.
+
+Compiled RED **0/1** (`red`), exercising **both boundaries × first/last** and proving
+successful different pairs, unchanged selected branch/M and immutable old intent.
+First GREEN **1/1** (`green-1`); expanded **4/4** (`focused-green`). New registered
+`batch_positive_primary_tests.rs` cases cover:
+- Both boundaries/first/last: Final ExternalChange None/None, zero child index spend,
+  ended local/attempt, target/cursor/hold truth, old pair retained/observation changed,
+  new primary preserved, dead old handle/read-only replay and next C on the same ad.
+- Cursor/last-Z fault rollback retaining the original witness; metadata retry with
+  the proof file now missing does no Git/reproof/M consumption or advertisement.
+- Known pair difference cannot override stale F2/map/cursor; real later F2 advancement
+  with cancellation blocks retained-witness writes and cannot acknowledge the flag.
+- A real same-tree primary commit **after actual branch deletion** stays Possible/
+  Owed, original M/unobserved intent preserved, no index claim or no-effect witness.
+
+Final commands completed serial foreground **Devenv**, **`timeout:0`**, locked,
+exit **0**. Logs `/tmp/opencode/task2-batch-positive-primaryfix-<suffix>.log`:
+
+| Command after `devenv shell --` | Suffix | Passed/result |
+| --- | --- | --- |
+| `cargo check --all-features --locked` | `check` | pass |
+| `cargo fmt --check` | `fmt` | pass |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy` | pass |
+| `cargo test --all-features --locked --lib retirement_batch_primaryfix_` | `focused` | **4** |
+| Same test flags, `--lib retirement_batch_specfix_` | `retained-specfix` | **19 retained corrections/inspection controls** |
+| Same test flags, `--lib batch_tests::` / `--lib context_retirement` | `batch` / `context` | **56 /203**, includes run/proof controls |
+| Same test flags, `--lib retirement_source_` | `source` | **36** |
+| Same test flags, `--test mutation_remote retirement_` | `retirement-ssh` | **105 registered SSH** |
+| Same test flags, `--lib cleanup` / `--lib retirement_f2_` / `--lib recovery` / `--lib refresh` | `cleanup` / `f2-index` / `recovery` / `refresh` | **54 /23 /63 /39** |
+| Same test flags, `--test recovery_foundation_gate` | `foundation` | **52** |
+
+Counts overlap; **56=52+4**, **203=199+4**. No zero-case/active/detached gate.
+Final **1,730-input** inventory, including new module and all document compile
+inputs: `/tmp/opencode/task2-batch-positive-primaryfix-source.sha256`, SHA-256
+**`2772e5a786d961090737b92e86de23227aced53a99f170039581b20f688f5bd8`**.
+**19-log** inventory (includes RED/format preflight/current isolated CLI):
+`task2-batch-positive-primaryfix-evidence.sha256`, SHA-256
+**`f87208901d709c2a533b0d7669af7868e3552ff6a8ebbac0eed081c2eda511dc`**.
+4116's 199/105/52 evidence and 3d0's six remote SSH gates retain their original
+source scopes; no gratuitous six-SSH/384-replay/full-fast/full-suite/native claim.
+
+Checkpoint **`01M6R4RJ1D3BHE3PC8TDQCSSXY`**, parent **`01M6R1FJAYW858A7M3ZA8KK769`**,
+actual UTC **`2026-11-06T09:59:18Z`**, subject
+`fix: settle known primary pair changes before branch invocation`.
+Relevant partial E/O/D **18/25/33/35/40**; no independent approval claim. Same
+**SPEC re-review then QUALITY** remain required. Self-review limit: synthetic ads/
+inert producer projections with real commits/cleanup/index, original-process
+witnesses only, no crash/new-F2 recovery or broader proof-kind/platform matrix.
+Still owed: full positive present/nonce/prune, gap/R8/resumed C/source restart,
+combined holder/window/ambiguous-commit and remaining A2/A3/replacement/M-D14-index-
+history faults, full-44 Task 2 review/Task 8 and actual Tasks 3/4. No agents/push/
+status/PR/main-close/native/other-worktree/real-profile-key-context-draft actions.
+Supported isolated CLI ID only; unsupported default profile never opened/repaired.
+Main rechecked unchanged **`c69789d9`**; controller merge phase reused, no rebase.

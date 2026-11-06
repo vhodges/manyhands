@@ -2,6 +2,8 @@
 //! Actual original A3, guarded branch deletion, discovery and index finalization;
 //! NOT live SSH advertisement or Task 4 producer/coordinator evidence.
 use super::*;
+#[path = "batch_positive_primary_tests.rs"]
+mod primary;
 #[path = "batch_positive_specfix_tests.rs"]
 mod specfix;
 
