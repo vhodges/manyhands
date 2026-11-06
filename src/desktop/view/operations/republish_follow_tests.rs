@@ -24,8 +24,8 @@ use super::{
     REPUBLISH, REPUBLISHING,
     stop_tests::{resume_of_operation, resumes, shown, under_a_resume},
     tests::{
-        TICKET, branch_deleted, finished, is_republish, republish_preview, republished,
-        requests_of, ticket_shell, until_present,
+        TICKET, branch_deleted, finished, finished_deleted_share, is_republish, republish_preview,
+        republished, requests_of, ticket_shell, until_present,
     },
 };
 use crate::desktop::{
@@ -438,20 +438,7 @@ async fn the_whole_chain_is_followed_and_read_again_on_reopening(cx: &mut TestAp
 #[gpui_kit::test]
 async fn a_share_offers_no_republish_while_one_runs(cx: &mut TestAppContext) {
     let (shell, root) = ticket_shell(cx);
-    let share = Intent::ItemSync {
-        root: root.clone(),
-        kind: AuthoringKind::Ticket,
-        id: item_id(TICKET),
-    };
-    let deleted = Envelope::classified_mutation(
-        "item sync",
-        Scope::default(),
-        false,
-        ResultCode::RemoteBranchDeleted,
-        Effects::not_requested(),
-        false,
-    );
-    let id = finished(&shell, 1, share, deleted, cx);
+    let id = finished_deleted_share(&shell, &root, cx).await;
     let offer = request_id(id, "republish");
     assert_eq!(shell.label(offer.clone(), cx).as_deref(), Some(REPUBLISH));
     assert_eq!(

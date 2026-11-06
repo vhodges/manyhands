@@ -269,21 +269,20 @@ fn republish_builds_its_mutation() {
     assert_eq!(intent.root(), Some(root.as_path()));
 }
 
-/// E-6, canned: an item's share answered `remote_branch_deleted`
-/// (`tests/mutation_remote.rs` `a_remotely_deleted_item_branch_is_remote_
-/// branch_deleted_and_holds_its_reservation`) says the shared copy was
-/// deleted, with no "later release", and, its record unknown here, offers
-/// Republish… and never Share. Republish… opens the confirmation on `item
-/// republish` of the item.
-#[gpui_kit::test]
-async fn a_deleted_branch_offers_republish(cx: &mut TestAppContext) {
-    let (shell, root) = ticket_shell(cx);
+/// A share of the ticket answered `remote_branch_deleted`, canned, whose
+/// record is finished: it ran against a repository with no publication
+/// remote, so the library holds nothing of it open.
+pub(super) async fn finished_deleted_share(
+    shell: &Shell,
+    root: &Path,
+    cx: &mut TestAppContext,
+) -> DesktopRequestId {
     let share = Intent::ItemSync {
-        root: root.clone(),
+        root: root.to_owned(),
         kind: AuthoringKind::Ticket,
         id: item_id(TICKET),
     };
-    let answer = Envelope::classified_mutation(
+    let deleted = Envelope::classified_mutation(
         "item sync",
         Scope::default(),
         false,
@@ -291,7 +290,29 @@ async fn a_deleted_branch_offers_republish(cx: &mut TestAppContext) {
         Effects::not_requested(),
         false,
     );
-    let id = finished(&shell, 1, share, answer, cx);
+    shell
+        .backend
+        .hold_job_return_answering(JobKind::SynchronizeItem, deleted)
+        .release();
+    let worker = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().worker().clone());
+    let id = worker.submit(share, Lane::User, None, None);
+    shell.until_ended(id, cx).await;
+    assert_eq!(worker.record_state(id), Some(RecordState::Finished));
+    id
+}
+
+/// E-6, canned: an item's share answered `remote_branch_deleted`
+/// (`tests/mutation_remote.rs` `a_remotely_deleted_item_branch_is_remote_
+/// branch_deleted_and_holds_its_reservation`) says the shared copy was
+/// deleted, with no "later release", and, its record finished, offers
+/// Republish… and never Share. Republish… opens the confirmation on `item
+/// republish` of the item.
+#[gpui_kit::test]
+async fn a_deleted_branch_offers_republish(cx: &mut TestAppContext) {
+    let (shell, root) = ticket_shell(cx);
+    let id = finished_deleted_share(&shell, &root, cx).await;
     assert!(!BRANCH_DELETED.contains("later release"));
     assert_eq!(
         shell.label(request_id(id, "outcome"), cx).as_deref(),
