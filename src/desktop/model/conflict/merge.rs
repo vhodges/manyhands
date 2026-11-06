@@ -83,7 +83,14 @@ pub(crate) struct PathConflict {
     body: Option<BodyPart>,
     /// Which side the body is taken from when only one changed it.
     body_taken: Option<Choice>,
+    /// The closure every result of a closed ticket carries: the library
+    /// refuses a result that changes a closure any recorded side holds
+    /// (`preserves_item_invariants`), so no choice is offered over it.
+    closure: Option<Closure>,
 }
+
+/// A ticket's `closed_at` and `closed_by`.
+type Closure = (Option<OffsetDateTime>, Option<String>);
 
 /// A front matter key: one Manyhands defines for the kind, or one it keeps
 /// as it is.
@@ -123,6 +130,10 @@ impl PathConflict {
         if mem::discriminant(&base_item) != kind || mem::discriminant(&theirs_item) != kind {
             return None;
         }
+        if !immutables_agree(&base_item, &mine_item, &theirs_item) {
+            return None;
+        }
+        let closure = closure_of([&mine_item, &theirs_item, &base_item])?;
         let mut fields = Vec::new();
         let mut taken = Vec::new();
         for slot in slots(&base_item, &mine_item, &theirs_item) {
@@ -132,7 +143,13 @@ impl PathConflict {
                 value(&theirs_item, &slot),
             );
             let key = slot_text(&slot);
-            match three_way(&b, &m, &t) {
+            let merge = match (&slot, &closure) {
+                (Slot::Known("closed_at" | "closed_by"), Some((side, _))) => {
+                    closure_merge(*side, &m, &t)
+                }
+                _ => three_way(&b, &m, &t),
+            };
+            match merge {
                 Merge::Same => {}
                 Merge::Taken(from) => taken.push(TakenField { key, from, slot }),
                 Merge::Choose => {
@@ -182,6 +199,7 @@ impl PathConflict {
             taken,
             body: body_part,
             body_taken,
+            closure: closure.map(|(_, closure)| closure),
         })
     }
 
@@ -301,6 +319,10 @@ impl PathConflict {
         for slot in from_theirs {
             copy(&mut result, &self.theirs, slot);
         }
+        if let (CanonicalItem::Ticket(ticket), Some((at, by))) = (&mut result, &self.closure) {
+            ticket.closed_at = *at;
+            ticket.closed_by = by.clone();
+        }
         if let Some(part) = &self.body {
             set_body(&mut result, part.result.clone());
         } else if self.body_taken == Some(Choice::Theirs) {
@@ -326,6 +348,70 @@ enum Merge {
     Same,
     Taken(Choice),
     Choose,
+}
+
+/// Which of the three sides holds the closure.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Holder {
+    Mine,
+    Theirs,
+    Base,
+}
+
+/// The closure the first closed ticket of `items` (mine, theirs, base)
+/// holds and the side it is on, `Some(None)` when none is closed, and
+/// `None` when two closed sides disagree: no result then passes.
+fn closure_of(items: [&CanonicalItem; 3]) -> Option<Option<(Holder, Closure)>> {
+    let mut found: Option<(Holder, Closure)> = None;
+    for (item, holder) in items
+        .into_iter()
+        .zip([Holder::Mine, Holder::Theirs, Holder::Base])
+    {
+        let CanonicalItem::Ticket(ticket) = item else {
+            continue;
+        };
+        if ticket.closed_at.is_none() {
+            continue;
+        }
+        let closure = (ticket.closed_at, ticket.closed_by.clone());
+        match &found {
+            Some((_, first)) if *first != closure => return None,
+            Some(_) => {}
+            None => found = Some((holder, closure)),
+        }
+    }
+    Some(found)
+}
+
+/// A closure field is never a choice: the result keeps the closure, so it
+/// is shown as taken from the side that holds it, or not at all where the
+/// sides agree or only the ancestor holds it.
+fn closure_merge<T: PartialEq>(holder: Holder, mine: &T, theirs: &T) -> Merge {
+    match holder {
+        _ if mine == theirs => Merge::Same,
+        Holder::Mine => Merge::Taken(Choice::Mine),
+        Holder::Theirs => Merge::Taken(Choice::Theirs),
+        Holder::Base => Merge::Same,
+    }
+}
+
+/// Whether the three sides agree on what the library refuses a result to
+/// change in a comment: its item, parent, creation and author keys. A
+/// result equals each side there, so sides that differ have none that
+/// passes.
+fn immutables_agree(base: &CanonicalItem, mine: &CanonicalItem, theirs: &CanonicalItem) -> bool {
+    let same = |a: &CanonicalItem, b: &CanonicalItem| match (a, b) {
+        (CanonicalItem::Comment(a), CanonicalItem::Comment(b)) => {
+            a.item_id == b.item_id
+                && a.parent_id == b.parent_id
+                && a.created_at == b.created_at
+                && a.created_by == b.created_by
+                && a.unknown.get("created_by") == b.unknown.get("created_by")
+                && a.unknown.get("author") == b.unknown.get("author")
+        }
+        _ => true,
+    };
+    same(base, mine) && same(base, theirs)
 }
 
 fn three_way<T: PartialEq + ?Sized>(base: &T, mine: &T, theirs: &T) -> Merge {
