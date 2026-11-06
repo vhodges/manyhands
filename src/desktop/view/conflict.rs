@@ -186,14 +186,15 @@ pub(crate) struct Opening {
     pub origin: FocusHandle,
 }
 
-/// Opens the sheet. `None` while quitting.
+/// Opens the sheet. `None` while quitting, or while drafts are being saved
+/// for it: nothing opens in front of Quit now.
 pub(crate) fn open(
     opening: Opening,
     services: &Services,
     window: &mut Window,
     cx: &mut App,
 ) -> Option<Entity<ResolveSheet>> {
-    if services.worker().quitting() {
+    if services.worker().quitting() || services.operations().read(cx).saving_drafts() {
         return None;
     }
     let origin = opening.origin.clone();

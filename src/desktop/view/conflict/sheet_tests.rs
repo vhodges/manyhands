@@ -6,10 +6,15 @@ use gpui_kit::TestAppContext;
 use manyhands::repository::OperationId;
 
 use super::{
-    NOTE_CLOSE, NOTE_MERGE, NOTE_SHARE, SheetSource, note_local,
-    tests::{TICKET, local_shell, open_sheet, remote_shell, resolves, until_present},
+    NOTE_CLOSE, NOTE_MERGE, NOTE_SHARE, Opening, SheetSource, note_local, open,
+    tests::{
+        TICKET, heading, local_shell, open_sheet, remote_shell, resolves, services, until_present,
+    },
 };
-use crate::desktop::services::{JobKind, resolutions::ResolutionStoreError};
+use crate::desktop::{
+    services::{JobKind, resolutions::ResolutionStoreError},
+    test_support::fixtures::item_id,
+};
 
 /// Decision 15: the note under the title follows where the conflict
 /// stopped.
@@ -73,4 +78,43 @@ async fn a_set_that_cannot_be_kept_is_not_sent(cx: &mut TestAppContext) {
             .jobs_seen()
             .contains(&JobKind::LocalContextResolve)
     );
+}
+
+/// Nothing opens in front of Quit now (as the lifecycle dialog's `open`):
+/// while quitting is saving drafts, no sheet opens, so no resolution can
+/// start mid-quit; it opens again once that ends.
+#[gpui_kit::test]
+async fn the_sheet_does_not_open_while_quitting_saves_drafts(cx: &mut TestAppContext) {
+    let (shell, root) = remote_shell(cx);
+    let services = services(&shell, cx);
+    let opening = |cx: &mut TestAppContext| Opening {
+        source: SheetSource::Share,
+        root: root.clone(),
+        operation_id: OperationId::new(),
+        item: item_id(TICKET),
+        heading: heading(),
+        folder: None,
+        origin: cx.update(|cx| cx.focus_handle()),
+    };
+    let saving = |saving: bool, cx: &mut TestAppContext| {
+        services
+            .operations()
+            .update(cx, |operations, _| operations.set_saving_drafts(saving));
+    };
+    saving(true, cx);
+    let blocked = opening(cx);
+    let opened = shell
+        .visual(cx)
+        .update(|window, cx| open(blocked, &services, window, cx));
+    shell.run(cx);
+    assert!(opened.is_none(), "nothing opens over Quit now");
+    assert!(!shell.present("conflict-sheet", cx));
+
+    saving(false, cx);
+    let allowed = opening(cx);
+    let opened = shell
+        .visual(cx)
+        .update(|window, cx| open(allowed, &services, window, cx));
+    shell.run(cx);
+    assert!(opened.is_some(), "it opens again once the drafts are saved");
 }
