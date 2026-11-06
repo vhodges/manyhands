@@ -626,3 +626,62 @@ async fn republish_waits_for_another_dialog_to_close(cx: &mut TestAppContext) {
         "not sent yet"
     );
 }
+
+/// R-30: a share on a deleted branch whose record cannot be read (here the
+/// registry is unreadable once the call has returned) offers Give up alone,
+/// not Republish…, which would answer `busy` while the share holds its
+/// reservation. Pressed, it asks the request to stop and sends it again.
+#[gpui_kit::test]
+async fn an_unreadable_record_offers_give_up_and_it_sends_the_give_up(cx: &mut TestAppContext) {
+    let (shell, root) = ticket_shell(cx);
+    let deleted = Envelope::classified_mutation(
+        "item sync",
+        Scope::default(),
+        false,
+        ResultCode::RemoteBranchDeleted,
+        Effects::not_requested(),
+        false,
+    );
+    let returned = shell
+        .backend
+        .hold_job_return_answering(JobKind::SynchronizeItem, deleted);
+    let worker = shell
+        .workspace
+        .read_with(cx, |workspace, _| workspace.services().worker().clone());
+    let share = Intent::ItemSync {
+        root,
+        kind: AuthoringKind::Ticket,
+        id: item_id(TICKET),
+    };
+    let id = worker.submit(share, Lane::User, None, None);
+    returned.wait_reached();
+    std::fs::write(
+        shell
+            .fixture
+            .data_dir()
+            .join(manyhands::repository::REGISTRY_FILE),
+        b"not a database",
+    )
+    .unwrap();
+    returned.release();
+    shell.until_ended(id, cx).await;
+    assert_eq!(worker.record_state(id), Some(RecordState::Unknown));
+    shell
+        .until_drawn(cx, "Give up", |shell, cx| {
+            shell.present(request_id(id, "give-up"), cx)
+        })
+        .await;
+    assert!(!shell.present(request_id(id, "republish"), cx));
+    assert!(!shell.present(request_id(id, "stop-and-republish"), cx));
+
+    shell.click(request_id(id, "give-up"), cx);
+    shell
+        .until(cx, move |operations| {
+            operations
+                .request(id)
+                .is_some_and(|request| request.attempt == 2)
+        })
+        .await;
+    shell.until_ended(id, cx).await;
+    assert_eq!(worker.gave_up(id), Some(GaveUp::Resent));
+}

@@ -430,14 +430,16 @@ impl SyncResult {
             // Republish… once it is finished. A record that could not be
             // read (Unknown) is neither: it is in practice still accepted,
             // so a republish answers `busy` while the share holds the
-            // reservation, and Give up cannot be offered on a guess. Nothing
-            // is offered until a later attempt reads the record.
+            // reservation. Give up is offered alone, which asks the request
+            // to stop and sends it again with its token cancelled (the
+            // worker's Give up of an unreadable record), and Republish…
+            // follows once that answer's record reads as finished.
             SyncOutcome::BranchDeleted if self.attempt.target == ShareTarget::Item => {
                 match self.attempt.record {
                     RecordState::Accepted if !self.attempt.after_give_up => {
                         vec![O::StopAndRepublish]
                     }
-                    RecordState::Unknown => Vec::new(),
+                    RecordState::Unknown if !self.attempt.after_give_up => vec![O::GiveUp],
                     _ => vec![O::Republish],
                 }
             }
