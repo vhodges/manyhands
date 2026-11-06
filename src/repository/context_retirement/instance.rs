@@ -471,6 +471,71 @@ pub(super) fn verify_frozen(
         require_checkout_inventory(git, request, None)
     }
 }
+
+/// A successful bounded inspection, not a translation of a verifier error.
+/// Missing/locked/redirected/malformed/inaccessible evidence remains Err.
+#[derive(PartialEq, Eq)]
+pub(super) enum FrozenComparison {
+    Unchanged,
+    Changed,
+}
+
+/// Compare only fully inspected current direct tips and canonical installed
+/// nonces. This grants no Selection/install or deletion authority. A2/A3 retain
+/// their strict expected-identity verifier above, unchanged.
+pub(super) fn compare_frozen(
+    git: &git2::Repository,
+    request: &RetireContextRequest,
+    tip: git2::Oid,
+    nonce: Option<&str>,
+) -> Result<FrozenComparison, RepositoryError> {
+    let context = item_context(&request.root, request.kind, request.item_id.clone());
+    let branch = format!("refs/heads/{}", context.branch);
+    ref_file_absent(&request.root, &git.commondir().join(&branch))?;
+    ref_file_absent(&request.root, &git.commondir().join("packed-refs"))?;
+    for lock in [
+        git.commondir().join(format!("{branch}.lock")),
+        git.commondir().join("packed-refs.lock"),
+    ] {
+        if !absent_path(&request.root, &lock)? {
+            return Err(recovery_required());
+        }
+    }
+    let reference = git
+        .find_reference(&branch)
+        .map_err(|_| recovery_required())?;
+    if reference.symbolic_target().is_some() {
+        return Err(recovery_required());
+    }
+    let current_tip = reference
+        .target()
+        .filter(|oid| !oid.is_zero())
+        .ok_or_else(recovery_required)?;
+    git.find_commit(current_tip)
+        .map_err(|_| recovery_required())?;
+    let changed = if let Some(expected_nonce) = nonce {
+        let expected_nonce = OperationId::parse(expected_nonce).map_err(|_| recovery_required())?;
+        // Same full registration/no-follow/lock/checkout inventory as the
+        // strict verifier, against the observed direct tip, before comparison.
+        identity(git, request, current_tip)?;
+        let data = Anchor::open(&admin(git, &request.item_id))
+            .and_then(|anchor| anchor.read())
+            .map_err(|_| recovery_required())?
+            .ok_or_else(recovery_required)?;
+        let current_nonce = parse(&data, request.kind, &request.item_id)?;
+        current_tip != tip || current_nonce != expected_nonce
+    } else {
+        // No inferred absence or fabricated branch lifetime: W/A must still be
+        // absent and the entire original branch-only inventory must succeed.
+        verify_frozen(git, request, current_tip, None)?;
+        current_tip != tip
+    };
+    Ok(if changed {
+        FrozenComparison::Changed
+    } else {
+        FrozenComparison::Unchanged
+    })
+}
 impl Verified {
     pub(super) fn matches_stored(
         tx: &rusqlite::Transaction<'_>,

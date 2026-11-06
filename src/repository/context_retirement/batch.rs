@@ -301,8 +301,9 @@ impl Child<'_> {
             }
             let k = entries.get(cursor).ok_or_else(recovery_required)?;
             // No unchanged target acquires destructive/index authority here.
-            // A changed original instance/tuple can only become a no-effect Final.
-            if verify_candidates(tx, p, std::slice::from_ref(k)).is_ok() {
+            // Only positively inspected mismatches may become a no-effect Final;
+            // unknown evidence (including SQL after a nonce change) stays closed.
+            if compare_candidate(tx, p, k)? != super::super::instance::FrozenComparison::Changed {
                 return Err(recovery_required());
             }
             let report = super::super::ContextRetirementReport::refused(

@@ -200,6 +200,70 @@ fn verify_candidates(
     Ok(())
 }
 
+/// C's no-effect comparison is NOT the inverse of strict A2/A3 admission.
+/// Both the full Git inspection and every required SQL read/decode/correlation
+/// must succeed before an observed mismatch may authorize a stable Final.
+fn compare_candidate(
+    db: &Connection,
+    p: &Projection,
+    k: &Candidate,
+) -> Result<super::instance::FrozenComparison, RepositoryError> {
+    use super::instance::{self, FrozenComparison};
+    no_child_collision(db, &k.child_operation_id)?;
+    let git = git2::Repository::open(&p.root).map_err(|_| recovery_required())?;
+    let request = super::RetireContextRequest {
+        root: (&p.root).into(),
+        kind: match k.kind.as_str() {
+            "ticket" => crate::repository::AuthoringKind::Ticket,
+            "document" => crate::repository::AuthoringKind::Document,
+            _ => return Err(recovery_required()),
+        },
+        item_id: k.item_id.parse().map_err(|_| recovery_required())?,
+        operation_id: OperationId::parse(&k.child_operation_id).map_err(|_| recovery_required())?,
+    };
+    let tip = git2::Oid::from_str(&k.expected_tip).map_err(|_| recovery_required())?;
+    let identity = instance::compare_frozen(&git, &request, tip, k.instance_nonce.as_deref())?;
+    // Do not short-circuit this evidence after an observed tip/nonce change.
+    let rows:Vec<(String,String,String,String)>=db.prepare("SELECT kind,operation_ulid,target_oid,step FROM remote_poll_materializations WHERE repository_id=?1 AND item_id=?2").map_err(|_|recovery_required())?.query_map(params![p.repository,k.item_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).map_err(|_|recovery_required())?.collect::<Result<_,_>>().map_err(|_|recovery_required())?;
+    if rows.len() > 1 {
+        return Err(recovery_required());
+    }
+    for (kind, owner, oid, step) in &rows {
+        if kind != &k.kind
+            || step != "complete"
+            || !OperationId::parse(owner).is_ok_and(|id| id.to_string() == *owner)
+            || !git2::Oid::from_str(oid).is_ok_and(|id| !id.is_zero() && id.to_string() == *oid)
+        {
+            return Err(recovery_required());
+        }
+        let correlated: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM remote_operation_records WHERE repository_id=?1 AND operation_ulid=?2 AND action='poll' AND poll_kind='update')", params![p.repository,owner], |r|r.get(0)).map_err(|_|recovery_required())?;
+        if !correlated {
+            return Err(recovery_required());
+        }
+    }
+    let expected = match k.materialization_capture.as_str() {
+        "absent" => Vec::new(),
+        "complete" => vec![(
+            k.kind.clone(),
+            k.materialization_operation_id
+                .clone()
+                .ok_or_else(recovery_required)?,
+            k.materialization_oid
+                .clone()
+                .ok_or_else(recovery_required)?,
+            "complete".into(),
+        )],
+        _ => return Err(recovery_required()),
+    };
+    Ok(
+        if identity == FrozenComparison::Changed || rows != expected {
+            FrozenComparison::Changed
+        } else {
+            FrozenComparison::Unchanged
+        },
+    )
+}
+
 fn contract(db: &Connection) -> Result<(), RepositoryError> {
     for table in ["poll_retirement_freeze_inputs", "poll_retirement_freezes"] {
         if !crate::repository::recovery::has_table(db, table).map_err(|_| recovery_required())? {

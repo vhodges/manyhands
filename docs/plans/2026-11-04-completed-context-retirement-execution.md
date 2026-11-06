@@ -450,6 +450,9 @@ are not authorized; numeric exits must come from existing results registry.
   gates are **157 context (147 retained +10 new)** and **105 retirement SSH**,
   with supporting gates below. Real B-cleanup/index→C-cleanup/index, gap O and
   resumed consumption remain closed/owed; this is not full A4 or Task 2 readiness.
+  LIMITED SPEC at `a562bac8` found one Medium S1 (inspection error is not positive
+  change evidence). The correction below has **166 context / 105 retirement SSH**
+  and **9 focused** green cases; **same SPEC re-review then QUALITY remain pending**.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
 - [ ] **5 — CLI command/flag/help/rendering.** Not started.
@@ -2882,14 +2885,14 @@ is unchanged; these are current incremental evidence/remaining-work annotations.
 | 30 | E `reentry_selected_generation_change_is_final_without_network`, old-generation retention units; O partial-effect generation variant |
 | 31 | E prior standalone/A1 evidence plus `source_handoff_*`: real complete poll processing, preterminal A2 SQL and original refresh/A3 handoff with inert producer projections/synthetic advertisements. Public replay cannot create eligibility. O source live-transport/full producer matrix; D actual Task 4 producer/selection/enrollment |
 | 32 | E `batch_original_live_refusals_*`: original A3 returns non-Clone C, distinct from ended P execution; real no-effect Final B→C transitions use the same current receipt, retain the consumer hold after B and settle it only after C. Stale ordinal handles and ended-P capture/finish refuse. O the entire positive real B-cleanup/index→C-cleanup/index journey and child stale-O write matrix; D actual Task 4 journey |
-| 33 | E prior A0/A2/A3 and exact original process-configuration controls retained. `batch_every_refusal_*` and `batch_current_advertisement_*` cover 17 F2/map/source/batch/projection/debt mutations plus current-ad/G/original-process changes at actual no-effect result admission; foreign service and unchanged cleanup stay closed. O destructive/index/gap/resumed C admission and remaining foreign-token/fault variants; D actual Task 3/4 binding/coordinator |
+| 33 | E prior A0/A2/A3 and exact original process-configuration controls retained. `batch_every_refusal_*` and `batch_current_advertisement_*` cover 17 F2/map/source/batch/projection/debt mutations plus current-ad/G/original-process changes. S1 `batch_specfix_*` distinguishes fully inspected positive tip/nonce/exact-M mismatch from unchanged and unknown: ref/admin/packed locks, SQL preparation/decoding failure, missing/malformed/redirected marker and incomplete/ambiguous M refuse without any registry/schema/resource write, even combined with another real mismatch. O destructive/index/gap/resumed C admission and remaining foreign-token/fault variants; D actual Task 3/4 binding/coordinator |
 | 34 | O no-child gap execution/request+batch fences; D actual Task 4 coordinator |
-| 35 | E prior R7 reports/stops, direct and nonadjacent-lineage changed-W → M truthful Possible/None, R3 terminal-observer outcome preservation; F2 preclaim/selected/new-reentry cancellation Final/no-effect and uncertain/post-prune Owed preserve flags, stale calls cannot acknowledge. `batch_final_replay_*` adds real once-only ExternalChange/no-removal Finals and read-only replay preserving new same-item instance/materialization. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
+| 35 | E prior R7 reports/stops, direct and nonadjacent-lineage changed-W → M truthful Possible/None, R3 terminal-observer outcome preservation; F2 preclaim/selected/new-reentry cancellation Final/no-effect and uncertain/post-prune Owed preserve flags, stale calls cannot acknowledge. `batch_final_replay_*` adds real once-only ExternalChange/no-removal Finals and read-only replay preserving new same-item instance/materialization. S1 now requires positive inspected mismatch for those Finals; unknown evidence never creates child/result/cursor/terminal/Z metadata. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
 | 36 | E prior F2 index/request-fence controls (approved at `c7daad0d`) plus `source_handoff_nonempty_*`: frozen child IDs refuse generic refresh and standalone retirement begin before any child row; ordinary/other-command controls retained. O remaining M/index fault and history variants |
 | 37 | E `generic_abandon_preserves_pending_and_terminal_identity`; D guarded preserving abandon Task 3 |
 | 38 | E prior migration/history controls plus strict A0/A1/A2/A3 correlations retained. New batch history audit accepts only exact frozen epoch-1 no-effect refused children with exact target/cursor/result correlation and no effect/index/request-child claims; `batch_audit_refuses_an_unfrozen_extra_child_*` catches copied ordinal/Final under a foreign ID. Catalog pins/DDL unchanged; consumption projection marker/tables installed only by tests. O remaining FK/tamper/deletion-order/full inventory variants; Task 4 owns producer/schema |
 | 39 | E A0→A1 remains unplanned; real A2 image/report/digest/binding and A3 exact process Capture retained. Private original-call poll continuation alone returns non-Clone C after nonempty successful A3; real no-effect ordered target/cursor updates consume that scope. No live C from public Complete, persisted eligibility, IDs or historical read. O real cleanup/index consumption, R8/resumed C and remaining token/fault matrix; D actual Task 4 producer/enrollment |
-| 40 | E prior A1/A2/A3 faults retained. `batch_each_refusal_write_*` covers seven child/result/cursor/terminal/Z rollback boundaries; `batch_empty_original_*` and `batch_empty_cursor_settlement_*` add explicit-empty success plus atomic empty-cursor A3 rollback/conservative ineligible recovery, no K or C. O remaining every-write/ambiguous-commit and second-release fault variants; D actual Task 4 producer |
+| 40 | E prior A1/A2/A3 faults retained. `batch_each_refusal_write_*` covers seven child/result/cursor/terminal/Z rollback boundaries; `batch_empty_original_*` and `batch_empty_cursor_settlement_*` add explicit-empty success plus atomic empty-cursor A3 rollback/conservative ineligible recovery, no K or C. S1 adds already-held/new-handle SQL-evidence faults: the two-child batch stays at cursor 0/active with both targets waiting and consumer hold retained, no false terminal `ok`. O remaining every-write/ambiguous-commit and second-release fault variants; D actual Task 4 producer |
 | 41 | E prior current-cancel/index-failure controls plus `source_handoff_specfix_r2_*`: completed-P lost capture settles ineligible/discovery_pending under BOTH restart spellings, before/after unrelated repair; immutable original report survives later ordinary poll replacement. Exact recovery-only writes; P outcome/epoch unchanged. Automatic, active-source and foreign root/child-source controls refuse without writes. O active-source crash fencing/fresh-ad retry and remaining source failure variants; D actual Task 4 producer |
 | 42 | E prior planning-pin controls plus both pins across refresh, source-only release on nonempty eligible handoff, retained consumer after source end and bound ineligible last-pin G→G+1 collection/reopen. O full cross-holder/window and partial-effect generation variants |
 | 43 | E `z_keeps_a_valid_integration_window_and_its_batch` retained; original-live C now holds through B's durable no-effect Final and releases at exact last C Final, with result/Z rollback and reopen controls. This does not substitute for the still-O combined source+consumer+other-holder+window matrix; D actual Task 4 journey |
@@ -4015,8 +4018,10 @@ This is a real, bounded metadata-consumption increment, not a permissive substit
 for cleanup/index ownership. Canonical projection schema/marker is test-installed
 only; the private methods await downstream invocation and fail closed without the
 full producer contracts. Whole-image/history audits are deliberately conservative;
-no performance claim. An identity-inspection failure can only produce a no-effect
-ExternalChange Final; it grants no cleanup. New batch terminal `ok` must not be
+no performance claim. The original a562 error-inversion classification was wrong:
+S1 below now propagates inspection/evidence failure before any child/result/cursor/
+Z write; only a fully inspected positive mismatch may produce ExternalChange Final.
+New batch terminal `ok` must not be
 misrepresented as successful resource retirement by future DTO/report integration.
 
 Still owed: controller LIMITED SPEC→QUALITY; **real ordered cleanup plus each local
@@ -4037,3 +4042,122 @@ Remote main rechecked unchanged **`c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`**;
 same-phase fetch/merge preflight reused, merge-tree succeeds. No agents/push/status/
 PR/main integration/closure/native CI/other-worktree edits or real-profile/key/
 context/draft actions, and no default-profile repair.
+
+## A4 LIMITED SPEC S1 Correction — Positive Change Is Not Inspection Failure
+
+Entry **`a562bac8498f143f957e48ed85d72c0a87e00c40`**, clean/ahead 1/unpushed,
+preserved unchanged. Review range remains
+**`5c9b53aa2691036a2add0ee3f8fb44e41ccc6981..fix-HEAD`**; full Task 2 base remains
+**`7b1912d152a1ab7440bd17c48a0a544e40e19258`**. Fix-HEAD introduces checkpoint
+**`01M6QF9DTHJADRY6P4C1VYHDYB`**, subject
+`fix: require positive evidence before batch refusal finals`.
+**Same LIMITED SPEC re-review, then QUALITY, are pending**; no expansion or push.
+
+### Accepted counterexample, root cause and typed correction
+
+Controller accepted one Medium S1 after inspecting the actual paths and isolated
+reviewer log `/tmp/opencode/batch-spec-a562-evkr620j/`
+`bounded-batch-controls-and-probes.log:21–36`. Under real original A3 with inert
+projections/synthetic ads, unchanged Git tip+marker plus either a ref/admin lock or
+missing materialization SQL table wrongly became ExternalChange Final. Missing SQL
+evidence could finalize both children, advance `(2,complete)`, set protocol `ok`,
+release the consumer and pass history audit. No destructive effect was observed;
+the defect was false Final/cursor/holder settlement, not deletion authority.
+
+`verify_candidates` mixes fixed-input mismatch with unavailable/uncertain Git and
+SQL evidence. `is_ok()` inversion treated **every Err** as positive change and
+could short-circuit on a changed nonce before even querying M. This was incorrect.
+
+- New internal `Result<FrozenComparison, RepositoryError>` separates successful
+  **Unchanged / Changed** inspection from **Err**. `instance::compare_frozen` reads
+  a valid direct existing-commit tip, enforces locks/no-follow/full registration/
+  selected-admin/checkout inspection, and parses a canonical installed nonce before
+  comparing. Missing, malformed, redirected or inaccessible evidence is Err; no
+  error-string/kind/NotFound heuristic, repaired marker or branch lifetime inference.
+- `handoff::compare_candidate` completes typed SQL preparation/row decoding and M
+  validation/correlation even after a positively changed tip/nonce. Only complete,
+  unambiguous canonical owner/OID/kind tuples (or successfully queried absence) may
+  participate in the exact frozen-M comparison. Incomplete/ambiguous evidence stays
+  closed. A positive identity observation never hides a later SQL evidence failure.
+- `batch::Child` accepts **only Changed**, before the first child envelope write.
+  Unchanged and Err create no record/attempt/result/target/cursor/terminal/Z delta.
+  Original strict `verify_candidates`/`verify_frozen` A2/A3 admission is unchanged;
+  all live/F2/map/G/process-config/current-receipt/image/debt guards and existing
+  Final replay/empty-cursor/child-collision/Z history paths are unchanged.
+
+Five Rust paths: `context_retirement/{batch,handoff,instance}.rs`, registration-only
+`batch_contract_tests.rs`, new `batch_inspection_tests.rs`. No old test assertion,
+shared schema/catalog pin, dependency/lockfile/target, cleanup/index/gap/resumed C
+authority or Task 3/4 production interface changed.
+
+### Test-first evidence and completed final gates
+
+Logs **`/tmp/opencode/task2-batch-consumption-specfix-<suffix>.log`**. New committed
+regressions, not copied reviewer probes, compiled before the production correction:
+`red` **1 passed / 4 failed**, expanded `red-expanded` **2 passed / 6 failed**.
+These reproduce error-as-change under normal obstruction and explicit isolated
+SQL/marker corruption. No CHECK/trigger was disabled. SQL decode corruption uses a
+deliberately replaced wrong-type table and is not presented as a normal M state.
+
+Final cases cover ref/admin/packed locks with unchanged and changed nonce, removal
+of only the fixture lock restoring original verification (unchanged stays closed),
+retained/new child handles after missing SQL evidence, typed SQL decode failures,
+missing/partial/oversized/nonregular/Unix-redirected markers combined with real M
+change, incomplete/ambiguous M combined with changed nonce, branch-only last-holder
+lock refusal, genuine nonce/tip/canonical M changes, and exact captured-complete M
+replacement/observed absence. Registry **schema plus every row**, refs and repository
+disk images stay identical after error; no false Final or hold release. Positive
+Finals retain original captured metadata and preserve current replacement M.
+
+All final commands below completed **serial foreground Devenv, `timeout:0`**,
+frozen source, exit **0**. Counts overlap; no aggregate count or zero-case claim.
+
+| Exact command after `devenv shell --` | Suffix | Passed/result |
+| --- | --- | --- |
+| `cargo check --all-features --locked` | `check` | pass |
+| `cargo fmt --check` | `fmt` | pass |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy` | pass |
+| `cargo test --all-features --locked --lib retirement_batch_specfix_` | `focused` | **9** |
+| Same test flags, `--lib retirement_source_` | `source-units` | **36**, R1/R2 and source/handoff guards retained |
+| Same test flags, `--lib context_retirement` | `context` | **166 = a562's 157 retained +9**; includes all instance guards and old 10 batch cases |
+| Same test flags, `--test mutation_remote retirement_` | `retirement-ssh` | **105 registered SSH cases**, unchanged assertions |
+| Same test flags, `--lib cleanup` / `--lib recovery` / `--lib refresh` | `cleanup` / `recovery` / `refresh` | **52 / 63 / 39** |
+| Same test flags, `--test recovery_foundation_gate` | `foundation` | **52** |
+| Same test flags, `--lib remote::poll` | `poll` | **81** ordinary poll controls |
+
+Final **1,724-input** inventory includes the new module and all build/dependency/
+asset/three literal document compile inputs:
+`/tmp/opencode/task2-batch-consumption-specfix-source.sha256`, SHA-256
+**`95a80b115d6534f5d7b76484df40b4a71db63c27e8249bc1e328783c74a1be36`**;
+all hashes rechecked after gates. **18-log** evidence inventory, including labeled
+RED/pre-freeze runs rather than 18 passing gates:
+`task2-batch-consumption-specfix-evidence.sha256`, SHA-256
+**`04da89cf8295e6245f9ffb8bb82dc2be5085049f06ff881bcb307a4a2f82460a`**.
+The pre-format `green-batch` **19** and earlier a562 **157/105** keep their original
+source scopes. No gratuitous unchanged 384-replay/broad-six-SSH repetition, full
+fast/full-suite/native/Windows/casefold/cross-compilation claim.
+
+### Limits, remaining duties and checkpoint
+
+Conservative comparison may refuse uncertain, incomplete or unsupported evidence
+instead of finalizing; that is deliberate and never grants cleanup. This correction
+does not make the inert projection a production Task 4 store or prove a live source
+SSH producer/coordinator journey. Terminal protocol `ok` still is not a successful
+cleanup/final DTO. Only affected E/O/D rows **33/35/40** were updated.
+
+Still owed: same SPEC re-review **then QUALITY**; positive A4 real B-cleanup/local
+index/result → C-cleanup/local index/result with every-write ownership; gap O/R8/
+resumed consumption; active-source restart/fencing; full holder/window/ambiguous-
+commit and A2/A3 remaining fault matrices; replacement/M/D14/index/history variants;
+full 44-row final Task 2 adversarial review and Task 8 fast/changed-path gates.
+Actual Tasks 3 Command/DTO/CLI/cancellation/guarded abandon and 4 production schema/
+selection/enrollment/loop/coordinator/final reports remain downstream. No approval,
+full A4 or Task 2 readiness/completion claim.
+
+Checkpoint parent **`01M6QC8XRVG0ERB2S57B8PE0ZH`**, actual UTC
+**`2026-11-06T03:44:01Z`**. ID only via supported current CLI with isolated
+`MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data` (`comment-id`).
+Main rechecked unchanged **`c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`**; same fresh
+controller fetch+merge phase reused, no rebase/D5 consumption. No agents, push,
+status/PR/main integration/closure/native CI/other-worktree edits or real-profile/
+key/context/draft actions; default unsupported profile never opened or repaired.

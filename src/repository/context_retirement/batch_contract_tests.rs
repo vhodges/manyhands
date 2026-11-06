@@ -4,6 +4,9 @@
 use super::*;
 use crate::repository::context_retirement::handoff::batch;
 
+#[path = "batch_inspection_tests.rs"]
+mod inspection;
+
 fn projections(s: &SourceFixture, entries: &[serde_json::Value]) {
     let db = s.f.db();
     db.execute_batch("DROP TRIGGER inert_frozen_decision;
