@@ -155,3 +155,38 @@ THEN fresh QUALITY.** Original review base is still
 `e79ab8e61b0682eb0f224d36dee5d67ef51aa4c9`; no whole-chunk approval or feature
 completion claimed. Tasks 7–8 remain owed. No agents, push, main/other-worktree/
 profile/key/context/draft mutation, PR/closure/native action or owned process.
+
+## Tasks 5–6 SPEC/QUALITY passes; Q1 membership assertion strengthened
+
+Controller reports SPEC **`ses_e4d1d87e4ffeVpP18HBE3BO07B` PASS** through
+**`1619e1009e36184e682d3589e4f23310562244d9`**, resolving S1–S3, followed by fresh
+QUALITY **`ses_e4d03572cffevY6wt8W3WDb3nC` PASS** with no Critical/Important and one
+Minor Q1. Original full review base remains
+`e79ab8e61b0682eb0f224d36dee5d67ef51aa4c9`; previous evidence/source scopes stand.
+
+Q1 was the final list check's vacuous `all(closed)` after filtering ITEM /
+OTHER_ITEM. Test-only source **`4df41831d9b327af2d64788c2083fb2847610abc`** now
+collects matching rows, requires sorted IDs exactly `[ITEM, OTHER_ITEM]` (also
+rejecting duplicates), then checks both closed. No new helper/case/target or
+production/renderer/policy change. Existing privacy, no-push and authoritative
+observation-count controls are unchanged. This is assertion strengthening, not a
+production bug; no artificial RED was needed.
+
+Only `devenv shell -- cargo test --all-features --locked --test cli_remote retirement_cli_authenticated_live_pass -- --exact`
+ran: **1 SSH case passed**, 42.31 s total wall, with the stronger membership check.
+Strict all-target/all-feature Clippy and fmt-check also pass. Setup was serialized
+and clean. Logs are `/tmp/opencode/task56-quality-q1-{ssh,clippy,fmt-check}.log`.
+No whole target, 19-case/render-case/PRESERVE/no-GPUI/fast/full/native rerun or real
+wait. The ledger records exact commands, scopes and results.
+
+Delta manifest: **1 input**, SHA-256
+`fc1622763b5b18a50038cacd594fed1a29d3aaefa80546813542cddae30063d7`.
+New evidence: **6 artifacts**, SHA-256
+`73d50e9dfd6802be02be56dad5e27d278e64dbfa63c53245be854fe0ba2b6f32`.
+Paths are `/tmp/opencode/task56-quality-q1-*.sha256`. This appends the same
+checkpoint without changing its identity/parent/time.
+
+**Original SPEC approval carries over; same QUALITY's bounded delta check is
+pending before publication.** No delta approval or whole-feature completion is
+claimed. Tasks 7–8 remain owed. No agents/push/main/other-worktree/PR/close/native
+or real profile/key/context/draft action; no owned process remains.

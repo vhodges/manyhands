@@ -27,14 +27,14 @@ transport-stop/host recovery, and truthful discovery after lost boundary copies.
 Both same reviewers found no remaining findings at their respective gates.
 The original 39 results and correction tables retain their actual source scopes;
 final whole-feature gates remain outstanding. Tasks 5–6's CLI/acceptance chunk is
-locally delivered at `c0ff11af`. Fresh SPEC `ses_e4d1d87e4ffeVpP18HBE3BO07B`
-found S1 Important (missing current action-owned operation ID in human recovery)
-and S2 Minor (working-image permission evidence overclaim). The same SPEC
-re-review cleared S1/S2 through `867b90e5`, but found one new Important S3:
-the new helper regrouped recovery actions, moving inspection/retry after abandon.
-S3 is locally corrected through `618eab46`; **same SPEC delta re-review retaining
-the prior full `e79ab8e6..returned-HEAD` analysis, THEN fresh QUALITY, are owed**.
-No independent approval of this chunk is claimed. Its bounded evidence,
+locally delivered at `c0ff11af`. Same SPEC `ses_e4d1d87e4ffeVpP18HBE3BO07B`
+**PASSED the full original Tasks 5–6 range through `1619e100`**, with S1–S3
+resolved. Fresh QUALITY **`ses_e4d03572cffevY6wt8W3WDb3nC` PASSED** at that same
+head with no Critical/Important findings and one Minor Q1 test-strengthening
+finding. Q1 is locally corrected at `4df41831`: the existing SSH case now requires
+both final ticket-list IDs exactly once before checking both closed.
+**Same QUALITY's bounded test-delta check remains pending before publication;
+original SPEC approval carries over this assertion-only delta.** Its bounded evidence,
 retained-44/acceptance delta and correction record are appended below. Task 7 governing
 amendments and Task 8 final tiers/whole-feature reviews remain owed. Ticket remains
 `implementing`, not full Task 2 or feature review-ready.**
@@ -146,7 +146,8 @@ Neither recovery route advances parent. Both corrections are internal under D15.
 - [ ] Tasks 5–6: CLI + relevant local acceptance and at most one new justified
   SSH connection E2E; no new SSH edge-case matrix. Existing 105 SSH cases are
   legacy evidence; review coverage mapping before any forward consolidation/rehome.
-  **Locally delivered at `c0ff11af`; independent SPEC then QUALITY still pending.**
+  **SPEC and fresh QUALITY passed through `1619e100`; QUALITY's one Minor Q1 is
+  locally corrected at `4df41831`, awaiting same-QUALITY bounded delta check.**
 - [ ] Tasks 7–8: governing docs, final static/fast/changed-path SSH tiers once at
   review-ready, then whole-range SPEC/QUALITY and owner handoff. No bare full suite
   premerge or repeated green gates. Ticket-branch publication remains authorized;
@@ -6824,3 +6825,68 @@ full-original-range analysis retained, against
 only after SPEC passes. No whole-chunk approval or feature completion claimed;
 Tasks 7–8 remain owed. Metadata-only evidence bookkeeping requires no repeated
 Rust gates.
+
+## Tasks 5–6 Review Passes And QUALITY Q1 Strengthening — 2026-11-06
+
+The controller reports **SPEC PASS** by `ses_e4d1d87e4ffeVpP18HBE3BO07B` through
+**`1619e1009e36184e682d3589e4f23310562244d9`**, after S1/S2/S3 were resolved, and
+fresh **QUALITY PASS** by **`ses_e4d03572cffevY6wt8W3WDb3nC`** on that full chunk,
+with **no Critical/Important findings and one Minor Q1**. These are bounded
+Tasks 5–6 approvals, not whole-feature/final-tier approval. Original review base
+remains **`e79ab8e61b0682eb0f224d36dee5d67ef51aa4c9`**; all earlier source/results
+and correction history remain intact at their recorded scopes.
+
+### Q1 — Nonvacuous Final List Membership
+
+The existing authenticated SSH case filtered the final `ticket list` to ITEM /
+OTHER_ITEM and called `all(closed)`, which accepted an empty set even when neither
+ticket was returned. Individual `ticket show` calls do not prove list membership.
+The controller verified the same lines. Source commit
+**`4df41831d9b327af2d64788c2083fb2847610abc`**, with coauthor, now collects the
+matching rows, sorts their IDs and asserts the vector is exactly
+`[ITEM, OTHER_ITEM]`, then asserts both closures closed. Comparing a vector (no
+deduplication) also rejects duplicates. No new helper, case/target, production,
+renderer, domain policy, schema, golden or transport change. Existing no-push,
+privacy and one-authoritative-observation assertions stay in the same case.
+
+This is **assertion strengthening, not a newly discovered production bug**;
+no artificial RED run was requested or manufactured. Only the changed exact SSH
+case ran. All Devenv commands were serialized with clean setup:
+
+```sh
+devenv shell -- cargo test --all-features --locked --test cli_remote retirement_cli_authenticated_live_pass -- --exact
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo fmt --check
+```
+
+| Log under `/tmp/opencode/` | Actual result at `4df41831` |
+| --- | --- |
+| `task56-quality-q1-ssh.log` | **1 SSH case passed**, nonzero exact runner match; 42.31 s total wall including 3.91 s build. The strengthened membership and retained closure/privacy/no-push/observation assertions all ran in this case. |
+| `task56-quality-q1-clippy.log` | Strict all-target/all-feature Clippy **exit 0**, 1.19 s compiler work; no separate redundant check. |
+| `task56-quality-q1-fmt-check.log` | Format check **exit 0**. Formatting itself also ran through Devenv (`task56-quality-q1-format.log`). |
+
+No whole SSH target, new SSH matrix, original 19-case or two-render-case rerun,
+PRESERVE/no-GPUI/fast/full/native run, real wait or command near 15 minutes.
+Prior green evidence remains at its original source scope; no approval/count is
+relabeled as a fresh test of this delta. This test-only edit carries the existing
+SPEC approval; **same QUALITY's bounded delta check is the next review gate**.
+
+- `/tmp/opencode/task56-quality-q1-sources.sha256`: **one changed test input**;
+  file SHA-256 **`0e38b6b25732f19b85ec3feef0f121d2cd6bb18b72bc5f8ab8832432c90fd240`**;
+  manifest SHA-256 **`fc1622763b5b18a50038cacd594fed1a29d3aaefa80546813542cddae30063d7`**.
+- `/tmp/opencode/task56-quality-q1-results.json`: literal commands/exits, timing,
+  nonzero SSH count, source SHA and strengthening-only classification.
+- `/tmp/opencode/task56-quality-q1-evidence.sha256`: **6 artifacts** (4 logs,
+  results JSON and source manifest), SHA-256
+  **`73d50e9dfd6802be02be56dad5e27d278e64dbfa63c53245be854fe0ba2b6f32`**.
+- Existing checkpoint `01M6SDJK2RM3GNP0YANZYS404Q` appended, preserving its
+  ID/parent/creator/time; no new ID or ticket status/body save. Only disposable
+  existing SSH fixtures ran; no real profile/key/context/draft action. No agents,
+  push, other-worktree/main change, PR/closure/native action or owned job remains.
+
+**Next:** same QUALITY reviewer checks this bounded assertion delta before
+publication. Full review range remains
+**`e79ab8e61b0682eb0f224d36dee5d67ef51aa4c9..returned-HEAD`**. No approval of the
+new delta is assumed. Tasks 7–8 and final whole-feature gates remain owed; Linux
+fixture success is not Windows/macOS runtime or real-context completion evidence.
+Metadata-only checkpoint bookkeeping needs no repeat of green Rust commands.
