@@ -94,12 +94,20 @@ fn a_republish_waits_until_its_own_entry_is_dismissed() {
     let resends = Resends::default();
     let (run, republish) = (DesktopRequestId(1), DesktopRequestId(2));
     assert!(!resends.pending_for(run));
-    resends.after_republish(republish, AfterRepublish::Retry(run));
+    resends.after_republish(
+        republish,
+        AfterRepublish::Retry(run),
+        PathBuf::from("/repo"),
+        item_id(TICKET),
+    );
     assert!(resends.pending_for(run));
+    assert!(resends.waiting_for(Path::new("/repo"), &item_id(TICKET)));
+    assert!(!resends.waiting_for(Path::new("/other"), &item_id(TICKET)));
     resends.forget(run);
     assert!(resends.pending_for(run), "the run's dismissal keeps it");
     resends.forget(republish);
     assert!(!resends.pending_for(run));
+    assert!(!resends.waiting_for(Path::new("/repo"), &item_id(TICKET)));
 }
 
 /// Ruling (a), re-review 1, 2: an answer offering `request.retry` or
@@ -126,7 +134,7 @@ fn a_republishs_answer_keeps_or_ends_what_waits_on_it() {
             republish(&root),
             RequestId::new(),
         );
-        resends.after_republish(id, resume_after(run));
+        resends.after_republish(id, resume_after(run), root.clone(), item_id(TICKET));
         let refused = answer(
             "item republish",
             ResultCode::ExternalChange,
@@ -138,12 +146,12 @@ fn a_republishs_answer_keeps_or_ends_what_waits_on_it() {
     }
 
     let removed = finished(&mut operations, 10, republish(&root), RequestId::new());
-    resends.after_republish(removed, resume_after(run));
+    resends.after_republish(removed, resume_after(run), root.clone(), item_id(TICKET));
     resends.not_run(removed);
     assert!(!resends.pending_for(run), "removed or not sent");
 
     let done = finished(&mut operations, 11, republish(&root), RequestId::new());
-    resends.after_republish(done, resume_after(run));
+    resends.after_republish(done, resume_after(run), root.clone(), item_id(TICKET));
     resends.ended(
         done,
         &answer("item republish", ResultCode::Ok, Vec::new()),
@@ -156,6 +164,22 @@ fn a_republishs_answer_keeps_or_ends_what_waits_on_it() {
         "the resume sent follows the run"
     );
     assert_eq!(resends.follow(run), resends.follow(run), "read, not taken");
+    // Last review, minor 1: the run queued again leads on afresh.
+    resends.requeued(run);
+    assert_eq!(resends.follow(run), None, "queued again");
+
+    // Dismissing the run drops its link (review M4).
+    let again = finished(&mut operations, 12, republish(&root), RequestId::new());
+    resends.after_republish(again, resume_after(run), root.clone(), item_id(TICKET));
+    resends.ended(
+        again,
+        &answer("item republish", ResultCode::Ok, Vec::new()),
+        &operations,
+        &worker,
+    );
+    assert!(resends.follow(run).is_some());
+    resends.forget(run);
+    assert_eq!(resends.follow(run), None, "dismissed");
 }
 
 /// The rows of `root`: one closure parent of `operation`, of the ticket.

@@ -425,6 +425,12 @@ impl Services {
                                 },
                             });
                         }
+                        // A run queued again leads on from here afresh.
+                        if let WorkerEvent::Queued(request) = &event
+                            && request.attempt > 1
+                        {
+                            resent.requeued(request.id);
+                        }
                         // A comment queued again under its own request.
                         if let WorkerEvent::Queued(request) = &event
                             && request.attempt > 1
@@ -593,9 +599,8 @@ impl Services {
         operations.locks().state(&key, in_flight, loading)
     }
 
-    /// Whether a republish of the item `id` of `root` is queued or running
-    /// (D5 Part C; review I-2, R-30): Republish… waits meanwhile.
-    pub(crate) fn republishing(
+    /// Whether a republish of the item `id` of `root` is queued or running.
+    pub(crate) fn republish_running(
         &self,
         root: &std::path::Path,
         id: &manyhands::canonical::ItemId,
@@ -604,6 +609,18 @@ impl Services {
             matches!(intent, requests::Intent::ItemRepublish { root: asked, id: asked_id, .. }
                 if asked == root && asked_id == id)
         })
+    }
+
+    /// Whether a republish of the item `id` of `root` is queued or running,
+    /// or one confirmed from a lifecycle's way out waits to be done (D5
+    /// Part C; review I-2, R-30): no other Republish… of it is offered
+    /// meanwhile.
+    pub(crate) fn republishing(
+        &self,
+        root: &std::path::Path,
+        id: &manyhands::canonical::ItemId,
+    ) -> bool {
+        self.republish_running(root, id) || self.resends.waiting_for(root, id)
     }
 
     /// The drafts this session knows of.

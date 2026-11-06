@@ -78,6 +78,7 @@ impl Workspace {
             id,
             after,
         } = target;
+        let item = (root.clone(), id.clone());
         let intent = Intent::ItemRepublish { root, kind, id };
         let services = self.services().clone();
         let Some(dialog) = confirm::confirm_followed(
@@ -93,7 +94,8 @@ impl Workspace {
             let resends = services.resends().clone();
             cx.subscribe_in(&dialog, window, move |_, _, followed: &Followed, _, _| {
                 if let Followed::Confirmed { request, .. } = followed {
-                    resends.after_republish(*request, after.clone());
+                    let (root, id) = item.clone();
+                    resends.after_republish(*request, after.clone(), root, id);
                 }
             })
             .detach();

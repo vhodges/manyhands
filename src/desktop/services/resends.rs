@@ -30,7 +30,7 @@
 
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -81,9 +81,16 @@ struct Registry {
     /// `original_request_required` by the run sent for it, and a run whose
     /// republish was done by the resume sent after it.
     resent: HashMap<DesktopRequestId, DesktopRequestId>,
-    /// Each republish confirmed from a lifecycle's way out, and how that
-    /// lifecycle goes on.
-    republishes: HashMap<DesktopRequestId, AfterRepublish>,
+    /// Each republish confirmed from a lifecycle's way out: how that
+    /// lifecycle goes on, and the item it republishes.
+    republishes: HashMap<DesktopRequestId, Waiting>,
+}
+
+/// A republish that waits to be done.
+struct Waiting {
+    after: AfterRepublish,
+    root: PathBuf,
+    item: ItemId,
 }
 
 /// The follow-ups of lifecycle resumes and republishes.
@@ -111,10 +118,18 @@ impl Resends {
         last
     }
 
-    /// Once the republish `republish` is done, its lifecycle goes on as
-    /// `after` says.
-    pub(crate) fn after_republish(&self, republish: DesktopRequestId, after: AfterRepublish) {
-        self.lock().republishes.insert(republish, after);
+    /// Once the republish `republish` of the item `item` of `root` is done,
+    /// its lifecycle goes on as `after` says.
+    pub(crate) fn after_republish(
+        &self,
+        republish: DesktopRequestId,
+        after: AfterRepublish,
+        root: PathBuf,
+        item: ItemId,
+    ) {
+        self.lock()
+            .republishes
+            .insert(republish, Waiting { after, root, item });
     }
 
     /// Whether a republish confirmed from the way out of `run` waits to be
@@ -123,7 +138,23 @@ impl Resends {
         self.lock()
             .republishes
             .values()
-            .any(|after| after.shown() == run)
+            .any(|waiting| waiting.after.shown() == run)
+    }
+
+    /// Whether a republish of the item `item` of `root` waits to be done,
+    /// from any run's way out: no other Republish… of it is offered
+    /// meanwhile (R-30; last review 1).
+    pub(crate) fn waiting_for(&self, root: &Path, item: &ItemId) -> bool {
+        self.lock()
+            .republishes
+            .values()
+            .any(|waiting| waiting.root == root && waiting.item == *item)
+    }
+
+    /// The run `id` was queued again: what it was followed by before is
+    /// not what follows it now (last review, minor 1).
+    pub(in crate::desktop::services) fn requeued(&self, id: DesktopRequestId) {
+        self.lock().resent.remove(&id);
     }
 
     /// The request `id` was dismissed: its link in a chain goes, and so
@@ -193,7 +224,7 @@ impl Resends {
                     }
                     return;
                 }
-                let Some(after) = registry.republishes.remove(&id) else {
+                let Some(Waiting { after, .. }) = registry.republishes.remove(&id) else {
                     return;
                 };
                 match after {
@@ -227,7 +258,7 @@ impl Resends {
 /// operation, or this session's request cannot be queued again: the
 /// resume's own answer is then what shows.
 fn resend(
-    root: &std::path::Path,
+    root: &Path,
     operation_id: OperationId,
     envelope: &Envelope<MutationDataDto>,
     operations: &Operations,

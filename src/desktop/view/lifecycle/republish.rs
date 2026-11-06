@@ -21,7 +21,7 @@
 
 use gpui_kit::{AnyElement, App, Context, IntoElement, Styled, Window, component::Root};
 use manyhands::{
-    repository::{LifecycleWayOut, MutationDataDto, OperationId},
+    repository::{LifecycleWayOut, MutationDataDto, OperationId, lifecycle_way_out},
     results::{Envelope, ResultCode},
 };
 
@@ -39,10 +39,10 @@ pub(crate) const STOPPED_READY: &str = "Stopped; ready to republish.";
 /// Stop and republish… could not give the run up: it is queued or running,
 /// or this session does not hold it.
 pub(crate) const NOT_STOPPED: &str = "This run could not be stopped now.";
-/// Stopped, and the republish confirmed after it stopped in turn: its own
-/// entry sends it again.
+/// A republish of the item, confirmed from a way out, stopped: its own
+/// entry sends it again, by Retry or Prepare again.
 pub(crate) const REPUBLISH_STOPPED: &str =
-    "The republish stopped; retry it from its entry in Activity.";
+    "The republish stopped; send it again from its entry in Activity.";
 
 impl LifecycleDialog {
     /// Whether the run `id`, answered `envelope`, is a Give up of an
@@ -56,9 +56,11 @@ impl LifecycleDialog {
             && self.services.worker().gave_up(id) == Some(GaveUp::Resent)
     }
 
-    /// Where Stop and republish… of the run `id` stands, in words: it could
-    /// not give this attempt up; or it stopped it, and Republish… is next,
-    /// runs, or stopped in turn.
+    /// Where a republish for the run `id` stands, in words: Stop and
+    /// republish… could not give this attempt up; a republish of the item
+    /// runs, or waits having stopped, which is why Republish… is not
+    /// offered; or Stop and republish… stopped the run, and Republish… is
+    /// next.
     pub(super) fn republish_line(
         &self,
         id: DesktopRequestId,
@@ -78,15 +80,29 @@ impl LifecycleDialog {
                     .into_any_element(),
             );
         }
-        if !self.stopped_to_republish(id, envelope) {
+        // Only a run whose way out is a republish speaks of one.
+        let stopped = self.stopped_to_republish(id, envelope);
+        let own = self.services.resends().pending_for(id);
+        let named = stopped
+            || own
+            || lifecycle_way_out(envelope).iter().any(|step| {
+                matches!(
+                    step,
+                    LifecycleWayOut::Republish { .. } | LifecycleWayOut::CancelThenSendAgain { .. }
+                )
+            });
+        if !named {
             return None;
         }
+        let waiting = own || self.republish_waiting();
         let (part, words) = if self.republish_in_flight() {
             ("lifecycle-republishing", REPUBLISHING)
-        } else if self.services.resends().pending_for(id) {
+        } else if waiting {
             ("lifecycle-republish-stopped", REPUBLISH_STOPPED)
-        } else {
+        } else if stopped {
             ("lifecycle-stopped-ready", STOPPED_READY)
+        } else {
+            return None;
         };
         Some(text(part, words).text_sm().into_any_element())
     }
@@ -96,13 +112,25 @@ impl LifecycleDialog {
         let (Some(root), Some(item)) = (self.root(), self.item_id()) else {
             return false;
         };
-        self.services.republishing(root, item)
+        self.services.republish_running(root, item)
+    }
+
+    /// Whether a republish of the item, confirmed from any run's way out,
+    /// waits to be done (R-30).
+    fn republish_waiting(&self) -> bool {
+        let (Some(root), Some(item)) = (self.root(), self.item_id()) else {
+            return false;
+        };
+        self.services.resends().waiting_for(root, item)
     }
 
     /// Whether a republish of the item is queued or running, or one
-    /// confirmed from the way out of `run` waits to be done.
+    /// confirmed from the way out of `run`, or of another run of the item,
+    /// waits to be done.
     fn republishing_now(&self, run: DesktopRequestId) -> bool {
-        self.services.resends().pending_for(run) || self.republish_in_flight()
+        self.services.resends().pending_for(run)
+            || self.republish_in_flight()
+            || self.republish_waiting()
     }
 
     /// Stop and republish… or Republish…, where the way out of the run

@@ -56,7 +56,7 @@ mod outcome;
 pub(crate) use outcome::{cleanup_reason, item_of, progress_words};
 pub(crate) use repair::{Reopen, reopen_repaired};
 #[cfg(all(test, feature = "desktop-test-support"))]
-pub(crate) use republish::NOT_STOPPED;
+pub(crate) use republish::{NOT_STOPPED, REPUBLISH_STOPPED};
 pub(crate) use resumed::follow_resume;
 mod prepare;
 mod repair;

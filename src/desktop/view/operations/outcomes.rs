@@ -130,29 +130,31 @@ pub(crate) fn busy_holder(
 }
 
 /// Whether the share `id` is of an item a republish of which is queued or
-/// running (R-30; review 4).
-fn republishing(services: &Services, id: DesktopRequestId, cx: &App) -> bool {
+/// running, or, with `waiting`, waits to be done from a lifecycle's way out
+/// (R-30; review 4).
+fn republishing(services: &Services, id: DesktopRequestId, waiting: bool, cx: &App) -> bool {
     match services
         .operations()
         .read(cx)
         .request(id)
         .map(|request| &request.intent)
     {
-        Some(Intent::ItemSync { root, id, .. }) => services.republishing(root, id),
+        Some(Intent::ItemSync { root, id, .. }) if waiting => services.republishing(root, id),
+        Some(Intent::ItemSync { root, id, .. }) => services.republish_running(root, id),
         _ => false,
     }
 }
 
 /// The offers the finished share `id`, of outcome `result`, shows: its
 /// own, but for Republish… and Stop and republish… while a republish of
-/// its item is queued or running (R-30; review 4).
+/// its item is queued, running, or waits to be done (R-30; review 4).
 pub(crate) fn shown_offers(
     services: &Services,
     id: DesktopRequestId,
     result: &SyncResult,
     cx: &App,
 ) -> Vec<SyncOffer> {
-    let republishing = republishing(services, id, cx);
+    let republishing = republishing(services, id, true, cx);
     result
         .offers()
         .into_iter()
@@ -172,7 +174,7 @@ pub(crate) fn share_words(
     result: &SyncResult,
     cx: &App,
 ) -> Option<String> {
-    if result.outcome == SyncOutcome::BranchDeleted && republishing(services, id, cx) {
+    if result.outcome == SyncOutcome::BranchDeleted && republishing(services, id, false, cx) {
         return Some(REPUBLISHING.to_owned());
     }
     let holder = matches!(result.outcome, SyncOutcome::Busy)

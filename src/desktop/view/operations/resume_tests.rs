@@ -129,7 +129,7 @@ async fn until_lock(shell: &Shell, root: &Path, expected: LockState, cx: &mut Te
         .await;
 }
 
-/// Draws frames until `done` holds, for up to a minute: for answers whose
+/// Draws frames until `done` holds, for up to thirty seconds: for answers whose
 /// retries outlast the harness's own wait under the whole suite.
 async fn until_long(
     shell: &Shell,
@@ -137,7 +137,7 @@ async fn until_long(
     cx: &mut TestAppContext,
     done: impl Fn(&Shell, &mut TestAppContext) -> bool,
 ) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
     loop {
         shell.frame(cx, |_, _| ());
         shell.run(cx);

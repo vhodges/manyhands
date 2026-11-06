@@ -24,8 +24,8 @@ use super::{
     REPUBLISH, REPUBLISHING,
     stop_tests::{resume_of_operation, resumes, shown, under_a_resume},
     tests::{
-        TICKET, finished, is_republish, republish_preview, republished, requests_of, ticket_shell,
-        until_present,
+        TICKET, branch_deleted, finished, is_republish, republish_preview, republished,
+        requests_of, ticket_shell, until_present,
     },
 };
 use crate::desktop::{
@@ -37,6 +37,7 @@ use crate::desktop::{
     test_support::fixtures::item_id,
     view::{
         harness::{Shell, key},
+        lifecycle::REPUBLISH_STOPPED,
         operations::{recovery_id, request_id, resume::tests as resume},
     },
 };
@@ -226,8 +227,12 @@ async fn a_stopped_republish_retried_still_sends_its_lifecycle_on(cx: &mut TestA
         .workspace
         .read_with(cx, |workspace, _| workspace.services().clone());
     assert!(
-        !services.republishing(&root, &item_id(TICKET)),
+        !services.republish_running(&root, &item_id(TICKET)),
         "not running"
+    );
+    assert!(
+        services.republishing(&root, &item_id(TICKET)),
+        "but waiting"
     );
     assert!(services.resends().pending_for(shown(cx).unwrap()));
     assert!(!shell.present("lifecycle-republish", cx), "it waits");
@@ -258,8 +263,9 @@ async fn a_stopped_republish_retried_still_sends_its_lifecycle_on(cx: &mut TestA
 }
 
 /// Ruling (a), I-2's "waits" half, canned as above: the stopped
-/// republish's follow-up hides Republish…; once its own entry is dismissed,
-/// the run's Open… offers Republish… again.
+/// republish's follow-up hides Republish…, and the dialog says the
+/// republish stopped; once its own entry is dismissed, the run's Open…
+/// offers Republish… again.
 #[gpui_kit::test]
 async fn a_waiting_republish_hides_republish_until_dismissed(cx: &mut TestAppContext) {
     let (shell, root) = ticket_shell(cx);
@@ -282,6 +288,11 @@ async fn a_waiting_republish_hides_republish_until_dismissed(cx: &mut TestAppCon
             !shell.present("confirm-ok", cx) && !shell.present("lifecycle-republish", cx)
         })
         .await;
+    // Last review, minor 4: the dialog says why.
+    assert_eq!(
+        shell.label("lifecycle-republish-stopped", cx).as_deref(),
+        Some(REPUBLISH_STOPPED)
+    );
     shell.keys("escape", cx);
     shell.click(request_id(republish, "dismiss"), cx);
     shell.click(request_id(run, "open"), cx);
@@ -483,4 +494,70 @@ async fn a_share_offers_no_republish_while_one_runs(cx: &mut TestAppContext) {
             shell.present(offer.clone(), cx)
         })
         .await;
+}
+
+/// R-30, last review 1, canned as above: while a lifecycle's republish of
+/// the item waits, stopped with `request.retry`, neither a share of the
+/// item nor another run of its lifecycle offers Republish… or Stop and
+/// republish…; the other run says the republish stopped.
+#[gpui_kit::test]
+async fn a_waiting_republish_hides_republish_elsewhere(cx: &mut TestAppContext) {
+    let (shell, root) = ticket_shell(cx);
+    under_a_resume(
+        &shell,
+        &root,
+        resume_of_operation(),
+        Some(super::tests::OPERATION),
+        cx,
+    )
+    .await;
+    let stopped = republish_answer(
+        ResultCode::TransportUnavailable,
+        Outcome::Error,
+        vec![RecoveryAction::new(RecoveryActionKind::RequestRetry, [])],
+    );
+    republish_answered(&shell, &root, stopped, cx).await;
+    shell
+        .until_drawn(cx, "the confirmation closes", |shell, cx| {
+            !shell.present("confirm-ok", cx)
+        })
+        .await;
+    shell.keys("escape", cx);
+
+    let share = Intent::ItemSync {
+        root: root.clone(),
+        kind: AuthoringKind::Ticket,
+        id: item_id(TICKET),
+    };
+    let deleted = Envelope::classified_mutation(
+        "item sync",
+        Scope::default(),
+        false,
+        ResultCode::RemoteBranchDeleted,
+        Effects::not_requested(),
+        false,
+    );
+    let shared = finished(&shell, 2, share, deleted, cx);
+    assert!(shell.present(request_id(shared, "dismiss"), cx));
+    assert!(!shell.present(request_id(shared, "republish"), cx));
+    assert!(!shell.present(request_id(shared, "stop-and-republish"), cx));
+
+    let other = finished(
+        &shell,
+        3,
+        Intent::TicketClose {
+            root: root.clone(),
+            id: item_id(TICKET),
+        },
+        branch_deleted(&root, manyhands::repository::RequestId::new()),
+        cx,
+    );
+    shell.click(request_id(other, "open"), cx);
+    until_present(&shell, "lifecycle-ending", cx).await;
+    assert!(!shell.present("lifecycle-stop-and-republish", cx));
+    assert!(!shell.present("lifecycle-republish", cx));
+    assert_eq!(
+        shell.label("lifecycle-republish-stopped", cx).as_deref(),
+        Some(REPUBLISH_STOPPED)
+    );
 }
