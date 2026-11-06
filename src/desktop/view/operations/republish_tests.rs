@@ -685,3 +685,75 @@ async fn an_unreadable_record_offers_give_up_and_it_sends_the_give_up(cx: &mut T
     shell.until_ended(id, cx).await;
     assert_eq!(worker.gave_up(id), Some(GaveUp::Resent));
 }
+
+/// R-32: the dialog Republish… waits for may be dismissed by hand, which is
+/// no request event. `Root::close_dialog` (and its deferred form, Escape)
+/// notifies the Kit's root, which draws its view, the workspace, again;
+/// `open_deferred_republish` runs in that render. So the deferred Republish…
+/// opens after Cancel, with nothing else happening, and the cancelled
+/// dialog sent nothing.
+#[gpui_kit::test]
+async fn republish_opens_when_the_dialog_it_waits_for_is_cancelled(cx: &mut TestAppContext) {
+    let (shell, root, other, worker, id) = accepted_deleted_share(cx).await;
+    let preview = republish_preview(&shell, &root);
+    shell.backend.answer_next_prepare("item republish", preview);
+    shell
+        .until_drawn(cx, "the share's offers", |shell, cx| {
+            shell.present(request_id(id, "stop-and-republish"), cx)
+        })
+        .await;
+    let cancelled = Envelope::classified_mutation(
+        "item sync",
+        Scope::default(),
+        true,
+        ResultCode::Cancelled,
+        Effects::not_requested(),
+        false,
+    );
+    let give_up = shell
+        .backend
+        .hold_job_return_answering(JobKind::SynchronizeItem, cancelled);
+    shell.click(request_id(id, "stop-and-republish"), cx);
+    give_up.wait_reached();
+
+    // A removal asked for, its preview shown and never confirmed.
+    shell.frame(cx, |window, cx| {
+        shell.workspace.update(cx, |workspace, cx| {
+            workspace.remove_repository(key(&other), window, cx)
+        })
+    });
+    shell
+        .until_drawn(cx, "the removal's preview", |shell, cx| {
+            shell.present("confirm-expires", cx)
+        })
+        .await;
+    give_up.release();
+    shell
+        .until(cx, move |operations| {
+            operations.request(id).is_some_and(|request| {
+                request.attempt == 2 && matches!(request.state, RequestState::Finished(..))
+            })
+        })
+        .await;
+    assert_eq!(worker.gave_up(id), Some(GaveUp::Resent));
+    shell.run(cx);
+    assert_eq!(
+        commands(&shell, cx),
+        ["Remove repository"],
+        "Republish… waits"
+    );
+
+    shell.click("confirm-cancel", cx);
+    shell
+        .until_drawn(cx, "Republish…", |shell, cx| {
+            commands(shell, cx) == ["Republish"]
+        })
+        .await;
+    assert!(
+        requests_of(&shell, cx, |intent| matches!(
+            intent,
+            Intent::RepoRemove { .. }
+        ))
+        .is_empty()
+    );
+}
