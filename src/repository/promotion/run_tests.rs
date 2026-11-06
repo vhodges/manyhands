@@ -5252,6 +5252,21 @@ fn a_promotion_tells_its_observer_only_the_steps_that_run() {
         told(&f.service, f.request()),
         [context, primary, E::CleaningUp]
     );
+    // The same, and the remote never saw the context (no tracking branch
+    // for it): the cleanup-only path starts no context child either.
+    let f = Fixture::new();
+    f.remote();
+    let merged = f.context.head().unwrap().target().unwrap();
+    checkout(&f.repo, merged);
+    f.repo
+        .reference("refs/remotes/origin/main", merged, true, "fixture")
+        .unwrap();
+    f.repo
+        .find_reference(&format!("refs/remotes/origin/manyhands/document/{ITEM}"))
+        .unwrap()
+        .delete()
+        .unwrap();
+    assert_eq!(told(&f.service, f.request()), [primary, E::CleaningUp]);
     // Sent again past the context's synchronization: no context child.
     let f = Fixture::new();
     f.remote();

@@ -2278,3 +2278,94 @@ fn a_closure_tells_its_observer_only_the_steps_that_run() {
         [E::Recording, E::Integrating, primary, E::CleaningUp]
     );
 }
+
+/// The stages a close reports through the mutation boundary.
+#[derive(Default)]
+struct Stages(Vec<crate::repository::ProgressStage>);
+impl crate::repository::ProgressSink for Stages {
+    fn event(&mut self, event: &crate::repository::ProgressEvent) {
+        self.0.push(event.stage);
+    }
+}
+
+/// R-15, D5 decision 11: a closure the ticket already holds is not recorded
+/// again, and so is not reported as `recording`. The binding sets this from
+/// what the request observed, at its prepare and again at a re-entry, so the
+/// stages come from a real prepare and execute of `ticket close`. Contained
+/// in the primary as well, only the tidy-up is left (R-14).
+#[test]
+fn a_closure_the_ticket_holds_is_not_reported_as_recording() {
+    use crate::repository::{
+        CancellationToken, ConfirmationId, Mutation, MutationCall, PrepareDataDto,
+        ProgressStage as S, RequestId, TicketCloseInput,
+    };
+    let stages_of = |contained: bool, interrupted: bool| {
+        let f = Fixture::new();
+        let closed = closed_ticket_bytes(
+            &read(&f.context, &ticket()),
+            support::at(1_800_000_000),
+            "Earlier <earlier@example.invalid>",
+        )
+        .unwrap();
+        write(&f.context, &ticket(), closed);
+        commit(&f.context);
+        if contained {
+            checkout(&f.repo, f.context_oid());
+        }
+        let mutation = || {
+            Mutation::TicketClose(TicketCloseInput {
+                root: f.root().to_owned(),
+                id: id(),
+            })
+        };
+        let prepared = f.service.prepare(&mutation());
+        let confirmation = prepared
+            .data
+            .as_ref()
+            .and_then(PrepareDataDto::preview)
+            .expect("a preview")
+            .confirmation_id
+            .clone();
+        let request_id = RequestId::new();
+        let call = || MutationCall {
+            request_id,
+            confirmation: Some(ConfirmationId::parse(&confirmation).unwrap()),
+            mutation: mutation(),
+        };
+        if interrupted {
+            // The process died after the request was accepted and before
+            // its domain call: the same request enters again.
+            let dying = f.failing(FailurePoint::BeforeRequestDomainCall);
+            let died = dying.execute(
+                call(),
+                &mut SessionCredentials::new(NoCredentials),
+                &mut Stages::default(),
+                &CancellationToken::new(),
+            );
+            assert_eq!(died.code, crate::results::ResultCode::InternalError);
+        }
+        let service = f.reopened();
+        let mut sink = Stages::default();
+        let done = service.execute(
+            call(),
+            &mut SessionCredentials::new(NoCredentials),
+            &mut sink,
+            &CancellationToken::new(),
+        );
+        assert_eq!(done.code, crate::results::ResultCode::Ok, "{:?}", done.data);
+        sink.0
+    };
+    assert_eq!(
+        stages_of(false, false),
+        [S::Accepted, S::Observing, S::Integrating, S::CleaningUp]
+    );
+    assert_eq!(
+        stages_of(true, false),
+        [S::Accepted, S::Observing, S::CleaningUp]
+    );
+    // The same request entered again, no `accepted` to report twice.
+    assert_eq!(
+        stages_of(false, true),
+        [S::Observing, S::Integrating, S::CleaningUp]
+    );
+}
