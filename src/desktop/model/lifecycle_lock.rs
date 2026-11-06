@@ -160,7 +160,7 @@ impl LifecycleLocks {
 
     /// A read of `root`'s pending operations landed (`result` borrowed).
     pub(crate) fn rows_read(&mut self, root: &str, result: &ReadResult<OperationListDto>) {
-        let rows = match result {
+        let rows: Vec<RecordRow> = match result {
             ReadResult::Ok(list) => list
                 .items
                 .iter()
@@ -181,7 +181,14 @@ impl LifecycleLocks {
                 .collect(),
             // Busy passes: the last rows stand.
             ReadResult::Busy => return,
-            ReadResult::Failed(_) => Vec::new(),
+            // Nothing is known of the rows, which reads as open (R-21). An
+            // exemption is kept: only a row read, gone or changed, ends it
+            // (R-22), and the next good read would lock it again.
+            ReadResult::Failed(_) => {
+                self.answered.retain(|key| key.root != root);
+                self.records.insert(root.to_owned(), Vec::new());
+                return;
+            }
         };
         self.answered.retain(|key| key.root != root);
         self.exemptions.retain(|key, exemption| {

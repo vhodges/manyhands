@@ -167,6 +167,43 @@ fn an_undoable_tidy_up_stop_exempts_its_row_until_it_changes() {
             "the row changed outside: {reason:?}"
         );
     }
+    // A read that fails says nothing of the row: the exemption stays, and
+    // the next good read of the same row is still not locked (R-21, R-22).
+    let mut locks = LifecycleLocks::default();
+    let changed = Some(LifecycleCleanupPendingReason::ContextChanged);
+    locks.answered(key(), request, Some(&pending(changed)));
+    locks.rows_read(ROOT, &read(vec![row("publication_pending", "t1")]));
+    locks.rows_read(
+        ROOT,
+        &ReadResult::Failed(ReadFailure {
+            code: ResultCode::RepositoryNotRegistered,
+            recovery: Vec::new(),
+        }),
+    );
+    assert_eq!(state(&locks), LockState::Open, "nothing is known meanwhile");
+    locks.rows_read(ROOT, &read(vec![row("publication_pending", "t1")]));
+    assert_eq!(
+        state(&locks),
+        LockState::Untidied(Untidied {
+            reason: LifecycleCleanupPendingReason::ContextChanged,
+            request
+        }),
+        "the same row after a failed read"
+    );
+    locks.rows_read(
+        ROOT,
+        &ReadResult::Failed(ReadFailure {
+            code: ResultCode::RepositoryNotRegistered,
+            recovery: Vec::new(),
+        }),
+    );
+    locks.rows_read(ROOT, &read(vec![row("publication_pending", "t2")]));
+    assert_eq!(
+        state(&locks),
+        LockState::Locked(LockSource::Record),
+        "a row changed meanwhile still ends it"
+    );
+
     let mut locks = LifecycleLocks::default();
     locks.answered(
         key(),
