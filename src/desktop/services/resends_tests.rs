@@ -396,3 +396,44 @@ fn a_resume_or_close_already_out_is_not_queued_twice() {
     );
     held.release();
 }
+
+/// V16: a resume Stop was pressed on is ending, and a resume of the same
+/// operation sent after the Stop is a new request that runs, not the
+/// stopping one. Once a resume is answered it is no twin either.
+#[test]
+fn a_stopped_or_finished_resume_is_not_a_twin() {
+    use crate::desktop::services::worker::{CancelResult, WorkerEvent};
+    use futures::StreamExt;
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    let backend = fixture.delaying_backend();
+    let held = backend.hold_job(crate::desktop::services::JobKind::OperationResume);
+    let (worker, mut events) = WorkerHandle::spawn(backend);
+    let operation = OperationId::new();
+    let resume = || Intent::OperationResume {
+        root: root.clone(),
+        operation_id: operation,
+    };
+
+    let first = worker.submit(resume(), Lane::User, None, None);
+    held.wait_reached();
+    assert_eq!(worker.cancel(first), CancelResult::Signalled, "Stop");
+    let again = worker.submit(resume(), Lane::User, None, None);
+    assert_ne!(again, first, "sent after the Stop: a new request");
+    assert_eq!(
+        worker.submit(resume(), Lane::User, None, None),
+        again,
+        "that one is a twin of the next"
+    );
+
+    held.release();
+    for want in [first, again] {
+        while let Some(event) = futures::executor::block_on(events.next()) {
+            if matches!(event, WorkerEvent::Finished(id, _) if id == want) {
+                break;
+            }
+        }
+    }
+    let after = worker.submit(resume(), Lane::User, None, None);
+    assert!(![first, again].contains(&after), "answered: not a twin");
+}

@@ -191,6 +191,14 @@ struct Job {
 }
 
 impl Job {
+    /// Whether its token was cancelled while it waited.
+    fn cancelled(&self) -> bool {
+        match &self.work {
+            Work::Execute { cancel, .. } | Work::GiveUp { cancel, .. } => cancel.is_cancelled(),
+            Work::ObserveHost { .. } => false,
+        }
+    }
+
     fn new(id: DesktopRequestId, work: Work, lane: Lane) -> Self {
         Self {
             id,
@@ -779,12 +787,28 @@ fn in_flight_twin(
         ) => submitted.request_id == request_id,
         _ => false,
     };
-    state
+    // One Stop was pressed on is ending: a call sent after the Stop is a
+    // new request, not that one.
+    let running = state
         .running
         .as_ref()
-        .map(|running| running.id)
+        .filter(|running| {
+            !running
+                .cancel
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled)
+        })
+        .map(|running| running.id);
+    running
         .into_iter()
-        .chain(state.user.iter().chain(&state.background).map(|job| job.id))
+        .chain(
+            state
+                .user
+                .iter()
+                .chain(&state.background)
+                .filter(|job| !job.cancelled())
+                .map(|job| job.id),
+        )
         .find(|id| state.submitted.get(id).is_some_and(twin))
 }
 
