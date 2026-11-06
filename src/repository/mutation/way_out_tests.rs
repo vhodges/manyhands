@@ -320,6 +320,22 @@ fn resolve_child_conflict_names_this_operation_then_the_way_on() {
         envelope.operation_id = None;
         assert_eq!(lifecycle_way_out(&envelope), expected);
     }
+    // The answer's own operation wins over the one the resume names.
+    let envelope = answer(
+        "operation resume",
+        ResultCode::RecoveryRequired,
+        stopped(),
+        vec![resume(OTHER_OPERATION)],
+    );
+    assert_eq!(
+        lifecycle_way_out(&envelope),
+        [
+            conflict(),
+            ResumeOperation {
+                operation_id: OTHER_OPERATION.into()
+            },
+        ]
+    );
     // `conflict_pending` alone is the repository's, not this operation's.
     let envelope = answer(
         "document promote",
