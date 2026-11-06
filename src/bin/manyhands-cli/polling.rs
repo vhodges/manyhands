@@ -90,7 +90,14 @@ pub fn once(
         session.json,
         driven,
         |envelope| render::prepare_output(false, envelope),
-        |envelope, supplied| once_output(envelope, supplied, root.to_string_lossy().as_ref()),
+        |envelope, supplied| {
+            let root = root.to_string_lossy();
+            if args.get_flag("retire-completed") {
+                once_output_in_mode(envelope, supplied, &root, true)
+            } else {
+                once_output(envelope, supplied, &root)
+            }
+        },
     )
 }
 
@@ -204,6 +211,15 @@ fn busy_route(root: &str) -> String {
 /// The human output of a `poll once` answer. `root` is the one the command
 /// named, for an answer whose scope holds none.
 fn once_output(envelope: &Envelope<MutationDataDto>, supplied: bool, root: &str) -> Output {
+    once_output_in_mode(envelope, supplied, root, false)
+}
+
+fn once_output_in_mode(
+    envelope: &Envelope<MutationDataDto>,
+    supplied: bool,
+    root: &str,
+    retire_completed: bool,
+) -> Output {
     let mut plain = envelope.clone();
     let body = match &envelope.data {
         Some(MutationDataDto::Poll(data)) => {
@@ -222,7 +238,11 @@ fn once_output(envelope: &Envelope<MutationDataDto>, supplied: bool, root: &str)
     } else {
         ""
     };
-    let mut output = render::compact(&plain, false, &body, after, envelope.recovery.clone(), "");
+    let mut output = if retire_completed {
+        crate::retirement::compact(&plain, false, &body, after)
+    } else {
+        render::compact(&plain, false, &body, after, envelope.recovery.clone(), "")
+    };
     if envelope.code == ResultCode::Busy {
         let root = envelope.scope.repository.as_deref().unwrap_or(root);
         output.stderr.extend(busy_route(root).into_bytes());

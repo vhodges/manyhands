@@ -332,8 +332,32 @@ fn retirement_report_distinguishes_as_of_cut_from_current_child_actions() {
         RetirementRemoval,
     };
     let mut e = poll_envelope(ResultCode::RecoveryRequired, vec![]);
+    const PARENT: &str = "01ARZ3NDEKTSV4RRFFQ69G5FP0";
+    const HISTORICAL_CHILD: &str = "01ARZ3NDEKTSV4RRFFQ69G5FK0";
+    const CURRENT_OPERATION: &str = "01ARZ3NDEKTSV4RRFFQ69G5FX0";
+    const CURRENT_REQUEST: &str = "01ARZ3NDEKTSV4RRFFQ69G5FR0";
+    const SCOPE_ROOT: &str = "/scope's\troot\n";
+    const ACTION_ROOT: &str = "/action's\troot\n";
+    e.operation_id = Some(PARENT.into());
+    e.scope.repository = Some(SCOPE_ROOT.into());
+    e.recovery = vec![
+        RecoveryAction::for_operation(RecoveryActionKind::OperationResume, CURRENT_OPERATION, []),
+        RecoveryAction::for_operation(
+            RecoveryActionKind::OperationAbandon,
+            CURRENT_OPERATION,
+            [("root", serde_json::Value::from(ACTION_ROOT))],
+        ),
+        RecoveryAction::new(
+            RecoveryActionKind::RequestRetry,
+            [("request_id", serde_json::Value::from(CURRENT_REQUEST))],
+        ),
+    ];
     let Some(MutationDataDto::Poll(poll)) = e.data.take() else {
         unreachable!()
+    };
+    let poll = PollMutationDto {
+        operation_id: PARENT.into(),
+        ..poll
     };
     let states = [
         PollRetirementItemState::Retired,
@@ -353,7 +377,7 @@ fn retirement_report_distinguishes_as_of_cut_from_current_child_actions() {
                 kind: ItemDtoKind::Ticket,
                 item_id: format!("item-{i}\n"),
                 request_id: REQUEST.into(),
-                operation_id: Some(REQUEST.into()),
+                operation_id: Some(HISTORICAL_CHILD.into()),
                 state,
                 code: Some(ResultCode::RecoveryRequired),
                 debt: (state == PollRetirementItemState::Pending)
@@ -362,7 +386,7 @@ fn retirement_report_distinguishes_as_of_cut_from_current_child_actions() {
                     r#type: ContextRetirementMutationType::ContextRetirement,
                     kind: ItemDtoKind::Ticket,
                     item_id: format!("item-{i}"),
-                    operation_id: REQUEST.into(),
+                    operation_id: HISTORICAL_CHILD.into(),
                     state: ContextRetirementState::Pending,
                     code: ResultCode::DiscoveryPending,
                     worktree_removal: RetirementRemoval::Observed,
@@ -372,7 +396,14 @@ fn retirement_report_distinguishes_as_of_cut_from_current_child_actions() {
             })
             .collect(),
     }));
-    let out = once_output(&e, false, ROOT);
+    let before = serde_json::to_value(&e).unwrap();
+    assert!(
+        !serde_json::to_string(&e.data)
+            .unwrap()
+            .contains(CURRENT_OPERATION),
+        "the current recovery target is absent from the historical report"
+    );
+    let out = once_output_in_mode(&e, false, ROOT, true);
     assert!(out.stdout.is_empty());
     let text = stderr(&out);
     for state in ["retired", "refused", "pending", "not_reached"] {
@@ -388,7 +419,71 @@ fn retirement_report_distinguishes_as_of_cut_from_current_child_actions() {
     );
     assert!(text.contains("debt=discovery"), "{text}");
     assert!(text.contains("never resumes the loop"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "next: manyhands-cli operation resume --repo {} --operation-id '{}'\n",
+            quoted(SCOPE_ROOT),
+            CURRENT_OPERATION
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "next: manyhands-cli operation abandon --repo {} --operation-id '{}' --prepare\n",
+            quoted(ACTION_ROOT),
+            CURRENT_OPERATION
+        )),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!(
+            "next: request.retry request_id={CURRENT_REQUEST}\n"
+        )),
+        "{text}"
+    );
+    for line in text.lines().filter(|line| line.starts_with("next:")) {
+        assert!(
+            !line.contains(PARENT) && !line.contains(HISTORICAL_CHILD),
+            "{line}"
+        );
+    }
+    assert_eq!(
+        serde_json::to_value(&e).unwrap(),
+        before,
+        "human formatting never changes JSON"
+    );
     no_raw_control(text);
+
+    // An opted-in refusal may precede a tagged report. The explicit mode still
+    // renders only the current action's target; the invocation root is not a
+    // substitute for a missing record/action root.
+    let mut no_report = e.clone();
+    no_report.data = None;
+    let out = once_output_in_mode(&no_report, false, "/not-the-record-root", true);
+    let text = stderr(&out);
+    assert!(
+        text.contains(&format!(
+            "next: manyhands-cli operation resume --repo {} --operation-id '{}'\n",
+            quoted(SCOPE_ROOT),
+            CURRENT_OPERATION
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("/not-the-record-root"));
+
+    let mut ordinary = poll_envelope(ResultCode::RecoveryRequired, vec![]);
+    ordinary.recovery = e.recovery.clone();
+    let ordinary = once_output(&ordinary, false, ROOT);
+    let text = stderr(&ordinary);
+    assert!(
+        text.contains("next: operation.resume\n"),
+        "ordinary output is unchanged: {text}"
+    );
+    assert!(text.contains(&format!(
+        "next: operation.abandon root={}\n",
+        field(ACTION_ROOT)
+    )));
+    assert!(!text.contains("next: manyhands-cli operation resume"));
 
     // Completed mixed passes are exit 0, not a claim that every item retired.
     // Empty, cancelled and index-pending reports retain their actual code/exit.
@@ -436,7 +531,7 @@ fn retirement_report_distinguishes_as_of_cut_from_current_child_actions() {
         } else if completion == PollRetirementCompletion::Completed {
             data.retirements.truncate(2);
         }
-        let out = once_output(&row, false, ROOT);
+        let out = once_output_in_mode(&row, false, ROOT, true);
         assert_eq!(out.status, status);
         let text = format!("{}{}", stdout(&out), stderr(&out));
         assert!(text.contains("poll (original observation report):"));

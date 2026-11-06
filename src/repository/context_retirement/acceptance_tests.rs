@@ -279,7 +279,7 @@ fn retirement_guarded_folded_and_refusal_table_preserves_full_resources_and_inde
             assert_eq!(
                 disk_image(&path),
                 before_disk,
-                "{case}: every working byte/mode/link retained"
+                "{case}: every working byte, node type and link target retained"
             );
             assert_eq!(
                 refs(),

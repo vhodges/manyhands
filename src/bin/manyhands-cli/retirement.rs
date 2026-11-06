@@ -12,7 +12,7 @@ use manyhands::{
         AuthoringKind, ContextRetireInput, ContextRetirementMutationDto, Mutation, MutationDataDto,
         RepositoryService,
     },
-    results::Envelope,
+    results::{Envelope, RecoveryActionKind},
 };
 
 pub fn retire(
@@ -69,20 +69,74 @@ pub(crate) fn removal(data: &ContextRetirementMutationDto) -> String {
 }
 
 fn output(envelope: &Envelope<MutationDataDto>, supplied: bool) -> Output {
-    let Some(MutationDataDto::ContextRetirement(data)) = &envelope.data else {
-        return render::mutation_output(false, envelope, supplied);
-    };
     let mut plain = envelope.clone();
-    plain.data = None;
-    let body = format!(
-        "retirement: kind={} item={} state={} code={} {}\n",
-        data.kind.as_str(),
-        field(&data.item_id),
-        data.state.as_str(),
-        data.code.as_str(),
-        removal(data)
-    );
-    render::compact(&plain, supplied, &body, "", envelope.recovery.clone(), "")
+    let body = if let Some(MutationDataDto::ContextRetirement(data)) = &envelope.data {
+        plain.data = None;
+        format!(
+            "retirement: kind={} item={} state={} code={} {}\n",
+            data.kind.as_str(),
+            field(&data.item_id),
+            data.state.as_str(),
+            data.code.as_str(),
+            removal(data)
+        )
+    } else {
+        String::new()
+    };
+    compact(&plain, supplied, &body, "")
+}
+
+/// Only the new retirement human paths use this formatter. Current recovery
+/// can name an operation absent from the historical report; neither the report
+/// nor the envelope's own operation ID supplies a continuation target.
+pub(crate) fn compact(
+    envelope: &Envelope<MutationDataDto>,
+    supplied: bool,
+    body: &str,
+    after: &str,
+) -> Output {
+    let mut next = after.to_owned();
+    let mut remaining = Vec::new();
+    for action in &envelope.recovery {
+        let verb = match action.action {
+            RecoveryActionKind::OperationResume => "resume",
+            RecoveryActionKind::OperationAbandon => "abandon",
+            _ => {
+                remaining.push(action.clone());
+                continue;
+            }
+        };
+        let Some(operation) = action.operation_id.as_deref() else {
+            remaining.push(action.clone());
+            continue;
+        };
+        let root = action
+            .arguments
+            .get("root")
+            .and_then(serde_json::Value::as_str)
+            .or(envelope.scope.repository.as_deref());
+        if let Some(root) = root {
+            let prepare = if action.action == RecoveryActionKind::OperationAbandon {
+                " --prepare"
+            } else {
+                ""
+            };
+            next.push_str(&format!(
+                "next: manyhands-cli operation {verb} --repo {} --operation-id {}{prepare}\n",
+                render::quoted(root),
+                render::quoted(operation)
+            ));
+        } else {
+            // No established root: retain the exact action-owned ID without
+            // inventing a repository from an invocation or a frozen target.
+            next.push_str(&format!(
+                "next: {} operation_id={}\n",
+                action.action.as_str(),
+                field(operation)
+            ));
+        }
+    }
+    render::compact(envelope, supplied, body, &next, remaining, "")
 }
 
 #[cfg(test)]
