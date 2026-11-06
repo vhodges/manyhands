@@ -126,7 +126,7 @@ pub(crate) fn offer_current_children(
     }
     envelope
 }
-fn answer(data: PollRetirementMutationDto) -> Ran {
+fn answer(data: PollRetirementMutationDto, original_poll_completed: bool) -> Ran {
     let code = data.stop_code.unwrap_or(ResultCode::Ok);
     let pending = data
         .retirements
@@ -142,9 +142,10 @@ fn answer(data: PollRetirementMutationDto) -> Ran {
         });
     let discovery = if pending || code == ResultCode::DiscoveryPending {
         crate::results::DiscoveryEffect::Pending
-    } else if data.completion == PollRetirementCompletion::Completed
-        || (data.poll.completion == super::super::dto::PollMutationCompletion::Completed
-            && matches!(code, ResultCode::RecoveryRequired | ResultCode::Cancelled))
+    } else if original_poll_completed
+        && (data.completion == PollRetirementCompletion::Completed
+            || (data.poll.completion == super::super::dto::PollMutationCompletion::Completed
+                && matches!(code, ResultCode::RecoveryRequired | ResultCode::Cancelled)))
     {
         crate::results::DiscoveryEffect::Current
     } else {
@@ -178,8 +179,13 @@ impl PollRetirementBinding {
         } else {
             forced
         };
-        match pass::finish(call.service, a, fallback, forced) {
-            Ok(data) => answer(data),
+        let finished = pass::finish(call.service, a, fallback, forced).and_then(|data| {
+            // Includes lost boundary-copy recovery of an existing cut. A
+            // terminal failed P is not evidence that discovery ever ran.
+            pass::original_poll_completed(call.service, a).map(|completed| (data, completed))
+        });
+        match finished {
+            Ok((data, completed)) => answer(data, completed),
             Err(e) => Ran {
                 answer: refused(e),
                 standing: Standing::Owed,
@@ -387,7 +393,16 @@ impl Binding for PollRetirementBinding {
         a: &Accepted,
         journal: JournalRow,
     ) -> Result<Entered, Ran> {
-        match pass::has_capture(call.service, &a.root(), a.operation_id) {
+        // A failed original P may have a cut without a captured image. Never
+        // execute P again once that cut exists, even if its journal was lost.
+        let history = pass::has_cut(call.service, &a.root(), a.operation_id).and_then(|cut| {
+            if cut {
+                Ok(true)
+            } else {
+                pass::has_capture(call.service, &a.root(), a.operation_id)
+            }
+        });
+        match history {
             Ok(true) => Err(self.finish(call, a, None, None)),
             Ok(false) => {
                 let mut ordinary = PollOnceBinding::from(PollOnceInput {

@@ -1199,6 +1199,19 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
         };
         let data = serde_json::to_value(&response.data).unwrap();
         assert_eq!(data["type"], "poll_retirement", "{case}: {response:?}");
+        if matches!(case, "empty" | "request_cancel_cut") {
+            assert_eq!(
+                response.effects.discovery,
+                DiscoveryEffect::Current,
+                "successful original discovery remains Current even for a stopped cancellation cut: {case}"
+            );
+        } else if case == "index_pending" {
+            assert_eq!(
+                response.effects.discovery,
+                DiscoveryEffect::Pending,
+                "the original pending discovery is not erased by report composition"
+            );
+        }
         if matches!(
             case,
             "empty" | "nonce_replaced" | "refused_copy_lost" | "all_absent"
@@ -1341,11 +1354,15 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
         "host_approve",
         "lost_key",
         "lost_host",
+        "copy_lost_host_verify",
+        "copy_lost_host_verify_missing",
+        "copy_lost_host_verify_corrupt",
     ] {
         let f = Fixture::new();
         let branch = present(&f);
         let id = RequestId::new();
         let lost = case.starts_with("lost_");
+        let copy_lost = case.starts_with("copy_lost_");
         let key = || HostKeyIdentity {
             algorithm: "ssh-ed25519".into(),
             sha256: "SHA256:safe-presented".into(),
@@ -1366,7 +1383,10 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
                 "selected_key_unavailable",
             ),
             "unlock" => (E::UnlockFailed, ResultCode::UnlockFailed, "unlock_required"),
-            "host_verify" => (
+            "host_verify"
+            | "copy_lost_host_verify"
+            | "copy_lost_host_verify_missing"
+            | "copy_lost_host_verify_corrupt" => (
                 E::HostVerificationUnavailable,
                 ResultCode::RecoveryRequired,
                 "host_approval_required",
@@ -1406,7 +1426,19 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
             kind,
         };
         let disk = disk_image(f.root.path());
-        let producer = RepositoryService::open_at(f.data.path()).unwrap();
+        let producer = if copy_lost {
+            RepositoryService::open_at_with_failure_point_for_testing(
+                f.data.path(),
+                FailurePoint::BeforeRequestSettlement,
+            )
+            .unwrap()
+        } else {
+            RepositoryService::open_at(f.data.path()).unwrap()
+        };
+        let index_before = [
+            row_image(&f.db(), "contexts"),
+            row_image(&f.db(), "discovered_items"),
+        ];
         if lost {
             let root = f.root.path().to_owned();
             let data = f.data.path().to_owned();
@@ -1438,7 +1470,93 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
                 root: f.root.path().into(),
             })
         };
-        let first = if lost {
+        let first = if copy_lost {
+            let lost_answer = execute(&producer, id, mutation());
+            assert_eq!(
+                lost_answer.code,
+                ResultCode::InternalError,
+                "actual parent boundary-copy loss AFTER the cut commits"
+            );
+            let request = f.service.request_record(id).unwrap().unwrap();
+            assert_eq!(request.state, RequestState::Accepted);
+            assert!(request.result.is_none());
+            let op = request.operations[0].operation_id;
+            let db = f.db();
+            let frozen: String = db
+                .query_row(
+                    "SELECT summary FROM poll_retirement_passes WHERE operation_ulid=?1",
+                    [op.to_string()],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            let cut: serde_json::Value = serde_json::from_str(&frozen).unwrap();
+            assert_eq!(cut["stop_code"], "recovery_required");
+            assert_eq!(
+                cut["poll"]["completion"], "completed",
+                "terminal wire completion is not successful discovery"
+            );
+            assert_eq!(cut["retirements"], serde_json::json!([]));
+            assert_eq!(
+                index_before,
+                [
+                    row_image(&db, "contexts"),
+                    row_image(&db, "discovered_items")
+                ],
+                "no original refresh ran"
+            );
+            if case == "copy_lost_host_verify_missing" {
+                db.execute(
+                    "DELETE FROM remote_operation_records WHERE operation_ulid=?1",
+                    [op.to_string()],
+                )
+                .unwrap();
+            } else if case == "copy_lost_host_verify_corrupt" {
+                db.execute_batch("PRAGMA ignore_check_constraints=ON")
+                    .unwrap();
+                db.execute(
+                    "UPDATE remote_operation_records SET outcome='corrupt' WHERE operation_ulid=?1",
+                    [op.to_string()],
+                )
+                .unwrap();
+                db.execute_batch("PRAGMA ignore_check_constraints=OFF")
+                    .unwrap();
+            }
+            let mut history = registry_image(&db);
+            history.remove("request_records");
+            let retry = execute(&f.service, id, mutation());
+            assert_eq!(
+                retry.effects.discovery,
+                DiscoveryEffect::NotRequested,
+                "SPEC I1 lost-copy regression: failed original P is not successful discovery: {case}: {retry:?}"
+            );
+            assert_eq!(
+                db.query_row(
+                    "SELECT summary FROM poll_retirement_passes WHERE operation_ulid=?1",
+                    [op.to_string()],
+                    |r| r.get::<_, String>(0)
+                )
+                .unwrap(),
+                frozen,
+                "the immutable cut bytes are not repaired or rewritten"
+            );
+            let mut after = registry_image(&db);
+            after.remove("request_records");
+            assert_eq!(
+                history, after,
+                "retry only settles request metadata: no refresh, remote work, child, nonce or prune"
+            );
+            assert_eq!(disk, disk_image(f.root.path()));
+            if case != "copy_lost_host_verify" {
+                assert_eq!(retry.code, ResultCode::RecoveryRequired);
+                assert_eq!(
+                    f.service.request_record(id).unwrap().unwrap().state,
+                    RequestState::Accepted,
+                    "missing/corrupt original P is not positive discovery evidence"
+                );
+                continue;
+            }
+            retry
+        } else if lost {
             assert!(catch_unwind(AssertUnwindSafe(|| execute(&producer, id, mutation()))).is_err());
             assert!(
                 f.db()

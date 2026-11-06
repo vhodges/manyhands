@@ -296,6 +296,43 @@ pub(in super::super) fn has_capture(
         tx.query_row("SELECT image IS NOT NULL FROM poll_retirement_passes WHERE operation_ulid=?1 AND repository_id=?2",params![op.to_string(),id],|r|r.get(0)).map_err(|_|recovery_required())
     })
 }
+
+pub(in super::super) fn has_cut(
+    service: &RepositoryService,
+    root: &Path,
+    op: OperationId,
+) -> Result<bool, RepositoryError> {
+    state::with_transaction(service, root, |tx, id| {
+        record::audit_connection(tx)?;
+        tx.query_row("SELECT summary IS NOT NULL FROM poll_retirement_passes WHERE operation_ulid=?1 AND repository_id=?2",params![op.to_string(),id],|r|r.get(0)).map_err(|_|recovery_required())
+    })
+}
+
+/// Wire completion also describes terminal failures. Before deriving Current
+/// from an immutable cut, read the exact original UPDATE-P's durable outcome;
+/// this read cannot refresh, restart P, reconstruct selection or change the cut.
+pub(in super::super) fn original_poll_completed(
+    service: &RepositoryService,
+    accepted: &Accepted,
+) -> Result<bool, RepositoryError> {
+    state::with_transaction(service, &accepted.root(), |tx, id| {
+        record::audit_connection(tx)?;
+        validate_parent(tx, accepted, false)?;
+        let original =
+            state::read_operation(tx, id, accepted.operation_id)?.ok_or_else(recovery_required)?;
+        if original.target.action() != repository::RemoteOperationAction::Poll
+            || original.poll_kind != Some(state::PollKind::Update)
+            || original.priority != repository::RemoteOperationPriority::Manual
+        {
+            return Err(recovery_required());
+        }
+        Ok(
+            original.phase == repository::RemoteOperationPhase::Completed
+                && original.outcome == Some(repository::RemoteOutcomeCategory::Completed),
+        )
+    })
+}
+
 pub(in super::super) fn is_parent(db: &Connection, ri: RequestId) -> Result<bool, RepositoryError> {
     db.query_row(
         "SELECT EXISTS(SELECT 1 FROM poll_retirement_passes WHERE request_ulid=?1)",
