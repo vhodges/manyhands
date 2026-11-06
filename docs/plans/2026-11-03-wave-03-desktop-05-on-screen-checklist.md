@@ -4,16 +4,27 @@ This list is for checking the D5 Cycle (conflict recovery, promotion and
 closure) by hand on Linux Wayland, before the Cycle is called
 review-ready. It is the native evidence the design asks for (design,
 "Native Checklist (Linux Wayland, Release Build, Product Owner)"), with
-the owner rulings that changed the UI since: R-27 to R-32. Work through
+the owner rulings that changed the UI since: R-27 to R-32, R-34 and R-35
+(with R-35a and R-35b). Work through
 sections 1 to 6 in order. Every journey is keyboard-only: use no pointer
 unless a step says so. Write each step's result in its row's last column,
 and a one-line summary per section in section 7. Claude records only what
 you report.
 
 Quoted text is the app's own wording. `{remote}` stands for the remote's
-name, `main` for the repository's main branch, `{id}` for an item's ID,
-and `{short}` for a ticket's short code (or an item's last eight ID
-characters when it has none).
+name, `{id}` for an item's ID, and `{short}` for a ticket's short code (or
+an item's last eight ID characters when it has none).
+
+**The primary branch (R-35).** Every D5 text names the repository's own
+primary branch, as its configuration names it. The scratch repositories
+use `main`, so the expected text below says `main`; steps marked
+"(primary)" quote it. In a repository whose primary branch is, say,
+`trunk`, the same text reads `trunk`. A sentence that begins with the
+branch reads "The main branch …" (R-35a); mid-sentence it is the bare
+name ("Merged into main"). Branch names are never capitalised.
+Activity's entry for a share of the primary branch names it too:
+"Share main" (R-35b). The one exception is the pre-D5 sidebar button,
+which stays "Share main" whatever the name.
 
 ## Before you start
 
@@ -109,7 +120,7 @@ choose.
    for the second: quitting stops the run at a safe point instead.
 5. `kill -CONT` the remote before the next step that needs it.
 
-A stall at "Share {main} with {remote}" (after the close is recorded and
+A stall at "Share main with {remote}" (after the close is recorded and
 merged) needs the stall to start after "Share with {remote}" is Done:
 stop the host's listening `sshd` (the parent, not your connection's) while
 "Share with {remote}" runs, so the next connection hangs. That is
@@ -158,16 +169,16 @@ Write down if you hit one, with the step; do not report it as a failure.
 | # | Do | Expect | Result / notes |
 | --- | --- | --- | --- |
 | 2.1 | **Remote.** On a Shared scratch ticket, Edit, change a line, and leave it **unsaved**. Tab to Close ticket… and press Enter. | The dialog opens: kind icon, title "Close ticket", subtitle "{short} · {title} · {repository}", and the branch. "Saving your latest edits…" shows briefly, then "Preparing…". | |
-| 2.2 | Read the confirm stage. | Lead "Closing runs these steps in order. If one fails, it stops there and nothing after it happens." Steps: "Save your latest edits", "Share with {remote}", "Mark as closed" ("Closed by {you}"), "Merge into main", "Share main with {remote}", "Tidy up". Then "Files that will be merged into main ({n})" with one row per path, each tagged ticket, document or comment; a "Git: merge … into main · push {remote} · delete …" line; "Expires {time}". Buttons **Close ticket** and **Cancel**. | |
-| 2.3 | Press Enter. | Each step goes Not started → Running → Done in order. "It continues in the background if you close this, and shows up in Activity." and **Stop at a safe point** show while it runs. Activity's entry reads "Closing · …" with the stage ("Connecting…", "Marking it closed…", "Merging into main…", "Sharing main…", "Tidying up…"). | |
-| 2.4 | When it ends, read it. | "Done", every step Done, then "Merged into main", "Shared", "Tidied up". **Close** only. Press Enter: the dialog closes and focus is back on the header. | |
+| 2.2 | Read the confirm stage. | (primary) Lead "Closing runs these steps in order. If one fails, it stops there and nothing after it happens." Steps: "Save your latest edits", "Share with {remote}", "Mark as closed" ("Closed by {you}"), "Merge into main", "Share main with {remote}", "Tidy up". Then "Files that will be merged into main ({n})" with one row per path, each tagged ticket, document or comment; a "Git: merge … into main · push {remote} · delete …" line; "Expires {time}". Buttons **Close ticket** and **Cancel**. | |
+| 2.3 | Press Enter. | (primary) Each step goes Not started → Running → Done in order. "It continues in the background if you close this, and shows up in Activity." and **Stop at a safe point** show while it runs. Activity's entry reads "Closing · …" with the stage ("Connecting…", "Marking it closed…", "Merging into main…", "Sharing main…", "Tidying up…"). | |
+| 2.4 | When it ends, read it. | (primary) "Done", every step Done, then "Merged into main", "Shared", "Tidied up". **Close** only. Press Enter: the dialog closes and focus is back on the header. | |
 | 2.5 | Look at the ticket. In the second clone, `git pull`. | The tab shows it from main: Closed, with Closed at and Closed by, apart from Status. No Close ticket…. In the second clone the ticket's file has `closed_at` and `closed_by`, and `git branch -r` lists no `manyhands/ticket/{id}`. | |
-| 2.6 | **Local-only.** On a Local scratch ticket, Edit, change a line, Save, and press Close ticket…. | Steps: "Save your latest edits", "Keep on this computer (sharing pending)" ("This repository has no remote, so nothing is sent."), "Mark as closed", "Merge into main", "Tidy up". No "Share main" step. | |
-| 2.7 | Confirm with Enter. | "Done", then "Merged into main", "Sharing pending (no remote)", "Tidied up" (R-7). No "Sharing main…" stage in Activity. | |
+| 2.6 | **Local-only.** On a Local scratch ticket, Edit, change a line, Save, and press Close ticket…. | (primary) Steps: "Save your latest edits", "Keep on this computer (sharing pending)" ("This repository has no remote, so nothing is sent."), "Mark as closed", "Merge into main", "Tidy up". No "Share main" step. | |
+| 2.7 | Confirm with Enter. | (primary) "Done", then "Merged into main", "Sharing pending (no remote)", "Tidied up" (R-7). No "Sharing main…" stage in Activity. | |
 | 2.8 | **Code on the branch.** On another Local scratch ticket, Edit and Save once. Then, with `git`, add a file such as `notes.txt` in `.manyhands/worktrees/{id}/` and commit it there. Press Close ticket…. | The file is listed with the tag `code`, and the note "This working copy includes code as well as the ticket. All of it is merged." shows. No line counts (R-3). | |
 | 2.9 | Confirm and let it finish. Run `git log --stat -1 main`. | "Done". The merge on main includes `notes.txt` and the ticket file. | |
 | 2.10 | **Made ready.** In the Local scratch, commit ticket A by `git`, then ticket B with `deps:` and `- {A's id}` lines in its front matter (as this repository's tickets have). Refresh. Edit and Save A once, then close A. | On Done, below the outcome lines: "Now ready:", then "{B's short} · {B's title}". | |
-| 2.11 | **Promote.** On a Shared scratch document, Edit, Save, and press Approve and merge…. Confirm. | Title "Approve and merge", lead "Merging runs these steps in order. …", no "Mark as closed" step; button **Approve and merge**. Ends "Done", "Merged into main", "Shared", "Tidied up". Activity reads "Merging · …". | |
+| 2.11 | **Promote.** On a Shared scratch document, Edit, Save, and press Approve and merge…. Confirm. | (primary) Title "Approve and merge", lead "Merging runs these steps in order. …", no "Mark as closed" step; button **Approve and merge**. Ends "Done", "Merged into main", "Shared", "Tidied up". Activity reads "Merging · …". | |
 | 2.12 | **Status text `closed`.** On a Local scratch ticket, set its Status to `closed` and Save. Press Close ticket… and confirm. | It runs (P13). Afterwards the lifecycle Closed shows apart from the Status field. | |
 | 2.13 | While a close runs (use the stall from "Before you start"), try Edit, Save and Share on that ticket, also from a second tab on it. | The tab reads "Closing…" ("Merging…" for a document) and Edit, Save, Share, Move… and Repair… are unavailable. Typing in a comment composer still works (R-23). | |
 
@@ -179,7 +190,7 @@ Write down if you hit one, with the step; do not report it as a failure.
 | --- | --- | --- | --- |
 | 3.1 | On a Shared scratch ticket, Edit and Save a line of its body (do not Share). In the second clone, on main, change the **same** line of that ticket's file; commit and push main. Press Share in the app. | The banner reads "You and someone else both changed this since it was last shared. Your work is safe." with **Review changes**. The pill reads "Needs attention". Activity's entry offers Review changes too. | |
 | 3.2 | Press Review changes on the banner. | The sheet opens, focused, while "Reading the conflict…" shows briefly. Title "Choose what to keep · {title}". Description "You and someone else both changed this since it was last shared. Pick a version for each part, or keep both." A meta line: kind icon, `{short}`, the repository, and "0 of {n} chosen" in amber. The note "Saving finishes the share that stopped." | |
-| 3.3 | **Look (R-27).** Read a part. | A field part names its field, with **Keep mine** and **Keep theirs** and "Choose one". The body part is "Description", with Keep mine, Keep theirs, **Keep both**. Before, Yours and Theirs are tinted monospaced lines (not editors); changed lines carry `~` and added lines `+` in the gutter. A field changed on one side only says "Only yours changed it; yours is kept." or "Only theirs changed it; theirs is kept." Under the Result editor: "Saving keeps the result on this computer. You can still edit it in the item afterwards, and Share sends it to everyone." At the foot, "Git: conflict in {path} · ours {8 chars} · theirs {8 chars}". No line counts, no author. | |
+| 3.3 | **Look (R-27).** Read a part. | A field part names its field, with **Keep mine** and **Keep theirs** and "Choose one". The body part is "Description", with Keep mine, Keep theirs, **Keep both**. Before, Yours and Theirs are tinted monospaced lines (not editors); changed lines carry `~` and added lines `+` in the gutter. A field changed on one side only says "Only yours changed it; yours is kept." or "Only theirs changed it; theirs is kept." Under the Result editor: "You can still edit it in the item afterwards." and nothing more (R-34); the sheet's note from 3.2 is the only text that says what Saving does. At the foot, "Git: conflict in {path} · ours {8 chars} · theirs {8 chars}". No line counts, no author. | |
 | 3.4 | Choose Keep both on the body, and one side on each field. | Each part's state reads "Keeping both", "Keeping yours" or "Keeping theirs"; the count turns green at "{n} of {n} chosen"; **Save resolution** becomes available. With a mixed choice, "This file will be saved in the standard layout." shows on the card. | |
 | 3.5 | Save resolution. | The sheet closes, the banner clears, and the share's outcome follows ("Shared"). In the second clone, after `git pull`, the file holds your choices. | |
 | 3.6 | Repeat 3.1 but **post a comment** in place of Share. | The comment is saved; the same banner with Review changes shows. Review changes, choose, Save resolution: the share finishes and the comment is in the second clone once. | |
@@ -188,9 +199,9 @@ Write down if you hit one, with the step; do not report it as a failure.
 
 | # | Do | Expect | Result / notes |
 | --- | --- | --- | --- |
-| 3.7 | Make a local conflict ("Before you start"). Press Close ticket…. | The dialog stops before confirm: "Nothing was changed. Each thing below stands in the way; deal with it, then prepare again." with "This item's changes conflict with main.", the guidance "Bring main into this ticket's working copy, then prepare again.", and **Repair locally…**, **Prepare again**, **Close**. | |
-| 3.8 | Press Repair locally…. | "Bringing main into this ticket's working copy…" shows; then the dialog closes and the sheet opens. Description "This item and main both changed since they last met. Pick a version for each part, or keep both." Note "Saving finishes bringing main into this item." Two parts: the title and Description. | |
-| 3.9 | Choose both parts and Save resolution. | The sheet closes and the **lifecycle dialog opens again** (R-29) with "Main is in this ticket's working copy now." and Prepare again and Close. | |
+| 3.7 | Make a local conflict ("Before you start"). Press Close ticket…. | (primary) The dialog stops before confirm: "Nothing was changed. Each thing below stands in the way; deal with it, then prepare again." with "This item's changes conflict with main.", the guidance "Bring main into this ticket's working copy, then prepare again.", and **Repair locally…**, **Prepare again**, **Close**. | |
+| 3.8 | Press Repair locally…. | (primary) "Bringing main into this ticket's working copy…" shows; then the dialog closes and the sheet opens. Description "This item and main both changed since they last met. Pick a version for each part, or keep both." Note "Saving finishes bringing main into this item." Two parts: the title and Description. | |
+| 3.9 | Choose both parts and Save resolution. | (primary) The sheet closes and the **lifecycle dialog opens again** (R-29) with "The main branch is in this ticket's working copy now." (R-35a) and Prepare again and Close. | |
 | 3.10 | Press Prepare again, then confirm. | The confirm stage shows; the close runs to "Done". | |
 | 3.11 | **(rare)** Make another local conflict, press Close ticket…, then Repair locally…; press Cancel in the sheet. Quit, start again, press `secondary-4`. | Under "Pending in repositories" the local synchronization's row offers **Review changes** (R-28). It opens the same sheet. | |
 
@@ -198,7 +209,7 @@ Write down if you hit one, with the step; do not report it as a failure.
 
 | # | Do | Expect | Result / notes |
 | --- | --- | --- | --- |
-| 3.12 | Repeat 3.1's setup (save a body line in the app; change the same line on main in the second clone and push), but press **Close ticket…** and confirm. | "Share with {remote}" fails: "Failed", with "This item's working copy has a conflict to resolve." and "A conflict on this item is waiting to be resolved.", the guidance "This ticket's shared copy has a conflict to resolve first, then retry.", and **Resolve conflict…** and **Retry**. Nothing was merged ("Nothing was merged into main."). If the prepare stops first with a blocker, follow its guidance and write it down. | |
+| 3.12 | Repeat 3.1's setup (save a body line in the app; change the same line on main in the second clone and push), but press **Close ticket…** and confirm. | (primary) "Share with {remote}" fails: "Failed", with "This item's working copy has a conflict to resolve." and "A conflict on this item is waiting to be resolved.", the guidance "This ticket's shared copy has a conflict to resolve first, then retry.", and **Resolve conflict…** and **Retry**. Nothing was merged ("Nothing was merged into main."). If the prepare stops first with a blocker, follow its guidance and write it down. | |
 | 3.13 | Press Resolve conflict…. | The dialog closes; the sheet opens with the note "Saving lets the close continue." | |
 | 3.14 | Choose and Save resolution. | The sheet closes; the lifecycle dialog shows Running again (the same request, sent again), then "Done". | |
 | 3.15 | Repeat 3.12-3.14 with a document and Approve and merge…. | The sheet's note reads "Saving lets the merge continue."; the merge ends "Done". | |
@@ -212,16 +223,16 @@ Write down if you hit one, with the step; do not report it as a failure.
 | --- | --- | --- | --- |
 | 4.1 | **Key locked.** Start the app fresh. Close a Shared scratch ticket and choose **Not now** at "Unlock key". | "Failed" at "Share with {remote}", with **Unlock…** and **Open Sharing & keys**. Press Unlock…, enter the passphrase: one prompt, then the run goes on to "Done". | |
 | 4.2 | **Key refused.** Remove your public key from the host's `authorized_keys`. Close a ticket. | "Failed" at "Share with {remote}", with **Retry** and **Open Sharing & keys**; write down the code under the message (expect `key_rejected`). Restore the key and press Retry: "Done". | |
-| 4.3 | **Remote deletion refused (P6).** On the host, add an `update` hook to the bare repository that refuses deleting `refs/heads/manyhands/*` (exit 1 when the new value is all zeros; `chmod +x`). Close a ticket. | "Failed", with "Merged into main", "Shared", and "Not tidied up yet: the remote refused to delete the shared branch", and **Retry**. The ticket stays read-only ("Closing…"). | |
+| 4.3 | **Remote deletion refused (P6).** On the host, add an `update` hook to the bare repository that refuses deleting `refs/heads/manyhands/*` (exit 1 when the new value is all zeros; `chmod +x`). Close a ticket. | (primary) "Failed", with "Merged into main", "Shared", and "Not tidied up yet: the remote refused to delete the shared branch", and **Retry**. The ticket stays read-only ("Closing…"). | |
 | 4.4 | Try Edit on that ticket. Then remove the hook and press Retry in the dialog (or Open… in Activity, then Retry). | Edit is unavailable (P23). Retry ends "Done" with "Tidied up"; no new merge or publication commit on main (`git log main` in the second clone after a pull) (P7). | |
-| 4.5 | **Stop.** Get a close stopped mid-run ("Before you start", Stop at a safe point). | The button reads "Stopping…", then "Stopped at a safe point", "The cancellation finished: nothing after the completed steps ran.", "Completed: {steps}.", "Nothing was merged into main.", and **Retry**. If it had already finished: "It finished before it could stop." | |
+| 4.5 | **Stop.** Get a close stopped mid-run ("Before you start", Stop at a safe point). | (primary) The button reads "Stopping…", then "Stopped at a safe point", "The cancellation finished: nothing after the completed steps ran.", "Completed: {steps}.", "Nothing was merged into main.", and **Retry**. If it had already finished: "It finished before it could stop." | |
 | 4.6 | Look at the ticket's tab, then let the remote go and press Retry. | Before Retry the ticket is editable again (stopped before "Mark as closed", L-1). Retry sends the same request: "Done". | |
 | 4.7 | **Quit and relaunch with Resume (P5).** Get a close stopped mid-run with `kill -9`. Let the remote go. Start the app, press `secondary-4`. | The close is listed under "Pending in repositories" with **Resume**. | |
 | 4.8 | Press Resume. | The dialog opens on Running and the same close goes on to "Done". | |
 | 4.9 | **(rare, K-20)** Make the same interruption with the stall at "Share main with {remote}". Start the app again and open the ticket. | It reads closed, offers no Close ticket…, and is read-only with "Closing…" (K-20). Resume on its row finishes it; then it unlocks. | |
 | 4.10 | **Already running (P22).** While a close is stalled, press Escape, then open the run again from Activity (**Open…**). | Escape hides the dialog; the run goes on. Open… reopens it on Running. Resume and Continue are not offered while it runs; a resend answered busy reads "Still running…". | |
 | 4.11 | **Held (P12).** Stop a close (4.5) and press Escape. Press Close ticket… again. | Either "An earlier run of this is not finished, and it holds the item. Nothing new was started." with **Continue** (or **Resume**), or a fresh confirm. Write down which. | |
-| 4.12 | **Dirty main (P19).** In the Local scratch, change a tracked file in the repository's folder without committing. Press Close ticket…. | Blocked: "Main has unsaved changes outside Manyhands." with **Open folder**. Nothing merged. Undo the change afterwards. | |
+| 4.12 | **Dirty main (P19).** In the Local scratch, change a tracked file in the repository's folder without committing. Press Close ticket…. | (primary) Blocked: "The main branch has unsaved changes outside Manyhands." (R-35a) with **Open folder**. Nothing merged. Undo the change afterwards. | |
 | 4.13 | **(rare) Stale (P2).** At the confirm stage of a close, commit a new file in the ticket's working copy with `git`, then press Enter. | "Something changed since you confirmed." with **Prepare again**, which shows the new summary. | |
 | 4.14 | **(K-13)** In the Local scratch, commit a `.gitignore` with `*.log` to main first. Edit and Save a ticket, put `scratch.log` in its working copy, and close it. | The close merges, then stops at the tidy-up: "Not tidied up yet: the working copy holds ignored files". The ticket is editable and shows "Merged, but not tidied up: the working copy holds ignored files" with **Open folder** and **Check again**. Delete the file and press Check again: "Tidied up". | |
 
@@ -231,7 +242,7 @@ Write down if you hit one, with the step; do not report it as a failure.
 | --- | --- | --- | --- |
 | 5.1 | **A share's deleted branch.** Share a Shared scratch ticket once. In the second clone, `git push origin --delete manyhands/ticket/{id}`. Edit and save the ticket in the app; press Share. | "The shared copy of this item was deleted. Republish it to share it again." While its record is held: **Stop and republish…** and **Stop trying to share**; once finished: **Republish…** (R-30). Write down which you got. | |
 | 5.2 | Press Republish… (or Stop and republish…). | A Republish confirmation with Branch, Last published and Local commit. After Confirm the entry reads "Republishing…", and Republish… and Stop and republish… are hidden on the entry and the item while it runs. It ends shared; `git branch -r` in the second clone lists the branch again. | |
-| 5.3 | **(rare) Main's deleted branch.** On the host, `git config receive.denyDeleteCurrent ignore` in the bare repository; from the second clone, `git push origin --delete main`. Press Share main in the app. | "The shared copy of main was deleted." with **Stop trying to share** only: no Republish… (R-30). Push main back from the second clone afterwards. | |
+| 5.3 | **(rare) Main's deleted branch.** On the host, `git config receive.denyDeleteCurrent ignore` in the bare repository; from the second clone, `git push origin --delete main`. Press the sidebar's Share main in the app (it reads "Share main" whatever the branch's name). | (primary) "The shared copy of main was deleted." with **Stop trying to share** only: no Republish… (R-30). Activity's entry is named "Share main" (R-35b). Push main back from the second clone afterwards. | |
 | 5.4 | **A lifecycle's deleted branch (P21).** Share a ticket once; delete its branch in the second clone as in 5.1; Edit and Save it in the app (do not Share or Refresh). Close ticket… and confirm. | "Failed" at "Share with {remote}", with "This ticket's shared copy was deleted: share it again, then retry." and "Stop this run first, then share this ticket again.", and **Stop and republish…**. If the prepare stops first on "This item's shared copy was deleted.", write it down. | |
 | 5.5 | Press Stop and republish…. | "Stopped; ready to republish." and the Republish confirmation opens over the dialog. Confirm: the dialog reads "Republishing…", then the close is sent again and runs to "Done". No loop of busy answers. | |
 | 5.6 | **(rare)** If the run could not be given up, or the republish stopped. | "This run could not be stopped now." or "The republish stopped; send it again from its entry in Activity." | |
