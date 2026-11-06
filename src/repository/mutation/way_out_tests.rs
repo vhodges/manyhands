@@ -292,6 +292,34 @@ fn resolve_child_conflict_names_this_operation_then_the_way_on() {
         );
         assert_eq!(lifecycle_way_out(&envelope), expected);
     }
+    // An `operation resume` answer is another operation's: its own ID is
+    // null, and the resume action names the parent, which the conflict verbs
+    // accept.
+    for (recovery, expected) in [
+        (
+            vec![resume(OTHER_OPERATION), inspect()],
+            vec![
+                ResolveChildConflict {
+                    operation_id: OTHER_OPERATION.into(),
+                },
+                ResumeOperation {
+                    operation_id: OTHER_OPERATION.into(),
+                },
+                Inspect,
+            ],
+        ),
+        // Nothing names an operation: nothing to resolve by.
+        (vec![inspect()], vec![Inspect]),
+    ] {
+        let mut envelope = answer(
+            "operation resume",
+            ResultCode::RecoveryRequired,
+            stopped(),
+            recovery,
+        );
+        envelope.operation_id = None;
+        assert_eq!(lifecycle_way_out(&envelope), expected);
+    }
     // `conflict_pending` alone is the repository's, not this operation's.
     let envelope = answer(
         "document promote",

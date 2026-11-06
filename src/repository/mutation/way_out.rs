@@ -166,9 +166,16 @@ fn merge_refused(envelope: &Envelope<MutationDataDto>, item: &str) -> Vec<Lifecy
 }
 
 /// A context child's conflict (C5 decision 34), named by this operation's ID,
-/// then the same request or the resume.
+/// then the same request or the resume. An `operation resume` answer carries
+/// no operation ID of its own (it is another's), so the parent the resume
+/// action names stands for it: the conflict verbs accept the parent's.
 fn child_conflict(envelope: &Envelope<MutationDataDto>) -> Vec<LifecycleWayOut> {
-    let Some(operation) = envelope.operation_id.as_deref() else {
+    let resumed = envelope
+        .recovery
+        .iter()
+        .find(|action| action.action == RecoveryActionKind::OperationResume)
+        .and_then(|action| action.operation_id.as_deref());
+    let Some(operation) = envelope.operation_id.as_deref().or(resumed) else {
         return Vec::new();
     };
     let mut route = vec![LifecycleWayOut::ResolveChildConflict {
