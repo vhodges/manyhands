@@ -14,6 +14,9 @@ use std::{path::Path, sync::Arc};
 
 const CONTRACT: &str = "poll_retirement_handoff_contract_v1";
 
+#[path = "batch.rs"]
+pub(in super::super) mod batch;
+
 // Read-only test observation at the actual A3 entry, after original refresh.
 // No runtime API, authority replacement or guard bypass is provided.
 #[cfg(test)]
@@ -119,6 +122,7 @@ fn no_child_collision(db: &Connection, child: &str) -> Result<(), RepositoryErro
                     |r| r.get::<_, bool>(0),
                 )
                 .map_err(|_| recovery_required())?
+            && (table != "operation_records" || !batch::admitted(db, child)?)
         {
             return Err(recovery_required());
         }
@@ -417,7 +421,13 @@ pub(super) fn audit_source(
                     && f.code.as_deref() == Some("ok")
                     && (source, consumer, releases) == (0, 0, 2)
             } else {
-                p.phase == "active" && f.code.is_none() && (source, consumer, releases) == (0, 1, 1)
+                (p.phase == "active"
+                    && f.code.is_none()
+                    && (source, consumer, releases) == (0, 1, 1))
+                    || (p.phase == "ended"
+                        && f.code.as_deref() == Some("ok")
+                        && (source, consumer, releases) == (0, 0, 2)
+                        && batch::completed(db, p, &f)?)
             }
         }
         "ineligible" => {
@@ -439,7 +449,7 @@ impl Capture {
         service: &RepositoryService,
         root: &Path,
         wrapper: OriginalWrapper,
-    ) -> Result<(), RepositoryError> {
+    ) -> Result<Option<batch::Live>, RepositoryError> {
         if !Arc::ptr_eq(&self.scope, &service.remote_reservation_scope)
             || root.to_str() != Some(self.p.root.as_str())
             || wrapper.report() != self.report
@@ -450,7 +460,7 @@ impl Capture {
         if let Some(observe) = BEFORE_SETTLE.with(|slot| slot.borrow_mut().take()) {
             observe();
         }
-        state::with_transaction(service, root, |tx, id| {
+        let live = state::with_transaction(service, root, |tx, id| {
             record::audit_connection(tx)?;
             let mut current = source::projection(tx, &self.p.operation, self.p.epoch)?;
             current.stage = "unplanned".into();
@@ -506,8 +516,10 @@ impl Capture {
                 } else {
                     "discovery_pending"
                 },
-            )
-        })
+            )?;
+            Ok(!cancelled && wrapper.complete() && f.count > 0)
+        })?;
+        Ok(live.then(|| batch::Live::from_original(self)))
     }
 }
 
@@ -521,6 +533,9 @@ fn decide(
     let terminal = eligibility == "ineligible" || f.count == 0;
     if tx.execute("UPDATE poll_retirement_freezes SET eligibility=?3,final_code=?4 WHERE operation_ulid=?1 AND owner_epoch=?2 AND eligibility='unconfirmed' AND capture_nonce=?5",params![p.operation,p.epoch,eligibility,terminal.then_some(code),f.nonce]).map_err(|_|recovery_required())?!=1 {return Err(recovery_required());}
     if terminal && tx.execute("UPDATE poll_retirement_attempts SET phase='ended' WHERE operation_ulid=?1 AND owner_epoch=?2 AND phase='active'",params![p.operation,p.epoch]).map_err(|_|recovery_required())?!=1 {return Err(recovery_required());}
+    if eligibility == "eligible" && f.count == 0 {
+        batch::settle_empty(tx, p)?;
+    }
     record::release_bound_source(tx, f.provenance, f.binding, terminal)?;
     record::audit_connection(tx)
 }
@@ -568,7 +583,10 @@ pub(super) fn require_release(
 ) -> Result<(), RepositoryError> {
     let valid:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM poll_retirement_freezes f JOIN poll_retirement_attempts a USING(operation_ulid,owner_epoch) JOIN remote_operation_records o USING(operation_ulid) WHERE f.provenance_id=?1 AND f.binding_id=?2 AND ((?3 AND a.phase='ended' AND f.final_code IS NOT NULL AND (f.eligibility='ineligible' OR (f.eligibility='eligible' AND f.candidate_count=0))) OR (NOT ?3 AND a.phase='active' AND f.final_code IS NULL AND f.eligibility='eligible' AND f.candidate_count>0)) AND o.phase='completed' AND o.owner_epoch=a.source_owner_epoch)",params![provenance,binding,consumer_terminal],|r|r.get(0)).map_err(|_|recovery_required())?;
     if !valid {
-        return Err(recovery_required());
+        if !consumer_terminal {
+            return Err(recovery_required());
+        }
+        batch::require_completed_release(db, provenance, binding)?;
     }
     Ok(())
 }

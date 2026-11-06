@@ -1409,6 +1409,10 @@ pub(in super::super) struct OriginalWrapper {
     report: String,
     complete: bool,
 }
+struct OriginalContinuation<'a> {
+    probe: Option<&'a CancellationProbe>,
+    live: &'a mut Option<crate::repository::context_retirement::handoff::batch::Live>,
+}
 impl OriginalWrapper {
     pub(in super::super) fn report(&self) -> &str {
         &self.report
@@ -1751,6 +1755,38 @@ impl RepositoryService {
         self.poll_after_fetch_observed(root, owner, plan, configuration, advertised, None)
     }
 
+    /// Private original-call continuation; public polling never returns a live C.
+    /// Missing producer projections and reconstructed terminal wrappers stay closed.
+    #[allow(dead_code)] // Task 4 consumes this private continuation, not a flag.
+    pub(in super::super) fn poll_after_fetch_with_handoff(
+        &self,
+        root: &Path,
+        owner: &super::RemoteReservation,
+        plan: &RemoteRefPlan,
+        configuration: &super::observation::ObservationConfiguration,
+        advertised: Vec<(String, git2::Oid)>,
+    ) -> Result<
+        (
+            RemotePollResult,
+            Option<crate::repository::context_retirement::handoff::batch::Live>,
+        ),
+        RemotePollError,
+    > {
+        let mut live = None;
+        let result = self.poll_after_fetch_into(
+            root,
+            owner,
+            plan,
+            configuration,
+            advertised,
+            OriginalContinuation {
+                probe: None,
+                live: &mut live,
+            },
+        )?;
+        Ok((result, live))
+    }
+
     fn poll_after_fetch_observed(
         &self,
         root: &Path,
@@ -1760,6 +1796,30 @@ impl RepositoryService {
         advertised: Vec<(String, git2::Oid)>,
         probe: Option<&CancellationProbe>,
     ) -> Result<RemotePollResult, RemotePollError> {
+        let mut live = None;
+        self.poll_after_fetch_into(
+            root,
+            owner,
+            plan,
+            configuration,
+            advertised,
+            OriginalContinuation {
+                probe,
+                live: &mut live,
+            },
+        )
+    }
+
+    fn poll_after_fetch_into(
+        &self,
+        root: &Path,
+        owner: &super::RemoteReservation,
+        plan: &RemoteRefPlan,
+        configuration: &super::observation::ObservationConfiguration,
+        advertised: Vec<(String, git2::Oid)>,
+        continuation: OriginalContinuation<'_>,
+    ) -> Result<RemotePollResult, RemotePollError> {
+        let probe = continuation.probe;
         use super::{
             RemoteOperationSafePoint as S, RemoteRefClassification as C,
             RemoteSafePointOutcome as D,
@@ -2184,7 +2244,7 @@ impl RepositoryService {
             let RemotePollOutcome::Polled(report) = outcome else {
                 return Err(state::recovery_required().into());
             };
-            capture.settle(
+            *continuation.live = capture.settle(
                 self,
                 root,
                 OriginalWrapper {

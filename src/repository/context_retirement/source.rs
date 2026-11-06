@@ -317,7 +317,7 @@ pub(super) fn audit(db: &Connection) -> Result<(), RepositoryError> {
             return Err(recovery_required());
         }
     }
-    Ok(())
+    super::handoff::batch::audit(db)
 }
 
 pub(super) fn require_ended(db: &Connection, provenance: i64) -> Result<(), RepositoryError> {

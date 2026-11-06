@@ -1,6 +1,8 @@
 //! Inert A2 producer projections, synthetic advertisements/real ODB and real
 //! owned poll SQL/refresh. NOT Task 4 selection, enrollment or coordination.
 use super::*;
+#[path = "batch_contract_tests.rs"]
+mod batch_tests;
 #[path = "source_handoff_specfix_tests.rs"]
 mod specfix;
 

@@ -1190,7 +1190,7 @@ fn audit_objects(
            ((c.branch_removal='none' OR NOT EXISTS(SELECT 1 FROM context_retirement_effect_intents e WHERE e.operation_ulid=c.operation_ulid AND e.resource='branch')) AND NOT EXISTS(SELECT 1 FROM context_retirement_absence_receipts m WHERE m.operation_ulid=c.operation_ulid AND m.owner_epoch=c.owner_epoch)))
        OR (c.request_ulid IS NULL AND (EXISTS(SELECT 1 FROM request_operations ro WHERE ro.operation_ulid=c.operation_ulid)
          OR EXISTS(SELECT 1 FROM context_retirement_attempts a WHERE a.operation_ulid=c.operation_ulid AND a.request_attempt IS NOT NULL)))
-       OR (c.request_ulid IS NOT NULL AND (NOT EXISTS(SELECT 1 FROM request_records r JOIN request_operations ro ON ro.request_ulid=r.request_ulid
+       OR (c.request_ulid IS NOT NULL AND c.batch_operation_ulid IS NULL AND (NOT EXISTS(SELECT 1 FROM request_records r JOIN request_operations ro ON ro.request_ulid=r.request_ulid
          JOIN context_retirement_attempts a ON a.operation_ulid=c.operation_ulid AND a.owner_epoch=c.owner_epoch
          WHERE r.request_ulid=c.request_ulid AND r.scope_key=o.root_path AND r.command='context retire' AND r.target=c.item_id
            AND ro.family='local' AND ro.operation_ulid=c.operation_ulid AND a.request_attempt IS NOT NULL AND a.request_attempt<=r.attempt
@@ -1274,9 +1274,9 @@ fn audit_objects(
     if invalid_absence {
         return Err(recovery_required());
     }
-    // Original-P binding is supported only through the strict A2/A3 projection
-    // audit below. Batch children/gap consumption and preservation stay closed.
-    let unsupported_authority: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records WHERE batch_operation_ulid IS NOT NULL OR phase IN ('preserving','abandoned'))
+    // Original-P binding and no-effect batch refusals have distinct strict
+    // historical audits below. Destructive/index/gap/preservation scopes stay closed.
+    let unsupported_authority: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM context_retirement_records WHERE phase IN ('preserving','abandoned'))
       OR EXISTS(SELECT 1 FROM retirement_advertisement_provenance WHERE execution_kind='batch_gap' OR (execution_kind='local_parent' AND execution_batch_operation_ulid IS NOT NULL))
        OR EXISTS(SELECT 1 FROM retirement_observation_receipts b JOIN retirement_advertisement_provenance p ON p.id=b.provenance_id WHERE b.consumer_kind='batch' AND p.execution_kind!='poll_parent')", [], |r| r.get(0)).map_err(|_| recovery_required())?;
     if unsupported_authority {
