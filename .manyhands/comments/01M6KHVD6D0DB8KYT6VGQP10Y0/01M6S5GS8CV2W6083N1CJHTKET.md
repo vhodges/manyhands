@@ -139,3 +139,69 @@ push, PR, other-worktree edits, main/closure or real-profile/key/context/draft
 action. No owned jobs remain. Task 3 approvals stand; Tasks 5–8, remaining mapped
 acceptance and final static/test tiers remain outstanding. This is local correction
 evidence for re-review, not independent approval or full-feature completion.
+
+## Task 4 QUALITY I1 corrected locally — SPEC delta then same QUALITY pending
+
+Controller reports **SPEC PASS through
+`126c2d72392639f371d44e8c72f5a9a2c7a8e0a7`**, same reviewer
+`ses_e4d9ed4e6ffeSwu9GiwqH5QMvl`, with S1–S4 resolved. Fresh QUALITY reviewer
+**`ses_e4d718d13ffe8hzc1y32YLWx3J`** found **one Important I1 and no others** in
+the full Task 4 range; the controller source-traced and verified it.
+
+I1 source correction is committed at
+**`6dc056b7d7d39056bc0ddf40ee3496898b5d75b1`**, with the required coauthor.
+Original Task 4 base **`0c1be623487f6634187a0ed031ce518a47b8c16f`** and every
+prior implementation/evidence commit remain intact. No push.
+
+The opted wrapper used the journal's broad later-call category to replace an
+already available precise live stop. It now borrows only poll report fields for
+the immutable empty cut and retains the live code/effects/standing and sanitized
+host data. KeyRejected, UnlockFailed, HostReplacementRequired and unavailable
+host verification keep their original codes; true lost-original reconstruction
+alone uses the coarse category fallback.
+
+Host stops reuse the **existing closed synchronization host root**, not a new
+DTO/schema/authority field. The internal stopped cut stays intact. Its copy audit
+allows the existing host answer only for an exact empty preselection failed host
+pass, matching request/cut code and pin roles, with the closed safe host shape.
+Unknown backend fields or mismatched pin roles refuse. Finished opted-parent
+replay reconstructs HostReplace/HostApprove from the saved safe data under that
+audited parent identity. Ordinary poll/generic synchronization replay, schemas
+and digests are unchanged, and nothing implicitly approves a host.
+
+Extended the existing **CUT** local production-path table with five live terminal
+error rows and two real lost-original controls. Actual compiled RED before the
+fix reproduced KeyRejected→NoSelectedKey; a second compiled RED caught the lost
+HostReplace route on finished replay. Final CUT GREEN: **1 passed, 0 failed**,
+28.42 s. Every row checks exact finished replay, correct effects/host action,
+privacy, retained disk/context and zero retirement/nonce/child/host-pin work.
+
+The existing exact producer contract/golden test also passes (**1 passed,
+0 failed**, 1.18 s). Its deliberately uninitialized transport now correctly pins
+the live RuntimeUninitialized→InternalError answer, rather than its old coarse
+TransportUnavailable expectation. Only the existing golden's code, stop_code and
+fixed message changed; no schema/root/case inventory or new scenario was added.
+Final strict all-target/all-feature Clippy and format check passed through Devenv.
+
+Exact commands, source scopes, RED/diagnostic distinctions and limits are in the
+execution ledger and `/tmp/opencode/task4-quality-i1-results.json` (SHA-256
+`9fc81372f5cd27b0063b1b55f1081a2c31726f459d2ab62bc8185a496a873ca3`). The initial
+`red.log` is a compile diagnostic; `green.log` is actually the replay RED, not a
+passing claim. The old contract expectation failure is not another production
+defect. No zero-match result or unchanged 39-/three-table rerun is claimed.
+
+Only **7 delta inputs** (6 Rust + 1 existing golden) are hashed in
+`/tmp/opencode/task4-quality-i1-sources.sha256`, inventory SHA-256
+`fa5e3bf152db5fdde03986c5c430c45ca24e53618ff402b7f427a21266926f4e`, zero source
+mismatches. **17 new logs** are in `task4-quality-i1-logs.sha256`, SHA-256
+`a74d8b056122d564348ad7cb4db6c9191155bdf445ee4291cc0f32709530bcf0`. Earlier
+manifests/logs retain their original scopes. Source original-range whitespace and
+merge-tree against existing origin/main `79c3931b` are clean.
+
+**Next: same SPEC reviewer checks the correction delta from `126c2d72`, then the
+same QUALITY reviewer re-reviews the full original Task 4 base-to-returned-HEAD
+range.** No correction approval or feature completion is claimed. Tasks 5–8 and
+final gates remain outstanding; ticket stays implementing/open. No agents, new
+batch framework, broad/fast/full/SSH/native tests, real waits, push/PR/main/closure,
+other-worktree edit or real-profile/key/context/draft action. No owned jobs remain.
+This append preserves the existing comment ID, parent and created timestamp.

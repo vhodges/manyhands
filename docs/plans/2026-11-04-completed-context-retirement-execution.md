@@ -21,10 +21,12 @@ implemented at `9864c2b2`; Task 3 SPEC and QUALITY are now independently approve
 through `989a5807`, including P1/P2 and Q1–Q3 corrections. The same SPEC reviewer
 approved the compatibility delta before the same QUALITY reviewer approved the
 whole original Task 3 range. Task 4's production original-live pass was delivered
-at `01a386ee` with checkpoint `9b6e4527`. Independent SPEC found four Important
-gaps (S1–S4); corrections are locally committed at `6400fe26` with three changed
-exact tables and strict Clippy/fmt passing. The same SPEC reviewer's re-review
-is pending; QUALITY has not started and remains gated. Ticket remains
+at `01a386ee` with checkpoint `9b6e4527`. Same-reviewer SPEC passed through
+`126c2d72`, resolving S1–S4. Fresh QUALITY found only one Important finding, I1:
+live transport stops were replaced by coarse journal reconstruction. I1 is locally
+corrected at `6dc056b7`; the extended CUT table, existing producer contract/golden
+test and strict Clippy/fmt pass at their recorded scopes. Same SPEC delta review,
+then same QUALITY full-range re-review, remain pending. Ticket remains
 `implementing`, not full Task 2 or feature review-ready.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
 [the delivery checkpoint](#task-3--ordinary-binding-and-guarded-preserving-recovery).
@@ -127,10 +129,11 @@ Neither recovery route advances parent. Both corrections are internal under D15.
    audits/exact no-observer lineage and stable cut/completed-all-selected report. Replace
    parent-capture-bound batch execution/index paths, not merely disable resume.
    **Implemented at `01a386ee`; the original 39 exact local tests/statics retain
-   only their recorded source scopes below. SPEC's S1–S4 corrections are committed
-   at `6400fe26`; three changed exact tables and strict Clippy/fmt pass for that
-   delta. Same-reviewer SPEC re-review, then QUALITY, remain pending, so this
-   delivery/review gate is not checked complete.**
+   only their recorded source scopes below. SPEC passed through `126c2d72`,
+   including S1–S4. Fresh QUALITY's sole Important I1 is locally corrected at
+   `6dc056b7`, with the exact CUT/producer-contract tests and strict Clippy/fmt
+   evidence below. Same SPEC delta, then same QUALITY full-range re-review, remain
+   pending, so this delivery/review gate is not checked complete.**
 - [ ] Tasks 5–6: CLI + relevant local acceptance and at most one new justified
   SSH connection E2E; no new SSH edge-case matrix. Existing 105 SSH cases are
   legacy evidence; review coverage mapping before any forward consolidation/rehome.
@@ -6113,3 +6116,137 @@ changed-path SSH gates remain owed later. No agents, push, PR, other-worktree
 edits, main/closure/native action or real profile/key/context/draft operation.
 No owned jobs remain. This ledger/comment-only follow-up needs no further Rust
 rerun on the unchanged corrected source.
+
+### Task 4 QUALITY I1 — Preserve Live Transport Stops (2026-11-06)
+
+**Review standing:** the controller reports same SPEC reviewer
+**`ses_e4d9ed4e6ffeSwu9GiwqH5QMvl`** **PASS through
+`126c2d72392639f371d44e8c72f5a9a2c7a8e0a7`**, with S1–S4 resolved. Fresh QUALITY
+reviewer **`ses_e4d718d13ffe8hzc1y32YLWx3J`** found **one Important, I1, and no
+other findings** in the full Task 4 range; the controller source-traced and
+verified it. This supersedes the earlier review-pending standing only through
+that reviewed HEAD, not the unreviewed correction below.
+
+**I1 correction source:** **`6dc056b7d7d39056bc0ddf40ee3496898b5d75b1`**,
+`fix: preserve live opted-poll transport stops`, with the required
+`Co-Authored-By: GPT-6.1 Sol <noreply@openai.com>` trailer. Correction base is
+`126c2d72`; the **Task 4 review base remains
+`0c1be623487f6634187a0ed031ce518a47b8c16f`**. Initial `01a386ee` / `9b6e4527`,
+S1–S4 source `6400fe26`, and checkpoint `126c2d72` are preserved forward history.
+No fetch/merge/rebase or other-worktree operation was repeated; existing
+origin/main is still `79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`.
+
+#### Root Cause And Composition Choice
+
+`remote/poll.rs` deliberately records a broad failure category and returns the
+typed live transport error. `PollOnceBinding::stopped` maps that original error
+precisely and obtains only the safe synchronization host data, while
+`PollOnceBinding::reported` explicitly maps stored categories for **later calls
+whose original answer was lost**. The opted wrapper called `stopped`, then
+discarded it immediately for `reported(stored_result)` on the first live call.
+That froze KeyRejected as NoSelectedKey, UnlockFailed as UnlockRequired, host
+replacement as host approval, and unavailable host verification as host approval;
+the replacement also lost its safe HostReplace route.
+
+The correction in `src/repository/mutation/bind/poll_retirement.rs` obtains only
+the poll report fields from the stored result for the empty metadata cut. On a
+successfully finalized cut with the same stop code, it retains the **live answer's
+precise code, effects, standing and safe host data**. Cut failure remains Owed;
+an already-decided concurrent parent cancellation retains its immutable cut.
+True lost-original reconstruction continues to use the normal category fallback.
+
+**Reuse, not a new output format:** the existing `poll once` family already
+accepts the closed `SynchronizationMutationDto` / synchronization host schema
+and has a stored-family decoder and host golden. Host stops reuse that root;
+other stopped opted passes keep the tagged poll-retirement report. No DTO/schema,
+ordinary poll digest/mapping/schema, interpreter or new golden scenario is added.
+The opted producer's existing uninitialized-transport golden changes only its
+code, stop_code and fixed message: precise live RuntimeUninitialized maps to
+InternalError, rather than its coarse TransportUnavailable category. E3's roots,
+case inventory and registration remain unchanged.
+
+The pass keeps its internal immutable stopped report even when its public answer
+is the existing host root. `src/repository/context_retirement/pass.rs` permits
+that copy alternative **only** for a no-image, empty preselection pass joined to
+its own terminal failed host-category P, with matching precise request/cut code,
+Completed poll fields, no targets/children, exact closed host shape and correct
+approval/replacement pin pair. It grants no execution authority. Extra backend
+fields or mismatched pin roles are rejected. All captured/child and other summary
+copies retain the ordinary exact-equality audit.
+
+The new table also traced generic finished replay's deliberate lack of host
+actions. The existing opted-parent recovery postprocessor now reconstructs the
+host action from saved safe data **only for an audited opted parent**. It does
+not approve a host, change generic synchronization/ordinary poll replay, create
+an observer or make the failed pass a cleanup/index owner.
+
+#### Tests First, Actual REDs And Cheap Final Evidence
+
+Extended the existing **CUT** test, not a new integration target or framework:
+
+```sh
+devenv shell -- cargo test --all-features --locked --lib repository::context_retirement::execution_tests::mutation_tests::retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup -- --exact
+```
+
+Its seven new rows cover live KeyRejected, UnlockFailed,
+HostReplacementRequired, HostVerificationUnavailable and HostApprovalRequired,
+plus two **actual lost-original** KeyRejected/host-replacement controls. The
+existing synthetic fetch seam now also accepts a typed error under `cfg(test)`;
+all reservation, source, terminal domain failure settlement, binding, metadata
+cut and request replay code is real. This is not a mapping-only test or SSH claim.
+The lost rows record an actual failed public P, then use the existing acceptance
+hook to lose the original answer **before any cut**; retry reconstructs only the
+coarse category, with no invented host authority.
+
+The live host rows assert the exact HostReplace/HostApprove root and authority,
+safe host fields and closed decoder round-trip. All rows assert correct effects,
+Finished standing, full envelope replay after reopen, unchanged registry/disk on
+replay, retained context, no instance nonce or child admission, zero retirement
+records/provenance/receipts/pins and zero host pins. Selected-key/raw-remote and
+private content sentinels do not escape. The host rows also reject unknown
+backend fields and pin roles inconsistent with their stop code in isolated
+stored-copy corruption checks.
+
+| Log (`/tmp/opencode/`) | Actual result and evidence scope |
+| --- | --- |
+| `task4-quality-i1-red.log` | **Compilation diagnostic only**, zero tests: missing import, private Command path, missing borrow in new fixture. Preserved, not a behavioral RED. |
+| `task4-quality-i1-red-compiled.log` | **Meaningful compiled RED before production fix**: KeyRejected became NoSelectedKey; 0 passed / 1 failed, 25.69 s. Earlier CUT crash messages are intentional caught fixture loss points, not the failing assertion. |
+| `task4-quality-i1-green.log` | **Compiled replay RED despite filename**: first host-replacement code/data/HostReplace were correct, but finished replay omitted HostReplace; 0 passed / 1 failed, 25.86 s. This drove the narrowly scoped recovery reconstruction. Not a passing claim. |
+| `task4-quality-i1-green-replay.log` | **GREEN**, 1 passed / 0 failed, 1653 filtered; 28.42 s tests / 13.62 s build. Covers all seven new rows and existing CUT rows. Its five `src/` inputs remained byte-identical to `6dc056b7`; only the integration/golden pin below changed afterward. |
+| `task4-quality-i1-contract.log` | Existing exact producer-contract check exposed its **old coarse expectation**, actual precise RuntimeUninitialized→InternalError; 0 passed / 1 failed. Expectation/golden diagnostic after the fix, not a new production defect or another pre-fix RED. |
+| `task4-quality-i1-contract-green.log` | `devenv shell -- cargo test --all-features --locked --test mutation_contract an_opted_poll_matches_its_distinct_closed_schema_and_golden -- --exact`: **1 passed / 0 failed**, 45 filtered, 1.18 s tests / 2.16 s build. Actual public producer, unchanged closed schema, corrected existing golden and stable finished replay. |
+
+Only those **two exact names** ran. The second was selected because I1 changes
+the real failed producer and could invalidate its existing golden; that named
+doubt was observed and corrected. No other original 39-test or three-table green
+set was rerun or relabeled. No broad filter/fast/full/SSH/native tier or real wait;
+no command approached the 15-minute budget. All Rust commands used Devenv.
+
+#### Final Static And Bounded Integrity Record
+
+| Check | Evidence |
+| --- | --- |
+| Final strict compilation/lint | `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`, exit 0, 2.90 s, `task4-quality-i1-clippy-final.log`. No separate check. Earlier Clippy/fmt passed before the integration/golden correction and retain only that scope; final runs followed those changed inputs. |
+| Final format | `devenv shell -- cargo fmt --check`, exit 0, `task4-quality-i1-fmt-check-final.log`; all formatting through Devenv. |
+| Source whitespace | `git diff --check`, `git diff --cached --check` and `git diff --check 0c1be623487f6634187a0ed031ce518a47b8c16f HEAD`, exit 0; `task4-quality-i1-{whitespace,staged-whitespace,source-range-whitespace}.log`. |
+| Source merge compatibility | `git merge-tree --write-tree HEAD origin/main`, exit 0, tree `5ac27ed4972e3f2fd53d2e1418c8f5811df132ce`, `task4-quality-i1-source-merge-tree.log`. No main/worktree edits or network action. |
+| Delta inputs | `/tmp/opencode/task4-quality-i1-sources.sha256`: **7 inputs, 6 Rust + 1 existing golden**, zero mismatches against source commit/current inputs; SHA-256 **`fa5e3bf152db5fdde03986c5c430c45ca24e53618ff402b7f427a21266926f4e`**. |
+| Delta logs | `/tmp/opencode/task4-quality-i1-logs.sha256`: **17 new logs** (6 test commands including one compile failure, 7 formatting/lint runs, 4 source Git checks); SHA-256 **`a74d8b056122d564348ad7cb4db6c9191155bdf445ee4291cc0f32709530bcf0`**. Failed/diagnostic logs are not GREEN claims. |
+| Literal commands/results | `/tmp/opencode/task4-quality-i1-results.json`, SHA-256 **`9fc81372f5cd27b0063b1b55f1081a2c31726f459d2ab62bc8185a496a873ca3`**. Includes source scopes, diagnostic/RED distinctions, actual SHAs and review gates. |
+
+Author self-review inspected the producer/error/category boundary, safe-host
+family/decoder, narrow copy exception and opted-only recovery dispatch, finished
+replay, both lost-original controls and the real golden correction. No independent
+approval is claimed. Earlier manifests/logs are preserved with their actual source
+scopes; only this bounded delta and its new logs were hashed.
+
+This checkpoint is appended to existing canonical comment
+**`01M6S5GS8CV2W6083N1CJHTKET`**, preserving its ID, parent and created timestamp;
+no ticket-body/status save or new comment ID. **Next: same SPEC reviewer checks
+the `126c2d72..returned-HEAD` correction delta, then the same QUALITY reviewer
+re-reviews the full `0c1be623487f6634187a0ed031ce518a47b8c16f..returned-HEAD`
+Task 4 range.** Tasks 5–8, remaining mapped acceptance and final static/test tiers
+remain outstanding. No agents, new batch framework, push, PR, other-worktree,
+main/closure/native or real-profile/key/context/draft action. No owned jobs remain.
+This is local I1 correction evidence, not full-feature completion; metadata-only
+ledger/comment bookkeeping does not call for another unchanged-source Rust run.
