@@ -12,7 +12,7 @@ use manyhands::{
     },
     results::{
         CheckpointEffect, DiscoveryEffect, Effects, Envelope, IntegrationEffect, PublicationEffect,
-        ResultCode, Scope, WriteEffect,
+        RecoveryAction, RecoveryActionKind, ResultCode, Scope, WriteEffect,
     },
 };
 
@@ -25,8 +25,9 @@ const COMMIT: &str = "3333333333333333333333333333333333333333";
 /// A share stopped on a conflict of `SYNCHRONIZATION`, as
 /// `tests/mutation_remote/merging.rs` `c4_merging_canonical_conflict`
 /// answers (`assert_conflict`): `recovery_required`, a merge begun and
-/// nothing published (`merge_pending`), and the conflict of the result's
-/// own operation, to resolve.
+/// nothing published (`merge_pending`), Retry and the repository's details
+/// as its recovery, and the conflict of the result's own operation, to
+/// resolve.
 pub(super) fn share_conflict() -> Envelope<MutationDataDto> {
     Envelope::classified_mutation(
         "item sync",
@@ -41,6 +42,10 @@ pub(super) fn share_conflict() -> Envelope<MutationDataDto> {
         false,
     )
     .with_operation_id(SYNCHRONIZATION)
+    .with_recovery(vec![
+        RecoveryAction::new(RecoveryActionKind::RequestRetry, []),
+        RecoveryAction::new(RecoveryActionKind::RepoInspect, []),
+    ])
     .with_data(MutationDataDto::SynchronizationConflict(
         SynchronizationConflictMutationDto {
             r#type: SynchronizationConflictType::SynchronizationConflict,

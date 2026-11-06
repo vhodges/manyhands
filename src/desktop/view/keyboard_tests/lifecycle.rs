@@ -10,9 +10,13 @@
 
 use std::path::Path;
 
-use gpui_kit::{ElementId, FocusHandle, TestAppContext};
+use futures::channel::oneshot;
+use gpui_kit::{ElementId, FocusHandle, Keystroke, TestAppContext};
 use manyhands::{
-    repository::{ItemContextKind, ItemDto, ItemDtoKind, ProgressStage, RequestId},
+    repository::{
+        ItemContextKind, ItemDto, ItemDtoKind, ProgressStage, RequestId, SharedKeyId,
+        keys::UnlockReason,
+    },
     results::{Outcome, ResultCode},
 };
 
@@ -24,6 +28,7 @@ use crate::desktop::{
     },
     services::{
         JobKind,
+        prompts::{PromptReply, PromptRequest},
         requests::{DesktopRequestId, Intent, RequestState},
     },
     test_support::fixtures::{Fixture, item_id},
@@ -31,6 +36,7 @@ use crate::desktop::{
         harness::{Shell, key},
         item::LIFECYCLE_ACTION,
         lifecycle::{ENDING_DONE, ENDING_STOPPED, KEEP_LOCAL, MERGED, SHARING_PENDING, TIDIED_UP},
+        passphrase::open_dialog,
         workspace::Region,
     },
 };
@@ -374,4 +380,57 @@ async fn focus_stays_in_the_dialog_when_stop_goes_by_itself(cx: &mut TestAppCont
         "Enter closes Done"
     );
     walk.region(Region::Content, cx);
+}
+
+/// Re-review I-1 (A21), real local-only: Enter on Confirm sends the close
+/// and Confirm goes with its stage, and in the same turn, before a frame is
+/// drawn, a passphrase prompt opens, as the workspace opens one when the
+/// worker asks for a key (`passphrase::open_dialog`). Escape cancels the
+/// prompt, and focus is back in the lifecycle dialog, not on the gone
+/// Confirm: Escape then closes the dialog, and focus is back on the
+/// action.
+#[gpui_kit::test]
+async fn a_prompt_over_a_pressed_confirm_gives_focus_back_to_the_dialog(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let walk = walk(cx, |fixture, a| {
+        fixture.commit_ticket(a, TICKET, "Untitled", "");
+        fixture.refresh(a);
+        fixture.save_ticket(a, TICKET, "Prompted");
+    });
+    walk.reach_the_action(TICKET, CLOSE_TICKET, cx);
+    let focus = walk.action_focus(cx);
+    walk.open_the_dialog(cx).await;
+    let held = walk.shell.backend.hold_job(JobKind::TicketClose);
+    walk.tab_to_control("lifecycle-confirm", cx);
+
+    let (reply, mut answer) = oneshot::channel();
+    let prompt = PromptRequest {
+        key_id: SharedKeyId::new(),
+        label: "primary".to_owned(),
+        reason: UnlockReason::ProtectedKey,
+        reply,
+    };
+    walk.shell.visual(cx).update(|window, cx| {
+        window.dispatch_keystroke(Keystroke::parse("enter").unwrap(), cx);
+        open_dialog(prompt, window, cx);
+    });
+    walk.shell.run(cx);
+    assert_eq!(
+        walk.lifecycles(cx).len(),
+        1,
+        "Enter on Confirm sent the close"
+    );
+    assert!(walk.shell.present("passphrase-dialog", cx));
+
+    walk.keys("escape", cx);
+    assert!(matches!(
+        answer.try_recv(),
+        Ok(Some(PromptReply::Cancelled))
+    ));
+    assert!(!walk.shell.present("passphrase-dialog", cx));
+    walk.in_dialog("lifecycle-dialog", cx);
+    walk.escape_to_the_action(&focus, cx);
+    held.release();
+    let sent = walk.lifecycles(cx);
+    walk.shell.until_ended(sent[0], cx).await;
 }

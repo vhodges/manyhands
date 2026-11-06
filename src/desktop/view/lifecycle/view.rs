@@ -128,7 +128,16 @@ impl LifecycleDialog {
     {
         let entity = cx.entity().downgrade();
         move |_, window, cx| {
-            let _ = entity.update(cx, |dialog, cx| f(dialog, window, cx));
+            let _ = entity.update(cx, |dialog, cx| {
+                // The pressed control may go with its stage (Confirm,
+                // Retry, Unlock…) before a frame is drawn: focus moves to
+                // the dialog first, so a passphrase prompt the worker opens
+                // meanwhile gives focus back here, not to a gone button
+                // (A21). `Workspace::focus_lost` covers controls that go
+                // by themselves. A dialog the press opens takes focus after.
+                window.focus(&dialog.focus, cx);
+                f(dialog, window, cx)
+            });
         }
     }
 

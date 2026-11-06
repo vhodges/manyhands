@@ -350,7 +350,8 @@ impl ResolveSheet {
             .border_1()
             .border_color(border)
             .rounded(px(4.))
-            .focus(move |style| style.border_2().border_color(ring))
+            // The ring changes the colour only, so the editor never moves.
+            .focus(move |style| style.border_color(ring))
             .on_click(move |event, window, cx| {
                 if event.is_keyboard() && stop.is_focused(window) {
                     enter.update(cx, |editor, cx| editor.focus(window, cx));
