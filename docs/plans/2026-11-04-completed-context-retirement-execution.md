@@ -489,8 +489,10 @@ are not authorized; numeric exits must come from existing results registry.
   controller checkpoint **`8e960885`** also contains main's `79c3931b` testing
   guidance, now governing new agents. Earlier
   70/217 results retain their milestone source scope, not relabeled as corrected.
-  Gap O, resumed consumption/new-F2 batch recovery and active-source restart remain
-  closed/owed; there is no full A4 or Task 2 readiness claim. SSH/slow gates are
+  The next bounded gap-O increment is now implemented at `f196dfff` from
+  `2acac179`, with **11 exact local tests** and whole-tree statics green; LIMITED
+  SPEC then QUALITY remain pending. Resumed consumption/new-F2 child/index recovery
+  and active-source restart remain closed/owed; no full A4/Task 2 readiness claim. SSH/slow gates are
   deferred to end-of-cycle under the owner's 2026-11-06 steering, not counted fresh.
 - [ ] **3 — Mutation/DTO/replay/resume/preserving abandon.** Not started.
 - [ ] **4 — Explicit fixed poll batch.** Not started; adversarial gate.
@@ -507,12 +509,14 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: a fresh bounded implementer connects **no-child-gap observer
-authorization/capture** under the approved batch-attempt scope, with independent
-SPEC then QUALITY review before publication or resumed-consumer expansion. The
+Immediate next step: controller LIMITED **SPEC then QUALITY** review of the bounded
+**no-child-gap observer authorization/capture** increment, from `2acac179`, before
+publication or resumed-consumer expansion. Its current-attempt/original-freeze
+adapter and per-attempt configuration recapture implement the controller's explicit
+clarification below, without reopening original eligibility or cleanup authority. The
 present milestone is independently approved and published through `8e960885`.
 All branch-only and earlier approvals are preserved, not reopened.
-No-child-gap/R8 observation, resumed consumption, active-source
+Remaining no-child-gap/R8 matrices, resumed consumption, active-source
 restart/fresh-ad fencing, shared-holder/Z fault variants and full Task 2 review
 remain owed. Actual Task 3 bindings and Task 4 coordination remain downstream;
 private projection tests must not be represented as those journeys.
@@ -2928,7 +2932,7 @@ is unchanged; these are current incremental evidence/remaining-work annotations.
 | 31 | E prior standalone/A1 evidence plus `source_handoff_*`: real complete poll processing, preterminal A2 SQL and original refresh/A3 handoff with inert producer projections/synthetic advertisements. Public replay cannot create eligibility. O source live-transport/full producer matrix; D actual Task 4 producer/selection/enrollment |
 | 32 | E prior refusal/branch-only evidence retained. Present increment adds original A3→real verified-nonce W/admin prune→B→D14→ordinary discovery/index/result before next present C, including ticket→promoted document, same exact receipt/no new ad, P unchanged, shared hold outliving B. LIMITED reviews pending. O remaining stale-observer combinations; D actual Task 4 journey |
 | 33 | E prior A0/A2/A3/refusal-S1/Q1 and positive S1 ownership separation retained. Present increment adds exact F2/map/cursor/batch-attempt/G/current-ad/comment-debt fences at IMMEDIATE W, after W, locked B and D14, plus original key-source fences at W/B but not authorized I. Original nonce/registration checks never install/repair. LIMITED reviews pending. O remaining foreign-token/fault variants, gap/resumed C; D actual Task 3/4 binding/coordinator |
-| 34 | O no-child gap execution/request+batch fences; D actual Task 4 coordinator |
+| 34 | E bounded private gap claim→owned advertisement/receipt/pin→completed O and exact replacement at `f196dfff`: later accepted F2, independent batch epoch, same immutable original freeze/shared cursor, no local parent or cleanup/index authority; exact local tests and statics below, LIMITED reviews pending. O remaining full-44 combinations and resumed consumption; D actual Task 4 coordinator |
 | 35 | E prior R7/F2/typed refusal/Q1 history evidence retained. Positive-A4 S2 covers successful primary-byte/mode mismatch AND successfully Preserved but different primary/proof pair before Git → current-owned no-effect Final, None/None, M untouched, attempt/local/target/cursor atomic. Same-tree real primary commits at preinvoke and locked-B boundaries preserve the OLD intent pair/receipt and mark observation changed, never authorize deletion under the new pair. Uninvoked witness is spent only at actual Git; post-invocation pair change stays Owed/Possible. Current-cancel I/stale-owner rules retained. O remaining cancellation/outcome variants; D mutation envelopes Task 3 |
 | 36 | E prior F2 index/request-fence controls (approved at `c7daad0d`) plus `source_handoff_nonempty_*`: frozen child IDs refuse generic refresh and standalone retirement begin before any child row; ordinary/other-command controls retained. O remaining M/index fault and history variants |
 | 37 | E `generic_abandon_preserves_pending_and_terminal_identity`; D guarded preserving abandon Task 3 |
@@ -4907,3 +4911,140 @@ observation, remaining holder/window/Z/fault matrices and full-44 Task 2 review.
 Tasks 3–8 and final review-ready static/fast/selected-SSH gates remain owed.
 No standalone retirement-filter/full-suite duplicate is added to the final
 selected-target gate; the bare full suite remains post-merge under current rules.
+
+## Bounded no-child-gap O — immutable original freeze / current attempt
+
+Entry/base **`2acac179a6ed98516005540eb4e34aa9618af0fc`**; code commit
+**`f196dfff791f09881b8756cdd56ca42cb06a70ed`**. Full Task 2 base remains `7b1912d1`.
+All prior LIMITED approvals remain intact. Main `79c3931b` is already merged;
+`git ls-remote origin refs/heads/main` rechecked it unchanged. No fetch/rebase or
+other-worktree edits were needed in this continuous controller-preflight phase.
+**Ready only for controller LIMITED SPEC then QUALITY; not published or approved.**
+
+### Deliberate representation clarification and actual mechanism
+
+Controller explicitly authorized the minimal current-attempt→original-freeze
+adapter as an inseparable gap-observer dependency. The original A3 row/provenance,
+report, image, digest, selected children/tips/nonces/M and single shared cursor are
+not copied/reselected/replaced. New `retirement_batch_gap_attempts` records the
+immutable original epoch/digest reference, expected previous epoch, independent
+current batch epoch, exact accepted R/F2/root/cursor, one O/remote epoch spend and
+terminal/fenced history. It is **not** an aggregate local journal/debt owner.
+
+For a NEW explicitly accepted attempt, capture a fresh process-only configuration
+observation after durable scope/exclusion proof, requiring the original persistent
+generation/remote/primary/endpoint digest. Recheck that attempt's exact key/source
+observation throughout execution. This is the approved standalone precedent in
+`reentry.rs:172–186` / `authority.rs:309–354`, not restoration/serialization of an
+old process's opaque `OriginalCapture`. Original live continuation stays strict.
+
+- Under the common Git lease and one IMMEDIATE transaction, prove the complete
+  original eligible contract and shared ordered history, exact current accepted
+  R→remote-P mapping and expected-old-epoch CAS, genuinely later F2, and no pending
+  local row **of any kind**. Current cleanup/index, unrelated local/comment debt,
+  read-only/mutating remote slots and retained integration/resolution debt refuse.
+- Fence only the exact old bound read-only O. Raise its remote epoch even when
+  terminal, preserving terminal projection/outcome. Never fence/reopen original P
+  or a foreign/mutating row. Fence the old attempt, append/bind/spend the new one,
+  move only the batch owner epoch, and release replaced consumer authority through
+  exact Z, atomically. Original source provenance remains immutable history;
+  original eligibility stays eligible, with no invented final result.
+- The private authenticated wrapper drops the lease before Fetch **advertisement
+  only**. Its local injected-ad seam runs the same common safe-point/owned write,
+  actual complete-batch persistence and completion path. The transaction receives
+  the actual returned batch ID and atomically creates immutable `batch_gap`
+  provenance (no local execution parent), batch receipt and consumer pin.
+- Ownership, cancellation and eligibility are separate. Current cancellation only
+  stops; stale F2/map/epoch/cursor/config/receipt owners cannot write/capture/finish.
+  Positive current configuration differences admit only exact owned STOP, including
+  an already registered generation fence; unknown inspection grants nothing.
+  Failed/ended observation releases its pin through Z; a successful ended O keeps
+  the exact batch-attempt consumer obligation until replacement. Already-released
+  histories are never re-resolved/collected through a reused scalar batch ID.
+- The additive gap catalog/marker is audited before widening; the exact previous
+  **37-object** index catalog is independently pinned to Git blob
+  `c8da3934cfa9085a681420ef19097d5dc01fd42e` (extraction also reproduced the existing
+  v2 pin). Missing/substituted schema, attachments/incoming FKs, missing companion,
+  bad lineage/cursor/digest/receipt/observer identity and unproduced terminal states
+  refuse without repair. Standalone and original-P rules remain closed otherwise.
+
+### Test-first evidence and final exact checkpoint
+
+All commands ran foreground through Devenv, locked, with a 15-minute maximum per
+test command; no real waits, background test jobs, broad filters or SSH cases.
+Logs are **`/tmp/opencode/task2-gap-<suffix>.log`**:
+
+| Checkpoint / command after `devenv shell --` | Suffix | Result |
+| --- | --- | --- |
+| Exact new gap journey (first red, then implemented path) | `red` / `green-3` | **0/1 → 1/1**: later accepted gap O initially refused |
+| Exact stopped-observer replacement | `stop-red` / `stop-green` | **0/1 → 1/1**: already-released failed receipt must remain historical, not be relabeled/resolved |
+| Exact injected network/configuration seam | `network-red` / `network-green` | **0/1 → 1/1**: real owned runner must reach the injected advertisement |
+| Three exact scope/exclusion/replacement tables | `scope-red` / `scope-green` / `replacement-green` | Two real REDs fixed: repository-ID debt with foreign root, and stale current-ad ownership. Intermediate third failure was a fixture error (active-slot insertion, then stale F2 before fixture stop), **not** a claimed regression |
+| Exact claim/ad/stop rollback table | `fault-red` / `fault-green` | **0/1 → 1/1**, ten reached fault boundaries; instrumentation RED, not a separate product regression |
+| Exact conservative history audit | `history-red` / `history-green` | **0/1 → 1/1**: completed/fenced O without its actual ended history was wrongly accepted |
+| Initial new/adapted exact migration controls | `migration` | **3/3** |
+| `cargo test --all-features --locked --lib -- --exact` with the **11 full names below**, after final amended Rust inputs | `exact-final` | **11 passed**, 0 failed/ignored; 81.10s test execution, 26.19s build |
+| `cargo check --all-features --locked` | `check-final` | exit **0** |
+| `cargo fmt --check` | `fmt-final` | exit **0** |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | `clippy-final` | exit **0** |
+
+`green-1` is private-visibility compile diagnostics; `green-2` exposed an absent
+future-producer-table startup query, corrected without requiring/installing Task4.
+The first Clippy run reported only the existing large SSH/observation error type;
+matching narrowly scoped allowances were added, with no public error-contract change.
+No compile/fixture/format/lint diagnostic is represented as a behavioral RED.
+
+Final exact names (each supplied as a full libtest filter with `--exact`):
+
+```text
+repository::context_retirement::execution_tests::source_contract_tests::handoff::batch_tests::gap::retirement_batch_gap_owned_capture_replacement_preserves_original_selection
+repository::context_retirement::execution_tests::source_contract_tests::handoff::batch_tests::gap::retirement_batch_gap_stops_release_only_the_exact_failed_attempt
+repository::context_retirement::execution_tests::source_contract_tests::handoff::batch_tests::gap::retirement_batch_gap_network_seam_rechecks_this_attempt_configuration_and_f2
+repository::context_retirement::execution_tests::source_contract_tests::handoff::batch_tests::gap::retirement_batch_gap_exclusion_and_original_contract_are_required_before_claim
+repository::context_retirement::execution_tests::source_contract_tests::handoff::batch_tests::gap::retirement_batch_gap_each_owned_boundary_rechecks_exact_scope
+repository::context_retirement::execution_tests::source_contract_tests::handoff::batch_tests::gap::retirement_batch_gap_replacement_fences_only_its_exact_readonly_observer
+repository::context_retirement::execution_tests::source_contract_tests::handoff::batch_tests::gap::retirement_batch_gap_claim_capture_and_stop_faults_roll_back_the_whole_projection
+repository::context_retirement::execution_tests::source_contract_tests::handoff::batch_tests::gap::retirement_batch_gap_history_audit_rejects_unproduced_or_substituted_authority
+repository::context_retirement::store_tests::migration_tests::retirement_batch_gap_migration_is_additive_atomic_and_rejects_unknown_catalog
+repository::context_retirement::store_tests::migration_tests::retirement_migration_published_v1_histories_upgrade_once_without_rewriting_rows
+repository::context_retirement::store_tests::migration_tests::retirement_f2_index_migration_is_additive_preserves_v2_history_and_reopens
+```
+
+The eight new gap tests use 18 exclusion/contract variants, 10 owned-fence variants,
+six replacement shapes, eight stop shapes, four network-gap/config variants, ten
+rollback boundaries and eight audit corruptions plus the actual journey. The new
+migration table has 11 shapes; two old migration controls changed only to construct
+their exact pre-gap fixture catalogs. Counts overlap; no broader coverage inferred.
+
+Narrow source inventory **10 changed Rust inputs**, `/tmp/opencode/task2-gap-source.sha256`,
+SHA-256 **`d1995e0ec0a43e0f3a431f66f41b22df7e966a0cd7d371a6755d74d7d139405f`**.
+**25-log** inventory (includes RED/diagnostics/isolated CLI ID),
+`/tmp/opencode/task2-gap-evidence.sha256`, SHA-256
+**`2e83d167ae7363cf22ffb87383248bee7cfa1504c2aa1a39976bc121d2ced286`**.
+No redundant 1,733-input re-inventory; prior unchanged-input evidence retains its
+actual source scope, not promoted into fresh broad verification.
+
+Checkpoint **`01M6RF46Z41MTDH83Q1XWS1VR4`**, parent **`01M6RBXXQ3TNF8Q6SHDEQ0Q4Y9`**,
+actual UTC **`2026-11-06T13:00:19Z`**. Supported existing built CLI `id new` only,
+through Devenv with approved isolated
+`MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data`; no default profile.
+Ticket remains **implementing**. No agents, push, PR, main integration/closure,
+native CI, other-worktree edits or real profile/key/context/draft actions.
+
+### Explicit evidence limits and remaining duties
+
+INERT Task4 selection/enrollment/manifest/cursor projections and synthetic ads are
+still fixtures; accepted-request reentry, reservation/owned writes, Git lease,
+batch/ad/provenance/receipt/pins/fences/Z and SQL rollback are real production paths.
+No live SSH or actual Task4 producer/coordinator journey is claimed. The adapter's
+supported gap histories leave the shared cursor fixed after reentry: new-F2 child
+consumption/index takeover and its advancing-history audit remain **closed**, not
+silently admitted by a receipt. No Live/Pruned/branch permit is reconstructed.
+
+Partial E/O/D evidence affects rows **27–34/38/40–44**, not all-44 completion.
+Still owed: pending-child/resumed C and lifetime-proof handling, new-F2 batch child/
+index recovery, active-source restart, remaining combined holder/window/every-write/
+ambiguous-commit/platform matrices, full Task2 adversarial review and Tasks3–8.
+Final review-ready whole-tree statics and AGENTS fast/changed-path SSH tiers stay
+owed at end-of-cycle, not waived or run redundantly here. No separate full-suite
+or retirement-filter duplicate; no native/Windows/casefold-volume claim.
