@@ -51,3 +51,26 @@ No Task 8 gates or feature-completion claim. Remaining retained-44 essential
 fault/platform classification, final tiers and whole-feature review remain owed;
 Tasks 3–6 evidence is neither rerun nor promoted. No push, PR, main close/merge,
 native dispatch, real context/key/draft/profile action, agents or owned job.
+
+## Task 7 SPEC correction — parent and child codes remain distinct
+
+SPEC `ses_e4ce0d5ddffeieNVsaSxi7UkAX` reported one Important finding and no
+others at initial `eaeabbf9`. Original full review base remains
+`76a852a7d5d4fcd757a95451601cdbb407b99bcc`; initial delivery/history is preserved.
+
+Source confirms the eligible stopped parent's top-level code/stop_code stays
+`recovery_required` when a child owes indexing: exit 3 without retirement
+removals, 4 with possible/observed removal. The child's nested
+`code=discovery_pending`, `state=pending`, `debt=discovery` sets discovery pending
+without changing that parent code. The Q1 row now says this explicitly. The
+separate original-P refresh/unconfirmed-handoff `discovery_pending`/4 route and
+cancellation precedence are unchanged. No second instance found in the other
+new operative Task 7 tables/audit text; no policy/code/schema/fixture change.
+
+Source/docs, links, metadata/history and whitespace checks are recorded in
+`/tmp/opencode/task7-spec-parent-code-checks.{log,json}`. No Cargo/build/test/
+static/SSH rerun: taxonomy verbs and parsing pins did not change. This appends
+the existing checkpoint without changing its ID/parent/creator/timestamp.
+**Correction pending the SAME SPEC review, then fresh QUALITY, before publication.**
+Task 8/whole-feature gates remain owed; no agents, push/PR/main/closure/native,
+real profile/key/context/draft action or owned background job.

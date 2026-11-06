@@ -36,8 +36,11 @@ both final ticket-list IDs exactly once before checking both closed. Same QUALIT
 approved that bounded delta through `37b64d17`, with no remaining findings;
 original SPEC approval carries over this assertion-only change. Its bounded evidence,
 retained-44/acceptance delta and correction record are appended below. Task 7 governing
-amendments are now locally delivered from base `76a852a7`, **independent SPEC then
-QUALITY pending** on the full Task 7 range; its source/contract checks and limits
+amendments are locally delivered from base `76a852a7`. Initial Task 7 SPEC
+`ses_e4ce0d5ddffeieNVsaSxi7UkAX` reported **one Important parent/child-code
+conflation, no other findings** at `eaeabbf9`. It is corrected locally;
+**same-SPEC re-review, then fresh QUALITY pending** on the full original Task 7
+range. Its source/contract checks and limits
 are in the new checkpoint below. Task 8 final tiers/whole-feature reviews and
 essential remaining retained-44 fault/platform classification remain owed. Ticket remains
 `implementing`, not full Task 2 or feature review-ready.**
@@ -7032,3 +7035,39 @@ actual retained-44 coverage are owed, without blanket waiver or a broad new
 matrix. D6/read precedence/remote deletion and existing lifecycle M omission
 remain outside delivered scope. Ticket stays `implementing`; not full Task 2,
 feature review-ready, native Windows/macOS or real-context completion evidence.
+
+## Task 7 SPEC Correction — Parent Stop Code Versus Child Index Code, 2026-11-06
+
+Original review base stays **`76a852a7d5d4fcd757a95451601cdbb407b99bcc`**;
+initial delivery **`eaeabbf9db62de1e8ce10bb1f3673573310509ef`** is preserved.
+SPEC **`ses_e4ce0d5ddffeieNVsaSxi7UkAX`** reported **one Important finding,
+no other findings**. Author/source correction only: **same-SPEC re-review is
+pending, followed by fresh QUALITY**, before controller publication.
+
+The Q1 row for a current child owing cleanup/discovery mixed the top-level
+parent `recovery_required` with nested child `discovery_pending`. Source
+`mutation/bind/poll_retirement.rs:248–264` forces `RecoveryRequired` when the
+ordinary child remains Accepted, unless parent cancellation wins. Its
+`answer` (`:129–164`) takes the parent code from `stop_code`; a child's Discovery
+debt sets `effects.discovery=pending`, not a replacement parent code.
+`context_retirement/pass_report.rs:144–160` independently sets that child's
+`code=discovery_pending`, `state=pending`, `debt=discovery`.
+
+The single RFC row now makes those levels explicit: eligible parent stopped
+with `recovery_required`, exit **3** without retirement removals or **4** with
+possible/observed removal, while child index debt stays nested. The separate
+original-P refresh/unconfirmed-handoff `discovery_pending`/4 row and cancellation
+precedence are unchanged. Swept other **new operative Task 7** tables/audit text
+for the same conflation; no second instance identified. No historical approval
+record, product policy, code, schema, fixture or taxonomy verb changed.
+
+Checks/logs: source/docs distinction and scoped link/frontmatter/history/whitespace
+checks in `/tmp/opencode/task7-spec-parent-code-checks.{log,json}`; correction-only
+three-document manifest `task7-spec-parent-code-sources.sha256` and diff
+`task7-spec-parent-code.diff`, under the same directory. Initial Task 7 artifacts
+retain their original source scope. Existing canonical comment
+`01M6SHEHSJYNH371M4TY9GMAV9` is appended with ID, parent, creator and timestamp
+unchanged; no new ID or ticket-body/status save. **No Cargo/build/test/static/SSH/
+fast/full/native command or prior-green rerun** for this prose clarification.
+Task 8 and whole-feature gates remain owed. No agents, other-worktree/main/profile/
+key/context/draft action, push/PR/close/native dispatch or owned background job.
