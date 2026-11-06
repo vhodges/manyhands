@@ -70,3 +70,49 @@ governing amendments and Task 8 final three statics, fast/selected-SSH tiers onc
 whole-feature reviews and owner handoff remain outstanding. Ticket remains
 implementing, not feature review-ready. No PR/main integration/closure/native
 authorization claimed. No owned process remains.
+
+## SPEC S1/S2 correction — 2026-11-06
+
+Fresh SPEC **`ses_e4d1d87e4ffeVpP18HBE3BO07B`** found one Important and one Minor,
+both controller-verified. Correction source is
+**`dac9f766d68bc702fd9b13b622cc14f1fa86bf54`**; the **original full review base
+remains `e79ab8e61b0682eb0f224d36dee5d67ef51aa4c9`**. Earlier `c0ff11af`/`3a935cf6`
+delivery and source-scoped evidence/approvals are preserved, not rewritten.
+
+- **S1:** retirement human paths now print exact current recovery action-owned
+  operation IDs and roots. A current X absent from the frozen P/K report is
+  rendered as an exact `operation resume` or prepared `operation abandon` command;
+  roots come from the action argument or established envelope scope, never the
+  historical report/envelope operation or invocation root. Missing roots retain
+  the exact ID without inventing a repository. Standalone with/without data and
+  explicit opted-in polling before/after a tagged report use the private helper.
+  Ordinary/default poll rendering, generic `render.rs`, JSON, engine behavior and
+  every golden are unchanged. Request-retry arguments are retained.
+- **S2:** PRESERVE's disk snapshot proves file bytes, node types and symlink
+  targets—not working-filesystem permissions. The assertion/current ledger
+  wording is narrowed; no snapshot implementation or comparison changes. No
+  runtime permission-preservation claim is made from Git-entry-mode proof.
+
+Both **existing** render tables produced meaningful compiled REDs before the
+production fix and now each pass exactly **1 nonzero case**. They distinguish
+parent P, historic K and current X absent from the report, verify action-root
+precedence/control escaping, no-report/no-root paths, intact request retry and
+unchanged JSON/default rendering. Logs are
+`/tmp/opencode/task56-spec-s1-{poll,single}-{red,final}.log`. Strict all-target/
+all-feature Clippy passes; a clean serial fmt-check passes. A preceding concurrent
+Devenv chmod/setup diagnostic despite exit 0 is retained but not used as a clean
+gate. No acceptance/SSH/19-case/no-GPUI/broad/full/native rerun or real waits.
+
+Delta source manifest: 5 inputs, SHA-256
+`92cef95d95611f8d0fe9a4afd190f4c3c39b8d0f3130da29592db679da8091d2`.
+New raw evidence: 13 artifacts, SHA-256
+`01f6f48f1c9d34f455ed5debdf67dfa25c1e8026615e16cc271b36b9c5923de4`.
+Both are `/tmp/opencode/task56-spec-s1-*.sha256`; the ledger has exact commands,
+results and scope classifications. Original 27-input/55-artifact/19-result evidence
+keeps its original source scope, not this correction tree's scope.
+
+**Same SPEC full-range re-review plus this delta is pending; fresh QUALITY is
+gated on that pass.** No independent pass or full-feature completion claimed.
+Task 7/8 remain owed. This appends the existing checkpoint without changing its
+identity/parent/time. No agents, push, main/other-worktree/profile/key/context/draft
+mutation, PR/closure/native action or owned background process.

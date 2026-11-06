@@ -27,9 +27,13 @@ transport-stop/host recovery, and truthful discovery after lost boundary copies.
 Both same reviewers found no remaining findings at their respective gates.
 The original 39 results and correction tables retain their actual source scopes;
 final whole-feature gates remain outstanding. Tasks 5–6's CLI/acceptance chunk is
-locally delivered at `c0ff11af`, awaiting the controller's independent SPEC then
-QUALITY review of the entire original `e79ab8e6..returned-HEAD` range. Its bounded
-evidence and retained-44/acceptance delta are appended below. Task 7 governing
+locally delivered at `c0ff11af`. Fresh SPEC `ses_e4d1d87e4ffeVpP18HBE3BO07B`
+found S1 Important (missing current action-owned operation ID in human recovery)
+and S2 Minor (working-image permission evidence overclaim). Both are locally
+corrected through `dac9f766`; **same SPEC re-review of the entire original
+`e79ab8e6..returned-HEAD` range plus correction, THEN fresh QUALITY, are owed**.
+No independent approval of this chunk is claimed. Its bounded evidence,
+retained-44/acceptance delta and correction record are appended below. Task 7 governing
 amendments and Task 8 final tiers/whole-feature reviews remain owed. Ticket remains
 `implementing`, not full Task 2 or feature review-ready.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
@@ -6497,7 +6501,7 @@ Aliases below are actual compiled tests, not planned APIs:
 | Acceptance | Delivered/reused evidence and exact boundary |
 | --- | --- |
 | A1 | SSH: A publishes two tickets; B materializes; A closes/deletes; B DEFAULT poll reports two `closed` yet keeps old open own-worktree reads/dependent blocked. Standalone removes ITEM; the still-open dependent becomes ready. Explicit two-child pass removes remaining/recreated copies; final show/list/readiness agree with primary. Real binary + disposable authenticated SSH, no read-ranking edit |
-| A2 | PRESERVE compares full working byte/mode/link image, **every local/tracking ref**, worktree registration and indexed ticket DTOs across dirty/unmatched/open/unknown refusals. Deeper ignored/submodule/no-follow/platform permutations retain ordinary proof/cleanup evidence, not a new SSH matrix |
+| A2 | PRESERVE compares full file bytes, node types and link targets, **every local/tracking ref**, worktree registration and indexed ticket DTOs across dirty/unmatched/open/unknown refusals. It does not snapshot working-filesystem permissions. Deeper ignored/submodule/no-follow/platform permutations retain ordinary proof/cleanup evidence, not a new SSH matrix |
 | A3 | PRESERVE's positive folded row asserts non-ancestry before guarded public retirement; full changed work is represented on primary. The existing all-entry/mode/canonical closure-exception proof matrix stays unchanged; no second proof implementation |
 | A4 | D14 uses a distinct peer clone plus disposable bare/local Git transfers for setup. Public DEFAULT poll materializes document T, peer folds/promotes content/deletes the edit, default preserves T, guarded retirement removes it, and later same-ID Q default-materializes with a **different intent and Q OID/body**. Primary document content/read is correct. The peer's promotion is fixture Git history, not a claim of exercising production promotion over file transport |
 | A5 | PRESERVE adds actual guarded open/unknown/unmatched negative journeys, beyond code-only checks. T4 FENCE/GAP and ordinary proof/current-ad/config/nonce controls retain their approved scope; no new transport edge matrix or weakened current-authority fence |
@@ -6658,3 +6662,87 @@ fast/selected-SSH tiers **once at review-ready** and whole-feature reviews remai
 owed. Ticket stays implementing; no full-feature/real-context completion, PR,
 main integration/closure or native CI claim. No owned process remains. Metadata-only
 checkpoint bookkeeping does not require repeating green Rust/test gates.
+
+## Tasks 5–6 SPEC Corrections — S1/S2, 2026-11-06
+
+**Original review base remains**
+`e79ab8e61b0682eb0f224d36dee5d67ef51aa4c9`. Original delivery/source
+`c0ff11afd53ffdb8969794f238564d6abad14e7a` and checkpoint
+`3a935cf694230a27aa4e293e2ccf79c2f5181746` are preserved. Fresh SPEC
+**`ses_e4d1d87e4ffeVpP18HBE3BO07B`** found one Important and one Minor; the
+controller verified both against actual code. Correction source commit
+**`dac9f766d68bc702fd9b13b622cc14f1fa86bf54`**, with the required coauthor,
+addresses only these findings. This is author-local correction evidence, **not a
+SPEC pass**; same SPEC full-range re-review precedes fresh QUALITY.
+
+| Finding | Verified cause / bounded correction |
+| --- | --- |
+| **S1 Important:** exact current continuation missing | Generic `render::compact` prints recovery action names and arguments, not `RecoveryAction.operation_id`. A frozen stopped pass can show P/historical K while current recovery legitimately targets unrelated X, so `operation.resume`/`operation.abandon` had no actionable X in text even though JSON was correct. A retirement-only helper now renders the **actual recovery action's operation ID**, taking root from that action's `root` argument first, otherwise the envelope's established repository scope. It never reads a frozen target, envelope operation ID or invocation root to infer authority. Resume is an exact CLI line; abandon names X and its prepared preserving flow. With no established root it preserves the exact action-owned ID without inventing a repository. Other actions/arguments, including request retry, retain existing generic rendering. |
+| **S1 scope/compatibility** | Standalone results use the helper with or without retirement data. Explicit `--retire-completed` passes a private rendering-mode flag, so a refusal before any tagged report also renders current X. Ordinary/default polling still uses the unchanged generic formatter. `render.rs`, JSON/DTOs, recovery engines, schemas, catalogs, dependencies and **all golden files are unchanged**. No new public command/action enum or domain behavior. |
+| **S2 Minor:** working permission claim exceeded snapshot | `disk_image` stores file bytes, node types and symlink targets, not filesystem permissions. Narrowed the PRESERVE assertion text and current A2 ledger row accordingly. No shared snapshot/permission implementation, assertion outcome or runtime behavior changed. Existing Git-entry-mode proof is not claimed as working-filesystem permission evidence. The canonical checkpoint clarification below makes the same limitation explicit. |
+
+### Compiled RED → GREEN, Exact Cases Only
+
+Extended the **existing** polling renderer table with distinct parent P,
+historical K and **current recovery X absent from the report**. Both action-owned
+resume and preserving abandon must name X and the correct root; action-root
+precedence, root quotes/tabs/newlines, intact request-retry arguments, no raw
+controls and no JSON mutation are asserted. An opted-in no-report row proves
+the invocation root cannot replace the established record scope. The same table
+also verifies ordinary polling still prints its original generic action lines.
+The existing standalone removal/render table now checks with/without data and
+missing-root cases, ensuring no fallback path drops X or guesses a root.
+
+Literal exact commands:
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands-cli polling::tests::retirement_report_distinguishes_as_of_cut_from_current_child_actions -- --exact
+devenv shell -- cargo test --all-features --locked --bin manyhands-cli retirement::tests::removal_flags_are_evidence_not_an_all_removed_claim -- --exact
+```
+
+| Log under `/tmp/opencode/` | Result / scope |
+| --- | --- |
+| `task56-spec-s1-poll-red.log` | **Meaningful compiled RED before production correction:** 0 passed/1 failed. Output contained P/K and generic resume/abandon names but no current X; request-retry arguments were present. Build/lock 3.47 s, test 0.00 s. |
+| `task56-spec-s1-single-red.log` | **Meaningful compiled RED before production correction:** 0 passed/1 failed. Standalone removal metadata rendered, but action-owned X was missing from both next lines. Build 3.38 s, test 0.00 s. |
+| `task56-spec-s1-{poll,single}-green.log` | Initial helper checkpoint: each **1 passed/0 failed**. Retained as intermediate evidence only; final rows below additionally cover the explicit-mode/no-report path and missing-root controls. |
+| `task56-spec-s1-poll-final.log` | Final polling table at `dac9f766`: **1 passed/0 failed**, 306 filtered, 0.00 s test / 11.60 s build/lock. |
+| `task56-spec-s1-single-final.log` | Final standalone table at `dac9f766`: **1 passed/0 failed**, 306 filtered, 0.00 s test / 11.67 s build/lock. |
+| `task56-spec-s1-clippy.log` | `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`: **exit 0**, 9.62 s compiler work after lock waits. No redundant separate `cargo check`. |
+| `task56-spec-s1-fmt-check.log` | Concurrent Devenv entry emitted a missing `.devenv/load-exports` chmod/setup diagnostic despite command exit 0. **Not relied on as a clean format gate.** This is wrapper/setup evidence, not a Rust failure or behavioral RED. |
+| `task56-spec-s1-fmt-verified.log` | Clean serial retry of `devenv shell -- cargo fmt --check`: **exit 0**, clean Devenv setup. No source edit or extra test run was needed. |
+
+No new test name, SSH case, broad filter/target, 19-case rerun, fast/full/native
+tier, real wait or no-GPUI rerun. No command approached the 15-minute budget. S2
+does not rerun PRESERVE: only assertion wording changed; actual snapshot and
+comparisons are identical. The prior 19 nonzero results, one SSH result and
+no-GPUI boundary evidence retain **only their original source scopes**. In
+particular the original `task56-sources.sha256` still describes `c0ff11af`, not
+this correction tree; it is not overwritten or relabeled.
+
+### Delta Integrity And Handoff
+
+- `/tmp/opencode/task56-spec-s1-sources.sha256`: **5 changed Rust inputs only**,
+  manifest SHA-256 **`92cef95d95611f8d0fe9a4afd190f4c3c39b8d0f3130da29592db679da8091d2`**.
+  Four CLI/render-test inputs plus the one-line acceptance assertion message;
+  no huge unchanged-source inventory.
+- `/tmp/opencode/task56-spec-s1-results.json`: literal commands, RED/intermediate/
+  final scopes, counts/exits and setup diagnostic classification.
+- `/tmp/opencode/task56-spec-s1-evidence.sha256`: **13 new artifacts** (11 logs,
+  results JSON and delta source manifest), SHA-256
+  **`01f6f48f1c9d34f455ed5debdf67dfa25c1e8026615e16cc271b36b9c5923de4`**.
+  Failed RED/setup logs are included, not called passing results.
+- Self-review: action-owned X/root only, preserving preparation rather than
+  unconfirmed abandonment, explicit-mode routing including no-report refusals,
+  generic ordinary/default branch untouched, escaping and immutable JSON;
+  no golden/domain/dependency/native-cfg changes. Linux-local compilation and
+  unit evidence only, no Windows/macOS runtime claim.
+- Existing canonical comment **`01M6SDJK2RM3GNP0YANZYS404Q`** is appended, preserving
+  its ID, parent, creator and original created timestamp. No new ID generation,
+  ticket-body/status save, profile/key/context/draft action, other-worktree/main
+  change, agent, push, PR, closure or native dispatch. No owned process remains.
+
+**Next: same SPEC reviewer `ses_e4d1d87e4ffeVpP18HBE3BO07B` re-reviews the whole
+original `e79ab8e61b0682eb0f224d36dee5d67ef51aa4c9..returned-HEAD` range and this
+delta; only after that passes, fresh QUALITY.** No approval or feature completion
+is claimed. Task 7 governing amendments and Task 8 final whole-feature gates remain
+owed. Metadata-only checkpoint bookkeeping needs no repeat of green Rust gates.
