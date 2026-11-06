@@ -389,25 +389,30 @@ fn audit_summaries(db: &Connection) -> Result<(), RepositoryError> {
     if missing {
         return Err(recovery_required());
     }
-    let mut q=db.prepare("SELECT p.operation_ulid,p.summary,r.result_data FROM poll_retirement_passes p JOIN request_records r ON r.request_ulid=p.request_ulid WHERE p.summary IS NOT NULL").map_err(|_|recovery_required())?;
+    let mut q=db.prepare("SELECT p.operation_ulid,p.summary,r.result_data,r.code,p.image IS NULL AND EXISTS(SELECT 1 FROM remote_operation_records o WHERE o.repository_id=p.repository_id AND o.operation_ulid=p.operation_ulid AND o.phase='failed' AND o.outcome='host_approval_required') FROM poll_retirement_passes p JOIN request_records r ON r.request_ulid=p.request_ulid WHERE p.summary IS NOT NULL").map_err(|_|recovery_required())?;
     for row in q
         .query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
                 r.get::<_, String>(1)?,
                 r.get::<_, Option<String>>(2)?,
+                r.get::<_, Option<String>>(3)?,
+                r.get::<_, bool>(4)?,
             ))
         })
         .map_err(|_| recovery_required())?
     {
-        let (op, text, copy) = row.map_err(|_| recovery_required())?;
+        let (op, text, copy, code, host_failure) = row.map_err(|_| recovery_required())?;
         let value: serde_json::Value =
             serde_json::from_str(&text).map_err(|_| recovery_required())?;
         let report = mutation::PollRetirementMutationDto::from_stored(&value)
             .ok_or_else(recovery_required)?;
         if report.poll.operation_id != op
             || copy.as_ref().is_some_and(|s| {
-                serde_json::from_str::<serde_json::Value>(s).ok().as_ref() != Some(&value)
+                let Ok(copy) = serde_json::from_str::<serde_json::Value>(s) else {
+                    return true;
+                };
+                copy != value && !host_stop_copy(&report, &copy, code.as_deref(), host_failure)
             })
         {
             return Err(recovery_required());
@@ -428,6 +433,37 @@ fn audit_summaries(db: &Connection) -> Result<(), RepositoryError> {
         }
     }
     Ok(())
+}
+
+/// Poll once already reports a live host stop using its closed synchronization
+/// host root. Only an empty preselection failed pass may keep that public answer
+/// alongside its internal stopped cut; no captured/child result gets an exception.
+fn host_stop_copy(
+    report: &mutation::PollRetirementMutationDto,
+    copy: &serde_json::Value,
+    code: Option<&str>,
+    host_failure: bool,
+) -> bool {
+    let Some(host) = mutation::SynchronizationMutationDto::from_stored(copy) else {
+        return false;
+    };
+    let replacement = report.stop_code == Some(crate::results::ResultCode::HostReplacementRequired);
+    host_failure
+        && report.completion == mutation::PollRetirementCompletion::Stopped
+        && report.poll.completion == mutation::PollMutationCompletion::Completed
+        && report.retirements.is_empty()
+        && report.poll.targets.is_empty()
+        && matches!(
+            report.stop_code,
+            Some(
+                crate::results::ResultCode::HostApprovalRequired
+                    | crate::results::ResultCode::HostReplacementRequired
+            )
+        )
+        && code == report.stop_code.map(|c| c.as_str())
+        && host.pinned_algorithm.is_some() == replacement
+        && host.pinned_fingerprint.is_some() == replacement
+        && serde_json::to_value(host).ok().as_ref() == Some(copy)
 }
 
 fn audit_parents(db: &Connection) -> Result<(), RepositoryError> {

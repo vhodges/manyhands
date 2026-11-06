@@ -1,5 +1,5 @@
 {
-  "code": "transport_unavailable",
+  "code": "internal_error",
   "command": "poll once",
   "data": {
     "completion": "stopped",
@@ -11,7 +11,7 @@
       "targets": []
     },
     "retirements": [],
-    "stop_code": "transport_unavailable",
+    "stop_code": "internal_error",
     "type": "poll_retirement"
   },
   "effects": {
@@ -23,7 +23,7 @@
     "publication": "not_requested",
     "write": "not_requested"
   },
-  "message": "The transport is not available; try again.",
+  "message": "An internal error occurred.",
   "operation_id": "<operation>",
   "outcome": "error",
   "recovery": [],

@@ -55,8 +55,8 @@ fn an_opted_poll_matches_its_distinct_closed_schema_and_golden() {
     let envelope = world.execute(REQUEST_1, mutation());
     assert_eq!(
         envelope.code,
-        ResultCode::TransportUnavailable,
-        "transport deliberately uninitialized: no network/credentials fixture: {envelope:?}"
+        ResultCode::InternalError,
+        "the deliberately uninitialized transport's live RuntimeUninitialized error must not become its coarse TransportUnavailable category: {envelope:?}"
     );
     assert_eq!(
         envelope.effects.discovery,

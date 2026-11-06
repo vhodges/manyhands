@@ -1,5 +1,5 @@
 //! Real shared-boundary acceptance/reentry/settlement over isolated local Git.
-//! No SSH evidence is claimed. Only finalizer faults are synthetic.
+//! No SSH evidence is claimed. Transport results and crash/finalizer faults are synthetic.
 use super::*;
 use crate::repository::keys::*;
 use crate::results::{DiscoveryEffect, ResultCode};
@@ -1326,6 +1326,320 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
             .code,
             ResultCode::RequestMismatch
         );
+    }
+    // Terminal transport failures flow through the real public opted binding,
+    // domain failure settlement, metadata cut and finished-request replay.
+    use crate::repository::transport::{
+        HostKeyIdentity, SshAuthority, SshDirection, SshTransportError, SshTransportErrorKind as E,
+    };
+    use crate::results::RecoveryActionKind as A;
+    for case in [
+        "key",
+        "unlock",
+        "host_replace",
+        "host_verify",
+        "host_approve",
+        "lost_key",
+        "lost_host",
+    ] {
+        let f = Fixture::new();
+        let branch = present(&f);
+        let id = RequestId::new();
+        let lost = case.starts_with("lost_");
+        let key = || HostKeyIdentity {
+            algorithm: "ssh-ed25519".into(),
+            sha256: "SHA256:safe-presented".into(),
+        };
+        let expected = HostKeyIdentity {
+            algorithm: "ssh-ed25519".into(),
+            sha256: "SHA256:safe-pinned".into(),
+        };
+        let (kind, code, category) = match case {
+            "key" => (
+                E::KeyRejected,
+                ResultCode::KeyRejected,
+                "selected_key_unavailable",
+            ),
+            "lost_key" => (
+                E::KeyRejected,
+                ResultCode::NoSelectedKey,
+                "selected_key_unavailable",
+            ),
+            "unlock" => (E::UnlockFailed, ResultCode::UnlockFailed, "unlock_required"),
+            "host_verify" => (
+                E::HostVerificationUnavailable,
+                ResultCode::RecoveryRequired,
+                "host_approval_required",
+            ),
+            "host_approve" => (
+                E::HostApprovalRequired { presented: key() },
+                ResultCode::HostApprovalRequired,
+                "host_approval_required",
+            ),
+            "lost_host" => (
+                E::HostReplacementRequired {
+                    expected,
+                    presented: key(),
+                },
+                ResultCode::HostApprovalRequired,
+                "host_approval_required",
+            ),
+            _ => (
+                E::HostReplacementRequired {
+                    expected,
+                    presented: key(),
+                },
+                ResultCode::HostReplacementRequired,
+                "host_approval_required",
+            ),
+        };
+        let selected = SharedKeyId::new();
+        let error = SshTransportError {
+            root: f.root.path().into(),
+            remote_name: "private-backend-remote-user-secret".into(),
+            direction: SshDirection::Fetch,
+            selected_key_id: Some(selected),
+            authority: Some(SshAuthority {
+                host: "safe-host.example".into(),
+                port: 2222,
+            }),
+            kind,
+        };
+        let disk = disk_image(f.root.path());
+        let producer = RepositoryService::open_at(f.data.path()).unwrap();
+        if lost {
+            let root = f.root.path().to_owned();
+            let data = f.data.path().to_owned();
+            producer.set_request_hook_for_testing(move || {
+                let service = RepositoryService::open_at(&data).unwrap();
+                let operation =
+                    service.request_record(id).unwrap().unwrap().operations[0].operation_id;
+                crate::repository::remote::synthetic_fetch_error(error);
+                assert!(matches!(
+                    service.poll_publication_remote(
+                        PollPublicationRemoteRequest {
+                            root,
+                            operation_id: operation,
+                            invocation: RemotePollInvocation::Explicit,
+                            approval: None,
+                            restart: false
+                        },
+                        &mut SessionCredentials::new(NoCredentials)
+                    ),
+                    Err(RemotePollError::Transport(_))
+                ));
+                panic!("lost original transport answer BEFORE the opted wrapper can compose a cut");
+            });
+        } else {
+            crate::repository::remote::synthetic_fetch_error(error);
+        }
+        let mutation = || {
+            Mutation::PollOnceRetiring(PollOnceInput {
+                root: f.root.path().into(),
+            })
+        };
+        let first = if lost {
+            assert!(catch_unwind(AssertUnwindSafe(|| execute(&producer, id, mutation()))).is_err());
+            assert!(
+                f.db()
+                    .query_row(
+                        "SELECT summary IS NULL FROM poll_retirement_passes",
+                        [],
+                        |r| r.get::<_, bool>(0)
+                    )
+                    .unwrap()
+            );
+            execute(&f.service, id, mutation())
+        } else {
+            execute(&producer, id, mutation())
+        };
+        assert_eq!(
+            first.code, code,
+            "I1 precise original terminal transport answer, coarse only when actually lost: {case}: {first:?}"
+        );
+        assert_eq!(
+            first.effects,
+            crate::results::Effects::not_requested(),
+            "I1 live stop must not claim a refresh: {case}"
+        );
+        assert_eq!(
+            f.service.request_record(id).unwrap().unwrap().state,
+            RequestState::Finished
+        );
+        let host = matches!(case, "host_replace" | "host_approve");
+        let data = serde_json::to_value(&first.data).unwrap();
+        if host {
+            assert!(
+                matches!(first.data, Some(MutationDataDto::Synchronization(_))),
+                "reuse the existing poll host schema family"
+            );
+            assert_eq!(
+                data.as_object().unwrap().len(),
+                6,
+                "existing closed synchronization host root only"
+            );
+            assert_eq!(data["host"], "safe-host.example");
+            assert_eq!(data["port"], 2222);
+            assert_eq!(data["presented_fingerprint"], "SHA256:safe-presented");
+            assert_eq!(
+                data["pinned_fingerprint"],
+                if case == "host_replace" {
+                    serde_json::json!("SHA256:safe-pinned")
+                } else {
+                    serde_json::Value::Null
+                }
+            );
+            let action = first
+                .recovery
+                .iter()
+                .find(|r| {
+                    r.action
+                        == if case == "host_replace" {
+                            A::HostReplace
+                        } else {
+                            A::HostApprove
+                        }
+                })
+                .expect("I1 safe host recovery route survives composition");
+            assert_eq!(
+                action.arguments.get("root"),
+                Some(&serde_json::json!(f.root.path().to_str().unwrap()))
+            );
+            assert_eq!(
+                action.arguments.get("authority"),
+                Some(&serde_json::json!("safe-host.example:2222"))
+            );
+        } else {
+            assert_eq!(data["type"], "poll_retirement");
+            assert_eq!(data["stop_code"], code.as_str());
+            assert!(
+                !first
+                    .recovery
+                    .iter()
+                    .any(|r| matches!(r.action, A::HostApprove | A::HostReplace)),
+                "lost-original category cannot invent host authority"
+            );
+        }
+        let op = first.operation_id.as_deref().unwrap();
+        let db = f.db();
+        let (summary, image, live): (String, Option<String>, bool) = db
+            .query_row(
+                "SELECT summary,image,live FROM poll_retirement_passes WHERE operation_ulid=?1",
+                [op],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        let cut: serde_json::Value = serde_json::from_str(&summary).unwrap();
+        assert_eq!(cut["stop_code"], code.as_str());
+        assert_eq!(cut["completion"], "stopped");
+        assert_eq!(cut["retirements"], serde_json::json!([]));
+        assert!(image.is_none() && !live);
+        let (phase, outcome): (String, String) = db
+            .query_row(
+                "SELECT phase,outcome FROM remote_operation_records WHERE operation_ulid=?1",
+                [op],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (phase.as_str(), outcome.as_str()),
+            ("failed", category),
+            "real domain persists only the coarse category"
+        );
+        for table in [
+            "poll_retirement_targets",
+            "poll_retirement_child_sources",
+            "context_retirement_records",
+            "retirement_advertisement_provenance",
+            "retirement_observation_receipts",
+            "retirement_observation_pins",
+            "ssh_host_pins",
+        ] {
+            assert_eq!(
+                db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
+                    .get::<_, i64>(0))
+                    .unwrap(),
+                0,
+                "{case}: no retirement/implicit approval: {table}"
+            );
+        }
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM request_records WHERE command='context retire'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        assert!(
+            git2::Repository::open(f.root.path())
+                .unwrap()
+                .find_reference(&branch)
+                .is_ok()
+        );
+        assert_eq!(
+            disk,
+            disk_image(f.root.path()),
+            "no nonce, selection, cleanup, transport or approval disk effects"
+        );
+        let serialized = serde_json::to_string(&first).unwrap();
+        for private in [
+            "private-backend-remote-user-secret",
+            "Private fixture title",
+            "Private fixture body",
+            &selected.to_string(),
+        ] {
+            assert!(
+                !serialized.contains(private),
+                "{case}: private transport evidence escaped"
+            );
+        }
+        let decoded = if host {
+            SynchronizationMutationDto::from_stored(&data).map(MutationDataDto::Synchronization)
+        } else {
+            PollRetirementMutationDto::from_stored(&data).map(MutationDataDto::PollRetirement)
+        };
+        assert_eq!(
+            decoded, first.data,
+            "existing stored family decoder round trip"
+        );
+        let registry = registry_image(&db);
+        let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+        assert_eq!(
+            first,
+            execute(&reopened, id, mutation()),
+            "exact finished code/data/effects/recovery, not category fallback: {case}"
+        );
+        assert_eq!(registry, registry_image(&db));
+        assert_eq!(disk, disk_image(f.root.path()));
+        if host {
+            for invalid in ["backend_error", "pinned_fingerprint"] {
+                let mut bad = data.clone();
+                bad[invalid] = if invalid == "backend_error" {
+                    "private-backend-error".into()
+                } else if case == "host_replace" {
+                    serde_json::Value::Null
+                } else {
+                    "invented-pin".into()
+                };
+                db.execute(
+                    "UPDATE request_records SET result_data=?2 WHERE request_ulid=?1",
+                    params![id.to_string(), bad.to_string()],
+                )
+                .unwrap();
+                assert!(
+                    super::super::record::audit_connection(&db).is_err(),
+                    "host-cut exception must stay closed and code/pin correlated"
+                );
+                db.execute(
+                    "UPDATE request_records SET result_data=?2 WHERE request_ulid=?1",
+                    params![id.to_string(), data.to_string()],
+                )
+                .unwrap();
+            }
+            super::super::record::audit_connection(&db).unwrap();
+        }
     }
 }
 

@@ -22,11 +22,53 @@ impl From<PollOnceInput> for PollRetirementBinding {
 
 /// Report bytes are immutable; continuations are not. Offer only the current
 /// ordinary child's route, never the finished pass as a cleanup/index owner.
+/// A failed preselection pass may instead carry poll once's existing safe host
+/// root: its host action is reconstructed on finished replay, never approved here.
 /// This read is used for both the original answer and finished-parent replay.
 pub(crate) fn offer_current_children(
     service: &RepositoryService,
     mut envelope: crate::results::Envelope<MutationDataDto>,
 ) -> crate::results::Envelope<MutationDataDto> {
+    if envelope.command == "poll once"
+        && matches!(
+            envelope.code,
+            ResultCode::HostApprovalRequired | ResultCode::HostReplacementRequired
+        )
+        && matches!(envelope.data, Some(MutationDataDto::Synchronization(_)))
+    {
+        let Some(ri) = envelope
+            .request_id
+            .as_deref()
+            .and_then(|id| super::super::RequestId::parse(id).ok())
+        else {
+            return envelope;
+        };
+        // Ordinary poll replay is unchanged. Only this audited opted parent
+        // owns the correlation between its host answer and empty stopped cut.
+        let parent = service.read_session(repository::RepositoryOperation::Read, |db| {
+            repository::context_retirement::record::audit_connection(db)
+                .and_then(|()| pass::is_parent(db, ri))
+                .map_err(|_| repository::ReadError::new(ResultCode::RecoveryRequired))
+        });
+        if matches!(parent, Ok(true)) {
+            let authority = envelope.data.as_ref().and_then(MutationDataDto::authority);
+            envelope.recovery = super::super::outcome::offered(
+                &super::super::outcome::Named {
+                    code: envelope.code,
+                    command: Command::PollOnce,
+                    root: envelope.scope.repository.as_deref(),
+                    request_id: Some(ri),
+                    operation_id: None,
+                    retry: false,
+                    unsettled: false,
+                },
+                envelope.recovery,
+                false,
+                authority.as_deref(),
+            );
+        }
+        return envelope;
+    }
     let Some(MutationDataDto::PollRetirement(report)) = envelope.data.as_ref() else {
         return envelope;
     };
@@ -308,7 +350,28 @@ impl Binding for PollRetirementBinding {
                 if matches!(stopped.standing, Standing::Final)
                     && let Ok(result) = call.service.poll_stored_result(&a.root(), a.operation_id)
                 {
-                    return self.reported(call, a, PollOnceBinding::reported(call, a, result));
+                    // The journal category is a LATER-call fallback, not this
+                    // live error's code, effects or sanitized host recovery data.
+                    // Borrow only its report fields for the metadata-only cut.
+                    let reported = PollOnceBinding::reported(call, a, result);
+                    let Some(MutationDataDto::Poll(poll)) = reported.answer.data else {
+                        return stopped;
+                    };
+                    let finished = self.finish(call, a, Some(poll), Some(stopped.answer.code));
+                    if matches!(finished.standing, Standing::Final)
+                        && finished.answer.code == stopped.answer.code
+                    {
+                        return Ran {
+                            answer: Answer {
+                                data: stopped.answer.data.or(finished.answer.data),
+                                ..stopped.answer
+                            },
+                            standing: stopped.standing,
+                        };
+                    }
+                    // A failed cut stays Owed; a concurrent parent cancellation
+                    // keeps its already-decided immutable cancellation cut.
+                    return finished;
                 }
                 stopped
             }

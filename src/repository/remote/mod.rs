@@ -4,7 +4,7 @@ pub(super) mod observation;
 mod poll;
 pub(super) use poll::OriginalWrapper;
 #[cfg(test)]
-pub(crate) use poll::synthetic_fetch;
+pub(crate) use poll::{synthetic_fetch, synthetic_fetch_error};
 mod refs;
 pub(super) mod sync;
 pub use conflict_read::{

@@ -1406,10 +1406,17 @@ impl FullPass<'_> {
 // Replaces transport ONLY; all reservation, observation, target, capture,
 // refresh and mutation-binding code is production code. No SSH claim.
 #[cfg(test)]
-thread_local! {static SYNTHETIC_FETCH:std::cell::RefCell<Option<Vec<(String,git2::Oid)>>>=const {std::cell::RefCell::new(None)};}
+type SyntheticFetch =
+    Result<Vec<(String, git2::Oid)>, crate::repository::transport::SshTransportError>;
+#[cfg(test)]
+thread_local! {static SYNTHETIC_FETCH:std::cell::RefCell<Option<SyntheticFetch>>=const {std::cell::RefCell::new(None)};}
 #[cfg(test)]
 pub(crate) fn synthetic_fetch(advertisement: Vec<(String, git2::Oid)>) {
-    SYNTHETIC_FETCH.with(|s| assert!(s.borrow_mut().replace(advertisement).is_none()));
+    SYNTHETIC_FETCH.with(|s| assert!(s.borrow_mut().replace(Ok(advertisement)).is_none()));
+}
+#[cfg(test)]
+pub(crate) fn synthetic_fetch_error(error: crate::repository::transport::SshTransportError) {
+    SYNTHETIC_FETCH.with(|s| assert!(s.borrow_mut().replace(Err(error)).is_none()));
 }
 
 /// Only the live completion continuation below can construct this wrapper.
@@ -1730,7 +1737,7 @@ impl RepositoryService {
         let fetched = fetch();
         #[cfg(test)]
         let fetched = match SYNTHETIC_FETCH.with(|s| s.borrow_mut().take()) {
-            Some(advertisement) => Ok(advertisement),
+            Some(result) => result,
             None => fetch(),
         };
         // Captured callback intent wins over libgit2's platform-specific abort code.
