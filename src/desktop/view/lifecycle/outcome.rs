@@ -215,14 +215,17 @@ impl Ending {
     }
 
     /// A `busy` answer of a run that already merged into main and left its
-    /// sharing or tidy-up pending (a push refused because another process
-    /// holds the repository): nothing else is running it, and what is
-    /// pending is Failed (A3, R-7), not a run in flight.
+    /// sharing with the remote pending (a push refused because another
+    /// process holds the repository): nothing else is running it, and
+    /// what is pending is Failed (A3, R-7), not a run in flight. A
+    /// repository with no remote has no sharing to leave pending, so its
+    /// `busy` is still another call holding the item (P22).
     fn reached_main_pending(envelope: &Envelope<MutationDataDto>) -> bool {
         lifecycle_data(envelope).is_some_and(|data| {
             data.integration.is_some()
-                && (data.publication == Some(LifecyclePublicationState::Pending)
-                    || data.cleanup == Some(LifecycleCleanupState::Pending))
+                && data.publication == Some(LifecyclePublicationState::Pending)
+                && data.publication_pending
+                    != Some(LifecyclePublicationPendingReason::NoPublicationRemote)
         })
     }
 

@@ -617,3 +617,53 @@ async fn a_lifecycle_entry_keeps_the_recovery_its_dialog_does_not_own(cx: &mut T
         "no raw Prepare again"
     );
 }
+
+/// A3, R-7, P22: which `busy` answers are Failed. Only one that merged and
+/// left the sharing with a remote pending is; one before main was reached,
+/// and one of a repository with no remote (nothing to share), are another
+/// call holding the item, still running.
+#[test]
+fn busy_is_failed_only_when_a_remote_share_was_left_pending() {
+    use super::outcome::Ending;
+    let root = Path::new("/repository");
+    let ticket = ItemDtoKind::Ticket;
+    let pending = |reason| {
+        let mut data = reached(ticket, TICKET, vec![]);
+        data.publication = Some(LifecyclePublicationState::Pending);
+        data.publication_oid = None;
+        data.publication_pending = Some(reason);
+        data.cleanup = Some(LifecycleCleanupState::Pending);
+        data.cleanup_pending = Some(LifecycleCleanupPendingReason::AwaitingPublication);
+        data
+    };
+    let request = RequestId::new();
+    for (name, data, expected) in [
+        (
+            "merged, the remote's share pending",
+            pending(LifecyclePublicationPendingReason::Busy),
+            Ending::Failed,
+        ),
+        (
+            "no remote",
+            pending(LifecyclePublicationPendingReason::NoPublicationRemote),
+            Ending::StillRunning,
+        ),
+        (
+            "no merge",
+            short_of_main(ticket, TICKET, vec![]),
+            Ending::StillRunning,
+        ),
+    ] {
+        let envelope = answer(
+            "ticket close",
+            root,
+            ResultCode::Busy,
+            Outcome::Partial,
+            data,
+            Effects::not_requested(),
+            vec![retry(request)],
+            request,
+        );
+        assert!(Ending::of(&envelope) == expected, "{name}");
+    }
+}
