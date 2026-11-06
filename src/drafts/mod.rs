@@ -82,8 +82,8 @@ pub mod folder {
         /// [`DraftErrorKind::Io`]. Temporary files that an interrupted
         /// [`Folder::replace`] left behind are removed.
         ///
-        /// Callers given a data directory (and tests) use this; the
-        /// application uses [`Folder::open_named_default`].
+        /// Callers given a data directory, the desktop's included, use
+        /// this; [`Folder::open_named_default`] opens the platform's.
         pub fn open_named(data: &Path, name: &str) -> Result<Self, DraftError> {
             let folder = protect::Folder::open_named(data, name).map(Self)?;
             for stale in folder.0.names()? {

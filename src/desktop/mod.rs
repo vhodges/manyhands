@@ -92,12 +92,13 @@ fn root_over_workspace(services: Services, window: &mut Window, cx: &mut Context
 }
 
 /// The production services: the library, and the draft store and the
-/// kept resolution sets in the default data directory, with no delays,
-/// and its worker. A store that cannot open leaves the desktop running
-/// without drafts, or without kept resolutions.
+/// kept resolution sets in the data directory the service opened, with
+/// no delays, and its worker. A store that cannot open leaves the
+/// desktop running without drafts, or without kept resolutions.
 fn library_services(service: RepositoryService, cx: &mut App) -> Services {
-    let drafts = DraftStore::open_default();
-    let resolutions = ResolutionStore::open_default();
+    let data = service.data_directory().to_owned();
+    let drafts = DraftStore::open_in(&data);
+    let resolutions = ResolutionStore::open_in(&data);
     Services::start(
         Arc::new(LibraryBackend::new(service, drafts, resolutions)),
         cx,

@@ -216,18 +216,11 @@ pub(crate) struct ResolutionStore {
 }
 
 impl ResolutionStore {
-    /// `<data>/resolutions`, made or checked and held open: for tests,
-    /// which give the fixture's data directory, as the draft store's
-    /// `open_in`.
-    #[cfg(test)]
+    /// `<data>/resolutions`, made or checked and held open, beside the
+    /// draft store's `drafts`: the application gives the data directory
+    /// its service opened, and tests their fixture's.
     pub(crate) fn open_in(data: &std::path::Path) -> Result<Self, ResolutionStoreError> {
         Ok(Self::over(Folder::open_named(data, RESOLUTIONS)?))
-    }
-
-    /// `resolutions` in the platform's application data directory, beside
-    /// the draft store's `drafts`.
-    pub(crate) fn open_default() -> Result<Self, ResolutionStoreError> {
-        Ok(Self::over(Folder::open_named_default(RESOLUTIONS)?))
     }
 
     fn over(folder: Folder) -> Self {
