@@ -31,10 +31,10 @@ locally delivered at `c0ff11af`. Same SPEC `ses_e4d1d87e4ffeVpP18HBE3BO07B`
 **PASSED the full original Tasks 5–6 range through `1619e100`**, with S1–S3
 resolved. Fresh QUALITY **`ses_e4d03572cffevY6wt8W3WDb3nC` PASSED** at that same
 head with no Critical/Important findings and one Minor Q1 test-strengthening
-finding. Q1 is locally corrected at `4df41831`: the existing SSH case now requires
-both final ticket-list IDs exactly once before checking both closed.
-**Same QUALITY's bounded test-delta check remains pending before publication;
-original SPEC approval carries over this assertion-only delta.** Its bounded evidence,
+finding. Q1 is corrected at `4df41831`: the existing SSH case now requires
+both final ticket-list IDs exactly once before checking both closed. Same QUALITY
+approved that bounded delta through `37b64d17`, with no remaining findings;
+original SPEC approval carries over this assertion-only change. Its bounded evidence,
 retained-44/acceptance delta and correction record are appended below. Task 7 governing
 amendments and Task 8 final tiers/whole-feature reviews remain owed. Ticket remains
 `implementing`, not full Task 2 or feature review-ready.**
@@ -143,11 +143,12 @@ Neither recovery route advances parent. Both corrections are internal under D15.
    including S1–S4 and I1/after-cut corrections. The original 39 exact results
    and targeted correction tables retain only their recorded source scopes.
    This is bounded Task 4 approval, not final test-tier/whole-feature approval.**
-- [ ] Tasks 5–6: CLI + relevant local acceptance and at most one new justified
+- [x] Tasks 5–6: CLI + relevant local acceptance and at most one new justified
   SSH connection E2E; no new SSH edge-case matrix. Existing 105 SSH cases are
   legacy evidence; review coverage mapping before any forward consolidation/rehome.
   **SPEC and fresh QUALITY passed through `1619e100`; QUALITY's one Minor Q1 is
-  locally corrected at `4df41831`, awaiting same-QUALITY bounded delta check.**
+  corrected at `4df41831` and same-QUALITY approved through `37b64d17`.
+  No remaining findings at this bounded CLI/acceptance gate.**
 - [ ] Tasks 7–8: governing docs, final static/fast/changed-path SSH tiers once at
   review-ready, then whole-range SPEC/QUALITY and owner handoff. No bare full suite
   premerge or repeated green gates. Ticket-branch publication remains authorized;
@@ -6890,3 +6891,38 @@ publication. Full review range remains
 new delta is assumed. Tasks 7–8 and final whole-feature gates remain owed; Linux
 fixture success is not Windows/macOS runtime or real-context completion evidence.
 Metadata-only checkpoint bookkeeping needs no repeat of green Rust commands.
+
+## Controller Tasks 5–6 Approval And Publication Checkpoint — 2026-11-06
+
+Canonical checkpoint **`01M6SGHZZ0VK1DB35FFKQZ8MFV`**, parent
+**`01M6SDJK2RM3GNP0YANZYS404Q`**, actual UTC **`2026-11-06T22:44:18Z`**.
+Bounded CLI/acceptance range
+**`e79ab8e61b0682eb0f224d36dee5d67ef51aa4c9..37b64d17667ff04de45973f6b8664eff112dbcf6`**
+is independently SPEC and QUALITY approved. Task 7/8 and whole-feature gates remain.
+
+- SPEC **`ses_e4d1d87e4ffeVpP18HBE3BO07B`** approved the full original chunk
+  through `1619e100` after S1–S3: exact current recovery targets, truthful snapshot
+  evidence wording and original recovery ordering. No remaining findings.
+- QUALITY **`ses_e4d03572cffevY6wt8W3WDb3nC`** approved that full chunk, then
+  the bounded Q1 assertion-only delta through `37b64d17`. No Critical/Important/Minor
+  findings remain; SPEC approval carries over the strengthened list assertion.
+- Controller inspected source corrections and raw evidence. Initial **27 inputs /
+  55 artifacts**, S1/S2 **5 / 13**, S3 **3 / 10**, Q1 **1 / 6** inventories verified
+  at their recorded scopes, zero mismatches. The layered **27 current changed
+  inputs** match exactly. Original 19 distinct exact results, including the single
+  SSH case, retain their actual scopes; only changed render cases and the changed
+  SSH assertion reran. No broad/final/native test claim.
+- Latest exact SSH case passed at `4df41831` (custom runner **1 SSH case**, 42.31 s
+  total). Strict Clippy and clean serial fmt passed at that same source. The
+  headless dependency check passed at the original chunk scope; no dependency
+  edits followed. No reviewer/controller Rust reruns for metadata bookkeeping.
+- Fresh fetch/merge reconfirmed main **`79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`**,
+  already up to date. Comment ID reused the built supported isolated CLI through
+  Devenv; no default-profile repair, main edit or compilation.
+
+Publish only this ticket branch. Next is the planned governing-document amendment
+task, then final whole-tree static/fast/changed-path SSH gates once and whole-feature
+reviews. Shared-library plus CLI delivery does not authorize a desktop Retire action,
+read-ranking change, real-context cleanup, PR, main integration/closure or native CI.
+Ticket remains `implementing`; remaining retained-44 fault/platform O rows are
+explicit final-review obligations, not silently marked complete by these approvals.
