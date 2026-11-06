@@ -21,14 +21,13 @@ implemented at `9864c2b2`; Task 3 SPEC and QUALITY are now independently approve
 through `989a5807`, including P1/P2 and Q1–Q3 corrections. The same SPEC reviewer
 approved the compatibility delta before the same QUALITY reviewer approved the
 whole original Task 3 range. Task 4's production original-live pass was delivered
-at `01a386ee` with checkpoint `9b6e4527`. Same-reviewer SPEC passed through
-`126c2d72`, resolving S1–S4. Fresh QUALITY found only I1 (live transport stops
-replaced by coarse journal reconstruction), corrected at `6dc056b7`. Same SPEC
-delta review accepted I1's live codes, host route and strict copy audit, but found
-one Important lost-copy discovery-effect regression. Its bounded correction is
-locally committed at `269567b2`; the extended exact CUT table and strict Clippy/fmt
-pass at that source. Same SPEC delta pass, then same QUALITY full-range re-review,
-remain pending. Ticket remains
+at `01a386ee` with checkpoint `9b6e4527`. Independent SPEC and QUALITY now approve
+the original Task 4 range through `c514d160`, including S1–S4, precise live
+transport-stop/host recovery, and truthful discovery after lost boundary copies.
+Both same reviewers found no remaining findings at their respective gates.
+The original 39 results and correction tables retain their actual source scopes;
+final whole-feature gates remain outstanding. Next is the planned Tasks 5–6
+CLI/acceptance delivery chunk. Ticket remains
 `implementing`, not full Task 2 or feature review-ready.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
 [the delivery checkpoint](#task-3--ordinary-binding-and-guarded-preserving-recovery).
@@ -126,17 +125,15 @@ Neither recovery route advances parent. Both corrections are internal under D15.
   Ordinary binding/DTO/replay/resume, confirmed preserving
   receipt/index finalizer, independent old-catalog freeze and forward unwiring of
   superseded gap installation/support are implemented. No full-feature approval.
-- [ ] Task 4: production original capture/selection, thin sealed-input live loop,
+- [x] Task 4: production original capture/selection, thin sealed-input live loop,
    R-12 versioned one-to-many consumer/initial-membership migration, per-holder
    audits/exact no-observer lineage and stable cut/completed-all-selected report. Replace
    parent-capture-bound batch execution/index paths, not merely disable resume.
-   **Implemented at `01a386ee`; the original 39 exact local tests/statics retain
-   only their recorded source scopes below. SPEC passed through `126c2d72`,
-   including S1–S4. Fresh QUALITY's sole I1 correction at `6dc056b7` retains its
-   exact CUT/producer-contract evidence. Same SPEC delta found one Important
-   after-cut lost-copy effect regression, locally corrected at `269567b2` with
-   exact CUT and strict Clippy/fmt evidence. Same SPEC delta pass, then same
-   QUALITY full-range re-review, remain pending; this gate is not complete.**
+   **Implemented at `01a386ee`, with reviewed corrections through `c514d160`.
+   Independent SPEC and QUALITY approve the whole original Task 4 range,
+   including S1–S4 and I1/after-cut corrections. The original 39 exact results
+   and targeted correction tables retain only their recorded source scopes.
+   This is bounded Task 4 approval, not final test-tier/whole-feature approval.**
 - [ ] Tasks 5–6: CLI + relevant local acceptance and at most one new justified
   SSH connection E2E; no new SSH edge-case matrix. Existing 105 SSH cases are
   legacy evidence; review coverage mapping before any forward consolidation/rehome.
@@ -6379,3 +6376,38 @@ same QUALITY reviewer `ses_e4d718d13ffe8hzc1y32YLWx3J` re-review the whole origi
 final gates remain outstanding. No agents, new framework, other-worktree edit,
 push, PR, main/closure/native or real-profile/key/context/draft action. No owned
 jobs remain. Metadata-only ledger/comment bookkeeping needs no further Rust run.
+
+## Controller Task 4 Approval And Publication Checkpoint — 2026-11-06
+
+Canonical checkpoint **`01M6SBZ17GGDV0027MQVG93K95`**, parent
+**`01M6S5GS8CV2W6083N1CJHTKET`**, actual UTC **`2026-11-06T21:24:03Z`**.
+Independent SPEC and QUALITY approve the full original range
+**`0c1be623487f6634187a0ed031ce518a47b8c16f..c514d160380dbe0a4f48eb4994bdfded14135112`**.
+
+- Same SPEC reviewer **`ses_e4d9ed4e6ffeSwu9GiwqH5QMvl`** approved S1–S4 through
+  `126c2d72`, then the I1 correction and its after-cut discovery fix through
+  `c514d160`. No new findings in the latest correction or affected invariants.
+- Same QUALITY reviewer **`ses_e4d718d13ffe8hzc1y32YLWx3J`** retained the full-range
+  analysis and re-reviewed the complete I1 delta through `c514d160`: **PASS**, no
+  outstanding Critical/Important/Minor findings. Precise live errors, sanitized
+  host actions, strict alternate host-copy audit and cut-first recovery verified.
+- Controller inspected production corrections and raw exact-test/static logs.
+  Initial **43 inputs / 104 artifacts**, S1–S4 **10 / 19**, I1 **7 / 17**, and
+  after-cut **3 / 11** manifests verified at their recorded scopes, zero mismatches.
+  Layering the source manifests verifies **44 current changed inputs**, zero
+  mismatches; the 15 forward deletions remain absent. No historical passing count
+  is relabeled as fresh correction-tree evidence.
+- Latest exact CUT table: **1 passed / 0 failed, 33.98 s**, source `269567b2`;
+  strict all-target/all-feature Clippy and fmt-check inspected at that source.
+  Earlier exact producer/contract and three-table results keep their actual scopes.
+  Reviews and this metadata-only checkpoint ran no Rust builds/tests.
+- Fresh fetch/merge reconfirmed main **`79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`**,
+  already up to date. Supported `id new` reused the built CLI under Devenv with
+  the approved isolated data directory; no default-profile repair or compilation.
+
+Only the ticket branch is being published. The next fresh implementer owns the
+approved Tasks 5–6 CLI/acceptance chunk, followed by independent SPEC then QUALITY.
+Task 7 contract amendments and Task 8 final static/fast/changed-path SSH gates and
+whole-feature reviews remain outstanding. No aggregate batch lifecycle, PR, native
+CI, main integration/closure, real-context retirement or real-profile/key/draft action
+is authorized by this approval. Ticket remains `implementing`.
