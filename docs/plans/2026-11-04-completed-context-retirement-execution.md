@@ -417,6 +417,8 @@ are not authorized; numeric exits must come from existing results registry.
 | Limited positive branch-only A4 final QUALITY through `c3f88091`, same base, after SPEC | Reviewer `ses_e561b7bffffeU0D7kd6d2wgZqb`: **0 Critical/0 Important/0 Minor**. Fresh isolated **56 batch**, **5 original probes**, **23 F2/index** and **1 counter-separation probe** passed; F2=3 with index epoch=1 for both children | Limited branch-only QUALITY approved. Controller inspected raw independent/static evidence and reverified all 1,730 source and 19 log hashes. Synthetic ads/inert producer boundary remains; no full A4/native claim |
 | Present-worktree A4 continuation preflight, 2026-11-06 | Both checkouts clean; fresh fetch succeeded, main/base still `c69789d97abd4c514ef4d4ac62f3a4fa47ca30f4`; merge before/after `c3f8809122acd8701668fa7538c18897c85a50e9` already up to date | No conflicts/rebase or unmerged branch consumption |
 | Present A4 LIMITED SPEC at `add1d2ba`, base `18c18949` | Reviewer `ses_e4f5c673dffe7xsyS2NM1oQO1b` found one Medium/spec-blocking missing original request-attempt correlation on present index spends; controller verified the source and actual-SQL counterexample | Correction `744ab1a2` below; **same SPEC re-review required, QUALITY gated**. No prior approval reopened or full A4 claim |
+| Present A4 LIMITED SPEC correction re-review | Controller reports reviewer `ses_e4f5c673dffe7xsyS2NM1oQO1b` passed the correction; subsequent `4ae33a5b`/`65a4dae4` merge/ledger changes are guidance-only | Limited SPEC pass preserved, not full Task 2 approval |
+| Present A4 LIMITED QUALITY after SPEC, at `65a4dae4` | Reviewer `ses_e4f49ec50ffewfrthj2VMoPkKi` found one Important platform-test defect: unconditional symlink table entry has a Unix-only mutation, so Windows runs an unchanged valid fixture against refusal assertions | Minimal test-only cfg correction below; **same QUALITY re-review pending**, no native execution claim |
 | Task 4 adversarial/final whole-range reviews | Not yet run | Mandatory future gates; separate lifecycle/native authorizations unchanged |
 
 ## Task Checklist And Next Step
@@ -479,10 +481,11 @@ are not authorized; numeric exits must come from existing results registry.
   above. Historical six-target remote SSH results retain their `3d0a36e4` scope.
   The next bounded **original-live present W→B→D14→index/result→C** increment is
   connected below from `18c18949`: **70 batch /217 context**, including 14 new
-  present tests, and all three statics. **LIMITED SPEC then QUALITY pending.**
+  present tests, and all three statics. **LIMITED QUALITY re-review pending.**
   Present SPEC found missing original-attempt spend correlation at `add1d2ba`;
   the narrow correction `744ab1a2` has **4 focused history/counter tests** and all
-  statics green. **Same SPEC re-review pending; QUALITY remains gated.** Earlier
+  statics green. **Same SPEC re-review passed; QUALITY found one platform-test
+  defect, corrected below for same QUALITY re-review.** Earlier
   70/217 results retain their milestone source scope, not relabeled as corrected.
   Gap O, resumed consumption/new-F2 batch recovery and active-source restart remain
   closed/owed; there is no full A4 or Task 2 readiness claim. SSH/slow gates are
@@ -502,8 +505,9 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: controller **LIMITED SPEC then QUALITY** of the bounded
-original-live present increment; no push or expansion before that review.
+Immediate next step: same reviewer **LIMITED QUALITY re-review** of the bounded
+original-live present increment's platform-test correction; SPEC correction pass
+is preserved. No push or expansion before that review.
 The branch-only approval/publication at `18c18949` is preserved, not reopened.
 No-child-gap/R8 observation, resumed consumption, active-source
 restart/fresh-ad fencing, shared-holder/Z fault variants and full Task 2 review
@@ -4811,3 +4815,49 @@ Next: same independent SPEC reviewer rechecks the bounded present milestone and
 claim correction from original base **`18c18949`** through merged HEAD; QUALITY
 remains gated. No ticket status/PR/main integration/closure/native CI authority
 is added by this merge.
+
+## Present LIMITED QUALITY correction — Unix-only symlink table case
+
+Entry **`65a4dae4d6fbdcf2a15152661fc39e8bd5f4800e`**, original review base remains
+**`18c189492fd2d5112fb16ef146dbab3bbc2c1cbf`**. Preserve the LIMITED SPEC correction
+pass from `ses_e4f5c673dffe7xsyS2NM1oQO1b`. Independent QUALITY reviewer
+**`ses_e4f49ec50ffewfrthj2VMoPkKi`** found one Important test defect, controller
+source-verified: `batch_present_tests.rs:174–303` always selected `symlink`, but its
+mutation was entirely `#[cfg(unix)]`. On Windows that iteration left a valid
+present fixture unchanged, which could Final instead of the required None/None
+CleanupPending. This is **source-verifiable platform failure**, not a Linux RED.
+
+Minimal correction: apply `#[cfg(unix)]` to both the array entry and its match arm,
+removing the redundant inner cfg block. All twelve independent non-symlink cases
+remain cross-platform, and all refusal/preservation assertions remain unchanged.
+No production changes, extra test, fixture redesign or whole-test disabling.
+
+Current merged `AGENTS.md` Testing Strategy and revised implementation verification
+reference were read first. Only the changed exact case ran, plus one coherent
+check and fmt; all serial foreground Devenv, `timeout:0`, exit 0. Logs use
+**`/tmp/opencode/task2-batch-present-quality-platform-<suffix>.log`**:
+
+| Command after `devenv shell --` | Suffix | Result |
+| --- | --- | --- |
+| `cargo check --all-features --locked` | `check` | pass |
+| `cargo fmt --check` | `fmt` | pass |
+| `cargo test --all-features --locked --lib repository::context_retirement::execution_tests::source_contract_tests::handoff::batch_tests::positive::present::retirement_batch_present_immediate_registration_locks_and_hidden_flags_are_not_authority -- --exact` | `exact` | **1 passed**, Linux; 13 table cases, 16.59s test execution |
+
+No behavioral RED fabricated; **Windows unverified locally**. No native CI,
+cross-toolchain install, unrelated green control, broad filter, SSH/slow/full run
+or real wait. Final whole-tree statics and final fast/changed-path SSH gates stay
+owed under current guidance; old evidence retains its actual source scope.
+
+Only changed compile input is `src/repository/context_retirement/batch_present_tests.rs`,
+SHA-256 **`3f0a02a1fd510e9f0dafa723cd0fd6b321ac489534fc1afd04e9fc6713a4375f`**.
+New **1,733-input** inventory `task2-batch-present-quality-platform-source.sha256`,
+SHA-256 **`a31fb1a9a446a946397462075cee6afbc97e06654e369763b839540a3a2b06f0`**;
+**3-log** inventory `task2-batch-present-quality-platform-evidence.sha256`, SHA-256
+**`fa090a23a836e15a763b193406ab522b72278d666f0274656ae8977a239c6a93`**.
+Inventories are under `/tmp/opencode/`; earlier hashes are historical, not current
+for the changed test file. Correction commit subject:
+`test: gate present symlink refusal case to Unix`.
+**Ready for same LIMITED QUALITY reviewer re-review; no QUALITY/full Task 2 pass
+claimed.** Controller's main `79c3931b` preflight/merge is reused, no history rewrite.
+No new checkpoint ID/status/profile/key/context/draft/other-worktree/PR/closure/
+native actions, agents or push. All prior stage limits and remaining duties stand.

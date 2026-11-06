@@ -182,6 +182,7 @@ fn retirement_batch_present_immediate_registration_locks_and_hidden_flags_are_no
         "ignored",
         "hidden",
         "other_checkout",
+        #[cfg(unix)]
         "symlink",
         "partial_w",
         "missing_git",
@@ -270,12 +271,10 @@ fn retirement_batch_present_immediate_registration_locks_and_hidden_flags_are_no
                     )
                     .unwrap();
                 }
+                #[cfg(unix)]
                 "symlink" => {
-                    #[cfg(unix)]
-                    {
-                        std::fs::remove_file(w.join(".git")).unwrap();
-                        std::os::unix::fs::symlink(admin.join("gitdir"), w.join(".git")).unwrap();
-                    }
+                    std::fs::remove_file(w.join(".git")).unwrap();
+                    std::os::unix::fs::symlink(admin.join("gitdir"), w.join(".git")).unwrap();
                 }
                 _ => unreachable!(),
             }
