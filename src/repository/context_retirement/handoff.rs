@@ -6,13 +6,24 @@ use super::{
 };
 use crate::repository::{
     OperationId, PollCompletion, RemotePollReport, RepositoryError, RepositoryService,
-    remote::{OriginalWrapper, state},
+    remote::{OriginalWrapper, observation::ObservationConfiguration, state},
 };
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use state::recovery_required;
 use std::{path::Path, sync::Arc};
 
 const CONTRACT: &str = "poll_retirement_handoff_contract_v1";
+
+// Read-only test observation at the actual A3 entry, after original refresh.
+// No runtime API, authority replacement or guard bypass is provided.
+#[cfg(test)]
+thread_local! {static BEFORE_SETTLE:std::cell::RefCell<Option<Box<dyn FnOnce()>>>=const {std::cell::RefCell::new(None)};}
+#[cfg(test)]
+pub(super) fn observe_next_settle_for_testing(observe: impl FnOnce() + 'static) {
+    BEFORE_SETTLE.with(|slot| {
+        assert!(slot.borrow_mut().replace(Box::new(observe)).is_none());
+    });
+}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -247,6 +258,9 @@ fn digest(p: &Projection, image: &str, report: &str) -> Vec<u8> {
 pub(in super::super) struct Capture {
     scope: Arc<()>,
     p: Projection,
+    // Exact sealed source configuration, including selected key/source identity.
+    // Process-only equality evidence: never encoded, digested or formatted.
+    configuration: ObservationConfiguration,
     nonce: String,
     digest: Vec<u8>,
     report: String,
@@ -256,6 +270,7 @@ pub(super) fn freeze(
     service: &RepositoryService,
     tx: &Transaction<'_>,
     p: &Projection,
+    configuration: ObservationConfiguration,
     report: &RemotePollReport,
 ) -> Result<Capture, RepositoryError> {
     contract(tx)?;
@@ -301,6 +316,7 @@ pub(super) fn freeze(
     Ok(Capture {
         scope: Arc::clone(&service.remote_reservation_scope),
         p: p.clone(),
+        configuration,
         nonce,
         digest,
         report,
@@ -430,6 +446,10 @@ impl Capture {
         {
             return Err(recovery_required());
         }
+        #[cfg(test)]
+        if let Some(observe) = BEFORE_SETTLE.with(|slot| slot.borrow_mut().take()) {
+            observe();
+        }
         state::with_transaction(service, root, |tx, id| {
             record::audit_connection(tx)?;
             let mut current = source::projection(tx, &self.p.operation, self.p.epoch)?;
@@ -455,13 +475,10 @@ impl Capture {
             }
             let plan = crate::repository::remote::observation::observation_plan(root)
                 .map_err(|_| recovery_required())?;
-            let configuration =
-                crate::repository::remote::observation::ObservationConfiguration::capture_owned(
-                    service, tx, root, &plan,
-                )?;
             if plan.remote_name() != self.p.remote
                 || plan.primary_branch() != self.p.primary
-                || configuration.endpoint_digest().as_slice() != self.p.endpoint
+                || self.configuration.endpoint_digest().as_slice() != self.p.endpoint
+                || !self.configuration.matches_owned(service, tx, root, &plan)?
             {
                 return Err(recovery_required());
             }

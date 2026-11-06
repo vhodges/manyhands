@@ -1,6 +1,8 @@
 //! Inert A2 producer projections, synthetic advertisements/real ODB and real
 //! owned poll SQL/refresh. NOT Task 4 selection, enrollment or coordination.
 use super::*;
+#[path = "source_handoff_specfix_tests.rs"]
+mod specfix;
 
 fn a2_projections(db: &Connection) {
     db.execute_batch("CREATE TABLE poll_retirement_freeze_inputs (

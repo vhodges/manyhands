@@ -1486,8 +1486,10 @@ impl RepositoryService {
             &request.root,
             RepositoryOperation::RepositorySnapshot,
         )?;
+        // A frozen original P is already completed: either restart spelling
+        // must settle/replay that history, never reserve or restart execution.
+        // Automatic polls and active projected sources gain no recovery seam.
         if request.invocation == RemotePollInvocation::Explicit
-            && !request.restart
             && let Some((mut report, pending)) =
                 crate::repository::context_retirement::handoff::replay_report(
                     self,

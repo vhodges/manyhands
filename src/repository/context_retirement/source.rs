@@ -266,7 +266,13 @@ impl OriginalPollSource {
         report: &super::super::remote::RemotePollReport,
     ) -> Result<super::handoff::Capture, RepositoryError> {
         self.validate(service, tx, id, record)?;
-        super::handoff::freeze(service, tx, &self.projection, report)
+        super::handoff::freeze(
+            service,
+            tx,
+            &self.projection,
+            self.configuration.clone(),
+            report,
+        )
     }
 }
 

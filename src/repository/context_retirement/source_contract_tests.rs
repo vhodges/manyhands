@@ -42,7 +42,11 @@ pub(super) struct SourceFixture {
 }
 impl SourceFixture {
     pub(super) fn new() -> Self {
+        Self::with_setup(|_| {})
+    }
+    fn with_setup(setup: impl FnOnce(&Fixture)) -> Self {
         let f = Fixture::new();
+        setup(&f);
         let root = f.root.path().canonicalize().unwrap();
         git2::Repository::open(&root)
             .unwrap()
