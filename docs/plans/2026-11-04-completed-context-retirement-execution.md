@@ -481,11 +481,13 @@ are not authorized; numeric exits must come from existing results registry.
   above. Historical six-target remote SSH results retain their `3d0a36e4` scope.
   The next bounded **original-live present W→B→D14→index/result→C** increment is
   connected below from `18c18949`: **70 batch /217 context**, including 14 new
-  present tests, and all three statics. **LIMITED QUALITY re-review pending.**
+  present tests, and all three statics at the recorded milestone source.
   Present SPEC found missing original-attempt spend correlation at `add1d2ba`;
   the narrow correction `744ab1a2` has **4 focused history/counter tests** and all
-  statics green. **Same SPEC re-review passed; QUALITY found one platform-test
-  defect, corrected below for same QUALITY re-review.** Earlier
+  statics green. **Same SPEC re-review passed; QUALITY's platform-test finding was
+  corrected and same QUALITY re-review passed through `4fb2073d`.** Published
+  controller checkpoint **`8e960885`** also contains main's `79c3931b` testing
+  guidance, now governing new agents. Earlier
   70/217 results retain their milestone source scope, not relabeled as corrected.
   Gap O, resumed consumption/new-F2 batch recovery and active-source restart remain
   closed/owed; there is no full A4 or Task 2 readiness claim. SSH/slow gates are
@@ -505,10 +507,11 @@ are not authorized; numeric exits must come from existing results registry.
   static gates rerun for Task 1's visibility correction, but whole fast/changed-path
   SSH tests and final reviews remain owed. Merge/close/native dispatch separately gated.
 
-Immediate next step: same reviewer **LIMITED QUALITY re-review** of the bounded
-original-live present increment's platform-test correction; SPEC correction pass
-is preserved. No push or expansion before that review.
-The branch-only approval/publication at `18c18949` is preserved, not reopened.
+Immediate next step: a fresh bounded implementer connects **no-child-gap observer
+authorization/capture** under the approved batch-attempt scope, with independent
+SPEC then QUALITY review before publication or resumed-consumer expansion. The
+present milestone is independently approved and published through `8e960885`.
+All branch-only and earlier approvals are preserved, not reopened.
 No-child-gap/R8 observation, resumed consumption, active-source
 restart/fresh-ad fencing, shared-holder/Z fault variants and full Task 2 review
 remain owed. Actual Task 3 bindings and Task 4 coordination remain downstream;
