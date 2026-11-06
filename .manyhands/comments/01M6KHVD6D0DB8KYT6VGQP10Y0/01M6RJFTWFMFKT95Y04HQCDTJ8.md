@@ -69,3 +69,34 @@ other-worktree/profile/key/draft/native/lifecycle action. ID only via existing
 built CLI under Devenv with approved isolated MANYHANDS_DATA_DIR. Source/doc citation,
 relative-link/frontmatter and whitespace checks are recorded in the ledger; this
 checkpoint does not substitute for independent review.
+
+## Independent review corrections — 2026-11-06 (same review base)
+
+Original base `b2fe68c93580a85ec8c41768a79fcc535e1fdc1e` and reviewed `43214ff7`
+history retained. Source `ses_e4ecf24b9ffeEuiFGI34Nf4fmm`: 0 Blocking/1 Important;
+contract `ses_e4ecf24b3ffeJBNQqLYF0ceEPn`: 0 Blocking/2 Important/1 Minor.
+Findings verified against actual receipt DDL, source/consumer/reentry/holder
+audits and contradictory tables; these are internal fixes under approved D15.
+
+R-12 now explicitly chooses one P/epoch provenance with multiple consumer rows
+keyed by repository/consumer_kind/ordinary K_i/local epoch, independent R_i/F2 correlation,
+immutable `poll_retirement_child_sources` initial membership, per-holder Z/audits
+and exact initial-poll NULL-observer→ordinary O/M/I lineage. The proposed
+`context_retirement_consumers_v1` migration freezes old catalogs first and preserves
+receipt IDs/all incoming references through whole dependency-closure rollback.
+Two-child same-provenance and stopped-parent/independent-child recovery cases are
+planned locally; this is a necessary schema refactor, NOT implemented already.
+
+C1: EVERY SELECTED target needs a durable settled outcome (success/legitimate
+refusal) for completed exit 0; a settled prefix/not-reached remainder is stopped.
+C2: only accepted-but-provably-never-claimed children settle metadata only;
+durably selected original present-W before Git retains normal fresh-O/proof/nonce
+reentry, unchanged R-7. C3: freeze immutable cut/result/debt snapshots/not-reached
+membership before parent Final; first metadata reconciliation creates a missing
+cut from durable states then. All-selected same-pass final-copy loss completes
+from those results, not other passes or a rewrite of an existing stopped cut.
+
+Engineering draft awaits the SAME reviewers' re-review; no pass/full Task 2
+readiness or renewed owner approval claimed. This correction uses source/doc grep
+and whitespace checks only; no builds/Cargo/tests/new agents/push/profile/CLI or
+lifecycle actions. Original status remains implementing; existing approvals stand.

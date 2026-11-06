@@ -14,7 +14,8 @@ id: "01M6M3B4V4GJQZJ82CS32N4W0V"
 > on 2026-11-04 and selected `subagent-driven-development`: sequential task
 > ownership, spec review, then quality review, with the named adversarial checks.
 > D15, 2026-11-06, approves the simpler live-pass-only contract. This engineering
-> revision is draft pending fresh read-only source/contract review; unchanged
+> revision is draft pending the same source/contract reviewers' re-review after
+> findings against `43214ff7`; unchanged
 > approvals/method stand. No code or verification execution is authorized by this
 > documents-only revision.
 
@@ -34,7 +35,7 @@ or Cargo test-target addition is planned.
 **Spec:** [Cycle](../Cycles/wave-03-completed-context-retirement.md) and
 [design](2026-11-04-completed-context-retirement-design.md). The Cycle governs
 the design, which governs this plan. D15 amends Q1/R-8 and the batch continuation
-promises only; Q2, D1–D14 and proof/standalone safety remain. R-9–R-11 ground the
+promises only; Q2, D1–D14 and proof/standalone safety remain. R-9–R-12 ground the
 private seams/forward unwiring. This is the existing plan refreshed, not a fourth
 plan or a request to redo unchanged approvals.
 
@@ -54,8 +55,8 @@ plan or a request to redo unchanged approvals.
   broad retirement filter or overlapping repeated matrix between steps. No bare
   full suite premerge. Full suite/native CI after merge; native dispatch separately
   authorized. This docs-only revision runs no Cargo/build/tests.
-- Owner has approved implementation/method and D15. Fresh source/contract review
-  of this engineering draft precedes resumption; routine internal representations
+- Owner has approved implementation/method and D15. The same source/contract
+  reviewers' re-review precedes resumption; routine internal representations
   do not require another product approval. Stop for a genuine policy change.
 - Tests first: introduce each observable row, run it and see the behavioral
   failure, then implement minimally and rerun. A compile failure alone is not
@@ -162,7 +163,12 @@ coherent chunk, with sequential SPEC then QUALITY before Task 4 integration.
   Preserve history; use synthetic exact prior and installed-empty-gap envelopes,
   and fail closed without data loss for unsupported nonempty experimental
   histories. No real profile inspection/repair. Retain published standalone
-  migration/receipt tests. Design's D15 named-test list governs semantic changes.
+  migration/receipt tests. **Before any DDL constant/catalog changes**, freeze
+  independent v1/v2/pre-gap index and exact installed-gap catalog definitions;
+  keep the existing fingerprints in design R-12 rather than deriving old catalogs
+  from edited `objects()`/`RECEIPTS`. Task 4 owns the coherent consumer-envelope
+  migration and initial binding; do not claim today's provenance UNIQUE is reusable.
+  Design's D15 named-test list governs semantic changes.
 
 - [ ] Write boundary rows before binding: same-ID retry, finished replay after
   context recreation, changed item/mode request mismatch, unrelated recovery,
@@ -240,6 +246,13 @@ selection/association/report here, not another preparatory coordinator layer.
   not started. Old R reentry must be summary-only with **zero** observations/new
   requests/cleanup. Final stopped parent may point to Owed R_i/K_i. New explicit
   pass handles remaining current contexts; no previous success is rolled back.
+- [ ] Local sharing/lineage proof: K1 binds original P provenance, completes and
+  releases only its own hold while the pass hold remains valid; K2 binds the SAME
+  provenance through a distinct receipt/local epoch and ordinary R_i. Retain K1's
+  immutable receipt. Stop parent with a pending ordinary child, then recover that
+  item and release independently after parent Final. Cover exact selected present-W
+  → fresh O/proof and owned-absence → M/I lineages from initial NULL observer;
+  foreign/missing membership still refuses, neither route advances parent.
 - [ ] Test original-handoff eligibility: failed original refresh, unrelated
   successful repair, original request retry still cannot retire; successful
   original refresh with loss before eligibility persistence conservatively
@@ -276,24 +289,66 @@ selection/association/report here, not another preparatory coordinator layer.
   current live start fence + association with normal request insertion. Reject
   stale stop/start races before effects; do not bypass the boundary with direct
   row fabrication or `Accepted::taking_up` (that is a remote-synchronization seam).
-  Reserve-only entries stay not reached after stop. Accepted-but-uninvoked R_i
-  must settle no-effect through its ordinary identity, not reselect after lost
-  initial input or be deleted/run-as-new. Persist pre-acceptance refusal rows
+  Reserve-only entries stay not reached after stop. Metadata-only settlement is
+  limited to accepted R_i whose ordinary local selection/claim provably NEVER
+  established; no saved selected identity means no reconstruction/reselection/
+  run-as-new (missing/corrupt evidence is not a never-claimed proof). A DURABLY
+  SELECTED original present-W before Git keeps normal standalone reentry with
+  fresh O/proof/nonce/lifetime where permitted; R-7 branch-only/tokenless limits
+  stay unchanged. Neither recovery route starts another item. Persist pre-acceptance refusal rows
   before advancing; lost answers are reported only to the extent durable records
   prove them, never recovered by re-invoking cleanup.
 - [ ] Route initial source consumption through the common ordinary local executor:
-  narrow single-consumer poll-provenance support/audits, fixed tip/nonce/M and
+  deliver R-12's necessary one-to-many consumer representation, not just wider
+  audits. Keep one P/source-epoch provenance; remove receipt provenance UNIQUE,
+  add `UNIQUE(repository_id, consumer_kind, consumer_operation_ulid, consumer_attempt_epoch)`
+  with child-local epoch distinct from R_i/F2, index and P epochs. Proposed
+  immutable `poll_retirement_child_sources` ties exact R/P/image/selected identity
+  to R_i/K_i/initial receipt + local epoch/F2. Ordinary O sources retain old
+  source/consumer-request equality; initial poll children use this exact membership,
+  never equate parent R with child R_i. Preserve receipt IDs, no fake P duplicates.
+  Use fixed tip/nonce/M and
   current configuration/observation checks, ordinary child RequestFence. Keep
   `batch_operation_ulid`/`batch_attempt_epoch` NULL on new children. Today's batch
   rows cannot use those fences (`request_scope.rs:169–174`, `reentry.rs:119`);
   replace/unwire capture-bound batch execution/index support, do not merely turn
   off loop resume. No public caller receipt, N observations, fabricated O, separate
   recovery driver or permanent parent-epoch dependence.
+- [ ] Implement the explicit `context_retirement_consumers_v1` marker/new exact
+  envelope and whole dependency-closure migration from independently frozen prior
+  catalogs (design R-12). Preserve all old receipt IDs and intent/M/absence/
+  resumption/pin/release references and supported histories; validate new uniqueness
+  against old rows. Rebuild known incoming-FK/trigger/index closure in ONE immediate
+  transaction, without destructive parent DROP/cascade or shadow-FK retargeting;
+  unknown incoming FK/catalog refuses. Commit marker only after full row/FK/history
+  checks; fault rollback and idempotent reopen must preserve the entire old closure.
+  Use synthetic pre-gap and exact installed-empty-gap upgrades, explicitly retire
+  only empty obsolete gap objects/marker; unsupported nonempty gap data refuses
+  unchanged. No profile access. This belongs to the existing Task 4 delivery chunk,
+  not another coordinator/preparatory framework or an already implemented API.
+- [ ] Replace provenance-wide fixed pin counts/reason assumptions with each exact
+  holder/binding's live obligation or release receipt. Existing Z releases only
+  the pass/source or child it owns and collects only without any holders/windows.
+  Admit initial NULL-observer→ordinary reentry ONLY via exact initial association/
+  receipt/epoch/F2/effect/M lineage (`record.rs:1331–1349`), not a generic NULL case.
+  Recovery validates historical membership without current parent authority, then
+  uses ordinary fresh O/M/I and unchanged R-7 rules.
 - [ ] Stop/cancel serializes with admission under the common lease/transaction,
-  revokes live starts/effects and records stop cut/not-reached. Keep accepted child
+  revokes live starts/effects and atomically persists ONE immutable stop cut with
+  child result/debt snapshots and exact not-reached membership BEFORE stopped-parent Final.
+  Keep accepted child
   identity and real debt; settle owned no-effect holds, never release debt as a
   parent-finality shortcut. R may finish truthful non-success while R_i remains
-  Owed. Reentry settles only report copies from durable child records; child
+  Owed. Replay/copy reconstruction reads the cut, NOT today's independently changed
+  child standing; handles expose current child status. If death preceded any cut,
+  first metadata reconciliation under lease/immediate transaction creates a cut
+  from states durably known then, never invents an old snapshot or fills gaps by
+  work. If no stopped cut exists, EVERY SELECTED target already has a durable
+  settled outcome (success/legitimate refusal, handoffs settled) in its exact
+  same-pass R_i/K_i association and only final copy was lost, complete from those
+  outcomes at exit 0. A settled prefix with B/C not reached is non-success; do not
+  count another pass's child IDs or rewrite a persisted stopped cut. R-8 handoff
+  eligibility is not bypassed by an empty selected image. Ordinary child
   reentry/index uses normal current R_i and may never start C. New destructive
   child recovery needs its own O and ordinary nonce/proof/R-7 checks; M/I only
   uses recorded authority without new ad. Exact source/consumer Z still applies.
@@ -314,6 +369,8 @@ selection/association/report here, not another preparatory coordinator layer.
 Example exact **proposed** local table names; run only the just-changed one:
 
 ```sh
+devenv shell -- cargo test --all-features --locked --lib repository::context_retirement::execution_tests::shared_provenance_two_children_keep_independent_holders -- --exact
+devenv shell -- cargo test --all-features --locked --lib repository::context_retirement::store_tests::migration_tests::consumer_envelope_preserves_receipt_ids_and_rolls_back_dependency_closure -- --exact
 devenv shell -- cargo test --all-features --locked --lib repository::context_retirement::execution_tests::live_initial_input_never_recreates_authority_after_stop -- --exact
 devenv shell -- cargo test --all-features --locked --test mutation_replay retirement::live_pass_stops_replays_and_new_pass_handles_remainder -- --exact
 devenv shell -- cargo test --all-features --locked --test mutation_replay retirement::stopped_parent_does_not_own_child_cleanup_or_index_recovery -- --exact
@@ -492,9 +549,14 @@ git merge-tree --write-tree HEAD origin/main
 | A9, D4/D5 | 2 release controls; 4 ordinary/background controls; 6 draft sentinel; 7 D6/read exclusions |
 | D9, Q1/Q2, E-1–E-10 | Approval gate/Task 0, named edits in owning tasks (E-10 existing confirmation only), final authorization audit |
 | R-11 / obsolete gap and batch-specific machinery | 3 forward runtime/catalog/support unwiring with exact isolated-envelope proof; 4 replaces parent-capture execution/index dependence; no history rewrite or real-profile repair |
+| R-12 / source review | 3 freeze independent historical catalogs first; 4 versioned one-to-many closure migration, two-child sharing, per-holder Z and exact initial-poll→ordinary O/M/I recovery; local tests only |
+| Contract review C1/C2/C3 | 4 every-selected versus prefix outcomes, never-claimed versus selected original present-W, immutable cut/first-cut/all-selected lost-copy reconciliation; no new owner policy |
 
 Remaining commands/outcomes above are planned. Earlier Task 0–2 executions and
 approvals are preserved in the ledger at their actual source scope. This D15
 revision is documents-only: no Cargo/build/test, Rust/schema change, native CI,
-real deletion, push, merge or close. Fresh read-only source/contract review remains
-pending before implementation resumes; no full Task 2 readiness claim.
+real deletion, push, merge or close. Read-only re-review by
+`ses_e4ecf24b9ffeEuiFGI34Nf4fmm` (source: 0 Blocking/1 Important)
+and `ses_e4ecf24b3ffeJBNQqLYF0ceEPn` (contract: 0 Blocking/2 Important/1 Minor)
+remains pending before implementation resumes. Corrections above are internal
+under approved D15; no renewed owner question or full Task 2 readiness claim.

@@ -13,8 +13,8 @@ id: "01M6M3B4TF7MQM8QCZAVSZWA6Y"
 ## Status
 
 **2026-11-06 amendment: D15's live-pass-only contract is owner-approved;
-the source-grounded engineering revision is draft, pending fresh read-only
-source/contract review.** Original approvals and limited implementation reviews
+the source-grounded engineering revision is draft, pending the same independent
+source/contract reviewers' re-review after findings against `43214ff7`.** Original approvals and limited implementation reviews
 below remain historical facts, not approval of this revision or the unreviewed
 gap code. The ticket remains `implementing`; no full Task 2 readiness is claimed.
 The existing sequential implementation → SPEC → QUALITY method remains approved.
@@ -136,16 +136,27 @@ That narrow renderer/test scope is D13; implementation itself remains gated.
    caller-supplied receipts or N standalone observations. The captured image/report
    is reporting/replay evidence, never a durable future deletion worklist. Each
    attempted item has its own stable request/operation and ordinary recovery;
-   refusals continue, real cleanup/index debt stops the loop. Old-pass retry only
-   settles/replays its stopped summary; a new explicit pass handles the remainder.
+    refusals continue, real cleanup/index debt stops the loop. Old-pass retry only
+    settles/replays its report, never restarts work. Exit 0 requires a durable
+    settled outcome (success or legitimate refusal) for EVERY SELECTED target;
+    settled A with B/C not reached remains stopped/non-success. If all selected
+    same-pass outcomes are already durable and only the final report copy was
+    lost, complete from those results. A new explicit pass handles real remainder.
 6. Worktree removal precedes branch deletion. Reentry never silently adopts a
    changed tip or enrolls a newly created context. Completed requests replay;
    they do not repeat release's run-as-new behavior.
 7. Refresh follows authoritative local removal. Complete each child's ordinary
    local index handoff before invoking the next. Pending refresh stays distinct
    from complete cleanup; child retry/resume finishes only that item's owed work.
-   A parent may be Final with a truthful non-success stopped summary referring to
-   an independently Owed child; Final is not batch-wide success or debt release.
+    A parent may be Final with a truthful non-success stopped summary referring to
+    an independently Owed child; Final is not batch-wide success or debt release.
+    Before a stopped parent becomes Final, one transaction binds an immutable cut to child
+    result/debt snapshots and not-reached membership; replay uses that cut, not
+    later child standing. Without a prior cut, first metadata reconciliation
+    creates one under lease from states durably known then, not invented history.
+    Accepted-but-never-claimed children settle metadata only; a durably selected
+    original present worktree retains ordinary fresh-O/proof/nonce reentry even
+    before a Git effect. Neither route advances the parent; R-7 is unchanged.
 8. The proposed per-target result/exit rules in the design are an explicit
     approved contract, not an unrecorded ruling about external behavior.
 
@@ -159,7 +170,7 @@ That narrow renderer/test scope is D13; implementation itself remains gated.
 | A4 | A document promoted elsewhere reports `promoted` and retires; mere primary document presence is insufficient | document two-clone row and negative content row |
 | A5 | Open primary ticket, malformed closure, unknown deletion history and reappeared remote context do not retire | domain/boundary/CLI negative rows |
 | A6 | Failures before/after each cleanup step, ref movement, configuration change, lost response and index failure are recoverable without removing a later context; guarded abandon preserves residual state and ends the blocker | retirement recovery/abandon tables and mutation replay/resume rows |
-| A7 | Explicit poll flag loops over independent retirements with one original observation; safe successes survive refusals/interruption, child debt stops later items, old pass never restarts the loop | table-driven local capture/stop/report/replay and independent child-recovery rows; advertisement counter; new-pass remainder acceptance |
+| A7 | Explicit poll uses one original provenance with independent children; safe successes survive refusals/interruption, child debt stops later items, old pass never restarts; only all-selected settled outcomes complete | local two-child same-provenance/K1-release→K2-bind, immutable-cut/first-cut/lost-copy and independent recovery rows; advertisement counter; new-pass remainder acceptance |
 | A8 | Old registry/report/request fixtures remain readable; new enums and command are fully catalogued | migration/corruption tests, read/mutation/CLI contract inventories and goldens |
 | A9 | No default/background cleanup, remote mutation, or draft deletion; existing release behavior unchanged | negative/control tests; isolated stored-draft sentinel remains readable/exportable after CLI retirement; branch-scope review |
 
@@ -291,7 +302,8 @@ D1–D14 dated 2026-11-04; D15 dated 2026-11-06, recorded from owner chat:
   any child begins. After a crash, unconfirmed eligibility is a final
   no-retirement `discovery_pending`, never inferred from a later index repair.
   Even durable `eligible` cannot recreate live authority: after capture, old-pass
-  reentry only settles/replays a stopped report, never observes or deletes again.
+  reentry only settles/replays a report, never observes or deletes again; a lost
+  final copy may complete only from all selected same-pass durable settled outcomes.
   Ordinary pre-selection poll recovery remains unchanged. Cost: a new explicit
   pass after interruption, including success with a lost eligibility write.
 - **R-9 — Ordinary children, sealed initial input.** Use one ordinary request R_i
@@ -301,14 +313,28 @@ D1–D14 dated 2026-11-04; D15 dated 2026-11-06, recorded from owner chat:
   the private seam/audits, not a second recovery engine; no shipment until a child
   can recover without its parent capture (design feasibility table).
 - **R-10 — Stop is reporting, not a new operation.** Fence live child-start authority
-  atomically with not-reached/report settlement; retain actual child obligations.
-  Parent replay is an as-of-pass report with child recovery handles. Cost if wrong:
-  additional metadata settlement retry, never restarted cleanup or silent debt loss.
+  atomically with one immutable stop cut/result/debt snapshot/not-reached set before
+  stopped-parent Final; retain actual child obligations. Reconstruct from the cut, not
+  current child status. If none exists, first metadata reconciliation snapshots
+  durably known states then; all-selected same-pass lost-copy completion is distinct
+  from a settled prefix. Cost if wrong: metadata settlement retry, never restarted
+  cleanup, invented historical snapshots or silent debt loss.
 - **R-11 — Retire obsolete experiments forward.** Inspect source reachability and
   exact synthetic schema envelopes, not real profiles. Unwire gap observers and
   installation; retain only necessary non-authorizing compatibility history.
   Cost if wrong: explicit fail-closed inspection of unsupported experimental data,
   not automatic repair or deletion; published standalone history must remain readable.
+- **R-12 — One provenance, many exact consumer bindings (2026-11-06).** Keep source
+  P/epoch unique; replace receipt provenance uniqueness with
+  `UNIQUE(repository_id, consumer_kind, consumer_operation_ulid, consumer_attempt_epoch)`.
+  Proposed `context_retirement_consumers_v1` envelope preserves receipt IDs/FKs;
+  immutable `poll_retirement_child_sources` binds exact pass/image membership to
+  independent R_i/K_i and its first receipt/epoch. Audit source R and child R_i
+  separately, each holder's pin/release independently, and only exact initial-poll
+  no-observer lineage into ordinary recovery. Freeze prior catalog fingerprints
+  before DDL edits and migrate the entire known dependency closure transactionally.
+  Cost if wrong: revise the small private schema/migration before shipping, not
+  add batch recovery, fake provenance, request rebinding or generic NULL authority.
 
 ## Named Edits To Pre-Existing Tests
 
@@ -374,6 +400,8 @@ not the fact those reviews and approvals occurred.
 | Independent review round 3, `5a6136e5` | Source/feasibility: 0 Blocking, 0 Important, 0 Minor. Adversarial/contract: 0 Blocking, 0 Important, 0 Minor | Settled at planning level | Both reviewers verified prior fixes and the new interactions; no repeated blocker remains | No Cargo/native/runtime evidence; Task 2/4 test-first checkpoints remain mandatory |
 | Owner, 2026-11-06 | Complexity of resumed batch lifecycle versus independently durable retirements | Decision | D15 supersedes only the batch continuation/aggregate-finality/gap-handle promises above | Existing proof/standalone/original-live review evidence retained at its actual scope |
 | Source-grounded D15 revision at base `b2fe68c9` | Current batch rows are not ordinary request-owned children; gap migration installs despite absent Task 4 producer | Ruling | R-9–R-11; thin loop plus ordinary-engine refactor and forward unwiring | Fresh read-only source/contract review pending; docs-only, no builds/tests; no full Task 2 pass |
+| D15 source review of `43214ff7`, `ses_e4ecf24b9ffeEuiFGI34Nf4fmm` | 0 Blocking, 1 Important: provenance UNIQUE and source/consumer/history/catalog assumptions make the promised sharing unexecutable | Internal ruling R-12 | Explicit one-to-many schema/versioned closure migration, immutable membership, per-holder auditing and exact initial-poll→O/M/I recovery | Corrected docs only; same source reviewer re-review required, not a runtime/spec pass |
+| D15 contract review of `43214ff7`, `ses_e4ecf24b3ffeJBNQqLYF0ceEPn` | 0 Blocking, 2 Important, 1 Minor: reached-prefix completion, pre-effect recovery conflation, and mutable stop snapshots | Internal corrections C1–C3 | Every selected outcome required; never-claimed versus selected present-W recovery split; immutable cut + first reconciliation + all-selected lost-copy rule | Corrected docs only; same contract reviewer re-review required; D15 approval/method unchanged |
 
 ## Approval And Execution Handoff
 
@@ -383,6 +411,6 @@ authorized implementation, and selected subagent-driven development on
 `implementing`; only its branch may be pushed. The broader existing lifecycle
 materialization-intent issue remains a proposed follow-up, not a filed ticket.
 D15 is a subsequent approved contract amendment, not a redo of unchanged approvals.
-This engineering draft needs the controller's fresh read-only source/contract
-review before code resumes. This bounded revision authorizes no push or lifecycle
+This engineering draft needs the same independent source/contract reviewers'
+read-only re-review before code resumes. This bounded revision authorizes no push or lifecycle
 action; it changes neither ticket status nor the agreed execution method.
