@@ -36,12 +36,11 @@ both final ticket-list IDs exactly once before checking both closed. Same QUALIT
 approved that bounded delta through `37b64d17`, with no remaining findings;
 original SPEC approval carries over this assertion-only change. Its bounded evidence,
 retained-44/acceptance delta and correction record are appended below. Task 7 governing
-amendments are locally delivered from base `76a852a7`. Initial Task 7 SPEC
-`ses_e4ce0d5ddffeieNVsaSxi7UkAX` reported **one Important parent/child-code
-conflation, no other findings** at `eaeabbf9`. It is corrected locally;
-**same-SPEC re-review, then fresh QUALITY pending** on the full original Task 7
-range. Its source/contract checks and limits
-are in the new checkpoint below. Task 8 final tiers/whole-feature reviews and
+amendments from base `76a852a7` are now independently SPEC and QUALITY approved
+through `c4fb38f5`, after the parent/child-code distinction and non-null disposition
+wording corrections. No findings remain at that bounded documentation gate.
+Its source/contract checks and limits are recorded below. Next is Task 8's
+final tiers/whole-feature reviews and
 essential remaining retained-44 fault/platform classification remain owed. Ticket remains
 `implementing`, not full Task 2 or feature review-ready.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
@@ -158,8 +157,8 @@ Neither recovery route advances parent. Both corrections are internal under D15.
   **SPEC and fresh QUALITY passed through `1619e100`; QUALITY's one Minor Q1 is
   corrected at `4df41831` and same-QUALITY approved through `37b64d17`.
   No remaining findings at this bounded CLI/acceptance gate.**
-- [ ] Task 7: governing amendments locally delivered at the new checkpoint below;
-  independent SPEC then QUALITY pending on `76a852a7..Task-7-HEAD`.
+- [x] Task 7: governing amendments independently SPEC and QUALITY approved on
+  `76a852a7..c4fb38f5`, with no remaining findings. Final verification not implied.
 - [ ] Task 8: final static/fast/changed-path SSH tiers once at review-ready,
   classify essential remaining fault/platform permutations using actual existing
   retained-44 coverage, then whole-range SPEC/QUALITY and owner handoff. No bare full suite
@@ -7100,3 +7099,36 @@ unchanged earlier evidence retains its original scope. **SPEC approval carries
 over this wording-only correction; SAME QUALITY's bounded delta check is pending
 before publication.** Task 8/final gates remain owed. No agents, other-worktree/
 main/profile/key/context/draft action, push/PR/close/native dispatch or owned job.
+
+## Controller Task 7 Approval And Final-Gate Entry — 2026-11-06
+
+Canonical checkpoint **`01M6SJYFVZMGDEAE0H21ATCTV0`**, parent
+**`01M6SHEHSJYNH371M4TY9GMAV9`**, actual UTC **`2026-11-06T23:26:02Z`**.
+Original documentation range **`76a852a7d5d4fcd757a95451601cdbb407b99bcc..c4fb38f5e8e4e595a912f15c666299b0373a71ea`**
+is independently SPEC and QUALITY approved, with no remaining findings.
+
+SPEC **`ses_e4ce0d5ddffeieNVsaSxi7UkAX`** approved the full amendment after
+correcting the top-level parent versus nested child code distinction. QUALITY
+**`ses_e4cd8261cffeK50w4NumlAXvPV`** approved the full amendment and then the
+bounded nullable-metadata/non-null disposition wording correction. Existing
+implementation approvals carry forward; this does not confer final-feature approval.
+
+Controller inspected the corrections and verified the initial **11 source / 9
+artifact**, SPEC **3 / 6**, and QUALITY **3 / 5** inventories, zero mismatches at
+their respective scopes. Layered **11 current document inputs** match. Recorded
+357-link initial and 96-link correction checks, frontmatter/history preservation,
+schema/source agreement and exact CLI taxonomy **1 passed / 0 failed** are bounded
+documentation evidence; no statics/SSH/fast/full/native gates were repeated.
+
+Fresh fetch and merge reconfirmed main **`79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`**,
+already up to date. Only ticket-branch publication is authorized. Next is a fresh
+Task 8 verification owner: classify essential remaining retained-44 obligations
+against actual coverage, run final whole-tree static gates and the fast tier plus
+all changed-path selected SSH targets once, then return for independent whole-feature
+SPEC/QUALITY. The full branch includes local-sync/promotion source and closure tests,
+so final gate selection must not be narrowed to the recent CLI changes.
+
+No bare full suite, native CI, real-context retirement, PR or main integration/closure.
+The supported isolated built CLI generated this metadata checkpoint ID; no default
+profile repair or Rust rebuild. Ticket stays `implementing` until final evidence
+and whole-feature reviews support the owner's review-ready handoff.
