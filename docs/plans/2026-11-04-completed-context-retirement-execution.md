@@ -18,22 +18,25 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 `774da0c30122685d10cf4f76b55d50811b8eb8f4`**, with exact parents
 `f69d341b5caac47c95d50b64c685f6073d61c958` and incoming main
 `1e5616af22630b08a84dc0fb42037135b385f81d` (approved/closed D5).
-That main is now the integration baseline; `79c3931b` remains the historical
-feature/review base, not the current-main gate. Controller reports the fixture
-delta already SPEC/QUALITY source-approved before this merge; those approvals
-do **not** approve the merged tree or runtime gates. **Merged-source same whole
-SPEC delta → same QUALITY remain pending; final-gate barrier retained.**
-The merge checkpoint's ten named exact tests remain **9 passed / 1 failed** at
-their actual scope. The controller then authorized only the missing enum pins:
-test-only source freeze **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`** adds all 19
-and the previously failing exact test now **PASSES**, including unchanged runtime
-completeness **122 declarations = 121 string pins + 1 schema-version pin**.
-Fresh strict Clippy/fmt pass on the same corrected test hash; the other nine
-merge greens were not rerun or promoted. No production/schema/helper change or
-broad library/fast/SSH/smoke/native gate. Historical library gates **1,495/2/160**
-and **1,494/3/160** remain failures. Ticket stays `implementing`; not source-clear,
-runtime-accepted, review-ready or complete on this new baseline. The integration
-and authorized inventory checkpoints at the end govern older next-step prose.
+That main is now the integration baseline; `79c3931b` remains historical, not the
+current-main gate. Controller reports **same whole SPEC SOURCE CLEAR and same
+whole QUALITY SOURCE PASS through `afb61789`**, including the merge and all19
+enum pins at Rust source **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**. No remaining
+findings at that source-review scope; runtime-evidence reviews are separate.
+The prior nine merge greens and exact enum completeness green retain their
+actual scopes; no interim group was rerun. Qualifying current-code Clippy/fmt
+were reused and a fresh final check passed. The new exact fast gate has reached
+**library GREEN: 1,530 passed / 0 failed / 160 local-sync filtered**, then
+**desktop FAILED: 1,518 passed / 62 failed / 0 filtered**. Cargo stopped before
+CLI tests/all27 integrations; no slow/SSH/smoke gate followed. Failures comprise
+59 deadlines,2 Busy reads,1 expired confirmation. One permitted exact first-draft
+diagnostic passed in isolation; it does not waive the failed binary. A large
+UTC/monotonic timing discrepancy is recorded, cause/causal relation unproven.
+Only evidence metadata changed; green library preserved, no source/thread/timeout
+edits or further probes. Historical **1,495/2/160** and **1,494/3/160** library
+failures remain unchanged. Ticket stays `implementing`, runtime **BLOCKED**, not
+review-ready/owner-handoff complete. The latest appended gate checkpoint governs
+older next-step prose.
 
 ### Current D15 Amendment — 2026-11-06
 
@@ -7952,3 +7955,125 @@ other worktree or real profile/key/context/draft action. No owned jobs at return
 Fresh final cargo check, broad library green, full fast bins/27 integration
 targets, local-sync, ten SSH targets, both smokes and runtime-evidence reviews
 remain owed; historic library failures keep their actual SHAs/counts.
+
+## Task 8 Final Recheck — Library Green, Desktop Binary Failed, 2026-11-07 UTC
+
+**BLOCKED at the first failed binary; no later gate admitted.** Controller lifted
+the barrier after same whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**
+and same whole QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` SOURCE PASS** through
+frozen **`afb617897d31cff077c8f24ca9d96de40749bee3`**, full feature range from new
+main **`1e5616af22630b08a84dc0fb42037135b385f81d`**. Actual Rust source is
+**`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**; HEAD differs only by metadata.
+Required merge `774da0c3`'s exact `f69d341b`/`1e5616af` parents were verified.
+Accepted controller's just-completed fresh main fetch/merge, already up to date;
+no further fetch/merge, agents, other worktree/main or source edit.
+
+### Evidence Integrity, Reused Statics And Actual Final Commands
+
+Reread current AGENTS/Testing Strategy and latest checkpoint. Clean entry;
+`git diff e6bc3912 -- src tests schemas Cargo.toml Cargo.lock devenv.nix
+devenv.lock .github/workflows/build.yml` empty. Only **5 relevant fixture/enum
+inputs** were hashed, not the 212 incoming-main paths. The six older manifests
+and their **35/14/26/19/38/11 entries** verified unchanged. Known 35/26/38/11
+manifest digests were authenticated against supplied hashes; 14/19 were snapshotted
+and all entries verified. No old runner/result/log/coverage/manifest was written.
+All new artifacts use **`/tmp/opencode/task8-recheck-`** only.
+
+| Gate | Actual evidence / precise scope |
+| --- | --- |
+| Strict Clippy | **REUSED exit0**, exact `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`; source e6bc3912/current matching inputs, original execution HEAD c6d0e10 with final working-tree input. `task8-enum-clippy.log`:1.973s measured elapsed/1.65s Cargo. Not run again. |
+| Formatting | **REUSED exit0**, exact `devenv shell -- cargo fmt --check`; same input proof. `task8-enum-fmt.log`:17.518s measured elapsed. Not a fabricated fresh run. |
+| Fresh check | `devenv shell -- cargo check --all-features --locked`: **exit0**,15.198s measured elapsed/15.00s Cargo; clean setup, `task8-recheck-check.log`. |
+| Exact AGENTS fast command | Complete original argv copied read-only from old JSON, all27 integrations including credentials/items; default threads, only existing local-sync skip. **Exit101**. **Lib1530/0/160**,1972.73s tests; **desktop1518/62/0**,2072.89s tests. Two of30 planned binaries finished; CLI/all integrations did not start. `task8-recheck-fast.log`. |
+
+All Cargo through serialized Devenv, foreground blocking until normal process
+completion. No tool background abandonment/poll/sleep or 15-minute narrowing of
+this approved final tier; no test-thread override, skip, timeout change or code
+fix. The old two failed library runs stay historical, never relabeled.
+
+**Timing caveat, recorded not waived:** this command's measured `time.monotonic`
+duration (runner field `wall_seconds`) is **4,153.935s**. UTC start/end are
+**03:17:34.375612Z → 12:05:50.913874Z**, interval **31,696.538262s**, difference
+**27,542.603262s**. Those are different observed clocks, not one consistent wall
+interval. No suspension/clock-change/load cause or causal relation to failures
+was proven. Do not label all62 infrastructure or pass the gate from this anomaly.
+Raw fast-log SHA-256:
+**`2c42ee696c5fa8ffaa33a29cd31d0c4b1c3f5fd10e2ba3433e62e7683043fbc0`**.
+
+### Desktop Failure Classification And One Permitted Diagnostic
+
+Full **62 exact test names, source locations and messages** are preserved in
+**`task8-recheck-failure-analysis.json`** and **`task8-recheck-fast-failures.log`**.
+There is no hidden later target. Read-only source grouping:
+
+| Failure group | Count / exact source and observed message |
+| --- | --- |
+| Awaited model state | **55**, `desktop/view/harness.rs:54`: “the awaited state did not arrive in 10s”; `WAIT=10s`/Instant deadline is :31–58. Includes confirm/posting/lifecycle/resume behavior. |
+| Until-drawn behavior | **2**, same harness:315: restored draft “the create did not happen” and close-save “the tab closing did not happen”; same10s real deadline. No new appearance test added. |
+| Held worker | **2**, `desktop/test_support/delaying.rs:406`: “the worker did not reach the held job”; existing10s condition wait. |
+| Busy read | **2**, `keyboard_tests/settings.rs:66` `add_an_existing_repository_by_keyboard`, and `settings/repositories_tests.rs:108` `create_in_an_empty_directory_previews_nothing_then_creates_and_refreshes`; unwrap got `ReadError { code: Busy }`. |
+| Expired confirmation | **1**, `test_support/fixtures.rs:173`, `desktop::view::settings::remotes::tests::a_remote_url_with_a_password_is_shown_redacted`; repo-create execute got ConfirmationExpired instead of Ok. Prepare→execute fixture is :158–174. |
+
+**Root cause remains unresolved.** Deadline/cancellation/Busy/confirmation behavior
+must not be weakened from the grouping alone. ONE named uncertainty was probed:
+does the first restored-draft-create failure reproduce in isolation on unchanged
+source? Exact command, default test threads/no other options:
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands desktop::services::drafts::create::tests::save_of_a_restored_not_created_draft_creates_it -- --exact
+```
+
+**1 passed/0 failed**,1579 filtered,2.24s tests/3.026s measured elapsed;
+`task8-recheck-diagnostic-draft-create.{log,json}`. It did **not** reproduce that
+failure alone. It does not clear the failed whole binary or the other61 cases,
+prove load/suspend causation, or authorize broader reruns. No other diagnostic,
+green-library repeat, source repair or runtime gate followed.
+
+### Current Coverage Delta And Exact Unrun Remainder
+
+**`task8-recheck-coverage.md`** links the immutable retained44 C/L/S history and
+correction deltas rather than rewriting them. The current1530-test library green
+includes M1's strict disposition table (fast log:1368), QUALITY Q1 CUT/public
+dispatcher (:977), preserving live-index clock boundary (:485), both repaired
+stop fixtures (:1153/:1187), and owned ordinal1 disposition INSERT-fault rollback
+(:1154). Production safety/dependencies/deadlines were not relaxed. Slow local-sync
+is deliberately excluded. Existing proof/lifetime/M/F2/Z assertions now have this
+current library scope, not native/exhaustive-cross-product evidence.
+
+Enum completeness's prior exact green at e6bc3912 remains **122 declarations /
+121 string pins + schema version**, unchanged runtime assertion; **full
+read_contract integration still unrun**. D5 integration's nine exact seam greens
+keep merge scope, both module/CASES registrations preserved; incoming domain cases
+are included in the library pass, but desktop source approval is not runtime
+success. D6 Retire UI remains owed; no blanket O-row/native waiver.
+
+**NOT RUN:** CLI test binary `manyhands-cli`; all27 fast integrations (literal
+names/argv in new results, including `read_credentials`/`read_items`); slow
+`devenv shell -- cargo test --all-features --locked --lib repository::local_sync::`;
+all10 selected whole SSH targets `ssh_transport`, `remote_observation`,
+`remote_synchronization`, `remote_merge_recovery`, `remote_polling`, `cli_remote`,
+`mutation_remote`, `document_promotion`, `ticket_closure`, `comment_publication`;
+both isolated smokes. No profile/app/display recheck or launch after failure.
+Earlier socket capability is not startup/visual evidence. No native/full suite.
+
+**Valid library green survives** on unchanged source; resumption must select the
+failed desktop and unrun remainder, not routinely rerun this green library. If
+an authorized fix changes shared library inputs, select affected gates from that
+actual delta. Controller owns diagnosis/fix/review and further gate authorization.
+
+New complete argv/source/main/exits/counts/clocks/reused-static evidence and the
+one diagnostic are incremental in **`task8-recheck-results.json`**; handoff/remainder
+in **`task8-recheck-handoff.json`**. `preflight.json` records six manifest proofs,
+current-code comparison and required merge parents; `stopped.json` records all
+known owned runner/child exits. Final source/whitespace/merge-tree/old-manifest
+preservation and the new-only artifact manifest are recorded separately.
+
+Canonical failure reply **`01M6TYJATB44WZPJABX9GMBVS1`**, parent
+**`01M6SYJK4CJGHWKZC7MTP18GTA`**, created **`2026-11-07T12:08:39Z`**. Built
+supported CLI through Devenv/isolated `/tmp/opencode/task2-recovery-core-cli-id-data`
+allocated only the ID, exit0/no build/default-profile repair or conversion.
+Only owned ledger/current-standing/comment metadata committed with coauthor.
+No ticket status/body save, push, PR/main/close, other worktree, real context/key/
+draft action or native dispatch. No owned Cargo/test job remains. Ticket stays
+**implementing / runtime BLOCKED**; final same SPEC→QUALITY runtime-evidence
+reviews and owner handoff remain owed, not feature/review-ready completion.
