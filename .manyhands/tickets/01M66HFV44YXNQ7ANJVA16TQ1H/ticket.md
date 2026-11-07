@@ -1,7 +1,7 @@
 ---
 slug: vh-hyksw
 id: 01M66HFV44YXNQ7ANJVA16TQ1H
-title: A key selected after a publication remote is configured must not block a context's first publication for good
+title: Remote history marked unknown by a key change, with no way to clear it, blocks first publication, promotion and closure
 type: defect
 status: open
 project: manyhands
@@ -9,36 +9,80 @@ team: core
 manyhands_managed: true
 manyhands_kind: ticket
 ---
-A key can be selected, or selected again, in a registry that already has a
-publication remote configured. When that happens, every repository with a
-remote is marked "remote history unknown". Nothing in production clears that
-mark. From then on, a context that was never published cannot be published
-from that registry.
+A key can be selected, cleared or selected again in a registry that already
+has a publication remote configured. When that happens, every repository with
+a remote is marked "remote history unknown". Nothing in production clears that
+mark. From then on, a context that was never pushed from that registry can't
+be published, promoted or closed.
 
-Every `item sync` of such a context answers `recovery_required` (exit 3) and
-holds the reservation, so other syncs answer `busy`. `request cancel` followed
-by the same request releases the reservation (`cancelled`, 130), but the next
-sync stops the same way. No other verb frees it:
+Combined on 2026-11-07 with `01M6V8RK88W7F8AHPK6MQKBQ2C` (vh-yq8wb), which
+found the same cause through `document promote` in the registered main
+checkout. That ticket's evidence is under "Evidence" below; this ticket is the
+record for the fix.
 
-- `operation resume` answers `recovery_required` or `already_applied`;
-- `operation abandon` answers `invalid_input`;
-- `item republish --prepare` answers `already_applied`;
-- `comment add` answers `recovery_required`;
-- `repo inspect` reports nothing wrong.
+## Symptoms
+
+- Every `item sync` of such a context answers `recovery_required` (exit 3)
+  and holds the reservation, so other syncs answer `busy`. `request cancel`
+  followed by the same request releases the reservation (`cancelled`, 130),
+  but the next sync stops the same way.
+- `document promote --prepare` and `ticket close` of a branch that was never
+  pushed answer `recovery_required` with blocker `history_unknown`.
+- The refusal names `poll once`, then a new prepare. `poll once` completes
+  but reports the branch `disposition=history_unknown`, so the guidance is
+  untrue.
+- No other verb frees it:
+  - `operation resume` answers `recovery_required` or `already_applied`;
+  - `operation abandon` answers `invalid_input`;
+  - `item republish --prepare` answers `already_applied`;
+  - `comment add` answers `recovery_required`;
+  - `repo inspect` reports nothing wrong.
+- Contexts that are already pushed keep working: a poll observes their remote
+  ref and records `observed_published` evidence for them.
+
+## Cause
+
+In `src/repository/remote/state.rs` unless noted:
+
+1. `key select` and `key clear` (`src/repository/keys/registry.rs`, the two
+   `invalidate_key_selection` calls) call `invalidate_key_selection`, which
+   calls `configure(tx, id, plan, true)` for every repository that has a
+   `remote_name`.
+2. `configure` does two separate jobs at once:
+   - **Fence:** it bumps the configuration generation, interrupts in-flight
+     operations and invalidates the current observation batch. That is right
+     for a key change, since the credentials changed.
+   - **Forget:** it deletes every `remote_context_states` row and sets
+     `remote_polling_state.history_unknown = 1`. That belongs only where the
+     remote's identity, and so its history, really changed.
+3. With the flag set, `fetch_publication_evidence_for` answers
+   `HistoryUnknown` for any context with no evidence row of its own, instead
+   of `NeverPublished`. Only a ref seen on the remote gets a row
+   (`observed_published`), so a branch that was never pushed never gets one.
+   `read_snapshot_rows` also rejects any `never_published` row while the flag
+   is set, so that evidence can't be recorded either.
+4. Promotion turns this into `PromotionBlocker::HistoryUnknown`
+   (`src/repository/promotion/observe.rs`), and synchronization into
+   `CleanIntegrationError::HistoryUnknown` (`src/repository/remote/refs.rs`).
+   The binding reports both as `recovery_required`.
+5. Only closure test support (`src/repository/closure/test_support.rs`)
+   resets the flag. Nothing clears it in production. The flag was built for
+   the case of a lost or replaced registry: the rule of 2026-10-05 in
+   `docs/Cycles/wave-02-cycle-04-remote-observation-and-recovery.md` says
+   "explicit recovery or republish confirmation in a later lifecycle Cycle",
+   and that recovery was never built.
+
+The same flag is set by three paths, all through `configure`:
+
+| Trigger | Today | Remote's history really unknown? |
+| --- | --- | --- |
+| Key selected or cleared (`invalidate_key_selection`) | fence + forget | No: same remote, new credentials |
+| Endpoint changed (`configure_endpoints`, digest differs) | fence + forget | Probably: may be a different remote |
+| Remote name or primary branch changed (`configure` with a new plan) | fence + forget | Probably |
+| Registry lost or replaced (`remote_history_lost` marker at migration) | flag + `recovery_suspended` | Yes |
 
 ## Evidence
 
-- **Code path** (`src/repository/remote/state.rs` unless noted):
-  - `invalidate_key_selection` calls `configure` for every repository with a
-    `remote_name`. `configure` sets `history_unknown = 1` wherever a remote is
-    set, and deletes the `remote_context_states` rows.
-  - A context with no evidence of its own then reads as `HistoryUnknown`.
-  - `plan_clean_integration` refuses an absent remote context with that
-    evidence (`src/repository/remote/refs.rs`,
-    `CleanIntegrationError::HistoryUnknown`). The binding reports that
-    refusal as `ResultCode::RecoveryRequired`.
-  - `NeverPublished` is refused while the mark is set. Nothing in production
-    resets `history_unknown` to 0; only closure test support does.
 - **Found** on 2026-10-30 by Wave 03 C4 Task 12a
   (`01M4CC0VMWEQQ9G4W0DAG7ADPY`) in a two-clone SSH journey, and
   reproduced through the binary:
@@ -52,27 +96,106 @@ sync stops the same way. No other verb frees it:
 
   The evidence log is in C4's worktree,
   `.superpowers/sdd/2026-10-26-wave-03-cli-04-discussion-and-sync-implementation/logs/task-12a-explore-history-unknown-cli.log`.
-- **C4 does not fix it**, because it is outside C4's library scope. C4's
-  two-clone fixture selects the key before anything publishes.
+- **Found again** on 2026-11-07 (vh-yq8wb) while promoting the Wave 04
+  document (`01M6V05RX2GZ4FFW8VMKTWFBTN`) from the registered main checkout,
+  at main `1e5616af`:
+  - `document promote --prepare` answered `recovery_required`, blocker
+    `history_unknown`, naming `poll once` and a new prepare.
+  - `poll once` completed (request `01M6V6HDSQSCZH06FV8J2GYH2B`) but reported
+    the document's branch `disposition=history_unknown`. Ticket branch
+    `01M6RAA5FF2FN3M52QS8TW409W` read the same.
+  - `item sync` on the document fetched, then stopped with
+    `recovery_required` and `publication=pending` (request
+    `01M6V6K9Q80B7KXZT57NPMPH94`, operation `01M6V6KA0QNSNF1BYB28ANDK6R`,
+    left at `fetch_observed`).
+  - Workaround: the document was merged into main with Git (`d0352184`), and
+    its branch and worktree were removed by hand. Manyhands' records don't
+    show it as promoted.
+- **The owner's registry, read-only, on 2026-11-07:**
+  - `history_unknown=1`, `recovery_suspended=0`. The second value rules out
+    a lost registry.
+  - Configuration generation 2. The step from 1 to 2 came in the same second
+    (2026-11-04) as the `select` of the "vhodges github (no passphrase)" key
+    in `key_registry_changes`, and the first generation-2 poll began that
+    same second.
+  - All 58 `remote_context_states` rows are `observed_published`.
+- `docs/RFC/cli-contract.md` lists this as a known limit on main.
 
-## Expected behaviour
+## Owner Direction 2026-11-07
 
-Selecting a key changes which credentials reach the remote. It does not, by
-itself, make what the registry knows about the remote's history unknown. A
-context that was never published stays publishable after a key selection.
-If the history truly must be re-established, some read or synchronization
-re-establishes it and clears the mark, and the refusal names that way out
-while the mark is set.
+- Combine the two tickets, then generalize the fix.
+- A key change should probably not mark the history unknown.
+- A remote change probably should.
+- The mark is cleared by an explicit, interactive repair: list the contexts
+  in question, with what can be done for each.
+- Recover the owner's stuck registry without deleting it and starting over.
 
-## Acceptance criteria
+## Fix Direction
 
-- A library test shows that, after a key is selected or re-selected on a
-  registry with a publication remote, a never-published context's first
-  `item sync` publishes it.
-- If a mark is still needed for some case, a test shows the operation that
-  clears it, and shows that the refusal while it is set offers that way out
-  instead of an empty or repeating `recovery_required`.
-- A context that is stuck today recovers after the fix with no hand edit of
-  the registry.
+To settle in the plan. A starting point:
+
+1. **Split fence from forget.** Give `configure` the reason for the change.
+   A key change fences only: it keeps `remote_context_states` and leaves
+   the flag as it is. A change of endpoint, remote name or primary branch
+   fences and forgets. Settle in the plan whether an endpoint change whose
+   digest is unchanged forgets anything.
+2. **Make "unknown" per context, not repository-wide.** When history is
+   forgotten (a remote change or a lost registry), record a
+   `history_unknown` row for each local context that exists at that moment.
+   A context created afterwards has nothing to be unsure of: with no ref on
+   the remote it is `never_published`. The repository-level state becomes
+   "some contexts are unresolved", derived from those rows. That removes the
+   rule that refuses every `never_published` row while the flag is set.
+3. **Resolve through an explicit repair operation.** A repository's
+   unresolved contexts are listed with what is known of each: local branch
+   and head, whether a tracking ref exists, and whether the current remote
+   advertises it. Each one is resolved by an owner's choice, for example:
+   - **publish it**: the owner asserts it can be pushed to this remote as a
+     first publication;
+   - **keep it local**: leave it unpublished and unresolved, as today;
+   - **retire it**: through the existing cleanup retirement
+     (`retired_contexts`), which already reads as never published.
+
+   A context the current remote advertises resolves itself as
+   `observed_published` on the next poll, as it does today. In the CLI the
+   repair is a confirmable `--prepare` and confirm pair, and in the desktop
+   a sheet listing the contexts. Refusals with `history_unknown` name the
+   repair, not `poll once`.
+4. **Recover existing registries.** A registry whose flag is set but has no
+   per-context rows, like the owner's, is upgraded at migration: one
+   `history_unknown` row is written for each local context with no evidence,
+   and the repository-wide flag is dropped. The contexts are then resolved
+   through the repair, with no hand edit. Whether a migration may treat a
+   flag with `recovery_suspended=0` as coming from a configuration change is
+   for the plan to decide. The registry no longer records whether it was a
+   key change or a remote change, so the default is to keep it unknown and
+   let the repair resolve it.
+
+Keep the protection the mark exists for: a context that was published and
+then deleted on the remote, or one whose history was really lost, still
+answers `remote_context_deleted` or `history_unknown`. It is never pushed
+again silently.
+
+## Acceptance Criteria
+
+- After a key is selected, cleared or selected again on a registry with a
+  publication remote, a never-published context's first `item sync`
+  publishes it, and `document promote` and `ticket close` of it go ahead.
+- After a remote change, a context that existed before the change is
+  `history_unknown` until resolved, and a context created after it is
+  publishable.
+- The repair lists the unresolved contexts and applies the owner's choice
+  for each. When none are left, nothing reads as `history_unknown`.
+- A refusal with `history_unknown` names the repair, and following it works.
+  The repair is not described as `poll once`.
+- A context published and then deleted on the remote is still refused.
+- A registry stuck today, like the owner's, recovers through the migration
+  and the repair, with no hand edit of the registry.
+- Tests: library unit tests over a local `git2` repository and a `file://`
+  remote, with an injected clock, table-driven, per `AGENTS.md` "Testing
+  Strategy". No SSH case unless the plan shows the behavior depends on the
+  transport.
+- `docs/RFC/cli-contract.md`'s known limit is amended or removed, and the
+  repair verb gets a contract entry.
 - Shared-library change under the Wave 03 track rule: reviewed and merged to
   main on its own.
