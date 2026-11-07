@@ -8,7 +8,7 @@ deps:
 id: 01M4CC0VN2K8DBHNMZ46NTX5JJ
 title: 'Wave 03 D5: Desktop Conflict Recovery, Promotion And Closure'
 type: cycle
-status: open
+status: done
 project: manyhands
 team: core
 manyhands_managed: true
