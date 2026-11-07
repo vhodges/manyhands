@@ -14,17 +14,18 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ### Current Accommodated Gate Standing — 2026-11-07 UTC
 
-**Gate sequence remains STOPPED; the bounded CLI help-fixture correction passed
-its one exact case, pending same SPEC→QUALITY delta review.**
+**Reviewed fixture barrier lifted; resumed gates STOPPED at mutation_replay.**
+Fixture/gate freeze **`fb6bbbb6817ad719eb47c37d2698b0077f2daaf7`**.
 Unchanged compiled/test source **`d49cfa4a7150d73bc31333e2fe9038fecfb2ec61`**;
 library/production freeze **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**;
 active main baseline **`707f4a6dc85abb187fd3385c534f514034ecc139`**, accepted
 controller docs-only merge/entry **`ab53de7c0733c5c3425a53a26da2d53f8844413f`**.
 No additional fetch/merge. Prior whole gates retain their actual846af679 baseline.
-Controller reports same whole SPEC **SOURCE CLEAR**, then same whole QUALITY
-**SOURCE PASS**, through d49cfa4a on the846af679 feature range. That lifted this
-sequence's source barrier, not approval of this new fixture delta or runtime
-review/owner handoff. Original79c3931b base remains historical, not the active base.
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**
+throughfb6bbbb, then SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE
+PASS**, zero Critical/Important/Minor findings. Both read-only delta reviews
+cleared the bounded six-line help fixture and lifted this sequence's barrier;
+they are **not final runtime acceptance**. Original79c3931b base remains historical.
 
 | Current evidence | Actual standing |
 | --- | --- |
@@ -32,32 +33,29 @@ review/owner handoff. Original79c3931b base remains historical, not the active b
 | Whole accommodated desktop | **1580 passed/0 failed/0 ignored/0 filtered**,2158.17s tests, **exit0**. |
 | CLI unit binary | **307 passed/0 failed**,0.52s tests, finished green. |
 | canonical_foundation | **65 passed/0 failed**,0.03s tests, finished green. |
-| Last whole cli integration | **476 passed/1 failed**,420.97s tests; remainder command **exit101**, not yet rerun. |
-| Exact corrected poll-help case | **1 passed/0 failed/476 filtered**,0.03s tests, **exit0**; entryab53de7c plus the recorded fixture SHA. Not a whole-target pass. |
+| Current whole cli integration | **477 passed/0 failed/0 filtered**,378.04s tests, **exit0** atfb6bbbb. Prior476/1 remains historical failure. |
+| First ten targets of25 selection | **All ten finished green**: discovery_rebuild79, drafts48, journal_rejection26, key_material39, key_storage2, local_authoring142, mutation_bridges166, mutation_confirmation184, mutation_contract46, mutation_relationships27. |
+| mutation_replay | **383 passed/1 failed/0 filtered**,969.17s tests; enclosing25-target command **exit101**, then STOP. |
 
-The recorded first failure was **`help::the_poll_verbs_help_is_available_and_is_its_own_golden`**,
-at `tests/support/cli.rs:629:5`: actual `poll once` help included optional
-**`--retire-completed`**, then absent from the expected
-`tests/fixtures/cli_v1/help_poll_once.json`.
-Full expected/actual and failed gate remain retained as RED. The only correction
-appends that optional flag **after `--confirm`**, matching the saved actual exactly;
-no other fixture, source, wording, default/wire behavior or assertion changes.
-The existing exact case completed all four poll-verb goldens and absent-data check.
-Prior no-suspend evidence retains its original two-command scope. Compiled inputs
-are unchanged; library/desktop/CLI-unit/canonical/static greens are preserved,
-**not rerun**. No check/fmt/Clippy or other Rust command accompanied this fixture fix.
+Current failure is **`resume::a_resume_of_a_row_another_call_is_indexing_under_is_busy_and_leaves_it`**,
+`tests/mutation_replay/resume.rs:112:5`: actual **(Success, Ok)**, expected
+**(Error, Busy)**. Root cause undiagnosed; no source probe/fix/retry, expectation
+relaxation or infrastructure waiver. Whole CLI now supplements the prior exact
+help1/0 correction evidence; old476/1 is not relabeled. All new footers nonzero,
+zero ignored/filtered. No measured suspend in either command. Source/fixture
+inputs stayed frozen; library/desktop/CLI-unit/canonical/static greens preserved,
+**not rerun**. No later target or extra diagnostic admitted after FIRSTFAIL.
 
 Owner-approved **WAIT60s** remains a finite test accommodation, not a performance
 fix; GPUI15s per uninterrupted park, POLL10ms, safety budgets and assertions are
 unchanged. Historical whole-desktop1518/62 and1516/64 remain failed at WAIT10s;
 instrumented51/49 remain diagnostic only. Profiling/optimization remains stopped.
-**NOT RUN:**25 remaining fast integrations, slow local-sync, ten selected SSH
-targets and both smokes. No display/profile/app/native action. Same whole SPEC
-`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`, then same QUALITY
-`ses_e4c8be2f1ffegiPUEUuB0QgyBE`, must clear this bounded delta before the gate
-owner resumes the failed whole CLI target once and the25 unrun integrations.
-Ticket **implementing / review-and-runtime BLOCKED**, not feature-complete or
-review-ready; final runtime-evidence reviews and owner handoff remain owed.
+**NOT RUN:**14 later fast integrations, selected library local-sync, ten SSH
+targets and both smokes. No display/profile/app/native action. Further execution
+or fixes require controller authorization; preserve valid finished greens on
+unchanged relevant inputs. Ticket **implementing / runtime BLOCKED**, not
+feature-complete/review-ready; SAME whole SPEC then QUALITY final runtime-evidence
+reviews and controller/owner handoff remain owed.
 Latest appended checkpoint governs older next-step prose.
 
 ### Historical Main Integration And Gate Standing — 2026-11-07 UTC
@@ -8946,3 +8944,133 @@ coauthor. No new ticket/ID/status save, agents, push, main/other-worktree/lifecy
 PR/close/native or real profile/key/context/draft action; no owned job remains.
 Ticket stays **implementing / review-and-runtime BLOCKED**, not review-ready or
 feature-complete; no autonomous gate continuation.
+
+## Task 8 — Reviewed Help Fixture; Whole CLI Green, Mutation Replay Failed
+
+### Reviews, Lifted Barrier And Frozen Scope — 2026-11-07 UTC
+
+Controller lifted the first-failure barrier after SAME whole SPEC
+**`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR throughfb6bbbb**, then SAME QUALITY
+**`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS throughfb6bbbb**,
+**zero Critical/Important/Minor findings**. These read-only reviews clear the
+bounded six-line poll-help fixture delta, not final runtime evidence. Sole gate
+owner resumed only the authorized failed-target/unrun sequence; no agents.
+
+Clean frozen gate/fixture HEAD **`fb6bbbb6817ad719eb47c37d2698b0077f2daaf7`**,
+active main **`707f4a6dc85abb187fd3385c534f514034ecc139`**, accepted docs-only merge
+**`ab53de7c0733c5c3425a53a26da2d53f8844413f`**. Main since846 changed only
+`docs/Waves/wave-04-workspace-design.md`; accepted completed preflight, no new
+fetch/merge. Compiled/test source stays **`d49cfa4a7150d73bc31333e2fe9038fecfb2ec61`**,
+library/production **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**. Only runtime
+fixture `tests/fixtures/cli_v1/help_poll_once.json` differs from d49 (6 added lines,
+no deletions), matching reviewed SHA20634af0. No source/schema/dependency/policy edit.
+
+Retained **library1530/0/160 filtered,1972.73s**; **whole desktop1580/0,2158.17s**;
+**CLI units307/0,0.52s**; **canonical_foundation65/0,0.03s**. No unchanged reruns.
+Prior check **`task8-recheck-check.log`** and current strict Clippy/fmt
+**`task8-wait-budget-{clippy,fmt}.log`** retain original source/reuse proofs,
+not new executions. The reviewed fixture affects no compiled Rust inputs.
+Authenticated **help4** manifest
+**`cf5780be8090c0e77b85c53205601f21c95cc10d89338609338a2339d4b7e9bd`** and its4
+entries; linked controller-verified **accommodated28** manifest
+**`6ef230f9a605221e178ebd4ccc663a6dc54bf69eaf2908f4adfe4e75e451806a`**.
+Only relevant current3 helper/fixture hashes and22 old manifest digests captured;
+no thousands-of-inputs or historical-artifact reinventory.
+
+### Actual Commands, Target Counts And First-Failure Boundary
+
+Exactly once, default threads, no filters/update flags/skips/instrumentation:
+
+```sh
+devenv shell -- cargo test --all-features --locked --test cli
+```
+
+**Exit0;477 passed/0 failed/0 ignored/0 filtered**,**378.04s tests**. The required
+whole target now passes on the changed fixture; prior476/1 remains a failed run at
+its original fixture, and help1/0 remains exact-case correction evidence.
+
+Only on PASS, the first-run **25-target remainder** through Devenv, all-feature
+locked, with every literal `--test` from discovery_rebuild through shared_key_registry.
+No lib/bins/CLI/unit/canonical/desktop repetition. Full argv in the new results
+and runner. Command **exit101** after this actual Cargo sequence:
+
+| Target | Passed | Failed | Test seconds |
+| --- | --- | --- | --- |
+| discovery_rebuild | **79** | **0** | **61.75** |
+| drafts | **48** | **0** | **6.68** |
+| journal_rejection | **26** | **0** | **19.67** |
+| key_material | **39** | **0** | **16.57** |
+| key_storage | **2** | **0** | **0.00** |
+| local_authoring | **142** | **0** | **119.93** |
+| mutation_bridges | **166** | **0** | **199.03** |
+| mutation_confirmation | **184** | **0** | **187.00** |
+| mutation_contract | **46** | **0** | **29.16** |
+| mutation_relationships | **27** | **0** | **17.43** |
+| mutation_replay | **383** | **1** | **969.17** |
+
+All footers have zero ignored/filtered. The first ten are finished greens; rounded
+0.00s key_storage still ran2 cases. mutation_replay finished normally (approved
+final gate, not the interim15-minute budget), then **no later target admitted**.
+
+Only failed case:
+**`resume::a_resume_of_a_row_another_call_is_indexing_under_is_busy_and_leaves_it`**,
+**`tests/mutation_replay/resume.rs:112:5`**:
+
+```text
+assertion `left == right` failed
+  left: (Success, Ok)
+ right: (Error, Busy)
+```
+
+Failure completion received **17:28:43.547604Z**, sidecar sequence1224. Complete
+failure section and receipt clocks are retained. This records the failed Busy
+expectation, **not a diagnosis** or proof of subsequent preservation assertions
+after the panic. No exact probe, source investigation/fix, retry, weakened lock/
+expectation, dependency change or performance work follows. Wait60 is not a waiver.
+
+### Clock/Power Facts, Coverage Limits And Unrun Remainder
+
+| Command | UTC interval | REALTIME / MONOTONIC / BOOTTIME seconds |
+| --- | --- | --- |
+| Whole cli | **16:56:32.918911Z→17:02:51.509289Z** | **378.590378023 /378.590386411 /378.590386381** |
+|25-target selection | **17:02:55.276718Z→17:30:02.331070Z** | **1627.054352585 /1627.054345903 /1627.054345675** |
+
+Boot-minus-mono **−0.000000030s /−0.000000228s** reflects sampling noise; both
+interval-only kernel PM entry/exit queries had **zero matches,exit1/no-match,
+empty stderr**. No measured suspend, no infrastructure waiver. No full/user
+journal, inhibitor, power change, induced/prevented sleep or synthetic waits.
+Raw output is separate from receipt-clock sidecars, **498/1290 rows**; complete
+byte coverage and **477 /1143** named completions reconcile every footer. These
+are output receipt clocks, **not case starts/internal wait/lease/worker phases**.
+
+**`task8-final-remainder-coverage.md`** records the current whole-target scopes,
+retained original sources and essential limits. C/L/S/retained44, M1/Q1/enum/D5/D6
+and native/combinatorial limits are unchanged; full read_contract remains unrun.
+Passing local_sync-named cases inside mutation_replay do not satisfy the selected
+library-module gate. Owner-approved shared WAIT60s/POLL10ms/default threads and
+GPUI15s per-park plus production lease/heartbeat/cache/SQLite/confirmation limits
+are unchanged. Historic failed/diagnostic outcomes remain; profiling/optimization
+and existing performance-ticket work stay stopped. No new performance claim.
+
+**NOT RUN:**read_boundary,read_characterization,read_comments,read_contract,
+read_credentials,read_items,read_relationships,read_repository,read_status,
+recovery_foundation_gate,remote_reservation,repository_enablement,session_credentials,
+shared_key_registry (**14 fast targets**). Also selected library local-sync
+(prior160 skipped), all10 selected SSH targets, both isolated smokes, SAME whole
+SPEC then QUALITY final runtime-evidence reviews and controller/owner handoff.
+No display/socket/profile/app operation or native CI. **FIRSTFAIL barrier restored**;
+controller must authorize any further execution/fix. Preserve all finished greens
+on unchanged relevant inputs; no routine reruns.
+
+New-only **`/tmp/opencode/task8-final-remainder-*`** holds preflight/review/barrier/
+reuse links, exact argv/results/raw/receipt/power data, current4 input hashes,
+failure classification, coverage/handoff and computed manifest. All22 older
+manifest files retain their snapshotted digests; no old runner/result/log written.
+Final source/whitespace/ancestry/merge-tree/comment-prefix/no-jobs evidence and
+metadata HEAD accompany handoff. Only ledger/current standing and append-only
+canonical **`01M6TYJATB44WZPJABX9GMBVS1`** committed with coauthor, preserving ID,
+parent **`01M6SYJK4CJGHWKZC7MTP18GTA`**, original creation time and all history.
+No new ID/extra build/status save/source or golden edits/push/PR/main/close/
+other-worktree/real profile/key/context/draft action. Known owned gate processes
+exited; no jobs. Ticket **implementing / runtime BLOCKED**, not feature-complete
+or review-ready; same whole runtime reviews and owner handoff remain owed.

@@ -476,3 +476,65 @@ whole CLI retry and25 first-run targets. No gate continuation, feature-complete 
 review-ready claim. Append preserves original ID/parent/time/body. No agents/
 push/status save/other-worktree/main/lifecycle/PR/close/native/real profile-key-
 context-draft action or owned job; profiling/performance-ticket work stays stopped.
+
+## Follow-up — fixture reviews clear; whole CLI GREEN, mutation_replay FAILED
+
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR
+throughfb6bbbb**, then SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE
+PASS throughfb6bbbb**, **zero Critical/Important/Minor findings**. These read-only
+delta reviews lifted the first-failure barrier for the authorized remaining-gate
+sequence, **not final runtime acceptance**. Sole owner, no agents/fetch/merge.
+
+Frozen gate/fixture **`fb6bbbb6817ad719eb47c37d2698b0077f2daaf7`**, active main
+**`707f4a6dc85abb187fd3385c534f514034ecc139`**, accepted docs-only mergeab53de7c;
+compiled source **`d49cfa4a7150d73bc31333e2fe9038fecfb2ec61`**, library/production
+**`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**. Only reviewed six fixture lines
+differ from d49. Retain library1530/0/1601972.73s, whole desktop1580/02158.17s,
+CLIunits307/00.52s, canonical65/00.03s and current check/fmt/Clippy greens, no reruns.
+
+1. Exact `devenv shell -- cargo test --all-features --locked --test cli` once:
+   **exit0;477/0/0filtered**,**378.04s tests**. Old whole476/1 remains historical;
+   exact help1/0 remains targeted correction evidence, not relabeled.
+2. First-run25-target selection once, exact authorized argv in new results:
+   **exit101**. Finished greens: discovery_rebuild**79/0,61.75s**;
+   drafts**48/0,6.68s**;journal_rejection**26/0,19.67s**;key_material**39/0,16.57s**;
+   key_storage**2/0,0.00s**;local_authoring**142/0,119.93s**;
+   mutation_bridges**166/0,199.03s**;mutation_confirmation**184/0,187.00s**;
+   mutation_contract**46/0,29.16s**;mutation_relationships**27/0,17.43s**.
+   **mutation_replay383/1,969.17s FAILED**; all zero ignored/filtered.
+   **No later target admitted;14 fast targets did not start.**
+
+Only failed case:
+**`resume::a_resume_of_a_row_another_call_is_indexing_under_is_busy_and_leaves_it`**,
+**`tests/mutation_replay/resume.rs:112:5`**. Actual **(Success, Ok)** vs expected
+**(Error, Busy)**. Completion received17:28:43.547604Z, sequence1224. Full message
+retained; no claim that later preservation assertions ran after the panic.
+**Cause undiagnosed; no probe/source fix/retry/expectation or safety relaxation**.
+
+Whole CLI UTC16:56:32.918911Z→17:02:51.509289Z, MONOTONIC378.590386411s /
+BOOTTIME378.590386381s;25 selection17:02:55.276718Z→17:30:02.331070Z,
+MONOTONIC1627.054345903s /BOOTTIME1627.054345675s. PM-only interval queries zero
+matches/exit1/empty stderr; sub-microsecond differences mean **no measured suspend**,
+not an infrastructure waiver. No power change/full journal/synthetic waits.
+Raw/receipt498/1290 rows cover all bytes and reconcile477/1143 completions;
+timestamps are receipt times, not case starts/internal phases. Inputs frozen.
+
+**Still NOT RUN:**14 later fast targets (literal names in handoff), selected library
+local-sync, all10 SSH targets, both smokes and SAME whole SPEC→QUALITY final runtime
+reviews/controller-owner handoff. No display/socket/profile/app/native action.
+Owner WAIT60s/POLL10ms/default threads/GPUI15s per-park and production budgets
+unchanged; no performance claim, profiling/optimization remains stopped. Retained44
+C/L/S/essential/M1/Q1/enum/D5/D6/native/combinatorial limits and historical failures
+keep actual scopes. Passing local_sync-named cases here does not replace its
+selected library gate. Preserve all completed greens for unchanged relevant inputs.
+
+New-only **`/tmp/opencode/task8-final-remainder-*`**: reviews/barrier/reuse proofs,
+literal commands/results/raw/receipt/power data, current4 hashes, failure analysis,
+coverage/handoff/final manifest. Help4 and prior accommodated28 manifests authenticated;
+all22 old manifest digests preserved, no old artifact writes/bulk reinventory.
+Only ledger/current standing/this append committed with coauthor; ID/parent/time/
+all previous body preserved. No ID/extra build/status save/source-golden edits/
+push/PR/main/lifecycle/other-worktree/real profile-key-context-draft action.
+Owned gate processes exited; no jobs. **FIRSTFAIL barrier restored**, controller
+authorization required. Ticket **implementing / runtime BLOCKED**, not feature-
+complete/review-ready; final runtime reviews and owner handoff remain owed.
