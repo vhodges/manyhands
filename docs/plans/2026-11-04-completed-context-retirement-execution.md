@@ -63,6 +63,17 @@ Read subphase/retirement-schema attribution and a sufficient minimal fix remain
 unresolved. No fix, policy change, additional test or later gate is authorized.
 Both uninstrumented desktop gates remain FAILED; library/static greens preserved.
 
+**Owner timing decision / API blocker (2026-11-07):** stop profiling and permit
+temporary finite desktop UI/worker waits of60s, with a consistently larger
+supported executor parking ceiling (90/120s), as a performance stopgap only.
+All six read-phase instrumentation files were restored first. Implementation
+preflight then merged documentation-only main **`846af679`** at **`9e8ad037`**;
+Rust/schema/build inputs still equal e6bc3912. The locked GPUI scheduler has a
+hard-coded15s per-uninterrupted-park limit and no duration setting/macro option.
+Per the owner's stop condition, **no wait-budget change was applied or tested**.
+Effective waits remain10s/held10s/parking15s. A focused owner decision on that API
+constraint is needed; no dependency patch, harness workaround or optimization.
+
 ### Current D15 Amendment — 2026-11-06
 
 **Owner-approved contract; both same-reviewer source/contract re-reviews passed
@@ -8482,3 +8493,98 @@ push/PR/closure/main/other-worktree action. Child2296737 and follow-up2306515
 exited. Only ledger and append-only current canonical comment are checkpointed
 with coauthor after restoration; original comment metadata/text retained.
 Ticket **implementing / runtime BLOCKED**, not feature-complete/review-ready.
+
+## Task 8 — Owner Timing Accommodation Authorized; Parking API Blocker
+
+### Finished Read-Phase Probe, Then Stop And Restore
+
+The separately authorized read-caller/subphase probe ran before owner steering,
+at clean **`972080a34a350878e1936a35093bce0b1964e1b1`**, fixed main1e5616af and
+frozen sourcee6bc3912. Same exact64 names from `task8-desktop-rerun-analysis.json`,
+default threads/RUST_TEST_THREADS unset, child-local diagnostic flag, Devenv
+all-feature locked desktop command; full argv is in
+**`/tmp/opencode/task8-readphase-command.json`**. **Exit101;15 passed/49 failed /
+1516 filtered;165.04s tests**,254.083083656s monotonic command time. UTC
+**14:57:36.450849Z→15:01:50.533942Z**, boottime254.083082647s; no measured suspend.
+The interval-only PM query has zero records, exit1/no-match/empty stderr.
+Raw9135-line receipt sidecar has complete byte coverage, not inferred case starts.
+This is diagnostic evidence only, not a restored-source gate or fixed cause.
+
+Owner then directed **STOP further profiling/optimization**. No follow-up probe,
+hot-caller analysis, optimization or further Rust command was admitted. Before
+the new implementation phase, all **six** temporary source files were restored
+using only the owned inverse patch through the patch tool; their pre/restored
+hashes match. Both HEAD and working-tree code/schema/build comparisons against
+e6bc3912 were empty and the worktree was clean. No instrumentation committed or
+cached instrumented executable launched as a gate. Raw log SHA-256
+**`559d348c80a75f5d3cfeac79992413fed5a729a12bd4153c803bfb71652c9030`**;
+immutable13-artifact read-phase manifest
+**`b9741e2fdd267aeccd63b855c18563ac1f7c2760096c6942121cd3d8c8fb322b`**.
+`restored-and-stopped.json` records exact restoration/byte coverage and scope.
+
+### Explicit Owner Decision And New-Phase Main Preflight — 2026-11-07
+
+Owner: “Retirement seems slow (but it’s doing a lot), if the timing budget needs
+to be relaxed to accomodate, then that’s fine for now. There are existing
+performance tickets.” Authorized accommodation is **test-only**, finite and
+stall-detecting: proposed **60s shared UI/worker wait and60s held-worker wait**,
+with an existing supported parking ceiling consistently above it, e.g90/120s.
+This is not a measured root-cause fix, permission to optimize, or a change to
+production leases/cache acquisition/SQL Busy/heartbeat/consent/cancellation.
+Default concurrency, predicates and all behavior/lifetime assertions must remain.
+Existing performance tickets are untouched; no new plan/framework/ticket.
+
+After restoration, fetched with `git fetch origin main`. Origin advanced from
+**`1e5616af22630b08a84dc0fb42037135b385f81d`** to
+**`846af67935f5381be9f355b25ae91d14e7705e6e`**, ten documentation commits only:
+`docs/RFC/desktop-information-architecture-and-editor.md`,
+`docs/Waves/wave-04-workspace-design.md`, `docs/design/09-implementation-plan.md`.
+Read current origin AGENTS; no rule delta. `git merge origin/main` succeeded
+without conflicts at **`9e8ad037f6ff42964aab2e6628927ed474d85697`**, exact parents
+**`972080a34a350878e1936a35093bce0b1964e1b1`** and **`846af679…`**; ancestry verified.
+No local-main or other-worktree edit/rebase. Source/schema/build diff against
+e6bc3912 remains empty after merge, so the old library evidence retains scope.
+
+### Actual Supported API And Why No Partial Budget Change Was Made
+
+Locked dependency chain: **gpui-kit0.6.6 → gpui-pre0.3.6 →
+gpui-pre-scheduler0.3.6**. Read-only installed-source inspection found:
+
+- `test_scheduler.rs:488–543`, `TestScheduler::park`: **hard_deadline = start +
+  Duration::from_secs(15)** at492; any supplied deadline is clamped with
+  `min(hard_deadline)` at494–497. This is per uninterrupted park, **not a total
+  test wall-clock limit**. Existing poll timers may wake normal waits earlier;
+  they do not configure a90/120s parking ceiling for every path.
+- `TestSchedulerConfig` at741–768 has seed/randomize_order/allow_parking/
+  capture_pending_traces/**timeout_ticks** only; no parking-duration field.
+- `gpui-pre/src/executor.rs:220–252` exposes allow_parking, forbid_parking and
+  **set_block_on_ticks(RangeInclusive<usize>)**. Ticks are not seconds and do not
+  alter the hard parking limit. `block_with_timeout` still reaches the clamp.
+- `gpui-pre-macros/src/test.rs:13–83` accepts retries, iterations, on_failure,
+  seed/seeds; **no timeout/parking argument**. The macro constructs the standard
+  dispatcher; there is no existing repository override pattern.
+
+**BLOCKED by the owner's explicit API stop condition.** No supported duration
+override was found, so WAIT was not raised into a configuration that fails the
+required ceiling relation. **Effective values remain UI10s / held-worker10s /
+GPUI per-park15s**. No Rust/test file, dependency, Cargo/Devenv, scheduler or
+poll-frequency change; no wakeup workaround, real waits or policy bypass.
+
+Controller decision needed: separately authorize a supported upstream parking
+duration API/dependency change, or explicitly accept retaining the independent15s
+per-park guard while extending the existing polled UI waits. Neither alternative
+is inferred or executed. New exact64 accommodation run, check/Clippy/fmt and all
+later gates are **NOT RUN**, since no persisted Rust change exists to verify.
+
+Preflight, dependency source hashes/ranges and exact unsupported-API findings are
+in **`/tmp/opencode/task8-readphase-budget-preflight-and-blocker.json`** and
+**`parking-api.txt`** under that same prefix. Prior manifests remain immutable;
+source restoration precedes both merge and metadata checkpoint. Only this ledger
+and append-only canonical comment are owned checkpoint changes, with coauthor;
+comment ID/parent/creation time/all existing text retained. Library1530/0/160,
+1972.73s and qualifying static greens are preserved, not rerun. Historical62/64
+whole desktop failures remain FAILED; diagnostic15/49 does not replace them.
+No status save, push/PR/closure/native, other worktree, real profile/key/context/
+draft action or remaining CLI/integration/local-sync/SSH/smoke gate. Ticket stays
+**implementing / runtime BLOCKED**; same whole SPEC delta review then same QUALITY
+review and runtime-evidence gates remain owed before any changed whole desktop run.

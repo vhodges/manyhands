@@ -272,3 +272,57 @@ Both children2296737/2306515 exited; no more tests. Only ledger/comment metadata
 checkpoint, existing ID/parent/created_at/text retained; no push/status save/PR/
 main/closure/other-worktree/real-profile-key-context-draft/native action. Ticket
 **implementing / runtime BLOCKED**, not feature-complete/review-ready.
+
+## Follow-up — profiling stopped; owner timing accommodation hits GPUI API blocker
+
+The last authorized read-phase exact64 probe had already finished when owner
+steering arrived: **exit101;15 passed/49 failed/1516 filtered;165.04s tests**,
+254.083083656s monotonic. UTC **14:57:36.450849Z→15:01:50.533942Z**, no measured
+suspend; filtered PM query zero records/no-match. Full argv/raw9135-line receipt
+sidecar/results are retained under **`/tmp/opencode/task8-readphase-*`**. Raw hash
+**`559d348c80a75f5d3cfeac79992413fed5a729a12bd4153c803bfb71652c9030`**;
+13-artifact manifest **`b9741e2fdd267aeccd63b855c18563ac1f7c2760096c6942121cd3d8c8fb322b`**.
+No further profiling, hot-caller analysis, follow-up probe or optimization followed.
+
+**All six temporary source files restored first with the patch tool**, exact
+pre/post hashes and empty HEAD/working-tree diff to e6bc3912; clean tree before
+new-phase preflight. No instrumentation committed or cached executable used as
+a restored-source gate. The actual diagnostic failure is retained, not waived.
+
+**Owner decision,2026-11-07:** temporarily accommodate slow retirement with finite
+desktop-test UI/worker wait budgets (proposed60s, matching held60s), while retaining
+all assertions/default concurrency and a supported larger parking ceiling90/120s.
+This is not a performance fix or permission to alter production heartbeat/lease/
+cache-acquisition/SQL Busy/600s consent/cancellation. Existing performance tickets
+remain untouched; no new ticket/design/framework.
+
+After restoration, `git fetch origin main` found ten documentation-only commits.
+Merged origin **`846af67935f5381be9f355b25ae91d14e7705e6e`** without conflicts at
+**`9e8ad037f6ff42964aab2e6628927ed474d85697`**, parents972080a3/846af679.
+Only incoming three RFC/Wave04/design-plan documents changed. Current AGENTS read;
+Rust/schema/build diff to e6bc3912 still empty, so library evidence retains scope.
+No main/other-worktree edit or rebase.
+
+**Implementation BLOCKED, per the owner's explicit API condition:** locked
+gpui-kit0.6.6/gpui-pre0.3.6 scheduler hard-codes **15s per uninterrupted park**
+(`test_scheduler.rs:492`) and clamps supplied deadlines to it. It is not a whole
+test wall-clock limit. Available `set_block_on_ticks` controls tick counts, not
+parking seconds; TestSchedulerConfig has no duration field. Test macro accepts
+retries/iterations/on_failure/seed/seeds, no timeout. Existing poll timers do not
+constitute a configured90/120s ceiling. No supported override found.
+
+Therefore **no partial60s budget edit and no new test run**. Effective UI10s /
+held10s / parking15s remain unchanged. No dependencies/GPUI library/framework/
+poll-frequency or production policy change. Focused owner choice is needed:
+authorize a separately scoped supported upstream duration API/dependency change,
+or explicitly accept retaining the independent15s per-park guard for extended
+polled waits. Neither workaround is assumed or performed.
+
+API excerpts/hashes, merge/source preflight and final integrity are under
+**`/tmp/opencode/task8-readphase-budget-*`**. Library1530/0/160 and statics remain
+preserved/not rerun; both whole desktop failures remain FAILED. Accommodation64,
+check/fmt/Clippy, whole desktop and all remaining gates were not run. Only owned
+ledger/comment metadata checkpoint with coauthor after source restoration; all
+original comment metadata/text preserved. No push/status save/PR/main/close/
+native/real-profile-key-context-draft action. Ticket **implementing/runtime BLOCKED**;
+same SPEC delta then same QUALITY approval and runtime gates remain owed.
