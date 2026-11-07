@@ -1,12 +1,56 @@
-use crate::render::{Human, field};
+use crate::render::{Human, field, quoted};
 use manyhands::{
     repository::*,
     results::{Effects, Envelope, Outcome, ResultCode},
 };
 
+pub const REPUBLISH: &str = "item republish";
+/// The no-op preview of `item republish`: the branch is there, was never
+/// published, or its deletion is not yet observed (design, Republish).
+const UNPUBLISHED_NOTE: &str = "no deletion of this item's published branch is recorded, so there is nothing to republish; run item sync first (add --request-id unless you run it at a terminal), which looks at the remote, then run the republish again.";
+
+/// What the no-op preview of an `item republish` adds to C2's line: the
+/// `item sync` to run first, as a `next:` line when the repository and the
+/// item are known, and the note that says why. The library offers no
+/// recovery action that names a sync, and none may be added (decision 8).
+/// Another command's no-op preview adds nothing.
+pub fn republish_noop(envelope: &Envelope<PrepareDataDto>) -> Option<Human> {
+    if envelope.command != REPUBLISH {
+        return None;
+    }
+    let next = match (
+        envelope.scope.repository.as_deref(),
+        envelope.scope.item_id.as_deref(),
+    ) {
+        (Some(root), Some(item)) => format!(
+            "next: manyhands-cli item sync --repo {} --id {}\n",
+            quoted(root),
+            field(item)
+        ),
+        _ => String::new(),
+    };
+    Some(Human {
+        stdout: next,
+        notes: vec![UNPUBLISHED_NOTE.into()],
+    })
+}
+
+/// `fields`, less the top-level keys a caller shows in its own form.
+pub(crate) fn fields_without(dto: &impl serde::Serialize, keys: &[&str]) -> String {
+    let Ok(mut value) = serde_json::to_value(dto) else {
+        return String::new();
+    };
+    if let Some(fields) = value.as_object_mut() {
+        for key in keys {
+            fields.remove(*key);
+        }
+    }
+    fields(&value)
+}
+
 // Only published, content-free DTOs reach this formatter. Inputs never do.
 // Nested field names retain their context, and every dynamic scalar is escaped.
-pub(super) fn fields(dto: &impl serde::Serialize) -> String {
+pub(crate) fn fields(dto: &impl serde::Serialize) -> String {
     fn walk(prefix: &str, value: &serde_json::Value, out: &mut String) {
         match value {
             serde_json::Value::Object(values) => {
@@ -60,6 +104,8 @@ pub fn preview(preview: &PreviewDto) -> String {
         PreviewDetailsDto::Identity(d) => fields(d),
         PreviewDetailsDto::Host(d) => fields(d),
         PreviewDetailsDto::Repair(d) => fields(d),
+        PreviewDetailsDto::Republish(d) => fields(d),
+        PreviewDetailsDto::Lifecycle(d) => lifecycle_details(d),
     };
     let mut out = format!("Preview of {}\n{details}", field(&preview.command));
     for effect in &preview.effects {
@@ -72,6 +118,38 @@ pub fn preview(preview: &PreviewDto) -> String {
     ));
     out
 }
+/// A preview's details: its fields, with each change on one line, its kind
+/// beside its path, where `Changes` sorts.
+fn lifecycle_details(details: &manyhands::repository::LifecyclePreviewDto) -> String {
+    let fields = fields_without(details, &["changes"]);
+    let changes: String = if details.changes.is_empty() {
+        "Changes: none\n".into()
+    } else {
+        details
+            .changes
+            .iter()
+            .map(|change| {
+                format!(
+                    "Changes: {} {}\n",
+                    change.change.as_str(),
+                    field(&change.path)
+                )
+            })
+            .collect()
+    };
+    let at = fields
+        .lines()
+        .position(|line| {
+            line.split(':')
+                .next()
+                .is_some_and(|label| label > "Changes")
+        })
+        .map_or(fields.len(), |line| {
+            fields.lines().take(line).map(|text| text.len() + 1).sum()
+        });
+    format!("{}{changes}{}", &fields[..at], &fields[at..])
+}
+
 pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
     match effect {
         PreviewEffect::DirectoryCreated => "create the directory",
@@ -100,6 +178,14 @@ pub fn effect_phrase(effect: PreviewEffect) -> &'static str {
         PreviewEffect::IdAdopted => "adopt the item ID",
         PreviewEffect::SourceWritten => "write the corrected source",
         PreviewEffect::CheckpointCommitted => "commit the checkpoint",
+        PreviewEffect::BranchRepublished => "push the deleted branch again at the local commit",
+        PreviewEffect::ContextSynchronized => "synchronize the editing branch with the remote",
+        PreviewEffect::ClosureRecorded => "record the closure on the editing branch",
+        PreviewEffect::PrimaryIntegrated => "merge the editing branch into primary",
+        PreviewEffect::PrimaryPublished => "publish primary",
+        PreviewEffect::RemoteBranchDeleted => "delete the editing branch on the remote",
+        PreviewEffect::WorktreeRemoved => "remove the editing worktree",
+        PreviewEffect::BranchDeleted => "delete the local editing branch",
     }
 }
 fn effects(effects: &Effects) -> String {

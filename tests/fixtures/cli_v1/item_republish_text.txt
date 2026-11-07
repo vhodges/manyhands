@@ -1,0 +1,2 @@
+error: No publication remote is selected.
+code: publication_remote_required

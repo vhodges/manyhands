@@ -15,6 +15,12 @@ mod authoring;
 
 #[path = "manyhands-cli/catalog.rs"]
 mod catalog;
+#[path = "manyhands-cli/collaboration.rs"]
+mod collaboration;
+#[path = "manyhands-cli/conflict.rs"]
+mod conflict;
+#[path = "manyhands-cli/discussion.rs"]
+mod discussion;
 #[path = "manyhands-cli/dispatch.rs"]
 mod dispatch;
 #[path = "manyhands-cli/fill.rs"]
@@ -25,12 +31,26 @@ mod human;
 mod human_admin;
 #[path = "manyhands-cli/human_authoring.rs"]
 mod human_authoring;
+#[path = "manyhands-cli/human_collaboration.rs"]
+mod human_collaboration;
+#[path = "manyhands-cli/human_lifecycle.rs"]
+mod human_lifecycle;
+#[path = "manyhands-cli/human_local_sync.rs"]
+mod human_local_sync;
 #[path = "manyhands-cli/input.rs"]
 mod input;
+#[path = "manyhands-cli/interrupt.rs"]
+mod interrupt;
+#[path = "manyhands-cli/lifecycle.rs"]
+mod lifecycle;
+#[path = "manyhands-cli/local_sync.rs"]
+mod local_sync;
 #[path = "manyhands-cli/mutate.rs"]
 mod mutate;
 #[path = "manyhands-cli/parse.rs"]
 mod parse;
+#[path = "manyhands-cli/polling.rs"]
+mod polling;
 #[path = "manyhands-cli/progress.rs"]
 mod progress;
 #[path = "manyhands-cli/prompt.rs"]

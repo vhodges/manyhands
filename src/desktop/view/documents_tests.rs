@@ -1,9 +1,9 @@
 //! The document tree: what the two library reads give, and nothing else;
-//! arrows move and Enter opens; folder creation is visibly unavailable.
+//! arrows move and Enter opens; New folder opens its dialog (E-10).
 
 use std::path::{Path, PathBuf};
 
-use gpui_kit::TestAppContext;
+use gpui_kit::{TestAppContext, test::TestWindowExt};
 use manyhands::repository::ItemDtoKind;
 
 use super::{NONCONFORMING, node_label};
@@ -101,17 +101,52 @@ fn the_tree_shows_what_the_library_reads_give(cx: &mut TestAppContext) {
     );
 }
 
+/// E-10: New folder opens its dialog, under `docs` with no folder
+/// selected; by keyboard, with a folder selected, under that folder.
+/// Escape closes it, focus goes back to New folder, and nothing is made.
 #[gpui_kit::test]
-fn folder_creation_is_visibly_unavailable(cx: &mut TestAppContext) {
-    let (shell, _) = documents(cx);
-    assert_eq!(
-        shell.label("new-folder-unavailable", cx).as_deref(),
-        Some(super::NEW_FOLDER_UNAVAILABLE)
-    );
-    // The control is shown and does nothing: the tree is as it was.
+fn new_folder_opens_its_dialog(cx: &mut TestAppContext) {
+    let (shell, root) = documents(cx);
     let before = shell.rows("doc-node", cx);
-    shell.click("new-folder", cx);
+    let folders = library_tree(&shell, &root);
+    shell.click("new-folder-button", cx);
+    assert!(shell.present("new-folder-dialog", cx), "its dialog opens");
+    assert_eq!(
+        shell.label("new-folder-explain", cx).as_deref(),
+        Some("A new folder stays on this computer until a document is saved in it.")
+    );
+    assert_eq!(
+        shell.label("new-folder-name", cx).as_deref(),
+        Some("Folder name")
+    );
+    assert_eq!(shell.label("new-folder-path", cx).as_deref(), Some("docs/"));
+    shell.keys("escape", cx);
+    assert!(!shell.present("new-folder-dialog", cx));
+
+    shell.keys("secondary-2", cx);
+    shell.keys("down", cx);
+    assert!(shell.selected(("doc-node", 1usize), cx));
+    assert_eq!(before[1], "guides");
+    shell.keys("shift-tab", cx);
+    let focused = |shell: &Shell, cx: &mut TestAppContext| {
+        shell.frame(cx, |window, _| {
+            window
+                .try_find("new-folder-button")
+                .is_some_and(|element| element.focused() == Some(true))
+        })
+    };
+    assert!(focused(&shell, cx), "Shift-Tab reaches New folder");
+    shell.press("enter", cx);
+    assert!(shell.present("new-folder-dialog", cx), "Enter opens it");
+    assert_eq!(
+        shell.label("new-folder-path", cx).as_deref(),
+        Some("docs/guides/")
+    );
+    shell.keys("escape", cx);
+    assert!(!shell.present("new-folder-dialog", cx));
+    assert!(focused(&shell, cx), "focus goes back to New folder");
     assert_eq!(shell.rows("doc-node", cx), before);
+    assert!(library_tree(&shell, &root) == folders, "nothing is made");
 }
 
 /// Arrows move through the drawn nodes; Enter opens a document by ID and
@@ -177,8 +212,11 @@ fn arrows_move_in_the_tree_and_enter_opens(cx: &mut TestAppContext) {
             id: TOP.parse().unwrap(),
         })
     );
+    // E-30: the kind and ID are in the details sheet.
+    shell.click("chip-all", cx);
     assert_eq!(shell.label("item-kind", cx).as_deref(), Some("Document"));
     assert_eq!(shell.label("item-id", cx).as_deref(), Some(TOP));
+    shell.keys("escape", cx);
 }
 
 /// Review Focus 1: A's document read is held while B is selected; B's

@@ -684,3 +684,66 @@ async fn a_finished_confirmation_and_a_prompt_in_one_batch_close_only_the_confir
     assert!(!shell.present("passphrase-dialog", cx));
     next.release();
 }
+
+/// A prompt raised while a share of repository `a` runs names what
+/// waits, and Cancel reads Not now, with a note on what it leaves; Not
+/// now answers `Cancelled`. A prompt with no share waiting names none.
+#[gpui_kit::test]
+async fn the_dialog_names_what_waits_and_says_not_now(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    let fixture = Fixture::new();
+    let root = fixture.create_repository("a");
+    fixture.publish_over_ssh(&root);
+    let shell = Shell::open(fixture, cx);
+
+    // Nothing waits: no share is named.
+    let asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    assert!(!shell.present("passphrase-subtitle", cx));
+    assert!(!shell.present("passphrase-note", cx));
+    shell.click("passphrase-cancel", cx);
+    assert_eq!(asked.answered(), "cancelled");
+
+    let held = shell.backend.hold_job(JobKind::SynchronizeRepo);
+    let id = shell.workspace.read_with(cx, |workspace, _| {
+        workspace.services().worker().submit(
+            Intent::RepoSync { root: root.clone() },
+            Lane::User,
+            None,
+            None,
+        )
+    });
+    held.wait_reached();
+    shell
+        .until(cx, move |operations| {
+            operations
+                .request(id)
+                .is_some_and(|request| matches!(request.state, RequestState::Running { .. }))
+        })
+        .await;
+
+    let asked = ask(&shell, "primary", cx);
+    until_shown(&shell, cx).await;
+    assert_eq!(
+        shell.label("passphrase-subtitle", cx).as_deref(),
+        Some("Sharing a is waiting for your passphrase.")
+    );
+    assert_eq!(
+        shell.label("passphrase-note", cx).as_deref(),
+        Some(
+            "If you choose Not now, your work stays saved on this computer. \
+             Unlock later from the waiting share, or stop trying to share it."
+        )
+    );
+    assert_eq!(CANCEL, "Not now");
+    assert_eq!(
+        shell.label("passphrase-cancel", cx).as_deref(),
+        Some(CANCEL)
+    );
+    shell.click("passphrase-cancel", cx);
+    assert_eq!(asked.answered(), "cancelled");
+    assert!(!shell.present("passphrase-dialog", cx));
+
+    held.release();
+    shell.until_ended(id, cx).await;
+}

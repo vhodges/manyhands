@@ -3440,3 +3440,61 @@ fn window_zero_requirement_excludes_non_sync_operations_and_removed_registration
     .unwrap();
     RepositoryService::open_at(data.path()).unwrap();
 }
+
+/// Closing an attempt that never began its paths leaves the step as it is,
+/// though another attempt of the step has begun its own: only an attempt
+/// that began its paths put the step at `resolution_prepared`, and only its
+/// closing puts it back (final review, minor 3).
+#[test]
+fn closing_an_unbegun_attempt_keeps_the_step_another_attempt_began() {
+    let (data, root, service) = fixture();
+    let operation = crate::repository::OperationId::new();
+    with_transaction(&service, root.path(), |tx, id| {
+        configure(tx, id, Some(&plan()), false)?;
+        insert_operation(
+            tx,
+            id,
+            operation,
+            &RemoteOperationTarget::for_primary_synchronization(&plan()),
+            RemoteOperationPriority::Manual,
+            123,
+        )
+    })
+    .unwrap();
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let (parent, generation): (i64, i64) = connection
+        .query_row(
+            "SELECT id,configuration_generation FROM remote_operation_records WHERE operation_ulid=?1",
+            [operation.to_string()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    connection.execute("INSERT INTO remote_integration_steps(operation_record_id,configuration_generation,owner_epoch,ordinal,stage,local_oid,incoming_oid,baseline_tree_oid,baseline_index_digest,conflict_digest,phase) VALUES(?1,?2,0,0,'primary',?3,?4,?5,zeroblob(32),zeroblob(32),'resolution_prepared')",params![parent,generation,ADVERTISED,TRACKING,ADVERTISED]).unwrap();
+    let begun = crate::repository::OperationId::new();
+    let unbegun = crate::repository::OperationId::new();
+    for (attempt, phase) in [(begun, "paths_applying"), (unbegun, "prepared")] {
+        connection.execute("INSERT INTO remote_resolution_attempts(attempt_ulid,operation_record_id,integration_step_id,configuration_generation,owner_epoch,observation_digest,input_digest,preflight_digest,phase,commit_time,commit_offset_minutes) VALUES(?1,?2,1,?3,0,zeroblob(32),zeroblob(32),zeroblob(32),?4,1700000000,0)",params![attempt.to_string(),parent,generation,phase]).unwrap();
+    }
+    drop(connection);
+    let closed = with_transaction(&service, root.path(), |tx, id| {
+        let record = read_operation(tx, id, operation)?.ok_or_else(recovery_required)?;
+        close_unwritten_resolution_attempt(tx, &record, unbegun)
+    })
+    .unwrap();
+    assert!(closed);
+    let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let step: String = connection
+        .query_row("SELECT phase FROM remote_integration_steps", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(step, "resolution_prepared");
+    let attempts: Vec<String> = connection
+        .prepare("SELECT attempt_ulid FROM remote_resolution_attempts")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(attempts, [begun.to_string()]);
+}

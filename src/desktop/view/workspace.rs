@@ -10,7 +10,10 @@ mod render;
 mod repositories;
 mod requests;
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use gpui_kit::{
     AppContext, Context, Entity, FocusHandle, Subscription, Task, WeakEntity, Window,
@@ -24,6 +27,7 @@ pub(crate) use super::quit::QuitPhase;
 use super::{
     documents::DocumentsPane,
     drafts::{DraftsEvent, DraftsPage},
+    item::{ChipField, ItemPane},
     passphrase::PassphraseDialog,
     settings::{SettingsEvent, SettingsHost},
     sidebar::RepositoriesPane,
@@ -32,14 +36,18 @@ use super::{
 };
 use crate::desktop::{
     model::{
-        documents::Documents, find::Find, navigation::Navigation, stamp::RepoKey, tickets::Tickets,
+        documents::Documents,
+        find::Find,
+        navigation::Navigation,
+        stamp::{Generations, RepoKey},
+        tickets::Tickets,
     },
-    services::Services,
+    services::{Services, pending_conflicts::PendingConflict},
 };
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 pub(crate) use focus::REGIONS;
 pub(crate) use focus::Region;
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop-test-support"))]
 use gpui_kit::App;
 use manyhands::drafts::DraftId;
 
@@ -51,9 +59,23 @@ struct ContentArea {
     drafts: Entity<DraftsPage>,
     /// A tab's Review in Drafts, for the next frame to open.
     review: Option<DraftId>,
+    /// A tab's create asked for Settings on this repository, where its
+    /// initials are set: the next frame opens them.
+    settings_for: Option<PathBuf>,
     /// A tab's restored draft was discarded: the next frame focuses the
     /// tab's content.
     refocus: bool,
+    /// A tab closed, or followed its repaired item, once an answer landed:
+    /// the next frame focuses the content region, as `refocus` does, but
+    /// not while the details sheet is open, whose close gives focus back to
+    /// its chip (Task 27 fix 2, N2).
+    landed_refocus: bool,
+    /// A chip's request for its tab's details sheet, for the next frame to
+    /// open.
+    details: Option<(WeakEntity<ItemPane>, ChipField)>,
+    /// The tab whose details sheet is open: the sheet closes once another
+    /// is shown.
+    sheet: Option<WeakEntity<ItemPane>>,
 }
 
 pub(crate) struct Workspace {
@@ -97,6 +119,12 @@ pub(crate) struct Workspace {
     /// Launch refreshes are submitted once, after the first repository list.
     launched: bool,
     pending_reads: HashMap<RepoKey, Task<()>>,
+    /// Each repository's pending rows whose conflict waits to be resolved,
+    /// as its last read of them found (D5 B5).
+    pending_conflicts: HashMap<RepoKey, Vec<PendingConflict>>,
+    /// Each repository's read of them; a newer read drops the last.
+    pending_conflict_reads: HashMap<RepoKey, Task<()>>,
+    conflict_generations: Generations,
     abandon_focus: HashMap<(RepoKey, String), FocusHandle>,
     abandon_drawn: HashSet<(RepoKey, String)>,
     control_focus: HashMap<String, FocusHandle>,
@@ -105,11 +133,25 @@ pub(crate) struct Workspace {
     /// A session's recovery state shows in the operation area.
     _drafts: Subscription,
     _focus_lost: Subscription,
+    /// The window taking focus reads every listed repository's pending
+    /// operations again: the lifecycle lock follows what another process
+    /// did meanwhile (D5 A2, P26).
+    _activation: Subscription,
     _ticket_events: Subscription,
     repositories_pane: RepositoriesPane,
     _repository_events: Subscription,
     remove_focus: FocusHandle,
     retry_focus: FocusHandle,
+    /// Each change gives the open tabs their repository's publication
+    /// remote from `navigation` (`TabContent::share_remotes`).
+    _remotes: Subscription,
+    /// Each Stop and republish… waiting for its Give up's answer (D5 A3).
+    pub(in crate::desktop::view) stopping_to_republish:
+        Vec<super::operations::republish::StopThenRepublish>,
+    /// Each Republish… that stopped sequence opened while another dialog
+    /// was open, waiting for it to close (R-32).
+    pub(in crate::desktop::view) republish_deferred:
+        Vec<(super::operations::republish::Republishing, FocusHandle)>,
 }
 
 impl Workspace {
@@ -126,6 +168,11 @@ impl Workspace {
         });
         let drafts = cx.observe(services.drafts(), |_, _, cx| cx.notify());
         let focus_lost = cx.on_focus_lost(window, |this, window, cx| this.focus_lost(window, cx));
+        let activation = cx.observe_window_activation(window, |this, window, cx| {
+            if window.is_window_active() {
+                this.reload_pending(cx);
+            }
+        });
         let workspace = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             workspace
@@ -214,7 +261,11 @@ impl Workspace {
                 settings,
                 drafts: drafts_page,
                 review: None,
+                settings_for: None,
                 refocus: false,
+                landed_refocus: false,
+                details: None,
+                sheet: None,
             },
             _settings_events: settings_events,
             _drafts_events: drafts_events,
@@ -225,6 +276,9 @@ impl Workspace {
             prompts_held: false,
             launched: false,
             pending_reads: HashMap::new(),
+            pending_conflicts: HashMap::new(),
+            pending_conflict_reads: HashMap::new(),
+            conflict_generations: Generations::default(),
             abandon_focus: HashMap::new(),
             abandon_drawn: HashSet::new(),
             control_focus: HashMap::new(),
@@ -232,11 +286,16 @@ impl Workspace {
             _operations: operations,
             _drafts: drafts,
             _focus_lost: focus_lost,
+            _activation: activation,
             _ticket_events: ticket_events,
             repositories_pane,
             _repository_events: repository_events,
             remove_focus: cx.focus_handle(),
             retry_focus: cx.focus_handle(),
+            _remotes: cx
+                .observe_self(|this, cx| this.content.tabs.share_remotes(&this.navigation, cx)),
+            stopping_to_republish: Vec::new(),
+            republish_deferred: Vec::new(),
         };
         workspace.load_repositories(cx);
         workspace
@@ -247,6 +306,18 @@ impl Workspace {
     }
     pub(crate) fn navigation(&self) -> &Navigation {
         &self.navigation
+    }
+    /// The pending row `operation_id` of `root`, when its conflict waits
+    /// to be resolved (D5 B5).
+    pub(in crate::desktop::view) fn pending_conflict(
+        &self,
+        root: &str,
+        operation_id: &str,
+    ) -> Option<&PendingConflict> {
+        self.pending_conflicts
+            .get(root)?
+            .iter()
+            .find(|conflict| conflict.operation_id.to_string() == operation_id)
     }
     pub(crate) fn documents(&self) -> &Documents {
         &self.documents
@@ -270,22 +341,22 @@ impl Workspace {
         &self.quit_focus
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn passphrase(&self) -> Option<Entity<PassphraseDialog>> {
         self.passphrase.as_ref().and_then(WeakEntity::upgrade)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn repositories_list_focus(&self, cx: &App) -> FocusHandle {
         gpui_kit::Focusable::focus_handle(self.repositories_pane.list().read(cx), cx)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn tickets_list_focus(&self, cx: &App) -> FocusHandle {
         gpui_kit::Focusable::focus_handle(self.tickets_pane.list().read(cx), cx)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn remove_focus(&self) -> FocusHandle {
         self.remove_focus.clone()
     }

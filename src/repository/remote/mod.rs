@@ -1,14 +1,21 @@
+pub(super) mod conflict_read;
 mod merge;
 pub(super) mod observation;
 mod poll;
 mod refs;
 pub(super) mod sync;
+pub use conflict_read::{
+    ConflictDto, ConflictPathDto, ConflictPathKind, ConflictPathStructure, ConflictReadEligibility,
+    ConflictReadNextAction, ConflictStage, ConflictState, ConflictTarget,
+};
 pub use merge::{
     ConfirmedCommitIdentity, ConflictEligibility, ConflictObservation, ConflictPathToken,
     ExpectedConfiguration, RedactedConflictBytes, ResolveSynchronizationOutcome,
     ResolveSynchronizationRequest,
 };
 pub use observation::{ObservePublicationRemoteRequest, RemoteObservationError};
+#[doc(hidden)]
+pub use poll::POLL_PROGRESS_THROTTLE;
 pub use poll::{
     AutomaticPollEligibility, PollCompletion, PollDisposition, PollIneligibility,
     PollPublicationRemoteRequest, PollTargetReport, RemotePollError, RemotePollOutcome,

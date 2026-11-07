@@ -662,12 +662,17 @@ fn every_golden_fixture_is_canonical_text() {
 
 /// The strings of the `enum` of `property`, which is a property name or a
 /// dotted path through nested objects. A nullable enumeration also lists
-/// `null`, which its `type` already allows and which is not a string.
+/// `null`, which its `type` already allows and which is not a string. The
+/// name `items` steps into an array's items.
 fn schema_enum(file: &str, property: &str) -> Vec<String> {
     let schema = read_json(&schema::schema_directory().join(file));
     let mut node = &schema;
     for name in property.split('.') {
-        node = &node["properties"][name];
+        node = if name == "items" {
+            &node["items"]
+        } else {
+            &node["properties"][name]
+        };
     }
     node["enum"]
         .as_array()
@@ -684,7 +689,7 @@ fn schema_enum(file: &str, property: &str) -> Vec<String> {
 /// abandoned can be. They are named, and not taken from `ALL` by
 /// position: an action added before them that is not local would then
 /// pass for one.
-const LOCAL_ACTIONS: [OperationAction; 14] = [
+const LOCAL_ACTIONS: [OperationAction; 15] = [
     OperationAction::CreateAndEnable,
     OperationAction::Enable,
     OperationAction::RemoveRegistration,
@@ -694,6 +699,7 @@ const LOCAL_ACTIONS: [OperationAction; 14] = [
     OperationAction::Refresh,
     OperationAction::Rebuild,
     OperationAction::PrepareContext,
+    OperationAction::ReleaseContext,
     OperationAction::SaveDocument,
     OperationAction::SaveTicket,
     OperationAction::SubmitComment,
@@ -704,7 +710,137 @@ const LOCAL_ACTIONS: [OperationAction; 14] = [
 fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
     let envelope = golden::ENVELOPE_SCHEMA;
     let effects = "effects.schema.json";
+    use manyhands::repository::{
+        LifecycleBlocker, LifecycleCleanupPendingReason, LifecycleCleanupState,
+        LifecycleIntegrationKind, LifecycleMadeReadyState, LifecycleMutationType,
+        LifecyclePathChangeKind, LifecyclePlannedIntegration, LifecyclePlannedPublication,
+        LifecyclePublicationPendingReason, LifecyclePublicationState, LifecycleRecording,
+        PollMutationCompletion, PollTargetDisposition,
+    };
     let mut enumerations = vec![
+        (
+            "lifecycle_blocked.schema.json",
+            "blockers.items",
+            LifecycleBlocker::ALL.map(LifecycleBlocker::as_str).to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.changes.items.change",
+            LifecyclePathChangeKind::ALL
+                .map(LifecyclePathChangeKind::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.integration",
+            LifecyclePlannedIntegration::ALL
+                .map(LifecyclePlannedIntegration::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.publication",
+            LifecyclePlannedPublication::ALL
+                .map(LifecyclePlannedPublication::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_preview.schema.json",
+            "details.closure.recording",
+            LifecycleRecording::ALL
+                .map(LifecycleRecording::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "type",
+            LifecycleMutationType::ALL
+                .map(LifecycleMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "recording",
+            LifecycleRecording::ALL
+                .map(LifecycleRecording::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "integration",
+            LifecycleIntegrationKind::ALL
+                .map(LifecycleIntegrationKind::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "publication",
+            LifecyclePublicationState::ALL
+                .map(LifecyclePublicationState::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "publication_pending",
+            LifecyclePublicationPendingReason::ALL
+                .map(LifecyclePublicationPendingReason::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "cleanup",
+            LifecycleCleanupState::ALL
+                .map(LifecycleCleanupState::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "cleanup_pending",
+            LifecycleCleanupPendingReason::ALL
+                .map(LifecycleCleanupPendingReason::as_str)
+                .to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "blockers.items",
+            LifecycleBlocker::ALL.map(LifecycleBlocker::as_str).to_vec(),
+        ),
+        (
+            "lifecycle_mutation.schema.json",
+            "made_ready_state",
+            LifecycleMadeReadyState::ALL
+                .map(LifecycleMadeReadyState::as_str)
+                .to_vec(),
+        ),
+        (
+            "poll_mutation.schema.json",
+            "completion",
+            PollMutationCompletion::ALL
+                .map(PollMutationCompletion::as_str)
+                .to_vec(),
+        ),
+        (
+            "poll_mutation.schema.json",
+            "targets.items.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "poll_mutation.schema.json",
+            "targets.items.disposition",
+            PollTargetDisposition::ALL
+                .map(PollTargetDisposition::as_str)
+                .to_vec(),
+        ),
         (
             "local_context_sync_observation.schema.json",
             "kind",
@@ -827,6 +963,11 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
             "item_context.schema.json",
             "kind",
             ItemContextKind::ALL.map(ItemContextKind::as_str).to_vec(),
+        ),
+        (
+            "context_mutation.schema.json",
+            "kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
         ),
         (
             "dependency.schema.json",
@@ -1032,6 +1173,138 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
         manyhands::repository::LocalContextSyncDataType::ALL
             .map(manyhands::repository::LocalContextSyncDataType::as_str)
             .to_vec(),
+    ));
+    use manyhands::repository::{ConflictNextAction, SynchronizationConflictType};
+    enumerations.extend([
+        (
+            "conflict_next.schema.json",
+            "next_action",
+            ConflictNextAction::ALL
+                .map(ConflictNextAction::as_str)
+                .to_vec(),
+        ),
+        (
+            "synchronization_conflict_mutation.schema.json",
+            "type",
+            SynchronizationConflictType::ALL
+                .map(SynchronizationConflictType::as_str)
+                .to_vec(),
+        ),
+    ]);
+    use manyhands::repository::{CommentMutationType, CommentPendingReason};
+    let comment = "comment_mutation.schema.json";
+    enumerations.extend([
+        (
+            comment,
+            "type",
+            CommentMutationType::ALL
+                .map(CommentMutationType::as_str)
+                .to_vec(),
+        ),
+        // A comment's publication is always asked for: never
+        // `not_requested`.
+        (
+            comment,
+            "publication",
+            PublicationEffect::ALL
+                .into_iter()
+                .filter(|effect| *effect != PublicationEffect::NotRequested)
+                .map(PublicationEffect::as_str)
+                .collect(),
+        ),
+        (
+            comment,
+            "pending_reason",
+            CommentPendingReason::ALL
+                .map(CommentPendingReason::as_str)
+                .to_vec(),
+        ),
+        (
+            comment,
+            "conflict.next_action",
+            ConflictNextAction::ALL
+                .map(ConflictNextAction::as_str)
+                .to_vec(),
+        ),
+    ]);
+    use manyhands::repository::ConflictResolutionMutationType;
+    let resolution = "conflict_resolution_mutation.schema.json";
+    enumerations.extend([
+        (
+            resolution,
+            "type",
+            ConflictResolutionMutationType::ALL
+                .map(ConflictResolutionMutationType::as_str)
+                .to_vec(),
+        ),
+        (
+            resolution,
+            "publication",
+            PublicationEffect::ALL
+                .map(PublicationEffect::as_str)
+                .to_vec(),
+        ),
+        (
+            resolution,
+            "conflict.next_action",
+            ConflictNextAction::ALL
+                .map(ConflictNextAction::as_str)
+                .to_vec(),
+        ),
+    ]);
+    use manyhands::repository::{
+        ConflictPathKind, ConflictPathStructure, ConflictReadEligibility, ConflictReadNextAction,
+        ConflictStage, ConflictState, ConflictTarget,
+    };
+    let conflict = "conflict.schema.json";
+    let conflict_path = "conflict_path.schema.json";
+    enumerations.extend([
+        (
+            conflict,
+            "target",
+            ConflictTarget::ALL.map(ConflictTarget::as_str).to_vec(),
+        ),
+        (
+            conflict,
+            "stage",
+            ConflictStage::ALL.map(ConflictStage::as_str).to_vec(),
+        ),
+        (
+            conflict,
+            "state",
+            ConflictState::ALL.map(ConflictState::as_str).to_vec(),
+        ),
+        (
+            conflict,
+            "next_action",
+            ConflictReadNextAction::ALL
+                .map(ConflictReadNextAction::as_str)
+                .to_vec(),
+        ),
+        (
+            conflict,
+            "eligibility",
+            ConflictReadEligibility::ALL
+                .map(ConflictReadEligibility::as_str)
+                .to_vec(),
+        ),
+        (
+            conflict_path,
+            "kind",
+            ConflictPathKind::ALL.map(ConflictPathKind::as_str).to_vec(),
+        ),
+        (
+            conflict_path,
+            "structure",
+            ConflictPathStructure::ALL
+                .map(ConflictPathStructure::as_str)
+                .to_vec(),
+        ),
+    ]);
+    enumerations.push((
+        "item_republish_preview.schema.json",
+        "details.kind",
+        ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
     ));
     enumerations
 }

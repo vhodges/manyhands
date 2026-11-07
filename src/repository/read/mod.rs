@@ -71,8 +71,9 @@ pub use local_sync::{
 pub use resolve::ResolvedRepository;
 pub(crate) use status::local_action;
 
-/// The argument of a recovery action that names a repository root.
-const ROOT_ARGUMENT: &str = "root";
+/// The argument of a recovery action that names a repository root. The
+/// conflict read places its failures with it too.
+pub(super) const ROOT_ARGUMENT: &str = "root";
 
 /// A recovery action that takes a repository root and nothing else, with
 /// the root when one is known. Every action the reads suggest is one, and

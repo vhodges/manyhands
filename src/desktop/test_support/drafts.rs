@@ -1,6 +1,7 @@
 //! Drafts for the views' tests: a stored draft of an item as the library
 //! reads it now, and a second actor in a child process of the test binary
-//! that discards a draft, saves an item or removes a registration.
+//! that discards a draft, saves a document or a ticket, or removes a
+//! registration.
 //!
 //! Draft types derive no `Debug`; tests read them through `match`.
 
@@ -13,7 +14,8 @@ use manyhands::{
     drafts::{DraftBase, DraftFields, DraftId, DraftStore, DraftTarget, Entry, Held, ItemKind},
     repository::{
         CancellationToken, DocumentDraft, DocumentSaveInput, ItemDtoKind, Mutation, MutationCall,
-        NoProgress, RepositoryService, RequestId, keys::SessionCredentials,
+        NoProgress, RelationshipWrite, RepositoryService, RequestId, TicketDraft, TicketSaveInput,
+        keys::SessionCredentials,
     },
     results::ResultCode,
 };
@@ -100,6 +102,21 @@ pub(crate) enum Actor<'a> {
     Discard(DraftId),
     /// Saves the document `id` of `root` retitled as `SOMEONE_ELSES_TITLE`.
     SaveDocument { root: &'a Path, id: &'a str },
+    /// Saves the document `id` of `root` with `title` and `body`.
+    SaveDocumentAs {
+        root: &'a Path,
+        id: &'a str,
+        title: &'a str,
+        body: &'a str,
+    },
+    /// Saves the ticket `id` of `root` with `title` and `status`; its other
+    /// fields and its body are kept as they read now.
+    SaveTicket {
+        root: &'a Path,
+        id: &'a str,
+        title: &'a str,
+        status: &'a str,
+    },
     /// Removes the registration of `root`.
     Unregister(&'a Path),
 }
@@ -108,6 +125,9 @@ const ACTION: &str = "MANYHANDS_TEST_DRAFT_ACTOR";
 const DATA: &str = "MANYHANDS_TEST_DRAFT_ACTOR_DATA";
 const ROOT: &str = "MANYHANDS_TEST_DRAFT_ACTOR_ROOT";
 const ITEM: &str = "MANYHANDS_TEST_DRAFT_ACTOR_ITEM";
+const TITLE: &str = "MANYHANDS_TEST_DRAFT_ACTOR_TITLE";
+const BODY: &str = "MANYHANDS_TEST_DRAFT_ACTOR_BODY";
+const STATUS: &str = "MANYHANDS_TEST_DRAFT_ACTOR_STATUS";
 
 /// The second actor, in a process of its own over the parent's data
 /// directory. Does nothing unless the parent named an action.
@@ -151,6 +171,64 @@ fn draft_actor_child() {
             );
             assert_eq!(saved.code, ResultCode::Ok, "{}", saved.message);
         }
+        "save-document-as" => {
+            let root = PathBuf::from(std::env::var_os(ROOT).unwrap());
+            let id = std::env::var(ITEM).unwrap();
+            let service = RepositoryService::open_at(&data).unwrap();
+            let repo = service.resolve_repository(&root).unwrap();
+            let shown = service.show_item(&repo, &item_id(&id)).unwrap();
+            let saved = service.execute(
+                MutationCall {
+                    request_id: RequestId::new(),
+                    confirmation: None,
+                    mutation: Mutation::DocumentSave(DocumentSaveInput {
+                        root,
+                        id: item_id(&id),
+                        draft: DocumentDraft {
+                            title: std::env::var(TITLE).unwrap(),
+                            body: std::env::var(BODY).unwrap(),
+                        },
+                        observation: shown.observation,
+                    }),
+                },
+                &mut SessionCredentials::new(NoPassphrase),
+                &mut NoProgress,
+                &CancellationToken::new(),
+            );
+            assert_eq!(saved.code, ResultCode::Ok, "{}", saved.message);
+        }
+        "save-ticket" => {
+            let root = PathBuf::from(std::env::var_os(ROOT).unwrap());
+            let id = std::env::var(ITEM).unwrap();
+            let service = RepositoryService::open_at(&data).unwrap();
+            let repo = service.resolve_repository(&root).unwrap();
+            let shown = service.show_item(&repo, &item_id(&id)).unwrap();
+            let saved = service.execute(
+                MutationCall {
+                    request_id: RequestId::new(),
+                    confirmation: None,
+                    mutation: Mutation::TicketSave(TicketSaveInput {
+                        root,
+                        id: item_id(&id),
+                        draft: TicketDraft {
+                            title: std::env::var(TITLE).unwrap(),
+                            ticket_type: shown.ticket_type.unwrap(),
+                            status: std::env::var(STATUS).unwrap(),
+                            project: shown.project,
+                            team: shown.team,
+                            body: shown.body.unwrap_or_default(),
+                        },
+                        deps: RelationshipWrite::Unchanged,
+                        parent: RelationshipWrite::Unchanged,
+                        observation: shown.observation.unwrap(),
+                    }),
+                },
+                &mut SessionCredentials::new(NoPassphrase),
+                &mut NoProgress,
+                &CancellationToken::new(),
+            );
+            assert_eq!(saved.code, ResultCode::Ok, "{}", saved.message);
+        }
         "unregister" => {
             let root = PathBuf::from(std::env::var_os(ROOT).unwrap());
             let service = RepositoryService::open_at(&data).unwrap();
@@ -177,6 +255,28 @@ pub(crate) fn second_actor(fixture: &Fixture, actor: Actor<'_>) {
             .env(ACTION, "save-document")
             .env(ROOT, root)
             .env(ITEM, id),
+        Actor::SaveDocumentAs {
+            root,
+            id,
+            title,
+            body,
+        } => command
+            .env(ACTION, "save-document-as")
+            .env(ROOT, root)
+            .env(ITEM, id)
+            .env(TITLE, title)
+            .env(BODY, body),
+        Actor::SaveTicket {
+            root,
+            id,
+            title,
+            status,
+        } => command
+            .env(ACTION, "save-ticket")
+            .env(ROOT, root)
+            .env(ITEM, id)
+            .env(TITLE, title)
+            .env(STATUS, status),
         Actor::Unregister(root) => command.env(ACTION, "unregister").env(ROOT, root),
     };
     let output = command.output().unwrap();

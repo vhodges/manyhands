@@ -387,6 +387,88 @@ impl super::RepositoryService {
         }
         Ok(())
     }
+
+    /// Releases the binding of a comment submission that wrote nothing
+    /// (R-34): in one transaction, the binding is deleted and the row
+    /// `record` is marked `rejected`. The row is kept, so the operation ID
+    /// stays bound to its target, and a repeat of it begins again as new
+    /// and binds afresh.
+    ///
+    /// It has two callers, both `checkpoint_comment_locally_with` with
+    /// the binding's semantics: a submission that stopped for an identity,
+    /// and one refused after its binding row was inserted, having begun no
+    /// effect (controller ruling, Task 2b concern 2).
+    ///
+    /// The caller has found the comment file absent. Here the row must
+    /// hold no step past the context's own, the binding no checkpoint, and
+    /// the child synchronization no row. Otherwise nothing changes and
+    /// `false` is returned: the binding and the row are the caller's to
+    /// keep, as for a submission that wrote. An error is a registry that
+    /// could not be read or written.
+    pub(super) fn release_unwritten_comment_binding(
+        &self,
+        root: &Path,
+        record: RecoveryRecord,
+        operation_id: OperationId,
+    ) -> Result<bool, RepositoryError> {
+        let failure = super::comment_publication::recovery_error;
+        if record.id == 0 {
+            return Ok(false);
+        }
+        let _guard = super::cache_write_guard(
+            &self.registry_path,
+            root,
+            RepositoryOperation::SubmitComment,
+        )?;
+        let mut connection = super::open_registry(&self.registry_path, &mut |_| {})?;
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|_| failure())?;
+        let operation = operation_id.to_string();
+        let unwritten: bool = tx
+            .query_row(
+                &format!(
+                    "SELECT EXISTS(SELECT 1 FROM operation_records o
+                       JOIN comment_publication_bindings b ON b.local_record_id = o.id
+                      WHERE o.id = ?1 AND o.operation_ulid = ?2 AND b.operation_ulid = ?2
+                        AND o.action = 'submit_comment' AND {NOT_ABANDONED}
+                        AND (o.completed_step IS NULL OR o.completed_step IN (?3, ?4, ?5))
+                        AND b.checkpoint_oid IS NULL
+                        AND NOT EXISTS(SELECT 1 FROM remote_operation_records
+                                        WHERE operation_ulid = b.synchronization_ulid))"
+                ),
+                params![
+                    record.id,
+                    operation,
+                    LocalStep::BranchObserved.as_str(),
+                    LocalStep::WorktreeObserved.as_str(),
+                    LocalStep::Completed.as_str(),
+                ],
+                |row| row.get(0),
+            )
+            .map_err(|_| failure())?;
+        if !unwritten {
+            return Ok(false);
+        }
+        let deleted = tx
+            .execute(
+                "DELETE FROM comment_publication_bindings WHERE operation_ulid = ?1 AND local_record_id = ?2",
+                params![operation, record.id],
+            )
+            .map_err(|_| failure())?;
+        let rejected = tx
+            .execute(
+                "UPDATE operation_records SET state = 'completed', completed_step = ?2, observed_at = ?3
+                  WHERE id = ?1",
+                params![record.id, LocalStep::Rejected.as_str(), now()],
+            )
+            .map_err(|_| failure())?;
+        if deleted != 1 || rejected != 1 {
+            return Err(failure());
+        }
+        tx.commit().map_err(|_| failure())?;
+        Ok(true)
+    }
     pub(super) fn comment_local_pending(
         &self,
         root: &Path,
@@ -892,6 +974,13 @@ local_steps! {
     BranchObserved => "branch_observed";
     /// The worktree of an authoring context was created or found.
     WorktreeObserved => "worktree_observed";
+    /// A release removed the worktree of a context, and has its branch
+    /// still to delete.
+    ContextWorktreeReleased => "context_worktree_released";
+    /// A release deleted the branch of a context: the context is gone,
+    /// and all the release still owes is its index hand-off. It commits
+    /// nothing.
+    ContextBranchReleased => "context_branch_released";
     /// A comment's creation time is recorded and its file is about to be
     /// written.
     CommentDestinationPrepared => "comment_destination_prepared";
@@ -964,6 +1053,9 @@ impl LocalStep {
             Self::BranchObserved
             | Self::LocalSyncPrepared
             | Self::WorktreeObserved
+            // A release removes what holds no work, and commits nothing.
+            | Self::ContextWorktreeReleased
+            | Self::ContextBranchReleased
             | Self::CommentDestinationPrepared
             | Self::AuthoringDestinationObserved
             | Self::DocumentDestinationObserved
@@ -981,15 +1073,19 @@ impl LocalStep {
     }
 
     /// Whether the step says the operation's own work is done and
-    /// recorded: a checkpoint step, or the step of a remote that was
-    /// added or removed, which commits nothing.
+    /// recorded: a checkpoint step, the step of a remote that was added
+    /// or removed, or that of a release that deleted its context's
+    /// branch. Neither of the last two commits anything.
     ///
     /// Not the intent to checkpoint a comment: whether its commit was
     /// made is still to be proved from Git, which the submission's own
-    /// retry does and a refresh does not.
+    /// retry does and a refresh does not. Nor a release that has removed
+    /// only its worktree: its branch is still to delete, which a refresh
+    /// does not do.
     fn is_authoritative(self) -> bool {
         (self.is_checkpoint() && self != Self::CommentCheckpointIntent)
             || self == Self::RemoteChanged
+            || self == Self::ContextBranchReleased
     }
 
     /// The step as a call under the same ID is told it when the call
@@ -1010,7 +1106,11 @@ impl LocalStep {
             // Enablement repairs an index write interrupted between its
             // configuration commit and recording InitializationCommitted.
             | Self::ConfigurationWritten
-            | Self::InitializationCommitted => Some(self),
+            | Self::InitializationCommitted
+            // A release goes on from the removal it recorded: to the
+            // branch, or to the hand-off.
+            | Self::ContextWorktreeReleased
+            | Self::ContextBranchReleased => Some(self),
             Self::BranchObserved
             | Self::LocalSyncPrepared
             | Self::WorktreeObserved
@@ -2096,6 +2196,7 @@ pub(super) fn action_name(operation: RepositoryOperation) -> &'static str {
         RepositoryOperation::RefreshRepository => "refresh",
         RepositoryOperation::RebuildRepository => "rebuild",
         RepositoryOperation::PrepareContext => "prepare_context",
+        RepositoryOperation::ReleaseContext => "release_context",
         RepositoryOperation::SaveDocument => "save_document",
         RepositoryOperation::SaveTicket => "save_ticket",
         RepositoryOperation::SubmitComment => "submit_comment",
@@ -2134,6 +2235,7 @@ fn operation_from_name(action: &str) -> Option<RepositoryOperation> {
         "refresh" => Some(RepositoryOperation::RefreshRepository),
         "rebuild" => Some(RepositoryOperation::RebuildRepository),
         "prepare_context" => Some(RepositoryOperation::PrepareContext),
+        "release_context" => Some(RepositoryOperation::ReleaseContext),
         "save_document" => Some(RepositoryOperation::SaveDocument),
         "save_ticket" => Some(RepositoryOperation::SaveTicket),
         "submit_comment" => Some(RepositoryOperation::SubmitComment),
@@ -2491,6 +2593,8 @@ mod abandoned_row_tests {
             [
                 "branch_observed",
                 "worktree_observed",
+                "context_worktree_released",
+                "context_branch_released",
                 "comment_destination_prepared",
                 "comment_checkpoint_intent",
                 "comment_registration_pending",

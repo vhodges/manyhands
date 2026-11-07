@@ -48,4 +48,4 @@ implementation until the user has approved the Cycle, design, and plan.
 | A question merely asks for preferences | Investigate first; offer a concrete default and consequence. |
 | A backend or fixture assumption is called proof | Label it a feasibility gap and specify native evidence. |
 | A temporary workaround silently becomes scope | State its downstream obligation or obtain approval. |
-| Closure is treated as post-merge cleanup | Include ticket closure in the final pre-merge checkpoint. |
+| Closure is treated as post-merge cleanup | Closure is the merge: after review approval, set the resolution status, then `ticket close`. |

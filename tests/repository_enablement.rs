@@ -593,6 +593,14 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "item_problems",
             "key_material_operations",
             "key_registry_changes",
+            "local_context_sync_conflicts",
+            "local_context_sync_execution",
+            "local_context_sync_images",
+            "local_context_sync_records",
+            "local_context_sync_request_control",
+            "local_context_sync_resolution_cancellation",
+            "local_context_sync_resolutions",
+            "local_context_sync_steps",
             "operation_record_contexts",
             "operation_records",
             "owned_generated_keys",
@@ -612,6 +620,7 @@ fn registry_creates_repository_and_discovery_metadata_schema() {
             "remote_ref_observations",
             "remote_resolution_attempts",
             "remote_resolution_index_artifacts",
+            "remote_resolution_owners",
             "remote_resolution_paths",
             "remote_resolution_ref_log_artifacts",
             "repositories",
@@ -3804,7 +3813,7 @@ fn assert_recovery_before_publication_configuration_commit(fixture: support::Tes
         panic!("expected the unfinished publication commit");
     };
     assert_eq!(commit_count(&fixture.repository), commits_before + 1);
-    assert_eq!(support::index_bytes(&fixture.repository), index_before);
+    enablement_index::assert_configuration_current(&fixture.root);
     assert_eq!(remote_names(&fixture.repository), remotes_before);
     assert_eq!(support::head_commit(&fixture.repository), Some(commit_oid));
     assert_eq!(

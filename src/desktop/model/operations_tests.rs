@@ -2,15 +2,17 @@ use std::path::PathBuf;
 
 use manyhands::{
     repository::{
-        OperationAction, OperationDto, OperationFamily, OperationListDto, OperationNextAction,
+        AuthoringKind, ConflictNextAction, ConflictNextDto, MutationDataDto, OperationAction,
+        OperationDto, OperationFamily, OperationId, OperationListDto, OperationNextAction,
         OperationOwner, ProgressEvent, ProgressStage, RequestId,
+        SynchronizationConflictMutationDto, SynchronizationConflictType,
     },
     results::{Effects, Envelope, Outcome, RecoveryActionKind, ResultCode, Scope},
 };
 
 use super::{
-    Operations, RecoveryControl, ResumeOffer, SYNCHRONIZATION_UNAVAILABLE, abandon_offered,
-    recovery_control, recovery_label, resume_offer,
+    Operations, RecoveryControl, ResumeOffer, SYNCHRONIZATION_UNAVAILABLE, StopOffer,
+    abandon_offered, recovery_control, recovery_label, resume_offer,
 };
 use crate::desktop::{
     model::list_state::LABEL_EMPTY,
@@ -111,6 +113,29 @@ fn a_request_runs_is_accepted_and_finishes() {
     assert_eq!(*code, ResultCode::Busy);
     assert!(recovery.is_empty());
     assert_eq!(*shown, message);
+}
+
+/// R-14: a same-ID re-entry never reports `Accepted` (fact 10), so any
+/// stage marks the request accepted, as the worker does.
+#[test]
+fn any_stage_after_acceptance_marks_the_request_accepted() {
+    let mut operations = Operations::default();
+    let queued = request(1);
+    let request_id = queued.request_id;
+    let id = queued.id;
+    operations.apply(WorkerEvent::Queued(queued));
+    operations.apply(WorkerEvent::Started(id));
+    operations.apply(WorkerEvent::Progress(
+        id,
+        progress(request_id, ProgressStage::Fetching),
+    ));
+    assert!(matches!(
+        operations.request(id).unwrap().state,
+        RequestState::Running {
+            stage: Some(ProgressStage::Fetching),
+            accepted: true
+        }
+    ));
 }
 
 #[test]
@@ -403,12 +428,14 @@ fn pending_operations_load_per_repository_and_drop_stale_reads() {
     assert!(operations.pending().is_empty());
 }
 
-/// Resume is offered for a local operation waiting to be resumed; a
-/// synchronization waiting for it shows Resume unavailable, with why.
-/// No local recipe leaves a pending synchronization, so the row is built
-/// here; production code never builds one.
+/// Resume is offered for a local operation waiting to be resumed, and
+/// for a remote item or repository synchronization (E-10, decision 11);
+/// a local-context synchronization waiting for it offers Resume too (D5
+/// B6, E-5). No local recipe leaves a pending synchronization waiting to
+/// be resumed, so the rows are built here; production code never builds
+/// one.
 #[test]
-fn resume_is_offered_for_a_local_operation_and_not_for_a_synchronization() {
+fn resume_is_offered_for_a_local_operation_and_a_synchronization() {
     let local = operation(
         OperationFamily::Local,
         OperationAction::SaveTicket,
@@ -417,22 +444,30 @@ fn resume_is_offered_for_a_local_operation_and_not_for_a_synchronization() {
     assert_eq!(resume_offer(&local), ResumeOffer::Offered);
     assert!(abandon_offered(&local));
 
-    for (family, action) in [
-        (OperationFamily::Remote, OperationAction::SynchronizeContext),
-        (OperationFamily::Remote, OperationAction::SynchronizePrimary),
-        (OperationFamily::Local, OperationAction::SynchronizeContext),
+    for action in [
+        OperationAction::SynchronizeContext,
+        OperationAction::SynchronizePrimary,
     ] {
-        let synchronization = operation(family, action, Some(OperationNextAction::Resume));
-        assert_eq!(
-            resume_offer(&synchronization),
-            ResumeOffer::Unavailable(SYNCHRONIZATION_UNAVAILABLE)
+        let remote = operation(
+            OperationFamily::Remote,
+            action,
+            Some(OperationNextAction::Resume),
         );
-        assert_eq!(
-            SYNCHRONIZATION_UNAVAILABLE,
-            "Synchronization is not available yet"
-        );
-        assert!(!abandon_offered(&synchronization));
+        assert_eq!(resume_offer(&remote), ResumeOffer::Offered);
+        assert!(!abandon_offered(&remote));
     }
+
+    let synchronization = operation(
+        OperationFamily::Local,
+        OperationAction::SynchronizeContext,
+        Some(OperationNextAction::Resume),
+    );
+    assert_eq!(resume_offer(&synchronization), ResumeOffer::Offered);
+    assert_eq!(
+        SYNCHRONIZATION_UNAVAILABLE,
+        "Synchronization is not available yet"
+    );
+    assert!(!abandon_offered(&synchronization));
 
     let waiting = operation(OperationFamily::Local, OperationAction::SaveTicket, None);
     assert_eq!(resume_offer(&waiting), ResumeOffer::NotOffered);
@@ -443,6 +478,144 @@ fn resume_is_offered_for_a_local_operation_and_not_for_a_synchronization() {
     );
     assert_eq!(resume_offer(&key), ResumeOffer::NotOffered);
     assert!(!abandon_offered(&key));
+}
+
+/// What the library lists of a comment (`read/status.rs`): the
+/// synchronization that publishes it with no next action, which offers
+/// no Resume, and its `submit_comment` row while its local work waits,
+/// which is a local operation and offers Resume. A remote synchronization
+/// with no operation ID offers none either.
+#[test]
+fn a_comments_rows_offer_resume_only_for_its_local_work() {
+    let mut publication = operation(
+        OperationFamily::Remote,
+        OperationAction::SynchronizeContext,
+        None,
+    );
+    publication.item_id = Some("01ARZ3NDEKTSV4RRFFQ69G5FS0".to_owned());
+    publication.state = "fetch_prepared".to_owned();
+    assert_eq!(resume_offer(&publication), ResumeOffer::NotOffered);
+    publication.state = "failed".to_owned();
+    assert_eq!(resume_offer(&publication), ResumeOffer::NotOffered);
+
+    let submitted = operation(
+        OperationFamily::Local,
+        OperationAction::SubmitComment,
+        Some(OperationNextAction::Resume),
+    );
+    assert_eq!(resume_offer(&submitted), ResumeOffer::Offered);
+
+    let mut unnamed = operation(
+        OperationFamily::Remote,
+        OperationAction::SynchronizePrimary,
+        Some(OperationNextAction::Resume),
+    );
+    unnamed.operation_id = None;
+    assert_eq!(resume_offer(&unnamed), ResumeOffer::NotOffered);
+}
+
+/// A synchronization of an item's context with no remote offers Resume
+/// (D5 B6, E-5), and so does one of the primary branch with no remote;
+/// neither is offered Abandon.
+#[test]
+fn resume_is_offered_for_a_local_context_sync() {
+    for action in [
+        OperationAction::SynchronizeContext,
+        OperationAction::SynchronizePrimary,
+    ] {
+        let local = operation(
+            OperationFamily::Local,
+            action,
+            Some(OperationNextAction::Resume),
+        );
+        assert_eq!(resume_offer(&local), ResumeOffer::Offered);
+        assert!(!abandon_offered(&local));
+    }
+}
+
+/// The resume of `operation_id` in `/fixture/a`, accepted and running,
+/// with `rows` listed pending there.
+fn running_resume(rows: Vec<OperationDto>, operation_id: &str) -> (Operations, DesktopRequestId) {
+    let mut operations = Operations::default();
+    let stamp = operations.load_pending("/fixture/a".to_owned());
+    assert!(operations.apply_pending(stamp, ReadResult::Ok(list(rows))));
+    let resume = DesktopRequest {
+        intent: Intent::OperationResume {
+            root: PathBuf::from("/fixture/a"),
+            operation_id: OperationId::parse(operation_id).unwrap(),
+        },
+        ..request(1)
+    };
+    let (id, request_id) = (resume.id, resume.request_id);
+    operations.apply(WorkerEvent::Queued(resume));
+    operations.apply(WorkerEvent::Started(id));
+    operations.apply(WorkerEvent::Progress(
+        id,
+        progress(request_id, ProgressStage::Fetching),
+    ));
+    (operations, id)
+}
+
+/// R-1, decision 11: a resume that takes up a remote item or repository
+/// synchronization listed pending stops at its safe points, so once
+/// accepted it offers Stop at a safe point, with a publication remote
+/// (R-15).
+#[test]
+fn an_accepted_resume_offers_stop() {
+    for action in [
+        OperationAction::SynchronizeContext,
+        OperationAction::SynchronizePrimary,
+    ] {
+        let row = operation(OperationFamily::Remote, action, None);
+        let named = row.operation_id.clone().unwrap();
+        let (operations, id) = running_resume(vec![row], &named);
+        assert_eq!(operations.stop_offer(id, true), StopOffer::Offered);
+        assert_eq!(operations.stop_offer(id, false), StopOffer::NotOffered);
+    }
+}
+
+/// Stop pressed on a resume reads Stopping… until it ends, even when a
+/// read of the pending operations since no longer lists the operation it
+/// took up.
+#[test]
+fn a_stopping_resume_reads_stopping_after_its_row_goes() {
+    let row = operation(
+        OperationFamily::Remote,
+        OperationAction::SynchronizePrimary,
+        None,
+    );
+    let named = row.operation_id.clone().unwrap();
+    let (mut operations, id) = running_resume(vec![row], &named);
+    operations.stopping(id);
+    assert_eq!(operations.stop_offer(id, true), StopOffer::Stopping);
+    let stamp = operations.load_pending("/fixture/a".to_owned());
+    assert!(operations.apply_pending(stamp, ReadResult::Ok(list(vec![]))));
+    assert_eq!(operations.stop_offer(id, true), StopOffer::Stopping);
+}
+
+/// A resume of local work ignores its token after acceptance
+/// (`bind/resume.rs`), so it reads Finishing, never Stop: a local
+/// operation, a comment's `submit_comment` row, a local-context
+/// synchronization, and an operation the pending read does not list.
+#[test]
+fn a_local_resume_reads_finishing_never_stop() {
+    for (family, action) in [
+        (OperationFamily::Local, OperationAction::SaveTicket),
+        (OperationFamily::Local, OperationAction::SubmitComment),
+        (OperationFamily::Local, OperationAction::SynchronizeContext),
+    ] {
+        let row = operation(family, action, Some(OperationNextAction::Resume));
+        let named = row.operation_id.clone().unwrap();
+        let (operations, id) = running_resume(vec![row], &named);
+        assert_eq!(operations.stop_offer(id, true), StopOffer::NotOffered);
+    }
+    let row = operation(
+        OperationFamily::Remote,
+        OperationAction::SynchronizePrimary,
+        None,
+    );
+    let (operations, id) = running_resume(vec![row], "01ARZ3NDEKTSV4RRFFQ69G5FAW");
+    assert_eq!(operations.stop_offer(id, true), StopOffer::NotOffered);
 }
 
 /// Every recovery action maps to a control D1 offers; one that names
@@ -666,4 +839,116 @@ fn a_host_observation_is_kept_for_the_page_that_asked() {
     assert!(operations.observation(DesktopRequestId(8)).is_none());
     assert!(operations.requests().is_empty());
     assert!(operations.take_changed().is_empty());
+}
+
+/// A promotion's or closure's parent row (L2) is listed as remote work
+/// with Resume, but it is not a synchronization: `resume_offer` does not
+/// offer it, nor show it unavailable as a local-context synchronization
+/// is. Its own row offers Resume instead (D5 Part C,
+/// `view/operations/resume.rs`). It is never offered Abandon. The rows are
+/// built here as `read/status.rs` lists them.
+#[test]
+fn a_lifecycle_row_is_not_a_synchronization() {
+    for action in [OperationAction::Promote, OperationAction::Close] {
+        let mut row = operation(
+            OperationFamily::Remote,
+            action,
+            Some(OperationNextAction::Resume),
+        );
+        row.item_id = Some("01ARZ3NDEKTSV4RRFFQ69G5FS0".to_owned());
+        row.state = "integrating".to_owned();
+        row.completed_step = Some("integrating".to_owned());
+        assert_eq!(resume_offer(&row), ResumeOffer::NotOffered, "{action:?}");
+        assert!(!abandon_offered(&row), "{action:?}");
+
+        row.next_action = None;
+        assert_eq!(resume_offer(&row), ResumeOffer::NotOffered, "{action:?}");
+    }
+}
+
+/// B3, B4: what settles a conflict clears its review, the banner's and the
+/// entries': a resolution applied, found already applied, or applied with
+/// its hand-off owed (`discovery_pending`, a Resume on the row away from
+/// done: nothing is left to choose); a resume that finds the repair made
+/// outside already in place (`already_applied`) as one answered ok does.
+/// Another operation's answer, or a resolution that did not apply, leaves it.
+#[test]
+fn what_settles_a_conflict_clears_its_review() {
+    const SYNCHRONIZATION: &str = "01M4CC0VN1KTQFSVR99378TDHV";
+    const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FY9";
+    let root = || PathBuf::from("/fixture/a");
+    let operation = |text: &str| OperationId::parse(text).unwrap();
+    let resolve = || Intent::ConflictResolve {
+        root: root(),
+        operation_id: operation(SYNCHRONIZATION),
+        observation: String::new(),
+        resolutions: Vec::new(),
+    };
+    let resume = |text: &str| Intent::OperationResume {
+        root: root(),
+        operation_id: operation(text),
+    };
+    let answer = |code| {
+        Envelope::<MutationDataDto>::classified_mutation(
+            "conflict resolve",
+            Scope::default(),
+            false,
+            code,
+            Effects::not_requested(),
+            false,
+        )
+    };
+    let conflicted = answer(ResultCode::RecoveryRequired).with_data(
+        MutationDataDto::SynchronizationConflict(SynchronizationConflictMutationDto {
+            r#type: SynchronizationConflictType::SynchronizationConflict,
+            conflict: ConflictNextDto {
+                operation_id: SYNCHRONIZATION.to_owned(),
+                next_action: ConflictNextAction::Resolve,
+            },
+        }),
+    );
+    for (intent, code, settled) in [
+        (resolve(), ResultCode::Ok, true),
+        (resolve(), ResultCode::AlreadyApplied, true),
+        (resolve(), ResultCode::DiscoveryPending, true),
+        (resolve(), ResultCode::ExternalChange, false),
+        (resume(SYNCHRONIZATION), ResultCode::Ok, true),
+        (resume(SYNCHRONIZATION), ResultCode::AlreadyApplied, true),
+        (resume(SYNCHRONIZATION), ResultCode::RecoveryRequired, false),
+        (resume(OTHER), ResultCode::AlreadyApplied, false),
+    ] {
+        let mut operations = Operations::default();
+        let share = DesktopRequest {
+            intent: Intent::ItemSync {
+                root: root(),
+                kind: AuthoringKind::Ticket,
+                id: "01M4CC0VN2K8DBHNMZ46NTX5JJ".parse().unwrap(),
+            },
+            ..request(1)
+        };
+        operations.apply(WorkerEvent::Queued(share));
+        operations.apply(WorkerEvent::Started(DesktopRequestId(1)));
+        operations.apply(WorkerEvent::Finished(
+            DesktopRequestId(1),
+            Box::new(conflicted.clone()),
+        ));
+        assert!(operations.review(DesktopRequestId(1)).is_some());
+        let settling = DesktopRequest {
+            intent: intent.clone(),
+            ..request(2)
+        };
+        operations.apply(WorkerEvent::Queued(settling));
+        operations.apply(WorkerEvent::Started(DesktopRequestId(2)));
+        operations.apply(WorkerEvent::Finished(
+            DesktopRequestId(2),
+            Box::new(answer(code)),
+        ));
+        assert_eq!(
+            operations.review(DesktopRequestId(1)).is_none(),
+            settled,
+            "{} answered {}",
+            intent.label(),
+            code.as_str()
+        );
+    }
 }

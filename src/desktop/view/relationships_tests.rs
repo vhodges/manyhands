@@ -95,6 +95,11 @@ fn slug(shell: &Shell, root: &Path, id: &str) -> Option<String> {
     service.show_item(&repo, &item_id(id)).unwrap().slug
 }
 
+/// E-23: opens the shown tab's details sheet with All details, by click.
+fn details(shell: &Shell, cx: &mut TestAppContext) {
+    shell.click("chip-all", cx);
+}
+
 fn cell(row: &str, ix: usize, name: &str) -> String {
     format!("rel-{row}-{ix}-{name}")
 }
@@ -107,6 +112,7 @@ fn cell(row: &str, ix: usize, name: &str) -> String {
 fn each_group_lists_its_tickets_and_each_row_opens_its_ticket(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, graph);
     open(&shell, ticket(&root, MAIN), cx);
+    details(&shell, cx);
 
     for (group, name) in [
         ("rel-dependencies", DEPENDENCIES),
@@ -212,8 +218,10 @@ fn each_group_lists_its_tickets_and_each_row_opens_its_ticket(cx: &mut TestAppCo
     for (row, ix, id, _, _) in &rows {
         open(&shell, ticket(&root, MAIN), cx);
         assert_eq!(opened(&shell, cx), Some(ticket(&root, MAIN)));
+        details(&shell, cx);
         shell.click((row_name(row), *ix), cx);
         assert_eq!(opened(&shell, cx), Some(ticket(&root, id)), "{row} {ix}");
+        details(&shell, cx);
         assert_eq!(shell.label("item-id", cx).as_deref(), Some(id.as_str()));
     }
     let tabs = shell
@@ -229,6 +237,7 @@ fn an_empty_group_says_none(cx: &mut TestAppContext) {
         fixture.create_ticket(root, MAIN, "Alone", "open");
     });
     open(&shell, ticket(&root, MAIN), cx);
+    details(&shell, cx);
     for group in ["dependency", "dependent", "parent", "child"] {
         assert_eq!(
             shell.label(format!("rel-{group}-none"), cx).as_deref(),
@@ -246,6 +255,7 @@ fn a_row_opens_its_ticket_from_the_keyboard(cx: &mut TestAppContext) {
     let (shell, root) = shell(cx, graph);
     open(&shell, ticket(&root, MAIN), cx);
     shell.keys("secondary-3", cx);
+    details(&shell, cx);
     let focused = |shell: &Shell, cx: &mut TestAppContext| {
         shell.frame(cx, |window, _| {
             window
@@ -284,6 +294,7 @@ fn an_unresolved_dependency_shows_its_id_and_cannot_be_opened(cx: &mut TestAppCo
         fixture.create_ticket_with_deps(root, MAIN, "Waits", "open", &[MISSING]);
     });
     open(&shell, ticket(&root, MAIN), cx);
+    details(&shell, cx);
     assert_eq!(
         shell.label(cell("dependency", 0, "id"), cx).as_deref(),
         Some(MISSING)
@@ -333,6 +344,7 @@ fn a_relationship_problem_is_listed_under_the_groups(cx: &mut TestAppContext) {
         fixture.commit_ticket(root, DEP_OPEN, "Open dependency", "");
     });
     open(&shell, ticket(&root, MAIN), cx);
+    details(&shell, cx);
     assert_eq!(shell.label("rel-problems", cx).as_deref(), Some(PROBLEMS));
     assert_eq!(
         shell.rows("rel-problem", cx),
@@ -370,6 +382,7 @@ fn a_document_tab_shows_no_relationships_panel(cx: &mut TestAppContext) {
         },
         cx,
     );
+    details(&shell, cx);
     assert_eq!(shell.label("item-title", cx).as_deref(), Some("Guide"));
     assert!(!shell.present("relationships", cx));
     assert_eq!(shell.backend.reads_seen(ReadKind::Dependencies), 0);
@@ -384,6 +397,7 @@ async fn a_refresh_reads_the_relationships_again_in_place(cx: &mut TestAppContex
     cx.executor().allow_parking();
     let (shell, root) = shell(cx, graph);
     open(&shell, ticket(&root, MAIN), cx);
+    details(&shell, cx);
     assert_eq!(shell.rows("rel-dependent", cx).len(), 1);
     let before =
         [ReadKind::Dependencies, ReadKind::Children].map(|kind| shell.backend.reads_seen(kind));
@@ -392,10 +406,13 @@ async fn a_refresh_reads_the_relationships_again_in_place(cx: &mut TestAppContex
         .fixture
         .create_ticket_with_deps(&root, LATE, "Came later", "open", &[MAIN]);
     shell.select(&root, cx);
+    // R-60 refuses `secondary-r` behind the sheet.
+    shell.keys("escape", cx);
     shell.keys("secondary-r", cx);
     let refresh = shell.requests(cx, |request| request.lane == Lane::User)[0];
     shell.until_ended(refresh, cx).await;
     shell.run(cx);
+    details(&shell, cx);
 
     let after =
         [ReadKind::Dependencies, ReadKind::Children].map(|kind| shell.backend.reads_seen(kind));
@@ -429,6 +446,7 @@ fn a_focused_row_keeps_its_ticket_when_a_reload_reorders_its_group(cx: &mut Test
         })
     };
     shell.keys("secondary-3", cx);
+    details(&shell, cx);
     let mut presses = 0;
     while !focused(&shell, 0, cx) {
         presses += 1;

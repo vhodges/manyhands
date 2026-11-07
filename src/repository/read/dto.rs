@@ -720,8 +720,8 @@ pub struct PollingStatusDto {
     /// The remote operation that holds the registration's reservation now,
     /// whatever its action, and null when none does.
     pub active_operation_id: Option<String>,
-    /// Null when it is not known when the next attempt is due. Nothing
-    /// stores that so far, so no read fills it.
+    /// The stored deadline of the next attempt. Null when none is stored;
+    /// a null or past deadline is due.
     pub next_eligible_at: Option<String>,
 }
 
@@ -746,11 +746,13 @@ contract_enum!(
 );
 
 contract_enum!(
-    /// What an operation does. The local store records the first thirteen,
+    /// What an operation does. The local store records the first fifteen,
     /// the remote store the next five and the key-material store the last
     /// two; a local synchronization is reported under its remote name.
-    /// `repair_item` is a repair of a nonconforming file: the corrected
-    /// source written and committed in the editing context of its item.
+    /// `release_context` removes an item's work context that holds no work
+    /// of its own. `repair_item` is a repair of a nonconforming file: the
+    /// corrected source written and committed in the editing context of its
+    /// item.
     OperationAction {
         CreateAndEnable => "create_and_enable",
         Enable => "enable",
@@ -761,6 +763,7 @@ contract_enum!(
         Refresh => "refresh",
         Rebuild => "rebuild",
         PrepareContext => "prepare_context",
+        ReleaseContext => "release_context",
         SaveDocument => "save_document",
         SaveTicket => "save_ticket",
         SubmitComment => "submit_comment",

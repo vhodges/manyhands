@@ -34,6 +34,8 @@ pub use closure::{
     TicketClosurePreview, TicketClosureResult,
 };
 mod comment_publication;
+mod context_release;
+pub use context_release::{ContextReleaseOutcome, ReleaseContextRequest};
 mod coordination;
 pub use comment_publication::*;
 #[cfg(test)]
@@ -92,9 +94,13 @@ use recovery::{
     record_owned_persisted_context, record_persisted_context as record_recovery_context,
     touch_indexing, transition_indexing,
 };
+#[doc(hidden)]
+pub use remote::POLL_PROGRESS_THROTTLE;
 pub use remote::{
-    AutomaticBackoff, AutomaticPollEligibility, ConfirmedCommitIdentity, ConflictEligibility,
-    ConflictObservation, ConflictPathToken, EphemeralSynchronizationConflictSides,
+    AutomaticBackoff, AutomaticPollEligibility, ConfirmedCommitIdentity, ConflictDto,
+    ConflictEligibility, ConflictObservation, ConflictPathDto, ConflictPathKind,
+    ConflictPathStructure, ConflictPathToken, ConflictReadEligibility, ConflictReadNextAction,
+    ConflictStage, ConflictState, ConflictTarget, EphemeralSynchronizationConflictSides,
     ExpectedConfiguration, ObservePublicationRemoteRequest, PollCompletion, PollDisposition,
     PollIneligibility, PollPublicationRemoteRequest, PollTargetReport, PollingInterval,
     PublishPendingReason, RedactedConflictBytes, RemoteContextSnapshot, RemoteContextState,
@@ -113,6 +119,18 @@ pub use remote::{
 };
 
 pub const REGISTRY_FILE: &str = "manyhands.sqlite3";
+/// The attempt ID `conflict resolve` derives, for the source-included test
+/// target that pins it.
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) use mutation::conflict_resolve_attempt;
+/// The conflict read's string tokens and display rule, for the
+/// source-included test targets that pin them.
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) use remote::conflict_read::{
+    display_path as conflict_display_path, observation_text, path_tokens,
+};
 #[cfg(test)]
 #[allow(unused_imports)] // Used by the source-included isolated SSH test runner.
 pub(crate) use remote::observation_tests;
@@ -951,6 +969,9 @@ pub enum FailurePoint {
     /// the branch and the row holding the step before it.
     AfterInitializationCommit,
     BeforePublicationConfigurationCommit,
+    /// `set_publication_remote`, after the commit and the step that records
+    /// it, before the Git index is brought up to it.
+    AfterPublicationConfigurationCommit,
     BeforeContextBranchCreation,
     AfterContextBranchBeforeWorktreeGitFailure,
     BeforeWorktreeCreation,
@@ -1022,6 +1043,17 @@ pub enum FailurePoint {
     /// past the wait would have it fail, and the row is left as the
     /// refresh left it.
     BeforeFolderRefreshClose,
+    /// `release_context`, once the checks before anything is touched
+    /// have passed, and before the branch is deleted. When the context
+    /// had a worktree, the worktree is removed and its step recorded, so
+    /// the call ends with the worktree gone, the branch there and the row
+    /// pending. When the context was a branch alone, nothing was removed
+    /// and no step was recorded, so the new row is discarded.
+    BeforeContextBranchRelease,
+    /// `release_context`, after the context's branch is deleted and its
+    /// step recorded, and before the index is told: the call ends there
+    /// with the context gone and no refresh begun.
+    AfterContextBranchRelease,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1043,6 +1075,7 @@ pub enum RepositoryOperation {
     RemoveRemote,
     SetPublicationRemote,
     PrepareContext,
+    ReleaseContext,
     SaveDocument,
     SaveTicket,
     SubmitComment,
@@ -2761,10 +2794,55 @@ impl RepositoryService {
         request: SubmitCommentRequest,
         effective_config: Option<&Config>,
     ) -> Result<LocalCommentCheckpointOutcome, RepositoryError> {
+        self.checkpoint_comment_locally_with(request, effective_config, None, false, &mut false)
+    }
+
+    /// `checkpoint_comment_locally`, which calls this with no author and
+    /// `release_unwritten: false`.
+    ///
+    /// `author`, when given, is the new comment's `created_by`, in place
+    /// of the text of the identity that checkpoints it (R-7). It is
+    /// written once: a file already written keeps the author it has. A
+    /// commit identity is needed either way.
+    ///
+    /// `release_unwritten` selects the binding's semantics, which
+    /// `comment add` asks for: a call that writes nothing leaves no
+    /// binding behind. With it:
+    ///
+    /// - the parent is checked before a new binding row is inserted, so
+    ///   a refused parent leaves no row (fact 19);
+    /// - on `IdentityRequired`, when this operation recorded no write
+    ///   step and the comment file is absent, one registry transaction
+    ///   deletes the binding and marks the row `rejected`. The same
+    ///   operation then begins again as new and binds afresh (R-34);
+    /// - so too on a refusal after the binding row was inserted that left
+    ///   nothing behind, as one for an occupied comment ID does. The
+    ///   refusal is returned, and `released` is set (controller ruling,
+    ///   Task 2b concern 2).
+    ///
+    /// Without it, the order and the standing are the public path's:
+    /// the binding row is inserted first, and is kept with the completed
+    /// row on `IdentityRequired` and on a refusal.
+    pub(crate) fn checkpoint_comment_locally_with(
+        &self,
+        request: SubmitCommentRequest,
+        effective_config: Option<&Config>,
+        author: Option<comment_publication::CommentAuthor>,
+        release_unwritten: bool,
+        released: &mut bool,
+    ) -> Result<LocalCommentCheckpointOutcome, RepositoryError> {
         let operation = RepositoryOperation::SubmitComment;
         let operation_id = request.target.operation_id;
         self.require_index_available(operation, Some(&request.target.root))?;
         let (root_repository, root) = canonical_repository_root(&request.target.root, operation)?;
+        // The comment's file in the item's editing worktree: a refusal
+        // that releases its binding has not written it.
+        let comment_file = item_context(&root, request.target.kind, request.target.item_id.clone())
+            .worktree
+            .join(format!(
+                ".manyhands/comments/{}/{}.md",
+                request.target.item_id, request.comment_id
+            ));
         let comment_id = request.comment_id.to_string();
         let paths = [Path::new(".manyhands/comments"), Path::new(&comment_id)];
         self.reject_pending_synchronization_target(
@@ -2813,6 +2891,9 @@ impl RepositoryService {
         }
         let mut known_checkpoint = None;
         let mut retained_binding = None;
+        // Set when the call stops for an identity with the comment file
+        // absent.
+        let mut unwritten = false;
         let result = (|| {
             if !matches!(request.target.intent, ContextIntent::Edit) {
                 return Err(authoring_error(
@@ -2821,6 +2902,10 @@ impl RepositoryService {
                     RepositoryErrorKind::MissingAuthoringTarget,
                     "comment submission requires an edit target",
                 ));
+            }
+            // Only a new row is given a new binding row.
+            if release_unwritten && record.is_new {
+                self.refuse_unknown_comment_parent(&root_repository, &root, &request)?;
             }
             retained_binding =
                 Some(self.bind_comment_publication(&root_repository, &root, &request, record)?);
@@ -3021,8 +3106,23 @@ impl RepositoryService {
             if !exists {
                 context_sources.push((path.clone(), serialized.clone()));
             }
+            // Only a problem of what the comment depends on refuses it.
+            // Amended 2026-10-30 by C4 (dogfooding): any problem in the
+            // context refused every comment, a plain document's missing
+            // front matter among them.
+            let dependencies = comment_dependency_paths(
+                &context_sources,
+                &path,
+                &context,
+                &request.comment_id,
+                request.parent_id.as_ref(),
+            );
             let validated = canonical::validate_context(context_sources);
-            if !validated.problems.is_empty() {
+            if validated
+                .problems
+                .iter()
+                .any(|problem| dependencies.contains(&problem.path))
+            {
                 return Err(authoring_error(
                     operation,
                     &context.root,
@@ -3055,13 +3155,18 @@ impl RepositoryService {
             let Some((identity, _)) =
                 resolve_identity(&config, effective_config, &context.worktree, operation)?
             else {
+                unwritten = !exists;
                 return Ok(LocalCommentCheckpointOutcome::IdentityRequired { context });
             };
             if !exists {
-                // A new comment names the identity that checkpoints it. A file
-                // already there keeps the author it was written with, so a
-                // retry under another identity rewrites nothing.
-                comment.created_by = Some(format!("{} <{}>", identity.name, identity.email));
+                // A new comment names the author it was given, or else the
+                // identity that checkpoints it. A file already there keeps
+                // the author it was written with, so a retry under another
+                // identity or author rewrites nothing.
+                comment.created_by = Some(match &author {
+                    Some(author) => author.as_str().to_owned(),
+                    None => format!("{} <{}>", identity.name, identity.email),
+                });
                 let serialized = serialize(&comment)?;
                 effects.begin();
                 self.check_failure(FailurePoint::BeforeItemWrite, operation, &context.root)?;
@@ -3184,6 +3289,19 @@ impl RepositoryService {
                     })
                 }
             }
+            Ok(LocalCommentCheckpointOutcome::IdentityRequired { context })
+                if release_unwritten && unwritten =>
+            {
+                // Under the lease, so no other call under the ID takes the
+                // binding up while it is released.
+                let released =
+                    self.release_unwritten_comment_binding(&root, record, operation_id)?;
+                drop(lease);
+                if !released {
+                    self.complete_lifecycle(&root, operation, record)?;
+                }
+                Ok(LocalCommentCheckpointOutcome::IdentityRequired { context })
+            }
             Ok(value) => {
                 drop(lease);
                 self.complete_lifecycle(&root, operation, record)?;
@@ -3197,6 +3315,27 @@ impl RepositoryService {
                         binding: retained_binding
                             .ok_or_else(comment_publication::recovery_error)?,
                     });
+                }
+                // With the binding's semantics, a refusal after the binding
+                // row was inserted that left nothing behind releases it,
+                // under the lease, as an identity stop does: no effect
+                // begun, no write step, and no comment file. A release
+                // its guard refuses leaves the binding, and the row is
+                // settled as before; a registry that cannot be written is
+                // reported, as for an identity stop.
+                let unwritten = matches!(
+                    comment_file.symlink_metadata(),
+                    Err(missing) if missing.kind() == std::io::ErrorKind::NotFound
+                );
+                if release_unwritten
+                    && retained_binding.is_some()
+                    && effects.leave_nothing_behind(record)
+                    && unwritten
+                    && self.release_unwritten_comment_binding(&root, record, operation_id)?
+                {
+                    *released = true;
+                    drop(lease);
+                    return Err(error);
                 }
                 self.finish_authoring_lifecycle(&root, operation, record, &effects, Err(error))
             }
@@ -3501,6 +3640,9 @@ impl RepositoryService {
             | LocalStep::CommentRegistrationPending
             | LocalStep::BranchObserved
             | LocalStep::WorktreeObserved
+            // A release's steps follow a removal, and no write of an item.
+            | LocalStep::ContextWorktreeReleased
+            | LocalStep::ContextBranchReleased
             | LocalStep::AuthoritativeObserved
             | LocalStep::RemoteChanged
             | LocalStep::PublicationConfigurationWritten
@@ -4361,6 +4503,10 @@ impl RepositoryService {
         }
         self.run_lifecycle_lease_hook(LifecycleLeasePhase::SetPublicationRemoteExisting);
         if config.publication_remote == request.name {
+            // A selection already made may have stopped before its index
+            // update, or come from a version that made none. The checks above
+            // showed the file matches HEAD and the entry only lags behind it.
+            publish_configuration_index(&repository, &root, operation)?;
             self.reconcile_registration(&repository, &root, operation)
                 .map_err(|error| registry_refresh_pending(operation, &root, error))?;
             if !record.is_pending
@@ -4489,6 +4635,12 @@ impl RepositoryService {
             }
         };
         self.advance_lifecycle(&root, operation, record, LocalStep::PublicationCommitted)?;
+        self.check_failure(
+            FailurePoint::AfterPublicationConfigurationCommit,
+            operation,
+            &root,
+        )?;
+        publish_configuration_index(&repository, &root, operation)?;
         match self.reconcile_registration(&repository, &root, operation) {
             Ok(()) => {
                 if self.handoff_post_authoritative(
@@ -8680,6 +8832,39 @@ fn refresh_configuration_index(
     )
 }
 
+/// Brings the live index's configuration entry up to HEAD's, leaving every
+/// other entry alone. An entry already there writes nothing, and takes no
+/// lock. A failure is the caller's: the same request heals it.
+fn publish_configuration_index(
+    repository: &Repository,
+    root: &Path,
+    operation: RepositoryOperation,
+) -> Result<(), RepositoryError> {
+    let git = |error| RepositoryError::git(operation, Some(root.to_owned()), error);
+    let head = repository
+        .head()
+        .and_then(|head| head.peel_to_commit())
+        .map_err(git)?;
+    let committed = configuration_entry_from_tree(&head.tree().map_err(git)?);
+    let mut index = repository.index().map_err(git)?;
+    index.read(false).map_err(git)?;
+    let current = index
+        .get_path(Path::new(canonical::CONFIG_PATH), 0)
+        .map(|entry| (entry.id, entry.mode));
+    if current == committed {
+        return Ok(());
+    }
+    refresh_configuration_index(repository, head.id(), IndexRefreshPolicy::ReplaceOwned).map_err(
+        |_| {
+            RepositoryError::io(
+                operation,
+                Some(root.to_owned()),
+                std::io::Error::other("the Git index could not be updated"),
+            )
+        },
+    )
+}
+
 fn refresh_missing_configuration_index(
     repository: &Repository,
     root: &Path,
@@ -9032,6 +9217,54 @@ fn canonical_comment_paths_for_id(
         .collect())
 }
 
+/// The paths in `sources` that a new comment depends on: its own
+/// `comment_path`, its item's file and its parent chain's files, with
+/// every file that claims one of their IDs. A problem at one of these
+/// refuses the comment. A problem anywhere else, such as another item's,
+/// another comment's or a plain document's, does not (amended 2026-10-30
+/// by C4, dogfooding).
+fn comment_dependency_paths(
+    sources: &[(PathBuf, String)],
+    comment_path: &Path,
+    context: &ItemContext,
+    comment_id: &canonical::ItemId,
+    parent_id: Option<&canonical::ItemId>,
+) -> BTreeSet<PathBuf> {
+    let parsed = sources
+        .iter()
+        .filter_map(|(path, source)| Some((path, canonical::parse_item(path, source).ok()?)))
+        .collect::<Vec<_>>();
+    let mut ids = BTreeSet::from([context.item_id.clone(), comment_id.clone()]);
+    // Each parent's own parent, as every file under its ID names it, until
+    // the chain ends or meets an ID already taken.
+    let mut chain = parent_id.into_iter().cloned().collect::<Vec<_>>();
+    while let Some(id) = chain.pop() {
+        if !ids.insert(id.clone()) {
+            continue;
+        }
+        chain.extend(parsed.iter().filter_map(|(_, item)| match item {
+            canonical::CanonicalItem::Comment(comment) if comment.id == id => {
+                comment.parent_id.clone()
+            }
+            _ => None,
+        }));
+    }
+    let mut paths = parsed
+        .into_iter()
+        .filter(|(_, item)| ids.iter().any(|id| canonical_item_has_id(item, id)))
+        .map(|(path, _)| path.clone())
+        .collect::<BTreeSet<_>>();
+    paths.insert(comment_path.to_owned());
+    // A ticket's file has one path, whether or not it parses.
+    if matches!(context.kind, AuthoringKind::Ticket) {
+        paths.insert(PathBuf::from(format!(
+            ".manyhands/tickets/{}/ticket.md",
+            context.item_id
+        )));
+    }
+    paths
+}
+
 fn ensure_authoring_worktree_base(
     root: &Path,
     operation: RepositoryOperation,
@@ -9275,6 +9508,19 @@ fn validate_context_tree(
     context: &ItemContext,
     operation: RepositoryOperation,
 ) -> Result<(), RepositoryError> {
+    validate_context_tree_items(repository, context, true, operation)
+}
+
+/// `validate_context_tree`, with the item required in the tree only when
+/// `require_target` says so: a context made for an item that does not
+/// exist yet holds none, and is still checked for an item of another
+/// kind, or two, under the ID.
+fn validate_context_tree_items(
+    repository: &Repository,
+    context: &ItemContext,
+    require_target: bool,
+    operation: RepositoryOperation,
+) -> Result<(), RepositoryError> {
     let inspect = || -> Result<CanonicalContext, ()> {
         let tree = repository
             .head()
@@ -9311,7 +9557,7 @@ fn validate_context_tree(
             "the canonical target commit cannot be inspected",
         )
     })?;
-    validate_context_items(context, canonical, true, operation)
+    validate_context_items(context, canonical, require_target, operation)
 }
 fn validate_context_items(
     context: &ItemContext,
@@ -10927,6 +11173,114 @@ fn committed_configuration_blob_oid(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Amended 2026-10-30 by C4 (dogfooding). A comment's problems are
+    /// those of its own path, its item and its parent chain, with any file
+    /// that claims one of their IDs. A plain document, a malformed file,
+    /// a sibling reply and another item's comment are not its own.
+    #[test]
+    fn a_comment_depends_on_its_path_its_item_and_its_parent_chain_only() {
+        let id = |text: &str| text.parse::<canonical::ItemId>().unwrap();
+        let ticket = id("01ARZ3NDEKTSV4RRFFQ69G5FAW");
+        let other = id("01ARZ3NDEKTSV4RRFFQ69G5FAV");
+        let (first, reply, sibling, new) = (
+            id("01ARZ3NDEKTSV4RRFFQ69G5FAX"),
+            id("01ARZ3NDEKTSV4RRFFQ69G5FAY"),
+            id("01ARZ3NDEKTSV4RRFFQ69G5FB0"),
+            id("01ARZ3NDEKTSV4RRFFQ69G5FAZ"),
+        );
+        let comment_path = |item: &canonical::ItemId, comment: &canonical::ItemId| -> PathBuf {
+            format!(".manyhands/comments/{item}/{comment}.md").into()
+        };
+        let comment = |item: &canonical::ItemId,
+                       comment: &canonical::ItemId,
+                       parent: Option<&canonical::ItemId>| {
+            let parent = parent.map_or(String::new(), |parent| format!("parent_id: {parent}\n"));
+            (
+                comment_path(item, comment),
+                format!(
+                    "---\nmanyhands_managed: true\nmanyhands_kind: comment\nid: {comment}\n\
+                     item_id: {item}\n{parent}created_at: 2026-09-30T12:00:00Z\n---\n"
+                ),
+            )
+        };
+        let ticket_path = PathBuf::from(format!(".manyhands/tickets/{ticket}/ticket.md"));
+        let claims_first = PathBuf::from("docs/claims-first.md");
+        let context = ItemContext {
+            root: PathBuf::from("/repository"),
+            kind: AuthoringKind::Ticket,
+            item_id: ticket.clone(),
+            branch: format!("manyhands/ticket/{ticket}"),
+            worktree: PathBuf::from("/repository/.manyhands/worktrees").join(ticket.to_string()),
+        };
+        let mut sources = vec![
+            (PathBuf::from("docs/notes.md"), "# Notes\n".to_owned()),
+            (
+                ticket_path.clone(),
+                format!(
+                    "---\nmanyhands_managed: true\nmanyhands_kind: ticket\nid: {ticket}\n\
+                     title: Ticket\ntype: task\nstatus: open\n---\n"
+                ),
+            ),
+            comment(&ticket, &first, None),
+            comment(&ticket, &reply, Some(&first)),
+            comment(&ticket, &sibling, Some(&first)),
+            (
+                PathBuf::from(format!(".manyhands/comments/{ticket}/bad.md")),
+                "not canonical markdown\n".to_owned(),
+            ),
+            comment(&other, &id("01ARZ3NDEKTSV4RRFFQ69G5FB1"), None),
+            (
+                claims_first.clone(),
+                format!(
+                    "---\nmanyhands_managed: true\nmanyhands_kind: document\nid: {first}\n\
+                     title: Duplicate\n---\n"
+                ),
+            ),
+        ];
+        let new_path = comment_path(&ticket, &new);
+        sources.push(comment(&ticket, &new, Some(&reply)));
+        let expected = BTreeSet::from([
+            new_path.clone(),
+            ticket_path.clone(),
+            comment_path(&ticket, &reply),
+            comment_path(&ticket, &first),
+            claims_first,
+        ]);
+        assert_eq!(
+            comment_dependency_paths(&sources, &new_path, &context, &new, Some(&reply)),
+            expected
+        );
+        // These have problems of their own, and none is the comment's.
+        let problems = canonical::validate_context(sources.clone())
+            .problems
+            .into_iter()
+            .map(|problem| problem.path)
+            .collect::<BTreeSet<_>>();
+        for unrelated in [
+            PathBuf::from("docs/notes.md"),
+            PathBuf::from(format!(".manyhands/comments/{ticket}/bad.md")),
+            comment_path(&ticket, &sibling),
+            comment_path(&other, &id("01ARZ3NDEKTSV4RRFFQ69G5FB1")),
+        ] {
+            assert!(problems.contains(&unrelated), "{}", unrelated.display());
+            assert!(!expected.contains(&unrelated), "{}", unrelated.display());
+        }
+
+        // A chain that loops back to the new comment ends there.
+        sources[2] = comment(&ticket, &first, Some(&new));
+        assert_eq!(
+            comment_dependency_paths(&sources, &new_path, &context, &new, Some(&reply)),
+            expected
+        );
+        // A root comment depends on its own path and its item only, and
+        // the ticket's path counts when the ticket does not parse.
+        sources[1].1 = "# Not a ticket\n".to_owned();
+        assert_eq!(
+            comment_dependency_paths(&sources, &new_path, &context, &new, None),
+            BTreeSet::from([new_path, ticket_path])
+        );
+    }
 
     #[test]
     fn enablement_s_configuration_holds_a_prefix_only_when_one_is_asked_for() {

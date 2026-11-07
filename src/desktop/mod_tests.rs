@@ -189,6 +189,14 @@ mod view {
             .unwrap();
         assert!(is_workspace);
         assert!(root_id < workspace_id);
+        // The draft store and the kept resolution sets open in the data
+        // directory the service opened, never the platform's default one,
+        // so the launch sweep cannot reach a developer's real sets.
+        assert!(data.join("drafts").is_dir(), "drafts beside the service");
+        assert!(
+            data.join("resolutions").is_dir(),
+            "resolutions beside the service"
+        );
     }
 
     /// Two Retry presses before the window's root is replaced open the

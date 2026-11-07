@@ -707,18 +707,27 @@ pub(in super::super) fn operation_owner(
     scope_key: &str,
     operation_id: OperationId,
 ) -> rusqlite::Result<Option<String>> {
-    operation_holder(connection, OperationFamily::Local, scope_key, operation_id)
+    operation_holder(
+        connection,
+        OperationFamily::Local,
+        scope_key,
+        operation_id,
+        None,
+    )
 }
 
 /// `operation_owner`, for an operation of any journal: the request
 /// whose record holds the operation `operation_id` of `family` in
 /// `scope_key` and is not finished. That request, sent again, is what
-/// takes the operation up with the input it was begun with.
+/// takes the operation up with the input it was begun with. With
+/// `command`, only a request of that command is named: `None` when the
+/// one that holds the operation is of another.
 pub(super) fn operation_holder(
     connection: &Connection,
     family: OperationFamily,
     scope_key: &str,
     operation_id: OperationId,
+    command: Option<&str>,
 ) -> rusqlite::Result<Option<String>> {
     connection
         .query_row(
@@ -729,11 +738,47 @@ pub(super) fn operation_holder(
                 AND request_operations.operation_ulid = ?2
                 AND request_records.scope_key = ?1
                 AND request_records.state = 'accepted'
+                AND (?4 IS NULL OR request_records.command = ?4)
               ORDER BY request_records.request_ulid LIMIT 1",
-            params![scope_key, operation_id.to_string(), family.as_str()],
+            params![
+                scope_key,
+                operation_id.to_string(),
+                family.as_str(),
+                command
+            ],
             |row| row.get(0),
         )
         .optional()
+}
+
+/// `operation_holder` of the remote operation `operation_id` of
+/// `scope_key`, or, when no record holds it and it is the context child of
+/// a lifecycle of the repository `repository_id`, of that parent: no
+/// record holds a lifecycle's child, and the request whose record holds its
+/// parent does (decision 34). An operation that is no lifecycle's child
+/// reads as `operation_holder` does.
+#[allow(clippy::result_large_err)] // `ReadError` carries its scope by value.
+pub(super) fn operation_or_parent_holder(
+    connection: &Connection,
+    scope_key: &str,
+    repository_id: i64,
+    operation_id: OperationId,
+) -> Result<Option<String>, ReadError> {
+    let family = OperationFamily::Remote;
+    if let Some(holder) = operation_holder(connection, family, scope_key, operation_id, None)? {
+        return Ok(Some(holder));
+    }
+    let Some(parent) = crate::repository::remote::state::lifecycle_parent_of(
+        connection,
+        repository_id,
+        operation_id,
+    )?
+    else {
+        return Ok(None);
+    };
+    Ok(operation_holder(
+        connection, family, scope_key, parent, None,
+    )?)
 }
 
 /// Deletes the record `operation_owner` finds, and releases the
@@ -812,6 +857,34 @@ impl RepositoryService {
                 .unwrap_or(false);
         self.write_records(|transaction| {
             insert_request(transaction, request, now, fails_after_confirmation)
+        })
+    }
+
+    /// Accepts a request and finishes it in one transaction with what `write`
+    /// wrote, under the exclusive index lock, so the request is absent or
+    /// finished and never accepted. `write` gives the result to store and what
+    /// the caller answers with. `None`, with nothing written, for a request ID
+    /// a record already holds. An `Err` leaves neither the record nor the write.
+    pub(super) fn finish_in_one_transaction<T>(
+        &self,
+        request: &NewRequest,
+        write: impl FnOnce(&Transaction<'_>) -> Result<(RequestResult, T), ReadError>,
+    ) -> Result<Option<T>, ReadError> {
+        let now = self.record_time();
+        self.write_records(|transaction| {
+            match insert_request(transaction, request, now, false)? {
+                InsertRequestOutcome::Inserted => {}
+                InsertRequestOutcome::RequestExists => return Ok(None),
+                // A request of this path presents no confirmation.
+                InsertRequestOutcome::ConfirmationUnavailable => {
+                    return Err(ReadError::new(ResultCode::InternalError));
+                }
+            }
+            let (result, value) = write(transaction)?;
+            if !finish_request(transaction, request.request_id, 1, &result, now)? {
+                return Err(ReadError::new(ResultCode::InternalError));
+            }
+            Ok(Some(value))
         })
     }
 
@@ -918,7 +991,10 @@ impl RepositoryService {
     /// Whether the record's cancellation flag is set. Nothing is
     /// changed: a cancellation that is held, and not yet passed on,
     /// stays where a later call finds it.
-    pub(super) fn cancellation_requested(&self, request_id: RequestId) -> Result<bool, ReadError> {
+    pub(in super::super) fn cancellation_requested(
+        &self,
+        request_id: RequestId,
+    ) -> Result<bool, ReadError> {
         if self
             .should_inject(
                 FailurePoint::BeforeRequestCancellationRead,

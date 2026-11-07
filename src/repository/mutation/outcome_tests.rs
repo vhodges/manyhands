@@ -1405,7 +1405,7 @@ fn a_hand_off_no_operation_owes_is_offered_as_a_refresh() {
     };
     for command in Command::ALL {
         let actions = offered(command, false);
-        if command == Command::FolderCreate {
+        if matches!(command, Command::FolderCreate | Command::PollOnce) {
             assert_eq!(actions.len(), 1);
             assert_eq!(actions[0].action, RecoveryActionKind::IndexRefresh);
             assert_eq!(actions[0].operation_id, None);
@@ -1532,6 +1532,10 @@ fn a_resume_is_never_offered_again_for_what_only_the_original_request_can_do() {
 /// other operation on the repository: a new preview could not be used,
 /// so the repository is what is looked at. An item write is offered
 /// nothing, as before.
+///
+/// `item republish` is the first confirmed command that stops at safe
+/// points: one whose record was left accepted holds its reservation, and the
+/// same request, which takes that up again, comes first.
 #[test]
 fn an_external_change_to_a_confirmed_command_is_offered_a_new_preview_or_an_inspection() {
     for command in Command::ALL {
@@ -1542,7 +1546,8 @@ fn an_external_change_to_a_confirmed_command_is_offered_a_new_preview_or_an_insp
                 command.stops_at_safe_points(),
             ) {
                 (true, false, _) => &["request.prepare"],
-                (true, true, _) => &["repo.inspect"],
+                (true, true, true) => &["request.retry", "repo.inspect"],
+                (true, true, false) => &["repo.inspect"],
                 // A synchronization that stopped with its reservation
                 // held: the same request is what takes it up again.
                 (false, true, true) => &["request.retry"],
@@ -1741,6 +1746,35 @@ fn a_failure_that_passes_by_itself_is_offered_the_same_request() {
                 "{code:?}"
             );
         }
+    }
+}
+
+/// A poll's transport stop is final, so the same request is not offered: it
+/// would only read the stored failure. A record left accepted is what still
+/// goes on, and the codes that do pass by themselves are unchanged.
+#[test]
+fn a_polls_final_transport_stop_offers_nothing() {
+    for code in [
+        ResultCode::RemoteUnavailable,
+        ResultCode::TransportUnavailable,
+    ] {
+        assert_eq!(
+            actions_of(Command::PollOnce, code, false),
+            [""; 0],
+            "{code:?}"
+        );
+        assert_eq!(
+            actions_of(Command::PollOnce, code, true),
+            ["request.retry"],
+            "{code:?}"
+        );
+    }
+    for code in [ResultCode::PollYielding, ResultCode::Busy] {
+        assert_eq!(
+            actions_of(Command::PollOnce, code, false),
+            ["request.retry"],
+            "{code:?}"
+        );
     }
 }
 

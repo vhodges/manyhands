@@ -333,6 +333,9 @@ impl Drop for Shelf {
 pub fn repair_data(envelope: &Envelope<MutationDataDto>) -> &RepairMutationDto {
     match envelope.data.as_ref() {
         Some(MutationDataDto::LocalContextSync(_)) => panic!("local synchronization data"),
+        Some(MutationDataDto::PollPolicy(_)) | Some(MutationDataDto::Poll(_)) => {
+            panic!("a polling policy's data")
+        }
         Some(MutationDataDto::Repair(data)) => data,
         Some(
             MutationDataDto::Document(_)
@@ -341,8 +344,13 @@ pub fn repair_data(envelope: &Envelope<MutationDataDto>) -> &RepairMutationDto {
             | MutationDataDto::Key(_)
             | MutationDataDto::Operation(_)
             | MutationDataDto::Synchronization(_)
+            | MutationDataDto::SynchronizationConflict(_)
+            | MutationDataDto::Comment(_)
+            | MutationDataDto::ConflictResolution(_)
             | MutationDataDto::Identity(_)
-            | MutationDataDto::Host(_),
+            | MutationDataDto::Host(_)
+            | MutationDataDto::Context(_)
+            | MutationDataDto::Lifecycle(_),
         )
         | None => panic!("the envelope carries no repair data"),
     }

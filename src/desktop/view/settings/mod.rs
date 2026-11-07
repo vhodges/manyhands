@@ -116,7 +116,7 @@ impl SettingsHost {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn shown(&self) -> Shown {
         self.shown
     }
@@ -143,6 +143,21 @@ impl SettingsHost {
             self.hosts(window, cx)
                 .update(cx, |page, cx| page.opened(selection, cx));
         }
+        cx.notify();
+    }
+
+    /// Share… and Share main…: the Remotes page on `root`, even when it
+    /// already works on another repository, so a publication remote is
+    /// chosen for the repository shared.
+    pub(crate) fn open_remotes_on(
+        &mut self,
+        root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.shown = Shown::Settings(SettingsPage::Remotes);
+        self.remotes(window, cx)
+            .update(cx, |page, cx| page.open_on(root, cx));
         cx.notify();
     }
 

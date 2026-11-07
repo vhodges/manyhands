@@ -56,27 +56,44 @@ mod reenter;
 mod replay;
 mod reply;
 mod settle;
+mod way_out;
 
+/// The synchronization a comment's operation publishes it by, for the
+/// conflict read (R-5).
+pub(super) use bind::comment::comment_synchronization;
+/// The attempt ID `conflict resolve` derives (R-14), for the
+/// source-included test target that plants a row under it.
+#[cfg(test)]
+pub(crate) use bind::conflict::attempt_for as conflict_resolve_attempt;
 use bind::{
     Binding, Confirmed,
     abandon::OperationAbandonBinding,
+    comment::CommentAddBinding,
+    conflict::ConflictResolveBinding,
+    context::{ContextPrepareBinding, ContextReleaseBinding},
     document::DocumentBinding,
     folder::FolderCreateBinding,
     host::HostBinding,
     index::IndexBinding,
     key::{KeyDeleteBinding, KeyGenerateBinding, KeyRegistryBinding},
+    lifecycle::LifecycleBinding,
     local_sync::LocalSyncBinding,
+    poll::{PollOnceBinding, PollPolicyBinding},
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
     repair::RepairBinding,
     repo::RepoBinding,
     repo_identity::RepoIdentityBinding,
     repo_remove::RepoRemoveBinding,
+    republish::ItemRepublishBinding,
     resume::OperationResumeBinding,
     sync::SyncBinding,
     ticket::{SlugAssignBinding, TicketBinding},
 };
 pub use bind::{
     abandon::OperationAbandonInput,
+    comment::CommentAddInput,
+    conflict::{ConflictResolutionInput, ConflictResolveInput},
+    context::{ContextPrepareInput, ContextPrepareIntent, ContextReleaseInput},
     document::{DocumentCreateInput, DocumentMoveInput, DocumentSaveInput},
     folder::FolderCreateInput,
     host::{HostApproveInput, HostReplaceInput},
@@ -85,12 +102,15 @@ pub use bind::{
         KeyClearInput, KeyDeleteInput, KeyGenerateInput, KeyImportInput, KeyRemoveInput,
         KeySelectInput,
     },
+    lifecycle::{DocumentPromoteInput, TicketCloseInput},
     local_sync::{LocalConflictResolutionInput, LocalContextResolveInput, LocalContextSyncInput},
+    poll::{PollConfigureInput, PollOnceInput, PollPauseInput, PollResumeInput},
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
     repair::{DocumentRepairInput, TicketRepairInput},
     repo::{RepoCreateInput, RepoEnableInput},
     repo_identity::RepoIdentitySetInput,
     repo_remove::RepoRemoveInput,
+    republish::ItemRepublishInput,
     resume::OperationResumeInput,
     sync::{ItemSyncInput, RepoSyncInput},
     ticket::{TicketCreateInput, TicketSaveInput, TicketSlugAssignInput},
@@ -98,14 +118,24 @@ pub use bind::{
 use command::Command;
 pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
-    CancelDto, DocumentMutationDto, HostMutationDto, HostObservationDto, HostPreviewDto,
-    HostReplacementDto, IdentityMutationDto, IdentityPreviewDto, KeyDeletionPreviewDto,
-    KeyDeletionState, KeyGenerationState, KeyMutationDto, LocalIdentityDto, MutationDataDto,
-    OperationAbandonPreviewDto, OperationMutationDto, PrepareDataDto, PreviewDetailsDto,
+    CancelDto, CommentMutationDto, CommentMutationType, CommentPendingReason, ConflictNextAction,
+    ConflictNextDto, ConflictResolutionMutationDto, ConflictResolutionMutationType,
+    ContextMutationDto, DocumentMutationDto, HostMutationDto, HostObservationDto, HostPreviewDto,
+    HostReplacementDto, IdentityMutationDto, IdentityPreviewDto, ItemRepublishPreviewDto,
+    KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState, KeyMutationDto,
+    LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupPendingReason, LifecycleCleanupState,
+    LifecycleIntegrationKind, LifecycleMadeReadyDto, LifecycleMadeReadyState, LifecycleMutationDto,
+    LifecycleMutationType, LifecyclePathChangeDto, LifecyclePathChangeKind,
+    LifecyclePlannedCleanupDto, LifecyclePlannedClosureDto, LifecyclePlannedIntegration,
+    LifecyclePlannedPublication, LifecyclePreviewDto, LifecyclePublicationPendingReason,
+    LifecyclePublicationState, LifecycleRecording, LocalIdentityDto, MutationDataDto,
+    OperationAbandonPreviewDto, OperationMutationDto, PollMutationCompletion, PollMutationDto,
+    PollPolicyMutationDto, PollTargetDisposition, PollTargetDto, PrepareDataDto, PreviewDetailsDto,
     PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto, PreviewIdentitySource,
     RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto, RepairPreviewDto,
     RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto,
-    RequestResultDto, RequestState, SynchronizationMutationDto, TicketMutationDto,
+    RequestResultDto, RequestState, SynchronizationConflictMutationDto,
+    SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
 };
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
@@ -118,6 +148,7 @@ pub use progress::{CancellationToken, NoProgress, ProgressEvent, ProgressSink, P
 use records::RequestRecord;
 pub(super) use records::migrate as migrate_request_tables;
 pub(super) use records::{operation_owner, release_operation_owner};
+pub use way_out::{LifecycleWayOut, lifecycle_prepare_way_out, lifecycle_way_out};
 
 /// What the service reads the time from when it times a record. Tests
 /// inject one to move time; everything else uses `SystemClock`.
@@ -401,6 +432,9 @@ pub struct MutationCall {
 pub enum Mutation {
     LocalContextSync(LocalContextSyncInput),
     LocalContextResolve(LocalContextResolveInput),
+    CommentAdd(CommentAddInput),
+    ConflictResolve(ConflictResolveInput),
+    ItemRepublish(ItemRepublishInput),
     DocumentCreate(DocumentCreateInput),
     DocumentSave(DocumentSaveInput),
     DocumentMove(DocumentMoveInput),
@@ -431,6 +465,14 @@ pub enum Mutation {
     FolderCreate(FolderCreateInput),
     DocumentRepair(DocumentRepairInput),
     TicketRepair(TicketRepairInput),
+    ContextPrepare(ContextPrepareInput),
+    ContextRelease(ContextReleaseInput),
+    DocumentPromote(DocumentPromoteInput),
+    TicketClose(TicketCloseInput),
+    PollConfigure(PollConfigureInput),
+    PollPause(PollPauseInput),
+    PollResume(PollResumeInput),
+    PollOnce(PollOnceInput),
 }
 
 impl Mutation {
@@ -443,6 +485,9 @@ impl Mutation {
         match self {
             Self::LocalContextSync(_) => Command::LocalContextSync,
             Self::LocalContextResolve(_) => Command::LocalContextResolve,
+            Self::CommentAdd(_) => Command::CommentAdd,
+            Self::ConflictResolve(_) => Command::ConflictResolve,
+            Self::ItemRepublish(_) => Command::ItemRepublish,
             Self::DocumentCreate(_) => Command::DocumentCreate,
             Self::DocumentSave(_) => Command::DocumentSave,
             Self::DocumentMove(_) => Command::DocumentMove,
@@ -473,6 +518,14 @@ impl Mutation {
             Self::FolderCreate(_) => Command::FolderCreate,
             Self::DocumentRepair(_) => Command::DocumentRepair,
             Self::TicketRepair(_) => Command::TicketRepair,
+            Self::ContextPrepare(_) => Command::ContextPrepare,
+            Self::ContextRelease(_) => Command::ContextRelease,
+            Self::DocumentPromote(_) => Command::DocumentPromote,
+            Self::TicketClose(_) => Command::TicketClose,
+            Self::PollConfigure(_) => Command::PollConfigure,
+            Self::PollPause(_) => Command::PollPause,
+            Self::PollResume(_) => Command::PollResume,
+            Self::PollOnce(_) => Command::PollOnce,
         }
     }
 
@@ -481,7 +534,11 @@ impl Mutation {
     /// there is nothing to preview, and nothing is read of its input.
     fn confirmed(&self) -> Option<Box<dyn Confirmed>> {
         match self {
-            Self::LocalContextSync(_) | Self::LocalContextResolve(_) => None,
+            Self::LocalContextSync(_)
+            | Self::LocalContextResolve(_)
+            | Self::CommentAdd(_)
+            | Self::ConflictResolve(_) => None,
+            Self::ItemRepublish(input) => Some(Box::new(ItemRepublishBinding::from(input.clone()))),
             Self::RepoCreate(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RepoEnable(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RemoteRemove(input) => Some(Box::new(RemoteRemoveBinding::from(input.clone()))),
@@ -497,9 +554,15 @@ impl Mutation {
             Self::HostReplace(input) => Some(Box::new(HostBinding::from(input.clone()))),
             Self::DocumentRepair(input) => Some(Box::new(RepairBinding::from(input.clone()))),
             Self::TicketRepair(input) => Some(Box::new(RepairBinding::from(input.clone()))),
+            Self::DocumentPromote(input) => Some(Box::new(LifecycleBinding::from(input.clone()))),
+            Self::TicketClose(input) => Some(Box::new(LifecycleBinding::from(input.clone()))),
             Self::DocumentCreate(_)
             | Self::DocumentSave(_)
             | Self::DocumentMove(_)
+            | Self::PollConfigure(_)
+            | Self::PollPause(_)
+            | Self::PollResume(_)
+            | Self::PollOnce(_)
             | Self::TicketCreate(_)
             | Self::TicketSave(_)
             | Self::TicketSlugAssign(_)
@@ -515,7 +578,9 @@ impl Mutation {
             | Self::ItemSync(_)
             | Self::RepoSync(_)
             | Self::OperationResume(_)
-            | Self::FolderCreate(_) => None,
+            | Self::FolderCreate(_)
+            | Self::ContextPrepare(_)
+            | Self::ContextRelease(_) => None,
         }
     }
 
@@ -523,6 +588,9 @@ impl Mutation {
         match self {
             Self::LocalContextSync(input) => Box::new(LocalSyncBinding::Start(input)),
             Self::LocalContextResolve(input) => Box::new(LocalSyncBinding::Resolve(input)),
+            Self::CommentAdd(input) => Box::new(CommentAddBinding::from(input)),
+            Self::ConflictResolve(input) => Box::new(ConflictResolveBinding::from(input)),
+            Self::ItemRepublish(input) => Box::new(ItemRepublishBinding::from(input)),
             Self::DocumentCreate(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentSave(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentMove(input) => Box::new(DocumentBinding::from(input)),
@@ -553,6 +621,14 @@ impl Mutation {
             Self::FolderCreate(input) => Box::new(FolderCreateBinding::from(input)),
             Self::DocumentRepair(input) => Box::new(RepairBinding::from(input)),
             Self::TicketRepair(input) => Box::new(RepairBinding::from(input)),
+            Self::ContextPrepare(input) => Box::new(ContextPrepareBinding::from(input)),
+            Self::ContextRelease(input) => Box::new(ContextReleaseBinding::from(input)),
+            Self::DocumentPromote(input) => Box::new(LifecycleBinding::from(input)),
+            Self::TicketClose(input) => Box::new(LifecycleBinding::from(input)),
+            Self::PollConfigure(input) => Box::new(PollPolicyBinding::from(input)),
+            Self::PollPause(input) => Box::new(PollPolicyBinding::from(input)),
+            Self::PollResume(input) => Box::new(PollPolicyBinding::from(input)),
+            Self::PollOnce(input) => Box::new(PollOnceBinding::from(input)),
         }
     }
 }

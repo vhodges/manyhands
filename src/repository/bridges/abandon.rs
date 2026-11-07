@@ -235,7 +235,10 @@ fn writes(operation: RepositoryOperation) -> Writes {
         | RepositoryOperation::SetLocalIdentity
         // A folder is a directory, which is no file, and is made under
         // no row: the row of its request is its refresh's.
-        | RepositoryOperation::CreateFolder => Writes::Nothing,
+        | RepositoryOperation::CreateFolder
+        // A release removes a context that holds nothing of anyone's,
+        // and writes no file and no remote state.
+        | RepositoryOperation::ReleaseContext => Writes::Nothing,
     }
 }
 

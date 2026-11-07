@@ -4,11 +4,15 @@
 //!
 //! `remote select`: a commit of the configuration file on primary. Its
 //! commit is read from Git, never taken from what the domain names.
+//!
+//! This file also holds the conformance rows of `poll configure`, `poll pause`
+//! and `poll resume`; their other rows are in `tests/mutation_remote/c5_poll.rs`.
 
 use manyhands::{
     repository::{
-        FailurePoint, Mutation, MutationDataDto, RemoteAddInput, RemoteMutationDto,
-        RemoteSelectInput, RepositoryService, RequestState,
+        FailurePoint, Mutation, MutationDataDto, PollConfigureInput, PollPauseInput,
+        PollResumeInput, RemoteAddInput, RemoteMutationDto, RemoteSelectInput, RepositoryService,
+        RequestState,
         request_store::{FinalKind, JournalRow},
     },
     results::{
@@ -1541,7 +1545,11 @@ fn a_selection_whose_hand_off_is_owed_without_its_commit_step_offers_the_request
 
 /// The rows of `remote add` and `remote select` in the conformance
 /// table.
-pub(crate) const CONFORMANCE: [Row; 2] = [
+///
+/// With them, the rows of the three polling policy verbs, which need no server
+/// and no confirmation. Each is refused for a repository never enabled, or for
+/// an interval out of range.
+pub(crate) const CONFORMANCE: [Row; 5] = [
     Row::new("remote add", false, "invalid_remote", |rule| {
         let world = World::new();
         mutation::drive_plain(
@@ -1572,4 +1580,73 @@ pub(crate) const CONFORMANCE: [Row; 2] = [
         );
         Ok(())
     }),
+    Row::new("poll configure", false, "invalid_input", |rule| {
+        let world = World::new();
+        let configure = |interval_seconds| {
+            Mutation::PollConfigure(PollConfigureInput {
+                root: world.root.clone(),
+                interval_seconds,
+            })
+        };
+        mutation::drive_plain(
+            &world.service,
+            world.data.path(),
+            &|ask| match ask {
+                Ask::Same | Ask::Unconsented => configure(120),
+                Ask::Changed => configure(240),
+                Ask::Refused => configure(59),
+            },
+            rule,
+        );
+        Ok(())
+    }),
+    Row::new("poll pause", false, "repository_not_enabled", |rule| {
+        let world = World::new();
+        let plain = never_enabled();
+        mutation::drive_plain(
+            &world.service,
+            world.data.path(),
+            &|ask| match ask {
+                Ask::Same | Ask::Unconsented => pause(&world.root),
+                Ask::Changed => resume(&world.root),
+                Ask::Refused => pause(plain.path()),
+            },
+            rule,
+        );
+        Ok(())
+    }),
+    Row::new("poll resume", false, "repository_not_enabled", |rule| {
+        let world = World::new();
+        let plain = never_enabled();
+        mutation::drive_plain(
+            &world.service,
+            world.data.path(),
+            &|ask| match ask {
+                Ask::Same | Ask::Unconsented => resume(&world.root),
+                Ask::Changed => pause(&world.root),
+                Ask::Refused => resume(plain.path()),
+            },
+            rule,
+        );
+        Ok(())
+    }),
 ];
+
+fn pause(root: &std::path::Path) -> Mutation {
+    Mutation::PollPause(PollPauseInput {
+        root: root.to_owned(),
+    })
+}
+
+fn resume(root: &std::path::Path) -> Mutation {
+    Mutation::PollResume(PollResumeInput {
+        root: root.to_owned(),
+    })
+}
+
+/// A Git repository Manyhands was never enabled on.
+fn never_enabled() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    git2::Repository::init(directory.path()).unwrap();
+    directory
+}

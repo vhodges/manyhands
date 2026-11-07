@@ -32,6 +32,9 @@ pub struct PtyCli {
     consumed: usize,
     before: libc::tcflag_t,
     live_stderr: Arc<Mutex<Vec<u8>>>,
+    /// How long `finish` waits for the child to exit: ten seconds unless a
+    /// case asks for longer (`exit_within`).
+    exit_wait: Duration,
 }
 
 fn owned(fd: libc::c_int) -> io::Result<File> {
@@ -232,7 +235,14 @@ impl PtyCli {
             consumed: 0,
             before,
             live_stderr,
+            exit_wait: Duration::from_secs(10),
         }
+    }
+    /// A longer wait for the child's exit, for a case whose run is known to
+    /// take more than the default ten seconds. Additive: no other case changes.
+    pub fn exit_within(mut self, wait: Duration) -> Self {
+        self.exit_wait = wait;
+        self
     }
     pub fn expect(&mut self, text: &str) {
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -291,7 +301,7 @@ impl PtyCli {
         }
     }
     fn wait(&self) -> ExitStatus {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + self.exit_wait;
         loop {
             if let Some(status) = self
                 .child
@@ -306,7 +316,7 @@ impl PtyCli {
             }
             if Instant::now() >= deadline {
                 self.stop();
-                panic!("PTY child exceeded 10 seconds");
+                panic!("PTY child exceeded {:?}", self.exit_wait);
             }
             thread::sleep(Duration::from_millis(5));
         }
@@ -352,6 +362,41 @@ impl PtyCli {
                 status: status.code().expect("PTY child died by signal"),
             },
             String::from_utf8(std::mem::take(&mut self.transcript)).unwrap(),
+        )
+    }
+    /// As `finish`, for a child that may have died by a signal: its exit
+    /// code, the signal that ended it, its stdout and its stderr.
+    pub fn finish_any(mut self) -> (Option<i32>, Option<i32>, String, String) {
+        use std::os::unix::process::ExitStatusExt;
+        let status = self.wait();
+        self.slave.take();
+        if let Some(reader) = self.reader.take() {
+            reader.join().unwrap();
+        }
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        for _ in 0..2 {
+            let (is_stdout, bytes) = self
+                .pipes
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("PTY standard pipe EOF deadline");
+            let bytes = bytes.unwrap();
+            if is_stdout {
+                stdout = bytes
+            } else {
+                stderr = bytes
+            }
+        }
+        for worker in self.workers.drain(..) {
+            worker.join().unwrap();
+        }
+        self.child.borrow_mut().take();
+        (
+            status.code(),
+            status.signal(),
+            String::from_utf8(stdout).unwrap(),
+            String::from_utf8(stderr).unwrap(),
         )
     }
     pub fn lflag_before_and_after(&self) -> (libc::tcflag_t, libc::tcflag_t) {

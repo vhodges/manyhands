@@ -284,26 +284,26 @@ impl HostsPage {
     }
 
     /// Around Check host, whose own focus is the Kit's.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn check_focus(&self) -> FocusHandle {
         self.focus[CHECK_ID].clone()
     }
 
     /// The focus the wrapper `id` tracks.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn control_focus(&self, id: &str) -> FocusHandle {
         self.focus[id].clone()
     }
 
     /// The request of the page's latest Check host, answered or not.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn observing_id(&self) -> Option<DesktopRequestId> {
         self.observing.as_ref().map(|observing| observing.id)
     }
 
     /// The code of the answer to the page's latest Check host, once it has
     /// one and it is of the repository the page works on.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn observed_code(&self) -> Option<manyhands::results::ResultCode> {
         self.current()?.answer.as_ref().map(|answer| answer.code)
     }

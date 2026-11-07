@@ -27,11 +27,46 @@ pub(super) enum WorktreeRemoval {
     Changed,
     RecoveryRequired,
 }
+/// What the item-free precheck of a release found of a worktree.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ReleaseCheck {
+    Clean,
+    /// A change, an untracked or ignored file, a hidden index bit or a
+    /// submodule change: something of the user's that removal would lose.
+    NotClean,
+    /// The worktree is not the context's as it is registered: another
+    /// identity or HEAD, a lock, or a tree that is no context's.
+    RecoveryRequired,
+}
+/// What a release's removal of a worktree came to.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum WorktreeRelease {
+    Removed,
+    AlreadyAbsent,
+    /// Refused before anything was touched: see `ReleaseCheck::NotClean`.
+    NotClean,
+    /// Refused before anything was touched: see
+    /// `ReleaseCheck::RecoveryRequired`, or a worktree whose directory
+    /// and registration are not both there.
+    RecoveryRequired,
+    /// The prune began and did not finish: part of the worktree may be
+    /// gone.
+    Incomplete,
+}
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum BranchDeletion {
     Deleted,
     AlreadyAbsent,
     Changed,
+}
+/// What a context check found wrong, before it is read as a promotion's
+/// or a release's answer.
+enum Finding {
+    /// Identity, registration, HEAD, tree or lock.
+    Mismatch,
+    /// What `require_cleanup_clean` refused for.
+    NotClean(Precheck),
+    Locked,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum TrackingDeletion {
@@ -44,7 +79,7 @@ pub(super) enum TrackingDeletion {
 pub(super) struct ContextCleanup {
     repository: git2::Repository,
     root: PathBuf,
-    _lease: RepositoryLease,
+    lease: RepositoryLease,
 }
 /// Not constructible outside this module, not Clone, and cannot outlive the
 /// cleanup lease. This proves the *local* tracking effect, not publication or
@@ -87,10 +122,78 @@ impl ContextCleanup {
         Ok(Self {
             repository,
             root,
-            _lease: lease,
+            lease,
         })
     }
+    /// The capability over the repository lease its caller already holds,
+    /// as a release does from the moment it begins its row: one lease
+    /// covers its checks, its removals and its row's steps.
+    pub(super) fn holding(root: &Path, lease: RepositoryLease) -> Result<Self, RepositoryError> {
+        let (repository, root) =
+            super::canonical_repository_root(root, RepositoryOperation::RepositorySnapshot)?;
+        if repository.is_worktree() {
+            return Err(state::recovery_required());
+        }
+        Ok(Self {
+            repository,
+            root,
+            lease,
+        })
+    }
+    /// The lease back, for the hand-off that gives it up.
+    pub(super) fn into_lease(self) -> RepositoryLease {
+        self.lease
+    }
+    /// Where the repository registers the context's worktree.
+    fn registration(&self, id: &ItemId) -> PathBuf {
+        self.repository
+            .commondir()
+            .join("worktrees")
+            .join(id.to_string())
+    }
+    /// Whether the context's worktree directory, and its registration,
+    /// are each there. `Err` for one that cannot be read.
+    fn worktree_parts(&self, kind: AuthoringKind, id: &ItemId) -> [Result<bool, ()>; 2] {
+        let context = item_context(&self.root, kind, id.clone());
+        [present(&context.worktree), present(&self.registration(id))]
+    }
+    /// Whether anything of the context's worktree is there: its
+    /// directory or its registration. `Err` when that cannot be read.
+    pub(super) fn worktree_present(&self, kind: AuthoringKind, id: &ItemId) -> Result<bool, ()> {
+        let [worktree, registration] = self.worktree_parts(kind, id);
+        Ok(worktree? || registration?)
+    }
     pub(super) fn precheck_context(&self, kind: AuthoringKind, id: &ItemId, oid: Oid) -> Precheck {
+        match self.inspect(kind, id, oid, true) {
+            Ok(()) => Precheck::Ok,
+            Err(Finding::Mismatch) => Precheck::Changed,
+            Err(Finding::NotClean(reason)) => reason,
+            Err(Finding::Locked) => Precheck::Locked,
+        }
+    }
+    /// The precheck of a release: as `precheck_context`, except that the
+    /// item need not be in the context's tree, which a context made for
+    /// a new item lacks, and that what is the user's is told apart from
+    /// what is not the context's as it is registered.
+    pub(super) fn precheck_release(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+    ) -> ReleaseCheck {
+        match self.inspect(kind, id, oid, false) {
+            Ok(()) => ReleaseCheck::Clean,
+            Err(Finding::NotClean(_)) => ReleaseCheck::NotClean,
+            Err(Finding::Mismatch | Finding::Locked) => ReleaseCheck::RecoveryRequired,
+        }
+    }
+    fn inspect(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+        require_item: bool,
+    ) -> Result<(), Finding> {
         let target = super::SynchronizationTarget::Context {
             kind,
             item_id: id.clone(),
@@ -104,22 +207,18 @@ impl ContextCleanup {
             )
             .is_err()
         {
-            return Precheck::Changed;
+            return Err(Finding::Mismatch);
         }
         let Ok(linked) = sync::materialized_target(&self.root, "", &target) else {
-            return Precheck::Changed;
+            return Err(Finding::Mismatch);
         };
-        let expected_admin = self
-            .repository
-            .commondir()
-            .join("worktrees")
-            .join(id.to_string());
+        let expected_admin = self.registration(id);
         if !linked.is_worktree()
             || linked.path().canonicalize().ok() != expected_admin.canonicalize().ok()
             || linked.commondir().canonicalize().ok()
                 != self.repository.commondir().canonicalize().ok()
         {
-            return Precheck::Changed;
+            return Err(Finding::Mismatch);
         }
         if linked.head().ok().and_then(|h| h.target()) != Some(oid)
             || self
@@ -129,37 +228,39 @@ impl ContextCleanup {
                 .and_then(|r| r.target())
                 != Some(oid)
         {
-            return Precheck::Changed;
+            return Err(Finding::Mismatch);
         }
         // The recorded clean OID is canonical authority. Do not invoke the
         // filesystem canonical-context scanner while this capability owns the
         // common lease; materialization/status/ignored checks remain below.
-        if super::validate_context_tree(&linked, &context, RepositoryOperation::RepositorySnapshot)
-            .is_err()
+        if super::validate_context_tree_items(
+            &linked,
+            &context,
+            require_item,
+            RepositoryOperation::RepositorySnapshot,
+        )
+        .is_err()
         {
-            return Precheck::Changed;
+            return Err(Finding::Mismatch);
         }
         // This stronger proof is deletion-only. Do not change synchronization's
         // status policy or clear index flags to make hidden data appear clean.
         let [Ok(worktree_root), Ok(admin_root)] =
             [context.worktree, expected_admin].map(|path| path.canonicalize())
         else {
-            return Precheck::Changed;
+            return Err(Finding::Mismatch);
         };
         let removal_roots = [worktree_root, admin_root];
-        if let Err(reason) =
-            require_cleanup_clean(&linked, &target, &removal_roots, &mut BTreeSet::new(), 0)
-        {
-            return reason;
-        }
+        require_cleanup_clean(&linked, &target, &removal_roots, &mut BTreeSet::new(), 0)
+            .map_err(Finding::NotClean)?;
         match self
             .repository
             .find_worktree(&id.to_string())
             .and_then(|w| w.is_locked())
         {
-            Ok(git2::WorktreeLockStatus::Unlocked) => Precheck::Ok,
-            Ok(git2::WorktreeLockStatus::Locked(_)) => Precheck::Locked,
-            Err(_) => Precheck::Changed,
+            Ok(git2::WorktreeLockStatus::Unlocked) => Ok(()),
+            Ok(git2::WorktreeLockStatus::Locked(_)) => Err(Finding::Locked),
+            Err(_) => Err(Finding::Mismatch),
         }
     }
     pub(super) fn remove_context_worktree(
@@ -168,18 +269,50 @@ impl ContextCleanup {
         id: &ItemId,
         oid: Oid,
     ) -> WorktreeRemoval {
-        let context = item_context(&self.root, kind, id.clone());
-        let admin = self
-            .repository
-            .commondir()
-            .join("worktrees")
-            .join(id.to_string());
-        match (present(&context.worktree), present(&admin)) {
-            (Ok(false), Ok(false)) => return WorktreeRemoval::AlreadyAbsent,
-            (Ok(true), Ok(true)) => (),
-            _ => return WorktreeRemoval::RecoveryRequired,
+        let refusal = || {
+            (self.precheck_context(kind, id, oid) != Precheck::Ok)
+                .then_some(WorktreeRelease::NotClean)
+        };
+        match self.remove_worktree(kind, id, refusal) {
+            WorktreeRelease::Removed => WorktreeRemoval::Removed,
+            WorktreeRelease::AlreadyAbsent => WorktreeRemoval::AlreadyAbsent,
+            WorktreeRelease::NotClean => WorktreeRemoval::Changed,
+            WorktreeRelease::RecoveryRequired | WorktreeRelease::Incomplete => {
+                WorktreeRemoval::RecoveryRequired
+            }
         }
-        if self.precheck_context(kind, id, oid) != Precheck::Ok {
+    }
+    /// The removal of a release: as `remove_context_worktree`, with the
+    /// release's own precheck, which it re-runs, and an answer that says
+    /// whether anything was touched.
+    pub(super) fn release_worktree(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+        oid: Oid,
+    ) -> WorktreeRelease {
+        let refusal = || match self.precheck_release(kind, id, oid) {
+            ReleaseCheck::Clean => None,
+            ReleaseCheck::NotClean => Some(WorktreeRelease::NotClean),
+            ReleaseCheck::RecoveryRequired => Some(WorktreeRelease::RecoveryRequired),
+        };
+        self.remove_worktree(kind, id, refusal)
+    }
+    /// Prunes the context's worktree once `refusal`, the caller's
+    /// precheck, finds nothing to refuse it for.
+    fn remove_worktree(
+        &self,
+        kind: AuthoringKind,
+        id: &ItemId,
+        refusal: impl FnOnce() -> Option<WorktreeRelease>,
+    ) -> WorktreeRelease {
+        let context = item_context(&self.root, kind, id.clone());
+        match self.worktree_parts(kind, id) {
+            [Ok(false), Ok(false)] => return WorktreeRelease::AlreadyAbsent,
+            [Ok(true), Ok(true)] => (),
+            _ => return WorktreeRelease::RecoveryRequired,
+        }
+        if let Some(refused) = refusal() {
             // Partial prune must never be guessed finished. Missing .git or any
             // tracked path requires explicit repair, even if libgit2 can prune it.
             let partial = git2::Repository::open(&context.worktree)
@@ -194,23 +327,23 @@ impl ContextCleanup {
                 })
                 .unwrap_or(true);
             return if partial {
-                WorktreeRemoval::RecoveryRequired
+                WorktreeRelease::RecoveryRequired
             } else {
-                WorktreeRemoval::Changed
+                refused
             };
         }
         let Ok(worktree) = self.repository.find_worktree(&id.to_string()) else {
-            return WorktreeRemoval::RecoveryRequired;
+            return WorktreeRelease::RecoveryRequired;
         };
         let mut options = git2::WorktreePruneOptions::new();
         options.valid(true).working_tree(true).locked(false);
         if worktree.prune(Some(&mut options)).is_err() {
-            return WorktreeRemoval::RecoveryRequired;
+            return WorktreeRelease::Incomplete;
         }
-        if present(&context.worktree) == Ok(false) && present(&admin) == Ok(false) {
-            WorktreeRemoval::Removed
+        if self.worktree_parts(kind, id) == [Ok(false), Ok(false)] {
+            WorktreeRelease::Removed
         } else {
-            WorktreeRemoval::RecoveryRequired
+            WorktreeRelease::Incomplete
         }
     }
     pub(super) fn delete_context_branch(

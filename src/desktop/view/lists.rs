@@ -1,6 +1,9 @@
 //! Rendering the navigation lists; read transitions live in `workspace/lists`.
+//! The ticket list opens with New ticket…, its create dialog
+//! (`view::create`), as the document tree does with New document….
 
 use super::{
+    create::NEW_TICKET,
     sidebar,
     tickets::{CLOSURE_FILTERS, READINESS_FILTERS},
     workspace::Workspace,
@@ -121,6 +124,19 @@ impl Workspace {
                         readiness_showing
                             .map(|text| showing_text("tickets-readiness-showing", text)),
                     );
+                // New ticket…, above the filters, where the Documents pane
+                // has New document… (`03-panels.md`): its dialog
+                // (`view::create`).
+                let new_ticket = {
+                    let workspace = cx.entity().downgrade();
+                    h_flex().child(div().id("new-ticket").test_support().child(
+                        Button::new("new-ticket-button").label(NEW_TICKET).on_click(
+                            move |_, window, cx| {
+                                let _ = workspace.update(cx, |this, cx| this.new_item(window, cx));
+                            },
+                        ),
+                    ))
+                };
                 match self.tickets().repo() {
                     None => v_flex()
                         .gap_1()
@@ -130,6 +146,7 @@ impl Workspace {
                         .gap_1()
                         .flex_1()
                         .min_h_0()
+                        .child(new_ticket)
                         .child(header)
                         .child(list_status("tickets-state", self.tickets().state(), cx))
                         .child(self.tickets_pane().render())

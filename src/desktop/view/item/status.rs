@@ -1,7 +1,9 @@
-//! Loading, typed failures and retained-state refresh guidance.
+//! Loading, typed failures and retained-state refresh guidance: D1's
+//! status lines, which the header draws as banners (`banners`); the
+//! discussion keeps its own.
 
 use gpui_kit::{
-    ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
+    ClickEvent, Context, Hsla, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, TestSupportExt,
     component::{ActiveTheme, button::Button, v_flex},
     div,
@@ -25,6 +27,18 @@ impl ItemPane {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<T> {
         let muted = cx.theme().muted_foreground;
+        self.status_in(name, state, muted, cx)
+    }
+
+    /// `status`, with its muted lines in `muted`: the discussion's light
+    /// ground takes `page-muted` in both themes.
+    pub(in crate::desktop::view) fn status_in<T: Rows>(
+        &self,
+        name: &'static str,
+        state: &ListState<T>,
+        muted: Hsla,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement + use<T> {
         let label = match state {
             ListState::Ready { index, .. }
                 if index.as_ref().is_none_or(|index| {
@@ -97,9 +111,6 @@ impl ItemPane {
                 .test_support()
                 .aria_label(NOT_REFRESHED)
                 .gap_1()
-                .p_2()
-                .border_1()
-                .border_color(cx.theme().border)
                 .child(div().text_sm().child(NOT_REFRESHED))
                 .child(text("item-not-refreshed-failure", code.message()).text_sm())
                 .child(

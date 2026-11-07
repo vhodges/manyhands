@@ -23,6 +23,8 @@ pub(crate) const ALREADY_SAVED: &str = "The item already holds this draft's text
 pub(crate) const UNVERIFIED: &str = "The item may have changed since this draft was saved";
 pub(crate) const TICKET_CLOSED: &str = "The ticket is closed";
 pub(crate) const ITEM_NOT_FOUND: &str = "The item is gone";
+/// A new item's draft whose item is not created yet (R-20).
+pub(crate) const NOT_CREATED: &str = "The item is not created yet";
 pub(crate) const NONCONFORMING: &str = "The item's file is not a valid item";
 pub(crate) const REPOSITORY_UNAVAILABLE: &str = "The repository is not available";
 pub(crate) const READ_FAILED: &str = "The item could not be read";
@@ -56,6 +58,7 @@ pub(crate) fn target_label(state: &TargetState) -> &'static str {
         TargetState::RepositoryUnavailable(_) => REPOSITORY_UNAVAILABLE,
         TargetState::ReadFailed(_) => READ_FAILED,
         TargetState::ParentNotFound => PARENT_NOT_FOUND,
+        TargetState::NotCreated => NOT_CREATED,
     }
 }
 

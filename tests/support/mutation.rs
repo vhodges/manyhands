@@ -596,15 +596,25 @@ impl World {
 pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
     match envelope.data.as_ref().expect("ticket data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
+        MutationDataDto::PollPolicy(_) | MutationDataDto::Poll(_) => {
+            panic!("a polling policy's data")
+        }
+        MutationDataDto::Comment(_) => panic!("a comment's data"),
+        MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Ticket(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::SynchronizationConflict(_) => {
+            panic!("a synchronization conflict's data")
+        }
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
+        MutationDataDto::Context(_) => panic!("a context's data"),
+        MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
     }
 }
 
@@ -612,15 +622,25 @@ pub fn ticket_data(envelope: &Envelope<MutationDataDto>) -> &TicketMutationDto {
 pub fn document_data(envelope: &Envelope<MutationDataDto>) -> &DocumentMutationDto {
     match envelope.data.as_ref().expect("document data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
+        MutationDataDto::PollPolicy(_) | MutationDataDto::Poll(_) => {
+            panic!("a polling policy's data")
+        }
+        MutationDataDto::Comment(_) => panic!("a comment's data"),
+        MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Document(data) => data,
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::SynchronizationConflict(_) => {
+            panic!("a synchronization conflict's data")
+        }
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
+        MutationDataDto::Context(_) => panic!("a context's data"),
+        MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
     }
 }
 
@@ -732,15 +752,25 @@ impl World {
 pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
     match envelope.data.as_ref().expect("remote data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
+        MutationDataDto::PollPolicy(_) | MutationDataDto::Poll(_) => {
+            panic!("a polling policy's data")
+        }
+        MutationDataDto::Comment(_) => panic!("a comment's data"),
+        MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Remote(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::SynchronizationConflict(_) => {
+            panic!("a synchronization conflict's data")
+        }
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
+        MutationDataDto::Context(_) => panic!("a context's data"),
+        MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
     }
 }
 
@@ -748,15 +778,25 @@ pub fn remote_data(envelope: &Envelope<MutationDataDto>) -> &RemoteMutationDto {
 pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutationDto {
     match envelope.data.as_ref().expect("operation data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
+        MutationDataDto::PollPolicy(_) | MutationDataDto::Poll(_) => {
+            panic!("a polling policy's data")
+        }
+        MutationDataDto::Comment(_) => panic!("a comment's data"),
+        MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Operation(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::SynchronizationConflict(_) => {
+            panic!("a synchronization conflict's data")
+        }
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
+        MutationDataDto::Context(_) => panic!("a context's data"),
+        MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
     }
 }
 
@@ -764,15 +804,25 @@ pub fn operation_data(envelope: &Envelope<MutationDataDto>) -> &OperationMutatio
 pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
     match envelope.data.as_ref().expect("key data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
+        MutationDataDto::PollPolicy(_) | MutationDataDto::Poll(_) => {
+            panic!("a polling policy's data")
+        }
+        MutationDataDto::Comment(_) => panic!("a comment's data"),
+        MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Key(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
         MutationDataDto::Remote(_) => panic!("a remote's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::SynchronizationConflict(_) => {
+            panic!("a synchronization conflict's data")
+        }
         MutationDataDto::Identity(_) => panic!("an identity's data"),
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
+        MutationDataDto::Context(_) => panic!("a context's data"),
+        MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
     }
 }
 
@@ -780,6 +830,11 @@ pub fn key_data(envelope: &Envelope<MutationDataDto>) -> &KeyMutationDto {
 pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationDto {
     match envelope.data.as_ref().expect("identity data") {
         MutationDataDto::LocalContextSync(_) => panic!("local synchronization data"),
+        MutationDataDto::PollPolicy(_) | MutationDataDto::Poll(_) => {
+            panic!("a polling policy's data")
+        }
+        MutationDataDto::Comment(_) => panic!("a comment's data"),
+        MutationDataDto::ConflictResolution(_) => panic!("a conflict resolution's data"),
         MutationDataDto::Identity(data) => data,
         MutationDataDto::Document(_) => panic!("a document's data"),
         MutationDataDto::Ticket(_) => panic!("a ticket's data"),
@@ -787,8 +842,13 @@ pub fn identity_data(envelope: &Envelope<MutationDataDto>) -> &IdentityMutationD
         MutationDataDto::Key(_) => panic!("a key's data"),
         MutationDataDto::Operation(_) => panic!("an operation's data"),
         MutationDataDto::Synchronization(_) => panic!("a synchronization's data"),
+        MutationDataDto::SynchronizationConflict(_) => {
+            panic!("a synchronization conflict's data")
+        }
         MutationDataDto::Host(_) => panic!("a host's data"),
         MutationDataDto::Repair(_) => panic!("a repair's data"),
+        MutationDataDto::Context(_) => panic!("a context's data"),
+        MutationDataDto::Lifecycle(_) => panic!("a promotion's or a closure's data"),
     }
 }
 

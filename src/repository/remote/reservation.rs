@@ -931,7 +931,6 @@ impl RepositoryService {
             Ok(RemoteReservationOutcome::Reserved(token(self, id, &record)))
         })
     }
-    #[allow(dead_code)] // Full-poll orchestration is introduced in Task 6.
     pub(crate) fn reserve_remote_poll(
         &self,
         root: &Path,
@@ -952,7 +951,6 @@ impl RepositoryService {
         )
     }
 
-    #[allow(dead_code)] // Full-poll orchestration is introduced in Task 6.
     pub(crate) fn restart_remote_poll(
         &self,
         root: &Path,
@@ -1222,6 +1220,78 @@ impl RepositoryService {
         })
     }
 
+    /// Answers a cancellation that stopped a promotion's or a closure's parent
+    /// for its child `child`, in one immediate transaction, so that no owner
+    /// passes a checkpoint between the guards and the write. It returns whether
+    /// the child was let go.
+    ///
+    /// A child with nothing to lose ends `cancelled` here, with no connection,
+    /// and the reservation is free: unfinished, under the current generation,
+    /// with no authority, no retained or released resolution, no reconciliation
+    /// owed, no integration begun, no publication attempt or recorded push, and
+    /// a checkpoint no further than its fetch. Any other child keeps all of that
+    /// for the same request, and only the flag `request cancel` set on its row
+    /// goes, since the cancellation has been answered: left, it would end the
+    /// row at the next restart.
+    ///
+    /// Whether an owner is alive isn't known. One that is finds its row ended,
+    /// or goes on, and is fenced by a restart as for any other retry.
+    pub(in super::super) fn release_promotion_child(
+        &self,
+        root: &Path,
+        child: OperationId,
+        execution: &crate::repository::promotion::record::ChildExecution,
+    ) -> Result<bool, RepositoryError> {
+        state::with_transaction(self, root, |tx, id| {
+            execution.validate(tx, id, child)?;
+            let Some(record) = state::read_operation(tx, id, child)? else {
+                return Ok(false);
+            };
+            if !active(record.phase) {
+                return Ok(false);
+            }
+            use state::SynchronizationCheckpoint as C;
+            let window = state::latest_integration_window(tx, &record)?;
+            let nothing_to_lose = record.authority.is_none()
+                && record.generation == state::generation(tx, id)?
+                && !record.reconciliation_required
+                && record.sync_evidence.push_oid.is_none()
+                && matches!(
+                    record.sync_checkpoint,
+                    None | Some(C::FetchPrepared | C::FetchObserved)
+                )
+                && !retains_promotion_child(tx, &record)?
+                && !promotion_child_has_resolution(tx, &record)?
+                && window.intent.is_none()
+                && state::integration_step_in_window(tx, record.id, window.number, 0)?.is_none()
+                && state::integration_step_in_window(tx, record.id, window.number, 1)?.is_none()
+                && state::latest_publication_attempt(tx, &record)?.is_none();
+            if !nothing_to_lose {
+                tx.execute(
+                    "UPDATE remote_operation_records SET cancel_requested=0,updated_at=max(updated_at,?2) WHERE id=?1",
+                    params![record.id, now()],
+                )
+                .map_err(|_| state::recovery_required())?;
+                return Ok(false);
+            }
+            tx.execute(
+                "UPDATE remote_operation_records SET cancel_requested=1,updated_at=max(updated_at,?2) WHERE id=?1",
+                params![record.id, now()],
+            )
+            .map_err(|_| state::recovery_required())?;
+            let record =
+                state::read_operation(tx, id, child)?.ok_or_else(state::recovery_required)?;
+            acknowledge(
+                tx,
+                &record,
+                record
+                    .completed_step
+                    .unwrap_or(RemoteOperationSafePoint::BeforeFetch),
+            )?;
+            Ok(true)
+        })
+    }
+
     pub fn cancel_remote_operation(
         &self,
         root: &Path,
@@ -1257,8 +1327,8 @@ impl RepositoryService {
         })
     }
 
-    /// Also usable by future transfer-progress callbacks; Cycle 04 invokes only
-    /// these non-transfer boundaries. Returns only after the durable transition.
+    /// Invoked at non-transfer boundaries only: a transfer's callback uses
+    /// `poll_progress`. Returns only after the durable transition.
     pub fn remote_safe_point(
         &self,
         root: &Path,
@@ -1515,6 +1585,62 @@ impl RepositoryService {
             } else {
                 Ok(RemoteSafePointOutcome::Continue)
             }
+        })
+    }
+
+    /// `check_synchronization_requests` for a synchronization whose push the
+    /// remote refused, `PushRejected`, and whose executor has just asked to
+    /// cancel it: in the transaction that acknowledges the cancellation,
+    /// the operation's outcome records the refusal as `protocol_rejected`,
+    /// the category a poll records a refused push under.
+    ///
+    /// The refusal is the remote's answer to the one ref update the push
+    /// intent names, so nothing of the operation is on the remote. The
+    /// intent itself is immutable history and is kept: the outcome is what
+    /// tells `push_absence` that the intent was answered. Only an operation
+    /// at its push intent, with the safe point before the push its last
+    /// step and with no publication attempt, authority or reconciliation,
+    /// is so recorded. Any other is cancelled exactly as
+    /// `check_synchronization_requests` cancels it.
+    pub(crate) fn acknowledge_refused_push(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+    ) -> Result<RemoteSafePointOutcome, RepositoryError> {
+        use state::SynchronizationCheckpoint as C;
+        state::with_transaction(self, root, |tx, id| {
+            let record = owned(self, tx, id, owner)?;
+            if !is_sync(&record.target) {
+                return Err(state::recovery_required());
+            }
+            if !(record.cancel_requested || record.yield_requested) {
+                return Ok(RemoteSafePointOutcome::Continue);
+            }
+            let refused = record.cancel_requested
+                && record.authority.is_none()
+                && !record.reconciliation_required
+                && record.sync_checkpoint == Some(C::PushPrepared)
+                && record.sync_evidence.push_oid.is_some()
+                && record.completed_step == Some(RemoteOperationSafePoint::BeforePush)
+                && state::latest_publication_attempt(tx, &record)?.is_none();
+            let decision = acknowledge(
+                tx,
+                &record,
+                record
+                    .completed_step
+                    .unwrap_or(RemoteOperationSafePoint::BeforeFetch),
+            )?;
+            if refused && decision == RemoteSafePointOutcome::Cancelled {
+                tx.execute(
+                    "UPDATE remote_operation_records SET outcome=?2 WHERE id=?1 AND phase='cancelled'",
+                    params![
+                        record.id,
+                        state::outcome_name(RemoteOutcomeCategory::ProtocolRejected)
+                    ],
+                )
+                .map_err(|_| state::recovery_required())?;
+            }
+            Ok(decision)
         })
     }
 

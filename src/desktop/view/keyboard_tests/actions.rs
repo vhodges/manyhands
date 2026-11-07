@@ -54,6 +54,9 @@ fn copy_by_keyboard(cx: &mut TestAppContext) {
     assert_eq!(walk.opened(cx), Some(walk.ticket(COPIED)));
     walk.keys("secondary-3", cx);
     walk.on(("tab", 0usize), Region::Content, cx);
+    // E-23: the details sheet, opened by All details, holds the controls.
+    walk.tab_to("tab", "chip-all", cx);
+    walk.enter(cx);
     let clipboard = |cx: &mut TestAppContext| cx.read_from_clipboard().and_then(|item| item.text());
     for (control, wanted) in [("copy-slug", COPIED_SLUG), ("copy-id", COPIED)] {
         walk.tab_to("tab", control, cx);
@@ -89,6 +92,9 @@ fn each_relationship_group_is_followed_by_keyboard(cx: &mut TestAppContext) {
             walk.keys("ctrl-tab", cx);
         }
         walk.on(("tab", 0usize), Region::Content, cx);
+        // E-23: the details sheet, opened by All details, holds the rows.
+        walk.tab_to("tab", "chip-all", cx);
+        walk.enter(cx);
         walk.tab_to("tab", (row, 0usize), cx);
         walk.on((row, 0usize), Region::Content, cx);
         walk.enter(cx);

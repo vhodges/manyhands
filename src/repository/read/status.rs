@@ -19,7 +19,9 @@ use crate::{
     canonical::ItemId,
     repository::{
         OperationId, RemoteOperationAction, RemoteOperationPhase, RemoteOperationSafePoint,
-        RemoteOutcomeCategory, RepositoryOperation, RepositoryService, SharedKeyId, recovery,
+        RemoteOutcomeCategory, RepositoryOperation, RepositoryService, SharedKeyId,
+        promotion::lifecycle::resumable,
+        recovery,
         remote::state::{self, StoredRemoteOperation},
     },
     results::{OperationFailureCode, ProblemCode, ResultCode, timestamp_string},
@@ -76,6 +78,7 @@ pub(crate) fn local_action(stored: &str) -> Option<OperationAction> {
         "refresh" => Some(OperationAction::Refresh),
         "rebuild" => Some(OperationAction::Rebuild),
         "prepare_context" => Some(OperationAction::PrepareContext),
+        "release_context" => Some(OperationAction::ReleaseContext),
         "save_document" => Some(OperationAction::SaveDocument),
         "save_ticket" => Some(OperationAction::SaveTicket),
         "submit_comment" => Some(OperationAction::SubmitComment),
@@ -294,9 +297,9 @@ fn remote_failure(outcome: RemoteOutcomeCategory) -> Option<OperationFailureCode
 ///   not say whether anything is still running it, so nothing is offered.
 /// - A synchronization that was interrupted or that failed is listed and
 ///   can be resumed: asked for again under its ID with a restart, it is
-///   given the reservation back. A cancelled one is never given it, and a
-///   promotion or closure has no boundary resume. Promotion's parent journal
-///   supplies its lifecycle step independently of its internal reservation.
+///   given the reservation back. A cancelled one is never given it. A
+///   promotion's or closure's reservation offers nothing: its parent's own
+///   row, listed beside it, offers the resume.
 /// - A synchronization that completed and whose index hand-off is still
 ///   pending is listed and can be resumed: asked for again, it does only
 ///   that hand-off.
@@ -361,6 +364,11 @@ fn remote_operation(
     })
 }
 
+/// Document promotion parents: the stored step is both state and completed
+/// step. Resume is offered for every parent `operation resume` would take
+/// up, by the predicate it uses: one an accepted request holds too, whose
+/// resume names that request (D5 decision 10). A complete parent, or one
+/// that ended or a consent refusal ended, is offered nothing.
 fn promotion_operations(
     connection: &Connection,
     repo: &ResolvedRepository,
@@ -394,7 +402,7 @@ fn promotion_operations(
                     action: OperationAction::Promote,
                     state: r.step.name().to_owned(),
                     completed_step: Some(r.step.name().to_owned()),
-                    next_action: None,
+                    next_action: resumable(&r).then_some(OperationNextAction::Resume),
                     item_id: Some(r.item_id.to_string()),
                     key_id: None,
                     worktree: None,
@@ -407,8 +415,8 @@ fn promotion_operations(
 }
 
 /// Ticket closure parents, as promotion parents: the stored step, including
-/// `closing`, is both state and completed step, and no boundary resume is
-/// offered.
+/// `closing`, is both state and completed step, and resume is offered for
+/// every parent left to continue, held or not.
 fn closure_operations(
     connection: &Connection,
     repo: &ResolvedRepository,
@@ -442,7 +450,7 @@ fn closure_operations(
                     action: OperationAction::Close,
                     state: r.step.name().to_owned(),
                     completed_step: Some(r.step.name().to_owned()),
-                    next_action: None,
+                    next_action: resumable(&r).then_some(OperationNextAction::Resume),
                     item_id: Some(r.item_id.to_string()),
                     key_id: None,
                     worktree: None,
