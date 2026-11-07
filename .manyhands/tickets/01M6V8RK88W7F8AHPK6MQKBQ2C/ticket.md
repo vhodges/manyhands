@@ -3,7 +3,7 @@ slug: vh-yq8wb
 id: 01M6V8RK88W7F8AHPK6MQKBQ2C
 title: Promotion and sync stay blocked by a history_unknown flag that nothing clears
 type: defect
-status: open
+status: duplicate
 project: manyhands
 team: core
 manyhands_managed: true
