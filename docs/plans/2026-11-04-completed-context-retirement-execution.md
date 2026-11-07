@@ -39,21 +39,22 @@ retained-44/acceptance delta and correction record are appended below. Task 7 go
 amendments from base `76a852a7` are now independently SPEC and QUALITY approved
 through `c4fb38f5`, after the parent/child-code distinction and non-null disposition
 wording corrections. No findings remain at that bounded documentation gate.
-Its source/contract checks and limits are recorded below. Task 8 is now **BLOCKED**:
+Its source/contract checks and limits are recorded below. Task 8 remains **BLOCKED**:
 final check/fmt/Clippy passed on frozen `e0b62f7e`, but the exact fast tier stopped
-at the library binary (1,495 passed / 2 failed; all later binaries/targets unrun).
-Independent whole-feature SPEC found one Important **A8/E-1 disposition-migration
-dependency-closure gap**, not covered by the separate consumer-closure matrix and
-not residual coverage. Controller imposed a pause after the existing command;
-no further gate/reproduction/source edit was admitted at that checkpoint. The
-controller subsequently authorized only three bounded corrections, delivered at
-`f9fa2d6c` with exact local regressions and Clippy/fmt evidence below. A8/E-1 now
-has new dependency-closure assertions, **pending the same whole-feature SPEC
-reviewer's re-review**, not an essential-gap waiver or full-44 approval. The two
-failed fixtures are corrected locally; their old fast-gate failures remain facts.
-No broad gate was rerun; fresh whole-feature QUALITY has not started. The failure
-checkpoint below preserves old-source evidence and unrun gates. Ticket remains
-`implementing`, not full Task 2 or feature review-ready; QUALITY/owner handoff owed.**
+at the library binary (**1,495 passed / 2 failed / 160 filtered**; binaries and
+all 27 integrations did not run). M1's A8/E-1 disposition-migration dependency
+closure and the two failed fixtures were corrected at `f9fa2d6c`. The controller
+now reports same whole-feature SPEC **SOURCE CLEAR through `47ba225b`**, including
+M1, not a runtime-gate waiver. Fresh whole-feature QUALITY reviewed the full
+`79c3931b..47ba225b` range and found one Important Q1 cancellation/evidence-loss
+gap and one Minor Q2 stale module comment, no other source findings. Those are
+locally corrected at `1ccd93d2`: exact CUT and strict Clippy/fmt pass on the
+recorded four-input delta. A6/A7's essential missing-companion cancellation
+coverage is now pinned locally **pending same whole-SPEC delta, then same
+whole-QUALITY full-range re-review**. The old fast gate still FAILED; no broad/SSH/smoke
+gate resumed and no earlier evidence scope is relabeled. The verification barrier
+remains. Ticket stays `implementing`, not feature review-ready or owner-handoff
+complete.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
 [the delivery checkpoint](#task-3--ordinary-binding-and-guarded-preserving-recovery).
 Owner: “Okay, the live-pass-only batch, but keep in mind the batch doesn't need
@@ -7360,3 +7361,165 @@ exit 0); no Cargo rebuild/default profile/repair. New manifest:
 whole-feature SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, then fresh whole-feature
 QUALITY. No agents, push/PR/main integration/close, real context/key/draft
 operations, native dispatch or owned running jobs.
+
+## Whole-Feature QUALITY — Original Task 4 Cancellation Dispatch Q1/Q2, 2026-11-07 UTC
+
+### Authority, Entry And Current Barrier
+
+Sole original Task 4 implementer, same ticket worktree/branch, no agents or push.
+Clean authorized entry **`47ba225bc6aa79b992aef9f259205954000999ba`**; controller's
+fresh fetch/merge of **`79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`** was already
+up to date and was accepted without another fetch/merge or other-worktree action.
+No gates/jobs were running. Tasks 3–7's bounded approvals, published checkpoint
+`e0b62f7e`, Task 8 correction source `f9fa2d6c` and every old evidence scope stand.
+
+Controller reports same whole-feature SPEC
+**`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR through `47ba225b`** after M1's
+dependency-closure correction. Fresh whole-feature QUALITY
+**`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** reviewed **the entire `79c3931b..47ba225b`
+range** and found **one Important Q1** and **one Minor Q2**, no other source
+findings. The controller traced the actual cancellation paths and verified Q1.
+The essential dispatch gap is corrected locally below, **not independently
+approved yet and not optional residual/platform coverage**. D15's independent
+ordinary Ri/Ki, immutable cuts and child-only recovery contract is unchanged.
+
+**Owned source commit:** **`1ccd93d26635ab1425bea8019ddec1c80274e693`**,
+`fix: keep opted poll cancellation fail-closed on evidence loss`, with
+`Co-Authored-By: GPT-6.1 Sol <noreply@openai.com>`. Correction review range is
+**`47ba225bc6aa79b992aef9f259205954000999ba..returned-HEAD`**, not a replacement
+for the full whole-feature range or original Task 4 base/history.
+
+### Q1 — Immutable Mode Before Companion-Dependent Routing
+
+Previously `cancel_request` inferred captured opted mode using
+`has_capture(...).unwrap_or(false)`, and `finish_fenced` excluded opted parents
+only while a companion-row `is_parent` lookup succeeded. Losing the mandatory
+pass row or swallowing its lookup/audit error could therefore turn an immutable
+opted request into an ordinary poll. With P fenced into Interrupted before
+selection, generic `sync::fenced_answer` then stored Finished / ExternalChange /
+no data, without the retirement cut; subsequent finished replay bypassed the
+retirement binding's fail-closed reentry.
+
+The bounded correction changes only the existing private pass/progress routing:
+
+- `context_retirement/pass.rs` factors the **unchanged** request-salted poll
+  digest formula already used by `validate_parent` / `audit_parents`. A small
+  private `is_opted_request(&RequestRecord)` validates the real record's command,
+  empty target, repository scope, no confirmation/expected path digest, recorded
+  position and single remote operation. It recognizes exactly the existing
+  retirement-flag digest or existing default/no-flag digest; any other identity
+  refuses. No fabricated Accepted, hardcoded ID heuristic, persisted mode flag,
+  public input, digest change or new authority.
+- `mutation/progress.rs::cancel_request` classifies that immutable identity
+  **before** choosing the ordinary fallback. An opted request then requires its
+  audited, exact repository/operation companion. Missing/corrupt/unreadable
+  metadata returns RecoveryRequired **before any request result/cancel write**.
+  It does not recreate the companion or release P/provenance/pins/selection.
+- `finish_fenced` independently uses the fallible immutable classifier: opted
+  requests are never generically finalized, and unknown identity is an error,
+  not ordinary false. Valid uncaptured opted cancellation still uses normal
+  remote-safe stopping, leaves R Accepted, and lets its own retry settle a tagged
+  immutable stop cut. Valid captured cancellation keeps the existing lease/cut
+  route. Exact ordinary-default polls retain generic fenced finalization.
+
+`pass::is_parent` is **unchanged** for callers such as host replay that need
+actual companion proof. Finished-request replay is unchanged. No schema/catalog/
+DDL/migration/DTO/wire/proof/cleanup/lifecycle/draft change or new batch framework.
+
+**Q2:** `context_retirement/run.rs`'s obsolete claim that new-executor recovery
+remains closed is replaced by its fresh-execution purpose and a link to the
+separately guarded `reentry` module. This is a source-comment-only correction;
+no separate Cargo test was added or run for it.
+
+### Exact CUT RED → GREEN And New Essential Coverage
+
+Only the existing full exact name ran, all three invocations:
+
+```sh
+devenv shell -- cargo test --all-features --locked --lib repository::context_retirement::execution_tests::mutation_tests::retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup -- --exact
+```
+
+Five new rows execute the real producer, existing synthetic Fetch result and
+PollBeforeDiscovery fault, real configuration-generation fencing of P, and
+actual `service.cancel_request(R)`. They cover missing companion, malformed
+mandatory companion, unknown mode digest, ordinary default and valid uncaptured
+opted controls. The malformed companion is a SQL-valid stopped row with a
+semantically invalid summary; production audits are not weakened.
+
+The negative rows require RecoveryRequired and R still Accepted with no generic
+code/effects/data/result. The full request is unchanged by refused cancellation;
+all non-request registry tables and disk stay unchanged, including P, retained
+provenance/pins, pass/selected metadata and schema. Known opted retries remain
+fail-closed, not finished generic replay, with no companion recreation or new
+Ri/transport/refresh/nonce/prune. The ordinary default control still finishes
+ExternalChange / no data / NotRequested effects and replays it; the valid opted
+control stays Accepted after cancel and then settles its own Cancelled tagged
+empty cut. Existing CUT captured cancellation, first-cut immutability, child-only
+recovery and history/no-effect rows remain in the same run.
+
+All command setup was **serialized through Devenv**. Each per-command JSON below
+records literal argv, UTC start/end, exit, wall time, source HEAD **and all four
+input hashes at that invocation**, plus its raw-log SHA-256. Prefix is
+`/tmp/opencode/task4-final-quality-q1-`:
+
+| Key / command | Actual result and precise evidence limit |
+| --- | --- |
+| `red`: exact CUT above | **101**, compiled **0 passed / 1 failed**, 1,656 filtered, 34.49 s tests / **57.781 s wall**. Actual missing-companion cancellation returned Ok and made R Finished / ExternalChange / data None with no cut: meaningful production RED. Caught historical crash messages are intentional fixture loss points. |
+| `format`: `devenv shell -- cargo fmt` | **0**, 16.722 s wall; owned edits only, hashes describe pre-format input bytes. |
+| `green`: exact CUT above | **101**, compiled but **fixture diagnostic, not a behavioral RED or GREEN**. Missing-companion row had passed; the malformed-summary fixture then violated SQL `summary IS NULL OR live=0` before dispatch. Also reported an owned unused import. 38.80 s tests / 55.328 s wall. Corrected the fixture to a SQL-valid stopped malformed summary and removed the unused import; no audit weakening. |
+| `format-final`: `devenv shell -- cargo fmt` | **0**, 16.674 s wall; final owned formatting. |
+| `green-final`: exact CUT above | **0**, **1 passed / 0 failed/ignored/measured**, 1,656 filtered; **37.13 s tests / 7.94 s build / 45.290 s wall**. All five new dispatcher rows and retained CUT controls passed, on the final source hashes. |
+| `clippy`: `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | **0**, 17.820 s wall (17.52 s Cargo), same final source hashes. Chosen instead of redundant separate check. |
+| `fmt`: `devenv shell -- cargo fmt --check` | **0**, 19.375 s wall, same final source hashes. |
+
+No other exact control was needed: ordinary-default and valid opted paths are
+in the changed CUT table itself. No old 39/19/three-table, Task 8 M1/B/C, whole
+library/fast/SSH/full/native/GPUI or smoke rerun, no real wait, and no command near
+15 minutes. No source edits followed the final green/lint/format checks.
+
+### Latest Acceptance Coverage Delta — A6/A7 (Independent Review Pending)
+
+| Contract | New bounded pin; standing |
+| --- | --- |
+| **A6 — recovery/evidence loss** | Real accepted opted R + preselection P + generation fence + missing/corrupt companion + public cancellation now refuses without finishing R, recreating evidence, releasing source holds or changing disk. Unknown mode also refuses. This essential cancellation dispatcher obligation is locally pinned **pending same whole-SPEC delta and same whole-QUALITY analysis**; no claim that all recovery/platform variants or the full runtime gate passed. |
+| **A7 — independent ordinary children/immutable parent cut** | Opted mode survives companion loss because identity is request-owned, not inferred from mutable companion existence. Valid uncaptured opted cancel uses safe stopping and its own tagged cut; valid captured cancel/immutable-cut/child-only controls remain. Ordinary default fenced cancellation stays generic. New controls are real public dispatcher paths, not a pure-classifier test, new aggregate policy or full-44 waiver. |
+
+### Integrity, Canonical Reply And Remaining Gates
+
+Only **four delta Rust inputs** were hashed. Final CUT, Clippy and fmt-check
+hashes are identical, with zero mismatches against source commit/current inputs:
+
+- `/tmp/opencode/task4-final-quality-q1-sources.sha256`: SHA-256
+  **`90be1a7cd79c267f0dfc7e8b60beb6fd0ba3cc990b8f6aa8b369ab97b47fb999`**.
+- `/tmp/opencode/task4-final-quality-q1-logs.sha256`: **11 new logs** (7 serialized
+  Rust commands, including RED/diagnostic, plus 4 source Git checks), SHA-256
+  **`d9df0b6219814e11dba4a797c5754afd42cbb177608c7ad6652247c643f16245`**.
+- `/tmp/opencode/task4-final-quality-q1-results.json`: literal argv/per-stage input
+  hashes/times/exits/log hashes, source SHA and review/barrier limits; SHA-256
+  **`6f5d3b6e3fe2c6e7061eaf04c4bca37cede0e365e4a4bee729d83b360f5970e4`**.
+- Source `git diff --check`, staged check and
+  `git diff --check 47ba225bc6aa79b992aef9f259205954000999ba HEAD` passed.
+  `git merge-tree --write-tree HEAD origin/main` passed at source commit, tree
+  **`4ce14a7d81bb8b255f6c2b427f77380750c8105b`**; no main/fetch/rebase action.
+
+Author self-review checked both mode guards, exact digest/record interfaces,
+mandatory-companion error propagation, untouched companion-proof semantics,
+ordinary fallback and the actual public control rows. This is not independent
+review approval. Earlier manifests/source scopes and all Task 8 M1/B/C evidence
+are preserved, not rehashed or relabeled as this correction's evidence.
+
+Evidence is appended to the supplied canonical checkpoint
+**`01M6SPJAW4WWAT4NC90T4HE8S6`**; its ID, parent and created timestamp are
+preserved. No new ID was needed, no CLI/default profile or ticket-body/status
+operation ran. **Next: controller obtains SAME whole-SPEC delta review from
+`47ba225b` through returned HEAD, THEN SAME whole-QUALITY full analysis of
+`79c3931b01d225ddf3434ae9cd4fc51eb607fd2e..returned-HEAD`.** No broad gate or push
+until those reviews permit verification to resume.
+
+**The old fast tier remains FAILED: 1,495 passed / 2 failed / 160 filtered, lib
+only; Cargo stopped before binaries and all 27 integrations.** The old fixture
+greens and this one-table green do not waive or replace that run. Controller
+still owns resumed final statics/runtime, selected SSH and smokes after review;
+none ran here. No feature/review-ready/native or final-gate completion claim.
+No agents, other worktrees, PR/push/main/close/native or real profile/key/context/
+draft action. No owned running jobs; verification barrier remains in place.

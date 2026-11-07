@@ -60,3 +60,73 @@ dispatch. No owned jobs remain. Ticket stays **implementing**. Return to the sam
 whole-feature SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, then fresh whole-feature
 QUALITY; controller owns final required three statics and affected/remaining
 gates after review. This is not final gates done or permission to push/PR/merge.
+
+## Whole-feature QUALITY Q1/Q2 — original Task 4 dispatch correction (2026-11-07 UTC)
+
+Controller reports SAME whole SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` **SOURCE CLEAR
+through `47ba225bc6aa79b992aef9f259205954000999ba`**, including M1. Fresh whole
+QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** reviewed the complete main-to-that-HEAD
+range and found **one Important Q1 cancellation/evidence-loss gap and one Minor
+Q2 stale comment**, no other source findings. Q1 was controller-traced/verified.
+D15 and all prior approval/evidence scopes remain; runtime verification stays
+paused, not waived by this correction.
+
+Owned source **`1ccd93d26635ab1425bea8019ddec1c80274e693`**, required coauthor,
+from clean base **`47ba225bc6aa79b992aef9f259205954000999ba`**. Controller's fresh
+merge of unchanged main `79c3931b` was accepted without repeating it. Same ticket
+worktree/branch only, no agents/push.
+
+**Q1:** cancellation formerly treated failed/missing pass lookups as ordinary
+mode; a fenced preselection opted P could then cause generic Finished /
+ExternalChange / no data, bypassing its own cut/recovery. Mode now comes from
+the exact immutable request-salted digest and actual RequestRecord shape, using
+the unchanged ordinary/no-flag and opted/retire_completed-true formulas. Unknown
+identity refuses. Opted cancellation requires its audited exact mandatory
+companion; loss/corruption returns RecoveryRequired with R Accepted and no generic
+result, recreation, source-hold release or new work. The fenced shortcut also
+uses immutable mode and never generically finishes opted requests. Ordinary
+default finalization, uncaptured remote-safe stopping, captured cut cancellation
+and finished replay remain. `pass::is_parent` keeps its companion-proof meaning.
+
+**Q2:** fresh-execution module comment now links the separately guarded reentry
+module; no behavior change or separate Cargo test. Only the four allowed Rust
+paths changed under `src/repository/`: `mutation/progress.rs`,
+`context_retirement/pass.rs`, `context_retirement/run.rs` and the existing
+`context_retirement/mutation_tests.rs` CUT table. No schema,
+catalog, DDL, DTO, digest/wire policy, proof/cleanup/lifecycle/draft change or new
+batch framework.
+
+**Tests first:** compiled CUT RED reproduced the actual public cancellation
+making missing-companion R Finished / ExternalChange with no cut. Added five
+public dispatcher rows: missing/corrupt companion, unknown mode, ordinary
+default fenced finalization and valid uncaptured opted cancellation/own tagged
+cut. Existing captured/cut/child/history rows remain. Full non-request registry
+and disk snapshots pin no new P/provenance/pin/selection/refresh/child/nonce/prune
+effects on refusal. Latest A6/A7 essential cancellation coverage is locally pinned
+**pending independent review**, not a full-44/runtime waiver.
+
+Final exact CUT: **1 passed / 0 failed**, 1,656 filtered, **37.13 s tests /
+45.290 s wall**. The intermediate `green.log` is a **fixture diagnostic**, not
+GREEN/behavioral RED: malformed summary setup violated its SQL live/summary
+constraint before dispatch; corrected to a SQL-valid stopped malformed summary,
+without audit weakening. Serialized final strict Clippy (**17.820 s wall**) and
+fmt check (**19.375 s**) passed at identical final input hashes. No other test,
+Task 8 M1/B/C, whole lib/fast/SSH/full/native/GPUI/smoke rerun or separate check.
+
+Exact argv, UTC, source hashes, exits, durations, raw logs and limits:
+`/tmp/opencode/task4-final-quality-q1-results.json`, SHA-256
+`6f5d3b6e3fe2c6e7061eaf04c4bca37cede0e365e4a4bee729d83b360f5970e4`.
+Four-input manifest `task4-final-quality-q1-sources.sha256`, SHA-256
+`90be1a7cd79c267f0dfc7e8b60beb6fd0ba3cc990b8f6aa8b369ab97b47fb999`;
+11-log manifest `task4-final-quality-q1-logs.sha256`, SHA-256
+`d9df0b6219814e11dba4a797c5754afd42cbb177608c7ad6652247c643f16245`.
+All artifacts are under `/tmp/opencode/`, zero source mismatches; older manifests
+are unchanged. Source whitespace and merge-tree against existing main passed.
+
+**Next: SAME whole SPEC checks `47ba225b..returned-HEAD`, THEN SAME whole QUALITY
+re-reviews the full `79c3931b..returned-HEAD` analysis before gates resume.** Old
+fast tier is still **FAILED: 1,495 passed / 2 failed / 160 filtered, lib only**;
+binaries and all 27 integrations never started. No SSH/smokes/final-gate or
+feature/review-ready/native claim. No push/PR/main/close, other-worktree edit,
+profile/real key/context/draft operation or running owned jobs. This append keeps
+the supplied comment ID, parent and created timestamp; no new ID/profile action.
