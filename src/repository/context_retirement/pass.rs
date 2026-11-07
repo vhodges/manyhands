@@ -8,7 +8,10 @@ use crate::repository::{
     self, OperationId, RemotePollReport, RepositoryError, RepositoryService, mutation,
     remote::state,
 };
-use mutation::{Accepted, RequestId};
+use mutation::{
+    Accepted, RequestId,
+    request_store::{DigestSalt, FieldValue, IntentDigest, RequestRecord, ScopeKey},
+};
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use state::recovery_required;
 use std::path::Path;
@@ -194,11 +197,7 @@ pub(super) fn validate_parent(
     a: &Accepted,
     original: bool,
 ) -> Result<bool, RepositoryError> {
-    use mutation::request_store::{DigestSalt, FieldValue, IntentDigest};
-    let digest =
-        IntentDigest::builder(DigestSalt::Request(a.request_id), "poll once", &a.scope, "")
-            .field("retire_completed", FieldValue::Flag(true))
-            .finish();
+    let digest = poll_intent(a.request_id, &a.scope, true);
     let cancel:Option<bool>=db.query_row("SELECT r.cancel_requested FROM request_records r WHERE r.request_ulid=?1 AND r.attempt=?2 AND r.state='accepted' AND r.scope_key=?3 AND r.command='poll once' AND r.target='' AND r.intent_digest=?4 AND r.confirmation_ulid IS NULL AND r.expected_digest IS NULL AND r.base_ref IS ?5 AND r.base_oid IS ?6 AND (SELECT count(*) FROM request_operations m WHERE m.request_ulid=r.request_ulid)=1 AND EXISTS(SELECT 1 FROM request_operations m WHERE m.request_ulid=r.request_ulid AND m.ordinal=0 AND m.family='remote' AND m.operation_ulid=?7)",params![a.request_id.to_string(),a.attempt,a.scope.as_str(),digest.to_string(),a.position.base_ref,a.position.base_oid.map(|o|o.to_string()),a.operation_id.to_string()],|r|r.get(0)).optional().map_err(|_|recovery_required())?;
     if original {
         let same:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM poll_retirement_passes WHERE operation_ulid=?1 AND request_ulid=?2 AND request_attempt=?3 AND live=1 AND summary IS NULL)",params![a.operation_id.to_string(),a.request_id.to_string(),a.attempt],|r|r.get(0)).map_err(|_|recovery_required())?;
@@ -207,6 +206,40 @@ pub(super) fn validate_parent(
         }
     }
     cancel.ok_or_else(recovery_required)
+}
+
+fn poll_intent(request: RequestId, scope: &ScopeKey, retiring: bool) -> IntentDigest {
+    let builder = IntentDigest::builder(DigestSalt::Request(request), "poll once", scope, "");
+    if retiring {
+        builder.field("retire_completed", FieldValue::Flag(true))
+    } else {
+        builder
+    }
+    .finish()
+}
+
+/// Mode is immutable request identity, not the presence of recoverable pass
+/// metadata. Unknown digests must never acquire the ordinary poll fallback.
+pub(in super::super) fn is_opted_request(record: &RequestRecord) -> Result<bool, RepositoryError> {
+    if record.command != "poll once"
+        || !record.target.is_empty()
+        || record.scope.repository().is_none()
+        || record.confirmation.is_some()
+        || record.expected_digest.is_some()
+        || record.base_ref.is_none()
+        || record.base_oid.is_none()
+        || record.operations.len() != 1
+        || record.operations[0].family != repository::OperationFamily::Remote
+    {
+        return Err(recovery_required());
+    }
+    if record.intent_digest == poll_intent(record.request_id, &record.scope, true) {
+        Ok(true)
+    } else if record.intent_digest == poll_intent(record.request_id, &record.scope, false) {
+        Ok(false)
+    } else {
+        Err(recovery_required())
+    }
 }
 pub(super) fn materialization(
     db: &Connection,
@@ -504,7 +537,6 @@ fn host_stop_copy(
 }
 
 fn audit_parents(db: &Connection) -> Result<(), RepositoryError> {
-    use mutation::request_store::{DigestSalt, FieldValue, IntentDigest, ScopeKey};
     let mut q=db.prepare("SELECT p.operation_ulid,p.request_ulid,repo.root_path,r.intent_digest FROM poll_retirement_passes p JOIN repositories repo ON repo.id=p.repository_id JOIN request_records r ON r.request_ulid=p.request_ulid").map_err(|_|recovery_required())?;
     for row in q
         .query_map([], |r| {
@@ -519,14 +551,7 @@ fn audit_parents(db: &Connection) -> Result<(), RepositoryError> {
     {
         let (op, ri, root, stored) = row.map_err(|_| recovery_required())?;
         let id = RequestId::parse(&ri).map_err(|_| recovery_required())?;
-        let expected = IntentDigest::builder(
-            DigestSalt::Request(id),
-            "poll once",
-            &ScopeKey::from_stored(&root),
-            "",
-        )
-        .field("retire_completed", FieldValue::Flag(true))
-        .finish();
+        let expected = poll_intent(id, &ScopeKey::from_stored(&root), true);
         if expected.to_string() != stored
             || id.to_string() != ri
             || !OperationId::parse(&op).is_ok_and(|id| id.to_string() == op)

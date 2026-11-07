@@ -1762,6 +1762,207 @@ fn retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup() {
             super::super::record::audit_connection(&db).unwrap();
         }
     }
+    // Cancellation must identify opted mode even when its mandatory companion
+    // is lost. Exercise the real public dispatcher after fencing original P.
+    for case in [
+        "cancel_missing",
+        "cancel_corrupt",
+        "cancel_unknown_mode",
+        "cancel_ordinary",
+        "cancel_opted",
+    ] {
+        let f = Fixture::new();
+        let branch = present(&f);
+        let git = git2::Repository::open(f.root.path()).unwrap();
+        let primary = git.head().unwrap().target().unwrap();
+        git.reference(
+            "refs/remotes/origin/main",
+            primary,
+            false,
+            "synthetic fetch",
+        )
+        .unwrap();
+        let producer = RepositoryService::open_at_with_failure_point_for_testing(
+            f.data.path(),
+            FailurePoint::PollBeforeDiscovery,
+        )
+        .unwrap();
+        let id = RequestId::new();
+        let ordinary = case == "cancel_ordinary";
+        let mutation = || {
+            if ordinary {
+                Mutation::PollOnce(PollOnceInput {
+                    root: f.root.path().into(),
+                })
+            } else {
+                Mutation::PollOnceRetiring(PollOnceInput {
+                    root: f.root.path().into(),
+                })
+            }
+        };
+        crate::repository::remote::synthetic_fetch(vec![("refs/heads/main".into(), primary)]);
+        let first = execute(&producer, id, mutation());
+        assert_ne!(first.code, ResultCode::Ok);
+        let request = f.service.request_record(id).unwrap().unwrap();
+        assert_eq!(request.state, RequestState::Accepted);
+        let p = request.operations[0].operation_id;
+        let db = f.db();
+        if !ordinary {
+            assert!(
+                db.query_row(
+                    "SELECT image IS NULL FROM poll_retirement_passes WHERE request_ulid=?1",
+                    [id.to_string()],
+                    |r| r.get::<_, bool>(0)
+                )
+                .unwrap()
+            );
+        }
+        git.remote_set_url("origin", "ssh://fixture@127.0.0.1:2/fenced")
+            .unwrap();
+        let plan = crate::repository::remote::observation::observation_plan(f.root.path()).unwrap();
+        let config = f
+            .service
+            .observation_configuration(f.root.path(), &plan)
+            .unwrap();
+        crate::repository::remote::state::with_transaction(
+            &f.service,
+            f.root.path(),
+            |tx, repo| {
+                crate::repository::remote::state::configure_endpoints(
+                    tx,
+                    repo,
+                    &plan,
+                    &config.endpoint_digest(),
+                )
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            db.query_row(
+                "SELECT phase FROM remote_operation_records WHERE operation_ulid=?1",
+                [p.to_string()],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+            "interrupted"
+        );
+        if matches!(case, "cancel_missing" | "cancel_unknown_mode") {
+            db.execute(
+                "DELETE FROM poll_retirement_passes WHERE request_ulid=?1",
+                [id.to_string()],
+            )
+            .unwrap();
+        } else if case == "cancel_corrupt" {
+            db.execute(
+                "UPDATE poll_retirement_passes SET live=0,summary='{}' WHERE request_ulid=?1",
+                [id.to_string()],
+            )
+            .unwrap();
+        }
+        if case == "cancel_unknown_mode" {
+            use crate::repository::mutation::request_store::{
+                DigestSalt, FieldValue, IntentDigest,
+            };
+            let unknown =
+                IntentDigest::builder(DigestSalt::Request(id), "poll once", &request.scope, "")
+                    .field("retire_completed", FieldValue::Flag(false))
+                    .finish();
+            db.execute(
+                "UPDATE request_records SET intent_digest=?2 WHERE request_ulid=?1",
+                params![id.to_string(), unknown.to_string()],
+            )
+            .unwrap();
+        }
+        let before_request = f.service.request_record(id).unwrap().unwrap();
+        let disk = disk_image(f.root.path());
+        let mut history = registry_image(&db);
+        history.remove("request_records");
+        let cancelled = f.service.cancel_request(id);
+        let after_request = f.service.request_record(id).unwrap().unwrap();
+        if matches!(
+            case,
+            "cancel_missing" | "cancel_corrupt" | "cancel_unknown_mode"
+        ) {
+            assert_eq!(
+                after_request.state,
+                RequestState::Accepted,
+                "whole QUALITY Q1: opted mode cannot disappear with companion evidence: {case}: {cancelled:?}; {after_request:?}"
+            );
+            assert_eq!(
+                cancelled.code,
+                ResultCode::RecoveryRequired,
+                "mandatory/unknown mode evidence must fail closed: {case}: {cancelled:?}"
+            );
+            assert!(after_request.result.is_none());
+            assert_eq!(
+                before_request, after_request,
+                "no generic code/effects/result or cancellation write on refused dispatch"
+            );
+            if case != "cancel_unknown_mode" {
+                assert_eq!(
+                    execute(&f.service, id, mutation()).code,
+                    ResultCode::RecoveryRequired
+                );
+                assert_eq!(
+                    f.service.request_record(id).unwrap().unwrap().state,
+                    RequestState::Accepted
+                );
+            }
+        } else if ordinary {
+            assert_eq!(cancelled.code, ResultCode::Ok);
+            assert_eq!(
+                after_request.state,
+                RequestState::Finished,
+                "ordinary default fenced cancellation retains generic finalization"
+            );
+            let result = after_request.result.as_ref().unwrap();
+            assert_eq!(result.code, ResultCode::ExternalChange);
+            assert_eq!(result.effects, crate::results::Effects::not_requested());
+            assert!(result.data.is_none());
+            assert_eq!(
+                execute(&f.service, id, mutation()).code,
+                ResultCode::ExternalChange
+            );
+        } else {
+            assert_eq!(cancelled.code, ResultCode::Ok);
+            assert_eq!(
+                after_request.state,
+                RequestState::Accepted,
+                "valid uncaptured opted parent cannot finish through the ordinary shortcut"
+            );
+            assert!(after_request.cancel_requested && after_request.result.is_none());
+            let settled = execute(&f.service, id, mutation());
+            assert_eq!(
+                settled.code,
+                ResultCode::Cancelled,
+                "own preselection recovery settles the cancellation: {settled:?}"
+            );
+            let cut = serde_json::to_value(&settled.data).unwrap();
+            assert_eq!(cut["type"], "poll_retirement");
+            assert_eq!(cut["completion"], "stopped");
+            assert_eq!(cut["retirements"], serde_json::json!([]));
+            assert_eq!(settled, execute(&f.service, id, mutation()));
+        }
+        if case != "cancel_opted" {
+            let mut after = registry_image(&db);
+            after.remove("request_records");
+            assert_eq!(
+                history, after,
+                "no companion recreation, P/source/pin/selection changes, refresh or new child: {case}"
+            );
+        }
+        assert_eq!(disk, disk_image(f.root.path()));
+        assert!(git.find_reference(&branch).is_ok());
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM request_records WHERE command='context retire'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+    }
 }
 
 #[test]

@@ -1,4 +1,5 @@
-//! Fresh standalone execution. Explicit new-executor recovery remains closed.
+//! Fresh context-retirement execution. Executor replacement and guarded
+//! continuation are implemented separately in [`super::reentry`].
 use super::{
     ContextRetirementOutcome, RetireContextRequest, RetirementRemoval, execution::*, instance,
     proof, record,

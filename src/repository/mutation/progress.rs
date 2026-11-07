@@ -30,9 +30,9 @@ use super::{
     super::{
         CloseTicketRequest, DocumentPromotionError, DocumentPromotionResult, OperationFamily,
         PollPublicationRemoteRequest, PromoteDocumentRequest, ReadError, RemotePollError,
-        RemotePollResult, RepositoryError, RepositoryOperation, RepositoryService,
-        SynchronizationError, SynchronizationObserver, SynchronizationResult,
-        SynchronizationSettings, SynchronizeRemoteRequest, TicketClosureError, TicketClosureResult,
+        RemotePollResult, RepositoryError, RepositoryService, SynchronizationError,
+        SynchronizationObserver, SynchronizationResult, SynchronizationSettings,
+        SynchronizeRemoteRequest, TicketClosureError, TicketClosureResult,
         keys::{SessionCredentialProvider, SessionCredentials},
         promotion::lifecycle::CancellationProbe,
         recovery::{FinalKind, JournalRow, PendingOperation},
@@ -564,15 +564,12 @@ impl RepositoryService {
         if Command::parse(&record.command) == Some(Command::ContextRetire) {
             return None;
         }
-        if Command::parse(&record.command) == Some(Command::PollOnce)
-            && self
-                .read_session(RepositoryOperation::Read, |db| {
-                    super::super::context_retirement::pass::is_parent(db, record.request_id)
-                        .map_err(|_| ReadError::new(ResultCode::RecoveryRequired))
-                })
-                .unwrap_or(false)
-        {
-            return None;
+        if Command::parse(&record.command) == Some(Command::PollOnce) {
+            match super::super::context_retirement::pass::is_opted_request(record) {
+                Ok(true) => return None,
+                Ok(false) => {}
+                Err(_) => return Some(Err(ReadError::new(ResultCode::RecoveryRequired))),
+            }
         }
         let accepted = Accepted::of_record(record, record.attempt)?;
         let journal = accepted.journal_row(self);
@@ -674,19 +671,38 @@ impl RepositoryService {
             requested,
             acknowledged,
         };
-        if record.state == RequestState::Accepted
+        let captured_retirement = if record.state == RequestState::Accepted
             && Command::parse(&record.command) == Some(Command::PollOnce)
-            && super::super::context_retirement::pass::has_capture(
-                self,
-                Path::new(record.scope.as_str()),
-                record
-                    .operations
-                    .first()
-                    .map(|o| o.operation_id)
-                    .unwrap_or_else(super::super::OperationId::new),
-            )
-            .unwrap_or(false)
         {
+            // Prove the mode BEFORE consulting its mandatory companion. Loss
+            // or an audit failure is not permission for ordinary finalization.
+            let captured = super::super::context_retirement::pass::is_opted_request(&record)
+                .and_then(|opted| {
+                    if opted {
+                        super::super::context_retirement::pass::has_capture(
+                            self,
+                            Path::new(record.scope.as_str()),
+                            record.operations[0].operation_id,
+                        )
+                    } else {
+                        Ok(false)
+                    }
+                });
+            match captured {
+                Ok(captured) => captured,
+                Err(_) => {
+                    return Envelope::failure(
+                        REQUEST_CANCEL,
+                        scope,
+                        ResultCode::RecoveryRequired,
+                        Vec::new(),
+                    );
+                }
+            }
+        } else {
+            false
+        };
+        if captured_retirement {
             // Only opted, already captured passes use this route. The common
             // lease serializes the immutable cut with normal child admission
             // and guarded effects. No Git transaction is interrupted.
