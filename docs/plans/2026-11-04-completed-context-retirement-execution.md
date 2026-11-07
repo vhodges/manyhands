@@ -14,14 +14,17 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ### Current Accommodated Gate Standing — 2026-11-07 UTC
 
-**Sole-owner final verification resumed, then STOPPED at the first failed target.**
-Frozen compiled/test source **`d49cfa4a7150d73bc31333e2fe9038fecfb2ec61`**;
+**Gate sequence remains STOPPED; the bounded CLI help-fixture correction passed
+its one exact case, pending same SPEC→QUALITY delta review.**
+Unchanged compiled/test source **`d49cfa4a7150d73bc31333e2fe9038fecfb2ec61`**;
 library/production freeze **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**;
-current main baseline **`846af67935f5381be9f355b25ae91d14e7705e6e`**, already
-integrated by documentation-only merge **`9e8ad037f6ff42964aab2e6628927ed474d85697`**.
+active main baseline **`707f4a6dc85abb187fd3385c534f514034ecc139`**, accepted
+controller docs-only merge/entry **`ab53de7c0733c5c3425a53a26da2d53f8844413f`**.
+No additional fetch/merge. Prior whole gates retain their actual846af679 baseline.
 Controller reports same whole SPEC **SOURCE CLEAR**, then same whole QUALITY
 **SOURCE PASS**, through d49cfa4a on the846af679 feature range. That lifted this
-sequence's source barrier, not runtime review/owner handoff.
+sequence's source barrier, not approval of this new fixture delta or runtime
+review/owner handoff. Original79c3931b base remains historical, not the active base.
 
 | Current evidence | Actual standing |
 | --- | --- |
@@ -29,27 +32,33 @@ sequence's source barrier, not runtime review/owner handoff.
 | Whole accommodated desktop | **1580 passed/0 failed/0 ignored/0 filtered**,2158.17s tests, **exit0**. |
 | CLI unit binary | **307 passed/0 failed**,0.52s tests, finished green. |
 | canonical_foundation | **65 passed/0 failed**,0.03s tests, finished green. |
-| cli integration | **476 passed/1 failed**,420.97s tests; remainder command **exit101**. |
+| Last whole cli integration | **476 passed/1 failed**,420.97s tests; remainder command **exit101**, not yet rerun. |
+| Exact corrected poll-help case | **1 passed/0 failed/476 filtered**,0.03s tests, **exit0**; entryab53de7c plus the recorded fixture SHA. Not a whole-target pass. |
 
-The first failure is **`help::the_poll_verbs_help_is_available_and_is_its_own_golden`**,
-at `tests/support/cli.rs:629:5`: actual `poll once` help includes optional
-**`--retire-completed`**, absent from `tests/fixtures/cli_v1/help_poll_once.json`.
-Full expected/actual retained; **no golden/source fix, diagnostic or retry**.
-No measured suspend in either command; PM-only queries had zero matches. Source
-and the3 cfg(test) hashes remained frozen throughout. Current wait-budget strict
-Clippy/fmt greens and prior unchanged-production check were **reused, not rerun**.
-Only3 cfg(test) paths differ from e6bc3912 and are excluded from normal check.
+The recorded first failure was **`help::the_poll_verbs_help_is_available_and_is_its_own_golden`**,
+at `tests/support/cli.rs:629:5`: actual `poll once` help included optional
+**`--retire-completed`**, then absent from the expected
+`tests/fixtures/cli_v1/help_poll_once.json`.
+Full expected/actual and failed gate remain retained as RED. The only correction
+appends that optional flag **after `--confirm`**, matching the saved actual exactly;
+no other fixture, source, wording, default/wire behavior or assertion changes.
+The existing exact case completed all four poll-verb goldens and absent-data check.
+Prior no-suspend evidence retains its original two-command scope. Compiled inputs
+are unchanged; library/desktop/CLI-unit/canonical/static greens are preserved,
+**not rerun**. No check/fmt/Clippy or other Rust command accompanied this fixture fix.
 
 Owner-approved **WAIT60s** remains a finite test accommodation, not a performance
 fix; GPUI15s per uninterrupted park, POLL10ms, safety budgets and assertions are
 unchanged. Historical whole-desktop1518/62 and1516/64 remain failed at WAIT10s;
 instrumented51/49 remain diagnostic only. Profiling/optimization remains stopped.
 **NOT RUN:**25 remaining fast integrations, slow local-sync, ten selected SSH
-targets and both smokes. No display/profile/app/native action. Preserve finished
-greens on unchanged relevant inputs; further execution/fixes need controller
-authorization. Ticket **implementing / runtime BLOCKED**, not feature-complete or
-review-ready; final same whole SPEC→QUALITY runtime-evidence reviews and owner
-handoff remain owed. Latest appended checkpoint governs older next-step prose.
+targets and both smokes. No display/profile/app/native action. Same whole SPEC
+`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`, then same QUALITY
+`ses_e4c8be2f1ffegiPUEUuB0QgyBE`, must clear this bounded delta before the gate
+owner resumes the failed whole CLI target once and the25 unrun integrations.
+Ticket **implementing / review-and-runtime BLOCKED**, not feature-complete or
+review-ready; final runtime-evidence reviews and owner handoff remain owed.
+Latest appended checkpoint governs older next-step prose.
 
 ### Historical Main Integration And Gate Standing — 2026-11-07 UTC
 
@@ -8872,3 +8881,68 @@ with coauthor; no ID allocation/extra build/status save, source/golden changes,
 push/PR/main/close, agents/other-worktree or real profile/key/context/draft action. All owned gate
 processes exited. Ticket **implementing / runtime BLOCKED**, not review-ready or
 feature-complete; same whole runtime-evidence reviews and owner handoff remain owed.
+
+## Task 8 — Bounded Poll-Once Help Golden Correction, 2026-11-07 UTC
+
+Accepted controller preflight at clean entry
+**`ab53de7c0733c5c3425a53a26da2d53f8844413f`**, parents metadata-only
+`fa0af48fd8d61a6ba609f797070004838956cdd6` and current main
+**`707f4a6dc85abb187fd3385c534f514034ecc139`**. Incoming main changed only one
+Wave04 document since846af679; no runtime/compiled input changed. No additional
+fetch/merge or other-worktree action. Active review base is707f4a6d; original
+79c3931b and prior gate bases remain historical at their recorded scopes.
+
+The existing compiled **CLI476/1,420.97s** failure at `d49cfa4a` is RED; it was not
+rerun unchanged. Saved failure analysis proves the only JSON difference is the
+optional `--retire-completed` option, **last, immediately after `--confirm`**.
+Manually added those six lines only to
+**`tests/fixtures/cli_v1/help_poll_once.json`**; full diff inspected. The updated
+JSON equals the saved actual; removing only that option restores the entry JSON.
+E-4/E-9 authorize this missed feature-help expectation. No auto-generation/update
+mode, other golden, test/helper/target, source, schema/API, dependency, help
+wording, existing flag, default/untagged wire or production policy change.
+
+**Only Rust command in this correction:**
+
+```sh
+devenv shell -- cargo test --all-features --locked --test cli help::the_poll_verbs_help_is_available_and_is_its_own_golden -- --exact
+```
+
+**Exit0;1 passed/0 failed/0 ignored/0 measured/476 filtered;0.03s tests**;
+Cargo0.35s, measured monotonic0.616653224s. Clean serialized Devenv setup,
+default threads, update/diagnostic variables unset, no sleeps. This existing case
+completed **once/configure/pause/resume goldens, schema validation and the final
+absent-data assertion**. No later mismatch or new case. Actual source scope is
+entry `ab53de7c` plus the fixture bytes below; compiled inputs still match `d49cfa4a`.
+
+New-only **`/tmp/opencode/task8-help-golden-`** evidence:
+
+| Artifact | Scope / SHA-256 |
+| --- | --- |
+| `command.json`, `results.json` | Literal argv/cwd, accepted entry/current main, compiled/library source scopes, fixture hash, counts/exits/clocks, RED provenance and exited child. |
+| `sources.sha256` | One changed fixture; file hash **`20634af0715e1adee65a47de60ff9ad0615606a2dda236007393dd0e32a9874a`**; manifest hash **`be4e2ac102555f9eef616229a7ef1e8082d1ac274309d71ca22fa1aeae8da7ae`**. |
+| `test.log` | Exact nonzero GREEN above; hash **`cc61a36e20964fa1dc28c4e0fa88897d8fec25e6b71e9855ac7c391f82ec9fa1`**. |
+| `evidence.sha256` | **4 new artifacts**: command JSON, source manifest, test log, results JSON; hash **`cf5780be8090c0e77b85c53205601f21c95cc10d89338609338a2339d4b7e9bd`**. |
+
+The prior28-artifact `task8-accommodated-evidence.sha256` digest remains
+**`6ef230f9a605221e178ebd4ccc663a6dc54bf69eaf2908f4adfe4e75e451806a`**. All old
+manifests/logs/failures/root-help/schema evidence remain untouched at their actual
+source scopes; no wholesale historical artifact reinventory or rewritten result.
+Keep **library1530/0/160,1972.73s; whole desktop1580/0,2158.17s; CLI units307/0,
+0.52s; canonical65/0,0.03s** and current static greens. None was rerun. No cargo
+check/fmt/Clippy/no-GPUI, whole CLI, other integration, local-sync, SSH, smoke or
+native gate ran. WAIT60s/GPUI15s-per-park/POLL10ms and production budgets are
+unchanged; profiling and performance-ticket work remain stopped.
+
+**Pending:** same whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`** bounded delta
+review, then same QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, before the final
+gate owner resumes **the failed whole CLI target once plus25 first-run integration
+targets**. No whole-CLI/feature pass follows from this one exact case. Selected
+local-sync/ten SSH/smokes/final runtime-evidence reviews remain owed.
+
+Only owned golden + ledger/current-standing + append to existing canonical
+**`01M6TYJATB44WZPJABX9GMBVS1`**, preserving its ID/parent/time/prior body, with
+coauthor. No new ticket/ID/status save, agents, push, main/other-worktree/lifecycle/
+PR/close/native or real profile/key/context/draft action; no owned job remains.
+Ticket stays **implementing / review-and-runtime BLOCKED**, not review-ready or
+feature-complete; no autonomous gate continuation.

@@ -442,3 +442,37 @@ Known owned gate processes exited; no jobs, source edits, ID allocation/extra
 build/status save/push/PR/main/closure/agents/other-worktree/real profile-key-context-draft action.
 Ticket **implementing / runtime BLOCKED**, not review-ready/feature-complete;
 same whole runtime-evidence reviews and owner handoff remain owed.
+
+## Follow-up — bounded poll-once help fixture corrected, exact case GREEN
+
+Accepted controller docs-only main merge/clean entry
+**`ab53de7c0733c5c3425a53a26da2d53f8844413f`**, active base
+**`707f4a6dc85abb187fd3385c534f514034ecc139`**; no repeated fetch/merge.
+Existing compiled CLI476/1 failure serves as RED. Only golden
+`tests/fixtures/cli_v1/help_poll_once.json` gains the delivered optional
+`--retire-completed` option **after `--confirm`**, in recorded actual order.
+Full six-line diff inspected; valid JSON equals saved actual, otherwise unchanged.
+No other golden, helper/case/target, source, schema/API, wording/default/wire or
+policy change; no update mode or artificial RED rerun.
+
+Only `devenv shell -- cargo test --all-features --locked --test cli help::the_poll_verbs_help_is_available_and_is_its_own_golden -- --exact`
+ran: **exit0;1 passed/0 failed/476 filtered;0.03s tests**,0.616653224s monotonic.
+All four poll-verb goldens/schema checks and absent-data assertion completed.
+Clean serialized setup/default threads. Compiled inputs remain `d49cfa4a`; actual
+test scope is entry `ab53de7c` plus the recorded fixture hash. Keep unchanged
+library1530/0/160, whole desktop1580/0, CLI units307/0, canonical65/0 and statics;
+none rerun. Whole CLI still needs its post-review gate;25 integrations/local-sync/
+ten SSH/smokes remain unrun. No check/fmt/Clippy/no-GPUI/broad/native run or sleeps.
+
+New-only `/tmp/opencode/task8-help-golden-{command.json,sources.sha256,test.log,results.json,evidence.sha256}`.
+Fixture SHA-256 `20634af0715e1adee65a47de60ff9ad0615606a2dda236007393dd0e32a9874a`;
+log `cc61a36e20964fa1dc28c4e0fa88897d8fec25e6b71e9855ac7c391f82ec9fa1`;
+4-artifact manifest `cf5780be8090c0e77b85c53205601f21c95cc10d89338609338a2339d4b7e9bd`.
+All historical evidence/scopes remain intact; prior28-artifact manifest unchanged.
+
+**Same whole SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`, then same QUALITY
+`ses_e4c8be2f1ffegiPUEUuB0QgyBE` bounded delta reviews pending** before gate-owner
+whole CLI retry and25 first-run targets. No gate continuation, feature-complete or
+review-ready claim. Append preserves original ID/parent/time/body. No agents/
+push/status save/other-worktree/main/lifecycle/PR/close/native/real profile-key-
+context-draft action or owned job; profiling/performance-ticket work stays stopped.
