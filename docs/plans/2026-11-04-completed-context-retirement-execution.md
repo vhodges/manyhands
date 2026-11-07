@@ -45,8 +45,14 @@ at the library binary (1,495 passed / 2 failed; all later binaries/targets unrun
 Independent whole-feature SPEC found one Important **A8/E-1 disposition-migration
 dependency-closure gap**, not covered by the separate consumer-closure matrix and
 not residual coverage. Controller imposed a pause after the existing command;
-no further gate/reproduction/source edit was admitted. The failure checkpoint
-below preserves old-source evidence and unrun gates. Ticket remains
+no further gate/reproduction/source edit was admitted at that checkpoint. The
+controller subsequently authorized only three bounded corrections, delivered at
+`f9fa2d6c` with exact local regressions and Clippy/fmt evidence below. A8/E-1 now
+has new dependency-closure assertions, **pending the same whole-feature SPEC
+reviewer's re-review**, not an essential-gap waiver or full-44 approval. The two
+failed fixtures are corrected locally; their old fast-gate failures remain facts.
+No broad gate was rerun; fresh whole-feature QUALITY has not started. The failure
+checkpoint below preserves old-source evidence and unrun gates. Ticket remains
 `implementing`, not full Task 2 or feature review-ready; QUALITY/owner handoff owed.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
 [the delivery checkpoint](#task-3--ordinary-binding-and-guarded-preserving-recovery).
@@ -7262,3 +7268,95 @@ dispatch. **Resume only on controller authorization after bounded fixes/review**
 preserve old-source greens and select affected/remaining tests from actual fixes,
 not a blanket restart. Whole-feature SPEC resolution, then QUALITY and owner
 handoff remain owed. No feature completion claim.
+
+## Task 8 — Three Bounded Corrections, 2026-11-07 UTC
+
+**Locally corrected; independent re-review and final gates still BLOCKED/owed.**
+Sole implementer, no subagents or other worktrees. Clean correction base
+**`68b13566763c6b14c47136e8ec8636a23ccfb708`**; fix commit
+**`f9fa2d6c36583125df2fee5b9b2b5c7af4339f4f`**. Controller's fresh fetch/merge of
+main **`79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`** was already up to date;
+ancestry confirmed without a redundant merge. Previous Task 3–7 approvals,
+D15 independent ordinary retirements/child-only recovery and all old evidence
+remain unchanged. This is a correction checkpoint, not a new plan.
+
+### Root Causes And Bounded Changes
+
+- **A / whole-feature SPEC M1, A8/E-1:** the validator checked only the expected
+  table/owner trigger; rename/drop could discard unknown attachments or retarget
+  incoming FKs and cascade-delete payload. A compiled RED in the existing table
+  caught unknown-index schema loss **before explicit rollback**. A private guard
+  now refuses unknown indexes/triggers, external trigger/view references and all
+  incoming FK definitions before affected DDL, conservatively handling ASCII
+  case/quoted names. Exact implicit indexes/owner trigger remain permitted;
+  old-enum corruption and literal-sensitive normalization are unchanged. The
+  table now has **28 rows**: 10 original corruptions plus nine dependencies in
+  each old15/current17 envelope, including empty/populated composite CASCADE and
+  RESTRICT, and populated SET NULL. `foreign_keys=ON`; complete schema/all table
+  rowids/payload/disposition/owner rows/schema version unchanged before rollback,
+  after rollback and after **refused public open**. The genuine pre-envelope
+  positive passed to check legitimate indexes/owner trigger are not overrejected.
+  The old15→current17 positive/owner guards remain unchanged. No SQL parser,
+  generic migration framework, dependency or unknown-object conversion.
+- **B / preserving admission:** the single exact diagnostic **passed**; it did
+  not reproduce the full-tier `PoisonError`. Source tracing plus a new passing
+  assertion confirm that `index_owner` deliberately unwinds under its hook mutex
+  and poisons that service. Use a fresh continuation, preserving the actual
+  request-bound index claim/heartbeat, lease/unrelated/stale-abandon-F2 refusals
+  and before/after images, strengthened for receipts/provenance/index claims.
+  No production hook change, skipped index row or mismatched-service/token fix.
+- **C / last-pin atomicity:** diagnostic identified **`Some("pin")` reopen
+  `RecoveryRequired`**: its unknown pin-table fault trigger conflicts with strict
+  consumer closure, not valid-envelope Z. Production audits remain unchanged.
+  Small private thread-local `cfg(test)` one-shot points replace schema faults
+  at result UPDATE, pin DELETE, conditional batch DELETE and journal completion;
+  receipt INSERT keeps its existing hook. Every named fault is **reached and
+  consumed**; full registry equality proves all preceding writes rolled back.
+  Valid-envelope reopen, exact release/collection, scalar-ID reuse and terminal
+  replay remain. Adjacent valid-window retention is unchanged, not newly rerun.
+
+### Exact Local Evidence — No Broad Admission
+
+Commands were serialized through Devenv, each under 38 s wall. Literal argv,
+UTC times, source HEAD **plus SHA-256 of the five input files**, exits, durations
+and raw-log hashes: **`/tmp/opencode/task8-correction-results.json`**. Logs:
+`/tmp/opencode/task8-correction-<key>.log`. These aliases are full exact names,
+not prefix filters:
+
+- **A:** `repository::remote::state::persistence_tests::retirement_disposition_old_corrupt_and_partial_envelopes_roll_back`
+- **O:** `repository::remote::state::persistence_tests::review_disposition_genuine_old_envelope_migrates_once_preserving_original_rows`
+- **B:** `repository::context_retirement::record::authority::tests::retirement_preserving_admission_refuses_live_or_unrelated_owners_and_stale_abandon_f2`
+- **C:** `repository::context_retirement::store_tests::retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen`
+
+| Key / command (expand exact aliases above; literal argv in JSON) | Actual result / wall |
+| --- | --- |
+| `a-red`: `devenv shell -- cargo test --all-features --locked --lib A -- --exact` | **101**; compiled, 0 passed / 1 failed, 1,656 filtered, 1.81 s tests / 22.384 s wall. Unknown index changed schema before rollback: meaningful migration RED |
+| `a-green`: `devenv shell -- cargo test --all-features --locked --lib -- A O --exact` | **0**; 2 passed, 1,655 filtered, 4.81 s tests / 21.877 s wall |
+| `bc-diagnostic`: `devenv shell -- cargo test --all-features --locked --lib -- B C --exact` | **101**; B passed / C failed at pin reopen, 1,655 filtered, 3.89 s tests / 15.811 s wall; diagnostic, not green Z |
+| `bc-green`: same exact B/C argv after fixes | **0**; 2 passed, 1,655 filtered, 3.75 s tests / 37.573 s wall |
+| `b-strengthened`: `devenv shell -- cargo test --all-features --locked --lib B -- --exact` after added image assertions | **0**; 1 passed, 1,656 filtered, 3.44 s tests / 12.956 s wall |
+| `fmt-first`: `devenv shell -- cargo fmt --check` | **1**; formatting-only diff, 17.880 s; applied only owned formatting corrections |
+| `clippy`: `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | **0**; 32.106 s, final Rust input hashes |
+| `fmt`: `devenv shell -- cargo fmt --check` | **0**; 18.738 s, same final hashes |
+
+Only formatting followed A/C greens; strengthened B then ran exactly once. No
+unchanged-tree green reruns, fresh `cargo check`, whole fast/lib/SSH, smoke or
+native command. Controller owns required final three statics and affected/
+remaining gates **after review**. A8/E-1 was missing essential coverage; these are
+**new local assertions pending independent review**, not a full-44 waiver.
+Historical coverage/row 38 remains; `task8-correction-coverage.md` records the delta.
+Original results/handoff/final metadata, logs and 35-artifact
+`task8-evidence.sha256` are untouched. Prior **1,495 passed / 2 failed** library-
+only gate still failed; binaries/all 27 integrations, slow local-sync, selected
+SSH targets and both smokes remain unrun. No whole-feature clear.
+
+Canonical reply **`01M6SPJAW4WWAT4NC90T4HE8S6`**, parent
+**`01M6SNFBVK9WRBE9JV3Q9MYQY5`**, actual UTC `2026-11-07T00:29:36Z`. ID used only
+the built supported CLI through Devenv, isolated
+`MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data` (`checkpoint-id`,
+exit 0); no Cargo rebuild/default profile/repair. New manifest:
+`task8-correction-evidence.sha256`; final range/input hashes and process/barrier:
+`task8-correction-final.json`. Ticket stays `implementing`. Return to **same
+whole-feature SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, then fresh whole-feature
+QUALITY. No agents, push/PR/main integration/close, real context/key/draft
+operations, native dispatch or owned running jobs.
