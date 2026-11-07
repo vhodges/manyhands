@@ -139,7 +139,7 @@ Read on 2026-11-07 against main at `1e5616af`.
 
 ## Required Source Amendments
 
-Made when this Wave is approved, on its ticket:
+Made on 2026-11-07, after the owner approved this Wave:
 
 - **Desktop IA RFC.** Replace "No boards, project rollups or configurable
   docking system are required" and the fixed-layout paragraph with: a title
