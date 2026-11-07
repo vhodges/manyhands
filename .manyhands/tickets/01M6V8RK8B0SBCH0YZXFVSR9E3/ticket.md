@@ -52,6 +52,31 @@ moves the operations area into the Activity panel unchanged.
 - Keyboard: Ctrl B, Ctrl Alt B, Ctrl J; no per-panel keys; `secondary-1` to
   `secondary-4` also show a hidden panel; F6 cycles visible panels only.
 
+## D6 Coordination
+
+Wave 03 D6 (`01M4CC0VN3VPVVQ3RNWJKXWEVX`) is planned but not implemented,
+and will probably run alongside this Cycle. Its plan (revision 1, drafted
+2026-11-07) touches the operations area, the quit path and
+`view/workspace/repositories.rs`.
+
+- **Quit feedback stays visible.** The quit path's "Finishing {label}"
+  section and Quit now render in the operations area today (`render.rs`),
+  and D6 adds "still stopping" there after ten seconds. Once that area is
+  the Activity panel, a hidden Activity must not hide them: show the
+  Activity panel when a quit starts waiting, or draw the finishing feedback
+  outside any panel. Decide in the plan and test it (quit with Activity
+  hidden).
+- **One source for Needs attention.** Derive the footer's count from the
+  operations model's attention entries (`model/operations.rs`), not a list
+  of this Cycle's own, so the entries D6 adds (key locked, host approval,
+  recovery hold) are counted in either merge order.
+- **Wrap, don't edit.** Move the operations area into `ActivityPanel` as it
+  is, without changing `view/operations/` or `model/operations.rs`, so D6's
+  edits there merge cleanly.
+- Expect small textual conflicts in `view/workspace/repositories.rs`, the
+  `Workspace` struct and constructor, and shared test harness and keyboard
+  tests. Whichever Cycle merges second merges main and adapts.
+
 ## Testing
 
 Desktop-only, so the fast tier at review-ready and no SSH target
