@@ -9,6 +9,12 @@ team: core
 manyhands_managed: true
 manyhands_kind: ticket
 ---
+**Combined into `01M66HFV44YXNQ7ANJVA16TQ1H` (vh-hyksw) on 2026-11-07.** It
+is the same defect, found earlier through `item sync`. Its cause is a key
+selection, which calls `configure` and marks the history unknown. That ticket
+now holds this one's evidence and the generalized fix. Close this one
+without a code change.
+
 A repository-wide `history_unknown` flag, once set, is never cleared. While it
 is set, every item branch that has no remote-tracking ref reads as "history
 unknown". So `document promote`, `ticket close` and `item sync` refuse any
