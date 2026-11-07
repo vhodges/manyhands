@@ -12,6 +12,25 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
+### Current Main Integration — 2026-11-07 UTC
+
+**Authorized in-progress main merge finished at source/postmerge
+`774da0c30122685d10cf4f76b55d50811b8eb8f4`**, with exact parents
+`f69d341b5caac47c95d50b64c685f6073d61c958` and incoming main
+`1e5616af22630b08a84dc0fb42037135b385f81d` (approved/closed D5).
+That main is now the integration baseline; `79c3931b` remains the historical
+feature/review base, not the current-main gate. Controller reports the fixture
+delta already SPEC/QUALITY source-approved before this merge; those approvals
+do **not** approve the merged tree or runtime gates. **Merged-source same whole
+SPEC delta → same QUALITY remain pending; final-gate barrier retained.**
+Fresh merged-tree strict Clippy/fmt pass. Ten named exact seam tests ran:
+**9 passed / 1 failed**; the failure is the unchanged premerge retirement enum
+inventory (122 declarations vs 103 pins), statically isolated below. No broad
+library/fast/SSH/smoke/native gate ran. Historical library gates **1,495/2/160**
+and **1,494/3/160** remain failures. Ticket stays `implementing`; not source-clear,
+runtime-accepted, review-ready or complete on this new baseline. The detailed
+integration checkpoint at the end governs older standing/next-step prose below.
+
 ### Current D15 Amendment — 2026-11-06
 
 **Owner-approved contract; both same-reviewer source/contract re-reviews passed
@@ -7734,3 +7753,130 @@ delta → same QUALITY `ses_e4c8be2f1ffegiPUEUuB0QgyBE` re-review before any bro
 gate resumes**. Final changed-library/check/remaining gates and runtime-evidence
 reviews still owed; ticket `implementing`, not review-ready/complete. No push/
 PR/main/close/native, other worktrees, real contexts/keys/drafts or owned jobs.
+
+## Task 8 — Approved D5 Main Integration (2026-11-07 UTC)
+
+Sole bounded implementer; no agents. The controller had already fetched and
+started the authorized merge on a clean tree. Entry HEAD was
+**`f69d341b5caac47c95d50b64c685f6073d61c958`**, MERGE_HEAD/origin-main
+**`1e5616af22630b08a84dc0fb42037135b385f81d`**. Completed existing two-parent
+merge/source **`774da0c30122685d10cf4f76b55d50811b8eb8f4`**. No new fetch/merge,
+rebase, abort, reset, discard or other-worktree/main edit. Current main's
+`AGENTS.md` and Cycle preflight were reread. D5's incoming ticket is `done`,
+with `closed_at: 2026-11-07T02:31:13Z`; its canonical ticket/comments and approved
+implementation were preserved, not independently reimplemented/reviewed in full.
+
+### Four Conflict Decisions And Shared-Seam Inspection
+
+1. **CLI RFC:** keep the explicit-only retirement poll qualification/default ban
+   and confirmed preserving-abandon amendment, plus D5 decision 10/L2's
+   unfinished non-refused held-or-unheld lifecycle-parent `next_action: resume`.
+2. **Wave rule 5:** keep both dated/named exceptions: retirement D1–D15,
+   shared library + CLI/no desktop Retire/D6 owed; D5 Part 0's rules 5/6
+   lifecycle way-out/resume/progress exception. Neutralize only the stale
+   ordinal “third”; do not change either approved scope or D5's completion.
+3. **Command-stage test:** production now independently observes local-sync,
+   lifecycle and retirement commands. Combined predicate is
+   `local || lifecycle || command == Command::ContextRetire`; confirmation,
+   safe-point and other command predicates remain intact.
+4. **SSH runner:** retain both `context_retirement` and `d5_progress` modules
+   and their one-each CASES chains. No new SSH case, matrix or target.
+
+Compared **old feature and incoming main**, not just `HEAD~1`: nine jointly
+changed paths are recorded in `task8-d5-merge-overlap.json`. Reviewed auto-merged
+mutation `mod.rs`/`progress.rs`/`bind/resume.rs`, read `status.rs`, the progress
+schema, D5 lifecycle observer/way-out and CLI adapter. Retirement's immutable
+mode check, captured-pass cancellation/cut, independent child identities,
+fenced preserving finalizer and I-only resume hook survive. D5's shared
+resumable predicate and lifecycle stages survive; its way-out matches only
+`MutationDataDto::Lifecycle`, and uses the recovery action's parent ID for
+resumed child conflicts. It does not reinterpret retirement's historical R/K
+report or current child actions. Incoming drafts protection still opens the
+caller-supplied directory for the isolated A9 sentinel; default drafts routing
+is unchanged. D5 operations/outcomes changes are lifecycle/share offers, not
+retirement abandonment; the existing generic confirmation retains the required-
+nullable safety metadata. No desktop Retire action added; D6 still owes it.
+Cycle/design/plan/current API-audit notes date this baseline change without
+rewriting Task 0, D15 decisions, review dates or historical evidence counts.
+
+**Compile-only merge mismatch:** initial strict Clippy failed E0046: incoming
+D5's test-only `Recorder: Session` lacked `retire_context` and
+`poll_once_retiring`. Added the same `None` implementations it uses for other
+domain calls, solely in `bind/lifecycle_tests.rs`. This is trait-shape
+integration, not a behavioral RED or a production fix. Strict Clippy then passed.
+Outside the nine shared paths, this is the **only incoming-only source file
+changed from main**; feature-only source files are unchanged from premerge.
+`task8-d5-merge-preservation.json` records this comparison, the exact parents,
+ancestor success, empty unmerged index and clean source checkpoint. Merge-tree
+exited 0 with tree `7fa0fea904445b9838334f799bc0bdee3da7264a`.
+
+### Bounded Verification — New Merged Source Only
+
+Rust commands were serialized through Devenv. Exact tests below all use
+`devenv shell -- cargo test --all-features --locked <selector> <name> -- --exact`;
+each ran **one nonzero test**, without thread overrides or real waits. Full
+argv, times, exits and SHA-256 logs are in `task8-d5-merge-results.json`.
+
+| Selector / exact name | Merge risk / actual result |
+| --- | --- |
+| `--lib repository::mutation::command::tests::the_stopping_commands_and_their_stages_and_confirmation` | Combined observing/confirmation predicate; **1/0**, 0.00 s test, 50.123 s wall |
+| `--lib repository::mutation::bind::lifecycle::tests::a_runs_steps_are_reported_as_stages` | Changed Recorder and D5 stage mapping; **1/0**, 0.00 s / 0.682 s |
+| `--lib repository::context_retirement::execution_tests::mutation_tests::retirement_batch_original_handoff_and_crash_table_never_restarts_cleanup` | Captured-pass cancellation CUT, immutable old report and no restarted cleanup across shared progress; **1/0**, 37.97 s / 38.594 s |
+| `--lib repository::context_retirement::execution_tests::mutation_tests::ordinary_retirement_index_only_resume_spends_own_request_and_preserves_recreation` | Shared resume retains exact ordinary I/preserving F2 and recreation safety; **1/0**, 3.06 s / 3.726 s |
+| `--lib repository::context_retirement::execution_tests::mutation_tests::acceptance_tests::retirement_preserves_recoverable_item_and_comment_drafts` | Incoming protected-folder API and isolated A9 full-source export sentinel; **1/0**, 1.38 s / 1.971 s |
+| `--test read_contract published_enumerations_list_exactly_the_registered_values` | D5 progress/new-root inventory; **0/1**, 0.02 s / 66.314 s; all individual pins passed, final total failed **122 vs 103** |
+| `--test cli inventory::the_catalog_and_the_rfc_taxonomies_name_the_same_verbs` | Conflict-resolved taxonomy still matches 78 catalogued verbs; **1/0**, 0.03 s / 9.053 s |
+| `--bin manyhands-cli polling::tests::retirement_report_distinguishes_as_of_cut_from_current_child_actions` | Current operation/request/root/order stays separate from frozen R/K report; **1/0**, 0.00 s / 7.183 s |
+| `--lib repository::mutation::way_out::tests::resolve_child_conflict_names_this_operation_then_the_way_on` | D5 resumed parent-ID mapping, not raw child ID; **1/0**, 0.00 s / 0.617 s |
+| `--test read_status a_held_parent_still_lists_resume` | D5 L2's held promotion and closure remain listed/resumable; **1/0**, 0.60 s / 3.424 s |
+
+Static commands: `devenv shell -- cargo fmt --check` **PASS** (16.825 s);
+`devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`
+initial compile failure (54.275 s), then **PASS** after test-only repair (29.394 s).
+No Rust/schema edit followed these green inputs. This is fresh merged-tree
+evidence, not reuse of `2f50e8bc`'s Clippy/fmt. Fresh `cargo check` remains owed.
+The merge message understated the exact-pass count as eight; the actual logs
+and this checkpoint record **nine passes and one failure**.
+
+**Named blocker — pre-existing enum inventory, not a D5 regression:**
+`tests/read_contract.rs` is byte-identical to premerge `f69d341b`; both have
+122 schema enum declarations, while main has 103. Retirement added six in its
+ordinary root, ten in the opted-in root, and three in abandon metadata without
+adding their 19 pins to `contract_enumerations`. Those three schemas also match
+premerge byte-for-byte; D5's progress schema is byte-identical to main, with
+one enum keyword before/after. The exact test passed every registered pin
+(including all D5 progress values) before failing the completeness count.
+`task8-d5-merge-schema-diagnosis.json` records static counts/hashes; **no old-tree
+test run is claimed**. Left the assertion, registry and wire schemas intact;
+controller must triage/authorize the bounded follow-on before final acceptance.
+No broad feature repair, relaxed expected count, skipped test or policy change.
+
+### Evidence, Review Barrier And Return
+
+New-only prefix **`/tmp/opencode/task8-d5-merge-`**: 38 relevant input hashes in
+`inputs.json`, complete command/result table, source-preservation comparison,
+both final old-feature/main overlap diffs, schema diagnosis and raw logs.
+`verification.sha256` covers **38 new artifacts**, SHA-256
+**`6c32ada91316faf7b7d3379efa0fe4e62af6e4a87c940bfaf1f64e6764207d9d`**.
+It does not hash the incoming 212-path tree. Log SHA-256:
+Clippy fixed **`8311e1154486791b1f1cde7edee3b15981dcae9a28538b9dd1f3dd53ebba5be3`**;
+fmt **`3153cbf05b1ece7140acec4ddb8bcbeea9e7c77da891f50c1f2f6b197c3e53a7`**;
+failed schema inventory **`6b5e2e1bb6b88897b36362fa4061e64b0d29128af64d55ff22f56ee5bf155321`**.
+Original 35/14/26/19 evidence artifacts/manifests were not overwritten.
+
+Canonical reply **`01M6SYJK4CJGHWKZC7MTP18GTA`**, parent
+**`01M6SWSX67QVEKM25VVW00YD2X`**, ID-only built CLI through Devenv and isolated
+`MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data`, exit 0.
+No default profile conversion, ticket save/status change, real key/context/draft
+action, push/PR/close, native dispatch or owned jobs. Incoming D5 sibling records
+untouched. The fixture correction's prior same-reviewer approvals keep only
+their old source scope, as do all historic failed/green results.
+
+**Next: same whole SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` merge delta, then same
+QUALITY `ses_e4c8be2f1ffegiPUEUuB0QgyBE`, before lifting the barrier.** Controller
+reviews the actual old-feature-plus-incoming-main range, not `HEAD~1` only.
+Enum-inventory triage, fresh check, broad library green, fast bins/all 27
+integration tiers, local-sync, ten changed-path SSH targets, both smokes and
+final runtime-evidence reviews remain owed. Individual named tests above are
+not whole target/tier passes. Ticket remains `implementing`, clean/unpushed at
+return; no merged-tree source-clear or runtime-completion claim.
