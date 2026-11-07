@@ -141,7 +141,8 @@ The same flag is set by three paths, all through `configure`:
   `01M6V8RK88W7F8AHPK6MQKBQ2C` and `01M6V8RK8B0SBCH0YZXFVSR9E3`, had no
   tracking ref and were absent from a live `ls-remote`, which listed all 58
   published branches. The mark comes back on the next key change until this
-  is fixed.
+  is fixed. The acceptance criterion for recovery with no hand edit still
+  stands.
 - Clearing the flag didn't release the `item sync` stuck by it earlier that
   day (request `01M6V6K9Q80B7KXZT57NPMPH94`, operation
   `01M6V6KA0QNSNF1BYB28ANDK6R`, at `fetch_observed`). It still held the
@@ -152,12 +153,26 @@ The same flag is set by three paths, all through `configure`:
   (`cancelled`). The `next: request.retry` line names no command a person
   can run: there is no `request retry` verb. The fix's recovery path, and
   its migration, must release or name such stuck syncs, and a `busy` caused
-  by a stuck operation should say which one holds the reservation. The acceptance criterion for recovery with no hand edit still
-  stands.
+  by a stuck operation should say which one holds the reservation.
 
 ## Fix Direction
 
-To settle in the plan. A starting point:
+**Settled by the approved design,
+`docs/plans/2026-11-07-remote-history-repair-design.md` (owner, 2026-11-07),
+which takes precedence over the text below.** Its decisions:
+
+- A key change forgets nothing.
+- The third choice is **release** of the local copy, not retirement, since a
+  retired context already reads as never published.
+- The repair is a read, `remote history`, plus a confirmable
+  `item resolve-history --as publish|release`.
+- **Publish** records the evidence and names `item sync`; it doesn't push.
+- Push proof stays per generation.
+- `poll once` reports a new disposition, `unpublished`.
+- The cache-loss flag clears with the last resolution.
+- The desktop sheet, and `busy` naming its holder, are follow-on tickets.
+
+The starting point recorded before the design:
 
 1. **Split fence from forget.** Give `configure` the reason for the change.
    A key change fences only: it keeps `remote_context_states` and leaves

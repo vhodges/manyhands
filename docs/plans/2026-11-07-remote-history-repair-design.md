@@ -1,8 +1,9 @@
 # Remote History Repair Design
 
 Ticket `01M66HFV44YXNQ7ANJVA16TQ1H` (vh-hyksw), combined on 2026-11-07 with
-`01M6V8RK88W7F8AHPK6MQKBQ2C` (vh-yq8wb). Status: **draft, awaiting owner
-decisions** (see "Decisions For The Owner"). A shared-library change, merged
+`01M6V8RK88W7F8AHPK6MQKBQ2C` (vh-yq8wb). Status: **approved
+2026-11-07**: the owner accepted every recommended decision (see "Owner
+Decisions"). A shared-library change, merged
 to main on its own.
 
 ## Intent
@@ -262,44 +263,47 @@ them in one fetch plus one confirm per context absent from the remote.
 Contexts the remote has resolve on that fetch. The known-identity columns
 are initialized from the current plan and digest.
 
-## Decisions For The Owner
+## Owner Decisions
 
-1. **Key change forgets nothing.** Recommended: yes, as in §1.
+All nine decisions were accepted as recommended by the owner on 2026-11-07.
+The alternatives are kept for the record.
+
+1. **Key change forgets nothing.** Accepted: yes, as in §1.
    *Alternative:* forget on a key change too, but tracked per context. That
    is safer if a different key could reach a different server under the same
    URL, which the endpoint digest can't tell apart.
 2. **"Retire" becomes "release".** The existing retirement reads as
    `NeverPublished`, so as an owner choice it would be the same as publish.
-   Recommended: the third choice is release of the local copy, through the
+   Accepted: the third choice is release of the local copy, through the
    existing context release.
-3. **Repair shape.** Recommended: a read, `remote history` (it fetches and
+3. **Repair shape.** Accepted: a read, `remote history` (it fetches and
    then lists), plus a per-item confirmable `item resolve-history`. The
    desktop sheet calls the same pair. *Alternative:* a single interactive
    CLI walkthrough, `remote repair`, that prompts per context. It's closer
    to "interactive", but a poor fit for `--non-interactive` agents and the
    existing confirmation model.
-4. **Does "publish" push?** Recommended: no. It records the evidence, and
+4. **Does "publish" push?** Accepted: no. It records the evidence, and
    `next:` names `item sync`, so first publication keeps one code path.
    *Alternative:* the verb runs the sync itself.
-5. **Push proof across a key change.** Recommended: keep it per generation
+5. **Push proof across a key change.** Accepted: keep it per generation
    (it heals on the next poll). *Alternative:* add an identity epoch to
    operation records, so a push stays proof across a credentials fence. That
    means more schema for a window of minutes.
-6. **New poll disposition `unpublished`.** Recommended: yes. It's needed for
+6. **New poll disposition `unpublished`.** Accepted: yes. It's needed for
    truthful `poll once` output, and it adds one value to the CLI contract.
-7. **Clearing the cache-loss flag.** Recommended: it clears when the last
+7. **Clearing the cache-loss flag.** Accepted: it clears when the last
    unresolved context is resolved, or through `--resolve-all` when none
    remain, and the marker file is deleted after the commit.
    *Alternative:* keep the marker file forever. Any registry rebuilt later
    would then start with history unknown.
-8. **Desktop scope.** Recommended: this ticket covers the library, the CLI
+8. **Desktop scope.** Accepted: this ticket covers the library, the CLI
    and the desktop's guidance text. A repair sheet, with entry from the
    lifecycle dialog's blocked body (`view/lifecycle/prepare.rs:372-430`,
    `repair.rs:334`) and from the share failure
    (`model/publication.rs:363-408`), becomes a follow-on ticket, or joins
    Wave 04 Cycle 05.
 9. **`busy` names its holder, and `request.retry` names a runnable
-   command.** Recommended: a separate ticket. `RemoteReservationOutcome::Busy`
+   command.** Accepted: a separate ticket. `RemoteReservationOutcome::Busy`
    would carry the holder (`reservation.rs:119-124`), reusing
    `records::operation_or_parent_holder`. Here, §4 removes the stuck sync
    that caused today's `busy`.
