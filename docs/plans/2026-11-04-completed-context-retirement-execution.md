@@ -48,8 +48,16 @@ Clippy/fmt greens were explicitly reused, and the resumed exact fast tier on
 `0e5fff04` / Rust source `1ccd93d2` stopped at lib (**1,494 passed / 3 failed /
 160 filtered**; binaries/all 27 integrations still unrun). Preserving index
 admission returned Ok instead of Busy; two default-poll tests installed unknown
-disposition triggers now rejected by M1. Read-only diagnosis/limits are appended;
-no probe/fix or later gate was admitted. M1, corrected Z/reopen and Q1 CUT tables
+disposition triggers now rejected by M1. Read-only diagnosis/limits at that
+checkpoint are preserved. The controller then authorized only the three failed
+fixtures and a related INSERT-fault audit: locally corrected at `165bd11c` through
+assertion-strengthening `2f50e8bc`, with
+four exact tests and fresh strict Clippy/fmt passing. The index diagnostic did
+not reproduce load expiry (measured age 0); frozen-clock rows now prove the
+unchanged 3-second boundary. Both stop fixtures and the formerly false-positive
+INSERT fixture now prove their actual boundaries without invalid attachments.
+**Same whole SPEC delta, then same whole QUALITY re-review remain required;
+no broad gate was resumed.** M1, corrected Z/reopen and Q1 CUT tables
 individually passed in that failed binary. The old `e0b62f7e` **1,495/2/160** gate
 remains a historical failure; all original 35 evidence artifacts remain unchanged
 at their actual scopes.
@@ -7636,3 +7644,93 @@ real contexts/keys/drafts or native dispatch. **No owned Cargo/test job remains.
 Return for controller-directed bounded fixes/review and explicit gate resumption;
 preserve qualifying greens and choose reruns from the actual changed tree. Formal
 runtime-evidence SPEC/QUALITY and owner handoff remain owed, not review-ready.
+
+## Task 8 — Bounded Live-Index And Poll-Fixture Corrections, 2026-11-07 UTC
+
+**Local corrections only; barrier retained.** Clean base
+**`76aef6233c4b9acf7f7e2d9806d559982720c0a2`**, entry Rust `1ccd93d2` (frozen
+`0e5fff04`); fixes **`165bd11cbfbe39abc54e648b47491f8411d5dab1`** and final source
+**`2f50e8bc6abed92ea9bdc29108701fecb1c3a23b`** (explicit restarted-scan assertions). Feature
+base `79c3931b01d225ddf3434ae9cd4fc51eb607fd2e` unchanged; controller's fresh
+no-op fetch/merge accepted, ancestry confirmed. Sole implementer in this ticket
+worktree, no agents/new design. Prior approvals remain at their recorded scope.
+
+### Four Existing Cases — Evidence, Not Policy Changes
+
+- **I / live index:** exact diagnostic **passed**; five actual service-clock
+  samples had heartbeat/now **1794017222**, **age 0**, threshold **3**. Full-load
+  expiry remains a source explanation, **not reproduced/measured**. The fresh
+  continuation now uses the existing injected Clock frozen to actual persisted
+  heartbeat + age: **0/3 → Busy/no mutation; 4 → preserving success**. Genuine
+  request/F2/epoch/spend/heartbeat/nonce retained, fresh service after poisoned
+  fixture, original lease/unrelated/stale-F2 images retained. Stale control
+  preserves old spend and fences old index plus matching old-service/token.
+  No waits, future-heartbeat cheat or production threshold/clock change.
+- **R/Y / stop report and yield:** exact failures reproduced with underlying
+  **ListSharedKeys / SharedKeyRegistryUnavailable**. Configuration preflight
+  (`keys/registry.rs:336`) migrates; strict M1 rejects the unknown disposition
+  triggers. Existing `PollBeforeTarget(Some(1))` hooks now prove committed primary
+  FF/OIDs/Git head, untouched context and no scan before exact operation+epoch
+  stop flags. R combines stop/completion in one FnMut, preserving the separate
+  later poll/index repair and original frozen cancelled/interrupted FF/not-reached
+  pending report. Y consumes a one-shot yield before fresh restart, retaining
+  reservation disposal/no first scan/current-primary+FF-context, adding stopped
+  replay attempt/deadline stability. No M1 allowlist or hook-mutex reentry.
+- **D / INSERT audit:** original case **passed for the wrong reason**, same key/
+  schema preflight error; stronger expected error produced compiled **RED**.
+  No existing FailurePoint is at the owned batch TX's INSERT. Added only a private
+  thread-local, exact-operation+ordinal one-shot `cfg(test)` hook in state.rs.
+  With real nonempty old poll/report history, fault before INSERT **ordinal 1**
+  proves inside TX that advertisement/context writes, old-report DELETE and
+  INSERT 0 happened. Reach/consume and complete affected-row/rowid/schema/version/
+  old-owner rollback, valid-envelope reopen and exact old-report replay all pass.
+  No Git/index effect or production schema/reservation/INSERT behavior change.
+
+Remaining CREATE audit: **seven sites/nine triggers** in remote/poll_tests.rs;
+none attach to or reference dispositions, left untouched. Only these four
+existing test functions changed, no new case function/target/dependency/SSH work.
+
+### Exact Local Verification
+
+Literal full exact names/argv, UTC times, HEAD + four input-file SHA-256 values,
+exits/durations and raw-log hashes: **`/tmp/opencode/task8-fixture-results.json`**.
+Logs `/tmp/opencode/task8-fixture-<key>.log`. All entries serialized through
+Devenv; default test threads, every command under one minute:
+
+| Key / command selection (full literal expanded argv in JSON) | Actual result |
+| --- | --- |
+| `diagnostic`: `devenv shell -- cargo test --all-features --locked --lib -- I R Y D --exact --nocapture` | **101**, unqualified diagnostic Connection import, 22.096 s; **compile failure, not RED** |
+| `diagnostic-compiled`: same four names after import fix | **101**, I/D passed, R/Y failed; 1,653 filtered, 3.81 s tests / 20.782 s wall; I age 0, D preflight false positive |
+| `disposition-red`: `devenv shell -- cargo test --all-features --locked --lib D -- --exact --nocapture` | **101**, 0 passed / 1 failed, 1,656 filtered, 0.34 s tests / 14.207 s wall; meaningful stronger-expectation RED |
+| `green`: same four exact names after fixes | **0**, **4 passed**, 1,653 filtered, 7.62 s tests / 55.883 s wall; ages 0/3/4 and actual reached/consumed stop/INSERT assertions |
+| `fmt-first` / `format`: `devenv shell -- cargo fmt --check` / `devenv shell -- cargo fmt` | **1 / 0**, owned formatting then formatter, 32.124 / 31.613 s |
+| `clippy`: `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | **0**, initial fix hashes, 31.563 s |
+| `fmt`: `devenv shell -- cargo fmt --check` | **0**, same initial fix hashes, 32.215 s |
+| `yield-strengthened`: `devenv shell -- cargo test --all-features --locked --lib Y -- --exact` after explicit restarted-head/one-scan/clear-flag assertions | **0**, 1 passed, 1,656 filtered, 0.83 s tests / 17.811 s wall |
+| `clippy-final` / `fmt-final`: same static argv after Y strengthening | **0 / 1**, 8.837 / 16.473 s; formatting-only one-line difference in the new assertion |
+| `fmt-ready` / `clippy-ready`: same fmt/strict Clippy argv after owned whitespace fix | **0 / 0**, **final source hashes**, 16.423 / 8.386 s |
+
+I = `repository::context_retirement::record::authority::tests::retirement_preserving_admission_refuses_live_or_unrelated_owners_and_stale_abandon_f2`;
+R = `repository::remote::poll::tests::review_original_stop_report_survives_later_poll_and_index_repair`;
+Y = `repository::remote::poll::tests::task6_yield_between_targets_keeps_changed_primary_and_restart_is_current`;
+D = `repository::remote::poll::tests::task6_disposition_insert_fault_rolls_back_advertisement_and_old_report`.
+After the four-test green, only formatting and Y's explicit required-scan
+assertions changed; Y alone then ran once. Latest statics followed the final
+whitespace fix. No unchanged-tree green reruns, fresh cargo check, whole
+lib/fast/local-sync/SSH/smoke/native run. Prior M1/Z/CUT greens unchanged, not
+rerun. Latest Clippy/fmt apply to the final `2f50e8bc` hashes; prior
+static reuse remains old-source evidence. Coverage delta only in new
+`task8-fixture-coverage.md`; no original map/44-row C/L/S waiver or overwrite.
+
+Canonical reply **`01M6SWSX67QVEKM25VVW00YD2X`**, parent
+**`01M6SVCCPV0X3DWS1WHQNA76R7`**, UTC `2026-11-07T02:18:36Z`; ID only through
+built CLI/Devenv with `MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data`,
+exit 0, no build/default profile. New final/barrier and manifest:
+`task8-fixture-final.json`, `task8-fixture-evidence.sha256`. Original 35 and resumed
+26 artifact manifests/logs unchanged. **1,495/2/160** and **1,494/3/160** library-
+only gates remain **FAILED**. Fast bins/all 27 integrations, slow local-sync, ten
+SSH targets and both smokes unrun. Same SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`
+delta → same QUALITY `ses_e4c8be2f1ffegiPUEUuB0QgyBE` re-review before any broad
+gate resumes**. Final changed-library/check/remaining gates and runtime-evidence
+reviews still owed; ticket `implementing`, not review-ready/complete. No push/
+PR/main/close/native, other worktrees, real contexts/keys/drafts or owned jobs.
