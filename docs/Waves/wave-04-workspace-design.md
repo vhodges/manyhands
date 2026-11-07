@@ -13,10 +13,11 @@ manyhands_kind: document
 
 Wave 04 rebuilds the desktop workspace around the design handoff in
 [`docs/design/`](../design/README.md). At its exit the fixed four-region layout
-is gone. The window has a title bar that names what you're looking at and
-carries Settings and Needs attention. Repositories, Tickets, Documents and
+is gone. The window has a title bar that names what you're looking at.
+Repositories, Tickets, Documents and
 Activity are dockable, resizable panels that the user shows, hides and moves
-from a footer bar, and the layout survives a restart. Each panel's rows,
+from a footer bar that also carries Needs attention and Settings, and the
+layout survives a restart. Each panel's rows,
 toolbars and states follow `03-panels.md` and the plain-language vocabulary in
 `06-language-and-states.md`. Settings opens as a sheet instead of taking over
 the item area.
@@ -63,8 +64,7 @@ never provisions a working copy.
 
 The owner set the scope and priority order of this Wave:
 
-1. Title bar. Settings moves here, as does the notification of things that
-   need action. The window title shows Manyhands and the selected
+1. Title bar. The window title shows Manyhands and the selected
    repository's name (later a project or team name).
 2. Footer bar. Buttons toggle each panel (Repositories, Tickets, Documents,
    Activity). Each button has a menu that sets its panel's dock location, as
@@ -86,15 +86,14 @@ Wave: Search (the title bar field and Ctrl K), the Teams panel and the
 Projects panel, with the Project and Team scope kinds. Anything that would
 show them is left out, not stubbed.
 
-Two of the owner's directions differ from the handoff, and this Wave follows
-the owner:
+Later on 2026-11-07 the owner settled two points:
 
-- **Settings and Needs attention sit in the title bar**, not in the footer
-  (`02`, "Footer", items 5 and 6). The Needs attention popover anchors below
-  its title-bar control instead of above the footer.
-- **The dock menu offers a top dock.** The handoff has only left, right and
-  bottom docks. See [Planning Baseline](#planning-baseline) for why the top
-  dock is an open decision.
+- **Settings and Needs attention stay where the design puts them**, in the
+  footer (`02`, "Footer", items 5 and 6), with the Needs attention popover
+  anchored above its footer item. An earlier direction moved them to the
+  title bar; the owner withdrew it.
+- **There is no top dock.** The dock menu offers left, right and bottom, as
+  the handoff does and GPUI Kit 0.6.6 supports.
 
 ## Planning Baseline
 
@@ -122,8 +121,8 @@ Read on 2026-11-07 against main at `1e5616af`.
   `v_resizable`; `TitleBar`, `StatusBar`, `Sheet`, `Popover`, `Menu`, `Tree`,
   `Table` and `VirtualList`. Each Cycle still verifies the names it uses.
 - **No top dock.** `DockPlacement` at 0.6.6 is `Center`, `Left`, `Bottom`,
-  `Right`, and its serde tags are a frozen on-disk schema. A top dock needs a
-  change in GPUI Kit itself (decision 2).
+  `Right`, and its serde tags are a frozen on-disk schema. The owner accepts
+  left, right and bottom only (decision 2).
 - **Theme.** The Kit theme is closed to new slots. `src/desktop/view/item/tokens.rs`
   already keeps the item view's own colors for both modes, plus the
   handoff's `accent` and `faint` chrome tokens. There is no workspace-wide
@@ -139,14 +138,12 @@ Made when this Wave is approved, on its ticket:
 
 - **Desktop IA RFC.** Replace "No boards, project rollups or configurable
   docking system are required" and the fixed-layout paragraph with: a title
-  bar; left, right and bottom docks (and top, if decision 2 adopts it) around
-  the item area; dockable, resizable Repositories, Tickets, Documents and
-  Activity panels shown, hidden and moved from the footer; layout persisted
-  in app-local data, never in a repository; Activity plus Needs attention as
-  the persistent operation area; Settings as a sheet; and the plain-language
-  vocabulary of `docs/design/06`. Boards and rollups stay excluded.
-- **`docs/design/02-layout-and-docking.md` and `05-sheets-and-dialogs.md`.**
-  Note the owner's move of Settings and Needs attention to the title bar.
+  bar; left, right and bottom docks around the item area; dockable,
+  resizable Repositories, Tickets, Documents and Activity panels shown,
+  hidden and moved from the footer; layout persisted in app-local data,
+  never in a repository; Activity plus Needs attention as the persistent
+  operation area; Settings as a sheet; and the plain-language vocabulary of
+  `docs/design/06`. Boards and rollups stay excluded.
 - **`docs/design/09-implementation-plan.md`.** Note that this Wave supersedes
   its sequence.
 
@@ -210,12 +207,8 @@ today's region contents unchanged inside the new frame.
   `secondary`, `text`, `selection`, `accent`, `teal`, `green`, `red`), both
   modes, applied to the title bar, panel headers and footer. The item view
   reads `accent` and `faint` from it.
-- **Title bar** (Kit `TitleBar`, 38 px): app icon; the title text; the
-  Needs attention control (`circle-alert` + "N need attention", red, hidden
-  at 0, counting the unresolved recovery states the operations area already
-  shows; until Cycle 03 it shows and focuses the Activity panel); the
-  Settings button (`settings`, tooltip "Settings (Ctrl ,)") opening today's
-  Settings page; platform window controls.
+- **Title bar** (Kit `TitleBar`, 38 px): app icon, the title text and the
+  platform window controls.
 - **Window title** set through the window and shown in the title bar:
   `Manyhands — {repository}` for the selected repository, `Manyhands` when
   none is selected. The repository name is the one shown in the
@@ -234,14 +227,19 @@ today's region contents unchanged inside the new frame.
   Repositories (0.6) stacked over Documents (1.4); right dock 440 px with
   Tickets; bottom dock 150 px with Activity.
 - **Resizing** of docks and of stacked groups, with the toolkit's handles.
-- **Footer** (Kit `StatusBar`, 28 px), per `02`, "Footer", without Settings
-  and the status items: the left dock toggle and one toggle per left panel;
-  the bottom dock toggle and one per bottom panel; one toggle per right
-  panel and the right dock toggle. On and off states, tooltips "Show
-  Tickets" and "Hide Tickets".
+- **Footer** (Kit `StatusBar`, 28 px), per `02`, "Footer": the left dock
+  toggle and one toggle per left panel; the bottom dock toggle and one per
+  bottom panel; one toggle per right panel and the right dock toggle. On and
+  off states, tooltips "Show Tickets" and "Hide Tickets". Also, per `02`:
+  the **Needs attention** item (`circle-alert` + "N need attention", red,
+  hidden at 0, counting the unresolved recovery states the operations area
+  already shows; until Cycle 03 it shows and focuses the Activity panel),
+  and after a separator the **Settings** button (`settings`, tooltip
+  "Settings (Ctrl ,)") opening today's Settings page. The other status
+  items are Cycle 03's.
 - **Dock menu** on every panel toggle (secondary click and the keyboard's
-  context-menu key, as in Zed): "Dock left", "Dock right", "Dock bottom"
-  (and "Dock top" if decision 2 adopts it), current placement checked.
+  context-menu key, as in Zed): "Dock left", "Dock right", "Dock bottom",
+  current placement checked.
   Moving a panel carries its footer button to that side.
 - **Behavior** from `02`: showing a panel shows its dock; hiding every panel
   in a dock collapses it and the center widens; a dock toggle hides or shows
@@ -262,7 +260,8 @@ today's region contents unchanged inside the new frame.
   Tab and has an accessible name.
 
 **Out of scope:** New panel contents, toolbars or row rendering, the Needs
-attention popover, the Settings sheet, status items in the footer, and the
+attention popover, the Settings sheet, the footer's sharing and update-check
+status items, and the
 dock-location menu for the item area itself.
 
 **Exit evidence:** The app starts in the default layout; each panel can be
@@ -276,8 +275,9 @@ Native check of the title bar on Linux Wayland, with macOS and Windows after
 merge (decision 4).
 
 **Split line:** if the plan does not fit one reviewable Cycle, split it into
-01a (tokens, title bar, dock area with the four panels, persistence) and 01b
-(footer toggles, dock menus, keyboard toggles), and update this Wave.
+01a (tokens, title bar, dock area with the four panels, persistence, and a
+footer with only Needs attention and Settings) and 01b (footer toggles, dock
+menus, keyboard toggles), and update this Wave.
 
 ### Cycle 02: Tickets And Documents Panels
 
@@ -341,7 +341,7 @@ the places the design puts them.
   newest first; failures kept until resolved; the "Show only things that
   need attention" filter. Today's operations-area content (finishing,
   session and pending sections) is carried into these rows, not dropped.
-- **Needs attention popover** (`05`, 2f), anchored to the title-bar control:
+- **Needs attention popover** (`05`, 2f), anchored above the footer item:
   one row per unresolved recovery state with its single action, and "Show
   everything in Activity". It is a filtered view of the same store as
   Activity.
@@ -367,7 +367,7 @@ opening it no longer hides the open item.
 **In scope:**
 
 - The sheet frame from `05` (right side, 720 px, header, scrolling body,
-  footer) with the 214 px left nav, opened from the title-bar Settings
+  footer) with the 214 px left nav, opened from the footer's Settings
   button and Ctrl ,; focus trapped, Esc closes, focus returns to the
   invoking control.
 - The existing pages folded into the design's nav: **Repositories** (today's
@@ -423,7 +423,6 @@ Wave 04 is complete when its Cycles have approved exit evidence and:
 | Client-side title bar behaves differently per platform (drag, double-click, controls, Wayland decorations) | Use Kit `TitleBar` and its window options; check Linux locally, macOS and Windows in native CI after merge (decision 4). |
 | A layout file from an older build, or a removed panel, breaks startup | Versioned file, fallback default reported in Activity, unknown panels dropped; one table-driven test. |
 | D6 lands while Cycles 01 and 03 move and rework the operations area | Cycle 01 moves the area unchanged; 03 bases its plan on whatever D6 has merged and leaves the polling states out until then. Merge main often, per `AGENTS.md`. |
-| A top dock needs a toolkit change | Decision 2; the Wave delivers left, right and bottom without it. |
 | Cycle 01 grows too large to review | The split line in Cycle 01. |
 | The design's list specs drop a Wave 03 behavior (Ready and Blocked, duplicate short codes, inaccessible entries) | Cycle 02's exit evidence names them; decision 5 places Ready and Blocked. |
 
@@ -431,17 +430,15 @@ Wave 04 is complete when its Cycles have approved exit evidence and:
 
 1. **Default layout.** Recommended: 1b without Projects and Teams (left:
    Repositories over Documents; right: Tickets; bottom: Activity).
-2. **Top dock.** GPUI Kit 0.6.6 has no top dock. Recommended: ship left,
-   right and bottom in this Wave and add top through a GPUI Kit change
-   later, if it is still wanted.
+2. **Top dock.** Settled 2026-11-07: no top dock. The owner accepts left,
+   right and bottom, which GPUI Kit 0.6.6 supports.
 3. **Panel toggle keys.** The handoff's Ctrl Shift R and Ctrl Shift D clash
    with Rebuild (`secondary-shift-r`) and Open drafts (`secondary-shift-d`).
    Recommended: no per-panel keys this Wave beyond the
    existing `secondary-1` to `secondary-4` (which now also show a hidden
    panel), plus the three Zed dock toggles.
 4. **Title bar on macOS and Windows.** Recommended: Kit `TitleBar` on every
-   platform, so the title, Needs attention and Settings sit in the same
-   place everywhere.
+   platform, so the title bar looks and behaves the same everywhere.
 5. **Ready and Blocked filters.** Recommended: a filter menu beside the
    Open/Closed/All control, keeping that control as designed.
 6. **Settings with a details sheet open.** Root has one sheet layer.
@@ -461,7 +458,7 @@ Owner item 6 and the excluded design parts, to be planned later:
 - Moving content from the bottom of the item view into its details sheet.
 - Item-area splits and the focused-pane treatment.
 - Search and the command palette; Projects and Teams panels and scopes;
-  title-bar menus; a top dock if decision 2 defers it.
+  title-bar menus.
 
 ## Approval And Remaining Readiness
 
