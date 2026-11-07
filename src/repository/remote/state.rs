@@ -538,6 +538,38 @@ pub(super) fn record_poll_completion(
     tx.execute("UPDATE remote_operation_records SET poll_completed_at=?3,poll_next_eligible_at=(SELECT next_eligible_at FROM remote_polling_state WHERE repository_id=?1) WHERE repository_id=?1 AND operation_ulid=?2 AND poll_kind='update'",params![id,op.to_string(),at]).map_err(|_|recovery_required())?;
     Ok(())
 }
+#[cfg(test)]
+type DispositionInsertHook = Box<dyn FnOnce(&Transaction<'_>, i64) -> Result<(), RepositoryError>>;
+#[cfg(test)]
+thread_local! {
+    static DISPOSITION_INSERT_HOOKS: std::cell::RefCell<std::collections::BTreeMap<(String, usize), DispositionInsertHook>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
+}
+#[cfg(test)]
+pub(super) fn set_disposition_insert_hook(
+    operation: crate::repository::OperationId,
+    ordinal: usize,
+    hook: impl FnOnce(&Transaction<'_>, i64) -> Result<(), RepositoryError> + 'static,
+) {
+    assert!(
+        DISPOSITION_INSERT_HOOKS
+            .with(|hooks| hooks
+                .borrow_mut()
+                .insert((operation.to_string(), ordinal), Box::new(hook)))
+            .is_none()
+    );
+}
+#[cfg(test)]
+pub(super) fn disposition_insert_hook_pending(
+    operation: crate::repository::OperationId,
+    ordinal: usize,
+) -> bool {
+    DISPOSITION_INSERT_HOOKS.with(|hooks| {
+        hooks
+            .borrow()
+            .contains_key(&(operation.to_string(), ordinal))
+    })
+}
+
 pub(super) fn replace_poll_dispositions(
     tx: &Transaction<'_>,
     id: i64,
@@ -558,6 +590,12 @@ pub(super) fn replace_poll_dispositions(
         } else {
             "malformed"
         };
+        #[cfg(test)]
+        if let Some(hook) = DISPOSITION_INSERT_HOOKS
+            .with(|hooks| hooks.borrow_mut().remove(&(op.to_string(), ordinal)))
+        {
+            hook(tx, id)?;
+        }
         tx.execute("INSERT INTO remote_poll_dispositions(repository_id,operation_ulid,ordinal,classification,remote_ref,kind,item_id,disposition,before_oid,after_oid,observed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![id,op.to_string(),ordinal as i64,classification,row.target.as_ref().map(RemoteRefTarget::remote_ref),row.kind.map(|k|crate::repository::authoring_kind_segment(&k)),row.item_id.as_ref().map(ToString::to_string),disposition_name(row.disposition),row.before_oid.map(|o|o.to_string()),row.after_oid.map(|o|o.to_string()),at]).map_err(|_|recovery_required())?;
     }
     Ok(())

@@ -779,19 +779,53 @@ fn review_original_stop_report_survives_later_poll_and_index_repair() {
             ("refs/heads/main".into(), incoming),
             (context.remote_ref().into(), incoming),
         ];
-        f.db().execute_batch(&format!("CREATE TRIGGER review_stop AFTER UPDATE ON remote_poll_dispositions WHEN NEW.ordinal=0 AND NEW.disposition='fast_forwarded' BEGIN UPDATE remote_operation_records SET {}=1 WHERE operation_ulid=NEW.operation_ulid;END;",if cancelled{"cancel_requested"}else{"yield_requested"})).unwrap();
         let root = f.local.root.clone();
         let data = f.local._data.path().to_owned();
         let plan = f.local.plan.clone();
         let second_advertised = advertised.clone();
         let called = Arc::new(AtomicBool::new(false));
         let fired = called.clone();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let stop_fired = stopped.clone();
+        let operation = f.owner.operation_id();
+        let epoch: i64 = f
+            .db()
+            .query_row(
+                "SELECT owner_epoch FROM remote_operation_records WHERE operation_ulid=?1",
+                [operation.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let old = f.local.old;
         f.local
             .service
-            .set_poll_boundary_hook_for_testing(move |point, _| {
+            .set_poll_boundary_hook_for_testing(move |point, ordinal| {
+                if point == crate::repository::FailurePoint::PollBeforeTarget && ordinal == Some(1)
+                {
+                    assert!(!stop_fired.swap(true, Ordering::SeqCst));
+                    request_stop_after_primary(
+                        &Connection::open(data.join(REGISTRY_FILE)).unwrap(),
+                        &root,
+                        operation,
+                        epoch,
+                        old,
+                        incoming,
+                        cancelled,
+                    );
+                }
                 if point == crate::repository::FailurePoint::PollAfterCompletion
                     && !fired.swap(true, Ordering::SeqCst)
                 {
+                    assert!(stop_fired.load(Ordering::SeqCst));
+                    assert_eq!(
+                        Connection::open(data.join(REGISTRY_FILE))
+                            .unwrap()
+                            .query_row("SELECT count(*) FROM operation_records", [], |row| row
+                                .get::<_, i64>(0))
+                            .unwrap(),
+                        0,
+                        "the original stopped poll did not scan"
+                    );
                     let service = RepositoryService::open_at(&data).unwrap();
                     let configuration = service.observation_configuration(&root, &plan).unwrap();
                     let owner = match service
@@ -835,6 +869,7 @@ fn review_original_stop_report_survives_later_poll_and_index_repair() {
                 }
             });
         let (original, pending) = report(f.run(advertised).unwrap());
+        assert!(stopped.load(Ordering::SeqCst));
         assert!(called.load(Ordering::SeqCst));
         assert!(pending);
         assert_eq!(
@@ -1181,6 +1216,55 @@ fn report(result: RemotePollResult) -> (RemotePollReport, bool) {
         RemotePollOutcome::Polled(r) => (r, pending),
         other => panic!("{other:?}"),
     }
+}
+
+// An exact owned-fixture stop at ordinal 1, after primary's durable disposition
+// and Git change, but before context mutation. No invalid schema attachment.
+fn request_stop_after_primary(
+    db: &Connection,
+    root: &Path,
+    operation: crate::repository::OperationId,
+    epoch: i64,
+    before: git2::Oid,
+    after: git2::Oid,
+    cancelled: bool,
+) {
+    let primary: (String, String, String) = db.query_row(
+        "SELECT disposition,before_oid,after_oid FROM remote_poll_dispositions WHERE operation_ulid=?1 AND ordinal=0",
+        [operation.to_string()], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap();
+    assert_eq!(
+        primary,
+        (
+            "fast_forwarded".into(),
+            before.to_string(),
+            after.to_string()
+        )
+    );
+    assert_eq!(db.query_row("SELECT disposition FROM remote_poll_dispositions WHERE operation_ulid=?1 AND ordinal=1", [operation.to_string()], |row| row.get::<_, String>(0)).unwrap(), "not_reached");
+    assert_eq!(
+        git2::Repository::open(root)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target(),
+        Some(after)
+    );
+    assert_eq!(
+        git2::Repository::open(root.join(".manyhands/worktrees").join(POLL_ID))
+            .unwrap()
+            .head()
+            .unwrap()
+            .target(),
+        Some(before)
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM operation_records", [], |row| row
+            .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    assert_eq!(db.execute(&format!("UPDATE remote_operation_records SET {}=1 WHERE operation_ulid=?1 AND owner_epoch=?2 AND action='poll' AND poll_kind='update' AND phase NOT IN ('completed','cancelled','failed','interrupted')", if cancelled { "cancel_requested" } else { "yield_requested" }), params![operation.to_string(), epoch]).unwrap(), 1);
 }
 
 #[test]
@@ -1604,12 +1688,47 @@ fn task6_ordered_existing_new_malformed_targets_materialize_and_snapshot_after_r
 
 #[test]
 fn task6_yield_between_targets_keeps_changed_primary_and_restart_is_current() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
     let f = PollFixture::new();
     let (target, linked) = f.local.context();
     let incoming = f.local.incoming(f.local.old, None);
     f.local.tracking(&SynchronizationTarget::Primary, incoming);
     f.local.tracking(&target, incoming);
-    f.db().execute_batch("CREATE TRIGGER yield_after_primary AFTER UPDATE ON remote_poll_dispositions WHEN NEW.ordinal=0 AND NEW.disposition='fast_forwarded' BEGIN UPDATE remote_operation_records SET yield_requested=1 WHERE operation_ulid=NEW.operation_ulid; END;").unwrap();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stop_fired = stopped.clone();
+    let data = f.local._data.path().to_owned();
+    let root = f.local.root.clone();
+    let operation = f.owner.operation_id();
+    let epoch: i64 = f
+        .db()
+        .query_row(
+            "SELECT owner_epoch FROM remote_operation_records WHERE operation_ulid=?1",
+            [operation.to_string()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let old = f.local.old;
+    f.local
+        .service
+        .set_poll_boundary_hook_for_testing(move |point, ordinal| {
+            if point == crate::repository::FailurePoint::PollBeforeTarget
+                && ordinal == Some(1)
+                && !stop_fired.swap(true, Ordering::SeqCst)
+            {
+                request_stop_after_primary(
+                    &Connection::open(data.join(REGISTRY_FILE)).unwrap(),
+                    &root,
+                    operation,
+                    epoch,
+                    old,
+                    incoming,
+                    false,
+                );
+            }
+        });
     let context = f
         .local
         .plan
@@ -1619,6 +1738,7 @@ fn task6_yield_between_targets_keeps_changed_primary_and_restart_is_current() {
         (context.remote_ref().into(), incoming),
     ];
     let (r, pending) = report(f.run(advertised.clone()).unwrap());
+    assert!(stopped.load(Ordering::SeqCst));
     assert!(pending);
     assert_eq!(r.completion(), PollCompletion::Interrupted);
     assert_eq!(
@@ -1629,6 +1749,13 @@ fn task6_yield_between_targets_keeps_changed_primary_and_restart_is_current() {
         [PollDisposition::FastForwarded, PollDisposition::NotReached]
     );
     assert_eq!(linked.head().unwrap().target(), Some(f.local.old));
+    assert!(
+        f.local
+            .service
+            .active_remote_operation(&f.local.root)
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
         f.db()
             .query_row("SELECT count(*) FROM operation_records", [], |r| r
@@ -1636,6 +1763,16 @@ fn task6_yield_between_targets_keeps_changed_primary_and_restart_is_current() {
             .unwrap(),
         0
     );
+    let timing = || {
+        f.db()
+            .query_row(
+                "SELECT latest_attempt_at,next_eligible_at FROM remote_polling_state",
+                [],
+                |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
+            )
+            .unwrap()
+    };
+    let stopped_timing = timing();
     let mut session = crate::repository::keys::SessionCredentials::new(PanicCredentials);
     assert!(matches!(
         f.local.service.poll_publication_remote(
@@ -1650,9 +1787,11 @@ fn task6_yield_between_targets_keeps_changed_primary_and_restart_is_current() {
         ),
         Err(RemotePollError::Interrupted)
     ));
-    f.db()
-        .execute_batch("DROP TRIGGER yield_after_primary")
-        .unwrap();
+    assert_eq!(
+        timing(),
+        stopped_timing,
+        "stopped replay does not change attempt/eligibility"
+    );
     let owner = match f
         .local
         .service
@@ -2120,29 +2259,176 @@ fn task6_pending_conflict_blocks_both_invocations_without_outcome_change() {
 
 #[test]
 fn task6_disposition_insert_fault_rolls_back_advertisement_and_old_report() {
-    let f = PollFixture::new();
+    let mut f = PollFixture::new();
+    let (target, linked) = f.local.context();
     f.local
         .tracking(&SynchronizationTarget::Primary, f.local.old);
-    f.db().execute_batch("CREATE TRIGGER fail_disposition BEFORE INSERT ON remote_poll_dispositions BEGIN SELECT RAISE(ABORT,'fixture');END;").unwrap();
+    f.local.tracking(&target, f.local.old);
+    let context = f
+        .local
+        .plan
+        .context(AuthoringKind::Document, &POLL_ID.parse().unwrap());
+    let advertised = |oid| {
+        vec![
+            ("refs/heads/main".into(), oid),
+            (context.remote_ref().into(), oid),
+        ]
+    };
+    // Seed real nonempty advertisement/report history, not an empty-table
+    // control that could pass while losing the previous poll's evidence.
+    let old_operation = f.owner.operation_id();
+    let (old_report, pending) = report(f.run(advertised(f.local.old)).unwrap());
+    assert!(!pending);
+    assert_eq!(old_report.targets().len(), 2);
+    let incoming = f.local.incoming(f.local.old, None);
+    f.local.tracking(&SynchronizationTarget::Primary, incoming);
+    f.local.tracking(&target, incoming);
+    f.owner = match f
+        .local
+        .service
+        .reserve_remote_poll(
+            &f.local.root,
+            crate::repository::OperationId::new(),
+            &super::super::RemoteOperationTarget::for_poll(&f.local.plan),
+            super::super::RemoteOperationPriority::Poll,
+        )
+        .unwrap()
+    {
+        super::super::reservation::RemotePollReservationOutcome::Reservation(
+            super::super::RemoteReservationOutcome::Reserved(owner),
+        ) => owner,
+        other => panic!("{other:?}"),
+    };
+    f.local
+        .service
+        .remote_safe_point(
+            &f.local.root,
+            &f.owner,
+            super::super::RemoteOperationSafePoint::BeforeTransport,
+        )
+        .unwrap();
+    let image = |db: &Connection| {
+        let mut image = BTreeMap::new();
+        for table in [
+            "sqlite_master",
+            "remote_observation_batches",
+            "remote_ref_observations",
+            "remote_context_states",
+            "remote_poll_dispositions",
+            "remote_polling_state",
+            "retired_contexts",
+            "operation_records",
+        ] {
+            let mut query = db
+                .prepare(&format!("SELECT rowid,* FROM {table} ORDER BY rowid"))
+                .unwrap();
+            let columns = query.column_count();
+            let rows = query
+                .query_map([], |row| {
+                    (0..columns)
+                        .map(|column| row.get::<_, rusqlite::types::Value>(column))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            image.insert(table, rows);
+        }
+        let mut query = db
+            .prepare("SELECT rowid,* FROM remote_operation_records WHERE operation_ulid=?1")
+            .unwrap();
+        let columns = query.column_count();
+        image.insert(
+            "old_owner",
+            query
+                .query_map([old_operation.to_string()], |row| {
+                    (0..columns)
+                        .map(|column| row.get::<_, rusqlite::types::Value>(column))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap(),
+        );
+        image.insert(
+            "schema_version",
+            vec![vec![rusqlite::types::Value::Integer(
+                db.query_row("PRAGMA schema_version", [], |row| row.get(0))
+                    .unwrap(),
+            )]],
+        );
+        image
+    };
+    let before = image(&f.db());
+    RepositoryService::open_at(f.local._data.path()).unwrap();
+    assert_eq!(
+        image(&f.db()),
+        before,
+        "the fault fixture starts with a legitimate schema"
+    );
+    let operation = f.owner.operation_id();
+    let reached = std::rc::Rc::new(std::cell::Cell::new(false));
+    let fired = reached.clone();
+    state::set_disposition_insert_hook(operation, 1, move |tx, id| {
+        assert_eq!(id, 1);
+        // Inside the owned batch TX: advertisement writes, old-report DELETE and
+        // ordinal 0 INSERT have all happened. Fail immediately before INSERT 1.
+        assert_eq!(
+            tx.query_row(
+                "SELECT count(*) FROM remote_observation_batches",
+                [],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(tx.query_row("SELECT count(*) FROM remote_ref_observations o JOIN remote_observation_batches b ON b.id=o.batch_id WHERE b.is_current=1 AND o.advertised_oid=?1", [incoming.to_string()], |row| row.get::<_, i64>(0)).unwrap(), 2);
+        assert_eq!(
+            tx.query_row(
+                "SELECT last_advertised_oid FROM remote_context_states",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+            incoming.to_string()
+        );
+        assert_eq!(
+            tx.query_row(
+                "SELECT count(*) FROM remote_poll_dispositions WHERE operation_ulid=?1",
+                [old_operation.to_string()],
+                |row| row.get::<_, i64>(0)
+            )
+            .unwrap(),
+            0
+        );
+        assert_eq!(
+            tx.query_row(
+                "SELECT ordinal,disposition FROM remote_poll_dispositions WHERE operation_ulid=?1",
+                [operation.to_string()],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            )
+            .unwrap(),
+            (0, "not_reached".into())
+        );
+        fired.set(true);
+        Err(state::recovery_required())
+    });
+    assert!(state::disposition_insert_hook_pending(operation, 1));
+    let failed = f.run(advertised(incoming));
     assert!(
-        f.run(vec![("refs/heads/main".into(), f.local.old)])
-            .is_err()
+        matches!(failed, Err(RemotePollError::Repository(ref error))
+        if error.kind == crate::repository::RepositoryErrorKind::RecoveryRequired),
+        "must reach the disposition write boundary, not fail during key/schema preflight: {failed:?}"
+    );
+    assert!(reached.get(), "the actual disposition INSERT fault fired");
+    assert!(
+        !state::disposition_insert_hook_pending(operation, 1),
+        "the exact-operation fault is consumed"
     );
     assert_eq!(
-        f.db()
-            .query_row("SELECT count(*) FROM remote_observation_batches", [], |r| r
-                .get::<_, i64>(0))
-            .unwrap(),
-        0
-    );
-    assert_eq!(
-        f.db()
-            .query_row("SELECT count(*) FROM remote_poll_dispositions", [], |r| r
-                .get::<_, i64>(
-                0
-            ))
-            .unwrap(),
-        0
+        image(&f.db()),
+        before,
+        "all advertisement writes and old report rows/rowids rolled back"
     );
     assert_eq!(
         f.local
@@ -2153,6 +2439,35 @@ fn task6_disposition_insert_fault_rolls_back_advertisement_and_old_report() {
             .completed_step(),
         Some(super::super::RemoteOperationSafePoint::BeforeBatchCommit)
     );
+    assert_eq!(
+        f.local.repository.head().unwrap().target(),
+        Some(f.local.old)
+    );
+    assert_eq!(linked.head().unwrap().target(), Some(f.local.old));
+    RepositoryService::open_at(f.local._data.path()).unwrap();
+    assert_eq!(
+        image(&f.db()),
+        before,
+        "valid-envelope reopen preserves old evidence"
+    );
+    let mut session = crate::repository::keys::SessionCredentials::new(PanicCredentials);
+    let (replayed, pending) = report(
+        f.local
+            .service
+            .poll_publication_remote(
+                PollPublicationRemoteRequest {
+                    root: f.local.root.clone(),
+                    operation_id: old_operation,
+                    invocation: RemotePollInvocation::Automatic,
+                    approval: None,
+                    restart: false,
+                },
+                &mut session,
+            )
+            .unwrap(),
+    );
+    assert!(!pending);
+    assert_eq!(replayed, old_report);
 }
 
 #[test]

@@ -93,9 +93,22 @@ impl SessionCredentialProvider for NoPassphrase {
 
 #[test]
 fn retirement_preserving_admission_refuses_live_or_unrelated_owners_and_stale_abandon_f2() {
-    for case in ["lease", "index", "unrelated", "stale_f2"] {
+    struct AdmissionClock(time::OffsetDateTime);
+    impl mutation::Clock for AdmissionClock {
+        fn now(&self) -> time::OffsetDateTime {
+            self.0
+        }
+    }
+    for (case, index_age) in [
+        ("lease", None),
+        ("index", Some(0)),
+        ("index_boundary", Some(INDEX_OWNER_STALE_AFTER)),
+        ("stale_index", Some(INDEX_OWNER_STALE_AFTER + 1)),
+        ("unrelated", None),
+        ("stale_f2", None),
+    ] {
         let f = Fixture::with_request(true);
-        let index_owner = (case == "index").then(|| f.index_owner());
+        let index_owner = index_age.map(|_| f.index_owner());
         if let Some(owner) = &index_owner {
             assert!(owner.retirement_request.is_some());
             assert!(recovery::owns_indexing(&f.db(), owner.clone()).unwrap());
@@ -108,10 +121,22 @@ fn retirement_preserving_admission_refuses_live_or_unrelated_owners_and_stale_ab
         }
         // index_owner models process loss by unwinding under the claim hook's
         // mutex. Continue with a fresh service, not that deliberately poisoned
-        // instance. The request-bound index spend above remains genuinely live.
-        let continuation = index_owner
-            .as_ref()
-            .map(|_| RepositoryService::open_at(f._data.path()).unwrap());
+        // instance. Freeze admission relative to the ACTUAL persisted heartbeat:
+        // fixture open/prepare/snapshots must not age the supposed live owner.
+        let continuation = index_age.map(|age| {
+            let heartbeat: i64 = f.db().query_row(
+                "SELECT observed_at FROM operation_records WHERE action='retire_context'",
+                [], |row| row.get(0),
+            ).unwrap();
+            let now = time::OffsetDateTime::from_unix_timestamp(heartbeat + age).unwrap();
+            let service = RepositoryService::open_at(f._data.path()).unwrap()
+                .with_clock_for_testing(std::sync::Arc::new(AdmissionClock(now)));
+            assert_eq!(service.clock.now().unix_timestamp() - heartbeat, age);
+            let row = recovery::local_row(&f.db(), f.request.root.to_str().unwrap(), f.request.operation_id).unwrap().unwrap();
+            assert_eq!(row.has_live_heartbeat(service.clock.now().unix_timestamp() - INDEX_OWNER_STALE_AFTER), age <= INDEX_OWNER_STALE_AFTER);
+            eprintln!("fixed index admission: heartbeat={heartbeat} now={} age={age} stale_after={INDEX_OWNER_STALE_AFTER}", now.unix_timestamp());
+            service
+        });
         let service = continuation.as_ref().unwrap_or(&f.service);
         let mutation = || {
             Mutation::OperationAbandon(OperationAbandonInput {
@@ -158,6 +183,43 @@ fn retirement_preserving_admission_refuses_live_or_unrelated_owners_and_stale_ab
             &mut NoProgress,
             &CancellationToken::new(),
         );
+        if case == "stale_index" {
+            assert_eq!(result.code, crate::results::ResultCode::Ok, "{result:?}");
+            let db = f.db();
+            assert_eq!(
+                db.query_row("SELECT phase FROM context_retirement_records", [], |row| {
+                    row.get::<_, String>(0)
+                })
+                .unwrap(),
+                "abandoned"
+            );
+            assert_eq!(
+                db.query_row(
+                    "SELECT count(*) FROM context_retirement_preservations",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )
+                .unwrap(),
+                1
+            );
+            assert_eq!(
+                before.get("context_retirement_index_claims"),
+                registry_image(&db).get("context_retirement_index_claims"),
+                "stale takeover retains the genuine old spend"
+            );
+            assert!(recovery::owns_indexing(&db, index_owner.unwrap()).is_err());
+            assert!(
+                f.service
+                    .remote_safe_point(
+                        &f.request.root,
+                        &f.owner,
+                        RemoteOperationSafePoint::BeforeTransport
+                    )
+                    .is_err(),
+                "the matching old service/token is fenced"
+            );
+            continue;
+        }
         assert_eq!(
             result.code,
             if case == "stale_f2" {
