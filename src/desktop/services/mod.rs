@@ -6,15 +6,19 @@
 //! fails or fabricates a call. Failures in tests come from the library's
 //! own failure points and hooks.
 
+pub(crate) mod conflicts;
 pub(crate) mod created_contexts;
 pub(crate) mod drafts;
 pub(crate) mod edit_tabs;
 pub(crate) mod images;
 pub(crate) mod links;
+pub(crate) mod pending_conflicts;
 pub(crate) mod prompts;
 mod reads;
 pub(crate) mod release;
 pub(crate) mod requests;
+pub(crate) mod resends;
+pub(crate) mod resolutions;
 pub(crate) mod submissions;
 pub(crate) mod worker;
 
@@ -24,15 +28,23 @@ use futures::StreamExt;
 use gpui_kit::{App, AppContext, Entity};
 use manyhands::{
     drafts::{DraftError, DraftStore},
-    repository::{ContextPrepareIntent, MutationDataDto, RepositoryService, keys::KeyStore},
-    results::{Envelope, Outcome, PublicationEffect, ResultCode},
+    repository::{
+        ConflictDto, ContextPrepareIntent, Mutation, MutationDataDto, OperationId, PrepareDataDto,
+        ProgressStage, RepositoryService, keys::KeyStore,
+    },
+    results::{Envelope, Outcome, PublicationEffect, RecoveryActionKind, ResultCode},
 };
 
-use crate::desktop::model::operations::Operations;
+use crate::desktop::model::{
+    lifecycle_lock::{LockKey, LockState},
+    list_state::ListState,
+    operations::Operations,
+};
 use created_contexts::{ContextKey, CreatedContexts};
 use drafts::DraftRegistry;
 use edit_tabs::EditTabs;
 use release::Releases;
+use resolutions::{ResolutionStore, ResolutionStoreError};
 use submissions::Submissions;
 use worker::{WorkerEvent, WorkerHandle};
 
@@ -81,6 +93,10 @@ pub(crate) enum ReadKind {
     /// The registry's re-read of an item after a save, apart from `Item`,
     /// which the repository's tabs reload under at the same time.
     DraftItem,
+    /// The lifecycle dialog's reads of the titles of the tickets a closure
+    /// made ready (D5 A3), apart from `Item`, which the item's tabs reload
+    /// under as the run ends.
+    MadeReady,
     /// `observe_path`: the path a clicked link names, and any other path
     /// the desktop asks the library about.
     ObservePath,
@@ -91,6 +107,15 @@ pub(crate) enum ReadKind {
     /// A local image an editor shows, read from the tab's trees and
     /// decoded (`images`): no library call, but held like one.
     Image,
+    /// A conflict's reads (D5 B1): the remote `show_conflict`, or the
+    /// local inspection and its content reads.
+    Conflict,
+    /// The resolve sheet's read of its item's work folder (D5 B4), apart
+    /// from `Conflict` and from `Item`, which the tabs read under.
+    ConflictFolder,
+    /// Which pending rows hold a conflict to review (D5 B5), read after
+    /// the rows, apart from `Operations`.
+    PendingConflicts,
 }
 
 /// What a worker job does, so the seam can hold one kind and not another.
@@ -129,6 +154,12 @@ pub(crate) enum JobKind {
     Comment,
     SynchronizeItem,
     SynchronizeRepo,
+    ItemRepublish,
+    DocumentPromote,
+    TicketClose,
+    ConflictResolve,
+    LocalContextSync,
+    LocalContextResolve,
     ObserveHost,
 }
 
@@ -152,6 +183,11 @@ pub(crate) trait Backend: Send + Sync + 'static {
     /// open.
     fn drafts(&self) -> Result<&DraftStore, DraftStoreUnavailable>;
 
+    /// The kept resolution sets (D5 B3), in `resolutions` beside the
+    /// draft store's folder: the application data directory's in
+    /// production, the fixture's in tests; otherwise why it did not open.
+    fn resolutions(&self) -> Result<&ResolutionStore, ResolutionStoreError>;
+
     /// Awaited inside the read's future, before the blocking library call.
     fn read_gate(&self, _kind: ReadKind) -> Option<ReadGate> {
         None
@@ -166,21 +202,53 @@ pub(crate) trait Backend: Send + Sync + 'static {
     fn after_job(&self, _kind: JobKind) -> Option<Envelope<MutationDataDto>> {
         None
     }
+
+    /// Called on the worker thread with each progress stage a job of
+    /// `kind` reports, once the stage has been forwarded to the UI and
+    /// before the library goes on. A test may hold the job here; the
+    /// library may hold the repository lease meanwhile (L3 reports
+    /// `integrating` under it).
+    fn on_progress(&self, _kind: JobKind, _stage: ProgressStage) {}
+
+    /// Called after a prepare of `mutation` returns. An answer it gives
+    /// stands in place of the library's: a test's canned prepare answer
+    /// (D5 decision 9).
+    fn after_prepare(&self, _mutation: &Mutation) -> Option<Envelope<PrepareDataDto>> {
+        None
+    }
+
+    /// Called after a conflict read of `operation_id`, of the read kind
+    /// `kind`, returns. A conflict it gives stands in place of the
+    /// library's: a test's canned `ConflictDto` (D5 decision 9).
+    fn after_conflict_read(
+        &self,
+        _kind: ReadKind,
+        _operation_id: &OperationId,
+    ) -> Option<ConflictDto> {
+        None
+    }
 }
 
 /// The production backend: the library, with no delays.
 pub(crate) struct LibraryBackend {
     service: RepositoryService,
     drafts: Result<DraftStore, DraftStoreUnavailable>,
+    resolutions: Result<ResolutionStore, ResolutionStoreError>,
 }
 
 impl LibraryBackend {
-    /// A backend over `service` and the draft store's open result: the
-    /// desktop starts whether or not the store opened.
-    pub(crate) fn new(service: RepositoryService, drafts: Result<DraftStore, DraftError>) -> Self {
+    /// A backend over `service` and the open results of the draft store
+    /// and the resolutions store: the desktop starts whether or not they
+    /// opened.
+    pub(crate) fn new(
+        service: RepositoryService,
+        drafts: Result<DraftStore, DraftError>,
+        resolutions: Result<ResolutionStore, ResolutionStoreError>,
+    ) -> Self {
         Self {
             service,
             drafts: drafts.map_err(DraftStoreUnavailable::from),
+            resolutions,
         }
     }
 }
@@ -196,6 +264,10 @@ impl Backend for LibraryBackend {
 
     fn drafts(&self) -> Result<&DraftStore, DraftStoreUnavailable> {
         self.drafts.as_ref().map_err(|unavailable| *unavailable)
+    }
+
+    fn resolutions(&self) -> Result<&ResolutionStore, ResolutionStoreError> {
+        self.resolutions.as_ref().map_err(|error| *error)
     }
 }
 
@@ -219,6 +291,10 @@ pub(crate) struct Services {
     edit_tabs: Entity<EditTabs>,
     /// The comments this session posted, shared by every item tab.
     submissions: Entity<Submissions>,
+    /// What follows each lifecycle child's resolution once applied (R-10).
+    followups: resolutions::Followups,
+    /// What follows a lifecycle's resume or republish (D5 decision 10, A3).
+    resends: resends::Resends,
     /// Whether the workspace refreshes every listed repository once its
     /// list first loads. Tests that do not wait for the worker turn it
     /// off.
@@ -254,8 +330,19 @@ impl Services {
     /// sent from anywhere, the operation area among them, so the post is
     /// posting again and the attempt is a re-send (P10). Each in the order
     /// the worker sent them.
+    ///
+    /// A resolution's end has its kept set deleted once `show_request`
+    /// says its request finished (R-12), and the launch sweep does the same
+    /// for every set kept from before (`resolutions`).
+    ///
+    /// A lifecycle's resume answered `original_request_required` sends the
+    /// request it names again, and a republish done from a lifecycle's way
+    /// out sends that lifecycle on, before the request model has the answer
+    /// (`resends`).
     pub(crate) fn start(backend: Arc<dyn Backend>, cx: &mut App) -> Self {
         let (worker, mut events) = WorkerHandle::spawn(backend.clone());
+        resolutions::sweep_at_launch(&backend, cx);
+        let settling = backend.clone();
         let operations = cx.new(|_| Operations::default());
         let model = operations.downgrade();
         let drafts = cx.new(|_| DraftRegistry::new(backend.clone(), worker.clone()));
@@ -266,6 +353,12 @@ impl Services {
         let releasing = releases.downgrade();
         let submissions = cx.new(|_| Submissions::new(worker.clone()));
         let posts = submissions.downgrade();
+        let followups = resolutions::Followups::default();
+        let following = followups.clone();
+        let settled_followups = followups.clone();
+        let resending = worker.clone();
+        let resends = resends::Resends::default();
+        let resent = resends.clone();
         cx.spawn(async move |cx| {
             while let Some(event) = events.next().await {
                 let mut batch = vec![event];
@@ -276,6 +369,7 @@ impl Services {
                     let mut finished = Vec::new();
                     let mut prepared = Vec::new();
                     let mut posted = Vec::new();
+                    let mut settled = Vec::new();
                     for event in batch {
                         let ended = match &event {
                             WorkerEvent::Finished(id, _)
@@ -295,11 +389,16 @@ impl Services {
                                 _ => PostEvent::Ended(request.id),
                             });
                         }
-                        // A share of an item that published it: its saved
-                        // comments' chips clear (decision 14).
+                        // A share of an item that published it, whatever
+                        // sent it (a Share, a Republish…, a close or an
+                        // approval that publishes): its saved comments'
+                        // chips clear (decision 14, K-19).
                         if let WorkerEvent::Finished(id, envelope) = &event
                             && let Some(request) = operations.request(*id)
-                            && let requests::Intent::ItemSync { root, id: item, .. } =
+                            && let requests::Intent::ItemSync { root, id: item, .. }
+                            | requests::Intent::ItemRepublish { root, id: item, .. }
+                            | requests::Intent::TicketClose { root, id: item }
+                            | requests::Intent::DocumentPromote { root, id: item } =
                                 &request.intent
                             && matches!(
                                 envelope.effects.publication,
@@ -307,6 +406,46 @@ impl Services {
                             )
                         {
                             posted.push(PostEvent::ItemShared(root.clone(), item.clone()));
+                        }
+                        // A resolution's end, for its kept set (R-12,
+                        // R-25): its answer, or that it never reached the
+                        // library.
+                        if let Some(request) = ended
+                            && let Some(source) = resolutions::source_of(&request.intent)
+                        {
+                            // A lifecycle child's applied resolution sends
+                            // the lifecycle on, sheet open or not (R-10).
+                            if let WorkerEvent::Finished(_, envelope) = &event {
+                                following.ended(
+                                    request.request_id,
+                                    envelope.code,
+                                    operations,
+                                    &resending,
+                                );
+                            }
+                            settled.push(resolutions::Ended {
+                                request: request.request_id,
+                                source,
+                                answer: match &event {
+                                    WorkerEvent::Finished(_, envelope) => {
+                                        Some((envelope.code, envelope.effects.checkpoint))
+                                    }
+                                    _ => None,
+                                },
+                                retry: matches!(
+                                    &event,
+                                    WorkerEvent::Finished(_, envelope)
+                                        if envelope.recovery.iter().any(|action| {
+                                            action.action == RecoveryActionKind::RequestRetry
+                                        })
+                                ),
+                            });
+                        }
+                        // A run queued again leads on from here afresh.
+                        if let WorkerEvent::Queued(request) = &event
+                            && request.attempt > 1
+                        {
+                            resent.requeued(request.id);
                         }
                         // A comment queued again under its own request.
                         if let WorkerEvent::Queued(request) = &event
@@ -322,8 +461,13 @@ impl Services {
                             matches!(request.intent, requests::Intent::ContextPrepare { .. })
                                 .then(|| (request.id, ContextKey::of(&request.intent)))
                         });
+                        // A republish that never ran will not be done.
+                        if let WorkerEvent::Removed(id) | WorkerEvent::NotSent(id, _) = &event {
+                            resent.not_run(*id);
+                        }
                         let mut made_here = false;
                         if let WorkerEvent::Finished(id, envelope) = &event {
+                            resent.ended(*id, envelope, operations, &resending);
                             if let Some(request) = operations.request(*id) {
                                 made_here = made
                                     .update(cx, |created, _| {
@@ -341,11 +485,14 @@ impl Services {
                         operations.apply(event);
                     }
                     cx.notify();
-                    (finished, prepared, posted)
+                    (finished, prepared, posted, settled)
                 });
-                let Ok((finished, prepared, posted)) = applied else {
+                let Ok((finished, prepared, posted, settled)) = applied else {
                     break;
                 };
+                if !settled.is_empty() {
+                    resolutions::settle_finished(&settling, &settled_followups, settled, cx);
+                }
                 if !posted.is_empty() {
                     let retire = posts
                         .update(cx, |submissions, cx| {
@@ -418,6 +565,8 @@ impl Services {
             releases,
             edit_tabs: cx.new(|_| EditTabs::default()),
             submissions,
+            followups,
+            resends,
             launch_refresh: true,
         };
         drafts.update(cx, |registry, cx| {
@@ -452,6 +601,44 @@ impl Services {
         &self.operations
     }
 
+    /// Where the item `id` of the repository at `root` stands under the
+    /// lifecycle lock (D5 A2; R-21 to R-23): an open lifecycle dialog of
+    /// it, its lifecycle in the worker, or its L2 row.
+    pub(crate) fn lifecycle_lock(&self, root: &str, id: &str, cx: &App) -> LockState {
+        let operations = self.operations.read(cx);
+        let key = LockKey::new(root, id);
+        let held = operations.locks().operations(&key);
+        let in_flight = self
+            .worker
+            .in_flight(|intent| lifecycle_of(intent, &key, &held));
+        let loading = matches!(operations.pending().get(root), Some(ListState::Loading));
+        operations.locks().state(&key, in_flight, loading)
+    }
+
+    /// Whether a republish of the item `id` of `root` is queued or running.
+    pub(crate) fn republish_running(
+        &self,
+        root: &std::path::Path,
+        id: &manyhands::canonical::ItemId,
+    ) -> bool {
+        self.worker.in_flight(|intent| {
+            matches!(intent, requests::Intent::ItemRepublish { root: asked, id: asked_id, .. }
+                if asked == root && asked_id == id)
+        })
+    }
+
+    /// Whether a republish of the item `id` of `root` is queued or running,
+    /// or one confirmed from a lifecycle's way out waits to be done (D5
+    /// Part C; review I-2, R-30): no other Republish… of it is offered
+    /// meanwhile.
+    pub(crate) fn republishing(
+        &self,
+        root: &std::path::Path,
+        id: &manyhands::canonical::ItemId,
+    ) -> bool {
+        self.republish_running(root, id) || self.resends.waiting_for(root, id)
+    }
+
     /// The drafts this session knows of.
     pub(crate) fn drafts(&self) -> &Entity<DraftRegistry> {
         &self.drafts
@@ -479,9 +666,39 @@ impl Services {
         &self.submissions
     }
 
+    /// What follows each lifecycle child's resolution once applied.
+    pub(crate) fn followups(&self) -> &resolutions::Followups {
+        &self.followups
+    }
+
+    /// What follows a lifecycle's resume or republish.
+    pub(crate) fn resends(&self) -> &resends::Resends {
+        &self.resends
+    }
+
     #[cfg(all(test, feature = "desktop-test-support"))]
     pub(crate) fn backend(&self) -> &Arc<dyn Backend> {
         &self.backend
+    }
+}
+
+/// Whether `intent` is the lifecycle of `key`: its close or merge, or a
+/// resume of one of `operations`, its lifecycle operations.
+pub(crate) fn lifecycle_of(
+    intent: &requests::Intent,
+    key: &LockKey,
+    operations: &[String],
+) -> bool {
+    use requests::Intent;
+    let same_root = |root: &std::path::Path| root.to_str() == Some(key.root.as_str());
+    match intent {
+        Intent::TicketClose { root, id } | Intent::DocumentPromote { root, id } => {
+            same_root(root) && id.to_string() == key.id
+        }
+        Intent::OperationResume { root, operation_id } => {
+            same_root(root) && operations.contains(&operation_id.to_string())
+        }
+        _ => false,
     }
 }
 

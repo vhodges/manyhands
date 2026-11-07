@@ -1,12 +1,14 @@
 //! Navigation-list read scheduling, filters and result application.
 
-use super::Workspace;
+use std::path::PathBuf;
+
+use super::{Region, Workspace};
 use crate::desktop::{
     model::{
         list_state::ListState,
-        navigation::Resolution,
+        navigation::{Pane, Resolution},
         stamp::{RepoKey, Stamp},
-        tickets::TicketRead,
+        tickets::{TicketQuery, TicketRead},
     },
     services::ReadKind,
 };
@@ -163,6 +165,38 @@ impl Workspace {
             (Some(stamp), Some((_, resolved))) => self.read_tickets(stamp, resolved, true, cx),
             _ => cx.notify(),
         }
+    }
+
+    /// Open ready tickets (D5 design, A3, R-20): the repository at `root`
+    /// selected, its Tickets pane shown under Open and Ready, and the
+    /// navigation focused. A repository not yet selected keeps that query
+    /// through its selection: the list is read under it once it resolves.
+    pub(in crate::desktop::view) fn open_ready_tickets(
+        &mut self,
+        root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(key) = root.to_str().map(str::to_owned) else {
+            return;
+        };
+        let query = TicketQuery {
+            closure: ClosureFilter::Open,
+            readiness: Some(ReadinessFilter::Ready),
+        };
+        if self.navigation.selected() == Some(&key) {
+            match (self.tickets.set_query(query), self.resolved_selection()) {
+                (Some(stamp), Some((_, resolved))) => self.read_tickets(stamp, resolved, true, cx),
+                _ => cx.notify(),
+            }
+        } else {
+            // Selecting clears the list first, so nothing is read under the
+            // query for the repository shown until now.
+            self.select_repository(key, cx);
+            let _ = self.tickets.set_query(query);
+        }
+        self.show_pane(Pane::Tickets, window, cx);
+        self.focus_region(Region::Navigation, window, cx);
     }
 
     pub(in crate::desktop::view) fn open_selected_document(&mut self, cx: &mut Context<Self>) {

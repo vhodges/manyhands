@@ -251,6 +251,20 @@ impl Shell {
             .read_with(cx, |workspace, _| workspace.services().operations().clone())
     }
 
+    /// Locks the item `id` of `root` as an open lifecycle dialog would
+    /// (R-21), with no dialog: its tabs' edits wait. The lock stays for the
+    /// test. For the controls whose gate a test reaches without a real
+    /// stopped close or merge.
+    pub(crate) fn lock_item(&self, root: &Path, id: &str, cx: &mut TestAppContext) {
+        let holder = self.workspace.entity_id();
+        let locked = crate::desktop::model::lifecycle_lock::LockKey::new(&key(root), id);
+        self.operations(cx).update(cx, |operations, cx| {
+            operations.locks_mut().set_dialog(holder, locked, true);
+            cx.notify();
+        });
+        self.run(cx);
+    }
+
     /// The requests of this session that `pick` picks, newest first.
     pub(crate) fn requests(
         &self,

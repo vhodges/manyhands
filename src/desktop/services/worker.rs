@@ -111,6 +111,22 @@ pub(crate) enum RecordState {
     Unknown,
 }
 
+/// Why a request was, or was not, queued again (`WorkerHandle::retry_as`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Retried {
+    /// Queued again.
+    Requeued,
+    /// The worker holds it queued or running already.
+    AlreadyOut,
+    /// Quitting closed the queue.
+    Closed,
+    /// This worker never took it.
+    NotHeld,
+    /// Held and finished, and still left alone (R-78, or a Give up of a
+    /// command that cannot be given up).
+    Refused,
+}
+
 /// What a Give up found.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum GaveUp {
@@ -175,6 +191,14 @@ struct Job {
 }
 
 impl Job {
+    /// Whether its token was cancelled while it waited.
+    fn cancelled(&self) -> bool {
+        match &self.work {
+            Work::Execute { cancel, .. } | Work::GiveUp { cancel, .. } => cancel.is_cancelled(),
+            Work::ObserveHost { .. } => false,
+        }
+    }
+
     fn new(id: DesktopRequestId, work: Work, lane: Lane) -> Self {
         Self {
             id,
@@ -370,7 +394,16 @@ impl WorkerHandle {
     /// nothing (owner, 2026-10-28). "After" is the order attempts were
     /// queued in. True when it was queued again.
     pub(crate) fn retry(&self, id: DesktopRequestId, secret: Option<SecretPassphrase>) -> bool {
-        self.requeue(id, None, secret, false).is_some()
+        self.requeue(id, None, secret, false).is_ok()
+    }
+
+    /// `retry`, saying why it queued the request `id` again or did not
+    /// (Task 16 re-review, I-1).
+    pub(crate) fn retry_as(&self, id: DesktopRequestId) -> Retried {
+        match self.requeue(id, None, None, false) {
+            Ok(_) => Retried::Requeued,
+            Err(why) => why,
+        }
     }
 
     /// Gives up the request `id` (decision 8): queues a job, on its lane
@@ -380,9 +413,10 @@ impl WorkerHandle {
     /// request's answer. A finished one is only replayed, and `gave_up`
     /// says it was already finished. Refused, as a retry is, while the
     /// request is queued or running, its Give up or its retry, and for a
-    /// command that does not stop at safe points. True when queued.
+    /// command that cannot be given up (`Intent::can_be_given_up`). True
+    /// when queued.
     pub(crate) fn give_up(&self, id: DesktopRequestId) -> bool {
-        self.requeue(id, None, None, true).is_some()
+        self.requeue(id, None, None, true).is_ok()
     }
 
     /// Where the request `id`'s record stood after its last finished
@@ -426,7 +460,7 @@ impl WorkerHandle {
         id: DesktopRequestId,
         confirmation: ConfirmationId,
     ) -> Option<u32> {
-        self.requeue(id, Some(confirmation), None, false)
+        self.requeue(id, Some(confirmation), None, false).ok()
     }
 
     fn requeue(
@@ -435,25 +469,27 @@ impl WorkerHandle {
         confirmation: Option<ConfirmationId>,
         secret: Option<SecretPassphrase>,
         give_up: bool,
-    ) -> Option<u32> {
+    ) -> Result<u32, Retried> {
         let shared = self.shared();
         let mut state = shared.lock();
-        if state.closed
-            || state.queued(id)
+        if state.closed {
+            return Err(Retried::Closed);
+        }
+        if state.queued(id)
             || state
                 .running
                 .as_ref()
                 .is_some_and(|running| running.id == id)
         {
-            return None;
+            return Err(Retried::AlreadyOut);
         }
         // R-78, as the owner narrowed it (2026-10-28): a request is not sent
         // again once a later attempt of its item would be undone by it,
         // unless that later attempt was a release refused with nothing
         // touched (`Intent::kept_from_again_by`).
-        let asked = state.submitted.get(&id)?;
-        if give_up && !asked.intent.stops_at_safe_points() {
-            return None;
+        let asked = state.submitted.get(&id).ok_or(Retried::NotHeld)?;
+        if give_up && !asked.intent.can_be_given_up() {
+            return Err(Retried::Refused);
         }
         if state.submitted.values().any(|later| {
             later.sent > asked.sent
@@ -461,10 +497,10 @@ impl WorkerHandle {
                     .intent
                     .kept_from_again_by(&later.intent, later.answers.all_refused())
         }) {
-            return None;
+            return Err(Retried::Refused);
         }
         let sent = state.next_send();
-        let submitted = state.submitted.get_mut(&id)?;
+        let submitted = state.submitted.get_mut(&id).ok_or(Retried::NotHeld)?;
         submitted.attempt += 1;
         submitted.sent = sent;
         submitted.answers.queued();
@@ -506,7 +542,7 @@ impl WorkerHandle {
             }
         };
         admit(shared, &mut state, Job::new(id, work, lane));
-        Some(attempt)
+        Ok(attempt)
     }
 
     /// The mark of the newest attempt queued so far: one `sent_since`
@@ -687,6 +723,11 @@ fn submit(
     request_id: RequestId,
 ) -> DesktopRequestId {
     let mut state = shared.lock();
+    // The same resume, or the same lifecycle request, is never out twice
+    // (V16, M1): the one in flight stands for this call.
+    if let Some(out) = in_flight_twin(&state, &intent, request_id) {
+        return out;
+    }
     let id = next_id(&mut state);
     let sent = state.next_send();
     state.submitted.insert(
@@ -721,6 +762,54 @@ fn submit(
     };
     admit(shared, &mut state, Job::new(id, work, lane));
     id
+}
+
+/// The request in flight that `intent`, under `request_id`, would only
+/// duplicate: a resume of the same operation of the same repository, or a
+/// close or merge under the same library request ID. Queued, waiting out
+/// `busy`, or running; a finished one is no twin.
+fn in_flight_twin(
+    state: &State,
+    intent: &Intent,
+    request_id: RequestId,
+) -> Option<DesktopRequestId> {
+    let twin = |submitted: &Submitted| match (&submitted.intent, intent) {
+        (
+            Intent::OperationResume {
+                root: held,
+                operation_id: held_operation,
+            },
+            Intent::OperationResume { root, operation_id },
+        ) => held == root && held_operation == operation_id,
+        (
+            Intent::TicketClose { .. } | Intent::DocumentPromote { .. },
+            Intent::TicketClose { .. } | Intent::DocumentPromote { .. },
+        ) => submitted.request_id == request_id,
+        _ => false,
+    };
+    // One Stop was pressed on is ending: a call sent after the Stop is a
+    // new request, not that one.
+    let running = state
+        .running
+        .as_ref()
+        .filter(|running| {
+            !running
+                .cancel
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled)
+        })
+        .map(|running| running.id);
+    running
+        .into_iter()
+        .chain(
+            state
+                .user
+                .iter()
+                .chain(&state.background)
+                .filter(|job| !job.cancelled())
+                .map(|job| job.id),
+        )
+        .find(|id| state.submitted.get(id).is_some_and(twin))
 }
 
 fn next_id(state: &mut State) -> DesktopRequestId {
@@ -873,7 +962,12 @@ fn execute(
     if give_up {
         give_up_first(shared, backend.service(), id, request_id, &cancel);
     }
-    let mut progress = Forward { id, shared };
+    let mut progress = Forward {
+        id,
+        shared,
+        backend,
+        kind: intent.job_kind(),
+    };
     let envelope = backend.service().execute(
         MutationCall {
             request_id,
@@ -1087,7 +1181,9 @@ fn finish(shared: &Shared) {
 }
 
 /// The running job's progress sink. It only records acceptance and
-/// forwards a copy: it never calls back into the library.
+/// forwards a copy: it never calls back into the library. Then the
+/// backend hears of the stage (`Backend::on_progress`), where a test may
+/// hold the job.
 ///
 /// Every stage is reported after acceptance, and a same-ID re-entry
 /// reports later stages only (fact 10), so any stage marks the job
@@ -1095,6 +1191,8 @@ fn finish(shared: &Shared) {
 struct Forward<'a> {
     id: DesktopRequestId,
     shared: &'a Shared,
+    backend: &'a dyn Backend,
+    kind: JobKind,
 }
 
 impl ProgressSink for Forward<'_> {
@@ -1104,6 +1202,7 @@ impl ProgressSink for Forward<'_> {
         }
         self.shared
             .send(WorkerEvent::Progress(self.id, event.clone()));
+        self.backend.on_progress(self.kind, event.stage);
     }
 }
 

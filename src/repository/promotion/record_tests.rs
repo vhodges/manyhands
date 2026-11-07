@@ -693,7 +693,7 @@ fn service_fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService
     (data, root, service)
 }
 #[test]
-fn promotion_status_reports_parent_step_once_and_never_offers_boundary_resume() {
+fn promotion_status_reports_parent_step_once_and_offers_resume() {
     let (_data, root, service) = service_fixture();
     git2::Repository::init(root.path()).unwrap();
     let resolved = service.resolve_repository(root.path()).unwrap();
@@ -711,7 +711,7 @@ fn promotion_status_reports_parent_step_once_and_never_offers_boundary_resume() 
     let shown = service.show_operation(&resolved, r.operation_id).unwrap();
     assert_eq!(shown.state, "confirmed");
     assert_eq!(shown.completed_step.as_deref(), Some("confirmed"));
-    assert!(shown.next_action.is_none());
+    assert_eq!(shown.next_action, Some(OperationNextAction::Resume));
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     service
         .reserve_remote_operation(

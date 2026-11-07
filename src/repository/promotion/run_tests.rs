@@ -5188,3 +5188,98 @@ fn an_unreadable_flag_stops_a_child() {
     );
     assert!(matches!(*answer.borrow(), Some(SafePointRequest::Stop)));
 }
+
+/// What a run tells its observer, in order.
+pub(in super::super) struct Told(pub(in super::super) Vec<run::RunEvent>);
+impl run::RunObserver for Told {
+    fn event(&mut self, event: run::RunEvent) {
+        self.0.push(event);
+    }
+}
+
+/// D5 decision 11, R-14, R-16: a promotion tells its observer only the steps
+/// that run, in the order they run. A context primary already holds is not
+/// merged; with no publication remote nothing is synchronized or published;
+/// a request sent again past its context's synchronization starts no
+/// context child.
+#[test]
+fn a_promotion_tells_its_observer_only_the_steps_that_run() {
+    use run::RunEvent as E;
+    let told = |service: &RepositoryService, request| {
+        let mut told = Told(Vec::new());
+        run::run_with_io_observed(
+            &lifecycle::DocumentPromotionLifecycle,
+            service,
+            run::lifecycle_request(request),
+            &mut FakeIo::default(),
+            &mut told,
+        )
+        .unwrap();
+        told.0
+    };
+    let context =
+        E::ChildStarting(crate::repository::promotion::lifecycle_record::ChildRole::Context);
+    let primary =
+        E::ChildStarting(crate::repository::promotion::lifecycle_record::ChildRole::Primary);
+    // No publication remote: the merge and the tidy-up only.
+    let f = Fixture::new();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [E::Integrating, E::CleaningUp]
+    );
+    // The context is already in the primary, and there is no remote: only
+    // the tidy-up (R-14, R-16).
+    let f = Fixture::new();
+    checkout(&f.repo, f.context.head().unwrap().target().unwrap());
+    assert_eq!(told(&f.service, f.request()), [E::CleaningUp]);
+    // A remote: the context's child, the merge, the primary's child.
+    let f = Fixture::new();
+    f.remote();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [context, E::Integrating, primary, E::CleaningUp]
+    );
+    // The context is already in the primary, and a remote: the children
+    // run and the primary's publishes, with no merge between them (R-14).
+    let f = Fixture::new();
+    f.remote();
+    let merged = f.context.head().unwrap().target().unwrap();
+    checkout(&f.repo, merged);
+    f.repo
+        .reference("refs/remotes/origin/main", merged, true, "fixture")
+        .unwrap();
+    assert_eq!(
+        told(&f.service, f.request()),
+        [context, primary, E::CleaningUp]
+    );
+    // The same, and the remote never saw the context (no tracking branch
+    // for it): the cleanup-only path starts no context child either.
+    let f = Fixture::new();
+    f.remote();
+    let merged = f.context.head().unwrap().target().unwrap();
+    checkout(&f.repo, merged);
+    f.repo
+        .reference("refs/remotes/origin/main", merged, true, "fixture")
+        .unwrap();
+    f.repo
+        .find_reference(&format!("refs/remotes/origin/manyhands/document/{ITEM}"))
+        .unwrap()
+        .delete()
+        .unwrap();
+    assert_eq!(told(&f.service, f.request()), [primary, E::CleaningUp]);
+    // Sent again past the context's synchronization: no context child.
+    let f = Fixture::new();
+    f.remote();
+    let request = f.request();
+    let failing = RepositoryService::open_at_with_failure_point_for_testing(
+        f.data.path(),
+        FailurePoint::AfterContextSync,
+    )
+    .unwrap();
+    let _ = run::promote_with_io(&failing, request.clone(), &mut FakeIo::default());
+    let reopened = RepositoryService::open_at(f.data.path()).unwrap();
+    assert_eq!(
+        told(&reopened, request),
+        [E::Integrating, primary, E::CleaningUp]
+    );
+}

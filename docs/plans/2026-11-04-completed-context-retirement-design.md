@@ -40,6 +40,15 @@ status below, not approved proof/consent policy or historical review results.
 
 ## Baseline Facts
 
+**Integration re-grounding, 2026-11-07 UTC:** current incoming main is
+`1e5616af22630b08a84dc0fb42037135b385f81d`, including approved/closed D5,
+not the former `79c3931b` baseline. D5's shared lifecycle-only way-out,
+resumable-parent predicate and four progress stages compose with retirement's
+separate R/K routes, immutable cuts and fenced index finalization. No recovery
+ownership or product policy changes; D6's desktop Retire work is still excluded.
+The facts/review dates below retain their historical source scope; the
+execution ledger records the merge seams and new bounded evidence.
+
 **Historical planning grounding**, verified at `c0e93f87`, with implementation
 source equal to planning-base main. These are not claims about current source:
 

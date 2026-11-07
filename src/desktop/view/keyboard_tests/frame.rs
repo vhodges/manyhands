@@ -199,6 +199,7 @@ fn the_strip_header_chips_and_page_run_in_tab_order(cx: &mut TestAppContext) {
         "item-comments".into(),
         "item-edit".into(),
         "item-share".into(),
+        "item-lifecycle-action".into(),
         "chip-type".into(),
         "chip-status".into(),
         "chip-project".into(),
@@ -232,6 +233,7 @@ fn the_strip_header_chips_and_page_run_in_tab_order(cx: &mut TestAppContext) {
     walk.tab_to("tab", "item-edit", cx);
     for id in [
         "item-share",
+        "item-lifecycle-action",
         "chip-status",
         "chip-author",
         "chip-date",
@@ -247,6 +249,7 @@ fn the_strip_header_chips_and_page_run_in_tab_order(cx: &mut TestAppContext) {
         "chip-date",
         "chip-author",
         "chip-status",
+        "item-lifecycle-action",
         "item-share",
         "item-edit",
     ] {

@@ -4,10 +4,10 @@ use super::{Region, Workspace};
 use crate::desktop::{
     model::{
         operations::RecoveryStep,
-        stamp::{RepoKey, SettingsPage},
+        stamp::{RepoKey, SettingsPage, ViewScope},
     },
     services::{
-        ReadKind,
+        ReadKind, ReadResult,
         requests::{DesktopRequestId, Intent, Lane, RequestState},
         worker::CancelResult,
     },
@@ -21,7 +21,10 @@ use gpui_kit::{
     App, Context, FocusHandle, Window,
     component::{Root, WindowExt},
 };
-use manyhands::{drafts::DraftId, repository::OperationId};
+use manyhands::{
+    drafts::DraftId,
+    repository::{OperationId, OperationListDto},
+};
 use std::path::PathBuf;
 
 /// `route`, owned, for the window's update that opens it.
@@ -50,6 +53,7 @@ impl Workspace {
             .operations()
             .update(cx, |operations, _| operations.load_pending(root.clone()));
         let path = PathBuf::from(&root);
+        let read_root = root.clone();
         let read = self.services.read(
             ReadKind::Operations,
             stamp,
@@ -58,16 +62,61 @@ impl Workspace {
                 service.list_operations(&repo)
             },
             cx,
-            |this: &mut Self, stamp, result, cx| {
-                this.services.operations().update(cx, |operations, cx| {
-                    if operations.apply_pending(stamp, result) {
+            move |this: &mut Self, stamp, result, cx| {
+                let list = match &result {
+                    ReadResult::Ok(list) => Some(list.clone()),
+                    ReadResult::Busy | ReadResult::Failed(_) => None,
+                };
+                let applied = this.services.operations().update(cx, |operations, cx| {
+                    let applied = operations.apply_pending(stamp, result);
+                    if applied {
                         cx.notify();
                     }
+                    applied
                 });
+                if applied {
+                    this.read_pending_conflicts(read_root, list, cx);
+                }
             },
         );
         self.pending_reads.insert(root, read);
         cx.notify();
+    }
+
+    /// Which of `root`'s pending rows, `list` as just read, hold a conflict
+    /// to review (D5 B5): a read of its own after the rows, stamped, so
+    /// the rows and the lifecycle lock never wait for it. Rows that could
+    /// not be read offer none.
+    fn read_pending_conflicts(
+        &mut self,
+        root: RepoKey,
+        list: Option<OperationListDto>,
+        cx: &mut Context<Self>,
+    ) {
+        let stamp = self
+            .conflict_generations
+            .next(ViewScope::PendingConflicts(root.clone()));
+        let Some(list) = list else {
+            self.pending_conflicts.remove(&root);
+            self.pending_conflict_reads.remove(&root);
+            return;
+        };
+        let read = self.services.read_pending_conflicts(
+            PathBuf::from(&root),
+            list,
+            stamp,
+            cx,
+            |this: &mut Self, stamp, conflicts, cx| {
+                if !this.conflict_generations.is_current(&stamp) {
+                    return;
+                }
+                if let ViewScope::PendingConflicts(root) = stamp.scope {
+                    this.pending_conflicts.insert(root, conflicts);
+                    cx.notify();
+                }
+            },
+        );
+        self.pending_conflict_reads.insert(root, read);
     }
 
     /// Coalesce each batch's changed roots, while keeping prompt/quit order.
@@ -76,6 +125,7 @@ impl Workspace {
         // Confirmation observers close their dialogs before a prompt opens.
         // The Kit closes the top dialog only.
         cx.defer_in(window, |this, window, cx| this.show_prompt(window, cx));
+        self.stops_to_republish_answered(window, cx);
         self.quit_if_finished(cx);
         let changed = self
             .services
@@ -397,6 +447,11 @@ impl Workspace {
                 .request(id)
                 .is_some_and(|request| matches!(request.state, RequestState::Dismissed))
         });
+        // A dismissed run's follow-ups go (review M4), but for one a
+        // republish sends on (ruling (b)).
+        if dismissed {
+            self.services.resends().forget(id);
+        }
         // A pending save dismissed is over (ruling R22).
         if dismissed {
             self.services

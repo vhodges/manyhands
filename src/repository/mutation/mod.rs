@@ -59,6 +59,7 @@ mod reenter;
 mod replay;
 mod reply;
 mod settle;
+mod way_out;
 
 /// The synchronization a comment's operation publishes it by, for the
 /// conflict read (R-5).
@@ -202,6 +203,7 @@ pub(in super::super) fn finish_recorded_retirement(
 }
 pub(super) use records::migrate as migrate_request_tables;
 pub(super) use records::{operation_owner, release_operation_owner};
+pub use way_out::{LifecycleWayOut, lifecycle_prepare_way_out, lifecycle_way_out};
 
 /// Retirement's claimed refresh completes the old request without releasing its
 /// identity, in the receipt/journal/Z transaction. A stale executor cannot settle.

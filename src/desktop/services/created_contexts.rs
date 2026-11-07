@@ -18,7 +18,7 @@ use std::{collections::HashSet, path::PathBuf};
 
 use manyhands::{
     canonical::ItemId,
-    repository::{AuthoringKind, ItemDtoKind, MutationDataDto},
+    repository::{AuthoringKind, ItemDtoKind, LifecycleCleanupState, MutationDataDto},
     results::{CheckpointEffect, Envelope, ResultCode},
 };
 
@@ -130,12 +130,27 @@ impl CreatedContexts {
     /// commit, and its release would be refused. Any other answer, and any
     /// other request, changes nothing. True when the answer made the
     /// context: a tab that closed while it prepared releases it then
-    /// (R-37).
+    /// (R-37). A close or merge, or a resume of one, whose tidy-up is
+    /// complete takes its item's out: the context is retired (D5 A4).
     pub(crate) fn finished(
         &mut self,
         intent: &Intent,
         envelope: &Envelope<MutationDataDto>,
     ) -> bool {
+        // A close or merge tidied up retired the item's context (D5 A4).
+        if let Some(MutationDataDto::Lifecycle(data)) = &envelope.data
+            && data.cleanup == Some(LifecycleCleanupState::Complete)
+            && matches!(
+                intent,
+                Intent::TicketClose { .. }
+                    | Intent::DocumentPromote { .. }
+                    | Intent::OperationResume { .. }
+            )
+            && let Some(root) = intent.root().and_then(|root| root.to_str())
+        {
+            self.remove(&ContextKey::new(root, data.kind, &data.item_id));
+            return false;
+        }
         let Some(key) = ContextKey::of(intent) else {
             return false;
         };

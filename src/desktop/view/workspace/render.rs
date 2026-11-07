@@ -48,6 +48,7 @@ impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_tickets(window, cx);
         self.apply_review(window, cx);
+        self.open_deferred_republish(window, cx);
         self.sync_sheet(window, cx);
         if let Some(region) = self.focused_region(window, cx) {
             self.last_region = Some(region);

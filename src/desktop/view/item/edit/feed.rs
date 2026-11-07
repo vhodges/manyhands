@@ -206,8 +206,10 @@ impl ItemPane {
         }
         self.sync_status(cx);
         // Done waits for a draft still beginning (design, Done and leaving,
-        // step 4).
+        // step 4), and so does the lifecycle lock's ending of a clean
+        // session.
         self.follow_done(cx);
+        self.lock_changed(cx);
         cx.notify();
     }
 

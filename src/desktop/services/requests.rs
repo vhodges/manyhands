@@ -53,6 +53,15 @@ impl CommentBody {
     }
 }
 
+/// One path's resolution as Save resolution sends it: the token the
+/// conflict read gave the path, and the whole text that is to be its
+/// result. It derives neither `Debug` nor `Display`: it holds item text.
+#[derive(Clone)]
+pub(crate) struct PathResolution {
+    pub token: String,
+    pub source: String,
+}
+
 /// One command the desktop can ask the library for, with the values it
 /// was asked with. One variant per command D1 offers, and the two saves
 /// of a draft.
@@ -259,6 +268,55 @@ pub(crate) enum Intent {
     RepoSync {
         root: PathBuf,
     },
+    /// Republish… (D5 Part C): an item's editing branch, which the remote
+    /// deleted, pushed to it again at the local commit the preview showed.
+    /// Confirmed: ordinary sharing never recreates a deleted branch.
+    ItemRepublish {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+    },
+    /// Approve and merge…: a document's work merged into the primary
+    /// branch, shared, and tidied up. No identity or input: the library
+    /// takes the configured identity (C5 decision 6).
+    DocumentPromote {
+        root: PathBuf,
+        id: ItemId,
+    },
+    /// Close ticket…: a ticket marked closed, merged into the primary
+    /// branch, shared, and tidied up. `closed_by` is the configured
+    /// identity (C5 decision 6).
+    TicketClose {
+        root: PathBuf,
+        id: ItemId,
+    },
+    /// Save resolution of a remote synchronization's conflict (D5 B3): the
+    /// synchronization, a comment's operation or a lifecycle's, as the
+    /// read was asked by; the read's observation; and every path's result.
+    /// It holds item text.
+    ConflictResolve {
+        root: PathBuf,
+        operation_id: OperationId,
+        observation: String,
+        resolutions: Vec<PathResolution>,
+    },
+    /// Repair locally… (D5 B6): main brought into the item's work context,
+    /// from the observation `observe_local_context_sync` gave.
+    LocalContextSync {
+        root: PathBuf,
+        kind: AuthoringKind,
+        id: ItemId,
+        observation: String,
+    },
+    /// Save resolution of a local synchronization's conflict (D5 B3), with
+    /// the inspection's observation (R-11) and every path's result. It
+    /// holds item text.
+    LocalContextResolve {
+        root: PathBuf,
+        operation_id: OperationId,
+        observation: String,
+        resolutions: Vec<PathResolution>,
+    },
 }
 
 impl Intent {
@@ -277,7 +335,10 @@ impl Intent {
             | Self::HostReplace { .. }
             | Self::OperationAbandon { .. }
             | Self::DocumentRepair { .. }
-            | Self::TicketRepair { .. } => true,
+            | Self::TicketRepair { .. }
+            | Self::ItemRepublish { .. }
+            | Self::DocumentPromote { .. }
+            | Self::TicketClose { .. } => true,
             Self::RemoteAdd { .. }
             | Self::RemoteSelect { .. }
             | Self::IndexRefresh { .. }
@@ -298,7 +359,23 @@ impl Intent {
             | Self::FolderCreate { .. }
             | Self::CommentAdd { .. }
             | Self::ItemSync { .. }
-            | Self::RepoSync { .. } => false,
+            | Self::RepoSync { .. }
+            | Self::ConflictResolve { .. }
+            | Self::LocalContextSync { .. }
+            | Self::LocalContextResolve { .. } => false,
+        }
+    }
+
+    /// What Activity calls the command, in a repository whose primary
+    /// branch is `primary` when known: a share of it names it (R-35b), as
+    /// the lifecycle dialog does; every other command is its `label`.
+    pub(crate) fn label_in(&self, primary: Option<&str>) -> String {
+        match self {
+            Self::RepoSync { .. } => format!(
+                "Share {}",
+                crate::desktop::model::operations::primary_name(primary)
+            ),
+            _ => self.label().to_owned(),
         }
     }
 
@@ -338,6 +415,12 @@ impl Intent {
             Self::CommentAdd { .. } => "Post comment",
             Self::ItemSync { .. } => "Share item",
             Self::RepoSync { .. } => "Share main",
+            Self::ItemRepublish { .. } => "Republish",
+            Self::DocumentPromote { .. } => "Approve and merge",
+            Self::TicketClose { .. } => "Close ticket",
+            Self::ConflictResolve { .. } => "Resolve conflict",
+            Self::LocalContextSync { .. } => "Repair locally",
+            Self::LocalContextResolve { .. } => "Resolve local conflict",
         }
     }
 
@@ -369,7 +452,13 @@ impl Intent {
             | Self::TicketRepair { root, .. }
             | Self::CommentAdd { root, .. }
             | Self::ItemSync { root, .. }
-            | Self::RepoSync { root } => Some(root),
+            | Self::RepoSync { root }
+            | Self::ItemRepublish { root, .. }
+            | Self::DocumentPromote { root, .. }
+            | Self::TicketClose { root, .. }
+            | Self::ConflictResolve { root, .. }
+            | Self::LocalContextSync { root, .. }
+            | Self::LocalContextResolve { root, .. } => Some(root),
             Self::KeyGenerate { .. }
             | Self::KeyImport { .. }
             | Self::KeySelect { .. }
@@ -412,7 +501,13 @@ impl Intent {
             | Self::TicketRepair { .. }
             | Self::CommentAdd { .. }
             | Self::ItemSync { .. }
-            | Self::RepoSync { .. } => true,
+            | Self::RepoSync { .. }
+            | Self::ItemRepublish { .. }
+            | Self::DocumentPromote { .. }
+            | Self::TicketClose { .. }
+            | Self::ConflictResolve { .. }
+            | Self::LocalContextSync { .. }
+            | Self::LocalContextResolve { .. } => true,
             Self::RepoRemove { .. }
             | Self::RepoIdentitySet { .. }
             | Self::RemoteAdd { .. }
@@ -429,16 +524,34 @@ impl Intent {
         }
     }
 
-    /// Whether the library honours a cancellation after accepting the
-    /// command, at a synchronization's safe points (fact 9): the comment,
-    /// the two syncs and `operation resume`. Every other command, the saves
-    /// among them, cannot be stopped once accepted.
+    /// Whether the call's cancellation token is honoured after the library
+    /// accepts the command, at a synchronization's safe points (fact 9): the
+    /// comment, the two syncs, a republish (P21), `operation resume`, a
+    /// promotion or closure, which stops between its steps (D5 fact 2), a
+    /// local synchronization and its resolution, and a remote resolution.
+    /// Every other command, the saves among them, cannot be stopped once
+    /// accepted.
+    ///
+    /// This is not the library's `Command::stops_at_safe_points`
+    /// (`R/mutation/command.rs:407-414`), which says whether `request
+    /// cancel` reaches a stopped request between calls. The two disagree
+    /// for `ConflictResolve` (as for `OperationResume`): its continuation
+    /// looks at the call's token (`bind/conflict.rs:877-879`), but `request
+    /// cancel` never reaches it, and its record goes on any stop
+    /// (`bind/conflict.rs:1111-1114`). So it is never given up
+    /// (`can_be_given_up`; R-24).
     pub(crate) fn stops_at_safe_points(&self) -> bool {
         match self {
             Self::OperationResume { .. }
             | Self::CommentAdd { .. }
             | Self::ItemSync { .. }
-            | Self::RepoSync { .. } => true,
+            | Self::RepoSync { .. }
+            | Self::ItemRepublish { .. }
+            | Self::DocumentPromote { .. }
+            | Self::TicketClose { .. }
+            | Self::ConflictResolve { .. }
+            | Self::LocalContextSync { .. }
+            | Self::LocalContextResolve { .. } => true,
             Self::RepoCreate { .. }
             | Self::RepoEnable { .. }
             | Self::RepoRemove { .. }
@@ -468,6 +581,14 @@ impl Intent {
             | Self::DocumentRepair { .. }
             | Self::TicketRepair { .. } => false,
         }
+    }
+
+    /// Whether Give up may send the request again (decision 8; R-24): a
+    /// command that stops at safe points, but for a remote resolution. Its
+    /// resend after a stop may checkpoint the resolution and still read as
+    /// already finished, since no record of it stands between calls.
+    pub(crate) fn can_be_given_up(&self) -> bool {
+        self.stops_at_safe_points() && !matches!(self, Self::ConflictResolve { .. })
     }
 
     /// R-78 (owner, 2026-10-26): whether sending this request again, once
@@ -569,6 +690,12 @@ impl Intent {
             Self::CommentAdd { .. } => JobKind::Comment,
             Self::ItemSync { .. } => JobKind::SynchronizeItem,
             Self::RepoSync { .. } => JobKind::SynchronizeRepo,
+            Self::ItemRepublish { .. } => JobKind::ItemRepublish,
+            Self::DocumentPromote { .. } => JobKind::DocumentPromote,
+            Self::TicketClose { .. } => JobKind::TicketClose,
+            Self::ConflictResolve { .. } => JobKind::ConflictResolve,
+            Self::LocalContextSync { .. } => JobKind::LocalContextSync,
+            Self::LocalContextResolve { .. } => JobKind::LocalContextResolve,
         }
     }
 }

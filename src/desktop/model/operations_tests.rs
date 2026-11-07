@@ -2,8 +2,10 @@ use std::path::PathBuf;
 
 use manyhands::{
     repository::{
-        OperationAction, OperationDto, OperationFamily, OperationId, OperationListDto,
-        OperationNextAction, OperationOwner, ProgressEvent, ProgressStage, RequestId,
+        AuthoringKind, ConflictNextAction, ConflictNextDto, MutationDataDto, OperationAction,
+        OperationDto, OperationFamily, OperationId, OperationListDto, OperationNextAction,
+        OperationOwner, ProgressEvent, ProgressStage, RequestId,
+        SynchronizationConflictMutationDto, SynchronizationConflictType,
     },
     results::{Effects, Envelope, Outcome, RecoveryActionKind, ResultCode, Scope},
 };
@@ -428,12 +430,12 @@ fn pending_operations_load_per_repository_and_drop_stale_reads() {
 
 /// Resume is offered for a local operation waiting to be resumed, and
 /// for a remote item or repository synchronization (E-10, decision 11);
-/// a local-context synchronization waiting for it shows Resume
-/// unavailable, with why (D5). No local recipe leaves a pending
-/// synchronization waiting to be resumed, so the rows are built here;
-/// production code never builds one.
+/// a local-context synchronization waiting for it offers Resume too (D5
+/// B6, E-5). No local recipe leaves a pending synchronization waiting to
+/// be resumed, so the rows are built here; production code never builds
+/// one.
 #[test]
-fn resume_is_offered_for_a_local_operation_and_not_for_a_synchronization() {
+fn resume_is_offered_for_a_local_operation_and_a_synchronization() {
     let local = operation(
         OperationFamily::Local,
         OperationAction::SaveTicket,
@@ -460,10 +462,7 @@ fn resume_is_offered_for_a_local_operation_and_not_for_a_synchronization() {
         OperationAction::SynchronizeContext,
         Some(OperationNextAction::Resume),
     );
-    assert_eq!(
-        resume_offer(&synchronization),
-        ResumeOffer::Unavailable(SYNCHRONIZATION_UNAVAILABLE)
-    );
+    assert_eq!(resume_offer(&synchronization), ResumeOffer::Offered);
     assert_eq!(
         SYNCHRONIZATION_UNAVAILABLE,
         "Synchronization is not available yet"
@@ -515,11 +514,11 @@ fn a_comments_rows_offer_resume_only_for_its_local_work() {
     assert_eq!(resume_offer(&unnamed), ResumeOffer::NotOffered);
 }
 
-/// A synchronization of an item's context with no remote stays
-/// unavailable for Resume (D5), and so does one of the primary branch
-/// with no remote; neither is offered Abandon.
+/// A synchronization of an item's context with no remote offers Resume
+/// (D5 B6, E-5), and so does one of the primary branch with no remote;
+/// neither is offered Abandon.
 #[test]
-fn resume_is_not_offered_for_a_local_context_sync() {
+fn resume_is_offered_for_a_local_context_sync() {
     for action in [
         OperationAction::SynchronizeContext,
         OperationAction::SynchronizePrimary,
@@ -529,10 +528,7 @@ fn resume_is_not_offered_for_a_local_context_sync() {
             action,
             Some(OperationNextAction::Resume),
         );
-        assert_eq!(
-            resume_offer(&local),
-            ResumeOffer::Unavailable(SYNCHRONIZATION_UNAVAILABLE)
-        );
+        assert_eq!(resume_offer(&local), ResumeOffer::Offered);
         assert!(!abandon_offered(&local));
     }
 }
@@ -843,4 +839,116 @@ fn a_host_observation_is_kept_for_the_page_that_asked() {
     assert!(operations.observation(DesktopRequestId(8)).is_none());
     assert!(operations.requests().is_empty());
     assert!(operations.take_changed().is_empty());
+}
+
+/// A promotion's or closure's parent row (L2) is listed as remote work
+/// with Resume, but it is not a synchronization: `resume_offer` does not
+/// offer it, nor show it unavailable as a local-context synchronization
+/// is. Its own row offers Resume instead (D5 Part C,
+/// `view/operations/resume.rs`). It is never offered Abandon. The rows are
+/// built here as `read/status.rs` lists them.
+#[test]
+fn a_lifecycle_row_is_not_a_synchronization() {
+    for action in [OperationAction::Promote, OperationAction::Close] {
+        let mut row = operation(
+            OperationFamily::Remote,
+            action,
+            Some(OperationNextAction::Resume),
+        );
+        row.item_id = Some("01ARZ3NDEKTSV4RRFFQ69G5FS0".to_owned());
+        row.state = "integrating".to_owned();
+        row.completed_step = Some("integrating".to_owned());
+        assert_eq!(resume_offer(&row), ResumeOffer::NotOffered, "{action:?}");
+        assert!(!abandon_offered(&row), "{action:?}");
+
+        row.next_action = None;
+        assert_eq!(resume_offer(&row), ResumeOffer::NotOffered, "{action:?}");
+    }
+}
+
+/// B3, B4: what settles a conflict clears its review, the banner's and the
+/// entries': a resolution applied, found already applied, or applied with
+/// its hand-off owed (`discovery_pending`, a Resume on the row away from
+/// done: nothing is left to choose); a resume that finds the repair made
+/// outside already in place (`already_applied`) as one answered ok does.
+/// Another operation's answer, or a resolution that did not apply, leaves it.
+#[test]
+fn what_settles_a_conflict_clears_its_review() {
+    const SYNCHRONIZATION: &str = "01M4CC0VN1KTQFSVR99378TDHV";
+    const OTHER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FY9";
+    let root = || PathBuf::from("/fixture/a");
+    let operation = |text: &str| OperationId::parse(text).unwrap();
+    let resolve = || Intent::ConflictResolve {
+        root: root(),
+        operation_id: operation(SYNCHRONIZATION),
+        observation: String::new(),
+        resolutions: Vec::new(),
+    };
+    let resume = |text: &str| Intent::OperationResume {
+        root: root(),
+        operation_id: operation(text),
+    };
+    let answer = |code| {
+        Envelope::<MutationDataDto>::classified_mutation(
+            "conflict resolve",
+            Scope::default(),
+            false,
+            code,
+            Effects::not_requested(),
+            false,
+        )
+    };
+    let conflicted = answer(ResultCode::RecoveryRequired).with_data(
+        MutationDataDto::SynchronizationConflict(SynchronizationConflictMutationDto {
+            r#type: SynchronizationConflictType::SynchronizationConflict,
+            conflict: ConflictNextDto {
+                operation_id: SYNCHRONIZATION.to_owned(),
+                next_action: ConflictNextAction::Resolve,
+            },
+        }),
+    );
+    for (intent, code, settled) in [
+        (resolve(), ResultCode::Ok, true),
+        (resolve(), ResultCode::AlreadyApplied, true),
+        (resolve(), ResultCode::DiscoveryPending, true),
+        (resolve(), ResultCode::ExternalChange, false),
+        (resume(SYNCHRONIZATION), ResultCode::Ok, true),
+        (resume(SYNCHRONIZATION), ResultCode::AlreadyApplied, true),
+        (resume(SYNCHRONIZATION), ResultCode::RecoveryRequired, false),
+        (resume(OTHER), ResultCode::AlreadyApplied, false),
+    ] {
+        let mut operations = Operations::default();
+        let share = DesktopRequest {
+            intent: Intent::ItemSync {
+                root: root(),
+                kind: AuthoringKind::Ticket,
+                id: "01M4CC0VN2K8DBHNMZ46NTX5JJ".parse().unwrap(),
+            },
+            ..request(1)
+        };
+        operations.apply(WorkerEvent::Queued(share));
+        operations.apply(WorkerEvent::Started(DesktopRequestId(1)));
+        operations.apply(WorkerEvent::Finished(
+            DesktopRequestId(1),
+            Box::new(conflicted.clone()),
+        ));
+        assert!(operations.review(DesktopRequestId(1)).is_some());
+        let settling = DesktopRequest {
+            intent: intent.clone(),
+            ..request(2)
+        };
+        operations.apply(WorkerEvent::Queued(settling));
+        operations.apply(WorkerEvent::Started(DesktopRequestId(2)));
+        operations.apply(WorkerEvent::Finished(
+            DesktopRequestId(2),
+            Box::new(answer(code)),
+        ));
+        assert_eq!(
+            operations.review(DesktopRequestId(1)).is_none(),
+            settled,
+            "{} answered {}",
+            intent.label(),
+            code.as_str()
+        );
+    }
 }

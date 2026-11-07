@@ -280,8 +280,12 @@ the durable consent boundary. The UI never reports cleanup success solely
 because primary integration succeeded.
 
 Conflicts have base/local/remote views and an editable result, with a path list
-and explicit Mark resolved action. Accepting one side is deliberate per file;
-there is no automatic winner. Canonical resolutions must validate and retain
+and explicit Save resolution action. Accepting one side is deliberate per file;
+there is no automatic winner. Amended 2026-11-04 by D5 (decision 4): the
+action is named Save resolution, as in the
+[resolve conflict sheet](../design/05-sheets-and-dialogs.md#resolve-conflict-sheet-2g--920-px).
+The sheet's choices are made per part, and each is a deliberate choice for
+its file: no part's side is chosen automatically. Canonical resolutions must validate and retain
 expected observations before the domain service checkpoints them. Markdown
 markers alone are not the definition of an unresolved Git conflict. A stale
 resolution stays recoverable and requires a refreshed comparison.

@@ -88,6 +88,16 @@ authorizes implementation, not separately gated lifecycle actions.
 
 ## Entry Evidence And Dependency Boundary
 
+**Integration re-grounding, 2026-11-07 UTC:** incoming `origin/main`
+`1e5616af22630b08a84dc0fb42037135b385f81d` includes the approved, closed D5
+ticket `01M4CC0VN2K8DBHNMZ46NTX5JJ` and replaces `79c3931b` as this branch's
+current integration baseline. Both products are retained: D5's lifecycle
+way-out/resume/progress and this ticket's guarded retirement, independent
+child recovery and default-poll non-cleanup. D6's explicit Retire action
+remains owed. The paragraphs below are historical entry/Task 0 evidence,
+not a current prohibition on consuming now-merged D5. Merge-delta SPEC then
+QUALITY and the outstanding final runtime gates remain required.
+
 This is the shared-library gap's own ticket, not a new numbered Wave Cycle.
 There are no ticket `deps`. C5 is on the planning base. D5 is in progress on its
 own branch and overlaps mutation exports, CLI lifecycle rendering and the RFCs;

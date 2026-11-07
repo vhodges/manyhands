@@ -2,7 +2,10 @@
 //! closure checkpoint, and `close_ticket` over the one generic lifecycle
 //! runner (C3).
 use crate::canonical::ItemId;
-use crate::repository::promotion::lifecycle::CancellationProbe;
+use crate::repository::promotion::{
+    lifecycle::CancellationProbe,
+    run::{RunObserver, Unobserved},
+};
 use crate::repository::{
     ConfirmedCommitIdentity, ExpectedConfiguration, IndexPending, OperationId, PlannedCleanup,
     PlannedIntegration, PlannedPublication, PromotionCleanup, PromotionIntegration,
@@ -362,16 +365,18 @@ impl RepositoryService {
         request: CloseTicketRequest,
         session: &mut SessionCredentials<P>,
     ) -> Result<TicketClosureResult, TicketClosureError> {
-        lifecycle::close(self, request, session, None)
+        lifecycle::close(self, request, session, None, &mut Unobserved)
     }
-    /// `close_ticket`, stopping at each safe point when `probe` says so.
+    /// `close_ticket`, stopping at each safe point when `probe` says so, and
+    /// telling `progress` of its steps (D5 decision 11).
     pub(super) fn close_ticket_observed<P: SessionCredentialProvider>(
         &self,
         request: CloseTicketRequest,
         session: &mut SessionCredentials<P>,
         probe: CancellationProbe,
+        progress: &mut dyn RunObserver,
     ) -> Result<TicketClosureResult, TicketClosureError> {
-        lifecycle::close(self, request, session, Some(probe))
+        lifecycle::close(self, request, session, Some(probe), progress)
     }
     /// Ask an unfinished closure to stop at its next safe point. `false` when
     /// no unfinished closure has this ID.

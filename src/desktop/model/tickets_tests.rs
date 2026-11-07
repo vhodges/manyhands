@@ -168,6 +168,34 @@ fn a_filter_change_drops_the_last_filters_read() {
     assert_eq!(model.query().closure, ClosureFilter::All);
 }
 
+/// D5 Task 8 (Open ready tickets): a whole query set at once is kept with
+/// nothing loaded and reads nothing; with a repository loaded it moves the
+/// stamp on, so a read made under the last query is dropped.
+#[test]
+fn set_query_keeps_the_query_and_drops_the_last_read() {
+    let fixture = Fixture::new();
+    let list = empty(&fixture);
+    let mut model = Tickets::default();
+    let ready = TicketQuery {
+        closure: ClosureFilter::Open,
+        readiness: Some(ReadinessFilter::Ready),
+    };
+    assert_eq!(model.set_query(ready), None, "nothing loaded");
+    assert_eq!(model.query(), ready);
+
+    let before = model.load("/a".to_owned());
+    let blocked = TicketQuery {
+        closure: ClosureFilter::Closed,
+        readiness: Some(ReadinessFilter::Blocked),
+    };
+    let after = model.set_query(blocked).expect("a repository is loaded");
+    assert_eq!(model.query(), blocked);
+    assert!(!model.apply(before, ReadResult::Ok(list.clone())));
+    assert!(matches!(model.state(), ListState::Loading));
+    assert!(model.apply(after, ReadResult::Ok(list)));
+    assert!(matches!(model.state(), ListState::Ready { .. }));
+}
+
 const BLOCKER: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD0";
 const WAITS: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD1";
 const MISSING: &str = "01ARZ3NDEKTSV4RRFFQ69G5FD2";

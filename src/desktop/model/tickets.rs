@@ -260,6 +260,14 @@ impl Tickets {
         Some(self.load(repo))
     }
 
+    /// Lists the tickets `query` asks for from now on. The stamp to read
+    /// under, when a repository is loaded.
+    pub(crate) fn set_query(&mut self, query: TicketQuery) -> Option<Stamp> {
+        self.query = query;
+        let repo = self.repo.clone()?;
+        Some(self.load(repo))
+    }
+
     /// Lists the tickets of `readiness` from now on, or ready or not with
     /// none. The stamp to read under, when a repository is loaded.
     pub(crate) fn set_readiness(&mut self, readiness: Option<ReadinessFilter>) -> Option<Stamp> {

@@ -2,7 +2,7 @@
 
 use super::Workspace;
 use crate::desktop::{
-    model::stamp::{RepoKey, Stamp},
+    model::stamp::{RepoKey, Stamp, ViewScope},
     services::{
         ReadKind,
         requests::{Intent, Lane},
@@ -50,6 +50,13 @@ impl Workspace {
             .map(|rows| rows.iter().map(|entry| entry.key().clone()).collect())
     }
 
+    /// Reads every listed repository's pending operations again.
+    pub(super) fn reload_pending(&mut self, cx: &mut Context<Self>) {
+        for root in self.listed().unwrap_or_default() {
+            self.load_pending(root, cx);
+        }
+    }
+
     /// Refresh on launch once; read pending operations only for new roots.
     fn repositories_loaded(&mut self, cx: &mut Context<Self>) {
         let Some(roots) = self.listed() else {
@@ -75,6 +82,21 @@ impl Workspace {
             cx.notify();
         });
         self.pending_reads.retain(|root, _| roots.contains(root));
+        // A removed repository's conflict offers go, and a read of them
+        // still running lands on nothing.
+        let gone: Vec<RepoKey> = self
+            .pending_conflicts
+            .keys()
+            .chain(self.pending_conflict_reads.keys())
+            .filter(|root| !roots.contains(root))
+            .cloned()
+            .collect();
+        for root in gone {
+            self.conflict_generations
+                .next(ViewScope::PendingConflicts(root.clone()));
+            self.pending_conflicts.remove(&root);
+            self.pending_conflict_reads.remove(&root);
+        }
         for root in roots {
             if !self.pending_reads.contains_key(&root) {
                 self.load_pending(root, cx);

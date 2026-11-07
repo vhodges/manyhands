@@ -133,7 +133,9 @@ impl ItemPane {
         if !self.session_kept() {
             return banners;
         }
-        let available = self.edit_available(cx);
+        // While the item's close or merge is unfinished, it waits, saying
+        // so (R-23).
+        let available = self.edit_available(cx) && !self.edits_wait(cx);
         let continue_editing = Button::new("item-kept-continue")
             .label(CONTINUE_EDITING)
             .small()
@@ -141,6 +143,11 @@ impl ItemPane {
             .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
                 this.edit_requested(window, cx);
             }));
+        let continue_editing = self.locked_note(
+            "item-kept-continue-locked",
+            continue_editing.into_any_element(),
+            cx,
+        );
         let discard = div()
             .id("item-kept-discard-focus")
             .track_focus(&self.edit.kept_discard)

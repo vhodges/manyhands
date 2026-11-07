@@ -20,7 +20,7 @@ use futures::channel::oneshot;
 use gpui_kit::{
     AnyElement, ClickEvent, Context, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled, Subscription, TestSupportExt, Window,
-    component::{Sizable, button::Button, h_flex},
+    component::{Disableable, Sizable, button::Button, h_flex},
     div, px,
 };
 use manyhands::{
@@ -244,6 +244,9 @@ impl ItemPane {
             return None;
         }
         let colors = item_colors(cx);
+        // Retry sharing and Unlock… send the post again: they wait for the
+        // lifecycle lock (R-23).
+        let waits = self.edits_wait(cx);
         match &result.outcome {
             CommentOutcome::SavedHere => Some(
                 text(format!("comment-saved-here-{comment}"), SAVED_HERE)
@@ -289,6 +292,13 @@ impl ItemPane {
                                     .label(label)
                                     .xsmall()
                                     .outline()
+                                    .disabled(
+                                        waits
+                                            && matches!(
+                                                offer,
+                                                CommentOffer::RetrySharing | CommentOffer::Unlock
+                                            ),
+                                    )
                                     .on_click(cx.listener(
                                         move |pane, _: &ClickEvent, window, cx| {
                                             pane.chip_pressed(&comment, offer, window, cx)
@@ -313,6 +323,11 @@ impl ItemPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The chip's sends wait for the lifecycle lock (R-23).
+        if matches!(offer, CommentOffer::RetrySharing | CommentOffer::Unlock) && self.edits_wait(cx)
+        {
+            return;
+        }
         let root = self.post_root();
         let submissions = self.services.submissions().clone();
         let worker = self.services.worker().clone();

@@ -40,6 +40,15 @@ plan or a request to redo unchanged approvals.
 
 ## Delivered Checkpoints And Remaining Work — 2026-11-06
 
+**Integration re-grounding, 2026-11-07 UTC:** the controller's authorized
+merge now brings in `origin/main` `1e5616af22630b08a84dc0fb42037135b385f81d`
+(approved/closed D5) from premerge HEAD `f69d341b5caac47c95d50b64c685f6073d61c958`.
+This is the current baseline for the existing plan and `AGENTS.md` rules;
+`79c3931b` and the Task 7 grounding below remain historical. Preserve both
+products at the shared mutation/progress/resume seams, then same whole-feature
+SPEC delta → same QUALITY before restarting final gates. No task restart,
+new policy, broad interim test tier or desktop Retire action is authorized.
+
 Source-grounded at clean Task 7 base
 `76a852a7d5d4fcd757a95451601cdbb407b99bcc`; controller's fresh fetch/merge of
 main `79c3931b01d225ddf3434ae9cd4fc51eb607fd2e` was already up to date.
@@ -77,7 +86,7 @@ only the existing generic abandon-preview metadata display is delivered here.
   `origin/main`, never rebase; repeat when main moves. Do not touch sibling
   worktrees, push other branches, create a PR, merge, close, delete real contexts
   or dispatch native CI without the owner's separate go-ahead.
-- Cargo only through `devenv shell -- cargo ...`. Main `79c3931b`'s `AGENTS.md`
+- Cargo only through `devenv shell -- cargo ...`. Current merged main's `AGENTS.md`
   Testing Strategy overrides old commands: between steps run only just-written/
   changed tests by exact full name, with check **or** Clippy + fmt at coherent
   checkpoints. Never rerun unchanged green evidence without a named doubt; stop
