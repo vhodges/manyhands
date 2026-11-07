@@ -95,21 +95,31 @@ impl SessionCredentialProvider for NoPassphrase {
 fn retirement_preserving_admission_refuses_live_or_unrelated_owners_and_stale_abandon_f2() {
     for case in ["lease", "index", "unrelated", "stale_f2"] {
         let f = Fixture::with_request(true);
-        if case == "index" {
-            let _ = f.index_owner();
+        let index_owner = (case == "index").then(|| f.index_owner());
+        if let Some(owner) = &index_owner {
+            assert!(owner.retirement_request.is_some());
+            assert!(recovery::owns_indexing(&f.db(), owner.clone()).unwrap());
+            assert!(recovery::touch_indexing(&f.db(), owner.clone()).unwrap());
+            assert!(f.service.refresh_claim_hook.is_poisoned());
         }
         if case == "unrelated" {
             f.branch_intent(); // End our O before reserving a different active O.
             f.db().execute("INSERT INTO remote_operation_records(repository_id,operation_ulid,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,action,priority,phase,created_at,updated_at,poll_kind) SELECT repository_id,?1,configuration_generation,remote_name,primary_branch,primary_ref,primary_tracking_ref,action,priority,'reserved',1,1,'observe' FROM remote_operation_records LIMIT 1",[OperationId::new().to_string()]).unwrap();
         }
+        // index_owner models process loss by unwinding under the claim hook's
+        // mutex. Continue with a fresh service, not that deliberately poisoned
+        // instance. The request-bound index spend above remains genuinely live.
+        let continuation = index_owner
+            .as_ref()
+            .map(|_| RepositoryService::open_at(f._data.path()).unwrap());
+        let service = continuation.as_ref().unwrap_or(&f.service);
         let mutation = || {
             Mutation::OperationAbandon(OperationAbandonInput {
                 root: f.request.root.clone(),
                 operation_id: f.request.operation_id,
             })
         };
-        let preview = f
-            .service
+        let preview = service
             .prepare(&mutation())
             .data
             .unwrap()
@@ -127,7 +137,7 @@ fn retirement_preserving_admission_refuses_live_or_unrelated_owners_and_stale_ab
         let abandon = RequestId::new();
         if case == "stale_f2" {
             let data = f._data.path().to_owned();
-            f.service.set_request_hook_for_testing(move || {
+            service.set_request_hook_for_testing(move || {
                 assert_eq!(
                     RepositoryService::open_at(&data)
                         .unwrap()
@@ -138,7 +148,7 @@ fn retirement_preserving_admission_refuses_live_or_unrelated_owners_and_stale_ab
             });
         }
         let before = registry_image(&f.db());
-        let result = f.service.execute(
+        let result = service.execute(
             MutationCall {
                 request_id: abandon,
                 confirmation: Some(ConfirmationId::parse(&preview.confirmation_id).unwrap()),
@@ -165,6 +175,9 @@ fn retirement_preserving_admission_refuses_live_or_unrelated_owners_and_stale_ab
             "remote_operation_records",
             "retirement_observation_pins",
             "retirement_observation_pin_releases",
+            "retirement_observation_receipts",
+            "retirement_advertisement_provenance",
+            "context_retirement_index_claims",
             "context_retirement_preservations",
             "context_retirement_preservation_claims",
         ] {

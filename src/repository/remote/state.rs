@@ -355,8 +355,61 @@ fn validate_poll_disposition_envelope(
             return Err(recovery_required());
         }
     }
+    validate_poll_disposition_dependencies(db)
+}
+
+fn validate_poll_disposition_dependencies(db: &Connection) -> Result<(), RepositoryError> {
+    const TABLE: &str = "remote_poll_dispositions";
+    let mut query = db
+        .prepare("SELECT type,name,tbl_name,sql FROM sqlite_master")
+        .map_err(|_| recovery_required())?;
+    let objects = query
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })
+        .map_err(|_| recovery_required())?;
+    for object in objects {
+        let (kind, name, table, sql) = object.map_err(|_| recovery_required())?;
+        // The exact table DDL above accounts for its two implicit constraint
+        // indexes. The only supported external reference is the exact immutable
+        // owner trigger, also checked above; never silently discard attachments.
+        let implicit = kind == "index"
+            && sql.is_none()
+            && matches!(
+                name.as_str(),
+                "sqlite_autoindex_remote_poll_dispositions_1"
+                    | "sqlite_autoindex_remote_poll_dispositions_2"
+            );
+        let owner = kind == "trigger" && name == "remote_poll_disposition_owner_immutable";
+        if !implicit
+            && !owner
+            && ((matches!(kind.as_str(), "index" | "trigger")
+                && table.eq_ignore_ascii_case(TABLE))
+                // Conservative reference detection handles SQLite's ASCII case
+                // and all identifier quoting without interpreting unknown SQL.
+                || (matches!(kind.as_str(), "trigger" | "view")
+                    && sql.is_some_and(|sql| sql.to_ascii_lowercase().contains(TABLE))))
+        {
+            return Err(recovery_required());
+        }
+    }
+    // Scan definitions, not child rows: even an empty incoming FK would be
+    // retargeted by RENAME. A populated CASCADE could lose evidence on DROP.
+    let incoming: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master m JOIN pragma_foreign_key_list(m.name) fk WHERE m.type='table' AND fk.\"table\"=?1 COLLATE NOCASE)",
+        [TABLE], |row| row.get(0),
+    ).map_err(|_| recovery_required())?;
+    if incoming {
+        return Err(recovery_required());
+    }
     Ok(())
 }
+
 fn normalized_poll_schema_sql(sql: &str) -> String {
     // SQL keywords/spacing may vary, but CHECK/trigger string literals must
     // match exactly. Folding literal case would accept a different enum.

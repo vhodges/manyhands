@@ -1069,6 +1069,7 @@ fn retirement_z_keeps_a_valid_integration_window_and_its_batch() {
 
 #[test]
 fn retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen() {
+    use super::record::RefusalFailurePoint;
     // Inert preselected consumer; exercises real domain metadata refusal/Z, not
     // a live advertisement, selection, marker or destructive producer journey.
     for failure in [
@@ -1095,19 +1096,22 @@ fn retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen() {
         crate::repository::remote::state::configure(&tx, 1, Some(&plan), true).unwrap();
         tx.commit().unwrap();
         let service = RepositoryService::open_at(data.path()).unwrap();
+        let before = super::execution_tests::registry_image(&db);
+        assert!(!super::record::set_release_failure(false));
+        assert_eq!(super::record::set_refusal_failure(None), None);
         if failure == Some("receipt") {
-            // A schema fault trigger on the release table is no longer a valid
-            // envelope. Inject at the same INSERT boundary, not at startup audit.
+            // Schema fault triggers on pins/receipts are invalid envelopes. All
+            // faults must reach actual write boundaries, never startup audit.
             super::record::set_release_failure(true);
         } else if let Some(failure) = failure {
-            let event = match failure {
-                "result" => "UPDATE OF final_result ON context_retirement_records",
-                "pin" => "DELETE ON retirement_observation_pins",
-                "batch" => "DELETE ON remote_observation_batches",
-                "journal" => "UPDATE OF state ON operation_records",
+            let point = match failure {
+                "result" => RefusalFailurePoint::Result,
+                "pin" => RefusalFailurePoint::Pin,
+                "batch" => RefusalFailurePoint::Batch,
+                "journal" => RefusalFailurePoint::Journal,
                 _ => unreachable!(),
             };
-            db.execute_batch(&format!("CREATE TRIGGER fail_z BEFORE {event} BEGIN SELECT RAISE(ABORT,'injected Z failure'); END;")).unwrap();
+            assert_eq!(super::record::set_refusal_failure(Some(point)), None);
         }
         let request = crate::repository::RetireContextRequest {
             root: data.path().into(),
@@ -1116,13 +1120,22 @@ fn retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen() {
             operation_id: operation,
         };
         if failure.is_some() {
-            assert!(service.retire_context(request.clone()).is_err());
-            if failure == Some("receipt") {
-                assert!(
-                    !super::record::set_release_failure(false),
-                    "the release INSERT fault must have been reached and consumed"
-                );
-            }
+            let failed = service.retire_context(request.clone());
+            assert!(failed.is_err(), "failure={failure:?}: {failed:?}");
+            assert!(
+                !super::record::set_release_failure(false),
+                "failure={failure:?}: release INSERT fault must be consumed"
+            );
+            assert_eq!(
+                super::record::set_refusal_failure(None),
+                None,
+                "failure={failure:?}: the named write boundary must be reached and consumed"
+            );
+            assert_eq!(
+                super::execution_tests::registry_image(&db),
+                before,
+                "failure={failure:?}: every prior write, including result/attempt/receipt/pin/collection, must roll back"
+            );
             assert_eq!(
                 db.query_row("SELECT phase FROM context_retirement_records", [], |r| {
                     r.get::<_, String>(0)
@@ -1154,10 +1167,13 @@ fn retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen() {
                     .unwrap(),
                 1
             );
-            assert!(RepositoryService::open_at(data.path()).is_ok());
-            if failure != Some("receipt") {
-                db.execute_batch("DROP TRIGGER fail_z").unwrap();
-            }
+            let reopened = RepositoryService::open_at(data.path()).map(|_| ());
+            assert!(reopened.is_ok(), "failure={failure:?}: {reopened:?}");
+            assert_eq!(
+                super::execution_tests::registry_image(&db),
+                before,
+                "failure={failure:?}: valid envelope reopens without changing retained evidence"
+            );
         }
         let result = service.retire_context(request.clone());
         assert!(

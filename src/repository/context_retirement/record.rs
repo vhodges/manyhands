@@ -28,6 +28,36 @@ pub(super) fn set_release_failure(fail: bool) -> bool {
     RELEASE_FAILURE.with(|slot| slot.replace(fail))
 }
 #[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RefusalFailurePoint {
+    Result,
+    Pin,
+    Batch,
+    Journal,
+}
+#[cfg(test)]
+thread_local! {static REFUSAL_FAILURE:std::cell::Cell<Option<RefusalFailurePoint>>=const {std::cell::Cell::new(None)};}
+#[cfg(test)]
+pub(super) fn set_refusal_failure(
+    point: Option<RefusalFailurePoint>,
+) -> Option<RefusalFailurePoint> {
+    REFUSAL_FAILURE.with(|slot| slot.replace(point))
+}
+#[cfg(test)]
+fn refusal_checkpoint(point: RefusalFailurePoint) -> Result<(), RepositoryError> {
+    if REFUSAL_FAILURE.with(|slot| {
+        if slot.get() == Some(point) {
+            slot.set(None);
+            true
+        } else {
+            false
+        }
+    }) {
+        return Err(recovery_required());
+    }
+    Ok(())
+}
+#[cfg(test)]
 pub(super) fn fail_migration_at(point: u8) {
     MIGRATION_FAILURE.with(|slot| slot.set(Some(point)));
 }
@@ -1719,9 +1749,13 @@ pub(super) fn finish_configuration_refusal(
     }
     let report =
         super::ContextRetirementReport::refused(crate::results::ResultCode::ExternalChange);
+    #[cfg(test)]
+    refusal_checkpoint(RefusalFailurePoint::Result)?;
     tx.execute("UPDATE context_retirement_records SET phase='refused',final_code=?2,final_result=?3 WHERE operation_ulid=?1", params![operation,report.code.as_str(),report.encode()?]).map_err(RepositoryError::sqlite)?;
     if tx.execute("UPDATE context_retirement_attempts SET phase='ended' WHERE operation_ulid=?1 AND owner_epoch=?2 AND phase='active'", params![operation,epoch]).map_err(RepositoryError::sqlite)?!=1 { return Err(recovery_required()); }
     release_single_consumer(tx, operation, epoch)?;
+    #[cfg(test)]
+    refusal_checkpoint(RefusalFailurePoint::Journal)?;
     if tx
         .execute(
             "UPDATE operation_records SET state='completed' WHERE id=?1 AND state!='completed'",
@@ -1908,7 +1942,11 @@ fn release_pin(tx: &rusqlite::Transaction<'_>, key: PinRelease<'_>) -> Result<()
         return Err(recovery_required());
     }
     tx.execute("INSERT INTO retirement_observation_pin_releases(provenance_id,pin_kind,holder_operation_ulid,holder_epoch,repository_id,observation_batch_id,binding_id,reason) VALUES(?1,?8,?2,?3,?4,?5,?6,?7)", params![provenance,operation,epoch,repository,batch,binding,reason,kind]).map_err(RepositoryError::sqlite)?;
+    #[cfg(test)]
+    refusal_checkpoint(RefusalFailurePoint::Pin)?;
     if tx.execute("DELETE FROM retirement_observation_pins WHERE provenance_id=?1 AND pin_kind=?7 AND holder_operation_ulid=?2 AND holder_epoch=?3 AND repository_id=?4 AND observation_batch_id=?5 AND binding_id IS ?6", params![provenance,operation,epoch,repository,batch,binding,kind]).map_err(RepositoryError::sqlite)?!=1 { return Err(recovery_required()); }
+    #[cfg(test)]
+    refusal_checkpoint(RefusalFailurePoint::Batch)?;
     tx.execute("DELETE FROM remote_observation_batches WHERE repository_id=?1 AND id=?2 AND is_current=0
       AND NOT EXISTS(SELECT 1 FROM remote_integration_windows w WHERE w.observation_batch_id=remote_observation_batches.id)
       AND NOT EXISTS(SELECT 1 FROM retirement_observation_pins pin WHERE pin.repository_id=remote_observation_batches.repository_id AND pin.observation_batch_id=remote_observation_batches.id)", params![repository,batch]).map_err(RepositoryError::sqlite)?;

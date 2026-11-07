@@ -704,8 +704,7 @@ fn retirement_disposition_exact_old_enum_upgrade_preserves_evidence_and_owner() 
 
 #[test]
 fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
-    let mut accepted = Vec::new();
-    for change in [
+    let corruptions = [
         "DROP TRIGGER remote_poll_disposition_owner_immutable",
         "DROP TRIGGER remote_poll_disposition_owner_immutable; CREATE TRIGGER remote_poll_disposition_owner_immutable BEFORE UPDATE ON remote_operation_records BEGIN SELECT 1; END;",
         "ALTER TABLE remote_poll_dispositions ADD COLUMN substituted TEXT",
@@ -716,14 +715,39 @@ fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
         "PRAGMA ignore_check_constraints=ON; UPDATE remote_poll_dispositions SET disposition='closed'",
         "PRAGMA ignore_check_constraints=ON; UPDATE remote_poll_dispositions SET disposition='promoted'",
         "PRAGMA ignore_check_constraints=ON; UPDATE remote_poll_dispositions SET disposition='substituted'",
-    ] {
+    ];
+    let dependencies = [
+        "CREATE INDEX unknown_index ON \"REMOTE_POLL_DISPOSITIONS\"(disposition)",
+        "CREATE TRIGGER unknown_attached AFTER UPDATE ON [Remote_Poll_Dispositions] BEGIN SELECT 1; END",
+        "CREATE TRIGGER unknown_external AFTER INSERT ON retention_payload BEGIN SELECT count(*) FROM `REMOTE_POLL_DISPOSITIONS`; END",
+        "CREATE VIEW unknown_view AS SELECT * FROM \"Remote_Poll_Dispositions\"",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES remote_poll_dispositions(repository_id,ordinal) ON DELETE CASCADE)",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES \"REMOTE_POLL_DISPOSITIONS\"(repository_id,ordinal) ON DELETE CASCADE); INSERT INTO incoming_dispositions SELECT repository_id,ordinal,'retained cascade payload' FROM remote_poll_dispositions",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES [Remote_Poll_Dispositions](repository_id,ordinal) ON DELETE RESTRICT)",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES `Remote_Poll_Dispositions`(repository_id,ordinal) ON DELETE RESTRICT); INSERT INTO incoming_dispositions SELECT repository_id,ordinal,'retained restrict payload' FROM remote_poll_dispositions",
+        "CREATE TABLE incoming_dispositions(repository_id INTEGER, ordinal INTEGER, payload TEXT, FOREIGN KEY(repository_id,ordinal) REFERENCES 'REMOTE_POLL_DISPOSITIONS'(repository_id,ordinal) ON DELETE SET NULL); INSERT INTO incoming_dispositions SELECT repository_id,ordinal,'retained set-null payload' FROM remote_poll_dispositions",
+    ];
+    let cases = corruptions.into_iter().map(|change| (true, change)).chain(
+        dependencies
+            .into_iter()
+            .flat_map(|change| [(true, change), (false, change)]),
+    );
+    let mut accepted = Vec::new();
+    for (old_envelope, change) in cases {
+        let case = format!("old={old_envelope}: {change}");
         let (data, _, service, _) = review_completed_state();
         drop(service);
         let mut db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
-        let old = POLL_DISPOSITION_SCHEMA.replace("'closed','promoted',", "");
-        db.execute_batch("DROP TRIGGER remote_poll_disposition_owner_immutable; ALTER TABLE remote_poll_dispositions RENAME TO previous_dispositions;").unwrap();
-        db.execute_batch(&old).unwrap();
-        db.execute_batch("INSERT INTO remote_poll_dispositions SELECT * FROM previous_dispositions; DROP TABLE previous_dispositions;").unwrap();
+        // Match the real service connection, including CASCADE effects. The
+        // unknown populated child must survive public open, not just our rollback.
+        db.execute_batch("PRAGMA foreign_keys=ON").unwrap();
+        if old_envelope {
+            let old = POLL_DISPOSITION_SCHEMA.replace("'closed','promoted',", "");
+            db.execute_batch("DROP TRIGGER remote_poll_disposition_owner_immutable; ALTER TABLE remote_poll_dispositions RENAME TO previous_dispositions;").unwrap();
+            db.execute_batch(&old).unwrap();
+            db.execute_batch("INSERT INTO remote_poll_dispositions SELECT * FROM previous_dispositions; DROP TABLE previous_dispositions;").unwrap();
+        }
+        db.execute_batch("CREATE TABLE retention_payload(payload TEXT NOT NULL); INSERT INTO retention_payload(rowid,payload) VALUES(91,'retained independent payload')").unwrap();
         db.execute_batch(change).unwrap();
         // Match a newly opened registry connection: retain the corrupt row,
         // but do not carry the fixture writer's CHECK bypass into migration.
@@ -743,20 +767,8 @@ fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
                 "{change}: {integrity}"
             );
         }
-        let schema = |db: &Connection| {
-            db.prepare("SELECT name,sql FROM sqlite_master ORDER BY name")
-                .unwrap()
-                .query_map([], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
-                })
-                .unwrap()
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap()
-        };
-        let rows = |db: &Connection, table: &str| {
-            let mut query = db
-                .prepare(&format!("SELECT rowid,* FROM {table} ORDER BY rowid"))
-                .unwrap();
+        let values = |db: &Connection, sql: &str| {
+            let mut query = db.prepare(sql).unwrap();
             let columns = query.column_count();
             query
                 .query_map([], |r| {
@@ -768,32 +780,54 @@ fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap()
         };
-        let before = schema(&db);
-        let dispositions_before = rows(&db, "remote_poll_dispositions");
-        let owners_before = rows(&db, "remote_operation_records");
-        assert!(!dispositions_before.is_empty());
+        let image = |db: &Connection| {
+            let tables = db
+                .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+                .unwrap()
+                .query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            let mut image = vec![values(
+                db,
+                "SELECT type,name,tbl_name,rootpage,sql FROM sqlite_master ORDER BY name",
+            )];
+            for table in tables {
+                image.push(values(
+                    db,
+                    &format!(
+                        "SELECT rowid,* FROM \"{}\" ORDER BY rowid",
+                        table.replace('"', "\"\"")
+                    ),
+                ));
+            }
+            image
+        };
+        let before = image(&db);
+        assert!(!values(&db, "SELECT * FROM remote_poll_dispositions").is_empty());
         let version: i64 = db
             .query_row("PRAGMA schema_version", [], |r| r.get(0))
             .unwrap();
         let tx = db.transaction().unwrap();
         let refused = migrate_poll_dispositions(&tx).is_err();
+        if dependencies.contains(&change) {
+            // The closure guard refuses BEFORE any DDL, not after a destructive
+            // rename/drop that happens to be hidden by the explicit rollback.
+            assert_eq!(image(&tx), before, "before rollback: {case}");
+            assert_eq!(
+                tx.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+                    .unwrap(),
+                version,
+                "before rollback: {case}"
+            );
+        }
         tx.rollback().unwrap();
-        assert_eq!(schema(&db), before, "{change}");
+        assert_eq!(image(&db), before, "{case}");
         assert_eq!(
             db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
                 .unwrap(),
             version,
-            "{change}"
-        );
-        assert_eq!(
-            rows(&db, "remote_poll_dispositions"),
-            dispositions_before,
-            "{change}"
-        );
-        assert_eq!(
-            rows(&db, "remote_operation_records"),
-            owners_before,
-            "{change}"
+            "{case}"
         );
         if corrupt_enum {
             let owner_update = db.execute(
@@ -804,15 +838,23 @@ fn retirement_disposition_old_corrupt_and_partial_envelopes_roll_back() {
                 matches!(owner_update, Err(rusqlite::Error::SqliteFailure(_, Some(ref message))) if message == "immutable disposition owner"),
                 "{change}: {owner_update:?}"
             );
-            assert_eq!(
-                rows(&db, "remote_operation_records"),
-                owners_before,
-                "{change}"
-            );
+            assert_eq!(image(&db), before, "{case}");
         }
         if !refused {
-            accepted.push(change);
+            accepted.push(case.clone());
         }
+        let opened = RepositoryService::open_at(data.path()).map(|_| ());
+        assert!(
+            matches!(opened, Err(ref error) if error.kind == RepositoryErrorKind::RecoveryRequired),
+            "public open must refuse {case}: {opened:?}"
+        );
+        assert_eq!(image(&db), before, "public open: {case}");
+        assert_eq!(
+            db.query_row("PRAGMA schema_version", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            version,
+            "public open: {case}"
+        );
     }
     assert!(
         accepted.is_empty(),
