@@ -405,6 +405,14 @@ design, so that the Wave leaves no surface in the old style. Every one keeps
 its current behavior, services, request handling and recovery routes. Only
 its frame, layout, copy and states change.
 
+**Check first.** Wave 03 D5 built the lifecycle dialog and the resolve
+conflict sheet from the same handoff (frames 2c to 2e and 2g), and the owner
+has not yet compared the result with the design. Before planning any work
+on either, compare each with `05` and its screenshots, and record in the
+Cycle document what already matches and what differs. Only the differences
+are in scope. If both already match, they leave the Cycle apart from the
+shared tokens and frame, and the split line below is unlikely to be needed.
+
 **In scope:**
 
 - **Common frame** from `05`: the sheet and dialog frames (header, body,
@@ -427,8 +435,9 @@ its frame, layout, copy and states change.
   the design's header, key card, note, Not now and Unlock, the inline error
   for a wrong passphrase, and Not now moving the prompt into Needs
   attention. The show and hide toggle follows decision 9.
-- **Close ticket and Approve and merge dialog** (`05`, 2c to 2e, 580 px):
-  today's lifecycle dialog laid out as the design's stages. Confirm shows
+- **Close ticket and Approve and merge dialog** (`05`, 2c to 2e, 580 px),
+  where the check finds differences: today's lifecycle dialog laid out as
+  the design's stages. Confirm shows
   the numbered step list, the files to be merged with their tags and line
   counts (and the note when code is included), "Becomes ready to start" and
   the Git detail line. Running shows each step's state and progress, with
@@ -437,8 +446,8 @@ its frame, layout, copy and states change.
   ready tickets. The local-only wording for step 2 is kept.
 - **Resolve conflict sheet** (`05`, 2g, 920 px): already built from the
   design in Wave 03 D5. This Cycle moves it onto the shared tokens and
-  frame and corrects any difference from `05` it finds, without changing
-  how parts are chosen or saved.
+  frame and corrects only the differences the check found, without
+  changing how parts are chosen or saved.
 - **Empty item area** (`04`, "Empty pane"): the faded app icon and "Open a
   ticket or document from the lists". The "Ctrl K to search" line waits
   for Search.
