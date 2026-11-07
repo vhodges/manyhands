@@ -12,51 +12,63 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
-### Current Accommodated Gate Standing — 2026-11-07 UTC
+### Current Refresh-Claim Correction Standing — 2026-11-07 UTC
 
-**Reviewed fixture barrier lifted; resumed gates STOPPED at mutation_replay.**
-Fixture/gate freeze **`fb6bbbb6817ad719eb47c37d2698b0077f2daaf7`**.
-Unchanged compiled/test source **`d49cfa4a7150d73bc31333e2fe9038fecfb2ec61`**;
-library/production freeze **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**;
-active main baseline **`707f4a6dc85abb187fd3385c534f514034ecc139`**, accepted
-controller docs-only merge/entry **`ab53de7c0733c5c3425a53a26da2d53f8844413f`**.
-No additional fetch/merge. Prior whole gates retain their actual846af679 baseline.
-Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**
-throughfb6bbbb, then SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE
-PASS**, zero Critical/Important/Minor findings. Both read-only delta reviews
-cleared the bounded six-line help fixture and lifted this sequence's barrier;
-they are **not final runtime acceptance**. Original79c3931b base remains historical.
+**Owner-approved narrow correction delivered locally; exact TDD GREEN only.**
+Owner replied **yes**,2026-11-07, to the deterministic refresh-claim clock design.
+Accepted controller preflight: clean4a7dc4c3, documentation-only incoming main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**, conflict-free merge
+**`57de16ce505a4a0e39256f5c1948c139d73bde74`**. Approved49-line plan amendment and
+clean correction base **`26283e60b8f318f6093d24bb0e7cb359737a414f`**. No extra
+fetch/merge/worktree or source/build/schema change arrived from main.
 
-| Current evidence | Actual standing |
+Only `claim_refresh_indexing`'s cutoff now uses existing `self.clock.now()`.
+The existing resume-contention case pins past heartbeatH=1700000000 and admission
+H/H+3/H+4 after normal save setup. Every Busy/transient/retry/no-record/no-effect/
+unchanged-row assertion remains; the same request then proves stale reclamation,
+one epoch increment, discovery-current effects and finished request settlement.
+Lifecycle claim/raw SQL/heartbeat writes/SystemClock/TTL3s remain unchanged.
+Default SystemClock still reads real UTC; this is **not a performance fix**.
+
+| New bounded evidence | Actual standing |
 | --- | --- |
-| Library retained | **1530 passed/0 failed/160 local-sync filtered**,1972.73s tests; unchanged library inputs, NOT rerun. |
-| Whole accommodated desktop | **1580 passed/0 failed/0 ignored/0 filtered**,2158.17s tests, **exit0**. |
-| CLI unit binary | **307 passed/0 failed**,0.52s tests, finished green. |
-| canonical_foundation | **65 passed/0 failed**,0.03s tests, finished green. |
-| Current whole cli integration | **477 passed/0 failed/0 filtered**,378.04s tests, **exit0** atfb6bbbb. Prior476/1 remains historical failure. |
-| First ten targets of25 selection | **All ten finished green**: discovery_rebuild79, drafts48, journal_rejection26, key_material39, key_storage2, local_authoring142, mutation_bridges166, mutation_confirmation184, mutation_contract46, mutation_relationships27. |
-| mutation_replay | **383 passed/1 failed/0 filtered**,969.17s tests; enclosing25-target command **exit101**, then STOP. |
+| Exact case, amended test + OLD production cutoff | **Compiled RED**,exit101;0 passed/1 failed/383 filtered;1.09s tests/4.310144528s elapsed. Actual Success/Ok vs Error/Busy proves injected cutoff was ignored. |
+| Same exact case + one-line production correction | **GREEN**,exit0;1 passed/0 failed/383 filtered;1.58s tests/13.343988555s elapsed. Both Busy boundaries and strict stale takeover assertions executed. |
+| Strict whole-tree Clippy | **exit0**,19.656576638s elapsed;all targets/all features/locked/-D warnings. |
+| Whole-tree fmt-check | **exit0**,18.196607690s elapsed;no formatting edit needed. |
 
-Current failure is **`resume::a_resume_of_a_row_another_call_is_indexing_under_is_busy_and_leaves_it`**,
-`tests/mutation_replay/resume.rs:112:5`: actual **(Success, Ok)**, expected
-**(Error, Busy)**. Root cause undiagnosed; no source probe/fix/retry, expectation
-relaxation or infrastructure waiver. Whole CLI now supplements the prior exact
-help1/0 correction evidence; old476/1 is not relabeled. All new footers nonzero,
-zero ignored/filtered. No measured suspend in either command. Source/fixture
-inputs stayed frozen; library/desktop/CLI-unit/canonical/static greens preserved,
-**not rerun**. No later target or extra diagnostic admitted after FIRSTFAIL.
+**Shared Rust source now differs** from the old library/compiled freezes; do not
+relabel old passes as unchanged-current-input evidence. They remain valid prior
+baselines, not failures: library**1530/0/160 filtered,1972.73s** at production
+**`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**; desktop**1580/0,2158.17s**,
+CLIunits**307/0,0.52s**,canonical**65/0,0.03s** at compiled
+**`d49cfa4a7150d73bc31333e2fe9038fecfb2ec61`**. Old statics retain their recorded
+original scopes. Historical fixture/gate**`fb6bbbb6817ad719eb47c37d2698b0077f2daaf7`**
+and main**`707f4a6dc85abb187fd3385c534f514034ecc139`** retain wholeCLI**477/0** and ten
+target greens**79/48/26/39/2/142/166/184/46/27**. Whole mutation_replay**383/1,
+969.17s** remains **RED** there; exact1/0 does not pass its other383 cases.
 
-Owner-approved **WAIT60s** remains a finite test accommodation, not a performance
-fix; GPUI15s per uninterrupted park, POLL10ms, safety budgets and assertions are
-unchanged. Historical whole-desktop1518/62 and1516/64 remain failed at WAIT10s;
-instrumented51/49 remain diagnostic only. Profiling/optimization remains stopped.
-**NOT RUN:**14 later fast integrations, selected library local-sync, ten SSH
-targets and both smokes. No display/profile/app/native action. Further execution
-or fixes require controller authorization; preserve valid finished greens on
-unchanged relevant inputs. Ticket **implementing / runtime BLOCKED**, not
-feature-complete/review-ready; SAME whole SPEC then QUALITY final runtime-evidence
-reviews and controller/owner handoff remain owed.
-Latest appended checkpoint governs older next-step prose.
+Source diagnosis establishes that the old fixture's unrenewed real-UTC heartbeat
+could age into legitimate reclamation. The historical run captured no claim-time
+cutoff/row age: **its actual cause remains unproven**, no live-owner exclusion
+defect or load/retirement/suspend cause is claimed. Historical failures and
+diagnostic outcomes stay intact. Profiling/optimization remains stopped.
+
+**Next barrier:** SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, THEN SAME
+QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** must re-review the changed shared source
+before controller-owned fresh cargo-check/final runtime gates resume. Old SOURCE
+approvals throughfb6bbbb do not approve this delta. Concrete callers, injected-clock
+usages and conservative final revalidation footprint are appended below and in
+`/tmp/opencode/task8-refresh-clock-coverage.md`; no coverage waiver or broad rerun.
+
+**Still NOT RUN:**14 later fast integrations, selected library local-sync160,
+ten SSH targets, both isolated smokes and final runtime-evidence SPEC→QUALITY /
+controller-owner handoff. No broad runtime/check command ran in this correction.
+WAIT60s/GPUI15s per-park/POLL10ms/default threads/safety budgets/assertions and all
+retained44/M1/Q1/enum/D5/D6/native/combinatorial limits are unchanged. No real
+profile/display/app/key/context/draft or native action. Ticket **implementing /
+review-and-runtime BLOCKED**, not SOURCE-approved, whole-target-passed,
+feature-complete or review-ready. Latest appended checkpoint governs older prose.
 
 ### Historical Main Integration And Gate Standing — 2026-11-07 UTC
 
@@ -9074,3 +9086,167 @@ No new ID/extra build/status save/source or golden edits/push/PR/main/close/
 other-worktree/real profile/key/context/draft action. Known owned gate processes
 exited; no jobs. Ticket **implementing / runtime BLOCKED**, not feature-complete
 or review-ready; same whole runtime reviews and owner handoff remain owed.
+
+## Task 8 — Approved Deterministic Refresh-Claim Clock Correction
+
+### Authority, Accepted Preflight And Source-Based Diagnosis — 2026-11-07 UTC
+
+Owner explicitly replied **yes** to this narrow correction. Controller completed
+current AGENTS/worktree preflight at clean**4a7dc4c3b5d2926446c4b6b7680227f6baf1c4a7**,
+fetched main**d70142b63a952f5e1aade369e0cd654ca9a03617**, and merged it conflict-free
+at**57de16ce505a4a0e39256f5c1948c139d73bde74**. Incoming since707f4a6d is one
+canonical ticket markdown file, no source/build/schema change. Accepted this
+preflight without another fetch/merge/worktree. The49-line approved amendment is
+already committed in the existing implementation plan at
+**26283e60b8f318f6093d24bb0e7cb359737a414f**, this correction's clean base.
+Sole implementer in the existing ticket branch/worktree; no other agents.
+
+The old failing fixture stamps `indexing` once at real UTC but runs no renewing
+owner. Generic refresh samples direct real UTC after migration/reconciliation;
+claim SQL permits takeover only when `observed_at < stale_before`. Thus an
+unrenewed fabricated owner can become stale. This source-based fixture weakness
+does **not** establish the historic gate's actual claim age/cause, a production
+exclusion defect, or load/retirement/suspend attribution. Profiling stays stopped;
+the past whole mutation_replay**383/1** is not used as this deterministic RED.
+
+### Exact Test-First Correction And Actual Commands
+
+Changed only the existing case
+`resume::a_resume_of_a_row_another_call_is_indexing_under_is_busy_and_leaves_it`.
+After ordinary `save_owing_its_hand_off` setup, reopen its service through existing
+`mutation::service_with_clock`/`with_clock_for_testing` with fixed past
+**H=1700000000**. At clockH andH+3 retain **all original** Busy/transient,
+request.retry action/REQUEST2 argument, absent request/operation/data/effects and
+unchanged complete Stored tuple assertions. AtH+4 the **same REQUEST2** must
+succeed with discovery-current-only effects, no owned operation/data/recovery,
+completed/checkpointed/no-debt journal, exactly one epoch increment, retained step,
+zero pending rows and a finished request targeting that operation.
+
+Before editing production, exactly once:
+
+```sh
+devenv shell -- cargo test --all-features --locked --test mutation_replay resume::a_resume_of_a_row_another_call_is_indexing_under_is_busy_and_leaves_it -- --exact
+```
+
+**RED: compiled successfully,exit101;0 passed/1 failed/0 ignored/383 filtered;
+1.09s tests,4.310144528s monotonic elapsed**. Panic at resume.rs:112:5 is exactly
+actual**(Success,Ok)** vs expected**(Error,Busy)** on the frozen fresh owner.
+Old production bytes match entry; this proves the injected cutoff was ignored,
+not the historical runtime cause. No compile error or cached-source substitute.
+
+Then **one production line only**, `src/repository.rs:3955`:
+
+```diff
+-            OffsetDateTime::now_utc().unix_timestamp() - INDEX_OWNER_STALE_AFTER,
++            self.clock.now().unix_timestamp() - INDEX_OWNER_STALE_AFTER,
+```
+
+The same exact command, once: **GREEN,exit0;1 passed/0 failed/0 ignored/383 filtered;
+1.58s tests,13.343988555s monotonic elapsed**. Test bytes are identical RED→GREEN;
+no sleep/future/MAX heartbeat/TTL/thread/assertion/predicate/retry-window change.
+This is one case exercising three clock values, not a new target or whole384 pass.
+
+At the coherent source checkpoint, serial and once:
+
+```sh
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo fmt --check
+```
+
+Both **exit0**, respectively**19.656576638s /18.196607690s** monotonic elapsed;
+no warnings or formatting edits. No additional cargo-check or any broad library,
+desktop, CLI, integration or SSH runtime command. Default libtest concurrency;
+RUST_TEST_THREADS and diagnostic flag unset. All commands exited below15minutes;
+source/test/build hashes before/after each command match its recorded scope.
+
+### Shared-Clock Semantics And Concrete Revalidation Footprint
+
+Only `claim_refresh_indexing` changes. `claim_lifecycle_indexing:3933` still uses
+direct UTC; raw claim SQL/strict `<`, index epochs, heartbeat writes, three-second
+TTL, Clock/SystemClock implementation and request-specific retirement claim path
+are unchanged. `RepositoryService` defaults to SystemClock (`repository.rs:4134`),
+whose `now` reads real UTC (`mutation/mod.rs:267–273`): default clock semantics
+remain equivalent at the same refresh-admission stage. No new public hook/API,
+schema/dependency/configuration change or broader clock sweep.
+
+Affected generic-refresh callers for whole-feature review:
+
+| Caller | Shared refresh seam |
+| --- | --- |
+| Public refresh and local-only synchronization completion | repository.rs:1383–1425;remote/sync.rs:6997 nonempty-target route |
+| IndexRefresh and ordinary OperationResume hand-off | mutation/bind/index.rs:135;mutation/bind/resume.rs:1041 |
+| Checkpointed comment hand-off | comment_publication.rs:598 |
+| Ordinary unbound retirement hand-off | context_retirement/execution.rs:401 |
+| Promotion/closure lifecycle index refresh | promotion/run.rs:1711 |
+| Poll application and folder bridge | remote/poll.rs:2247;bridges/folder.rs:576 |
+
+Existing injected-clock usages needing explicit assessment, **not new test passes**:
+
+- `tests/support/mutation.rs:45–68` TestClock/service_with_clock and the new case;
+  `tests/support/records.rs:47–63` request-record World used by mutation_replay.
+- `tests/support/confirmation.rs:159–181,425–443,621–643,780–786`: Desk/Home/Keyring/
+  Unregistered fixtures in mutation_confirmation/mutation_contract; key-only paths
+  do not themselves enter repository refresh. Direct injected helpers at
+  `mutation_confirmation.rs:2447,2573,3499,3827` cover killed create/enable,
+  competing confirmation, lost refusal and concurrent removal.
+- `mutation_contract.rs:1069–1074,1242,1367`: still-clock removal/abandon/key
+  fixtures. Ordinary resume golden at1310 uses SystemClock, not this fixture.
+- `tests/mutation_remote/c5_lifecycle.rs:1266,1283,1302,1346` and
+  `c5_resume.rs:185`: RowClock consent/retry/resume promotion/closure paths can
+  reach refresh. Advanced clocks now also affect its claim-age decision.
+- Desktop real-clock overrides: lifecycle `expired_consent_offers_prepare_again`
+  (`stale_tests.rs:98–145`) and repair
+  `a_stale_preview_is_refused_and_prepare_again_is_offered`
+  (`repair_tests.rs:1074–1113`), both11-minute clock moves.
+- `context_retirement/authority_tests.rs:95–140`: admission boundary clock;
+  preserving/request-scoped cutoff already used self.clock independently.
+
+Claim/heartbeat timestamps remain real UTC. A clock behind a real heartbeat keeps
+it live; an advanced clock may classify it stale. Overrides can no longer be
+assumed to affect only request timestamps. **Controller proposal, not execution:**
+after SAME whole SPEC then SAME QUALITY re-review, obtain fresh required check and
+final AGENTS fast coverage on amended shared Rust, including whole mutation_replay
+and the directly clock-injecting targets/cases above. Assess lib/desktop/CLI
+callers explicitly; no automatic reuse as unchanged-current-source passes. New
+Clippy/fmt may be reused if their inputs stay unchanged. Controller/gate owner
+decides final selection; no unreviewed broad run or waiver was performed.
+
+### Preserved Baselines, Remaining Obligations And Evidence
+
+Historical library**1530/0/160** remains at production**e6bc3912**; accommodated
+desktop**1580/0**,CLIunits**307/0**,canonical**65/0** at compiled**d49cfa4a**.
+Old check/Clippy/fmt keep original scopes, not relabeled new-source passes.
+At fixture/gate**fb6bbbb** and main**707f4a6d**, wholeCLI**477/0** plus ten targets
+**79/48/26/39/2/142/166/184/46/27** stay finished greens; whole mutation_replay
+**383/1,969.17s** stays **RED**. These are prior baselines, not disqualified as
+failures or combined with exact1/0 into an invented whole-target green.
+
+**Owed, not run here:**fresh cargo-check;14 fast targets read_boundary,
+read_characterization,read_comments,read_contract,read_credentials,read_items,
+read_relationships,read_repository,read_status,recovery_foundation_gate,
+remote_reservation,repository_enablement,session_credentials,shared_key_registry;
+selected library local-sync160;ten SSH targets ssh_transport,remote_observation,
+remote_synchronization,remote_merge_recovery,remote_polling,cli_remote,
+mutation_remote,document_promotion,ticket_closure,comment_publication;both isolated
+smokes;final runtime-evidence reviews and controller/owner handoff. WAIT60s,
+GPUI15s per-park,10ms polling, default threads, production safety budgets and all
+retained44/M1/Q1/enum/D5/D6/native/combinatorial limitations are unchanged.
+
+New-only **`/tmp/opencode/task8-refresh-clock-*`** records literal argv, entry/main/
+source/test hashes, full raw logs, counts/exits/clocks, exact source comparisons,
+coverage, final handoff and hash manifest. RED raw SHA256
+**`9e7afae1692722fb5a83f40f0698c849fdae4be205a28f62d69e51ee82698acc`**;
+GREEN **`366d6b573a84d91de295487376cbd15af8ba8494b4817b1c7c3d67e2a305c6fc`**.
+Prior28-artifact manifest
+**`1d7ef8673db6365e7a349c061ab43ce3ed6be2e95e7e3ebcb89147d27fae25ee`** is unchanged;
+controller's zero-mismatch verification retained, no old artifact writes or huge
+source reinventory. Only owned source/test/ledger and append to canonical comment
+**01M6TYJATB44WZPJABX9GMBVS1** are committed with coauthor; original metadata,
+parent01M6SYJK4CJGHWKZC7MTP18GTA/time/all prior body remain intact. No plan rewrite.
+
+Next: SAME whole **SPEC ses_e4cc1a00bffeO0qOz2Do4Qx1Bd**, THEN SAME **QUALITY
+ses_e4c8be2f1ffegiPUEUuB0QgyBE**, before further gates. No SOURCE approval,
+whole-target success, performance/root-cause fix or readiness/completion claim.
+No push/PR/native/main/status-save/closure/other-worktree or real profile/display/
+app/key/draft/context operation. All four owned command children exited; no jobs.
+Ticket **implementing / review-and-runtime BLOCKED**; controller owns continuation.

@@ -3952,7 +3952,7 @@ impl RepositoryService {
         Ok(claim_indexing(
             &connection,
             record.id,
-            OffsetDateTime::now_utc().unix_timestamp() - INDEX_OWNER_STALE_AFTER,
+            self.clock.now().unix_timestamp() - INDEX_OWNER_STALE_AFTER,
         )
         .map_err(|error| error.for_operation(operation, root))?
         .map(|owner| (record, owner)))

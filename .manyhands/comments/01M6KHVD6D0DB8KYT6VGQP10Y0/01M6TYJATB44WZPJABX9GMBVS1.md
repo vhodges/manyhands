@@ -538,3 +538,107 @@ push/PR/main/lifecycle/other-worktree/real profile-key-context-draft action.
 Owned gate processes exited; no jobs. **FIRSTFAIL barrier restored**, controller
 authorization required. Ticket **implementing / runtime BLOCKED**, not feature-
 complete/review-ready; final runtime reviews and owner handoff remain owed.
+
+## Follow-up — approved deterministic refresh-claim clock correction, exact TDD GREEN
+
+**Owner explicitly replied yes,2026-11-07**, to the narrow correction, not a
+performance fix or broader clock sweep. Accepted controller's completed preflight:
+clean**4a7dc4c3b5d2926446c4b6b7680227f6baf1c4a7**, main
+**d70142b63a952f5e1aade369e0cd654ca9a03617**, conflict-free ticket merge
+**57de16ce505a4a0e39256f5c1948c139d73bde74**. Incoming main changes one canonical
+ticket markdown only; no source/build/schema delta. Approved49-line amendment to
+the existing implementation plan is already committed at clean correction base
+**26283e60b8f318f6093d24bb0e7cb359737a414f**. No repeated fetch/merge/worktree or
+other agents; work remains on the existing ticket branch.
+
+**Source-based fixture weakness, not historical causation:** the old test stamped
+an `indexing` heartbeat once with real UTC and supplied no renewing owner. Generic
+refresh samples its three-second cutoff after migration/reconciliation, so that
+fixture can become legitimately stale. The historical383/1 gate captured no
+claim-time age/cutoff: its actual cause remains **unproven**. No production
+exclusion defect or load/suspend/retirement cause is asserted. Profiling stays stopped.
+
+Extended only existing
+`resume::a_resume_of_a_row_another_call_is_indexing_under_is_busy_and_leaves_it`:
+after normal save setup, existing TestClock/service_with_clock pins past
+**H=1700000000**. ClockH andH+3 both retain every Busy/transient/request.retry +
+REQUEST2 argument, absent request/operation/data/effects, and entire unchanged
+Stored state/step/heartbeat/epoch assertion. ClockH+4 lets the **same REQUEST2**
+complete, discovery-current only, step retained, epoch incremented exactly once,
+completed/checkpointed/no-debt journal and finished request/no owned operation.
+No new case/target/API/hook, real waits or future/MAX heartbeat.
+
+Exact command **twice for TDD, not retry-until-green**:
+
+```sh
+devenv shell -- cargo test --all-features --locked --test mutation_replay resume::a_resume_of_a_row_another_call_is_indexing_under_is_busy_and_leaves_it -- --exact
+```
+
+- **Actual compiled RED before production edit:**exit101;**0 passed/1 failed/383
+  filtered**,1.09s tests/**4.310144528s** monotonic. At resume.rs:112:5, actual
+  **(Success,Ok)** vs expected**(Error,Busy)** proves the injected cutoff was
+  ignored. Production bytes equal entry; not a compile-error RED or historical-age proof.
+- **Then one production line only:**`claim_refresh_indexing` at
+  `src/repository.rs:3955` reads `self.clock.now().unix_timestamp() -
+  INDEX_OWNER_STALE_AFTER`, replacing direct real UTC. Same test bytes and exact
+  command **GREEN,exit0;1 passed/0 failed/383 filtered**,1.58s tests/
+  **13.343988555s** monotonic. All three clock values and preservation/settlement
+  assertions executed. Exact1/0 is **not whole mutation_replay success**.
+- Serial whole-tree `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`
+  **exit0,19.656576638s**;`devenv shell -- cargo fmt --check`
+  **exit0,18.196607690s**. No formatting edits or duplicate check. All source
+  hashes unchanged during each command; default threads/no diagnostic flag.
+
+**Default semantics/safety:**service defaults to SystemClock, still real UTC at
+the same refresh admission stage. `claim_lifecycle_indexing:3933`, raw SQL/strict
+`<`, epoch fencing, heartbeat writes, SystemClock implementation and3sTTL remain
+unchanged. WAIT60/GPUI15s per-park/10ms poll/default threads/production safety
+budgets/assertions unchanged. No performance change or policy relaxation.
+
+**Shared Rust changes invalidate an unchanged-input carryover claim, not the old
+evidence itself.** Library**1530/0/160** stays at production**e6bc3912**;
+desktop**1580/0**,CLIunits**307/0**,canonical**65/0** at compiled**d49cfa4a**;
+old check/Clippy/fmt keep original scopes. At fixture/gate**fb6bbbb**,main**707f4a6d**,
+wholeCLI**477/0** and ten target greens**79/48/26/39/2/142/166/184/46/27** stay true;
+whole mutation_replay**383/1,969.17s** stays **RED**. No old green is relabeled a
+failure or combined with exact1/0 into a new whole pass.
+
+Concrete impact/revalidation map is in the appended execution ledger and
+**`/tmp/opencode/task8-refresh-clock-coverage.md`**. Generic callers: IndexRefresh,
+ordinary OperationResume, local-only synchronization, comment hand-off, unbound
+retirement, promotion/closure, poll apply and folder bridge. Existing clock users:
+mutation_replay record fixture; mutation_confirmation Desk/Home/Keyring/Unregistered;
+mutation_contract still-clock fixtures; mutation_remote c5_lifecycle/c5_resume
+RowClock cases; desktop lifecycle expired-consent and stale repair-preview cases;
+retirement preserving-admission clock. Frozen/advanced test clocks now also govern
+generic refresh eligibility; raw heartbeat timestamps remain real UTC. Review
+these usages explicitly, not by assuming the override times only request rows.
+
+**Controller proposal, not authorization/execution:**after same SPEC→QUALITY,
+fresh required cargo-check/final AGENTS fast coverage on changed shared Rust,
+including whole failed mutation_replay and clock-injecting cases/targets; assess
+lib/desktop/CLI callers rather than inheriting old passes as current-source gates.
+Reuse new Clippy/fmt only if inputs stay unchanged. **Unrun obligations remain:**
+14 fast read_boundary/read_characterization/read_comments/read_contract/
+read_credentials/read_items/read_relationships/read_repository/read_status/
+recovery_foundation_gate/remote_reservation/repository_enablement/
+session_credentials/shared_key_registry;library local-sync160;ten SSH targets;
+both isolated smokes and final runtime-evidence reviews/controller-owner handoff.
+No broad runtime/check gate ran here; retained44/M1/Q1/enum/D5/D6/native limits persist.
+
+New-only **`/tmp/opencode/task8-refresh-clock-*`**:literal argv, entry/main/source/
+test hashes, actual RED/GREEN/statics counts/exits/clocks/full raw logs, source
+comparisons, coverage/handoff/final manifest. RED log SHA256
+**9e7afae1692722fb5a83f40f0698c849fdae4be205a28f62d69e51ee82698acc**;
+GREEN **366d6b573a84d91de295487376cbd15af8ba8494b4817b1c7c3d67e2a305c6fc**.
+Prior28-artifact manifest**1d7ef8673db6365e7a349c061ab43ce3ed6be2e95e7e3ebcb89147d27fae25ee**
+unchanged, controller's0mismatch verification retained; no old evidence writes or
+huge reinventory. Owned source/test/ledger/this append committed with coauthor;
+original comment ID/parent01M6SYJK4CJGHWKZC7MTP18GTA/time/all prior body preserved.
+
+**Next SAME whole SPEC ses_e4cc1a00bffeO0qOz2Do4Qx1Bd, THEN SAME QUALITY
+ses_e4c8be2f1ffegiPUEUuB0QgyBE before final gates.** No SOURCE approval, whole-target
+pass, readiness/completion or root-cause/performance-fix claim. Four command
+children exited;no jobs. No push/PR/main/status-save/native/closure/other-worktree
+or real profile/display/app/key/context/draft actions. Ticket remains
+**implementing / review-and-runtime BLOCKED**;controller owns continuation.
