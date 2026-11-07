@@ -1,7 +1,7 @@
 //! Actions and key bindings, defined once here (design, Layout And
 //! Keyboard). `secondary` is Ctrl on Linux and Windows, Cmd on macOS.
 
-use gpui_kit::{App, KeyBinding};
+use gpui_kit::{App, KeyBinding, NoAction};
 
 gpui_kit::actions!(
     manyhands,
@@ -104,6 +104,11 @@ gpui_kit::actions!(
         CancelComposer,
         /// Switch a comment composer between Rich text and Markdown.
         ComposerToggleMode,
+        /// Save resolution, in the resolve conflict sheet (D5 B3).
+        SaveResolution,
+        /// Escape in the sheet's Result editor: back to its tab stop, the
+        /// sheet left open (R-31).
+        LeaveResult,
     ]
 );
 
@@ -184,6 +189,14 @@ pub(crate) const COMMENT_COMPOSER_CONTEXT: &str = "CommentComposer";
 /// composer's cancel is bound here too, as `EDIT_HOST_EDITOR` binds the
 /// edit editor's Escape.
 const COMMENT_COMPOSER_EDITOR: &str = "CommentComposer > Editor";
+
+/// The key context of the resolve conflict sheet (D5 B3): `secondary-enter`
+/// saves, from its Result editor too, where Enter is a newline.
+pub(crate) const RESOLVE_SHEET_CONTEXT: &str = "ResolveSheet";
+
+/// The sheet's Result editor, inside the sheet: its Escape goes back to the
+/// editor's tab stop rather than closing the sheet (R-31).
+const RESOLVE_SHEET_EDITOR: &str = "ResolveSheet > Editor";
 
 /// Binds the desktop's keys. Quit now has no key: it is the focused
 /// Quit now button while quitting waits.
@@ -267,6 +280,17 @@ pub(crate) fn bind(cx: &mut App) {
         ),
         KeyBinding::new("escape", CancelComposer, Some(COMMENT_COMPOSER_EDITOR)),
         KeyBinding::new("secondary-k", InsertLink, Some(COMMENT_COMPOSER_EDITOR)),
+        KeyBinding::new(
+            "secondary-enter",
+            SaveResolution,
+            Some(RESOLVE_SHEET_CONTEXT),
+        ),
+        // The dialog's Enter (its Confirm, which the sheet ignores) is
+        // taken back inside the sheet, so Enter presses the focused button,
+        // as Space does (A21); the Result editor's Enter, bound deeper, is
+        // still its newline.
+        KeyBinding::new("enter", NoAction, Some(RESOLVE_SHEET_CONTEXT)),
+        KeyBinding::new("escape", LeaveResult, Some(RESOLVE_SHEET_EDITOR)),
     ]);
 }
 

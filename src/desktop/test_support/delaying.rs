@@ -2,10 +2,17 @@
 //! test can hold.
 //!
 //! It only delays. It never fails or fabricates a call; failures in tests
-//! come from the library's own failure points and hooks. The one exception
-//! is `hold_job_return_answering`: after the library's real call returns,
-//! a test's constructed answer stands in place of its answer, for an
-//! answer no fixture can reach.
+//! come from the library's own failure points and hooks. The exceptions
+//! are the canned answers (D5 decision 9): `hold_job_return_answering`, a
+//! canned prepare (`answer_next_prepare`) and a canned conflict read
+//! (`answer_next_conflict_read`). Each lets the library's real call run,
+//! then puts a test's answer, built from library types, in place of its
+//! answer, for an answer no fixture can reach. A test that uses one says
+//! so in its doc comment, names the library test that produces the real
+//! answer, and asserts nothing about repository state.
+//!
+//! `hold_at_stage` holds a job on the worker thread once it has reported
+//! a named progress stage: a real interruption point, not an answer.
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -17,16 +24,23 @@ use std::{
 use futures::channel::oneshot;
 use manyhands::{
     drafts::{DraftError, DraftStore},
-    repository::{MutationDataDto, RepositoryService, keys::KeyStore},
+    repository::{
+        ConflictDto, Mutation, MutationDataDto, OperationId, PrepareDataDto, ProgressStage,
+        RepositoryService, keys::KeyStore,
+    },
     results::Envelope,
 };
 
 use crate::desktop::services::{
     Backend, DraftStoreUnavailable, JobKind, KeyStoreUnavailable, ReadGate, ReadKind,
+    resolutions::{ResolutionStore, ResolutionStoreError},
 };
 
 /// How many times a test can put another real service in place.
 const REPLACEMENTS: usize = 8;
+
+/// The holds a job takes when it reports a stage, by kind and stage.
+type StageHolds = HashMap<(JobKind, ProgressStage), VecDeque<Arc<Gate>>>;
 
 pub(crate) struct DelayingBackend {
     service: Arc<RepositoryService>,
@@ -39,6 +53,9 @@ pub(crate) struct DelayingBackend {
     /// The real store over the fixture's data directory, or why it did
     /// not open.
     drafts: Result<DraftStore, DraftStoreUnavailable>,
+    /// The real resolutions store over the fixture's data directory, or
+    /// why it did not open; unavailable until `with_resolutions`.
+    resolutions: Result<ResolutionStore, ResolutionStoreError>,
     reads: Mutex<HashMap<ReadKind, VecDeque<ReadGate>>>,
     jobs: Mutex<HashMap<JobKind, VecDeque<Arc<Gate>>>>,
     /// Holds taken after a job's library call returns, each with the
@@ -49,6 +66,14 @@ pub(crate) struct DelayingBackend {
     reads_seen: Mutex<Vec<ReadKind>>,
     /// Every job kind the worker reached `before_job` with, in order.
     seen: Mutex<Vec<JobKind>>,
+    /// Holds taken when a job of the kind reports the stage.
+    stages: Mutex<StageHolds>,
+    /// Canned prepare answers, each by the command whose next prepare it
+    /// stands in place of.
+    prepares: Mutex<Vec<(&'static str, Envelope<PrepareDataDto>)>>,
+    /// Canned conflicts, each standing in place of the next conflict read
+    /// of its own operation ID.
+    conflicts: Mutex<Vec<ConflictDto>>,
 }
 
 impl DelayingBackend {
@@ -64,12 +89,25 @@ impl DelayingBackend {
             replacements: Default::default(),
             home,
             drafts: drafts.map_err(DraftStoreUnavailable::from),
+            resolutions: Err(ResolutionStoreError::Unavailable),
             reads: Mutex::default(),
             jobs: Mutex::default(),
             returned: Mutex::default(),
             reads_seen: Mutex::default(),
             seen: Mutex::default(),
+            stages: Mutex::default(),
+            prepares: Mutex::default(),
+            conflicts: Mutex::default(),
         }
+    }
+
+    /// The same backend over the resolutions store's open result.
+    pub(crate) fn with_resolutions(
+        mut self,
+        resolutions: Result<ResolutionStore, ResolutionStoreError>,
+    ) -> Self {
+        self.resolutions = resolutions;
+        self
     }
 
     /// Holds the next read of `kind` at its gate until the returned sender
@@ -134,6 +172,45 @@ impl DelayingBackend {
         JobGate(gate)
     }
 
+    /// Holds the next job of `kind` on the worker thread once it has
+    /// reported `stage`, which the UI has then been sent, until the gate
+    /// is released or dropped. The library goes on only after: Stop
+    /// pressed meanwhile lands at its next safe point. The library may
+    /// hold the repository lease while the job is held (L3 reports
+    /// `integrating` under it), so a test does not open a second
+    /// repository operation until it releases the gate.
+    #[must_use = "dropping the handle releases the hold"]
+    pub(crate) fn hold_at_stage(&self, kind: JobKind, stage: ProgressStage) -> JobGate {
+        let gate = Arc::new(Gate::default());
+        self.stages
+            .lock()
+            .unwrap()
+            .entry((kind, stage))
+            .or_default()
+            .push_back(gate.clone());
+        JobGate(gate)
+    }
+
+    /// A canned prepare answer for `command` (`Mutation::command`, as
+    /// "ticket close"): the next prepare of that command still calls the
+    /// library, and `answer` stands in place of its answer. A prepare of
+    /// any other command takes none. Canned answers for one command
+    /// stack: each prepare takes the oldest.
+    pub(crate) fn answer_next_prepare(
+        &self,
+        command: &'static str,
+        answer: Envelope<PrepareDataDto>,
+    ) {
+        self.prepares.lock().unwrap().push((command, answer));
+    }
+
+    /// A canned conflict read: the next conflict read of
+    /// `conflict.operation_id` still calls the library, and `conflict`
+    /// stands in place of its answer.
+    pub(crate) fn answer_next_conflict_read(&self, conflict: ConflictDto) {
+        self.conflicts.lock().unwrap().push(conflict);
+    }
+
     /// Puts `service`, a real service the test opened over the same data
     /// directory, in place of the one in use: what the library tests do
     /// when they open a service with a failure point, and reopen it with
@@ -189,6 +266,10 @@ impl Backend for DelayingBackend {
         self.drafts.as_ref().map_err(|unavailable| *unavailable)
     }
 
+    fn resolutions(&self) -> Result<&ResolutionStore, ResolutionStoreError> {
+        self.resolutions.as_ref().map_err(|error| *error)
+    }
+
     fn read_gate(&self, kind: ReadKind) -> Option<ReadGate> {
         self.reads_seen.lock().unwrap().push(kind);
         self.reads.lock().unwrap().get_mut(&kind)?.pop_front()
@@ -216,6 +297,44 @@ impl Backend for DelayingBackend {
             .and_then(VecDeque::pop_front)?;
         returned.gate.wait();
         returned.answer
+    }
+
+    fn on_progress(&self, kind: JobKind, stage: ProgressStage) {
+        let gate = self
+            .stages
+            .lock()
+            .unwrap()
+            .get_mut(&(kind, stage))
+            .and_then(VecDeque::pop_front);
+        if let Some(gate) = gate {
+            gate.wait();
+        }
+    }
+
+    fn after_prepare(&self, mutation: &Mutation) -> Option<Envelope<PrepareDataDto>> {
+        let mut prepares = self.prepares.lock().unwrap();
+        let command = mutation.command();
+        let at = prepares.iter().position(|(of, _)| *of == command)?;
+        Some(prepares.remove(at).1)
+    }
+
+    /// A conflict read takes the canned conflict; the pending rows' probe
+    /// only looks at it, so the sheet that follows still reads it (Task 16
+    /// re-review, M-3).
+    fn after_conflict_read(
+        &self,
+        kind: ReadKind,
+        operation_id: &OperationId,
+    ) -> Option<ConflictDto> {
+        let mut conflicts = self.conflicts.lock().unwrap();
+        let wanted = operation_id.to_string();
+        let at = conflicts
+            .iter()
+            .position(|conflict| conflict.operation_id == wanted)?;
+        match kind {
+            ReadKind::PendingConflicts => Some(conflicts[at].clone()),
+            _ => Some(conflicts.remove(at)),
+        }
     }
 }
 
@@ -265,9 +384,11 @@ impl Gate {
     }
 }
 
-/// A held job. The worker thread blocks before the job's library call
-/// until `release` is called or the gate is dropped, so a failed test
-/// cannot leave the worker waiting.
+/// A held job. The worker thread blocks at the gate until `release` is
+/// called or the gate is dropped, so a failed test cannot leave the worker
+/// waiting: before the job's library call for `hold_job`, after it returns
+/// for `hold_job_return`, and once the named stage has been sent to the UI
+/// for `hold_at_stage`.
 #[must_use = "dropping the handle releases the hold"]
 pub(crate) struct JobGate(Arc<Gate>);
 
@@ -276,9 +397,11 @@ impl JobGate {
         self.0.release();
     }
 
-    /// Blocks the test until the worker thread has reached this gate, so
-    /// the job is running and not yet accepted. Panics after ten seconds,
-    /// inside the scheduler's fifteen.
+    /// Blocks the test until the worker thread has reached this gate:
+    /// for `hold_job` the job is running and not yet accepted; for
+    /// `hold_at_stage` it is past acceptance, its stage already sent; for
+    /// `hold_job_return` its library call has returned. Panics after ten
+    /// seconds, inside the scheduler's fifteen.
     pub(crate) fn wait_reached(&self) {
         assert!(
             self.0.wait_reached(Duration::from_secs(10)),

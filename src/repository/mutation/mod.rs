@@ -56,6 +56,7 @@ mod reenter;
 mod replay;
 mod reply;
 mod settle;
+mod way_out;
 
 /// The synchronization a comment's operation publishes it by, for the
 /// conflict read (R-5).
@@ -147,6 +148,7 @@ pub use progress::{CancellationToken, NoProgress, ProgressEvent, ProgressSink, P
 use records::RequestRecord;
 pub(super) use records::migrate as migrate_request_tables;
 pub(super) use records::{operation_owner, release_operation_owner};
+pub use way_out::{LifecycleWayOut, lifecycle_prepare_way_out, lifecycle_way_out};
 
 /// What the service reads the time from when it times a record. Tests
 /// inject one to move time; everything else uses `SystemClock`.

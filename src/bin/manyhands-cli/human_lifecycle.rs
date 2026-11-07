@@ -39,7 +39,8 @@ use crate::{
 use manyhands::{
     repository::{
         ItemDtoKind, LifecycleBlocker, LifecycleMadeReadyState, LifecycleMutationDto,
-        LifecyclePublicationPendingReason, LifecycleRecording, MutationDataDto, PrepareDataDto,
+        LifecyclePublicationPendingReason, LifecycleWayOut, MutationDataDto, PrepareDataDto,
+        lifecycle_prepare_way_out, lifecycle_way_out,
     },
     results::{Envelope, RecoveryActionKind, ResultCode},
 };
@@ -159,242 +160,198 @@ fn action_index(envelope: &Envelope<MutationDataDto>, kind: RecoveryActionKind) 
         .position(|action| action.action == kind)
 }
 
-fn branch_deleted(envelope: &Envelope<MutationDataDto>, root: &str, item: &str, route: &mut Route) {
-    if let Some(index) = action_index(envelope, RecoveryActionKind::OperationResume) {
-        route.next.push(republish(root, item));
-        if let Some(line) = resume_line(envelope, index, root) {
-            route.rendered.push(index);
-            route.next.push(line);
-        }
-        route.notes.push(RESUME_DELETED_NOTE.to_owned());
-        return;
-    }
-    let Some(request) = envelope.request_id.as_deref() else {
-        return;
-    };
-    let again = format!(
+/// The same request, sent again by its command.
+fn again(command: &str, root: &str, item: &str, request: &str) -> String {
+    format!(
         "manyhands-cli {} --repo {} --id {} --request-id {}",
-        field(&envelope.command),
+        field(command),
         quoted(root),
         field(item),
         field(request)
-    );
-    if let Some(index) = action_index(envelope, RecoveryActionKind::RequestCancel) {
-        route.rendered.push(index);
-        route.next.extend([
-            format!(
-                "manyhands-cli request cancel --request-id {}",
-                field(request)
-            ),
-            again.clone(),
-        ]);
-        route.notes.push(DELETED_NOTE.to_owned());
-    }
-    route.next.extend([republish(root, item), again]);
+    )
 }
 
-/// The repair, when the same request or a resume can then go on: `sync-local`
-/// admits a closure only while it is recording its own (`local_sync/record.rs`).
-fn merge_refused_route(
-    envelope: &Envelope<MutationDataDto>,
-    root: &str,
-    item: &str,
-    route: &mut Route,
-) {
-    if action_index(envelope, RecoveryActionKind::RequestRetry).is_some() {
-        route.next = merge_refused(root, item);
-        route.notes.push(format!(
-            "{REFUSED_NOTE} {REPAIR_NOTE} Then send this request again; the closure's fields are kept."
-        ));
-    } else if let Some(index) = action_index(envelope, RecoveryActionKind::OperationResume) {
-        route.next = merge_refused(root, item);
-        if let Some(line) = resume_line(envelope, index, root) {
-            route.rendered.push(index);
-            route.next.push(line);
-        }
-        route.notes.push(format!(
-            "{REFUSED_NOTE} {REPAIR_NOTE} Then resume it again (add --request-id unless you run it at a terminal); the closure's fields are kept."
-        ));
-    }
+/// The `operation resume` of `operation`.
+fn resume_line(root: &str, operation: &str) -> String {
+    format!(
+        "manyhands-cli operation resume --repo {} --operation-id {}",
+        quoted(root),
+        field(operation)
+    )
 }
 
 /// A context child's conflict (decision 34): its read and its resolution,
 /// named by this operation's ID, which the conflict verbs take for its
-/// context child. Then the same request, as C2 renders it, or the resume.
-fn child_conflict_route(envelope: &Envelope<MutationDataDto>, root: &str, route: &mut Route) {
-    let Some(operation) = envelope.operation_id.as_deref() else {
-        return;
-    };
-    let (root_text, operation) = (quoted(root), field(operation));
-    route.next = vec![
-        format!("manyhands-cli conflict show --repo {root_text} --operation-id {operation}"),
+/// context child.
+fn child_conflict(root: &str, operation: &str) -> Vec<String> {
+    let (root, operation) = (quoted(root), field(operation));
+    vec![
+        format!("manyhands-cli conflict show --repo {root} --operation-id {operation}"),
         format!(
-            "manyhands-cli conflict resolve --repo {root_text} --operation-id {operation} --input - --request-id <new-request-id>"
+            "manyhands-cli conflict resolve --repo {root} --operation-id {operation} --input - --request-id <new-request-id>"
         ),
-    ];
-    let then = if action_index(envelope, RecoveryActionKind::RequestRetry).is_some() {
-        " Then send this request again."
-    } else if let Some(index) = action_index(envelope, RecoveryActionKind::OperationResume) {
-        if let Some(line) = resume_line(envelope, index, root) {
-            route.rendered.push(index);
-            route.next.push(line);
-        }
-        " Then resume it again (add --request-id unless you run it at a terminal)."
-    } else {
-        ""
-    };
-    // The note goes with the lines, whatever follows them.
-    route
-        .notes
-        .push(format!("{CONFLICT_NOTE}{then} {CONFLICT_CONSENT_NOTE}"));
+    ]
 }
 
-/// The `operation resume` a recovery action names.
-fn resume_line(envelope: &Envelope<MutationDataDto>, index: usize, root: &str) -> Option<String> {
-    let operation = envelope.recovery[index]
-        .operation_id
-        .as_deref()
-        .or(envelope.operation_id.as_deref())?;
-    Some(format!(
-        "manyhands-cli operation resume --repo {} --operation-id {}",
-        quoted(root),
-        field(operation)
-    ))
-}
-
+/// L1's way out of a result, in its lines and notes. A step that prints no
+/// line is C2's action (`SendAgain` as `request.retry`, and `Inspect`), or is
+/// left to the actions (`RepairOutside`). A deleted branch's answer offers no
+/// `request.retry` (`never_gets_past`), so its route names the request itself.
 fn route_of(envelope: &Envelope<MutationDataDto>, data: &LifecycleMutationDto) -> Route {
     let mut route = Route::default();
     let Some(root) = envelope.scope.repository.as_deref() else {
         return route;
     };
-    match envelope.code {
-        ResultCode::RecoveryRequired
-            if data
-                .blockers
-                .contains(&LifecycleBlocker::IntegrationConflict)
-                && data.kind == ItemDtoKind::Ticket
-                && data.recording == Some(LifecycleRecording::Record) =>
-        {
-            merge_refused_route(envelope, root, &data.item_id, &mut route);
+    let retry = action_index(envelope, RecoveryActionKind::RequestRetry).is_some();
+    let resume = action_index(envelope, RecoveryActionKind::OperationResume);
+    let again_of = |request: &str| again(&envelope.command, root, &data.item_id, request);
+    for step in lifecycle_way_out(envelope) {
+        match step {
+            // The repair, when the same request or a resume can then go on:
+            // `sync-local` admits a closure only while it is recording its own
+            // (`local_sync/record.rs`).
+            LifecycleWayOut::RepairLocally { item_id } => {
+                route.next.extend(merge_refused(root, &item_id));
+                let then = if retry {
+                    "Then send this request again;"
+                } else {
+                    "Then resume it again (add --request-id unless you run it at a terminal);"
+                };
+                route.notes.push(format!(
+                    "{REFUSED_NOTE} {REPAIR_NOTE} {then} the closure's fields are kept."
+                ));
+            }
+            LifecycleWayOut::ResolveChildConflict { operation_id } => {
+                route.next.extend(child_conflict(root, &operation_id));
+                let then = if retry {
+                    " Then send this request again."
+                } else if resume.is_some() {
+                    " Then resume it again (add --request-id unless you run it at a terminal)."
+                } else {
+                    ""
+                };
+                // The note goes with the lines, whatever follows them.
+                route
+                    .notes
+                    .push(format!("{CONFLICT_NOTE}{then} {CONFLICT_CONSENT_NOTE}"));
+            }
+            LifecycleWayOut::CancelThenSendAgain { request_id } => {
+                route
+                    .rendered
+                    .extend(action_index(envelope, RecoveryActionKind::RequestCancel));
+                route.next.extend([
+                    format!(
+                        "manyhands-cli request cancel --request-id {}",
+                        field(&request_id)
+                    ),
+                    again_of(&request_id),
+                ]);
+                route.notes.push(DELETED_NOTE.to_owned());
+            }
+            LifecycleWayOut::Republish { item_id } => {
+                route.next.push(republish(root, &item_id));
+                if resume.is_some() {
+                    route.notes.push(RESUME_DELETED_NOTE.to_owned());
+                }
+            }
+            LifecycleWayOut::SendAgain if envelope.code == ResultCode::RemoteBranchDeleted => {
+                if let Some(request) = envelope.request_id.as_deref() {
+                    route.next.push(again_of(request));
+                }
+            }
+            LifecycleWayOut::ResumeOperation { operation_id } => {
+                route.rendered.extend(resume);
+                route.next.push(resume_line(root, &operation_id));
+            }
+            // C2's actions say these, or (`RepairOutside`) nothing does; the
+            // rest are a prepare's.
+            LifecycleWayOut::SendAgain
+            | LifecycleWayOut::Inspect
+            | LifecycleWayOut::RepairOutside
+            | LifecycleWayOut::RetryRequest { .. }
+            | LifecycleWayOut::SharePrimary
+            | LifecycleWayOut::PollOnce
+            | LifecycleWayOut::SaveItem { .. } => {}
         }
-        ResultCode::RecoveryRequired
-            if data.blockers.contains(&LifecycleBlocker::ConflictPending)
-                && data.blockers.contains(&LifecycleBlocker::ContextConflicted) =>
-        {
-            child_conflict_route(envelope, root, &mut route);
-        }
-        ResultCode::RemoteBranchDeleted => {
-            branch_deleted(envelope, root, &data.item_id, &mut route);
-        }
-        _ => {}
     }
     route
 }
 
-/// The way out of a blocked prepare: what to run, and what it says of that.
-fn way_out(
-    kind: ItemDtoKind,
-    blockers: &[LifecycleBlocker],
-    root: &str,
-    item: &str,
-) -> Option<(Vec<String>, String)> {
-    use LifecycleBlocker::{
-        ConflictPending, ContextConflicted, ContextDirty, ContextMissing, HistoryUnknown,
-        IntegrationConflict, LocalOperationPending, PrimaryAheadOfRemote, PrimaryMissing,
-    };
-    // What a poll reads: primary's tracking, and whether a published context
-    // still stands, which an absent tracking ref leaves unknown (decision 35).
-    let tracking = |blocker: &LifecycleBlocker| {
-        matches!(
-            blocker,
-            PrimaryAheadOfRemote | PrimaryMissing | HistoryUnknown
-        )
-    };
-    if blockers.iter().any(tracking)
-        && blockers
-            .iter()
-            .all(|blocker| tracking(blocker) || *blocker == ContextMissing)
-    {
-        let root = quoted(root);
-        let poll = format!("manyhands-cli poll once --repo {root} --request-id <new-request-id>");
-        // Missing, a poll makes it. Ahead, primary may hold work never
-        // published, which a poll doesn't push.
-        if !blockers.contains(&PrimaryAheadOfRemote) {
-            let note = if blockers.contains(&PrimaryMissing) {
-                POLL_NOTE
-            } else {
-                UNKNOWN_NOTE
-            };
-            return Some((vec![poll], format!("{note} Then prepare again.")));
+/// What a blocked prepare's way out says of itself, chosen from its blockers.
+fn way_out_note(blockers: &[LifecycleBlocker], way_out: &[LifecycleWayOut]) -> String {
+    let note = if way_out.contains(&LifecycleWayOut::SharePrimary) {
+        AHEAD_NOTE.to_owned()
+    } else if way_out.contains(&LifecycleWayOut::PollOnce) {
+        // What a poll reads: primary's tracking, and whether a published
+        // context still stands, which an absent tracking ref leaves unknown
+        // (decision 35).
+        if blockers.contains(&LifecycleBlocker::PrimaryMissing) {
+            POLL_NOTE.to_owned()
+        } else {
+            UNKNOWN_NOTE.to_owned()
         }
-        return Some((
-            vec![
-                poll,
-                format!("manyhands-cli repo sync --repo {root} --request-id <new-request-id>"),
-            ],
-            format!("{AHEAD_NOTE} Then prepare again."),
-        ));
-    }
-    if blockers == [ContextMissing] {
-        return Some((
-            vec![render::save_line(kind, root, item)],
-            format!("{} Then prepare again.", render::NO_CONTEXT_NOTE),
-        ));
-    }
-    // `sync-local` refuses a dirty or conflicted context, and a pending conflict
-    // or local operation has its own way on.
-    let reachable = blockers.contains(&IntegrationConflict)
-        && ![
-            ContextDirty,
-            ContextConflicted,
-            ConflictPending,
-            LocalOperationPending,
-        ]
+    } else if way_out
         .iter()
-        .any(|other| blockers.contains(other));
-    reachable.then(|| {
-        (
-            merge_refused(root, item),
-            format!("this context can't merge into primary. {REPAIR_NOTE} Then prepare again."),
-        )
-    })
+        .any(|step| matches!(step, LifecycleWayOut::SaveItem { .. }))
+    {
+        render::NO_CONTEXT_NOTE.to_owned()
+    } else {
+        format!("this context can't merge into primary. {REPAIR_NOTE}")
+    };
+    format!("{note} Then prepare again.")
+}
+
+/// The lines of a blocked prepare's way out.
+fn way_out_lines(kind: ItemDtoKind, way_out: &[LifecycleWayOut], root: &str) -> Vec<String> {
+    let mut next = Vec::new();
+    for step in way_out {
+        match step {
+            LifecycleWayOut::PollOnce => next.push(format!(
+                "manyhands-cli poll once --repo {} --request-id <new-request-id>",
+                quoted(root)
+            )),
+            LifecycleWayOut::SharePrimary => next.push(format!(
+                "manyhands-cli repo sync --repo {} --request-id <new-request-id>",
+                quoted(root)
+            )),
+            LifecycleWayOut::SaveItem { item_id } => {
+                next.push(render::save_line(kind, root, item_id));
+            }
+            LifecycleWayOut::RepairLocally { item_id } => {
+                next.extend(merge_refused(root, item_id));
+            }
+            // `Inspect` is C2's action; the rest are a result's or a held
+            // prepare's.
+            LifecycleWayOut::Inspect
+            | LifecycleWayOut::SendAgain
+            | LifecycleWayOut::RetryRequest { .. }
+            | LifecycleWayOut::CancelThenSendAgain { .. }
+            | LifecycleWayOut::ResumeOperation { .. }
+            | LifecycleWayOut::ResolveChildConflict { .. }
+            | LifecycleWayOut::Republish { .. }
+            | LifecycleWayOut::RepairOutside => {}
+        }
+    }
+    next
 }
 
 /// A prepare refused because an unfinished request, or an operation no request
 /// holds, has the item (decision 33): the command that goes on with it, in
 /// place of the action's own line.
-fn held(envelope: &Envelope<PrepareDataDto>) -> Option<Output> {
-    let (ResultCode::RecoveryRequired, None, Some(root), Some(item), [action]) = (
-        envelope.code,
-        &envelope.data,
+fn held(envelope: &Envelope<PrepareDataDto>, way_out: &[LifecycleWayOut]) -> Option<Output> {
+    let (Some(root), Some(item)) = (
         envelope.scope.repository.as_deref(),
         envelope.scope.item_id.as_deref(),
-        envelope.recovery.as_slice(),
     ) else {
         return None;
     };
-    let (line, note) = match action.action {
-        RecoveryActionKind::RequestRetry => {
-            let request = action.arguments.get("request_id")?.as_str()?;
-            (
-                format!(
-                    "manyhands-cli {} --repo {} --id {} --request-id {}",
-                    field(&envelope.command),
-                    quoted(root),
-                    field(item),
-                    field(request)
-                ),
-                HELD_NOTE,
-            )
+    let (line, note) = match way_out {
+        [LifecycleWayOut::RetryRequest { request_id }] => {
+            (again(&envelope.command, root, item, request_id), HELD_NOTE)
         }
-        RecoveryActionKind::OperationResume => (
-            format!(
-                "manyhands-cli operation resume --repo {} --operation-id {}",
-                quoted(root),
-                field(action.operation_id.as_deref()?)
-            ),
-            HELD_RESUME_NOTE,
-        ),
+        [LifecycleWayOut::ResumeOperation { operation_id }] => {
+            (resume_line(root, operation_id), HELD_RESUME_NOTE)
+        }
         _ => return None,
     };
     let refusal = refusal_of(envelope, Vec::new());
@@ -406,21 +363,24 @@ fn held(envelope: &Envelope<PrepareDataDto>) -> Option<Output> {
 /// The human output of a prepare of these verbs: C2's, with a blocked prepare's
 /// way out.
 pub fn prepare(kind: ItemDtoKind, envelope: &Envelope<PrepareDataDto>) -> Output {
-    if let Some(output) = held(envelope) {
+    let way_out = lifecycle_prepare_way_out(kind, envelope);
+    if let Some(output) = held(envelope, &way_out) {
         return output;
     }
 
-    let (Some(PrepareDataDto::LifecycleBlocked(data)), Some(root), Some(item)) = (
+    let (Some(PrepareDataDto::LifecycleBlocked(data)), Some(root), Some(_)) = (
         &envelope.data,
         envelope.scope.repository.as_deref(),
         envelope.scope.item_id.as_deref(),
     ) else {
         return render::prepare_output(false, envelope);
     };
-    let Some((next, note)) = way_out(kind, &data.blockers, root, item) else {
+    let next = way_out_lines(kind, &way_out, root);
+    if next.is_empty() {
         let refusal = refusal_of(envelope, envelope.recovery.clone());
         return render::failure_output(false, &refusal, Some(blockers_line(&data.blockers)));
-    };
+    }
+    let note = way_out_note(&data.blockers, &way_out);
     let mut extra = blockers_line(&data.blockers);
     for line in next {
         extra.push_str(&format!("next: {line}\n"));

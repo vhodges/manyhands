@@ -483,11 +483,12 @@ impl Command {
             Self::PollOnce => ProgressStage::Connecting,
             Self::LocalContextSync | Self::LocalContextResolve => ProgressStage::Observing,
             Self::IndexRefresh | Self::IndexRebuild => ProgressStage::Indexing,
-            Self::ItemSync
-            | Self::RepoSync
-            | Self::ItemRepublish
-            | Self::DocumentPromote
-            | Self::TicketClose => ProgressStage::Connecting,
+            Self::ItemSync | Self::RepoSync | Self::ItemRepublish => ProgressStage::Connecting,
+            // What a promotion or a closure does first is look at its record
+            // and the repository: a local-only or cleanup-only run never
+            // connects, and one that does reports `connecting` itself (D5
+            // decision 11).
+            Self::DocumentPromote | Self::TicketClose => ProgressStage::Observing,
             // An approval connects to the host to see the key it
             // presents, and does nothing else there.
             Self::HostApprove | Self::HostReplace => ProgressStage::Connecting,
@@ -748,6 +749,9 @@ mod tests {
                 command,
                 Command::ItemRepublish | Command::DocumentPromote | Command::TicketClose
             );
+            // A promotion or a closure looks first, and reports its steps'
+            // stages itself (D5 decision 11).
+            let lifecycle = matches!(command, Command::DocumentPromote | Command::TicketClose);
             let stopping = local
                 || comment
                 || confirmed
@@ -765,7 +769,7 @@ mod tests {
                 );
                 assert_eq!(
                     command.stage(),
-                    if local {
+                    if local || lifecycle {
                         ProgressStage::Observing
                     } else if comment {
                         ProgressStage::Writing
@@ -978,7 +982,7 @@ mod tests {
             assert!(!command.was_accepted_without_operation(), "{command:?}");
             assert!(!command.restores_index(), "{command:?}");
             assert!(!command.creates_its_repository(), "{command:?}");
-            assert_eq!(command.stage(), ProgressStage::Connecting, "{command:?}");
+            assert_eq!(command.stage(), ProgressStage::Observing, "{command:?}");
         }
     }
 

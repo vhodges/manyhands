@@ -683,10 +683,11 @@ fn conflict() -> Envelope<MutationDataDto> {
 }
 
 /// A share of the item that stopped on a conflict raises the conflict
-/// banner, which says the work is safe and offers nothing (decision 13),
-/// and the pill needs attention; dismissing its entry ends both.
+/// banner, which says the work is safe and offers Review changes (decision
+/// 13; D5 B5, E-7), and the pill needs attention; dismissing its entry
+/// ends both.
 #[gpui_kit::test]
-fn the_conflict_banner_says_work_is_safe_and_offers_nothing(cx: &mut TestAppContext) {
+fn the_conflict_banner_says_work_is_safe_and_offers_review_changes(cx: &mut TestAppContext) {
     let (shell, root) = shell(true, cx);
     open_ticket(&shell, &root, cx);
     assert!(!shell.present("item-conflict", cx));
@@ -700,29 +701,48 @@ fn the_conflict_banner_says_work_is_safe_and_offers_nothing(cx: &mut TestAppCont
     assert_eq!(
         CONFLICT_BANNER,
         "You and someone else both changed this since it was last shared. Your work is \
-         safe. Resolving it in Manyhands arrives in a later release."
+         safe."
     );
     assert_eq!(
         shell.label("item-pill", cx).as_deref(),
         Some(NEEDS_ATTENTION)
     );
-    // The banner's frame holds its words and no control.
+    // The banner's frame holds its words and one control: Review changes.
+    assert_eq!(
+        shell.label("item-review-changes", cx).as_deref(),
+        Some(crate::desktop::view::conflict::REVIEW_CHANGES)
+    );
     let others = shell.frame(cx, |window, _| {
         let words = window
             .try_find("item-conflict")
             .expect("the banner")
             .path()
             .to_vec();
-        let frame = &words[..words.len() - 1];
+        let review = window
+            .try_find("item-review-changes")
+            .expect("Review changes")
+            .path()
+            .to_vec();
+        // The banner's own frame, however deep its words are drawn.
+        let at = words
+            .iter()
+            .rposition(|id| {
+                matches!(id, gpui_kit::ElementId::NamedInteger(name, _) if name.as_ref() == "item-banner")
+            })
+            .expect("the banner's frame");
+        let frame = &words[..=at];
         gpui_kit::base::test_support::snapshots(window)
             .iter()
             .filter(|element| {
                 let path = element.path();
-                path.starts_with(frame) && path != frame && path != words.as_slice()
+                path.starts_with(frame)
+                    && path != frame
+                    && path != words.as_slice()
+                    && !path.starts_with(&review)
             })
             .count()
     });
-    assert_eq!(others, 0, "the banner offers no action");
+    assert_eq!(others, 0, "the banner offers Review changes only");
 
     shell.click(request_id(share.id, "dismiss"), cx);
     assert!(!shell.present("item-conflict", cx));

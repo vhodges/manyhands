@@ -302,11 +302,12 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     walk.keys("secondary-3", cx);
     walk.on(("tab", 0usize), Region::Content, cx);
 
-    let header: [ElementId; 10] = [
+    let header: [ElementId; 11] = [
         ("tab-close-button", 0usize).into(),
         "item-comments".into(),
         "item-edit".into(),
         "item-share".into(),
+        "item-lifecycle-action".into(),
         "chip-type".into(),
         "chip-status".into(),
         "chip-project".into(),
@@ -417,6 +418,7 @@ async fn tab_order_runs_header_share_chips_page_discussion_composer(cx: &mut Tes
     walk.on(("tab", 0usize), Region::Content, cx);
     walk.tab_to("tab", "item-share", cx);
     for id in [
+        "item-lifecycle-action",
         "chip-type",
         "chip-status",
         "chip-project",

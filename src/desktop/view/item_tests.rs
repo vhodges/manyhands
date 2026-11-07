@@ -15,11 +15,12 @@ use time::OffsetDateTime;
 use super::{
     NONCONFORMING_FILE, SOURCE_NOT_UTF8,
     discussion::{REPLY_INDENT, offset_at, shown_time},
+    header::LIFECYCLE_ACTION,
 };
 use crate::desktop::{
     model::{
         item::{
-            KIND_ACTIVE, KIND_PRIMARY, LATER, LATER_NOTE, NOT_REPRESENTABLE, UNKNOWN_AUTHOR,
+            CLOSE_TICKET, KIND_ACTIVE, KIND_PRIMARY, NOT_REPRESENTABLE, UNKNOWN_AUTHOR,
             provenance_label,
         },
         navigation::OpenTarget,
@@ -451,17 +452,14 @@ fn a_nonconforming_entry_opens_by_path_with_its_problem_and_repair_offered(
     assert!(present(&shell, "item-source", cx));
     assert!(!present(&shell, "comments-state", cx));
 
-    // The header's later actions are shown, and each says it is not
-    // available yet. The header's primary action is the ticket's, Close
-    // ticket…. Repair is not one of them.
-    let later: Vec<&str> = LATER
-        .into_iter()
-        .filter(|action| !["Approve and merge…"].contains(action))
-        .collect();
-    assert_eq!(shell.rows("later-action", cx), later);
-    let notes = shell.rows("later-note", cx);
-    assert_eq!(notes.len(), later.len());
-    assert!(notes.iter().all(|note| note == LATER_NOTE));
+    // No action waits for a later release (E-4): the header's action is
+    // the ticket's, Close ticket…, live. Repair is not it.
+    assert!(!present(&shell, ("later-action", 0usize), cx));
+    assert!(!present(&shell, ("later-note", 0usize), cx));
+    assert_eq!(
+        shell.label(LIFECYCLE_ACTION, cx).as_deref(),
+        Some(CLOSE_TICKET)
+    );
     // Repair is offered from the "Needs fixing" banner: pressed, it opens
     // the repair view, and the problem is still shown.
     assert_eq!(shell.label("item-repair", cx).as_deref(), Some("Repair…"));

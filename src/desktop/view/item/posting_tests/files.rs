@@ -237,6 +237,13 @@ pub(super) fn saved_conflict(comment: &ItemId) -> Envelope<MutationDataDto> {
     ))
 }
 
+/// Row 6: written and committed, its publication needs the key unlocked.
+pub(super) fn saved_needs_unlock() -> Envelope<MutationDataDto> {
+    let mut effects = effects(WriteEffect::Written, CheckpointEffect::Committed);
+    effects.publication = PublicationEffect::Pending;
+    answer(ResultCode::UnlockRequired, effects)
+}
+
 /// Nothing written or committed, answered `code`.
 pub(super) fn not_saved(code: ResultCode) -> Envelope<MutationDataDto> {
     answer(

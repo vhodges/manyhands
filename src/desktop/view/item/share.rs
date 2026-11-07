@@ -19,7 +19,8 @@
 //! the first of the tab's own reads begun once the share had finished):
 //! sharing private work changes what the item reads, so the read before
 //! the share never speaks for its outcome. A conflict raises the item's
-//! conflict banner, which offers nothing (`share_outcome`, decision 13).
+//! conflict banner, which offers Review changes (`share_outcome`, decision
+//! 13; D5 B5, `review`).
 //! So does the item's newest post whose comment was saved but whose
 //! synchronization stopped on a conflict (`post_conflict`, design,
 //! Posting), until its entry is dismissed or a share publishes it.
@@ -172,24 +173,27 @@ impl ItemPane {
     /// operation area entry listed, with its comment saved but its
     /// synchronization stopped on a conflict (design, Posting,
     /// `SavedConflict`): the item's conflict banner shows, offering
-    /// nothing, as for a share's (decision 13). Dismissing its entry, a
-    /// newer post of the item, or a share that published the comment
-    /// (decision 14) ends it.
+    /// Review changes, as for a share's (decision 13; D5 B5). Dismissing
+    /// its entry, a newer post of the item, or a share that published the
+    /// comment (decision 14) ends it.
     pub(super) fn post_conflict(&self, cx: &App) -> bool {
+        self.post_conflict_request(cx).is_some()
+    }
+
+    /// The post `post_conflict` finds, by its request.
+    pub(super) fn post_conflict_request(&self, cx: &App) -> Option<DesktopRequestId> {
         let Some(Intent::ItemSync { root, kind, id }) = self.share_target() else {
-            return false;
+            return None;
         };
         let operations = self.services.operations().read(cx);
-        let Some(request) = operations.requests().iter().find(|request| {
+        let request = operations.requests().iter().find(|request| {
             matches!(&request.intent, Intent::CommentAdd { root: asked, kind: asked_kind, id: asked_id, .. }
                 if *asked == root && *asked_kind == kind && *asked_id == id)
-        }) else {
-            return false;
-        };
+        })?;
         let (RequestState::Finished(..), Intent::CommentAdd { comment_id, .. }) =
             (&request.state, &request.intent)
         else {
-            return false;
+            return None;
         };
         self.services
             .submissions()
@@ -198,9 +202,12 @@ impl ItemPane {
             .is_some_and(|post| {
                 post.request == request.id
                     && !post.shared_since()
+                    // Until a resolution of it applies (D5 B3).
+                    && operations.review(request.id).is_some()
                     && matches!(&post.state, SubmissionState::Finished { result, .. }
                         if matches!(result.outcome, CommentOutcome::SavedConflict { .. }))
             })
+            .then_some(request.id)
     }
 
     /// What the item's newest share (`item sync`) says once finished,
@@ -220,8 +227,11 @@ impl ItemPane {
         let result = share_result(&self.services, latest, cx)?;
         Some(ShareOutcome {
             request: latest,
-            words: share_words(&self.services, latest, &result, cx)?,
-            conflict: matches!(result.outcome, SyncOutcome::Conflict { .. }),
+            // An item's share: it names no primary branch.
+            words: share_words(&self.services, latest, &result, None, cx)?,
+            // Until a resolution of it applies (D5 B3: the banner clears).
+            conflict: matches!(result.outcome, SyncOutcome::Conflict { .. })
+                && self.services.operations().read(cx).review(latest).is_some(),
             attention: !matches!(
                 result.outcome,
                 SyncOutcome::Published | SyncOutcome::Current | SyncOutcome::NothingToShare
@@ -335,6 +345,7 @@ impl ItemPane {
             PublicationRemote::Named(name) => Some(name),
         };
         let sharing = self.sharing();
+        let locked = self.edits_wait(cx);
         let label = match (remote, sharing) {
             (_, true) => SHARING,
             (Some(_), false) => SHARE,
@@ -344,10 +355,18 @@ impl ItemPane {
             .label(label)
             .small()
             .icon(Icon::default().path(icon_path("cloud-upload")))
-            .disabled(sharing)
+            .disabled(sharing || locked)
             .on_click(cx.listener(|pane, _: &ClickEvent, window, cx| {
                 pane.share_item(window, cx);
             }));
+        // While the item's close or merge is unfinished, Share waits (R-23).
+        if self.locked_words(cx).is_some() {
+            return Some(self.locked_note(
+                super::lock::SHARE_LOCKED,
+                button.into_any_element(),
+                cx,
+            ));
+        }
         let Some(remote) = remote else {
             return Some(button.into_any_element());
         };
@@ -372,7 +391,7 @@ impl ItemPane {
         let Some(intent) = self.share_target() else {
             return false;
         };
-        if self.model.item().rows().is_none() {
+        if self.model.item().rows().is_none() || self.edits_wait(cx) {
             return false;
         }
         match self.publication_remote() {

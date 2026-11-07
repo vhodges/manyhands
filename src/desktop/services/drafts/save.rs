@@ -330,6 +330,29 @@ impl DraftRegistry {
         id: DraftId,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), DraftErrorKind>> {
+        self.discard_telling(id, true, cx)
+    }
+
+    /// As `discard`, but release on leave is not told (`DraftDiscardLanded`
+    /// is not emitted): the lifecycle lock ends a clean session this way,
+    /// and the item's context is left as it is while its close or merge is
+    /// unfinished (R-23).
+    pub(crate) fn discard_quietly(
+        &mut self,
+        id: DraftId,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), DraftErrorKind>> {
+        self.discard_telling(id, false, cx)
+    }
+
+    /// `discard`, telling release on leave of a deleted draft when
+    /// `release`.
+    fn discard_telling(
+        &mut self,
+        id: DraftId,
+        release: bool,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), DraftErrorKind>> {
         // The tab the session is attached to learns it ended (R-71).
         let tab = self.tab_of(id);
         let Some(live) = self
@@ -380,7 +403,7 @@ impl DraftRegistry {
                 if let Some(tab) = tab {
                     cx.emit(SessionDiscarded::Landed(tab, discarded.is_ok()));
                 }
-                if discarded.is_ok() {
+                if discarded.is_ok() && release {
                     cx.emit(DraftDiscardLanded(target));
                 }
             });

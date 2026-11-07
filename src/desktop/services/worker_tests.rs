@@ -27,7 +27,10 @@ use crate::desktop::{
     model::operations::Operations,
     services::{
         JobKind,
-        requests::{CommentBody, DesktopRequest, DesktopRequestId, Intent, Lane, RequestState},
+        requests::{
+            CommentBody, DesktopRequest, DesktopRequestId, Intent, Lane, PathResolution,
+            RequestState,
+        },
     },
     test_support::{delaying::DelayingBackend, fixtures::Fixture},
 };
@@ -1144,6 +1147,29 @@ fn give_up_and_retry_of_one_request_refuse_each_other() {
     assert!(!harness.worker.give_up(refresh));
 }
 
+/// R-24: a remote resolution stops at safe points, but is never given
+/// up: a resend after a stop may checkpoint the resolution and still read as
+/// already finished. Its retry is still taken.
+#[test]
+fn a_remote_resolution_is_never_given_up() {
+    let mut harness = Harness::new();
+    let intent = Intent::ConflictResolve {
+        root: harness.root.clone(),
+        operation_id: manyhands::repository::OperationId::new(),
+        observation: format!("conflict-v1:{}", "0".repeat(64)),
+        resolutions: vec![PathResolution {
+            token: format!("conflict-path-v1:{}", "1".repeat(64)),
+            source: "source".to_owned(),
+        }],
+    };
+    assert!(intent.stops_at_safe_points());
+    let id = harness.worker.submit(intent, Lane::User, None, None);
+    harness.until_end_of(id);
+    assert!(!harness.worker.give_up(id));
+    assert!(harness.worker.retry(id, None));
+    harness.until_end_of(id);
+}
+
 /// After each finished attempt of a command that stops at safe points,
 /// the worker asks `show_request` and keeps the record's state; one whose
 /// record cannot be read is Unknown (P17). Other commands keep none.
@@ -1240,4 +1266,44 @@ fn giving_up_an_unreadable_record_resends_with_its_token_cancelled() {
     assert_ne!(finished(&seen, id).code, ResultCode::Ok);
     assert_eq!(harness.worker.gave_up(id), Some(GaveUp::Resent));
     assert_eq!(harness.worker.record_state(id), Some(RecordState::Unknown));
+}
+
+/// The progress-sink seam (D5 Testing): a job held at a named stage parks
+/// once that stage has reached the UI, accepted and still running, and
+/// dropping the gate lets the library go on. Nothing else touches the
+/// repository while it is parked: the job may hold its lease.
+#[test]
+fn a_stage_hold_parks_after_its_stage_reaches_the_ui() {
+    let mut harness = Harness::new();
+    let held = harness
+        .backend
+        .hold_at_stage(JobKind::IndexRefresh, ProgressStage::Accepted);
+    let id = harness
+        .worker
+        .submit(harness.refresh(), Lane::User, None, None);
+    held.wait_reached();
+    loop {
+        match harness.next() {
+            Seen::Progress(of, progress) if of == id => {
+                assert_eq!(progress.stage, ProgressStage::Accepted);
+                break;
+            }
+            Seen::Finished(of, _) if of == id => panic!("the held job finished"),
+            _ => {}
+        }
+    }
+    let running = harness.worker.running_job().expect("the job is parked");
+    assert_eq!(running.id, id);
+    assert!(running.accepted);
+    assert!(matches!(
+        harness.state(id),
+        RequestState::Running {
+            stage: Some(ProgressStage::Accepted),
+            accepted: true,
+        }
+    ));
+
+    drop(held);
+    let seen = harness.until_end_of(id);
+    assert_eq!(finished(&seen, id).code, ResultCode::Ok);
 }

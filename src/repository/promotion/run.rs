@@ -39,11 +39,42 @@ pub(in super::super) trait PromotionIo {
     ) -> Result<DeleteObservation, SynchronizationError>;
 }
 
+/// What a run is about to do, as its observer is told it (D5 decision 11).
+/// It is the domain's: the mutation boundary maps it to its progress stages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum RunEvent {
+    /// A child synchronization of `ChildRole` is about to run. A child
+    /// adopted as complete, and the acknowledgement of a cancelled one, are
+    /// not started.
+    ChildStarting(ChildRole),
+    /// A safe point of a started child.
+    ChildSafePoint(ChildRole, RemoteOperationSafePoint),
+    /// A closure's checkpoint is about to be written.
+    Recording,
+    /// Primary is about to be moved to a merge.
+    Integrating,
+    /// The context is about to be retired.
+    CleaningUp,
+}
+
+/// What is told of a run's steps, each as it starts, and only the steps that
+/// run (D5 decision 11).
+pub(in super::super) trait RunObserver {
+    fn event(&mut self, event: RunEvent);
+}
+
+/// The observer of a run no one watches.
+pub(in super::super) struct Unobserved;
+impl RunObserver for Unobserved {
+    fn event(&mut self, _event: RunEvent) {}
+}
+
 pub(super) fn promote<P: SessionCredentialProvider>(
     service: &RepositoryService,
     request: PromoteDocumentRequest,
     session: &mut SessionCredentials<P>,
     probe: Option<CancellationProbe>,
+    progress: &mut dyn RunObserver,
 ) -> Result<DocumentPromotionResult, DocumentPromotionError> {
     run_lifecycle(
         &DocumentPromotionLifecycle,
@@ -53,17 +84,26 @@ pub(super) fn promote<P: SessionCredentialProvider>(
             ..lifecycle_request(request)
         },
         session,
+        progress,
     )
 }
 
-/// Any lifecycle over the production children and exact-delete transport.
+/// Any lifecycle over the production children and exact-delete transport,
+/// telling `progress` of its steps.
 pub(in super::super) fn run_lifecycle<L: Lifecycle, P: SessionCredentialProvider>(
     lifecycle: &L,
     service: &RepositoryService,
     request: LifecycleRequest<L::Expectation>,
     session: &mut SessionCredentials<P>,
+    progress: &mut dyn RunObserver,
 ) -> Result<L::Output, L::Error> {
-    run_with_io(lifecycle, service, request, &mut Direct(session, L::KIND))
+    run_observed(
+        lifecycle,
+        service,
+        request,
+        &mut Direct(session, L::KIND),
+        progress,
+    )
 }
 
 struct Direct<'a, P>(&'a mut SessionCredentials<P>, LifecycleKind);
@@ -277,13 +317,34 @@ pub(super) fn promote_with_io(
         io,
     )
 }
+#[cfg(test)]
 pub(in super::super) fn run_with_io<L: Lifecycle>(
     lifecycle: &L,
     service: &RepositoryService,
     request: LifecycleRequest<L::Expectation>,
     io: &mut impl PromotionIo,
 ) -> Result<L::Output, L::Error> {
-    let result = promote_inner(lifecycle, service, request.clone(), io);
+    run_observed(lifecycle, service, request, io, &mut Unobserved)
+}
+/// `run_with_io`, telling `progress` of the steps that run.
+#[cfg(test)]
+pub(in super::super) fn run_with_io_observed<L: Lifecycle>(
+    lifecycle: &L,
+    service: &RepositoryService,
+    request: LifecycleRequest<L::Expectation>,
+    io: &mut impl PromotionIo,
+    progress: &mut dyn RunObserver,
+) -> Result<L::Output, L::Error> {
+    run_observed(lifecycle, service, request, io, progress)
+}
+fn run_observed<L: Lifecycle>(
+    lifecycle: &L,
+    service: &RepositoryService,
+    request: LifecycleRequest<L::Expectation>,
+    io: &mut impl PromotionIo,
+    progress: &mut dyn RunObserver,
+) -> Result<L::Output, L::Error> {
+    let result = promote_inner(lifecycle, service, request.clone(), io, progress);
     let Err(error) = result else {
         return result;
     };
@@ -368,6 +429,7 @@ fn promote_inner<L: Lifecycle>(
     service: &RepositoryService,
     mut request: LifecycleRequest<L::Expectation>,
     io: &mut impl PromotionIo,
+    progress: &mut dyn RunObserver,
 ) -> Result<L::Output, L::Error> {
     let (_, root) =
         canonical_repository_root(&request.root, RepositoryOperation::RepositorySnapshot)?;
@@ -578,6 +640,7 @@ fn promote_inner<L: Lifecycle>(
             &bound_primary,
             &mut r,
             io,
+            progress,
         ));
     }
     if r.remote_name() != config.publication_remote.as_deref() {
@@ -604,7 +667,8 @@ fn promote_inner<L: Lifecycle>(
         .is_some_and(|p| !p.runs_context_child());
         if r.remote_name().is_some()
             && !cleanup_only
-            && let Err(error) = child::<L>(service, &request, &mut r, ChildRole::Context, io)
+            && let Err(error) =
+                child::<L>(service, &request, &mut r, ChildRole::Context, io, progress)
         {
             if cancelled::<L>(service, &request, &r)? {
                 release_child::<L>(service, &request, &r, ChildRole::Context);
@@ -663,6 +727,18 @@ fn promote_inner<L: Lifecycle>(
         let context = r.context_oid().ok_or_else(L::Error::recovery_required)?;
         L::integration_request(&p, r.expectation(), context)
     };
+    // A closure's checkpoint is written in the integration's hook, unless an
+    // earlier run wrote it. Whether the closure is new is the boundary's to
+    // say: it knows what the request consented to (R-15). A record whose
+    // `closing` was recorded by an earlier run (it reads as
+    // `context_synchronized`, with its checkpoint named) has the hook write
+    // the checkpoint in this call, so this call reports it; one at
+    // `integrating` or later wrote it long ago.
+    if L::KIND == LifecycleKind::TicketClosure
+        && (!r.effect_written() || r.step() == Step::ContextSynchronized)
+    {
+        progress.event(RunEvent::Recording);
+    }
     let prepared = match lifecycle.prepare_integration(
         service,
         &root,
@@ -713,6 +789,12 @@ fn promote_inner<L: Lifecycle>(
     r.set_integration_oid(Some(candidate.oid()));
     save::<L>(service, &root, &r)?;
     boundary(service, &root, FailurePoint::BeforeIntegrationRef)?;
+    // Before the cancellation check that precedes the merge, so a stop asked
+    // at `integrating` lands before it. A context primary already holds is not
+    // merged, and reports nothing (R-14).
+    if r.integration_kind() == Some(IntegrationKind::Merged) {
+        progress.event(RunEvent::Integrating);
+    }
     if cancelled::<L>(service, &request, &r)? {
         return Err(L::Error::interrupted());
     }
@@ -734,6 +816,7 @@ fn promote_inner<L: Lifecycle>(
         &bound_primary,
         &mut r,
         io,
+        progress,
     ))
 }
 
@@ -774,9 +857,15 @@ struct CancellationObserver<'a, L: Lifecycle> {
     service: &'a RepositoryService,
     request: &'a LifecycleRequest<L::Expectation>,
     record: &'a L::Record,
+    /// Where a started child's safe points are told, by its role. An
+    /// acknowledgement's are not.
+    progress: Option<(&'a mut dyn RunObserver, ChildRole)>,
 }
 impl<L: Lifecycle> SynchronizationObserver for CancellationObserver<'_, L> {
-    fn safe_point(&mut self, _: RemoteOperationSafePoint) -> SafePointRequest {
+    fn safe_point(&mut self, point: RemoteOperationSafePoint) -> SafePointRequest {
+        if let Some((progress, role)) = &mut self.progress {
+            progress.event(RunEvent::ChildSafePoint(*role, point));
+        }
         match cancelled::<L>(self.service, self.request, self.record) {
             Ok(true) => SafePointRequest::Cancel,
             Ok(false) => SafePointRequest::Continue,
@@ -816,6 +905,7 @@ fn child<L: Lifecycle>(
     r: &mut L::Record,
     role: ChildRole,
     io: &mut impl PromotionIo,
+    progress: &mut dyn RunObserver,
 ) -> Result<SynchronizationOutcome, SynchronizationError> {
     let root = &request.root;
     let observed = state::with_transaction(service, root, |tx, _| L::child_state(tx, r, role))?;
@@ -866,6 +956,7 @@ fn child<L: Lifecycle>(
                         service,
                         request,
                         record: &*r,
+                        progress: None,
                     };
                     let execution = L::child_execution(r, role)?;
                     let _ack_result = io.synchronize(service, ack, &mut observer, &execution);
@@ -900,10 +991,12 @@ fn child<L: Lifecycle>(
         })?;
         restart = false;
     }
+    progress.event(RunEvent::ChildStarting(role));
     let mut observer = CancellationObserver::<L> {
         service,
         request,
         record: &*r,
+        progress: Some((progress, role)),
     };
     let execution = L::child_execution(r, role)?;
     let result = io.synchronize(
@@ -1046,9 +1139,11 @@ fn finish_integrated<L: Lifecycle>(
     primary: &str,
     r: &mut L::Record,
     io: &mut impl PromotionIo,
+    progress: &mut dyn RunObserver,
 ) -> L::Output {
     let mut known = None;
-    if let Err(category) = finish_steps::<L>(service, request, primary, r, io, &mut known) {
+    if let Err(category) = finish_steps::<L>(service, request, primary, r, io, progress, &mut known)
+    {
         // A concurrent same-ID executor may have completed while this child's
         // index handoff was outside the lease. Stored completion outranks this
         // executor's now-obsolete unfinished-step snapshot.
@@ -1070,6 +1165,7 @@ fn finish_steps<L: Lifecycle>(
     primary: &str,
     r: &mut L::Record,
     io: &mut impl PromotionIo,
+    progress: &mut dyn RunObserver,
     known: &mut Option<KnownPublication>,
 ) -> Result<(), Clean> {
     let root = &request.root;
@@ -1117,7 +1213,7 @@ fn finish_steps<L: Lifecycle>(
             r.set_publication(Some(Pub::NoPublicationRemote));
             r.set_cleanup(None);
         } else {
-            match child::<L>(service, request, r, ChildRole::Primary, io) {
+            match child::<L>(service, request, r, ChildRole::Primary, io, progress) {
                 Ok(SynchronizationOutcome::Published { oid, .. }) => {
                     remember_publication(
                         r,
@@ -1154,6 +1250,7 @@ fn finish_steps<L: Lifecycle>(
     if cancelled::<L>(service, request, r).map_err(recovery)? {
         return Err(Clean::Cancelled);
     }
+    progress.event(RunEvent::CleaningUp);
     require_configuration(root, primary, r.remote_name())?;
     // The merged context: what integration merged and the context branch now
     // holds. For promotion it is `context_oid`; for a closure, the checkpoint

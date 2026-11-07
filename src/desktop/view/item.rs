@@ -37,7 +37,8 @@
 //! confirmation dialog; a repair made, the tab follows the item by its ID.
 //!
 //! D4's slots: `share` the header's Share, `composer` the discussion's
-//! comment composers and `posting` the comments being posted.
+//! comment composers and `posting` the comments being posted. D5's
+//! `review` is the conflict banner's Review changes.
 
 mod banners;
 mod chips;
@@ -48,12 +49,14 @@ mod draft;
 mod draft_actions;
 mod edit;
 mod header;
+mod lock;
 mod page;
 mod pill;
 mod posting;
 mod reads;
 mod relations_edit;
 mod repair;
+mod review;
 mod share;
 mod sheet;
 mod source;
@@ -90,7 +93,13 @@ pub(super) use details::text;
 pub(crate) use draft::NOT_SAVED;
 pub(crate) use draft::{NOT_DISCARDED, ReviewInDrafts, refused_label};
 pub(crate) use draft_actions::DraftDiscarded;
-pub(crate) use edit::{CloseThisTab, InitialsInSettings, Leaving};
+pub(crate) use edit::{CloseThisTab, InitialsInSettings, Leaving, SaveFirst};
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use header::{LIFECYCLE_ACTION, LIFECYCLE_NOTE, NO_ID, NOT_CREATED};
+#[cfg(all(test, feature = "desktop-test-support"))]
+pub(crate) use lock::OpenedFolders;
+pub(crate) use lock::lock_words;
+pub(crate) use lock::{CHECK_AGAIN, open_folder};
 pub(crate) use repair::FollowItem;
 pub(crate) use sheet::open_details;
 
@@ -179,6 +188,11 @@ pub(crate) struct ItemPane {
     sheet_focus: Vec<FocusHandle>,
     /// Around the sheet's Inspect link, whose own focus is the Kit's.
     link_focus: FocusHandle,
+    /// The header's lifecycle action, where its dialog gives focus back.
+    lifecycle_focus: FocusHandle,
+    /// The conflict banner's Review changes, where its sheet gives focus
+    /// back (`review`).
+    review_focus: FocusHandle,
     /// The details sheet's own scroll, where its focused controls are
     /// revealed.
     pub(super) sheet_scroll: ContentScroll,
@@ -204,6 +218,9 @@ pub(crate) struct ItemPane {
     /// The repository's publication remote, which the workspace sets from
     /// its navigation as the tab opens and as the list changes.
     publication_remote: PublicationRemote,
+    /// The repository's primary branch, as navigation last gave it (R-35):
+    /// what the lifecycle dialog and the sheet name before a preview does.
+    primary_branch: Option<String>,
     /// The discussion's new-comment and reply composers (`composer`).
     composers: composer::Composers,
     /// The comments being posted, drawn pending in their threads
@@ -292,6 +309,8 @@ impl ItemPane {
             chip_focus: chips::chip_focus(cx),
             sheet_focus: sheet::sheet_focus(cx),
             link_focus: cx.focus_handle(),
+            lifecycle_focus: cx.focus_handle(),
+            review_focus: cx.focus_handle(),
             fields: sheet::SheetFields::default(),
             relations,
             sheet_scroll: scroll.region(),
@@ -303,6 +322,7 @@ impl ItemPane {
             discussion: discussion::Discussion::new(cx),
             share: share::ShareState::default(),
             publication_remote: PublicationRemote::Unknown,
+            primary_branch: None,
             composers: composer::Composers::default(),
             posting,
             region_end: None,
@@ -397,6 +417,20 @@ impl ItemPane {
     /// The repository's publication remote, as navigation last gave it.
     pub(crate) fn publication_remote(&self) -> &PublicationRemote {
         &self.publication_remote
+    }
+
+    /// The repository's primary branch, as navigation last gave it.
+    pub(crate) fn primary_branch(&self) -> Option<&str> {
+        self.primary_branch.as_deref()
+    }
+
+    /// The workspace's navigation gives the repository's primary branch
+    /// (R-35).
+    pub(crate) fn set_primary_branch(&mut self, primary: Option<String>, cx: &mut Context<Self>) {
+        if self.primary_branch != primary {
+            self.primary_branch = primary;
+            cx.notify();
+        }
     }
 
     /// The workspace's navigation gives the repository's publication

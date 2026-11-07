@@ -30,15 +30,21 @@ use manyhands::{
 };
 
 mod outcomes;
+mod review;
 
+pub(crate) use review::{Review, ReviewOf};
+
+#[cfg(test)]
+pub(crate) use outcomes::main_branch_deleted;
 #[cfg(test)]
 pub(crate) use outcomes::{
     ANOTHER_SHARE_HOLDS, BRANCH_DELETED, CHOOSE_A_KEY, CURRENT, KEY_LOCKED, NEEDS_ATTENTION,
     NEEDS_IDENTITY, NOWHERE_TO_SHARE, SHARED, check_host_text, may_be_waiting_for,
 };
-pub(crate) use outcomes::{CONFLICT_BANNER, sync_text};
+pub(crate) use outcomes::{CONFLICT_BANNER, primary_name, primary_subject, share_text};
 
 use super::{
+    lifecycle_lock::{LifecycleLocks, LockKey},
     list_state::{ListState, Rows},
     navigation::UNAVAILABLE_CODES,
     publication::{ShareAttempt, ShareTarget, SyncResult, sync_outcome},
@@ -51,7 +57,8 @@ use crate::desktop::services::{
     worker::{RecordState, WorkerEvent},
 };
 
-/// Why a local-context synchronization's Resume is unavailable (D5).
+/// Why Resume is unavailable for a pending synchronization that no
+/// `operation resume` here takes up (D5).
 pub(crate) const SYNCHRONIZATION_UNAVAILABLE: &str = "Synchronization is not available yet";
 /// Why a recovery action that names nothing this session can act on is
 /// unavailable.
@@ -128,6 +135,15 @@ pub(crate) struct Operations {
     /// Each finished share's last answer, which its outcome is classified
     /// from (`share_result`).
     shares: HashMap<DesktopRequestId, Envelope<MutationDataDto>>,
+    /// Each finished lifecycle's last answer, which the lifecycle dialog
+    /// shows and takes its way out from (D5, A3): a promotion's or a
+    /// closure's, or a resume's that answered with lifecycle data.
+    lifecycles: HashMap<DesktopRequestId, Envelope<MutationDataDto>>,
+    /// The lifecycle lock's own state (D5 A2; R-21, R-22).
+    locks: LifecycleLocks,
+    /// The operation each finished request's last answer stopped on with a
+    /// conflict, whose sheet its entry offers (D5 B5, `review`).
+    reviews: HashMap<DesktopRequestId, Review>,
 }
 
 /// What finished requests may have changed since the views last read.
@@ -192,6 +208,8 @@ impl Operations {
             WorkerEvent::Queued(request) => {
                 self.stopping.remove(&request.id);
                 self.shares.remove(&request.id);
+                self.lifecycles.remove(&request.id);
+                self.reviews.remove(&request.id);
                 self.sends += 1;
                 self.sent.insert(request.id, self.sends);
                 self.answers.entry(request.id).or_default().queued();
@@ -222,12 +240,35 @@ impl Operations {
             WorkerEvent::Finished(id, envelope) => {
                 let envelope = *envelope;
                 self.stopping.remove(&id);
+                match review::conflict_of(&envelope) {
+                    Some(review) => self.reviews.insert(id, review),
+                    None => self.reviews.remove(&id),
+                };
+                // A resolution applied: no entry offers its conflict again,
+                // and the banner clears (B3).
+                if let Some(resolved) = self
+                    .request(id)
+                    .and_then(|request| review::resolved_by(&request.intent, &envelope))
+                {
+                    self.reviews
+                        .retain(|_, review| review.operation_id != resolved);
+                }
                 if self
                     .request(id)
                     .is_some_and(|request| ShareTarget::of(&request.intent).is_some())
                 {
                     self.shares.insert(id, envelope.clone());
                 }
+                if self.request(id).is_some_and(|request| {
+                    matches!(
+                        request.intent,
+                        Intent::TicketClose { .. } | Intent::DocumentPromote { .. }
+                    )
+                }) || matches!(envelope.data, Some(MutationDataDto::Lifecycle(_)))
+                {
+                    self.lifecycles.insert(id, envelope.clone());
+                }
+                self.lifecycle_answered(id, &envelope);
                 match &envelope.data {
                     Some(MutationDataDto::Ticket(ticket)) if !ticket.rejected.is_empty() => {
                         self.rejected.insert(id, ticket.rejected.clone());
@@ -384,6 +425,58 @@ impl Operations {
         ))
     }
 
+    /// The operation whose conflict the finished request `id` last stopped
+    /// on, which Review changes opens the sheet on (D5 B5).
+    pub(crate) fn review(&self, id: DesktopRequestId) -> Option<&Review> {
+        self.reviews.get(&id)
+    }
+
+    /// The last answer of the lifecycle `id`: a promotion's or a closure's,
+    /// or a resume's with lifecycle data. `None` while it is queued or
+    /// running again, and for any other request.
+    pub(crate) fn lifecycle_answer(
+        &self,
+        id: DesktopRequestId,
+    ) -> Option<&Envelope<MutationDataDto>> {
+        self.lifecycles.get(&id)
+    }
+
+    /// A finished request of an item's lifecycle, or a resume that
+    /// answered with lifecycle data, tells the lock: until the rows are
+    /// read again the item awaits, and the answer sets or ends its L-4
+    /// exemption (D5 A2; R-21, R-22).
+    fn lifecycle_answered(&mut self, id: DesktopRequestId, envelope: &Envelope<MutationDataDto>) {
+        let Some(request) = self.request(id) else {
+            return;
+        };
+        let Some(root) = request.intent.root().and_then(Path::to_str) else {
+            return;
+        };
+        let data = match &envelope.data {
+            Some(MutationDataDto::Lifecycle(data)) => Some(data.as_ref()),
+            _ => None,
+        };
+        let item = match (&request.intent, data) {
+            (_, Some(data)) => data.item_id.clone(),
+            (Intent::TicketClose { id, .. } | Intent::DocumentPromote { id, .. }, None) => {
+                id.to_string()
+            }
+            _ => return,
+        };
+        let key = LockKey::new(root, &item);
+        self.locks.answered(key, id, data);
+    }
+
+    /// The lifecycle lock's state.
+    pub(crate) fn locks(&self) -> &LifecycleLocks {
+        &self.locks
+    }
+
+    /// The lifecycle lock's state, to change.
+    pub(crate) fn locks_mut(&mut self) -> &mut LifecycleLocks {
+        &mut self.locks
+    }
+
     /// The answer of the host observation `id`, once it has one.
     pub(crate) fn observation(
         &self,
@@ -446,6 +539,10 @@ impl Operations {
             )
         {
             request.state = RequestState::Dismissed;
+            // Nothing shows a dismissed lifecycle's answer, or offers its
+            // conflict, again.
+            self.lifecycles.remove(&id);
+            self.reviews.remove(&id);
         }
     }
 
@@ -508,6 +605,7 @@ impl Operations {
         let ViewScope::Operations(root) = stamp.scope else {
             return false;
         };
+        self.locks.rows_read(&root, &result);
         if let ReadResult::Failed(failure) = &result
             && UNAVAILABLE_CODES.contains(&failure.code)
         {
@@ -533,6 +631,7 @@ impl Operations {
             .cloned()
             .collect();
         for root in gone {
+            self.locks.forget(&root);
             self.pending.remove(&root);
             self.generations.next(ViewScope::Operations(root));
         }
@@ -580,11 +679,13 @@ impl ShareTarget {
 
 /// A stage's words for a share or a post (design, Stage text), naming the
 /// publication remote `remote` while connecting. `None` for a stage the
-/// design gives no words: a share does not write.
+/// design gives no words: a share does not write. A lifecycle's merge and
+/// sharing name the primary branch, `primary` when known (R-35).
 pub(crate) fn stage_text(
     kind: Progressing,
     stage: ProgressStage,
     remote: Option<&str>,
+    primary: Option<&str>,
 ) -> Option<String> {
     let words = match (stage, kind) {
         (ProgressStage::Accepted | ProgressStage::Observing, Progressing::Share) => {
@@ -606,6 +707,14 @@ pub(crate) fn stage_text(
         (ProgressStage::Pushing, _) => "Sending your saved changes…",
         (ProgressStage::Verifying, _) => "Checking it arrived…",
         (ProgressStage::Indexing, _) => "Updating the list…",
+        (ProgressStage::Recording, _) => "Marking it closed…",
+        (ProgressStage::Integrating, _) => {
+            return Some(format!("Merging into {}…", primary_name(primary)));
+        }
+        (ProgressStage::Publishing, _) => {
+            return Some(format!("Sharing {}…", primary_name(primary)));
+        }
+        (ProgressStage::CleaningUp, _) => "Tidying up…",
         (ProgressStage::Stopping, _) => "Stopping at a safe point…",
     };
     Some(words.to_owned())
@@ -624,8 +733,8 @@ pub(crate) fn progress_words(
         Progressing::Post => "Posting",
     };
     let words = stage
-        .and_then(|stage| stage_text(kind, stage, remote))
-        .or_else(|| stage_text(kind, ProgressStage::Accepted, remote))
+        .and_then(|stage| stage_text(kind, stage, remote, None))
+        .or_else(|| stage_text(kind, ProgressStage::Accepted, remote, None))
         .unwrap_or_default();
     format!("{prefix} · {words}")
 }
@@ -875,6 +984,15 @@ impl Operations {
     }
 }
 
+/// Whether a pending row is a document promotion's or a ticket closure's
+/// parent (L2), which the library lists as remote work.
+fn is_lifecycle(operation: &OperationDto) -> bool {
+    matches!(
+        operation.action,
+        OperationAction::Promote | OperationAction::Close
+    )
+}
+
 /// Whether a pending row is a synchronization.
 fn is_synchronization(operation: &OperationDto) -> bool {
     operation.family == OperationFamily::Remote
@@ -905,6 +1023,17 @@ fn takes_up_remote_work(operation: &OperationDto) -> bool {
         )
 }
 
+/// Whether a pending row is a synchronization with no remote to publish
+/// to: the library lists it as a local operation of the remote name
+/// (`OperationDto::action`).
+fn local_synchronization(operation: &OperationDto) -> bool {
+    operation.family == OperationFamily::Local
+        && matches!(
+            operation.action,
+            OperationAction::SynchronizeContext | OperationAction::SynchronizePrimary
+        )
+}
+
 /// What a pending row offers for Resume.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ResumeOffer {
@@ -916,16 +1045,23 @@ pub(crate) enum ResumeOffer {
 }
 
 /// Resume is offered when the row waits to be resumed and is a local
-/// command (a comment's incomplete `submit_comment` among them) or a
-/// remote item or repository synchronization, by its operation ID
-/// (decision 11); a local-context synchronization shows it unavailable
-/// (D5). The library lists no comment publication waiting to be resumed
-/// (`takes_up_remote_work`), so none is offered.
+/// command (a comment's incomplete `submit_comment` and a `context
+/// sync-local` among them), a remote item or repository synchronization,
+/// or a local-context or primary synchronization with no remote (D5 B6,
+/// E-5), by its operation ID (decision 11). Any other synchronization
+/// shows it unavailable. The library lists no comment publication waiting
+/// to be resumed (`takes_up_remote_work`), so none is offered. A
+/// promotion's or closure's parent (L2) is no synchronization: it is not
+/// offered here, but by its own row, whose resume opens the lifecycle
+/// dialog (D5 Part C, `view/operations/resume.rs`).
 pub(crate) fn resume_offer(operation: &OperationDto) -> ResumeOffer {
     if operation.next_action != Some(OperationNextAction::Resume) {
         return ResumeOffer::NotOffered;
     }
-    if takes_up_remote_work(operation) {
+    if is_lifecycle(operation) {
+        return ResumeOffer::NotOffered;
+    }
+    if takes_up_remote_work(operation) || local_synchronization(operation) {
         return match operation.operation_id {
             Some(_) => ResumeOffer::Offered,
             None => ResumeOffer::NotOffered,

@@ -34,7 +34,7 @@ use super::{
         SynchronizationObserver, SynchronizationResult, SynchronizationSettings,
         SynchronizeRemoteRequest, TicketClosureError, TicketClosureResult,
         keys::{SessionCredentialProvider, SessionCredentials},
-        promotion::lifecycle::CancellationProbe,
+        promotion::{lifecycle::CancellationProbe, run::RunObserver},
         recovery::{FinalKind, JournalRow, PendingOperation},
         remote::sync::RepublishConsent,
         transport::{SshTransportError, SshTransportVerified, VerifySshTransportRequest},
@@ -83,6 +83,15 @@ contract_enum!(
     /// A resume reports `observing` before it looks at the operation it
     /// names, then `indexing` before a hand-off it runs, or the stages
     /// of a synchronization it takes up.
+    ///
+    /// A promotion or a closure reports `observing` before its run, then
+    /// the stages of the steps it runs (D5 decision 11): `connecting` when
+    /// it starts its context's synchronization, and that synchronization's
+    /// `fetching`, `updating_local` and `pushing`; `recording` before it
+    /// writes a closure's checkpoint; `integrating` before it moves primary
+    /// to a merge; `publishing` once, when it starts primary's publication;
+    /// and `cleaning_up` before it retires the context. A step it does not
+    /// run reports nothing.
     ProgressStage {
         Accepted => "accepted",
         Observing => "observing",
@@ -93,6 +102,10 @@ contract_enum!(
         Pushing => "pushing",
         Verifying => "verifying",
         Indexing => "indexing",
+        Recording => "recording",
+        Integrating => "integrating",
+        Publishing => "publishing",
+        CleaningUp => "cleaning_up",
         Stopping => "stopping",
     }
 );
@@ -103,7 +116,9 @@ contract_enum!(
 /// the request carries or meets: no body or source, no commit message,
 /// no remote location, no credential and no text a server sent.
 /// `effects` is what the request has completed so far; the request's
-/// result is what names a commit.
+/// result is what names a commit. A promotion's or a closure's stage events
+/// carry no effects, as `not_requested` throughout (D5 decision 11): its
+/// result is what reports them.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ProgressEvent {
     pub request_id: String,
@@ -124,7 +139,8 @@ pub struct ProgressEvent {
 ///
 /// A sink must not call back into the library. Two of a
 /// synchronization's stages, `updating_local` and the `observing` that
-/// follows it, are reported while the repository's lease is held.
+/// follows it, are reported while the repository's lease is held, and so
+/// is a promotion's or a closure's `integrating`.
 ///
 /// A sink that panics is sent nothing more by that call. The panic goes
 /// no further: the request runs on as if the sink had returned.
@@ -161,6 +177,18 @@ impl Subject {
                 accepted.scope.repository().map(str::to_owned),
                 Some(&accepted.position),
             ),
+        }
+    }
+
+    /// A subject of the request `request_id` of `command`, for a test that
+    /// has no binding or accepted request.
+    #[cfg(test)]
+    pub(crate) fn for_testing(request_id: &str, command: &'static str) -> Self {
+        Self {
+            request_id: request_id.to_owned(),
+            operation_id: None,
+            command,
+            scope: Scope::default(),
         }
     }
 
@@ -219,22 +247,26 @@ pub(crate) trait Session {
     /// call's token and by the flag of the request `asked_of`; see
     /// `RepositoryService::promote_document`. `None` when the session has
     /// no credentials, or they are in use: nothing was called.
+    /// `progress` is told of each step the run takes (D5 decision 11).
     fn promote_document(
         &self,
         service: &RepositoryService,
         request: PromoteDocumentRequest,
         asked_of: RequestId,
+        progress: &mut dyn RunObserver,
     ) -> Option<Result<DocumentPromotionResult, DocumentPromotionError>>;
 
     /// Closes a ticket with the session's credentials, stopped by the call's
     /// token and by the flag of the request `asked_of`; see
     /// `RepositoryService::close_ticket`. `None` when the session has no
     /// credentials, or they are in use: nothing was called.
+    /// `progress` is told of each step the run takes (D5 decision 11).
     fn close_ticket(
         &self,
         service: &RepositoryService,
         request: CloseTicketRequest,
         asked_of: RequestId,
+        progress: &mut dyn RunObserver,
     ) -> Option<Result<TicketClosureResult, TicketClosureError>>;
 
     /// Polls with the session's credentials, stopped by the call's token and by
@@ -345,10 +377,11 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         service: &RepositoryService,
         request: PromoteDocumentRequest,
         asked_of: RequestId,
+        progress: &mut dyn RunObserver,
     ) -> Option<Result<DocumentPromotionResult, DocumentPromotionError>> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
         let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
-        Some(service.promote_document_observed(request, &mut credentials, probe))
+        Some(service.promote_document_observed(request, &mut credentials, probe, progress))
     }
 
     fn close_ticket(
@@ -356,10 +389,11 @@ impl<P: SessionCredentialProvider> Session for CallSession<'_, P> {
         service: &RepositoryService,
         request: CloseTicketRequest,
         asked_of: RequestId,
+        progress: &mut dyn RunObserver,
     ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
         let mut credentials = self.credentials.try_borrow_mut().ok()?;
         let probe = CancellationProbe::new(self.cancel.clone(), asked_of);
-        Some(service.close_ticket_observed(request, &mut credentials, probe))
+        Some(service.close_ticket_observed(request, &mut credentials, probe, progress))
     }
 
     fn poll_once(
@@ -420,6 +454,7 @@ impl Session for NoSession {
         _service: &RepositoryService,
         _request: PromoteDocumentRequest,
         _asked_of: RequestId,
+        _progress: &mut dyn RunObserver,
     ) -> Option<Result<DocumentPromotionResult, DocumentPromotionError>> {
         None
     }
@@ -429,6 +464,7 @@ impl Session for NoSession {
         _service: &RepositoryService,
         _request: CloseTicketRequest,
         _asked_of: RequestId,
+        _progress: &mut dyn RunObserver,
     ) -> Option<Result<TicketClosureResult, TicketClosureError>> {
         None
     }
