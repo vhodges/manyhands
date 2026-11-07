@@ -230,9 +230,9 @@ today's region contents unchanged inside the new frame.
   Operations area). Panel headers follow `02`, "Panel header": single panel
   with icon, title and count; tabbed group with the amber active line.
   Toolbars stay as they are until 02 and 03.
-- **Default layout** (decision 1, recommended): left dock 290 px with
-  Repositories (0.6) stacked over Documents (1.4); right dock 440 px with
-  Tickets; bottom dock 150 px with Activity.
+- **Default layout** (decision 1): left dock 290 px with Repositories (0.6)
+  stacked over Documents (1.4); right dock 440 px with Tickets; bottom dock
+  150 px with Activity. Rows are 28 px (decision 7).
 - **Resizing** of docks and of stacked groups, with the toolkit's handles.
 - **Footer** (Kit `StatusBar`, 28 px), per `02`, "Footer": the left dock
   toggle and one toggle per left panel; the bottom dock toggle and one per
@@ -259,7 +259,7 @@ today's region contents unchanged inside the new frame.
   report it in Activity, when the file is missing, unreadable or of another
   version. Never write layout into a repository.
 - **Keyboard.** Dock toggles Ctrl B (left), Ctrl Alt B (right), Ctrl J
-  (bottom), as in Zed. One toggle per panel (decision 3). The region
+  (bottom), as in Zed. No per-panel toggle keys (decision 3). The region
   actions keep working: `secondary-1` focuses Repositories, `secondary-2`
   the last used of Tickets and Documents, `secondary-3` the item area,
   `secondary-4` Activity, and F6 cycles only visible panels. Focusing a
@@ -307,7 +307,7 @@ menus, keyboard toggles), and update this Wave.
   conflict markers after the title; nonconforming rows kept visible with
   "needs fixing"; closed titles in `secondary`; the footnote
   `{n} open tickets in {repository}`. Ready and Blocked filters keep working,
-  placed per decision 5.
+  in a filter menu beside the segmented control (decision 5).
 - **Documents:** toolbar (New document, New folder, Collapse all); tree rows
   with depth indent, chevrons, folder and file icons, collapsed descendant
   counts, the document title as the label and the path in the tooltip;
@@ -393,8 +393,9 @@ opening it no longer hides the open item.
 
 **Exit evidence:** Every existing settings journey and recovery route passes
 through the sheet by keyboard; opening and closing Settings leaves the open
-item, its scroll position and any draft untouched; the rule for an item
-details sheet that is already open (decision 6) is tested.
+item, its scroll position and any draft untouched; opening Settings while
+an item details sheet is open closes that sheet first and loses no edit
+(decision 6).
 
 ### Cycle 05: Existing Sheets And Dialogs
 
@@ -429,12 +430,13 @@ shared tokens and frame, and the split line below is unlikely to be needed.
   with its Suggested tag, the sharing remote select (non-SSH remotes listed
   but disabled, with the reason), the "Removing a repository … never
   deletes" note, and the identity step when Git has none. It opens from
-  the Repositories panel's `+`, from the Settings Repositories page and
-  from the empty Repositories panel.
+  the Repositories panel's `+`, from the Settings Repositories page
+  (replacing the Settings sheet until Cancel or Add, decision 10) and from
+  the empty Repositories panel.
 - **Unlock key dialog** (`05`, 2h, 440 px): today's passphrase dialog with
   the design's header, key card, note, Not now and Unlock, the inline error
   for a wrong passphrase, and Not now moving the prompt into Needs
-  attention. The show and hide toggle follows decision 9.
+  attention. There is no show and hide toggle (decision 9).
 - **Close ticket and Approve and merge dialog** (`05`, 2c to 2e, 580 px),
   where the check finds differences: today's lifecycle dialog laid out as
   the design's stages. Confirm shows
@@ -508,35 +510,37 @@ Wave 04 is complete when its Cycles have approved exit evidence and:
 | Restyling the lifecycle dialog and the resolve conflict sheet regresses D5 behavior (stale confirmations, retry reusing the operation, safe-point stop, no automatic winner) | Cycle 05 changes layout and copy only; D5's existing tests stay and must pass unchanged in what they assert about behavior. |
 | The design's list specs drop a Wave 03 behavior (Ready and Blocked, duplicate short codes, inaccessible entries) | Cycle 02's exit evidence names them; decision 5 places Ready and Blocked. |
 
-## Open Decisions For The Owner
+## Owner Decisions, 2026-11-07
 
-1. **Default layout.** Recommended: 1b without Projects and Teams (left:
-   Repositories over Documents; right: Tickets; bottom: Activity).
-2. **Top dock.** Settled 2026-11-07: no top dock. The owner accepts left,
-   right and bottom, which GPUI Kit 0.6.6 supports.
-3. **Panel toggle keys.** The handoff's Ctrl Shift R and Ctrl Shift D clash
-   with Rebuild (`secondary-shift-r`) and Open drafts (`secondary-shift-d`).
-   Recommended: no per-panel keys this Wave beyond the
-   existing `secondary-1` to `secondary-4` (which now also show a hidden
-   panel), plus the three Zed dock toggles.
-4. **Title bar on macOS and Windows.** Recommended: Kit `TitleBar` on every
-   platform, so the title bar looks and behaves the same everywhere.
-5. **Ready and Blocked filters.** Recommended: a filter menu beside the
-   Open/Closed/All control, keeping that control as designed.
-6. **Settings with a details sheet open.** Root has one sheet layer.
-   Recommended: opening Settings closes the details sheet first (its edits
-   live in the shared draft, so nothing is lost).
-7. **Row density.** Recommended: 28 px rows, no setting yet.
-8. **Fonts.** Recommended: the toolkit's UI font and one monospace font, at
-   the design's size scale.
-9. **Passphrase show and hide.** The design's Unlock key dialog has an `eye`
-   toggle, but today's dialog has none on purpose: the Kit's masked input
-   refuses copy and hides its value from accessibility. Recommended: keep it
-   without the toggle.
-10. **Add repository from Settings.** Root has one sheet layer, so the Add
-   repository sheet can't sit over the Settings sheet. Recommended: opening
-   it from Settings replaces the Settings sheet, and Cancel or Add returns to
-   the Settings Repositories page.
+The owner accepted each recommendation below, changing only decision 1 to
+use comfortable rows.
+
+1. **Default layout:** 1b without Projects and Teams (left: Repositories
+   over Documents; right: Tickets; bottom: Activity), with the comfortable
+   28 px rows of 1a in place of 1b's 24 px.
+2. **Top dock:** none. Left, right and bottom, which GPUI Kit 0.6.6
+   supports.
+3. **Panel toggle keys:** no per-panel keys in this Wave. The handoff's
+   Ctrl Shift R and Ctrl Shift D clash with Rebuild (`secondary-shift-r`)
+   and Open drafts (`secondary-shift-d`). The existing `secondary-1` to
+   `secondary-4` now also show a hidden panel, and the three Zed dock
+   toggles are added.
+4. **Title bar on macOS and Windows:** Kit `TitleBar` on every platform, so
+   the title bar looks and behaves the same everywhere.
+5. **Ready and Blocked filters:** a filter menu beside the Open/Closed/All
+   control, which stays as designed.
+6. **Settings with a details sheet open:** Root has one sheet layer, so
+   opening Settings closes the details sheet first. Its edits live in the
+   shared draft, so nothing is lost.
+7. **Row density:** 28 px rows, with no density setting yet.
+8. **Fonts:** the toolkit's UI font and one monospace font, at the design's
+   size scale.
+9. **Passphrase show and hide:** no toggle. The design's Unlock key dialog
+   has an `eye` toggle, but today's dialog leaves it out on purpose: the
+   Kit's masked input refuses copy and hides its value from accessibility.
+10. **Add repository from Settings:** Root has one sheet layer, so opening
+    the Add repository sheet from Settings replaces the Settings sheet, and
+    Cancel or Add returns to the Settings Repositories page.
 
 ## Deferred Work
 
@@ -552,7 +556,8 @@ Owner item 6 and the excluded design parts, to be planned later:
 ## Approval And Remaining Readiness
 
 Drafted 2026-11-07 from the owner's direction of that date. Not yet
-approved. Approval needs the owner's answers to the open decisions, or
-acceptance of their recommendations, and the source amendments above. Each
+approved. The owner settled every decision on 2026-11-07 (see
+[Owner Decisions](#owner-decisions-2026-11-07)). Approval still needs the
+owner's review of this text and the source amendments above. Each
 Cycle then needs its own ticket, Cycle document, plan and approval before
 implementation.
