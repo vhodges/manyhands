@@ -74,6 +74,17 @@ Per the owner's stop condition, **no wait-budget change was applied or tested**.
 Effective waits remain10s/held10s/parking15s. A focused owner decision on that API
 constraint is needed; no dependency patch, harness workaround or optimization.
 
+**Controller option2 selected (2026-11-07); previous parking blocker withdrawn.**
+Owner-approved stopgap now uses **one60s shared desktop-test wait**, re-exported by
+the UI harness and used by the held-job gate. Existing10ms polling and GPUI's
+independent **15s per-uninterrupted-park** guard are unchanged; no90/120s ceiling
+or dependency change is required. Uninstrumented exact64 result **64 passed/0
+failed/1516 filtered**,215.70s tests, no measured suspend; fresh strict all-target/
+all-feature Clippy and fmt pass. This is a test-timing accommodation, not a
+performance fix or a whole-desktop green. Three cfg(test) source files only;
+library/production safety inputs remain e6bc3912. Same SPEC delta review then
+same QUALITY review must precede any changed whole desktop/remaining gate run.
+
 ### Current D15 Amendment — 2026-11-06
 
 **Owner-approved contract; both same-reviewer source/contract re-reviews passed
@@ -8588,3 +8599,111 @@ No status save, push/PR/closure/native, other worktree, real profile/key/context
 draft action or remaining CLI/integration/local-sync/SSH/smoke gate. Ticket stays
 **implementing / runtime BLOCKED**; same whole SPEC delta review then same QUALITY
 review and runtime-evidence gates remain owed before any changed whole desktop run.
+
+## Task 8 — Approved60s Desktop-Test Accommodation; Exact64 Pass
+
+### Owner Decision And Minimal Test-Only Delta — 2026-11-07
+
+Controller explicitly selected **option2** within the owner's temporary timing
+approval:60s desktop UI/worker and held-job waits **while retaining GPUI's
+independent15s per-park guard and existing polling**. The prior requirement for
+a90/120s parking ceiling is withdrawn, not an owner-denied dependency upgrade.
+This resolves the preceding checkpoint's API blocker without a GPUI change.
+Performance work remains on the existing backlog; no profiling, optimization,
+new ticket/design/framework, new wakeup or synthetic load.
+
+Accepted the just-completed main preflight: clean entry
+**`03f606e78a13e7372c239d4122835e9011dd1b2d`**, origin/main
+**`846af67935f5381be9f355b25ae91d14e7705e6e`**, documentation-only merge
+**`9e8ad037f6ff42964aab2e6628927ed474d85697`**. No repeated fetch/merge. Library,
+production, test-library, schema/dependency/build inputs were frozen at
+**`e6bc391208e0c7bbc580528d6ba650f71003a5d0`** before this test-only change.
+
+Only three source files changed:
+
+- `src/desktop/test_support/mod.rs`: **one shared `WAIT = Duration::from_secs(60)`**,
+  with the owner date/temporary purpose. Parent module is `#[cfg(test)]`.
+- `src/desktop/view/harness.rs`: re-exports that same WAIT, preserving existing
+  imports; corrects the misleading aggregate-vs-parking comment. Both existing
+  worker/model and drawn waits retain their predicates, Instant deadlines,
+  `run_until_parked` and **POLL10ms**.
+- `src/desktop/test_support/delaying.rs`: held-job `wait_reached` uses that same
+  WAIT, with corrected comments. Condvar predicate, release-on-drop, gate
+  sequencing and all assertions are unchanged.
+
+The finite60s limit is per aggregate harness/gate wait, not a whole-test runtime
+limit. GPUI's **15s per uninterrupted park**, scheduler tick settings, test
+concurrency and existing timers remain unchanged; no new wakeup to defeat the
+guard. Production cache acquisition250ms, SQLite Busy5s, heartbeat, leases,
+consent600s, cancellation/fences/retirement/removal/lifetime protections are
+unchanged. All source outside these three cfg(test) files matches e6bc3912.
+`scope-proof.json` reverses only the selected budget/comment edits and confirms
+the remaining helper bodies byte-identical; dependency source hashes also match.
+
+### Actual One-Shot Uninstrumented Verification
+
+Existing uninstrumented whole-desktop62/64 failures and subsequent instrumented
+51/49 failures are the retained RED evidence. No unchanged10s ritual rerun or
+new wall-time assertion. Ran **once**, default threads, with both
+`RUST_TEST_THREADS` and **`MANYHANDS_TASK8_DIAG` unset**:
+
+`devenv shell -- cargo test --all-features --locked --bin manyhands --` followed
+by **all64 exact names** from `task8-desktop-rerun-analysis.json`, then `--exact`.
+Complete literal argv/names are in
+**`/tmp/opencode/task8-wait-budget-command.json`** and **`command.sh`**.
+
+**Exit0;64 passed/0 failed/0 ignored/1516 filtered;215.70s tests**. All64 completion
+lines accounted for, no hidden prefix/skip/extra case or retry. Cargo explicitly
+rebuilt current source in1m32s; there is **no instrumentation output**, and no
+cached instrumented executable was substituted. No GPUI parking panic, Busy panic
+or unexpected consent-expiry failure in this selected run; this does not waive
+their historical failures or establish all original causes. Libtest's whole-case
+“over60seconds” notices remain verbatim and are not individual wait failures.
+
+UTC **2026-11-07T15:18:35.494169Z→15:23:44.755580Z**;
+REALTIME**309.261411152s**, MONOTONIC**309.261403594s**,
+BOOTTIME**309.261403525s**, boot−mono**−0.000000069s** (sampling noise, no measured
+suspend). Finished normally well inside900s. Interval-only system PM entry/exit
+query returned zero matches, exit1/no-match/empty stderr; no user/full journal,
+power policy/inhibitor, induced sleep or real aging waits. Raw90-line receipt
+sidecar covers every byte; receipt clocks are not case-start/internal timings.
+Raw log SHA-256 **`a53bc02000c834ece604ab7df339b77b08ccb4b009e21657742713da38004dc7`**.
+
+Then, serial Devenv checks on the same source:
+
+| Static | Actual result |
+| --- | --- |
+| `devenv shell -- cargo fmt --check` | **Exit0**,17.618100972s monotonic; `task8-wait-budget-fmt.log` |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | **Exit0**,21.190365631s monotonic/20.90s Cargo; `task8-wait-budget-clippy.log` |
+
+No duplicate cargo-check/static group. Earlier check retains its actual unchanged
+production-input scope, not a fabricated fresh test-config check. **Library
+1530/0/160,1972.73s remains preserved**, not rerun; strict Clippy compiles all
+targets/features but does not constitute another library runtime pass.
+
+### Scope, Evidence Preservation And Mandatory Review Barrier
+
+**This accommodates existing slow work; it is not a root-cause optimization,
+performance guarantee, infrastructure waiver or whole-desktop gate pass.**
+Historical whole results **1518/62** and **1516/64** stay FAILED at their actual
+source/budgets; instrumented13/51 and15/49 remain diagnostic only. Current64 pass
+covers exactly that selected set with the new test budgets, not the other1516
+desktop cases. All retained44 C/L/S, enum/M1/D5/D6 and native/combinatorial
+limitations remain unchanged; no retirement guard or O-row waiver.
+
+**Before any changed whole-desktop gate:** same whole SPEC
+**`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`** reviews this delta, then same QUALITY
+**`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**. Controller owns those reviews; no agent
+delegation or automatic gate continuation. CLI tests/all27 integrations, slow
+local-sync, ten SSH targets, both smokes, native and final runtime-evidence review
+remain unrun/barred. No performance ticket edits or additional profiling.
+
+New-only **`/tmp/opencode/task8-wait-budget-*`** records preflight/old manifest
+proofs, exact source delta and pre/post hashes, argv, raw/receipt logs, result/
+power/static evidence, scope proof and final manifest. All prior manifests and
+artifacts remain immutable, including13 readphase and4 blocker-checkpoint sets.
+Only the three test files plus this ledger and append-only canonical comment
+form the owned commit, with coauthor; comment ID/parent/creation time/history
+retained. No push/status save/main/PR/close/native/other-worktree or real profile/
+key/context/draft action. Child2340592 exited normally; no owned gate job remains.
+Ticket **implementing / review-and-runtime BLOCKED**, not feature-complete/ready.

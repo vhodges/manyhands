@@ -326,3 +326,58 @@ ledger/comment metadata checkpoint with coauthor after source restoration; all
 original comment metadata/text preserved. No push/status save/PR/main/close/
 native/real-profile-key-context-draft action. Ticket **implementing/runtime BLOCKED**;
 same SPEC delta then same QUALITY approval and runtime gates remain owed.
+
+## Follow-up — option2 approved; shared60s test budget, exact64 pass
+
+**Owner/controller decision,2026-11-07:** use60s aggregate desktop UI/worker and
+held-job test waits while retaining GPUI's independent **15s per uninterrupted
+park**, existing10ms polling and default concurrency. The earlier90/120s parking
+ceiling requirement is explicitly withdrawn; the prior API blocker is resolved
+by this choice, not by changing dependencies or adding wakeups. This is a temporary
+timing accommodation, not a performance/root-cause fix. Profiling remains stopped;
+existing performance tickets are untouched.
+
+Accepted completed preflight at **`03f606e78a13e7372c239d4122835e9011dd1b2d`**,
+main **`846af67935f5381be9f355b25ae91d14e7705e6e`**, docs-only merge9e8ad037.
+No repeated fetch/merge. Minimal three cfg(test) source files:
+`test_support/mod.rs` defines the single60s WAIT; `view/harness.rs` re-exports it;
+`test_support/delaying.rs` uses it for held-job waiting. Corrected comments.
+All predicates/assertions/job sequencing/drop behavior/10ms poll/run_until_parked
+are unchanged. GPUI guard/ticks, production250ms acquisition/5s SQLite Busy/
+heartbeat/leases/600s consent/cancellation/retirement/removal safety are unchanged.
+All library/production/test-library/schema/dependency inputs remain e6bc3912.
+
+**One actual UNINSTRUMENTED exact64 command**, names copied from
+`task8-desktop-rerun-analysis.json`, all-feature locked desktop Cargo test through
+Devenv; full literal argv in **`/tmp/opencode/task8-wait-budget-command.{json,sh}`**.
+RUST_TEST_THREADS/MANYHANDS_TASK8_DIAG unset, no thread override/skips/retries.
+**Exit0;64 passed/0 failed/1516 filtered;215.70s tests**, all64 accounted. Cargo
+rebuilt current source1m32s, no diagnostic output/cached instrumented substitute.
+No selected case remains failed; no GPUI parking panic. Existing whole-case
+over60s notices are retained, not misrepresented as individual wait failures.
+
+UTC **15:18:35.494169Z→15:23:44.755580Z**, mono**309.261403594s**,
+boot**309.261403525s**; no measured suspend. PM-only query zero records/no-match,
+no power policy or user logs. Raw90 receipt lines cover all bytes. Raw SHA-256
+**`a53bc02000c834ece604ab7df339b77b08ccb4b009e21657742713da38004dc7`**.
+Existing failed gates serve as RED; no unchanged10s rerun or new timing assertion.
+
+Fresh serial `devenv shell -- cargo fmt --check` **exit0**,17.618s; strict
+`devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`
+**exit0**,21.190s. No duplicate check/static group or library runtime rerun.
+Library**1530/0/160,1972.73s** preserved on unchanged library inputs.
+
+**Targeted green only:** previous whole desktop1518/62 and1516/64 remain FAILED;
+instrumented51/49 failures keep diagnostic scope. The other1516 cases, CLI/all27
+integrations/local-sync/ten SSH/smokes/native/final runtime approvals remain barred.
+Retained44 C/L/S/native/D6/retirement limitations are not waived.
+
+Next is same whole **SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` delta review**, then
+same **QUALITY `ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, before changed whole desktop
+or remaining gates. No agents or autonomous continuation. New-only evidence under
+**`/tmp/opencode/task8-wait-budget-*`**, with pre/post hashes/source-only proof,
+results/statics/power/raw receipt evidence and final manifest; all older artifacts
+remain untouched. Only three test files + ledger/comment committed with coauthor;
+this comment's ID/parent/time/all history preserved. Child2340592 exited; no jobs,
+push/status save/PR/main/close/native/other-worktree/real-profile-key-context-draft
+actions. Ticket **implementing / review-and-runtime BLOCKED**, not ready/complete.
