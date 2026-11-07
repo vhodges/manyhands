@@ -42,3 +42,17 @@ Follow-ups from Wave 03 D5's whole-branch quality review (ticket 01M4CC0VN2K8DBH
 ## Docs
 
 - [ ] AGENTS.md: update the SSH-tier timing ("about 1 h 36 min") with D5's measurements (`mutation_remote` alone ran about 84 min at D5's Part 0).
+
+## Deferred from the max-effort review of D5 (owner triage, 2026-11-06)
+
+Recorded in D5's design as K-28 to K-33. The review's confirmed bugs and Tier A were fixed in D5; these remain.
+
+- [ ] K-28: the Activity area's Retry of a failed plain item save or comment resubmits it without the lifecycle-lock check (owner: rarely used; revisit).
+- [ ] K-29: save-first skips unsaved edits while the lock is `Awaiting`; a lock arriving during "Post as a new comment"'s re-target does not stop that post.
+- [ ] K-30: an edit typed in the Result editor while a save is out is reverted with `set_text` (undo history lost); a closure pinned from the ancestor is not named on the sheet; a comment with divergent immutable fields goes outside as "unreadable".
+- [ ] K-31: a resend of a close at `closing` whose checkpoint ref already moved also reports `recording` (progress only); a kept set left after a busy refusal waits for the launch sweep.
+- [ ] K-32 (rare or narrow): a store read error shown as a lost set; the launch sweep across two processes; Enter auto-repeat confirming a Stale preview on Wayland; Stop in the ~0.7 s busy retry window says nothing changed; a Busy rows read leaving the lock `Awaiting` or `Open` for ~1.7 s; stale mouse closure after a model swap; Share main queued twice; the closed dialog popped by a later one; Stop and republish… from a lifecycle dialog stacks over it; a deferred Republish… is not re-validated against the item.
+- [ ] K-33: library and CLI contract: resume events carry the inner binding's subject; a lifecycle cancel never reports `stopping`. Wording: Keep both's blank lines, a modify/delete card saying "code", an outside repair shown as saved, "Closing…" while `Awaiting`, the blocked step's label.
+- [ ] Test debt: a worker thread leaks per desktop test (`Services::start`'s drain holds a strong `WorkerHandle`; its doc says otherwise).
+- [ ] A bind-level test that the removed `d5_progress` SSH cases' exact boundary stages `[Accepted, Observing, Publishing, CleaningUp]` (remote already-contained, no tracking ref) hold on a real remote. One end-to-end SSH case was kept, as AGENTS.md allows.
+- [ ] Review the library API change `RepositoryService::data_directory()` (now public) for a better home, for example a `DataDirectory` type the desktop opens its stores from.
