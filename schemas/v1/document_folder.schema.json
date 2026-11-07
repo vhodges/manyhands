@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 document folder",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["path", "empty"],
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Relative to the repository root, beginning with docs/, written with forward slashes on every platform."
+    },
+    "empty": {
+      "type": "boolean",
+      "description": "The last refresh found nothing in the directory: no file, whether a document or not, no directory and no link."
+    }
+  }
+}

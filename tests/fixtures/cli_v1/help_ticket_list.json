@@ -1,0 +1,87 @@
+{
+  "code": "ok",
+  "command": "cli help",
+  "data": {
+    "commands": [
+      {
+        "available": true,
+        "command": "ticket list",
+        "delivered_by": "C1",
+        "options": [
+          {
+            "name": "--repo",
+            "required": true,
+            "summary": "Repository path, relative to the invocation directory.",
+            "value": "path"
+          },
+          {
+            "name": "--status",
+            "required": false,
+            "summary": "Filter by exact status text.",
+            "value": "text"
+          },
+          {
+            "name": "--type",
+            "required": false,
+            "summary": "Filter by exact type text.",
+            "value": "text"
+          },
+          {
+            "name": "--project",
+            "required": false,
+            "summary": "Filter by exact project text.",
+            "value": "text"
+          },
+          {
+            "name": "--closure",
+            "required": false,
+            "summary": "Filter by closure state (default: all).",
+            "value": "open|closed|all"
+          },
+          {
+            "name": "--slug",
+            "required": false,
+            "summary": "Filter by short code, passed through unchanged.",
+            "value": "code"
+          },
+          {
+            "name": "--ready",
+            "required": false,
+            "summary": "Only ready tickets; conflicts with --blocked.",
+            "value": null
+          },
+          {
+            "name": "--blocked",
+            "required": false,
+            "summary": "Only blocked tickets; conflicts with --ready.",
+            "value": null
+          }
+        ],
+        "repository": "required",
+        "summary": "List tickets, open and closed unless filtered."
+      }
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": null,
+    "worktree": null
+  }
+}

@@ -1,0 +1,60 @@
+{
+  "code": "recovery_required",
+  "command": "ticket close",
+  "data": {
+    "blockers": [
+      "integration_conflict"
+    ],
+    "checkpoint_oid": "<checkpoint-oid>",
+    "cleanup": null,
+    "cleanup_pending": null,
+    "integration": null,
+    "integration_oid": null,
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "kind": "ticket",
+    "made_ready": [],
+    "made_ready_state": "not_computed",
+    "publication": null,
+    "publication_oid": null,
+    "publication_pending": null,
+    "recording": "record",
+    "type": "lifecycle"
+  },
+  "effects": {
+    "checkpoint": "committed",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "Recovery is required before this can continue.",
+  "operation_id": "<operation-id>",
+  "outcome": "partial",
+  "recovery": [
+    {
+      "action": "request.retry",
+      "arguments": {
+        "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1"
+      },
+      "operation_id": null
+    },
+    {
+      "action": "repo.inspect",
+      "arguments": {
+        "root": "<repository>"
+      },
+      "operation_id": null
+    }
+  ],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX1",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": "01ARZ3NDEKTSV4RRFFQ69G5FC0",
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

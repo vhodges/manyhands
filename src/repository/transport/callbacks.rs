@@ -13,9 +13,21 @@ pub(super) struct CallbackAttempt {
     passthrough: Cell<bool>,
     key_submissions: Cell<u8>,
     username_submissions: Cell<u8>,
+    poll_stopped: Cell<bool>,
 }
 
 impl CallbackAttempt {
+    pub(super) fn poll_progress(&self, keep_going: impl FnOnce() -> bool) -> bool {
+        if self.poll_stopped.get() {
+            return false;
+        }
+        let continuing = keep_going();
+        self.poll_stopped.set(!continuing);
+        continuing
+    }
+    pub(super) fn poll_stopped(&self) -> bool {
+        self.poll_stopped.get()
+    }
     pub(super) fn failure(&self) -> Option<SshTransportErrorKind> {
         self.failure.borrow().clone()
     }
@@ -154,4 +166,24 @@ pub(super) fn build_callbacks<'a>(
         attempt.check_host(prepared, host, certificate_identity(certificate))
     });
     callbacks
+}
+
+/// Locked libgit2 uses src=current remote OID and dst=new OID, even though
+/// a deletion has an empty source refname. Refuse before sending any command.
+pub(super) fn guard_delete<'a>(
+    callbacks: &mut git2::RemoteCallbacks<'a>,
+    reference: &'a str,
+    expected: git2::Oid,
+) {
+    callbacks.push_negotiation(move |updates| {
+        if updates.len() != 1
+            || expected.is_zero()
+            || updates[0].src() != expected
+            || !updates[0].dst().is_zero()
+            || updates[0].dst_refname() != Some(reference)
+        {
+            return Err(git2::Error::from_str("SSH deletion precondition rejected"));
+        }
+        Ok(())
+    });
 }

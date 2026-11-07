@@ -1,0 +1,13 @@
+# Published schemas and golden envelopes are compared byte for byte.
+schemas/** -text
+tests/fixtures/read_v1/** -text
+tests/fixtures/slug_v1/** -text
+tests/fixtures/mutation_v1/** -text
+tests/fixtures/progress_v1/** -text
+tests/fixtures/cli_v1/** -text
+tests/fixtures/cli_input_v1/** -text
+
+# Checksum-pinned upstream originals must retain their exact published bytes.
+packaging/licenses/supplemental/** -text
+# This upstream copyright line ends in a space; its SHA-256 pins that byte.
+packaging/licenses/supplemental/zune-image-LICENSE.md whitespace=-blank-at-eol

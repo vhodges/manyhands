@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 CLI version",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "version"],
+  "properties": {
+    "name": {"type": "string"},
+    "version": {"type": "string"}
+  }
+}

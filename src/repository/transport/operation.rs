@@ -61,7 +61,10 @@ impl RepositoryService {
         )
     }
 
-    fn with_authenticated_remote_policy_expected<P: SessionCredentialProvider, T>(
+    pub(in super::super) fn with_authenticated_remote_policy_expected<
+        P: SessionCredentialProvider,
+        T,
+    >(
         &self,
         request: VerifySshTransportRequest,
         session: &mut SessionCredentials<P>,
@@ -264,7 +267,7 @@ impl RepositoryService {
         // match the raw configured spelling. Validate this actual handle too.
         let effective = match context.direction {
             SshDirection::Fetch => remote.url(),
-            SshDirection::Push => remote.pushurl().or_else(|| remote.url()),
+            SshDirection::Push | SshDirection::Delete => remote.pushurl().or_else(|| remote.url()),
         };
         if effective
             .and_then(|url| super::endpoint::parse_ssh_endpoint(url).ok())
@@ -278,7 +281,7 @@ impl RepositoryService {
             .connect_auth(
                 match context.direction {
                     SshDirection::Fetch => git2::Direction::Fetch,
-                    SshDirection::Push => git2::Direction::Push,
+                    SshDirection::Push | SshDirection::Delete => git2::Direction::Push,
                 },
                 Some(build_callbacks(prepared, passphrase, &attempt)),
                 None,
@@ -311,6 +314,8 @@ impl RepositoryService {
             prepared.approval.as_ref(),
         )
         .map_err(|kind| context.with_kind(kind))?;
+        #[cfg(test)]
+        super::operation_tests::checkpoint(super::operation_tests::Checkpoint::HostTrustFinalized);
         let mut adapter = AuthenticatedSshRemote::new(
             connection.remote(),
             self,

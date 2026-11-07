@@ -1,0 +1,30 @@
+{
+  "code": "already_applied",
+  "command": "remote select",
+  "data": {
+    "location": null,
+    "name": "origin"
+  },
+  "effects": {
+    "checkpoint": "unchanged",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "unchanged"
+  },
+  "message": "The request was already applied; nothing changed.",
+  "operation_id": "<operation>",
+  "outcome": "noop",
+  "recovery": [],
+  "request_id": "01ARZ3NDEKTSV4RRFFQ69G5FX2",
+  "schema_version": 1,
+  "scope": {
+    "branch": "main",
+    "item_id": null,
+    "remote": "origin",
+    "repository": "<root>",
+    "worktree": null
+  }
+}

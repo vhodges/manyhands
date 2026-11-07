@@ -1,0 +1,37 @@
+{
+  "code": "ok",
+  "command": "key show",
+  "data": {
+    "fingerprint": "<generated-fingerprint>",
+    "id": "<generated-key-id>",
+    "label": "Generated key",
+    "ownership": "generated",
+    "private_key_path": "<generated-private-key>",
+    "private_source_state": "available",
+    "public_key_path": "<generated-public-key>",
+    "public_metadata_state": "available",
+    "selected": true
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": null,
+    "worktree": null
+  }
+}

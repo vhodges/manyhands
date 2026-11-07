@@ -1,14 +1,16 @@
 ---
+cycle: '04'
+wave: '02'
+id: 01K7F6H9J2N4Q6S8V0X2Z4B6DC
+title: 'Wave 02 Cycle 04: Remote Observation And Recovery Model'
+type: cycle
+status: closed
+project: manyhands
+team: core
+closed_at: 2026-10-06T14:03:05Z
+closed_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: ticket
-id: "01K7F6H9J2N4Q6S8V0X2Z4B6DC"
-title: "Wave 02 Cycle 04: Remote Observation And Recovery Model"
-type: "cycle"
-status: "closed"
-project: "manyhands"
-team: "core"
-wave: "02"
-cycle: "04"
 ---
 
 Make the approved remote-ref protocol and remote lifecycle state durable and

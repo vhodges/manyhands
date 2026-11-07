@@ -1,0 +1,51 @@
+{
+  "code": "ok",
+  "command": "remote remove",
+  "data": {
+    "command": "remote remove",
+    "confirmation_id": "<confirmation>",
+    "details": {
+      "fetch_location": "https://example.invalid/team/project.git",
+      "name": "origin",
+      "polling_affected": false,
+      "publication_affected": false,
+      "push_location": "https://example.invalid/team/project.git",
+      "root": "<root>"
+    },
+    "effects": [
+      {
+        "effect": "remote_removed"
+      }
+    ],
+    "expires_at": "2023-11-14T22:23:20Z",
+    "scope": {
+      "branch": null,
+      "item_id": null,
+      "remote": "origin",
+      "repository": "<root>",
+      "worktree": null
+    }
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": "origin",
+    "repository": "<root>",
+    "worktree": null
+  }
+}

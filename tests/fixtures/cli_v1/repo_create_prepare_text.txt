@@ -1,0 +1,17 @@
+Preview of repo create
+Identity email: repository@example.invalid
+Identity name: Repository Person
+Identity source: supplied
+Identity written locally: true
+Primary branch: main
+Root: <repository>
+Slug prefix: mh
+Will create the directory.
+Will initialize the Git repository.
+Will write the repository identity.
+Will exclude the managed worktrees.
+Will write the Manyhands configuration.
+Will commit the initialization.
+Will register the repository.
+Confirmation: <confirmation-id> (expires <expires-at>)
+Apply with the same command and --confirm <confirmation-id>; add --request-id unless you run it at a terminal.

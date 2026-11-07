@@ -8,6 +8,21 @@ use crate::{
 use std::{cell::Cell, str::FromStr};
 
 pub const CASES: &[crate::ssh_harness::Case] = &[
+    ("exact_delete_expected", delete_expected),
+    ("exact_delete_mismatch", delete_mismatch),
+    ("exact_delete_rejected", delete_rejected),
+    ("exact_delete_race", delete_race),
+    ("exact_delete_lost_status", delete_lost_status),
+    ("exact_delete_scope_and_policy", delete_scope_and_policy),
+    (
+        "exact_ticket_context_delete_is_in_scope",
+        ticket_context_delete_is_in_scope,
+    ),
+    ("exact_delete_distinct_endpoint", delete_distinct_endpoint),
+    (
+        "exact_delete_post_send_observation",
+        delete_post_send_observation,
+    ),
     ("exact_fetch_scope", fetch_scope),
     ("exact_direction_and_plan", direction_and_plan),
     ("exact_distinct_push_endpoint", distinct_push_endpoint),
@@ -19,6 +34,294 @@ pub const CASES: &[crate::ssh_harness::Case] = &[
         reference_status_rejection,
     ),
 ];
+fn document() -> SynchronizationTarget {
+    SynchronizationTarget::Context {
+        kind: AuthoringKind::Document,
+        item_id: crate::canonical::ItemId::from_str("01ARZ3NDEKTSV4RRFFQ69G5FAX").unwrap(),
+    }
+}
+fn delete_expected() -> Result<(), FixtureError> {
+    delete_case(0)
+}
+fn delete_mismatch() -> Result<(), FixtureError> {
+    delete_case(1)
+}
+fn delete_rejected() -> Result<(), FixtureError> {
+    delete_case(2)
+}
+fn delete_race() -> Result<(), FixtureError> {
+    delete_case(3)
+}
+fn delete_lost_status() -> Result<(), FixtureError> {
+    delete_case(4)
+}
+fn delete_case(mode: u8) -> Result<(), FixtureError> {
+    let case = Case::new(false)?;
+    let reference = ObservationRef::RemoteDocument;
+    case.fixture.set_observation_ref(reference, true)?;
+    let server = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
+    let original = case.fixture.commit_id();
+    let competing = root_commit(&server, "refs/heads/competing")?;
+    let expected = if mode == 1 { competing } else { original };
+    if mode == 2 {
+        case.fixture.reject_context_deletion(true)?;
+    }
+    if mode == 3 {
+        case.fixture
+            .race_context_update(reference, original, competing)?;
+    }
+    if mode == 4 {
+        case.fixture
+            .disconnect_at(FixtureBoundary::AfterReceivePack);
+    }
+    let (mut session, _) = session(vec![]);
+    let mut request = case.request();
+    request.direction = SshDirection::Delete;
+    let observation = fixed(case.service.with_authenticated_remote(
+        request.clone(),
+        &mut session,
+        |remote| remote.delete_exact(&plan(), &document(), expected),
+    ))?;
+    let wanted = match mode {
+        1 => DeleteObservation::Changed(original),
+        2 => DeleteObservation::StillPresent(original),
+        3 => DeleteObservation::Changed(competing),
+        _ => DeleteObservation::Deleted,
+    };
+    assert_eq!(observation, wanted);
+    for sentinel in [&case.fixture.url(), PASSWORD, "fixture@example.invalid"] {
+        assert!(!format!("{observation:?}").contains(sentinel));
+    }
+    case.fixture.wait_for_helper_audits()?;
+    let updates = case.fixture.receive_updates();
+    if mode == 1 {
+        assert!(updates.is_empty());
+        // Callback refusal still authenticates and starts receive-pack; it
+        // must not send a parsed update command.
+        assert_eq!(case.fixture.receive_advertisements(), 4);
+    } else {
+        assert_eq!(updates.len(), 1);
+        assert_eq!(
+            updates[0],
+            ReceiveUpdate {
+                reference: reference.name().into(),
+                old_oid: original,
+                new_oid: git2::Oid::zero(),
+                accepted: mode == 0 || mode == 4,
+            }
+        );
+    }
+    assert_eq!(fixed(server.refname_to_id("refs/heads/main"))?, original);
+    if mode == 4 {
+        assert!(case.fixture.receive_status_withheld());
+        // An already absent context is observed without a second delete push.
+        assert_eq!(
+            fixed(
+                case.service
+                    .with_authenticated_remote(request, &mut session, |remote| {
+                        remote.delete_exact(&plan(), &document(), expected)
+                    })
+            )?,
+            DeleteObservation::Deleted
+        );
+        case.fixture.wait_for_helper_audits()?;
+        assert_eq!(case.fixture.receive_updates().len(), 1);
+    }
+    Ok(())
+}
+fn delete_scope_and_policy() -> Result<(), FixtureError> {
+    let case = Case::new(false)?;
+    let (mut session, _) = session(vec![]);
+    let mut request = case.request();
+    request.direction = SshDirection::Delete;
+    fixed(
+        case.service
+            .with_authenticated_remote(request, &mut session, |remote| {
+                let before = case.fixture.helper_invocations();
+                // Named edit 6 (owner, 2026-10-18): only the primary is out of
+                // delete scope; a ticket context is in scope since named edit 5
+                // (see `exact_ticket_context_delete_is_in_scope`).
+                let error = remote
+                    .delete_exact(
+                        &plan(),
+                        &SynchronizationTarget::Primary,
+                        case.fixture.commit_id(),
+                    )
+                    .unwrap_err();
+                assert_eq!(error.kind, SshTransportErrorKind::ConfigurationInvalid);
+                assert!(!format!("{error:?} {error}").contains(&case.fixture.url()));
+                assert_eq!(case.fixture.helper_invocations(), before);
+                case.service.clear_shared_key_selection().unwrap();
+                let error = remote
+                    .delete_exact(&plan(), &document(), case.fixture.commit_id())
+                    .unwrap_err();
+                assert_eq!(error.kind, SshTransportErrorKind::SelectionChanged);
+                assert!(!format!("{error:?} {error}").contains(&case.fixture.url()));
+                assert_eq!(case.fixture.helper_invocations(), before);
+                Ok(())
+            }),
+    )?;
+    Ok(())
+}
+/// A ticket context delete is one exact `:<ticket context ref>` push under
+/// its expected-OID guard: a stale guard sends no update, the current guard
+/// deletes exactly that ref with one receive update, and nothing else moves.
+fn ticket_context_delete_is_in_scope() -> Result<(), FixtureError> {
+    let case = Case::new(false)?;
+    let reference = ObservationRef::RemoteTicket;
+    assert_eq!(reference.name(), target_ref());
+    case.fixture.set_observation_ref(reference, true)?;
+    let server = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
+    let original = case.fixture.commit_id();
+    let competing = root_commit(&server, "refs/heads/competing")?;
+    let (mut session, _) = session(vec![]);
+    let mut request = case.request();
+    request.direction = SshDirection::Delete;
+    let stale = fixed(case.service.with_authenticated_remote(
+        request.clone(),
+        &mut session,
+        |remote| remote.delete_exact(&plan(), &context(), competing),
+    ))?;
+    assert_eq!(stale, DeleteObservation::Changed(original));
+    case.fixture.wait_for_helper_audits()?;
+    assert!(case.fixture.receive_updates().is_empty());
+    assert_eq!(fixed(server.refname_to_id(target_ref()))?, original);
+    let observation = fixed(case.service.with_authenticated_remote(
+        request,
+        &mut session,
+        |remote| remote.delete_exact(&plan(), &context(), original),
+    ))?;
+    assert_eq!(observation, DeleteObservation::Deleted);
+    for rendered in [format!("{stale:?}"), format!("{observation:?}")] {
+        for sentinel in [&case.fixture.url(), PASSWORD, "fixture@example.invalid"] {
+            assert!(!rendered.contains(sentinel));
+        }
+    }
+    case.fixture.wait_for_helper_audits()?;
+    assert_eq!(
+        case.fixture.receive_updates(),
+        [ReceiveUpdate {
+            reference: target_ref().into(),
+            old_oid: original,
+            new_oid: git2::Oid::zero(),
+            accepted: true,
+        }]
+    );
+    assert!(server.find_reference(target_ref()).is_err());
+    assert_eq!(fixed(server.refname_to_id("refs/heads/main"))?, original);
+    assert_eq!(
+        fixed(server.refname_to_id("refs/heads/competing"))?,
+        competing
+    );
+    Ok(())
+}
+fn delete_distinct_endpoint() -> Result<(), FixtureError> {
+    let case = Case::new(false)?;
+    let destination = SshRemoteFixture::start()?;
+    destination.allow_client_public_key(fixed(russh::keys::PublicKey::from_bytes(
+        &case.fixture.allowed_client_public_key(),
+    ))?);
+    let reference = ObservationRef::RemoteDocument;
+    case.fixture.set_observation_ref(reference, true)?;
+    destination.set_observation_ref(reference, true)?;
+    let local = fixed(git2::Repository::open(&case.root))?;
+    fixed(local.remote_set_pushurl("origin", Some(&destination.url())))?;
+    let (mut session, _) = session(vec![]);
+    let mut request = case.request();
+    request.direction = SshDirection::Delete;
+    request.approval = Some(HostApproval {
+        authority: SshAuthority {
+            host: "127.0.0.1".into(),
+            port: destination.address().port(),
+        },
+        expected: None,
+        presented: destination.host_identity(),
+    });
+    assert_eq!(
+        fixed(
+            case.service
+                .with_authenticated_remote(request, &mut session, |remote| {
+                    remote.delete_exact(&plan(), &document(), destination.commit_id())
+                })
+        )?,
+        DeleteObservation::Deleted
+    );
+    destination.wait_for_helper_audits()?;
+    assert_eq!(destination.receive_updates().len(), 1);
+    assert_eq!(case.fixture.helper_invocations(), 0);
+    let source = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
+    assert_eq!(
+        fixed(source.refname_to_id(reference.name()))?,
+        case.fixture.commit_id()
+    );
+    Ok(())
+}
+fn delete_post_send_observation() -> Result<(), FixtureError> {
+    use crate::repository::transport::operation_tests::*;
+    use std::rc::Rc;
+    for lose_advertisement in [false, true] {
+        let case = Rc::new(Case::new(false)?);
+        let reference = ObservationRef::RemoteDocument;
+        case.fixture.set_observation_ref(reference, true)?;
+        let server = fixed(git2::Repository::open_bare(case.fixture.repository_path()))?;
+        let competing = root_commit(&server, "refs/heads/competing")?;
+        if lose_advertisement {
+            case.fixture
+                .disconnect_at(FixtureBoundary::AfterReceivePack);
+        }
+        let observed = Rc::new(Cell::new(0));
+        let calls = observed.clone();
+        let owned = case.clone();
+        let hook = install_hook(move |point| {
+            if point == Checkpoint::DeleteAttemptReturned {
+                calls.set(calls.get() + 1);
+                if lose_advertisement {
+                    owned.fixture.disconnect_at(FixtureBoundary::Authentication);
+                } else {
+                    git2::Repository::open_bare(owned.fixture.repository_path())
+                        .unwrap()
+                        .reference(reference.name(), competing, true, "post-send collaborator")
+                        .unwrap();
+                }
+            }
+        });
+        let (mut session, _) = session(vec![]);
+        let mut request = case.request();
+        request.direction = SshDirection::Delete;
+        let result =
+            case.service
+                .with_authenticated_remote(request.clone(), &mut session, |remote| {
+                    remote.delete_exact(&plan(), &document(), case.fixture.commit_id())
+                });
+        drop(hook);
+        assert_eq!(observed.get(), 1);
+        if lose_advertisement {
+            let error = result.unwrap_err();
+            // This fault closes during public-key authentication, which the
+            // existing backend policy classifies as an authentication failure.
+            assert_eq!(error.kind, SshTransportErrorKind::KeyRejected);
+            for sentinel in [&case.fixture.url(), "127.0.0.1", PASSWORD] {
+                assert!(!format!("{error:?} {error}").contains(sentinel));
+            }
+            assert!(case.fixture.receive_status_withheld());
+            case.fixture.clear_fault();
+            assert_eq!(
+                fixed(
+                    case.service
+                        .with_authenticated_remote(request, &mut session, |remote| {
+                            remote.delete_exact(&plan(), &document(), case.fixture.commit_id())
+                        })
+                )?,
+                DeleteObservation::Deleted
+            );
+        } else {
+            assert_eq!(fixed(result)?, DeleteObservation::Changed(competing));
+        }
+        case.fixture.wait_for_helper_audits()?;
+        assert_eq!(case.fixture.receive_updates().len(), 1);
+    }
+    Ok(())
+}
 fn plan() -> RemoteRefPlan {
     RemoteRefPlan::from_configuration("origin", "main").unwrap()
 }

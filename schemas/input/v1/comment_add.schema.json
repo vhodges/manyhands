@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Comment add input",
+  "type": "object",
+  "properties": {
+    "comment_id": { "type": "string" },
+    "body": { "type": "string" },
+    "parent_id": { "type": ["string", "null"] },
+    "created_by": { "type": "string" }
+  },
+  "required": ["comment_id", "body"],
+  "additionalProperties": false
+}

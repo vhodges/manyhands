@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Polling configuration input",
+  "type": "object",
+  "properties": {
+    "interval_seconds": {
+      "description": "Seconds between automatic polls, from 60 to 3600.",
+      "type": "integer",
+      "minimum": 60
+    }
+  },
+  "required": ["interval_seconds"],
+  "additionalProperties": false
+}

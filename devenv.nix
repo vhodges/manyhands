@@ -19,6 +19,7 @@
   packages = with pkgs; [
     git
     pkg-config
+    python3
     openssl
     clang
     wayland

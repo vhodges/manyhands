@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 synchronization conflict mutation data",
+  "description": "The data of an item sync or repo sync envelope, or of the envelope of an operation resume that took the operation of one up, that stopped on a conflict in a merge of its own. The code is recovery_required, the integration effect is pending, the merge is left in the target worktree and the reservation is released. Sending the same request again reads the conflict again, without transport, while it is pending.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "conflict"],
+  "properties": {
+    "type": {
+      "description": "The one value that tells this data apart.",
+      "type": "string",
+      "enum": ["synchronization_conflict"]
+    },
+    "conflict": {
+      "$ref": "conflict_next.schema.json"
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "code": "ok",
+  "command": "remote list",
+  "data": {
+    "complete": true,
+    "items": [
+      {
+        "fetch_location": "https://example.invalid/team/repo.git",
+        "name": "origin",
+        "publication_eligible": false,
+        "push_location": "https://example.invalid/team/repo.git",
+        "selected_for_publication": false
+      },
+      {
+        "fetch_location": "ssh://git@example.invalid/team/repo.git",
+        "name": "publish",
+        "publication_eligible": true,
+        "push_location": "ssh://git@example.invalid/team/repo.git",
+        "selected_for_publication": true
+      }
+    ]
+  },
+  "effects": {
+    "checkpoint": "not_requested",
+    "cleanup": "not_requested",
+    "commit_oid": null,
+    "discovery": "not_requested",
+    "integration": "not_requested",
+    "publication": "not_requested",
+    "write": "not_requested"
+  },
+  "message": "The request completed.",
+  "operation_id": null,
+  "outcome": "success",
+  "recovery": [],
+  "request_id": null,
+  "schema_version": 1,
+  "scope": {
+    "branch": null,
+    "item_id": null,
+    "remote": null,
+    "repository": "<repository>",
+    "worktree": null
+  }
+}

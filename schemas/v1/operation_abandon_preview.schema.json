@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 operation abandon preview",
+  "description": "The data of a prepare envelope that gives a preview of operation abandon: the pending local operation that will be closed, what it has left on disk, and the confirmation an execute of the same command, repository and operation presents to close it. A prepare that gives no preview carries no preview data: a rejection, as for an operation ID no journal holds (operation_not_found) or one that is a synchronization's or a key operation's (invalid_input), and a no-op for a local operation that has ended. The preview does not say whether a call is still working under the operation: the execute finds that out, and is busy when one is.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["confirmation_id", "expires_at", "command", "scope", "effects", "details"],
+  "properties": {
+    "confirmation_id": {
+      "description": "What an execute presents as its consent. It is accepted by one request.",
+      "type": "string"
+    },
+    "expires_at": {
+      "description": "When the confirmation stops being accepted by a new request: ten minutes after the preview. A request that has accepted it is honored afterwards.",
+      "type": "string"
+    },
+    "command": {
+      "description": "The command the confirmation is for, as an envelope names it.",
+      "type": "string"
+    },
+    "scope": {
+      "$ref": "scope.schema.json"
+    },
+    "effects": {
+      "description": "What the command will do, in the order it does it.",
+      "type": "array",
+      "items": {
+        "$ref": "preview_effect.schema.json"
+      }
+    },
+    "details": {
+      "description": "The operation that will be closed. The command closes its row in the local journal and deletes the record of the unfinished request that began it, and nothing else. The confirmation binds the operation's state and step: an operation that has ended or advanced since is external_change.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "root",
+        "operation_id",
+        "action",
+        "state",
+        "step",
+        "item_id",
+        "worktree",
+        "paths",
+        "paths_complete",
+        "committed",
+        "request_id",
+        "files_changed",
+        "git_state_changed"
+      ],
+      "properties": {
+        "root": {
+          "description": "The repository's root, as the operation's journal names it.",
+          "type": "string"
+        },
+        "operation_id": {
+          "description": "The operation that will be closed.",
+          "type": "string"
+        },
+        "action": {
+          "description": "What the operation does, as operation show names it. Null for an action this version does not know.",
+          "type": ["string", "null"],
+          "enum": [
+            "create_and_enable",
+            "enable",
+            "remove_registration",
+            "add_remote",
+            "remove_remote",
+            "set_publication_remote",
+            "refresh",
+            "rebuild",
+            "prepare_context",
+            "release_context",
+            "save_document",
+            "save_ticket",
+            "submit_comment",
+            "repair_item",
+            "context_sync_local",
+            null
+          ]
+        },
+        "state": {
+          "description": "The state the operation is in, as operation show gives it.",
+          "type": "string"
+        },
+        "step": {
+          "description": "The last step the operation recorded as done. Null when it recorded none.",
+          "type": ["string", "null"]
+        },
+        "item_id": {
+          "description": "The item the operation writes. Null for an operation that writes no item.",
+          "type": ["string", "null"]
+        },
+        "worktree": {
+          "description": "The worktree the operation writes in, relative to the repository's root with forward slashes: an item's own, or . for the primary worktree. Null for an operation that writes no file of a worktree, and for an item whose worktree is not there.",
+          "type": ["string", "null"]
+        },
+        "paths": {
+          "description": "The paths of the operation's target that differ from the head of their branch, uncommitted and untracked alike, relative to the repository's root with forward slashes: for an operation that writes an item, every such path of the item's worktree; for one that writes the configuration file, that file when it differs. The command leaves every one of them exactly as it is, for its user to commit or restore with Git. No content is given.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "paths_complete": {
+          "description": "Whether paths is all of them. False when there are more than are listed, or the worktree could not be read: git status in the worktree then says what is there.",
+          "type": "boolean"
+        },
+        "committed": {
+          "description": "Whether the operation recorded that it passed the point where its work is committed: for a save, its checkpoint; for an enablement, its initialization commit. The command leaves that commit where it is: abandoning undoes nothing.",
+          "type": "boolean"
+        },
+        "request_id": {
+          "description": "The unfinished request that began the operation, whose record the command deletes: its ID is then free, and its next use is a new request. Null when no such request is recorded.",
+          "type": ["string", "null"]
+        },
+        "files_changed": {
+          "description": "Whether the command changes or removes any file under the root. It never does: this is false.",
+          "type": "boolean"
+        },
+        "git_state_changed": {
+          "description": "Whether the command changes anything Git holds: a commit, a branch, a worktree, the index or the configuration. It never does: this is false.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

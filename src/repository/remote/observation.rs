@@ -6,7 +6,7 @@ use std::{fmt, path::PathBuf};
 
 /// Process-only equality evidence. Never serialized or included in Debug/errors.
 #[derive(Clone, PartialEq, Eq)]
-pub(super) struct ObservationConfiguration {
+pub(crate) struct ObservationConfiguration {
     plan: RemoteRefPlan,
     fetch: Result<crate::repository::transport::endpoint::SshEndpoint, SshTransportErrorKind>,
     push: Result<crate::repository::transport::endpoint::SshEndpoint, SshTransportErrorKind>,
@@ -14,7 +14,14 @@ pub(super) struct ObservationConfiguration {
 }
 
 impl ObservationConfiguration {
-    pub(super) fn transport_expectation(
+    /// Tracking refs describe Fetch history. A Push-only endpoint's observation
+    /// must never be installed as if it had been fetched from another server.
+    pub(in super::super) fn fetch_and_push_share_endpoint(&self) -> bool {
+        self.fetch
+            .as_ref()
+            .is_ok_and(|fetch| self.push.as_ref().is_ok_and(|push| fetch == push))
+    }
+    pub(in super::super) fn transport_expectation(
         &self,
         direction: SshDirection,
     ) -> Option<crate::repository::transport::SshScopeExpectation> {
@@ -29,13 +36,13 @@ impl ObservationConfiguration {
     ) -> Option<&crate::repository::transport::endpoint::SshEndpoint> {
         match direction {
             SshDirection::Fetch => self.fetch.as_ref().ok(),
-            SshDirection::Push => self.push.as_ref().ok(),
+            SshDirection::Push | SshDirection::Delete => self.push.as_ref().ok(),
         }
     }
     // Only validated public SSH locator metadata enters this digest. Endpoint
     // parsing rejects passwords, query/fragment credentials and non-SSH URLs.
     // Key registration/source identity stays process-only.
-    pub(super) fn endpoint_digest(&self) -> [u8; 32] {
+    pub(in super::super) fn endpoint_digest(&self) -> [u8; 32] {
         let mut digest = blake3::Hasher::new();
         for endpoint in [&self.fetch, &self.push] {
             match endpoint {
@@ -54,7 +61,7 @@ impl ObservationConfiguration {
 }
 
 impl RepositoryService {
-    pub(super) fn observation_configuration(
+    pub(in super::super) fn observation_configuration(
         &self,
         root: &std::path::Path,
         plan: &RemoteRefPlan,
@@ -324,7 +331,7 @@ impl RepositoryService {
     }
 }
 
-fn observation_plan(root: &std::path::Path) -> Result<RemoteRefPlan, SshTransportError> {
+pub(super) fn observation_plan(root: &std::path::Path) -> Result<RemoteRefPlan, SshTransportError> {
     let mut error = SshTransportError {
         root: root.to_owned(),
         remote_name: String::new(),
@@ -345,7 +352,7 @@ fn observation_plan(root: &std::path::Path) -> Result<RemoteRefPlan, SshTranspor
     RemoteRefPlan::from_configuration(&remote, &config.primary_branch).map_err(|_| error)
 }
 
-fn transport_category(kind: &SshTransportErrorKind) -> RemoteOutcomeCategory {
+pub(super) fn transport_category(kind: &SshTransportErrorKind) -> RemoteOutcomeCategory {
     use SshTransportErrorKind::*;
     match kind {
         ConfigurationInvalid | PublicationRemoteMissing | UsernameRequired | EndpointChanged => {

@@ -1,9 +1,10 @@
 ---
+id: 01M48T4Y5PMNG30JPA3ZWRC1ZK
+item_id: 01M48S808PF2D8ZWVYM918RK2M
+created_at: 2026-10-06T14:33:42Z
+created_by: Vince Hodges <vince@imbas.ca>
 manyhands_managed: true
 manyhands_kind: comment
-id: "01M48T4Y5PMNG30JPA3ZWRC1ZK"
-item_id: "01M48S808PF2D8ZWVYM918RK2M"
-created_at: "2026-10-06T14:33:42Z"
 ---
 
 Plan-review checkpoint. Proposed artifacts:

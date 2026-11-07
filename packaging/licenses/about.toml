@@ -1,0 +1,17 @@
+# Prefer MIT for dual-licensed crates. Review additions against the locked graph.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "CC0-1.0",
+    "Zlib",
+    "Unicode-3.0",
+    "bzip2-1.0.6",
+    "NCSA",
+    "MPL-2.0",
+]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

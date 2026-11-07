@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Manyhands JSON v1 identity mutation data",
+  "description": "The data of a repo identity-set envelope that set an identity or found it set: what the repository's own Git configuration holds once the request is done. An identity that is written is shown by no effect, so this and the outcome say what the request did: success for one that wrote, noop for one that found the configuration as it asks. A request that is refused carries no data.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "email", "initials"],
+  "properties": {
+    "name": {
+      "description": "user.name in the repository's own Git configuration.",
+      "type": ["string", "null"]
+    },
+    "email": {
+      "description": "user.email in the repository's own Git configuration.",
+      "type": ["string", "null"]
+    },
+    "initials": {
+      "description": "manyhands.initials in the repository's own Git configuration. Null when it holds none: a short code is then composed from the name.",
+      "type": ["string", "null"]
+    }
+  }
+}
