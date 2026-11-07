@@ -14,11 +14,10 @@ manyhands_kind: document
 Wave 04 rebuilds the desktop workspace around the design handoff in
 [`docs/design/`](../design/README.md). At its exit the fixed four-region layout
 is gone. The window has a title bar that names what you're looking at.
-Repositories, Tickets, Documents and
-Activity are dockable, resizable panels that the user shows, hides and moves
-from a footer bar that also carries Needs attention and Settings, and the
-layout survives a restart. Each panel's rows,
-toolbars and states follow `03-panels.md` and the plain-language vocabulary in
+Repositories, Tickets, Documents and Activity are dockable, resizable panels
+that the user shows, hides and moves from a footer bar that also carries
+Needs attention and Settings, and the layout survives a restart. Each panel's
+rows, toolbars and states follow `03-panels.md` and the plain-language vocabulary in
 `06-language-and-states.md`. Settings opens as a sheet instead of taking over
 the item area.
 
