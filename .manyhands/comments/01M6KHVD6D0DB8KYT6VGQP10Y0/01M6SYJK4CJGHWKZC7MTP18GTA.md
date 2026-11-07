@@ -67,3 +67,43 @@ Old source approvals are not merged-tree approval. Historic **1,495/2/160** and
 fast bins/all 27 integrations, local-sync, ten SSH targets, both smokes and
 final runtime-evidence reviews remain owed. Not source-clear, review-ready or
 runtime complete on this new base.
+
+## Authorized enum-inventory follow-on — 2026-11-07 UTC
+
+Controller authorized only the missing test pins from clean metadata HEAD
+**`c6d0e10b15f9fa778ceb5f62c0e5b2a2b7098648`**. Accepted existing main/preflight;
+no fetch/new merge or agents. Source freeze
+**`e6bc391208e0c7bbc580528d6ba650f71003a5d0`** changes only
+`tests/read_contract.rs`: **19 explicit property pins (6 + 10 + 3)**, Rust
+`ALL/as_str` where available, explicit removal variants and the intentional
+**37-code** ResultCode subset. Phase remains a String; ten published literals
+are a manual contract pin grounded in the audited record CHECK/metadata copy,
+not a public Rust enum registry. No schema/production/API/result-code change.
+Schema discovery, nested/null handling and executable completeness test are
+unchanged; no blind count adjustment or expectations read from schemas.
+
+The existing compiled failure above is RED and was **not rerun unchanged**.
+Only the changed exact test ran: **1 passed / 0 failed**, 71 filtered,
+0.02 s test / **3.125 s wall**. Every value pin and unchanged runtime completeness
+now pass: **122 declarations = 121 string pins + 1 integer schema-version pin**.
+Fresh `devenv shell -- cargo fmt --check` **PASS**, **17.518 s**;
+`devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`
+**PASS**, **1.973 s**. All commands used test input hash
+**`3014413f77ade72bd545b969d1d98c78a85af357c42d051d6a1314a8b6939f66`**.
+No other tests, prior-nine reruns, broad tier, extra check, SSH, native or waits.
+
+Full exact argv/timestamps/PIDs/results/log hashes: `/tmp/opencode/task8-enum-results.json`.
+Log SHA-256: exact test **`418c3639c896c6dc28fd65496e3de7119b8b56bce26d6fc1723c52a4aa8d5076`**;
+fmt **`d7f87577179e72b25bde5a726d4039498b87b8fff4913ffade3dbb59dc672022`**;
+Clippy **`c10dd34fff8dbb79d871f89e638901e52d69d76ccea2fb9373b06169625427a4`**.
+New 11-artifact manifest `/tmp/opencode/task8-enum-verification.sha256`:
+**`5e4d9949307bfd2bb652e9f9d5b2dbb7a5c5132e64455a5c2f7e3f720b1ec36d`**.
+Old 38 merge artifacts verified unchanged; old gate/fixture manifests preserved.
+This append preserves this comment's existing ID, parent and creation time.
+
+**Same whole SPEC merge + inventory delta → same QUALITY remain pending;
+barrier retained.** The nine merge greens stay at their old scope; full tiers
+and historic library failures have not become green. Ticket `implementing`,
+no owned jobs/push/lifecycle/native/other-worktree or real profile/key/context/
+draft action. Fresh check, broad library, fast bins/all 27 integration targets,
+local-sync, ten SSH targets, both smokes and runtime-evidence reviews remain owed.

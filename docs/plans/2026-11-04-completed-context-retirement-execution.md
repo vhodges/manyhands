@@ -23,13 +23,17 @@ feature/review base, not the current-main gate. Controller reports the fixture
 delta already SPEC/QUALITY source-approved before this merge; those approvals
 do **not** approve the merged tree or runtime gates. **Merged-source same whole
 SPEC delta → same QUALITY remain pending; final-gate barrier retained.**
-Fresh merged-tree strict Clippy/fmt pass. Ten named exact seam tests ran:
-**9 passed / 1 failed**; the failure is the unchanged premerge retirement enum
-inventory (122 declarations vs 103 pins), statically isolated below. No broad
-library/fast/SSH/smoke/native gate ran. Historical library gates **1,495/2/160**
+The merge checkpoint's ten named exact tests remain **9 passed / 1 failed** at
+their actual scope. The controller then authorized only the missing enum pins:
+test-only source freeze **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`** adds all 19
+and the previously failing exact test now **PASSES**, including unchanged runtime
+completeness **122 declarations = 121 string pins + 1 schema-version pin**.
+Fresh strict Clippy/fmt pass on the same corrected test hash; the other nine
+merge greens were not rerun or promoted. No production/schema/helper change or
+broad library/fast/SSH/smoke/native gate. Historical library gates **1,495/2/160**
 and **1,494/3/160** remain failures. Ticket stays `implementing`; not source-clear,
-runtime-accepted, review-ready or complete on this new baseline. The detailed
-integration checkpoint at the end governs older standing/next-step prose below.
+runtime-accepted, review-ready or complete on this new baseline. The integration
+and authorized inventory checkpoints at the end govern older next-step prose.
 
 ### Current D15 Amendment — 2026-11-06
 
@@ -7880,3 +7884,71 @@ integration tiers, local-sync, ten changed-path SSH targets, both smokes and
 final runtime-evidence reviews remain owed. Individual named tests above are
 not whole target/tier passes. Ticket remains `implementing`, clean/unpushed at
 return; no merged-tree source-clear or runtime-completion claim.
+
+## Task 8 — Authorized Retirement Enum Inventory Correction (2026-11-07 UTC)
+
+Controller authorized this bounded follow-on after inspecting the exact failure,
+schemas and merge evidence. Accepted the same preflight, clean metadata HEAD
+**`c6d0e10b15f9fa778ceb5f62c0e5b2a2b7098648`**, main
+**`1e5616af22630b08a84dc0fb42037135b385f81d`** and merge source
+`774da0c30122685d10cf4f76b55d50811b8eb8f4`; no fetch/new merge or agents.
+Source freeze **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`** changes only
+`tests/read_contract.rs`. No production, schema, API, result code, dependency,
+golden, target or case change. This is our feature's omitted contract inventory,
+not a D5 policy/baseline regression. The existing compiled **122-vs-103 RED**
+log `task8-d5-merge-progress-schema.log` remains unchanged (SHA-256
+`6b5e2e1bb6b88897b36362fa4061e64b0d29128af64d55ff22f56ee5bf155321`);
+no redundant RED or old-tree runtime run.
+
+Added **19 actual property pins**: ordinary retirement **6**, opted-in poll
+retirement **10** (including nested `retirements.items.result` fields), abandon
+metadata **3**. DTO enums/kinds/debt use Rust `ALL/as_str`. Removals use explicit
+`RetirementRemoval::{None, Possible, Observed}` with its existing `as_str`
+(there is no `ALL` registry). The ordinary root's code pin uses **37 named
+ResultCode variants**, not full `ALL`; nested result `code` remains a string,
+not a fabricated enum pin. Abandon `phase` is a public String: its ten literals
+pin the approved vocabulary grounded in the audited record-table phase CHECK
+and `preserve::metadata`'s unchanged copy, **not an automatic Rust enum-registry
+check**. Comments state that limitation; no new public phase enum/API.
+Existing `schema_enum`/nullable-debt null filtering, schema discovery and count
+helpers are byte-identical, and the complete test's executable statements,
+including `assert_eq!(published, enumerations.len() + 1)`, are unchanged.
+Only explanatory comments in that test were corrected. D5 stage pins, ordinary
+untagged poll and existing exemptions are untouched. No new helper or concrete
+secondary dependency risk; therefore no additional exact test was needed/run.
+
+Serialized fresh Devenv verification on test SHA-256
+**`3014413f77ade72bd545b969d1d98c78a85af357c42d051d6a1314a8b6939f66`**:
+
+| Exact command | Actual result / wall time / log SHA-256 |
+| --- | --- |
+| `devenv shell -- cargo test --all-features --locked --test read_contract published_enumerations_list_exactly_the_registered_values -- --exact` | **1 passed / 0 failed**, 71 filtered, 0.02 s test / **3.125 s** wall; **`418c3639c896c6dc28fd65496e3de7119b8b56bce26d6fc1723c52a4aa8d5076`** |
+| `devenv shell -- cargo fmt --check` | **PASS**, **17.518 s**; **`d7f87577179e72b25bde5a726d4039498b87b8fff4913ffade3dbb59dc672022`** |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | **PASS**, **1.973 s**; **`c10dd34fff8dbb79d871f89e638901e52d69d76ccea2fb9373b06169625427a4`** |
+
+This is a runtime **122/122 completeness GREEN**, with all registered value
+comparisons passing, not an adjusted expected count. All three command input
+hashes match before/after and match source freeze. No Rust edit followed;
+fresh Clippy/fmt qualify these new test inputs, not the old omitted inventory.
+The nine earlier merge semantics greens retain their original scope; no reruns,
+CUT/mode/fixture/broad fast/SSH/native/GPUI or extra cargo check, no sleeps.
+
+New-only `/tmp/opencode/task8-enum-*`: `results.json` records exact argv,
+timestamps/PIDs/exits/log hashes, 19 property paths and pin bases; `inputs.json`
+hashes ten relevant inputs; `delta.diff` and `preservation.json` record the
+test-only change and unchanged helpers/schema/production. The **11-artifact**
+`verification.sha256` is
+**`5e4d9949307bfd2bb652e9f9d5b2dbb7a5c5132e64455a5c2f7e3f720b1ec36d`**.
+The earlier 38 merge-artifact bytes and their manifest/final hashes were
+verified unchanged; old 35/14/26/19 gate/fixture manifests were not written.
+Appended the existing canonical comment `01M6SYJK4CJGHWKZC7MTP18GTA`, retaining
+its ID, parent and creation time; no new CLI ID or profile access was needed.
+
+**Combined merge + inventory delta still needs same whole SPEC
+`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`, then same QUALITY
+`ses_e4c8be2f1ffegiPUEUuB0QgyBE`; barrier retained.** No source-clear,
+review-ready/status save, feature/runtime completion, push/PR/main/close/native,
+other worktree or real profile/key/context/draft action. No owned jobs at return.
+Fresh final cargo check, broad library green, full fast bins/27 integration
+targets, local-sync, ten SSH targets, both smokes and runtime-evidence reviews
+remain owed; historic library failures keep their actual SHAs/counts.
