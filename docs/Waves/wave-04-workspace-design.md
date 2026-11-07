@@ -19,11 +19,12 @@ that the user shows, hides and moves from a footer bar that also carries
 Needs attention and Settings, and the layout survives a restart. Each panel's
 rows, toolbars and states follow `03-panels.md` and the plain-language vocabulary in
 `06-language-and-states.md`. Settings opens as a sheet instead of taking over
-the item area.
+the item area, and the existing sheets and dialogs follow the design too.
 
 Each Cycle is small and leaves the app visibly better than before: the shell
 first, then the two lists people use most, then the sharing and recovery
-surfaces, then Settings. No Cycle changes domain behavior. This Wave is a
+surfaces, then Settings, then the remaining sheets and dialogs. No Cycle
+changes domain behavior. This Wave is a
 view-layer reorganization over the existing headless services, plus a desktop
 layout model and its app-local persistence.
 
@@ -50,6 +51,8 @@ suggested sequence. This Wave replaces it with the owner's priorities from
 | `03` Repositories, Activity | Cycle 03 |
 | `05` Needs attention popover | Cycle 03 |
 | `05` Settings sheet frame, Sharing & keys | Cycle 04 |
+| `05` common sheet and dialog frame, Add repository, Unlock key, Close ticket and Approve and merge, Resolve conflict | Cycle 05 |
+| `04` empty item area | Cycle 05 |
 | `06` copy and state vocabulary | every Cycle, for the surfaces it touches |
 | `07` color, type, spacing tokens (both modes) | Cycle 01 (chrome tokens), then each Cycle's surfaces |
 | `08` GPUI Kit mapping | every Cycle, verified against the locked version |
@@ -78,7 +81,10 @@ The owner set the scope and priority order of this Wave:
    into its details sheet.
 
 Items 1 to 3 form Cycle 01, item 4 spans Cycles 02 and 03, and item 5 is
-Cycle 04. Item 6 is [Deferred Work](#deferred-work).
+Cycle 04. Later the same day the owner added Cycle 05 for the sheets and
+dialogs that already exist but were left out: the "other dialogs" part of
+item 6, for the surfaces the app has today. The rest of item 6 is
+[Deferred Work](#deferred-work).
 
 These parts of the design are aspirational and are **not** built in this
 Wave: Search (the title bar field and Ctrl K), the Teams panel and the
@@ -158,6 +164,7 @@ Made when this Wave is approved, on its ticket:
   Activity, in Repository scope.
 - The Needs attention popover.
 - The Settings sheet, holding the existing settings pages.
+- The existing sheets and dialogs, in the design's frame and layout.
 
 ## Explicit Exclusions
 
@@ -167,9 +174,8 @@ Made when this Wave is approved, on its ticket:
   hold already has a key binding or a control.
 - Item-area splits and the focused-pane treatment (`02`, "Center";
   `04`). The center keeps today's single tab group.
-- The Add repository sheet (`05`, 1d), and restyling the Close ticket,
-  Approve and merge, Unlock key and Resolve conflict surfaces. They keep
-  their current form.
+- Sheets and dialogs the app does not have yet, such as the design's
+  General settings page.
 - A theme switch, the Appearance settings page and light-mode polish. Tokens
   carry both modes so that this is later work, not rework.
 - A row density setting and font changes (decisions 7 and 8).
@@ -178,7 +184,7 @@ Made when this Wave is approved, on its ticket:
 
 ## Cycles
 
-Four Cycles, in priority order. Each gets a Manyhands ticket before its plan,
+Five Cycles, in priority order. Each gets a Manyhands ticket before its plan,
 and its Cycle document at the path named below.
 
 | Cycle | Delivers | Depends on |
@@ -187,9 +193,11 @@ and its Cycle document at the path named below.
 | 02 Tickets and Documents panels | The two lists rebuilt to `03` | 01 |
 | 03 Repositories, Activity and Needs attention | Sharing states, the activity log, the popover, the footer's "to share" | 01; D6 for the polling states only |
 | 04 Settings sheet | Settings moved from the item area into a sheet | 01 |
+| 05 Existing sheets and dialogs | Add repository, Unlock key, Close ticket and Approve and merge, Resolve conflict and the other dialogs in the design's frame | 01, 04 |
 
-Cycles 02, 03 and 04 each depend only on 01. Run them in order unless the
-owner asks to overlap them. 02 and 03 both touch panel headers and shared row
+Cycles 02, 03 and 04 each depend only on 01. Cycle 05 also depends on 04,
+because it moves Add repository out of the Settings sheet's Repositories
+page. Run them in order unless the owner asks to overlap them. 02 and 03 both touch panel headers and shared row
 helpers, so overlapping them means more merging.
 
 ### Cycle 01: Workspace Shell
@@ -348,7 +356,8 @@ the places the design puts them.
   repository with unshared work. "Checked for updates …" only once D6 has
   merged.
 
-**Out of scope:** The Add repository sheet; background polling itself (D6).
+**Out of scope:** The Add repository sheet (Cycle 05); background polling
+itself (D6).
 
 **Exit evidence:** Failures persist until resolved and appear in both
 Activity and the popover; every popover action works by keyboard; Activity
@@ -387,6 +396,70 @@ through the sheet by keyboard; opening and closing Settings leaves the open
 item, its scroll position and any draft untouched; the rule for an item
 details sheet that is already open (decision 6) is tested.
 
+### Cycle 05: Existing Sheets And Dialogs
+
+**Planned document:** `docs/Cycles/wave-04-cycle-05-sheets-and-dialogs.md`
+
+**Purpose:** Bring the sheets and dialogs that already exist up to the
+design, so that the Wave leaves no surface in the old style. Every one keeps
+its current behavior, services, request handling and recovery routes. Only
+its frame, layout, copy and states change.
+
+**In scope:**
+
+- **Common frame** from `05`: the sheet and dialog frames (header, body,
+  footer), primary and secondary buttons, 32 px inputs with the teal focus
+  ring, scrims, and focus that is trapped, closes on Esc unless an operation
+  is running, and returns to the invoking control. It applies to every
+  existing dialog, including those the design does not draw on its own: the
+  confirmation dialog (`confirm.rs`), New ticket… and New document…, New
+  folder…, Move…, the close-draft dialog and the quit dialogs.
+- **Add repository sheet** (`05`, 1d, 470 px): today's Add an existing
+  repository and Create a repository, moved out of the Settings
+  Repositories page into the sheet, with the mode segmented control, the
+  live folder checks and their recovery actions, the main branch select
+  with its Suggested tag, the sharing remote select (non-SSH remotes listed
+  but disabled, with the reason), the "Removing a repository … never
+  deletes" note, and the identity step when Git has none. It opens from
+  the Repositories panel's `+`, from the Settings Repositories page and
+  from the empty Repositories panel.
+- **Unlock key dialog** (`05`, 2h, 440 px): today's passphrase dialog with
+  the design's header, key card, note, Not now and Unlock, the inline error
+  for a wrong passphrase, and Not now moving the prompt into Needs
+  attention. The show and hide toggle follows decision 9.
+- **Close ticket and Approve and merge dialog** (`05`, 2c to 2e, 580 px):
+  today's lifecycle dialog laid out as the design's stages. Confirm shows
+  the numbered step list, the files to be merged with their tags and line
+  counts (and the note when code is included), "Becomes ready to start" and
+  the Git detail line. Running shows each step's state and progress, with
+  Stop at a safe point. Failed names the step and cause, shows the outcome
+  box, the contextual fix and Retry. Done shows the outcome and the newly
+  ready tickets. The local-only wording for step 2 is kept.
+- **Resolve conflict sheet** (`05`, 2g, 920 px): already built from the
+  design in Wave 03 D5. This Cycle moves it onto the shared tokens and
+  frame and corrects any difference from `05` it finds, without changing
+  how parts are chosen or saved.
+- **Empty item area** (`04`, "Empty pane"): the faded app icon and "Open a
+  ticket or document from the lists". The "Ctrl K to search" line waits
+  for Search.
+
+**Out of scope:** New behavior in any of these surfaces, the General and
+Appearance settings pages, and theme switching.
+
+**Exit evidence:** Every existing journey through these surfaces still
+passes by keyboard: adding and creating a repository, including the
+identity step and each failed check's recovery action; unlocking, Not now,
+a wrong passphrase; a close and an approval through confirm, running,
+failed with Retry, and done, including a local-only repository; resolving
+a conflict. Focus returns to the invoking control after each. No
+passphrase or private key text reaches any label, tooltip or Git detail
+line (extend the existing privacy tests).
+
+**Split line:** if the plan does not fit one reviewable Cycle, split it into
+05a (common frame, Add repository sheet, Unlock key dialog, empty item area)
+and 05b (Close ticket and Approve and merge dialog, Resolve conflict sheet),
+and update this Wave.
+
 ## Testing
 
 Per `AGENTS.md`, "Testing Strategy". This Wave changes `src/desktop/` only,
@@ -407,8 +480,8 @@ Wave 04 is complete when its Cycles have approved exit evidence and:
   footer and by dragging, and get them back after relaunch.
 - Every Wave 03 desktop journey still passes by keyboard through the new
   shell.
-- Settings, Needs attention, the four panels and the window title follow the
-  design as amended here, in the dark theme, with both modes' tokens in
+- Settings, Needs attention, the four panels, the window title and the
+  existing sheets and dialogs follow the design as amended here, in the dark theme, with both modes' tokens in
   place.
 - The static gates and the fast tier pass on the integrated tree, and the
   desktop smoke test runs on Linux Wayland. Native CI on all four targets
@@ -422,7 +495,8 @@ Wave 04 is complete when its Cycles have approved exit evidence and:
 | Client-side title bar behaves differently per platform (drag, double-click, controls, Wayland decorations) | Use Kit `TitleBar` and its window options; check Linux locally, macOS and Windows in native CI after merge (decision 4). |
 | A layout file from an older build, or a removed panel, breaks startup | Versioned file, fallback default reported in Activity, unknown panels dropped; one table-driven test. |
 | D6 lands while Cycles 01 and 03 move and rework the operations area | Cycle 01 moves the area unchanged; 03 bases its plan on whatever D6 has merged and leaves the polling states out until then. Merge main often, per `AGENTS.md`. |
-| Cycle 01 grows too large to review | The split line in Cycle 01. |
+| Cycle 01 or 05 grows too large to review | The split line in each. |
+| Restyling the lifecycle dialog and the resolve conflict sheet regresses D5 behavior (stale confirmations, retry reusing the operation, safe-point stop, no automatic winner) | Cycle 05 changes layout and copy only; D5's existing tests stay and must pass unchanged in what they assert about behavior. |
 | The design's list specs drop a Wave 03 behavior (Ready and Blocked, duplicate short codes, inaccessible entries) | Cycle 02's exit evidence names them; decision 5 places Ready and Blocked. |
 
 ## Open Decisions For The Owner
@@ -446,14 +520,21 @@ Wave 04 is complete when its Cycles have approved exit evidence and:
 7. **Row density.** Recommended: 28 px rows, no setting yet.
 8. **Fonts.** Recommended: the toolkit's UI font and one monospace font, at
    the design's size scale.
+9. **Passphrase show and hide.** The design's Unlock key dialog has an `eye`
+   toggle, but today's dialog has none on purpose: the Kit's masked input
+   refuses copy and hides its value from accessibility. Recommended: keep it
+   without the toggle.
+10. **Add repository from Settings.** Root has one sheet layer, so the Add
+   repository sheet can't sit over the Settings sheet. Recommended: opening
+   it from Settings replaces the Settings sheet, and Cancel or Add returns to
+   the Settings Repositories page.
 
 ## Deferred Work
 
 Owner item 6 and the excluded design parts, to be planned later:
 
 - Theme switching and the Appearance page; light-mode polish.
-- The Add repository sheet; restyled Close ticket, Approve and merge, Unlock
-  key and Resolve conflict surfaces.
+- Other dialogs and panels the app does not have yet.
 - Moving content from the bottom of the item view into its details sheet.
 - Item-area splits and the focused-pane treatment.
 - Search and the command palette; Projects and Teams panels and scopes;
