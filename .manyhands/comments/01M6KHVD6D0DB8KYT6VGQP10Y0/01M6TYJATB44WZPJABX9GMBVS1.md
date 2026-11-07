@@ -381,3 +381,64 @@ remain untouched. Only three test files + ledger/comment committed with coauthor
 this comment's ID/parent/time/all history preserved. Child2340592 exited; no jobs,
 push/status save/PR/main/close/native/other-worktree/real-profile-key-context-draft
 actions. Ticket **implementing / review-and-runtime BLOCKED**, not ready/complete.
+
+## Follow-up — whole accommodated desktop GREEN; CLI integration FAILED
+
+After controller's same whole SPEC SOURCE CLEAR then QUALITY SOURCE PASS through
+**`d49cfa4a7150d73bc31333e2fe9038fecfb2ec61`**, resumed sole final-gate ownership.
+Main **`846af67935f5381be9f355b25ae91d14e7705e6e`** / accepted docs merge9e8ad037;
+library/production freeze **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**. No fetch/
+merge/agent/source edit. Only the3 approved cfg(test) WAIT60s helpers differ;
+GPUI15s uninterrupted-park guard/POLL10ms/production safety/assertions unchanged.
+
+**Reused, not rerun:** current wait-budget strict Clippy exit0,21.190s; fmt exit0,
+17.618s; prior check exit0,15.198s. Three changed test modules are excluded from
+normal cargo-check inputs. Current3 hashes and wait-budget18 manifest/entries
+authenticated. Preserve **library1530/0/160,1972.73s**, no repeated lib/bins gate.
+
+Actual serial commands, default threads/no instrumentation/filter/skip/retry:
+
+1. `devenv shell -- cargo test --all-features --locked --bin manyhands`:
+   **exit0;1580 passed/0 failed/0 ignored/0 filtered**,**2158.17s tests**. Actual
+   whole desktop green supplements, not relabels, the earlier exact64 green.
+2. Authorized `--bin manyhands-cli` +all27 named fast integrations, no lib/bins:
+   **exit101**. CLI unit binary **307/0**,0.52s; canonical_foundation **65/0**,0.03s;
+   cli integration **476/1**,420.97s. Full literal argv in new results.
+   **Other25 integrations did not start. FIRSTFAIL stopped admission.**
+
+Only failed case:
+**`help::the_poll_verbs_help_is_available_and_is_its_own_golden`**, helper
+**`tests/support/cli.rs:629:5`**. Actual `poll once` help includes optional
+**`--retire-completed`**, missing from
+**`tests/fixtures/cli_v1/help_poll_once.json`**. Saved JSON otherwise agrees after
+removing only that option; full expected/actual preserved. Failure completion
+received16:23:50.443974Z, sequence559. **No fixture/source fix or further probe**.
+
+Desktop UTC15:45:16.622086Z→16:21:15.497802Z, MONOTONIC**2158.875708606s** /
+BOOTTIME**2158.875708269s**; remainder16:21:21.446230Z→16:28:34.447030Z,
+MONOTONIC**433.000799816s** /BOOTTIME**433.000799369s**. Both PM-only queries had
+zero matches, exit1/no-match/empty stderr; sub-microsecond clock differences:
+**no measured suspend**. No power policy/inhibitor/induced sleep. Raw output and
+receipt sidecars1655/1034 rows cover every byte; timestamps are not case starts.
+
+Old whole1518/62 and1516/64 at WAIT10s remain FAILED; instrumented51/49 remain
+diagnostic only. Owner timing accommodation is **not a performance/root-cause
+fix**; profiling stays stopped. CLI retirement contract/replay cases passed but
+do not pass this full target. Retained44 C/L/S/M1/Q1/enum/D5/D6/native/combinatorial
+limits remain explicit; full read_contract still unrun, no blanket waiver.
+
+**NOT RUN:**25 later fast integrations, selected slow local-sync, all ten selected
+SSH targets, both smokes and runtime-evidence SPEC→QUALITY reviews. No display/
+socket/profile/app/native operation. Keep finished desktop/CLI-unit/canonical and
+retained library greens for unchanged inputs; controller owns the failure and
+further execution. No retry/optimization/golden edit authorized by this phase.
+
+New-only **`/tmp/opencode/task8-accommodated-*`** contains exact per-command argv,
+raw/receipt/results/power evidence, current3 hashes/reused statics, failure analysis,
+coverage/handoff/final manifest. All18 old manifest files retain their digests,
+with no old artifact writes/whole-tree reinventory. Only ledger/comment checkpoint
+metadata with coauthor; this comment's original text/ID/parent/time preserved.
+Known owned gate processes exited; no jobs, source edits, ID allocation/extra
+build/status save/push/PR/main/closure/agents/other-worktree/real profile-key-context-draft action.
+Ticket **implementing / runtime BLOCKED**, not review-ready/feature-complete;
+same whole runtime-evidence reviews and owner handoff remain owed.

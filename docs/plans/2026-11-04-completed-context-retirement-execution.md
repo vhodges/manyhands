@@ -12,7 +12,46 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
-### Current Main Integration — 2026-11-07 UTC
+### Current Accommodated Gate Standing — 2026-11-07 UTC
+
+**Sole-owner final verification resumed, then STOPPED at the first failed target.**
+Frozen compiled/test source **`d49cfa4a7150d73bc31333e2fe9038fecfb2ec61`**;
+library/production freeze **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**;
+current main baseline **`846af67935f5381be9f355b25ae91d14e7705e6e`**, already
+integrated by documentation-only merge **`9e8ad037f6ff42964aab2e6628927ed474d85697`**.
+Controller reports same whole SPEC **SOURCE CLEAR**, then same whole QUALITY
+**SOURCE PASS**, through d49cfa4a on the846af679 feature range. That lifted this
+sequence's source barrier, not runtime review/owner handoff.
+
+| Current evidence | Actual standing |
+| --- | --- |
+| Library retained | **1530 passed/0 failed/160 local-sync filtered**,1972.73s tests; unchanged library inputs, NOT rerun. |
+| Whole accommodated desktop | **1580 passed/0 failed/0 ignored/0 filtered**,2158.17s tests, **exit0**. |
+| CLI unit binary | **307 passed/0 failed**,0.52s tests, finished green. |
+| canonical_foundation | **65 passed/0 failed**,0.03s tests, finished green. |
+| cli integration | **476 passed/1 failed**,420.97s tests; remainder command **exit101**. |
+
+The first failure is **`help::the_poll_verbs_help_is_available_and_is_its_own_golden`**,
+at `tests/support/cli.rs:629:5`: actual `poll once` help includes optional
+**`--retire-completed`**, absent from `tests/fixtures/cli_v1/help_poll_once.json`.
+Full expected/actual retained; **no golden/source fix, diagnostic or retry**.
+No measured suspend in either command; PM-only queries had zero matches. Source
+and the3 cfg(test) hashes remained frozen throughout. Current wait-budget strict
+Clippy/fmt greens and prior unchanged-production check were **reused, not rerun**.
+Only3 cfg(test) paths differ from e6bc3912 and are excluded from normal check.
+
+Owner-approved **WAIT60s** remains a finite test accommodation, not a performance
+fix; GPUI15s per uninterrupted park, POLL10ms, safety budgets and assertions are
+unchanged. Historical whole-desktop1518/62 and1516/64 remain failed at WAIT10s;
+instrumented51/49 remain diagnostic only. Profiling/optimization remains stopped.
+**NOT RUN:**25 remaining fast integrations, slow local-sync, ten selected SSH
+targets and both smokes. No display/profile/app/native action. Preserve finished
+greens on unchanged relevant inputs; further execution/fixes need controller
+authorization. Ticket **implementing / runtime BLOCKED**, not feature-complete or
+review-ready; final same whole SPEC→QUALITY runtime-evidence reviews and owner
+handoff remain owed. Latest appended checkpoint governs older next-step prose.
+
+### Historical Main Integration And Gate Standing — 2026-11-07 UTC
 
 **Authorized in-progress main merge finished at source/postmerge
 `774da0c30122685d10cf4f76b55d50811b8eb8f4`**, with exact parents
@@ -8707,3 +8746,129 @@ form the owned commit, with coauthor; comment ID/parent/creation time/history
 retained. No push/status save/main/PR/close/native/other-worktree or real profile/
 key/context/draft action. Child2340592 exited normally; no owned gate job remains.
 Ticket **implementing / review-and-runtime BLOCKED**, not feature-complete/ready.
+
+## Task 8 — Accommodated Desktop Green; First CLI Integration Gate Failed
+
+### Authority, Frozen Inputs And Reused Evidence — 2026-11-07 UTC
+
+Controller lifted the final-gate barrier after owner-approved WAIT60s and the
+**same whole SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**, then **same
+whole QUALITY `ses_e4c8be2f1ffegiPUEUuB0QgyBE` SOURCE PASS**, through frozen
+**`d49cfa4a7150d73bc31333e2fe9038fecfb2ec61`**, active feature range from main
+**`846af67935f5381be9f355b25ae91d14e7705e6e`**. Accepted completed fetch/merge
+preflight and docs-only9e8ad037; no new fetch/merge, agents or source edits.
+Library/production/test-library/schema/Cargo/Devenv/workflow inputs still
+**`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**, except exactly the3 approved
+cfg(test) desktop WAIT helpers. Their hashes match the wait-budget source
+manifest, SHA-256 **`37e427fc52e2843b59432ea47751b6d40b7236bc1a5cf1c0e15eebaee98b856c`**.
+
+**Reused, not executed again:**
+
+- Prior `devenv shell -- cargo check --all-features --locked`, exit0,15.198s,
+  **`task8-recheck-check.log`**. `desktop::test_support` is gated by `#[cfg(test)]`;
+  `view::harness` by `#[cfg(all(test, feature = "desktop-test-support"))]`.
+  The3 changed files are not normal cargo-check compiled inputs; all other inputs
+  match the prior production freeze. No invented fresh check.
+- Current strict all-target/all-feature Clippy exit0,**21.190365631s**,20.90s Cargo,
+  **`task8-wait-budget-clippy.log`**; fmt-check exit0,**17.618100972s**,
+  **`task8-wait-budget-fmt.log`**. Literal argv/times in the immutable statics JSON;
+  final3 file hashes match. Wait-budget18-artifact manifest authenticated against
+  **`c5dd7e7e5302dcb8621e80b9ffece80dd7c167f15deff3d801ebe0d53f3f57a1`**,
+  all18 entries verified without broad incoming-code inventories.
+- Library **1530/0/160 filtered,1972.73s**, unchanged library inputs, NOT rerun.
+  Prior exact64 **64/0/1516 filtered,215.70s** remains targeted evidence, not
+  relabeled as the following whole desktop. Historical failed/diagnostic runs
+  keep their original source, wait budget and scope.
+
+### Actual Serial Commands And First-Failure Boundary
+
+First, exact whole changed desktop:
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands
+```
+
+**Exit0;1580 passed/0 failed/0 ignored/0 measured/0 filtered**,**2158.17s tests**.
+All1580 completion lines accounted for. Cargo used the matching current,
+uninstrumented WAIT60s build (0.42s target check; prior64 run had rebuilt these
+same source hashes), not a substituted instrumented executable. No new filter,
+skip, thread/deadline/GPUI change, synthetic wait, wakeup or profiling.
+
+Only after this PASS, ran the authorized **CLI+all27 fast integration command**,
+`--bin manyhands-cli` plus every named `--test`, including read_credentials and
+read_items; **no `--lib`, `--bins`, desktop repeat or local-sync skip argument**.
+Its full literal argv is in **`task8-accommodated-results.json`** and the runner.
+**Exit101**, with this actual Cargo order/binary scope:
+
+| Finished binary/target | Passed / failed / filtered | Test seconds |
+| --- | --- | --- |
+| `unittests src/bin/manyhands-cli.rs` | **307/0/0** | **0.52** |
+| `tests/canonical_foundation.rs` | **65/0/0** | **0.03** |
+| `tests/cli.rs` | **476/1/0** | **420.97** |
+
+Cargo stopped after cli. **None of the other25 integration targets started.**
+Do not discard the307/65 greens or infer a full CLI/fast-tier pass from them.
+
+The **only failed case** is
+**`help::the_poll_verbs_help_is_available_and_is_its_own_golden`**, panic helper
+**`tests/support/cli.rs:629:5`**, golden
+**`tests/fixtures/cli_v1/help_poll_once.json`**. Recorded actual `poll once` help
+adds optional **`--retire-completed`**, value null, summary
+“Explicitly retire proven-safe completed contexts in this live pass only.”
+That option is absent from expected. Removing only it from the **saved** actual
+JSON makes the saved expected/actual identical. This is saved-output analysis,
+not a new command/probe, fixture acceptance or proof of later assertions in the
+same test. Failure completion received **16:23:50.443974Z**, output sequence559.
+Complete message/expected/actual and receipt clocks are in **`failure-analysis.json`**
+and **`fast-remainder-failures.log`** under the new prefix. No golden update,
+diagnostic, source fix, retry or infrastructure attribution is authorized here.
+
+### Clock/Power Facts, Coverage And Exact Unrun Remainder
+
+| Actual command | UTC interval | REALTIME / MONOTONIC / BOOTTIME seconds |
+| --- | --- | --- |
+| Whole desktop | **15:45:16.622086Z→16:21:15.497802Z** | **2158.875715446 /2158.875708606 /2158.875708269** |
+| CLI+27 selection | **16:21:21.446230Z→16:28:34.447030Z** | **433.000800129 /433.000799816 /433.000799369** |
+
+BOOTTIME−MONOTONIC differences **−0.000000337s /−0.000000447s** are sampling noise,
+not elapsed suspend. Each interval-only kernel PM entry/exit query returned
+**zero matches, exit1/no-match, empty stderr**. No full/user journal, power policy,
+inhibitor or induced/prevented sleep. Raw output is separate from ordered
+receipt-clock sidecars: desktop**1655 rows**,remainder**1034 rows**, complete
+byte coverage and per-binary completion reconciliation. Receipt clocks are not
+case starts/internal phases. **No measured suspend**, not a performance guarantee
+or infrastructure waiver for this concrete help-output assertion.
+
+**`task8-accommodated-coverage.md`** records the actual current binary scopes.
+Both CLI retirement integration cases passed (`retirement_command_flag_and_stopped_report_contract`
+and `retirement_replay_index_and_preserving_binary_contract`), while the CLI
+target remains FAILED. M1/Q1/fixture/domain evidence retains the preserved library
+scope. Full read_contract still unrun; prior exact enum122/122 and nine seams
+retain their scopes. Retained44 C/L/S, D5/D6, native/combinatorial limits are not
+waived. The wait accommodation is owner-approved stopgap only, not a sufficient
+root-cause/performance fix; profiling and existing performance tickets untouched.
+
+**Still NOT RUN:**25 fast integrations: discovery_rebuild, drafts,
+journal_rejection, key_material, key_storage, local_authoring, mutation_bridges,
+mutation_confirmation, mutation_contract, mutation_relationships, mutation_replay,
+read_boundary, read_characterization, read_comments, read_contract, read_credentials,
+read_items, read_relationships, read_repository, read_status, recovery_foundation_gate,
+remote_reservation, repository_enablement, session_credentials, shared_key_registry.
+Also selected slow `--lib repository::local_sync::` (prior160 skipped), all ten
+SSH targets, both isolated smokes and final runtime-evidence SPEC→QUALITY reviews.
+No display/socket/app/profile check or native CI. **FIRSTFAIL stops the sequence**;
+controller owns the failed target and further authorization. Preserve completed
+desktop/CLI-unit/canonical and retained library greens on unchanged relevant inputs.
+
+New-only **`/tmp/opencode/task8-accommodated-*`** holds current3 source hashes,
+preflight/reuse proof, both exact argv/raw/receipt/result/power records, failure
+analysis, coverage and handoff. All18 older manifest files were snapshotted and
+remain digest-identical; old artifacts were not written or wholesale reinventoried.
+Final owned-metadata/source/whitespace/merge-tree/comment-append/no-jobs checks and
+computed new-only artifact manifest accompany the checkpoint. Canonical comment
+**`01M6TYJATB44WZPJABX9GMBVS1`** is append-only, original ID/parent/creation time
+and all history preserved. Only ledger/current standing/comment metadata committed
+with coauthor; no ID allocation/extra build/status save, source/golden changes,
+push/PR/main/close, agents/other-worktree or real profile/key/context/draft action. All owned gate
+processes exited. Ticket **implementing / runtime BLOCKED**, not review-ready or
+feature-complete; same whole runtime-evidence reviews and owner handoff remain owed.
