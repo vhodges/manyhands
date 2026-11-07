@@ -38,6 +38,14 @@ failures remain unchanged. Ticket stays `implementing`, runtime **BLOCKED**, not
 review-ready/owner-handoff complete. The latest appended gate checkpoint governs
 older next-step prose.
 
+**Bounded diagnosis update:** the appended desktop-diagnosis checkpoint confirms
+two real suspend cycles and records **four additional exact probes,4/0**, with
+no measured suspend in that probe. It also traces a direct-read/background-refresh
+race opportunity and retirement's full audit on ordinary refresh admission under
+the exclusive cache lock. Neither failure causation nor audit duration is proven.
+All62 desktop failures remain unresolved; the library/static greens survive on
+unchanged source. No fix, further test run or policy change is authorized.
+
 ### Current D15 Amendment — 2026-11-06
 
 **Owner-approved contract; both same-reviewer source/contract re-reviews passed
@@ -8077,3 +8085,119 @@ No ticket status/body save, push, PR/main/close, other worktree, real context/ke
 draft action or native dispatch. No owned Cargo/test job remains. Ticket stays
 **implementing / runtime BLOCKED**; final same SPEC→QUALITY runtime-evidence
 reviews and owner handoff remain owed, not feature/review-ready completion.
+
+## Task 8 — Bounded Frozen Desktop Diagnosis, 2026-11-07 UTC
+
+**Diagnosis only; desktop still FAILED, root cause unresolved.** Sole owner,
+existing ticket worktree, frozen entry **`3204e1b9102f14e93a697f52104863b8e61f2ecb`**;
+Rust/schema/build inputs still **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**,
+comparison main **`1e5616af22630b08a84dc0fb42037135b385f81d`**. No fetch/merge,
+baseline move, agent, source/instrumentation edit or implementation. Historical
+checkpoints above retain their as-of evidence; the new power evidence below
+updates their earlier unknown timing cause, not the failed-gate disposition.
+
+### Only New Rust Command — Four Authorized Exact Failure Representatives
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands -- desktop::view::lifecycle::outcome_canned_tests::cleanup_refused_is_failed_with_retry desktop::view::lifecycle::credential_tests::a_resend_without_a_secret_takes_the_unlock_path desktop::view::keyboard_tests::settings::add_an_existing_repository_by_keyboard desktop::view::settings::remotes::tests::a_remote_url_with_a_password_is_shown_redacted --exact
+```
+
+Ran once, default threads, `RUST_TEST_THREADS` unset, no deadline/thread override:
+**exit0;4 passed/0 failed/1576 filtered;4.40s tests**. UTC
+**12:19:54.904342Z→12:19:59.885497Z**; monotonic elapsed **4.981190312s**,
+boottime **4.981190601s**, difference **0.000000289s**: no measured suspend in
+this probe. Raw before/after clock values and complete argv are in
+`/tmp/opencode/task8-desktop-diag-four-cases.json`; raw log SHA-256
+**`6ab51aaf66bc33cada73a73dbf2b638c53335dda1d2bf0005ebac5db1adf031e`**.
+Foreground child **2179215** exited normally. This is **not reproduced in this
+bounded set**, not desktop-gate success or proof of no product bug. The earlier
+passing restored-draft probe and green library were not rerun.
+
+### Confirmed Evidence Versus Unproven Causation
+
+1. **Real suspend, not merely a clock hypothesis.** Independently queried only
+   system kernel `PM: suspend entry/exit` records in the original command range;
+   no application/user journal logs. First s2idle **03:28:10.028398Z→10:51:38.561281Z**,
+   suspend gap **26606.600681s**, was in the passing library phase. Second
+   **11:47:45.577162Z→12:03:21.571749Z**, gap **934.903832s**, was late desktop.
+   Their sum **27541.504513s** explains the original UTC-minus-monotonic difference
+   within **1.098749s**. Approximate desktop start is **11:15:43.120042Z** and
+   second resume to command end **149.342125s**; these are aggregate phase bounds,
+   not per-case timestamps. `Instant`/duration waits do not establish that the
+   suspended wall interval consumed each10s budget. **No blanket suspend waiver
+   for59 deadlines or2 Busy errors.**
+2. **Confirmation expiry is plausible, not correlated.** The one failure was
+   fixture repo-create acceptance before the remote-redaction UI started.
+   Fixtures use real UTC `SystemClock`; confirmation lifetime is600s, also
+   rejecting a backward clock. The second suspend exceeds600s, but the old log
+   has no actual prepare/expiry/accept timestamps proving this confirmation
+   straddled it. The exact probe passed; neither product nor fixture is fixed.
+3. **Source-confirmed Busy race opportunity, not reproduced Busy causation.**
+   Both failing tests unwrap direct `fixture.service().list_repositories()` after
+   only the original request ends. `worker.rs:1046` sends Finished before
+   enqueueing background IndexRefresh at1050–1058; workspace follow-up reads are
+   also asynchronous. Request end is not worker/cache quiescence. Direct reads
+   take a shared cache-file lock (250ms acquisition bound), then read-only SQLite
+   (5s busy timeout), without the UI read service's Busy retry. Debug deliberately
+   hides the source; `Busy,has_source:true` cannot distinguish file-lock timeout
+   from SQLite BUSY/LOCKED. Actual overlap, origin and duration remain unmeasured.
+4. **Retirement-owned shared cost remains a concrete hypothesis.** Ordinary
+   list-repositories reads do **not** migrate or run retirement audits. Ordinary
+   mutation `write_records` does call changed `migrate_registry` under the
+   exclusive cache guard, adding retirement schema/closure validation and M1
+   disposition dependency scans of `sqlite_master`/foreign-key metadata.
+   Importantly, full retirement history audit is **not only startup or
+   retirement-specific execution**: ordinary refresh follows
+   `claim_refresh_indexing` (`repository.rs:3938`) → `begin_or_reconcile`
+   (`recovery.rs:764`) → retirement `refresh_allowed`/`refresh_allowed_scoped`
+   (`record.rs:165/198`) → **`audit(db)` at232, before `owned_identity`**.
+   This runs under the exclusive cache guard and the immediate begin transaction;
+   audit includes schema/closure checks, per-table integrity/foreign-key checks
+   and retained-history validation. It adds retirement work to the existing
+   ordinary-refresh path even without a retirement-owned ID. Higher CPU/lock-hold
+   cost could contribute under parallel fixtures; **no per-call timings establish
+   its magnitude or its role in any of62 failures**. Four passing probes do not
+   exclude a load-dependent regression; aggregate CPU usage is not attribution.
+
+### Bounded Main Comparison And Missing Evidence
+
+**17 relevant files** (representative tests, fixtures, harness, worker, async
+reads, read/list/lock and mutation confirmation) are byte-identical to new main;
+**five existing functions** in otherwise changed files (read-only connection,
+index availability, record write/time, SystemClock now) also match. The only
+desktop delta is generic abandon-confirm retirement detail fields and their tests.
+This is source comparison, **not a passing runtime baseline** or proof that the
+failures are pre-existing. Shared domain retirement changes are reachable as above.
+
+No retirement-specific functional counterexample reproduced, so no minimal fix
+is justified or authorized. The old untimestamped log cannot identify the
+failing wait phases, actual consent interval, underlying Busy kind, audit
+latency, exclusive-lock hold or overlapping writer. Source/phase evidence and
+its limits are saved in `task8-desktop-diag-source-comparison.json`, bounded
+`source-delta.diff`, `source-excerpts.txt`, `power-journal.jsonl`,
+`power-analysis.json` and `diagnosis.json` under `/tmp/opencode/`.
+
+### Controller Options Only — Neither Executed
+
+- Authorize **one unchanged failed desktop binary** rerun, default threads and
+  existing deadlines, in ordinary owner-awake conditions, with timestamped raw
+  output and UTC/monotonic/boottime measurements. No inhibitor/power-policy or
+  concurrency change, green-library repeat or automatic later-gate continuation.
+  Completion timestamps alone may still not locate internal phase/Busy causes.
+- Alternatively authorize **minimal diagnostic instrumentation first**: per-case
+  wait/worker phases, actual confirmation times, privacy-safe cache-lock versus
+  SQLite Busy classification, and migration/audit/lock acquisition/hold durations;
+  then explicitly select the reproduction. No unredacted error sources/secrets,
+  broad performance framework, validation weakening or harness rewrite.
+
+The failed desktop gate remains **1518/62/0**, with **59 deadlines,2 Busy,1
+ConfirmationExpired**. Preserve **library1530/0/160** and static greens, unchanged
+and not rerun. CLI tests/all27 fast integrations, slow local-sync, ten SSH
+targets, both smokes and final runtime-evidence reviews remain unrun/barred.
+No broader Rust command, source change, timeout/retry/thread/power-policy change,
+induced suspend, push/status-save/PR/main/closure/native or real profile/key/
+context/draft action followed. New evidence uses only
+**`/tmp/opencode/task8-desktop-diag-*`**; all old manifests/artifacts stay immutable.
+Append-only current canonical comment retains ID/parent/creation time and all
+existing text. Only this ledger and that comment form the metadata checkpoint;
+ticket remains **implementing / runtime BLOCKED**, not review-ready.
