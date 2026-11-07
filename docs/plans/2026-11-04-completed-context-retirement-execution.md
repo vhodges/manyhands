@@ -39,22 +39,22 @@ retained-44/acceptance delta and correction record are appended below. Task 7 go
 amendments from base `76a852a7` are now independently SPEC and QUALITY approved
 through `c4fb38f5`, after the parent/child-code distinction and non-null disposition
 wording corrections. No findings remain at that bounded documentation gate.
-Its source/contract checks and limits are recorded below. Task 8 remains **BLOCKED**:
-final check/fmt/Clippy passed on frozen `e0b62f7e`, but the exact fast tier stopped
-at the library binary (**1,495 passed / 2 failed / 160 filtered**; binaries and
-all 27 integrations did not run). M1's A8/E-1 disposition-migration dependency
-closure and the two failed fixtures were corrected at `f9fa2d6c`. The controller
-now reports same whole-feature SPEC **SOURCE CLEAR through `47ba225b`**, including
-M1, not a runtime-gate waiver. Fresh whole-feature QUALITY reviewed the full
-`79c3931b..47ba225b` range and found one Important Q1 cancellation/evidence-loss
-gap and one Minor Q2 stale module comment, no other source findings. Those are
-locally corrected at `1ccd93d2`: exact CUT and strict Clippy/fmt pass on the
-recorded four-input delta. A6/A7's essential missing-companion cancellation
-coverage is now pinned locally **pending same whole-SPEC delta, then same
-whole-QUALITY full-range re-review**. The old fast gate still FAILED; no broad/SSH/smoke
-gate resumed and no earlier evidence scope is relabeled. The verification barrier
-remains. Ticket stays `implementing`, not feature review-ready or owner-handoff
-complete.**
+Its source/contract checks and limits are recorded below. Controller reports whole
+SPEC **SOURCE CLEAR** and whole QUALITY **SOURCE PASS** through `0e5fff04`, after
+M1/B/C at `f9fa2d6c` and Q1/Q2 at `1ccd93d2`; no remaining findings at that source
+review scope. The barrier was lifted for sole-owner verification, not runtime
+approval. Task 8 is again **BLOCKED**: a fresh check passed, matching-final-input
+Clippy/fmt greens were explicitly reused, and the resumed exact fast tier on
+`0e5fff04` / Rust source `1ccd93d2` stopped at lib (**1,494 passed / 3 failed /
+160 filtered**; binaries/all 27 integrations still unrun). Preserving index
+admission returned Ok instead of Busy; two default-poll tests installed unknown
+disposition triggers now rejected by M1. Read-only diagnosis/limits are appended;
+no probe/fix or later gate was admitted. M1, corrected Z/reopen and Q1 CUT tables
+individually passed in that failed binary. The old `e0b62f7e` **1,495/2/160** gate
+remains a historical failure; all original 35 evidence artifacts remain unchanged
+at their actual scopes.
+Ticket stays `implementing`; final runtime-evidence SPEC/QUALITY and owner
+handoff remain owed. No feature review-ready/completion claim.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
 [the delivery checkpoint](#task-3--ordinary-binding-and-guarded-preserving-recovery).
 Owner: “Okay, the live-pass-only batch, but keep in mind the batch doesn't need
@@ -7523,3 +7523,116 @@ still owns resumed final statics/runtime, selected SSH and smokes after review;
 none ran here. No feature/review-ready/native or final-gate completion claim.
 No agents, other worktrees, PR/push/main/close/native or real profile/key/context/
 draft action. No owned running jobs; verification barrier remains in place.
+
+## Task 8 Resumed — Current-Code Fast Gate Failure, 2026-11-07 UTC
+
+**BLOCKED; stopped at the first failed gate.** Controller lifted the prior pause
+after same whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR** and fresh
+whole QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` SOURCE PASS**, including Q1/Q2
+re-review, for full main-to-**`0e5fff04811f3933f47da4ca93b13ddda5c87be3`**. Its
+Rust source is **`1ccd93d26635ab1425bea8019ddec1c80274e693`**; metadata-only delta.
+Controller's fresh fetch/merge of unchanged main
+**`79c3931b01d225ddf3434ae9cd4fc51eb607fd2e`** was accepted. Sole verification
+owner, exact ticket worktree/branch only; clean entry, no agents/source edits.
+
+### Qualifying Static Reuse And New Execution
+
+Current AGENTS/Testing Strategy and current checkpoint/standing were reread.
+`git diff --exit-code 1ccd93d2 HEAD -- src tests schemas Cargo.toml Cargo.lock
+devenv.nix devenv.lock .github/workflows/build.yml` and working-code comparison
+were empty. **Only the 9 changed Rust inputs since the old failed freeze** were
+hashed in `task8-resume-changed-inputs.sha256`, not the whole tree. The latest
+4-input source manifest and 11-log manifest were authenticated/verified with zero
+mismatches. Original **35-artifact** manifest
+**`b6dd3bb5dac137f5a8403dc4c5bea05991e82e571072cb571ad7d9d5b418201c`** and every
+listed old file were also verified unchanged. New artifacts use only the
+**`/tmp/opencode/task8-resume-`** prefix; no old runner/result/log/coverage rewrite.
+
+| Gate | Actual scope/result | Wall time / raw log |
+| --- | --- | --- |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | **REUSED exit 0**, not run again. Final input hashes equal source `1ccd93d2` and current frozen code; original recorded execution HEAD was `47ba225b` with final working-tree inputs | 17.820 s wall / 17.52 s Cargo; `/tmp/opencode/task4-final-quality-q1-clippy.log` |
+| `devenv shell -- cargo fmt --check` | **REUSED exit 0**, same final-input proof/original recorded execution scope; not a fabricated new run | 19.375 s; `task4-final-quality-q1-fmt.log` |
+| `devenv shell -- cargo check --all-features --locked` | **NEW exit 0** at `0e5fff04` / source `1ccd93d2`; clean serialized Devenv setup | **6.281 s** wall / 6.07 s Cargo; `task8-resume-check.log` |
+| Exact original AGENTS fast argv, copied read-only from old JSON (all **27 targets**, including `read_credentials` and `read_items`) | **NEW exit 101**; **lib only 1,494 passed / 3 failed / 0 ignored / 160 filtered**. No later binary/integration ran; 1 of 30 planned binaries finished | **2,079.779 s** wall / **2,008.75 s tests**; `task8-resume-fast.log` |
+
+All new Cargo ran through Devenv, serially with default test-thread behavior.
+The failed/changed library justified this whole fast rerun; bins/integrations
+were first planned runtime gates, but Cargo again stopped before them. One
+**foreground blocking completion** waited for the whole existing command;
+no background abandonment, sleep/progress polling, narrowing at 15 minutes or
+duplicate command. This was the approved final tier, not a between-step run.
+Fast UTC interval **01:17:38.022977–01:52:17.802167**; raw SHA-256
+**`7ef0b6479da3f92d88ff9472ed1ded4dd1f50da707e0771a772483818bd55025`**.
+
+### Three Exact Failures — Bounded Read-Only Triage Only
+
+1. **`repository::context_retirement::record::authority::tests::retirement_preserving_admission_refuses_live_or_unrelated_owners_and_stale_abandon_f2`**,
+   `authority_tests.rs:161`: **index expected Busy, got Ok**, successful preserving
+   abandon, discovery Current, completed/abandoned. **Not the old PoisonError**.
+   Source :98–115 proves one real request-bound claim/heartbeat and a fresh
+   continuation; then service open, prepare and whole-image snapshot precede
+   execution. `preserve.rs:289–297` uses the real service clock and
+   `repository.rs:145`'s **3-second** stale threshold. Expiry under full load is
+   consistent with this path, but the log contains no before/after timestamps:
+   **a source-based hypothesis, not confirmed runtime timing or an infrastructure
+   waiver**. Essential live-owner admission assertion remains runtime blocked.
+2. **`repository::remote::poll::tests::review_original_stop_report_survives_later_poll_and_index_repair`**,
+   `poll_tests.rs:837`: `f.run(...).unwrap()` got **remote poll repository
+   unavailable**. Fixture :782 installs unknown `review_stop` trigger on
+   `remote_poll_dispositions`; M1's strict attachment validator
+   (`remote/state.rs:361–410`) now rejects exactly such objects. Source-traced
+   fixture/strict-schema conflict; fixed error text does not expose an inner cause.
+3. **`repository::remote::poll::tests::task6_yield_between_targets_keeps_changed_primary_and_restart_is_current`**,
+   `poll_tests.rs:1621`: same fixed error at first `f.run`. Fixture :1612 installs
+   unknown `yield_after_primary` trigger on the same protected table; same
+   source-traced M1 conflict. **Do not weaken the production guard or skip the
+   default/yield/report control assertions to accommodate the fixtures.**
+
+Detailed section is `task8-resume-fast-failures.log`. No exact reproduction,
+source/test edit, assertion weakening, test-thread override or additional gate
+was admitted. Controller owns bounded correction/review routing; the first
+failure's clock explanation is explicitly unconfirmed. No infrastructure claim.
+
+### Current Coverage Delta, Preserved History And Unrun Remainder
+
+**`task8-resume-coverage.md`** links the unchanged original 44-row map and bounded
+correction delta, not another matrix/plan. M1's actual 28-row disposition table
+(`remote/state_tests.rs:706`) **passed** in this resumed binary (raw log :1330),
+distinct from row 38 consumer closure. Corrected valid-envelope Z/reopen/exact
+release/scalar reuse (`store_tests.rs:1071`) **passed** (:589). Q1's real public
+dispatcher rows in the existing CUT table (`mutation_tests.rs:1765–1951`)
+**passed** (:1027): missing/corrupt mandatory companion/unknown immutable mode
+stay Accepted/no generic result/evidence recreation; ordinary/valid opted controls
+remain. These individual passes and source approvals do **not** pass the binary
+or close the renewed preserving/default-poll blockers. Native/file-handle/fault
+cross-products remain explicit limitations, not essential safety waivers.
+
+**Still NOT RUN:** both fast bins (`manyhands`, `manyhands-cli`) and all **27**
+fast integrations (exact list/argv copied in the new JSON); slow
+`devenv shell -- cargo test --all-features --locked --lib repository::local_sync::`;
+the **10** previously justified separate SSH targets `ssh_transport`,
+`remote_observation`, `remote_synchronization`, `remote_merge_recovery`,
+`remote_polling`, `cli_remote`, `mutation_remote`, `document_promotion`,
+`ticket_closure`, `comment_publication`; both isolated smokes. No display/profile
+reprobe or launch after this failure; earlier connectable display sockets are
+capability only, never app-startup proof. No SSH case or native CI ran.
+
+Complete new argv/UTC/source scopes/exits/per-binary counts/log hashes and
+explicit reused static rows: **`task8-resume-results.json`**. Failures, exact
+remaining command argv/fast targets, coverage and checkpoint are in
+**`task8-resume-handoff.json`**; verification/source/old-manifest proofs in
+`task8-resume-preflight.json`; owned runner/child exited in
+`task8-resume-stopped.json`. New metadata/merge-tree/whitespace/log manifest checks
+are recorded separately; original 35 files and old **1,495/2/160** failure stay
+immutable at `e0b62f7e`. No Rust source was changed or re-inventoried wholesale.
+
+Canonical failure reply **`01M6SVCCPV0X3DWS1WHQNA76R7`**, parent
+**`01M6SPJAW4WWAT4NC90T4HE8S6`**, created **`2026-11-07T01:53:44Z`**. Its ID
+used only the built supported isolated CLI through Devenv, data directory
+`/tmp/opencode/task2-recovery-core-cli-id-data`; exit 0, **no build/default profile
+or conversion**. Only owned ledger/current standing and this comment are committed
+with coauthor. No ticket status/body save, push, other-worktree/main/PR/close,
+real contexts/keys/drafts or native dispatch. **No owned Cargo/test job remains.**
+Return for controller-directed bounded fixes/review and explicit gate resumption;
+preserve qualifying greens and choose reruns from the actual changed tree. Formal
+runtime-evidence SPEC/QUALITY and owner handoff remain owed, not review-ready.
