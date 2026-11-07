@@ -51,6 +51,18 @@ stays `implementing` / runtime **BLOCKED**, not feature-complete/review-ready.
 Final runtime-evidence SPEC→QUALITY reviews and owner handoff remain owed. The
 latest appended checkpoint governs older next-step prose.
 
+**Temporary instrumentation checkpoint:** controller subsequently authorized the
+exact64 failed cases, not a third whole binary. Instrumented result **13 passed /
+51 failed /1516 filtered**,166.19s, with no measured suspend; one justified exact
+restored-draft follow-up passed1/0 in2.44s. All13 temporary source files are now
+byte-identical to entry/e6bc3912. Real worker/read-budget exhaustion and cache-file
+Busy overlap are measured; retirement validation/audit cost is measured but is
+not a sufficient common root cause. Two close failures spent almost their entire
+wait in repeated cache-read holds with no full audit in the failing window.
+Read subphase/retirement-schema attribution and a sufficient minimal fix remain
+unresolved. No fix, policy change, additional test or later gate is authorized.
+Both uninstrumented desktop gates remain FAILED; library/static greens preserved.
+
 ### Current D15 Amendment — 2026-11-06
 
 **Owner-approved contract; both same-reviewer source/contract re-reviews passed
@@ -8307,3 +8319,166 @@ checkpoint with coauthor; no ID allocation/build, ticket status save, push,
 PR/main/merge/close or other-worktree action. Ticket remains
 **implementing / runtime BLOCKED**, not feature-complete or review-ready;
 runtime-evidence reviews and owner handoff remain owed.
+
+## Task 8 — Temporary Instrumentation And Exact64 Diagnosis, 2026-11-07 UTC
+
+**Measured reproduction without suspend; no production fix.** Controller selected
+option2 on clean metadata HEAD **`697990420b18c29a3299cec071e40d94fc21bb5c`**,
+source **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**, fixed main
+**`1e5616af22630b08a84dc0fb42037135b385f81d`**. Sole author, same worktree;
+no fetch/merge, baseline execution/move, agents or other worktree. First wrote
+the24-line hypothesis/scope record, not a new governing plan. All new evidence
+uses **`/tmp/opencode/task8-desktop-instrument-*`**.
+
+### Temporary Boundaries, Exact Commands And Restoration
+
+Only13 identified source files were temporarily instrumented: shared test
+wait/fixture/held-gate helpers, worker/read boundaries, cache acquisition/hold,
+registry/retirement migration and full audit/admission, M1 dependency validation,
+and numeric fixture repo-create consent. Private debug/test diagnostics were
+enabled only in each child command with `MANYHANDS_TASK8_DIAG=1`. Logged static
+typed phases/counts, public request IDs, thread IDs, anonymous cache tags, numeric
+clock values and durations; no DTO/content/credential/endpoint/raw fixture path
+or raw error source. Existing hooks were not consumed or replaced. No locking,
+fence, safe point, clock, timeout, retry, predicate, thread count or outcome change.
+Direct stderr bypassed test capture; synchronous I/O adds observer overhead.
+
+Actual full64 argv is retained verbatim in `command.json` and `command.sh`, with
+all64 names copied exactly from `task8-desktop-rerun-analysis.json`, followed by
+`--exact`: `devenv shell -- cargo test --all-features --locked --bin manyhands --`
+then those64 full names and `--exact`. Default threads; `RUST_TEST_THREADS` unset,
+affinity16 CPUs, no thread override. **Exactly64 selected/nonzero**, not a prefix,
+new case, whole binary or final tier.
+
+| Diagnostic command | Actual result / clocks |
+| --- | --- |
+| Exact64 once | **Exit101;13 passed/51 failed/1516 filtered;166.19s tests**. Compilation succeeded in1m09s; no compilation failure. Two temporary guard-field warnings retained, not a fresh static gate. UTC **14:24:20.026574Z→14:28:16.435395Z**; REALTIME236.408821227s, MONOTONIC236.408821965s, BOOTTIME236.408821995s; boot−mono0.000000030s. |
+| One permitted exact follow-up | `devenv shell -- cargo test --all-features --locked --bin manyhands -- desktop::services::drafts::create::tests::save_of_a_restored_not_created_draft_creates_it --exact`; same instrumentation/default threads. **Exit0;1/0/1579 filtered;2.44s tests**, MONOTONIC3.460043593s, BOOTTIME3.460043434s; UTC **14:32:21.736058Z→14:32:25.196106Z**. |
+
+Both commands completed well within900s. Follow-up was justified by new measured
+data: the compound draft wait had spent **7.083386686s before TicketCreate was
+queued**. It asked whether the same instrumented compound wait overruns without
+the other selected fixtures. It did not; this is not an uninstrumented baseline,
+an observer-overhead bound, a final gate or permission for another probe.
+
+No measured suspend in either command. After each, queried only system kernel
+PM suspend entry/exit records for that interval: **zero matches**, journalctl
+exit1/empty stderr (no-match result), raw empty record files retained. No full or
+user journal, induced/inhibited sleep or power change. Receipt sidecars cover
+**all raw bytes**,64376 and831 lines; receipt timestamps are not internal starts.
+`TASK8DIAG` clocks are actual emission-boundary samples, independently labelled.
+
+**ALL temporary code restored using the patch tool**, only after instrumented
+hashes matched the captured owned delta. All13 pre/restored hashes match exactly;
+both `git diff --exit-code e6bc3912 HEAD -- src tests schemas Cargo.toml Cargo.lock
+devenv.nix devenv.lock .github/workflows/build.yml` and its working-tree comparison
+were empty. Source tree was clean before these metadata additions. No instrumented
+code committed. Cargo's cached executable may still be instrumented; it was not
+launched or claimed as a restored-source final gate. No Rust command after restore.
+
+### What The Failure Timelines Actually Show
+
+**51 failures:**47 awaited-state,2 until-drawn,2 held-worker; no unexpected
+ConfirmationExpired or direct-oracle Busy panic in this selection. All four
+previous pre-suspend representatives fail again without suspend. Exact51 names,
+locations/messages, final predicates and adjacent request snapshots are preserved
+in `analysis.json`; all64 outcomes are accounted for.
+
+- **Restored-draft Save and close-Save:** ContextPrepare is queued promptly,
+  progresses Accepted/Writing and finishes Ok. Reads then run and TicketCreate
+  is queued late in the same compound wait. At10.005836s /10.195987s, TicketCreate
+  is still accepted/Writing. This is not a missing enqueue or assertion that
+  stale UI data was accepted. In the first wait,16 retirement migrations occupy
+  **1061.852ms**,32 M1 checks243.663ms; no full retirement audit runs there.
+  Later cache-Io/InternalError follows the first FAILED completion/fixture
+  teardown, so it cannot explain the earlier deadline.
+- **Earlier-attempt confirmation test:** fails before Prepare again is reached.
+  The test deliberately holds the repository lease; its first abandon returns
+  Busy three times, with existing worker retries, and the fourth still runs at
+  the10.031332s deadline. The intentional lease Busy is not evidence of SQLite
+  BUSY or a wrong earlier-attempt predicate. Three full retirement audits consume
+  **1022.787ms** in this window, alongside31 read holds/6958.289ms.
+- **Child resolution/resume:** sends ConflictResolve, then OperationResume gets
+  OriginalRequestRequired, then correctly resends TicketClose. Real close moves
+  Observing→Recording→Integrating→CleaningUp. In its final **10.063195477s** wait,
+  its worker spends **10.005581743s in43 cache-read holds**, with **zero retirement
+  migration/full audit** in that window. Not a missing resend; audit-only root
+  cause is contradicted by this measured path.
+- **Cleanup-refused canned outcome:** the real close has not returned for the
+  canned substitution before the wait ends. Its worker spends **9.563245961s
+  in42 read holds** within10.053208561s; zero full audit there. The eventual
+  post-timeout answer is not a primary product counterexample.
+- **Both held-return gates:** close is queued/started promptly and advances
+  through CleaningUp. At10s, reached=false because the real library call is
+  still running; this is not a lost queue admission. Calls return only after
+  the gate wait/test teardown has already failed.
+
+### Measured Retirement Cost And Actual Busy Origin
+
+Under this instrumented64-case workload:
+
+| Boundary | Count | Median / P95 / max ms |
+| --- | ---: | --- |
+| Retirement migration/schema validation | 2417 | 71.133 /107.377 /557.764 |
+| Full retirement audit | 283 | 231.883 /298.956 /373.566 |
+| M1 disposition dependency validation | 4851 | 8.519 /12.667 /39.904 |
+| Outer refresh claim | 132 | 610.029 /739.343 /781.964 |
+| Cache-read hold | 6986 | 208.523 /436.961 /2804.642 |
+| Cache-write hold | 2108 | 383.665 /561.333 /781.867 |
+
+**129 full audits are measured inside ordinary refresh admission and its exclusive
+cache guard.** The reachability hypothesis now has timing evidence; no individual
+full audit exceeded10s. Audit/schema span bodies have no nested added trace calls
+on these current-schema paths, excluding their own start/end diagnostic writes;
+global observer/scheduling effects still remain. Single-follow-up read-hold median
+is4.458ms versus208.523ms in the selection; this comparison is load-sensitive,
+not proof of schema causation or a controlled logger-overhead experiment.
+
+Two real **cache-file read acquisition timeouts**,250.568106ms and250.530085ms,
+overlap exclusive writers on the same anonymous cache. Writer holds are
+**475.022223ms** and**397.017869ms**, containing retirement migration
+**81.867584ms** and**87.896302ms** respectively. No SQLite BUSY/LOCKED diagnostic
+was emitted. These internal read stops were retried/handled; the exact previously
+failed settings fixture oracle passed, so the old oracle failure remains unproven.
+Fresh fixture numeric consent checks: **70 accepts**, all created≤accept<expiry,
+max accept−created3s. Old suspend/expiry correlation is still unestablished.
+
+### Attribution Limit And Focused Owner Decision
+
+Measured mechanism is **load-sensitive exhaustion of real worker/read/compound
+wait budgets**, plus actual cache-file contention. Retirement adds measured work,
+but full audit is not a sufficient common explanation. Read-hold caller identity
+was not tagged: the span may cover connection/schema initialization, SQL/query/
+rollback or other guarded caller work. **Which caller/subphase dominates, and
+whether retirement schema growth causes it, is not measured**. No sufficient
+minimal owned fix is yet
+established. Do not blindly skip/reorder/cache validation across calls, weaken
+invariants, increase waits/retries, reduce threads or replace predicates.
+
+If diagnosis continues, controller should separately authorize **cache-read caller
+identification, then hot-caller subphase measurement** on an already-failing close
+path (read-session connection/first SQL/query/rollback if applicable), not a third whole binary
+or another microprobe loop. A session/connection-reuse remedy may affect shared
+read infrastructure beyond retirement and needs design/safety authorization.
+After an actual fix is established, retain the existing exact failed compound/
+close regression and use cheapest library unit schema/dependency cases for any
+owned validation change; no new wall-time assertion or TDD claim was made here.
+
+Restored static comparison reconfirms17 main-identical representative paths and
+five functions; desktop delta remains generic abandon retirement details/tests.
+No main runtime baseline was run. **All nine historical manifests verified with
+zero mismatches**, including latest24 at
+`310d572e416859ee2775c8dbb20e6be07021ba810dfc8d5fe230f3cca943c2e5`.
+New raw/sidecars, forward/inverse diagnostic patch, pre/instrumented/restored
+hashes, clocks/power/classification, static comparison and integrity records stay
+under the new prefix; raw64 log SHA-256
+**`9cf0197390ee6d940f2631414981b26851d8d0a78502b347ffc0162deb967da5`**.
+
+**Preserved, not rerun:** library1530/0/160,1972.73s and qualifying check/Clippy/fmt;
+both prior desktop gates **1518/62** and **1516/64** remain FAILED. No CLI tests,
+27 integrations, local-sync, ten SSH targets, smokes, native or runtime-evidence
+review gate followed. No real profile/key/context/draft action, ticket save,
+push/PR/closure/main/other-worktree action. Child2296737 and follow-up2306515
+exited. Only ledger and append-only current canonical comment are checkpointed
+with coauthor after restoration; original comment metadata/text retained.
+Ticket **implementing / runtime BLOCKED**, not feature-complete/review-ready.

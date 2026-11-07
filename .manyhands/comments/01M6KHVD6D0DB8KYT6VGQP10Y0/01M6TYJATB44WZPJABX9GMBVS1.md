@@ -188,3 +188,87 @@ exited; no owned Cargo/test job remains. Only ledger/comment checkpoint metadata
 with coauthor; this comment's existing text, ID/parent/created_at are unchanged.
 No ID/build/status save/push/PR/main/merge/closure/other-worktree action. Ticket
 **implementing / runtime BLOCKED**, not feature-complete/review-ready.
+
+## Follow-up — temporary exact64 instrumentation, source restored
+
+Controller authorized bounded option2 at clean **`697990420b18c29a3299cec071e40d94fc21bb5c`**,
+same source **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**, main1e5616af.
+Sole author, existing worktree, no fetch/merge/baseline move or agents. Wrote the
+24-line scratch scope first; no new governing plan or behavior fix.
+
+Temporary private debug/test instrumentation in13 identified files recorded only
+sanitized phases/counts/IDs/cache tags, acquisition/hold/audit timings and numeric
+consent clocks. Local child flag `MANYHANDS_TASK8_DIAG=1`; no timeout, retry,
+predicate, lock/fence/safe-point, clock, thread, schema or hook change. Synchronous
+diagnostic stderr has observer overhead, not a production measurement exemption.
+
+- **Exact64 latest failed names, once:** full argv in
+  `/tmp/opencode/task8-desktop-instrument-command.{json,sh}`; Devenv all-feature
+  locked desktop test command, those64 full names after `--`, then `--exact`.
+  Default threads/RUST_TEST_THREADS unset/affinity16. **Exit101;13 passed/51 failed /
+  1516 filtered;166.19s tests**, all64 accounted; build succeeded1m09s, only two
+  temporary guard-field warnings (not fresh Clippy). UTC
+  **14:24:20.026574Z→14:28:16.435395Z**; mono236.408821965s, boot236.408821995s,
+  difference30ns. All four prior pre-suspend failures reproduced.
+- **One justified exact follow-up:** same instrumented source, only
+  `desktop::services::drafts::create::tests::save_of_a_restored_not_created_draft_creates_it`,
+  **exit0;1/0/1579 filtered;2.44s tests**, mono3.460043593s. New uncertainty was
+  measured7.083s consumed before TicketCreate queue in the compound wait. Its
+  isolated pass is not a final gate, baseline or bound on64-case observer cost.
+- **No measured suspend in either run.** Filtered PM-only system queries returned
+  zero records, exit1/no-match and empty stderr; raw records retained. No policy,
+  induced/inhibited sleep or user/application logs. Raw byte coverage complete:
+ 64376/831 sidecar receipt lines, distinct from actual internal diagnostic clocks.
+
+**Measured mechanism, not one proven fix:** restored draft waits encompass
+ContextPrepare→reads→TicketCreate; the create is still Writing at deadline.
+The earlier-attempt confirmation test actually times out on its first intentional
+lease-Busy attempt/retries, before Prepare again. Child resolution sends the
+correct resume/original close; close progresses through CleaningUp. In its final
+**10.063195477s**, the worker spends **10.005581743s across43 cache-read holds**,
+with **no retirement audit/migration** in that window. Cleanup-refused similarly
+has42 read holds/9.563245961s of10.053208561s and no full audit. Both held-return
+gates wait on real library closes still running at10s, not lost admission.
+
+Retirement costs are now measured under this workload: full-audit median/P95/max
+**231.883/298.956/373.566ms** (283 calls); current migration71.133/107.377/557.764ms
+(2417); M1 dependency8.519/12.667/39.904ms (4851). **129 full audits** are enclosed
+by ordinary refresh admission/exclusive guard. None individually takes10s; this
+does not make audit the common cause when failing windows contain none.
+
+Two measured cache-file read timeouts (**250.568/250.530ms**) overlap same-cache
+writers holding475.022/397.018ms, containing retirement migration81.868/87.896ms.
+No SQLite BUSY/LOCKED origin event. These are handled internal reads; the old
+direct settings-oracle failure did not reproduce. All70 numeric fixture consent
+accepts are within expiry (max3s after creation); old expiry remains uncorrelated.
+Late Io/InternalError after the first failed draft's teardown is not its cause.
+
+Read-hold median208.523ms under64-case load versus4.458ms in the one follow-up.
+The read-guard caller was not tagged; it may include connection/schema/SQL/query/
+rollback or other guarded work. **The dominant caller/subphase and retirement-schema
+attribution remain unresolved**.
+No sufficient minimal owned fix is established; no blind audit skip/cache/reorder,
+deadline/thread change or harness repair proposed. Next owner decision, if any:
+separately authorize cache-read caller identification and hot-caller subphase
+measurement on a failed close,
+not another full binary. Any connection/session reuse may exceed retirement scope
+and requires design/safety review. Cheapest regressions after a confirmed fix are
+existing failed exact cases plus relevant library schema/dependency unit checks,
+not new timing assertions or a claimed TDD cycle.
+
+**All13 temporary files restored byte-for-byte with the patch tool.** HEAD and
+working-tree source/schema/build inputs equal e6bc3912; no Rust command after
+restore. Library1530/0/160,1972.73s and qualifying static greens remain valid,
+not rerun. Cargo may cache the instrumented executable; not launched as a gate.
+Both uninstrumented desktop gates **1518/62** and **1516/64** remain FAILED.
+CLI/all27 integrations/local-sync/ten SSH/smokes/native/runtime reviews stay barred.
+
+New-only evidence **`/tmp/opencode/task8-desktop-instrument-*`**: raw/receipt logs,
+command/result JSON, `analysis.json`, diagnostic forward/inverse patches, all
+pre/instrumented/restored hashes and final manifest. Raw64 log SHA-256
+**`9cf0197390ee6d940f2631414981b26851d8d0a78502b347ffc0162deb967da5`**.
+All nine old manifests verified zero mismatches, including latest24 digest310d572e.
+Both children2296737/2306515 exited; no more tests. Only ledger/comment metadata
+checkpoint, existing ID/parent/created_at/text retained; no push/status save/PR/
+main/closure/other-worktree/real-profile-key-context-draft/native action. Ticket
+**implementing / runtime BLOCKED**, not feature-complete/review-ready.
