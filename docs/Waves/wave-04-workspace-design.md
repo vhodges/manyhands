@@ -2,7 +2,7 @@
 id: 01M6V05RX2GZ4FFW8VMKTWFBTN
 title: 'Wave 04: Workspace Design'
 date: 2026-11-07
-status: draft
+status: approved
 author: "Vince Hodges <vince@imbas.ca> && Claude"
 manyhands_managed: true
 manyhands_kind: document
@@ -555,9 +555,11 @@ Owner item 6 and the excluded design parts, to be planned later:
 
 ## Approval And Remaining Readiness
 
-Drafted 2026-11-07 from the owner's direction of that date. Not yet
-approved. The owner settled every decision on 2026-11-07 (see
-[Owner Decisions](#owner-decisions-2026-11-07)). Approval still needs the
-owner's review of this text and the source amendments above. Each
+Drafted 2026-11-07 from the owner's direction of that date. The owner
+settled every decision on 2026-11-07 (see
+[Owner Decisions](#owner-decisions-2026-11-07)) and approved this Wave the
+same day. The desktop IA RFC amendment in
+[Required Source Amendments](#required-source-amendments) follows the
+approval. Each
 Cycle then needs its own ticket, Cycle document, plan and approval before
 implementation.
