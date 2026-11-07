@@ -131,3 +131,60 @@ profile/key/context/draft action, push/status save/PR/main/closure/native.
 Only ledger/comment checkpoint metadata changes; this comment's original
 ID/parent/created_at/text are retained. Ticket **implementing / runtime BLOCKED**,
 not feature-complete/review-ready; controller decides the next authorization.
+
+## Follow-up — one unchanged desktop repeat FAILED, 2026-11-07 UTC
+
+Controller authorized **one failed desktop binary repeat only**, not later gates
+or another diagnostic. Entry/gate **`f5fba2728a49c57fc2d27b4d029e695337a20bc5`**,
+same Rust **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**, main baseline
+**`1e5616af22630b08a84dc0fb42037135b385f81d`**. Source before/after unchanged;
+no fetch/merge, agents or source edits. Exactly once, default threads/deadlines:
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands
+```
+
+**Exit101:1,516 passed/64 failed/0 ignored/0 filtered**,2040.58s tests, all1580
+cases accounted. `RUST_TEST_THREADS` unset; CPU/online/affinity counts16 and
+cpuset0-15 are host observations, not measured libtest workers. No filter/skips,
+nocapture, timeout/thread/environment change or automatic retry/continuation.
+
+- **62 deadlines:**58 awaited state,2 until-drawn,2 held worker; **1 Busy read**,
+  **1 ConfirmationExpired** (now find/no-match fixture repo-create). All64 exact
+  names/locations/messages and completion-receipt clocks are in new results and
+  analysis JSON. **59 overlap** the prior62;3 old failures did not fail now and5
+  newly failed. Old**1518/62** and new**1516/64** are separate failed runs.
+- UTC **12:42:54.492456Z→13:31:55.338187Z**; REALTIME**2940.845731539s**,
+  MONOTONIC**2041.233053799s**, BOOTTIME**2940.845731250s**;
+  BOOTTIME−MONOTONIC**899.612677451s**. Privacy-filtered kernel PM records confirm
+  s2idle **12:50:22.814633Z→13:05:23.575309Z**. Journal realtime-minus-monotonic
+  gap**899.612678s** matches aggregate within0.55µs. First unsupported `--kernel`
+  query failure preserved; only the read-only query was corrected to `-k`, exit0.
+- **Four failed completion lines arrived before suspend entry;60 after exit.**
+  First restored-draft failure received12:44:08.665517Z, sequence342. The later
+  suspend cannot explain the four already-reported failures. Receipt timestamps
+  are not case starts or internal wait/consent/audit/lock phases; after-exit
+  receipt does not prove suspend caused the other60. No induced/prevented sleep,
+  power policy/inhibitor or clock change.
+
+**Root cause unresolved; no infrastructure waiver.** Earlier Busy/background
+refresh and retirement-audit-under-lock hypotheses remain unmeasured. No source
+instrumentation/optimization, wait/validation weakening, additional probe or test
+retry is authorized or performed. Preserve **library1530/0/160,1972.73s** and
+current check/Clippy/fmt greens **without rerunning** them; prior diagnostic greens
+and historical failures retain their scopes. Retained44 C/L/S/native/D6 limits
+and final runtime-evidence SPEC→QUALITY/owner handoff remain owed.
+
+**Still NOT RUN:** CLI tests/all27 integrations, slow local-sync, all ten selected
+SSH targets and both smokes; no display/app/profile/key/context/draft action or
+native CI. Controller authorization is exhausted; no later gate admitted.
+
+New-only **`/tmp/opencode/task8-desktop-rerun-`**: verbatim `raw.log`, separate
+2039-row `output.jsonl` (complete raw-byte coverage), `results.json`, `analysis.json`
+(all64), `failures.log`, `power.json` and `power-corrected.json`, desktop-only
+`coverage.md`, integrity/handoff/final manifest. All eight historical manifests
+and their35/26/38/11/14/19/30/11 entries preserved. Runner2191726/child2191734
+exited; no owned Cargo/test job remains. Only ledger/comment checkpoint metadata
+with coauthor; this comment's existing text, ID/parent/created_at are unchanged.
+No ID/build/status save/push/PR/main/merge/closure/other-worktree action. Ticket
+**implementing / runtime BLOCKED**, not feature-complete/review-ready.

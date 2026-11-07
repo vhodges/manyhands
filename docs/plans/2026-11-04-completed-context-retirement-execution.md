@@ -25,26 +25,31 @@ enum pins at Rust source **`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**. No rema
 findings at that source-review scope; runtime-evidence reviews are separate.
 The prior nine merge greens and exact enum completeness green retain their
 actual scopes; no interim group was rerun. Qualifying current-code Clippy/fmt
-were reused and a fresh final check passed. The new exact fast gate has reached
-**library GREEN: 1,530 passed / 0 failed / 160 local-sync filtered**, then
-**desktop FAILED: 1,518 passed / 62 failed / 0 filtered**. Cargo stopped before
-CLI tests/all27 integrations; no slow/SSH/smoke gate followed. Failures comprise
-59 deadlines,2 Busy reads,1 expired confirmation. One permitted exact first-draft
-diagnostic passed in isolation; it does not waive the failed binary. A large
-UTC/monotonic timing discrepancy is recorded, cause/causal relation unproven.
-Only evidence metadata changed; green library preserved, no source/thread/timeout
-edits or further probes. Historical **1,495/2/160** and **1,494/3/160** library
-failures remain unchanged. Ticket stays `implementing`, runtime **BLOCKED**, not
-review-ready/owner-handoff complete. The latest appended gate checkpoint governs
-older next-step prose.
+were reused and the prior final check passed. Preserve **library GREEN: 1,530 passed /
+0 failed / 160 local-sync filtered,1972.73s tests**, not rerun. The prior fast-tier
+**desktop FAILED:1,518 passed/62 failed**,2072.89s tests, remains a separate failure.
+After bounded diagnosis, controller authorized exactly one unchanged desktop-only
+repeat at **`f5fba2728a49c57fc2d27b4d029e695337a20bc5`**: **exit101,1,516 passed /
+64 failed / 0 ignored / 0 filtered**,2040.58s tests. Source before/after unchanged.
+Current failures:58 awaited-state deadlines,2 until-drawn,2 held-worker,1 Busy,
+1 ConfirmationExpired. No later test/probe or gate was admitted. CLI tests/all27
+integrations, slow local-sync, ten SSH targets and both smokes remain NOT RUN.
 
-**Bounded diagnosis update:** the appended desktop-diagnosis checkpoint confirms
-two real suspend cycles and records **four additional exact probes,4/0**, with
-no measured suspend in that probe. It also traces a direct-read/background-refresh
-race opportunity and retirement's full audit on ordinary refresh admission under
-the exclusive cache lock. Neither failure causation nor audit duration is proven.
-All62 desktop failures remain unresolved; the library/static greens survive on
-unchanged source. No fix, further test run or policy change is authorized.
+**Timing evidence, not a waiver:** the repeat confirms one s2idle pair; aggregate
+BOOTTIME−MONOTONIC is899.612677451s. **Four failed completion lines arrived before
+suspend entry,60 after exit.** Receipt times are not case starts/internal phases;
+the later suspend cannot explain the four already-reported failures, nor does
+after-exit receipt establish causation for the rest. Earlier single/four-class
+probes remain passing diagnostics at their recorded scopes, not gate success.
+The direct-read/background-refresh race opportunity and retirement audit under
+the exclusive cache lock remain unmeasured hypotheses. **Root cause unresolved.**
+Only evidence metadata changed; all eight older manifests stay immutable. No
+source/thread/deadline/power-policy change, library/static rerun, instrumentation
+or fix. Historical **1,495/2/160** and **1,494/3/160** library failures also remain
+unchanged. Authorization is exhausted; controller owns the next decision. Ticket
+stays `implementing` / runtime **BLOCKED**, not feature-complete/review-ready.
+Final runtime-evidence SPEC→QUALITY reviews and owner handoff remain owed. The
+latest appended checkpoint governs older next-step prose.
 
 ### Current D15 Amendment — 2026-11-06
 
@@ -8201,3 +8206,104 @@ context/draft action followed. New evidence uses only
 Append-only current canonical comment retains ID/parent/creation time and all
 existing text. Only this ledger and that comment form the metadata checkpoint;
 ticket remains **implementing / runtime BLOCKED**, not review-ready.
+
+## Task 8 — Single Unchanged Desktop Repeat Failed, 2026-11-07 UTC
+
+**Exactly one authorized command, exit101; no later gate or probe.** Clean entry
+and gate HEAD **`f5fba2728a49c57fc2d27b4d029e695337a20bc5`**, unchanged frozen Rust
+**`e6bc391208e0c7bbc580528d6ba650f71003a5d0`**, main baseline
+**`1e5616af22630b08a84dc0fb42037135b385f81d`**. Accepted controller's no-fetch/merge
+preflight; no agents, other worktree/main edit or source/instrumentation change.
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands
+```
+
+**FAILED:1,516 passed/64 failed/0 ignored/0 measured/0 filtered**, all1580 cases
+accounted, **2040.58s tests**. Default libtest selection/deadlines; no filters,
+skips, test-thread/env override, nocapture, forced terminal flag or retry. Sole
+foreground runner blocked until exit. `RUST_TEST_THREADS` was unset; host CPU,
+online CPU and affinity counts were16, effective cpuset0-15. These read-only host
+observations are **not** a measured libtest worker count; cpu.max was unavailable.
+
+### Raw Evidence, Clock Reconciliation And Causal Limits
+
+New evidence uses only **`/tmp/opencode/task8-desktop-rerun-*`**. Verbatim combined
+stdout/stderr **`raw.log`** is separate from **`output.jsonl`**,2039 ordered receipt
+events. Sidecar offsets cover all191489 raw bytes;1580 named completions reconcile
+with the footer. Timestamps mean **line receipt**, never case-start or internal
+wait/worker/consent/audit/lock phase. All64 exact names, source locations/messages
+and matched completion clocks are in **`results.json`** and **`analysis.json`**;
+**`failures.log`** retains the full failure section. Raw/sidecar SHA-256:
+
+- **`cb668e75241eb710f4c03476ef146a75e20369c03f09776c5ff06a8aa25eb0ac`**
+- **`4242f101943ff87492c66119e591df29dddbafc65f9152096259d09713bb3896`**
+
+| Clock | Command interval / elapsed |
+| --- | --- |
+| REALTIME UTC | **12:42:54.492456Z→13:31:55.338187Z**,2940.845731539s |
+| MONOTONIC | **2041.233053799s** |
+| BOOTTIME | **2940.845731250s** |
+| BOOTTIME−MONOTONIC elapsed | **899.612677451s** |
+| REALTIME−MONOTONIC elapsed | **899.612677740s** |
+
+After completion, queried **only kernel PM suspend entry/exit records** for this
+exact command interval; no application/user journal. Initial unsupported
+`--kernel` query failed and remains in **`power.json`**. Corrected only the same
+read-only query to standard **`-k`**, exit0, in **`power-corrected.json`**. No test
+command repeated. One **s2idle entry12:50:22.814633Z→exit13:05:23.575309Z**:
+journal realtime gap900.760676s minus monotonic gap1.147998s =**899.612678s**,
+matching aggregate BOOTTIME−MONOTONIC within approximately**0.55µs**. No sleep was
+induced/prevented; no inhibitor, power policy, clock or environment change.
+
+**Four FAILED completion lines were received before PM entry;60 after PM exit.**
+The first restored-draft-create failure was received **12:44:08.665517Z**, sequence342,
+before suspend. The later suspend cannot explain those four already-reported
+failures. After-exit receipt does not prove suspend caused any of the other60;
+actual prepare/expiry/accept and wait/audit/lock phases remain unmeasured.
+
+### Actual Failure Delta, Preserved Greens And Untouched Remainder
+
+| Current failure class | Count / location |
+| --- | --- |
+| Awaited state did not arrive in10s | **58**, `src/desktop/view/harness.rs:54:9` |
+| Until-drawn create/tab-close deadline | **2**, `src/desktop/view/harness.rs:315:13` |
+| Worker did not reach held job | **2**, `src/desktop/test_support/delaying.rs:406:9` |
+| Busy read | **1**, `src/desktop/view/settings/repositories_tests.rs:108:10` |
+| ConfirmationExpired in fixture repo-create | **1**, `src/desktop/test_support/fixtures.rs:173:9`, now `desktop::view::find::tests::no_match_says_so_and_opens_nothing` |
+
+**59 failure names overlap** the prior62;3 old cases did not fail this time and5
+newly failed, with both exact derived sets in analysis JSON. The prior **1518/62**
+and current **1516/64** remain two actual failed runs. The prior source-confirmed
+Busy race opportunity and retirement audit under exclusive cache guard remain
+reachable, **not measured causal explanations**. No retirement-specific functional
+counterexample or root cause is established; **no blanket infrastructure waiver**.
+No additional probe, optimization/instrumentation, wait/validation/thread change
+or source fix follows this authorization.
+
+**Preserved, not rerun:** library**1530/0/160**,1972.73s tests; current check,
+strict Clippy/fmt greens; nine seam/four fixture/exact enum and prior single/
+four-class diagnostics at their actual scopes. **`coverage.md`** is desktop-only:
+the retained44 C/L/S, M1/Q1/fixture/enum/D5 and native/combinatorial limitations
+remain as recorded, with no O-row waiver or D6 UI-delivery inference.
+
+**Still NOT RUN:** `manyhands-cli` test binary/all27 fast integrations; slow
+local-sync; all ten selected SSH targets (`ssh_transport`, `remote_observation`,
+`remote_synchronization`, `remote_merge_recovery`, `remote_polling`, `cli_remote`,
+`mutation_remote`, `document_promotion`, `ticket_closure`, `comment_publication`);
+both smokes and final runtime-evidence SPEC→QUALITY reviews. No display recheck,
+app launch, real profile/key/context/draft action or native CI. **Authorization
+is exhausted after this command regardless of outcome; controller triage required.**
+
+Source comparison before/after is empty and gate HEAD unchanged. All eight old
+manifests and their**35/26/38/11/14/19/30/11 entries** are preserved; final integrity,
+whitespace/merge-tree checks, metadata HEAD and a computed new-only artifact
+manifest are recorded in **`final-metadata.json`**, **`handoff.json`** and
+**`evidence.sha256`**. Runner2191726 and child/Cargo2191734 exited; no owned job
+remains. Appended canonical comment **`01M6TYJATB44WZPJABX9GMBVS1`** retains all
+earlier text and original ID, parent **`01M6SYJK4CJGHWKZC7MTP18GTA`**, creation
+time **`2026-11-07T12:08:39Z`**. Only ledger/current-standing/comment metadata
+checkpoint with coauthor; no ID allocation/build, ticket status save, push,
+PR/main/merge/close or other-worktree action. Ticket remains
+**implementing / runtime BLOCKED**, not feature-complete or review-ready;
+runtime-evidence reviews and owner handoff remain owed.
