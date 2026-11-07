@@ -1828,6 +1828,23 @@ fn task6_yield_between_targets_keeps_changed_primary_and_restart_is_current() {
     assert!(!pending);
     assert_eq!(r.targets()[0].disposition(), PollDisposition::Current);
     assert_eq!(r.targets()[1].disposition(), PollDisposition::FastForwarded);
+    assert_eq!(linked.head().unwrap().target(), Some(incoming));
+    assert_eq!(
+        f.db()
+            .query_row("SELECT count(*) FROM operation_records", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1,
+        "only the restarted poll performs the required discovery scan"
+    );
+    assert!(
+        !f.db()
+            .query_row("SELECT refresh_required FROM repositories", [], |row| row
+                .get::<_, bool>(
+                0
+            ))
+            .unwrap()
+    );
 }
 
 #[test]
