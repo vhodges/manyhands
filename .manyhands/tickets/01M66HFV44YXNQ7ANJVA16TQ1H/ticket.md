@@ -141,7 +141,18 @@ The same flag is set by three paths, all through `configure`:
   `01M6V8RK88W7F8AHPK6MQKBQ2C` and `01M6V8RK8B0SBCH0YZXFVSR9E3`, had no
   tracking ref and were absent from a live `ls-remote`, which listed all 58
   published branches. The mark comes back on the next key change until this
-  is fixed. The acceptance criterion for recovery with no hand edit still
+  is fixed.
+- Clearing the flag didn't release the `item sync` stuck by it earlier that
+  day (request `01M6V6K9Q80B7KXZT57NPMPH94`, operation
+  `01M6V6KA0QNSNF1BYB28ANDK6R`, at `fetch_observed`). It still held the
+  repository's reservation, so the owner's `ticket close` of vh-yq8wb
+  retried `observing`/`connecting` and then answered `busy`, which looked
+  like a GitHub outage, though GitHub was up. It was freed by
+  `request cancel`, then resending the same `item sync` with its request ID
+  (`cancelled`). The `next: request.retry` line names no command a person
+  can run: there is no `request retry` verb. The fix's recovery path, and
+  its migration, must release or name such stuck syncs, and a `busy` caused
+  by a stuck operation should say which one holds the reservation. The acceptance criterion for recovery with no hand edit still
   stands.
 
 ## Fix Direction
