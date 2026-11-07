@@ -129,6 +129,20 @@ The same flag is set by three paths, all through `configure`:
 - The mark is cleared by an explicit, interactive repair: list the contexts
   in question, with what can be done for each.
 - Recover the owner's stuck registry without deleting it and starting over.
+- The three repair choices are enough: publish, keep local, retire. Before
+  offering them, the repair checks whether the remote has the branch and
+  whether the two have diverged, because an agent or person needs to know
+  that before choosing.
+- Stopgap: the owner's registry was cleared by hand at the owner's request.
+  The database was backed up to
+  `~/.local/share/manyhands/manyhands.sqlite3.bak-2026-11-07-history-unknown`,
+  and `history_unknown` was set to 0 on repository 1. This was safe because
+  the only local contexts with no evidence row, `01M6RAA5FF2FN3M52QS8TW409W`,
+  `01M6V8RK88W7F8AHPK6MQKBQ2C` and `01M6V8RK8B0SBCH0YZXFVSR9E3`, had no
+  tracking ref and were absent from a live `ls-remote`, which listed all 58
+  published branches. The mark comes back on the next key change until this
+  is fixed. The acceptance criterion for recovery with no hand edit still
+  stands.
 
 ## Fix Direction
 
@@ -146,21 +160,37 @@ To settle in the plan. A starting point:
    the remote it is `never_published`. The repository-level state becomes
    "some contexts are unresolved", derived from those rows. That removes the
    rule that refuses every `never_published` row while the flag is set.
-3. **Resolve through an explicit repair operation.** A repository's
-   unresolved contexts are listed with what is known of each: local branch
-   and head, whether a tracking ref exists, and whether the current remote
-   advertises it. Each one is resolved by an owner's choice, for example:
-   - **publish it**: the owner asserts it can be pushed to this remote as a
-     first publication;
+3. **Resolve through an explicit repair operation.** The repair first
+   checks the remote: its prepare runs a complete fetch of the publication
+   remote. A preview made from stale observations isn't enough (owner,
+   2026-11-07). It then lists the repository's unresolved contexts with what
+   is known of each:
+   - the local branch and its head;
+   - whether a tracking ref exists;
+   - whether the remote has the branch now;
+   - if it does, how local and remote relate: the same, local ahead, remote
+     ahead, or diverged, with commit counts each way.
+
+   Each context is resolved by an owner's choice (owner, 2026-11-07: these
+   three are enough):
+   - **publish it**: push it to this remote. When the remote lacks the
+     branch, this is a first publication. When the remote has it, the
+     choice follows the relation: same or remote ahead records
+     `observed_published` and leaves the update to an ordinary sync; local
+     ahead fast-forwards; diverged is refused here and handed to the
+     existing divergence and merge path. The repair never overwrites a
+     remote branch.
    - **keep it local**: leave it unpublished and unresolved, as today;
    - **retire it**: through the existing cleanup retirement
      (`retired_contexts`), which already reads as never published.
 
-   A context the current remote advertises resolves itself as
-   `observed_published` on the next poll, as it does today. In the CLI the
-   repair is a confirmable `--prepare` and confirm pair, and in the desktop
-   a sheet listing the contexts. Refusals with `history_unknown` name the
-   repair, not `poll once`.
+   The confirm applies the choices only if the remote is unchanged since
+   the prepare's fetch. Otherwise it answers with a fresh prepare, as other
+   confirmable verbs do. A context the current remote advertises also
+   resolves itself as `observed_published` on the next poll, as it does
+   today. In the CLI the repair is a confirmable `--prepare` and confirm
+   pair, and in the desktop a sheet listing the contexts. Refusals with
+   `history_unknown` name the repair, not `poll once`.
 4. **Recover existing registries.** A registry whose flag is set but has no
    per-context rows, like the owner's, is upgraded at migration: one
    `history_unknown` row is written for each local context with no evidence,
@@ -186,6 +216,13 @@ again silently.
   publishable.
 - The repair lists the unresolved contexts and applies the owner's choice
   for each. When none are left, nothing reads as `history_unknown`.
+- The repair's prepare fetches first and reports, for each context, whether
+  the remote has the branch and how the two relate: same, ahead, behind or
+  diverged. A table-driven test covers each relation. "Publish it" never
+  overwrites a remote branch, and a diverged context is refused with the
+  merge path named.
+- A confirm after the remote moved since its prepare doesn't apply the
+  choices, and answers with a fresh prepare.
 - A refusal with `history_unknown` names the repair, and following it works.
   The repair is not described as `poll once`.
 - A context published and then deleted on the remote is still refused.
