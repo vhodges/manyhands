@@ -1,6 +1,9 @@
 ---
 id: 01M6V05RX2GZ4FFW8VMKTWFBTN
 title: 'Wave 04: Workspace Design'
+date: 2026-11-07
+status: draft
+author: "Vince Hodges <vince@imbas.ca> && Claude"
 manyhands_managed: true
 manyhands_kind: document
 ---
