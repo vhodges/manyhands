@@ -1,4 +1,6 @@
 ---
+cycle: '01'
+wave: '04'
 slug: vh-jge24
 id: 01M6V8RK8B0SBCH0YZXFVSR9E3
 title: 'Wave 04 Cycle 01: Workspace Shell'
