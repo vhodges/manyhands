@@ -603,6 +603,55 @@ devenv shell -- cargo test --all-features --locked --test remote_polling
 git merge-tree --write-tree HEAD origin/main
 ```
 
+### Approved Task 8 Correction — Deterministic Refresh-Claim Clock
+
+Owner approved this bounded correction on 2026-11-07 after the whole
+`mutation_replay` target returned **383 passed / 1 failed**. Its resume-contention
+fixture stamps an `indexing` row once with real UTC but supplies no renewing
+owner. A legitimate stale takeover can therefore defeat its intended live-owner
+precondition. The historical run did not capture the claim-time cutoff; this is
+a demonstrated fixture weakness, **not proof of that run's cause or a production
+exclusion defect**. No further performance profiling is authorized.
+
+**Files:** `src/repository.rs`, `tests/mutation_replay/resume.rs`, and the existing
+execution ledger/canonical ticket checkpoint. Reuse `TestClock` and
+`with_clock_for_testing`; add no clock trait, public test hook, dependency,
+integration target, real wait or future-dated heartbeat.
+
+1. Extend the existing exact case
+   `resume::a_resume_of_a_row_another_call_is_indexing_under_is_busy_and_leaves_it`
+   before changing production source. Inject a fixed clock at heartbeat `H`,
+   using an ordinary fixed past timestamp, and retain every Busy, transient
+   failure, retry, absent-request and unchanged-row assertion. Exercise both
+   fresh `H` and equality `H + 3` clock values; advancing the injected clock to
+   `H + 4` must permit the same request to reclaim and finish the hand-off.
+   This pins the existing strict `<` cutoff without sleeps or a larger TTL.
+2. Run only that exact case through Devenv and capture a compiled behavioral
+   RED with the old real-UTC cutoff. A compile error is not RED evidence:
+   ```sh
+   devenv shell -- cargo test --all-features --locked --test mutation_replay resume::a_resume_of_a_row_another_call_is_indexing_under_is_busy_and_leaves_it -- --exact
+   ```
+3. Change only the cutoff argument in `claim_refresh_indexing` to
+   `self.clock.now().unix_timestamp() - INDEX_OWNER_STALE_AFTER`. Leave
+   `claim_lifecycle_indexing`, claim SQL, epoch fencing, heartbeat writes,
+   production `SystemClock`, and the three-second constant unchanged.
+4. Run the same exact case for GREEN, then strict whole-tree Clippy and fmt at
+   the coherent checkpoint. Record exact commands, nonzero counts, source
+   scopes and both RED/GREEN logs. Stop and report any need to broaden the
+   production change instead of silently expanding clock plumbing.
+5. Obtain the same whole-feature SPEC review, then the same QUALITY review,
+   before further runtime gates. Reassess the affected verification scope:
+   prior source-frozen greens remain evidence at their original SHAs, not
+   automatically current-source passes after shared Rust source changes.
+   Refresh required static/runtime evidence once after review, preserve valid
+   unaffected coverage, and retain the first-failure admission rule.
+
+The existing WAIT60 test accommodation, GPUI per-park guard, default test
+concurrency, production leases/cache/SQLite/confirmation limits, retirement
+authority and all lifecycle authorization boundaries remain unchanged. This
+amendment extends the existing Task 8; it does not restart the Cycle or authorize
+native CI, real-context retirement, PR creation, main integration or closure.
+
 ## Plan Self-Review
 
 | Contract/ruling | Tasks and proof |
