@@ -39,10 +39,15 @@ retained-44/acceptance delta and correction record are appended below. Task 7 go
 amendments from base `76a852a7` are now independently SPEC and QUALITY approved
 through `c4fb38f5`, after the parent/child-code distinction and non-null disposition
 wording corrections. No findings remain at that bounded documentation gate.
-Its source/contract checks and limits are recorded below. Next is Task 8's
-final tiers/whole-feature reviews and
-essential remaining retained-44 fault/platform classification remain owed. Ticket remains
-`implementing`, not full Task 2 or feature review-ready.**
+Its source/contract checks and limits are recorded below. Task 8 is now **BLOCKED**:
+final check/fmt/Clippy passed on frozen `e0b62f7e`, but the exact fast tier stopped
+at the library binary (1,495 passed / 2 failed; all later binaries/targets unrun).
+Independent whole-feature SPEC found one Important **A8/E-1 disposition-migration
+dependency-closure gap**, not covered by the separate consumer-closure matrix and
+not residual coverage. Controller imposed a pause after the existing command;
+no further gate/reproduction/source edit was admitted. The failure checkpoint
+below preserves old-source evidence and unrun gates. Ticket remains
+`implementing`, not full Task 2 or feature review-ready; QUALITY/owner handoff owed.**
 Current Task 3 scope, exact evidence and remaining gates are recorded in
 [the delivery checkpoint](#task-3--ordinary-binding-and-guarded-preserving-recovery).
 Owner: “Okay, the live-pass-only batch, but keep in mind the batch doesn't need
@@ -7132,3 +7137,128 @@ No bare full suite, native CI, real-context retirement, PR or main integration/c
 The supported isolated built CLI generated this metadata checkpoint ID; no default
 profile repair or Rust rebuild. Ticket stays `implementing` until final evidence
 and whole-feature reviews support the owner's review-ready handoff.
+
+## Task 8 — Frozen-Source Gate Failure And Controller Pause, 2026-11-07 UTC
+
+**BLOCKED; not review-ready or feature-complete.** Verification owner worked only
+this ticket worktree/branch, with no subagents, Rust/test/schema/plan edits or
+other-worktree/main changes. Clean entry/frozen source was
+**`e0b62f7ec63f56210fda6411c9de9a90f95d48e5`**; full feature range is
+**`79c3931b01d225ddf3434ae9cd4fc51eb607fd2e...e0b62f7ec63f56210fda6411c9de9a90f95d48e5`**.
+Controller's just-completed main fetch/merge was accepted; no redundant fetch,
+merge or earlier 39/19/overlapping retirement-filter run. Current AGENTS Testing
+Strategy, Task 8, current standing and retained-44/Task 4/Tasks 5–6 deltas were read.
+
+### Actual Commands, Once And Serialized
+
+All rows below ran against that **same frozen source**. Raw logs are under
+`/tmp/opencode/`; literal complete argv, UTC start/end, exit, wall time, log hashes
+and nonzero per-binary results are incremental in **`task8-results.json`**.
+
+| Command / log | Actual result | Wall time |
+| --- | --- | --- |
+| `devenv shell -- cargo check --all-features --locked`; `task8-check.log` | exit **0**, clean Devenv setup | 15.652 s |
+| `devenv shell -- cargo fmt --check`; `task8-fmt.log` | exit **0**, clean setup | 17.790 s |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings`; `task8-clippy.log` | exit **0**, clean setup | 1.651 s |
+| Exact AGENTS fast-tier command (`--lib --bins`, all 27 named integration targets, `-- --skip repository::local_sync::`); `task8-fast.log` | exit **101**; **lib only: 1,495 passed / 2 failed / 0 ignored / 160 filtered**. Test time 1,908.21 s. No later binary/target ran | 2,018.761 s |
+
+The final fast command was already running when the controller requested a pause.
+It finished normally at **2026-11-07T00:08:45.325369Z**. A one-shot **blocking pidfd
+completion wait on the recorded OWN runner** was used, not sleep/progress polling.
+The completion notification confirms the same exit/counts. No second fast run,
+static rerun or newly admitted runtime command followed. This was a final selected
+tier, not an over-budget between-step run. Raw fast-log SHA-256:
+**`92b3bd6035661fe9994e8a600f47ff183274720c9f1a4170443e77541b51e390`**.
+
+### Exact Failures — Read-Only Triage, No Reproduction Or Fix
+
+1. **`repository::context_retirement::record::authority::tests::retirement_preserving_admission_refuses_live_or_unrelated_owners_and_stale_abandon_f2`**:
+   `src/repository.rs:5652`, `test refresh-claim hook lock: PoisonError { .. }`.
+   Read-only source traces the index case (`authority_tests.rs:99`) through
+   `Fixture::index_owner` (:786–803), which intentionally resumes unwind from the
+   refresh-claim hook, then reuses that service. `run_refresh_claim_hook`
+   (`repository.rs:5648–5655`) holds its if-let mutex guard while executing the
+   hook, so that intentional unwind poisons the reused hook mutex. This is a
+   test-fixture unwind/reuse diagnosis, not a Devenv setup failure or proof that
+   the intended preserving-admission assertion passed. No guard was weakened.
+2. **`repository::context_retirement::store_tests::retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen`**:
+   `src/repository/context_retirement/store_tests.rs:1157`,
+   `assertion failed: RepositoryService::open_at(data.path()).is_ok()`.
+   **Root cause/variant unresolved**: the failing table prints neither the failure
+   variant nor the underlying open error. A read-only hypothesis is the injected
+   `fail_z` schema trigger on a protected pin/receipt closure being rejected by
+   current strict consumer validation (`consumer_migration.rs:66–72`), but this
+   is not runtime-confirmed. Treat as a real untriaged gate failure, not a waived
+   Z/reopen assertion or infrastructure green. Controller owns bounded follow-up.
+
+Detailed failure section: **`task8-fast-failures.log`**. No exact reproduction,
+source edit, assertion skip/weakening or additional gate followed either failure.
+The 1,495 individual passes retain their old frozen-source scope; the fast tier
+as a whole did **not** pass.
+
+### Coverage Amendment And Independent SPEC Barrier
+
+Before broad gates, the verification owner inspected actual assertions and
+created a **44-row C/L/S classification** in **`task8-coverage.md`**, retaining
+earlier runtime evidence only at its actual Task 1/2/3/4/5–6/7 scopes. Initial
+symbol/row consistency checked 60 named symbols, all 44 rows, zero missing names;
+this was inspection, not fresh runtime evidence or independent review.
+
+**The initial no-missing-essential conclusion is explicitly superseded.**
+Whole-feature SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`** found one Important;
+controller read the validator and DDL and confirmed **A8 / E-1 BLOCKED**:
+`src/repository/remote/state.rs:339–358,425–428` checks the two named disposition
+objects but does not reject unknown attached indexes/triggers or incoming
+`ON DELETE CASCADE` FK dependencies before old-15-enum rename/copy/drop. Unknown
+evidence/dependencies may be lost or redirected. This is essential migration
+safety, **not residual L**. Row 38's consumer-envelope dependency-closure matrix
+is a **different migration** and does not discharge it. The coverage file and
+row 38 are amended with B/this distinction; no whole matrix was re-reviewed.
+Its amended SHA-256 is
+**`b8698d042d29335134d5b9a2b62e954fc39c450e3ba8ac957c2d5012b9d91d94`**.
+The two fast failures separately block current runtime claims for their rows.
+
+### NOT RUN — Preserve This Remainder For Authorized Resumption
+
+- **Fast binaries:** `manyhands`, `manyhands-cli`. **All 27 fast integration
+  targets** are unrun: `canonical_foundation`, `cli`, `discovery_rebuild`, `drafts`,
+  `journal_rejection`, `key_material`, `key_storage`, `local_authoring`,
+  `mutation_bridges`, `mutation_confirmation`, `mutation_contract`,
+  `mutation_relationships`, `mutation_replay`, `read_boundary`,
+  `read_characterization`, `read_comments`, `read_contract`, `read_credentials`,
+  `read_items`, `read_relationships`, `read_repository`, `read_status`,
+  `recovery_foundation_gate`, `remote_reservation`, `repository_enablement`,
+  `session_credentials`, `shared_key_registry`. Compilation is not runtime proof.
+- **Slow library:** `devenv shell -- cargo test --all-features --locked --lib repository::local_sync::`.
+- **Selected SSH targets:** `ssh_transport`, `remote_observation`,
+  `remote_synchronization`, `remote_merge_recovery`, `remote_polling`, `cli_remote`,
+  `mutation_remote`, `document_promotion`, `ticket_closure`, plus justified
+  `comment_publication` (its handoff calls the changed shared refresh/index-owner
+  path at `comment_publication.rs:570–601`). Each awaits its separate full target
+  command, no filter. `transport/`, `keys/`, `tests/support/ssh_*` are unchanged;
+  no blanket `ssh_fixture` selection. Full changed-path list has 118 relevant
+  source/test/schema paths, not a new thousand-file/hash inventory.
+- **CLI and desktop smokes:** both **NOT RUN due to barrier**. Display capability
+  inspection found connectable actual Wayland `wayland-1` and X11 `:1` sockets;
+  this is **not app startup/window evidence**. No profile/app was opened. Prepared
+  disposable smoke scripts did not run. Native Windows/macOS and native CI unrun.
+
+**`task8-handoff.json`** records failures, barrier, all remaining command argv and
+unrun fast targets. **`task8-barrier.json`** confirms the recorded runner/child
+PIDs have exited and no gate/Cargo/test process remains in this exact workdir.
+Source-frozen preflight `git merge-tree --write-tree HEAD origin/main` exited 0,
+tree **`104cd1ef9be66fa5e74b63b6274417192a83027a`**; full-range/current whitespace
+checks exited 0 (`task8-preflight.json`). Metadata-only handoff checks follow;
+they do not invalidate or freshen the old Rust evidence.
+
+Canonical failure checkpoint **`01M6SNFBVK9WRBE9JV3Q9MYQY5`**, parent
+**`01M6SJYFVZMGDEAE0H21ATCTV0`**, actual UTC **`2026-11-07T00:10:30Z`**. Its ID
+used the existing built supported CLI, serial Devenv and isolated
+`MANYHANDS_DATA_DIR=/tmp/opencode/task2-recovery-core-cli-id-data`; exit 0, no
+Cargo rebuild/default-profile access or conversion (`task8-checkpoint-id.log`).
+Only ledger/comment evidence is committed, with coauthor. No ticket status/body
+save, push, PR, main integration/closure, real context/key/draft action or native
+dispatch. **Resume only on controller authorization after bounded fixes/review**;
+preserve old-source greens and select affected/remaining tests from actual fixes,
+not a blanket restart. Whole-feature SPEC resolution, then QUALITY and owner
+handoff remain owed. No feature completion claim.
