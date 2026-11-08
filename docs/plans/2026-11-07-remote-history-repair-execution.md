@@ -21,6 +21,7 @@ pushes.
 | 3 | done | 54257d6b | 354c9599 | approved | per-context unknown rows; known-column fallback; held rows validated; review should-fix 1 carried to Task 5 |
 | 4 | done | 03c6574a | bf7b7d6f | approved | `unpublished` disposition; table rebuild under marker `remote_poll_dispositions_unpublished_v1` |
 | 5 | done | 21ac5032 | cf100915 | approved | migration `remote_history_per_context_v1`; carry requires kept rows' refs to match the new plan (Task 3 should-fix) |
+| 6 | done | ef45f239 | 946623a5 | approved on re-review | `remote_history` over the full manual poll; `RemoteHistoryError`; caller-supplied operation, request and token |
 
 ## Test Filters (Task 0)
 
@@ -175,3 +176,46 @@ All commands passed:
   - a doc comment line about the marker being recorded when the marker file
     is present;
   - no test row for flag 1 with no remote.
+
+## Task 6 Results
+
+- Commits: `e278ea76` (first cut), `439ab42d` (moved to the poll path) and
+  `946623a5` (review fixes).
+- Tests, all passed: `remote::history::tests` 2 (an 8-row table, plus an
+  outcome table), `poll::tests` 80, `remote::tests::` 15; clippy, fmt and
+  `check --tests` clean.
+- **Orchestrator decision:** `remote_history` runs the full manual poll
+  (`poll_publication_remote_observed`), not the observation alone. The
+  observation reads only the advertisement and fetches no objects, so it
+  can't show divergence when the remote holds commits we don't have. The
+  design already names "the same observation path as `poll once`". The
+  poll's ordinary side effects (fast-forward, materialization) are accepted.
+  Each entry carries the poll's disposition.
+- **Review finding (blocking, fixed):** a poll stopped by unlock, host
+  approval, the key, the configuration or the transport reports
+  `Completed`, but its outcome category isn't `Completed`. The fix is
+  `RemoteHistoryError::{Poll, Stopped(category), Cancelled, Interrupted,
+  Internal}`, with success only for `Completed` plus `Some(Completed)`, as
+  in `bind/poll.rs`.
+- Signature:
+  `remote_history(root, operation_id, RequestId, CancellationToken, session)`.
+- The resolved set is a before/after diff of fetch evidence, not captured
+  inside the observation transaction (accepted, and documented in the doc
+  comment).
+- The accessor `RemoteSnapshot::history_unknown()` in `state.rs` is
+  accepted.
+- **Notes for Task 9:**
+  - pass a fresh operation id unless resuming, since a replayed terminal
+    result fetches nothing and `resolved` comes back empty;
+  - clear the cancellation flag after `Cancelled`, as the poll binding does
+    with `take_cancellation`.
+
+## Plan Deviations
+
+- **Transport is SSH-only**: `file://` endpoints are rejected. The plan's
+  two CLI journeys over a `file://` remote (Task 9) become **one SSH case in
+  `cli_remote`**, covering both journeys end to end. That is the single
+  end-to-end SSH case AGENTS.md allows for a new feature. Why it needs SSH:
+  no other transport exists, and `remote history` and `item sync` can't run
+  without one. Every edge case stays in unit tests.
+- Test filters: see "Test Filters (Task 0)".
