@@ -1972,7 +1972,22 @@ impl RepositoryService {
             plan,
             &observations,
             at,
-            |tx, id| state::replace_poll_dispositions(tx, id, owner.operation_id(), &targets, at),
+            |tx, id| {
+                state::replace_poll_dispositions_with_insert_check(
+                    tx,
+                    id,
+                    owner.operation_id(),
+                    &targets,
+                    at,
+                    || {
+                        self.check_failure(
+                            crate::repository::FailurePoint::PollBeforeDispositionInsert,
+                            RepositoryOperation::RepositorySnapshot,
+                            root,
+                        )
+                    },
+                )
+            },
             |tx, id, decision| self.poll_capture_stop(tx, id, owner.operation_id(), decision, None),
         )?;
         if decision != D::Continue {
@@ -2149,6 +2164,11 @@ impl RepositoryService {
                         }) != before_admin;
                     state::with_transaction(self, root, |tx, id| {
                         super::reservation::owned(self, tx, id, owner)?;
+                        self.check_failure(
+                            crate::repository::FailurePoint::PollBeforeDispositionWrite,
+                            RepositoryOperation::RepositorySnapshot,
+                            root,
+                        )?;
                         state::update_poll_disposition(tx, id, owner.operation_id(), ordinal, &row)
                     })?;
                     local_changes |= changed;

@@ -15,7 +15,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI64, AtomicUsize, Ordering},
     },
 };
 
@@ -1985,15 +1985,27 @@ fn whole_review_effect_cancel(materialization: bool) -> Result<(), FixtureError>
     } else {
         p.publish(MAIN, p.base()?, &[("remote", Some((b"remote\n", MODE)))])?
     };
-    fixed(db.execute_batch(if materialization {
-        "CREATE TRIGGER whole_review_failure BEFORE UPDATE OF step ON remote_poll_materializations WHEN NEW.step='branch_created' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;"
+    let failing = if materialization {
+        fixed(db.execute_batch("CREATE TRIGGER whole_review_failure BEFORE UPDATE OF step ON remote_poll_materializations WHEN NEW.step='branch_created' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;"))?;
+        None
     } else {
-        "CREATE TRIGGER whole_review_failure BEFORE UPDATE ON remote_poll_dispositions WHEN NEW.disposition='fast_forwarded' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;"
-    }))?;
+        Some(fixed(
+            RepositoryService::open_at_with_failure_point_for_testing(
+                &p.b.data,
+                FailurePoint::PollBeforeDispositionWrite,
+            ),
+        )?)
+    };
     let req = p.request(RemotePollInvocation::Explicit);
+    let result = p.poll_with(
+        failing.as_ref().unwrap_or(&p.b.service),
+        req.clone(),
+        &mut session(),
+    );
     assert!(matches!(
-        p.poll_with(&p.b.service, req.clone(), &mut session()),
-        Err(RemotePollError::Repository(_))
+        result,
+        Err(RemotePollError::Repository(ref error))
+            if materialization || error.kind == RepositoryErrorKind::InjectedFailure
     ));
     assert_eq!(fixed(p.b.repo()?.refname_to_id(&target_ref))?, tip);
     if materialization {
@@ -2009,14 +2021,16 @@ fn whole_review_effect_cancel(materialization: bool) -> Result<(), FixtureError>
     } else {
         clean_checkout(&p, None, tip)?;
     }
-    // The effect precedes its failed SQLite row write: this must already be
+    // The effect precedes its failed row write: this must already be
     // durable, even if a subsequent restart only acknowledges cancellation.
     assert!(fixed(db.query_row(
         "SELECT refresh_required FROM repositories",
         [],
         |r| r.get::<_, bool>(0)
     ))?);
-    fixed(db.execute_batch("DROP TRIGGER whole_review_failure"))?;
+    if materialization {
+        fixed(db.execute_batch("DROP TRIGGER whole_review_failure"))?;
+    }
     let before = snapshot(&p.b)?;
     let refs = all_refs(&p.b.repo()?)?;
     let second = p.b.reopen()?;
@@ -2505,14 +2519,58 @@ fn partial_batch() -> Result<(), FixtureError> {
         base,
         &[("fixture.txt", Some((b"ticket incoming\n", MODE)))],
     )?;
-    fixed(p.b.db()?.execute_batch("CREATE TRIGGER stop_after_primary AFTER UPDATE ON remote_poll_dispositions WHEN NEW.ordinal=0 AND NEW.disposition='fast_forwarded' BEGIN UPDATE remote_operation_records SET yield_requested=1 WHERE operation_ulid=NEW.operation_ulid; END;"))?;
     let locals = count(&p.b, "operation_records")?;
     let req = p.request(RemotePollInvocation::Explicit);
+    let operation = req.operation_id;
+    let root = p.b.root.clone();
+    let data = p.b.data.clone();
+    let yielded = Arc::new(AtomicBool::new(false));
+    let yield_fired = yielded.clone();
+    let stopped_epoch = Arc::new(AtomicI64::new(-1));
+    let yield_epoch = stopped_epoch.clone();
+    p.b.service
+        .set_poll_boundary_hook_for_testing(move |point, ordinal| {
+            if point == FailurePoint::PollBeforeTarget
+                && ordinal == Some(1)
+                && !yield_fired.swap(true, Ordering::SeqCst)
+            {
+                let db = rusqlite::Connection::open(data.join(REGISTRY_FILE)).unwrap();
+                let primary: (String, String, String) = db.query_row(
+                    "SELECT disposition,before_oid,after_oid FROM remote_poll_dispositions WHERE operation_ulid=?1 AND ordinal=0",
+                    [operation.to_string()],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                ).unwrap();
+                assert_eq!(primary, ("fast_forwarded".into(), base.to_string(), main.to_string()));
+                let context: (String, Option<String>, Option<String>) = db.query_row(
+                    "SELECT disposition,before_oid,after_oid FROM remote_poll_dispositions WHERE operation_ulid=?1 AND ordinal=1",
+                    [operation.to_string()],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                ).unwrap();
+                assert_eq!(context, ("not_reached".into(), None, None));
+                let repo = git2::Repository::open(&root).unwrap();
+                assert_eq!(repo.refname_to_id(MAIN).unwrap(), main);
+                assert_eq!(repo.refname_to_id(&reference(T)).unwrap(), base);
+                let linked = git2::Repository::open(root.join(".manyhands/worktrees").join(T)).unwrap();
+                assert_eq!(linked.head().unwrap().target(), Some(base));
+                assert_eq!(db.query_row("SELECT count(*) FROM operation_records", [], |r| r.get::<_, i64>(0)).unwrap(), locals);
+                let epoch: i64 = db.query_row(
+                    "SELECT owner_epoch FROM remote_operation_records WHERE operation_ulid=?1 AND action='poll' AND poll_kind='update' AND phase='local_prepared' AND completed_step='before_local_mutation' AND yield_requested=0 AND cancel_requested=0",
+                    [operation.to_string()], |r| r.get(0),
+                ).unwrap();
+                assert!(epoch >= 0);
+                yield_epoch.store(epoch, Ordering::SeqCst);
+                assert_eq!(db.execute(
+                    "UPDATE remote_operation_records SET yield_requested=1 WHERE operation_ulid=?1 AND owner_epoch=?2 AND action='poll' AND poll_kind='update' AND phase='local_prepared' AND completed_step='before_local_mutation' AND yield_requested=0 AND cancel_requested=0",
+                    rusqlite::params![operation.to_string(), epoch],
+                ).unwrap(), 1);
+            }
+        });
     let (r, pending) = report(fixed(p.poll_with(
         &p.b.service,
         req.clone(),
         &mut session(),
     ))?)?;
+    assert!(yielded.load(Ordering::SeqCst));
     assert!(pending);
     assert_eq!(r.completion(), PollCompletion::Interrupted);
     assert_eq!(
@@ -2527,7 +2585,6 @@ fn partial_batch() -> Result<(), FixtureError> {
     assert_eq!(r.targets()[1].before_oid(), None);
     assert_eq!(fixed(p.b.repo()?.refname_to_id(&reference(T)))?, base);
     assert_eq!(count(&p.b, "operation_records")?, locals);
-    fixed(p.b.db()?.execute_batch("DROP TRIGGER stop_after_primary"))?;
     let second = p.b.reopen()?;
     let mut restart = req.clone();
     restart.restart = true;
@@ -2539,6 +2596,11 @@ fn partial_batch() -> Result<(), FixtureError> {
         PollDisposition::FastForwarded
     );
     clean_checkout(&p, Some(T), ticket)?;
+    assert_eq!(fixed(p.b.db()?.query_row(
+        "SELECT owner_epoch,yield_requested,cancel_requested,phase FROM remote_operation_records WHERE operation_ulid=?1",
+        [operation.to_string()],
+        |r| Ok((r.get::<_, i64>(0)?, r.get::<_, bool>(1)?, r.get::<_, bool>(2)?, r.get::<_, String>(3)?)),
+    ))?, (stopped_epoch.load(Ordering::SeqCst) + 1, false, false, "completed".into()));
     let later = p.poll()?;
     let (old, _) = report(fixed(p.poll_with(&second, req, &mut session()))?)?;
     assert!(old.targets().is_empty());
@@ -2547,16 +2609,29 @@ fn partial_batch() -> Result<(), FixtureError> {
     assert_ne!(later.operation_id(), old.operation_id());
     p.finish()
 }
-fn sql_failure(sql: &str, stage: &str) -> Result<(), FixtureError> {
+enum PollFailure {
+    Sql(&'static str),
+    Injected(FailurePoint),
+}
+fn sql_failure(failure: PollFailure, stage: &str) -> Result<(), FixtureError> {
     let p = Pair::new()?;
     let base = p.base()?;
     let incoming = p.publish(MAIN, base, &[("fixture.txt", Some((b"incoming\n", MODE)))])?;
-    fixed(p.b.db()?.execute_batch(sql))?;
+    let failing = match failure {
+        PollFailure::Sql(sql) => {
+            fixed(p.b.db()?.execute_batch(sql))?;
+            None
+        }
+        PollFailure::Injected(point) => Some(fixed(
+            RepositoryService::open_at_with_failure_point_for_testing(&p.b.data, point),
+        )?),
+    };
     let req = p.request(RemotePollInvocation::Explicit);
     let before = snapshot(&p.b)?;
     assert!(matches!(
-        p.poll_with(&p.b.service, req.clone(), &mut session()),
-        Err(RemotePollError::Repository(_))
+        p.poll_with(failing.as_ref().unwrap_or(&p.b.service), req.clone(), &mut session()),
+        Err(RemotePollError::Repository(ref error))
+            if failing.is_none() || error.kind == RepositoryErrorKind::InjectedFailure
     ));
     assert_eq!(
         fixed(p.b.repo()?.refname_to_id("refs/remotes/origin/main"))?,
@@ -2582,7 +2657,9 @@ fn sql_failure(sql: &str, stage: &str) -> Result<(), FixtureError> {
         ))?;
         assert_eq!(disposition, "not_reached");
     }
-    fixed(p.b.db()?.execute_batch("DROP TRIGGER poll_failure"))?;
+    if failing.is_none() {
+        fixed(p.b.db()?.execute_batch("DROP TRIGGER poll_failure"))?;
+    }
     let second = p.b.reopen()?;
     let before_restart = snapshot(&p.b)?;
     let mut restart = req;
@@ -2606,25 +2683,29 @@ fn sql_failure(sql: &str, stage: &str) -> Result<(), FixtureError> {
 }
 fn failure_after_tracking() -> Result<(), FixtureError> {
     sql_failure(
-        "CREATE TRIGGER poll_failure BEFORE UPDATE OF completed_step ON remote_operation_records WHEN NEW.completed_step='after_advertisement' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;",
+        PollFailure::Sql(
+            "CREATE TRIGGER poll_failure BEFORE UPDATE OF completed_step ON remote_operation_records WHEN NEW.completed_step='after_advertisement' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;",
+        ),
         "tracking",
     )
 }
 fn batch_failure() -> Result<(), FixtureError> {
     sql_failure(
-        "CREATE TRIGGER poll_failure BEFORE INSERT ON remote_poll_dispositions BEGIN SELECT RAISE(ABORT,'fixed fault'); END;",
+        PollFailure::Injected(FailurePoint::PollBeforeDispositionInsert),
         "batch",
     )
 }
 fn disposition_failure() -> Result<(), FixtureError> {
     sql_failure(
-        "CREATE TRIGGER poll_failure BEFORE UPDATE ON remote_poll_dispositions WHEN NEW.disposition='fast_forwarded' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;",
+        PollFailure::Injected(FailurePoint::PollBeforeDispositionWrite),
         "disposition",
     )
 }
 fn completion_failure() -> Result<(), FixtureError> {
     sql_failure(
-        "CREATE TRIGGER poll_failure BEFORE UPDATE OF phase ON remote_operation_records WHEN NEW.phase='completed' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;",
+        PollFailure::Sql(
+            "CREATE TRIGGER poll_failure BEFORE UPDATE OF phase ON remote_operation_records WHEN NEW.phase='completed' BEGIN SELECT RAISE(ABORT,'fixed fault'); END;",
+        ),
         "completion",
     )
 }

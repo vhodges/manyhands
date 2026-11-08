@@ -944,6 +944,12 @@ pub enum FailurePoint {
     AfterCompletion,
     RefreshFailure,
     PollBeforeTarget,
+    /// Inside the owned observation batch transaction, after advertisement and
+    /// capture writes and the old disposition DELETE, before the first INSERT.
+    PollBeforeDispositionInsert,
+    /// Inside the owned local-target transaction, after Git effects and target
+    /// capture, immediately before its disposition UPDATE. Refresh debt is durable.
+    PollBeforeDispositionWrite,
     PollBeforeDiscovery,
     PollAfterCompletion,
     PollAfterMaterializationIntent,

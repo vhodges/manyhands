@@ -570,12 +570,24 @@ pub(super) fn disposition_insert_hook_pending(
     })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub(super) fn replace_poll_dispositions(
     tx: &Transaction<'_>,
     id: i64,
     op: crate::repository::OperationId,
     rows: &[super::poll::PollTargetReport],
     at: i64,
+) -> Result<(), RepositoryError> {
+    replace_poll_dispositions_with_insert_check(tx, id, op, rows, at, || Ok(()))
+}
+
+pub(super) fn replace_poll_dispositions_with_insert_check(
+    tx: &Transaction<'_>,
+    id: i64,
+    op: crate::repository::OperationId,
+    rows: &[super::poll::PollTargetReport],
+    at: i64,
+    mut before_first_insert: impl FnMut() -> Result<(), RepositoryError>,
 ) -> Result<(), RepositoryError> {
     tx.execute(
         "DELETE FROM remote_poll_dispositions WHERE repository_id=?1",
@@ -595,6 +607,9 @@ pub(super) fn replace_poll_dispositions(
             .with(|hooks| hooks.borrow_mut().remove(&(op.to_string(), ordinal)))
         {
             hook(tx, id)?;
+        }
+        if ordinal == 0 {
+            before_first_insert()?;
         }
         tx.execute("INSERT INTO remote_poll_dispositions(repository_id,operation_ulid,ordinal,classification,remote_ref,kind,item_id,disposition,before_oid,after_oid,observed_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",params![id,op.to_string(),ordinal as i64,classification,row.target.as_ref().map(RemoteRefTarget::remote_ref),row.kind.map(|k|crate::repository::authoring_kind_segment(&k)),row.item_id.as_ref().map(ToString::to_string),disposition_name(row.disposition),row.before_oid.map(|o|o.to_string()),row.after_oid.map(|o|o.to_string()),at]).map_err(|_|recovery_required())?;
     }
