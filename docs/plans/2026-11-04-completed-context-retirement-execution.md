@@ -12,7 +12,66 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
-### Current Final-Tail Gate Standing — 2026-11-08 UTC
+### Current Owned Poll-Write Correction Standing — 2026-11-08 UTC
+
+**Owner-approved narrow correction locally GREEN; SAME SPEC→QUALITY pending,
+remaining-gate barrier retained.** Owner explicitly replied YES on November 8 to
+the two existing-mechanism write points, existing partial-yield hook, only four
+failed-case SSH selections plus statics, and retention of every completed green.
+Approved plan base **`96103e36c8f17172fb1952c2351a87b32b29b57d`**; new runtime/test
+freeze **`d87d4568cd185cebf7e880dd92e179c30966efce`**. Accepted controller's fresh
+unchanged-main/no-op preflight from clean **`ed3a7232bb0b2cdee7a4d7a7929eb3f21ba98ef8`**
+against **`d70142b63a952f5e1aade369e0cd654ca9a03617`**; no repeated fetch/merge,
+other worktree/main edit or agents. The already-committed plan was not rewritten.
+
+- Three compiled type-only REDs each **0 passed/1 failed, Cargo exit1**, at the
+  expected injected-error assertions, before either runtime check existed.
+- Four exact SSH GREENs each **1 actual case passed/0 failed, Cargo exit0**:
+  whole-review disposition/cancel **19.175133148s**, partial yield/restart
+  **6.439326801s**, batch atomic restart **4.478500970s**, post-Git disposition
+  restart **4.830381987s** measured command elapsed. No whole target repeat.
+- Fresh serial whole-tree check **exit0,8.839858988s**, strict all-target/all-feature
+  locked Clippy **exit0,49.335242622s**, fmt-check **exit0,19.728017697s**. All seven
+  GREEN/static commands used the same four final source hashes; no later Rust edit.
+- Exact placements: first INSERT after old disposition DELETE, after owned batch
+  advertisement/capture writes; local-target UPDATE after ownership validation,
+  Git/target capture and independently committed refresh debt. The old no-op state
+  entry point/private unit hook ordering and strict M1 catalog are unchanged.
+- Partial yield now proves committed primary FF/OIDs, untouched context/no scan
+  against saved locals, exact active operation/epoch single-row flagging, one-shot
+  consumption, restart epoch+1 and cleared flags. All original report/ref/pending/
+  cancellation/replay/privacy/no-push assertions remain; only broad write-error
+  assertions were strengthened to require `InjectedFailure`. All84 cases retained.
+
+The fixture/schema conflict is now source-traced: configuration→ListSharedKeys
+migration rejects unknown protected-table triggers before fetch. Its old returned
+`SharedKeyRegistryUnavailable` kind is a **source prediction, not captured runtime
+payload**. Panic-hook source permits mapping only the relevant historical1998/2561
+observations to ref assertions. New errors are Rust transaction-unwind injections,
+not SQLite `RAISE(ABORT)`; see the appended fidelity qualification below.
+
+Historical **remote_polling80/4 at4cc6ca5a** remains FAILED, not synthesized into
+fresh84/0. Retain its other80, all completed headless/desktop/library/local-sync/SSH
+greens and owner-selected exact follow-ups at their actual **64a6/4cc/other recorded
+scopes**, NOT newly executed on d87. Owner explicitly selected narrow verification
+despite shared Rust seam additions; default-no-fault compatibility is source-assessed
+plus normal initial/reopened/restarted paths in the four exact cases. No broad
+library/fast/desktop/completed-SSH repeat is authorized. Manual characterization
+stays **0 passed/1 ignored, NOT MEASURED**; profiling/performance STOP remains.
+
+**Next SAME SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`, THEN SAME QUALITY
+`ses_e4c8be2f1ffegiPUEUuB0QgyBE` before** `cli_remote`, `mutation_remote`,
+`document_promotion`, `ticket_closure`, `comment_publication` and both isolated
+smokes. Final runtime-evidence reviews/owner acceptance remain owed. New-only
+evidence **`/tmp/opencode/task8-poll-write-faults-20261108T112107Z/`** records all
+literal argv, hashes, clocks, raw logs/source proof and a small manifest. Old tail
+manifest still **`f1638d301dd27322b577e82ecad7a96e5e4676c9e44c93b436218ce6886b937c`**;
+controller's34-artifact/39-older-manifest verification retained, no old writes or
+bulk reinventory. Clean UNPUSHED metadata handoff follows; known command groups
+exited, no owned gate jobs. Ticket **implementing / review-and-runtime BLOCKED**,
+not review-ready/ALLPASS/complete; no gate auto-resumption/push/PR/native/lifecycle.
+
+### Prior Final-Tail Gate Standing — 2026-11-08 UTC
 
 **Source-approved inventory correction; remaining fast targets/local-sync/four
 whole SSH targets GREEN, then remote_polling FAILED80/4. Runtime BLOCKED.** Clean
@@ -10650,3 +10709,157 @@ merge-tree/prefix/no-jobs checks accompany handoff. Clean **UNPUSHED**, no owned
 gate jobs. Ticket **implementing / runtime BLOCKED**,not ALLPASS/feature-complete/
 review-ready; no source/golden/schema/dependency edit/new ID/status save/push/PR/
 merge/close/native/main/other-worktree/real profile-key-context-draft/cleanup action.
+
+## Task 8 — Approved Owned Poll-Write Fault Correction, 2026-11-08 UTC
+
+### Authority, Base And Source-Traced Cause
+
+Owner explicitly replied **YES** to the narrow two-point runtime/test correction
+and only four failed SSH cases plus statics, retaining80 other polling cases and
+ALL completed greens. Accepted controller's completed fresh preflight: clean
+**`ed3a7232bb0b2cdee7a4d7a7929eb3f21ba98ef8`**, fetch succeeded/main unchanged
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**, merge Already up to date, main clean
+behind170/no unpublished main commits consumed, current origin/main AGENTS read.
+No repeated fetch/merge/worktree. Already-approved69-line plan amendment committed
+at **`96103e36c8f17172fb1952c2351a87b32b29b57d`** was read, not rewritten.
+Runtime/test-only commit **`d87d4568cd185cebf7e880dd92e179c30966efce`**, exact4 files,
+**143 added/21 removed** lines; metadata-only checkpoint follows with coauthor.
+
+Read-only source trace: public `Pair::poll_with`→`poll_publication_remote`→
+`observation_configuration`→`list_shared_keys`→`migrate_registry`→remote M1 migration
+rejects the fixtures' unknown attached disposition triggers **before fetch**.
+`state::recovery_required` is remapped by key-registry listing to
+**ListSharedKeys/SharedKeyRegistryUnavailable**, then `RemotePollError::Repository`.
+That underlying old error kind is **predicted from source, not measured in the
+saved parent output**. Verified panic-hook emission of `location.line()` allows
+mapping historical1998 to the whole-review local-tip assertion and2561 to the two
+tracking-ref assertions; it does not make all numeric observations location IDs.
+Partial's `fixed(...)?` can return without a panic observation. No production data
+loss/SSH transport/timing/suspend/performance cause is claimed.
+
+### Exact Windows, Preserved Assertions And Limits
+
+1. `src/repository.rs` adds only the documented `FailurePoint` variants
+   **PollBeforeDispositionInsert** and **PollBeforeDispositionWrite**. Existing
+   opening API, defaultNone, one-shot `should_inject`/`check_failure` and normal
+   public APIs remain unchanged; no setter/framework/dependency/feature added.
+2. `remote/state.rs` retains `replace_poll_dispositions`'s signature as a no-op
+   wrapper. The thin internal insertion check runs only at ordinal0, after DELETE
+   and the existing private unit hook, immediately before actual INSERT. All prior
+   SQL/private-hook ordering is byte-identical after removing the added check.
+   `remote/poll.rs` supplies only the existing service-local failure check from
+   the owned batch callback, after advertisement/context/applicable capture writes.
+3. The second check is immediately after `reservation::owned` and before the
+   valid local target's disposition UPDATE. Git FF and retirement-target capture
+   precede it; `poll_prepare_local_effect` committed refresh debt independently.
+   No Git/D14/check/write is moved and the unrelated malformed path is untouched.
+4. `tests/remote_polling.rs` removes the four invalid protected-table trigger
+   sites. Its three write cases require **InjectedFailure**, preserving every
+   original fetched-tracking/local-ref, rollback count, durable NotReached,
+   index-pending, cancel/restart/replay/no-I/O/checkout/ref-snapshot assertion.
+   Shared materialization-true trigger/service and tracking/completion SQL remain
+   exact original semantics, source-assessed rather than repeated green cases.
+5. Partial yield uses only existing **PollBeforeTarget/Some(1)**. Cloned fixture
+   paths/ID and service-local atomic one-shot prove primary committed FF/OIDs/Git,
+   untouched context/NotReached and unchanged saved local-operation count before
+   exact active-operation/actual-epoch flag UPDATE, exactly1 row. Restart proves
+   epoch+1, yield/cancel cleared and completion; later poll proves no reinjection.
+   All15 original partial assertions are retained. Whole-review16/17 and shared
+   fault10/11 assertions remain verbatim modulo whitespace; their remaining broad
+   repository-error assertions are strengthened, never relaxed.
+
+**Fidelity qualification:** these are injected Rust errors at the approved exact
+public effect windows, not SQLite `RAISE(ABORT)`. Batch SQL is already inside the
+owned transaction and unwinds; Git/refresh debt survives the separate failed
+disposition transaction. Existing private ordinal1 library coverage at
+`poll_tests.rs:2278–2487` is retained, **not rerun**: it proves prior advertisement/
+context SQL, old-report DELETE/INSERT0, rollback/image/reopen/replay. Its private
+hook itself returns `recovery_required()` before SQL, so do not claim that hook
+newly generates an engine constraint error or that this correction verifies
+engine-specific error propagation. No test expectation/catalog guard is weakened.
+
+Source proof confirms all84 CASES bytes unchanged; `Pair` privacy/no-push/finish,
+SSH support files, M1 schema/dependencies/private-hook prefix and remaining state
+suffix unchanged. Only4 approved code files differ from96103. All normal policy,
+authority, lease/cache/SQL/clock/consent limits, WAIT60s/GPUI15s/POLL10ms and default
+concurrency remain unchanged. No profiling/instrumentation or new SSH case.
+
+### Actual TDD And Final Static Commands
+
+The amended fixtures plus **only two enum declarations** compiled first; poll.rs
+and state.rs hashes still exactly96103. Each type-only case failed at the expected
+injected-error assertion: whole-review observation2003; batch/disposition2629.
+No runtime check existed yet, no compile-error RED or old invalid-fixture rerun.
+Actual returned values stay behind the privacy boundary, not printed as payloads.
+Only after those REDs were the two checks wired. An explicit Devenv rustfmt run
+was restricted to the4 owned files with `skip_children=true`; only test whitespace
+changed, before all GREEN/static commands. No Rust change followed those gates.
+
+```sh
+# Type-only RED, each separate command:
+devenv shell -- cargo test --all-features --locked --test remote_polling poll_whole_review_disposition_fault_cancel_keeps_index_pending -- --exact
+devenv shell -- cargo test --all-features --locked --test remote_polling poll_batch_commit_failure_atomic_restart -- --exact
+devenv shell -- cargo test --all-features --locked --test remote_polling poll_fast_forward_before_disposition_failure_restart -- --exact
+# Runtime GREEN, each separate command:
+devenv shell -- cargo test --all-features --locked --test remote_polling poll_whole_review_disposition_fault_cancel_keeps_index_pending -- --exact
+devenv shell -- cargo test --all-features --locked --test remote_polling poll_partial_batch_yield_report_and_restart -- --exact
+devenv shell -- cargo test --all-features --locked --test remote_polling poll_batch_commit_failure_atomic_restart -- --exact
+devenv shell -- cargo test --all-features --locked --test remote_polling poll_fast_forward_before_disposition_failure_restart -- --exact
+devenv shell -- cargo check --all-features --locked
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo fmt --check
+```
+
+| Actual command key | Custom SSH passed/failed | Cargo exit | Monotonic seconds |
+| --- | --- | ---: | ---: |
+| red-whole | 0/1 | 1 | 38.470782074 |
+| red-batch | 0/1 | 1 | 3.325953825 |
+| red-disposition | 0/1 | 1 | 3.175272086 |
+| green-whole | 1/0 | 0 | 19.175133148 |
+| green-partial | 1/0 | 0 | 6.439326801 |
+| green-batch | 1/0 | 0 | 4.478500970 |
+| green-disposition | 1/0 | 0 | 4.830381987 |
+| check | not a test | 0 | 8.839858988 |
+| clippy | not a test | 0 | 49.335242622 |
+| fmt | not a test | 0 | 19.728017697 |
+
+All7 SSH selections actually ran exactly1 matching case; no zero/filter-prefix/
+masked-child success. Custom harness has no libtest test-seconds/filtered footer;
+none fabricated. All commands serial/default threads/diagnostic flags unset, below
+900s; no retry or broader test. Per-command UTC/REALTIME/MONOTONIC/BOOTTIME, source
+hashes, exits/raw hashes and build-finished lines are in new-only `results.json`.
+Aggregate clock differences show no material suspend growth; no PM/full/user logs,
+power changes/sleeps or profiling. No old historical cause is inferred from clocks.
+
+### Retained Baselines, Integrity And Review Handoff
+
+New runtime freeze d87 contains shared Rust changes: do **not** call old LIB1530/
+0/160+selectedlocalSync160,24 active headless scopes+tail11/39, exact inventory1/A17
+1, desktop evidence, SSH123/15/69/29 or polling's80 newly executed on d87. Owner
+explicitly retained ALL at their actual64a6/4cc/other recorded scopes and approved
+only4 failed selections+statics for this seam addition. Historical whole80/4 remains
+FAILED; new4 exact greens do not make fresh84/0. DefaultNone compatibility is
+source-assessed plus normal initial/reopened/restarted paths in those four cases.
+Manual read_characterization stays0passed/1ignored/NOT MEASURED, no benchmark debt
+or profiling authorization. Retained44/M1/Q1/enum/D5/D6/native limits remain.
+
+New-only **`/tmp/opencode/task8-poll-write-faults-20261108T112107Z/`** holds11 command
+records/raw logs (including owned formatting), source phase diffs/proof, literal
+argv/current4 hashes/clocks, results, authority/integrity/handoff/small manifest.
+One metadata-audit failure is retained: my expected old digest had an extra65th
+character0 transcribed from “0 mismatches.” Read-only sha256sum confirmed the
+controller's actual64-character **f1638d301dd27322b577e82ecad7a96e5e4676c9e44c93b436218ce6886b937c**;
+only new authority/audit metadata corrected, corrected audit passed, **no Rust
+command repeated**. Old34 artifacts/controller-verified39 manifests stay immutable,
+no bulk reinventory. Known command PIDs/process groups exited; no owned jobs.
+
+Only4 code files and this ledger/current-standing/canonical comment append are
+owned. Original comment **01M6TYJATB44WZPJABX9GMBVS1**, parent
+**01M6SYJK4CJGHWKZC7MTP18GTA**, created_at and entire prior body remain unchanged.
+Runtime and metadata commits carry required coauthor; clean UNPUSHED handoff.
+**SAME SPEC ses_e4cc1a00bffeO0qOz2Do4Qx1Bd THEN SAME QUALITY
+ses_e4c8be2f1ffegiPUEUuB0QgyBE before any unrun gate.** Five remaining SSH targets
+`cli_remote`,`mutation_remote`,`document_promotion`,`ticket_closure`,
+`comment_publication`, isolated CLI/desktop smokes and final runtime-evidence/owner
+acceptance are still owed. No auto-run/ready/complete/status-save/new ticket/ID/
+push/PR/native/main/close/other-worktree/real profile-key-context-draft/cleanup action.

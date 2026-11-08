@@ -1292,3 +1292,99 @@ standing/this append checkpointed with coauthor; original ID/parent/time/entire
 absent,no owned jobs; no source/golden/schema/dependency edit/new ID/status save/
 push/PR/merge/close/native/main/other-worktree/real profile-key-context-draft/cleanup.
 Ticket **implementing / runtime BLOCKED**,not ALLPASS/feature-complete/review-ready.
+
+## Follow-up — owner-approved owned poll-write fault correction GREEN — 2026-11-08 UTC
+
+Owner explicitly replied **YES** to two precise existing-mechanism fault points,
+the existing partial-yield hook, only4 failed SSH cases+statics, and retention of80
+other polling cases/ALL completed greens. Accepted controller's fresh unchanged-
+main/no-op preflight from **ed3a7232bb0b2cdee7a4d7a7929eb3f21ba98ef8**, against
+**d70142b63a952f5e1aade369e0cd654ca9a03617**; main clean behind170/no unpublished local
+commits consumed. Already-committed plan **96103e36c8f17172fb1952c2351a87b32b29b57d**
+read, not rewritten. No repeated fetch/merge/worktree or agents.
+
+New runtime/test freeze **d87d4568cd185cebf7e880dd92e179c30966efce**, only4 approved
+files,143 added/21 removed lines. `FailurePoint` gains only documented
+**PollBeforeDispositionInsert**/**PollBeforeDispositionWrite**. The INSERT check
+is inside owned batch TX after advertisement/context/applicable capture writes and
+old disposition DELETE, immediately before actual ordinal0 INSERT. A thin internal
+check/no-op wrapper preserves the old free-function signature/SQL/private unit-hook
+order. UPDATE check follows `reservation::owned` immediately before local-target
+disposition UPDATE, after Git FF/retirement-target capture and separately committed
+refresh debt. No malformed-path, Git/D14/check/write movement, public setter/hook
+framework/dependency/feature/schema/allowlist or authority change.
+
+Source-traced fixture cause: observation_configuration→list_shared_keys→migration
+hits strict M1 rejection of unknown disposition triggers **before fetch**. Its
+underlying **ListSharedKeys/SharedKeyRegistryUnavailable** is a source prediction,
+**not captured old runtime payload**. Verified panic-hook `location.line()` mapping
+applies to relevant1998/2561 ref assertions, not all observations. Partial's `?`
+can return without a panic line. No data-loss/transport/timing/performance claim.
+
+All84 CASES bytes and `Pair` no-push/privacy/finish unchanged; no SSH support edit.
+All original ref/OID/batch rollback/NotReached/index-pending/cancel/no-I/O/restart/
+replay/checkout/assertions retained; three write-error checks now specifically
+require **InjectedFailure** to reject false preflight failures. Green materialization
+and tracking/completion SQL branches keep original source semantics, not rerun.
+Partial now uses existing **PollBeforeTarget/Some(1)**: committed primary FF/OIDs/Git,
+untouched context/NotReached and saved-locals no-scan proof before exact active-op/
+actual-epoch UPDATE, exactly1 row. Atomic one-shot consumed; restart proves epoch+1,
+cleared yield/cancel/completion, later poll no reinjection. All15 old assertions remain.
+
+**Three meaningful compiled RED commands before runtime wiring**, new points only
+declared: whole-review0/1 at expected-error assertion2003; batch/disposition0/1 at
+2629, each Cargo exit1. Poll/state bytes still96103; not compile failures or ritual
+old-trigger reruns. Actual returned values are not printed through privacy boundary.
+After wiring, exactly4 full-name `--exact` GREEN commands, each1 actual custom SSH
+case/0 failures/Cargo exit0; no whole target, prefix filter, zero-case or retry:
+
+| Full case name | RED elapsed seconds | GREEN elapsed seconds |
+| --- | ---: | ---: |
+| poll_whole_review_disposition_fault_cancel_keeps_index_pending | 38.470782074 | 19.175133148 |
+| poll_partial_batch_yield_report_and_restart | old80/4 fixture evidence, not repeated | 6.439326801 |
+| poll_batch_commit_failure_atomic_restart | 3.325953825 | 4.478500970 |
+| poll_fast_forward_before_disposition_failure_restart | 3.175272086 | 4.830381987 |
+
+Each command's literal form is
+`devenv shell -- cargo test --all-features --locked --test remote_polling <full-case-name> -- --exact`;
+all7 fully expanded argv/raw logs/input hashes/clocks/actual counts in new results.
+Owned4-file formatting only through Devenv with skip_children, before GREEN; fresh
+serial `cargo check --all-features --locked` **exit0,8.839858988s**;
+`cargo clippy --all-targets --all-features --locked -- -D warnings` **exit0,
+49.335242622s**; `cargo fmt --check` **exit0,19.728017697s**. All through Devenv;
+same4 final hashes/default threads/diagnostic flags unset/no later Rust edit. No
+command reached900s, no suspend growth inferred from aggregate boot/mono samples,
+no PM/user log query, power policy/waits/profiling. Owner performance STOP retained.
+
+**Fidelity:** new errors are Rust owned-transaction unwind, not SQLite RAISE(ABORT).
+Retained private library ordinal1 coverage proves prior actual SQL, DELETE/INSERT0,
+image rollback/reopen/replay; its hook itself returns recovery_required before SQL,
+so no new engine-generated constraint-error/propagation proof is claimed. Not rerun.
+DefaultNone/check_failure one-shot and no-op wrapper behavior source-assessed;
+normal initial/reopened/restarted paths execute within the four selected cases.
+
+Historical **whole80/4 at4cc6ca5a** remains FAILED, never combined into fresh84/0.
+ALL completed library1530/0/160+selectedlocalSync160/headless24+tail11/39/desktop/
+owner A17+inventory exact/SSH123/15/69/29/other80 greens retain actual64a6/4cc/other
+recorded scopes, **not newly executed on d87**. Owner explicitly approved this
+narrow selection despite shared Rust seam additions; no whole lib/fast/desktop/
+completed-SSH repeat. Manual read_characterization stays0passed/1ignored,NOT MEASURED.
+Retained44/M1/Q1/enum/D5/D6/native limits and all safety/timing budgets unchanged.
+
+New-only **/tmp/opencode/task8-poll-write-faults-20261108T112107Z/**:11 literal command
+records/raw logs including owned formatting, phase snapshots/final hashes,
+source comparison/assertion/window proof, clocks/results/authority/handoff/manifest.
+Metadata audit initially failed because I transcribed “0 mismatches” as an extra
+65th digest character; read-only sha256sum matches original64-character
+**f1638d301dd27322b577e82ecad7a96e5e4676c9e44c93b436218ce6886b937c**. Only new expected
+metadata corrected/audit passed; no Rust rerun/old artifact write. Controller's old34/
+39-manifest verification retained, no bulk inventory. Known PID/groups exited,no jobs.
+
+**NEXT SAME SPEC ses_e4cc1a00bffeO0qOz2Do4Qx1Bd THEN SAME QUALITY
+ses_e4c8be2f1ffegiPUEUuB0QgyBE before5 unrun SSH targets** cli_remote/mutation_remote/
+document_promotion/ticket_closure/comment_publication and both isolated smokes.
+Final runtime-evidence/owner acceptance still owed. Only4 code files + ledger/current
+standing + this append checkpointed with coauthor, preserving this ID/parent/time/
+entire prior body. Clean UNPUSHED; no auto-gate/status save/ID/push/PR/native/main/
+close/other-worktree/real profile-key-context-draft/cleanup. Ticket remains
+**implementing / review-and-runtime BLOCKED**, not ALLPASS/ready/feature-complete.
