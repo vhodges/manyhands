@@ -19,6 +19,7 @@ pushes.
 | 1 | done | ea29a9ac | 9539e43c | approved | `ConfigurationChange`, known identity; interim weakening of `replacing_configuration_does_not_turn_known_publication_into_first_publication` (Task 2 restores it); review should-fix 1 and 2 carried to Task 2 |
 | 2 | done | 27ae78fd | 875590f8 | approved | carry-forward; evidence held while the plan is unavailable (implementer's decision, reviewed); review should-fix 1 and 2 carried to Task 3 |
 | 3 | done | 54257d6b | 354c9599 | approved | per-context unknown rows; known-column fallback; held rows validated; review should-fix 1 carried to Task 5 |
+| 4 | done | 03c6574a | bf7b7d6f | approved | `unpublished` disposition; table rebuild under marker `remote_poll_dispositions_unpublished_v1` |
 
 ## Test Filters (Task 0)
 
@@ -138,3 +139,19 @@ All commands passed:
     and NULL known + the same remote (rows kept).
 - Nits left: the `plan.ok_or_else` that can't be reached needs a comment;
   the real clock is consistent with the file.
+
+## Task 4 Results
+
+- Implementer: `remote::poll::tests` 80, `remote::state::` 74 and
+  `--bins poll` 19, all passed; clippy, fmt and `check --tests` clean.
+- Reviewer: `poll::tests` 80, `state::` 74 and `--test read_contract` 72,
+  all passed. Approved, with no findings above a nit.
+- Edits outside the plan's boundary, both needed and approved:
+  - `schemas/v1/poll_mutation.schema.json` gains `unpublished`
+    (`read_contract` checks it against the DTO);
+  - `tests/remote_polling.rs` gains a match arm, so it compiles.
+- The absent primary stays `history_unknown`. Nothing that consumes the
+  disposition treats `unpublished` differently.
+- For Task 11: `tests/remote_polling.rs` (around line 1613) and possibly
+  `tests/cli_remote/polling.rs` may now see `unpublished` for a context
+  that was never published.
