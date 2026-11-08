@@ -24,6 +24,7 @@ pushes.
 | 6 | done | ef45f239 | 946623a5 | approved on re-review | `remote_history` over the full manual poll; `RemoteHistoryError`; caller-supplied operation, request and token |
 | 7 | done | 8fe524c6 | da7c8118 | approved on re-review | `item resolve-history`, plus the repository-level `remote resolve-history`; `mutation_contract` red only on missing goldens (Task 9) |
 | 8 | done | 651774aa | f457e894 | approved on re-review | terminal `HistoryUnresolved`; `remote.history` recovery; `ResolveHistory` way out; refusal-blocker CHECK bounds widened, with rebuilds |
+| 9 | done | 68a0b743 | 45d5acda | approved | CLI `remote history`, `item resolve-history`, `remote resolve-history`; goldens and schemas; one SSH case `cli_remote remote_history_repair_journey` |
 
 ## Test Filters (Task 0)
 
@@ -316,3 +317,60 @@ All commands passed:
   - `tests/comment_publication.rs` gained two match arms.
 - A record that looks Cancelled to other readers, while the request answers
   `recovery_required`, matches the existing `ExternalChange` behaviour.
+
+## Task 9 Results And Part 2 Checkpoint (Tasks 6–9)
+
+- Commits: `f789baea`, `0923020c`, `ef61cb85` and `45d5acda`.
+- Tests, all passed:
+  - `--bin manyhands-cli` 315;
+  - `--test mutation_contract` 45, **green again**;
+  - `--test read_contract` 73;
+  - `--test cli` 474;
+  - the SSH case `--test cli_remote remote_history_repair_journey -- --exact`
+    (about 14 s);
+  - clippy, fmt and `check --tests` clean.
+- **What the SSH case covers:**
+  - `key clear`, `key select`, then a new ticket's `item sync` publishes
+    (the original bug);
+  - lost history: `remote history` lists the unresolved context;
+  - `item sync` refuses it with `remote.history` and holds no reservation;
+  - `item resolve-history --as publish` (prepare and confirm), then
+    `item sync` publishes;
+  - a later ticket needs no repair;
+  - the end state is `Contexts: none` and `Cache loss: no`.
+
+  The loss is simulated by SQL, as in `Fixture::lose_history`. The harness
+  has no second endpoint, so the identity-change fence is unit-tested in
+  Tasks 1–3.
+- **Decisions:**
+  - `remote history` is an unjournaled `Kind::UnlockingRead`, like
+    `host observe`. It takes no `--request-id` and is cancelled only by
+    Ctrl-C. It runs a reserved poll, which may fast-forward and
+    materialize. Its error codes match `poll once` arm for arm, and the
+    reviewer checked them side by side.
+  - Release is a note, not a `next:` command, because `context release` is
+    desktop-only (RFC, around line 131). `--as release` answers
+    `invalid_input`.
+  - `UNKNOWN_NOTE` is kept for push-proof unknown, and the new
+    `HISTORY_NOTE` covers `ResolveHistory`.
+  - The catalog label is `Available("C5")`, the nearest existing label.
+- Edits outside the CLI folder:
+  - library DTOs `RemoteHistoryDto` and friends in `mutation/dto.rs`;
+  - `RemoteHistoryError::result_code` and `host_authority`;
+  - three `pub(crate)` widenings;
+  - four schemas;
+  - 8 `mutation_v1` goldens and 1 `read_v1` golden;
+  - inventory and help goldens;
+  - the minimal RFC catalog rows that `--test cli` requires.
+- Carried to Task 12:
+  - **should-fix 1:** RFC rows for the refused options of `remote history`,
+    the golden and result-code tables for the new goldens, and the side
+    effects and cancellation in the `remote history` amendment;
+  - **should-fix 2:** the human listing renders
+    `choices=publish (release: desktop only)`, while JSON keeps both. Update
+    the SSH case's expected line, and record this deviation from the plan's
+    example.
+- Nits left:
+  - `Stopped(host category)` offers no `host.approve`. This is probably
+    unreachable, since host errors arrive as `Poll(Transport)`;
+  - the progress line is written before `interrupt::reset()`.
