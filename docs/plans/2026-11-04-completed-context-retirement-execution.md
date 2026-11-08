@@ -14,9 +14,10 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ### Current Main-Integration Standing — 2026-11-08 UTC
 
-**Integration local gates remain recorded at `7447beb1`; SAME SPEC reported one
-P3 docs-only mismatch, no functional findings. RFC correction awaits SAME SPEC
-confirmation, then QUALITY. Ticket implementing; retirement seam unimplemented.**
+**Integration SPEC CLEAR per controller. QUALITY's historical P2 is now
+owner-accepted/deferred, not fixed or disproven; SAME QUALITY confirmation is
+pending with that exception, not zero findings. Prior `7447beb1` runtime evidence
+is unchanged. Ticket implementing; retirement seam unimplemented.**
 Entry `c48bc2cf2d9d9bbe68621278bb56fedd7276d94c`; accepted fresh main
 `8da9afd4ec82c145632988687cbd71bead046051`; merge base
 `d70142b63a952f5e1aade369e0cd654ca9a03617`. Reconfirmed clean refs/checkouts and
@@ -11473,3 +11474,81 @@ Pending **SAME SPEC confirmation over complete
 **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, controller-owned before any retirement-seam
 implementation. This metadata correction is not review acceptance or runtime
 completion. Ticket remains **implementing**; no further gate autorun.
+
+## Task 8 — Owner-Accepted Deferred Marker-Race P2, 2026-11-08 UTC
+
+### Owner Decision And Qualified Disposition
+
+At clean metadata entry **`e3987713922d64eef87b9bb22b79dda8c484b9e7`**, the owner
+supersedes the read-only assessment's proposed production repair:
+
+> Lets discuss. The odds of this happening is extremely low would seem to require two applications running concurrently, each running a sync at the same time. Also each repo should have it's own boundry, in other words, it shouldn't matter. Make note as a known issue and move on.
+
+**Owner-accepted deferred known issue; blocking repair requirement removed.**
+This is risk acceptance, **not a fix, disproof or zero-findings QUALITY result**.
+SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** historically reported NOT CLEAR
+with one P2; that finding and its scope remain recorded. Controller carries
+integration SPEC CLEAR and will ask the SAME QUALITY reviewer to confirm source
+clear **with the owner-accepted P2 deferred**. That confirmation is still pending.
+
+Technical qualification of the owner's likelihood/boundary assessment:
+
+- The current marker is **registry-wide**, despite per-repository cache-loss
+  flags. The owner's per-repository boundary expectation is not a claim that
+  the current implementation already provides that boundary.
+- `src/repository/remote/resolve.rs:178–197,247–258` checks global flags inside
+  the resolution transaction, then unlinks afterward. Its writer/cache guard
+  ends in `remote/state.rs:7297–7325`; `recovery.rs:2389–2395` checks marker
+  contents/unlinks without the registry flag guard. No outer domain-call cache
+  guard bridges the interval (`mutation/execute.rs:457–464`).
+- The source-derived interleave is resolution versus registration/rebuild/cache
+  recovery, **not necessarily two syncs, two applications or two processes**.
+  Marker-created policy defaults/registration trigger are at `remote/state.rs:39–65`;
+  default restoration waits for a later migration at `:227–275`. Rebuild
+  registration and exclusive replacement are at `repository.rs:5974–5995` and
+  `:4039–4063`. Existing sequential multi-repository coverage does not reproduce
+  the interval. The race remains **source-derived, not reproduced; likelihood
+  unmeasured**, and is not a diagnosis of the historical SSH failures.
+
+Revisit this issue when **per-repository recovery-boundary or relevant concurrency
+work** is undertaken. No unsolicited follow-up ticket, new document/comment ID
+or promised automatic repair. The prior proposed central cleanup/default
+normalization/exclusive-guard/test-hook package is **superseded, not authorized**.
+The owner accepts the risk without authorizing production changes. Broad
+necessary-test-fix/expansion authorization remains, not authority to implement
+this deferred race fix or its hooks.
+
+### Metadata-Only Checkpoint And Remaining Controller Gate
+
+Only the existing design/implementation-plan brief known-issue notes, this
+ledger's current standing/append and canonical checkpoint append change. No Rust,
+schema, test, build, dependency, workflow, guard or marker behavior is changed.
+No Cargo/tests/statics/probes, fetch/merge, agents, remaining gates, push/PR,
+lifecycle/native/real profile/key/context/draft operation or cleanup. No new
+ticket/ID, status save, default normalization, exclusive guard or new hook.
+
+Prior **29 exact cases** (each1passed/0failed, exit0) and **three final statics**
+(exit0) retain their actual unchanged **`7447beb1` source/evidence scopes**;
+`e3987713` and this checkpoint are metadata-only. No repeats, fresh runtime claim,
+combined-tree whole pass or upstream raw-log reauthentication. Earlier qualified
+historical scopes remain; manual characterization stays ignored/NOT MEASURED and
+the performance/profiling STOP remains.
+
+New-only `/tmp/opencode/task8-marker-race-owner-deferral-20261108T220445Z/` records
+the owner words/disposition, clean entry, metadata diff, unchanged source/build
+trees, prefix/Git whitespace/commit/clean UNPUSHED/no-owned-jobs proof and manifest.
+Canonical **`01M6TYJATB44WZPJABX9GMBVS1`** appends after its entire **112425-byte**
+prior prefix (SHA-256
+`adaf26076753eb43575549307cd338f5657a31dd79924c9e774c5c3522d8c306`), preserving
+original ID, parent **`01M6SYJK4CJGHWKZC7MTP18GTA`** and creation time. Commit
+with required coauthor; no other worktree/main edit or publication.
+
+Next: controller sends SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** the
+complete c48-to-returned-HEAD range and owner acceptance, carrying integration
+SPEC CLEAR and unchanged runtime evidence. Only **after its confirmation and
+controller resumption** may the already-approved cfg(test) post-real-prune seam
+and three failed SSH-fixture fixes resume with focused checks. They remain
+**UNIMPLEMENTED/UNFIXED now**; this decision does not admit that work or new gates
+in this checkpoint. `document_promotion`, `ticket_closure`, `comment_publication`,
+isolated smokes and final runtime SPEC/QUALITY remain owed. Ticket remains
+**implementing**, not full runtime-ready, complete, published or closed.

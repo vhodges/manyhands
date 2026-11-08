@@ -68,11 +68,27 @@ approvals and historical evidence remain scoped to their recorded sources.
   Pin/Z tests retain exact old-holder and rollback assertions and independently
   prove the carried copy survives; do not replace strict checks with loose totals.
 
-This bounded integration is pending SAME SPEC then QUALITY review. The approved
+This bounded integration has controller-reported SPEC CLEAR; SAME QUALITY
+confirmation is pending with the owner-accepted deferred P2 below, not zero
+findings. The approved
 post-prune test fault seam is **not implemented in this integration**; the three
 historical mutation_remote failures, remaining SSH targets/smokes and final
 runtime reviews remain owed. No real profiles/keys/contexts/drafts, lifecycle,
 native CI or performance work is authorized here.
+
+### Owner-Accepted Deferred Known Issue — Registry-Wide Marker P2, 2026-11-08
+
+SAME QUALITY's P2 remains a known issue, **not fixed or disproven**: the cache-loss
+marker is registry-wide despite per-repository flags, and a source-derived
+resolution-versus-registration/rebuild/cache-recovery interleave can invalidate
+the flag check before unlink. It need not involve two syncs or two processes;
+likelihood is unmeasured and the race was not reproduced. The owner explicitly
+accepts the risk and removes the blocking repair requirement; the original words
+and evidence are in the execution ledger. The proposed production fix, default
+normalization, exclusive-guard changes and new hooks are not authorized. Revisit
+when per-repository recovery boundaries or relevant concurrency work are
+undertaken, without creating a new ticket now. All other approved contracts and
+historical evidence scopes remain; QUALITY confirmation must carry this deferral.
 
 **Integration re-grounding, 2026-11-07 UTC:** current incoming main is
 `1e5616af22630b08a84dc0fb42037135b385f81d`, including approved/closed D5,

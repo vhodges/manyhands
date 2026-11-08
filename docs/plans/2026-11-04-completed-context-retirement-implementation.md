@@ -776,6 +776,24 @@ evidence at their actual scopes; no combined-tree whole-pass claim. Upstream
 ledger-reported gates are not reauthenticated or combined passes. Manual timing
 benchmark stays ignored/NOT MEASURED. No push/PR/closure/native/real-context action.
 
+### Owner-Accepted Deferred Marker-Race P2 — 2026-11-08
+
+The owner supersedes the proposed production repair: record the registry-wide
+marker race as an accepted deferred known issue and move on. Historical QUALITY
+P2 remains **not fixed/not disproven**, source-derived/not reproduced, with
+unmeasured likelihood. Per-repository flags do not make the current marker
+per-repository; the possible interleave is resolution versus registration,
+rebuild or cache recovery, not necessarily two syncs/processes. No production
+fix/default normalization/exclusive-guard change/new hook or follow-up ticket is
+authorized. Revisit with per-repository recovery-boundary or relevant concurrency
+work. Carry integration SPEC CLEAR; require SAME QUALITY confirmation **with the
+owner-accepted P2 deferred**, not zero findings, before controller-admitted
+post-prune cfg(test) seam/three failed SSH-fixture work. Broad necessary-test-fix
+authorization remains, not authorization to repair this production race. Prior29
+exact checks/statics retain their unchanged scopes; no repeats or further gates
+are admitted by this metadata amendment. Remaining SSH/smokes/final runtime
+SPEC/QUALITY remain owed. The ledger/canonical append records the owner's words.
+
 ## Plan Self-Review
 
 | Contract/ruling | Tasks and proof |

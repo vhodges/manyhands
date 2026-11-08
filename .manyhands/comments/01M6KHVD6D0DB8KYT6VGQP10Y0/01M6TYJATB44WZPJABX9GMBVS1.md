@@ -1674,3 +1674,54 @@ prefix/commit/clean UNPUSHED/no-owned-jobs receipts, no test repeat. Entire
 `89a3d798934bd40e35b9f6cd4ce475cf15c49a8847eb01e2256283bfea02a398`), ID, parent
 **01M6SYJK4CJGHWKZC7MTP18GTA** and creation time preserved. Required coauthor;
 no new IDs/status save/publication/cleanup or further gate autorun.
+
+## Follow-up — Owner Accepts Deferred Marker-Race P2 — 2026-11-08 UTC
+
+At **`e3987713922d64eef87b9bb22b79dda8c484b9e7`**, the owner supersedes the
+proposed production repair with this decision, preserved verbatim:
+
+> Lets discuss. The odds of this happening is extremely low would seem to require two applications running concurrently, each running a sync at the same time. Also each repo should have it's own boundry, in other words, it shouldn't matter. Make note as a known issue and move on.
+
+**Owner-accepted deferred known issue; blocking repair requirement removed.**
+Historical SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** P2/NOT CLEAR remains
+recorded, **not fixed/disproven and not a zero-findings review**. Technical
+qualification: the current marker is registry-wide despite per-repository flags;
+the source interleave is resolution versus registration/rebuild/cache recovery,
+not necessarily two syncs/applications/processes. Likelihood is **unmeasured**;
+the race is **source-derived, not reproduced**, not a historical SSH diagnosis.
+The owner's per-repository boundary expectation does not change the current
+registry-wide marker scope.
+
+Source evidence remains `remote/resolve.rs:178–197,247–258`,
+`remote/state.rs:7297–7325,39–65,227–275`, `recovery.rs:2389–2395`,
+`mutation/execute.rs:457–464`, and `repository.rs:4039–4063,5974–5995` under
+`src/repository/` (the last path is `src/repository.rs`). Existing sequential
+coverage does not exercise the gap. Revisit with **per-repository recovery-boundary
+or relevant concurrency work**, without a new/follow-up ticket now.
+
+No production race fix, default normalization, exclusive-guard change, new hook
+or repair-test package is authorized; the read-only proposal is superseded.
+Broad necessary-test-fix/expansion authority remains, not authority to repair
+this deferred race. Only existing design/implementation-plan known-issue notes,
+ledger current standing/append and this canonical append change. No Rust/Cargo/
+tests/statics/probes/fetch/merge/agents/new IDs/status save/push/PR/lifecycle/native/
+real profile/key/context/draft/cleanup action or main/other-worktree edit.
+
+Carry controller-reported **integration SPEC CLEAR** and unchanged runtime.
+Controller next requests SAME QUALITY confirmation **with owner-accepted P2
+deferred**, not zero issues, over complete c48-to-returned-HEAD. Only after that
+confirmation and controller resumption may approved post-prune cfg(test) seam/
+three failed SSH-fixture work resume. Both remain **UNIMPLEMENTED/UNFIXED now**.
+`document_promotion`, `ticket_closure`, `comment_publication`, isolated smokes and
+final runtime SPEC/QUALITY remain owed. No further gate autorun; ticket implementing.
+
+Prior29 exact cases (each1/0 exit0) and three statics (exit0) retain their unchanged
+**7447 source/evidence scopes**, not new measurements/repeats or whole-suite passes.
+Historical qualified/upstream-reported-only scopes remain; manual characterization
+ignored/NOT MEASURED and performance STOP unchanged. New-only evidence:
+`/tmp/opencode/task8-marker-race-owner-deferral-20261108T220445Z/`; metadata diff,
+source/build equality, Git diff-check/commit/clean UNPUSHED/no-owned-jobs receipts.
+Entire **112425-byte** prior prefix (SHA-256
+`adaf26076753eb43575549307cd338f5657a31dd79924c9e774c5c3522d8c306`), original ID,
+parent **01M6SYJK4CJGHWKZC7MTP18GTA** and creation time preserved. Required coauthor;
+no publication/new ticket or closure.
