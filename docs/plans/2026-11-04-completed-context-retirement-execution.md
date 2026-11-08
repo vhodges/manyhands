@@ -12,78 +12,80 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
-### Current Owned Poll-Write Correction Standing — 2026-11-08 UTC
+### Current Remaining-SSH Gate Standing — 2026-11-08 UTC
 
-**Owner-approved narrow correction locally GREEN; SAME SPEC→QUALITY pending,
-remaining-gate barrier retained.** Owner explicitly replied YES on November 8 to
-the two existing-mechanism write points, existing partial-yield hook, only four
-failed-case SSH selections plus statics, and retention of every completed green.
-Approved plan base **`96103e36c8f17172fb1952c2351a87b32b29b57d`**; new runtime/test
-freeze **`d87d4568cd185cebf7e880dd92e179c30966efce`**. Accepted controller's fresh
-unchanged-main/no-op preflight from clean **`ed3a7232bb0b2cdee7a4d7a7929eb3f21ba98ef8`**
-against **`d70142b63a952f5e1aade369e0cd654ca9a03617`**; no repeated fetch/merge,
-other worktree/main edit or agents. The already-committed plan was not rewritten.
+**Poll-write source/evidence clearance recorded; cli_remote GREEN165/0, then
+mutation_remote FAILED805/3. Runtime BLOCKED.** Clean entry
+**`e424db099d8c211345deb2acd4fe35a009e8430e`**, runtime/test freeze
+**`d87d4568cd185cebf7e880dd92e179c30966efce`**, accepted known main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. d87→entry is metadata-only fidelity;
+all26 source/build inputs and4 current hashes remained frozen. Accepted prior
+controller fresh unchanged-main/no-op preflight fromed3a7232; no new fetch/merge,
+agent, source investigation/fix, main/other-worktree edit or performance work.
 
-**Metadata-only fidelity correction after `5efbab59729af0e61f81a473855858f005dc7222`:**
-the implementation plan's claim of retained “engine-specific rollback” is now
-corrected to actual SQLite transaction rollback/image restoration/reopen/replay
-after prior real SQL writes and an injected Rust error before INSERT1. Neither
-that private hook nor the new `InjectedFailure` points establishes a SQLite-generated
-constraint error or its propagation. Placement/scope/assertions/runtime freeze d87
-are unchanged; no additional design or runtime verification is owed for this prose.
-Controller independently read the full4-file source diff, all3 RED/4 GREEN/3 static
-raw logs and result argv/exits, and verified the latest35-entry manifest
-**`8c7d8b323982f97c25980077ded5bb32eba11239f04fe1892dd1a88446e3e37c`** with **ZERO
-mismatches**, all4 current source hashes matching. This records that verification,
-not a repeat or SAME SPEC/QUALITY approval. Historical entries/evidence remain
-intact; no Rust/Cargo/static/test/probe/profile/smoke/fetch/merge or gate resumption.
+SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE/SPEC CLEAR**,then SAME
+QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,zero findings through
+e424,complete4cc..e424/bounded961..e424, per controller. These are **source/evidence
+clearance only**,not final runtime acceptance. Controller lifted remote_polling
+FIRSTFAIL only for5 first-time SSH targets and isolated smokes on5PASS. Owner YES
+retains narrow4 exact-case follow-ups despite shared Rust changes; no broad repeats.
 
-- Three compiled type-only REDs each **0 passed/1 failed, Cargo exit1**, at the
-  expected injected-error assertions, before either runtime check existed.
-- Four exact SSH GREENs each **1 actual case passed/0 failed, Cargo exit0**:
-  whole-review disposition/cancel **19.175133148s**, partial yield/restart
-  **6.439326801s**, batch atomic restart **4.478500970s**, post-Git disposition
-  restart **4.830381987s** measured command elapsed. No whole target repeat.
-- Fresh serial whole-tree check **exit0,8.839858988s**, strict all-target/all-feature
-  locked Clippy **exit0,49.335242622s**, fmt-check **exit0,19.728017697s**. All seven
-  GREEN/static commands used the same four final source hashes; no later Rust edit.
-- Exact placements: first INSERT after old disposition DELETE, after owned batch
-  advertisement/capture writes; local-target UPDATE after ownership validation,
-  Git/target capture and independently committed refresh debt. The old no-op state
-  entry point/private unit hook ordering and strict M1 catalog are unchanged.
-- Partial yield now proves committed primary FF/OIDs, untouched context/no scan
-  against saved locals, exact active operation/epoch single-row flagging, one-shot
-  consumption, restart epoch+1 and cleared flags. All original report/ref/pending/
-  cancellation/replay/privacy/no-push assertions remain; only broad write-error
-  assertions were strengthened to require `InjectedFailure`. All84 cases retained.
+| Actually executed once, foreground serial/default threads | Cases | Cargo exit | Monotonic seconds |
+| --- | --- | ---: | ---: |
+| cli_remote | **165 passed/0 failed**,custom footer reconciled | **0** | 2098.397418239 |
+| mutation_remote — FAILED | **805 passed/3 failed**,all808 parent cases reconciled | **1** | 9406.345476593 |
 
-The fixture/schema conflict is now source-traced: configuration→ListSharedKeys
-migration rejects unknown protected-table triggers before fetch. Its old returned
-`SharedKeyRegistryUnavailable` kind is a **source prediction, not captured runtime
-payload**. Panic-hook source permits mapping only the relevant historical1998/2561
-observations to ref assertions. New errors are Rust transaction-unwind injections,
-not SQLite `RAISE(ABORT)`; see the appended fidelity qualification below.
+**970 new passes/3 failures,973 unique completions** on d87 runtime. The mutation
+parent naturally completed808 cases,then no next target was admitted. Failures:
+`retirement_reentry_resumed_prune_sql_gap_owned_absence_preserves_all_old_uncertainty`,
+`retirement_reentry_worktree_intent_cannot_invent_branch_removal`,
+`retirement_present_prune_sql_gap_preserves_surviving_branch_on_retry`. Saved parent
+reports say isolated child or watchdog failure; internal assertions/causes are
+not exposed or investigated. No probe/fix/retry/infrastructure/timing waiver or
+production invariant/SQL-engine attribution. The failed target's805 passing cases
+remain partial,not a green target.
 
-Historical **remote_polling80/4 at4cc6ca5a** remains FAILED, not synthesized into
-fresh84/0. Retain its other80, all completed headless/desktop/library/local-sync/SSH
-greens and owner-selected exact follow-ups at their actual **64a6/4cc/other recorded
-scopes**, NOT newly executed on d87. Owner explicitly selected narrow verification
-despite shared Rust seam additions; default-no-fault compatibility is source-assessed
-plus normal initial/reopened/restarted paths in the four exact cases. No broad
-library/fast/desktop/completed-SSH repeat is authorized. Manual characterization
-stays **0 passed/1 ignored, NOT MEASURED**; profiling/performance STOP remains.
+**FIRSTFAIL barrier restored at mutation_remote. NOT RUN:** `document_promotion`,
+`ticket_closure`,`comment_publication`,both isolated smokes and final runtime-
+evidence SAME SPEC→QUALITY/controller acceptance. No profile/display/socket/app
+action or unavailable-display/window inference. Further execution/fix needs
+controller authorization; preserve cli_remote165 and all qualified prior evidence.
 
-**Next SAME SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`, THEN SAME QUALITY
-`ses_e4c8be2f1ffegiPUEUuB0QgyBE` before** `cli_remote`, `mutation_remote`,
-`document_promotion`, `ticket_closure`, `comment_publication` and both isolated
-smokes. Final runtime-evidence reviews/owner acceptance remain owed. New-only
-evidence **`/tmp/opencode/task8-poll-write-faults-20261108T112107Z/`** records all
-literal argv, hashes, clocks, raw logs/source proof and a small manifest. Old tail
-manifest still **`f1638d301dd27322b577e82ecad7a96e5e4676c9e44c93b436218ce6886b937c`**;
-controller's34-artifact/39-older-manifest verification retained, no old writes or
-bulk reinventory. Clean UNPUSHED metadata handoff follows; known command groups
-exited, no owned gate jobs. Ticket **implementing / review-and-runtime BLOCKED**,
-not review-ready/ALLPASS/complete; no gate auto-resumption/push/PR/native/lifecycle.
+**Current d87 evidence reused,NOT rerun:** check**exit0,8.839858988s**,strict
+all-target/all-feature/locked Clippy `-D warnings` **exit0,49.335242622s**,fmt
+**exit0,19.728017697s**;4 exact polling follow-ups each1/0 at19.175133148s,
+6.439326801s,4.478500970s,4.830381987s. **Older**26 active headless scopes,
+LIB1530/0/160filtered+separate selectedlocal-sync160/0,SSH123/15/69/29,other80poll
+cases and inventory/A17 follow-ups retain their **64a6/4cc/other OLD recorded
+scopes**,not newly executed d87 passes. Historical poll80/4/enablement102/1/
+desktop1579/1 are not fresh84/103/1580 whole greens; no fresh unfiltered1690 claim.
+Manual timing benchmark default0pass/1ignored intentionally **NOT MEASURED**,
+excluded active counts,not missing required gate; owner profiling/performance STOP.
+
+**Fidelity unchanged from e424:** private ordinal1 proves actual prior SQL
+advertisement/context/oldDELETE/INSERT0 then RustErr(recovery_required) before
+INSERT1; real rollback/full-image restoration/reopen/replay, **not engine-generated
+constraint-error provenance/propagation**. NewpointsRustInjectedFailure,notSQLite
+RAISE. Old ListSharedKeys/SharedKeyRegistryUnavailable payload is source-predicted,
+not historically captured; PanicHook source supports old1998/2561line mapping,
+not arbitraryIDs. No public guard-free callback was moved under SQL.
+
+UTC command envelope**2026-11-08T12:39:53.210004Z→15:51:38.193707Z**. Both saved
+PM-only interval queries0matches/exit1/no-match/empty stderr,no measured suspend.
+Full REALTIME/MONOTONIC/BOOTTIME bounds retained; receipts are completions,not
+case starts/phases. Raw**67361 bytes**/**1111 receipt rows** cover all973 cases.
+Explicit final-target duration exception permitted natural completion; no timeout/
+production-safety/default-thread change or performance waiver.
+
+New-only **`/tmp/opencode/task8-remaining-ssh-smokes-20261108T123758Z/`** holds entry/
+runtime/source/review/selection/fidelity/reuse/lifted+restored barrier,raw/results/
+clocks/PM/coverage/failure/validation/handoff/new manifest. Poll35 authenticated,
+tail34 digest and42 older manifest/input-manifest digests preserved,no bulk audit/
+old writes. Only ledger/current standing+append and canonical comment append with
+coauthor; original ID/parent/time/full95974-byte prior body preserved. Clean
+**UNPUSHED**,known runner/Cargo PIDs/sessions absent,no owned jobs. Ticket
+**implementing / runtime BLOCKED**,not candidate/ALLPASS/review-ready/complete;
+retained44 C/L/S/D6/M1/Q1/enum/D5/native/combinatorial limits and owner STOP remain.
 
 ### Prior Final-Tail Gate Standing — 2026-11-08 UTC
 
@@ -10924,3 +10926,191 @@ owed. Historical whole80/4 is not fresh84/0; retained greens and manual
 characterization0passed/1ignored/NOT MEASURED remain unchanged. Owner performance
 STOP and retained44/M1/Q1/enum/D5/D6/native limits stand; ticket remains
 **implementing / review-and-runtime BLOCKED**, not ALLPASS/ready/complete.
+
+## Task 8 — Remaining SSH: CLI Remote Green, Mutation Remote Failed
+
+### Controller Clearance, Frozen Entry And Evidence Fidelity — 2026-11-08 UTC
+
+SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE/SPEC CLEAR**,then SAME
+whole QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,zero findings
+through **`e424db099d8c211345deb2acd4fe35a009e8430e`**,complete4cc..e424 plus
+bounded961..e424,per controller. Both are **source/evidence clearance ONLY**,not
+final runtime acceptance. Controller independently read4-file diff/all3compiled
+RED+4GREEN+3static raw logs/argv/exits and authenticated35-entry poll manifest.
+Controller lifted remote_polling FIRSTFAIL only for5 first-time remaining whole
+SSH gates,then standard isolated smokes only on5PASS. Sole foreground gate owner,
+no agents/status polling/duplicate run/source investigation/fix/profiling.
+
+Clean entry**`e424db099d8c211345deb2acd4fe35a009e8430e`**,runtime/test freeze
+**`d87d4568cd185cebf7e880dd92e179c30966efce`**,known main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Controller's prior fresh fetch/no-op
+main merge from **`ed3a7232bb0b2cdee7a4d7a7929eb3f21ba98ef8`** accepted by implementer/
+reviewers; no new fetch/merge while frozen. d87→entry changes only the existing
+implementation plan/ledger/comment metadata. This phase leaves the implementation
+plan untouched and edits only owned ledger/current-standing+append/comment append.
+All26 relevant input hashes and complete source/build-input diff remained frozen
+before/after both new commands; current four hashes:
+
+| File | SHA-256 |
+| --- | --- |
+| src/repository.rs | 6a27f0c57faa6af84778579bcaf3971a5b75d227856b5300d0be760968fd49fe |
+| src/repository/remote/poll.rs | 73f1e45b867bcb63276bc5ae89d57ad5bbaba36d1d86b7b937b31566da280c7d |
+| src/repository/remote/state.rs | d20d3c3153b20d96af10af62a5f1541aaa36b1f0d8ff65cc79b74a1005e6eec1 |
+| tests/remote_polling.rs | acb67e5a84bbc084a0a3a0b5f7d9978955a0eeb0a657fcca7e8578447ebe1774 |
+
+Authenticated **35-entry**
+`/tmp/opencode/task8-poll-write-faults-20261108T112107Z/evidence.sha256`,SHA-256
+**`8c7d8b323982f97c25980077ded5bb32eba11239f04fe1892dd1a88446e3e37c`**,zero mismatches,
+all4 current hashes match. Prior tail34 manifest digest
+**`f1638d301dd27322b577e82ecad7a96e5e4676c9e44c93b436218ce6886b937c`** unchanged;
+42 older manifest/input-manifest digests preserved without historical bulk audit
+or any old artifact/runner/log/result/manifest overwrite.
+
+Owner explicitly approved2 existing FailurePoint additions at actual first
+disposition INSERT afterDELETE in the owned batch and local-target UPDATE after
+Git/ownership+independent refresh debt,existing partial-yield hook,4 failed exact
+SSH cases+3statics only,retaining all completed greens. All84 case inventory,
+strict M1/support SSH/privacy/no-push remain; original assertions unchanged or
+write-error assertions strengthened. Existing wrapper signature/default one-shot
+local mechanism preserved; public guard-free callback not moved under SQL. These
+are retained source-reviewed facts,not a new source investigation in this phase.
+
+**Corrected e424 fidelity remains authoritative:** private ordinal1 proves actual
+prior advertisement/context SQL,old-report DELETE and INSERT0,then returns Rust
+`Err(state::recovery_required())` **before INSERT1**. Real SQLite transaction
+rollback/full-image restoration/reopen/replay is proven after prior SQL writes;
+**engine-generated constraint-error provenance/propagation is NOT proven**. New
+points return Rust `InjectedFailure`,not SQLiteRAISE. Old premature
+ListSharedKeys/SharedKeyRegistryUnavailable is source-predicted,not captured old
+payload. PanicHook source supports only relevant historical1998/2561line mapping,
+not arbitrary diagnostic IDs. No timing/infrastructure/performance waiver or new
+engine-specific proof is introduced. This phase does not alter that corrected
+implementation-plan paragraph or add an engine probe.
+
+### Reused Current Evidence Versus Retained OLD Source Scopes
+
+**REUSED,NOT rerun,current d87 source hashes:** check**exit0,8.839858988s**,
+strict all-target/all-feature/locked Clippy `-D warnings` **exit0,49.335242622s**,
+fmt-check**exit0,19.728017697s**. The raw `check.log`,`clippy.log`,`fmt.log` under
+poll-write-faults are current final-source static receipts; no Rust edit followed.
+Four exact SSH follow-ups each1actualcase/0failed/exit0 at final source:
+whole19.175133148s,partial6.439326801s,batch4.478500970s,disposition4.830381987s.
+No current static/4exact/whole-poll repeat ran.
+
+**RETAINED at OLD actual scopes,NOT newly executed at d87:**26 active headless
+binary footers (24 at7eda plus2 at4cc,old production64a6),includingCLIunits307,
+CLI477/wholemutation_replay384/read_contract72; library1530/0/160filtered at64a6
+plus separate selectedlocal-sync160/0 at4cc/oldproduction64a6; SSHtransport123,
+observation15,synchronization69,merge_recovery29 and other80pollingcases at4cc.
+Historical whole polling80/4 remains FAILED,not fresh84/0 by arithmetic with4
+new exact cases. Owner inventoryexact1/0 at4cc and A17exact1/0 at7eda qualify their
+historicalenablement102/1/desktop1579/1 runs,not freshwhole103/1580. Selected library
+scope is not a fresh1690 run. No broad/current-old-scope relabeling despite shared
+Rust changes: wider default-no-fault compatibility is source-assessed plus ordinary
+initial/reopened/restarted paths in4exactcases,not a fresh broad runtime pass.
+
+Manual `read_characterization` default0passed/1ignored remains expected opt-in
+TIMING benchmark **NOT MEASURED**,excluded active counts,not a missing required
+gate/new failure. No unignore/profile/performance work; owner STOPoptimization/
+performance/perftickets/promotion-closure-materialization-cleanup follow-up remains.
+Retained44 C/L/S/D6/M1/Q1/enum/D5/native/combinatorial limitations stand.
+
+### Exactly Two New Whole SSH Commands, Serial Foreground
+
+```sh
+devenv shell -- cargo test --all-features --locked --test cli_remote
+devenv shell -- cargo test --all-features --locked --test mutation_remote
+```
+
+Both ran exactly once/default threads/no filters/retries/skips/diagnostic/golden/
+fault overrides. No new cases/targets/bare suite/fast/library/Desktop/CLItest/
+completed-SSH/local-sync/static repeat. The explicit final-target duration
+exception permits natural completion beyond15minutes; no timeout/safety budget
+was changed. Mutation parent finished its own full808-case harness,then **no next
+target was admitted**. This is first failed **target**,not termination at the
+first failed child followed by lost accounting.
+
+| New whole target on d87 | Passed | Failed | Parent cases | Cargo exit | Monotonic seconds |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| cli_remote | 165 | 0 | 165 | 0 | 2098.397418239 |
+| mutation_remote — FAILED | 805 | 3 | 808 | 1 | 9406.345476593 |
+
+All **973 unique case completions** reconcile to custom child-line/parent pass-fail
+footers: **970 passes/3 failures**. CLI remote is a new current-runtime green;
+mutation's805 passing cases remain partial evidence,not a target green or fresh
+808/0. Custom harness does not emit standard ignored/filtered/test-seconds fields
+or every child's exit; no such counters/durations/statuses are fabricated. Actual
+parent/Cargoexit1 is printed for mutation; cli Cargoexit0 observed. No zero-case/
+masked-child pass. Old baseline scopes above are not included in this new aggregate.
+
+### Saved Mutation Failures Only, No Investigation Or Attribution
+
+Each parent report is **FAILED (isolated child or watchdog failure)**. Saved
+completion facts on2026-11-08:
+
+| Failed case | UTC receipt | Sequence |
+| --- | --- | ---: |
+| retirement_reentry_resumed_prune_sql_gap_owned_absence_preserves_all_old_uncertainty | 13:50:16.768650Z | 162 |
+| retirement_reentry_worktree_intent_cannot_invent_branch_removal | 13:50:55.833973Z | 175 |
+| retirement_present_prune_sql_gap_preserves_surviving_branch_on_retry | 13:52:03.154993Z | 238 |
+
+No case-named observation/internal assertion location or stack is exposed by these
+saved parent reports. Underlying failure causes remain undiagnosed. No source
+lookup/investigation/probe/fix/retry/capture-privacy relaxation or production
+invariant/clock/SQL-engine/performance attribution follows. The earlier source-
+verified polling mapping is not applied speculatively to these new failures.
+
+### Clock Boundaries, PM Facts And Complete Raw Capture
+
+| Command | UTC interval on2026-11-08 | REALTIME seconds | MONOTONIC seconds | BOOTTIME seconds |
+| --- | --- | ---: | ---: | ---: |
+| cli_remote | 12:39:53.210004Z→13:14:51.607427Z | 2098.397423611 | 2098.397418239 | 2098.397417786 |
+| mutation_remote | 13:14:51.848231Z→15:51:38.193707Z | 9406.345475400 | 9406.345476593 | 9406.345476235 |
+
+Both existing interval-only kernel PM queries returned **0matches,exit1/no-match,
+empty stderr**; boot-minus-mono differences approximately−0.000000453s and
+−0.000000358s, **no measured suspend**. Command/receipt clocks are completion
+boundaries,**not case starts or internal phases**,and no per-case runtime is
+inferred. No full/user journal,new performance instrumentation,inhibitor/sleep/
+synthetic wait/induced suspend,power profile or status polling.
+
+Two verbatim raw logs total**67361 bytes**; separate sidecars**1111 receipt rows**
+cover every byte and all973 named completions. Raw SHA-256s:
+
+- cli_remote:**`1592b4249b8c57109895637f0cce5d5a0d5db3fb23fb97241b8fbdc6fb73809a`**
+- mutation_remote:**`479402597a361d00d47e7d4b140a7f256b70f33fd8b3b1548622be13772d9fc1`**
+
+Before/after entry/runtime/main and input26 hashes match; no source/build-input
+change. Known runner/Cargo PIDs and owned sessions are absent,no owned gate jobs.
+
+### Restored Barrier, Unrun Remainder And Metadata-Only Handoff
+
+**FIRSTFAIL barrier restored at mutation_remote.** Further execution/fix requires
+controller authorization. **NOT RUN:**`document_promotion`,`ticket_closure`,
+`comment_publication`; both isolated bare CLI/standard desktop smokes; final SAME
+whole SPEC THEN QUALITY runtime-evidence reviews/controller acceptance. Both
+smokes were ineligible after target failure:no profile allocation/display/Wayland/
+runtime socket/app/window action or unavailable-display inference. No real/default
+profile/key/context/draft/repository retirement/window interaction or screenshot.
+
+Preserve newcli_remote165/currentstatics/4exactevidence and all qualifiedOLDscope
+greens without broad/completed-green repeats. Manual benchmark is intentional
+NOTMEASURED,not added to the gate debt. Retained44 C/L/S/D6/M1/Q1/enum/D5/native/
+combinatorial limits and owner STOP remain. No clock/3sTTL/250mscache/SQL/lease/
+consent/WAIT60s/GPUI15s-per-park/POLL10ms/default-thread/source/golden/schema/
+dependency change,performance fix or infrastructure waiver.
+
+New-only **`/tmp/opencode/task8-remaining-ssh-smokes-20261108T123758Z/`** stores
+preflight/source freeze/current4hashes/review scopes/owner selection/fidelity/
+reused-current/retainedOLD scopes/lifted+restored barrier,literal argv/full raw/
+receipts/incremental results/counts/exits/clocks/PM/failure analysis/coverage/
+validation/checklist/precommit/metadata delta/commit/handoff/new manifest.
+All42 old manifest/input-manifest digests preserved,no old writes/bulk audit.
+Only execution ledger/current standing+append and canonical comment
+**`01M6TYJATB44WZPJABX9GMBVS1`** append committed with required coauthor; original
+ID/parent**`01M6SYJK4CJGHWKZC7MTP18GTA`**/created time/entire95974-byte prior body
+preserved. Existing implementation plan unchanged. Source/build-input/hash/
+whitespace/known-main ancestry/merge-tree/prefix/known owned job exit checks
+accompany handoff. Clean **UNPUSHED**,no owned jobs. Ticket **implementing / runtime
+BLOCKED**,not candidate/ALLPASS/review-ready/complete. No status save/new ID/new
+planning doc/push/PR/mainmerge/closure/nativeCI/realretirement/worktreecleanup.

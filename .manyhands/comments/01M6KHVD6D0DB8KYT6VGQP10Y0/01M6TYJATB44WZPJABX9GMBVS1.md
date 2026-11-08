@@ -1430,3 +1430,100 @@ mutation_remote/document_promotion/ticket_closure/comment_publication and both
 isolated smokes. Final runtime-evidence/owner acceptance still owed. Historical80/4,
 retained greens/actual source scopes and characterization0passed/1ignored/NOT MEASURED
 unchanged. Ticket **implementing / review-and-runtime BLOCKED**, not ready/complete.
+
+## Follow-up — cli_remote165/0 GREEN, mutation_remote805/3 FAILED — 2026-11-08 UTC
+
+SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE/SPEC CLEAR**,then SAME
+QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,zero findings through
+e424,complete4cc..e424/bounded961..e424 per controller. **Source/evidence clearance
+ONLY,not final runtime acceptance.** Controller lifted polling FIRSTFAIL only for
+5 remaining first-time whole SSH gates then isolated smokes on5PASS. Owner YES
+selects two existing failure points/partial-yield hook,4exactfollowups+3statics,
+retaining all oldgreens despite sharedRust change;no broad/completed-green repeat.
+
+Clean foreground entry **`e424db099d8c211345deb2acd4fe35a009e8430e`**,runtime/test
+freeze **`d87d4568cd185cebf7e880dd92e179c30966efce`**,known main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Accepted prior controller fresh
+unchanged-main/no-op preflight fromed3a7232;no new fetch/merge,source edit or other-
+worktree/main action. d87→entry is metadata-only;26 current inputs/4source hashes
+unchanged throughout. Poll35 manifest**8c7d8b323982f97c25980077ded5bb32eba11239f04fe1892dd1a88446e3e37c**
+authenticated zero mismatches;tail34 digest and42 older manifest/input-manifest
+digests preserved,no old writes/huge inventory. Existing implementation plan untouched.
+
+Current d87 statics **checkexit0,8.839858988s;strictalltarget/allfeature/locked
+Clippy-Dwarningsexit0,49.335242622s;fmtexit0,19.728017697s**,reused NOT rerun.
+Four current exact SSH follow-ups each1/0/exit0 at19.175133148s,6.439326801s,
+4.478500970s,4.830381987s reused NOT rerun. All older26activeheadless (CLIunits307/
+CLI477/wholemutation_replay384),LIB1530/0/160filtered+separatelocal-sync160,
+SSH123/15/69/29,other80pollingcases and ownerinventory/A17followups retain their
+**OLD64a6/4cc/other recorded scopes,NOT newd87passes**. Historicalwhole80/4,
+enablement102/1,desktop1579/1 are not fresh84/103/1580;no fresh1690libraryclaim.
+Manual opt-in TIMING benchmark0passed/1ignored **NOTMEASURED**,excludedactivecounts,
+not missingrequiredgate;no unignore/profile/performance permission.
+
+Correct e424 fidelity preserved:actual prior SQLadvertisement/context/oldDELETE/
+INSERT0 then RustErr(state::recovery_required()) **beforeINSERT1** proves real
+rollback/full-image restoration/reopen/replay,**NOT engine-generated constraint-
+error provenance/propagation**. NewpointsRustInjectedFailure,notSQLiteRAISE.
+Old prematureListSharedKeys/SharedKeyRegistryUnavailable payload is source-predicted,
+not historically captured; PanicHook source supports relevant1998/2561line mapping,
+not arbitraryIDs. Public guard-free callback not moved underSQL. No new engine/
+timing/infrastructure/performance proof/waiver or source investigation.
+
+Exactly once/defaultthreads/serialforeground:
+
+```sh
+devenv shell -- cargo test --all-features --locked --test cli_remote
+devenv shell -- cargo test --all-features --locked --test mutation_remote
+```
+
+**cli_remote165passed/0failed,Cargoexit0,2098.397418239s monotonic** atcurrentd87.
+Then **mutation_remote805passed/3failed,all808parentcases,Cargoexit1,
+9406.345476593s monotonic**. All973 unique completions/custom child-line+parent
+footers reconcile:970newpasses/3failures,not whole-suite acceptance.805mutation
+passes are partial,not a green target. Custom harness emits no standard ignored/
+filtered/test-seconds footer;none fabricated. Final target duration exception
+permits natural completion;no timeout/thread/safety changes. Parent finished its
+own full808case harness,then no next target admitted. No statuspoll/duplicate run.
+
+Three saved parent **FAILED (isolated child or watchdog failure)** reports:
+
+- `retirement_reentry_resumed_prune_sql_gap_owned_absence_preserves_all_old_uncertainty`:
+  receipt**13:50:16.768650Z**,seq162.
+- `retirement_reentry_worktree_intent_cannot_invent_branch_removal`:
+  receipt**13:50:55.833973Z**,seq175.
+- `retirement_present_prune_sql_gap_preserves_surviving_branch_on_retry`:
+  receipt**13:52:03.154993Z**,seq238.
+
+No case-named observation/internal assertion location/stack exposed;causes remain
+undiagnosed. No source lookup/investigation/probe/fix/retry/privacy relaxation or
+production invariant/clock/SQL-engine/performance attribution;do not apply old
+polling source mapping to these new failures. Existing harness output preserved.
+
+UTC**2026-11-08T12:39:53.210004Z→15:51:38.193707Z**. cli clocks REALTIME2098.397423611s,
+MONO2098.397418239s,BOOT2098.397417786s;mutation REALTIME9406.345475400s,
+MONO9406.345476593s,BOOT9406.345476235s. Both saved PM-only intervalqueries0matches/
+exit1/no-match/empty stderr,no measuredsuspend. Raw67361bytes/1111receipts coverall
+973cases;receipt clocks are completions,not casestarts/phases. No newperformance
+instrumentation/fulluserjournal/inhibitor/sleep/powerpolicy/statuspolling.
+
+**FIRSTFAIL barrier restored at mutation_remote. NOTRUN:**document_promotion,
+ticket_closure,comment_publication,both isolated CLI/desktop smokes,final SAMEwhole
+SPEC THEN QUALITY runtime-evidence/controller acceptance. No profile allocation/
+display/Wayland/socket/app/window action or unavailable-display inference;no real
+keys/contexts/drafts/retirement/userwindow action. Further execution/fix requires
+controller authorization. Retain newcli_remote/currentstatics/4exact and qualified
+OLDscopes;no broad repeat/manualbenchmark added. Retained44 C/L/S/D6/M1/Q1/enum/
+D5/native/combinatorial limits unwaived;ownerSTOPperformance/optimization/perftickets/
+promotion-closure-materialization-cleanup follow-up remains. Production3sTTL/
+250mscache/SQL/lease/consent/WAIT60s/GPUI15s-per-park/POLL10ms/defaultthreads unchanged.
+
+New-only **`/tmp/opencode/task8-remaining-ssh-smokes-20261108T123758Z/`** holds source/
+review/selection/fidelity/reuse/scopes/lifted+restored barrier/argv/raw/receipts/
+counts/exits/clocks/PM/analysis/coverage/validation/handoff/newmanifest. Only owned
+ledger currentstanding+append/this canonicalappend checkpointed with coauthor;
+originalID,parent01M6SYJK4CJGHWKZC7MTP18GTA,createdtime/entire95974-byte prior body
+preserved. Clean **UNPUSHED**,knownrunner/CargoPIDs/sessions absent,no ownedjobs.
+Ticket **implementing / runtime BLOCKED**,not candidate/ALLPASS/review_ready/complete;
+no source/golden/schema/dependency edit/statussave/newIDs/newplanningdoc/push/PR/
+mainmerge/closure/nativeCI/realretirement/worktreecleanup authority exercised.
