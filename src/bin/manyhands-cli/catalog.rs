@@ -96,6 +96,12 @@ pub const INPUT: OptionSpec = option(
     false,
     "Read one JSON input object from a file or stdin (-).",
 );
+const RESOLVE_AS: OptionSpec = option(
+    "--as",
+    Some("publish|release"),
+    true,
+    "The choice for a context whose publication history is unknown.",
+);
 pub const REQUEST_ID: OptionSpec = option(
     "--request-id",
     Some("ULID"),
@@ -941,6 +947,39 @@ pub const COMMANDS: &[CommandSpec] = &[
         availability: Availability::Available("C4"),
         repo: Some(Required),
         options: &[REPO, ID, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "item",
+        verb: "resolve-history",
+        summary: "Record a context whose publication history is unknown as never published.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO, ID, RESOLVE_AS, REQUEST_ID, PREPARE, CONFIRM],
+        kind: Kind::Mutation {
+            confirmed: true,
+            input: InputRule::Refused,
+        },
+    },
+    CommandSpec {
+        resource: "remote",
+        verb: "history",
+        summary: "Poll the publication remote and list the contexts whose publication history is unknown.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: &[REPO],
+        kind: Kind::UnlockingRead,
+    },
+    CommandSpec {
+        resource: "remote",
+        verb: "resolve-history",
+        summary: "Clear the repository's lost-history flag once no context reads unknown.",
+        availability: Availability::Available("C5"),
+        repo: Some(Required),
+        options: MUTATION_NO_INPUT,
         kind: Kind::Mutation {
             confirmed: true,
             input: InputRule::Refused,

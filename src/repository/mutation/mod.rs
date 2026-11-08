@@ -65,6 +65,7 @@ pub(super) use bind::comment::comment_synchronization;
 /// source-included test target that plants a row under it.
 #[cfg(test)]
 pub(crate) use bind::conflict::attempt_for as conflict_resolve_attempt;
+pub(crate) use bind::poll::category_code;
 use bind::{
     Binding, Confirmed,
     abandon::OperationAbandonBinding,
@@ -124,7 +125,7 @@ pub use confirm::CONFIRMATION_LIFETIME_SECONDS;
 pub use dto::{
     CancelDto, CommentMutationDto, CommentMutationType, CommentPendingReason, ConflictNextAction,
     ConflictNextDto, ConflictResolutionMutationDto, ConflictResolutionMutationType,
-    ContextMutationDto, DocumentMutationDto, HistoryMarkerState, HostMutationDto,
+    ContextMutationDto, DocumentMutationDto, HistoryMarkerState, HistoryRelation, HostMutationDto,
     HostObservationDto, HostPreviewDto, HostReplacementDto, IdentityMutationDto,
     IdentityPreviewDto, ItemRepublishPreviewDto, ItemResolveHistoryMutationDto,
     ItemResolveHistoryPreviewDto, KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState,
@@ -137,7 +138,8 @@ pub use dto::{
     LocalIdentityDto, MutationDataDto, OperationAbandonPreviewDto, OperationMutationDto,
     PollMutationCompletion, PollMutationDto, PollPolicyMutationDto, PollTargetDisposition,
     PollTargetDto, PrepareDataDto, PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto,
-    PreviewIdentityDto, PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto,
+    PreviewIdentityDto, PreviewIdentitySource, RemoteHistoryChoicesDto, RemoteHistoryDto,
+    RemoteHistoryEntryDto, RemoteMutationDto, RemoteRemovalPreviewDto,
     RemoteResolveHistoryPreviewDto, RepairMutationDto, RepairPreviewDto, RepositoryPreviewDto,
     RepositoryRemovalPreviewDto, RequestDto, RequestOperationDto, RequestResultDto, RequestState,
     SynchronizationConflictMutationDto, SynchronizationConflictType, SynchronizationMutationDto,
@@ -150,6 +152,7 @@ pub(crate) use observe::absent_token;
 /// reports.
 #[cfg(test)]
 pub(super) use outcome::repository_error_code;
+pub(crate) use outcome::{repository_error_code, ssh_transport_error_code};
 pub use progress::{CancellationToken, NoProgress, ProgressEvent, ProgressSink, ProgressStage};
 use records::RequestRecord;
 pub(super) use records::migrate as migrate_request_tables;

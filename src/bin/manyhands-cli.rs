@@ -25,6 +25,8 @@ mod discussion;
 mod dispatch;
 #[path = "manyhands-cli/fill.rs"]
 mod fill;
+#[path = "manyhands-cli/history.rs"]
+mod history;
 #[path = "manyhands-cli/human.rs"]
 mod human;
 #[path = "manyhands-cli/human_admin.rs"]

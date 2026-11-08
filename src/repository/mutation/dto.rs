@@ -444,6 +444,98 @@ contract_enum!(
     }
 );
 
+contract_enum!(
+    /// How a context's local head relates to the branch the remote advertises
+    /// in `remote history`. Absent when the remote lacks the branch, or when
+    /// either commit is not here to compare.
+    HistoryRelation {
+        Same => "same",
+        LocalAhead => "local_ahead",
+        RemoteAhead => "remote_ahead",
+        Diverged => "diverged",
+    }
+);
+
+/// What the owner may do about an unresolved context: both are offered only
+/// when the remote does not have the branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct RemoteHistoryChoicesDto {
+    pub publish: bool,
+    pub release: bool,
+}
+
+/// One context `remote history` lists: unresolved, or resolved by the poll it
+/// ran. It holds names and commits and no content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RemoteHistoryEntryDto {
+    pub kind: ItemDtoKind,
+    pub item_id: String,
+    /// The editing branch, as its short name.
+    pub branch: String,
+    /// The local tip of the branch. Null when it has no local ref.
+    pub local_oid: Option<String>,
+    pub tracking_ref_exists: bool,
+    /// The commit the remote advertises for the branch. Null when it lacks it.
+    pub remote_oid: Option<String>,
+    pub relation: Option<HistoryRelation>,
+    pub ahead: Option<u64>,
+    pub behind: Option<u64>,
+    /// The fetch recorded the context as published, so no choice is needed.
+    pub resolved: bool,
+    /// What the poll did with the context. Null when it reported no target.
+    pub disposition: Option<PollTargetDisposition>,
+    pub choices: RemoteHistoryChoicesDto,
+}
+
+/// What `remote history` reports after its fresh poll of the publication
+/// remote.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RemoteHistoryDto {
+    /// The repository-wide cache-loss flag: set when the registry was lost.
+    pub cache_loss: bool,
+    pub generation: i64,
+    pub entries: Vec<RemoteHistoryEntryDto>,
+}
+
+impl From<&crate::repository::RemoteHistoryReport> for RemoteHistoryDto {
+    fn from(report: &crate::repository::RemoteHistoryReport) -> Self {
+        use crate::repository::{AuthoringKind, RemoteHistoryRelation as Domain};
+        Self {
+            cache_loss: report.cache_loss,
+            generation: report.generation,
+            entries: report
+                .entries
+                .iter()
+                .map(|entry| RemoteHistoryEntryDto {
+                    kind: match entry.kind {
+                        AuthoringKind::Document => ItemDtoKind::Document,
+                        AuthoringKind::Ticket => ItemDtoKind::Ticket,
+                    },
+                    item_id: entry.item_id.to_string(),
+                    branch: entry.branch.clone(),
+                    local_oid: entry.local_head.map(|oid| oid.to_string()),
+                    tracking_ref_exists: entry.tracking_ref_exists,
+                    remote_oid: entry.advertised.map(|oid| oid.to_string()),
+                    relation: entry.relation.map(|relation| match relation {
+                        Domain::Same => HistoryRelation::Same,
+                        Domain::LocalAhead => HistoryRelation::LocalAhead,
+                        Domain::RemoteAhead => HistoryRelation::RemoteAhead,
+                        Domain::Diverged => HistoryRelation::Diverged,
+                    }),
+                    ahead: entry.ahead.map(|count| count as u64),
+                    behind: entry.behind.map(|count| count as u64),
+                    resolved: entry.resolved,
+                    disposition: entry.disposition.map(super::bind::poll::dto_disposition),
+                    choices: RemoteHistoryChoicesDto {
+                        publish: entry.choices.publish,
+                        release: entry.choices.release,
+                    },
+                })
+                .collect(),
+        }
+    }
+}
+
 /// What `item resolve-history` reports: the context is recorded as never
 /// published, and whether that cleared the cache-loss flag. `item sync` is
 /// what publishes it.

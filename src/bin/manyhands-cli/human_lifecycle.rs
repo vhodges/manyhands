@@ -52,7 +52,10 @@ const REPAIR_NOTE: &str = "The commands above are the local repair: the <...> va
 const EXTERNAL_REPAIR_NOTE: &str = "If context sync-local answers external_resolution_required, repair it with Git in the context.";
 const REFUSED_NOTE: &str = "primary refused this closure's checkpoint.";
 const POLL_NOTE: &str = "this repository has no record of the remote's primary, and a poll reads it; <new-request-id> is a placeholder to fill in.";
+/// Unknown from a push's proof, which a poll reads and settles.
 const UNKNOWN_NOTE: &str = "this repository hasn't read whether the remote still holds this item's branch, and a poll reads it; <new-request-id> is a placeholder to fill in.";
+/// Unknown from lost history, which no poll settles: the owner chooses.
+const HISTORY_NOTE: &str = "this repository has lost track of whether this item was ever published, and a poll can't settle that: remote history polls the remote and lists the contexts it can't confirm, and item resolve-history records the owner's choice for each.";
 const AHEAD_NOTE: &str = "primary holds commits the remote's primary, as this repository last read it, lacks: a poll reads the remote again, and if primary is still ahead, repo sync publishes it; each <new-request-id> is a placeholder for a request of its own.";
 const HELD_NOTE: &str = "an unfinished request holds this item; send it again to finish it, and prepare again once it has finished, or has stopped on a cleanup a new request can replace.";
 const HELD_RESUME_NOTE: &str = "an unfinished operation that no request holds has this item; resume it (add --request-id unless you run it at a terminal), and prepare again only once it has finished.";
@@ -292,8 +295,7 @@ fn way_out_note(blockers: &[LifecycleBlocker], way_out: &[LifecycleWayOut]) -> S
             UNKNOWN_NOTE.to_owned()
         }
     } else if way_out.contains(&LifecycleWayOut::ResolveHistory) {
-        "this item's shared copy can't be confirmed; a poll can't settle it. Repair it, then prepare again."
-            .to_owned()
+        HISTORY_NOTE.to_owned()
     } else if way_out
         .iter()
         .any(|step| matches!(step, LifecycleWayOut::SaveItem { .. }))
@@ -314,7 +316,7 @@ fn way_out_lines(kind: ItemDtoKind, way_out: &[LifecycleWayOut], root: &str) -> 
                 "manyhands-cli poll once --repo {} --request-id <new-request-id>",
                 quoted(root)
             )),
-            // Task 9 words this; the line is the command that lists the repair.
+            // The read that lists each unresolved context, with its choices.
             LifecycleWayOut::ResolveHistory => next.push(format!(
                 "manyhands-cli remote history --repo {}",
                 quoted(root)

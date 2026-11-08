@@ -301,6 +301,26 @@ fn a_conflict_prints_its_conflict_and_the_command_that_shows_it() {
     );
 }
 
+/// A synchronization that can't confirm the remote's history is final and
+/// offers the repair read, which is rendered as a command in place of the
+/// action's own line.
+#[test]
+fn unresolved_history_names_the_repair_read_as_a_command() {
+    let mut envelope = golden("repo_sync_recovery_required");
+    envelope.data = None;
+    envelope.recovery = vec![RecoveryAction::new(
+        RecoveryActionKind::RemoteHistory,
+        [("root", "/work/repo".into())],
+    )];
+    let text = stderr(&output(&envelope, false, &Seen::default())).to_owned();
+    assert!(
+        text.contains("next: manyhands-cli remote history --repo '/work/repo'\n"),
+        "{text}"
+    );
+    assert!(!text.contains("remote.history"), "{text}");
+    assert!(!text.contains("request.retry"), "{text}");
+}
+
 #[test]
 fn a_conflict_to_repair_outside_says_so() {
     let mut envelope = golden("repo_sync_recovery_required");

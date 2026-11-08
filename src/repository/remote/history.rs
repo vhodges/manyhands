@@ -20,6 +20,7 @@ use crate::{
         mutation::{CancellationToken, RequestId},
         promotion::lifecycle::CancellationProbe,
     },
+    results::ResultCode,
 };
 
 /// How a context's local head relates to the branch the remote advertises.
@@ -93,6 +94,48 @@ impl std::fmt::Display for RemoteHistoryError {
     }
 }
 impl std::error::Error for RemoteHistoryError {}
+impl RemoteHistoryError {
+    /// The code a front end answers with: the one `poll once` gives the same
+    /// stop. The category of a poll that ran and stopped keeps its own.
+    pub fn result_code(&self) -> ResultCode {
+        match self {
+            Self::Poll(error) => match error.as_ref() {
+                RemotePollError::Repository(error) => {
+                    crate::repository::mutation::repository_error_code(error.kind)
+                }
+                RemotePollError::Transport(error) => {
+                    crate::repository::mutation::ssh_transport_error_code(&error.kind)
+                }
+                RemotePollError::Busy => ResultCode::Busy,
+                RemotePollError::PollYielding => ResultCode::PollYielding,
+                RemotePollError::ConflictPending | RemotePollError::Interrupted => {
+                    ResultCode::RecoveryRequired
+                }
+            },
+            Self::Stopped(category) => crate::repository::mutation::category_code(*category),
+            Self::Cancelled => ResultCode::Cancelled,
+            Self::Interrupted => ResultCode::RecoveryRequired,
+            Self::Internal => ResultCode::InternalError,
+        }
+    }
+
+    /// The host a transport stop names, as `host approve` takes it: `host:port`,
+    /// with a bracketed IPv6 host. Only a transport error that names one has it.
+    pub fn host_authority(&self) -> Option<String> {
+        let Self::Poll(error) = self else {
+            return None;
+        };
+        let RemotePollError::Transport(error) = error.as_ref() else {
+            return None;
+        };
+        let authority = error.authority.as_ref()?;
+        Some(if authority.host.contains(':') {
+            format!("[{}]:{}", authority.host, authority.port)
+        } else {
+            format!("{}:{}", authority.host, authority.port)
+        })
+    }
+}
 impl From<RemotePollError> for RemoteHistoryError {
     fn from(error: RemotePollError) -> Self {
         Self::Poll(Box::new(error))
