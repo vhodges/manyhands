@@ -652,6 +652,75 @@ authority and all lifecycle authorization boundaries remain unchanged. This
 amendment extends the existing Task 8; it does not restart the Cycle or authorize
 native CI, real-context retirement, PR creation, main integration or closure.
 
+### Approved Task 8 Correction — Owned Poll Write Failure Points
+
+Owner approved this bounded correction and verification selection on 2026-11-08:
+add two precise points to the existing failure-injection mechanism, replace the
+partial-batch yield trigger with the existing poll-boundary hook, verify only
+the four failed SSH cases plus static checks, then resume the unrun gates.
+Retain the 80 passing polling cases and every other completed green at its
+recorded source scope; do not repeat whole targets or synthesize a fresh 84/0.
+
+The failed fixtures attach unknown triggers to `remote_poll_dispositions`.
+M1 correctly rejects those attachments during configuration/key preflight,
+before fetch or the intended owned-write window. Keep the closed-catalog guard
+unchanged. The historical parent log does not expose the underlying repository
+error kind; its panic hook records source line numbers, not error payloads.
+
+**Files:** `src/repository.rs`, `src/repository/remote/poll.rs`,
+`src/repository/remote/state.rs`, `tests/remote_polling.rs`, and existing
+ledger/canonical checkpoint metadata. No SSH harness, case inventory, dependency,
+schema, new public setter or callback framework change.
+
+1. Adapt only the four failed cases and their necessary shared fixture helpers:
+   `poll_whole_review_disposition_fault_cancel_keeps_index_pending`,
+   `poll_partial_batch_yield_report_and_restart`,
+   `poll_batch_commit_failure_atomic_restart`, and
+   `poll_fast_forward_before_disposition_failure_restart`.
+   Preserve every original ref/OID, pending-index, cancellation, atomicity,
+   restart, replay, no-push and output-privacy assertion. Require the three
+   injected-write errors to be `InjectedFailure`, not a broad repository error
+   that also accepts premature schema rejection.
+2. Add only the declarations of two doc-hidden `FailurePoint` variants needed
+   to compile those tests, before wiring any new runtime check. Run the three
+   write-fault cases individually by exact name for compiled behavioral RED:
+   the configured new points must not fire in the still-unmodified write paths.
+   A compile error is not RED. The prior whole 80/4 run supplies the recorded
+   partial-batch fixture RED; do not repeat that unchanged case for ceremony.
+3. Add `PollBeforeDispositionInsert` at the actual first disposition INSERT,
+   **after the transaction's disposition DELETE**, with advertisement/context
+   capture already inside the ownership-validated batch transaction. Retain the
+   existing `replace_poll_dispositions` signature through a thin internal
+   no-op wrapper/check parameter so its other callers and private unit fault
+   hooks keep their behavior. Call only the existing service-local one-shot
+   failure mechanism; add no external callback under the transaction guard.
+4. Add `PollBeforeDispositionWrite` inside the ownership-validated disposition
+   update transaction, immediately before its UPDATE, after local Git effects
+   and the separately durable `refresh_required` mark. Neither fault point
+   changes default operation when no failure is configured.
+5. Replace the partial-batch trigger with the existing guard-free
+   `PollBeforeTarget / Some(1)` hook. Before requesting yield, prove committed
+   primary FF/OIDs, untouched context and no discovery relative to the fixture's
+   saved local-operation count. Bind the yield update to the exact operation and
+   actual owner epoch, require one changed row, and prove one-shot consumption
+   and normal restart ownership/flag clearing.
+6. Run each of the four cases individually once for GREEN:
+   ```sh
+   devenv shell -- cargo test --all-features --locked --test remote_polling <exact-failed-case-name> -- --exact
+   ```
+   Do not rerun the other 80 cases or completed library, desktop, headless,
+   local-sync or SSH gates. Run fresh required whole-tree check, strict Clippy
+   and fmt once on the coherent amended Rust tree. Obtain same whole SPEC,
+   then same QUALITY review before resuming the five unrun SSH targets/smokes.
+
+The new errors exercise owned Rust-transaction rollback at the same public
+effect windows; they are not SQLite `RAISE(ABORT)` errors. Existing private
+library INSERT-fault coverage retains the engine-specific rollback, old-report
+DELETE/partial-INSERT, complete-image restoration and legitimate reopen/replay
+proof. Do not relabel old runtime evidence as newly executed on the amended
+source. This owner-approved narrow selection adds no performance investigation,
+safety-budget relaxation, native dispatch, push, PR, merge or closure authority.
+
 ## Plan Self-Review
 
 | Contract/ruling | Tasks and proof |
