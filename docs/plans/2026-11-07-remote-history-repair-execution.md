@@ -448,3 +448,57 @@ All commands passed:
 - The reviewer approved. Nits left: the `unknown()` wording in
   `journeys.rs`, and the configuration arm of `poll_tests` task6 asserts
   nothing about batches.
+
+## Task 13: Gate Round 1 (at `22f72aab`) And Fixes
+
+**Round 1 results** (logs in the orchestrator's job directory):
+
+- Green:
+  - check, fmt, clippy;
+  - `--lib repository::local_sync::` 160;
+  - `remote_observation` 15, `remote_polling` 84, `remote_synchronization`
+    69, `remote_merge_recovery` 29;
+  - `cli_remote` 162, `ticket_closure` 78, `comment_publication` 41.
+- Red:
+  - **Fast tier: 1,404 passed, 2 failed.** Cargo stopped at the first
+    failing binary, so `mutation_replay` and `mutation_bridges` never ran.
+    Later rounds use `--no-fail-fast`.
+  - `mutation_remote`: 694 passed, 9 failed.
+  - `document_promotion`: 76 passed, 3 failed.
+  - `ssh_transport`: 119 passed, 4 failed.
+- A final whole-branch review (read-only) said **READY**. It had one
+  should-fix (ghost unknown rows) and found every acceptance criterion
+  met.
+
+**Fixes** (`781fd112` to `61732e93`), reviewed and approved:
+
+- Code bugs:
+  - **`5784a4c5`:** the observation recheck fenced a late same-plan
+    endpoint edit as `Credentials` with no digest, so nothing was forgotten.
+    It now goes through `configure_endpoints` with the fresh digest, which
+    forgets.
+  - **`c51400c3`:** a forgetting fence wrote unknown rows for retired items.
+    That broke R1 retirement in `push_absence`, and syncs answered
+    `HistoryUnknown`. `insert_unknown_context_rows` now skips retired items.
+    **Residual (documented):** after an identity change, a recreated
+    context for a retired item reads `NeverPublished` on the new remote.
+    Its first push is non-forced, so a ref already on the new remote isn't
+    overwritten: the push is refused or diverges.
+  - **`f7ab036d`:** the final-review should-fix. `unresolved_contexts` and
+    `history_report` count only rows with an active context, so a ghost row
+    no longer lists forever or blocks the flag.
+- Test fixes:
+  - **`b399c665`:** the conformance `HOMES` table gains the two new verbs
+    (43 to 45), with driven rows in `tests/mutation_confirmation/conformance.rs`.
+    This was the shared cause of the 9 `mutation_remote` failures, and also
+    hit `mutation_replay` and `mutation_bridges`.
+  - **`781fd112`:** `context_release` check C uses a real identity change,
+    and the results registry lists `remote.history`.
+  - **`483ed88a`** and **`61732e93`:** the `ssh_transport`
+    `observe_selection_race`, `_lifecycle` and `_replacement` cases expect
+    the carried batch, because key selection doesn't forget. The race case
+    tells a carried batch apart by `observed_at` plus the generation
+    advancing.
+- Also: a comment on `configure_endpoints` naming, and the conformance
+  mismatch row now targets an item with a context.
+- Each failing case passed alone by exact name after its fix.
