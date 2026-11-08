@@ -1844,13 +1844,9 @@ fn replacing_configuration_does_not_turn_known_publication_into_first_publicatio
     })
     .unwrap();
     let snapshot = service.remote_snapshot(root.path()).unwrap();
-    // Task 1 interim: configure no longer sets history_unknown, and the
-    // carry-forward that keeps the evidence is Task 2. Task 2 restores the
-    // original assertion (evidence stays known), so this is deliberately not
-    // a pin of the interim behavior.
     assert_eq!(
         snapshot.publication_evidence_for(AuthoringKind::Ticket, &ITEM.parse().unwrap()),
-        RemotePublicationEvidence::NeverPublished
+        RemotePublicationEvidence::ObservedPublished
     );
 }
 
@@ -3503,6 +3499,120 @@ fn closing_an_unbegun_attempt_keeps_the_step_another_attempt_began() {
     assert_eq!(attempts, [begun.to_string()]);
 }
 
+#[test]
+fn credentials_fence_carries_batch_and_rows() {
+    let document_ref = format!("refs/heads/manyhands/document/{ITEM}");
+    let document = || {
+        RemoteRefObservation::from_advertisement(
+            &plan(),
+            &document_ref,
+            Oid::from_str(TRACKING).unwrap(),
+            None,
+        )
+        .unwrap()
+    };
+    for pinned in [false, true] {
+        let (data, root, service) = fixture();
+        let operation = window_fixture(&service, root.path());
+        let generation = with_transaction(&service, root.path(), |tx, id| {
+            let generation = read_policy(tx, id)?.generation;
+            complete_batch(
+                tx,
+                id,
+                &plan(),
+                generation,
+                &[document(), advertised()],
+                123,
+            )?;
+            Ok(generation)
+        })
+        .unwrap();
+        // The second batch no longer advertises the document: its row becomes
+        // `remotely_deleted` next to the observed ticket row.
+        let old_batch = if pinned {
+            let intent = pinned_window(
+                &service,
+                root.path(),
+                operation,
+                Some(Oid::from_str(ADVERTISED).unwrap()),
+            );
+            with_transaction(&service, root.path(), |tx, id| {
+                let record = read_operation(tx, id, operation)?.unwrap();
+                prepare_integration_window(tx, &record, 1, &intent)?;
+                Ok(intent.observation_batch_id)
+            })
+            .unwrap()
+        } else {
+            with_transaction(&service, root.path(), |tx, id| {
+                complete_batch(tx, id, &plan(), generation, &[advertised()], 124)
+            })
+            .unwrap()
+        };
+        let before = service.remote_snapshot(root.path()).unwrap();
+        let carried = with_transaction(&service, root.path(), |tx, id| {
+            let after = configure(tx, id, Some(&plan()), ConfigurationChange::Credentials)?;
+            // The startup audit reads every batch, pinned historical ones too.
+            read_snapshot_rows(tx, id, true)?;
+            Ok(after)
+        })
+        .unwrap();
+        assert_eq!(carried, generation + 1, "pinned={pinned}");
+        let after = service.remote_snapshot(root.path()).unwrap();
+        assert_eq!(
+            format!("{:?}", after.observations()),
+            format!("{:?}", before.observations()),
+            "pinned={pinned}"
+        );
+        assert_eq!(
+            format!("{:?}", after.contexts()),
+            format!("{:?}", before.contexts()),
+            "pinned={pinned}"
+        );
+        assert_eq!(after.contexts().len(), 2);
+        assert!(
+            after
+                .contexts()
+                .iter()
+                .any(|context| context.state() == RemoteContextState::RemotelyDeleted)
+        );
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let (current_generation, current_rows): (i64, i64) = db
+            .query_row(
+                "SELECT configuration_generation,(SELECT COUNT(*) FROM remote_ref_observations WHERE batch_id=remote_observation_batches.id) FROM remote_observation_batches WHERE is_current=1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(current_generation, carried);
+        assert_eq!(current_rows as usize, before.observations().len());
+        let old_kept: bool = db
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM remote_observation_batches WHERE id=?1 AND is_current=0)",
+                [old_batch],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(old_kept, pinned, "pinned={pinned}");
+        // An unavailable plan keeps the evidence dormant; its return carries
+        // it again, and a fresh observation at that generation still works.
+        with_transaction(&service, root.path(), |tx, id| {
+            configure(tx, id, None, ConfigurationChange::Unavailable)?;
+            read_snapshot_rows(tx, id, true)?;
+            assert!(read_snapshot(tx, id)?.observations().is_empty());
+            let back = configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
+            read_snapshot_rows(tx, id, true)?;
+            assert_eq!(
+                format!("{:?}", read_snapshot(tx, id)?.contexts()),
+                format!("{:?}", before.contexts())
+            );
+            complete_batch(tx, id, &plan(), back, &[advertised()], 125)?;
+            read_snapshot_rows(tx, id, true)?;
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Call {
     Plan(&'static str, &'static str),
@@ -3642,6 +3752,18 @@ fn configure_reasons_fence_and_forget() {
             Some("main"),
             Some(1),
         ),
+        // unavailable, then the same digest returning: known digest kept
+        (
+            vec![Endpoints("origin", "main", 1), Unavailable],
+            false,
+            Endpoints("origin", "main", 1),
+            true,
+            false,
+            0,
+            Some("origin"),
+            Some("main"),
+            Some(1),
+        ),
         // the cache-loss flag stays set, and nothing here sets it
         (
             vec![a],
@@ -3655,13 +3777,21 @@ fn configure_reasons_fence_and_forget() {
             None,
         ),
     ];
-    for (n, (setup, flag, call, bumps, _forgets, flag_after, name, branch, digest)) in
+    for (n, (setup, flag, call, bumps, forgets, flag_after, name, branch, digest)) in
         rows.into_iter().enumerate()
     {
         let (data, root, service) = fixture();
         let mut generation = 0;
-        for step in setup {
+        let seeded = !setup.is_empty();
+        for (step_n, step) in setup.into_iter().enumerate() {
             generation = apply_call(&service, root.path(), step);
+            if step_n == 0 {
+                // Evidence for the first remote: a current batch and a row.
+                with_transaction(&service, root.path(), |tx, id| {
+                    complete_batch(tx, id, &plan(), generation, &[advertised()], 123)
+                })
+                .unwrap();
+            }
         }
         let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
         if flag {
@@ -3682,6 +3812,23 @@ fn configure_reasons_fence_and_forget() {
                 |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
+        if seeded {
+            // Forgetting deletes the rows (Task 3 turns that into unknown
+            // rows); anything else keeps them and carries the batch.
+            let (rows, batch_generation): (i64, Option<i64>) = db
+                .query_row(
+                    "SELECT (SELECT COUNT(*) FROM remote_context_states),(SELECT configuration_generation FROM remote_observation_batches WHERE is_current=1)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(rows, i64::from(!forgets), "row {n} rows kept");
+            assert_eq!(
+                batch_generation,
+                (!forgets).then_some(after),
+                "row {n} carried batch"
+            );
+        }
         assert_eq!(unknown, flag_after, "row {n} flag");
         assert_eq!(known_name.as_deref(), name, "row {n} known name");
         assert_eq!(known_branch.as_deref(), branch, "row {n} known branch");

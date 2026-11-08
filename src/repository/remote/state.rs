@@ -2311,6 +2311,27 @@ pub(in super::super) fn configure(
     configure_known(transaction, repository_id, plan, change, None)
 }
 
+/// The single forget decision. The identity differs from what was last known,
+/// so the evidence is about another remote. A first plan (nothing known) and
+/// NULL columns forget nothing.
+fn forgets(
+    change: ConfigurationChange,
+    plan: Option<&RemoteRefPlan>,
+    (known_name, known_branch, known_digest): &KnownIdentity,
+    digest: Option<&[u8; 32]>,
+) -> bool {
+    (change == ConfigurationChange::Plan
+        && plan.is_some_and(|plan| {
+            known_name
+                .as_deref()
+                .is_some_and(|name| name != plan.remote_name())
+                || known_branch
+                    .as_deref()
+                    .is_some_and(|branch| branch != plan.primary_branch())
+        }))
+        || digest.is_some_and(|digest| known_digest.as_ref().is_some_and(|known| known != digest))
+}
+
 fn configure_known(
     transaction: &Transaction<'_>,
     repository_id: i64,
@@ -2323,20 +2344,8 @@ fn configure_known(
     if change != ConfigurationChange::Credentials && policy.plan.as_ref() == plan {
         return Ok(policy.generation);
     }
-    let (known_name, known_branch, known_digest) = read_known_identity(transaction, repository_id)?;
-    // The identity differs from what was last known, so the evidence is about
-    // another remote. A first plan (nothing known) and NULL columns forget
-    // nothing.
-    let _forgets = (change == ConfigurationChange::Plan
-        && plan.is_some_and(|plan| {
-            known_name
-                .as_deref()
-                .is_some_and(|name| name != plan.remote_name())
-                || known_branch
-                    .as_deref()
-                    .is_some_and(|branch| branch != plan.primary_branch())
-        }))
-        || digest.is_some_and(|digest| known_digest.as_ref().is_some_and(|known| known != digest));
+    let known = read_known_identity(transaction, repository_id)?;
+    let forgets = forgets(change, plan, &known, digest);
     let generation = policy
         .generation
         .checked_add(1)
@@ -2348,22 +2357,39 @@ fn configure_known(
     // The mutable current snapshot is invalidated, but a pass referenced by an
     // immutable window is retained as historical intent. It is never made
     // current again, nor used to authorize effects at the new generation.
+    let previous: Option<(i64, String, String)> = transaction.query_row("SELECT id,remote_name,primary_branch FROM remote_observation_batches WHERE repository_id=?1 AND is_current=1", [repository_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional().map_err(|_| recovery_required())?;
     transaction.execute("UPDATE remote_observation_batches SET is_current=0 WHERE repository_id=?1 AND is_current=1", [repository_id]).map_err(|_| recovery_required())?;
-    transaction.execute("DELETE FROM remote_ref_observations WHERE batch_id IN (SELECT batch.id FROM remote_observation_batches batch WHERE batch.repository_id=?1 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=batch.id))",[repository_id]).map_err(|_| recovery_required())?;
+    // A fence that forgets nothing carries the evidence into the new
+    // generation: the batch and its observations are copied (a batch is only
+    // carried to the plan it was observed under; an unavailable plan carries
+    // it dormant) and the context rows are kept.
+    let carry = !forgets
+        && previous.as_ref().is_none_or(|(_, name, branch)| {
+            plan.is_none_or(|plan| plan.remote_name() == name && plan.primary_branch() == branch)
+        });
+    let mut carried = None;
+    if carry && let Some((old, _, _)) = previous {
+        transaction.execute("INSERT INTO remote_observation_batches(repository_id,remote_name,primary_branch,configuration_generation,observed_at,is_current) SELECT repository_id,remote_name,primary_branch,?2,observed_at,1 FROM remote_observation_batches WHERE id=?1",params![old,generation]).map_err(|_| recovery_required())?;
+        let new = transaction.last_insert_rowid();
+        transaction.execute("INSERT INTO remote_ref_observations(batch_id,ordinal,remote_ref,tracking_ref,classification,advertised_oid,tracking_oid) SELECT ?2,ordinal,remote_ref,tracking_ref,classification,advertised_oid,tracking_oid FROM remote_ref_observations WHERE batch_id=?1",params![old,new]).map_err(|_| recovery_required())?;
+        carried = Some(new);
+    }
+    transaction.execute("DELETE FROM remote_ref_observations WHERE batch_id IN (SELECT batch.id FROM remote_observation_batches batch WHERE batch.repository_id=?1 AND batch.id IS NOT ?2 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=batch.id))",params![repository_id,carried]).map_err(|_| recovery_required())?;
     transaction
         .execute(
-            "DELETE FROM remote_observation_batches WHERE repository_id=?1 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=remote_observation_batches.id)",
-            [repository_id],
+            "DELETE FROM remote_observation_batches WHERE repository_id=?1 AND id IS NOT ?2 AND NOT EXISTS(SELECT 1 FROM remote_integration_windows window_pass WHERE window_pass.observation_batch_id=remote_observation_batches.id)",
+            params![repository_id, carried],
         )
         .map_err(|_| recovery_required())?;
-    // Task 2: carry the evidence forward when `_forgets` is false. Task 3:
-    // write per-context unknown rows when it is true.
-    transaction
-        .execute(
-            "DELETE FROM remote_context_states WHERE repository_id=?1",
-            [repository_id],
-        )
-        .map_err(|_| recovery_required())?;
+    // Task 3: write per-context unknown rows when `forgets` is true.
+    if !carry {
+        transaction
+            .execute(
+                "DELETE FROM remote_context_states WHERE repository_id=?1",
+                [repository_id],
+            )
+            .map_err(|_| recovery_required())?;
+    }
     transaction.execute("UPDATE remote_polling_state SET configuration_generation=?2,remote_name=?3,primary_branch=?4,automatic_backoff_seconds=NULL,latest_outcome=NULL WHERE repository_id=?1",
         params![repository_id,generation,plan.map(RemoteRefPlan::remote_name),plan.map(RemoteRefPlan::primary_branch)]).map_err(|_| recovery_required())?;
     if change == ConfigurationChange::Plan
@@ -6218,7 +6244,10 @@ fn read_snapshot_rows(
             return Err(recovery_required());
         }
         let current = flag(current)?;
-        if generation != policy.generation || policy.plan.as_ref() != Some(&plan) {
+        // While the plan is unavailable, a current batch carried by the fence
+        // is dormant: validated, but not exposed until a plan returns.
+        let dormant = current && policy.plan.is_none() && generation == policy.generation;
+        if !dormant && (generation != policy.generation || policy.plan.as_ref() != Some(&plan)) {
             // Only an exact window-bound historical pass may outlive the
             // configuration that selected it. The ordinary snapshot never
             // selects these rows; startup still audits their complete contents.
@@ -6279,7 +6308,7 @@ fn read_snapshot_rows(
                 }
                 _ => return Err(recovery_required()),
             };
-            if current {
+            if current && !dormant {
                 if observation.classification == RemoteRefClassification::MalformedContext {
                     snapshot.contexts.push(RemoteContextSnapshot::new(
                         None,
@@ -6322,11 +6351,11 @@ fn read_snapshot_rows(
             _ => return Err(recovery_required()),
         };
         let id: ItemId = id.parse().map_err(|_| recovery_required())?;
-        let target = policy
-            .plan
-            .as_ref()
-            .ok_or_else(recovery_required)?
-            .context(kind, &id);
+        // Rows kept across an unavailable plan stay dormant until it returns.
+        let Some(plan) = policy.plan.as_ref() else {
+            continue;
+        };
+        let target = plan.context(kind, &id);
         if target.remote_ref() != remote_ref
             || target.tracking_ref() != tracking_ref
             || observed_at < 0
