@@ -22,6 +22,7 @@ pushes.
 | 4 | done | 03c6574a | bf7b7d6f | approved | `unpublished` disposition; table rebuild under marker `remote_poll_dispositions_unpublished_v1` |
 | 5 | done | 21ac5032 | cf100915 | approved | migration `remote_history_per_context_v1`; carry requires kept rows' refs to match the new plan (Task 3 should-fix) |
 | 6 | done | ef45f239 | 946623a5 | approved on re-review | `remote_history` over the full manual poll; `RemoteHistoryError`; caller-supplied operation, request and token |
+| 7 | done | 8fe524c6 | da7c8118 | approved on re-review | `item resolve-history`, plus the repository-level `remote resolve-history`; `mutation_contract` red only on missing goldens (Task 9) |
 
 ## Test Filters (Task 0)
 
@@ -219,3 +220,50 @@ All commands passed:
   no other transport exists, and `remote history` and `item sync` can't run
   without one. Every edge case stays in unit tests.
 - Test filters: see "Test Filters (Task 0)".
+
+## Task 7 Results
+
+- Commits: `cea94440` (the verb) and `da7c8118` (review fixes).
+- Tests:
+  - `remote::resolve_tests` 4 and `mutation` 153 (bind 35) passed;
+    `--test read_contract` 72 passed;
+  - `--test mutation_contract`: 43 passed, 1 failed. The failure is
+    `every_bound_command_has_a_golden`, for `item resolve-history` and
+    `remote resolve-history`. It is **expected red until Task 9** adds the
+    goldens;
+  - clippy, fmt and `check --tests` clean.
+- **Decisions:**
+  - **Snapshot rule.** `read_snapshot_rows` accepts an explicit
+    `never_published` row while the cache-loss flag is set. The reviewer
+    confirmed the only writer is `record_context_resolved`, the owner's
+    confirmed resolution. Contexts with no row stay unknown under the flag.
+    Named edits: `evidence_defaults_by_flag_and_rows`, and
+    `retirement_does_not_weaken_unknown_never_published_row_invariant`,
+    renamed to
+    `an_explicit_never_published_row_is_accepted_under_the_cache_loss_flag`.
+  - **No remote reservation.** The Immediate registry transaction is the
+    fence. The reviewer found no in-flight sync, poll or promotion it could
+    affect.
+  - **Way-outs.** The new `HistoryWayOut` (`ReleaseContext`, `Republish`,
+    `Sync`, `RemoteHistory`) keys on result code and choice, so
+    `RecoveryActionKind` is untouched.
+  - **`--resolve-all` became a verb.** Decision 7's `--resolve-all` is the
+    separate confirmable verb `remote resolve-history`
+    (`Command::RemoteResolveHistory`). It clears the cache-loss flag when
+    nothing reads unknown, then retires the marker file. A confirmable
+    change doesn't fit on a read.
+  - **Marker deletion.** It happens only when this call cleared the flag. A
+    failure is reported (`HistoryMarkerState::Failed`) and doesn't undo the
+    commit. A valid marker that can't be removed leaves the flag at 0 on
+    the next open (the reviewer traced it).
+- Edits outside the boundary, all forced by exhaustive matches:
+  `human_admin.rs` and desktop `view/confirm.rs` (one arm each),
+  `tests/support/mutation.rs` and `tests/support/repair.rs`, and
+  `schemas/v1/preview_effect.schema.json` (`history_resolved`,
+  `history_flag_cleared`).
+- For Task 9 or 12: the goldens and the schemas for the two verbs' preview
+  and result DTOs.
+- Nits left:
+  - the "undeletable marker" test builds an *invalid* marker (a directory),
+    so it should be renamed;
+  - `target()` returns an empty string for the repository-wide verb.
