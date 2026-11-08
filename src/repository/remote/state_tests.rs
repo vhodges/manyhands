@@ -3907,6 +3907,7 @@ fn a_forgetting_fence_writes_no_unknown_row_for_a_retired_item() {
 fn unresolved_contexts_count_only_active_contexts() {
     const OTHER: &str = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
     // (active contexts, rows by item, items listed, flag cleared by resolving)
+    #[allow(clippy::type_complexity)]
     let rows: [(&[&str], &[&str], &[&str], bool); 5] = [
         (&[ITEM], &[ITEM], &[ITEM], false),
         (&[], &[ITEM], &[], true),
@@ -3927,8 +3928,7 @@ fn unresolved_contexts_count_only_active_contexts() {
         }
         db.execute("UPDATE remote_polling_state SET history_unknown=1", [])
             .unwrap();
-        let (flag, unknown) =
-            with_transaction(&service, root.path(), |tx, id| unresolved_contexts(tx, id)).unwrap();
+        let (flag, unknown) = with_transaction(&service, root.path(), unresolved_contexts).unwrap();
         assert!(flag, "row {n} flag");
         let unknown: Vec<String> = unknown.iter().map(|(_, id)| id.to_string()).collect();
         assert_eq!(unknown, listed, "row {n} listed");
