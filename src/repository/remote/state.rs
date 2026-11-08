@@ -2635,6 +2635,13 @@ fn configure_known(
     }
     transaction.execute("UPDATE remote_polling_state SET configuration_generation=?2,remote_name=?3,primary_branch=?4,automatic_backoff_seconds=NULL,latest_outcome=NULL WHERE repository_id=?1",
         params![repository_id,generation,plan.map(RemoteRefPlan::remote_name),plan.map(RemoteRefPlan::primary_branch)]).map_err(|_| recovery_required())?;
+    // The endpoint digests belong to the remote forgotten here. Leaving them
+    // would make the next endpoint registration under the new remote read as
+    // a digest change and forget again; NULL is "not recorded" and never
+    // forgets.
+    if forgets {
+        transaction.execute("UPDATE remote_polling_state SET endpoint_digest=NULL,known_endpoint_digest=NULL WHERE repository_id=?1", [repository_id]).map_err(|_| recovery_required())?;
+    }
     if change == ConfigurationChange::Plan
         && let Some(plan) = plan
     {

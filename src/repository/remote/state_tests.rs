@@ -4218,3 +4218,37 @@ fn poll_dispositions_unpublished_migration_preserves_rows_and_is_idempotent() {
     db.execute(&insert, []).unwrap();
     assert_eq!(rows(&db).len(), 2);
 }
+
+/// A forgetting `Plan` fence must not leave the old remote's endpoint digest
+/// as the known one: the first endpoint registration under the new remote
+/// would read as a digest change and forget the owner's resolution again.
+#[test]
+fn a_forgetting_plan_fence_does_not_forget_again_at_the_next_endpoint_registration() {
+    let (data, root, service) = fixture();
+    apply_call(&service, root.path(), Call::Endpoints("origin", "main", 1));
+    Connection::open(data.path().join(REGISTRY_FILE)).unwrap().execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,'/active',?2)", params![format!("manyhands/ticket/{ITEM}"), ITEM]).unwrap();
+    apply_call(&service, root.path(), Call::Plan("upstream", "main"));
+    let upstream = RemoteRefPlan::from_configuration("upstream", "main").unwrap();
+    let item: ItemId = ITEM.parse().unwrap();
+    with_transaction(&service, root.path(), |tx, id| {
+        assert_eq!(
+            read_snapshot(tx, id)?.fetch_publication_evidence_for(AuthoringKind::Ticket, &item),
+            RemotePublicationEvidence::HistoryUnknown
+        );
+        record_context_resolved(tx, id, &upstream, AuthoringKind::Ticket, &item)
+    })
+    .unwrap();
+    apply_call(
+        &service,
+        root.path(),
+        Call::Endpoints("upstream", "main", 2),
+    );
+    with_transaction(&service, root.path(), |tx, id| {
+        assert_eq!(
+            read_snapshot(tx, id)?.fetch_publication_evidence_for(AuthoringKind::Ticket, &item),
+            RemotePublicationEvidence::NeverPublished
+        );
+        Ok(())
+    })
+    .unwrap();
+}
