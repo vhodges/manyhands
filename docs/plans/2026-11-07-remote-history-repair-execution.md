@@ -20,6 +20,7 @@ pushes.
 | 2 | done | 27ae78fd | 875590f8 | approved | carry-forward; evidence held while the plan is unavailable (implementer's decision, reviewed); review should-fix 1 and 2 carried to Task 3 |
 | 3 | done | 54257d6b | 354c9599 | approved | per-context unknown rows; known-column fallback; held rows validated; review should-fix 1 carried to Task 5 |
 | 4 | done | 03c6574a | bf7b7d6f | approved | `unpublished` disposition; table rebuild under marker `remote_poll_dispositions_unpublished_v1` |
+| 5 | done | 21ac5032 | cf100915 | approved | migration `remote_history_per_context_v1`; carry requires kept rows' refs to match the new plan (Task 3 should-fix) |
 
 ## Test Filters (Task 0)
 
@@ -155,3 +156,22 @@ All commands passed:
 - For Task 11: `tests/remote_polling.rs` (around line 1613) and possibly
   `tests/cli_remote/polling.rs` may now see `unpublished` for a context
   that was never published.
+
+## Task 5 Results And Part 1 Checkpoint (Tasks 1–5)
+
+- Implementer, at the checkpoint, all passed:
+  - clippy `-D warnings`, `fmt --check` and `check --tests` clean;
+  - `remote::state::` 76, `poll::tests` 80, `refs::tests` 10, `sync::tests`
+    182, `remote::tests::` 15.
+- Reviewer: `remote::state::` 76 and `remote::tests::` 15 passed. Approved.
+- With the carry guard temporarily disabled,
+  `null_known_and_no_plan_rows_follow_the_new_plan` fails (it then reverts).
+- Decisions:
+  - a flag set to 1 with no remote configured is left set, and the marker
+    is still recorded. This is fail-closed, behaves like cache loss, and
+    Task 7's repair clears it once nothing reads unknown;
+  - a stored plan that can't be parsed gives `recovery_required`.
+- Nits left:
+  - a doc comment line about the marker being recorded when the marker file
+    is present;
+  - no test row for flag 1 with no remote.
