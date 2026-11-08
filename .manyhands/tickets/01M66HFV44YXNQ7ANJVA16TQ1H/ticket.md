@@ -3,7 +3,7 @@ slug: vh-hyksw
 id: 01M66HFV44YXNQ7ANJVA16TQ1H
 title: Remote history marked unknown by a key change, with no way to clear it, blocks first publication, promotion and closure
 type: defect
-status: open
+status: done
 project: manyhands
 team: core
 manyhands_managed: true
