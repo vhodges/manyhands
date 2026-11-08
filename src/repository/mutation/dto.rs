@@ -1615,6 +1615,7 @@ contract_enum!(
         Malformed => "malformed",
         RemotelyDeleted => "remotely_deleted",
         HistoryUnknown => "history_unknown",
+        Unpublished => "unpublished",
         NotReached => "not_reached",
     }
 );
@@ -1639,6 +1640,7 @@ impl PollTargetDisposition {
             Self::Malformed => Domain::Malformed,
             Self::RemotelyDeleted => Domain::RemotelyDeleted,
             Self::HistoryUnknown => Domain::HistoryUnknown,
+            Self::Unpublished => Domain::Unpublished,
             Self::NotReached => Domain::NotReached,
         }
         .guidance()

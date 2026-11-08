@@ -2686,6 +2686,10 @@ fn poll_dispositions_have_only_fixed_guidance() {
             "Publication history is unknown; inspect remote state before proceeding.",
         ),
         (
+            PollDisposition::Unpublished,
+            "The remote context is not published yet; item sync publishes it.",
+        ),
+        (
             PollDisposition::NotReached,
             "This target was not reached; retry the poll when ready.",
         ),
@@ -4011,6 +4015,7 @@ fn poll_ignored_only_is_clean_and_remote_absence_wins_over_dirty() {
             PollTrackingState::HistoryUnknown,
             PollDisposition::HistoryUnknown,
         ),
+        (PollTrackingState::Unpublished, PollDisposition::Unpublished),
     ] {
         let before = snapshot(&f.root, &context);
         assert_eq!(
@@ -5211,5 +5216,32 @@ fn poll_document_selection_matches_discovery_extensions_including_dotfiles() {
                 Some(POLL_ID.parse().unwrap())
             );
         }
+    }
+}
+
+#[test]
+fn absent_target_is_classified_from_its_previous_evidence() {
+    use super::super::RemotePublicationEvidence as E;
+    let f = LocalFixture::new();
+    for (evidence, disposition) in [
+        (Some(E::NeverPublished), PollDisposition::Unpublished),
+        (Some(E::HistoryUnknown), PollDisposition::HistoryUnknown),
+        (Some(E::ObservedPublished), PollDisposition::RemotelyDeleted),
+        (None, PollDisposition::HistoryUnknown),
+    ] {
+        assert_eq!(
+            classify_local_target(
+                &f.root,
+                "main",
+                &SynchronizationTarget::Primary,
+                absent_tracking_state(evidence)
+            )
+            .unwrap(),
+            LocalPollClassification::Unchanged {
+                disposition,
+                local_oid: None
+            },
+            "{evidence:?}"
+        );
     }
 }

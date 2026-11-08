@@ -69,6 +69,7 @@
               "malformed",
               "remotely_deleted",
               "history_unknown",
+              "unpublished",
               "not_reached"
             ]
           },

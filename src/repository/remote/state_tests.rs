@@ -3975,3 +3975,42 @@ fn corrupt_dormant_context_rows_are_rejected_while_the_plan_is_unavailable() {
         assert!(read_snapshot_rows(&db, 1, false).is_err(), "{update} read");
     }
 }
+
+#[test]
+fn poll_dispositions_unpublished_migration_preserves_rows_and_is_idempotent() {
+    let (data, _, service, _) = review_completed_state();
+    drop(service);
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    let old = POLL_DISPOSITION_SCHEMA.replace("'unpublished',", "");
+    assert_ne!(old, POLL_DISPOSITION_SCHEMA);
+    db.execute_batch(&format!("DROP TRIGGER remote_poll_disposition_owner_immutable; ALTER TABLE remote_poll_dispositions RENAME TO saved; {old}; INSERT INTO remote_poll_dispositions SELECT * FROM saved; DROP TABLE saved; DELETE FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1';")).unwrap();
+    let insert = format!(
+        "INSERT INTO remote_poll_dispositions SELECT repository_id,operation_ulid,1,'context','refs/heads/manyhands/ticket/{ITEM}','ticket','{ITEM}','unpublished',NULL,NULL,observed_at FROM remote_poll_dispositions WHERE ordinal=0"
+    );
+    assert!(db.execute(&insert, []).is_err());
+    let rows = |db: &Connection| -> Vec<(i64, String, Option<String>)> {
+        db.prepare(
+            "SELECT ordinal,disposition,after_oid FROM remote_poll_dispositions ORDER BY ordinal",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    };
+    let before = rows(&db);
+    assert_eq!(before.len(), 1);
+    drop(db);
+    for _ in 0..2 {
+        drop(RepositoryService::open_at(data.path()).unwrap());
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        assert_eq!(rows(&db), before);
+        let marked: i64 = db.query_row("SELECT count(*) FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(marked, 1);
+        let triggers: i64 = db.query_row("SELECT count(*) FROM sqlite_master WHERE name='remote_poll_disposition_owner_immutable'", [], |r| r.get(0)).unwrap();
+        assert_eq!(triggers, 1);
+    }
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    db.execute(&insert, []).unwrap();
+    assert_eq!(rows(&db).len(), 2);
+}

@@ -733,6 +733,9 @@ fn guidance(d: PollDisposition) -> &'static str {
         PollDisposition::HistoryUnknown => {
             "Publication history is unknown; inspect remote state before proceeding."
         }
+        PollDisposition::Unpublished => {
+            "The remote context is not published yet; item sync publishes it."
+        }
         PollDisposition::Nonconforming => {
             "Repair the remote context's canonical tree before materialization."
         }

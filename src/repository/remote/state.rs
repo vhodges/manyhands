@@ -341,7 +341,7 @@ const POLL_DISPOSITION_SCHEMA: &str = r#"
         remote_ref TEXT,
         kind TEXT CHECK(kind IN ('document','ticket')),
         item_id TEXT,
-        disposition TEXT NOT NULL CHECK(disposition IN ('current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','history_unknown','not_reached')),
+        disposition TEXT NOT NULL CHECK(disposition IN ('current','fast_forwarded','local_ahead','diverged','dirty','conflicted','inaccessible','materialized','nonconforming','blocked_by_local_state','materialization_incomplete','malformed','remotely_deleted','history_unknown','unpublished','not_reached')),
         before_oid TEXT CHECK(length(before_oid)=40 AND before_oid NOT GLOB '*[^0-9a-f]*'),
         after_oid TEXT CHECK(length(after_oid)=40 AND after_oid NOT GLOB '*[^0-9a-f]*'),
         observed_at INTEGER NOT NULL CHECK(typeof(observed_at)='integer' AND observed_at BETWEEN 0 AND 253402300799),
@@ -397,6 +397,17 @@ fn migrate_poll_dispositions(tx: &Transaction<'_>) -> Result<(), RepositoryError
         // completion fallback. Freeze it once during migration; its original
         // retry deadline is unknown and remains NULL. New rows never infer it.
         tx.execute("UPDATE remote_operation_records SET poll_completed_at=updated_at WHERE action='poll' AND poll_kind='update' AND phase IN ('completed','cancelled','failed','interrupted')",[]).map_err(|_|recovery_required())?;
+    }
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS registry_migrations (name TEXT PRIMARY KEY);")
+        .map_err(|_| recovery_required())?;
+    let marked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM registry_migrations WHERE name='remote_poll_dispositions_unpublished_v1')",[],|r|r.get(0)).map_err(|_|recovery_required())?;
+    if !marked {
+        // The CHECK gained `unpublished`; rebuild a table that predates it. The
+        // owner trigger is dropped first so the rename cannot rewrite its body.
+        if objects == 2 {
+            tx.execute_batch(&format!("DROP TRIGGER remote_poll_disposition_owner_immutable; ALTER TABLE remote_poll_dispositions RENAME TO remote_poll_dispositions_before_unpublished; {POLL_DISPOSITION_SCHEMA}; INSERT INTO remote_poll_dispositions SELECT * FROM remote_poll_dispositions_before_unpublished; DROP TABLE remote_poll_dispositions_before_unpublished;")).map_err(|_|recovery_required())?;
+        }
+        tx.execute("INSERT INTO registry_migrations(name) VALUES('remote_poll_dispositions_unpublished_v1')",[]).map_err(|_|recovery_required())?;
     }
     validate_poll_disposition_schema(tx)?;
     Ok(())
@@ -463,6 +474,7 @@ fn disposition_name(d: super::poll::PollDisposition) -> &'static str {
         Malformed => "malformed",
         RemotelyDeleted => "remotely_deleted",
         HistoryUnknown => "history_unknown",
+        Unpublished => "unpublished",
         NotReached => "not_reached",
     }
 }
@@ -483,6 +495,7 @@ fn disposition(value: &str) -> Result<super::poll::PollDisposition, RepositoryEr
         "malformed" => Malformed,
         "remotely_deleted" => RemotelyDeleted,
         "history_unknown" => HistoryUnknown,
+        "unpublished" => Unpublished,
         "not_reached" => NotReached,
         _ => return Err(recovery_required()),
     })

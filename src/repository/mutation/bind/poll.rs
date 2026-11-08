@@ -299,6 +299,7 @@ fn dto_disposition(disposition: PollDisposition) -> PollTargetDisposition {
         PollDisposition::Malformed => PollTargetDisposition::Malformed,
         PollDisposition::RemotelyDeleted => PollTargetDisposition::RemotelyDeleted,
         PollDisposition::HistoryUnknown => PollTargetDisposition::HistoryUnknown,
+        PollDisposition::Unpublished => PollTargetDisposition::Unpublished,
         PollDisposition::NotReached => PollTargetDisposition::NotReached,
     }
 }
