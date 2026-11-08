@@ -202,6 +202,11 @@ impl CacheLoss {
         lost.registry()
             .execute("UPDATE remote_polling_state SET history_unknown=1", [])
             .unwrap();
+        // A complete fetch that advertised nothing: absence is read from a
+        // current batch.
+        lost.registry()
+            .execute("INSERT INTO remote_observation_batches(repository_id,remote_name,primary_branch,configuration_generation,observed_at,is_current) SELECT repository_id,remote_name,primary_branch,configuration_generation,100,1 FROM remote_polling_state WHERE remote_name IS NOT NULL", [])
+            .unwrap();
         lost
     }
 
@@ -251,9 +256,8 @@ impl CacheLoss {
 
     fn move_generation(&self) {
         self.registry()
-            .execute(
-                "UPDATE remote_polling_state SET configuration_generation=configuration_generation+1",
-                [],
+            .execute_batch(
+                "UPDATE remote_polling_state SET configuration_generation=configuration_generation+1; UPDATE remote_observation_batches SET configuration_generation=configuration_generation+1",
             )
             .unwrap();
     }

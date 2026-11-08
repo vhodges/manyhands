@@ -1846,10 +1846,15 @@ fn assert_prepare_contract(
     );
 }
 
+/// The registry as a cache loss left it, then a complete fetch that
+/// advertised nothing: absence is read from a current batch.
 fn set_cache_loss(world: &World) {
-    rusqlite::Connection::open(world.data.path().join(manyhands::repository::REGISTRY_FILE))
-        .unwrap()
-        .execute("UPDATE remote_polling_state SET history_unknown=1", [])
+    let db =
+        rusqlite::Connection::open(world.data.path().join(manyhands::repository::REGISTRY_FILE))
+            .unwrap();
+    db.execute("UPDATE remote_polling_state SET history_unknown=1", [])
+        .unwrap();
+    db.execute("INSERT OR IGNORE INTO remote_observation_batches(repository_id,remote_name,primary_branch,configuration_generation,observed_at,is_current) SELECT repository_id,remote_name,primary_branch,configuration_generation,100,1 FROM remote_polling_state WHERE remote_name IS NOT NULL", [])
         .unwrap();
 }
 
