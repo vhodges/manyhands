@@ -247,8 +247,8 @@ async fn create_in_an_empty_directory_previews_nothing_then_creates_and_refreshe
     shell.until_ended(id, cx).await;
     assert_eq!(finished(&shell, id, cx), (Outcome::Success, ResultCode::Ok));
     assert!(root.join(CONFIG_PATH).is_file());
-    assert_eq!(registered(&shell), [key(&root)]);
     until_onboarded(&shell, &root, cx).await;
+    assert_eq!(registered(&shell), [key(&root)]);
     assert_eq!(listed(&shell, cx), [key(&root)]);
     assert_eq!(background_refreshes(&shell, &root, cx), 1);
     assert!(!shell.present("confirm-dialog", cx));
@@ -519,8 +519,8 @@ async fn pressing_confirm_twice_creates_one_repository(cx: &mut TestAppContext) 
         .filter(|kind| *kind == JobKind::RepoCreate)
         .count();
     assert_eq!(ran, 1);
-    assert_eq!(registered(&shell), [key(&root)]);
     until_onboarded(&shell, &root, cx).await;
+    assert_eq!(registered(&shell), [key(&root)]);
     assert_eq!(background_refreshes(&shell, &root, cx), 1);
 }
 

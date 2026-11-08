@@ -12,7 +12,56 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
-### Current Shared-Clock Gate Standing — 2026-11-08 UTC
+### Current Settings-Test Ordering Standing — 2026-11-08 UTC
+
+**Controller-authorized test-only correction: targeted GREEN; whole desktop and
+runtime acceptance still BLOCKED.** Entry and postmerge HEAD are both
+**`91f2561816c7da265c330c423c69b78e637b3741`**. Fresh `git fetch origin` found no
+new main commits; `git merge origin/main` was already up to date against
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**, ancestry exit0. No merge commit,
+conflict, main-checkout edit or incoming Rust/schema/build change.
+
+Exactly two existing `until_onboarded` awaits moved before the post-create
+`registered()` assertions in `src/desktop/view/settings/repositories_tests.rs`.
+Every assertion remains verbatim, including the preview's empty registry read.
+No helper, other test, harness, production, build, timing or lock change. Source
+comparison against runtime **`64a6c2495d999916823346b8e1fec5ce9e328e4c`** finds only
+that cfg(test)/desktop-test-support file changed; current file SHA-256 is
+**`7826c56838723da437ea4578deee8e63502170ea08881bd55abf9528d13817ad`**.
+
+The source proves foreground `Finished` precedes automatic refresh submission;
+`until_ended` does not await that follow-up. This removes an avoidable unjoined
+overlap, **not a proven historical Busy cause or performance fix**. The first
+test's saved helper-line panic does not identify its preview versus post-create
+call. Coordination versus SQL Busy origin remains unknown. Existing onboarding
+semantics remain background `Finished` of any outcome plus visible membership;
+refresh requires registration and cannot create one. Green add/partial cases
+remain untouched, not silently swept into scope.
+
+| Evidence on the corrected test source | Actual standing |
+| --- | --- |
+| Both changed full names, one exact desktop command | **2 passed/0 failed/1578 filtered**,1.92s tests; exit0,20.679633274s elapsed. |
+| Fresh strict all-target/all-feature locked Clippy | **exit0**,9.996290582s elapsed/9.72s Cargo. |
+| Fresh whole-tree fmt-check | **exit0**,17.871146450s elapsed. |
+| Unchanged library and check, retained NOT rerun | Library **1530/0/160 filtered**,1865.59s tests; check exit0,4.165545239s elapsed. |
+| Prior whole desktop, still FAILED | **1578/2/0 filtered**,2123.31s tests at64a6; exact2/0 is not whole1580/0. |
+
+Recorded whole-desktop failure is the existing RED; no ritual unchanged RED run,
+fabricated Busy, new test, hold gate, retry, probe or profiling was added. Known
+test/Clippy/fmt command process groups exited; no jobs remain. New-only evidence:
+**`/tmp/opencode/task8-settings-order-*`**, small manifest
+**`task8-settings-order-evidence.sha256`**. Old evidence remains immutable.
+
+**Next barrier:** SAME whole SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`, then SAME whole
+QUALITY `ses_e4c8be2f1ffegiPUEUuB0QgyBE`, before controller-authorized changed whole
+desktop/remaining gates. No postreview gates ran here. CLI units/all27 fast
+integrations, selected local-sync160, ten SSH targets, both smokes and final
+runtime-evidence reviews/owner handoff remain owed on64a6/current source.
+WAIT60s/GPUI15s-per-park/POLL10ms/default threads, the one-line clock correction,
+production safety limits and retained44/D5/D6/native exclusions are unchanged.
+Ticket remains **implementing / runtime BLOCKED**, not feature-complete/review-ready.
+
+### Prior Shared-Clock Gate Standing — 2026-11-08 UTC
 
 **Owner-approved/source-reviewed shared correction; fresh final gates STOPPED at
 desktop Busy failures.** Current frozen source **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**.
@@ -9388,3 +9437,95 @@ No ID/extra build/status save/source-golden-schema-dependency change/push/PR/
 main/close/other-worktree/real key-profile-draft-context operation. Known gate
 runner/Cargo processes exited; no jobs. Ticket **implementing / runtime BLOCKED**,
 not feature-complete/review-ready; final runtime reviews/owner handoff remain owed.
+
+## Task 8 — Two Settings-Test Await Moves, 2026-11-08 UTC
+
+### Controller Authority And Fresh Merge Preflight
+
+Controller authorized only the two existing await moves after the bounded
+source-only diagnosis, under the approved Cycle implementation, not new product
+policy or production lock semantics. Clean entry and postmerge HEAD:
+**`91f2561816c7da265c330c423c69b78e637b3741`**, parent/runtime source
+**`64a6c2495d999916823346b8e1fec5ce9e328e4c`**. At
+**2026-11-08T00:18:22.295030Z**, fresh `git fetch origin` succeeded; main remained
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**, no incoming main commits/files.
+Current main AGENTS read; `git merge origin/main` at00:18:39.385725Z answered
+already up to date, ancestry exit0. No new merge parents/conflicts. Registered
+main checkout was clean/behind170, left unchanged; all implementation stays in
+this ticket worktree. No rebase, other-worktree edit or additional agent was used.
+
+### Source Delta And Limits
+
+Only `src/desktop/view/settings/repositories_tests.rs` changed among source,
+test and build inputs relative to64a6: existing awaits now precede the post-create
+registry assertions in
+`create_in_an_empty_directory_previews_nothing_then_creates_and_refreshes` and
+`pressing_confirm_twice_creates_one_repository`. Every assertion line is retained
+verbatim and in order, including preview registry-empty, foreground success,
+root configuration, single request/execution, registry contents, visible list,
+one background refresh and dialog state. File SHA-256:
+**`ed3434feb313256622474b259faa57528a84a4abc9e14306b767558ec8763253`** →
+**`7826c56838723da437ea4578deee8e63502170ea08881bd55abf9528d13817ad`**.
+The module remains `#[cfg(all(test, feature = "desktop-test-support"))]`.
+
+Source trace: worker.rs1034–1059 sends foreground `Finished` before submitting
+automatic `IndexRefresh`; harness.rs322–332 waits only for the foreground request.
+The direct registry oracle enters read_session's shared coordination guard;
+follow-up refresh claim takes the exclusive guard. The old order never guaranteed
+registration before background work. Refresh requires registration, cannot create
+one, and the unchanged onboarding helper waits for background `Finished` of ANY
+outcome plus visible membership. Moving that wait removes avoidable overlap,
+without retries/error suppression or changed assertions/production limits.
+
+**Historical Busy origin remains UNKNOWN**: coordination timeout and SQL busy/
+locked map to the same saved ReadError shape. The first test has preview and
+post-create calls; helper108 alone does not identify which failed. No clock,
+performance, load, suspend or infrastructure explanation is claimed. The green
+add/partial-retry cases' latent gap is not authority for a sweep. Existing hold-job
+counterexample was source-inspected only, not added/run. Owner-stopped profiling
+stays stopped; no cache/read-phase instrumentation, fabricated answers or new API.
+
+### Actual Bounded Verification
+
+Existing whole desktop **1578 passed/2 failed**,2123.31s at64a6 is the RED retained
+verbatim. No unchanged failed-case/whole-binary RED rerun was performed. Exactly
+once after both moves, default threads/no diagnostic or golden override:
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands -- desktop::view::settings::repositories::tests::create_in_an_empty_directory_previews_nothing_then_creates_and_refreshes desktop::view::settings::repositories::tests::pressing_confirm_twice_creates_one_repository --exact
+devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings
+devenv shell -- cargo fmt --check
+```
+
+| Command | UTC start → end, 2026-11-08 | Actual result |
+| --- | --- | --- |
+| Exact two desktop cases | 00:19:36.375147Z →00:19:57.054767Z | **exit0;2 passed/0 failed/0 ignored/0 measured/1578 filtered**,1.92s tests,20.679633274s elapsed; compiled test profile18.46s. |
+| Strict whole-tree Clippy | 00:20:03.844339Z →00:20:13.840622Z | **exit0**,9.996290582s elapsed/9.72s Cargo. |
+| Whole-tree fmt-check | 00:20:03.857951Z →00:20:21.729087Z | **exit0**,17.871146450s elapsed. |
+
+Literal argv/full raw logs/exit/time receipts and parsed names/counts are new-only
+**`/tmp/opencode/task8-settings-order-*`**. Source hash still matches after gates.
+Production64a6, build/dependency/schema inputs, one-line clock fix,3s owner-staleness
+cutoff,1s heartbeat and250ms coordination bound remain unchanged, as do SQL/lease/consent limits and
+WAIT60s/GPUI15s/POLL10ms. No `cargo check`/library/full desktop/CLI/fast/SSH/smoke
+gate was rerun.
+Retain current library **1530/0/160 filtered,1865.59s** and check
+**exit0,4.165545239s**; they were NOT rerun. Prior whole desktop stays FAILED;
+exact2/0 does not combine with1578/2 into whole1580/0. All e6bc/d49/fb6 baselines
+and original failed/targeted scopes above remain unchanged.
+
+At00:21:17.464413Z, all three known command process groups were absent; no jobs.
+Old clock-final28 manifest SHA-256 remains
+**`5286472b99402133cb7d38f8263253bca3c9863001428e60f6e9889d4939edf9`**;
+no older runner/log/manifest rewritten, no bulk input inventory. Only this ledger's
+current standing/append, the existing canonical comment append (original ID/parent/
+creation time/full prior body preserved), and the one cfg(test) file are committed.
+No push/PR/native/main/closure/status save/new ID/real profile or cleanup operation.
+
+**Barrier remains:** return unpushed full HEAD/delta and small evidence manifest
+to controller for SAME whole SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` THEN SAME whole
+QUALITY `ses_e4c8be2f1ffegiPUEUuB0QgyBE`. Changed whole desktop and unrun remaining
+gates may follow only after that review/authorization; none ran here. CLI units/
+all27 integrations/local-sync160/ten SSH targets/both smokes/final runtime-evidence
+reviews and owner handoff remain owed on64a6/current. Ticket **implementing /
+runtime BLOCKED**, not feature-complete/review-ready.

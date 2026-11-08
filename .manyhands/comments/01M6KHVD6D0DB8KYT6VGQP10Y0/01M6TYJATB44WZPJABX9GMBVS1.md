@@ -713,3 +713,65 @@ other-worktree/real profile-key-context-draft action. Known gate processes exite
 no jobs. **FIRSTFAIL barrier restored**, controller authorization required. Ticket
 **implementing / runtime BLOCKED**, not feature-complete/review-ready; final runtime
 reviews/owner handoff remain owed.
+
+## Follow-up — Controller-Authorized Settings-Test Ordering, 2026-11-08 UTC
+
+Fresh approved preflight: clean entry/postmerge
+**`91f2561816c7da265c330c423c69b78e637b3741`**, parent/runtime
+**`64a6c2495d999916823346b8e1fec5ce9e328e4c`**. `git fetch origin` at
+**2026-11-08T00:18:22.295030Z** succeeded; current main stayed
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**, no incoming main commits/files.
+Current main AGENTS read; `git merge origin/main` was already up to date,
+ancestry exit0, no merge commit/conflict or main/other-worktree edit/rebase.
+
+Controller authorized exactly two TEST-ONLY existing `until_onboarded` moves,
+before post-create `registered()` assertions, in
+`src/desktop/view/settings/repositories_tests.rs`:
+
+- `create_in_an_empty_directory_previews_nothing_then_creates_and_refreshes`
+- `pressing_confirm_twice_creates_one_repository`
+
+Every existing assertion retained verbatim/in order, including preview registry
+empty/foreground success/root config/single request+execution/registry/list/one
+background refresh/dialog state. No helper, other case, harness or production edit.
+Source/build comparison against64a6 finds only this cfg(test)/desktop-test-support
+file changed, SHA-256 **`7826c56838723da437ea4578deee8e63502170ea08881bd55abf9528d13817ad`**.
+
+Source-proven gap: worker sends foreground `Finished` before automatic refresh
+submission; `until_ended` waits only foreground, not refresh. Direct registry reads
+take the shared coordination guard; refresh claim takes the exclusive guard.
+Original ordering never guaranteed registration before background work; refresh
+requires registration and cannot create it. Existing onboarding semantics remain
+background `Finished` ANY outcome plus visible list, not a new success assertion.
+This removes avoidable unjoined overlap, **not a historical Busy/performance fix**.
+Actual Busy origin (coordination vs SQL) remains UNKNOWN; the first test's helper
+line does not identify preview versus post-create read. No clock/load/suspend
+attribution, retry/suppression/budget relaxation, instrumentation or profiling.
+Green add/partial-retry cases remain untouched. No new gate/canned-answer/test/API.
+
+Existing full desktop1578/2 at64a6 is retained RED, no ritual RED rerun. After both
+moves, exactly one default-thread full-name `--exact` Devenv command ran both:
+**2 passed/0 failed/0 ignored/0 measured/1578 filtered**,1.92s tests,
+**exit0,20.679633274s** elapsed,00:19:36.375147Z→00:19:57.054767Z.
+Fresh `cargo clippy --all-targets --all-features --locked -- -D warnings` through
+Devenv **exit0,9.996290582s**; fresh Devenv `cargo fmt --check`
+**exit0,17.871146450s**. Literal commands/raw logs/receipts/counts/source hashes:
+new-only **`/tmp/opencode/task8-settings-order-*`**, small
+**`task8-settings-order-evidence.sha256`** manifest. Old clock-final28 manifest
+digest **`5286472b99402133cb7d38f8263253bca3c9863001428e60f6e9889d4939edf9`** preserved.
+
+Current library **1530/0/160 filtered,1865.59s** and check
+**exit0,4.165545239s** retained NOT rerun; production64a6 and all safety/timing/build
+inputs unchanged. Prior full desktop **1578/2,2123.31s remains FAILED** until a
+reviewed changed whole run: exact2/0 is not whole1580/0. Olde6bc/d49/fb6 scopes stay
+historical. All three known command process groups exited; no jobs. No further
+Cargo/full desktop/CLI/fast/local-sync/SSH/smoke/native run, agent, push/PR/main/
+close/status save/new ID/real profile-key-context-draft operation. No additional
+agent was spawned.
+
+Return unpushed commit/full delta to controller: SAME whole SPEC
+**`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` THEN SAME whole QUALITY
+`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** before changed whole desktop/remaining gates.
+CLI units/all27 integrations/local-sync160/ten SSH targets/both smokes/final
+runtime-evidence reviews/owner handoff remain owed on64a6/current. Ticket remains
+**implementing / runtime BLOCKED**, not feature-complete/review-ready.
