@@ -556,3 +556,57 @@ Every command ran once, through Devenv, with `--locked`:
   - `busy` doesn't name its holder (vh-vsfbp);
   - after an identity change, a retired item's recreated context relies on
     its first push being non-forced.
+
+## Owner Code Review (2026-11-08) And Fixes
+
+The owner ran `/code-review medium` at `8b897110`. It made 10 findings,
+and the owner approved fixing all but one.
+
+**Fixes** (`48acc184` to `aa1ecef8`). Each finding was checked in the code
+before it was fixed, and the fixes were reviewed and approved:
+
+1. **`48acc184`:** `item resolve-history` refuses publish when a tracking
+   ref exists, answering `remote_branch_deleted` with the way out
+   `item republish`.
+2. **Same commit:** it also refuses when there is no current batch at the
+   current generation, answering `recovery_required` with the way out
+   `remote history`. A fetch must come first.
+3. **`ed75a71d`:** a forgetting `Plan` fence (`remote select`) left a stale
+   known digest, so the next `configure_endpoints` forgot again and undid
+   the owner's resolution. A forget now sets both digests to NULL. The
+   reviewer traced that every batch writer and operation reserver records a
+   digest first, so no real endpoint change is missed.
+4. **`b4cb1a71`:** the registry-wide cache-loss marker is retired only when
+   no repository is still flagged (`cache_loss_remains`, read in the same
+   transaction).
+5. **`b79c2028`:** a recovered registry's `remote_polling_state` had
+   `DEFAULT 1` in its schema text. Once the marker file is gone, the table
+   is rebuilt from its stored SQL with defaults 0, keeping rows, column
+   order and the registration trigger. It has no migration marker; the
+   state is its own gate.
+6. **`b72c4d26`:** if `ended_if_unresolved` can't end the operation, it
+   answers `recovery_required`, because the reservation is still held.
+7. **`94b2b67f`:** docs and tidy-up. The fence doc now describes the carry;
+   the second loop in `unresolved_contexts` was redundant and is removed;
+   the double snapshot read in `clear_cache_loss` is gone. Reusing
+   `active_contexts` elsewhere was skipped, because the semantics differ
+   (the id cross-check).
+- **`21054884`:** the contract and conformance fixtures gain a current
+  batch.
+- **`aa1ecef8`:** the review of fix 1 found a dead end: republish couldn't
+  follow its own way out. `republish_evidence` now treats HistoryUnknown +
+  tracking ref + a current batch not advertising the context as a
+  `Fetched` deletion, with `last_published` = the tracking OID, still
+  consent-gated. `remote history` adds `choices.republish` and a
+  `next: item republish … --prepare` line. The schema and golden are
+  updated.
+
+**Deferred: finding 4** (held rows read as `NeverPublished` while the plan
+is unavailable). It is display only, since no remote effect can run
+without a plan. It is noted for vh-ez4y9.
+
+**Tests:**
+- `--lib repository::remote:: repository::mutation` 601,
+  `mutation_confirmation` 183, `mutation_contract` 45, `read_contract` 73;
+- `--bin manyhands-cli history` 10, `recovery_foundation_gate` 52;
+- `cli_remote remote_history_repair_journey`, run alone: passed.
