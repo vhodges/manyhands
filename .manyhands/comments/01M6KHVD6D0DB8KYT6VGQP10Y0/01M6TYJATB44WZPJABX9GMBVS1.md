@@ -1042,3 +1042,83 @@ clean **unpushed**. Original ID/parent/time/entire body above preserved. All own
 foreground commands returned; no jobs/other agents. No status save/new ticket/ID/
 push/PR/main merge/close/native/real profile-key-context-draft/cleanup. Owner STOP
 profiling/optimization remains in force.
+
+## Follow-up — owner-selected headless remainder FAILED at registry schema oracle — 2026-11-08 UTC
+
+Owner: "Just run the one failing test, any fix there is not likely to cause a
+regression elsewhere". Exact A17 **1/0/1579 filtered,2.58s**,current rebuild38.11s,
+is sufficient for this test-only correction; **no whole desktop/another A17/other
+desktop/fast-library/green-static repeat is required or authorized**. Historical
+b84 whole1579/1,2142.63s,exit101 remains immutable; five onboarding cases passed
+there. No combination into fresh whole1580/0, no repeat added to the remainder.
+Other unrun gates are not waived.
+
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**
+then SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,zero findings,
+completeb84..7eda plus bounded687..7eda. Both explicitly accept owner exact selection.
+FIRSTFAIL was lifted only for once-serial unrun headless/local-sync/10 SSH/smokes,
+not final runtime acceptance. Sole gate owner, no agents/source fix/probe/profiling.
+
+Clean frozen test HEAD **`7eda8be7258859ab419fe2323eb7282d80af9cd0`**, unchanged
+production/library **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**, main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Accepted implementer's fresh
+unchanged-main/no-op preflight from68728b1a, no new fetch/merge or other-worktree/
+main edit. Only3 cfg-test paths differ from64a;16 relevant hashes unchanged. A17
+source hash**79a4a4392c11e61292140e2876b3875b4415b849d7da7e810f186171cafa52be**;
+assertions/actions/helpers/history/production unchanged. Exact-root Background
+IndexRefresh Finished still means ANY outcome, not success. Historical Busy
+initial/final/cache-versus-SQL origin unknown; no consent/performance/clock claim.
+
+Current library**1530/0/160 filtered,1865.59s** and check**exit0,4.165545239s** retained
+NOT rerun. New current consent-order strict Clippy**exit0,11.205811546s** and fmt
+**exit0,19.877930249s** reused NOT rerun. Consent16 manifest authenticated zero
+mismatches; prior onboarding-final17 and all34 older manifest/input-manifest
+digests preserved. No old artifact writes or huge input inventory.
+
+Exactly one first current-production CLI units+27-integration command ran with the
+controller's literal argv/default threads/no filters/new skips/retries/overrides;
+full argv is in ledger/results/handoff. **Cargo exit101** at first failed target
+`repository_enablement`; **26/28 binary footers** observed, **24 active-green,
+1 ignored-only,1 failed**. Aggregate**2459 passed/1 failed/1 ignored/0 filtered**,
+not whole-fast/all27 green. CLI units307/0, CLI477/0, read_contract72/0 and whole
+**mutation_replay384/0/0 filtered,925.11s** actually passed on current production64a;
+old exact1 is not the whole replay gate. All26 binary counts/times in ledger.
+
+`read_characterization` reports **0 passed/0 failed/1 ignored/0 filtered,0.00s**:
+`reads_of_a_thousand_item_repository_are_characterized`, existing opt-in
+characterization. **Not an active pass/nonzero coverage**; no ignored override or
+profiling run, coverage limitation unwaived. The failed target's102 passing cases
+are partial evidence, not a green target.
+
+Only failed case: **`registry_creates_repository_and_discovery_metadata_schema`**,
+**`tests/repository_enablement.rs:581:5`**, exact table-list assertion. Saved left66
+names versus right49,17 left-only/0 right-only; full message/names retained. This
+observed oracle mismatch does not establish a production migration defect or the
+correct oracle change. **No source investigation/probe/fix/retry/schema/golden/
+expectation change or infrastructure waiver**. Failure completion receipt
+**2026-11-08T03:49:21.890387Z**,sequence2655, not an internal-phase timestamp.
+
+UTC**2026-11-08T03:12:30.077911Z→03:49:41.370160Z**, REALTIME2231.292249058s,
+MONOTONIC2231.292231918s, BOOTTIME2231.292231435s. PM-only interval query zero
+matches/exit1/no-match/empty stderr: **no measured suspend**. Raw215043 bytes and
+2706 receipt rows cover all2461 unique completions/all26 footers. Receipt clocks
+are not case starts/phases; no full/user journal/power/sleep/progress polling.
+
+**FIRSTFAIL barrier restored** at the new headless failure. **NOT RUN:**current
+`session_credentials`/`shared_key_registry`; selected local-sync160; all10 whole
+SSH targets; both isolated smokes; SAME whole final runtime-evidence SPEC→QUALITY/
+controller-owner acceptance. No display/socket/profile/app activity or availability
+inference. Further execution/fix needs controller authorization. Existing ignored-
+only characterization scope remains unwaived. No desktop repeat is added back.
+
+New-only **`/tmp/opencode/task8-headless-final-20261108T030957Z/`** holds steering/
+reviews/lifted+restored barrier/source/reuse/raw/receipt/argv/counts/times/exits/
+power/analysis/coverage/handoff/final manifest. Retained44 C/L/S/essential/M1/Q1/enum/
+D5/D6/native/combinatorial limits unwaived; no all-essential/full-pass/performance
+claim. WAIT60s/GPUI15s-per-park/POLL10ms/default threads/production safety unchanged;
+owner STOP profiling/optimization/performance-ticket work retained. Only owned
+ledger/current standing/this append checkpointed with coauthor; original ID/parent/
+creation time/entire69172-byte prior body preserved. Clean **UNPUSHED**, known gate
+PIDs exited/no jobs; no source/golden/schema/dependency edit/new ID/status save/
+push/PR/merge/close/native/real profile-key-context-draft/cleanup action. Ticket
+**implementing / runtime BLOCKED**, not feature-complete/review-ready.

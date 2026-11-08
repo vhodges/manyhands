@@ -12,67 +12,68 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
-### Current A17 Startup-Oracle Ordering Standing — 2026-11-08 UTC
+### Current Owner-Selected Headless Gate Standing — 2026-11-08 UTC
 
-**Owner-directed exact A17 follow-up GREEN; SAME SPEC then QUALITY source review
-pending, remaining runtime gates owed.** Owner's original wording:
-"Just run the one failing test, any fix there is not likely to cause a regression elsewhere".
-This supersedes the whole-desktop-repeat requirement for this test-only correction,
-not the other unrun gates. No fresh whole desktop run is required or claimed.
+**Source-reviewed A17 exact follow-up accepted under owner selection; first current
+headless command FAILED at repository_enablement. Runtime BLOCKED.** Clean frozen
+test source **`7eda8be7258859ab419fe2323eb7282d80af9cd0`**, unchanged production/library
+**`64a6c2495d999916823346b8e1fec5ce9e328e4c`**, known main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Accepted implementer's fresh
+unchanged-main/no-op preflight from68728b1a; no new fetch/merge while frozen.
 
-Clean entry/postmerge **`68728b1a8effd55ca258fa936339274aa9f58b97`**; fresh
-`git fetch origin` found no incoming main commits/files, and `git merge origin/main`
-was a no-op against **`d70142b63a952f5e1aade369e0cd654ca9a03617`**, ancestry exit0.
-No conflicts, rebase, merge commit, main-checkout or other-worktree edit.
+Owner: "Just run the one failing test, any fix there is not likely to cause a
+regression elsewhere". The one exact A17 **1/0/1579 filtered,2.58s** suffices for
+this cfg-test correction. **No whole desktop/another A17/other desktop test or
+fast-library/static repeat is owed or authorized.** Historical b84 whole1579/1,
+2142.63s,exit101 remains immutable, never combined into a fresh whole1580/0. Five
+reviewed onboarding cases actually passed in that historical whole run. This
+selection does **not** waive the remaining headless/local-sync/SSH/smoke gates.
 
-Only additional source versus **`b84bb707228ea7231ea5f255ed3e24e48cea4f3d`** is
-`src/desktop/view/lifecycle/privacy_consent_tests.rs`: import `Lane`, then use
-existing `Shell::until` with `.any` over root-matched Background IndexRefresh
-Finished of **ANY outcome** before the stranded-close test's initial raw `step`.
-Empty history cannot pass. All existing assertions/actions/order, final `step`,
-Accepted request/main checks, allowlist/history, `until_idle` and raw helper remain
-verbatim; reversing just the import/wait restores the b84 file byte-for-byte.
-Request history is retained: waiting does not conceal forbidden requests.
+Controller reports SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR**
+then SAME QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,zero findings,
+completeb84..7eda and bounded687..7eda, explicitly accepting owner exact selection.
+Controller lifted FIRSTFAIL only for the once-only unrun remainder, not final
+runtime acceptance. The A17 wait retains request history/assertions/actions and
+still means root-specific Background IndexRefresh Finished ANY outcome, not refresh
+success. Historical initial/final/cache-versus-SQL Busy origin remains unknown;
+no performance fix or consent-policy violation is claimed.
 
 | Current evidence | Actual standing |
 | --- | --- |
-| One exact changed A17 case, default threads | **Exit0;1 passed/0 failed/0 ignored/1579 filtered**,2.58s tests;40.984544399s measured elapsed. Cargo rebuilt the current binary,38.11s; not a zero-test run. |
-| Fresh strict whole-tree Clippy, once | **Exit0**,11.205811546s elapsed; all targets/features, locked, `-D warnings`. |
-| Fresh whole-tree fmt-check, once | **Exit0**,19.877930249s elapsed; no formatting edits. |
-| Unchanged library/check, retained NOT rerun | **1530/0/160 filtered**,1865.59s tests; check exit0,4.165545239s. Production/library remains **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**. |
-| Historical whole desktop at b84, immutable FAILED result | **1579/1/0 filtered**,2142.63s tests;exit101. Five reviewed onboarding cases passed there. Exact1/0 is not a fresh whole1580/0. |
+| First current CLI units +27 integration selection, once | **Cargo exit101**;26/28 binary footers observed:24 active-green,1 ignored-only,1 failed. Aggregate **2459 passed/1 failed/1 ignored**,0 filtered;2231.292231918s monotonic. |
+| Whole mutation_replay, actually run | **384/0/0 ignored/0 filtered**,925.11s; old exact1 is not the gate substitute. |
+| Failed repository_enablement target | **102 passed/1 failed/0 ignored/0 filtered**,61.35s. `registry_creates_repository_and_discovery_metadata_schema`, `tests/repository_enablement.rs:581:5`, exact table-list assertion:66 actual versus49 expected,17 actual-only names. |
+| read_characterization, ignored-only | **0 passed/0 failed/1 ignored/0 filtered**,0.00s; existing opt-in characterization is **not active/nonzero coverage**. No override/profiling run authorized. |
+| Owner-selected exact A17, retained NOT rerun | **Exit0;1/0/1579 filtered**,2.58s tests;40.984544399s elapsed,38.11s rebuild. Not a fresh whole desktop pass. |
+| Current strict Clippy/fmt, reused NOT rerun | **Exit0**,11.205811546s /19.877930249s from authenticated consent-order evidence. |
+| Current library/check, retained NOT rerun | **1530/0/160 filtered,1865.59s**; check **exit0,4.165545239s**,unchanged production/non-cfg-test inputs. |
 
-Source proves the initial unjoined startup-read gap, **not the historical Busy
-origin**: helper76 could have been called at old265 or289; cache versus SQL origin
-remains unknown. Finished joins the full synchronous library return/heartbeat
-drop, not refresh success. No unauthorized-resume/consent-policy breach,
-performance fix or infrastructure causation is established.
+**FIRSTFAIL barrier restored at the new headless failure**; no source investigation,
+probe, fix, retry, infrastructure waiver or later gate. Saved table-list mismatch
+alone does not establish a migration defect or the correct oracle change. Current
+CLI307 and23 active integration targets completed green; the failed target's102
+passing cases do not make it green. Full26-target counts/times appear below.
 
-The prior six-launch source audit found only this direct-oracle hole: both
-operations cases already join identified jobs; move/posting use model or separate
-draft-store oracles; the conflict-restart case observes its row then waits idle
-before direct repository reads. No further audit, probe, profiling or other test ran.
-No production/helper/API/framework/build/schema/clock/TTL/lease/cache/SQL/consent/
-WAIT60s/GPUI15s-per-park/POLL10ms/default-thread change.
+**NOT RUN:**current `session_credentials`/`shared_key_registry` integration binaries;
+selected local-sync module (160 previously filtered); all10 SSH targets; both
+smokes; final runtime-evidence SAME SPEC→QUALITY/controller-owner acceptance.
+Existing ignored-only characterization coverage remains unwaived. No whole desktop
+repeat is added back to this remainder. No display/socket/profile/app action.
 
-Next controller checkpoint: SAME SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, THEN SAME
-QUALITY **`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** on this delta. After source clearance,
-owner steering permits resuming the unrun controller-owned checks **without
-another whole desktop run**. CLI units/all27 integrations including whole
-mutation_replay384, selected local-sync160, ten SSH targets, both smokes and final
-runtime-evidence reviews remain owed; none ran here. Retained44/D5/D6/native
-limits stand. Ticket **implementing**, not full-pass/feature-complete/review-ready.
+UTC**2026-11-08T03:12:30.077911Z→03:49:41.370160Z**, REALTIME2231.292249058s,
+MONOTONIC2231.292231918s, BOOTTIME2231.292231435s. Interval kernel PM query:zero
+matches/exit1/no-match/empty stderr; no measured suspend. Raw215043 bytes/2706
+receipts cover2461 named completions. Receipt clocks are not case starts/phases.
 
-New-only evidence: **`/tmp/opencode/task8-consent-order-20261108T024734Z/`**,
-including preflight, exact literal argv/raw/result/rebuilt-binary hash, static
-logs/results, source proof/patch, prior audit classification, handoff and manifest.
-Owned source SHA-256 **`79a4a4392c11e61292140e2876b3875b4415b849d7da7e810f186171cafa52be`**;
-all other source/build inputs unchanged. Latest prior17-artifact manifest remains
-**`b71e9c2f8bda984f088f7c034ff342aa460c519f87f605cdf6f3d4be73197906`**,
-controller-verified zero mismatches; no old evidence overwritten. All owned
-foreground commands returned; no jobs. Only this cfg-test file plus owned
-ledger/comment checkpoint committed with coauthor, unpushed. No other tests,
-agents, status save, push/PR/close/native or real-profile/key/context/draft action.
+New-only **`/tmp/opencode/task8-headless-final-20261108T030957Z/`** stores owner/review/
+barrier/reuse/source16-hash/raw/results/coverage/failure/power/handoff/manifest proof;
+34 older manifest/input-manifest digests preserved, consent16 authenticated, no
+old artifact overwrite or huge inventory. WAIT60s/GPUI15s-per-park/POLL10ms/default
+threads and production safety remain unchanged; profiling/optimization remains
+owner-stopped. Retained44 C/L/S/essential/M1/Q1/enum/D5/D6/native/combinatorial limits
+stand. Metadata-only ledger/comment append, original comment ID/parent/time/full
+body preserved, coauthor; clean **UNPUSHED**, no owned jobs. Ticket **implementing /
+runtime BLOCKED**, not full-pass/feature-complete/review-ready.
 
 ### Prior Onboarding-Oracle Correction Standing — 2026-11-08 UTC
 
@@ -10096,3 +10097,178 @@ append are checkpointed with coauthor, clean and **unpushed**. Original comment
 ID/parent/time/entire prior body preserved. All foreground commands returned; no
 owned jobs. No status save/new ID/ticket/push/PR/main merge/close/native or real
 profile/key/context/draft/worktree-cleanup action.
+
+## Task 8 — Owner-Selected Headless Remainder Failed At Registry Schema Oracle
+
+### Authority, Frozen Scope And Retained Evidence — 2026-11-08 UTC
+
+Owner steering: "Just run the one failing test, any fix there is not likely to
+cause a regression elsewhere". The controller accepted A17's test-only startup
+join plus **one exact1/0/1579 filtered,2.58s** follow-up on
+**`7eda8be7258859ab419fe2323eb7282d80af9cd0`**. Historical whole desktop1579/1 at
+**`b84bb707228ea7231ea5f255ed3e24e48cea4f3d`**,2142.63s,exit101 stays unchanged;
+five onboarding cases actually passed there. Exact1/0 is **not** combined with it
+into a fresh whole1580/0. **No whole desktop or A17 repeat is required/authorized
+for this correction**, and the old whole failure is not a repeat blocker. Other
+unrun checks remain required. No desktop/library-fast/static test was rerun here.
+
+SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd` SOURCE CLEAR** then SAME QUALITY
+**`ses_e4c8be2f1ffegiPUEUuB0QgyBE` QUALITY/SOURCE PASS**,zero findings, complete
+b84..7eda plus bounded687..7eda, per controller. Both explicitly require no whole
+desktop/broad regression for this correction under owner selection. Controller
+lifted FIRSTFAIL **only** for once-serial unrun headless/local-sync/10 SSH/smokes;
+these are source reviews, not final runtime-evidence acceptance. Sole gate owner,
+no agents. No changed authorization for profiling/optimization/performance tickets.
+
+Clean entry/frozen test source **`7eda8be7258859ab419fe2323eb7282d80af9cd0`**,
+production/library **`64a6c2495d999916823346b8e1fec5ce9e328e4c`**, known main
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Accepted implementer's fresh
+unchanged-main/no-op preflight from previous verifier metadata
+**`68728b1a8effd55ca258fa936339274aa9f58b97`**; no new fetch/merge or other-worktree/
+main edit while frozen. Only three cfg-test files differ from production64a;
+sixteen relevant source/build hashes match preflight and remained unchanged.
+Latest source `src/desktop/view/lifecycle/privacy_consent_tests.rs` SHA-256
+**`79a4a4392c11e61292140e2876b3875b4415b849d7da7e810f186171cafa52be`**. No helper/
+production/assertion/action/clock/budget/lease/consent change. Operations history
+was captured before the local root-matched Background IndexRefresh Finished ANY
+outcome join, so forbidden-request history is retained. Historical initial versus
+final panic/cache-versus-SQL cause remains unknown; no consent/performance claim.
+
+Authenticated16-artifact consent manifest
+**`acf942bfb392bd8caa76f1d5c4b8ea63177e458f7760f5eacb332f984c6d693a`**,zero mismatches;
+read all three raw exact/Clippy/fmt logs. Preserved prior onboarding-final17 digest
+**`b71e9c2f8bda984f088f7c034ff342aa460c519f87f605cdf6f3d4be73197906`**.
+Thirty-four older manifest/input-manifest digests snapshotted without bulk source
+inventories or old artifact writes. Initial metadata-only manifest-count assertion
+omitted the prior input manifest; corrected before directory/gate creation, with
+no Rust/test command involved. Actual snapshot set is33 root manifests+consent1.
+
+**RETAINED/REUSED, NOT rerun:** current library**1530/0/160 filtered,1865.59s** from
+`task8-clock-final-fast-raw.log`; normal check**exit0,4.165545239s** from
+`task8-clock-final-check-raw.log`. The historical containing fast command later
+failed desktop, not a whole-fast pass. Current consent-order strict all-target/
+all-feature/locked Clippy `-D warnings` **exit0,11.205811546s** and fmt-check
+**exit0,19.877930249s** reused from unchanged7eda inputs. Exact A17's actual current
+rebuild38.11s/exact2.58s/elapsed40.984544399s remains targeted owner evidence only.
+Older e6bc/d49/fb6/exact/diagnostic scopes stay unchanged; current greens below
+are actual first current-production executions, not those baselines relabeled.
+
+### Exactly One First Current Headless Command
+
+```sh
+devenv shell -- cargo test --all-features --locked --bin manyhands-cli --test canonical_foundation --test cli --test discovery_rebuild --test drafts --test journal_rejection --test key_material --test key_storage --test local_authoring --test mutation_bridges --test mutation_confirmation --test mutation_contract --test mutation_relationships --test mutation_replay --test read_boundary --test read_characterization --test read_comments --test read_contract --test read_credentials --test read_items --test read_relationships --test read_repository --test read_status --test recovery_foundation_gate --test remote_reservation --test repository_enablement --test session_credentials --test shared_key_registry
+```
+
+**Cargo exit101**, default threads, no filters/retries/new skips/diagnostic/golden/
+fault overrides, no `--lib`/`--bins`/desktop duplication. Cargo naturally stopped
+after its first failed target, `repository_enablement`; no next serial command.
+**26 of28 binary footers observed:24 active-green,1 ignored-only,1 failed**.
+Aggregate observed completions **2459 passed/1 failed/1 ignored/0 filtered**;
+this partial command is **not** an all27-integration or fast-tier pass. Per-binary
+footer facts follow; binary child exit codes were not independently observed.
+All have0 filtered/measured; ignored0 except the explicit characterization row.
+
+| Binary | Passed | Failed | Ignored | Footer seconds |
+| --- | ---: | ---: | ---: | ---: |
+| manyhands-cli units | 307 | 0 | 0 | 0.47 |
+| canonical_foundation | 65 | 0 | 0 | 0.02 |
+| cli | 477 | 0 | 0 | 369.60 |
+| discovery_rebuild | 79 | 0 | 0 | 52.42 |
+| drafts | 48 | 0 | 0 | 6.55 |
+| journal_rejection | 26 | 0 | 0 | 18.35 |
+| key_material | 39 | 0 | 0 | 16.07 |
+| key_storage | 2 | 0 | 0 | 0.00 |
+| local_authoring | 142 | 0 | 0 | 122.59 |
+| mutation_bridges | 166 | 0 | 0 | 211.62 |
+| mutation_confirmation | 184 | 0 | 0 | 189.03 |
+| mutation_contract | 46 | 0 | 0 | 27.18 |
+| mutation_relationships | 27 | 0 | 0 | 17.59 |
+| mutation_replay | 384 | 0 | 0 | 925.11 |
+| read_boundary | 20 | 0 | 0 | 14.00 |
+| read_characterization — ignored-only, not active green | 0 | 0 | 1 | 0.00 |
+| read_comments | 23 | 0 | 0 | 11.67 |
+| read_contract | 72 | 0 | 0 | 11.56 |
+| read_credentials | 25 | 0 | 0 | 8.41 |
+| read_items | 82 | 0 | 0 | 93.28 |
+| read_relationships | 17 | 0 | 0 | 11.81 |
+| read_repository | 33 | 0 | 0 | 12.85 |
+| read_status | 28 | 0 | 0 | 15.26 |
+| recovery_foundation_gate | 52 | 0 | 0 | 25.97 |
+| remote_reservation | 13 | 0 | 0 | 7.62 |
+| repository_enablement — FAILED | 102 | 1 | 0 | 61.35 |
+
+Whole **mutation_replay384 actually passed**, not old exact1 as a substitute;
+its925.11s final gate was not cut at the interim15-minute cap. `read_contract72/0`
+and CLI477/0 now have current-production evidence. `read_characterization` has
+**no active pass**: saved raw line says
+`reads_of_a_thousand_item_repository_are_characterized ... ignored, a characterization, run on request with --ignored --nocapture`.
+No ignored-case override or profiling run was added. This zero-active/nonzero-
+coverage limitation remains unwaived; the libtest `ok` footer is not active green.
+
+### First Failed Target: Saved Output Only, No Investigation Or Fix
+
+`registry_creates_repository_and_discovery_metadata_schema` failed at
+**`tests/repository_enablement.rs:581:5`**, `assertion left == right failed`.
+Saved left table list has**66**names versus right**49**; **17 left-only,0 right-only**.
+The left-only names are retirement-related context/poll/observation tables; the
+full names and complete original assertion are preserved in raw/failure evidence.
+This is an observed table-list oracle mismatch, **not** proof of a production
+migration defect, the correct oracle change, or an infrastructure waiver. No
+source investigation/probe/fix/retry/schema/golden/expectation change follows.
+The failed target's102 passing cases remain partial evidence, not a target green.
+
+Failure completion receipt **2026-11-08T03:49:21.890387Z**,sequence2655. Command UTC
+**2026-11-08T03:12:30.077911Z→03:49:41.370160Z**; REALTIME**2231.292249058s**,
+MONOTONIC**2231.292231918s**, BOOTTIME**2231.292231435s**; boot-minus-mono
+approximately**−0.000000483s**. Interval-only kernel PM entry/exit query returned
+**zero matches,exit1/no-match,empty stderr**: **no measured suspend**. No user/full
+journal, power-policy/inhibitor, induced sleep, synthetic wait or progress polling.
+Blocking serial runner reached normal target/Cargo completion, then stopped.
+
+Verbatim raw**215043 bytes** and separate**2706 receipt rows** cover every byte and
+all**2461 unique completions**; all26 footers reconcile. Receipt clocks are **not
+case starts or internal phases**. Raw SHA-256
+**`8fd1ae7c744f16b7a7ad49770806cd406fb21b97a5107d8c60ddc054a68f9eac`**;
+receipt-sidecar SHA-256
+**`ce30b6dac94e9d712a7ecc696e55c0cb7f33e30cc0645b2e22b6d6a824a2274a`**.
+Source/main16-hash proof stayed frozen; known runner/Cargo PIDs exited.
+
+### Restored Barrier, Exact Remainder And Metadata Handoff
+
+**FIRSTFAIL barrier restored at repository_enablement.** Further execution/fix
+requires controller authorization; no later command was admitted. **NOT RUN:**
+
+- Current `session_credentials` and `shared_key_registry` integration binaries,
+  which Cargo never reached. They are not zero-case passes.
+- Selected `repository::local_sync::` library module,160 previously filtered;
+  no actual current selected-module count obtained.
+- All10 whole SSH targets: `ssh_transport`, `remote_observation`,
+  `remote_synchronization`, `remote_merge_recovery`, `remote_polling`, `cli_remote`,
+  `mutation_remote`, `document_promotion`, `ticket_closure`, `comment_publication`.
+- Both isolated standard CLI/desktop smokes. No scratch profile/display/socket/
+  app action; display availability was not tested or inferred.
+- SAME whole SPEC then QUALITY final runtime-evidence reviews/controller-owner
+  acceptance. Existing ignored-only characterization coverage also remains
+  unwaived; no owner-stopped profiling is resumed.
+
+No whole desktop/another A17/other desktop/fast-library/green-static repeat is
+added to this remainder. Current valid library/check/statics/A17 targeted evidence
+and24 active-green binary results remain preserved on unchanged inputs. No current
+all-essential/whole-fast/complete claim. Retained44 C/L/S/essential/M1/Q1/enum/D5/D6/
+native/combinatorial limits remain; no native run/waiver. WAIT60s/GPUI15s-per-park/
+POLL10ms/default threads and production safety/clock/cache/SQL/lease/consent limits
+unchanged; performance tickets/profiling/optimization remain untouched.
+
+New-only **`/tmp/opencode/task8-headless-final-20261108T030957Z/`** holds preflight/
+owner steering/source reviews/lifted+restored barrier, exact argv/source/reuse/
+raw/receipt/per-binary results/power, failure analysis/coverage/validation/checklist,
+precommit/metadata delta/commit/handoff and computed new-only manifest. All34 old
+manifest/input-manifest digests preserved, no broad linked-input inventory or old
+artifact writes. Only this execution ledger/current standing and canonical comment
+**`01M6TYJATB44WZPJABX9GMBVS1`** append are checkpointed with required coauthor;
+original ID/parent**`01M6SYJK4CJGHWKZC7MTP18GTA`**/creation time/full69172-byte prior
+body preserved. Source/hash/whitespace/known-main ancestry/merge-tree/prefix/no-jobs
+checks accompany handoff. Clean **UNPUSHED**, no owned jobs. Ticket **implementing /
+runtime BLOCKED**, not feature-complete/review-ready; no source/golden/schema/
+dependency change, agent, new ID/status save/push/PR/merge/close/native/real profile-
+key-context-draft/worktree cleanup action.
