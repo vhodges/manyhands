@@ -41,7 +41,10 @@ pub(crate) use outcomes::{
     ANOTHER_SHARE_HOLDS, BRANCH_DELETED, CHOOSE_A_KEY, CURRENT, KEY_LOCKED, NEEDS_ATTENTION,
     NEEDS_IDENTITY, NOWHERE_TO_SHARE, SHARED, check_host_text, may_be_waiting_for,
 };
-pub(crate) use outcomes::{CONFLICT_BANNER, primary_name, primary_subject, share_text};
+pub(crate) use outcomes::{
+    CONFLICT_BANNER, HISTORY_UNRESOLVED_BLOCKER, HISTORY_UNRESOLVED_GUIDANCE, primary_name,
+    primary_subject, share_text,
+};
 
 use super::{
     lifecycle_lock::{LifecycleLocks, LockKey},
@@ -1110,7 +1113,9 @@ pub(crate) fn recovery_control(kind: RecoveryActionKind) -> RecoveryControl {
         RecoveryActionKind::RequestCancel => RecoveryControl::Cancel,
         RecoveryActionKind::OperationResume => RecoveryControl::Resume,
         RecoveryActionKind::OperationAbandon => RecoveryControl::Abandon,
-        // Placeholder until the guidance text: Task 10 names `remote history`.
+        // `remote.history` has no button: repair runs in `manyhands-cli
+        // remote history` until the repair sheet (vh-ez4y9). Inspect opens
+        // the repository's details; the guidance text names the command.
         RecoveryActionKind::RepoInspect | RecoveryActionKind::RemoteHistory => {
             RecoveryControl::Inspect
         }
