@@ -25,6 +25,7 @@ pushes.
 | 7 | done | 8fe524c6 | da7c8118 | approved on re-review | `item resolve-history`, plus the repository-level `remote resolve-history`; `mutation_contract` red only on missing goldens (Task 9) |
 | 8 | done | 651774aa | f457e894 | approved on re-review | terminal `HistoryUnresolved`; `remote.history` recovery; `ResolveHistory` way out; refusal-blocker CHECK bounds widened, with rebuilds |
 | 9 | done | 68a0b743 | 45d5acda | approved | CLI `remote history`, `item resolve-history`, `remote resolve-history`; goldens and schemas; one SSH case `cli_remote remote_history_repair_journey` |
+| 10 | done | 59561bc0 | 56aba82d | approved | desktop guidance for unresolved history; Share failure `HistoryUnresolved` with no Retry |
 
 ## Test Filters (Task 0)
 
@@ -374,3 +375,26 @@ All commands passed:
   - `Stopped(host category)` offers no `host.approve`. This is probably
     unreachable, since host errors arrive as `Poll(Transport)`;
   - the progress line is written before `interrupt::reset()`.
+
+## Task 10 Results
+
+- Commits: `b00fde97`, and `56aba82d` (review fixes: the copy no longer
+  promises a future sheet; the test pins the exact offers for the Item and
+  Main targets).
+- Tests passed, each by name:
+  - `sync_unresolved_history_is_not_retried`;
+  - `recovery_actions_map_to_controls`, a named edit that adds the
+    `RemoteHistory` row;
+  - `unresolved_history_guides_to_the_command_line`.
+
+  clippy, fmt and check clean.
+- Decisions:
+  - **The Share failure.** A Share failure answered `recovery_required`
+    with `remote.history` becomes `SyncOutcome::HistoryUnresolved`. It
+    offers no Retry, Share or Republish; only Give up, while the record is
+    accepted.
+  - **Inspect stays the control.** `RemoteHistory` still maps to the Inspect
+    control. That's an interim choice until the sheet (vh-ez4y9).
+  - **The lifecycle text.** `HistoryUnresolved` and `ResolveHistory` share
+    `HISTORY_UNRESOLVED_GUIDANCE`. `HistoryUnknown` and `PollOnce` are
+    unchanged.
