@@ -683,6 +683,16 @@ fn configuration_identity_race(selection: bool) -> Result<(), FixtureError> {
             .observe_publication_remote(request(&case), &mut session),
     )?;
     let before = fixed(case.service.remote_snapshot(&case.root))?;
+    let batch = |case: &Case| -> Result<(i64, i64), FixtureError> {
+        fixed(rusqlite::Connection::open(case.directory.path().join("data").join(REGISTRY_FILE)))?
+            .query_row(
+                "SELECT observed_at,configuration_generation FROM remote_observation_batches WHERE is_current=1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(|_| FixtureError)
+    };
+    let batch_before = batch(&case)?;
     let root = case.root.clone();
     let data = case.directory.path().join("data");
     let guard = install_hook(move |point| {
@@ -711,6 +721,11 @@ fn configuration_identity_race(selection: bool) -> Result<(), FixtureError> {
         // A key selection fences without forgetting: the evidence of the
         // earlier pass is carried, and the raced pass publishes nothing.
         assert_eq!(after.observations(), before.observations());
+        // The current batch is the earlier pass copied into a newer
+        // generation (same observed_at), not a pass committed at the old one.
+        let batch_after = batch(&case)?;
+        assert_eq!(batch_after.0, batch_before.0);
+        assert!(batch_after.1 > batch_before.1);
     } else {
         // An endpoint edit is another remote: its evidence is forgotten.
         assert!(after.observations().is_empty());

@@ -21,6 +21,9 @@ use super::{
 /// An operation ID no journal holds.
 const UNKNOWN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FZZ";
 
+/// A second ticket, with a context of its own.
+const OTHER_TICKET: &str = "01ARZ3NDEKTSV4RRFFQ69G5FCM";
+
 const REFUSED: &str = "confirmation_not_found";
 
 const ROWS: [Row; 8] = [
@@ -146,7 +149,8 @@ const ROWS: [Row; 8] = [
             lost.world.data.path(),
             &|ask| match ask {
                 Ask::Same | Ask::Refused | Ask::Unconsented => lost.resolve_item(),
-                // Another item: it has no branch to resolve.
+                // Another item, which has a branch of its own to resolve, so the
+                // refusal is the mismatch and not a missing item.
                 Ask::Changed => lost.resolve_other_item(),
             },
             // A newer fetch moves the generation the preview showed.
@@ -189,8 +193,10 @@ impl CacheLoss {
         let selected = world.execute(REQUEST_1, Self::select(&world, Some("origin")));
         assert_eq!(selected.outcome, Outcome::Success);
         if with_ticket {
-            let created = world.execute(REQUEST_2, world.create(mutation::TICKET_NEW));
-            assert_eq!(created.outcome, Outcome::Success, "{}", created.message);
+            for (request, id) in [(REQUEST_2, mutation::TICKET_NEW), (REQUEST_3, OTHER_TICKET)] {
+                let created = world.execute(request, world.create(id));
+                assert_eq!(created.outcome, Outcome::Success, "{}", created.message);
+            }
         }
         let lost = Self { world };
         lost.registry()
@@ -230,7 +236,7 @@ impl CacheLoss {
     }
 
     fn resolve_other_item(&self) -> Mutation {
-        self.resolve(TICKET_A)
+        self.resolve(OTHER_TICKET)
     }
 
     fn clear(&self) -> Mutation {

@@ -2677,6 +2677,8 @@ pub(in super::super) fn configure_endpoints(
     // A digest change under an unchanged plan still fences, like a credentials
     // change; a changed plan fences through `Plan`.
     let plan_changed = read_policy(tx, id)?.plan.as_ref() != Some(plan);
+    // `Credentials` for a digest-only change still forgets: `configure_known`
+    // compares the digest with the known one.
     let change = if changed && !plan_changed {
         ConfigurationChange::Credentials
     } else {
