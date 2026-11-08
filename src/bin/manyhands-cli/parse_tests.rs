@@ -735,3 +735,56 @@ fn a_c3_verbs_usage_error_never_echoes_a_value() {
     };
     assert!(!detail.contains("SECRET-VALUE"), "{detail}");
 }
+
+#[test]
+fn the_history_verbs_take_their_choice_and_selectors() {
+    const ID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+    let args = run(&[
+        "item",
+        "resolve-history",
+        "--repo",
+        "r",
+        "--id",
+        ID,
+        "--as",
+        "release",
+        "--prepare",
+    ]);
+    assert_eq!(
+        args.get_one::<String>("as").map(String::as_str),
+        Some("release")
+    );
+    run(&["remote", "history", "--repo", "r"]);
+    run(&[
+        "remote",
+        "resolve-history",
+        "--repo",
+        "r",
+        "--request-id",
+        ID,
+    ]);
+    // The choice is one of two words, and is required.
+    let item = Some(("item", "resolve-history"));
+    usage(
+        &[
+            "item",
+            "resolve-history",
+            "--repo",
+            "r",
+            "--id",
+            ID,
+            "--as",
+            "retire",
+        ],
+        item,
+    );
+    usage(
+        &["item", "resolve-history", "--repo", "r", "--id", ID],
+        item,
+    );
+    // A read takes no request ID.
+    usage(
+        &["remote", "history", "--repo", "r", "--request-id", ID],
+        Some(("remote", "history")),
+    );
+}

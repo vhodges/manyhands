@@ -281,7 +281,7 @@ impl From<PollOnceInput> for PollOnceBinding {
     }
 }
 
-fn dto_disposition(disposition: PollDisposition) -> PollTargetDisposition {
+pub(crate) fn dto_disposition(disposition: PollDisposition) -> PollTargetDisposition {
     match disposition {
         PollDisposition::Current => PollTargetDisposition::Current,
         PollDisposition::FastForwarded => PollTargetDisposition::FastForwarded,
@@ -299,6 +299,7 @@ fn dto_disposition(disposition: PollDisposition) -> PollTargetDisposition {
         PollDisposition::Malformed => PollTargetDisposition::Malformed,
         PollDisposition::RemotelyDeleted => PollTargetDisposition::RemotelyDeleted,
         PollDisposition::HistoryUnknown => PollTargetDisposition::HistoryUnknown,
+        PollDisposition::Unpublished => PollTargetDisposition::Unpublished,
         PollDisposition::NotReached => PollTargetDisposition::NotReached,
     }
 }
@@ -350,7 +351,7 @@ pub(crate) fn ended_failed(journal: &JournalRow) -> bool {
 
 /// The code of a stored category, which a later call reads where the first
 /// call's error named the stop by its own code (design, Polling Verbs).
-fn category_code(category: RemoteOutcomeCategory) -> ResultCode {
+pub(crate) fn category_code(category: RemoteOutcomeCategory) -> ResultCode {
     match category {
         RemoteOutcomeCategory::Completed => ResultCode::Ok,
         RemoteOutcomeCategory::ConfigurationRequired => ResultCode::PublicationRemoteRequired,

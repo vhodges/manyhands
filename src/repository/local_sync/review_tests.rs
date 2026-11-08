@@ -369,7 +369,12 @@ fn local_resolution_id_is_reserved_across_repository_boundaries() {
             "remote" => {
                 let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
                 remote::state::with_transaction(&f.service, other.root.path(), |tx, id| {
-                    remote::state::configure(tx, id, Some(&plan), false)
+                    remote::state::configure(
+                        tx,
+                        id,
+                        Some(&plan),
+                        remote::state::ConfigurationChange::Plan,
+                    )
                 })
                 .unwrap();
                 let result = f.service.reserve_remote_operation(

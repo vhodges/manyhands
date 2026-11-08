@@ -589,15 +589,23 @@ fn check_c_a_verified_push_of_the_context_is_an_external_change() {
     assert_refused_and_left(&f, TICKET, RepositoryErrorKind::ExternalChange);
 }
 
-/// R-43: every re-selection of the remote leaves the publication history
-/// unknown for good. With no tracking ref and no commit of its own, the
-/// context is released.
+/// R-43: a change of the remote's identity leaves the publication history
+/// unknown. With no tracking ref and no commit of its own, the context is
+/// released.
 #[test]
 fn check_c_an_unknown_publication_history_with_no_tracking_ref_is_released() {
     let f = Fixture::new();
     f.select_origin();
-    f.select(None);
     f.edit(TICKET);
+    f.service
+        .add_remote(AddRemoteRequest {
+            root: f.root(),
+            name: "elsewhere".into(),
+            url: "ssh://fixture@localhost/elsewhere".into(),
+            operation_id: OperationId::new(),
+        })
+        .unwrap();
+    f.select(Some("elsewhere"));
     assert_eq!(
         f.evidence(TICKET),
         RemotePublicationEvidence::HistoryUnknown

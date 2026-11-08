@@ -306,6 +306,9 @@ pub(crate) enum SyncOutcome {
         next: ConflictNextDto,
     },
     BranchDeleted,
+    /// `recovery_required` with a `remote.history` action: the same request
+    /// would refuse again until the history is resolved outside the app.
+    HistoryUnresolved,
     NeedsUnlock,
     NeedsKey,
     /// The host the recovery names, when it names one (K-3).
@@ -390,6 +393,14 @@ fn classify_sync(envelope: &Envelope<MutationDataDto>, attempt: ShareAttempt) ->
     }
     match code {
         ResultCode::RemoteBranchDeleted => SyncOutcome::BranchDeleted,
+        ResultCode::RecoveryRequired
+            if envelope
+                .recovery
+                .iter()
+                .any(|action| action.action == RecoveryActionKind::RemoteHistory) =>
+        {
+            SyncOutcome::HistoryUnresolved
+        }
         ResultCode::UnlockRequired | ResultCode::UnlockFailed => SyncOutcome::NeedsUnlock,
         code if KEY_CODES.contains(&code) => SyncOutcome::NeedsKey,
         code if HOST_CODES.contains(&code) => SyncOutcome::NeedsHost {
@@ -447,6 +458,7 @@ impl SyncResult {
             | SyncOutcome::Current
             | SyncOutcome::Conflict { .. }
             | SyncOutcome::BranchDeleted
+            | SyncOutcome::HistoryUnresolved
             | SyncOutcome::NothingToShare => Vec::new(),
             SyncOutcome::Stopped { .. } => vec![O::Share],
             SyncOutcome::NeedsUnlock => vec![resend(O::Unlock)],

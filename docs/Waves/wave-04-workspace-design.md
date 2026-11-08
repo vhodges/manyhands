@@ -227,7 +227,9 @@ today's region contents unchanged inside the new frame.
 - **Panels**, registered by stable name: `RepositoriesPanel` (today's
   sidebar), `TicketsPanel` and `DocumentsPanel` (today's Navigation pane,
   split in two, each with its current contents), `ActivityPanel` (today's
-  Operations area). Panel headers follow `02`, "Panel header": single panel
+  Operations area, wrapped as it is). Quit feedback stays visible with
+  Activity hidden: the panel is shown when a quit starts waiting, or the
+  feedback is drawn outside any panel. Panel headers follow `02`, "Panel header": single panel
   with icon, title and count; tabbed group with the amber active line.
   Toolbars stay as they are until 02 and 03.
 - **Default layout** (decision 1): left dock 290 px with Repositories (0.6)
@@ -239,8 +241,9 @@ today's region contents unchanged inside the new frame.
   bottom panel; one toggle per right panel and the right dock toggle. On and
   off states, tooltips "Show Tickets" and "Hide Tickets". Also, per `02`:
   the **Needs attention** item (`circle-alert` + "N need attention", red,
-  hidden at 0, counting the unresolved recovery states the operations area
-  already shows; until Cycle 03 it shows and focuses the Activity panel),
+  hidden at 0, counting the attention entries in the operations model
+  (`model/operations.rs`), so that states Wave 03 D6 adds there are counted
+  too; until Cycle 03 it shows and focuses the Activity panel),
   and after a separator the **Settings** button (`settings`, tooltip
   "Settings (Ctrl ,)") opening today's Settings page. The other status
   items are Cycle 03's.
@@ -276,7 +279,8 @@ hidden, shown and moved to every offered dock from the footer, by mouse and
 by keyboard; docks and groups resize; the layout, including a hidden dock and
 a moved panel, survives a restart; a corrupt or old layout file restores the
 default without losing anything else; the window title follows the selected
-repository; every existing keyboard journey still passes. Model tests cover
+repository; a quit that has to wait shows its feedback with Activity
+hidden; every existing keyboard journey still passes. Model tests cover
 the visibility rules, menu moves, restore fallback and title derivation.
 Native check of the title bar on Linux Wayland, with macOS and Windows after
 merge (decision 4).
@@ -505,7 +509,9 @@ Wave 04 is complete when its Cycles have approved exit evidence and:
 | Moving regions into `DockArea` breaks focus, R-60 sheet refusal or key contexts | Cycle 01 keeps the sheet layer in the center and the region actions mapped to panels; the existing keyboard and dialog tests are the regression net. |
 | Client-side title bar behaves differently per platform (drag, double-click, controls, Wayland decorations) | Use Kit `TitleBar` and its window options; check Linux locally, macOS and Windows in native CI after merge (decision 4). |
 | A layout file from an older build, or a removed panel, breaks startup | Versioned file, fallback default reported in Activity, unknown panels dropped; one table-driven test. |
-| D6 lands while Cycles 01 and 03 move and rework the operations area | Cycle 01 moves the area unchanged; 03 bases its plan on whatever D6 has merged and leaves the polling states out until then. Merge main often, per `AGENTS.md`. |
+| D6 lands while Cycles 01 and 03 move and rework the operations area | Cycle 01 wraps the area as the Activity panel without editing `view/operations/` or `model/operations.rs`; 03 bases its plan on whatever D6 has merged and leaves the polling states out until then. Whichever merges second merges main and adapts, per `AGENTS.md`. |
+| Quit feedback ("Finishing …", Quit now, and D6's "still stopping") renders in the operations area, so a hidden Activity panel would hide it | Cycle 01 shows the Activity panel when a quit starts waiting, or draws that feedback outside any panel, and tests a quit with Activity hidden. |
+| Needs attention misses the attention states D6 adds (key locked, host approval, recovery hold) | The footer count reads the operations model's attention entries, the one store D6 adds to. |
 | Cycle 01 or 05 grows too large to review | The split line in each. |
 | Restyling the lifecycle dialog and the resolve conflict sheet regresses D5 behavior (stale confirmations, retry reusing the operation, safe-point stop, no automatic winner) | Cycle 05 changes layout and copy only; D5's existing tests stay and must pass unchanged in what they assert about behavior. |
 | The design's list specs drop a Wave 03 behavior (Ready and Blocked, duplicate short codes, inaccessible entries) | Cycle 02's exit evidence names them; decision 5 places Ready and Blocked. |

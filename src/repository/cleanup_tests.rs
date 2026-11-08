@@ -166,7 +166,12 @@ impl Fixture {
     fn setup_remote(&self) -> RemoteRefPlan {
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         remote::state::with_transaction(&self.service, self.root.path(), |tx, id| {
-            let generation = remote::state::configure(tx, id, Some(&plan), false)?;
+            let generation = remote::state::configure(
+                tx,
+                id,
+                Some(&plan),
+                remote::state::ConfigurationChange::Plan,
+            )?;
             let target = plan.context(self.kind, &ID.parse().unwrap());
             let observation = RemoteRefObservation::from_advertisement(
                 &plan,
@@ -1282,7 +1287,12 @@ fn cleanup_retirement_preserves_other_item_and_historical_observations() {
     let f = Fixture::new(AuthoringKind::Document);
     let plan = f.setup_remote();
     remote::state::with_transaction(&f.service, f.root.path(), |tx, id| {
-        let generation = remote::state::configure(tx, id, Some(&plan), false)?;
+        let generation = remote::state::configure(
+            tx,
+            id,
+            Some(&plan),
+            remote::state::ConfigurationChange::Plan,
+        )?;
         let observations = [ID, OTHER].map(|item| {
             RemoteRefObservation::from_advertisement(
                 &plan,
