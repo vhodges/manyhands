@@ -338,6 +338,44 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
     }
 }
 
+/// An unknown row whose context is gone (released, or removed by hand) is no
+/// entry: nothing can resolve or release it.
+#[test]
+fn an_unknown_row_without_an_active_context_is_not_reported() {
+    for active in [true, false] {
+        let data = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        db.execute_batch(&format!(
+            "INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES ('{}',123,'accessible',0);
+             INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active','manyhands/ticket/{ITEM}','/active','{ITEM}');",
+            root.path().to_str().unwrap()
+        ))
+        .unwrap();
+        git2::Repository::init(root.path()).unwrap();
+        for remote in ["origin", "upstream"] {
+            state::with_transaction(&service, root.path(), |tx, id| {
+                state::configure(tx, id, Some(&plan(remote)), ConfigurationChange::Plan)
+            })
+            .unwrap();
+        }
+        // The change of remote wrote the unknown row.
+        let rows: i64 = db
+            .query_row("SELECT COUNT(*) FROM remote_context_states", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(rows, 1);
+        if !active {
+            db.execute("DELETE FROM contexts", []).unwrap();
+        }
+        let before = snapshot(&service, root.path());
+        let report = service.history_report(root.path(), &before, &[]).unwrap();
+        assert_eq!(report.entries.len(), usize::from(active), "active {active}");
+    }
+}
+
 #[test]
 fn a_poll_that_did_not_refresh_the_evidence_gives_no_report() {
     use RemoteHistoryError as E;

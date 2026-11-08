@@ -225,8 +225,12 @@ impl RepositoryService {
         before: &RemoteSnapshot,
         dispositions: &[PollTargetReport],
     ) -> Result<RemoteHistoryReport, RepositoryError> {
-        let (after, generation) = state::with_transaction(self, root, |tx, id| {
-            Ok((state::read_snapshot(tx, id)?, state::generation(tx, id)?))
+        let (after, generation, active) = state::with_transaction(self, root, |tx, id| {
+            Ok((
+                state::read_snapshot(tx, id)?,
+                state::generation(tx, id)?,
+                state::active_contexts(tx, id)?,
+            ))
         })?;
         let after = &after;
         let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
@@ -235,6 +239,10 @@ impl RepositoryService {
             let (Some(kind), Some(item_id)) = (context.kind(), context.item_id()) else {
                 continue;
             };
+            // A row whose context is gone cannot be resolved or released.
+            if !active.contains(&(kind, item_id.clone())) {
+                continue;
+            }
             // Fetch evidence, not the push overlay: only a fetch resolves.
             let now = after.fetch_publication_evidence_for(kind, item_id);
             let resolved = match now {

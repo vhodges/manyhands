@@ -3899,6 +3899,47 @@ fn a_forgetting_fence_writes_no_unknown_row_for_a_retired_item() {
     assert_eq!(items, [OTHER]);
 }
 
+/// What still reads unknown under the cache-loss flag: an unknown row counts
+/// only while its context is active, and an active context with no row counts
+/// too. A ghost row (its context released or removed by hand) is neither
+/// listed nor blocking.
+#[test]
+fn unresolved_contexts_count_only_active_contexts() {
+    const OTHER: &str = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
+    // (active contexts, rows by item, items listed, flag cleared by resolving)
+    let rows: [(&[&str], &[&str], &[&str], bool); 5] = [
+        (&[ITEM], &[ITEM], &[ITEM], false),
+        (&[], &[ITEM], &[], true),
+        (&[OTHER], &[ITEM], &[OTHER], false),
+        (&[ITEM, OTHER], &[ITEM], &[ITEM, OTHER], false),
+        (&[], &[], &[], true),
+    ];
+    for (n, (active, with_rows, listed, clears)) in rows.into_iter().enumerate() {
+        let (data, root, service) = fixture();
+        apply_call(&service, root.path(), Call::Plan("origin", "main"));
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        for item in with_rows {
+            let target = plan().context(AuthoringKind::Ticket, &item.parse().unwrap());
+            db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'history_unknown','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),item]).unwrap();
+        }
+        for item in active {
+            db.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,?3,?2)", params![format!("manyhands/ticket/{item}"), item, format!("/{item}")]).unwrap();
+        }
+        db.execute("UPDATE remote_polling_state SET history_unknown=1", [])
+            .unwrap();
+        let (flag, unknown) =
+            with_transaction(&service, root.path(), |tx, id| unresolved_contexts(tx, id)).unwrap();
+        assert!(flag, "row {n} flag");
+        let unknown: Vec<String> = unknown.iter().map(|(_, id)| id.to_string()).collect();
+        assert_eq!(unknown, listed, "row {n} listed");
+        let cleared = with_transaction(&service, root.path(), |tx, id| {
+            clear_cache_loss_when_resolved(tx, id)
+        })
+        .unwrap();
+        assert_eq!(cleared, clears, "row {n} cleared");
+    }
+}
+
 #[test]
 fn null_known_columns_fall_back_to_the_current_plan() {
     let (data, root, service) = fixture();

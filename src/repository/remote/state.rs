@@ -2478,32 +2478,47 @@ pub(in super::super) fn record_context_resolved(
     Ok(())
 }
 
+/// The kind and item of each active context of the repository. A row for any
+/// other context is a ghost: its context was released or removed by hand.
+pub(in super::super) fn active_contexts(
+    connection: &Connection,
+    repository_id: i64,
+) -> Result<Vec<(AuthoringKind, ItemId)>, RepositoryError> {
+    let branches = connection
+        .prepare("SELECT branch FROM contexts WHERE repository_id=?1 AND kind='active'")
+        .and_then(|mut statement| {
+            statement
+                .query_map([repository_id], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?;
+    branches
+        .iter()
+        .map(|branch| {
+            crate::repository::stored_authoring_branch(branch).ok_or_else(recovery_required)
+        })
+        .collect()
+}
+
 /// The contexts that still read unknown while the cache-loss flag is set:
-/// rows that say so, and active contexts with no row. Empty when the flag is
+/// rows that say so, and active contexts with no row. A row whose context is
+/// no longer active is neither listed nor blocking. Empty when the flag is
 /// clear (contexts with rows are then listed by `remote history` alone).
 pub(in super::super) fn unresolved_contexts(
     transaction: &Transaction<'_>,
     repository_id: i64,
 ) -> Result<(bool, Vec<(AuthoringKind, ItemId)>), RepositoryError> {
     let snapshot = read_snapshot(transaction, repository_id)?;
+    let active = active_contexts(transaction, repository_id)?;
     let mut unknown: Vec<(AuthoringKind, ItemId)> = snapshot
         .contexts
         .iter()
         .filter(|context| context.publication_evidence == RemotePublicationEvidence::HistoryUnknown)
         .filter_map(|context| Some((context.kind?, context.item_id.clone()?)))
+        .filter(|context| active.contains(context))
         .collect();
     if snapshot.history_unknown {
-        let active = transaction
-            .prepare("SELECT branch FROM contexts WHERE repository_id=?1 AND kind='active'")
-            .and_then(|mut statement| {
-                statement
-                    .query_map([repository_id], |row| row.get::<_, String>(0))?
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .map_err(|_| recovery_required())?;
-        for branch in active {
-            let (kind, item_id) = crate::repository::stored_authoring_branch(&branch)
-                .ok_or_else(recovery_required)?;
+        for (kind, item_id) in active {
             if snapshot.fetch_publication_evidence_for(kind, &item_id)
                 == RemotePublicationEvidence::HistoryUnknown
                 && !unknown.contains(&(kind, item_id.clone()))
