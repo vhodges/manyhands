@@ -364,6 +364,7 @@ contract_enum!(
         IntegrationConflict => "integration_conflict",
         RemoteContextDeleted => "remote_context_deleted",
         HistoryUnknown => "history_unknown",
+        HistoryUnresolved => "history_unresolved",
         AlreadyClosed => "already_closed",
         PrimaryReopened => "primary_reopened",
         DocumentInvalidAfterIntegration => "document_invalid_after_integration",

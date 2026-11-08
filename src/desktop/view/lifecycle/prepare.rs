@@ -46,10 +46,10 @@ pub(crate) fn blocker_words(blocker: LifecycleBlocker, known: Option<&str>) -> S
     use LifecycleBlocker::{
         AlreadyClosed, CommentPublicationPending, ConflictPending, ContextBehindRemote,
         ContextConflicted, ContextDirty, ContextMissing, ContextNonconforming,
-        DocumentInvalidAfterIntegration, HistoryUnknown, IdentityRequired, IntegrationConflict,
-        LocalOperationPending, NotADocument, NotATicket, PrimaryAheadOfRemote, PrimaryConflicted,
-        PrimaryDirty, PrimaryMissing, PrimaryNotCheckedOut, PrimaryReopened, RemoteContextDeleted,
-        TicketInvalidAfterClosure,
+        DocumentInvalidAfterIntegration, HistoryUnknown, HistoryUnresolved, IdentityRequired,
+        IntegrationConflict, LocalOperationPending, NotADocument, NotATicket, PrimaryAheadOfRemote,
+        PrimaryConflicted, PrimaryDirty, PrimaryMissing, PrimaryNotCheckedOut, PrimaryReopened,
+        RemoteContextDeleted, TicketInvalidAfterClosure,
     };
     let subject = primary_subject(known);
     let primary = primary_name(known);
@@ -74,6 +74,8 @@ pub(crate) fn blocker_words(blocker: LifecycleBlocker, known: Option<&str>) -> S
         IntegrationConflict => return format!("This item's changes conflict with {primary}."),
         RemoteContextDeleted => "This item's shared copy was deleted.",
         HistoryUnknown => "Whether this item's shared copy still stands is not known.",
+        // Task 10 words this with the `remote history` guidance.
+        HistoryUnresolved => "This item's shared copy cannot be confirmed.",
         AlreadyClosed => "This ticket is already closed.",
         PrimaryReopened => return format!("{subject} has reopened this ticket."),
         DocumentInvalidAfterIntegration => {
@@ -97,6 +99,11 @@ pub(super) fn guidance(
         LifecycleWayOut::PollOnce => {
             Some("Check origin for others' changes, then prepare again.".to_owned())
         }
+        // Task 10 refines this text.
+        LifecycleWayOut::ResolveHistory => Some(
+            "This item's shared copy can't be confirmed. Run manyhands-cli remote history."
+                .to_owned(),
+        ),
         LifecycleWayOut::SaveItem { .. } => Some(format!(
             "Edit and save this {item} once to give it a working copy, then prepare again."
         )),

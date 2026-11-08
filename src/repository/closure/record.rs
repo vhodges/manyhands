@@ -130,7 +130,7 @@ impl From<ParentStep> for ClosureStep {
 
 pub(in super::super) type Refusal = parent::Refusal<ClosureBlocker>;
 /// The design's blocker order; bit `i` of the stored mask is entry `i`.
-pub(in super::super) const CLOSURE_BLOCKERS: [ClosureBlocker; 21] = [
+pub(in super::super) const CLOSURE_BLOCKERS: [ClosureBlocker; 22] = [
     ClosureBlocker::NotATicket,
     ClosureBlocker::ContextMissing,
     ClosureBlocker::ContextNonconforming,
@@ -152,6 +152,7 @@ pub(in super::super) const CLOSURE_BLOCKERS: [ClosureBlocker; 21] = [
     ClosureBlocker::PrimaryReopened,
     ClosureBlocker::TicketInvalidAfterClosure,
     ClosureBlocker::IdentityRequired,
+    ClosureBlocker::HistoryUnresolved,
 ];
 impl Blocker for ClosureBlocker {
     const ORDER: &'static [Self] = &CLOSURE_BLOCKERS;

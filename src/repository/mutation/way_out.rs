@@ -44,6 +44,9 @@ pub enum LifecycleWayOut {
     /// `poll once`, which reads primary's tracking ref and whether a
     /// published context still stands.
     PollOnce,
+    /// `remote history`, then `item resolve-history`: the shared copy's
+    /// history is unknown from evidence, which a poll can't read.
+    ResolveHistory,
     /// A save of the item, which makes its missing context.
     SaveItem { item_id: String },
     /// A refused merge no other step routes, of a promotion or a closure,
@@ -290,7 +293,8 @@ fn held(envelope: &Envelope<PrepareDataDto>) -> Option<LifecycleWayOut> {
 fn blocked(blockers: &[LifecycleBlocker], item: Option<&str>) -> Vec<LifecycleWayOut> {
     use LifecycleBlocker::{
         ConflictPending, ContextConflicted, ContextDirty, ContextMissing, HistoryUnknown,
-        IntegrationConflict, LocalOperationPending, PrimaryAheadOfRemote, PrimaryMissing,
+        HistoryUnresolved, IntegrationConflict, LocalOperationPending, PrimaryAheadOfRemote,
+        PrimaryMissing,
     };
     let tracking = |blocker: &LifecycleBlocker| {
         matches!(
@@ -298,6 +302,26 @@ fn blocked(blockers: &[LifecycleBlocker], item: Option<&str>) -> Vec<LifecycleWa
             PrimaryAheadOfRemote | PrimaryMissing | HistoryUnknown
         )
     };
+    if blockers.contains(&HistoryUnresolved)
+        && blockers.iter().all(|blocker| {
+            tracking(blocker) || matches!(blocker, HistoryUnresolved | ContextMissing)
+        })
+    {
+        // The poll still reads what it can; the repair is the way out of
+        // the unresolved history.
+        let mut route = Vec::new();
+        if blockers
+            .iter()
+            .any(|blocker| *blocker != HistoryUnknown && tracking(blocker))
+        {
+            route.push(LifecycleWayOut::PollOnce);
+            if blockers.contains(&PrimaryAheadOfRemote) {
+                route.push(LifecycleWayOut::SharePrimary);
+            }
+        }
+        route.push(LifecycleWayOut::ResolveHistory);
+        return route;
+    }
     if blockers.iter().any(tracking)
         && blockers
             .iter()

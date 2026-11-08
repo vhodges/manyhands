@@ -229,6 +229,7 @@ pub(crate) fn synchronization_error_code(error: &SynchronizationError) -> Result
         }
         | SynchronizationError::Interrupted
         | SynchronizationError::HistoryUnknown
+        | SynchronizationError::HistoryUnresolved
         | SynchronizationError::RecoveryRequired => ResultCode::RecoveryRequired,
     }
 }

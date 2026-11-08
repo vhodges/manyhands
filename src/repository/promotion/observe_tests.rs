@@ -644,7 +644,62 @@ fn remote_history_unknown() {
     f.db()
         .execute("UPDATE remote_polling_state SET history_unknown=1", [])
         .unwrap();
-    f.blocked(&[PromotionBlocker::HistoryUnknown]);
+    f.blocked(&[PromotionBlocker::HistoryUnresolved]);
+}
+/// What an absent tracking context says of the remote, by cause: evidence
+/// of unknown history is unresolved (the owner's repair), published with no
+/// deletion seen is unknown (a poll reads it).
+#[test]
+fn remote_context_history_tells_the_causes_apart() {
+    use crate::repository::remote::{RemoteContextSnapshot, RemoteContextState as S};
+    let item: ItemId = ID.parse().unwrap();
+    let oid = Some(git2::Oid::from_str("1111111111111111111111111111111111111111").unwrap());
+    for (evidence, state, advertised, expected) in [
+        (
+            RemotePublicationEvidence::HistoryUnknown,
+            S::HistoryUnknown,
+            None,
+            RemoteContextHistory::Unresolved,
+        ),
+        (
+            RemotePublicationEvidence::ObservedPublished,
+            S::Observed,
+            oid,
+            RemoteContextHistory::Unknown,
+        ),
+        (
+            RemotePublicationEvidence::ObservedPublished,
+            S::RemotelyDeleted,
+            oid,
+            RemoteContextHistory::Deleted,
+        ),
+        (
+            RemotePublicationEvidence::NeverPublished,
+            S::HistoryUnknown,
+            None,
+            RemoteContextHistory::NeverPublished,
+        ),
+    ] {
+        let snapshot = RemoteSnapshot::new(
+            Default::default(),
+            None,
+            Vec::new(),
+            vec![RemoteContextSnapshot::new(
+                None,
+                Some(AuthoringKind::Document),
+                Some(item.clone()),
+                advertised,
+                None,
+                evidence,
+                state,
+            )],
+        );
+        assert_eq!(
+            remote_context_history(&snapshot, LifecycleKind::DocumentPromotion, &item),
+            expected,
+            "{evidence:?} {state:?}"
+        );
+    }
 }
 #[test]
 fn present_tracking_context_overrides_deleted_history() {

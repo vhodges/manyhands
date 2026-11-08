@@ -643,6 +643,7 @@ fn synchronization_errors() -> Vec<(SynchronizationError, ResultCode)> {
         (Error::PrimaryMissing, Code::InvalidConfiguration),
         (Error::RemoteContextDeleted, Code::RemoteBranchDeleted),
         (Error::HistoryUnknown, Code::RecoveryRequired),
+        (Error::HistoryUnresolved, Code::RecoveryRequired),
         (
             Error::ConflictPending {
                 target: context_target(),
@@ -691,13 +692,14 @@ fn synchronization_error_count(error: &SynchronizationError) -> usize {
         | Error::PrimaryMissing
         | Error::RemoteContextDeleted
         | Error::HistoryUnknown
+        | Error::HistoryUnresolved
         | Error::ConflictPending { .. }
         | Error::IdentityRequired { .. }
         | Error::ExternalResolutionRequired { .. }
         | Error::MergeRequired { .. }
         | Error::PushRejected
         | Error::ExternalChange
-        | Error::RecoveryRequired => 18,
+        | Error::RecoveryRequired => 19,
     }
 }
 

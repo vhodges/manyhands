@@ -75,7 +75,7 @@ impl CleanupCategory {
 }
 
 pub(in super::super) type Refusal = parent::Refusal<PromotionBlocker>;
-const BLOCKERS: [PromotionBlocker; 16] = [
+const BLOCKERS: [PromotionBlocker; 17] = [
     PromotionBlocker::NotADocument,
     PromotionBlocker::ContextMissing,
     PromotionBlocker::ContextNonconforming,
@@ -92,6 +92,7 @@ const BLOCKERS: [PromotionBlocker; 16] = [
     PromotionBlocker::RemoteContextDeleted,
     PromotionBlocker::HistoryUnknown,
     PromotionBlocker::DocumentInvalidAfterIntegration,
+    PromotionBlocker::HistoryUnresolved,
 ];
 impl Blocker for PromotionBlocker {
     const ORDER: &'static [Self] = &BLOCKERS;

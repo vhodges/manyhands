@@ -1110,7 +1110,10 @@ pub(crate) fn recovery_control(kind: RecoveryActionKind) -> RecoveryControl {
         RecoveryActionKind::RequestCancel => RecoveryControl::Cancel,
         RecoveryActionKind::OperationResume => RecoveryControl::Resume,
         RecoveryActionKind::OperationAbandon => RecoveryControl::Abandon,
-        RecoveryActionKind::RepoInspect => RecoveryControl::Inspect,
+        // Placeholder until the guidance text: Task 10 names `remote history`.
+        RecoveryActionKind::RepoInspect | RecoveryActionKind::RemoteHistory => {
+            RecoveryControl::Inspect
+        }
         RecoveryActionKind::RepoIdentitySet => RecoveryControl::IdentitySet,
         // The action names the host but not the key to pin: the Hosts
         // page checks the host, and offers Approve or Replace for the key
@@ -1137,7 +1140,7 @@ pub(crate) fn recovery_label(kind: RecoveryActionKind) -> &'static str {
         RecoveryActionKind::RepoIdentitySet => "Set identity",
         RecoveryActionKind::HostApprove => "Approve host",
         RecoveryActionKind::HostReplace => "Replace host key",
-        RecoveryActionKind::RepoInspect => "Inspect repository",
+        RecoveryActionKind::RepoInspect | RecoveryActionKind::RemoteHistory => "Inspect repository",
     }
 }
 

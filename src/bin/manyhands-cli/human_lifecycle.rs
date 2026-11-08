@@ -271,6 +271,7 @@ fn route_of(envelope: &Envelope<MutationDataDto>, data: &LifecycleMutationDto) -
             | LifecycleWayOut::RetryRequest { .. }
             | LifecycleWayOut::SharePrimary
             | LifecycleWayOut::PollOnce
+            | LifecycleWayOut::ResolveHistory
             | LifecycleWayOut::SaveItem { .. } => {}
         }
     }
@@ -290,6 +291,9 @@ fn way_out_note(blockers: &[LifecycleBlocker], way_out: &[LifecycleWayOut]) -> S
         } else {
             UNKNOWN_NOTE.to_owned()
         }
+    } else if way_out.contains(&LifecycleWayOut::ResolveHistory) {
+        "this item's shared copy can't be confirmed; a poll can't settle it. Repair it, then prepare again."
+            .to_owned()
     } else if way_out
         .iter()
         .any(|step| matches!(step, LifecycleWayOut::SaveItem { .. }))
@@ -308,6 +312,11 @@ fn way_out_lines(kind: ItemDtoKind, way_out: &[LifecycleWayOut], root: &str) -> 
         match step {
             LifecycleWayOut::PollOnce => next.push(format!(
                 "manyhands-cli poll once --repo {} --request-id <new-request-id>",
+                quoted(root)
+            )),
+            // Task 9 words this; the line is the command that lists the repair.
+            LifecycleWayOut::ResolveHistory => next.push(format!(
+                "manyhands-cli remote history --repo {}",
                 quoted(root)
             )),
             LifecycleWayOut::SharePrimary => next.push(format!(

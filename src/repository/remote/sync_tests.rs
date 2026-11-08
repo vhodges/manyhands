@@ -15859,3 +15859,56 @@ fn an_index_hand_off_whose_row_was_abandoned_is_refused_and_stays_owed() {
         .unwrap();
     assert_eq!(row, ("completed".to_owned(), Some("abandoned".to_owned())));
 }
+/// Evidence-based unknown history ends the operation and lets the
+/// reservation go, so a sync of another context isn't busy behind it; push
+/// proof of an earlier generation, and an operation that intended a push,
+/// stay pending and resumable.
+#[test]
+fn unresolved_history_ends_the_operation_and_frees_the_reservation() {
+    let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
+    let context = |id: &str| SynchronizationTarget::Context {
+        kind: AuthoringKind::Ticket,
+        item_id: id.parse().unwrap(),
+    };
+    for (error, push_intent, ends) in [
+        (SynchronizationError::HistoryUnresolved, false, true),
+        (SynchronizationError::HistoryUnresolved, true, false),
+        (SynchronizationError::HistoryUnknown, false, false),
+        (SynchronizationError::RecoveryRequired, false, false),
+    ] {
+        let data = fixture_tempdir();
+        let root = fixture_tempdir();
+        let service = RepositoryService::open_at(data.path()).unwrap();
+        rusqlite::Connection::open(data.path().join(REGISTRY_FILE)).unwrap().execute(
+            "INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)",
+            [root.path().to_str().unwrap()]).unwrap();
+        state::with_transaction(&service, root.path(), |tx, id| {
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
+        })
+        .unwrap();
+        let target = context("01ARZ3NDEKTSV4RRFFQ69G5FAV").operation_target(&plan);
+        let owner = match service
+            .reserve_remote_operation(root.path(), OperationId::new(), &target)
+            .unwrap()
+        {
+            RemoteReservationOutcome::Reserved(owner) => owner,
+            other => panic!("{other:?}"),
+        };
+        let returned = service.ended_if_unresolved(root.path(), &owner, push_intent, error);
+        assert!(matches!(
+            returned,
+            SynchronizationError::HistoryUnresolved
+                | SynchronizationError::HistoryUnknown
+                | SynchronizationError::RecoveryRequired
+        ));
+        let other = context("01ARZ3NDEKTSV4RRFFQ69G5FAW").operation_target(&plan);
+        let second = service
+            .reserve_remote_operation(root.path(), OperationId::new(), &other)
+            .unwrap();
+        assert_eq!(
+            matches!(second, RemoteReservationOutcome::Reserved(_)),
+            ends,
+            "{returned:?} push_intent={push_intent}"
+        );
+    }
+}

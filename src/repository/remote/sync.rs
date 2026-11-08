@@ -369,7 +369,13 @@ pub enum SynchronizationError {
     },
     PrimaryMissing,
     RemoteContextDeleted,
+    /// Push proof from an earlier generation left the history unknown:
+    /// resumable, and a poll can settle it.
     HistoryUnknown,
+    /// The evidence for the context says its history is unknown. Terminal:
+    /// the operation is ended and the reservation let go, and only the
+    /// owner's repair (`remote history`) settles it.
+    HistoryUnresolved,
     /// A real Git merge is installed in the target worktree. The branch HEAD
     /// remains on the local parent and callers must inspect/repair explicitly.
     ConflictPending {
@@ -410,6 +416,7 @@ impl fmt::Display for SynchronizationError {
             Self::PrimaryMissing => "primary missing",
             Self::RemoteContextDeleted => "remote context deleted",
             Self::HistoryUnknown => "publication history unknown",
+            Self::HistoryUnresolved => "publication history unresolved",
             Self::ConflictPending { .. } => "synchronization conflict pending",
             Self::IdentityRequired { .. } => "commit identity required",
             Self::ExternalResolutionRequired { .. } => "external conflict resolution required",
@@ -3951,7 +3958,7 @@ fn graph_plan(
         refs::CleanIntegrationError::RemoteContextDeleted => {
             SynchronizationError::RemoteContextDeleted
         }
-        refs::CleanIntegrationError::HistoryUnknown => SynchronizationError::HistoryUnknown,
+        refs::CleanIntegrationError::HistoryUnknown => SynchronizationError::HistoryUnresolved,
         refs::CleanIntegrationError::MergeRequired => SynchronizationError::MergeRequired {
             target: target.clone(),
         },
@@ -4002,6 +4009,29 @@ pub(in super::super) fn promotion_test_publication_plan(
     .map(|_| ())
 }
 impl RepositoryService {
+    /// `error`, after ending the operation when it is `HistoryUnresolved`:
+    /// the owner's repair, not a call of the same request, settles that, so
+    /// the operation is cancelled and the reservation let go (as for a
+    /// refused push). With a push intended an earlier call may have
+    /// published, so the operation is left as it is. Should the ending
+    /// fail, the operation stays pending and its row says so.
+    fn ended_if_unresolved(
+        &self,
+        root: &Path,
+        owner: &RemoteReservation,
+        push_intent: bool,
+        error: SynchronizationError,
+    ) -> SynchronizationError {
+        if matches!(error, SynchronizationError::HistoryUnresolved)
+            && !push_intent
+            && self
+                .request_synchronization_cancellation(root, owner)
+                .is_ok()
+        {
+            let _ = self.check_synchronization_requests(root, owner);
+        }
+        error
+    }
     fn synchronization_reserve_owned(
         &self,
         root: &Path,
@@ -6406,7 +6436,9 @@ impl RepositoryService {
             ) {
                 Ok(_) => false,
                 Err(SynchronizationError::MergeRequired { .. }) => true,
-                Err(error) => return Err(error),
+                Err(error) => {
+                    return Err(self.ended_if_unresolved(&root, &owner, push_intent, error));
+                }
             }
         };
         // An open publication attempt never replays the legacy local-update
@@ -6527,7 +6559,8 @@ impl RepositoryService {
                     primary,
                     context,
                     publication,
-                )?;
+                )
+                .map_err(|error| self.ended_if_unresolved(&root, &owner, push_intent, error))?;
                 if resumed.is_some_and(|c| {
                     matches!(
                         c,
