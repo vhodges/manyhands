@@ -95,7 +95,22 @@ fn remote_history_repair_journey() -> Result<(), FixtureError> {
     let a = &p.a;
 
     // The original bug: a key selected again after the remote was set.
-    a.select_a_key(&p.server, "Second key")?;
+    let keys = a.json(&["key", "list"], &[], "ok", 0);
+    let key = keys["data"]["items"][0]["id"].as_str().unwrap().to_owned();
+    a.json(&["key", "clear", "--request-id", &request()], &[], "ok", 0);
+    a.json(
+        &[
+            "key",
+            "select",
+            "--key-id",
+            &key,
+            "--request-id",
+            &request(),
+        ],
+        &[],
+        "ok",
+        0,
+    );
     create(a, LOCAL);
     item_sync(a, LOCAL, &request(), "ok", 0);
     assert_eq!(p.served(&branch(LOCAL))?, a.tip(&branch(LOCAL))?);
@@ -106,7 +121,6 @@ fn remote_history_repair_journey() -> Result<(), FixtureError> {
     lose_history(a);
     let listed = human(a, &["remote", "history", "--repo", a.root()], &[]);
     assert_eq!(listed.status, 0, "{}", text(&listed.stderr));
-    eprintln!("remote history:\n{}", text(&listed.stdout));
     let root = collaboration::quoted(a);
     assert!(
         text(&listed.stdout).contains(&format!(
@@ -155,8 +169,8 @@ fn remote_history_repair_journey() -> Result<(), FixtureError> {
         "{}",
         text(&human_refusal.stderr)
     );
-    // Another context is not held up by it.
-    item_sync(a, LOCAL, &request(), "ok", 0);
+    // Another context is not held up by it: the refusal held no reservation.
+    item_sync(a, LOCAL, &request(), "already_applied", 0);
 
     // The owner's choice: prepare, then confirm.
     let preview = a.json(&resolve_args(a, &["--prepare"]), &[], "ok", 0);

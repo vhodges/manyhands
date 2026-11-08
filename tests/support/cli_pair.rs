@@ -161,7 +161,7 @@ impl CliClone {
 
     /// Imports the key the server allows into the clone's own key store,
     /// and selects it.
-    pub fn select_a_key(&self, server: &SshRemoteFixture, label: &str) -> Result<(), FixtureError> {
+    fn select_a_key(&self, server: &SshRemoteFixture, label: &str) -> Result<(), FixtureError> {
         let key = self.json(
             &[
                 "key",

@@ -14,10 +14,10 @@
 use clap::ArgMatches;
 use manyhands::{
     repository::{
-        HistoryWayOut, ItemResolveHistoryInput, Mutation, MutationDataDto, OperationId,
-        PrepareDataDto, RemoteHistoryDto, RemoteHistoryEntryDto, RemoteResolveHistoryInput,
-        RepositoryService, RequestId, ResolveHistoryChoice, clear_cache_loss_way_out,
-        keys::SessionCredentials, resolve_history_way_out,
+        HistoryRelation, HistoryWayOut, ItemResolveHistoryInput, Mutation, MutationDataDto,
+        OperationId, PrepareDataDto, RemoteHistoryDto, RemoteHistoryEntryDto,
+        RemoteResolveHistoryInput, RepositoryService, RequestId, ResolveHistoryChoice,
+        clear_cache_loss_way_out, keys::SessionCredentials, resolve_history_way_out,
     },
     results::{Envelope, RecoveryAction, RecoveryActionKind, ResultCode, Scope},
 };
@@ -93,7 +93,10 @@ fn relation(entry: &RemoteHistoryEntryDto) -> String {
         };
     };
     let mut text = relation.as_str().replace('_', "-");
-    if let (Some(ahead), Some(behind)) = (entry.ahead, entry.behind) {
+    // The counts say nothing of a head that is the remote's.
+    if relation != HistoryRelation::Same
+        && let (Some(ahead), Some(behind)) = (entry.ahead, entry.behind)
+    {
         text.push_str(&format!(" ahead={ahead} behind={behind}"));
     }
     text
