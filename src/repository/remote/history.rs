@@ -6,8 +6,9 @@ use std::path::Path;
 use git2::Oid;
 
 use super::{
-    ObservePublicationRemoteRequest, RemoteObservationError, RemoteOutcomeCategory,
-    RemotePollInvocation, RemotePublicationEvidence, RemoteSnapshot,
+    PollCompletion, PollDisposition, PollPublicationRemoteRequest, PollTargetReport,
+    RemotePollError, RemotePollInvocation, RemotePollOutcome, RemotePollResult,
+    RemotePublicationEvidence, RemoteSnapshot,
     poll::{PollRelation, classify_relation},
     state,
 };
@@ -51,6 +52,9 @@ pub struct RemoteHistoryEntry {
     pub behind: Option<usize>,
     /// The fetch recorded the context as published, so no choice is needed.
     pub resolved: bool,
+    /// What the poll did with this context (a fast-forward shows here, not as
+    /// `Same`). `None` when the poll reported no target for it.
+    pub disposition: Option<PollDisposition>,
     pub choices: RemoteHistoryChoices,
 }
 
@@ -63,24 +67,25 @@ pub struct RemoteHistoryReport {
 }
 
 impl RepositoryService {
-    /// Observe the publication remote once (reserved, a complete advertisement,
-    /// persisted as the current batch) and report every context whose
-    /// publication history is unknown or that this observation just resolved.
+    /// Run the manual one-shot poll (what `poll once` runs: reserved, a real
+    /// fetch of the publication remote, a complete batch persisted) and report
+    /// every context whose publication history is unknown or that this poll
+    /// just resolved. The poll's ordinary side effects apply: a clean,
+    /// strictly-behind context is fast-forwarded and unmaterialized remote
+    /// contexts are materialized; each entry carries the poll's disposition.
     ///
-    /// This is `observe_publication_remote`, the narrowest existing call that
-    /// reserves, completes and persists a batch. It is not the full poll: that
-    /// would also fast-forward and materialize local contexts, which a read
-    /// must not do. The unknown set is read just before the observation, and
-    /// the resolved set is the difference with the snapshot the observation
-    /// returns.
+    /// The resolved set is the difference between the fetch evidence in the
+    /// snapshot read just before the poll and the one read after it. It isn't
+    /// captured inside the persistence transaction; a concurrent poll that
+    /// resolves a context in between still leaves it listed as resolved.
     pub fn remote_history<P: SessionCredentialProvider>(
         &self,
         root: &Path,
         session: &mut SessionCredentials<P>,
-    ) -> Result<RemoteHistoryReport, RemoteObservationError> {
+    ) -> Result<RemoteHistoryReport, RemotePollError> {
         let before = self.remote_snapshot(root)?;
-        let outcome = self.observe_publication_remote(
-            ObservePublicationRemoteRequest {
+        let result = self.poll_publication_remote(
+            PollPublicationRemoteRequest {
                 root: root.to_path_buf(),
                 operation_id: OperationId::new(),
                 invocation: RemotePollInvocation::Explicit,
@@ -89,10 +94,18 @@ impl RepositoryService {
             },
             session,
         )?;
-        if outcome.category() != RemoteOutcomeCategory::Completed {
-            return Err(RemoteObservationError::Interrupted);
+        let outcome = match result {
+            RemotePollResult::Complete(outcome) => outcome,
+            RemotePollResult::IndexPending(pending) => pending.authoritative,
+        };
+        let RemotePollOutcome::Polled(report) = outcome else {
+            return Err(RemotePollError::Interrupted);
+        };
+        if report.completion() != PollCompletion::Completed {
+            return Err(RemotePollError::Interrupted);
         }
-        Ok(self.history_report(root, &before, outcome.snapshot())?)
+        let after = self.remote_snapshot(root)?;
+        Ok(self.history_report(root, &before, &after, report.targets())?)
     }
 
     /// The report from the snapshots either side of an observation.
@@ -101,6 +114,7 @@ impl RepositoryService {
         root: &Path,
         before: &RemoteSnapshot,
         after: &RemoteSnapshot,
+        dispositions: &[PollTargetReport],
     ) -> Result<RemoteHistoryReport, RepositoryError> {
         let generation = state::with_transaction(self, root, |tx, id| state::generation(tx, id))?;
         let repository = git2::Repository::open(root).map_err(|_| state::recovery_required())?;
@@ -157,6 +171,10 @@ impl RepositoryService {
                 ahead: counts.map(|(ahead, _)| ahead),
                 behind: counts.map(|(_, behind)| behind),
                 resolved,
+                disposition: dispositions
+                    .iter()
+                    .find(|target| target.kind() == Some(kind) && target.item_id() == Some(item_id))
+                    .map(PollTargetReport::disposition),
                 choices: RemoteHistoryChoices {
                     publish: offered,
                     release: offered,

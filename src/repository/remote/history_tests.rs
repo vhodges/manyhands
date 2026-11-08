@@ -43,6 +43,8 @@ fn snapshot(service: &RepositoryService, root: &std::path::Path) -> RemoteSnapsh
 struct Layout {
     local_extra: usize,
     advertised_extra: Option<usize>,
+    /// The poll fast-forwarded the local branch onto the advertised tip.
+    local_on_remote: bool,
 }
 
 struct Want {
@@ -50,24 +52,27 @@ struct Want {
     relation: Option<RemoteHistoryRelation>,
     counts: Option<(usize, usize)>,
     publish_and_release: bool,
+    disposition: Option<PollDisposition>,
 }
 
 #[test]
 fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
     use RemoteHistoryRelation::*;
-    let rows: [(&str, bool, Layout, Want); 6] = [
+    let rows: [(&str, bool, Layout, Want); 8] = [
         (
             "absent and unknown",
             false,
             Layout {
                 local_extra: 0,
                 advertised_extra: None,
+                local_on_remote: false,
             },
             Want {
                 resolved: false,
                 relation: None,
                 counts: None,
                 publish_and_release: true,
+                disposition: None,
             },
         ),
         (
@@ -76,12 +81,14 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
             Layout {
                 local_extra: 0,
                 advertised_extra: Some(0),
+                local_on_remote: false,
             },
             Want {
                 resolved: true,
                 relation: Some(Same),
                 counts: Some((0, 0)),
                 publish_and_release: false,
+                disposition: Some(PollDisposition::Current),
             },
         ),
         (
@@ -90,12 +97,14 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
             Layout {
                 local_extra: 2,
                 advertised_extra: Some(0),
+                local_on_remote: false,
             },
             Want {
                 resolved: true,
                 relation: Some(LocalAhead),
                 counts: Some((2, 0)),
                 publish_and_release: false,
+                disposition: Some(PollDisposition::LocalAhead),
             },
         ),
         (
@@ -104,12 +113,14 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
             Layout {
                 local_extra: 0,
                 advertised_extra: Some(1),
+                local_on_remote: false,
             },
             Want {
                 resolved: true,
                 relation: Some(RemoteAhead),
                 counts: Some((0, 1)),
                 publish_and_release: false,
+                disposition: Some(PollDisposition::Dirty),
             },
         ),
         (
@@ -118,12 +129,14 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
             Layout {
                 local_extra: 1,
                 advertised_extra: Some(1),
+                local_on_remote: false,
             },
             Want {
                 resolved: true,
                 relation: Some(Diverged),
                 counts: Some((1, 1)),
                 publish_and_release: false,
+                disposition: Some(PollDisposition::Diverged),
             },
         ),
         (
@@ -132,12 +145,46 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
             Layout {
                 local_extra: 0,
                 advertised_extra: None,
+                local_on_remote: false,
             },
             Want {
                 resolved: false,
                 relation: None,
                 counts: None,
                 publish_and_release: true,
+                disposition: None,
+            },
+        ),
+        (
+            "fast-forwarded by the poll",
+            false,
+            Layout {
+                local_extra: 0,
+                advertised_extra: Some(1),
+                local_on_remote: true,
+            },
+            Want {
+                resolved: true,
+                relation: Some(Same),
+                counts: Some((0, 0)),
+                publish_and_release: false,
+                disposition: Some(PollDisposition::FastForwarded),
+            },
+        ),
+        (
+            "remote ahead, local diverged so not fast-forwarded",
+            false,
+            Layout {
+                local_extra: 2,
+                advertised_extra: Some(3),
+                local_on_remote: false,
+            },
+            Want {
+                resolved: true,
+                relation: Some(Diverged),
+                counts: Some((2, 3)),
+                publish_and_release: false,
+                disposition: Some(PollDisposition::Diverged),
             },
         ),
     ];
@@ -160,7 +207,12 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 commit(&repository, Some(parent), &format!("{tag}{n}"))
             })
         };
-        let local = chain("local", layout.local_extra);
+        let advertised = layout.advertised_extra.map(|extra| chain("remote", extra));
+        let local = if layout.local_on_remote {
+            advertised.unwrap()
+        } else {
+            chain("local", layout.local_extra)
+        };
         repository
             .reference(
                 &format!("refs/heads/manyhands/ticket/{ITEM}"),
@@ -169,7 +221,6 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
                 "fixture",
             )
             .unwrap();
-        let advertised = layout.advertised_extra.map(|extra| chain("remote", extra));
 
         let origin = plan("origin");
         let upstream = plan("upstream");
@@ -228,8 +279,16 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
         .unwrap();
         let after = snapshot(&service, root.path());
 
+        let dispositions = [PollTargetReport {
+            target: None,
+            kind: Some(AuthoringKind::Ticket),
+            item_id: Some(ITEM.parse().unwrap()),
+            disposition: want.disposition.unwrap_or(PollDisposition::NotReached),
+            before_oid: None,
+            after_oid: None,
+        }];
         let report = service
-            .history_report(root.path(), &before, &after)
+            .history_report(root.path(), &before, &after, &dispositions)
             .unwrap();
         assert_eq!(report.cache_loss, cache_loss, "{name} flag");
         assert_eq!(report.generation, generation, "{name} generation");
@@ -246,6 +305,11 @@ fn history_reports_unknown_and_resolved_contexts_with_relations_and_choices() {
         );
         assert_eq!(entry.advertised, advertised, "{name} advertised");
         assert_eq!(entry.resolved, want.resolved, "{name} resolved");
+        assert_eq!(
+            entry.disposition,
+            Some(want.disposition.unwrap_or(PollDisposition::NotReached)),
+            "{name} disposition"
+        );
         assert_eq!(entry.relation, want.relation, "{name} relation");
         assert_eq!(entry.ahead.zip(entry.behind), want.counts, "{name} counts");
         assert_eq!(
