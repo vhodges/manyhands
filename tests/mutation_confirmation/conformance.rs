@@ -5,6 +5,11 @@
 //! request that is refused presents a confirmation no preview gave, and
 //! the one with the wrong consent presents none.
 
+use manyhands::repository::{
+    AuthoringKind, ItemResolveHistoryInput, RemoteResolveHistoryInput, RemoteSelectInput,
+    ResolveHistoryChoice,
+};
+
 use super::{
     support::{
         conformance::{Ask, Home as Target, Row, run},
@@ -18,7 +23,7 @@ const UNKNOWN: &str = "01ARZ3NDEKTSV4RRFFQ69G5FZZ";
 
 const REFUSED: &str = "confirmation_not_found";
 
-const ROWS: [Row; 6] = [
+const ROWS: [Row; 8] = [
     Row::new("repo create", true, REFUSED, |rule| {
         let desk = Desk::new();
         let site = Site::new();
@@ -134,7 +139,119 @@ const ROWS: [Row; 6] = [
         );
         Ok(())
     }),
+    Row::new("item resolve-history", true, REFUSED, |rule| {
+        let lost = CacheLoss::new(true);
+        drive_confirmed(
+            &lost.world.service,
+            lost.world.data.path(),
+            &|ask| match ask {
+                Ask::Same | Ask::Refused | Ask::Unconsented => lost.resolve_item(),
+                // Another item: it has no branch to resolve.
+                Ask::Changed => lost.resolve_other_item(),
+            },
+            // A newer fetch moves the generation the preview showed.
+            &|| lost.move_generation(),
+            rule,
+        );
+        Ok(())
+    }),
+    Row::new("remote resolve-history", true, REFUSED, |rule| {
+        let lost = CacheLoss::new(false);
+        drive_confirmed(
+            &lost.world.service,
+            lost.world.data.path(),
+            &|ask| match ask {
+                Ask::Same | Ask::Refused | Ask::Unconsented => lost.clear(),
+                // The command has no input but its repository: another
+                // command.
+                Ask::Changed => lost.deselect(),
+            },
+            &|| lost.move_generation(),
+            rule,
+        );
+        Ok(())
+    }),
 ];
+
+/// A repository with a publication remote whose cache was lost, which
+/// holds a ticket context when `with_ticket`.
+struct CacheLoss {
+    world: World,
+}
+
+impl CacheLoss {
+    fn new(with_ticket: bool) -> Self {
+        let world = World::new();
+        git2::Repository::open(&world.root)
+            .unwrap()
+            .remote("origin", "git@example.invalid:team/project.git")
+            .unwrap();
+        let selected = world.execute(REQUEST_1, Self::select(&world, Some("origin")));
+        assert_eq!(selected.outcome, Outcome::Success);
+        if with_ticket {
+            let created = world.execute(REQUEST_2, world.create(mutation::TICKET_NEW));
+            assert_eq!(created.outcome, Outcome::Success, "{}", created.message);
+        }
+        let lost = Self { world };
+        lost.registry()
+            .execute("UPDATE remote_polling_state SET history_unknown=1", [])
+            .unwrap();
+        lost
+    }
+
+    fn registry(&self) -> rusqlite::Connection {
+        rusqlite::Connection::open(
+            self.world
+                .data
+                .path()
+                .join(manyhands::repository::REGISTRY_FILE),
+        )
+        .unwrap()
+    }
+
+    fn select(world: &World, name: Option<&str>) -> Mutation {
+        Mutation::RemoteSelect(RemoteSelectInput {
+            root: world.root.clone(),
+            name: name.map(str::to_owned),
+        })
+    }
+
+    fn resolve(&self, id: &str) -> Mutation {
+        Mutation::ItemResolveHistory(ItemResolveHistoryInput {
+            root: self.world.root.clone(),
+            kind: AuthoringKind::Ticket,
+            id: items::item_id(id),
+            choice: ResolveHistoryChoice::Publish,
+        })
+    }
+
+    fn resolve_item(&self) -> Mutation {
+        self.resolve(mutation::TICKET_NEW)
+    }
+
+    fn resolve_other_item(&self) -> Mutation {
+        self.resolve(TICKET_A)
+    }
+
+    fn clear(&self) -> Mutation {
+        Mutation::RemoteResolveHistory(RemoteResolveHistoryInput {
+            root: self.world.root.clone(),
+        })
+    }
+
+    fn deselect(&self) -> Mutation {
+        Self::select(&self.world, None)
+    }
+
+    fn move_generation(&self) {
+        self.registry()
+            .execute(
+                "UPDATE remote_polling_state SET configuration_generation=configuration_generation+1",
+                [],
+            )
+            .unwrap();
+    }
+}
 
 #[test]
 fn every_command_of_this_target_keeps_the_rules_of_the_boundary() {
