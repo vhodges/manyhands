@@ -14,7 +14,7 @@ fn retirement_r1_missing_row_only_overrides_unknown_history_for_that_item() {
     for kind in [AuthoringKind::Document, AuthoringKind::Ticket] {
         let (data, root, service) = fixture();
         with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, Some(&plan()), true)
+            configure(tx, id, Some(&plan()), ConfigurationChange::Credentials)
         })
         .unwrap();
         let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
@@ -62,7 +62,7 @@ fn retirement_r1_missing_row_only_overrides_unknown_history_for_that_item() {
 fn retirement_batch_absence_preserves_retirement_and_publication_consumes_it_atomically() {
     let (data, root, service) = fixture();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), true)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Credentials)
     })
     .unwrap();
     let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
@@ -143,7 +143,7 @@ fn retirement_batch_absence_preserves_retirement_and_publication_consumes_it_ato
 fn retirement_does_not_weaken_unknown_never_published_row_invariant() {
     let (data, root, service) = fixture();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), true)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Credentials)
     })
     .unwrap();
     let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
@@ -162,7 +162,7 @@ fn retirement_does_not_weaken_unknown_never_published_row_invariant() {
 fn retirement_migration_additive_idempotent_atomic_and_audited() {
     let (data, root, service) = fixture();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), true)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Credentials)
     })
     .unwrap();
     let mut db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
@@ -326,7 +326,7 @@ fn poll_kind_direct_sql_changes_are_denied_and_preserve_the_entire_row_after_reo
     for kind in [Some(PollKind::Observe), Some(PollKind::Update), None] {
         let (data, root, service) = fixture();
         with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, Some(&plan()), false)?;
+            configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
             insert_operation_with_kind(
                 tx,
                 id,
@@ -374,7 +374,7 @@ fn poll_kind_direct_sql_changes_are_denied_and_preserve_the_entire_row_after_reo
 fn poll_kind_legacy_migration_freezes_observe_identity_and_preserves_rows_on_reopen() {
     let (data, root, service) = fixture();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation(
             tx,
             id,
@@ -437,7 +437,7 @@ fn review_completed_state() -> (
     let (data, root, service) = fixture();
     let op = crate::repository::OperationId::new();
     with_transaction(&service,root.path(),|tx,id|{
-        configure(tx,id,Some(&plan()),false)?;
+        configure(tx,id,Some(&plan()),ConfigurationChange::Plan)?;
         insert_operation_with_kind(tx,id,op,&RemoteOperationTarget::for_poll(&plan()),RemoteOperationPriority::Poll,Some(PollKind::Update),123)?;
         tx.execute("UPDATE remote_operation_records SET phase='completed',completed_step='before_discovery',outcome='completed',updated_at=124,poll_completed_at=124,poll_next_eligible_at=424",[]).unwrap();
         replace_poll_dispositions(tx,id,op,&[super::super::poll::PollTargetReport{target:Some(plan().primary().clone()),kind:None,item_id:None,disposition:super::super::poll::PollDisposition::Current,before_oid:Some(ADVERTISED.parse().unwrap()),after_oid:Some(ADVERTISED.parse().unwrap())}],124)
@@ -642,7 +642,7 @@ fn review_disposition_every_recognizable_partial_envelope_is_retained() {
 fn task6_local_history_unknown_context_also_exposes_its_latest_disposition() {
     let (_data, root, service) = fixture();
     with_transaction(&service,root.path(),|tx,id|{
-        configure(tx,id,Some(&plan()),false)?;
+        configure(tx,id,Some(&plan()),ConfigurationChange::Plan)?;
         tx.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(?1,'active','manyhands/ticket/01ARZ3NDEKTSV4RRFFQ69G5FAV','/local-context','01ARZ3NDEKTSV4RRFFQ69G5FAV')",[id]).unwrap();
         let op=crate::repository::OperationId::new();
         insert_operation_with_kind(tx,id,op,&RemoteOperationTarget::for_poll(&plan()),RemoteOperationPriority::Poll,Some(PollKind::Update),123)?;
@@ -664,7 +664,7 @@ fn task6_disposition_schema_upgrade_rollback_corruption_and_privacy() {
     ] {
         let (data, root, service) = fixture();
         with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, Some(&plan()), false)?;
+            configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
             let op = crate::repository::OperationId::new();
             insert_operation_with_kind(
                 tx,
@@ -850,7 +850,7 @@ fn materialization_state_fixture() -> (
     let (data, root, service) = fixture();
     let operation = crate::repository::OperationId::new();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation_with_kind(
             tx,
             id,
@@ -1035,7 +1035,7 @@ fn remove_attempt_columns(connection: &Connection) {
 fn attempt_migration_preserves_existing_rows_and_is_a_no_op_on_second_start() {
     let (data, root, service) = fixture();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
@@ -1191,7 +1191,7 @@ fn state_fixture_symlink_parent_configures_and_reads_registered_root() {
     let (data, root, service) = fixture_in(&alias);
 
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
@@ -1309,7 +1309,7 @@ fn current_advertisement_requires_matching_publication_evidence() {
     ] {
         let (data, root, service) = fixture();
         let generation = with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, Some(&plan()), false)
+            configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
         })
         .unwrap();
         with_transaction(&service, root.path(), |tx, id| {
@@ -1342,7 +1342,7 @@ fn current_advertisement_requires_matching_publication_evidence() {
 fn live_context_state_requires_a_matching_current_advertisement() {
     let (data, root, service) = fixture();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
@@ -1401,7 +1401,7 @@ fn vm_work<T>(connection: &Connection, operation: impl FnOnce() -> T) -> (T, usi
 fn routine_reads_and_batch_writes_do_not_scale_with_retained_history() {
     let (data, root, service) = fixture();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
@@ -1464,7 +1464,7 @@ fn startup_automatically_audits_historical_refs_and_foreign_keys() {
     ] {
         let (data, root, service) = fixture();
         let generation = with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, Some(&plan()), false)
+            configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
         })
         .unwrap();
         with_transaction(&service, root.path(), |tx, id| {
@@ -1503,7 +1503,7 @@ fn startup_automatically_audits_historical_refs_and_foreign_keys() {
 fn only_complete_batches_replace_current_and_deletion_retains_last_successful_oid() {
     let (data, root, service) = fixture();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
@@ -1601,7 +1601,7 @@ fn configuration_changes_invalidate_remote_state_but_preserve_repository_policy(
         )
         .unwrap();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
@@ -1616,7 +1616,7 @@ fn configuration_changes_invalidate_remote_state_but_preserve_repository_policy(
         Some(plan()),
     ] {
         with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, next.as_ref(), true)
+            configure(tx, id, next.as_ref(), ConfigurationChange::Credentials)
         })
         .unwrap();
         let snapshot = service.remote_snapshot(root.path()).unwrap();
@@ -1664,7 +1664,7 @@ fn malformed_response_names_never_enter_database_wal_backups_or_public_formattin
         .execute_batch("PRAGMA journal_mode=WAL; SELECT count(*) FROM repositories;")
         .unwrap();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     let sentinels = [
@@ -1762,7 +1762,7 @@ fn stored_context_states_require_valid_targets_and_publication_evidence() {
 fn operation_target_envelope_is_immutable_and_irrelevant_oid_fields_are_absent() {
     let (data, root, service) = fixture();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     let target = RemoteOperationTarget::for_poll(&plan());
@@ -1828,7 +1828,7 @@ fn local_context_with_lost_history_is_projected_as_unknown_without_a_deletion() 
 fn replacing_configuration_does_not_turn_known_publication_into_first_publication() {
     let (_data, root, service) = fixture();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
@@ -1836,17 +1836,21 @@ fn replacing_configuration_does_not_turn_known_publication_into_first_publicatio
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, None, true)
+        configure(tx, id, None, ConfigurationChange::Credentials)
     })
     .unwrap();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), true)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Credentials)
     })
     .unwrap();
     let snapshot = service.remote_snapshot(root.path()).unwrap();
+    // Task 1 interim: configure no longer sets history_unknown, and the
+    // carry-forward that keeps the evidence is Task 2. Task 2 restores the
+    // original assertion (evidence stays known), so this is deliberately not
+    // a pin of the interim behavior.
     assert_eq!(
         snapshot.publication_evidence_for(AuthoringKind::Ticket, &ITEM.parse().unwrap()),
-        RemotePublicationEvidence::HistoryUnknown
+        RemotePublicationEvidence::NeverPublished
     );
 }
 
@@ -1890,7 +1894,7 @@ CREATE UNIQUE INDEX remote_active_reservation ON remote_operation_records(reposi
 fn cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication() {
     let (data, root, service) = fixture();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     let connection = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
@@ -1987,7 +1991,7 @@ fn task2_merge_evidence_migration_preserves_cycle05_authority_and_is_idempotent(
     let operation_id = crate::repository::OperationId::new();
     let target = RemoteOperationTarget::for_primary_synchronization(&plan());
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation(
             tx,
             id,
@@ -2091,7 +2095,7 @@ fn legacy_attempt_shape_upgrades_empty_attempts_and_rejects_populated_attempts(
     let operation = crate::repository::OperationId::new();
     let target = RemoteOperationTarget::for_primary_synchronization(&plan());
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation(
             tx,
             id,
@@ -2221,7 +2225,7 @@ fn incompatible_context_integration_stage_requires_recovery() {
     }
     .operation_target(&plan());
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation(
             tx,
             id,
@@ -2251,7 +2255,7 @@ fn task2_evidence_schema_has_no_content_or_transport_columns_and_wal_stays_redac
         .execute_batch("PRAGMA journal_mode=WAL; SELECT count(*) FROM repositories;")
         .unwrap();
     let generation = with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)
     })
     .unwrap();
     assert_eq!(generation, 1);
@@ -2328,7 +2332,7 @@ fn index_artifact_schema_migration_is_additive_and_rejects_weakened_provenance()
     let (data, root, service) = fixture();
     let operation = crate::repository::OperationId::new();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation(
             tx,
             id,
@@ -2478,7 +2482,7 @@ fn window_migration_preserves_legacy_step_ids_attempt_paths_and_native_provenanc
     let (data, root, service) = fixture();
     let operation = crate::repository::OperationId::new();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation(
             tx,
             id,
@@ -2581,7 +2585,7 @@ fn window_migration_preserves_legacy_step_ids_attempt_paths_and_native_provenanc
 fn window_fixture(service: &RepositoryService, root: &Path) -> crate::repository::OperationId {
     let operation = crate::repository::OperationId::new();
     with_transaction(service, root, |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         let target = RemoteOperationTarget::for_context(
             &plan(),
             RemoteOperationAction::SynchronizeContext,
@@ -3077,7 +3081,7 @@ fn pinned_window_pass_survives_configuration_fencing_and_registration_cascade() 
     with_transaction(&service, root.path(), |tx, id| {
         let record = read_operation(tx, id, operation)?.unwrap();
         prepare_integration_window(tx, &record, 1, &intent)?;
-        let generation = configure(tx, id, Some(&next_plan), false)?;
+        let generation = configure(tx, id, Some(&next_plan), ConfigurationChange::Plan)?;
         // A retained old pass is not live endpoint history and must not cause
         // another generation bump when the new endpoint is first bound.
         assert_eq!(
@@ -3163,7 +3167,7 @@ fn assert_missing_initial_window_requires_recovery(populated: bool) {
             RemoteOperationTarget::for_primary_synchronization(&plan())
         };
         with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, Some(&plan()), false)?;
+            configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
             insert_operation(
                 tx,
                 id,
@@ -3392,7 +3396,7 @@ fn window_zero_requirement_excludes_non_sync_operations_and_removed_registration
     ] {
         let (data, root, service) = fixture();
         with_transaction(&service, root.path(), |tx, id| {
-            configure(tx, id, Some(&plan()), false)?;
+            configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
             let target = if action == RemoteOperationAction::Poll {
                 RemoteOperationTarget::for_poll(&plan())
             } else {
@@ -3450,7 +3454,7 @@ fn closing_an_unbegun_attempt_keeps_the_step_another_attempt_began() {
     let (data, root, service) = fixture();
     let operation = crate::repository::OperationId::new();
     with_transaction(&service, root.path(), |tx, id| {
-        configure(tx, id, Some(&plan()), false)?;
+        configure(tx, id, Some(&plan()), ConfigurationChange::Plan)?;
         insert_operation(
             tx,
             id,
@@ -3497,4 +3501,194 @@ fn closing_an_unbegun_attempt_keeps_the_step_another_attempt_began() {
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(attempts, [begun.to_string()]);
+}
+
+#[derive(Clone, Copy)]
+enum Call {
+    Plan(&'static str, &'static str),
+    Endpoints(&'static str, &'static str, u8),
+    Credentials,
+    Unavailable,
+}
+
+fn apply_call(service: &RepositoryService, root: &Path, call: Call) -> i64 {
+    with_transaction(service, root, |tx, id| match call {
+        Call::Plan(name, branch) => {
+            let plan = RemoteRefPlan::from_configuration(name, branch).unwrap();
+            configure(tx, id, Some(&plan), ConfigurationChange::Plan)
+        }
+        Call::Endpoints(name, branch, digest) => {
+            let plan = RemoteRefPlan::from_configuration(name, branch).unwrap();
+            configure_endpoints(tx, id, &plan, &[digest; 32])
+        }
+        Call::Credentials => {
+            let plan = read_policy(tx, id)?.plan;
+            configure(tx, id, plan.as_ref(), ConfigurationChange::Credentials)
+        }
+        Call::Unavailable => configure(tx, id, None, ConfigurationChange::Unavailable),
+    })
+    .unwrap()
+}
+
+#[test]
+fn configure_reasons_fence_and_forget() {
+    use Call::*;
+    let a = Plan("origin", "main");
+    // (setup, flag set before the call, call, bumps, forgets, flag after,
+    // known name, known branch, known digest byte)
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(
+        Vec<Call>,
+        bool,
+        Call,
+        bool,
+        bool,
+        i64,
+        Option<&str>,
+        Option<&str>,
+        Option<u8>,
+    )> = vec![
+        // first plan
+        (
+            vec![],
+            false,
+            a,
+            true,
+            false,
+            0,
+            Some("origin"),
+            Some("main"),
+            None,
+        ),
+        // credentials, unavailable
+        (
+            vec![a],
+            false,
+            Credentials,
+            true,
+            false,
+            0,
+            Some("origin"),
+            Some("main"),
+            None,
+        ),
+        (
+            vec![a],
+            false,
+            Unavailable,
+            true,
+            false,
+            0,
+            Some("origin"),
+            Some("main"),
+            None,
+        ),
+        // the same plan returning after unavailable
+        (
+            vec![a, Unavailable],
+            false,
+            a,
+            true,
+            false,
+            0,
+            Some("origin"),
+            Some("main"),
+            None,
+        ),
+        // a different plan after unavailable
+        (
+            vec![a, Unavailable],
+            false,
+            Plan("upstream", "main"),
+            true,
+            true,
+            0,
+            Some("upstream"),
+            Some("main"),
+            None,
+        ),
+        // a new primary branch
+        (
+            vec![a],
+            false,
+            Plan("origin", "trunk"),
+            true,
+            true,
+            0,
+            Some("origin"),
+            Some("trunk"),
+            None,
+        ),
+        // digest changed, then unchanged
+        (
+            vec![Endpoints("origin", "main", 1)],
+            false,
+            Endpoints("origin", "main", 2),
+            true,
+            true,
+            0,
+            Some("origin"),
+            Some("main"),
+            Some(2),
+        ),
+        (
+            vec![Endpoints("origin", "main", 1)],
+            false,
+            Endpoints("origin", "main", 1),
+            false,
+            false,
+            0,
+            Some("origin"),
+            Some("main"),
+            Some(1),
+        ),
+        // the cache-loss flag stays set, and nothing here sets it
+        (
+            vec![a],
+            true,
+            Credentials,
+            true,
+            false,
+            1,
+            Some("origin"),
+            Some("main"),
+            None,
+        ),
+    ];
+    for (n, (setup, flag, call, bumps, _forgets, flag_after, name, branch, digest)) in
+        rows.into_iter().enumerate()
+    {
+        let (data, root, service) = fixture();
+        let mut generation = 0;
+        for step in setup {
+            generation = apply_call(&service, root.path(), step);
+        }
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        if flag {
+            db.execute("UPDATE remote_polling_state SET history_unknown=1", [])
+                .unwrap();
+        }
+        let after = apply_call(&service, root.path(), call);
+        assert_eq!(after != generation, bumps, "row {n} generation");
+        let (unknown, known_name, known_branch, known_digest): (
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<Vec<u8>>,
+        ) = db
+            .query_row(
+                "SELECT history_unknown,known_remote_name,known_primary_branch,known_endpoint_digest FROM remote_polling_state",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(unknown, flag_after, "row {n} flag");
+        assert_eq!(known_name.as_deref(), name, "row {n} known name");
+        assert_eq!(known_branch.as_deref(), branch, "row {n} known branch");
+        assert_eq!(
+            known_digest,
+            digest.map(|byte| vec![byte; 32]),
+            "row {n} known digest"
+        );
+    }
 }

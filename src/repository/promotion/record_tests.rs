@@ -204,7 +204,7 @@ fn spec_p2_create_folder_authoritative_child_keeps_exact_refresh_handoff() {
         let (data, root, service) = promotion_folder_fixture();
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         let r = state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)?;
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)?;
             let mut r = begin_record(
                 tx,
                 id,
@@ -686,7 +686,7 @@ fn service_fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService
             tx,
             id,
             Some(&RemoteRefPlan::from_configuration("origin", "main").unwrap()),
-            false,
+            state::ConfigurationChange::Plan,
         )
     })
     .unwrap();
@@ -825,7 +825,7 @@ fn audit_rejects_foreign_child_scope_instead_of_treating_it_as_absence() {
     let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
     db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES(?1,123,'accessible',0)",[other.path().to_str().unwrap()]).unwrap();
     state::with_transaction(&service, other.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let child = OperationId::new();
@@ -986,7 +986,7 @@ fn parent_and_child_ids_cross_scope_but_own_promote_reservation_is_accepted() {
     let other = tempfile::tempdir_in(std::env::temp_dir().canonicalize().unwrap()).unwrap();
     Connection::open(&service.registry_path).unwrap().execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES(?1,123,'accessible',0)",[other.path().to_str().unwrap()]).unwrap();
     state::with_transaction(&service, other.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     assert_eq!(
@@ -1107,7 +1107,7 @@ fn final_sql_rollback_preserves_history_parent_reservation_and_tracking_guard() 
         .unwrap();
     let op = OperationId::new();
     state::with_transaction(&service,root.path(),|tx,id| {
-        state::configure(tx,id,Some(&plan),false)?;
+        state::configure(tx,id,Some(&plan),state::ConfigurationChange::Plan)?;
         let mut r=begin_record(tx,id,op,&item,PromotionExpectation::from_bytes([7;32]),Some("origin"))?;
         through_integration(tx,&mut r);
         r.step=PromotionStep::Published; r.publication=Some(PublicationCategory::Published); save_record(tx,id,&r)?;
@@ -1284,7 +1284,7 @@ fn finalization_without_applicable_reservation_does_not_fabricate_history() {
         let plan = remote.then(|| RemoteRefPlan::from_configuration("origin", "main").unwrap());
         let op = OperationId::new();
         let r = state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, plan.as_ref(), false)?;
+            state::configure(tx, id, plan.as_ref(), state::ConfigurationChange::Plan)?;
             let mut r = begin_record(
                 tx,
                 id,

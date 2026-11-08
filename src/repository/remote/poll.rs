@@ -1318,7 +1318,7 @@ impl RepositoryService {
                     let policy = state::read_snapshot(tx, id)?.polling().clone();
                     // Configuration fencing clears observer retry state. Full
                     // poll attention uses the pre-failure policy in this same TX.
-                    state::configure(tx, id, None, false)?;
+                    state::configure(tx, id, None, state::ConfigurationChange::Unavailable)?;
                     let now = OffsetDateTime::now_utc();
                     state::record_outcome(
                         tx,

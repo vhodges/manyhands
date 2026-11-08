@@ -475,7 +475,7 @@ fn context_oid_immutable_once_set() {
         &tx,
         1,
         Some(&RemoteRefPlan::from_configuration("origin", "main").unwrap()),
-        false,
+        state::ConfigurationChange::Plan,
     )
     .unwrap();
     let mut r = begin_record(
@@ -1092,7 +1092,7 @@ fn service_fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService
             tx,
             id,
             Some(&RemoteRefPlan::from_configuration("origin", "main").unwrap()),
-            false,
+            state::ConfigurationChange::Plan,
         )
     })
     .unwrap();

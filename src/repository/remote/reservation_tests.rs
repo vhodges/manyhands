@@ -1151,7 +1151,7 @@ fn fixture_in(parent: &Path) -> (tempfile::TempDir, tempfile::TempDir, Repositor
         "INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES (?1,123,'accessible',0)",
         [root.path().to_str().unwrap()]).unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan()), false)
+        state::configure(tx, id, Some(&plan()), state::ConfigurationChange::Plan)
     })
     .unwrap();
     (data, root, service)
@@ -1351,7 +1351,12 @@ fn batch_commit_rechecks_requests_and_generation_atomically() {
     let (_data, root, service) = fixture();
     let token = reserve(&service, root.path());
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan()), true)
+        state::configure(
+            tx,
+            id,
+            Some(&plan()),
+            state::ConfigurationChange::Credentials,
+        )
     })
     .unwrap();
     assert!(
@@ -3100,7 +3105,7 @@ fn sync_owner_target_root_generation_and_active_index_are_fenced_in(parent: &Pat
     let second = tempfile::tempdir_in(parent.canonicalize().unwrap()).unwrap();
     connection.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES(?1,123,'accessible',0)",[second.path().to_str().unwrap()]).unwrap();
     state::with_transaction(&service, second.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan()), false)
+        state::configure(tx, id, Some(&plan()), state::ConfigurationChange::Plan)
     })
     .unwrap();
     assert!(
@@ -3133,7 +3138,12 @@ fn sync_owner_target_root_generation_and_active_index_are_fenced_in(parent: &Pat
         .is_err()
     );
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan()), true)
+        state::configure(
+            tx,
+            id,
+            Some(&plan()),
+            state::ConfigurationChange::Credentials,
+        )
     })
     .unwrap();
     assert!(

@@ -147,7 +147,7 @@ impl RepositoryService {
             Err(error) => {
                 session.clear_cached_passphrase();
                 state::with_transaction(self, root, |tx, id| {
-                    state::configure(tx, id, None, false)?;
+                    state::configure(tx, id, None, state::ConfigurationChange::Unavailable)?;
                     state::record_outcome(
                         tx,
                         id,
@@ -267,7 +267,12 @@ impl RepositoryService {
         {
             state::with_transaction(self, root, |tx, id| {
                 reservation::owned(self, tx, id, &owner)?;
-                state::configure(tx, id, current_plan.as_ref(), true)?;
+                let change = match current_plan.as_ref() {
+                    Some(current) if current == &plan => state::ConfigurationChange::Credentials,
+                    Some(_) => state::ConfigurationChange::Plan,
+                    None => state::ConfigurationChange::Unavailable,
+                };
+                state::configure(tx, id, current_plan.as_ref(), change)?;
                 state::record_outcome(tx, id, RemoteOutcomeCategory::ConfigurationRequired, None)
             })?;
             return Err(RemoteObservationError::Interrupted);

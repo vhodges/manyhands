@@ -3453,7 +3453,12 @@ impl RepositoryService {
                 _ => None,
             };
             remote::state::with_transaction(self, root, |tx, id| {
-                remote::state::configure(tx, id, plan.as_ref(), false)
+                remote::state::configure(
+                    tx,
+                    id,
+                    plan.as_ref(),
+                    remote::state::ConfigurationChange::Plan,
+                )
             })?;
         }
         Ok(())

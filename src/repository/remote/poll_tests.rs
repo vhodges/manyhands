@@ -682,7 +682,7 @@ fn review_original_fenced_stop_keeps_pending_after_later_poll_repairs_index() {
                 // A real configuration-generation fence ends the first owner before
                 // its next safe point. A later explicit local poll may now proceed.
                 state::with_transaction(&service, &root, |tx, id| {
-                    state::configure(tx, id, Some(&plan), true)
+                    state::configure(tx, id, Some(&plan), state::ConfigurationChange::Credentials)
                 })
                 .unwrap();
                 let configuration = service.observation_configuration(&root, &plan).unwrap();
@@ -2771,7 +2771,7 @@ impl MaterializationFixture {
                 .unwrap();
         db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES(?1,123,'accessible',0)", [local.root.to_str().unwrap()]).unwrap();
         state::with_transaction(&local.service, &local.root, |tx, id| {
-            state::configure(tx, id, Some(&local.plan), false)
+            state::configure(tx, id, Some(&local.plan), state::ConfigurationChange::Plan)
         })
         .unwrap();
         let item_id: canonical::ItemId = POLL_ID.parse().unwrap();

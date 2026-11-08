@@ -246,7 +246,7 @@ fn applying_candidate_restart_fixture(already_at_candidate: bool) {
     let repo = git2::Repository::open(root.path()).unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let base = repo.head().unwrap().target().unwrap();
@@ -399,7 +399,7 @@ fn candidate_third_head_restart_preserves_applying_evidence() {
     let repo = git2::Repository::open(root.path()).unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let base = repo.head().unwrap().target().unwrap();
@@ -530,7 +530,7 @@ fn divergence_recheck_refuses_configuration_and_tracking_changes_before_mutation
             .unwrap();
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
         })
         .unwrap();
         let base = repo.head().unwrap().target().unwrap();
@@ -1080,7 +1080,7 @@ fn local_synchronization_binding_rejects_remote_collision_after_none_inspection_
         // Simulate the remote insertion AFTER service inspection returned None,
         // before local binding. The binder must inspect again in its transaction.
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)?;
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)?;
             state::insert_operation(
                 tx,
                 id,
@@ -1139,7 +1139,7 @@ fn existing_remote_id_rejects_other_root_before_invalid_live_configuration() {
     let req = request(root.path());
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)?;
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)?;
         state::insert_operation(
             tx,
             id,
@@ -1839,7 +1839,7 @@ fn resolution_fixture_with_baseline_bytes(
         .unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let target = RemoteOperationTarget::for_primary_synchronization(&plan);
@@ -1975,7 +1975,7 @@ fn context_primary_conflict_fixture() -> (
         .unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let target = RemoteOperationTarget::for_context(
@@ -3753,7 +3753,7 @@ fn local_effect_restart_before_clean_preflight_and_transport() {
         };
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
         })
         .unwrap();
         let target = RemoteOperationTarget::for_primary_synchronization(&plan);
@@ -4225,7 +4225,7 @@ impl PassFixture {
             .unwrap();
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
         })
         .unwrap();
         if published {
@@ -6298,7 +6298,7 @@ fn new_refs_append_window_immutable_evidence() {
         .unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let local = repository.head().unwrap().target().unwrap();
@@ -6783,7 +6783,7 @@ fn pending_context_synchronization_blocks_only_its_public_authoring_context() {
     let tree = repo.find_commit(head).unwrap().tree().unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&service, root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let target = RemoteOperationTarget::for_context(
@@ -12635,7 +12635,7 @@ impl ContextPass {
             .observation_configuration(root.path(), &plan)
             .unwrap();
         state::with_transaction(&service, root.path(), |tx, id| {
-            state::configure(tx, id, Some(&plan), false)?;
+            state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)?;
             state::configure_endpoints(tx, id, &plan, &configuration.endpoint_digest())
         })
         .unwrap();

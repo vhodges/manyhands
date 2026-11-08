@@ -189,6 +189,30 @@ pub(in super::super) fn migrate(transaction: &Transaction<'_>) -> Result<(), Rep
         transaction.execute_batch("ALTER TABLE remote_polling_state ADD COLUMN endpoint_digest BLOB CHECK(endpoint_digest IS NULL OR (typeof(endpoint_digest)='blob' AND length(endpoint_digest)=32))")
             .map_err(|_| recovery_required())?;
     }
+    let known_columns = transaction
+        .prepare("PRAGMA table_info(remote_polling_state)")
+        .and_then(|mut query| {
+            query
+                .query_map([], |row| row.get::<_, String>(1))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(|_| recovery_required())?;
+    for (name, definition) in [
+        ("known_remote_name", "TEXT"),
+        ("known_primary_branch", "TEXT"),
+        (
+            "known_endpoint_digest",
+            "BLOB CHECK(known_endpoint_digest IS NULL OR (typeof(known_endpoint_digest)='blob' AND length(known_endpoint_digest)=32))",
+        ),
+    ] {
+        if !known_columns.iter().any(|column| column == name) {
+            transaction
+                .execute_batch(&format!(
+                    "ALTER TABLE remote_polling_state ADD COLUMN {name} {definition}"
+                ))
+                .map_err(|_| recovery_required())?;
+        }
+    }
     migrate_poll_attempt_times(transaction)?;
     migrate_poll_materializations(transaction)?;
     migrate_poll_dispositions(transaction)?;
@@ -2260,20 +2284,59 @@ pub(super) fn outcome_name(value: RemoteOutcomeCategory) -> &'static str {
     }
 }
 
-/// Configuration preflight supplies only a validated plan and whether any
-/// endpoint/key selection changed. No endpoint, key ID, path, or secret-derived
-/// fingerprint is stored. Task 3 owns when to invoke this transition.
+/// Why a configuration fence is taken. Every reason bumps the generation and
+/// drops the live observation; only a differing identity forgets the evidence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in super::super) enum ConfigurationChange {
+    /// Key selection or credentials changed: always fences, forgets nothing.
+    Credentials,
+    /// The configured remote is unavailable (`plan` is `None`): fences when a
+    /// plan was set and keeps the known identity, so the same remote
+    /// returning forgets nothing.
+    Unavailable,
+    /// A validated plan was supplied: fences when it differs from the current
+    /// plan, and forgets when it differs from the known identity.
+    Plan,
+}
+
+/// Configuration preflight supplies only a validated plan and the reason for
+/// the fence. No endpoint, key ID, path, or secret-derived fingerprint is
+/// stored beyond the endpoint digest.
 pub(in super::super) fn configure(
     transaction: &Transaction<'_>,
     repository_id: i64,
     plan: Option<&RemoteRefPlan>,
-    configuration_changed: bool,
+    change: ConfigurationChange,
+) -> Result<i64, RepositoryError> {
+    configure_known(transaction, repository_id, plan, change, None)
+}
+
+fn configure_known(
+    transaction: &Transaction<'_>,
+    repository_id: i64,
+    plan: Option<&RemoteRefPlan>,
+    change: ConfigurationChange,
+    digest: Option<&[u8; 32]>,
 ) -> Result<i64, RepositoryError> {
     read_snapshot(transaction, repository_id)?;
     let policy = read_policy(transaction, repository_id)?;
-    if !configuration_changed && policy.plan.as_ref() == plan {
+    if change != ConfigurationChange::Credentials && policy.plan.as_ref() == plan {
         return Ok(policy.generation);
     }
+    let (known_name, known_branch, known_digest) = read_known_identity(transaction, repository_id)?;
+    // The identity differs from what was last known, so the evidence is about
+    // another remote. A first plan (nothing known) and NULL columns forget
+    // nothing.
+    let _forgets = (change == ConfigurationChange::Plan
+        && plan.is_some_and(|plan| {
+            known_name
+                .as_deref()
+                .is_some_and(|name| name != plan.remote_name())
+                || known_branch
+                    .as_deref()
+                    .is_some_and(|branch| branch != plan.primary_branch())
+        }))
+        || digest.is_some_and(|digest| known_digest.as_ref().is_some_and(|known| known != digest));
     let generation = policy
         .generation
         .checked_add(1)
@@ -2293,14 +2356,22 @@ pub(in super::super) fn configure(
             [repository_id],
         )
         .map_err(|_| recovery_required())?;
+    // Task 2: carry the evidence forward when `_forgets` is false. Task 3:
+    // write per-context unknown rows when it is true.
     transaction
         .execute(
             "DELETE FROM remote_context_states WHERE repository_id=?1",
             [repository_id],
         )
         .map_err(|_| recovery_required())?;
-    transaction.execute("UPDATE remote_polling_state SET history_unknown=CASE WHEN remote_name IS NOT NULL THEN 1 ELSE history_unknown END,configuration_generation=?2,remote_name=?3,primary_branch=?4,automatic_backoff_seconds=NULL,latest_outcome=NULL WHERE repository_id=?1",
+    transaction.execute("UPDATE remote_polling_state SET configuration_generation=?2,remote_name=?3,primary_branch=?4,automatic_backoff_seconds=NULL,latest_outcome=NULL WHERE repository_id=?1",
         params![repository_id,generation,plan.map(RemoteRefPlan::remote_name),plan.map(RemoteRefPlan::primary_branch)]).map_err(|_| recovery_required())?;
+    if change == ConfigurationChange::Plan
+        && let Some(plan) = plan
+    {
+        transaction.execute("UPDATE remote_polling_state SET known_remote_name=?2,known_primary_branch=?3 WHERE repository_id=?1",
+            params![repository_id,plan.remote_name(),plan.primary_branch()]).map_err(|_| recovery_required())?;
+    }
     Ok(generation)
 }
 
@@ -2319,7 +2390,12 @@ pub(in super::super) fn invalidate_key_selection(
         .map_err(|_| recovery_required())?;
     for id in ids {
         let policy = read_policy(transaction, id)?;
-        configure(transaction, id, policy.plan.as_ref(), true)?;
+        configure(
+            transaction,
+            id,
+            policy.plan.as_ref(),
+            ConfigurationChange::Credentials,
+        )?;
     }
     Ok(())
 }
@@ -2338,9 +2414,17 @@ pub(in super::super) fn configure_endpoints(
     let changed = previous
         .as_ref()
         .map_or(has_history, |previous| previous != digest);
-    let generation = configure(tx, id, Some(plan), changed)?;
+    // A digest change under an unchanged plan still fences, like a credentials
+    // change; a changed plan fences through `Plan`.
+    let plan_changed = read_policy(tx, id)?.plan.as_ref() != Some(plan);
+    let change = if changed && !plan_changed {
+        ConfigurationChange::Credentials
+    } else {
+        ConfigurationChange::Plan
+    };
+    let generation = configure_known(tx, id, Some(plan), change, Some(digest))?;
     tx.execute(
-        "UPDATE remote_polling_state SET endpoint_digest=?2 WHERE repository_id=?1",
+        "UPDATE remote_polling_state SET endpoint_digest=?2,known_endpoint_digest=?2 WHERE repository_id=?1",
         params![id, digest.as_slice()],
     )
     .map_err(|_| recovery_required())?;
@@ -2368,6 +2452,22 @@ pub(super) fn configure_poll_endpoints(
     )
     .map_err(|_| recovery_required())?;
     Ok(generation)
+}
+
+type KnownIdentity = (Option<String>, Option<String>, Option<[u8; 32]>);
+
+fn read_known_identity(connection: &Connection, id: i64) -> Result<KnownIdentity, RepositoryError> {
+    let (name, branch, digest): (Option<String>, Option<String>, Option<Vec<u8>>) = connection
+        .query_row(
+            "SELECT known_remote_name,known_primary_branch,known_endpoint_digest FROM remote_polling_state WHERE repository_id=?1",
+            [id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(|_| recovery_required())?;
+    let digest = digest
+        .map(|value| value.try_into().map_err(|_| recovery_required()))
+        .transpose()?;
+    Ok((name, branch, digest))
 }
 
 fn read_endpoint_digest(
