@@ -111,7 +111,8 @@ pub use remote::{
     ExpectedConfiguration, ObservePublicationRemoteRequest, PollCompletion, PollDisposition,
     PollIneligibility, PollPublicationRemoteRequest, PollTargetReport, PollingInterval,
     PublishPendingReason, RedactedConflictBytes, RemoteContextSnapshot, RemoteContextState,
-    RemoteObservationError, RemoteObservationOutcome, RemoteOperationAction,
+    RemoteHistoryChoices, RemoteHistoryEntry, RemoteHistoryError, RemoteHistoryRelation,
+    RemoteHistoryReport, RemoteObservationError, RemoteObservationOutcome, RemoteOperationAction,
     RemoteOperationInspection, RemoteOperationPhase, RemoteOperationPriority,
     RemoteOperationSafePoint, RemoteOperationTarget, RemoteOperationTargetError,
     RemoteOutcomeCategory, RemotePollError, RemotePollInvocation, RemotePollOutcome,
@@ -3485,7 +3486,12 @@ impl RepositoryService {
                 _ => None,
             };
             remote::state::with_transaction(self, root, |tx, id| {
-                remote::state::configure(tx, id, plan.as_ref(), false)
+                remote::state::configure(
+                    tx,
+                    id,
+                    plan.as_ref(),
+                    remote::state::ConfigurationChange::Plan,
+                )
             })?;
         }
         Ok(())

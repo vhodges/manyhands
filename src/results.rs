@@ -426,6 +426,9 @@ recovery_actions! {
     HostApprove => "host.approve", ["authority", "root"];
     /// Replace the pin of the host `authority` for the repository at `root`.
     HostReplace => "host.replace", ["authority", "root"];
+    /// List the contexts of the repository at `root` whose publication
+    /// history is unknown, and choose a repair for each.
+    RemoteHistory => "remote.history", ["root"];
 }
 
 impl Serialize for RecoveryActionKind {

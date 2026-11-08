@@ -32,6 +32,7 @@ fn retirement_recognition_committed_primary_and_independent_ticket_completion() 
         "unmatched",
         "open",
         "unknown",
+        "unpublished",
         "malformed",
         "tracking_only",
         "promoted",
@@ -204,6 +205,8 @@ fn retirement_recognition_committed_primary_and_independent_ticket_completion() 
             },
             if case == "unknown" {
                 PollTrackingState::HistoryUnknown
+            } else if case == "unpublished" {
+                PollTrackingState::Unpublished
             } else {
                 PollTrackingState::RemotelyDeleted
             },
@@ -220,6 +223,7 @@ fn retirement_recognition_committed_primary_and_independent_ticket_completion() 
             | "unmatched" => PollDisposition::Closed,
             "promoted" => PollDisposition::Promoted,
             "unknown" => PollDisposition::HistoryUnknown,
+            "unpublished" => PollDisposition::Unpublished,
             _ => PollDisposition::RemotelyDeleted,
         };
         assert_eq!(disposition, expected, "{case}");
@@ -935,7 +939,7 @@ fn review_original_fenced_stop_keeps_pending_after_later_poll_repairs_index() {
                 // A real configuration-generation fence ends the first owner before
                 // its next safe point. A later explicit local poll may now proceed.
                 state::with_transaction(&service, &root, |tx, id| {
-                    state::configure(tx, id, Some(&plan), true)
+                    state::configure(tx, id, Some(&plan), state::ConfigurationChange::Credentials)
                 })
                 .unwrap();
                 let configuration = service.observation_configuration(&root, &plan).unwrap();
@@ -2603,6 +2607,11 @@ fn task6_config_and_selected_key_source_after_fetch_fence_before_batch() {
         } else {
             fs::write(&key, b"externally replaced longer fixture source").unwrap();
         }
+        // An earlier current batch: a key change carries it forward to the new
+        // generation.
+        f.db()
+            .execute_batch("INSERT INTO remote_observation_batches(repository_id,remote_name,primary_branch,configuration_generation,observed_at,is_current) SELECT repository_id,remote_name,primary_branch,configuration_generation,1000,1 FROM remote_polling_state")
+            .unwrap();
         let before = snapshot(&f.local.root, &f.local.repository);
         assert!(matches!(
             f.local.service.poll_after_fetch(
@@ -2615,13 +2624,18 @@ fn task6_config_and_selected_key_source_after_fetch_fence_before_batch() {
             Err(RemotePollError::Interrupted)
         ));
         assert_eq!(snapshot(&f.local.root, &f.local.repository), before);
-        assert_eq!(
-            f.db()
-                .query_row("SELECT count(*) FROM remote_observation_batches", [], |r| r
-                    .get::<_, i64>(0))
-                .unwrap(),
-            0
-        );
+        // No batch of this poll was committed; only the fence touched them.
+        let current: i64 = f
+            .db()
+            .query_row(
+                "SELECT count(*) FROM remote_observation_batches b JOIN remote_polling_state p ON p.repository_id=b.repository_id AND p.configuration_generation=b.configuration_generation WHERE b.is_current=1 AND b.observed_at=1000",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        if change == "key_source" {
+            assert_eq!(current, 1);
+        }
     }
 }
 
@@ -3236,6 +3250,10 @@ fn poll_dispositions_have_only_fixed_guidance() {
             "Publication history is unknown; inspect remote state before proceeding.",
         ),
         (
+            PollDisposition::Unpublished,
+            "The remote context is not published yet; item sync publishes it.",
+        ),
+        (
             PollDisposition::NotReached,
             "This target was not reached; retry the poll when ready.",
         ),
@@ -3321,7 +3339,7 @@ impl MaterializationFixture {
                 .unwrap();
         db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES(?1,123,'accessible',0)", [local.root.to_str().unwrap()]).unwrap();
         state::with_transaction(&local.service, &local.root, |tx, id| {
-            state::configure(tx, id, Some(&local.plan), false)
+            state::configure(tx, id, Some(&local.plan), state::ConfigurationChange::Plan)
         })
         .unwrap();
         let item_id: canonical::ItemId = POLL_ID.parse().unwrap();
@@ -4561,6 +4579,7 @@ fn poll_ignored_only_is_clean_and_remote_absence_wins_over_dirty() {
             PollTrackingState::HistoryUnknown,
             PollDisposition::HistoryUnknown,
         ),
+        (PollTrackingState::Unpublished, PollDisposition::Unpublished),
     ] {
         let before = snapshot(&f.root, &context);
         assert_eq!(
@@ -5761,5 +5780,32 @@ fn poll_document_selection_matches_discovery_extensions_including_dotfiles() {
                 Some(POLL_ID.parse().unwrap())
             );
         }
+    }
+}
+
+#[test]
+fn absent_target_is_classified_from_its_previous_evidence() {
+    use super::super::RemotePublicationEvidence as E;
+    let f = LocalFixture::new();
+    for (evidence, disposition) in [
+        (Some(E::NeverPublished), PollDisposition::Unpublished),
+        (Some(E::HistoryUnknown), PollDisposition::HistoryUnknown),
+        (Some(E::ObservedPublished), PollDisposition::RemotelyDeleted),
+        (None, PollDisposition::HistoryUnknown),
+    ] {
+        assert_eq!(
+            classify_local_target(
+                &f.root,
+                "main",
+                &SynchronizationTarget::Primary,
+                absent_tracking_state(evidence)
+            )
+            .unwrap(),
+            LocalPollClassification::Unchanged {
+                disposition,
+                local_oid: None
+            },
+            "{evidence:?}"
+        );
     }
 }

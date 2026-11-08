@@ -13,6 +13,7 @@ use crate::{
 
 use super::{
     LifecycleBlocker, LifecycleMutationDto, LifecycleRecording, MutationDataDto, PrepareDataDto,
+    ResolveHistoryChoice,
 };
 
 /// One step of the way out of a lifecycle answer. Its IDs are the answer's;
@@ -43,6 +44,9 @@ pub enum LifecycleWayOut {
     /// `poll once`, which reads primary's tracking ref and whether a
     /// published context still stands.
     PollOnce,
+    /// `remote history`, then `item resolve-history`: the shared copy's
+    /// history is unknown from evidence, which a poll can't read.
+    ResolveHistory,
     /// A save of the item, which makes its missing context.
     SaveItem { item_id: String },
     /// A refused merge no other step routes, of a promotion or a closure,
@@ -52,6 +56,56 @@ pub enum LifecycleWayOut {
     RepairOutside,
     /// `repo inspect`, when the answer offers it.
     Inspect,
+}
+
+/// The verb that follows an answer of `item resolve-history`. The values
+/// carry no text: each front end words them, as for [`LifecycleWayOut`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HistoryWayOut {
+    /// `context release` of the item: `release` is no choice of the verb
+    /// (Decision 2).
+    ReleaseContext { item_id: String },
+    /// `item republish` of the item, whose published branch the remote
+    /// deleted. Resolving never stands in for its consent.
+    Republish { item_id: String },
+    /// `item sync` of the item, which publishes it or integrates what the
+    /// remote has.
+    Sync { item_id: String },
+    /// `remote history`, then `item resolve-history` for what it lists:
+    /// some context still reads unknown, so the flag stays.
+    RemoteHistory,
+}
+
+/// The way out of an answer of `remote resolve-history`: `recovery_required`
+/// means a context still reads unknown.
+pub fn clear_cache_loss_way_out(code: ResultCode) -> Option<HistoryWayOut> {
+    (code == ResultCode::RecoveryRequired).then_some(HistoryWayOut::RemoteHistory)
+}
+
+/// The way out of an answer of `item resolve-history`, from its code alone:
+/// a refused `release`, a deleted branch (or a tracking ref that says it was
+/// published), a context already resolved or present on the remote, a
+/// resolution that was made, and `recovery_required` (no current batch to
+/// read absence from: `remote history` first). Nothing for any other code.
+///
+/// `InvalidInput` names the release only for the choice `release`, which is
+/// the one input the verb refuses that way; any other `InvalidInput` is a
+/// malformed request and is told nothing.
+pub fn resolve_history_way_out(
+    choice: ResolveHistoryChoice,
+    code: ResultCode,
+    item_id: &str,
+) -> Option<HistoryWayOut> {
+    let item_id = item_id.to_owned();
+    match code {
+        ResultCode::InvalidInput if choice == ResolveHistoryChoice::Release => {
+            Some(HistoryWayOut::ReleaseContext { item_id })
+        }
+        ResultCode::RemoteBranchDeleted => Some(HistoryWayOut::Republish { item_id }),
+        ResultCode::RecoveryRequired => Some(HistoryWayOut::RemoteHistory),
+        ResultCode::Ok | ResultCode::AlreadyApplied => Some(HistoryWayOut::Sync { item_id }),
+        _ => None,
+    }
 }
 
 /// The way out of a result of `document promote`, `ticket close` or an
@@ -241,7 +295,8 @@ fn held(envelope: &Envelope<PrepareDataDto>) -> Option<LifecycleWayOut> {
 fn blocked(blockers: &[LifecycleBlocker], item: Option<&str>) -> Vec<LifecycleWayOut> {
     use LifecycleBlocker::{
         ConflictPending, ContextConflicted, ContextDirty, ContextMissing, HistoryUnknown,
-        IntegrationConflict, LocalOperationPending, PrimaryAheadOfRemote, PrimaryMissing,
+        HistoryUnresolved, IntegrationConflict, LocalOperationPending, PrimaryAheadOfRemote,
+        PrimaryMissing,
     };
     let tracking = |blocker: &LifecycleBlocker| {
         matches!(
@@ -249,6 +304,26 @@ fn blocked(blockers: &[LifecycleBlocker], item: Option<&str>) -> Vec<LifecycleWa
             PrimaryAheadOfRemote | PrimaryMissing | HistoryUnknown
         )
     };
+    if blockers.contains(&HistoryUnresolved)
+        && blockers.iter().all(|blocker| {
+            tracking(blocker) || matches!(blocker, HistoryUnresolved | ContextMissing)
+        })
+    {
+        // The poll still reads what it can; the repair is the way out of
+        // the unresolved history.
+        let mut route = Vec::new();
+        if blockers
+            .iter()
+            .any(|blocker| *blocker != HistoryUnknown && tracking(blocker))
+        {
+            route.push(LifecycleWayOut::PollOnce);
+            if blockers.contains(&PrimaryAheadOfRemote) {
+                route.push(LifecycleWayOut::SharePrimary);
+            }
+        }
+        route.push(LifecycleWayOut::ResolveHistory);
+        return route;
+    }
     if blockers.iter().any(tracking)
         && blockers
             .iter()

@@ -12,7 +12,120 @@ id: "01M6M98R2XHH0756TPFGKK4BM3"
 
 ## Authority, Scope And Current Standing
 
-### Current Remaining-SSH Gate Standing — 2026-11-08 UTC
+### Current Main-Integration Standing — 2026-11-08 UTC
+
+**Bounded compatibility integration local gates GREEN; controller SAME SPEC then
+QUALITY review remains owed before the retirement seam. Ticket implementing.**
+Entry `c48bc2cf2d9d9bbe68621278bb56fedd7276d94c`; accepted fresh main
+`8da9afd4ec82c145632988687cbd71bead046051`; merge base
+`d70142b63a952f5e1aade369e0cd654ca9a03617`. Reconfirmed clean refs/checkouts and
+ran `git merge origin/main`: exit1, the assessed 12 files/22 content-conflict
+hunks, no discard/rebase. The controller authorizes bounded resolutions and
+compatibility of both approved contracts. Owner's broader necessary-test-fix/
+expansion authorization stands; no weakened assertion/catalog or new policy.
+
+Design/implementation-plan amendments above precede compatibility behavior edits.
+Merge's mechanical baseline and source-counted inventories are not runtime proof.
+The three retirement SSH invalid-trigger failures and the proposed post-prune
+seam remain UNFIXED/UNIMPLEMENTED. No remaining SSH target/smoke is admitted here.
+
+Planned exact checks (each through `devenv shell -- cargo test --all-features
+--locked --lib <full-name> -- --exact`, names/argv recorded in new-only evidence
+before execution):
+
+- `repository::remote::state::persistence_tests::retirement_disposition_exact_old_enum_upgrade_preserves_evidence_and_owner`
+- `repository::remote::state::persistence_tests::retirement_disposition_old_corrupt_and_partial_envelopes_roll_back`
+- `repository::remote::state::persistence_tests::poll_dispositions_unpublished_migration_preserves_rows_and_is_idempotent`
+- `repository::context_retirement::store_tests::retirement_old_generation_pin_retains_exact_batch_and_children_through_reopen`
+- `repository::context_retirement::store_tests::retirement_z_keeps_a_valid_integration_window_and_its_batch`
+- `repository::context_retirement::store_tests::retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen`
+- `repository::remote::poll::tests::retirement_recognition_committed_primary_and_independent_ticket_completion`
+- `repository::remote::poll::tests::task6_disposition_insert_fault_rolls_back_advertisement_and_old_report`
+
+Changed configuration-call, DTO, CLI inventory and schema checks are selected by
+exact name before their command, not whole modules. Fresh final check/strict
+Clippy/fmt required on the coherent tree. No test had run at this initial
+checkpoint; actual outcomes are appended below and in the final integration entry.
+New evidence: `/tmp/opencode/task8-main-integration-20261108T202227Z/`.
+Assessment47 manifest `9dc1b503e533acb2ee878f095e3aa8ea627fd25af62cba6a9b89aa2c27dd65d0`
+retained, no historical bulk audit. Prior d87/64a6/4cc and upstream-ledger greens
+remain source-qualified, not current merged passes. SAME SPEC then QUALITY remain
+controller-owned; no performance/profiling, real profile/context/draft, push, PR,
+main close/native or cleanup authority. Ticket remains implementing.
+
+#### Integration Exact-Check Checkpoint / Remaining Selection
+
+Compiled behavioral REDs are captured as `red-migration`,
+`red-marker-and-corruption`, `red-pin`, `red-schema`: each exit101, 0passed/1failed.
+Respectively they measure valid profile15 rejection, schema writes before the
+profile16 missing-marker refusal, pinned-parent commit's SQLite FK failure
+(extended787), and remote-history's missing closed/promoted members. That new pin
+failure is **not** an attribution of the three historical SSH failures.
+`green-migration`, `green-marker-and-corruption`, `green-pin`,
+`green-unpublished-migration`, `green-window-and-carry`, `green-last-pin-and-carry`,
+`green-recognition`, `green-local-disposition-rollback` each passed exactly1/0,
+exit0; all library commands filtered1722. Per-command argv/input/log hashes and
+timings live in the admitted/completed JSON receipts in the new evidence folder.
+No unchanged green is repeated.
+
+Additional exact selection before execution (same Devenv all-feature/locked
+test flags as above; each receipt records the literal argv before launching):
+
+- `--lib repository::remote::state::persistence_tests::review_disposition_genuine_old_envelope_migrates_once_preserving_original_rows -- --exact`:
+  this genuine pre-envelope path also changed. Source inspection finds its old
+  fixture drops the objects/time pair but retains main's new marker. Measure the
+  predicted fixture failure, then repair historical construction only; retain
+  marker-inconsistent refusal and all row/time/reopen assertions.
+- `--lib repository::context_retirement::record::authority::tests::retirement_f2_all_old_remote_and_local_write_boundaries_require_actual_current_scope -- --exact`
+- `--lib repository::context_retirement::record::authority::tests::retirement_reentry_explicit_replacement_fences_all_old_write_boundaries -- --exact`
+- `--lib repository::context_retirement::record::authority::tests::retirement_live_owned_observer_checks_every_write_boundary -- --exact`
+- `--lib repository::context_retirement::execution_tests::retirement_specfix_s3_completed_sync_index_debt_blocks_before_claim -- --exact`
+- `--lib repository::context_retirement::execution_tests::retirement_specfix_s3_terminal_reconciliation_debt_blocks_before_claim -- --exact`
+- `--lib repository::context_retirement::execution_tests::retirement_specfix_s3_active_observer_still_blocks_before_claim -- --exact`
+- `--lib repository::remote::state::persistence_tests::credentials_fence_carries_batch_and_rows -- --exact`
+- `--lib repository::remote::state::persistence_tests::configure_reasons_fence_and_forget -- --exact`
+- `--lib repository::mutation::dto::poll_retirement_stored_contract_is_closed_and_cannot_complete_a_not_reached_prefix -- --exact`
+- `--lib repository::mutation::dto::poll_retirement_recognition_tests::ordinary_retirement_stored_data_is_closed_and_typed -- --exact`
+- `--lib repository::mutation::dto::poll_retirement_recognition_tests::ordinary_poll_stored_reports_keep_their_untagged_shape_and_all_old_values -- --exact`
+- `--bin manyhands-cli catalog::tests::catalog_repository_rules_and_planned_metadata_match_the_design -- --exact`
+- `--bin manyhands-cli catalog::tests::catalog_matches_every_command_and_delivering_cycle_without_duplicates -- --exact`
+- `--test cli inventory::every_bound_mutation_is_a_catalogued_mutating_verb_less_the_two_exempt -- --exact`
+- `--test cli inventory::the_catalog_and_the_rfc_taxonomies_name_the_same_verbs -- --exact`
+- `--test mutation_contract every_schema_is_reachable_from_a_published_root -- --exact`
+- `--test mutation_contract every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root -- --exact`
+- `--test read_contract published_enumerations_list_exactly_the_registered_values -- --exact`
+
+The two existing upstream configuration cases directly cover carry and reason
+mapping, not a whole module rerun. Independent literal-source inventory proof
+counts46 homes/44 catalogued mutations/81 verbs/67 roots; tests retain their own
+strict independent pins. Remaining selection is local only, no SSH/smokes.
+
+Filter correction: the first `green-conversion-f2`, `green-conversion-reentry`,
+`green-conversion-live-owner` receipts used `authority_tests` as the module path.
+They exited0 with **0passed/0failed/1723filtered**, NOT GREEN verification despite
+their label prefix. The three full names above are corrected from the actual
+`record::authority::tests` declarations before running new uniquely labelled
+commands. No source change or unchanged passing case is repeated for this repair.
+
+The pre-envelope fixture's measured exit101/0passed/1failed confirmed the marker
+construction mismatch. Its repaired exact check passed1/0, retaining every
+original row/time/reopen assertion and adding direct pre-DDL/public refusal for
+the still-marked form before removing exactly that marker. No production change.
+A bounded search of the same migration test file finds two more positive legacy
+builders with the identical stale marker. Before repair, select only:
+
+- `devenv shell -- cargo test --all-features --locked --lib repository::remote::state::persistence_tests::poll_kind_legacy_migration_freezes_observe_identity_and_preserves_rows_on_reopen -- --exact`
+- `devenv shell -- cargo test --all-features --locked --lib repository::remote::state::persistence_tests::cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication -- --exact`
+
+Measure their fixture failures, remove only the ahistorical unpublished marker,
+and rerun those exact changed tests. Negative partial-loss fixtures keep their
+markers. Owner's necessary-test-repair authority applies, not new policy or a
+broader module/target rerun. The three corrected authority filters each ran1/0;
+the other five configuration cases, all three DTO cases, two CLI catalog cases,
+two CLI inventory cases, two schema-root cases and exact enum case each ran1/0,
+all exit0. Completed receipts preserve actual per-target filtered counts.
+
+### Prior Remaining-SSH Gate Standing — 2026-11-08 UTC
 
 **Poll-write source/evidence clearance recorded; cli_remote GREEN165/0, then
 mutation_remote FAILED805/3. Runtime BLOCKED.** Clean entry
@@ -11114,3 +11227,194 @@ whitespace/known-main ancestry/merge-tree/prefix/known owned job exit checks
 accompany handoff. Clean **UNPUSHED**,no owned jobs. Ticket **implementing / runtime
 BLOCKED**,not candidate/ALLPASS/review-ready/complete. No status save/new ID/new
 planning doc/push/PR/mainmerge/closure/nativeCI/realretirement/worktreecleanup.
+
+## Task 8 — Approved Remote-History Main Integration, 2026-11-08 UTC
+
+### Authority, Merge Inputs And Compatibility Boundary
+
+Controller explicitly authorizes integrating already-approved contracts, the
+actual `git merge origin/main`, bounded resolutions and necessary test repairs.
+Entry/first parent **`c48bc2cf2d9d9bbe68621278bb56fedd7276d94c`**; measured main/second
+parent **`8da9afd4ec82c145632988687cbd71bead046051`**; common base
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Fresh preflight was accepted,
+then clean checkouts and unchanged refs were reconfirmed before the merge.
+The actual merge exited1 with the assessed **12 conflicted files/22 hunks**.
+No rebase, reset, discard, force, fetch of a different main, main-checkout edit,
+agent, push, lifecycle, publication, native CI or real profile/key/context/draft
+action. Existing design/plan were re-grounded before compatibility behavior edits;
+original approvals and history retained. Owner's broader necessary-test-fix and
+expansion authorization does not authorize weakened guards or policy redesign.
+
+The resolved conflict paths are:
+
+- `docs/RFC/cli-contract.md`
+- `src/bin/manyhands-cli/catalog_tests.rs`
+- `src/repository/mutation/dto.rs`
+- `src/repository/mutation/mod.rs`
+- `src/repository/remote/mod.rs`
+- `src/repository/remote/observation.rs`
+- `src/repository/remote/state.rs`
+- `tests/cli/inventory.rs`
+- `tests/mutation_contract.rs`
+- `tests/support/conformance.rs`
+- `tests/support/mutation.rs`
+- `tests/support/repair.rs`
+
+Both DTO families, exports, command meanings, closed decoders and rejecting helper
+arms remain. The retirement enums/impls stay outside `MutationDataDto`; both
+remote test modules have independent cfg(test). Invalid configuration preserves
+the reserved retirement-ID guard before `ConfigurationChange::Unavailable`.
+Eight ticket-only configuration bool callers now use the precise upstream enum
+(Unavailable/Plan/Credentials), with endpoint-versus-credentials logic unchanged.
+Independent literal source counts and exact inventory checks confirm **46 homes,
+44 catalogued mutations, 81 verbs, 67 schema roots**, not merely predictions.
+
+Compatibility behavior is limited to:
+
+1. Exact genuine pre-envelope, unmarked15, marked upstream16, unmarked ticket17
+   and marked combined18 disposition profiles. Frozen source enum literals are
+   independent of the current enum. Exact table/owner trigger, dependency closure,
+   paired time columns, marker consistency and source enum membership are checked
+   **before upgrade DDL**. All rows/owners/completion evidence survive atomically,
+   with stable reopen. Unknown attachments/corruption remain refused. The unchecked
+   unmarked rewrite is removed, not used to bypass retirement's strict validation.
+2. Upstream generation/reason/configuration carry plus retirement-pin AND
+   integration-window exclusions in **both** child and parent GC. The old current
+   batch is read before invalidation; a permitted new current copy is independent.
+   Exact old pins/provenance are not rebound to the copy, nor is old execution
+   authority revived. Pin/Z cases independently assert exact old-ID retention or
+   collection and exact carried-copy preservation, with rollback/reopen/reused-ID
+   assertions retained rather than permissive total counts.
+3. `remote_history.schema.json`'s closed enum adds closed/promoted while retaining
+   every upstream member and null. Recognition's table includes unpublished as
+   distinct from fetched deletion/history_unknown. Default polling stays
+   non-destructive. Release/drafts/read precedence/D15/strict catalog are unchanged.
+
+### Exact Test Evidence — No Whole Target Pass Inferred
+
+All Rust commands ran through Devenv, foreground, default threads, exact names,
+with a900-second per-command cap. Literal argv, admission timestamps, source input
+hashes, complete raw logs, exits, counts and monotonic times were saved before/
+after every command. No cap was reached; no unchanged passing case was repeated.
+
+Four **compiled behavioral REDs** each ran0passed/1failed, exit101, before the
+compatibility production fixes: valid historical15 upgrade rejection;
+profile16 missing-marker schema-write-before-refusal; pin commit's SQLite FK
+extended787; and missing closed/promoted schema enum values. All four exact
+commands subsequently ran1passed/0failed, exit0. Compilation/conflict markers are
+not counted as RED, and the new FK observation is **not** attributed to the three
+historical SSH failures.
+
+Three additional **fixture-diagnosis failures**, each0/1 exit101, exposed that
+positive pre-envelope/pre-kind/Cycle04 builders retained the new unpublished
+marker after reconstructing older catalogs. Only their ahistorical marker was
+removed. Existing row/time/immutability/reopen assertions remain; the pre-envelope
+case also asserts direct pre-DDL and public refusal of the marked lost form.
+The genuine15 unpublished builder uses a frozen literal historical catalog,
+not current DDL minus one value. The three exact repaired cases then ran1/0 exit0.
+Negative partial-loss fixtures retain their markers.
+
+**29 distinct exact cases passed; each command exit0,1passed/0failed,0ignored.**
+Full names are in the initial/remaining selections above and literal commands in
+`checkpoint-results.json`. Receipt labels below identify their raw logs/JSON:
+
+| Exact scope / case suffix | Receipt label | Actual |
+| --- | --- | --- |
+| state persistence: `retirement_disposition_exact_old_enum_upgrade_preserves_evidence_and_owner` | `green-migration` | 1/0, exit0 |
+| state persistence: `retirement_disposition_old_corrupt_and_partial_envelopes_roll_back` | `green-marker-and-corruption` | 1/0, exit0 |
+| state persistence: `poll_dispositions_unpublished_migration_preserves_rows_and_is_idempotent` | `green-unpublished-migration` | 1/0, exit0 |
+| state persistence: `review_disposition_genuine_old_envelope_migrates_once_preserving_original_rows` | `green-pre-envelope-fixture` | 1/0, exit0 |
+| state persistence: `poll_kind_legacy_migration_freezes_observe_identity_and_preserves_rows_on_reopen` | `green-pre-kind-fixture` | 1/0, exit0 |
+| state persistence: `cycle04_poll_migration_preserves_terminal_rows_without_inferred_publication` | `green-cycle04-fixture` | 1/0, exit0 |
+| retirement store: `retirement_old_generation_pin_retains_exact_batch_and_children_through_reopen` | `green-pin` | 1/0, exit0 |
+| retirement store: `retirement_z_keeps_a_valid_integration_window_and_its_batch` | `green-window-and-carry` | 1/0, exit0 |
+| retirement store: `retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen` | `green-last-pin-and-carry` | 1/0, exit0 |
+| poll: `retirement_recognition_committed_primary_and_independent_ticket_completion` | `green-recognition` | 1/0, exit0 |
+| poll: `task6_disposition_insert_fault_rolls_back_advertisement_and_old_report` | `green-local-disposition-rollback` | 1/0, exit0 |
+| record authority: `retirement_f2_all_old_remote_and_local_write_boundaries_require_actual_current_scope` | `green-conversion-f2-exact` | 1/0, exit0 |
+| record authority: `retirement_reentry_explicit_replacement_fences_all_old_write_boundaries` | `green-conversion-reentry-exact` | 1/0, exit0 |
+| record authority: `retirement_live_owned_observer_checks_every_write_boundary` | `green-conversion-live-owner-exact` | 1/0, exit0 |
+| retirement execution: `retirement_specfix_s3_completed_sync_index_debt_blocks_before_claim` | `green-conversion-sync-debt` | 1/0, exit0 |
+| retirement execution: `retirement_specfix_s3_terminal_reconciliation_debt_blocks_before_claim` | `green-conversion-reconciliation-debt` | 1/0, exit0 |
+| retirement execution: `retirement_specfix_s3_active_observer_still_blocks_before_claim` | `green-conversion-observer-debt` | 1/0, exit0 |
+| state persistence: `credentials_fence_carries_batch_and_rows` | `green-credentials-carry` | 1/0, exit0 |
+| state persistence: `configure_reasons_fence_and_forget` | `green-configuration-reasons` | 1/0, exit0 |
+| mutation DTO: `poll_retirement_stored_contract_is_closed_and_cannot_complete_a_not_reached_prefix` | `green-dto-opted` | 1/0, exit0 |
+| mutation DTO recognition: `ordinary_retirement_stored_data_is_closed_and_typed` | `green-dto-retirement` | 1/0, exit0 |
+| mutation DTO recognition: `ordinary_poll_stored_reports_keep_their_untagged_shape_and_all_old_values` | `green-dto-ordinary-poll` | 1/0, exit0 |
+| CLI bin catalog: `catalog_repository_rules_and_planned_metadata_match_the_design` | `green-catalog-c5` | 1/0, exit0 |
+| CLI bin catalog: `catalog_matches_every_command_and_delivering_cycle_without_duplicates` | `green-catalog-commands` | 1/0, exit0 |
+| CLI inventory: `every_bound_mutation_is_a_catalogued_mutating_verb_less_the_two_exempt` | `green-cli-mutation-inventory` | 1/0, exit0 |
+| CLI inventory: `the_catalog_and_the_rfc_taxonomies_name_the_same_verbs` | `green-cli-rfc-inventory` | 1/0, exit0 |
+| mutation contract: `every_schema_is_reachable_from_a_published_root` | `green-schema-roots` | 1/0, exit0 |
+| mutation contract: `every_data_root_describes_the_data_of_a_golden_and_every_data_has_one_root` | `green-data-roots` | 1/0, exit0 |
+| read contract: `published_enumerations_list_exactly_the_registered_values` | `green-schema` | 1/0, exit0 |
+
+Library commands each filtered1722; CLI-bin commands316; CLI integration476;
+mutation-contract46; read-contract72. The three wrongly qualified authority
+filters are separately retained as **exit0,0passed/0failed,1723filtered** and are
+NOT verification, despite their `green-conversion-*` label prefixes. Only the
+three corrected `record::authority::tests` receipts count above.
+
+### Final Coherent-Source Statics And Source Proof
+
+| Literal command | Exit | Monotonic seconds | Raw log SHA-256 |
+| --- | ---: | ---: | --- |
+| `devenv shell -- cargo check --all-features --locked` | 0 | 17.478878777 | `c3b1148eaea1b17fe2d70e1b811529b17d2d39b4dbd6abc0c51aec37eb17139b` |
+| `devenv shell -- cargo clippy --all-targets --all-features --locked -- -D warnings` | 0 | 73.401031701 | `4d43d1f538c28ca6f9d7b58e072782f20b8f27365d0928d201a00a4c2e35c49b` |
+| `devenv shell -- cargo fmt --check` | 0 | 18.925678637 | `ac3f37fbf06980301deeab29bd68afa89f7af747930adb561a76755438a95789` |
+
+The three final static receipts match every final focused source/build/schema
+input hash exactly. That focused input aggregate SHA-256 is
+**`3d0bf920b06c411ca855a8a464bd53e54646fbb0e1d1fc80cbc0ed1475567d61`**;
+the final merged commit/tree is the full source freeze in `handoff.json`.
+After those statics only ledger/canonical-comment metadata is finalized.
+Earlier exact greens have their own captured input images; later source changes
+were only the named legacy test bodies, not a broad re-run of unchanged greens.
+Whitespace check, resolved-index/conflict-marker checks and zero entry diffs for
+retirement run/reentry/consumer schema/three SSH fixtures, build/dependency/workflow
+inputs accompany the new source proof. No retirement fault seam or harness edit.
+
+### Retained Scopes, Evidence And Controller-Only Next Step
+
+Prior runtime freeze **`d87d4568cd185cebf7e880dd92e179c30966efce`** remains historical:
+cli_remote165/0; mutation_remote805/3 partial, not a green target; prior poll80/4,
+desktop1579/1 and enablement102/1 plus qualified exact follow-ups; older active
+headless/library/local-sync/SSH scopes at their actual sources. No synthetic
+combined-tree whole fast/library/desktop/poll84/mutation808/805 regression pass.
+Main's ledger-reported gates remain **upstream-source reports**, not reauthenticated
+raw logs or combined passes. Manual characterization remains ignored/**NOT
+MEASURED**; profiling/performance STOP and the promotion/closure/materialization
+follow-up remain. This integration neither clears those old runtime barriers nor
+creates a new owner policy.
+
+The three historical retirement SSH cases are deliberately **UNFIXED**:
+`retirement_reentry_resumed_prune_sql_gap_owned_absence_preserves_all_old_uncertainty`,
+`retirement_reentry_worktree_intent_cannot_invent_branch_removal`,
+`retirement_present_prune_sql_gap_preserves_surviving_branch_on_retry`.
+They remain source-diagnosed invalid triggers, not measured historical internal
+error payloads. The approved later one-shot post-real-Git-prune Rust-abort seam
+is **UNIMPLEMENTED**, and would prove Rust-abort SQL rollback, not an engine-raised
+constraint error. No new seam/callback/dependency/unsafe/schema weakening here.
+Also still owed: `document_promotion`, `ticket_closure`, `comment_publication`,
+isolated CLI/desktop smokes and final runtime-evidence reviews.
+
+New-only evidence: **`/tmp/opencode/task8-main-integration-20261108T202227Z/`**,
+with preflight/actual-merge receipts, independent source inventory, per-command
+admission+raw+completed receipts, `checkpoint-results.json`, final source and
+untouched-boundary proof, canonical prefix, commit/handoff receipts and new
+manifest. Assessment47 manifest
+`9dc1b503e533acb2ee878f095e3aa8ea627fd25af62cba6a9b89aa2c27dd65d0` and preflight
+`f2b2d1b04077495d6d5967da8fc88caa179adafecc3ff28a51918ad22e6f365a` are preserved,
+not rewritten/bulk re-audited. Canonical comment
+**`01M6TYJATB44WZPJABX9GMBVS1`** appends with original ID, parent
+**`01M6SYJK4CJGHWKZC7MTP18GTA`**, creation time and entire **102397-byte** prior
+body preserved (SHA-256 `47989b09976f8a214352acddbf3b13c942e448e68cece3b31efc3d69e95f82ab`).
+
+Return the merge/resolutions/tests/owned metadata with the required coauthor,
+clean and **UNPUSHED**. Final receipts verify parents/main ancestry, merge-tree,
+main untouched, prefix preservation and no owned jobs. Controller alone requests
+SAME whole SPEC **`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`**, then SAME QUALITY
+**`ses_e4c8be2f1ffegiPUEUuB0QgyBE`**, over **complete c48-to-returned-HEAD range**,
+before approved retirement-seam implementation. No further gate autorun. Ticket
+remains **implementing**, not full runtime-ready, complete, published or closed.

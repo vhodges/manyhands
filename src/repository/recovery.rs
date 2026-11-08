@@ -2383,6 +2383,19 @@ pub(super) fn remote_history_lost(data: &std::path::Path) -> std::io::Result<boo
     Ok(true)
 }
 
+/// Deletes the cache-loss marker once an explicit repair has cleared the flag
+/// (Decision 7). Returns whether a marker was there to delete. A marker that
+/// is not the one this build writes is left alone and reported as an error.
+pub(super) fn retire_remote_history_marker(data: &std::path::Path) -> std::io::Result<bool> {
+    if !remote_history_lost(data)? {
+        return Ok(false);
+    }
+    std::fs::remove_file(data.join(REMOTE_HISTORY_MARKER))?;
+    #[cfg(unix)]
+    std::fs::File::open(data)?.sync_all()?;
+    Ok(true)
+}
+
 /// The caller holds the exclusive cache recovery guard. Publication and sync
 /// must succeed before any registry or sidecar is renamed.
 pub(super) fn publish_remote_history_marker(data: &std::path::Path) -> std::io::Result<()> {

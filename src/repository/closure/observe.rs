@@ -802,6 +802,9 @@ fn observe_git(
             RemoteContextHistory::Unknown => {
                 blockers.insert(HistoryUnknown);
             }
+            RemoteContextHistory::Unresolved => {
+                blockers.insert(HistoryUnresolved);
+            }
             RemoteContextHistory::NeverPublished => {}
         }
     }

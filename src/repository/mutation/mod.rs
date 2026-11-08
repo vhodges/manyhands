@@ -68,6 +68,7 @@ pub(super) use bind::comment::comment_synchronization;
 /// source-included test target that plants a row under it.
 #[cfg(test)]
 pub(crate) use bind::conflict::attempt_for as conflict_resolve_attempt;
+pub(crate) use bind::poll::category_code;
 pub(in super::super) use bind::poll::poll_data as poll_report_data;
 use bind::{
     Binding, Confirmed,
@@ -84,11 +85,13 @@ use bind::{
     local_sync::LocalSyncBinding,
     poll::{PollOnceBinding, PollPolicyBinding},
     remote::{RemoteAddBinding, RemoteRemoveBinding, RemoteSelectBinding},
+    remote_resolve_history::RemoteResolveHistoryBinding,
     repair::RepairBinding,
     repo::RepoBinding,
     repo_identity::RepoIdentityBinding,
     repo_remove::RepoRemoveBinding,
     republish::ItemRepublishBinding,
+    resolve_history::ItemResolveHistoryBinding,
     resume::OperationResumeBinding,
     retire::ContextRetireBinding,
     sync::SyncBinding,
@@ -111,11 +114,13 @@ pub use bind::{
     local_sync::{LocalConflictResolutionInput, LocalContextResolveInput, LocalContextSyncInput},
     poll::{PollConfigureInput, PollOnceInput, PollPauseInput, PollResumeInput},
     remote::{RemoteAddInput, RemoteRemoveInput, RemoteSelectInput},
+    remote_resolve_history::RemoteResolveHistoryInput,
     repair::{DocumentRepairInput, TicketRepairInput},
     repo::{RepoCreateInput, RepoEnableInput},
     repo_identity::RepoIdentitySetInput,
     repo_remove::RepoRemoveInput,
     republish::ItemRepublishInput,
+    resolve_history::{ItemResolveHistoryInput, ResolveHistoryChoice},
     resume::OperationResumeInput,
     retire::ContextRetireInput,
     sync::{ItemSyncInput, RepoSyncInput},
@@ -127,9 +132,10 @@ pub use dto::{
     CancelDto, CommentMutationDto, CommentMutationType, CommentPendingReason, ConflictNextAction,
     ConflictNextDto, ConflictResolutionMutationDto, ConflictResolutionMutationType,
     ContextMutationDto, ContextRetirementMutationDto, ContextRetirementMutationType,
-    ContextRetirementState, DocumentMutationDto, HostMutationDto, HostObservationDto,
-    HostPreviewDto, HostReplacementDto, IdentityMutationDto, IdentityPreviewDto,
-    ItemRepublishPreviewDto, KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState,
+    ContextRetirementState, DocumentMutationDto, HistoryMarkerState, HistoryRelation,
+    HostMutationDto, HostObservationDto, HostPreviewDto, HostReplacementDto, IdentityMutationDto,
+    IdentityPreviewDto, ItemRepublishPreviewDto, ItemResolveHistoryMutationDto,
+    ItemResolveHistoryPreviewDto, KeyDeletionPreviewDto, KeyDeletionState, KeyGenerationState,
     KeyMutationDto, LifecycleBlockedDto, LifecycleBlocker, LifecycleCleanupPendingReason,
     LifecycleCleanupState, LifecycleIntegrationKind, LifecycleMadeReadyDto,
     LifecycleMadeReadyState, LifecycleMutationDto, LifecycleMutationType, LifecyclePathChangeDto,
@@ -141,7 +147,8 @@ pub use dto::{
     PollRetirementDebt, PollRetirementItemDto, PollRetirementItemState, PollRetirementMutationDto,
     PollRetirementMutationType, PollTargetDisposition, PollTargetDto, PrepareDataDto,
     PreviewDetailsDto, PreviewDto, PreviewEffect, PreviewEffectDto, PreviewIdentityDto,
-    PreviewIdentitySource, RemoteMutationDto, RemoteRemovalPreviewDto, RepairMutationDto,
+    PreviewIdentitySource, RemoteHistoryChoicesDto, RemoteHistoryDto, RemoteHistoryEntryDto,
+    RemoteMutationDto, RemoteRemovalPreviewDto, RemoteResolveHistoryPreviewDto, RepairMutationDto,
     RepairPreviewDto, RepositoryPreviewDto, RepositoryRemovalPreviewDto, RequestDto,
     RequestOperationDto, RequestResultDto, RequestState, SynchronizationConflictMutationDto,
     SynchronizationConflictType, SynchronizationMutationDto, TicketMutationDto,
@@ -149,10 +156,9 @@ pub use dto::{
 use identity::ScopeKey;
 pub use identity::{ConfirmationId, ConfirmationIdParseError, RequestId, RequestIdParseError};
 pub(crate) use observe::absent_token;
-/// For the closed-ticket guard's tests: the code a refused domain write
-/// reports.
-#[cfg(test)]
-pub(super) use outcome::repository_error_code;
+// The codes a refused domain write and a transport stop report: the closed-ticket
+// guard's tests read the first, and `remote history` answers with both.
+pub(crate) use outcome::{repository_error_code, ssh_transport_error_code};
 pub use progress::{CancellationToken, NoProgress, ProgressEvent, ProgressSink, ProgressStage};
 use records::RequestRecord;
 
@@ -203,7 +209,10 @@ pub(in super::super) fn finish_recorded_retirement(
 }
 pub(super) use records::migrate as migrate_request_tables;
 pub(super) use records::{operation_owner, release_operation_owner};
-pub use way_out::{LifecycleWayOut, lifecycle_prepare_way_out, lifecycle_way_out};
+pub use way_out::{
+    HistoryWayOut, LifecycleWayOut, clear_cache_loss_way_out, lifecycle_prepare_way_out,
+    lifecycle_way_out, resolve_history_way_out,
+};
 
 /// Retirement's claimed refresh completes the old request without releasing its
 /// identity, in the receipt/journal/Z transaction. A stale executor cannot settle.
@@ -543,6 +552,8 @@ pub enum Mutation {
     CommentAdd(CommentAddInput),
     ConflictResolve(ConflictResolveInput),
     ItemRepublish(ItemRepublishInput),
+    ItemResolveHistory(ItemResolveHistoryInput),
+    RemoteResolveHistory(RemoteResolveHistoryInput),
     DocumentCreate(DocumentCreateInput),
     DocumentSave(DocumentSaveInput),
     DocumentMove(DocumentMoveInput),
@@ -599,6 +610,8 @@ impl Mutation {
             Self::CommentAdd(_) => Command::CommentAdd,
             Self::ConflictResolve(_) => Command::ConflictResolve,
             Self::ItemRepublish(_) => Command::ItemRepublish,
+            Self::ItemResolveHistory(_) => Command::ItemResolveHistory,
+            Self::RemoteResolveHistory(_) => Command::RemoteResolveHistory,
             Self::DocumentCreate(_) => Command::DocumentCreate,
             Self::DocumentSave(_) => Command::DocumentSave,
             Self::DocumentMove(_) => Command::DocumentMove,
@@ -651,6 +664,12 @@ impl Mutation {
             | Self::CommentAdd(_)
             | Self::ConflictResolve(_) => None,
             Self::ItemRepublish(input) => Some(Box::new(ItemRepublishBinding::from(input.clone()))),
+            Self::ItemResolveHistory(input) => {
+                Some(Box::new(ItemResolveHistoryBinding::from(input.clone())))
+            }
+            Self::RemoteResolveHistory(input) => {
+                Some(Box::new(RemoteResolveHistoryBinding::from(input.clone())))
+            }
             Self::RepoCreate(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RepoEnable(input) => Some(Box::new(RepoBinding::from(input.clone()))),
             Self::RemoteRemove(input) => Some(Box::new(RemoteRemoveBinding::from(input.clone()))),
@@ -705,6 +724,8 @@ impl Mutation {
             Self::CommentAdd(input) => Box::new(CommentAddBinding::from(input)),
             Self::ConflictResolve(input) => Box::new(ConflictResolveBinding::from(input)),
             Self::ItemRepublish(input) => Box::new(ItemRepublishBinding::from(input)),
+            Self::ItemResolveHistory(input) => Box::new(ItemResolveHistoryBinding::from(input)),
+            Self::RemoteResolveHistory(input) => Box::new(RemoteResolveHistoryBinding::from(input)),
             Self::DocumentCreate(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentSave(input) => Box::new(DocumentBinding::from(input)),
             Self::DocumentMove(input) => Box::new(DocumentBinding::from(input)),

@@ -1527,3 +1527,111 @@ preserved. Clean **UNPUSHED**,knownrunner/CargoPIDs/sessions absent,no ownedjobs
 Ticket **implementing / runtime BLOCKED**,not candidate/ALLPASS/review_ready/complete;
 no source/golden/schema/dependency edit/statussave/newIDs/newplanningdoc/push/PR/
 mainmerge/closure/nativeCI/realretirement/worktreecleanup authority exercised.
+
+## Follow-up — Approved Remote-History Main Integration, Local Gates GREEN — 2026-11-08 UTC
+
+Controller authorizes integrating the two already-approved contracts, not a new
+owner policy. Entry/first parent **`c48bc2cf2d9d9bbe68621278bb56fedd7276d94c`**;
+main/second parent **`8da9afd4ec82c145632988687cbd71bead046051`**; base
+**`d70142b63a952f5e1aade369e0cd654ca9a03617`**. Accepted fresh preflight, reconfirmed
+clean checkouts/unchanged refs, then actual `git merge origin/main` exit1 exposed
+the assessed **12 files/22 hunks**. Existing design/implementation plan/ledger
+re-grounded before compatibility behavior edits; approvals/history retained.
+Owner's necessary-test-fix/expansion authority stands, not weakened guards,
+production-policy redesign or retirement authority.
+
+Resolved the12 assessed RFC/catalog/DTO/export/module/observation/state/inventory/
+helper conflicts. Both closed DTO families and decoders, commands/meanings and
+rejecting helper arms remain. Retirement structs/impls are outside the enum;
+test module cfgs independent. Invalid-configuration handling keeps the reserved
+retirement-ID guard before Unavailable; eight ticket-only configure bool calls
+map precisely to Unavailable/Plan/Credentials. Independently counted and tested
+**46 homes/44 catalogued mutations/81 verbs/67 roots**; strict pins retained.
+
+Bounded compatibility:
+
+- Exact genuine pre-envelope/unmarked15/marked upstream16/unmarked ticket17/
+  marked combined18 disposition catalogs. Independent frozen source enums;
+  exact DDL/owner trigger/dependency closure/paired times/marker/source rows
+  checked **before DDL**. Atomic preservation and stable reopen; unknown/corrupt/
+  inconsistent schemas still refused. No unchecked unmarked-rebuild bypass.
+- Upstream reason/generation/carry plus retirement-pin AND integration-window
+  exclusions on **both child and parent collection**. Read old current before
+  invalidation; preserve exact old holders/provenance, independent carried copy,
+  and fenced old execution. Pin/Z tests independently assert old-ID retention/
+  collection and copy equality with rollback/reopen/reused-ID controls retained.
+- Remote-history's closed enum adds closed/promoted alongside all upstream
+  members and null. Recognition's table distinguishes unpublished from fetched
+  deletion/history_unknown. Default poll remains non-destructive; release,
+  drafts, read precedence, D15 and strict catalog unchanged.
+
+Four compiled behavioral REDs each **exit101,0passed/1failed**: valid15 upgrade,
+profile16 missing-marker writes before rejection, pin commit's SQLite FK
+extended787, and missing closed/promoted read-schema enum. Their exact GREENs
+each **exit0,1passed/0failed**. The measured integration pin failure is **not**
+attributed to the historical three SSH cases. Three further fixture failures
+each0/1 exit101 showed positive pre-envelope/pre-kind/Cycle04 builders carrying
+an ahistorical unpublished marker. Only fixture construction was repaired;
+assertions retained, plus direct pre-DDL/public refusal of the still-marked lost
+form. All three then passed1/0 exit0. Genuine15 fixture is literal/independent.
+
+**29 distinct exact local checks passed, each1/0 exit0,0ignored**: six migration,
+three pin/Z, recognition, local disposition rollback, six conversion-only
+authority/debt, two upstream configuration, three closed DTO, four CLI catalog/
+inventory, two schema-root and exact closed-enum cases. Full actual names/argv/
+per-case counts/exits/input hashes/times/raw logs are in the execution ledger and
+new `checkpoint-results.json`. Three initial wrong authority module filters
+exited0 with **0passed/0failed/1723filtered** and are **NOT verification**; the
+corrected `record::authority::tests` filters each ran1/0. All library1/0 commands
+filtered1722; CLI-bin316, CLI-integration476, mutation-contract46, read-contract72.
+No whole target/module/fast/desktop/SSH repeat, no ignored benchmark enabled,
+no real wait/thread override, no900-second command cap reached. Earlier exact
+greens were not repeated after unrelated later legacy-fixture-body changes.
+
+Final coherent-source Devenv statics each **exit0**:
+
+| Actual command | Monotonic seconds | Raw log SHA-256 |
+| --- | ---: | --- |
+| `cargo check --all-features --locked` | 17.478878777 | `c3b1148eaea1b17fe2d70e1b811529b17d2d39b4dbd6abc0c51aec37eb17139b` |
+| `cargo clippy --all-targets --all-features --locked -- -D warnings` | 73.401031701 | `4d43d1f538c28ca6f9d7b58e072782f20b8f27365d0928d201a00a4c2e35c49b` |
+| `cargo fmt --check` | 18.925678637 | `ac3f37fbf06980301deeab29bd68afa89f7af747930adb561a76755438a95789` |
+
+All three match the final focused source/build/schema hashes; aggregate SHA-256
+**`3d0bf920b06c411ca855a8a464bd53e54646fbb0e1d1fc80cbc0ed1475567d61`**.
+Full source freeze is the returned two-parent merge HEAD/tree in `handoff.json`.
+Only owned ledger/comment metadata finalized after statics. Zero entry diff for
+retirement run/reentry/consumer schema/three SSH fixtures and build/dependency/
+workflow inputs; no seam, harness, callback, dependency, unsafe or guard weakening.
+
+Prior **d87 runtime** cli_remote165/0 and mutation_remote805/3 partial retain their
+scope; poll80/4, desktop1579/1, enablement102/1 plus qualified follow-ups and old
+headless/library/local-sync/SSH scopes remain historical, not combined-tree whole
+passes. Upstream ledger-reported gates are upstream-source reports, not raw-log
+reauthentication or combined passes. Manual characterization stays ignored/**NOT
+MEASURED**; performance/profiling STOP and promotion/closure/materialization
+follow-up remain. Historical three failures remain source-diagnosed invalid
+triggers, not measured internal historical errors. **All three remain UNFIXED;
+approved post-real-prune Rust-abort fault seam remains UNIMPLEMENTED**. Its future
+proof is SQL rollback after a Rust abort, not SQLite-generated constraint failure.
+
+Still owed after integration review: that seam/three exact SSH repairs,
+`document_promotion`, `ticket_closure`, `comment_publication`, isolated smokes and
+final runtime-evidence reviews. Controller-owned SAME whole SPEC
+**`ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`** then SAME QUALITY
+**`ses_e4c8be2f1ffegiPUEUuB0QgyBE`** must review **complete c48-to-returned-HEAD**
+before seam implementation. No other agents or further gate autorun.
+
+New-only **`/tmp/opencode/task8-main-integration-20261108T202227Z/`** contains actual
+merge/source/count/RED/GREEN/static receipts, full raw logs, final inputs, canonical
+prefix, commit/handoff and new manifest. Assessment47 manifest
+`9dc1b503e533acb2ee878f095e3aa8ea627fd25af62cba6a9b89aa2c27dd65d0` and prior preflight
+`f2b2d1b04077495d6d5967da8fc88caa179adafecc3ff28a51918ad22e6f365a` retained without
+rewrite/bulk audit. This append preserves original ID, parent
+**01M6SYJK4CJGHWKZC7MTP18GTA**, creation time and **entire102397-byte prior body**
+(SHA-256 `47989b09976f8a214352acddbf3b13c942e448e68cece3b31efc3d69e95f82ab`).
+Merge/resolutions/tests/owned metadata checkpoint with required coauthor; final
+handoff records clean **UNPUSHED**, correct parents/main ancestry/merge-tree,
+main untouched and no owned jobs. Ticket remains **implementing / runtime gates
+owed**, not full runtime-ready, complete, published or closed. No reset/rebase/
+discard/force/main-checkout edit/status save/new ID/new doc/publication/push/PR/
+main closure/native CI/real profile/key/context/draft/cleanup action.

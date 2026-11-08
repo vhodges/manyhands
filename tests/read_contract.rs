@@ -1302,6 +1302,39 @@ fn contract_enumerations() -> Vec<(&'static str, &'static str, Vec<&'static str>
                 .to_vec(),
         ),
     ]);
+    enumerations.extend([
+        (
+            "item_resolve_history_preview.schema.json",
+            "details.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "history_resolution_mutation.schema.json",
+            "marker",
+            manyhands::repository::HistoryMarkerState::ALL
+                .map(manyhands::repository::HistoryMarkerState::as_str)
+                .to_vec(),
+        ),
+        (
+            "remote_history.schema.json",
+            "entries.items.kind",
+            ItemDtoKind::ALL.map(ItemDtoKind::as_str).to_vec(),
+        ),
+        (
+            "remote_history.schema.json",
+            "entries.items.relation",
+            manyhands::repository::HistoryRelation::ALL
+                .map(manyhands::repository::HistoryRelation::as_str)
+                .to_vec(),
+        ),
+        (
+            "remote_history.schema.json",
+            "entries.items.disposition",
+            PollTargetDisposition::ALL
+                .map(PollTargetDisposition::as_str)
+                .to_vec(),
+        ),
+    ]);
     enumerations.push((
         "item_republish_preview.schema.json",
         "details.kind",
@@ -2925,6 +2958,74 @@ fn poll_status_matches_its_schema_and_golden() {
         &envelope,
     );
     assert_git_transport_uninitialized();
+}
+
+/// `remote history` after its poll: one context the remote lacks, which offers
+/// both choices, and one the poll just resolved, which has diverged. The report
+/// is built by hand: the poll that makes one needs an SSH server, and
+/// the report's shape does not.
+#[test]
+fn remote_history_matches_its_schema_and_golden() {
+    use manyhands::repository::{
+        AuthoringKind, PollDisposition, RemoteHistoryChoices, RemoteHistoryDto, RemoteHistoryEntry,
+        RemoteHistoryRelation, RemoteHistoryReport,
+    };
+    let fixture = support::born_repository();
+    let enabled = support::enabled_repository(&fixture);
+    let repo = enabled.service.resolve_repository(&fixture.root).unwrap();
+    let oid = |text: &str| git2::Oid::from_str(&text.repeat(40)).unwrap();
+    let report = RemoteHistoryReport {
+        entries: vec![
+            RemoteHistoryEntry {
+                kind: AuthoringKind::Ticket,
+                item_id: items::item_id(items::TICKET_A),
+                branch: format!("manyhands/ticket/{}", items::TICKET_A),
+                local_head: Some(oid("a")),
+                tracking_ref_exists: false,
+                advertised: None,
+                relation: None,
+                ahead: None,
+                behind: None,
+                resolved: false,
+                disposition: Some(PollDisposition::HistoryUnknown),
+                choices: RemoteHistoryChoices {
+                    publish: true,
+                    release: true,
+                    republish: false,
+                },
+            },
+            RemoteHistoryEntry {
+                kind: AuthoringKind::Document,
+                item_id: items::item_id(items::DOCUMENT_A),
+                branch: format!("manyhands/document/{}", items::DOCUMENT_A),
+                local_head: Some(oid("a")),
+                tracking_ref_exists: true,
+                advertised: Some(oid("b")),
+                relation: Some(RemoteHistoryRelation::Diverged),
+                ahead: Some(1),
+                behind: Some(2),
+                resolved: true,
+                disposition: Some(PollDisposition::Diverged),
+                choices: RemoteHistoryChoices::default(),
+            },
+        ],
+        cache_loss: true,
+        generation: 4,
+    };
+    let envelope = Envelope::read_success(
+        "remote history",
+        repo.scope(),
+        RemoteHistoryDto::from(&report),
+    );
+    golden::assert_contract(
+        &ContractCase {
+            name: "remote_history",
+            data_schema: Some("remote_history.schema.json"),
+            placeholders: &[(repo.root().to_str().unwrap(), "<repository>")],
+            sentinels: &[],
+        },
+        &envelope,
+    );
 }
 
 /// A repository with an operation in each store: a key generation kept for

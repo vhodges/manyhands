@@ -725,6 +725,53 @@ fn retirement_refresh_requires_exact_due_handoff_and_intact_companion() {
     }
 }
 
+fn batch_image(db: &Connection, id: i64) -> [Vec<Vec<rusqlite::types::Value>>; 2] {
+    [
+        ("remote_observation_batches", "id"),
+        ("remote_ref_observations", "batch_id"),
+    ]
+    .map(|(table, column)| {
+        let mut q = db
+            .prepare(&format!(
+                "SELECT rowid,* FROM {table} WHERE {column}=?1 ORDER BY rowid"
+            ))
+            .unwrap();
+        let columns = q.column_count();
+        q.query_map([id], |row| (0..columns).map(|i| row.get(i)).collect())
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    })
+}
+
+fn assert_carried_batch(db: &Connection, old: i64) -> i64 {
+    let (new, generation): (i64, i64) = db
+        .query_row(
+            "SELECT id,configuration_generation FROM remote_observation_batches WHERE is_current=1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_ne!(old, new);
+    assert_eq!(generation, 1);
+    let equal: bool = db.query_row("SELECT NOT EXISTS(SELECT remote_name,primary_branch,observed_at FROM remote_observation_batches WHERE id=?1 EXCEPT SELECT remote_name,primary_branch,observed_at FROM remote_observation_batches WHERE id=?2) AND NOT EXISTS(SELECT ordinal,remote_ref,tracking_ref,classification,advertised_oid,tracking_oid FROM remote_ref_observations WHERE batch_id=?1 EXCEPT SELECT ordinal,remote_ref,tracking_ref,classification,advertised_oid,tracking_oid FROM remote_ref_observations WHERE batch_id=?2) AND NOT EXISTS(SELECT ordinal,remote_ref,tracking_ref,classification,advertised_oid,tracking_oid FROM remote_ref_observations WHERE batch_id=?2 EXCEPT SELECT ordinal,remote_ref,tracking_ref,classification,advertised_oid,tracking_oid FROM remote_ref_observations WHERE batch_id=?1)",params![old,new],|r|r.get(0)).unwrap();
+    assert!(
+        equal,
+        "the new generation carries an exact independent copy"
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT observation_batch_id FROM retirement_observation_pins",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        old
+    );
+    assert_eq!(db.query_row("SELECT count(*) FROM retirement_advertisement_provenance WHERE observation_batch_id=?1",[new],|r|r.get::<_,i64>(0)).unwrap(),0,"carrying is not a new retirement proof");
+    new
+}
+
 #[test]
 fn retirement_old_generation_pin_retains_exact_batch_and_children_through_reopen() {
     let data = tempfile::tempdir().unwrap();
@@ -739,7 +786,12 @@ fn retirement_old_generation_pin_retains_exact_batch_and_children_through_reopen
     db.execute("INSERT INTO remote_ref_observations(batch_id,ordinal,remote_ref,tracking_ref,classification,advertised_oid) VALUES(1,0,'refs/heads/main','refs/remotes/origin/main','primary',?1)", ["1".repeat(40)]).unwrap();
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     let tx = db.transaction().unwrap();
-    let fenced = crate::repository::remote::state::configure(&tx, 1, Some(&plan), true);
+    let fenced = crate::repository::remote::state::configure(
+        &tx,
+        1,
+        Some(&plan),
+        crate::repository::remote::state::ConfigurationChange::Credentials,
+    );
     assert!(
         fenced.is_ok(),
         "configuration must retain live retirement evidence, not fail deleting its pinned parent: {fenced:?}"
@@ -767,10 +819,13 @@ fn retirement_old_generation_pin_retains_exact_batch_and_children_through_reopen
         .unwrap(),
         1
     );
+    let carried = assert_carried_batch(&db, 1);
+    let image = batch_image(&db, carried);
     assert!(
         RepositoryService::open_at(data.path()).is_ok(),
         "historical audit must accept exact live pin, not require a current-generation guess"
     );
+    assert_eq!(batch_image(&db, carried), image);
 }
 
 #[test]
@@ -1016,8 +1071,16 @@ fn retirement_z_keeps_a_valid_integration_window_and_its_batch() {
     .unwrap();
     tx.execute("UPDATE remote_operation_records SET phase='completed',outcome='completed' WHERE operation_ulid=?1", [sync.to_string()]).unwrap();
     tx.execute("INSERT INTO remote_integration_windows(operation_record_id,number,configuration_generation,owner_epoch,kind,observation_batch_id,local_oid,primary_oid) SELECT id,1,0,0,'pinned',1,?2,?3 FROM remote_operation_records WHERE operation_ulid=?1", params![sync.to_string(),"2".repeat(40),"1".repeat(40)]).unwrap();
-    crate::repository::remote::state::configure(&tx, 1, Some(&plan), true).unwrap();
+    crate::repository::remote::state::configure(
+        &tx,
+        1,
+        Some(&plan),
+        crate::repository::remote::state::ConfigurationChange::Credentials,
+    )
+    .unwrap();
     tx.commit().unwrap();
+    let carried = assert_carried_batch(&db, 1);
+    let carried_before = batch_image(&db, carried);
     let service = RepositoryService::open_at(data.path()).unwrap();
     let result = service
         .retire_context(crate::repository::RetireContextRequest {
@@ -1041,15 +1104,21 @@ fn retirement_z_keeps_a_valid_integration_window_and_its_batch() {
         0
     );
     assert_eq!(
-        db.query_row("SELECT count(*) FROM remote_observation_batches", [], |r| r
-            .get::<_, i64>(0))
-            .unwrap(),
+        db.query_row(
+            "SELECT count(*) FROM remote_observation_batches WHERE id=1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
         1
     );
     assert_eq!(
-        db.query_row("SELECT count(*) FROM remote_ref_observations", [], |r| r
-            .get::<_, i64>(0))
-            .unwrap(),
+        db.query_row(
+            "SELECT count(*) FROM remote_ref_observations WHERE batch_id=1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
         1
     );
     assert_eq!(
@@ -1064,6 +1133,13 @@ fn retirement_z_keeps_a_valid_integration_window_and_its_batch() {
     assert!(
         RepositoryService::open_at(data.path()).is_ok(),
         "the independent valid window remains historical retention authority after final retirement unpin"
+    );
+    assert_eq!(batch_image(&db, carried), carried_before);
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM remote_observation_batches", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        2
     );
 }
 
@@ -1093,8 +1169,16 @@ fn retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen() {
         db.execute("INSERT INTO remote_ref_observations(batch_id,ordinal,remote_ref,tracking_ref,classification,advertised_oid) VALUES(1,0,'refs/heads/main','refs/remotes/origin/main','primary',?1)", ["1".repeat(40)]).unwrap();
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         let tx = db.transaction().unwrap();
-        crate::repository::remote::state::configure(&tx, 1, Some(&plan), true).unwrap();
+        crate::repository::remote::state::configure(
+            &tx,
+            1,
+            Some(&plan),
+            crate::repository::remote::state::ConfigurationChange::Credentials,
+        )
+        .unwrap();
         tx.commit().unwrap();
+        let carried = assert_carried_batch(&db, 1);
+        let carried_before = batch_image(&db, carried);
         let service = RepositoryService::open_at(data.path()).unwrap();
         let before = super::execution_tests::registry_image(&db);
         assert!(!super::record::set_release_failure(false));
@@ -1162,9 +1246,12 @@ fn retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen() {
                 1
             );
             assert_eq!(
-                db.query_row("SELECT count(*) FROM remote_ref_observations", [], |r| r
-                    .get::<_, i64>(0))
-                    .unwrap(),
+                db.query_row(
+                    "SELECT count(*) FROM remote_ref_observations WHERE batch_id=1",
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
                 1
             );
             let reopened = RepositoryService::open_at(data.path()).map(|_| ());
@@ -1180,19 +1267,23 @@ fn retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen() {
             matches!(result, Ok(crate::repository::ContextRetirementOutcome::Final(ref report)) if report.code == crate::results::ResultCode::ExternalChange),
             "old generation before-effect refusal must atomically settle its hold: {result:?}"
         );
-        for table in [
-            "retirement_observation_pins",
-            "remote_observation_batches",
-            "remote_ref_observations",
+        for (table, predicate) in [
+            ("retirement_observation_pins", "1=1"),
+            ("remote_observation_batches", "id=1"),
+            ("remote_ref_observations", "batch_id=1"),
         ] {
             assert_eq!(
-                db.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r
-                    .get::<_, i64>(0))
-                    .unwrap(),
+                db.query_row(
+                    &format!("SELECT count(*) FROM {table} WHERE {predicate}"),
+                    [],
+                    |r| r.get::<_, i64>(0)
+                )
+                .unwrap(),
                 0,
                 "{table}"
             );
         }
+        assert_eq!(batch_image(&db, carried), carried_before);
         assert_eq!(
             db.query_row(
                 "SELECT count(*) FROM retirement_observation_pin_releases",
@@ -1207,14 +1298,26 @@ fn retirement_last_pin_release_is_atomic_with_refusal_collection_and_reopen() {
             "reopen AFTER final unpin/collection must succeed"
         );
         // SQLite may reuse this scalar ID. Replay must not look it up or GC it.
-        db.execute_batch("INSERT INTO remote_observation_batches(id,repository_id,remote_name,primary_branch,configuration_generation,observed_at,is_current) VALUES(1,1,'origin','main',1,2,1)").unwrap();
+        // The carried current batch remains independent; reuse the old scalar ID
+        // for another historical lifetime without replacing that current copy.
+        db.execute_batch("INSERT INTO remote_observation_batches(id,repository_id,remote_name,primary_branch,configuration_generation,observed_at,is_current) VALUES(1,1,'origin','main',1,2,0)").unwrap();
         let replay = service.retire_context(request).unwrap();
         assert_eq!(replay, result.unwrap());
+        assert_eq!(
+            db.query_row(
+                "SELECT count(*) FROM remote_observation_batches WHERE id=1",
+                [],
+                |r| r.get::<_, i64>(0)
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(batch_image(&db, carried), carried_before);
         assert_eq!(
             db.query_row("SELECT count(*) FROM remote_observation_batches", [], |r| r
                 .get::<_, i64>(0))
                 .unwrap(),
-            1
+            2
         );
         assert!(RepositoryService::open_at(data.path()).is_ok());
     }

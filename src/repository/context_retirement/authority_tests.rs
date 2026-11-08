@@ -1456,7 +1456,7 @@ fn retirement_f2_all_old_remote_and_local_write_boundaries_require_actual_curren
         assert!(
             state::with_transaction(&f.service, &f.request.root, |tx, id| {
                 reservation::owned(&f.service, tx, id, &f.owner)?;
-                state::configure(tx, id, None, false)
+                state::configure(tx, id, None, state::ConfigurationChange::Unavailable)
             })
             .is_err(),
             "{case}"
@@ -1865,7 +1865,7 @@ fn retirement_reentry_explicit_replacement_fences_all_old_write_boundaries() {
         assert!(
             state::with_transaction(&f.service, &f.request.root, |tx, id| {
                 reservation::owned(&f.service, tx, id, &f.owner)?;
-                state::configure(tx, id, None, false)
+                state::configure(tx, id, None, state::ConfigurationChange::Unavailable)
             })
             .is_err()
         );
@@ -2123,7 +2123,7 @@ fn retirement_live_owned_observer_checks_every_write_boundary() {
         assert!(
             state::with_transaction(&f.service, &f.request.root, |tx, id| {
                 reservation::owned(&f.service, tx, id, &f.owner)?;
-                state::configure(tx, id, None, false)
+                state::configure(tx, id, None, state::ConfigurationChange::Unavailable)
             })
             .is_err(),
             "{fence}: configuration write"

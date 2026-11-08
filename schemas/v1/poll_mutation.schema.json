@@ -71,6 +71,7 @@
               "closed",
               "promoted",
               "history_unknown",
+              "unpublished",
               "not_reached"
             ]
           },

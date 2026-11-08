@@ -580,6 +580,13 @@ pub fn dispatch(
         "item republish" => {
             return crate::collaboration::item_republish(service, session, command, args);
         }
+        "item resolve-history" => {
+            return crate::history::item_resolve(service, session, command, args);
+        }
+        "remote history" => return crate::history::remote_history(service, session, command, args),
+        "remote resolve-history" => {
+            return crate::history::remote_resolve(service, session, command, args);
+        }
         "repo sync" => return crate::collaboration::repo_sync(service, session, command, args),
         "document promote" => {
             return crate::lifecycle::document_promote(service, session, command, args);

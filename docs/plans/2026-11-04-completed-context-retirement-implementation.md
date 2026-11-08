@@ -725,6 +725,57 @@ amended source. This owner-approved narrow selection adds no performance
 investigation, safety-budget relaxation, native dispatch, push, PR, merge or closure
 authority.
 
+### Approved Task 8 Integration — Remote History Repair Main, 2026-11-08
+
+Controller authorizes the required merge of `origin/main`
+`8da9afd4ec82c145632988687cbd71bead046051` into clean entry
+`c48bc2cf2d9d9bbe68621278bb56fedd7276d94c` (base `d70142b6`). Fresh preflight is
+accepted; refs/cleanliness were reconfirmed and the actual merge has the assessed
+12 conflicted files/22 hunks. No rebase or main-checkout edit. Owner additionally
+authorizes necessary test repairs/expansions, not weakened guards/assertions,
+new product behavior, production retirement authority or performance work.
+
+1. Resolve additive DTO/export/module/test-helper/RFC conflicts structurally.
+   Independently count command/home/schema inventories; retain strict pins and
+   both closed stored decoders. Convert ticket-only configuration test callers to
+   the upstream reason enum. Keep the reserved retirement ID guard before the
+   invalid-configuration fence and preserve endpoint-versus-credentials checks.
+2. Before compatibility wiring, extend the existing cheap migration tests with
+   independent literal historical15/16/17 catalogs and exact marker profiles.
+   Exercise valid rows, owner/time/row preservation, reopen, source-invalid rows,
+   dependencies and marker inconsistencies. Observe compiled behavioral RED;
+   conflict markers or compilation failures are not RED. Then compose one
+   exact-profile upgrade to combined18. All source validation precedes DDL; do
+   not retain main's unchecked unmarked rebuild or broaden the old15 row check.
+3. Extend exact pin/Z tests to assert original batch/children/holder identities,
+   rollback and copied-current-batch independence. Observe RED on the mechanical
+   merge, then retain main's carry plus retirement/window exclusions in BOTH GC
+   predicates. Never rebind old evidence to the copied batch. Current generation
+   and exact receipt checks remain unchanged. No callbacks or new fault seams.
+4. Preserve the closed remote-history enum, adding closed/promoted alongside
+   upstream's members and null; run the existing exact enum contract check.
+   Recognition's table must distinguish fetched deletion from unpublished and
+   unknown history without deleting resources. Retain local disposition rollback.
+5. Run only exact changed interoperability tests through Devenv, with names and
+   literal argv recorded before admission in the ledger/new evidence. Run fresh
+   coherent-tree `cargo check --all-features --locked`,
+   `cargo clippy --all-targets --all-features --locked -- -D warnings` and
+   `cargo fmt --check`. No broad library/fast/desktop/SSH rerun; 15-minute interim
+   cap, no waits or thread/safety-budget changes. Do not repeat unchanged greens.
+6. Record source/RED/GREEN/static evidence and qualified retained scopes, append
+   the canonical checkpoint preserving its complete prior body, and commit the
+   merge/resolutions with the required coauthor. Return clean/unpushed to the
+   controller for SAME whole SPEC `ses_e4cc1a00bffeO0qOz2Do4Qx1Bd`, then QUALITY
+   `ses_e4c8be2f1ffegiPUEUuB0QgyBE`, over complete c48-to-returned-HEAD range.
+
+The three invalid-trigger retirement SSH fixtures and their approved cfg(test)
+seam remain UNFIXED here. `document_promotion`, `ticket_closure`,
+`comment_publication`, isolated smokes and final runtime reviews remain owed.
+Retain prior cli_remote165/0, mutation805/3, polling80/4 and all other historical
+evidence at their actual scopes; no combined-tree whole-pass claim. Upstream
+ledger-reported gates are not reauthenticated or combined passes. Manual timing
+benchmark stays ignored/NOT MEASURED. No push/PR/closure/native/real-context action.
+
 ## Plan Self-Review
 
 | Contract/ruling | Tasks and proof |

@@ -40,6 +40,7 @@ pub enum PollDisposition {
     Closed,
     Promoted,
     HistoryUnknown,
+    Unpublished,
     NotReached,
 }
 impl PollDisposition {
@@ -77,6 +78,7 @@ impl PollDisposition {
             Self::HistoryUnknown => {
                 "Publication history is unknown; inspect remote state before proceeding."
             }
+            Self::Unpublished => "The remote context is not published yet; item sync publishes it.",
             Self::NotReached => "This target was not reached; retry the poll when ready.",
         }
     }
@@ -93,6 +95,7 @@ pub(super) enum PollTrackingState {
     Present(git2::Oid),
     RemotelyDeleted,
     HistoryUnknown,
+    Unpublished,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LocalPollClassification {
@@ -206,6 +209,20 @@ fn poll_materialized_target(
     Ok(linked)
 }
 
+/// What an unadvertised target means, from its previous fetch evidence. The
+/// primary (no evidence) stays unknown.
+pub(super) fn absent_tracking_state(
+    evidence: Option<super::RemotePublicationEvidence>,
+) -> PollTrackingState {
+    match evidence {
+        Some(super::RemotePublicationEvidence::ObservedPublished) => {
+            PollTrackingState::RemotelyDeleted
+        }
+        Some(super::RemotePublicationEvidence::NeverPublished) => PollTrackingState::Unpublished,
+        _ => PollTrackingState::HistoryUnknown,
+    }
+}
+
 pub(super) fn classify_local_target(
     root: &Path,
     primary: &str,
@@ -227,6 +244,9 @@ pub(super) fn classify_local_target(
         }
         PollTrackingState::HistoryUnknown => {
             return Ok(unchanged(PollDisposition::HistoryUnknown, None));
+        }
+        PollTrackingState::Unpublished => {
+            return Ok(unchanged(PollDisposition::Unpublished, None));
         }
     };
     let Ok(linked) = poll_materialized_target(root, primary, target) else {
@@ -1611,7 +1631,7 @@ impl RepositoryService {
                     let policy = state::read_snapshot(tx, id)?.polling().clone();
                     // Configuration fencing clears observer retry state. Full
                     // poll attention uses the pre-failure policy in this same TX.
-                    state::configure(tx, id, None, false)?;
+                    state::configure(tx, id, None, state::ConfigurationChange::Unavailable)?;
                     let now = OffsetDateTime::now_utc();
                     state::record_outcome(
                         tx,
@@ -2051,15 +2071,9 @@ impl RepositoryService {
                             PollTrackingState::Present(o.advertised_oid())
                         }
                         Some(_) => return Err(RemotePollError::Interrupted),
-                        None if row.kind.is_some()
-                            && previous.fetch_publication_evidence_for(
-                                row.kind.expect("context"),
-                                row.item_id.as_ref().expect("context"),
-                            ) == super::RemotePublicationEvidence::ObservedPublished =>
-                        {
-                            PollTrackingState::RemotelyDeleted
-                        }
-                        None => PollTrackingState::HistoryUnknown,
+                        None => absent_tracking_state(row.kind.zip(row.item_id.as_ref()).map(
+                            |(kind, item)| previous.fetch_publication_evidence_for(kind, item),
+                        )),
                     };
                     let target = match (row.kind, row.item_id.as_ref()) {
                         (Some(kind), Some(item)) => SynchronizationTarget::Context {

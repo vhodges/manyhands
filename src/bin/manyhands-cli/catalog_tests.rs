@@ -105,6 +105,10 @@ const DESIGN: &[(&str, &[&str])] = &[
             "context sync-local",
             "context resolve-local",
             "context retire",
+            // The remote history repair (vh-hyksw) joined this row.
+            "item resolve-history",
+            "remote history",
+            "remote resolve-history",
         ],
     ),
 ];

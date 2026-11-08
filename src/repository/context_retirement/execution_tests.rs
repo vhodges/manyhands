@@ -1479,7 +1479,7 @@ fn assert_retirement_preserves_remote_debt(reconciliation: bool) {
     f.materialization("complete");
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&f.service, f.root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     let target = RemoteOperationTarget::for_primary_synchronization(&plan);
@@ -1662,7 +1662,7 @@ fn retirement_specfix_s3_active_observer_still_blocks_before_claim() {
     f.materialization("complete");
     let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
     state::with_transaction(&f.service, f.root.path(), |tx, id| {
-        state::configure(tx, id, Some(&plan), false)
+        state::configure(tx, id, Some(&plan), state::ConfigurationChange::Plan)
     })
     .unwrap();
     assert!(matches!(

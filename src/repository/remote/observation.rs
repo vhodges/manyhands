@@ -228,7 +228,7 @@ impl RepositoryService {
                         tx,
                         request.operation_id,
                     )?;
-                    state::configure(tx, id, None, false)?;
+                    state::configure(tx, id, None, state::ConfigurationChange::Unavailable)?;
                     state::record_outcome(
                         tx,
                         id,
@@ -347,12 +347,34 @@ impl RepositoryService {
         // Recheck after all prompt/network and local observation work. The
         // transaction below independently fences registered configuration edits.
         let current_plan = observation_plan(root).ok();
-        if current_plan.as_ref() != Some(&plan)
-            || self.observation_configuration(root, &plan)? != configuration
-        {
+        let current = self.observation_configuration(root, &plan)?;
+        if current_plan.as_ref() != Some(&plan) || current != configuration {
             state::with_transaction(self, root, |tx, id| {
                 reservation::owned(self, tx, id, &owner)?;
-                state::configure(tx, id, current_plan.as_ref(), true)?;
+                match current_plan.as_ref() {
+                    // A late endpoint edit is a change of identity: the
+                    // digest makes the fence forget this remote's evidence.
+                    Some(same)
+                        if same == &plan
+                            && current.endpoint_digest() != configuration.endpoint_digest() =>
+                    {
+                        state::configure_endpoints(tx, id, same, &current.endpoint_digest())?;
+                    }
+                    Some(same) if same == &plan => {
+                        state::configure(
+                            tx,
+                            id,
+                            Some(same),
+                            state::ConfigurationChange::Credentials,
+                        )?;
+                    }
+                    Some(other) => {
+                        state::configure(tx, id, Some(other), state::ConfigurationChange::Plan)?;
+                    }
+                    None => {
+                        state::configure(tx, id, None, state::ConfigurationChange::Unavailable)?;
+                    }
+                }
                 state::record_outcome(tx, id, RemoteOutcomeCategory::ConfigurationRequired, None)
             })?;
             return Err(RemoteObservationError::Interrupted);

@@ -40,6 +40,40 @@ status below, not approved proof/consent policy or historical review results.
 
 ## Baseline Facts
 
+### Approved Main Integration Re-Grounding — 2026-11-08
+
+Controller authorizes merging main `8da9afd4ec82c145632988687cbd71bead046051`
+into ticket HEAD `c48bc2cf2d9d9bbe68621278bb56fedd7276d94c`, merge base
+`d70142b63a952f5e1aade369e0cd654ca9a03617`. This composes the approved remote
+history repair with retirement, not new deletion authority or a new owner policy.
+The dry and actual merge expose the same 12 files/22 conflict hunks. Prior
+approvals and historical evidence remain scoped to their recorded sources.
+
+- Retain both closed DTO families, command catalogs and schema roots. Default
+  polling stays non-destructive; `unpublished` is distinct from fetched deletion,
+  and only the latter can produce `closed`/`promoted` recognition. Remote history
+  uses the same closed disposition vocabulary, including its nullable entry.
+- Recognize exact historical poll-disposition profiles: genuine pre-envelope,
+  old15 without the unpublished marker, upstream16 with that marker, ticket17
+  without it, and combined18 with it. Before upgrade DDL, validate the source
+  catalog, immutable owner trigger, dependency closure, paired time columns and
+  source enum membership. No unknown attachment or corrupt old row is adopted.
+  Upgrade once atomically; replay/reopen must not rebuild a current catalog.
+- Configuration reason/generation/endpoint handling follows approved main.
+  A credentials fence may copy a current batch into the new generation, while
+  exact old retirement pins and integration windows keep their original batch
+  and children. Both collection predicates exclude pins, windows and the copy.
+  A copy is not a new receipt and cannot revive a fenced retirement executor.
+- Re-ground legacy fixture catalogs independently of the growing current enum.
+  Pin/Z tests retain exact old-holder and rollback assertions and independently
+  prove the carried copy survives; do not replace strict checks with loose totals.
+
+This bounded integration is pending SAME SPEC then QUALITY review. The approved
+post-prune test fault seam is **not implemented in this integration**; the three
+historical mutation_remote failures, remaining SSH targets/smokes and final
+runtime reviews remain owed. No real profiles/keys/contexts/drafts, lifecycle,
+native CI or performance work is authorized here.
+
 **Integration re-grounding, 2026-11-07 UTC:** current incoming main is
 `1e5616af22630b08a84dc0fb42037135b385f81d`, including approved/closed D5,
 not the former `79c3931b` baseline. D5's shared lifecycle-only way-out,

@@ -47,11 +47,13 @@ pub(crate) mod local_sync;
 pub(crate) mod poll;
 pub(crate) mod poll_retirement;
 pub(crate) mod remote;
+pub(crate) mod remote_resolve_history;
 pub(crate) mod repair;
 pub(crate) mod repo;
 pub(crate) mod repo_identity;
 pub(crate) mod repo_remove;
 pub(crate) mod republish;
+pub(crate) mod resolve_history;
 pub(crate) mod resume;
 pub(crate) mod retire;
 pub(crate) mod save;
@@ -1093,6 +1095,9 @@ pub(crate) fn recorded_effects(service: &RepositoryService, record: &RequestReco
         Some(Command::RepoIdentitySet) => Recorded::nothing(),
         // Answered above, from the pin store: this is not reached.
         Some(Command::HostApprove | Command::HostReplace) => Recorded::nothing(),
+        // A history resolution is one registry transaction: nothing of it
+        // is ever done with work remaining.
+        Some(Command::ItemResolveHistory | Command::RemoteResolveHistory) => Recorded::nothing(),
         // A directory is shown by no effect, and nothing records that
         // the request made one: its one row is its refresh's, and a
         // refresh in flight has made no durable effect. A directory at

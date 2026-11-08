@@ -475,7 +475,7 @@ fn context_oid_immutable_once_set() {
         &tx,
         1,
         Some(&RemoteRefPlan::from_configuration("origin", "main").unwrap()),
-        false,
+        state::ConfigurationChange::Plan,
     )
     .unwrap();
     let mut r = begin_record(
@@ -716,11 +716,12 @@ fn abandoned_refusal_replays() {
 }
 
 #[test]
-fn blocker_mask_round_trips_all_21() {
-    assert_eq!(CLOSURE_BLOCKERS.len(), 21);
+fn blocker_mask_round_trips_all_22() {
+    assert_eq!(CLOSURE_BLOCKERS.len(), 22);
     assert!(CLOSURE_BLOCKERS.windows(2).all(|p| p[0] < p[1]));
     assert_eq!(CLOSURE_BLOCKERS[0], ClosureBlocker::NotATicket);
     assert_eq!(CLOSURE_BLOCKERS[20], ClosureBlocker::IdentityRequired);
+    assert_eq!(CLOSURE_BLOCKERS[21], ClosureBlocker::HistoryUnresolved);
     let mut db = db();
     let tx = db.transaction().unwrap();
     let mut all = Vec::new();
@@ -761,8 +762,8 @@ fn blocker_mask_round_trips_all_21() {
     )
     .unwrap();
     assert_eq!(read(&tx, r.operation_id).refusal, Some(every));
-    assert!(!rejected(&tx, r.operation_id, "refusal_blockers=2097151"));
-    for wrong in ["refusal_blockers=0", "refusal_blockers=2097152"] {
+    assert!(!rejected(&tx, r.operation_id, "refusal_blockers=4194303"));
+    for wrong in ["refusal_blockers=0", "refusal_blockers=4194304"] {
         assert!(rejected(&tx, r.operation_id, wrong), "{wrong}");
     }
     // An empty or unordered set is never stored.
@@ -1092,7 +1093,7 @@ fn service_fixture() -> (tempfile::TempDir, tempfile::TempDir, RepositoryService
             tx,
             id,
             Some(&RemoteRefPlan::from_configuration("origin", "main").unwrap()),
-            false,
+            state::ConfigurationChange::Plan,
         )
     })
     .unwrap();
@@ -1314,4 +1315,57 @@ fn remote_deletion_required_unless_contained_without_tracking() {
     .unwrap();
     local.integration_kind = Some(IntegrationKind::Merged);
     assert!(!local.remote_deletion_required());
+}
+
+/// A registry from before the widened mask CHECK is rebuilt once, keeping
+/// its rows, and then takes the new bit.
+#[test]
+fn closure_refusal_blockers_v2_rebuilds_an_old_bound_table_once() {
+    let mut db = db();
+    let tx = db.transaction().unwrap();
+    let refusal = |blocker| Refusal::Blocked(vec![blocker]);
+    let refuse = |tx: &Transaction<'_>, refusal: &Refusal| {
+        refuse_record(
+            tx,
+            1,
+            OperationId::new(),
+            &item(ITEM),
+            digest(7),
+            None,
+            None,
+            refusal,
+        )
+        .unwrap()
+    };
+    let old = refuse(&tx, &refusal(ClosureBlocker::ContextDirty));
+    let sql: String = tx
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE name='ticket_closures'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    tx.execute_batch(&format!(
+        "DROP INDEX ticket_closures_unfinished; ALTER TABLE ticket_closures RENAME TO before; {}; {INDEX}; INSERT INTO ticket_closures SELECT * FROM before; DROP TABLE before; DELETE FROM registry_migrations WHERE name='closure_refusal_blockers_v2';",
+        sql.replace("4194303", "2097151")
+    ))
+    .unwrap();
+    assert!(
+        tx.execute("UPDATE ticket_closures SET refusal_blockers=2097152", [])
+            .is_err()
+    );
+    for _ in 0..2 {
+        migrate(&tx).unwrap();
+        assert_eq!(read(&tx, old.operation_id).refusal, old.refusal);
+        let marked: i64 = tx
+            .query_row(
+                "SELECT count(*) FROM registry_migrations WHERE name='closure_refusal_blockers_v2'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(marked, 1);
+    }
+    let new = refuse(&tx, &refusal(ClosureBlocker::HistoryUnresolved));
+    assert_eq!(read(&tx, new.operation_id).refusal, new.refusal);
 }
