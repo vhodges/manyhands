@@ -60,7 +60,8 @@ impl HistoryObservation {
 /// How the marker file of a cache-loss repair ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MarkerRetirement {
-    /// The flag was not cleared by this resolution.
+    /// The flag was not cleared by this resolution, or another repository
+    /// of the registry is still flagged and the marker stays for it.
     NotApplicable,
     Removed,
     /// The flag was cleared and no marker file was there.
@@ -174,7 +175,7 @@ impl RepositoryService {
         expected: &CacheLossObservation,
     ) -> Result<HistoryResolution, RepositoryError> {
         let marker_present = self.marker_present();
-        state::with_transaction(self, root, |tx, id| {
+        let others_flagged = state::with_transaction(self, root, |tx, id| {
             let (cache_loss, unresolved) = state::unresolved_contexts(tx, id)?;
             let found = CacheLossObservation {
                 cache_loss,
@@ -189,11 +190,15 @@ impl RepositoryService {
             {
                 return Err(external_change(root));
             }
-            Ok(())
+            state::cache_loss_remains(tx)
         })?;
         Ok(HistoryResolution {
             cache_loss_cleared: true,
-            marker: self.retire_marker(),
+            marker: if others_flagged {
+                MarkerRetirement::NotApplicable
+            } else {
+                self.retire_marker()
+            },
         })
     }
 
@@ -227,7 +232,8 @@ impl RepositoryService {
     /// that re-reads first: if anything `expected` covers has moved the answer
     /// is `ExternalChange` and nothing is written. When the cache-loss flag is
     /// set and no context still reads unknown, the same transaction clears it,
-    /// and after the commit the marker file is deleted. A file that cannot be
+    /// and after the commit the marker file is deleted unless another
+    /// repository of the registry is still flagged. A file that cannot be
     /// deleted is reported and does not undo the commit.
     ///
     /// The registry transaction is atomic with every other registry write (a
@@ -241,15 +247,17 @@ impl RepositoryService {
         expected: &HistoryObservation,
     ) -> Result<HistoryResolution, RepositoryError> {
         let plan = plan_of(root)?;
-        let cache_loss_cleared = state::with_transaction(self, root, |tx, id| {
-            let found = observe_in(tx, id, root, &plan, kind, item_id)?;
-            if found != *expected || !found.resolvable() {
-                return Err(external_change(root));
-            }
-            state::record_context_resolved(tx, id, &plan, kind, item_id)?;
-            state::clear_cache_loss_when_resolved(tx, id)
-        })?;
-        let marker = if cache_loss_cleared {
+        let (cache_loss_cleared, others_flagged) =
+            state::with_transaction(self, root, |tx, id| {
+                let found = observe_in(tx, id, root, &plan, kind, item_id)?;
+                if found != *expected || !found.resolvable() {
+                    return Err(external_change(root));
+                }
+                state::record_context_resolved(tx, id, &plan, kind, item_id)?;
+                let cleared = state::clear_cache_loss_when_resolved(tx, id)?;
+                Ok((cleared, cleared && state::cache_loss_remains(tx)?))
+            })?;
+        let marker = if cache_loss_cleared && !others_flagged {
             self.retire_marker()
         } else {
             MarkerRetirement::NotApplicable

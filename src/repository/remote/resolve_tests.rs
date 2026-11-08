@@ -483,3 +483,57 @@ fn clearing_the_flag_reports_a_marker_that_cannot_be_deleted_and_refuses_what_mo
     assert_eq!(error.kind, RepositoryErrorKind::ExternalChange);
     assert!(f.flag());
 }
+
+/// The cache-loss marker is registry-wide: a repair that clears one
+/// repository's flag keeps it while another repository is still flagged.
+#[test]
+fn the_marker_outlives_a_repair_while_another_repository_is_flagged() {
+    use MarkerRetirement::{NotApplicable, Removed};
+    // (case, the other repository's flag, marker after, marker file kept)
+    for (name, other_flagged, marker, kept) in [
+        (
+            "another repository still flagged",
+            true,
+            NotApplicable,
+            true,
+        ),
+        ("no other repository flagged", false, Removed, false),
+    ] {
+        for via_clear in [false, true] {
+            let f = Fixture::new();
+            f.lose_history(
+                true,
+                Some(if via_clear {
+                    "never_published"
+                } else {
+                    "history_unknown"
+                }),
+            );
+            f.batch(&[], 100);
+            f.publish_marker();
+            let db = f.db();
+            db.execute("INSERT INTO repositories(root_path,enabled_at,accessibility,refresh_required) VALUES ('/other',123,'accessible',0)", []).unwrap();
+            db.execute(
+                "UPDATE remote_polling_state SET history_unknown=?1 WHERE repository_id=2",
+                [i32::from(other_flagged)],
+            )
+            .unwrap();
+            let done = if via_clear {
+                let expected = f.service.cache_loss_observation(f.root.path()).unwrap();
+                f.service.clear_cache_loss(f.root.path(), &expected)
+            } else {
+                f.service.resolve_history(
+                    f.root.path(),
+                    AuthoringKind::Ticket,
+                    &item(),
+                    &f.observe(),
+                )
+            };
+            let done = done.unwrap_or_else(|error| panic!("{name} {via_clear}: {error:?}"));
+            assert!(done.cache_loss_cleared, "{name} {via_clear}");
+            assert_eq!(done.marker, marker, "{name} {via_clear}");
+            assert_eq!(f.marker().exists(), kept, "{name} {via_clear} file");
+            assert!(!f.flag(), "{name} {via_clear}: this repository is clear");
+        }
+    }
+}

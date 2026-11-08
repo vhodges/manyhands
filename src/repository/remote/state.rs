@@ -2567,6 +2567,20 @@ pub(in super::super) fn clear_cache_loss_when_resolved(
     Ok(true)
 }
 
+/// Whether any repository of the registry still has the cache-loss flag set.
+/// The marker file is registry-wide, so it outlives a repair that leaves one.
+pub(in super::super) fn cache_loss_remains(
+    transaction: &Transaction<'_>,
+) -> Result<bool, RepositoryError> {
+    transaction
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM remote_polling_state WHERE history_unknown=1)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|_| recovery_required())
+}
+
 fn configure_known(
     transaction: &Transaction<'_>,
     repository_id: i64,
