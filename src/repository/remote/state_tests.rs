@@ -3783,6 +3783,7 @@ fn configure_reasons_fence_and_forget() {
         let (data, root, service) = fixture();
         let mut generation = 0;
         let seeded = !setup.is_empty();
+        Connection::open(data.path().join(REGISTRY_FILE)).unwrap().execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,'/active',?2)", params![format!("manyhands/ticket/{ITEM}"), ITEM]).unwrap();
         for (step_n, step) in setup.into_iter().enumerate() {
             generation = apply_call(&service, root.path(), step);
             if step_n == 0 {
@@ -3813,20 +3814,44 @@ fn configure_reasons_fence_and_forget() {
             )
             .unwrap();
         if seeded {
-            // Forgetting deletes the rows (Task 3 turns that into unknown
-            // rows); anything else keeps them and carries the batch.
-            let (rows, batch_generation): (i64, Option<i64>) = db
+            // Forgetting rewrites every active context to an unknown row;
+            // anything else keeps the observed row and carries the batch.
+            let (rows, evidence, state, batch_generation): (i64, String, String, Option<i64>) = db
                 .query_row(
-                    "SELECT (SELECT COUNT(*) FROM remote_context_states),(SELECT configuration_generation FROM remote_observation_batches WHERE is_current=1)",
-                    [],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    "SELECT (SELECT COUNT(*) FROM remote_context_states),(SELECT publication_evidence FROM remote_context_states WHERE item_id=?1),(SELECT state FROM remote_context_states WHERE item_id=?1),(SELECT configuration_generation FROM remote_observation_batches WHERE is_current=1)",
+                    [ITEM],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
                 )
                 .unwrap();
-            assert_eq!(rows, i64::from(!forgets), "row {n} rows kept");
+            assert_eq!(rows, 1, "row {n} one row per active context");
+            let (want_evidence, want_state) = if forgets {
+                ("history_unknown", "history_unknown")
+            } else {
+                ("observed_published", "unmaterialized")
+            };
+            assert_eq!(
+                (evidence.as_str(), state.as_str()),
+                (want_evidence, want_state),
+                "row {n} rows"
+            );
             assert_eq!(
                 batch_generation,
                 (!forgets).then_some(after),
                 "row {n} carried batch"
+            );
+            // A context registered afterwards has no row: never published.
+            let later = "01BX5ZZKBKACTAV9WEVGEMMVRZ";
+            db.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,'/later',?2)", params![format!("manyhands/ticket/{later}"), later]).unwrap();
+            assert_eq!(
+                read_snapshot(&db, 1)
+                    .unwrap()
+                    .fetch_publication_evidence_for(AuthoringKind::Ticket, &later.parse().unwrap()),
+                if flag_after == 0 {
+                    RemotePublicationEvidence::NeverPublished
+                } else {
+                    RemotePublicationEvidence::HistoryUnknown
+                },
+                "row {n} later context"
             );
         }
         assert_eq!(unknown, flag_after, "row {n} flag");
@@ -3837,5 +3862,116 @@ fn configure_reasons_fence_and_forget() {
             digest.map(|byte| vec![byte; 32]),
             "row {n} known digest"
         );
+    }
+}
+
+#[test]
+fn null_known_columns_fall_back_to_the_current_plan() {
+    let (data, root, service) = fixture();
+    let generation = apply_call(&service, root.path(), Call::Plan("origin", "main"));
+    let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+    // A registry from before the known columns: no batch, a stale row.
+    db.execute_batch(
+        "UPDATE remote_polling_state SET known_remote_name=NULL,known_primary_branch=NULL;",
+    )
+    .unwrap();
+    db.execute("INSERT INTO contexts(repository_id,kind,branch,worktree_path,item_id) VALUES(1,'active',?1,'/active',?2)", params![format!("manyhands/ticket/{ITEM}"), ITEM]).unwrap();
+    let target = RemoteRefPlan::from_configuration("origin", "main")
+        .unwrap()
+        .context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
+    db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'never_published','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),ITEM]).unwrap();
+    assert_ne!(
+        apply_call(&service, root.path(), Call::Plan("upstream", "main")),
+        generation
+    );
+    let (evidence, remote_ref): (String, String) = db
+        .query_row(
+            "SELECT publication_evidence,remote_ref FROM remote_context_states",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(evidence, "history_unknown");
+    let upstream = RemoteRefPlan::from_configuration("upstream", "main")
+        .unwrap()
+        .context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
+    assert_eq!(remote_ref, upstream.remote_ref());
+}
+
+#[test]
+fn evidence_defaults_by_flag_and_rows() {
+    let ticket = AuthoringKind::Ticket;
+    let item: ItemId = ITEM.parse().unwrap();
+    for flag in [false, true] {
+        for row in [
+            None,
+            Some("never_published"),
+            Some("history_unknown"),
+            Some("observed_published"),
+        ] {
+            for retired in [false, true] {
+                let (data, root, service) = fixture();
+                let generation = apply_call(&service, root.path(), Call::Plan("origin", "main"));
+                let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+                if row == Some("observed_published") {
+                    with_transaction(&service, root.path(), |tx, id| {
+                        complete_batch(tx, id, &plan(), generation, &[advertised()], 123)
+                    })
+                    .unwrap();
+                }
+                if let Some(evidence @ ("never_published" | "history_unknown")) = row {
+                    let target = plan().context(ticket, &item);
+                    db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,?4,'history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),ITEM,evidence]).unwrap();
+                }
+                if flag {
+                    db.execute("UPDATE remote_polling_state SET history_unknown=1", [])
+                        .unwrap();
+                }
+                if retired {
+                    seed_retirement(&db, ticket, ITEM);
+                }
+                let case = format!("flag={flag} row={row:?} retired={retired}");
+                let accepted = !(flag && row == Some("never_published"));
+                let snapshot = read_snapshot(&db, 1);
+                assert_eq!(snapshot.is_ok(), accepted, "{case} accepted");
+                if let Ok(snapshot) = snapshot {
+                    let expected = match row {
+                        Some("never_published") => RemotePublicationEvidence::NeverPublished,
+                        Some("history_unknown") => RemotePublicationEvidence::HistoryUnknown,
+                        Some(_) => RemotePublicationEvidence::ObservedPublished,
+                        None if flag && !retired => RemotePublicationEvidence::HistoryUnknown,
+                        None => RemotePublicationEvidence::NeverPublished,
+                    };
+                    assert_eq!(
+                        snapshot.fetch_publication_evidence_for(ticket, &item),
+                        expected,
+                        "{case}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn corrupt_dormant_context_rows_are_rejected_while_the_plan_is_unavailable() {
+    // (column assignment, a row the CHECKs allow but the evidence/state pairing does not)
+    for update in [
+        "last_advertised_oid='1111111111111111111111111111111111111111'",
+        "publication_evidence='observed_published'",
+        "state='observed'",
+        "item_id='not-a-ulid'",
+    ] {
+        let (data, root, service) = fixture();
+        apply_call(&service, root.path(), Call::Plan("origin", "main"));
+        let db = Connection::open(data.path().join(REGISTRY_FILE)).unwrap();
+        let target = plan().context(AuthoringKind::Ticket, &ITEM.parse().unwrap());
+        db.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(1,?1,?2,'ticket',?3,'never_published','history_unknown',123)",params![target.remote_ref(),target.tracking_ref(),ITEM]).unwrap();
+        apply_call(&service, root.path(), Call::Unavailable);
+        assert!(read_snapshot_rows(&db, 1, true).is_ok(), "{update} before");
+        db.execute(&format!("UPDATE remote_context_states SET {update}"), [])
+            .unwrap();
+        assert!(read_snapshot_rows(&db, 1, true).is_err(), "{update} audit");
+        assert!(read_snapshot_rows(&db, 1, false).is_err(), "{update} read");
     }
 }

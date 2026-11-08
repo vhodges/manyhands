@@ -2312,22 +2312,27 @@ pub(in super::super) fn configure(
 }
 
 /// The single forget decision. The identity differs from what was last known,
-/// so the evidence is about another remote. A first plan (nothing known) and
-/// NULL columns forget nothing.
+/// so the evidence is about another remote. A first plan (nothing known) forgets
+/// nothing.
 fn forgets(
     change: ConfigurationChange,
     plan: Option<&RemoteRefPlan>,
     (known_name, known_branch, known_digest): &KnownIdentity,
+    current: Option<&RemoteRefPlan>,
     digest: Option<&[u8; 32]>,
 ) -> bool {
+    // NULL known columns (a registry from before they existed) fall back to
+    // the plan in force before this change.
+    let known_name = known_name
+        .as_deref()
+        .or_else(|| current.map(RemoteRefPlan::remote_name));
+    let known_branch = known_branch
+        .as_deref()
+        .or_else(|| current.map(RemoteRefPlan::primary_branch));
     (change == ConfigurationChange::Plan
         && plan.is_some_and(|plan| {
-            known_name
-                .as_deref()
-                .is_some_and(|name| name != plan.remote_name())
-                || known_branch
-                    .as_deref()
-                    .is_some_and(|branch| branch != plan.primary_branch())
+            known_name.is_some_and(|name| name != plan.remote_name())
+                || known_branch.is_some_and(|branch| branch != plan.primary_branch())
         }))
         || digest.is_some_and(|digest| known_digest.as_ref().is_some_and(|known| known != digest))
 }
@@ -2345,7 +2350,7 @@ fn configure_known(
         return Ok(policy.generation);
     }
     let known = read_known_identity(transaction, repository_id)?;
-    let forgets = forgets(change, plan, &known, digest);
+    let forgets = forgets(change, plan, &known, policy.plan.as_ref(), digest);
     let generation = policy
         .generation
         .checked_add(1)
@@ -2381,7 +2386,8 @@ fn configure_known(
             params![repository_id, carried],
         )
         .map_err(|_| recovery_required())?;
-    // Task 3: write per-context unknown rows when `forgets` is true.
+    // Dropped rows are replaced by an unknown row per active context under the
+    // new plan, so a context registered afterwards reads as never published.
     if !carry {
         transaction
             .execute(
@@ -2389,6 +2395,20 @@ fn configure_known(
                 [repository_id],
             )
             .map_err(|_| recovery_required())?;
+        let plan = plan.ok_or_else(recovery_required)?;
+        let active = transaction.prepare("SELECT branch,item_id FROM contexts WHERE repository_id=?1 AND kind='active' ORDER BY branch")
+            .and_then(|mut statement| statement.query_map([repository_id],|row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()).map_err(|_| recovery_required())?;
+        let now = OffsetDateTime::now_utc().unix_timestamp().max(0);
+        for (branch, id) in active {
+            let (kind, item_id) = crate::repository::stored_authoring_branch(&branch)
+                .ok_or_else(recovery_required)?;
+            if item_id.to_string() != id {
+                return Err(recovery_required());
+            }
+            let target = plan.context(kind, &item_id);
+            transaction.execute("INSERT INTO remote_context_states(repository_id,remote_ref,tracking_ref,kind,item_id,publication_evidence,state,observed_at) VALUES(?1,?2,?3,?4,?5,'history_unknown','history_unknown',?6)",
+                params![repository_id,target.remote_ref(),target.tracking_ref(),crate::repository::authoring_kind_segment(&kind),id,now]).map_err(|_| recovery_required())?;
+        }
     }
     transaction.execute("UPDATE remote_polling_state SET configuration_generation=?2,remote_name=?3,primary_branch=?4,automatic_backoff_seconds=NULL,latest_outcome=NULL WHERE repository_id=?1",
         params![repository_id,generation,plan.map(RemoteRefPlan::remote_name),plan.map(RemoteRefPlan::primary_branch)]).map_err(|_| recovery_required())?;
@@ -6351,15 +6371,15 @@ fn read_snapshot_rows(
             _ => return Err(recovery_required()),
         };
         let id: ItemId = id.parse().map_err(|_| recovery_required())?;
-        // Rows kept across an unavailable plan stay dormant until it returns.
-        let Some(plan) = policy.plan.as_ref() else {
-            continue;
-        };
-        let target = plan.context(kind, &id);
-        if target.remote_ref() != remote_ref
-            || target.tracking_ref() != tracking_ref
-            || observed_at < 0
-        {
+        if observed_at < 0 {
+            return Err(recovery_required());
+        }
+        // Rows kept across an unavailable plan stay dormant until it returns:
+        // parsed and checked below, but not compared against refs or batches.
+        let target = policy.plan.as_ref().map(|plan| plan.context(kind, &id));
+        if target.as_ref().is_some_and(|target| {
+            target.remote_ref() != remote_ref || target.tracking_ref() != tracking_ref
+        }) {
             return Err(recovery_required());
         }
         let evidence = match evidence.as_str() {
@@ -6385,6 +6405,9 @@ fn read_snapshot_rows(
             return Err(recovery_required());
         }
         let tracking = oid(tracking)?;
+        let Some(target) = target else {
+            continue;
+        };
         match current_contexts.remove(remote_ref.as_str()) {
             Some(observation)
                 if matches!(
