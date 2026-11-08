@@ -122,7 +122,10 @@ const CASES: &[ssh_harness::Case] = &[
         branch_blocked,
     ),
     ("poll_preexisting_path_blocks_materialization", path_blocked),
-    ("poll_history_unknown_after_registry_loss", history_unknown),
+    (
+        "poll_unpublished_after_key_selection_in_new_registry",
+        unpublished,
+    ),
     (
         "poll_ignored_directory_collision_preserved",
         directory_collision,
@@ -1613,13 +1616,15 @@ fn branch_blocked() -> Result<(), FixtureError> {
 fn path_blocked() -> Result<(), FixtureError> {
     blocked(false)
 }
-fn history_unknown() -> Result<(), FixtureError> {
+fn unpublished() -> Result<(), FixtureError> {
     let p = Pair::new()?;
     p.context(T)?;
     p.poll()?;
     let bare = fixed(git2::Repository::open_bare(p.server.repository_path()))?;
     assert!(bare.find_reference(&reference(T)).is_err());
-    // A genuinely new application registry has no remote publication evidence.
+    // A genuinely new application registry has no remote publication evidence,
+    // and selecting its key is not a loss of history: the context reads as
+    // never published, not unknown.
     let data = p._dir.path().join("z");
     let service = fixed(RepositoryService::open_at(&data))?;
     fixed(service.enable(EnableRepositoryRequest {
@@ -1645,7 +1650,7 @@ fn history_unknown() -> Result<(), FixtureError> {
         p.request(RemotePollInvocation::Explicit),
         &mut session(),
     ))?)?;
-    unchanged(&r, &reference(T), PollDisposition::HistoryUnknown);
+    unchanged(&r, &reference(T), PollDisposition::Unpublished);
     assert_eq!(snapshot(&p.b)?, before);
     ssh_privacy::scan(&data, &p.probes)?;
     p.finish()

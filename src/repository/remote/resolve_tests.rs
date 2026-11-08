@@ -423,7 +423,10 @@ fn a_newer_fetch_that_still_lacks_the_branch_does_not_stale_the_observation() {
 #[test]
 fn clearing_the_flag_reports_a_marker_that_cannot_be_deleted_and_refuses_what_moved() {
     // (case, marker, expected result of clear_cache_loss)
-    for (name, directory) in [("marker file", false), ("undeletable marker", true)] {
+    for (name, directory) in [
+        ("marker file", false),
+        ("invalid marker (a directory)", true),
+    ] {
         let f = Fixture::new();
         f.lose_history(true, Some("never_published"));
         if directory {

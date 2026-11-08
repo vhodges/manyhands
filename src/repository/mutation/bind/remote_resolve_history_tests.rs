@@ -48,7 +48,7 @@ fn the_flag_is_cleared_only_when_nothing_reads_unknown() {
         None,
         File,
     }
-    // The undeletable marker is covered by the domain table
+    // The invalid marker (a directory) is covered by the domain table
     // (`resolve_tests`): the registry will not even reopen over one.
     // (case, flag, the ticket's row, marker, other unknown context,
     //  prepare code, executed data, whether the context moves after prepare)

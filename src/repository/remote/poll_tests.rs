@@ -2053,6 +2053,11 @@ fn task6_config_and_selected_key_source_after_fetch_fence_before_batch() {
         } else {
             fs::write(&key, b"externally replaced longer fixture source").unwrap();
         }
+        // An earlier current batch: a key change carries it forward to the new
+        // generation.
+        f.db()
+            .execute_batch("INSERT INTO remote_observation_batches(repository_id,remote_name,primary_branch,configuration_generation,observed_at,is_current) SELECT repository_id,remote_name,primary_branch,configuration_generation,1000,1 FROM remote_polling_state")
+            .unwrap();
         let before = snapshot(&f.local.root, &f.local.repository);
         assert!(matches!(
             f.local.service.poll_after_fetch(
@@ -2065,13 +2070,18 @@ fn task6_config_and_selected_key_source_after_fetch_fence_before_batch() {
             Err(RemotePollError::Interrupted)
         ));
         assert_eq!(snapshot(&f.local.root, &f.local.repository), before);
-        assert_eq!(
-            f.db()
-                .query_row("SELECT count(*) FROM remote_observation_batches", [], |r| r
-                    .get::<_, i64>(0))
-                .unwrap(),
-            0
-        );
+        // No batch of this poll was committed; only the fence touched them.
+        let current: i64 = f
+            .db()
+            .query_row(
+                "SELECT count(*) FROM remote_observation_batches b JOIN remote_polling_state p ON p.repository_id=b.repository_id AND p.configuration_generation=b.configuration_generation WHERE b.is_current=1 AND b.observed_at=1000",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        if change == "key_source" {
+            assert_eq!(current, 1);
+        }
     }
 }
 

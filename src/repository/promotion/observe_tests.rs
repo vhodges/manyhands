@@ -371,9 +371,6 @@ impl Fixture {
             base,
         };
         if remote {
-            f.db()
-                .execute("UPDATE remote_polling_state SET history_unknown=0", [])
-                .unwrap();
             f.tracking("main", base);
         }
         f

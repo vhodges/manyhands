@@ -252,9 +252,6 @@ impl Fixture {
                 "fixture",
             )
             .unwrap();
-        self.db()
-            .execute("UPDATE remote_polling_state SET history_unknown=0", [])
-            .unwrap();
         let plan = RemoteRefPlan::from_configuration("origin", "main").unwrap();
         let configuration = self
             .service
